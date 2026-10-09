@@ -4,10 +4,13 @@
 //! birth immediately before and after event delivery.
 mod ffi;
 mod navigation;
+mod resize_transaction;
 mod storage;
 pub use ffi::*;
 pub use navigation::{FocusPlacement, ZoomPolicy};
 use navigation::{NavigationContext, ViewFlight};
+use resize_transaction::NativeResizeTransaction;
+pub use resize_transaction::{NativeResizeResult, ResizeOutcome};
 
 use driftwm_canvas::{
     DragGesture, OutputId, Point, Rect, ResizeEdges, ResizeGesture, Scene, Size, SnapOptions,
@@ -80,6 +83,10 @@ pub struct Source {
     pub buffer: BufferSize,
     pub original_rect: Rect,
     pub observed_rect: Rect,
+    pub observation_known: bool,
+    pub observation_revision: u64,
+    pub capture_revision: Option<u64>,
+    pub resize_disabled: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -139,6 +146,9 @@ pub struct Controller {
     navigation_contexts: BTreeMap<OutputId, NavigationContext>,
     navigation_clock: Option<u64>,
     next_navigation: u64,
+    native_resize: Option<NativeResizeTransaction>,
+    next_resize: u64,
+    retired_resize_identities: Vec<SourceIdentity>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -151,6 +161,44 @@ pub struct Request {
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
     Snapshot {},
+    BeginNativeResize {
+        window: WindowId,
+        output: OutputId,
+        edges: Edges,
+        start_screen: Point,
+        #[serde(default)]
+        group: bool,
+    },
+    NativeResizeTo {
+        transaction: u64,
+        screen: Point,
+    },
+    EndNativeResize {
+        transaction: u64,
+    },
+    CancelNativeResize {
+        transaction: u64,
+    },
+    NativeResizeResult {
+        transaction: u64,
+        effect_id: u64,
+        identity: SourceIdentity,
+        generation: u64,
+        result: NativeResizeResult,
+    },
+    RetireNativeResizeSource {
+        transaction: u64,
+        identity: SourceIdentity,
+        generation: u64,
+        lifetime_ended: bool,
+    },
+    NativeResizeCaptureReady {
+        window: WindowId,
+        identity: SourceIdentity,
+        generation: u64,
+        observation_revision: u64,
+        buffer: BufferSize,
+    },
     NavigateWindow {
         window: WindowId,
         output: OutputId,
@@ -270,7 +318,7 @@ pub enum Command {
         path: String,
     },
 }
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Edges {
     Left,
@@ -349,6 +397,66 @@ impl Controller {
     fn apply(&mut self, command: Command) -> Result<Value, Error> {
         match command {
             Command::Snapshot {} => return self.snapshot(),
+            Command::BeginNativeResize {
+                window,
+                output,
+                edges,
+                start_screen,
+                group,
+            } => return self.begin_native_resize(window, output, edges, start_screen, group),
+            Command::NativeResizeTo {
+                transaction,
+                screen,
+            } => return self.native_resize_to(transaction, screen),
+            Command::EndNativeResize { transaction } => {
+                return self.finish_native_resize(transaction, false);
+            }
+            Command::CancelNativeResize { transaction } => {
+                return self.finish_native_resize(transaction, true);
+            }
+            Command::NativeResizeResult {
+                transaction,
+                effect_id,
+                identity,
+                generation,
+                result,
+            } => {
+                return self.native_resize_result(
+                    transaction,
+                    effect_id,
+                    identity,
+                    generation,
+                    result,
+                );
+            }
+            Command::RetireNativeResizeSource {
+                transaction,
+                identity,
+                generation,
+                lifetime_ended,
+            } => {
+                return self.retire_native_resize_source(
+                    transaction,
+                    identity,
+                    generation,
+                    lifetime_ended,
+                );
+            }
+            Command::NativeResizeCaptureReady {
+                window,
+                identity,
+                generation,
+                observation_revision,
+                buffer,
+            } => {
+                return self.native_resize_capture_ready(
+                    window,
+                    identity,
+                    generation,
+                    observation_revision,
+                    buffer,
+                );
+            }
             Command::NavigateWindow {
                 window,
                 output,
@@ -445,6 +553,7 @@ impl Controller {
                 return Ok(json!({"output": id}));
             }
             Command::RemoveOutput { output } => {
+                let resize = self.resize_output_removed(output)?;
                 let viewport = self.scene.remove_output(output)?;
                 self.flights.remove(&output);
                 self.navigation_contexts.remove(&output);
@@ -453,6 +562,9 @@ impl Controller {
                     .ok_or(Error::Invalid("missing output metadata"))?
                     .viewport = viewport;
                 self.gesture = None;
+                if let Some(result) = resize {
+                    return Ok(result);
+                }
             }
             Command::Attach {
                 identity,
@@ -464,6 +576,14 @@ impl Controller {
                 world_rect,
             } => {
                 identity.validate()?;
+                if self.retired_resize_identities.iter().any(|old| {
+                    old.pid == identity.pid
+                        && old.birth_sec == identity.birth_sec
+                        && old.birth_usec == identity.birth_usec
+                        && old.wid == identity.wid
+                }) {
+                    return Err(Error::Invalid("source lifetime was retired"));
+                }
                 buffer.validate()?;
                 if !rect_valid(source_rect)
                     || !text_valid(&bundle_id, 1024)
@@ -517,6 +637,10 @@ impl Controller {
                         buffer,
                         original_rect: source_rect,
                         observed_rect: source_rect,
+                        observation_known: true,
+                        observation_revision: 0,
+                        capture_revision: Some(0),
+                        resize_disabled: false,
                     },
                 );
                 return Ok(json!({"window": id}));
@@ -527,6 +651,7 @@ impl Controller {
                 source_rect,
                 buffer,
             } => {
+                self.guard_resize_structure(Some(window))?;
                 self.fresh(window, &identity)?;
                 buffer.validate()?;
                 if !rect_valid(source_rect) {
@@ -536,6 +661,14 @@ impl Controller {
                     .sources
                     .get_mut(&window)
                     .ok_or(Error::Invalid("unbound source"))?;
+                if source.observation_revision > 0 && source.observed_rect.size != source_rect.size
+                {
+                    source.observation_revision = source
+                        .observation_revision
+                        .checked_add(1)
+                        .ok_or(Error::Invalid("observation revisions exhausted"))?;
+                    source.capture_revision = None;
+                }
                 source.observed_rect = source_rect;
                 source.buffer = buffer;
             }
@@ -544,6 +677,7 @@ impl Controller {
                 identity,
                 keep_placeholder,
             } => {
+                self.guard_resize_structure(Some(window))?;
                 self.fresh(window, &identity)?;
                 self.invalidate_focus(window);
                 self.sources.remove(&window);
@@ -554,6 +688,7 @@ impl Controller {
                 self.gesture = None;
             }
             Command::Forget { window } => {
+                self.guard_resize_structure(Some(window))?;
                 self.scene.remove_window(window)?;
                 self.metadata.remove(&window);
                 self.invalidate_focus(window);
@@ -690,6 +825,7 @@ impl Controller {
                 edges,
                 group,
             } => {
+                self.guard_resize_structure(None)?;
                 if self.gesture.is_some() {
                     return Err(Error::Invalid("gesture already active"));
                 }
@@ -758,7 +894,12 @@ impl Controller {
                 self.save(&path)?;
             }
             Command::Load { path } => {
+                self.guard_resize_structure(None)?;
                 let mut loaded = Self::load(&path)?;
+                loaded.next_window = loaded.next_window.max(self.next_window);
+                loaded.next_output = loaded.next_output.max(self.next_output);
+                loaded.next_resize = self.next_resize;
+                loaded.retired_resize_identities = self.retired_resize_identities.clone();
                 loaded.next_effect = self.next_effect;
                 loaded.next_navigation = self.next_navigation;
                 loaded.next_generation = self.next_generation;
@@ -890,6 +1031,10 @@ impl Controller {
             .sources
             .get(&hit.window)
             .ok_or(Error::Invalid("unbound source"))?;
+        if !source.observation_known || source.capture_revision != Some(source.observation_revision)
+        {
+            return Err(Error::Invalid("source presentation unsettled"));
+        }
         if let Some(identity) = expected {
             self.fresh(hit.window, identity)?;
         }
@@ -912,12 +1057,13 @@ impl Controller {
         let placements: Vec<_> = self.scene.placements().iter().map(|p| {
             let source = self.sources.get(&p.window);
             let world_size = self.scene.window(p.window).expect("placement references scene window").world_rect.size;
-            let buffer_crop = source.map(|s| scale_rect(p.source_rect, world_size, Size::new(s.buffer.width as f64, s.buffer.height as f64)));
-            json!({"window": p.window, "output": p.output, "screen_rect": p.screen_rect, "clip_rect": p.clip_rect, "world_local_crop": p.source_rect, "buffer_crop": buffer_crop, "source": source})
+            let settled = source.is_some_and(|s| s.observation_known && s.capture_revision == Some(s.observation_revision));
+            let buffer_crop = source.filter(|_| settled).map(|s| scale_rect(p.source_rect, world_size, Size::new(s.buffer.width as f64, s.buffer.height as f64)));
+            json!({"window": p.window, "output": p.output, "screen_rect": p.screen_rect, "clip_rect": p.clip_rect, "world_local_crop": p.source_rect, "buffer_crop": buffer_crop, "presentation_settled": settled, "source": source})
         }).collect();
         let windows: Vec<_> = self.scene.windows().iter().map(|w| json!({"window": w.id, "world_rect": w.world_rect, "metadata": self.metadata.get(&w.id), "source": self.sources.get(&w.id)})).collect();
         Ok(
-            json!({"evidence": "logical_controller_only", "capabilities": ["normal_window_navigation"], "navigation": {"flights": self.flights, "clock_ns": self.navigation_clock, "contexts": self.navigation_contexts}, "outputs": self.scene.outputs(), "windows": windows, "focused": self.scene.focused(), "focus": {"intent": self.scene.focused(), "observed_native": self.focus.observed_native, "pending_effect": self.focus.pending_effect, "last_result": self.focus.last_result, "history": self.scene.stage().focus_history(), "cycle": self.scene.stage().cycle_state(), "release_pending": self.focus.release_pending}, "placements": placements}),
+            json!({"evidence": "logical_controller_only", "capabilities": ["normal_window_navigation", "native_resize_controller_contract"], "native_resize": self.native_resize, "navigation": {"flights": self.flights, "clock_ns": self.navigation_clock, "contexts": self.navigation_contexts}, "outputs": self.scene.outputs(), "windows": windows, "focused": self.scene.focused(), "focus": {"intent": self.scene.focused(), "observed_native": self.focus.observed_native, "pending_effect": self.focus.pending_effect, "last_result": self.focus.last_result, "history": self.scene.stage().focus_history(), "cycle": self.scene.stage().cycle_state(), "release_pending": self.focus.release_pending}, "placements": placements}),
         )
     }
 }

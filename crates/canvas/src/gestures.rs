@@ -337,6 +337,32 @@ impl Scene {
     /// nonfinite/out-of-range geometry, missing/externally changed members or an
     /// unsettled cascade fail atomically, including the gesture's bond state.
     pub fn resize_to(&mut self, gesture: &mut ResizeGesture, delta: Point) -> Result<Rect, Error> {
+        let mut next = gesture.clone();
+        let initial = next.primary.1;
+        let rect = self.resize_proposal(&mut next, delta)?;
+        let (shifts, bonds) = resolve(&next.members, initial, rect, next.options.gap, &next.bonds)?;
+        let mut updates = vec![(next.primary.0, rect)];
+        updates.extend(
+            next.members
+                .iter()
+                .zip(shifts)
+                .map(|(member, delta)| (member.id, member.initial.translated(delta))),
+        );
+        self.apply_gesture(&next.expected, &updates)?;
+        next.expected = updates;
+        next.bonds = bonds;
+        *gesture = next;
+        Ok(rect)
+    }
+
+    /// Advance the single-window snap intent without changing committed geometry.
+    /// Native callers must settle actual dimensions separately. This method
+    /// computes the primary rectangle only; it does not propagate group members.
+    pub fn resize_proposal(
+        &self,
+        gesture: &mut ResizeGesture,
+        delta: Point,
+    ) -> Result<Rect, Error> {
         if !delta.valid() {
             return Err(Error::Invalid("resize delta"));
         }
@@ -424,17 +450,6 @@ impl Scene {
         if !rect.valid() {
             return Err(Error::Invalid("resized window geometry"));
         }
-        let (shifts, bonds) = resolve(&next.members, initial, rect, next.options.gap, &next.bonds)?;
-        let mut updates = vec![(next.primary.0, rect)];
-        updates.extend(
-            next.members
-                .iter()
-                .zip(shifts)
-                .map(|(member, delta)| (member.id, member.initial.translated(delta))),
-        );
-        self.apply_gesture(&next.expected, &updates)?;
-        next.expected = updates;
-        next.bonds = bonds;
         *gesture = next;
         Ok(rect)
     }
