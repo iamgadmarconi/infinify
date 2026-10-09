@@ -4,6 +4,8 @@
 @property (atomic) BOOL unexpectedInput,foregroundInterrupted,exclusionFailed,windowsExcluded;
 @property (atomic) NSInteger firstRejectedType;
 @property (atomic,copy) NSDictionary *firstWindowExclusionFailure;
+@property (atomic,copy) NSDictionary *firstAcceptedInertHelper;
+@property (atomic,copy) NSArray *lastSharingHelperScan;
 @property pid_t foreground;
 @property NSArray *foregroundBirth;
 @property NSDictionary *startup;
@@ -60,10 +62,24 @@ static BOOL rpBeforeOrder(NSWindow *w){
 // Main-thread AppKit inspection; workers use the atomic published flag plus the
 // input/foreground latches. Unexpected delivery is dropped even between polls.
 static BOOL rpCheckWindows(void){
-    BOOL valid=rpInputExcluded();for(NSWindow *w in NSApp.windows)valid&=rpWindowExcluded(w);
+    BOOL valid=rpInputExcluded();NSMutableArray *helpers=[NSMutableArray array];
+    for(NSWindow *w in NSApp.windows){
+        // Screen sharing can create this hidden, unregistered AppKit auxiliary.
+        // This enumeration-only exception never applies to owned window ordering
+        // or direct root/decoy/child validation. Reevaluate every field each scan.
+        BOOL inert=NO;
+        if(w.class==NSClassFromString(@"NSLocalWindowSharingWindow")){
+            NSInteger number=w.windowNumber;BOOL visible=w.visible,canKey=w.canBecomeKeyWindow,canMain=w.canBecomeMainWindow,key=w.keyWindow,main=w.mainWindow;
+            inert=number==-1&&!visible&&!canKey&&!canMain&&!key&&!main;
+            NSDictionary *snapshot=@{@"class":NSStringFromClass(w.class),@"window_id":@(number),@"visible":@(visible),@"ignores_mouse_events":@(w.ignoresMouseEvents),@"can_become_key":@(canKey),@"can_become_main":@(canMain),@"is_key":@(key),@"is_main":@(main),@"accepted_inert_auxiliary":@(inert)};
+            [helpers addObject:snapshot];if(inert&&!rpIsolation.firstAcceptedInertHelper)rpIsolation.firstAcceptedInertHelper=snapshot;
+        }
+        if(!inert)valid&=rpWindowExcluded(w);
+    }
+    rpIsolation.lastSharingHelperScan=helpers;
     rpIsolation.windowsExcluded=valid;if(!valid)rpIsolation.exclusionFailed=YES;return valid;
 }
-static NSDictionary *rpIsolationDiagnostics(void){return @{@"dedicated_application":@([NSApp isKindOfClass:RPIsolatedApplication.class]),@"unexpected_input":@(rpIsolation.unexpectedInput),@"first_rejected_event_type":@(rpIsolation.firstRejectedType),@"foreground_interrupted":@(rpIsolation.foregroundInterrupted),@"exclusion_failed":@(rpIsolation.exclusionFailed),@"windows_excluded":@(rpIsolation.windowsExcluded),@"first_window_exclusion_failure":rpIsolation.firstWindowExclusionFailure?:@{}};}
+static NSDictionary *rpIsolationDiagnostics(void){return @{@"dedicated_application":@([NSApp isKindOfClass:RPIsolatedApplication.class]),@"unexpected_input":@(rpIsolation.unexpectedInput),@"first_rejected_event_type":@(rpIsolation.firstRejectedType),@"foreground_interrupted":@(rpIsolation.foregroundInterrupted),@"exclusion_failed":@(rpIsolation.exclusionFailed),@"windows_excluded":@(rpIsolation.windowsExcluded),@"first_window_exclusion_failure":rpIsolation.firstWindowExclusionFailure?:@{},@"first_accepted_inert_helper":rpIsolation.firstAcceptedInertHelper?:@{},@"last_sharing_helper_scan":rpIsolation.lastSharingHelperScan?:@[]};}
 static NSWindow *rpMakeWindow(NSRect frame,NSString *title,NSWindowStyleMask style){
     NSWindow *window=[[RPIsolatedWindow alloc]initWithContentRect:frame styleMask:style backing:NSBackingStoreBuffered defer:NO];
     window.title=title;window.releasedWhenClosed=NO;window.animationBehavior=NSWindowAnimationBehaviorNone;window.hasShadow=NO;return window;

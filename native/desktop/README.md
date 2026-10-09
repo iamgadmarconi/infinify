@@ -302,7 +302,13 @@ and all actionable or unknown events still latch failure. There is no event-tag
 exemption. Scripted DesktopView calls bypass the event queue. All owned-window
 exclusion contracts are checked before capture and mutation. Diagnostics preserve
 the first failing window's class, ID, visibility and mouse/key/main exclusion flags;
-unknown windows remain forbidden. No window titles or human text are recorded.
+unknown windows remain forbidden except an enumeration-only AppKit auxiliary:
+the exact class NSLocalWindowSharingWindow with ID -1, hidden, unable to become
+key/main and currently neither key nor main. Every scan rechecks those conditions
+and records accepted helper state separately from failures; any registration,
+visibility or key/main capability change fails the gate. The probe never alters
+that helper. Direct owned-window checks and before-order checks retain their strict
+mouse exclusion requirement. No window titles or human text are recorded.
 
 Every setter checks the exact owned identity, unchanged read-only transform,
 recognized geometry, deadline, foreground identity, fresh fixture exclusion state,
