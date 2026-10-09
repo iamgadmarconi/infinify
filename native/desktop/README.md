@@ -164,3 +164,63 @@ capture, hotkeys, or event taps. The app build and this test are integration
 checks only. Live native focus, multiple windows of one app, third-party apps,
 physical displays, shortcut delivery, foreground notifications, and input-tap
 behavior remain unrun and unproven for this path.
+
+## Experimental native resizing
+
+`--experimental-native-resize` independently enables eight orange handles on the
+selected ordinary source. Handles use true projected world edges; viewport clipping
+does not invent resize edges. Shift/group resize is rejected. Default controls stay
+unchanged. Escape requests cancellation (the global observer does not suppress the
+native app's Escape); release ends the gesture. The OS must already permit event
+observation; no permission prompt is requested. Global Escape observation remains
+unproved on a live host.
+
+`resize-coordinator.m` calls the real Rust JSON C ABI only on the main thread. Every
+emitted adapter effect is registered before its serial worker dispatch, matched to
+the controller's current pending effect, and reconciled on main even after cancel,
+output removal, or quit. Duplicate dispatch is rejected for the coordinator lifetime.
+There is no second motion queue. Setter timeout uncertainty retains the source;
+unknown geometry, temporary CG absence, or stream failure never attests lifetime end.
+Chooser/load/detach/return require the controller's structural guard to permit them.
+Quit drains every dispatched call without a timeout-based destruction deadline, then
+saves committed geometry; unresolved uncertainty is reported, not rolled back or
+reported successful. An OS call that stalls leaves shutdown visibly pending.
+
+The native driver reuses `native/families/window-server-family.h`: read-only yabai
+MIT-derived WindowServer queries at commit
+`dd845723416f5fe92af49fad5ebab00369e07edd`, with `YABAI-NOTICE.txt` copied into the app.
+Unknown ancestry, children, foreign association, and unmapped extent are unsupported.
+A fresh root-only guard is checked immediately before AX size mutation. Its veto is
+an adapter policy refusal, not evidence about AX resize capability. Original adapter
+results, including actual AX/CG rectangles and timeout flags, pass through unchanged.
+
+Managed capture never unconditionally enqueues frames. Initial binding explicitly
+invalidates capture authority. Acceptance requires exact stream/source/generation/
+revision, complete typed metadata, a strictly newer WindowServer mach display time
+than the main-thread observation cutoff and last displayed frame, real CV buffer
+dimensions, a bounded pixel crop derived from contentRect and scaleFactor, and
+screenRect plus content extent matching a freshly verified root-only native frame.
+Missing metadata has no arrival-time, frame-count, or configuration-callback fallback.
+The same sample acknowledged by the C ABI is installed. Placement and input mappings
+include content padding; input native coordinates remain native geometry. Lost
+mapping immediately removes every existing surface and clears retained frames. The
+last accepted sample is retained with its revision for newly visible placements of
+static sources; a new layer that cannot install it remains inert. Generic geometry
+polling is disabled for managed sources; the capture gate reconciles fresh idle
+geometry only when the controller permits structural changes, then requires a
+post-observation frame. Active or uncertain transactions retain exclusive ownership.
+
+A revision change requests updated stream dimensions after the cutoff; its callback
+is never proof of fresh pixels. Whether static native applications reliably emit a
+new Complete frame after this request is **unproved**. Strict metadata checks may
+leave a tile inert. Metadata proves geometric freshness, not semantic layout or
+pixel correctness; current screenRect coordinate assumptions require live validation.
+
+`tests/e2e/desktop-resize.sh` exercises the production coordinator, Rust C ABI, and
+real synthetic CVPixelBuffer/CMSampleBuffer objects without NSApplication startup or
+any native windows, AX calls, capture streams, activation, event taps, or fixtures.
+This is headless contract evidence only. The signed app is built without launching.
+The existing independent resize fixture does **not** prove this integration. A future
+explicitly authorized owned-fixture gate must cross real handles, AX mutation, SCK,
+renderer pixels, independent AX/CG observation, clamp behavior, static-frame refresh,
+Escape handling, and cleanup. No such integrated live proof has been run or claimed.

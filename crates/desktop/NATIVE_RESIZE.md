@@ -123,3 +123,15 @@ The existing snap oracle remains separate. Floating-point fractional displacemen
 is still the existing reducer behavior, whereas upstream truncates displacement
 to integers; literal fractional parity is unresolved. No full DriftWM/native
 macOS behavior parity is claimed.
+
+### Experimental desktop integration (headless evidence only)
+
+The desktop flag `--experimental-native-resize` now connects eight true-edge handles
+to the native resize transaction C ABI through a serial adapter coordinator. See
+`native/desktop/README.md` for dispatch, capture metadata, provenance, lifecycle,
+and exact unrun native boundaries. `dw_resize_apply_guarded` preserves the original
+`dw_resize_apply` wrapper while allowing a fresh root-only family policy veto before
+the setter. A veto returns Unsupported with the real preflight observation and
+`mutation_attempted=false`; this is policy refusal, not an AX capability finding.
+Ownership/deadline are rechecked after the family query. No frozen live fixture
+receipts or hashes were replaced; this guarded path has no live validation yet.

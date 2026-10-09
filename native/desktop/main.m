@@ -7,6 +7,8 @@
 #import <Carbon/Carbon.h>
 #include "driftwm_desktop.h"
 #import "focus-driver.h"
+#import "resize-driver.h"
+#include <mach/mach_time.h>
 
 static NSDictionary *pointJSON(CGPoint p) { return @{@"x":@(p.x),@"y":@(p.y)}; }
 static NSDictionary *rectJSON(CGRect r) { return @{@"origin":pointJSON(r.origin),@"size":@{@"width":@(r.size.width),@"height":@(r.size.height)}}; }
@@ -26,22 +28,35 @@ static CGRect topRect(NSRect r) { return CGRectMake(r.origin.x,screenTop()-NSMax
 @property NSString *error;
 @property BOOL detached;
 @property BOOL streamStopped;
+@property (weak) DWResizeCoordinator *resize;
+@property NSNumber *configuredRevision;
+@property CMSampleBufferRef latestSample;
+@property NSNumber *latestRevision;
+@property BOOL resizeFailureHandled;
+- (void)clearSample;
 @end
 @implementation LiveSource
-- (void)stream:(SCStream *)stream didStopWithError:(NSError *)error { (void)stream; self.error=error.localizedDescription; }
+- (void)stream:(SCStream *)stream didStopWithError:(NSError *)error { dispatch_async(dispatch_get_main_queue(),^{if(stream!=self.stream||self.detached)return;self.error=error.localizedDescription;self.resizeFailureHandled=YES;[self.resize invalidate:self.logical];[self.resize cancel];}); }
 - (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sample ofType:(SCStreamOutputType)type {
-    (void)stream;
-    if(self.detached||type!=SCStreamOutputTypeScreen||!CMSampleBufferIsValid(sample)||!CMSampleBufferGetImageBuffer(sample))return;
+    if(stream!=self.stream)return;
+    if(self.detached||self.error||type!=SCStreamOutputTypeScreen||!CMSampleBufferIsValid(sample)||!CMSampleBufferGetImageBuffer(sample))return;
+    if(self.resize){[self.resize accept:sample window:self.logical stream:stream install:^BOOL(CMSampleBufferRef accepted){return [self installSample:accepted];}];return;}
     CFArrayRef a=CMSampleBufferGetSampleAttachmentsArray(sample,NO);
-    if(a&&CFArrayGetCount(a)){NSDictionary *info=(__bridge NSDictionary *)CFArrayGetValueAtIndex(a,0);if([info[SCStreamFrameInfoStatus] integerValue]!=SCFrameStatusComplete)return;}
-    CVImageBufferRef buffer=CMSampleBufferGetImageBuffer(sample); self.buffer=CGSizeMake(CVPixelBufferGetWidth(buffer),CVPixelBufferGetHeight(buffer));
-    CMSampleBufferRef copy=NULL;if(CMSampleBufferCreateCopy(kCFAllocatorDefault,sample,&copy)!=noErr)return;
-    CFArrayRef attachments=CMSampleBufferGetSampleAttachmentsArray(copy,YES);
-    if(attachments&&CFArrayGetCount(attachments))CFDictionarySetValue((CFMutableDictionaryRef)CFArrayGetValueAtIndex(attachments,0),kCMSampleAttachmentKey_DisplayImmediately,kCFBooleanTrue);
-    for(AVSampleBufferDisplayLayer *surface in self.surfaces){if(surface.sampleBufferRenderer.status==AVQueuedSampleBufferRenderingStatusFailed)[surface.sampleBufferRenderer flush];if(surface.sampleBufferRenderer.readyForMoreMediaData)[surface.sampleBufferRenderer enqueueSampleBuffer:copy];}
-    self.frames++;CFRelease(copy);
+    if(!a||!CFArrayGetCount(a))return;
+    NSDictionary *info=(__bridge NSDictionary *)CFArrayGetValueAtIndex(a,0);
+    if(![info[SCStreamFrameInfoStatus]isKindOfClass:NSNumber.class]||[info[SCStreamFrameInfoStatus]integerValue]!=SCFrameStatusComplete)return;
+    [self installSample:sample];
 }
-- (void)dealloc { if(_router.eventSource)CFRelease(_router.eventSource); }
+- (BOOL)installSample:(CMSampleBufferRef)sample {
+    if(self.resize){for(AVSampleBufferDisplayLayer *surface in self.surfaces)if(surface.hidden||surface.sampleBufferRenderer.status==AVQueuedSampleBufferRenderingStatusFailed||!surface.sampleBufferRenderer.readyForMoreMediaData)return NO;}
+    CFArrayRef attachments=CMSampleBufferGetSampleAttachmentsArray(sample,YES);if(attachments&&CFArrayGetCount(attachments))CFDictionarySetValue((CFMutableDictionaryRef)CFArrayGetValueAtIndex(attachments,0),kCMSampleAttachmentKey_DisplayImmediately,kCFBooleanTrue);
+    CVImageBufferRef buffer=CMSampleBufferGetImageBuffer(sample);self.buffer=CGSizeMake(CVPixelBufferGetWidth(buffer),CVPixelBufferGetHeight(buffer));
+    for(AVSampleBufferDisplayLayer *surface in self.surfaces){if(surface.hidden)continue;if(surface.sampleBufferRenderer.status==AVQueuedSampleBufferRenderingStatusFailed)[surface.sampleBufferRenderer flush];if(surface.sampleBufferRenderer.readyForMoreMediaData)[surface.sampleBufferRenderer enqueueSampleBuffer:sample];}
+    if(self.resize){[self clearSample];self.latestSample=(CMSampleBufferRef)CFRetain(sample);self.latestRevision=[self.resize captureState:self.logical][@"observation_revision"];}
+    self.frames++;return YES;
+}
+- (void)clearSample {if(self.latestSample){CFRelease(self.latestSample);self.latestSample=NULL;}self.latestRevision=nil;}
+- (void)dealloc { if(_latestSample)CFRelease(_latestSample);if(_router.eventSource)CFRelease(_router.eventSource); }
 @end
 @interface DesktopView : FlippedView
 @property (weak) Desktop *desktop;
@@ -55,6 +70,7 @@ static CGRect topRect(NSRect r) { return CGRectMake(r.origin.x,screenTop()-NSMax
 @property NSNumber *dragOutput;
 @property LiveSource *pressedSource;
 @property CGPoint pressedLocal;
+@property NSNumber *resizeTransaction;
 @property NSInteger gesture; // 1 pan, 2 logical world drag, 3 native pointer
 - (void)render:(NSDictionary *)snapshot;
 - (NSNumber *)outputAt:(CGPoint)p;
@@ -63,6 +79,12 @@ static CGRect topRect(NSRect r) { return CGRectMake(r.origin.x,screenTop()-NSMax
 @interface Desktop : NSObject <NSTableViewDataSource,NSTableViewDelegate,NSWindowDelegate>
 @property DriftDesktop *controller;
 @property BOOL experimentalNavigation;
+@property BOOL experimentalResize;
+@property DWResizeCoordinator *resize;
+@property id resizeKeyMonitor;
+@property id resizeGlobalKeyMonitor;
+@property NSNumber *resizeSavedTransaction;
+- (void)configureResize;
 @property DWNavigationCoordinator *navigation;
 @property NSTimer *frameTimer;
 @property CFTimeInterval lastObservation;
@@ -123,20 +145,33 @@ static CGRect topRect(NSRect r) { return CGRectMake(r.origin.x,screenTop()-NSMax
     return nil;
 }
 - (void)render:(NSDictionary *)snapshot {
-    NSMutableSet *keys=[NSMutableSet set]; [CATransaction begin];[CATransaction setDisableActions:YES];
+    NSMutableSet *keys=[NSMutableSet set],*invalidate=[NSMutableSet set]; [CATransaction begin];[CATransaction setDisableActions:YES];
     for(NSDictionary *p in snapshot[@"placements"]){
         if(![self.outputs containsObject:p[@"output"]])continue;
         NSString *key=[NSString stringWithFormat:@"%@:%@",p[@"window"],p[@"output"]];[keys addObject:key];
         CALayer *tile=self.tiles[key];if(!tile){tile=[CALayer layer];tile.masksToBounds=YES;tile.backgroundColor=[NSColor colorWithWhite:.16 alpha:1].CGColor;[self.layer insertSublayer:tile atIndex:0];self.tiles[key]=tile;}
         CGRect full=jsonRect(p[@"screen_rect"]),clip=jsonRect(p[@"clip_rect"]);tile.frame=CGRectOffset(clip,-self.globalBounds.origin.x,-self.globalBounds.origin.y);
         LiveSource *source=self.desktop.sources[p[@"window"]];
-        AVSampleBufferDisplayLayer *surface=self.surfaces[key];
+        AVSampleBufferDisplayLayer *surface=self.surfaces[key];BOOL newSurface=surface==nil;
         if(source&&!source.detached){
             if(!surface){for(CALayer *child in tile.sublayers.copy)[child removeFromSuperlayer];surface=[AVSampleBufferDisplayLayer layer];surface.videoGravity=AVLayerVideoGravityResize;[tile addSublayer:surface];self.surfaces[key]=surface;[source.surfaces addObject:surface];}
-            surface.frame=CGRectMake(full.origin.x-clip.origin.x,full.origin.y-clip.origin.y,full.size.width,full.size.height);
+            BOOL settled=!source.resize||[p[@"presentation_settled"]boolValue];
+            surface.hidden=!settled;if(!settled){[source clearSample];[surface removeFromSuperlayer];[source.surfaces removeObject:surface];[self.surfaces removeObjectForKey:key];surface=nil;}
+            if(source.resize&&settled){CGRect crop=jsonRect(p[@"buffer_crop"]);NSDictionary *buffer=p[@"source"][@"buffer"];CGFloat sx=clip.size.width/crop.size.width,sy=clip.size.height/crop.size.height;
+                surface.frame=CGRectMake(-crop.origin.x*sx,-crop.origin.y*sy,[buffer[@"width"]doubleValue]*sx,[buffer[@"height"]doubleValue]*sy);
+            }else surface.frame=CGRectMake(full.origin.x-clip.origin.x,full.origin.y-clip.origin.y,full.size.width,full.size.height);
+            if(source.resize&&settled&&surface.sampleBufferRenderer.status==AVQueuedSampleBufferRenderingStatusFailed){surface.hidden=YES;[invalidate addObject:source.logical];}
+            if(source.resize&&settled&&newSurface&&![source.resize.installingWindow isEqual:source.logical]){
+                if(source.latestSample&&[source.latestRevision isEqual:p[@"source"][@"observation_revision"]]&&surface.sampleBufferRenderer.readyForMoreMediaData)[surface.sampleBufferRenderer enqueueSampleBuffer:source.latestSample];
+                else {surface.hidden=YES;[invalidate addObject:source.logical];}
+            }
         }else{
             if(surface){[surface.sampleBufferRenderer flush];[surface removeFromSuperlayer];[self.surfaces removeObjectForKey:key];}
             if(!tile.sublayers.count){CATextLayer *text=[CATextLayer layer];text.string=[NSString stringWithFormat:@"Detached window %@\nChoose a source to rebind\n⌃⌥ click to dismiss",p[@"window"]];text.fontSize=17;text.foregroundColor=NSColor.whiteColor.CGColor;text.wrapped=YES;text.frame=CGRectMake(12,12,MAX(40,clip.size.width-24),100);text.contentsScale=NSScreen.mainScreen.backingScaleFactor;[tile addSublayer:text];}
+        }
+        for(CALayer *child in tile.sublayers.copy)if([child.name isEqual:@"resize-handle"])[child removeFromSuperlayer];
+        if(self.desktop.experimentalResize&&[snapshot[@"focused"]isEqual:p[@"window"]]&&[p[@"presentation_settled"]boolValue])for(NSDictionary *handle in DWResizeHandles(full,clip)){
+            CALayer *h=[CALayer layer];h.name=@"resize-handle";h.backgroundColor=NSColor.systemOrangeColor.CGColor;h.frame=CGRectMake([handle[@"x"]doubleValue]-clip.origin.x-4,[handle[@"y"]doubleValue]-clip.origin.y-4,8,8);[tile addSublayer:h];
         }
         // Placement order is the controller's bottom-to-top world z order.
         [tile removeFromSuperlayer];[self.layer insertSublayer:tile atIndex:(unsigned)keys.count-1];
@@ -145,7 +180,7 @@ static CGRect topRect(NSRect r) { return CGRectMake(r.origin.x,screenTop()-NSMax
         AVSampleBufferDisplayLayer *surface=self.surfaces[key];for(LiveSource *source in self.desktop.sources.allValues)[source.surfaces removeObject:surface];
         [self.tiles[key] removeFromSuperlayer];[self.tiles removeObjectForKey:key];[self.surfaces removeObjectForKey:key];
     }
-    [CATransaction commit];self.status.stringValue=self.desktop.statusText?:@"";
+    [CATransaction commit];self.status.stringValue=self.desktop.statusText?:@"";for(NSNumber *window in invalidate)[self.desktop.resize invalidate:window];
 }
 - (NSDictionary *)hit:(CGPoint)p output:(NSNumber *)output {
     // Controller input intentionally rejects placeholders. Find their geometry only
@@ -155,6 +190,7 @@ static CGRect topRect(NSRect r) { return CGRectMake(r.origin.x,screenTop()-NSMax
     return [self.desktop call:@{@"op":@"hit",@"output":output,@"screen":pointJSON(p)}][@"hit"];
 }
 - (BOOL)forward:(CGEventRef)e at:(CGPoint)p output:(NSNumber *)output activate:(BOOL)activate {
+    if(self.desktop.resize&&![self.desktop.resize canRemove:nil])return NO;
     if(activate)[self.desktop cancelNavigation];
     if(!e||!output)return NO;
     if(!AXIsProcessTrusted()){self.desktop.statusText=@"Input requires Accessibility access. Enable it in System Settings, then reopen.";return NO;}
@@ -178,8 +214,18 @@ static CGRect topRect(NSRect r) { return CGRectMake(r.origin.x,screenTop()-NSMax
 - (void)mouseDown:(NSEvent *)e {
     if(self.desktop.probe&&!self.desktop.probeDrivingGesture){self.desktop.probeHumanInput=YES;return;}
     [self.desktop cancelNavigation];
+    if(self.desktop.resize&&![self.desktop.resize canRemove:nil]){[self.desktop.resize cancel];return;}
     CGPoint p=[self screenPoint:e];NSNumber *output=[self outputAt:p];if(!output)return;
     self.startPoint=self.lastPoint=p;self.dragOutput=output;
+    if(self.desktop.experimentalResize&&!(e.modifierFlags&(NSEventModifierFlagControl|NSEventModifierFlagOption))){NSDictionary *snapshot=[self.desktop call:@{@"op":@"snapshot"}];
+        for(NSDictionary *placement in [snapshot[@"placements"]reverseObjectEnumerator])if([placement[@"output"]isEqual:output]&&[placement[@"window"]isEqual:snapshot[@"focused"]]&&[placement[@"presentation_settled"]boolValue]){
+            BOOL occluded=NO;for(NSDictionary *front in [snapshot[@"placements"]reverseObjectEnumerator]){if(front==placement)break;if([front[@"output"]isEqual:output]&&CGRectContainsPoint(jsonRect(front[@"clip_rect"]),p)){occluded=YES;break;}}if(occluded)continue;
+            for(NSDictionary *h in DWResizeHandles(jsonRect(placement[@"screen_rect"]),jsonRect(placement[@"clip_rect"])))if(hypot(p.x-[h[@"x"]doubleValue],p.y-[h[@"y"]doubleValue])<=7){
+                NSDictionary *reply=[self.desktop.resize request:@{@"op":@"begin_native_resize",@"window":placement[@"window"],@"output":output,@"edges":h[@"edge"],@"start_screen":pointJSON(p),@"group":@((e.modifierFlags&NSEventModifierFlagShift)!=0)}];
+                if(reply){self.resizeTransaction=reply[@"transaction"];self.gesture=4;}[self.desktop render];return;
+            }
+        }
+    }
     NSDictionary *hit=[self hit:p output:output];BOOL isHit=[hit isKindOfClass:NSDictionary.class];
     BOOL option=(e.modifierFlags&NSEventModifierFlagOption)!=0,control=(e.modifierFlags&NSEventModifierFlagControl)!=0;
     if(control&&option&&isHit&&!self.desktop.sources[hit[@"window"]]){[self.desktop call:@{@"op":@"forget",@"window":hit[@"window"]}];[self.desktop render];[self.desktop saveScene];return;}
@@ -192,7 +238,8 @@ static CGRect topRect(NSRect r) { return CGRectMake(r.origin.x,screenTop()-NSMax
 - (void)mouseDragged:(NSEvent *)e {
     if(self.desktop.probe&&!self.desktop.probeDrivingGesture){self.desktop.probeHumanInput=YES;return;}
     CGPoint p=[self screenPoint:e];
-    if(self.gesture==1)[self.desktop call:@{@"op":@"pan",@"output":self.dragOutput,@"screen_delta":pointJSON(CGPointMake(self.lastPoint.x-p.x,self.lastPoint.y-p.y))}];
+    if(self.gesture==4)[self.desktop.resize request:@{@"op":@"native_resize_to",@"transaction":self.resizeTransaction,@"screen":pointJSON(p)}];
+    else if(self.gesture==1)[self.desktop call:@{@"op":@"pan",@"output":self.dragOutput,@"screen_delta":pointJSON(CGPointMake(self.lastPoint.x-p.x,self.lastPoint.y-p.y))}];
     else if(self.gesture==2)[self.desktop call:@{@"op":@"gesture_to",@"screen_delta":pointJSON(CGPointMake(p.x-self.startPoint.x,p.y-self.startPoint.y))}];
     else if(self.gesture==3){CGEventRef cg=CGEventCreateCopy(e.CGEvent);[self forward:cg at:p output:self.dragOutput activate:NO];CFRelease(cg);}
     self.lastPoint=p;[self.desktop render];
@@ -206,12 +253,13 @@ static CGRect topRect(NSRect r) { return CGRectMake(r.origin.x,screenTop()-NSMax
         if([birth(router.pid)isEqual:router.processBirth]&&[current[(id)kCGWindowOwnerPID]intValue]==router.pid&&current[(id)kCGWindowBounds])router.bounds=current[(id)kCGWindowBounds];
         sig_atomic_t wasStopped=stopped;stopped=0;CGEventRef up=CGEventCreateMouseEvent(self.pressedSource.router.eventSource,kCGEventLeftMouseUp,CGPointZero,kCGMouseButtonLeft);[self.pressedSource.router post:up at:self.pressedLocal];CFRelease(up);if(wasStopped)stopped=wasStopped;self.pressedSource=nil;}
 }
-- (void)mouseUp:(NSEvent *)e { if(self.desktop.probe&&!self.desktop.probeDrivingGesture){self.desktop.probeHumanInput=YES;return;} (void)e;[self releasePressed];if(self.gesture==2)[self.desktop call:@{@"op":@"end_gesture"}];self.gesture=0;[self.desktop saveScene]; }
+- (void)mouseUp:(NSEvent *)e { if(self.desktop.probe&&!self.desktop.probeDrivingGesture){self.desktop.probeHumanInput=YES;return;} (void)e;if(self.gesture==4)[self.desktop.resize request:@{@"op":@"end_native_resize",@"transaction":self.resizeTransaction}];self.resizeTransaction=nil;[self releasePressed];if(self.gesture==2)[self.desktop call:@{@"op":@"end_gesture"}];self.gesture=0;[self.desktop saveScene]; }
 - (void)zoom:(double)factor at:(CGPoint)p output:(NSNumber *)output {
     for(NSDictionary *o in [self.desktop call:@{@"op":@"snapshot"}][@"outputs"])if([o[@"id"] isEqual:output]){[self.desktop call:@{@"op":@"zoom",@"output":output,@"zoom":@(MAX(.001,MIN(1,[o[@"zoom"] doubleValue]*factor))),@"anchor":pointJSON(p)}];break;}
     [self.desktop render];[self.desktop saveScene];
 }
 - (void)scrollWheel:(NSEvent *)e {
+    if(self.desktop.resize&&![self.desktop.resize canRemove:nil])return;
     if(self.desktop.probe){self.desktop.probeHumanInput=YES;return;}
     [self.desktop cancelNavigation];
     CGPoint p=[self screenPoint:e];NSNumber *output=[self outputAt:p];if(!output)return;
@@ -219,10 +267,11 @@ static CGRect topRect(NSRect r) { return CGRectMake(r.origin.x,screenTop()-NSMax
     else if((e.modifierFlags&NSEventModifierFlagOption)||![[self hit:p output:output]isKindOfClass:NSDictionary.class]){[self.desktop call:@{@"op":@"pan",@"output":output,@"screen_delta":pointJSON(CGPointMake(-e.scrollingDeltaX,-e.scrollingDeltaY))}];[self.desktop render];[self.desktop saveScene];}
     else {CGEventRef cg=CGEventCreateCopy(e.CGEvent);[self forward:cg at:p output:output activate:NO];CFRelease(cg);}
 }
-- (void)magnifyWithEvent:(NSEvent *)e { [self.desktop cancelNavigation]; if(self.desktop.probe){self.desktop.probeHumanInput=YES;return;} CGPoint p=[self screenPoint:e];NSNumber *output=[self outputAt:p];if(output)[self zoom:1+e.magnification at:p output:output]; }
+- (void)magnifyWithEvent:(NSEvent *)e { if(self.desktop.resize&&![self.desktop.resize canRemove:nil])return; [self.desktop cancelNavigation]; if(self.desktop.probe){self.desktop.probeHumanInput=YES;return;} CGPoint p=[self screenPoint:e];NSNumber *output=[self outputAt:p];if(output)[self zoom:1+e.magnification at:p output:output]; }
 @end
 static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEventRef event,void *context) {
     (void)proxy;Desktop *desktop=(__bridge Desktop *)context;
+    if(type==kCGEventKeyDown&&CGEventGetIntegerValueField(event,kCGKeyboardEventKeycode)==53)[desktop.resize cancel];
     if(type==kCGEventTapDisabledByTimeout||type==kCGEventTapDisabledByUserInput){desktop.navigation.focusAllowed=NO;[desktop.navigationInput cancel];[desktop.navigation invalidate];return event;}
     CGEventFlags flags=CGEventGetFlags(event);
     NSUInteger modifiers=((flags&kCGEventFlagMaskAlternate)?1:0)|((flags&kCGEventFlagMaskShift)?2:0)|((flags&(kCGEventFlagMaskCommand|kCGEventFlagMaskControl|kCGEventFlagMaskSecondaryFn|kCGEventFlagMaskAlphaShift))?4:0);
@@ -244,6 +293,21 @@ static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) {
 - (instancetype)init {
     if((self=[super init])){_controller=driftwm_desktop_create();_panels=[NSMutableArray array];_views=[NSMutableArray array];_sources=[NSMutableDictionary dictionary];_choices=[NSMutableArray array];_pendingStops=[NSMutableArray array];_statusText=@"Option-drag: pan · ⌘-wheel/pinch: zoom · ⌃⌥-drag: move · +Shift: cluster · ⌃⌥Esc: exit";}
     return self;
+}
+- (void)configureResize {
+    if(!self.experimentalResize||self.resize)return;
+    __weak Desktop *weak=self;dispatch_queue_t queue=dispatch_queue_create("org.infinify.resize",DISPATCH_QUEUE_SERIAL);
+    self.resize=[[DWResizeCoordinator alloc]initWithCommand:^NSDictionary *(NSDictionary *c){return [weak call:c];} driver:[DWNativeResizeDriver new] clock:^uint64_t{return mach_absolute_time();} worker:^(DWJob job){dispatch_async(queue,job);} main:^(DWJob job){dispatch_async(dispatch_get_main_queue(),job);}];
+    self.resize.enabled=YES;self.resize.changed=^{Desktop *d=weak;if(d.resize.failure)d.statusText=d.resize.failure;
+        for(NSDictionary *w in [d call:@{@"op":@"snapshot"}][@"windows"]){LiveSource *source=d.sources[w[@"window"]];id state=w[@"source"];if(source&&[state isKindOfClass:NSDictionary.class]&&state[@"capture_revision"]==NSNull.null)[source clearSample];if(!source||![state isKindOfClass:NSDictionary.class]||![state[@"observation_known"]boolValue])continue;
+            CGRect observed=jsonRect(state[@"observed_rect"]);source.router.bounds=CFBridgingRelease(CGRectCreateDictionaryRepresentation(observed));
+            if(source.stream&&![source.configuredRevision isEqual:state[@"observation_revision"]]){source.configuredRevision=state[@"observation_revision"];
+                SCStreamConfiguration *config=[SCStreamConfiguration new];config.width=(size_t)ceil(observed.size.width*2);config.height=(size_t)ceil(observed.size.height*2);config.pixelFormat=kCVPixelFormatType_32BGRA;config.minimumFrameInterval=CMTimeMake(1,30);config.queueDepth=3;config.showsCursor=NO;config.ignoreShadowsSingleWindow=YES;
+                SCStream *stream=source.stream;[stream updateConfiguration:config completionHandler:^(NSError *error){if(error)dispatch_async(dispatch_get_main_queue(),^{if(source.stream==stream&&!source.detached){source.error=error.localizedDescription;[source.resize invalidate:source.logical];[source.resize cancel];}});}];
+            }
+        }id transaction=[d call:@{@"op":@"snapshot"}][@"native_resize"];if([transaction isKindOfClass:NSDictionary.class]&&[transaction[@"phase"]isEqual:@"needs_observation"])d.statusText=@"Native resize remains uncertain; source retained and input disabled.";if([transaction isKindOfClass:NSDictionary.class]&&[d.resize canRemove:nil]&&!d.resize.obligations&&![d.resizeSavedTransaction isEqual:transaction[@"transaction"]]){d.resizeSavedTransaction=transaction[@"transaction"];[d saveScene];}[d render];};
+    self.resizeKeyMonitor=[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent *(NSEvent *event){if(event.keyCode==53&&weak.resize&&![weak.resize canRemove:nil]){[weak.resize cancel];return nil;}return event;}];
+    self.resizeGlobalKeyMonitor=[NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^(NSEvent *event){if(event.keyCode==53)[weak.resize cancel];}];
 }
 - (void)configureNavigation {
     if(!self.experimentalNavigation||self.navigation)return;
@@ -286,11 +350,13 @@ static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) {
     for(DesktopView *v in self.views){NSNumber *output=[v outputAt:point];if(output)return output;}return nil;
 }
 - (void)navigateButton:(NSButton *)sender {
+    [self.resize cancel];if(self.resize&&![self.resize canRemove:nil])return;
     NSNumber *output=[self navigationOutput:sender.superview];if(!output)return;
     if(sender.tag==0){id window=[self call:@{@"op":@"snapshot"}][@"focused"];if([window isKindOfClass:NSNumber.class])[self.navigation navigate:@{@"op":@"navigate_window",@"window":window,@"output":output,@"zoom_policy":@"reset"}];}
     else [self.navigation navigate:@{@"op":@"cycle_navigate",@"output":output,@"backward":@(sender.tag==1),@"held":@NO}];
 }
 - (void)cycleNavigation:(BOOL)backward {
+    [self.resize cancel];if(self.resize&&![self.resize canRemove:nil])return;
     if(!self.navigation.focusAllowed||!self.nextHotkey||!self.previousHotkey)return;
     NSNumber *held=[self.navigationInput takeShortcut:backward];if(!held)return;
     NSNumber *output=[self navigationOutput:nil];if(output)[self.navigation navigate:@{@"op":@"cycle_navigate",@"output":output,@"backward":@(backward),@"held":held}];
@@ -302,7 +368,7 @@ static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) {
     NSDictionary *reply=[NSJSONSerialization JSONObjectWithData:data options:0 error:nil];if(![reply[@"ok"]boolValue]){self.statusText=reply[@"error"]?:@"Controller error";return nil;}return reply[@"data"];
 }
 - (BOOL)loadScene:(NSString *)path {
-    [self cancelNavigation];
+    [self cancelNavigation];[self.resize cancel];if(self.resize&&![self.resize canRemove:nil]){self.statusText=@"Resize must settle before loading";return NO;}
     self.statePath=path;
     if(![NSFileManager.defaultManager fileExistsAtPath:path])return YES;
     if([self call:@{@"op":@"load",@"path":path}])return YES;
@@ -312,9 +378,9 @@ static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) {
 }
 - (void)saveScene { if(self.statePath)[self call:@{@"op":@"save",@"path":self.statePath}]; }
 - (void)render { NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}];for(DesktopView *view in self.views)[view render:snapshot]; }
-- (void)quit:(id)sender { (void)sender;[self stopNavigation];stopped=1; }
-- (void)resizeUnavailable:(id)sender { if(self.probe&&sender){self.probeHumanInput=YES;return;} (void)sender;self.statusText=@"Native layout resize is unavailable. Resize the original app on the desktop, then return; capture reconciles without changing world geometry.";[self render]; }
-- (void)returnDesktop:(id)sender { if(self.probe&&sender){self.probeHumanInput=YES;return;} (void)sender;[self cleanup];[self showChooser:nil]; }
+- (void)quit:(id)sender { (void)sender;[self.resize shutdown];[self stopNavigation];stopped=1; }
+- (void)resizeUnavailable:(id)sender { if(self.probe&&sender){self.probeHumanInput=YES;return;} (void)sender;if(self.experimentalResize){self.statusText=@"Experimental: select one source, then drag an orange edge handle. Unknown family or capture mapping stays inert; Escape cancels shell input.";[self render];return;}self.statusText=@"Native layout resize is unavailable. Resize the original app on the desktop, then return; capture reconciles without changing world geometry.";[self render]; }
+- (void)returnDesktop:(id)sender { [self.resize cancel];if(self.resize&&![self.resize canRemove:nil]){self.statusText=@"Resize is pending or unresolved; source retained";[self render];return;} if(self.probe&&sender){self.probeHumanInput=YES;return;} (void)sender;[self cleanup];[self showChooser:nil]; }
 - (DesktopView *)panel:(NSRect)frame outputRects:(NSArray *)rects identities:(NSArray *)identities {
     NSPanel *panel=[[CanvasPanel alloc]initWithContentRect:frame styleMask:NSWindowStyleMaskBorderless|NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO];
     panel.releasedWhenClosed=NO;panel.level=NSFloatingWindowLevel;panel.animationBehavior=NSWindowAnimationBehaviorNone;panel.collectionBehavior=NSWindowCollectionBehaviorMoveToActiveSpace|NSWindowCollectionBehaviorFullScreenAuxiliary;
@@ -333,7 +399,7 @@ static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) {
     else for(NSScreen *screen in NSScreen.screens){NSNumber *display=screen.deviceDescription[@"NSScreenNumber"];CFUUIDRef uuid=CGDisplayCreateUUIDFromDisplayID(display.unsignedIntValue);NSString *name=uuid?CFBridgingRelease(CFUUIDCreateString(NULL,uuid)):nil;if(uuid)CFRelease(uuid);if(!name)continue;CGRect output=topRect(screen.frame);output.origin.y+=64;output.size.height-=64;[self panel:screen.frame outputRects:@[rectJSON(output)] identities:@[name]];}
     EventTypeSpec type={kEventClassKeyboard,kEventHotKeyPressed};OSStatus handler=InstallApplicationEventHandler(exitKey,1,&type,(__bridge void *)self,&_hotkeyHandler);EventHotKeyID key={'Infi',1};
     if(handler!=noErr||RegisterEventHotKey(53,controlKey|optionKey,key,GetApplicationEventTarget(),0,&_exitHotkey)!=noErr)self.statusText=@"Exit shortcut unavailable; use the visible Quit button.";
-    [self configureNavigation];[self render];
+    [self configureResize];[self configureNavigation];[self render];
 }
 - (void)refreshChoices:(id)sender {
     if(self.probe&&sender){self.probeHumanInput=YES;return;}
@@ -349,6 +415,7 @@ static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) {
     });}];
 }
 - (void)showChooser:(id)sender {
+    [self.resize cancel];if(self.resize&&![self.resize canRemove:nil]){self.statusText=@"Resize is pending or unresolved; source retained";[self render];return;}
     [self cancelNavigation];
     if(self.probe&&sender){self.probeHumanInput=YES;return;}
     (void)sender;
@@ -385,21 +452,23 @@ static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(logical)command[@"logical_id"]=logical;else {if(!world){NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}];NSDictionary *o=[snapshot[@"outputs"]firstObject];double zoom=[o[@"zoom"]doubleValue];CGPoint camera=jsonPoint(o[@"camera"]);world=rectJSON(CGRectMake(camera.x+30/MAX(.001,zoom),camera.y+30/MAX(.001,zoom),bounds.size.width,bounds.size.height));}command[@"world_rect"]=world;}
     source.logical=[self call:command][@"window"];if(!source.logical)return NO;self.sources[source.logical]=source;
     SCStreamConfiguration *config=[SCStreamConfiguration new];config.width=(size_t)source.buffer.width;config.height=(size_t)source.buffer.height;config.pixelFormat=kCVPixelFormatType_32BGRA;config.minimumFrameInterval=CMTimeMake(1,30);config.queueDepth=3;config.showsCursor=NO;config.ignoreShadowsSingleWindow=YES;
-    source.stream=[[SCStream alloc]initWithFilter:[[SCContentFilter alloc]initWithDesktopIndependentWindow:window] configuration:config delegate:source];NSError *error=nil;
+    source.resize=self.resize;
+    source.stream=[[SCStream alloc]initWithFilter:[[SCContentFilter alloc]initWithDesktopIndependentWindow:window] configuration:config delegate:source];[self.resize bind:source.logical stream:source.stream];NSError *error=nil;
     if(![source.stream addStreamOutput:source type:SCStreamOutputTypeScreen sampleHandlerQueue:dispatch_get_main_queue() error:&error]){source.error=error.localizedDescription;[self detach:source];return NO;}
-    [source.stream startCaptureWithCompletionHandler:^(NSError *e){if(e)dispatch_async(dispatch_get_main_queue(),^{source.error=e.localizedDescription;});}];
+    SCStream *starting=source.stream;[starting startCaptureWithCompletionHandler:^(NSError *e){if(e)dispatch_async(dispatch_get_main_queue(),^{if(source.stream==starting&&!source.detached)source.error=e.localizedDescription;});}];
     if(!privateAvailable)self.statusText=@"Live view only: private per-window input is unavailable on this OS.";
     [self render];return YES;
 }
 - (void)detach:(LiveSource *)source {
     [self cancelNavigation];
-    if(source.detached)return;for(DesktopView *view in self.views)if(view.pressedSource==source)[view releasePressed];source.detached=YES;
-    [self call:@{@"op":@"remove_source",@"window":source.logical,@"identity":source.identity,@"keep_placeholder":@YES}];
+    if(source.detached)return;[self.resize cancel];
+    if(![self call:@{@"op":@"remove_source",@"window":source.logical,@"identity":source.identity,@"keep_placeholder":@YES}])return;
+    for(DesktopView *view in self.views)if(view.pressedSource==source)[view releasePressed];source.detached=YES;[source clearSample];
     [self.pendingStops addObject:source];[source.stream stopCaptureWithCompletionHandler:^(NSError *error){(void)error;dispatch_async(dispatch_get_main_queue(),^{source.streamStopped=YES;source.stream=nil;[self.pendingStops removeObject:source];});}];[source.surfaces removeAllObjects];[self.sources removeObjectForKey:source.logical];
 }
 - (void)screensChanged:(NSNotification *)notification {
     (void)notification;if(self.demo||!self.panels.count)return;[self stopNavigation];
-    for(DesktopView *view in self.views){[view releasePressed];for(NSNumber *output in view.outputs)[self call:@{@"op":@"remove_output",@"output":output}];}
+    for(DesktopView *view in self.views){[view releasePressed];for(NSNumber *output in view.outputs){NSDictionary *reply=[self call:@{@"op":@"remove_output",@"output":output}];[self.resize consume:reply];}}
     for(NSPanel *panel in self.panels){[panel orderOut:nil];[panel close];}
     [self.panels removeAllObjects];[self.views removeAllObjects];for(LiveSource *source in self.sources.allValues)[source.surfaces removeAllObjects];
     if(self.exitHotkey){UnregisterEventHotKey(self.exitHotkey);self.exitHotkey=NULL;}if(self.hotkeyHandler){RemoveEventHandler(self.hotkeyHandler);self.hotkeyHandler=NULL;}
@@ -410,6 +479,7 @@ static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(self.navigation&&!self.frameTimer)[self.navigation frame];
     if(self.navigation&&CACurrentMediaTime()-self.lastObservation>=.5){self.lastObservation=CACurrentMediaTime();[self.navigation observe];}
     for(LiveSource *source in self.sources.allValues){
+        if(source.resize){if(source.error&&!source.resizeFailureHandled){source.resizeFailureHandled=YES;[self.resize invalidate:source.logical];[self.resize cancel];self.statusText=@"Capture failed; source retained until resize obligations settle";}continue;}
         NSDictionary *w=windowInfo(source.router.wid);if(source.error||![birth(source.router.pid)isEqual:source.router.processBirth]||[w[(id)kCGWindowOwnerPID]intValue]!=source.router.pid){self.statusText=source.error?:@"A source closed. Its world placeholder is retained for explicit rebind.";[self detach:source];continue;}
         CGRect bounds=CGRectZero;if(!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)w[(id)kCGWindowBounds],&bounds))continue;
         if(![source.router.bounds isEqual:w[(id)kCGWindowBounds]]){
@@ -423,15 +493,26 @@ static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(!self.frameTimer)[self render];
 }
 - (void)cleanup {
-    if(self.cleaning)return;self.cleaning=YES;[self stopNavigation];[self saveScene];
+    if(self.cleaning)return;self.cleaning=YES;[self.resize shutdown];[self stopNavigation];
+    while(self.resize.obligations){self.statusText=@"Quit pending: waiting for native resize result";[self render];pump(.01);}
+    if(self.resize&&![self.resize canRemove:nil]){self.statusText=@"Resize uncertainty remains unresolved at shutdown";fprintf(stderr,"%s\n",self.statusText.UTF8String);}
+    [self saveScene];
     for(DesktopView *view in self.views)[view releasePressed];
     NSArray *closing=self.sources.allValues;
     for(LiveSource *source in closing)[self detach:source];
-    NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:2];
-    while(deadline.timeIntervalSinceNow>0){BOOL done=self.pendingStops.count==0;if(done)break;pump(.01);}
-    for(DesktopView *view in self.views)for(NSNumber *output in view.outputs)[self call:@{@"op":@"remove_output",@"output":output}];
+    // Streaming lifetime is separate from controller removal: uncertainty retains
+    // the binding but cannot leave callbacks alive across controller destruction.
+    for(LiveSource *source in self.sources.allValues)if(source.stream&&![self.pendingStops containsObject:source]){
+        source.detached=YES;[self.pendingStops addObject:source];
+        [source.stream stopCaptureWithCompletionHandler:^(NSError *error){(void)error;dispatch_async(dispatch_get_main_queue(),^{source.streamStopped=YES;source.stream=nil;[self.pendingStops removeObject:source];});}];
+    }
+    while(self.pendingStops.count){self.statusText=@"Shutdown pending: waiting for capture streams";pump(.01);}
+    for(DesktopView *view in self.views)for(NSNumber *output in view.outputs){NSDictionary *reply=[self call:@{@"op":@"remove_output",@"output":output}];[self.resize consume:reply];}
     for(NSPanel *panel in self.panels){[panel orderOut:nil];[panel close];}[self.panels removeAllObjects];[self.views removeAllObjects];
     if(self.exitHotkey){UnregisterEventHotKey(self.exitHotkey);self.exitHotkey=NULL;}if(self.hotkeyHandler){RemoveEventHandler(self.hotkeyHandler);self.hotkeyHandler=NULL;}
+    if(self.resizeKeyMonitor){[NSEvent removeMonitor:self.resizeKeyMonitor];self.resizeKeyMonitor=nil;}
+    if(self.resizeGlobalKeyMonitor){[NSEvent removeMonitor:self.resizeGlobalKeyMonitor];self.resizeGlobalKeyMonitor=nil;}
+    if(!self.sources.count)self.resize=nil;
 
 }
 - (void)dealloc { [self stopNavigation];if(_controller)driftwm_desktop_destroy(_controller); }
@@ -558,17 +639,17 @@ static int runDemo(Desktop *desktop,NSString *directory,BOOL probe) {
     }report[@"passed"]=@(pass);save(report,receipt);return pass?0:2;
 }
 int main(int argc,const char **argv) { @autoreleasepool {
-    BOOL experimental=NO;const char *filtered[argc+1];int count=0;
-    for(int i=0;i<argc;i++){if(i>0&&!strcmp(argv[i],"--experimental-native-navigation")){experimental=YES;continue;}filtered[count++]=argv[i];}filtered[count]=NULL;argc=count;argv=filtered;
+    BOOL experimental=NO,resize=NO;const char *filtered[argc+1];int count=0;
+    for(int i=0;i<argc;i++){if(i>0&&!strcmp(argv[i],"--experimental-native-resize")){resize=YES;continue;}if(i>0&&!strcmp(argv[i],"--experimental-native-navigation")){experimental=YES;continue;}filtered[count++]=argv[i];}filtered[count]=NULL;argc=count;argv=filtered;
 
-    if(argc==2&&!strcmp(argv[1],"--help")){puts("Infinify.app — macOS 26+ Apple Silicon native window canvas\nDefault: show chooser; only explicitly selected windows are captured.\n--demo EMPTY_DIRECTORY: disposable interactive fixture, bounded to 60 seconds\n--demo-probe EMPTY_DIRECTORY: automated own-fixture E2E, no permission prompts\n--demo-probe-guard EMPTY_DIRECTORY: own-fixture interruption regression (expected exit 2)\n--experimental-native-navigation: gated Center/Previous/Next and Option-Tab focus navigation\n--state ABSOLUTE_PATH: explicit persistent scene file (default Application Support/Infinify/scene.json)\n--source DIR SECONDS NONCE: internal disposable child only\nOption-drag / blank scroll: pan. Command-wheel / pinch: anchored zoom (max 1x).\nControl-Option-drag: world move/snap; add Shift: cluster.\nNative left-click/drag/scroll forwarded only to selected, freshly validated source.\nNative keyboard/IME remain with the real app. Control-Option-Escape or Quit exits.\nResize status explains unavailable native layout resizing. No SIP/settings changes.");return 0;}
+    if(argc==2&&!strcmp(argv[1],"--help")){puts("Infinify.app — macOS 26+ Apple Silicon native window canvas\nDefault: show chooser; only explicitly selected windows are captured.\n--demo EMPTY_DIRECTORY: disposable interactive fixture, bounded to 60 seconds\n--demo-probe EMPTY_DIRECTORY: automated own-fixture E2E, no permission prompts\n--demo-probe-guard EMPTY_DIRECTORY: own-fixture interruption regression (expected exit 2)\n--experimental-native-resize: experimental eight-handle size-only native resize\n--experimental-native-navigation: gated Center/Previous/Next and Option-Tab focus navigation\n--state ABSOLUTE_PATH: explicit persistent scene file (default Application Support/Infinify/scene.json)\n--source DIR SECONDS NONCE: internal disposable child only\nOption-drag / blank scroll: pan. Command-wheel / pinch: anchored zoom (max 1x).\nControl-Option-drag: world move/snap; add Shift: cluster.\nNative left-click/drag/scroll forwarded only to selected, freshly validated source.\nNative keyboard/IME remain with the real app. Control-Option-Escape or Quit exits.\nResize status explains unavailable native layout resizing. No SIP/settings changes.");return 0;}
     BOOL child=argc==5&&!strcmp(argv[1],"--source"),demo=argc==3&&!strcmp(argv[1],"--demo"),guard=argc==3&&!strcmp(argv[1],"--demo-probe-guard"),probe=argc==3&&!strcmp(argv[1],"--demo-probe"),state=argc==3&&!strcmp(argv[1],"--state");
     if(argc!=1&&!child&&!demo&&!probe&&!guard&&!state)return 64;
-    if(experimental&&(child||probe||guard))return 64;
+    if((experimental||resize)&&(child||probe||guard))return 64;
     signal(SIGTERM,stopSignal);signal(SIGINT,stopSignal);signal(SIGHUP,stopSignal);
     [ProbeApplication sharedApplication];[NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];[NSApp finishLaunching];
     if(child){char *end=NULL;double seconds=strtod(argv[3],&end);if(!end||*end||!isfinite(seconds)||seconds<1||seconds>65)return 64;return source(@(argv[2]),seconds,@(argv[4]));}
-    Desktop *desktop=[Desktop new];desktop.experimentalNavigation=experimental;desktop.demo=demo||probe||guard;desktop.probe=probe||guard;desktop.interruptProbe=guard;
+    Desktop *desktop=[Desktop new];desktop.experimentalNavigation=experimental;desktop.experimentalResize=resize;desktop.demo=demo||probe||guard;desktop.probe=probe||guard;desktop.interruptProbe=guard;
     if(demo||probe||guard){NSString *dir=@(argv[2]);BOOL isDir=NO;if(![NSFileManager.defaultManager fileExistsAtPath:dir isDirectory:&isDir]||!isDir||[NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:nil].count)return 64;desktop.statePath=[dir stringByAppendingPathComponent:@"scene.json"];return runDemo(desktop,dir,probe||guard);}
     NSString *dir=[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/Infinify"];
     if(state){desktop.statePath=@(argv[2]);if(!desktop.statePath.isAbsolutePath)return 64;}

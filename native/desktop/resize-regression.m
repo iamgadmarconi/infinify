@@ -1,0 +1,98 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// No NSApplication, AX, capture stream, input tap, or native window is started.
+#import "resize-coordinator.h"
+#import "resize-capture-policy.h"
+#import <ScreenCaptureKit/ScreenCaptureKit.h>
+#import <CoreVideo/CoreVideo.h>
+#include "driftwm_desktop.h"
+static void check(BOOL ok,NSString *why){if(!ok){fprintf(stderr,"FAIL: %s\n",why.UTF8String);exit(2);}}
+static NSDictionary *rect(double x,double y,double w,double h){return @{ @"origin":@{@"x":@(x),@"y":@(y)},@"size":@{@"width":@(w),@"height":@(h)}};}
+static NSDictionary *identity(void){return @{@"pid":@123,@"birth_sec":@1800000000,@"birth_usec":@5,@"wid":@1};}
+static NSDictionary *call(DriftDesktop *c,NSDictionary *command){NSData *data=[NSJSONSerialization dataWithJSONObject:@{@"version":@1,@"command":command}options:0 error:nil];char *r=driftwm_desktop_request(c,data.bytes,data.length);check(r!=NULL,@"C ABI response");NSDictionary *reply=[NSJSONSerialization JSONObjectWithData:[NSData dataWithBytes:r length:strlen(r)]options:0 error:nil];driftwm_desktop_response_free(r);return [reply[@"ok"]boolValue]?reply[@"data"]:nil;}
+@interface Driver : NSObject <DWResizeDriver>
+@property CGRect bounds;
+@property BOOL family,timeout;
+@property NSString *outcome;
+@property NSUInteger setters;
+@end
+@implementation Driver
+- (NSDictionary *)rootExtent:(NSDictionary *)i{(void)i;return self.family?rect(self.bounds.origin.x,self.bounds.origin.y,self.bounds.size.width,self.bounds.size.height):nil;}
+- (NSDictionary *)perform:(NSDictionary *)e{
+    BOOL setter=[e[@"requested"]isKindOfClass:NSDictionary.class];if(setter)self.setters++;
+    NSDictionary *requested=setter?e[@"requested"]:@{@"width":@0,@"height":@0};
+    if(setter&&!self.timeout&&![self.outcome isEqual:@"rejected"]){CGSize size=CGSizeMake([requested[@"width"]doubleValue],[requested[@"height"]doubleValue]);if([self.outcome isEqual:@"clamped"])size.width=210;self.bounds=CGRectMake(self.bounds.origin.x,self.bounds.origin.y,size.width,size.height);}
+    BOOL observed=!(setter&&self.timeout);NSDictionary *r=observed?[self rootExtent:identity()]:rect(0,0,0,0);
+    return @{@"outcome":setter?(self.timeout?@"timed_out":self.outcome?:@"applied"):@"observed",@"ax_error":setter&&self.timeout?@(-25204):@0,@"mutation_attempted":@(setter),@"observed":@(observed),@"requested":requested,@"actual_ax":r,@"actual_cg":r};
+}
+@end
+static CMSampleBufferRef sample(CGRect native,NSDictionary *overrides){
+    CVPixelBufferRef pixels=NULL;check(CVPixelBufferCreate(NULL,480,360,kCVPixelFormatType_32BGRA,NULL,&pixels)==kCVReturnSuccess,@"pixel buffer");
+    CMVideoFormatDescriptionRef format=NULL;check(CMVideoFormatDescriptionCreateForImageBuffer(NULL,pixels,&format)==noErr,@"format");
+    CMSampleTimingInfo timing={kCMTimeInvalid,CMTimeMake(1,30),kCMTimeInvalid};CMSampleBufferRef s=NULL;check(CMSampleBufferCreateReadyWithImageBuffer(NULL,pixels,format,&timing,&s)==noErr,@"sample");CFRelease(format);CFRelease(pixels);
+    CFArrayRef a=CMSampleBufferGetSampleAttachmentsArray(s,YES);NSMutableDictionary *m=(__bridge NSMutableDictionary *)CFArrayGetValueAtIndex(a,0);
+    m[SCStreamFrameInfoStatus]=@(SCFrameStatusComplete);m[SCStreamFrameInfoDisplayTime]=@200;m[SCStreamFrameInfoScaleFactor]=@2;m[SCStreamFrameInfoContentScale]=@1;
+    m[SCStreamFrameInfoContentRect]=CFBridgingRelease(CGRectCreateDictionaryRepresentation(CGRectMake(10,10,native.size.width,native.size.height)));m[SCStreamFrameInfoScreenRect]=CFBridgingRelease(CGRectCreateDictionaryRepresentation(native));
+    for(id key in overrides){if(overrides[key]==NSNull.null)[m removeObjectForKey:key];else m[key]=overrides[key];}return s;
+}
+static void drain(NSMutableArray *workers,NSMutableArray *mains){NSUInteger n=0;while(workers.count||mains.count){check(++n<30,@"bounded drain");if(workers.count){DWJob job=workers[0];[workers removeObjectAtIndex:0];job();}if(mains.count){DWJob job=mains[0];[mains removeObjectAtIndex:0];job();}}}
+static NSDictionary *snap(DriftDesktop *c){return call(c,@{@"op":@"snapshot"});}
+static void scenario(NSString *edge,NSString *outcome,BOOL cancel,BOOL timeout,BOOL removeOutput){
+    DriftDesktop *c=driftwm_desktop_create();Driver *driver=[Driver new];driver.bounds=CGRectMake(10,20,200,150);driver.family=YES;driver.outcome=outcome;driver.timeout=timeout;
+    NSMutableArray *workers=[NSMutableArray array],*mains=[NSMutableArray array];
+    DWResizeCoordinator *co=[[DWResizeCoordinator alloc]initWithCommand:^NSDictionary *(NSDictionary *command){return call(c,command);}driver:driver clock:^uint64_t{return 100;}worker:^(DWJob job){[workers addObject:[job copy]];}main:^(DWJob job){[mains addObject:[job copy]];}];co.enabled=YES;
+    check(call(c,@{@"op":@"register_output",@"stable_id":@"one",@"screen_bounds":rect(0,0,1000,800)})!=nil,@"output");
+    check(call(c,@{@"op":@"attach",@"identity":identity(),@"bundle_id":@"test",@"title":@"source",@"buffer":@{@"width":@400,@"height":@300},@"source_rect":rect(10,20,200,150),@"world_rect":rect(100,100,200,150)})!=nil,@"attach");
+    id stream=[NSObject new];[co bind:@1 stream:stream];CMSampleBufferRef s=sample(driver.bounds,@{});__block CMSampleBufferRef installed=NULL;
+    check([co accept:s window:@1 stream:stream install:^BOOL(CMSampleBufferRef actual){installed=actual;return YES;}],@"ack sample");check(installed==s,@"same acknowledged sample installed");
+    check(![co accept:s window:@1 stream:[NSObject new] install:^BOOL(CMSampleBufferRef actual){(void)actual;check(NO,@"wrong stream installed");return YES;}],@"wrong stream rejected");
+    NSDictionary *sourceState=snap(c)[@"windows"][0][@"source"];
+    [co invalidate:@1];
+    CFArrayRef update=CMSampleBufferGetSampleAttachmentsArray(s,YES);CFDictionarySetValue((CFMutableDictionaryRef)CFArrayGetValueAtIndex(update,0),(__bridge CFStringRef)SCStreamFrameInfoDisplayTime,(__bridge CFNumberRef)@201);
+    check(!call(c,@{@"op":@"native_resize_capture_ready",@"window":@1,@"identity":identity(),@"generation":sourceState[@"generation"],@"observation_revision":sourceState[@"observation_revision"],@"buffer":@{@"width":@480,@"height":@360}}),@"stale capture ack rejected");
+    check([co accept:s window:@1 stream:stream install:^BOOL(CMSampleBufferRef x){(void)x;return YES;}],@"new token restores capture");
+    CFDictionarySetValue((CFMutableDictionaryRef)CFArrayGetValueAtIndex(update,0),(__bridge CFStringRef)SCStreamFrameInfoDisplayTime,(__bridge CFNumberRef)@202);
+    driver.family=NO;check(![co accept:s window:@1 stream:stream install:^BOOL(CMSampleBufferRef x){(void)x;return YES;}],@"family expansion invalidates");driver.family=YES;
+    check([co accept:s window:@1 stream:stream install:^BOOL(CMSampleBufferRef x){(void)x;return YES;}],@"verified root restores capture");
+    CMSampleBufferRef fail=sample(driver.bounds,@{SCStreamFrameInfoDisplayTime:@203});
+    check(![co accept:fail window:@1 stream:stream install:^BOOL(CMSampleBufferRef x){(void)x;return NO;}],@"backpressure install failure");
+    check(snap(c)[@"windows"][0][@"source"][@"capture_revision"]==NSNull.null,@"failed installation revokes authority");
+    check([co accept:fail window:@1 stream:stream install:^BOOL(CMSampleBufferRef x){(void)x;return YES;}],@"same fresh sample can retry after installation failure");CFRelease(fail);
+    __weak DWResizeCoordinator *weak=co;co.changed=^{if(weak.installingWindow){weak.changed=nil;[weak invalidate:@1];}};
+    CMSampleBufferRef interrupted=sample(driver.bounds,@{SCStreamFrameInfoDisplayTime:@204});
+    check(![co accept:interrupted window:@1 stream:stream install:^BOOL(CMSampleBufferRef x){(void)x;check(NO,@"invalidated ack must not install");return YES;}],@"reentrant authority loss blocks installation");
+    check([co accept:interrupted window:@1 stream:stream install:^BOOL(CMSampleBufferRef x){(void)x;return YES;}],@"fresh retry after reentrant invalidation");CFRelease(interrupted);
+    NSDictionary *initial=snap(c);NSDictionary *begin=[co request:@{@"op":@"begin_native_resize",@"window":@1,@"output":@1,@"edges":edge,@"start_screen":@{@"x":@50,@"y":@50}}];check(begin!=nil,@"begin");
+    check(co.obligations==1&&workers.count==1,@"obligation precedes dispatch");
+    [co consume:begin];check(workers.count==1,@"duplicate dispatch suppressed");drain(workers,mains);[co consume:begin];check(workers.count==0,@"completed effect replay suppressed");
+    NSNumber *transaction=begin[@"transaction"];
+    [co request:@{@"op":@"native_resize_to",@"transaction":transaction,@"screen":@{@"x":@65,@"y":@65}}];
+    [co request:@{@"op":@"native_resize_to",@"transaction":transaction,@"screen":@{@"x":@70,@"y":@70}}];
+    check(workers.count==1&&co.obligations==1,@"coalescing has one dispatched setter");check(![co canRemove:@1],@"detach/load blocked");
+    if(removeOutput)[co consume:call(c,@{@"op":@"remove_output",@"output":@1})];
+    else if(cancel)[co cancel];else [co request:@{@"op":@"end_native_resize",@"transaction":transaction}];
+    check(co.obligations==1,@"cancel/release preserves setter");if(cancel||timeout||removeOutput)[co shutdown];drain(workers,mains);check(co.obligations==0,@"every dispatched result drains");
+    check(driver.setters==(cancel||timeout||removeOutput?1:2),@"release drains latest; shutdown discards unsent intent only");[co shutdown];
+    NSDictionary *after=snap(c);if(!removeOutput)check([initial[@"outputs"]isEqual:after[@"outputs"]],@"cameras fixed");
+    check([co canRemove:@1]==!timeout,@"uncertainty retained");
+    if(timeout){check([after[@"native_resize"][@"phase"]isEqual:@"needs_observation"],@"timeout remains unresolved");check(![co accept:s window:@1 stream:stream install:^BOOL(CMSampleBufferRef x){(void)x;return YES;}],@"timeout blocks capture");}
+    else {CMSampleBufferRef fresh=sample(driver.bounds,@{SCStreamFrameInfoDisplayTime:@300});check([co accept:fresh window:@1 stream:stream install:^BOOL(CMSampleBufferRef x){check(x==fresh,@"post-resize sample identity");return YES;}],@"post-resize capture");CFRelease(fresh);}
+    if(!timeout&&!removeOutput){
+        NSDictionary *before=snap(c);CMSampleBufferRef old=sample(driver.bounds,@{SCStreamFrameInfoDisplayTime:@299});
+        check(![co accept:old window:@1 stream:stream install:^BOOL(CMSampleBufferRef x){(void)x;return YES;}],@"out-of-order frame discarded");check([before isEqual:snap(c)],@"old frame preserves current authority");CFRelease(old);
+        driver.bounds=CGRectOffset(driver.bounds,5,7);CMSampleBufferRef moved=sample(driver.bounds,@{SCStreamFrameInfoDisplayTime:@400});
+        check(![co accept:moved window:@1 stream:stream install:^BOOL(CMSampleBufferRef x){(void)x;return YES;}],@"idle move establishes new cutoff");
+        check([co accept:moved window:@1 stream:stream install:^BOOL(CMSampleBufferRef x){(void)x;return YES;}],@"idle move fresh mapping restored");
+        check([before[@"windows"][0][@"world_rect"]isEqual:snap(c)[@"windows"][0][@"world_rect"]],@"idle reconciliation preserves world geometry");CFRelease(moved);
+    }
+    [co invalidate:@1];check(!call(c,@{@"op":@"input",@"output":@1,@"screen":@{@"x":@120,@"y":@120},@"identity":identity()}),@"invalidation blocks input");
+    CFRelease(s);driftwm_desktop_destroy(c);
+}
+int main(void){@autoreleasepool{
+    CGRect native=CGRectMake(10,20,200,150);CMSampleBufferRef s=sample(native,@{});NSDictionary *m=DWResizeCaptureMetadata(s,100,native);check([m[@"buffer"][@"width"]intValue]==480&&[m[@"content_rect"][@"origin"][@"x"]intValue]==20,@"actual padded crop");CFRelease(s);
+    NSArray *invalid=@[@{SCStreamFrameInfoDisplayTime:NSNull.null},@{SCStreamFrameInfoDisplayTime:@100},@{SCStreamFrameInfoDisplayTime:@(-1)},@{SCStreamFrameInfoDisplayTime:@100.5},@{SCStreamFrameInfoDisplayTime:@1e30},@{SCStreamFrameInfoStatus:NSNull.null},@{SCStreamFrameInfoStatus:@.5},@{SCStreamFrameInfoContentScale:@0},@{SCStreamFrameInfoScreenRect:NSNull.null},@{SCStreamFrameInfoContentRect:CFBridgingRelease(CGRectCreateDictionaryRepresentation(CGRectMake(100,100,200,150)))}];
+    for(NSDictionary *override in invalid){s=sample(native,override);check(DWResizeCaptureMetadata(s,100,native)==nil,@"invalid metadata rejected");CFRelease(s);}
+    check(DWResizeHandles(CGRectMake(0,0,100,100),CGRectMake(0,0,100,100)).count==8,@"eight handles");check(DWResizeHandles(CGRectMake(-50,-50,200,200),CGRectMake(0,0,100,100)).count==0,@"no clipped-edge handles");
+    for(NSString *edge in @[@"top_left",@"top",@"top_right",@"right",@"bottom_right",@"bottom",@"bottom_left",@"left"])scenario(edge,nil,NO,NO,NO);
+    scenario(@"right",@"clamped",NO,NO,NO);scenario(@"right",@"rejected",YES,NO,NO);scenario(@"right",nil,YES,YES,NO);scenario(@"right",nil,NO,NO,YES);
+    puts("PASS: production resize coordinator + Rust C ABI + real synthetic CV/CMSampleBuffer metadata; no native app/window/AX/capture started");return 0;
+}}

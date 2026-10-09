@@ -25,6 +25,8 @@ typedef struct { DWResizeIdentity identity; CGRect original; bool valid; } DWRes
 bool dw_resize_identity(pid_t pid, CGWindowID window, DWResizeIdentity *identity);
 DWResizeResult dw_resize_observe(DWResizeIdentity identity);
 DWResizeResult dw_resize_apply(DWResizeIdentity identity, CGSize size);
+typedef bool (*DWResizeGuard)(DWResizeIdentity identity, void *context);
+DWResizeResult dw_resize_apply_guarded(DWResizeIdentity identity, CGSize size, DWResizeGuard guard, void *context);
 DWResizeResult dw_resize_snapshot(DWResizeIdentity identity, DWResizeSnapshot *snapshot);
 // Restore size only. Actual origin is returned: no native position or camera changes occur.
 DWResizeResult dw_resize_restore(DWResizeSnapshot snapshot);

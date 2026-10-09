@@ -98,7 +98,7 @@ DWResizeResult dw_resize_observe(DWResizeIdentity i) { @autoreleasepool {
     DWResizeResult r=result(DWResizeObserved); double deadline=now()+2.; AXUIElementRef w=resolve(i,deadline,&r);
     if (w) { if (readback(i,w,deadline,&r)) r.outcome=DWResizeObserved; CFRelease(w); } return r;
 } }
-DWResizeResult dw_resize_apply(DWResizeIdentity i, CGSize size) { @autoreleasepool {
+DWResizeResult dw_resize_apply_guarded(DWResizeIdentity i, CGSize size, DWResizeGuard guard, void *context) { @autoreleasepool {
     DWResizeResult r=result(DWResizeInvalidRequest); r.requested=size;
     if (!isfinite(size.width)||!isfinite(size.height)||size.width<1||size.height<1||size.width>32768||size.height>32768) return r;
     double deadline=now()+2.; AXUIElementRef w=resolve(i,deadline,&r); if (!w) return r;
@@ -110,6 +110,9 @@ DWResizeResult dw_resize_apply(DWResizeIdentity i, CGSize size) { @autoreleasepo
     if (!owner(i,NULL)) { r.outcome=DWResizeStaleIdentity; r.observed=false; CFRelease(w); return r; }
     r.ax_error=timeout(w,deadline);
     if (r.ax_error!=kAXErrorSuccess) { r.outcome=DWResizeTimedOut; CFRelease(w); return r; }
+    if (guard && !guard(i,context)) { r.outcome=DWResizeUnsupported; CFRelease(w); return r; }
+    if (guard && !owner(i,NULL)) { r.outcome=DWResizeStaleIdentity; r.observed=false; CFRelease(w); return r; }
+    if (guard) { r.ax_error=timeout(w,deadline); if(r.ax_error!=kAXErrorSuccess) {r.outcome=DWResizeTimedOut;CFRelease(w);return r;} }
     AXValueRef v=AXValueCreate(kAXValueCGSizeType,&size); r.mutation_attempted=true;
     AXError setter=AXUIElementSetAttributeValue(w,kAXSizeAttribute,v); CFRelease(v);
     r.observed=false; r.outcome=now()>=deadline?DWResizeTimedOut:DWResizeReadbackFailed;
@@ -124,6 +127,7 @@ DWResizeResult dw_resize_apply(DWResizeIdentity i, CGSize size) { @autoreleasepo
     if (setter!=kAXErrorSuccess) r.ax_error=setter;
     CFRelease(w); return r;
 } }
+DWResizeResult dw_resize_apply(DWResizeIdentity i, CGSize size) { return dw_resize_apply_guarded(i,size,NULL,NULL); }
 DWResizeResult dw_resize_snapshot(DWResizeIdentity i,DWResizeSnapshot *s) {
     DWResizeResult r=dw_resize_observe(i); if (s) *s=(DWResizeSnapshot){.identity=i,.original=r.actual_ax,.valid=r.observed}; return r;
 }
