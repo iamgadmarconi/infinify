@@ -303,11 +303,15 @@ exemption. Scripted DesktopView calls bypass the event queue. All owned-window
 exclusion contracts are checked before capture and mutation. Diagnostics preserve
 the first failing window's class, ID, visibility and mouse/key/main exclusion flags;
 unknown windows remain forbidden except an enumeration-only AppKit auxiliary:
-the exact class NSLocalWindowSharingWindow with ID -1, hidden, unable to become
-key/main and currently neither key nor main. Every scan rechecks those conditions
-and records accepted helper state separately from failures; any registration,
-visibility or key/main capability change fails the gate. The probe never alters
-that helper. Direct owned-window checks and before-order checks retain their strict
+the exact class NSLocalWindowSharingWindow, hidden, unable to become key/main
+and currently neither key nor main. ID -1 is accepted before registration; a
+positive ID additionally requires an exact current CG row owned by this process,
+its unchanged birth identity and explicit CG onscreen=false. Missing facts fail.
+The first validated positive ID is frozen per object; later ID changes, including
+returning to -1, fail. Every scan rechecks those conditions and records actual CG
+facts separately from the first helper failure. This observed-state exception
+does not establish the private class's purpose or compatibility on other OS builds.
+The probe never alters that helper. Direct owned-window checks and before-order checks retain their strict
 mouse exclusion requirement. No window titles or human text are recorded.
 
 Every setter checks the exact owned identity, unchanged read-only transform,

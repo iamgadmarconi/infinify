@@ -228,6 +228,7 @@ static int ownedResizeEntry(int argc,const char **argv) {
     pid_t beforePID=NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier;NSArray *beforeBirth=birth(beforePID);
     NSDictionary *parentLease=fixture?readJSON([directory stringByAppendingPathComponent:@"lease.json"]):nil;
     rpIsolation=[RPIsolationState new];rpIsolation.foreground=fixture?[parentLease[@"foreground"]intValue]:beforePID;rpIsolation.foregroundBirth=fixture?parentLease[@"foreground_birth"]:beforeBirth;
+    rpIsolation.ownBirth=birth(getpid());rpIsolation.registeredHelpers=[[NSMapTable alloc]initWithKeyOptions:NSPointerFunctionsStrongMemory|NSPointerFunctionsObjectPointerPersonality valueOptions:NSPointerFunctionsStrongMemory capacity:2];
     NSMutableDictionary *startup=[@{@"expected_foreground_pid":@(rpIsolation.foreground),@"expected_foreground_birth":rpIsolation.foregroundBirth?:@[],@"before_appkit_pid":@(beforePID),@"before_appkit_birth":beforeBirth?:@[],@"prestartup_matches":@(beforeBirth&&beforePID==rpIsolation.foreground&&[beforeBirth isEqual:rpIsolation.foregroundBirth]&&beforePID!=getpid())}mutableCopy];
     NSString *startupPath=[directory stringByAppendingPathComponent:fixture?@"fixture-startup.json":@"controller-startup.json"];
     if(![startup[@"prestartup_matches"]boolValue]){save(startup,startupPath);return 2;}

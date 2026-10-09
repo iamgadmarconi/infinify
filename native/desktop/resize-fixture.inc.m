@@ -116,9 +116,10 @@ static int ownedResizeFixture(NSString *directory,NSString *nonce) {
     NSDictionary *pending=readJSON([directory stringByAppendingPathComponent:@"intent.json"]);
     BOOL sameForegroundBirth=[birth(foreground)isEqual:foregroundBirth];
     BOOL sameTransform=transform&&[rpTransform((uint32_t)root.windowNumber)isEqual:transform];
-    BOOL sameForeground=NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier==foreground;
     BOOL inputExcluded=rpCheckWindows()&&rpInputExcluded();
-    // Only atomic/in-process state reads follow the final exclusion check. The owned
+    BOOL sameForeground=NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier==foreground;
+    // Window scans include slow CG helper checks, so foreground is sampled afterward.
+    // Only atomic/in-process state reads follow the final foreground check. The owned
     // NSWindow frame getters do not query AX/WindowServer or pump the run loop.
     NSRect current=root.frame;
     BOOL knownFrame=NSEqualRects(current,last)||rpExpectedFrame(current,last,pending,nonce);
