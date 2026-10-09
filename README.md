@@ -126,7 +126,9 @@ Additional experimental paths are available separately:
   integration and an end-to-end run through both components remain unfinished.
 - [Native focus adapter](native/focus/README.md): exact selected-window requests,
   external focus readback and guarded input checks. Source review and nonmutating
-  checks pass; its live focus and cleanup scenarios remain unrun.
+  checks pass. Live normal-path attempts pass the repaired readiness handshake
+  but stop before focus/input at the activity guard; cleanup-specific scenarios
+  remain unrun. Failed attempts are retained as evidence.
 - [Window family diagnostic](native/families/README.md): genuine native panels
   and sheets exposed a failed capture-placement assumption. Metadata normalization
   now passes saved-pixel checks for a right-extending panel and an in-bounds sheet

@@ -1,0 +1,13 @@
+{
+  "error" : "preflight unavailable, foreground changed or human input in last 3 seconds",
+  "invalid_identity_rejection" : [
+    1,
+    1,
+    1
+  ],
+  "passed" : false,
+  "scope" : "owned same-title ordinary NSWindows; no IME, menus or drag-and-drop claim",
+  "steps" : [
+
+  ]
+}

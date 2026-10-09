@@ -1,0 +1,24 @@
+{
+  "scope": "Authorized disposable-window focus attempts; no successful native focus/input sequence yet. Failed attempts preserved. No credentials retained.",
+  "attempts": [
+    {
+      "run": "run-oq3ayp10",
+      "revision": "d86beab",
+      "result": "failed",
+      "verification": "run-oq3ayp10/verification.json"
+    },
+    {
+      "run": "run-hxrpyxhg",
+      "revision": "6229519",
+      "result": "failed",
+      "verification": "run-hxrpyxhg/verification.json"
+    },
+    {
+      "run": "run-888kfis8",
+      "revision": "5d311c1",
+      "result": "failed",
+      "verification": "run-888kfis8/verification.json"
+    }
+  ],
+  "current_finding": "Readiness succeeded after fix. Final attempt passed AX/listen/identity/foreground preflight, but global HID idle was 0.088962209 seconds, below 3 seconds. No cause beyond HID activity is asserted. Both fixtures restored controls and all three direct children were reaped."
+}

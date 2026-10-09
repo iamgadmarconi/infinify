@@ -1,0 +1,27 @@
+{
+  "passed": false,
+  "scenario": "normal",
+  "live_focus_attempted": true,
+  "cleanup": [
+    {
+      "pid": 84472,
+      "reaped": true,
+      "status": 0
+    }
+  ],
+  "error": "AssertionError: ",
+  "all_owned_controls_restored": false,
+  "source_sha256": {
+    "native/focus/README.md": "6bb6057b84b2ed6cebb9fba103c392f1417c0c95ee86e4de32ffade4bfa6461c",
+    "native/focus/common.h": "b082a1edad6541f2cf0de6ea6a36407a6d2ceaf516cf1b48ae42b83383f27d2e",
+    "native/focus/e2e.py": "6942105992d70a3b07375f6944bdb2f67c85e6be849af8cb18afadb8731714a3",
+    "native/focus/fixture.m": "eced700d3322aeed42cf31e07b70235e14e1b8644804d0a4f43bec3122b448da",
+    "native/focus/focus.h": "05de7f3f92fe753c95d350bdbd288d798481b412ef486942ce1d798370182384",
+    "native/focus/focus.m": "ac92ce6b556b73e3e8ac78bc0d493b491c0534c59ce25b7debd2b4e7eb74a4d7",
+    "native/focus/geometry-check.c": "56be6afa1f8bf755ec75e8e17f49e1e774b94c4642a3acdb15715dcffe38968d",
+    "native/focus/geometry.h": "ec0b687a1b9a3c34027802668a50a11c83b2dea8515d8fc724721caeef73e4e8",
+    "native/focus/probe.m": "d0e44bf7f0805bbd2f7723845c282fcd144394f9e26c0868eec107201e816812",
+    "scripts/build-focus.sh": "7e93284fa08e608d502f825cafd6f988434c17799882d0963337e47c5d52b1c7",
+    "tests/e2e/native-focus.sh": "d4e61a87a4a15faef59b315ac6e7a0188d5b5980b5f754ecf5123e96b22fb50c"
+  }
+}

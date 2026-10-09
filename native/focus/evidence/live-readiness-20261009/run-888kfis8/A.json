@@ -1,0 +1,67 @@
+{
+  "active" : false,
+  "birth" : [
+    1791547670,
+    587832
+  ],
+  "controller" : 90320,
+  "events" : [
+
+  ],
+  "foreign_events" : 0,
+  "key_window" : 0,
+  "pid" : 90316,
+  "ready" : true,
+  "sequence" : 7,
+  "signature" : "1647ac7e45c8e2b5d34189ffa294485a1a7e2fb5864b00b98c6de6e49699b401",
+  "windows" : [
+    {
+      "actions" : [
+
+      ],
+      "birth" : [
+        1791547670,
+        587832
+      ],
+      "button_point" : [
+        145,
+        114.5
+      ],
+      "button_state" : 0,
+      "clicks" : 0,
+      "key" : false,
+      "label" : "A1",
+      "pid" : 90316,
+      "text_point" : [
+        215,
+        197
+      ],
+      "text_sha256" : "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "window" : 79684
+    },
+    {
+      "actions" : [
+
+      ],
+      "birth" : [
+        1791547670,
+        587832
+      ],
+      "button_point" : [
+        145,
+        114.5
+      ],
+      "button_state" : 0,
+      "clicks" : 0,
+      "key" : false,
+      "label" : "A2",
+      "pid" : 90316,
+      "text_point" : [
+        215,
+        197
+      ],
+      "text_sha256" : "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "window" : 79686
+    }
+  ]
+}

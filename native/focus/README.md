@@ -1,7 +1,13 @@
 # Exact selected native-window focus gate
 
 Harness prepared for Apple Silicon / macOS 26+. **Live focus and native-input
-verification has not been run.** Build success, pure geometry and read-only doctor
+verification has not succeeded.** Three authorized normal-path attempts are
+preserved in [readiness evidence](evidence/live-readiness-20261009/index.json).
+The first exposed invalid startup identities; the repaired version enrolled both
+fixtures, but the latest attempt stopped at the global HID inactivity check
+before any focus/input step. Both fixtures restored their controls and all three
+children were reaped. Cleanup-specific scenarios remain unrun.
+Build success, pure geometry and read-only doctor
 results establish no usable native-focus capability. No IME, menus, drag-and-drop,
 unowned apps, or rendering/compositing capability is claimed by this gate.
 
