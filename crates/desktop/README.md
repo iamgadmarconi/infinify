@@ -50,8 +50,11 @@ Preserve them as integers in native code.
 `edges` is `left`, `right`, `top`, `bottom`, `top_left`, `top_right`,
 `bottom_left` or `bottom_right`. One gesture is active per controller. Motion
 uses gesture-start zoom and real canvas snapshot/hysteresis/group semantics.
-The drag threshold is 12 screen points, break force 24 screen points, and gap
-8 world points. Resize changes the world representation; native resize delivery
+The snap threshold is 24 screen points, break force 32 screen points, and gap
+12 world points. Threshold and break force use current output zoom on each update;
+displacement still uses gesture-start zoom. See the [snapping contract](../canvas/SNAPPING.md)
+for the verified algorithm scope and remaining coordinate/rounding differences.
+Resize changes the world representation; native resize delivery
 is the host's responsibility. No command itself changes a native window.
 
 A source identity is `{pid,birth_sec,birth_usec,wid,owner?}`; `owner` optionally

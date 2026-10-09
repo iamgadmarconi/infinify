@@ -25,6 +25,12 @@ pub(crate) struct ResizeMember {
     y: Option<Side>,
 }
 
+impl ResizeMember {
+    pub(crate) fn is_shifted(&self) -> bool {
+        self.x.is_some() || self.y.is_some()
+    }
+}
+
 pub(crate) fn classify(
     primary: (WindowId, Rect),
     cluster: &[(WindowId, Rect)],

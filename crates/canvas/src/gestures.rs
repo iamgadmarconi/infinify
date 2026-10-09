@@ -4,8 +4,8 @@
 // src/layout/snap.rs::update_axis, src/state/cluster_snapshot.rs, and
 // src/grabs/resize_grab.rs. No Smithay/native grab or configure protocol is ported.
 use crate::cluster_resize::{ResizeMember, classify, resolve};
-use crate::layout::candidates;
-use crate::{Error, Point, Rect, Scene, SnapOptions, WindowId};
+use crate::layout::{candidates, closest, edge_candidates};
+use crate::{Error, Point, Rect, Scene, Size, SnapOptions, WindowId};
 
 /// A side or corner to resize. Opposite edges stay fixed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,6 +103,8 @@ pub struct DragGesture {
     expected: Vec<(WindowId, Rect)>,
     options: SnapOptions,
     resistance: f64,
+    same_edge: bool,
+    center: bool,
     x: AxisState,
     y: AxisState,
 }
@@ -119,12 +121,102 @@ pub struct ResizeGesture {
     edges: ResizeEdges,
     options: SnapOptions,
     bonds: Vec<(usize, usize)>,
+    resistance: f64,
+    same_edge: bool,
+    min: Size,
+    max: Size,
+    x: AxisState,
+    y: AxisState,
+}
+
+impl DragGesture {
+    /// Refresh world snap distances without resetting the latch or cooldown.
+    /// Divide screen distances by the current zoom, independently of the
+    /// gesture-start zoom used for pointer displacement.
+    pub fn set_snap_distances(&mut self, threshold: f64, break_force: f64) -> Result<(), Error> {
+        let options = SnapOptions {
+            threshold,
+            ..self.options
+        };
+        options.validate()?;
+        validate_break_force(break_force)?;
+        self.options = options;
+        self.resistance = break_force;
+        Ok(())
+    }
+
+    /// Enable upstream's optional same-edge/corner and midpoint alignment.
+    /// Both default to false and require perpendicular adjacency without overlap.
+    pub fn with_alignment(mut self, same_edge: bool, center: bool) -> Self {
+        self.same_edge = same_edge;
+        self.center = center;
+        self
+    }
+}
+
+impl ResizeGesture {
+    /// Refresh world snap distances without resetting the latch or cooldown.
+    /// Divide screen distances by the current zoom, independently of the
+    /// gesture-start zoom used for pointer displacement.
+    pub fn set_snap_distances(&mut self, threshold: f64, break_force: f64) -> Result<(), Error> {
+        let options = SnapOptions {
+            threshold,
+            ..self.options
+        };
+        options.validate()?;
+        validate_break_force(break_force)?;
+        self.options = options;
+        self.resistance = break_force;
+        Ok(())
+    }
+
+    /// Enable upstream's optional same-edge/corner alignment (default false).
+    pub fn with_same_edge(mut self, enabled: bool) -> Self {
+        self.same_edge = enabled;
+        self
+    }
+
+    /// Set the magnetic release distance in world points (default 32).
+    /// Screen-driven callers divide the screen break force by zoom.
+    pub fn with_break_force(mut self, break_force: f64) -> Result<Self, Error> {
+        validate_break_force(break_force)?;
+        self.resistance = break_force;
+        Ok(self)
+    }
+
+    /// Capture minimum/maximum visible frame sizes. Zero means unconstrained.
+    /// As upstream, bounds are applied before snapping, with a 1-point floor;
+    /// a snap may subsequently cross a declared bound. Native callers must
+    /// supply sizes including chrome, since canvas frames already include it.
+    pub fn with_constraints(mut self, min: Size, max: Size) -> Result<Self, Error> {
+        if [min.width, min.height, max.width, max.height]
+            .iter()
+            .any(|v| !v.is_finite() || *v < 0.0 || *v > 1e12)
+        {
+            return Err(Error::Invalid("resize constraints"));
+        }
+        self.min = min;
+        self.max = max;
+        Ok(self)
+    }
+}
+
+fn validate_break_force(break_force: f64) -> Result<(), Error> {
+    if !break_force.is_finite() || !(0.0..=1e6).contains(&break_force) {
+        return Err(Error::Invalid("snap break force"));
+    }
+    Ok(())
+}
+
+fn clamp_size(value: f64, min: f64, max: f64) -> f64 {
+    let value = value.max(1.0).max(min);
+    if max > 0.0 { value.min(max) } else { value }
 }
 
 impl Scene {
     /// Start a magnetic drag, optionally capturing the current connected group.
-    /// All snap parameters and positive `break_force` are in world points.
-    /// Only the primary window's opposite edges attract; the captured group
+    /// All snap parameters and nonnegative `break_force` are in world points.
+    /// Only the primary window's edges attract; the captured group
     /// follows rigidly. Targets outside the group use their current geometry.
     pub fn begin_drag(
         &self,
@@ -134,9 +226,7 @@ impl Scene {
         move_group: bool,
     ) -> Result<DragGesture, Error> {
         options.validate()?;
-        if !break_force.is_finite() || break_force <= 0.0 || break_force > 1e6 {
-            return Err(Error::Invalid("snap break force"));
-        }
+        validate_break_force(break_force)?;
         let primary = self.window(id).ok_or(Error::UnknownWindow(id))?.world_rect;
         let initial = self.gesture_members(id, options, move_group)?;
         Ok(DragGesture {
@@ -145,6 +235,8 @@ impl Scene {
             initial,
             options,
             resistance: break_force,
+            same_edge: false,
+            center: false,
             x: AxisState::default(),
             y: AxisState::default(),
         })
@@ -154,8 +246,8 @@ impl Scene {
     /// since the last event. Returns total snapped world displacement.
     ///
     /// A screen-driven caller divides its total screen displacement by its
-    /// gesture-start zoom. Likewise divide screen snap distance/break force by
-    /// that zoom before `begin_drag`; the gap remains a world distance. Camera
+    /// gesture-start zoom. Divide screen snap distance/break force by current
+    /// zoom via `set_snap_distances`; the gap remains a world distance. Camera
     /// changes are independent. Repeated positions do not accumulate drift.
     ///
     /// Latches break on retreat from engagement or overshoot past the target by
@@ -202,7 +294,7 @@ impl Scene {
 
     /// Capture a resize's initial geometry and connected component. Membership
     /// and per-side downstream classification remain fixed until it is dropped.
-    /// `options.threshold` is unused: resize edge snapping is not implemented.
+    /// Active edges snap to outside windows and stationary cluster members.
     pub fn begin_resize(
         &self,
         id: WindowId,
@@ -224,6 +316,12 @@ impl Scene {
             edges,
             options,
             bonds: Vec::new(),
+            resistance: 32.0,
+            same_edge: false,
+            min: Size::new(0.0, 0.0),
+            max: Size::new(0.0, 0.0),
+            x: AxisState::default(),
+            y: AxisState::default(),
         })
     }
 
@@ -234,49 +332,143 @@ impl Scene {
     ///
     /// Downstream members translate without resizing. Collisions can push other
     /// captured members, retaining directional bonds across motion reversals.
-    /// Outside windows and all cameras remain unchanged. Nonpositive dimensions,
+    /// Outside windows and all cameras remain unchanged. Dimensions clamp to
+    /// captured constraints before snapping. Invalid deltas,
     /// nonfinite/out-of-range geometry, missing/externally changed members or an
     /// unsettled cascade fail atomically, including the gesture's bond state.
     pub fn resize_to(&mut self, gesture: &mut ResizeGesture, delta: Point) -> Result<Rect, Error> {
         if !delta.valid() {
             return Err(Error::Invalid("resize delta"));
         }
-        let initial = gesture.primary.1;
-        let mut rect = initial;
-        if gesture.edges.left() {
-            rect.origin.x += delta.x;
-            rect.size.width -= delta.x;
-        } else if gesture.edges.right() {
-            rect.size.width += delta.x;
+        let mut next = gesture.clone();
+        let initial = next.primary.1;
+        let width = initial.size.width
+            + if next.edges.left() {
+                -delta.x
+            } else if next.edges.right() {
+                delta.x
+            } else {
+                0.0
+            };
+        let height = initial.size.height
+            + if next.edges.top() {
+                -delta.y
+            } else if next.edges.bottom() {
+                delta.y
+            } else {
+                0.0
+            };
+        let mut rect = Rect::new(
+            initial.origin.x,
+            initial.origin.y,
+            clamp_size(width, next.min.width, next.max.width),
+            clamp_size(height, next.min.height, next.max.height),
+        );
+        if next.edges.left() {
+            rect.origin.x = initial.right() - rect.size.width;
         }
-        if gesture.edges.top() {
-            rect.origin.y += delta.y;
-            rect.size.height -= delta.y;
-        } else if gesture.edges.bottom() {
-            rect.size.height += delta.y;
+        if next.edges.top() {
+            rect.origin.y = initial.bottom() - rect.size.height;
+        }
+
+        // X uses the held Y edge, then Y uses the just-resolved X range.
+        let mut visual = rect;
+        if let Some(snap) = next.y.snap {
+            if next.edges.top() {
+                visual.origin.y = snap.snapped;
+                visual.size.height = initial.bottom() - snap.snapped;
+            } else if next.edges.bottom() {
+                visual.size.height = snap.snapped - initial.origin.y;
+            }
+        }
+        if next.edges.left() || next.edges.right() {
+            let high = next.edges.right();
+            let natural = if high { rect.right() } else { rect.origin.x };
+            let candidate = self.resize_candidate(&next, visual, true, high);
+            let edge = next
+                .x
+                .update(natural, candidate, next.options.threshold, next.resistance);
+            rect.size.width = if high {
+                edge - initial.origin.x
+            } else {
+                initial.right() - edge
+            };
+            if !high {
+                rect.origin.x = edge;
+            }
+        }
+        if next.edges.top() || next.edges.bottom() {
+            let high = next.edges.bottom();
+            let natural = if high { rect.bottom() } else { rect.origin.y };
+            let candidate = self.resize_candidate(&next, rect, false, high);
+            let edge = next
+                .y
+                .update(natural, candidate, next.options.threshold, next.resistance);
+            rect.size.height = if high {
+                edge - initial.origin.y
+            } else {
+                initial.bottom() - edge
+            };
+            if !high {
+                rect.origin.y = edge;
+            }
+        }
+        rect.size.width = rect.size.width.max(1.0);
+        rect.size.height = rect.size.height.max(1.0);
+        if next.edges.left() {
+            rect.origin.x = initial.right() - rect.size.width;
+        }
+        if next.edges.top() {
+            rect.origin.y = initial.bottom() - rect.size.height;
         }
         if !rect.valid() {
             return Err(Error::Invalid("resized window geometry"));
         }
-        let (shifts, bonds) = resolve(
-            &gesture.members,
-            initial,
-            rect,
-            gesture.options.gap,
-            &gesture.bonds,
-        )?;
-        let mut updates = vec![(gesture.primary.0, rect)];
+        let (shifts, bonds) = resolve(&next.members, initial, rect, next.options.gap, &next.bonds)?;
+        let mut updates = vec![(next.primary.0, rect)];
         updates.extend(
-            gesture
-                .members
+            next.members
                 .iter()
                 .zip(shifts)
                 .map(|(member, delta)| (member.id, member.initial.translated(delta))),
         );
-        self.apply_gesture(&gesture.expected, &updates)?;
-        gesture.expected = updates;
-        gesture.bonds = bonds;
+        self.apply_gesture(&next.expected, &updates)?;
+        next.expected = updates;
+        next.bonds = bonds;
+        *gesture = next;
         Ok(rect)
+    }
+
+    fn resize_candidate(
+        &self,
+        gesture: &ResizeGesture,
+        rect: Rect,
+        horizontal: bool,
+        high: bool,
+    ) -> Option<f64> {
+        closest(
+            self.windows()
+                .iter()
+                .filter(|w| {
+                    w.id != gesture.primary.0
+                        && !gesture
+                            .members
+                            .iter()
+                            .any(|m| m.id == w.id && m.is_shifted())
+                })
+                .flat_map(|w| {
+                    edge_candidates(
+                        rect,
+                        w.world_rect,
+                        gesture.options,
+                        horizontal,
+                        high,
+                        gesture.same_edge,
+                    )
+                })
+                .flatten(),
+            gesture.options.threshold,
+        )
     }
 
     fn gesture_members(
@@ -301,13 +493,23 @@ impl Scene {
 
     fn drag_candidate(&self, gesture: &DragGesture, delta: Point, horizontal: bool) -> Option<f64> {
         let rect = gesture.primary.translated(delta);
-        self.windows()
-            .iter()
-            .filter(|w| !gesture.initial.iter().any(|(id, _)| *id == w.id))
-            .flat_map(|w| candidates(rect, w.world_rect, gesture.options.gap, horizontal))
-            .flatten()
-            .filter(|c| c.abs() < gesture.options.threshold)
-            .min_by(|a, b| a.abs().total_cmp(&b.abs()))
+        closest(
+            self.windows()
+                .iter()
+                .filter(|w| !gesture.initial.iter().any(|(id, _)| *id == w.id))
+                .flat_map(|w| {
+                    candidates(
+                        rect,
+                        w.world_rect,
+                        gesture.options,
+                        horizontal,
+                        gesture.same_edge,
+                        gesture.center,
+                    )
+                })
+                .flatten(),
+            gesture.options.threshold,
+        )
     }
 
     fn apply_gesture(

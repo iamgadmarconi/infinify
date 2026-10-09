@@ -89,8 +89,16 @@ struct SavedOutput {
 
 #[derive(Clone, Debug)]
 enum Gesture {
-    Drag { state: DragGesture, zoom: f64 },
-    Resize { state: ResizeGesture, zoom: f64 },
+    Drag {
+        state: DragGesture,
+        zoom: f64,
+        output: OutputId,
+    },
+    Resize {
+        state: ResizeGesture,
+        zoom: f64,
+        output: OutputId,
+    },
 }
 #[derive(Clone, Debug, Default)]
 pub struct Controller {
@@ -456,12 +464,13 @@ impl Controller {
                     .ok_or(Error::Invalid("unknown output"))?
                     .zoom;
                 let options = SnapOptions {
-                    threshold: 12.0 / zoom,
+                    threshold: 24.0 / zoom,
                     ..SnapOptions::default()
                 };
                 self.gesture = Some(Gesture::Drag {
-                    state: self.scene.begin_drag(window, options, 24.0 / zoom, group)?,
+                    state: self.scene.begin_drag(window, options, 32.0 / zoom, group)?,
                     zoom,
+                    output,
                 });
             }
             Command::BeginResize {
@@ -479,13 +488,20 @@ impl Controller {
                     .ok_or(Error::Invalid("unknown output"))?
                     .zoom;
                 self.gesture = Some(Gesture::Resize {
-                    state: self.scene.begin_resize(
-                        window,
-                        edges.into(),
-                        SnapOptions::default(),
-                        group,
-                    )?,
+                    state: self
+                        .scene
+                        .begin_resize(
+                            window,
+                            edges.into(),
+                            SnapOptions {
+                                threshold: 24.0 / zoom,
+                                ..SnapOptions::default()
+                            },
+                            group,
+                        )?
+                        .with_break_force(32.0 / zoom)?,
                     zoom,
+                    output,
                 });
             }
             Command::GestureTo { screen_delta } => {
@@ -497,10 +513,30 @@ impl Controller {
                     .as_mut()
                     .ok_or(Error::Invalid("no active gesture"))?
                 {
-                    Gesture::Drag { state, zoom } => {
+                    Gesture::Drag {
+                        state,
+                        zoom,
+                        output,
+                    } => {
+                        let current_zoom = self
+                            .scene
+                            .output(*output)
+                            .ok_or(Error::Invalid("unknown gesture output"))?
+                            .zoom;
+                        state.set_snap_distances(24.0 / current_zoom, 32.0 / current_zoom)?;
                         self.scene.drag_to(state, screen_delta / *zoom)?;
                     }
-                    Gesture::Resize { state, zoom } => {
+                    Gesture::Resize {
+                        state,
+                        zoom,
+                        output,
+                    } => {
+                        let current_zoom = self
+                            .scene
+                            .output(*output)
+                            .ok_or(Error::Invalid("unknown gesture output"))?
+                            .zoom;
+                        state.set_snap_distances(24.0 / current_zoom, 32.0 / current_zoom)?;
                         self.scene.resize_to(state, screen_delta / *zoom)?;
                     }
                 }

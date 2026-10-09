@@ -119,7 +119,7 @@ fn two_outputs_clipping_inverse_input_and_world_gestures() {
     host.ok(json!({"op":"gesture_to","screen_delta":{"x":10.0,"y":5.0}}));
     let before = host.snapshot();
     assert_eq!(
-        host.call(json!({"op":"gesture_to","screen_delta":{"x":-500.0,"y":0.0}}))["ok"],
+        host.call(json!({"op":"gesture_to","screen_delta":{"x":1e12,"y":0.0}}))["ok"],
         false
     );
     assert_eq!(host.snapshot(), before);
@@ -262,5 +262,49 @@ fn strict_schema_numeric_failures_and_ffi_limits_are_atomic() {
         driftwm_desktop_response_free(response);
         driftwm_desktop_response_free(std::ptr::null_mut());
         driftwm_desktop_destroy(std::ptr::null_mut());
+    }
+}
+
+#[test]
+fn snap_defaults_use_current_zoom_while_displacement_keeps_start_zoom() {
+    // config/mod.rs defaults: gap=12 world, distance=24 screen, break=32 screen.
+    // snap.rs measures raw edge distance, then applies the gap. The current
+    // output zoom changes the latch distances (cluster_snapshot.rs and resize_grab.rs).
+    for op in ["begin_drag", "begin_resize"] {
+        let mut host = Host::new();
+        let display = output(&mut host, "snap-display", rect(0.0, 0.0, 800.0, 600.0));
+        let window = host.ok(attach(rect(0.0, 0.0, 100.0, 100.0)))["window"].clone();
+        let mut neighbor = attach(rect(150.0, 0.0, 100.0, 100.0));
+        neighbor["identity"]["wid"] = json!(457);
+        host.ok(neighbor);
+        host.ok(json!({"op":"zoom","output":display,"zoom":0.5,"anchor":{"x":0.0,"y":0.0}}));
+        let mut begin = json!({"op":op,"window":window,"output":display});
+        if op == "begin_resize" {
+            begin["edges"] = json!("right");
+        }
+        host.ok(begin);
+        for (zoom, screen_delta, expected_delta) in [
+            (1.0, 2.0, 4.0),
+            (0.5, 2.0, 38.0),
+            (1.0, 34.5, 38.0),
+            (1.0, 35.0, 70.0),
+        ] {
+            host.ok(json!({"op":"zoom","output":display,"zoom":zoom,"anchor":{"x":0.0,"y":0.0}}));
+            host.ok(json!({"op":"gesture_to","screen_delta":{"x":screen_delta,"y":0.0}}));
+            let expected = if op == "begin_drag" {
+                rect(expected_delta, 0.0, 100.0, 100.0)
+            } else {
+                rect(0.0, 0.0, 100.0 + expected_delta, 100.0)
+            };
+            assert_eq!(
+                host.snapshot()["windows"][0]["world_rect"],
+                expected,
+                "{op} zoom={zoom} screen_delta={screen_delta}"
+            );
+            assert_eq!(
+                host.snapshot()["windows"][1]["world_rect"],
+                rect(150.0, 0.0, 100.0, 100.0)
+            );
+        }
     }
 }

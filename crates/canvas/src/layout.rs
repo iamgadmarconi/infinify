@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 pub struct SnapOptions {
     /// Desired gap between adjacent window edges.
     pub gap: f64,
-    /// Maximum correction distance to engage a snap (zero disables snapping).
+    /// Distance from the neighboring edge before applying the gap (zero disables snapping).
     pub threshold: f64,
     /// Allowed error around the gap when discovering an existing cluster.
     pub adjacency_tolerance: f64,
@@ -18,8 +18,8 @@ pub struct SnapOptions {
 impl Default for SnapOptions {
     fn default() -> Self {
         Self {
-            gap: 8.0,
-            threshold: 12.0,
+            gap: 12.0,
+            threshold: 24.0,
             adjacency_tolerance: 1.0,
         }
     }
@@ -97,23 +97,24 @@ impl Scene {
         // Resolve X first, then use those final edges to determine Y eligibility.
         // This avoids a diagonal correction docking to a corner without overlap.
         for horizontal in [true, false] {
-            let mut correction: Option<f64> = None;
-            for moving in self.windows().iter().filter(|w| members.contains(&w.id)) {
+            let mut correction: Option<(f64, f64)> = None;
+            for moving in self.windows().iter().filter(|w| w.id == id) {
                 let rect = moving.world_rect.translated(actual);
                 for fixed in self.windows().iter().filter(|w| !members.contains(&w.id)) {
-                    for candidate in candidates(rect, fixed.world_rect, options.gap, horizontal)
-                        .into_iter()
-                        .flatten()
+                    for candidate in
+                        candidates(rect, fixed.world_rect, options, horizontal, false, false)
+                            .into_iter()
+                            .flatten()
                     {
-                        if candidate.abs() < options.threshold
-                            && correction.is_none_or(|old| candidate.abs() < old.abs())
+                        if candidate.1 < options.threshold
+                            && correction.is_none_or(|old| candidate.1 < old.1)
                         {
                             correction = Some(candidate);
                         }
                     }
                 }
             }
-            if let Some(correction) = correction {
+            if let Some((correction, _)) = correction {
                 if horizontal {
                     actual.x += correction;
                 } else {
@@ -158,18 +159,82 @@ pub(crate) fn adjacent(a: Rect, b: Rect, options: SnapOptions) -> bool {
             && ((a.bottom() + options.gap - b.origin.y).abs() <= options.adjacency_tolerance
                 || (b.bottom() + options.gap - a.origin.y).abs() <= options.adjacency_tolerance))
 }
-pub(crate) fn candidates(a: Rect, b: Rect, gap: f64, horizontal: bool) -> [Option<f64>; 2] {
-    if horizontal && a.origin.y < b.bottom() && b.origin.y < a.bottom() {
+/// Candidate correction and upstream ranking distance (not correction magnitude).
+pub(crate) fn candidates(
+    a: Rect,
+    b: Rect,
+    options: SnapOptions,
+    horizontal: bool,
+    same_edge: bool,
+    center: bool,
+) -> [Option<(f64, f64)>; 5] {
+    let (low, high, perp_low, perp_high) = axis_edges(a, horizontal);
+    let (other_low, other_high, other_perp_low, other_perp_high) = axis_edges(b, horizontal);
+    let overlap = perp_high > other_perp_low && other_perp_high > perp_low;
+    let aligned = !overlap
+        && (other_perp_low - perp_high)
+            .max(perp_low - other_perp_high)
+            .max(0.0)
+            < options.gap + options.threshold;
+    [
+        overlap.then_some((other_low - options.gap - high, (high - other_low).abs())),
+        overlap.then_some((other_high + options.gap - low, (low - other_high).abs())),
+        (same_edge && aligned).then_some((other_low - low, (low - other_low).abs())),
+        (same_edge && aligned).then_some((other_high - high, (high - other_high).abs())),
+        (center && aligned).then_some((
+            (other_low + other_high - low - high) / 2.0,
+            ((low + high - other_low - other_high) / 2.0).abs(),
+        )),
+    ]
+}
+
+pub(crate) fn axis_edges(rect: Rect, horizontal: bool) -> (f64, f64, f64, f64) {
+    if horizontal {
+        (rect.origin.x, rect.right(), rect.origin.y, rect.bottom())
+    } else {
+        (rect.origin.y, rect.bottom(), rect.origin.x, rect.right())
+    }
+}
+
+pub(crate) fn edge_candidates(
+    a: Rect,
+    b: Rect,
+    options: SnapOptions,
+    horizontal: bool,
+    high_edge: bool,
+    same_edge: bool,
+) -> [Option<(f64, f64)>; 2] {
+    let (low, high, perp_low, perp_high) = axis_edges(a, horizontal);
+    let (other_low, other_high, other_perp_low, other_perp_high) = axis_edges(b, horizontal);
+    let overlap = perp_high > other_perp_low && other_perp_high > perp_low;
+    let aligned = same_edge
+        && !overlap
+        && (other_perp_low - perp_high)
+            .max(perp_low - other_perp_high)
+            .max(0.0)
+            < options.gap + options.threshold;
+    if high_edge {
         [
-            Some(b.origin.x - gap - a.right()),
-            Some(b.right() + gap - a.origin.x),
-        ]
-    } else if !horizontal && a.origin.x < b.right() && b.origin.x < a.right() {
-        [
-            Some(b.origin.y - gap - a.bottom()),
-            Some(b.bottom() + gap - a.origin.y),
+            overlap.then_some((other_low - options.gap, (high - other_low).abs())),
+            aligned.then_some((other_high, (high - other_high).abs())),
         ]
     } else {
-        [None, None]
+        [
+            overlap.then_some((other_high + options.gap, (low - other_high).abs())),
+            aligned.then_some((other_low, (low - other_low).abs())),
+        ]
     }
+}
+
+pub(crate) fn closest(candidates: impl Iterator<Item = (f64, f64)>, threshold: f64) -> Option<f64> {
+    // Keep the first target on ties, matching upstream's strict comparison.
+    candidates
+        .fold(None, |best: Option<(f64, f64)>, candidate| {
+            if candidate.1 < threshold && best.is_none_or(|old| candidate.1 < old.1) {
+                Some(candidate)
+            } else {
+                best
+            }
+        })
+        .map(|(position, _)| position)
 }

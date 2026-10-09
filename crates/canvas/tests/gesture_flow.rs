@@ -20,7 +20,7 @@ fn frame(scene: &Scene, id: u64) -> Rect {
 fn options() -> SnapOptions {
     SnapOptions {
         gap: 4.0,
-        threshold: 8.0,
+        threshold: 9.0,
         adjacency_tolerance: 0.01,
     }
 }
@@ -45,7 +45,7 @@ fn drag_latches_releases_cools_down_and_never_accumulates_motion() {
     // Caller's screen displacement and thresholds use the frozen start zoom.
     let zoom = scene.output(OutputId(1)).unwrap().zoom;
     let mut snap = options();
-    snap.threshold = 4.0 / zoom;
+    snap.threshold = 4.5 / zoom;
     let mut drag = scene
         .begin_drag(WindowId(1), snap, 3.0 / zoom, false)
         .unwrap();
@@ -296,7 +296,7 @@ fn rejected_resizes_and_stale_members_are_atomic() {
         .unwrap();
     for delta in [
         Point::new(1.0, 0.0),
-        Point::new(-100.0, 0.0),
+        Point::new(1e12, 0.0),
         Point::new(0.0, f64::NAN),
     ] {
         let before = scene.clone();
