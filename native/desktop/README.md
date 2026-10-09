@@ -296,15 +296,21 @@ Its host panel has the same contract plus the nonactivating style. A dedicated
 NSApplication is installed from startup and rejects unexpected queued pointer,
 button, drag, scroll, keyboard, flags, gesture, tablet and unknown events before
 normal dispatch, atomically latching failure. Framework housekeeping alone passes;
-there is no event-tag exemption. Scripted DesktopView calls bypass the event queue.
-All owned-window exclusion contracts are checked before capture and mutation.
+passive MouseEntered, MouseExited and CursorUpdate notifications are discarded
+before dispatch without latching failure or clearing any existing latch. MouseMoved
+and all actionable or unknown events still latch failure. There is no event-tag
+exemption. Scripted DesktopView calls bypass the event queue. All owned-window
+exclusion contracts are checked before capture and mutation. Diagnostics preserve
+the first failing window's class, ID, visibility and mouse/key/main exclusion flags;
+unknown windows remain forbidden. No window titles or human text are recorded.
 
 Every setter checks the exact owned identity, unchanged read-only transform,
 recognized geometry, deadline, foreground identity, fresh fixture exclusion state,
 and sticky input-exclusion status. The same foreground application's unrelated
 input is allowed: this mode does not query global HID inactivity or require an
 input-observation grant. Switching foreground apps still aborts, and unexpected
-input delivered to the probe is dropped and permanently aborts the session.
+actionable or unknown input delivered to the probe is dropped and permanently
+aborts the session.
 Owned mode registers neither the global Escape monitor nor the exit hotkey; use
 the supervisor's SIGINT or the bounded deadline. Visible chooser buttons are inert
 in this probe, and the host toolbar explicitly labels the noninteractive mode.
