@@ -28,7 +28,7 @@ impl Controller {
             scene.remove_output(output.id)?;
         }
         let saved = Saved {
-            version: VERSION,
+            version: SAVE_VERSION,
             scene,
             metadata: self.metadata.clone(),
             outputs: self.outputs.clone(),
@@ -92,7 +92,7 @@ impl Controller {
             return Err(Error::Invalid("save exceeds 32 MiB"));
         }
         let saved: Saved = serde_json::from_slice(&bytes)?;
-        if saved.version != VERSION {
+        if saved.version != SAVE_VERSION {
             return Err(Error::Invalid("unsupported desktop save schema"));
         }
         if !saved.scene.outputs().is_empty() {
@@ -135,6 +135,9 @@ impl Controller {
             next_window: saved.next_window,
             next_output: saved.next_output,
             gesture: None,
+            focus: FocusRuntime::default(),
+            next_effect: 0,
+            next_generation: 0,
         })
     }
 }

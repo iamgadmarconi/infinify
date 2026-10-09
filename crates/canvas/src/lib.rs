@@ -17,11 +17,13 @@ mod layout;
 mod momentum;
 pub mod policy;
 mod session;
+mod stage;
 pub use geometry::{Point, Rect, Size};
 pub use gestures::{DragGesture, ResizeEdges, ResizeGesture};
 pub use layout::SnapOptions;
 pub use momentum::Momentum;
 pub use session::SESSION_VERSION;
+pub use stage::Stage;
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -169,9 +171,9 @@ pub enum Error {
 }
 /// Window world, z-order, output cameras and bookmarks. All mutations are validated.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, try_from = "SceneData")]
+#[serde(deny_unknown_fields, try_from = "SceneData", into = "SceneData")]
 pub struct Scene {
-    windows: Vec<Window>,
+    stage: Stage,
     outputs: Vec<Viewport>,
     focused: Option<WindowId>,
     bookmarks: BTreeMap<String, Bookmark>,
@@ -183,7 +185,41 @@ impl Scene {
     }
     /// Windows ordered bottom-to-top.
     pub fn windows(&self) -> &[Window] {
-        &self.windows
+        self.stage.windows()
+    }
+    /// Window and focus-cycle state, owned by this scene.
+    pub fn stage(&self) -> &Stage {
+        &self.stage
+    }
+    /// Advance frozen MRU history and update logical intent.
+    pub fn cycle_focus(&mut self, backward: bool) -> Result<Option<WindowId>, Error> {
+        let selected = self.stage.cycle_step(backward, self.focused);
+        if let Some(id) = selected {
+            self.focus(id)?;
+        }
+        Ok(selected)
+    }
+    /// Promote confirmed native focus, retaining frozen history during cycling.
+    pub fn confirm_focus(&mut self, id: WindowId) -> Result<(), Error> {
+        if self.window(id).is_none() {
+            return Err(Error::UnknownWindow(id));
+        }
+        if self.stage.cycle_state.is_none() {
+            self.stage.push_focus(id);
+        }
+        Ok(())
+    }
+    /// Commit a confirmed cycle selection.
+    pub fn end_cycle(&mut self) {
+        self.stage.end_cycle();
+    }
+    /// Cancel a cycle without promotion.
+    pub fn cancel_cycle(&mut self) {
+        self.stage.cycle_state = None;
+    }
+    /// Remove an ineligible or detached window from native focus history.
+    pub fn drop_focus_history(&mut self, id: WindowId) {
+        self.stage.drop_history(id);
     }
     /// Independent output cameras in registration order.
     pub fn outputs(&self) -> &[Viewport] {
@@ -191,7 +227,7 @@ impl Scene {
     }
     /// Find a window.
     pub fn window(&self, id: WindowId) -> Option<&Window> {
-        self.windows.iter().find(|w| w.id == id)
+        self.stage.windows().iter().find(|w| w.id == id)
     }
     /// Find an output.
     pub fn output(&self, id: OutputId) -> Option<&Viewport> {
@@ -211,10 +247,16 @@ impl Scene {
         if self.window(window.id).is_some() {
             return Err(Error::Invalid("duplicate window ID"));
         }
-        if window.native.is_some() && self.windows.iter().any(|w| w.native == window.native) {
+        if window.native.is_some()
+            && self
+                .stage
+                .windows()
+                .iter()
+                .any(|w| w.native == window.native)
+        {
             return Err(Error::Invalid("duplicate native identity"));
         }
-        self.windows.push(window);
+        self.stage.add(window);
         Ok(())
     }
     /// Attach a freshly verified native identity, or detach with `None`.
@@ -233,13 +275,14 @@ impl Scene {
         }
         if native.is_some()
             && self
-                .windows
+                .stage
+                .windows()
                 .iter()
                 .any(|w| w.id != id && w.native == native)
         {
             return Err(Error::Invalid("duplicate native identity"));
         }
-        if let Some(window) = self.windows.iter_mut().find(|w| w.id == id) {
+        if let Some(window) = self.stage.window_mut(id) {
             window.native = native;
         }
         Ok(())
@@ -247,13 +290,14 @@ impl Scene {
     /// Remove a window; closing the focused window focuses the next topmost one.
     pub fn remove_window(&mut self, id: WindowId) -> Result<Window, Error> {
         let index = self
-            .windows
+            .stage
+            .windows()
             .iter()
             .position(|w| w.id == id)
             .ok_or(Error::UnknownWindow(id))?;
-        let removed = self.windows.remove(index);
+        let removed = self.stage.remove(index);
         if self.focused == Some(id) {
-            self.focused = self.windows.last().map(|w| w.id);
+            self.focused = self.stage.windows().last().map(|w| w.id);
         }
         Ok(removed)
     }
@@ -291,9 +335,8 @@ impl Scene {
         if !rect.valid() {
             return Err(Error::Invalid("window geometry"));
         }
-        self.windows
-            .iter_mut()
-            .find(|w| w.id == id)
+        self.stage
+            .window_mut(id)
             .ok_or(Error::UnknownWindow(id))?
             .world_rect = rect;
         Ok(())
@@ -332,7 +375,7 @@ impl Scene {
         self.outputs
             .iter()
             .flat_map(|output| {
-                self.windows.iter().filter_map(move |window| {
+                self.stage.windows().iter().filter_map(move |window| {
                     let origin = output.world_to_screen(window.world_rect.origin);
                     let screen_rect = Rect {
                         origin,
@@ -367,7 +410,8 @@ impl Scene {
             return None;
         }
         let world = output.screen_to_world(screen);
-        self.windows
+        self.stage
+            .windows()
             .iter()
             .rev()
             .find(|w| w.world_rect.contains(world))
@@ -378,13 +422,10 @@ impl Scene {
     }
     /// Focus and raise a window to the top of the global stack.
     pub fn focus(&mut self, id: WindowId) -> Result<(), Error> {
-        let index = self
-            .windows
-            .iter()
-            .position(|w| w.id == id)
-            .ok_or(Error::UnknownWindow(id))?;
-        let window = self.windows.remove(index);
-        self.windows.push(window);
+        if self.window(id).is_none() {
+            return Err(Error::UnknownWindow(id));
+        }
+        self.stage.raise(id);
         self.focused = Some(id);
         Ok(())
     }
@@ -408,7 +449,8 @@ impl Scene {
         };
         let mut best: Option<(WindowId, f64)> = None;
         for window in self
-            .windows
+            .stage
+            .windows()
             .iter()
             .rev()
             .filter(|w| Some(w.id) != self.focused)
@@ -465,7 +507,7 @@ impl Scene {
     pub fn validate(&self) -> Result<(), Error> {
         let mut windows = BTreeSet::new();
         let mut natives = BTreeSet::new();
-        for window in &self.windows {
+        for window in self.stage.windows() {
             validate_window(window)?;
             if !windows.insert(window.id) {
                 return Err(Error::Invalid("duplicate window ID"));
@@ -525,7 +567,7 @@ fn validate_window(window: &Window) -> Result<(), Error> {
 
 // Deserialize through an untrusted representation so even direct serde use
 // cannot manufacture an invalid Scene and bypass the command invariants.
-#[derive(Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SceneData {
     windows: Vec<Window>,
@@ -537,12 +579,23 @@ impl TryFrom<SceneData> for Scene {
     type Error = Error;
     fn try_from(data: SceneData) -> Result<Self, Error> {
         let scene = Self {
-            windows: data.windows,
+            stage: Stage::from_windows(data.windows),
             outputs: data.outputs,
             focused: data.focused,
             bookmarks: data.bookmarks,
         };
         scene.validate()?;
         Ok(scene)
+    }
+}
+
+impl From<Scene> for SceneData {
+    fn from(scene: Scene) -> Self {
+        Self {
+            windows: scene.stage.into_windows(),
+            outputs: scene.outputs,
+            focused: scene.focused,
+            bookmarks: scene.bookmarks,
+        }
     }
 }

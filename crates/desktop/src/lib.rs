@@ -14,7 +14,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-pub const VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = 1;
+pub const SAVE_VERSION: u32 = 1;
+/// Compatibility alias for JSON ABI callers.
+pub const VERSION: u32 = ABI_VERSION;
 pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
@@ -69,6 +72,7 @@ impl BufferSize {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct Source {
+    pub generation: u64,
     pub identity: SourceIdentity,
     pub buffer: BufferSize,
     pub original_rect: Rect,
@@ -100,6 +104,22 @@ enum Gesture {
         output: OutputId,
     },
 }
+/// A request to the native adapter, never evidence that focus changed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct FocusEffect {
+    pub op: &'static str,
+    pub effect_id: u64,
+    pub window: WindowId,
+    pub identity: SourceIdentity,
+    pub generation: u64,
+}
+#[derive(Clone, Debug, Default, Serialize)]
+struct FocusRuntime {
+    observed_native: Option<FocusEffect>,
+    pending_effect: Option<FocusEffect>,
+    last_result: Option<Value>,
+    release_pending: bool,
+}
 #[derive(Clone, Debug, Default)]
 pub struct Controller {
     scene: Scene,
@@ -109,6 +129,9 @@ pub struct Controller {
     next_window: u64,
     next_output: u64,
     gesture: Option<Gesture>,
+    focus: FocusRuntime,
+    next_effect: u64,
+    next_generation: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -164,6 +187,25 @@ pub enum Command {
     },
     Focus {
         window: WindowId,
+    },
+    CycleFocus {
+        backward: bool,
+        held: bool,
+    },
+    EndFocusCycle {},
+    CancelFocusCycle {},
+    FocusLost {},
+    FocusResult {
+        effect_id: u64,
+        window: WindowId,
+        identity: SourceIdentity,
+        generation: u64,
+        success: bool,
+    },
+    ObserveFocus {
+        window: WindowId,
+        identity: SourceIdentity,
+        generation: u64,
     },
     Hit {
         output: OutputId,
@@ -380,9 +422,14 @@ impl Controller {
                     id
                 };
                 self.metadata.insert(id, Metadata { bundle_id, title });
+                self.next_generation = self
+                    .next_generation
+                    .checked_add(1)
+                    .ok_or(Error::Invalid("binding generations exhausted"))?;
                 self.sources.insert(
                     id,
                     Source {
+                        generation: self.next_generation,
                         identity,
                         buffer,
                         original_rect: source_rect,
@@ -415,6 +462,7 @@ impl Controller {
                 keep_placeholder,
             } => {
                 self.fresh(window, &identity)?;
+                self.invalidate_focus(window);
                 self.sources.remove(&window);
                 if !keep_placeholder {
                     self.scene.remove_window(window)?;
@@ -425,6 +473,7 @@ impl Controller {
             Command::Forget { window } => {
                 self.scene.remove_window(window)?;
                 self.metadata.remove(&window);
+                self.invalidate_focus(window);
                 self.sources.remove(&window);
                 self.gesture = None;
             }
@@ -443,7 +492,83 @@ impl Controller {
                 self.scene.zoom_at(output, zoom, anchor)?;
                 self.sync_output(output)?;
             }
-            Command::Focus { window } => self.scene.focus(window)?,
+            Command::Focus { window } => {
+                self.finish_cycle();
+                self.scene.focus(window)?;
+                return self.request_focus(window);
+            }
+            Command::CycleFocus { backward, held } => {
+                self.focus.release_pending = false;
+                if let Some(window) = self.scene.cycle_focus(backward)? {
+                    let result = self.request_focus(window)?;
+                    if !held {
+                        self.release_cycle();
+                    }
+                    return Ok(result);
+                }
+            }
+            Command::EndFocusCycle {} => self.release_cycle(),
+            Command::CancelFocusCycle {} => {
+                self.scene.cancel_cycle();
+                self.focus.pending_effect = None;
+                self.focus.release_pending = false;
+            }
+            Command::FocusLost {} => {
+                self.scene.cancel_cycle();
+                self.focus.pending_effect = None;
+                self.focus.observed_native = None;
+                self.focus.release_pending = false;
+            }
+            Command::FocusResult {
+                effect_id,
+                window,
+                identity,
+                generation,
+                success,
+            } => {
+                let expected = FocusEffect {
+                    op: "focus_native_window",
+                    effect_id,
+                    window,
+                    identity,
+                    generation,
+                };
+                if self.focus.pending_effect.as_ref() != Some(&expected) {
+                    return Err(Error::Invalid("stale or superseded focus result"));
+                }
+                self.check_generation(window, &expected.identity, generation)?;
+                self.focus.pending_effect = None;
+                self.focus.last_result = Some(json!({"effect": expected, "success": success}));
+                if success {
+                    self.focus.observed_native = Some(expected);
+                    self.scene.confirm_focus(window)?;
+                    if self.focus.release_pending {
+                        self.finish_cycle();
+                    }
+                } else {
+                    // A failed request does not claim a new observation.
+                    self.scene.cancel_cycle();
+                    self.focus.release_pending = false;
+                }
+            }
+            Command::ObserveFocus {
+                window,
+                identity,
+                generation,
+            } => {
+                self.check_generation(window, &identity, generation)?;
+                self.finish_cycle();
+                self.focus.pending_effect = None;
+                self.scene.focus(window)?;
+                self.scene.confirm_focus(window)?;
+                self.focus.observed_native = Some(FocusEffect {
+                    op: "observed_native_focus",
+                    effect_id: 0,
+                    window,
+                    identity,
+                    generation,
+                });
+            }
             Command::Hit { output, screen } => return self.hit(output, screen, None),
             Command::Input {
                 output,
@@ -546,10 +671,103 @@ impl Controller {
                 self.save(&path)?;
             }
             Command::Load { path } => {
-                *self = Self::load(&path)?;
+                let mut loaded = Self::load(&path)?;
+                loaded.next_effect = self.next_effect;
+                loaded.next_generation = self.next_generation;
+                *self = loaded;
             }
         }
         Ok(json!({}))
+    }
+    fn check_generation(
+        &self,
+        window: WindowId,
+        identity: &SourceIdentity,
+        generation: u64,
+    ) -> Result<(), Error> {
+        if self.fresh(window, identity)?.generation != generation {
+            return Err(Error::Invalid("stale binding generation"));
+        }
+        Ok(())
+    }
+    fn request_focus(&mut self, window: WindowId) -> Result<Value, Error> {
+        self.focus.pending_effect = None;
+        let Some(source) = self.sources.get(&window) else {
+            return Ok(json!({"effect": null}));
+        };
+        self.next_effect = self
+            .next_effect
+            .checked_add(1)
+            .ok_or(Error::Invalid("focus effect IDs exhausted"))?;
+        let effect = FocusEffect {
+            op: "focus_native_window",
+            effect_id: self.next_effect,
+            window,
+            identity: source.identity.clone(),
+            generation: source.generation,
+        };
+        self.focus.pending_effect = Some(effect.clone());
+        Ok(json!({"effect": effect}))
+    }
+    fn finish_cycle(&mut self) {
+        // Only a confirmed current selection can be committed. A pending
+        // selection must not accidentally promote the previous observation.
+        if self.focus.pending_effect.is_none()
+            && self
+                .focus
+                .observed_native
+                .as_ref()
+                .is_some_and(|f| Some(f.window) == self.scene.focused())
+            && self
+                .scene
+                .stage()
+                .cycle_state()
+                .and_then(|i| self.scene.stage().focus_history().get(i))
+                .copied()
+                == self.scene.focused()
+        {
+            self.scene.end_cycle();
+        } else {
+            self.scene.cancel_cycle();
+        }
+        self.focus.release_pending = false;
+    }
+    fn release_cycle(&mut self) {
+        if self.scene.stage().cycle_state().is_none() {
+            return;
+        }
+        if self.focus.pending_effect.is_some() {
+            self.focus.release_pending = true;
+        } else {
+            self.finish_cycle();
+        }
+    }
+    fn invalidate_focus(&mut self, window: WindowId) {
+        self.scene.drop_focus_history(window);
+        if self.scene.focused() == Some(window)
+            || self
+                .focus
+                .pending_effect
+                .as_ref()
+                .is_some_and(|f| f.window == window)
+            || self
+                .focus
+                .observed_native
+                .as_ref()
+                .is_some_and(|f| f.window == window)
+        {
+            self.scene.cancel_cycle();
+            self.focus.release_pending = false;
+            self.focus.pending_effect = None;
+        }
+        if self
+            .focus
+            .observed_native
+            .as_ref()
+            .is_some_and(|f| f.window == window)
+        {
+            self.focus.observed_native = None;
+        }
     }
     fn sync_output(&mut self, id: OutputId) -> Result<(), Error> {
         self.outputs
@@ -611,7 +829,7 @@ impl Controller {
         }).collect();
         let windows: Vec<_> = self.scene.windows().iter().map(|w| json!({"window": w.id, "world_rect": w.world_rect, "metadata": self.metadata.get(&w.id), "source": self.sources.get(&w.id)})).collect();
         Ok(
-            json!({"evidence": "logical_controller_only", "outputs": self.scene.outputs(), "windows": windows, "focused": self.scene.focused(), "placements": placements}),
+            json!({"evidence": "logical_controller_only", "outputs": self.scene.outputs(), "windows": windows, "focused": self.scene.focused(), "focus": {"intent": self.scene.focused(), "observed_native": self.focus.observed_native, "pending_effect": self.focus.pending_effect, "last_result": self.focus.last_result, "history": self.scene.stage().focus_history(), "cycle": self.scene.stage().cycle_state(), "release_pending": self.focus.release_pending}, "placements": placements}),
         )
     }
 }

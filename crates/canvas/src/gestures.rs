@@ -532,10 +532,11 @@ impl Scene {
             }
         }
         // Every lookup and geometry is validated before the first write.
-        for window in &mut self.windows {
-            if let Some((_, rect)) = updates.iter().find(|(id, _)| *id == window.id) {
-                window.world_rect = *rect;
-            }
+        for &(id, rect) in updates {
+            self.stage
+                .window_mut(id)
+                .expect("validated gesture member")
+                .world_rect = rect;
         }
         Ok(())
     }

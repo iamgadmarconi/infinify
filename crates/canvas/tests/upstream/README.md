@@ -58,3 +58,23 @@ Only the field storage, tuple construction, Point addition/subtraction, and i32
 to f64 casts needed to compile the original file are implemented.
 
 See `../../POLICY.md` for the public helper contracts and integration boundaries.
+
+## Stage oracle
+
+`stage/mod.rs` is the complete byte-for-byte `src/stage/mod.rs` from the same
+pinned upstream commit, GPL-3.0-or-later. `stage/element.rs` is explicitly a harness
+trait adapter, not an upstream copy: value IDs implement only the element queries
+used by Stage. `tests/support/stage_oracle.rs` compiles the full original Stage
+with rustc as an executable (without cfg(test), so upstream's separate unit-test
+modules are not loaded). It supplies geometry storage/default construction and
+the SnapRect data shape, plus an input/output trace driver; no MRU, cycle, removal,
+or stacking algorithm is in the adapter. The driver calls upstream operations.
+
+`cargo test -p driftwm-canvas --test stage_parity parity_ --locked` compares the
+public Scene trace with this executable after every operation. It covers map,
+raise, frozen history, fresh/backward wrap, an excluded current window, clamped
+removal, explicit interruption/cancel, and remove/re-add identity. Fractional
+production geometry is checked unchanged alongside integer oracle geometry.
+Fullscreen, fit, fill, pin and modal relationships are compiled but not modeled or
+claimed as implemented by production. This establishes bounded controller-state
+parity, never native focus or complete Alt-Tab behavior.
