@@ -118,6 +118,7 @@ def run(scenario, directory):
     result = {'proof_scope': 'noninteractive owned fixture layout/capture; no physical-input or third-party claim',
               'startup': read(directory / 'controller-startup.json'),
               'fixture_startup': read(directory / 'fixture-startup.json'),
+              'fixture_readiness': read(directory / 'fixture-readiness.json'),
               'preflight': native.get('preflight', {}), 'enrollment': native.get('enrollment', {}),
               'ax_enrollment': native.get('ax_enrollment', {}),
               'guard_checks': native.get('guard_checks', {}), 'input_isolation': native.get('isolation', {}),

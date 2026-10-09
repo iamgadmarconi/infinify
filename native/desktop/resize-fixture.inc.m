@@ -38,6 +38,50 @@ static NSDictionary *rpFixtureDiagnostics(NSWindow *root,NSWindow *decoy,NSWindo
     BOOL excluded=rpCheckWindows()&&rpWindowExcluded(root)&&rpWindowExcluded(decoy)&&(!child||rpWindowExcluded(child));
     return @{@"timestamp":@(CACurrentMediaTime()),@"input_excluded":@(excluded),@"isolation":rpIsolationDiagnostics(),@"foreground_pid_matches":@(NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier==rpIsolation.foreground),@"foreground_birth_matches":@([birth(rpIsolation.foreground)isEqual:rpIsolation.foregroundBirth]),@"initial_transform":transform?:@[],@"current_transform":currentTransform?:@[],@"transform_available":@(currentTransform!=nil),@"transform_unchanged":@(transform&&[currentTransform isEqual:transform]),@"original_frame":rpFrame(original),@"current_frame":rpFrame(root.frame),@"last_recognized_frame":rpFrame(last),@"decoy_unchanged":@(NSEqualRects(decoy.frame,decoyOriginal))};
 }
+// Missing WindowServer registration is pending, never a usable baseline. A
+// present but foreign/ambiguous/moved entry fails instead of becoming a new origin.
+static NSDictionary *rpRegistrationWindow(NSWindow *window,NSRect original,CGRect expected,uint32_t frozenID) {
+    NSInteger number=window.windowNumber;BOOL positive=number>0&&(uint64_t)number<=UINT32_MAX;
+    BOOL sameID=!frozenID||(positive&&(uint32_t)number==frozenID);
+    NSDictionary *cg=positive?windowInfo((uint32_t)number):nil;CGRect bounds=CGRectZero;
+    BOOL exact=cg&&[cg[(id)kCGWindowNumber]unsignedIntValue]==(uint32_t)number&&[cg[(id)kCGWindowOwnerPID]intValue]==getpid();
+    BOOL hasBounds=cg&&CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)cg[(id)kCGWindowBounds],&bounds);
+    BOOL sameBounds=hasBounds&&CGRectEqualToRect(bounds,expected),sameFrame=NSEqualRects(window.frame,original);
+    BOOL invalid=!sameID||!sameFrame||(cg&&(!exact||!sameBounds));
+    return @{@"window":@(number),@"positive_id":@(positive),@"id_unchanged":@(sameID),@"cg_present":@(cg!=nil),@"exact_owner":@(exact),@"bounds_available":@(hasBounds),@"bounds_match_created_frame":@(sameBounds),@"appkit_frame_unchanged":@(sameFrame),@"expected_cg":rpFrame(expected),@"observed_cg":rpFrame(bounds),@"status":invalid?@"invalid":exact&&sameBounds?@"registered":@"pending"};
+}
+static NSDictionary *rpWaitForRegistration(NSWindow *root,NSWindow *decoy,NSRect original,NSRect decoyOriginal,pid_t parent,NSArray *parentBirth,double deadline) {
+    double began=CACurrentMediaTime(),end=fmin(deadline,began+2.0);NSArray *ownBirth=birth(getpid());
+    CGRect expected=topRect(original),decoyExpected=topRect(decoyOriginal);
+    uint32_t rootID=0,decoyID=0;NSArray *candidate=nil,*decoyCandidate=nil;NSMutableArray *observations=[NSMutableArray array];NSString *failure=@"registration-deadline";BOOL ready=NO;
+    while(CACurrentMediaTime()<end){
+        BOOL parentMatches=getppid()==parent&&[birth(parent)isEqual:parentBirth],ownBirthMatches=ownBirth&&[birth(getpid())isEqual:ownBirth];
+        BOOL foreground=rpForegroundMatches(),excluded=rpCheckWindows()&&rpInputExcluded();
+        NSMutableDictionary *sample=[@{@"elapsed":@(CACurrentMediaTime()-began),@"parent_birth_matches":@(parentMatches),@"own_birth_matches":@(ownBirthMatches),@"foreground_preserved":@(foreground),@"input_excluded":@(excluded),@"signal_clear":@(!stopped),@"isolation":rpIsolationDiagnostics()}mutableCopy];
+        [observations addObject:sample];
+        if(stopped||!parentMatches||!ownBirthMatches||!foreground||!excluded){failure=@"registration-interrupted";break;}
+        NSDictionary *r=rpRegistrationWindow(root,original,expected,rootID),*d=rpRegistrationWindow(decoy,decoyOriginal,decoyExpected,decoyID);sample[@"root"]=r;sample[@"decoy"]=d;
+        if(!rootID&&[r[@"positive_id"]boolValue])rootID=[r[@"window"]unsignedIntValue];if(!decoyID&&[d[@"positive_id"]boolValue])decoyID=[d[@"window"]unsignedIntValue];
+        if([r[@"status"]isEqual:@"invalid"]||[d[@"status"]isEqual:@"invalid"]){failure=@"registered-identity-or-created-geometry-changed";break;}
+        if([r[@"status"]isEqual:@"registered"]&&[d[@"status"]isEqual:@"registered"]){
+            // No transform query occurs before BOTH windows have exact registered
+            // owners and the original created geometry. First registered values
+            // are candidates only; differing later values fail, never rebase.
+            NSArray *t=rpTransform(rootID),*dt=rpTransform(decoyID);BOOL rootKnown=t.count==6,decoyKnown=dt.count==6;for(NSNumber *part in t)rootKnown&=isfinite(part.doubleValue);for(NSNumber *part in dt)decoyKnown&=isfinite(part.doubleValue);sample[@"root_transform_known"]=@(rootKnown);sample[@"decoy_transform_known"]=@(decoyKnown);sample[@"root_transform"]=rootKnown?t:@[];sample[@"decoy_transform"]=decoyKnown?dt:@[];
+            if(!rootKnown||!decoyKnown){failure=@"registered-transform-unavailable";break;}
+            if(candidate){if(![candidate isEqual:t]||![decoyCandidate isEqual:dt]){failure=@"registered-transform-changed";break;}ready=YES;}
+            else {candidate=t;decoyCandidate=dt;}
+        }else if(candidate){failure=@"registration-lost-after-first-valid-observation";break;}
+        // Guard again after every potentially slow query. A successful candidate
+        // cannot bless an interruption or geometry change during observation.
+        if(stopped||CACurrentMediaTime()>=end||getppid()!=parent||![birth(parent)isEqual:parentBirth]||![birth(getpid())isEqual:ownBirth]||!rpForegroundMatches()||!rpCheckWindows()||!rpInputExcluded()||!NSEqualRects(root.frame,original)||!NSEqualRects(decoy.frame,decoyOriginal)){ready=NO;failure=@"registration-final-guard-failed";break;}
+        if(ready){failure=@"";break;}
+        // Service real AppKit/WindowServer registration between observations;
+        // this is not a fixed sleep or an animation/redraw used to fake capture.
+        pump(.015);
+    }
+    return @{@"ready":@(ready),@"failure":failure,@"elapsed":@(CACurrentMediaTime()-began),@"observations":observations,@"root_window":@(rootID),@"decoy_window":@(decoyID),@"registered_original_cg":rpFrame(expected),@"registered_decoy_cg":rpFrame(decoyExpected),@"root_transform":ready?candidate:@[],@"decoy_transform":ready?decoyCandidate:@[]};
+}
 static int ownedResizeFixture(NSString *directory,NSString *nonce) {
     NSDictionary *lease=readJSON([directory stringByAppendingPathComponent:@"lease.json"]);
     pid_t parent=getppid();NSArray *parentBirth=birth(parent);
@@ -51,9 +95,18 @@ static int ownedResizeFixture(NSString *directory,NSString *nonce) {
     if(!rpBeforeOrder(root)){save(rpIsolationDiagnostics(),[directory stringByAppendingPathComponent:@"fixture-order-failure.json"]);[root close];return 2;}[root orderFront:nil];[root display];
     NSWindow *decoy=rpMakeWindow(NSMakeRect(30,30,100,80),root.title,NSWindowStyleMaskBorderless);NSRect decoyOriginal=decoy.frame;
     if(!rpBeforeOrder(decoy)){save(rpIsolationDiagnostics(),[directory stringByAppendingPathComponent:@"fixture-order-failure.json"]);[root close];[decoy close];return 2;}[decoy orderFront:nil];
-    __block NSRect last=original;NSArray *transform=rpTransform((uint32_t)root.windowNumber);
-    NSDictionary *registration=windowInfo((uint32_t)root.windowNumber);
-    rpPrivateSave(@{@"registration":@{@"cg_owner_matches":@([registration[(id)kCGWindowOwnerPID]intValue]==getpid()),@"cg_bounds":registration[(id)kCGWindowBounds]?:@{},@"frame_unchanged_after_order":@(NSEqualRects(root.frame,original))},@"pid":@(getpid()),@"birth":birth(getpid())?:@[],@"nonce":nonce,@"window":@(root.windowNumber),@"decoy":@(decoy.windowNumber),@"original":rpFrame(original),@"transform":transform?:@[],@"input_excluded":@(rpCheckWindows()),@"startup":rpIsolation.startup?:@{}},[directory stringByAppendingPathComponent:@"ready.json"]);
+    NSDictionary *readiness=rpWaitForRegistration(root,decoy,original,decoyOriginal,parent,parentBirth,deadline);
+    save(readiness,[directory stringByAppendingPathComponent:@"fixture-readiness.json"]);
+    if(![readiness[@"ready"]boolValue]){
+        // No ready receipt, controller enrollment, AX mutation, or restoration
+        // setter is permitted on this path. Close only these owned objects.
+        BOOL unchanged=NSEqualRects(root.frame,original)&&NSEqualRects(decoy.frame,decoyOriginal);
+        [root close];[decoy close];
+        save(@{@"reason":@"registration-failed",@"readiness_failure":readiness[@"failure"],@"restored":@NO,@"restoration_attempted":@NO,@"original_frames_unchanged":@(unchanged),@"closed_owned_windows":@YES,@"contaminated":@YES,@"final_isolation":rpIsolationDiagnostics()},[directory stringByAppendingPathComponent:@"fixture-exit.json"]);return 2;
+    }
+    __block NSRect last=original;NSArray *transform=readiness[@"root_transform"];
+    NSDictionary *registration=[readiness[@"observations"]lastObject][@"root"];
+    if(!rpPrivateSave(@{@"registration":registration,@"registered_original_cg":readiness[@"registered_original_cg"],@"registered_decoy_cg":readiness[@"registered_decoy_cg"],@"pid":@(getpid()),@"birth":birth(getpid())?:@[],@"nonce":nonce,@"window":@(root.windowNumber),@"decoy":@(decoy.windowNumber),@"original":rpFrame(original),@"transform":transform,@"decoy_transform":readiness[@"decoy_transform"],@"input_excluded":@(rpCheckWindows()),@"startup":rpIsolation.startup?:@{}},[directory stringByAppendingPathComponent:@"ready.json"])){[root close];[decoy close];save(@{@"reason":@"ready-publication-failed",@"restored":@NO,@"restoration_attempted":@NO,@"closed_owned_windows":@YES},[directory stringByAppendingPathComponent:@"fixture-exit.json"]);return 2;}
     __block NSDictionary *firstContamination=nil;
     __block BOOL contaminated=NO,restored=NO,finished=NO;__block NSString *reason=@"deadline";__block NSWindow *child=nil;
     void (^finish)(void)=^{

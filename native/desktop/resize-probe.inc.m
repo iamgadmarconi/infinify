@@ -129,16 +129,25 @@ static int runOwnedResize(NSString *directory,NSString *scenario) {
     double readyEnd=CACurrentMediaTime()+3;NSDictionary *ready=nil;
     while(fixture.running&&!stopped&&CACurrentMediaTime()<readyEnd){ready=readJSON([directory stringByAppendingPathComponent:@"ready.json"]);if(ready)break;pump(.02);}
     lease.wid=[ready[@"window"]unsignedIntValue];
-    lease.transform=rpTransform(lease.wid);
+    NSArray *currentTransform=lease.wid?rpTransform(lease.wid):nil;
+    // The fixture's registered baseline is immutable. Independent observations
+    // must confirm it; they must never silently establish a replacement baseline.
+    lease.transform=ready[@"transform"];
+    NSArray *registeredOriginal=ready[@"registered_original_cg"];
+    BOOL baselineValid=[lease.transform isKindOfClass:NSArray.class]&&lease.transform.count==6&&[registeredOriginal isKindOfClass:NSArray.class]&&registeredOriginal.count==4;
+    if(baselineValid)lease.initial=rpRect(registeredOriginal);
     NSMutableDictionary *axDiagnostics=[NSMutableDictionary dictionary];
-    NSDictionary *initial=rpObserveDetailed(lease.pid,lease.processBirth,lease.wid,axDiagnostics);
+    NSDictionary *initial=lease.wid?rpObserveDetailed(lease.pid,lease.processBirth,lease.wid,axDiagnostics):nil;
+    BOOL transformMatches=baselineValid&&[currentTransform isEqual:lease.transform];
+    BOOL originalMatches=baselineValid&&initial&&CGRectEqualToRect(rpRect(initial[@"cg"]),lease.initial)&&CGRectEqualToRect(rpRect(initial[@"ax"]),lease.initial);
+    report[@"fixture_readiness"]=readJSON([directory stringByAppendingPathComponent:@"fixture-readiness.json"])?:@{};
     report[@"ax_enrollment"]=axDiagnostics;report[@"fixture_startup"]=readJSON([directory stringByAppendingPathComponent:@"fixture-startup.json"])?:@{};
     save(@{@"fixture":@(lease.pid),@"birth":lease.processBirth?:@[],@"windows":@[@(lease.wid),ready[@"decoy"]?:@0],@"original":initial?:@{},@"transform":lease.transform?:@[]},[directory stringByAppendingPathComponent:@"identity.json"]);
-    SCWindow *selected=findWindow(lease.pid,lease.wid);
-    report[@"enrollment"]=@{@"sck_exact_window_found":@(selected!=nil),@"ax_cg_observed":@(initial!=nil),@"transform_available":@(lease.transform!=nil),@"controller_transform":lease.transform?:@[],@"fixture_initial_transform":ready[@"transform"]?:@[],@"nonce_matches":@([ready[@"nonce"]isEqual:lease.nonce]),@"birth_matches":@([ready[@"birth"]isEqual:lease.processBirth]),@"input_exclusion_reported":@([ready[@"input_excluded"]boolValue]),@"fixture_registration":ready[@"registration"]?:@{}};
+    SCWindow *selected=lease.wid&&baselineValid?findWindow(lease.pid,lease.wid):nil;
+    report[@"enrollment"]=@{@"sck_exact_window_found":@(selected!=nil),@"ax_cg_observed":@(initial!=nil),@"transform_available":@(lease.transform!=nil),@"controller_transform":currentTransform?:@[],@"registered_baseline_valid":@(baselineValid),@"registered_transform_matches":@(transformMatches),@"registered_original_frame_matches":@(originalMatches),@"registered_original_cg":registeredOriginal?:@[],@"fixture_initial_transform":ready[@"transform"]?:@[],@"nonce_matches":@([ready[@"nonce"]isEqual:lease.nonce]),@"birth_matches":@([ready[@"birth"]isEqual:lease.processBirth]),@"input_exclusion_reported":@([ready[@"input_excluded"]boolValue]),@"fixture_registration":ready[@"registration"]?:@{}};
     @try {
-        if(!selected||!initial||!lease.transform||![ready[@"nonce"]isEqual:lease.nonce]||![ready[@"birth"]isEqual:lease.processBirth]||![lease check])@throw @"fixture identity, AX or transform unavailable";
-        lease.initial=rpRect(initial[@"cg"]);if(lease.initial.size.width!=440||lease.initial.size.height!=280)@throw @"fixture initial extent differs";
+        if(!selected||!initial||!transformMatches||!originalMatches||![ready[@"nonce"]isEqual:lease.nonce]||![ready[@"birth"]isEqual:lease.processBirth]||![lease check])@throw @"fixture registration/identity/AX/transform confirmation failed; see enrollment conditions";
+        if(lease.initial.size.width!=440||lease.initial.size.height!=280)@throw @"fixture initial extent differs";
 
         DWNativeResizeDriver *driver=[DWNativeResizeDriver new];driver.mutationPreparation=^BOOL(NSDictionary *effect){return [lease prepare:effect];};driver.mutationGuard=^BOOL(NSDictionary *effect){(void)effect;return [lease authorize];};driver.didPerform=^(NSDictionary *effect,NSDictionary *result){@synchronized(lease){[lease.results addObject:@{@"effect":effect,@"result":result}];}};desktop.ownedResizeDriver=driver;
         // Guard hooks are immutable from this point until every obligation drains.

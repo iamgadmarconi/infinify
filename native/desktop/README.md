@@ -269,6 +269,17 @@ The fixture is deliberately a **borderless resizable AppKit window** with real
 min/max constraints, a same-title decoy, and (for `family`) a real attached child.
 It does not override AX setters. Unsupported exact AX identity or AXSize fails;
 it does not widen the scope or claim ordinary titled/third-party compatibility.
+Before publishing readiness, it preserves both original created frames and spends
+at most two seconds servicing the event loop while observing exact CG IDs/owners,
+process birth and matching original top-coordinate bounds. No transform is queried
+until both windows are registered. Two consecutive registered observations,
+separated by an event pump, must have identical finite transforms; any subsequent
+registered change, unknown transform, changed geometry or interference fails and
+closes only the owned windows. Missing registration remains pending, never a usable
+baseline. The observation sequence is retained in `fixture-readiness.json`.
+The first registered transform candidates are frozen once: there is no rebase on
+change or after readiness. Before chooser use, the controller independently confirms
+that the current transform and AX/CG geometry equal this published baseline.
 It draws once and invalidates only when actual content bounds resize: fixed
 24-point markers on opposite edges and six 36-point saturated tiles wrap at a
 400-point content width. No animation or manual redraw during capture waiting
