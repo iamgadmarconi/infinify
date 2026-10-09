@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
-// src/input/actions.rs (execute_action's dispatch, exec_command, NudgeWindow,
-// detect_terminal, detect_launcher). The grammar itself is not adapted: it is
-// driftwm-core's `config::{Action, parse_action}`, upstream's own code. The
-// camera, bookmark, nudge, exec, reload and quit actions execute; every other
-// action parses and is then refused by name.
+// src/input/actions.rs (execute_action's cycle prelude and dispatch,
+// exec_command, NudgeWindow, detect_terminal, detect_launcher). The grammar
+// itself is not adapted: it is driftwm-core's `config::{Action, parse_action}`,
+// upstream's own code. The camera, bookmark, window navigation, nudge, exec,
+// reload and quit actions execute; every other action parses and is then
+// refused by name.
+use super::window_actions::Moved;
 use super::*;
 use driftwm_core::config::{Action, Direction, LayoutSwitch, TrackpadState, parse_action};
 
@@ -134,6 +136,10 @@ pub(crate) fn runs_here(action: &Action) -> bool {
             | Action::ExecLauncher
             | Action::NudgeWindow(_)
             | Action::PanViewport(_)
+            | Action::CenterWindow
+            | Action::CenterNearest(_)
+            | Action::CycleWindows { .. }
+            | Action::FocusCenter
             | Action::HomeToggle
             | Action::ZoomIn
             | Action::ZoomOut
@@ -162,9 +168,27 @@ pub(crate) struct Outcome {
     /// Saved state changed, so the shell should save.
     pub(crate) dirty: bool,
 }
+impl Outcome {
+    /// A window navigation: its flight, its focus request as an effect, and
+    /// the focus and stacking it wrote as saved state.
+    fn moved(mut self, moved: Moved) -> Self {
+        self.navigation = moved.navigation;
+        if !moved.effect.is_null() {
+            self.effects.push(moved.effect);
+        }
+        self.dirty |= moved.refocused;
+        self
+    }
+}
 impl Controller {
-    pub(crate) fn action(&mut self, output: Option<OutputId>, spec: &str) -> Result<Value, Error> {
-        let outcome = self.run_action(output, spec)?;
+    pub(crate) fn action(
+        &mut self,
+        output: Option<OutputId>,
+        spec: &str,
+        pointer: Option<Point>,
+        held: bool,
+    ) -> Result<Value, Error> {
+        let outcome = self.run_action(output, spec, pointer, held)?;
         Ok(json!({"navigation":outcome.navigation,"effects":outcome.effects,"dirty":outcome.dirty}))
     }
     /// Upstream spawn_command as a request to the shell: `sh -c command` with
@@ -204,13 +228,24 @@ impl Controller {
     }
     /// Parse and execute one action string. An unknown string, a known action
     /// that does not run here yet, and a missing active output are three
-    /// different refusals, checked in that order.
+    /// different refusals, checked in that order. `pointer` is the pointer's
+    /// global screen point, for `focus-center`. `held` is upstream's "a real
+    /// modifier is physically down" as a `cycle-windows` fires.
     pub(crate) fn run_action(
         &mut self,
         output: Option<OutputId>,
         spec: &str,
+        pointer: Option<Point>,
+        held: bool,
     ) -> Result<Outcome, Error> {
         let action = parse_action(spec).map_err(Error::Refused)?;
+        // Upstream execute_action: a non-cycle action ends an Alt-Tab cycle in
+        // progress before it runs. A refused action is rolled back with it.
+        if !matches!(action, Action::CycleWindows { .. })
+            && self.scene.stage().cycle_state().is_some()
+        {
+            self.finish_cycle();
+        }
         let mut outcome = Outcome::default();
         let active = || output.ok_or(Error::Invalid("no active output"));
         let mut reply = match &action {
@@ -242,6 +277,17 @@ impl Controller {
             Action::NudgeWindow(direction) => {
                 outcome.dirty = self.nudge_window(direction)?;
                 return Ok(outcome);
+            }
+            Action::CenterWindow => return Ok(outcome.moved(self.center_window(active()?)?)),
+            Action::FocusCenter => {
+                return Ok(outcome.moved(self.focus_center(active()?, pointer)?));
+            }
+            Action::CenterNearest(direction) => {
+                return Ok(outcome.moved(self.center_nearest(active()?, direction)?));
+            }
+            Action::CycleWindows { backward } => {
+                let moved = self.cycle_navigate(active()?, *backward, held)?;
+                return Ok(outcome.moved(moved.unwrap_or_default()));
             }
             Action::PanViewport(direction) => self.pan_viewport(active()?, direction.into())?,
             Action::HomeToggle => self.home_toggle(active()?)?,

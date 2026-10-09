@@ -559,6 +559,9 @@ impl Controller {
             "repeat_delay_ms":config.repeat_delay,
             "repeat_rate_hz":config.repeat_rate,
             "super":self.platform.super_text(),
+            // The physical modifiers that hold an Alt-Tab cycle open, or null
+            // when upstream's set has no macOS chord.
+            "cycle_hold":self.platform.physical(&config.cycle_hold).ok(),
             "settings":self.pointer_settings(),
             "warnings":warnings,
         })

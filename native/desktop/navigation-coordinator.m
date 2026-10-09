@@ -5,6 +5,13 @@ static BOOL sameIdentity(NSDictionary *a,NSDictionary *b) {
     BOOL aOwner=a[@"owner"]&&a[@"owner"]!=NSNull.null,bOwner=b[@"owner"]&&b[@"owner"]!=NSNull.null;
     return aOwner==bOwner&&(!aOwner||[a[@"owner"]isEqual:b[@"owner"]]);
 }
+// The one focus request a reply can carry: "effect" as focus, navigate_window and activate
+// answer, or the focus_native_window entry of an action or IPC reply's "effects".
+static NSDictionary *focusEffect(NSDictionary *reply) {
+    id effect=reply[@"effect"],effects=reply[@"effects"];if([effect isKindOfClass:NSDictionary.class])return effect;
+    if([effects isKindOfClass:NSArray.class])for(id e in [effects reverseObjectEnumerator])if([e isKindOfClass:NSDictionary.class]&&[e[@"op"]isEqual:@"focus_native_window"])return e;
+    return nil;
+}
 @interface DWNavigationCoordinator ()
 @property (copy) DWCommand command;
 @property id<DWNavigationDriver> driver;
@@ -13,43 +20,63 @@ static BOOL sameIdentity(NSDictionary *a,NSDictionary *b) {
 @property NSLock *lock;
 @property uint64_t epoch;
 @property BOOL closed, observing, flying;
+@property NSDictionary *work; // the request handed to the driver and not yet answered
+@property NSUInteger held; // modifiers keeping a cycle session open, 0 for none
 @end
 @implementation DWNavigationCoordinator
 - (instancetype)initWithCommand:(DWCommand)c driver:(id<DWNavigationDriver>)d clock:(uint64_t (^)(void))clock worker:(DWSchedule)worker main:(DWSchedule)main {
     if((self=[super init])){_command=[c copy];_driver=d;_clock=[clock copy];_worker=[worker copy];_main=[main copy];_lock=[NSLock new];}return self;
 }
 - (BOOL)current:(uint64_t)epoch { [self.lock lock];BOOL valid=!self.closed&&self.epoch==epoch;[self.lock unlock];return valid; }
-- (uint64_t)advance { [self.lock lock];uint64_t epoch=++self.epoch;[self.lock unlock];return epoch; }
-- (void)cancelFocus { [self advance];if(!self.closed&&self.enabled)self.command(@{@"op":@"cancel_focus_cycle"}); }
+- (uint64_t)advance { self.work=nil;[self.lock lock];uint64_t epoch=++self.epoch;[self.lock unlock];return epoch; }
+- (void)cancelFocus { [self advance];self.held=0;if(!self.closed&&self.enabled)self.command(@{@"op":@"cancel_focus_cycle"}); }
+- (void)interrupt { if(self.work)[self cancelFocus]; }
 - (void)invalidate { [self cancelFocus];if(!self.closed&&self.enabled)for(NSDictionary *o in self.command(@{@"op":@"snapshot"})[@"outputs"])self.command(@{@"op":@"cancel_navigation",@"output":o[@"id"]}); }
-- (void)shutdown { [self invalidate];[self.lock lock];self.closed=YES;[self.lock unlock];self.command=nil;self.changed=nil;self.settled=nil; }
+- (void)shutdown { [self invalidate];[self.lock lock];self.closed=YES;[self.lock unlock];self.command=nil;self.changed=nil;self.settled=nil;self.output=nil; }
 - (BOOL)binding:(NSDictionary *)effect snapshot:(NSDictionary *)snapshot {
     for(NSDictionary *window in snapshot[@"windows"])if([window[@"window"]isEqual:effect[@"window"]]){
         id source=window[@"source"];return [source isKindOfClass:NSDictionary.class]&&[source[@"identity"]isEqual:effect[@"identity"]]&&[source[@"generation"]isEqual:effect[@"generation"]];
     }
     return NO;
 }
-- (void)complete:(NSDictionary *)effect epoch:(uint64_t)epoch success:(BOOL)success {
+- (void)complete:(NSDictionary *)effect epoch:(uint64_t)epoch success:(BOOL)success { [self answer:effect epoch:epoch with:@{@"op":@"focus_result",@"success":success?@YES:@NO}]; }
+// The controller's pending request is answered once: the driver's result, or focus_logical when the driver is never asked.
+- (void)answer:(NSDictionary *)effect epoch:(uint64_t)epoch with:(NSDictionary *)fields {
     if(![self current:epoch])return;
-    NSDictionary *snapshot=self.command(@{@"op":@"snapshot"});
+    self.work=nil;NSDictionary *snapshot=self.command(@{@"op":@"snapshot"});
     if(![snapshot[@"focus"][@"pending_effect"]isEqual:effect]||![self binding:effect snapshot:snapshot])return;
-    NSMutableDictionary *result=[effect mutableCopy];result[@"op"]=@"focus_result";result[@"success"]=@(success);self.command(result);[self advance];
+    NSMutableDictionary *result=[effect mutableCopy];[result addEntriesFromDictionary:fields];self.command(result);[self advance];
     if(self.changed)self.changed();
 }
-- (void)navigate:(NSDictionary *)command {
-    if(!self.enabled||self.closed)return;
-    NSDictionary *reply=self.command(command);if(!reply)return;
+- (void)perform:(NSDictionary *)reply {
+    if(!self.enabled||self.closed||!reply)return;
+    NSDictionary *effect=[focusEffect(reply) copy];
+    if(!effect){
+        // Focus moved to something without a source, or was cleared: the request in flight is no longer the controller's.
+        if(reply[@"effect"]||(self.work&&![self.command(@{@"op":@"snapshot"})[@"focus"][@"pending_effect"]isEqual:self.work]))[self advance];
+        return;
+    }
     uint64_t epoch=[self advance],deadline=self.clock()+1500000000;
-    NSDictionary *effect=[reply[@"effect"] copy];
-    if(self.changed)self.changed();
-    if(![effect isKindOfClass:NSDictionary.class])return;
-    if(!self.focusAllowed||(effect[@"identity"][@"owner"]&&effect[@"identity"][@"owner"]!=NSNull.null)){[self complete:effect epoch:epoch success:NO];return;}
+    // Logical-only focus is not a failure: it neither cancels a held cycle nor stays out of the most-recently-focused order.
+    if(!self.focusAllowed){[self answer:effect epoch:epoch with:@{@"op":@"focus_logical"}];return;}
+    if(effect[@"identity"][@"owner"]&&effect[@"identity"][@"owner"]!=NSNull.null){[self complete:effect epoch:epoch success:NO];return;}
     // All captured values are immutable. The guard never enters the controller/main queue.
-    DWGuard authorization=[self.driver authorization:effect[@"identity"]];
+    DWGuard authorization=[self.driver authorization:effect[@"identity"]];self.work=effect;
     self.worker(^{if(![self current:epoch])return;
         BOOL success=[self.driver select:effect[@"identity"] guard:^BOOL{return [self current:epoch]&&self.clock()<deadline&&authorization&&authorization();}];
         self.main(^{[self complete:effect epoch:epoch success:success];});
     });
+}
+- (NSDictionary *)navigate:(NSDictionary *)command {
+    if(!self.enabled||self.closed)return nil;
+    NSDictionary *reply=self.command(command);if(!reply)return nil;
+    [self perform:reply];if(self.changed)self.changed();return reply;
+}
+- (void)hold:(NSUInteger)modifiers { self.held=modifiers; }
+- (BOOL)poll:(NSUInteger)down {
+    if(!self.enabled||self.closed||!self.held)return NO;
+    if((down&self.held)==self.held)return YES;
+    self.held=0;[self releaseCycle];return NO;
 }
 - (void)releaseCycle { if(self.enabled&&!self.closed)self.command(@{@"op":@"end_focus_cycle"}); }
 - (void)observe {
@@ -65,7 +92,18 @@ static BOOL sameIdentity(NSDictionary *a,NSDictionary *b) {
         id observed=focus[@"observed_native"];
         if(match&&[observed isKindOfClass:NSDictionary.class]&&[observed[@"window"]isEqual:match[@"window"]]&&[observed[@"generation"]isEqual:match[@"generation"]]&&sameIdentity(observed[@"identity"],identity))return;
         if(!match&&observed==NSNull.null&&pending==NSNull.null)return;
-        [self advance];NSMutableDictionary *c=match?[match mutableCopy]:[NSMutableDictionary dictionary];c[@"op"]=match?@"observe_focus":@"focus_lost";self.command(c);if(self.changed)self.changed();
+        [self advance];
+        if(!match)self.command(@{@"op":@"focus_lost"});
+        else {
+            // The user focused a window of the canvas natively: upstream's activation, so focus, MRU order and by
+            // its reveal rule the camera follow. The observation is the focus; a request in the reply is answered
+            // from it, never by the driver. Refused (a gesture is active), the focus is still recorded.
+            NSMutableDictionary *c=[match mutableCopy];c[@"op"]=@"activate";c[@"cause"]=@"native";c[@"output"]=(self.output?self.output():nil)?:NSNull.null;
+            NSDictionary *reply=self.command(c),*effect=focusEffect(reply);
+            if(effect)[self complete:effect epoch:self.epoch success:YES];
+            else if(!reply){[c removeObjectsForKeys:@[@"cause",@"output"]];c[@"op"]=@"observe_focus";self.command(c);}
+        }
+        if(self.changed)self.changed();
     });});
 }
 - (BOOL)frame {
@@ -73,33 +111,5 @@ static BOOL sameIdentity(NSDictionary *a,NSDictionary *b) {
     NSDictionary *result=self.command(@{@"op":@"tick_navigation",@"timestamp_ns":@(self.clock())});
     if([result[@"changed_outputs"]count]&&self.changed)self.changed();
     BOOL active=[result[@"needs_frames"]boolValue];if(!active&&self.flying&&self.settled)self.settled();self.flying=active;return active;
-}
-@end
-@interface DWNavigationInput ()
-@property NSMutableArray<NSDictionary *> *presses;
-@property BOOL tab, option, saturated;
-@end
-@implementation DWNavigationInput
-- (instancetype)init {if((self=[super init]))_presses=[NSMutableArray array];return self;}
-- (void)cancel {for(NSUInteger i=0;i<self.presses.count;i++)self.presses[i]=@{@"backward":self.presses[i][@"backward"],@"valid":@NO};self.tab=NO;}
-- (NSInteger)flagsChanged:(NSUInteger)flags {
-    BOOL wasOption=self.option;self.option=(flags&1)!=0;
-    if(flags&4){[self cancel];return 1;}
-    if(wasOption&&!self.option)return 2;
-    if(!wasOption){[self cancel];return 1;}
-    return 0;
-}
-- (BOOL)tabDown:(NSUInteger)flags {
-    if(self.saturated)return NO;
-    self.option=(flags&1)!=0;
-    if(!self.option||(flags&4)){[self cancel];return NO;}
-    if(self.presses.count>=128){self.saturated=YES;[self cancel];return NO;}
-    self.tab=YES;[self.presses addObject:@{@"backward":@((flags&2)!=0),@"valid":@YES}];return YES;
-}
-- (BOOL)tabUp {BOOL accepted=self.tab;self.tab=NO;return accepted;}
-- (NSNumber *)takeShortcut:(BOOL)backward {
-    if(self.saturated)return nil;
-    if(!self.presses.count||[self.presses[0][@"backward"]boolValue]!=backward)return nil;
-    BOOL valid=[self.presses[0][@"valid"]boolValue];[self.presses removeObjectAtIndex:0];return valid?@(self.option):nil;
 }
 @end

@@ -26,14 +26,6 @@ static NSDictionary *ident(int pid,int wid){return @{@"pid":@(pid),@"birth_sec":
 @end
 static void drain(NSMutableArray *jobs){while(jobs.count){DWJob job=jobs[0];[jobs removeObjectAtIndex:0];job();}}
 int main(void){__weak DWNavigationCoordinator *weak;@autoreleasepool{
-    DWNavigationInput *input=[DWNavigationInput new];
-    check([input tabDown:1],@"accept exact Option Tab");check([input flagsChanged:0]==2,@"actual Option release ends cycle");check([input tabUp],@"late Tab up preserves pending release");check([[input takeShortcut:NO]isEqual:@NO],@"late Carbon dispatch is unheld after release");
-    [input tabDown:1];[input cancel];check([input takeShortcut:NO]==nil,@"human interruption invalidates queued Carbon intent");
-    check(![input tabDown:5]&&[input takeShortcut:NO]==nil,@"extra modifier cannot authorize focus");
-    [input tabDown:3];check([[input takeShortcut:YES]isEqual:@YES],@"reverse held shortcut accepted");
-    check([input flagsChanged:5]==1,@"unrelated modifier cancels");
-    DWNavigationInput *repress=[DWNavigationInput new];[repress tabDown:1];[repress cancel];[repress tabDown:1];
-    check([repress takeShortcut:NO]==nil,@"canceled old Carbon delivery cannot borrow new press");check([[repress takeShortcut:NO]isEqual:@YES],@"new press retains its own delivery");
     DriftDesktop *host=driftwm_desktop_create();NSMutableArray *worker=[NSMutableArray array],*main=[NSMutableArray array];FakeDriver *driver=[FakeDriver new];driver.permitted=driver.success=YES;
     __block uint64_t clock=1000000000;__block NSUInteger saved=0,rendered=0;
     DWNavigationCoordinator *nav=[[DWNavigationCoordinator alloc]initWithCommand:^NSDictionary *(NSDictionary *c){return call(host,c);} driver:driver clock:^uint64_t{return clock;} worker:^(DWJob job){[worker addObject:[job copy]];} main:^(DWJob job){[main addObject:[job copy]];}];
@@ -60,7 +52,30 @@ int main(void){__weak DWNavigationCoordinator *weak;@autoreleasepool{
     NSMutableDictionary *pendingIdentity=[snapshot()[@"focus"][@"pending_effect"][@"identity"]mutableCopy];[pendingIdentity removeObjectForKey:@"owner"];driver.observation=pendingIdentity;
     NSUInteger callsBeforeObservation=driver.calls;[nav observe];drain(worker);drain(main);delayed();delayed=nil;drain(main);
     check(driver.calls==callsBeforeObservation&&snapshot()[@"focus"][@"pending_effect"]==NSNull.null&&snapshot()[@"focus"][@"cycle"]!=NSNull.null,@"independent expected confirmation preserves cycle and cancels queued mutation");
-    [nav navigate:@{@"op":@"cycle_navigate",@"output":o1,@"backward":@YES,@"held":@YES}];[nav releaseCycle];drain(worker);drain(main);check(snapshot()[@"focus"][@"cycle"]==NSNull.null,@"reverse release finishes");
+    // Hold-to-commit: modifiers are opaque bits here; 1 holds the cycle, 2 is any other modifier.
+    check(![nav poll:0],@"no hold is open before a held step");
+    [nav navigate:@{@"op":@"cycle_navigate",@"output":o1,@"backward":@YES,@"held":@YES}];[nav hold:1];
+    check([nav poll:1]&&[nav poll:3]&&snapshot()[@"focus"][@"cycle"]!=NSNull.null,@"hold modifier down keeps the cycle open");
+    check(![nav poll:2]&&[snapshot()[@"focus"][@"release_pending"]boolValue],@"hold modifier up ends the cycle and waits for the pending result");
+    drain(worker);drain(main);check(snapshot()[@"focus"][@"cycle"]==NSNull.null&&![nav poll:1],@"reverse release finishes and the hold is closed");
+    [nav navigate:cycle];drain(worker);drain(main);[nav hold:1];id live=snapshot()[@"focus"][@"cycle"];before=driver.calls;
+    [nav interrupt];drain(worker);drain(main);check(live!=NSNull.null&&[snapshot()[@"focus"][@"cycle"]isEqual:live]&&[nav poll:1]&&driver.calls==before,@"unrelated input with no request in flight leaves a confirmed held cycle open");
+    check(![nav poll:0]&&snapshot()[@"focus"][@"cycle"]==NSNull.null,@"confirmed held cycle commits on release");
+    // A canvas press, as the shell sends it: the cycle is released, then focus work is withdrawn and flights stop.
+    [nav navigate:cycle];drain(worker);drain(main);[nav hold:1];NSNumber *chosen=snapshot()[@"focused"];[nav releaseCycle];[nav invalidate];
+    check(snapshot()[@"focus"][@"cycle"]==NSNull.null&&[snapshot()[@"focus"][@"history"][0]isEqual:chosen]&&![nav poll:1],@"canvas press commits a confirmed held cycle");
+    [nav navigate:cycle];[nav hold:1];before=driver.calls;[nav releaseCycle];[nav invalidate];drain(worker);drain(main);
+    check(driver.calls==before&&snapshot()[@"focus"][@"pending_effect"]==NSNull.null&&snapshot()[@"focus"][@"cycle"]==NSNull.null&&[snapshot()[@"focus"][@"history"][0]isEqual:chosen],@"canvas press drops a held cycle whose selection is still in flight");
+    [nav navigate:cycle];[nav hold:1];before=driver.calls;[nav interrupt];drain(worker);drain(main);
+    check(driver.calls==before&&snapshot()[@"focus"][@"pending_effect"]==NSNull.null&&snapshot()[@"focus"][@"cycle"]==NSNull.null&&![nav poll:1],@"unrelated input withdraws the request in flight, its cycle and its hold");
+    // An action or IPC reply carries its focus request inside "effects", beside the shell's own.
+    NSDictionary *request=call(host,@{@"op":@"focus",@"window":windows[1]})[@"effect"];before=driver.calls;
+    [nav perform:@{@"navigation":NSNull.null,@"effects":@[@{@"op":@"exec",@"command":@"true",@"env":@{}},request],@"dirty":@YES}];drain(worker);drain(main);
+    check(driver.calls==before+1&&[snapshot()[@"focus"][@"observed_native"][@"window"]isEqual:windows[1]],@"focus request inside effects reaches the driver and is confirmed");
+    [nav navigate:navigate(2,o1)];before=driver.calls;[nav perform:@{@"navigation":NSNull.null,@"effects":@[],@"dirty":@NO}];drain(worker);drain(main);
+    check(driver.calls==before+1&&[snapshot()[@"focus"][@"observed_native"][@"window"]isEqual:windows[2]],@"reply without a focus request leaves the pending one in flight");
+    [nav navigate:navigate(0,o1)];call(host,@{@"op":@"cancel_focus_cycle"});before=driver.calls;[nav perform:@{@"navigation":NSNull.null,@"effects":@[],@"dirty":@NO}];drain(worker);drain(main);
+    check(driver.calls==before&&[snapshot()[@"focus"][@"observed_native"][@"window"]isEqual:windows[2]],@"request the controller dropped is withdrawn from the driver");
     driver.observation=nil;NSDictionary *unchanged=snapshot();[nav observe];drain(worker);drain(main);check([snapshot()isEqual:unchanged],@"unknown observation is no-op");
     driver.observation=ids[1];[nav observe];drain(worker);drain(main);check([snapshot()[@"focus"][@"observed_native"][@"window"]isEqual:windows[1]],@"external bound focus reconciles");
     driver.observation=ident(99,99);[nav observe];drain(worker);drain(main);check(snapshot()[@"focus"][@"observed_native"]==NSNull.null,@"verified outside focus lost");
@@ -70,7 +85,14 @@ int main(void){__weak DWNavigationCoordinator *weak;@autoreleasepool{
     driver.during=^{[nav invalidate];};[nav navigate:navigate(1,o1)];drain(worker);drain(main);check(snapshot()[@"focus"][@"pending_effect"]==NSNull.null,@"running guard sees cancellation");driver.during=nil;
     driver.permitted=NO;[nav navigate:navigate(1,o1)];drain(worker);drain(main);check(![snapshot()[@"focus"][@"last_result"][@"success"]boolValue],@"authorization denied cannot confirm");driver.permitted=YES;
     driver.success=NO;[nav navigate:navigate(1,o1)];drain(worker);drain(main);check(![snapshot()[@"focus"][@"last_result"][@"success"]boolValue],@"adapter failure cannot confirm");driver.success=YES;
-    nav.focusAllowed=NO;before=driver.calls;[nav navigate:navigate(0,o1)];check(driver.calls==before&&worker.count==0,@"unavailable input observer blocks adapter");nav.focusAllowed=YES;
+    // Logical-only focus: the request is answered focus_logical and never reaches the driver. It claims no native
+    // focus, the window enters the order, and a held cycle steps past the second window and commits on release.
+    nav.focusAllowed=NO;before=driver.calls;id seen=snapshot()[@"focus"][@"observed_native"];[nav navigate:navigate(0,o1)];NSDictionary *logical=snapshot()[@"focus"];
+    check(driver.calls==before&&worker.count==0&&![logical[@"last_result"][@"success"]boolValue]&&[logical[@"last_result"][@"logical"]boolValue]&&logical[@"pending_effect"]==NSNull.null,@"logical-only focus never reaches the adapter");
+    check([logical[@"history"][0]isEqual:windows[0]]&&[logical[@"observed_native"]isEqual:seen],@"logical-only focus enters the order and claims no native focus");
+    NSArray *order=logical[@"history"];[nav navigate:cycle];[nav navigate:cycle];[nav hold:1];
+    check([snapshot()[@"focus"][@"cycle"]isEqual:@2]&&[snapshot()[@"focused"]isEqual:order[2]]&&[nav poll:1],@"logical-only held cycle steps past the second window");
+    check(![nav poll:0]&&snapshot()[@"focus"][@"cycle"]==NSNull.null&&[snapshot()[@"focus"][@"history"][0]isEqual:order[2]]&&[snapshot()[@"focus"][@"observed_native"]isEqual:seen]&&driver.calls==before&&worker.count==0,@"logical-only held cycle commits on release");nav.focusAllowed=YES;
     [nav navigate:navigate(0,o1)];clock+=2000000000;drain(worker);drain(main);check(![snapshot()[@"focus"][@"last_result"][@"success"]boolValue],@"deadline cannot confirm");
     [nav navigate:navigate(0,o1)];NSDictionary *old=snapshot()[@"focus"][@"pending_effect"];[nav invalidate];call(host,@{@"op":@"remove_source",@"window":windows[0],@"identity":ids[0],@"keep_placeholder":@YES});
     call(host,@{@"op":@"attach",@"logical_id":windows[0],@"identity":ids[0],@"bundle_id":@"test",@"title":@"rebound",@"buffer":@{@"width":@200,@"height":@100},@"source_rect":rect(0,0,200,100)});

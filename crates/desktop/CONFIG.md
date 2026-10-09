@@ -67,7 +67,9 @@ constants they replaced.
 | `[navigation] pan_step` | `pan-viewport`, `pan_viewport` |
 | `[navigation] nudge_step` | `nudge-window` |
 | `[navigation] camera_speed` | every `tick_navigation` |
-| `[navigation] anchors` | `zoom-to-fit` fits them with the windows, as upstream's `ZoomToFit` does |
+| `[navigation] anchors` | `zoom-to-fit` fits them with the windows, as upstream's `ZoomToFit` does; `center-nearest` lands on them |
+| `[navigation] auto_navigate_on_click` | `activate` with cause `click_release` flies to a still-focused window that is not wholly in view |
+| `[zoom] reset_on_activation` | whether `activate` with cause `native` and the IPC `Focus` fly to a clipped window at zoom 1 or at the current zoom |
 | `[navigation.bookmarks]` | seeds of the bookmark registry, see [Session](#session) |
 | `[navigation] trackpad_speed`; `[zoom] mouse_speed` | reported with each pointer binding and by `bindings`; the shell scales a bound scroll pan and a bound wheel zoom by them |
 | `[zoom] step` | `zoom-in`, `zoom-out`; reported to the shell for wheel zoom |
@@ -100,9 +102,8 @@ code, and then unused, because the feature it configures does not exist here:
   pointer binding and by `bindings`, but the shell's drag pan follows the
   pointer 1:1 and its pinch is unscaled
 - `[navigation] resize_step`, `drift`, `touch_speed`, `auto_navigate_on_close`,
-  `auto_navigate_on_click`, `[navigation.edge_pan]`
-- `[zoom] touch_speed`, `reset_on_new_window`, `reset_on_activation`,
-  `interact_min`
+  `[navigation.edge_pan]`
+- `[zoom] touch_speed`, `reset_on_new_window`, `interact_min`
 - `[input.keyboard] layout`, `variant`, `options`, `model`,
   `remember_layout_per_window`, `num_lock`, `caps_lock`; `[input.trackpad]`,
   `[input.mouse]`, `[input.touch]`, `[input.tablet]`
@@ -199,6 +200,7 @@ which the user did not ask for.
  "skipped":[{"combo":"Print","action":"spawn grim - | wl-copy","reason":"the key has no macOS equivalent"}],
  "reserved":[{"purpose":"exit","key_code":53,"modifiers":{…},"claimed_by":null}],
  "layout_independent":true,"repeat_delay_ms":200,"repeat_rate_hz":25,"super":"ctrl+alt",
+ "cycle_hold":{"control":false,"option":true,"shift":false,"command":false},
  "settings":{"trackpad_speed":1.5,"mouse_speed":1.0,"zoom_step":1.1,"zoom_mouse_speed":1.0,"zoom_trackpad_speed":1.0},
  "warnings":[]}
 ```
@@ -214,6 +216,14 @@ which the user did not ask for.
   `action not implemented on macOS yet: <name>`. The binding is listed all the
   same; registering its chord takes the chord from every app for nothing.
 - `chord` is a display string: the modifiers as glyphs and the US key label.
+- `cycle_hold` is upstream's `Config::cycle_hold` as physical modifiers: the
+  modifiers of the `cycle-windows forward` binding, Option when it has none or
+  is unbound. A `cycle-windows` step fired with `held` true stays open until
+  these are no longer all down, which is when the shell sends
+  [`end_focus_cycle`](FOCUS.md#upstream-entry-points). It is `null` when the set
+  has no macOS chord (it holds `mod3`, or `super` together with a modifier the
+  super chord cannot displace); the binding that would have opened such a cycle
+  is skipped for the same reason.
 - `settings` are the speeds a pointer gesture scales by, see below.
 - `warnings` are this map's own, one per skipped binding the user should know
   about: `binding '<combo>' = '<action>' skipped: <reason>`.
@@ -232,24 +242,24 @@ With no config file, the default super chord and `mod_key = "super"`. "Runs" is
 
 | Upstream | macOS chord | `key_code` | Action | Repeats | Runs |
 | --- | --- | --- | --- | --- | --- |
-| `alt+Tab` | ⌥Tab | 48 | `cycle-windows forward` | yes | no |
-| `alt+shift+Tab` | ⌥⇧Tab | 48 | `cycle-windows backward` | yes | no |
+| `alt+Tab` | ⌥Tab | 48 | `cycle-windows forward` | yes | yes |
+| `alt+shift+Tab` | ⌥⇧Tab | 48 | `cycle-windows backward` | yes | yes |
 | `mod+0` | ⌃⌥0 | 29 | `zoom-reset` |  | yes |
 | `mod+1` | ⌃⌥1 | 18 | `go-to-bookmark 1` |  | yes |
 | `mod+2` | ⌃⌥2 | 19 | `go-to-bookmark 2` |  | yes |
 | `mod+3` | ⌃⌥3 | 20 | `go-to-bookmark 3` |  | yes |
 | `mod+4` | ⌃⌥4 | 21 | `go-to-bookmark 4` |  | yes |
-| `mod+Down` | ⌃⌥Down | 125 | `center-nearest down` |  | no |
-| `mod+Left` | ⌃⌥Left | 123 | `center-nearest left` |  | no |
+| `mod+Down` | ⌃⌥Down | 125 | `center-nearest down` |  | yes |
+| `mod+Left` | ⌃⌥Left | 123 | `center-nearest left` |  | yes |
 | `mod+Return` | ⌃⌥Return | 36 | `exec-terminal` |  | yes |
-| `mod+Right` | ⌃⌥Right | 124 | `center-nearest right` |  | no |
-| `mod+Up` | ⌃⌥Up | 126 | `center-nearest up` |  | no |
+| `mod+Right` | ⌃⌥Right | 124 | `center-nearest right` |  | yes |
+| `mod+Up` | ⌃⌥Up | 126 | `center-nearest up` |  | yes |
 | `mod+a` | ⌃⌥A | 0 | `home-toggle` |  | yes |
 | `mod+alt+Down` | ⌃⌥⇧⌘Down | 125 | `send-to-output down` |  | no |
 | `mod+alt+Left` | ⌃⌥⇧⌘Left | 123 | `send-to-output left` |  | no |
 | `mod+alt+Right` | ⌃⌥⇧⌘Right | 124 | `send-to-output right` |  | no |
 | `mod+alt+Up` | ⌃⌥⇧⌘Up | 126 | `send-to-output up` |  | no |
-| `mod+c` | ⌃⌥C | 8 | `center-window` |  | no |
+| `mod+c` | ⌃⌥C | 8 | `center-window` |  | yes |
 | `mod+ctrl+Down` | ⌃⌥⌘Down | 125 | `pan-viewport down` | yes | yes |
 | `mod+ctrl+Left` | ⌃⌥⌘Left | 123 | `pan-viewport left` | yes | yes |
 | `mod+ctrl+Right` | ⌃⌥⌘Right | 124 | `pan-viewport right` | yes | yes |
@@ -275,7 +285,7 @@ With no config file, the default super chord and `mod_key = "super"`. "Runs" is
 | `mod+shift+w` | ⌃⌥⇧W | 13 | `zoom-to-fit-snapped` |  | no |
 | `mod+t` | ⌃⌥T | 17 | `toggle-pin-to-screen` |  | no |
 | `mod+w` | ⌃⌥W | 13 | `zoom-to-fit` |  | yes |
-| `mod+x` | ⌃⌥X | 7 | `focus-center` |  | no |
+| `mod+x` | ⌃⌥X | 7 | `focus-center` |  | yes |
 | `mod+z` | ⌃⌥Z | 6 | `zoom-reset` |  | yes |
 
 Under `{"super":"cmd"}` every ⌃⌥ above is ⌘, `mod+ctrl+…` is ⌃⌘…, `mod+alt+…`
@@ -367,6 +377,10 @@ Upstream's defaults under the default super chord:
 
 ## Actions that run now
 
+`center-window`, `center-nearest <dir>`, `cycle-windows forward` /
+`cycle-windows backward` and `focus-center` are upstream's window navigation:
+see [NAVIGATION.md](NAVIGATION.md#window-navigation-actions).
+
 `nudge-window <dir>` moves the focused window by `navigation.nudge_step` world
 points along the unit vector, each axis rounded as upstream rounds it. It is a
 logical world move, refused during a gesture or a live native resize and for a
@@ -440,8 +454,12 @@ was restored too early back to a new output's pose.
 - A new output's camera is the world origin at its top-left corner, as before;
   upstream centers the origin.
 - Window placeholders are saved and restored whatever `restore_windows` says.
-- `[navigation] anchors` join `zoom-to-fit` only. Upstream also uses them in
-  `center-nearest`, which does not run here.
+- `[navigation] auto_navigate_on_click` navigates when the shell sends
+  `activate` with cause `click_release`. Upstream's 5 px click slop is the
+  shell's to apply before sending it, and upstream's deferral past the
+  double-click window after a title-bar click does not exist.
+- `cycle_hold` is reported, not enforced: the controller sees no keys, so the
+  shell ends a held cycle.
 - A reload re-applies only what the table above lists. Upstream also rebuilds
   its keyboard layout, cursor theme, device settings, output rules and render
   caches, none of which exist here.

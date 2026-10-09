@@ -1,10 +1,12 @@
 # Normal-window navigation, ABI 1
 
 The `normal_window_navigation` snapshot capability covers a selected normal
-window's camera placement with `keep` or `reset` zoom. A UI may call the primitive
-“Center selected window”. This is not upstream's complete `center-window` action:
-RestoreFillElseReset, nearest-window fallback, fullscreen/pin/fill/suspended
-handling and upstream input dispatch are absent. No native operation is performed.
+window's camera placement with `keep` or `reset` zoom. The commands in the table
+below are that primitive. Upstream's own window navigation (`center-window`,
+`center-nearest`, `cycle-windows`, `focus-center`, and what a click or an
+activation does) is built on it and described under
+[Window navigation actions](#window-navigation-actions). Fullscreen, pinned,
+fill and modal handling are absent throughout. No native operation is performed.
 
 | Command | Fields | Result |
 | --- | --- | --- |
@@ -79,11 +81,212 @@ Parity claims apply only to source-representable traces. This executes selected
 original methods, not the whole upstream compositor or its scheduler. It proves
 no native rendering, capture, input delivery, or usable third-party compositing.
 
-The shell now supplies a frame timer, and selected-window/cycle
-actions behind `--experimental-native-navigation`. Its separate headless check
-executes the actual Objective-C coordinator and input-order policy with this C ABI;
-it does not execute native focus or prove real shortcut delivery. See the
-[shell integration scope](../../native/desktop/README.md).
+The shell supplies the frame timer and decides which launches drive these
+commands and perform focus effects; see the
+[shell integration scope](../../native/desktop/README.md). Nothing in this
+crate executes native focus or proves real shortcut delivery.
+
+## Window navigation actions
+
+Adapted from `src/input/actions.rs` (`CenterWindow`, `FocusCenter`,
+`CenterNearest`, `CycleWindows` and `execute_action`'s cycle prelude) and
+`src/state/navigation.rs` (`navigate_to_window_on`, `fire_click_navigate`,
+`activate_window_output_local`, `window_already_active`, `nav_center`,
+`element_closest_point`) at the pinned commit. The directional search and the
+visibility measures are `driftwm-core`'s `canvas::find_nearest`,
+`visible_fraction` and `visible_canvas_rect`: upstream's own code.
+
+Four action strings run through [`action`](IPC.md#action), and therefore through
+key bindings and `msg action`. Each one that lands does what upstream's
+`navigate_to_window` does: it raises the window, makes it the logical focus,
+asks for native focus with the existing [focus effect](FOCUS.md), and arms the
+same per-output flight `tick_navigation` advances. All but `cycle-windows`,
+which is itself a cycle step, end a cycle in progress first. The reply is `action`'s:
+`{"navigation":…,"effects":[…],"dirty":…}`, with the focus effect in `effects`.
+A detached placeholder is upstream's stand-in: it is a candidate and a target
+everywhere below, it is focused and flown to, and it adds no effect.
+
+| Action | Target | Zoom |
+| --- | --- | --- |
+| `center-window` | the focused window; with none, the window whose center is nearest the viewport center (the first in stacking order on a tie) | 1 |
+| `center-nearest <dir>` | the best candidate in a 90° cone, see below | kept |
+| `cycle-windows forward` / `backward` | the next step of the frozen focus history | kept |
+| `focus-center` | the topmost window under `pointer` on the active output | 1 |
+
+"Nothing to do" is not an error: no window at all, no candidate in the cone, an
+empty focus history, no `pointer`, or nothing under it reply
+`{"navigation":null,"effects":[],"dirty":false}`. Every one of these needs an
+output (`no active output` otherwise), rejects an unknown output, and rejects
+with `navigation during active gesture` while a drag or resize is installed.
+
+- **`center-window`** is upstream's `RestoreFillElseReset`. There is no fill
+  here, so no stored view is ever restored and the policy is always Reset: the
+  flight ends at zoom 1.
+- **`center-nearest`**. The viewport center is the world point under the usable
+  center, `camera + usable_center / zoom`. The origin of the search is the
+  focused window's center when the whole frame is on the output (upstream's
+  threshold 1.0, measured against the whole output, not the usable area), and
+  the viewport center otherwise; in the first case the focused window is not a
+  candidate. Candidates are every Scene window, represented by the point of its
+  frame closest to the origin, or by its center when the frame contains the
+  origin, and every `navigation.anchors` point inside the ±1e12 world. A
+  candidate at offset `d` from the origin is in the cone of unit direction `u`
+  when `d·u > 0` and `|d×u| ≤ d·u`; the lowest `|d|² / (d·u)` wins and the
+  first candidate keeps a tie, windows in stacking order before anchors in file
+  order. A window is navigated to with upstream's `NavZoom::Keep`. An anchor
+  clears logical focus (so the next search starts from the viewport center,
+  which is then that anchor), disarms a zoom-to-fit return and flies the camera
+  until the usable center shows it, at the current zoom, writing only the
+  camera target as `go-to-bookmark` does; there is no effect, and `dirty` is
+  true when a window was focused.
+- **`cycle-windows`** is `cycle_navigate`. The fresh-cycle anchor is the logical
+  focus, as upstream's `cycle_anchor` is the focused window or stand-in: a
+  focused window that is not the history's head (a placeholder never enters it)
+  starts the cycle at the head instead of stepping past it. With `held` true
+  the cycle stays open until `end_focus_cycle`; otherwise the step is released
+  at once. Either way the history changes only when the selection's focus
+  request is answered: confirmed by the adapter, or `focus_logical` from a shell
+  that performs no native focus. See [FOCUS.md](FOCUS.md#upstream-entry-points).
+- **`focus-center`** hit-tests `pointer` against world rectangles on `output`
+  only. Upstream reads the seat's pointer; here the shell supplies it.
+
+### `activate`
+
+```json
+{"op":"activate","window":3,"output":1,"cause":"click"}
+{"op":"activate","window":3,"output":1,"cause":"click_release"}
+{"op":"activate","window":3,"output":1,"cause":"native","identity":{…},"generation":7}
+```
+
+What upstream does when a window is clicked, or when something asks for it to be
+activated. `output` is the active output or `null`. `identity` and `generation`
+are optional; when present they must be the window's current binding, or the
+command rejects (`stale source identity`, `stale binding generation`,
+`unbound source`). For `click` and `native` the reply is
+`{"effect":…,"navigation":…,"dirty":…}`:
+`effect` and `navigation` as `navigate_window` returns them, the focus effect
+or `null` and the armed flight or `null`, and `dirty` as `action` reports it,
+true when focus or stacking was written and the shell should save.
+
+- **`"cause":"click"`** is upstream's click-to-focus at the press: it ends a
+  cycle, raises the window, makes it the logical focus and returns the focus
+  effect (`null` for a placeholder). It never moves the camera, whatever the
+  config says: `navigation` is always `null`, so the press and the drags that
+  follow it reach the window where the pointer is.
+- **`"cause":"click_release"`** is that press let go as a completed click.
+  Upstream arms the click at the press and resolves it at the release
+  (`arm_click_navigate`, `resolve_click_navigate`): the same button lifting
+  within 5 px of the press, on the same output. The controller sees no pointer,
+  so the sender decides that and sends this only then. Only with
+  `navigation.auto_navigate_on_click` on, and only when the window still holds
+  logical focus and its frame is not wholly inside `output`'s usable area, it
+  flies there at the current zoom (upstream's `fire_click_navigate`). It
+  requests no focus and writes none: the reply is
+  `{"navigation":…,"dirty":false}` with no `effect` key, so that a shell does
+  not read it as a focus change and withdraw the press's request while that is
+  still in flight. `zoom.reset_on_activation` is not read. With `output` null
+  it does nothing.
+- **`"cause":"native"`** is for native focus the shell saw move to the window
+  without being asked: upstream's activation request. The window must have a
+  bound source. The observation is the focus, so `effect` is always `null` and
+  nothing is asked of the adapter: the command ends a cycle, drops a pending
+  effect, raises the window, makes it the logical focus, records it as observed
+  native focus and promotes it in the focus history, exactly as
+  [`observe_focus`](FOCUS.md) does, and then applies upstream's reveal rule. The
+  home output is the first registered output whose viewport shows the frame's
+  center, else `output`. A frame wholly on the home output is left where it is.
+  A clipped one is flown to on the home output, at zoom 1, or at the current
+  zoom with `zoom.reset_on_activation` off. With no output showing it and
+  `output` null, only focus follows. Send it instead of `observe_focus`,
+  not after it: a window that already holds both logical and observed native
+  focus and is at least partly on its home output is upstream's "already
+  active", and the command then changes nothing and replies
+  `{"effect":null,"navigation":null,"dirty":false}`.
+
+`{"op":"clear_focus"}` is upstream's click on empty canvas; see
+[FOCUS.md](FOCUS.md#upstream-entry-points).
+
+### Visibility
+
+Two different tests are upstream's and both are kept:
+
+- "Wholly inside the usable area" (`window_fully_in_viewport`): the projected
+  frame against the navigation context's `usable_rect_local`, in fractional
+  points. Used by a completed click (`click_release`) and by the IPC `Focus`.
+- "Share of the frame on the output" (`visible_fraction`): against the whole
+  output, panels included. Used by `center-nearest` (≥ 1) and by native
+  activation (≥ 1 to stay put, ≥ `f64::EPSILON` to count as on screen).
+  Upstream's function takes whole pixels. A fractional frame is measured by the
+  largest whole-pixel rectangle inside it (origin rounded up, far edge down), so
+  a frame navigation has just parked flush against an output edge still counts
+  as wholly visible; a frame under a pixel across measures as invisible. The
+  output's size is rounded to whole points. Geometry outside `i32` rejects with
+  `view geometry exceeds integer range`, as the view actions do.
+
+### Differences from upstream
+
+- A window's representative points are taken from its world rectangle, which
+  already includes the title bar: there is no separate chrome strip.
+- Fullscreen, pinned, widget and modal windows do not exist here, so none of
+  upstream's special cases for them apply, and `center-nearest` has no
+  just-exited-fullscreen anchor.
+- Whether a release completes a click is the sender's to decide (upstream's
+  5 px slop on the same output): the controller sees no pointer and checks only
+  that the window still holds logical focus and is still clipped. Upstream also
+  waits out the double-click window before panning after a click on a
+  server-side title bar; there is no separate title bar here, so
+  `click_release` always pans at once.
+- `focus_follows_mouse`, `auto_navigate_on_close` and `zoom.interact_min`'s
+  pick mode are not implemented.
+- The focus history is promoted when a focus request is answered, not when
+  logical focus is set: see [FOCUS.md](FOCUS.md#upstream-entry-points). A shell
+  that performs no native focus answers `focus_logical`, and cycling then
+  follows logical focus. If no request is ever answered the history stays empty
+  and `cycle-windows` has nothing to step through; the three other actions and
+  `activate` do not need it.
+
+### Evidence and limits
+
+`navigation_actions_flow` drives all of the above through the exported C ABI on
+an output whose `screen_bounds` origin is not the global origin and whose usable
+rectangle is asymmetric: `center-nearest` in the four cardinal directions and a
+diagonal over a fixed layout with a placeholder and an anchor, with the origin
+switching between the focused window and the viewport center, and over two
+layouts in which the closest point and the center, and the cone score and the
+plain distance, choose different windows; `center-window` with and without
+focus; `cycle-windows` held and not held, committed by `end_focus_cycle` and by
+the prelude of another action, with every request confirmed and with every
+request answered `focus_logical`; `focus-center` with the pointer over a
+window, over empty canvas and absent; `activate` for its three causes with
+`auto_navigate_on_click` and `zoom.reset_on_activation` on and off, for
+visible, clipped and off-screen windows; `clear_focus`; flights settled by
+`tick_navigation`; and the identity each effect carries. Expected targets are
+derived by hand from the rules above. Upstream's action bodies are not executed
+as an oracle, so parity with them is by reading.
+
+This is controller evidence only: synthetic identities, synthetic focus results,
+no key, no pointer, no native window. It does not show that a chord fires an
+action, that a modifier release is noticed, that a focus effect focuses
+anything, or that a native focus change is observed.
+
+The same commands were also reached through the built app on 2026-10-09: four
+`--windowed` launches on a private scene, config and socket with three detached
+placeholders, driven through `Infinify msg` (so through `ipc`, `Action` and the
+shell's flight tick) and read back after each flight settled. `center-nearest`
+landed where the cone and score rule say in each case tried: right, left,
+up-right, up and down from a view moved below and above a window, a kept zoom
+of 0.5, no candidate for up and down, an origin that fell back to the viewport
+center when the focused window was off the output, an anchor from a config file
+written while running (focus cleared), and the lower score winning between two
+windows above that anchor. `center-window` ended at zoom 1 on the focused
+window and, with focus cleared, on the window nearest the viewport center.
+`cycle-windows` replied Ok and changed nothing, as an empty history requires:
+no placeholder ever enters it. The four malformed specs answered upstream's
+messages. No window had a bound source, so no focus effect was produced,
+`held`, `activate`, `focus_logical` and `clear_focus` were not reached, and
+`focus-center` was sent without knowing what was under the pointer. The
+[shell README](../../native/desktop/README.md#what-has-been-run-for-navigation)
+has the transcript's values. Nothing from those runs is saved as evidence.
 
 ## View actions
 
@@ -175,8 +378,9 @@ Differences from upstream:
   warp), `ZoomToFitSnapped`, and momentum are absent. Every Scene window counts
   as a canvas window.
 - Upstream's `execute_action` prelude commits an in-progress focus cycle before
-  any non-cycle action. These commands leave logical focus and a held cycle
-  exactly as they were.
+  any non-cycle action. The six commands, sent directly, leave logical focus
+  and a held cycle exactly as they were; the same handlers reached through
+  [`action`](IPC.md#action) run that prelude first.
 
 ### Evidence and limits
 
@@ -196,5 +400,5 @@ call are covered by the canvas crate's `policy_flow`.
 This is controller ABI evidence only. It shows no key binding, shell dispatch,
 frame scheduling, native rendering, capture, or input delivery. The default
 shell binds these commands to toolbar buttons and global shortcuts and ticks
-their flights with its own 60 Hz timer, without the experimental flag; that path
-is built but unrun. See the [shell README](../../native/desktop/README.md).
+their flights on a 60 Hz timer; the toolbar and shortcut path is built but
+unrun. See the [shell README](../../native/desktop/README.md).

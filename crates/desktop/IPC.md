@@ -16,18 +16,40 @@ back as one line. No command here performs a native operation.
 
 ```json
 {"op":"action","output":1,"action":"go-to-bookmark 1"}
+{"op":"action","output":1,"action":"cycle-windows forward","pointer":{"x":812.0,"y":440.5},"held":true}
 ```
 
-`output` is the active output's logical id, or `null`. The reply is
-`{"navigation":<flight or null>,"effects":[…],"dirty":<bool>}`:
+`output` is the active output's logical id, or `null`. Two optional inputs say
+what only the shell knows at the moment the action fires:
+
+- `pointer` is the pointer's global screen point, in the coordinates `hit`
+  takes. `focus-center` acts on the window under it; no other action reads it.
+  Absent or `null` means unknown. A point outside the ±1e12 range is a
+  controller error, `invalid pointer`.
+- `held` is a real boolean, default `false`: true when a real modifier is
+  physically down as the action fires, which upstream reads from the keyboard.
+  Only `cycle-windows` reads it: a held step leaves the cycle open until
+  [`end_focus_cycle`](FOCUS.md); a step that is not held is committed as a
+  release would commit it. `0` and `1` are refused.
+
+The reply is `{"navigation":<flight or null>,"effects":[…],"dirty":<bool>}`:
 
 - `navigation` is the armed flight
   `{output,generation,target_camera,target_zoom,animating}` exactly as the
   [view actions](NAVIGATION.md#view-actions) return it, or `null` when nothing
   flies. Schedule frames while it is an object.
 - `effects` are requests to the shell: `{"op":"quit"}`,
-  `{"op":"exec","command":…,"env":{…}}` and `{"op":"reload_config"}`.
-- `dirty` is true when saved state changed and the shell should save.
+  `{"op":"exec","command":…,"env":{…}}`, `{"op":"reload_config"}` and, from the
+  four window navigation actions, at most one
+  `{"op":"focus_native_window",effect_id,window,identity,generation}`. That is
+  the [focus effect](FOCUS.md) `focus` and `navigate_window` return under
+  `effect`: perform it and acknowledge it with `focus_result`, or answer it
+  `focus_logical` when no native focus is performed in this run, and never read
+  it as evidence that native focus changed. Focusing a detached placeholder
+  adds no effect.
+- `dirty` is true when saved state changed and the shell should save. Focus and
+  stacking are saved, so a window navigation that focuses a window is dirty,
+  and so is one that clears a focus.
 
 The string is parsed by upstream's own `parse_action`, from `driftwm-core`; the
 same grammar reads the [config file](CONFIG.md)'s bindings. The first
@@ -38,6 +60,10 @@ Names are case-sensitive kebab-case; directions (`up`, `down`, `left`, `right`,
 | Action | Runs here | Effect |
 | --- | --- | --- |
 | `pan-viewport <dir>` | yes | the `pan_viewport` command |
+| `center-window` | yes | focuses and flies to the focused window, else the window nearest the viewport center, at zoom 1 |
+| `center-nearest <dir>` | yes | focuses and flies to the nearest window in that direction at the current zoom, or flies to a `navigation.anchors` point and clears focus |
+| `cycle-windows forward`, `cycle-windows backward` | yes | one step through the focus history, flown to at the current zoom; reads `held` |
+| `focus-center` | yes | focuses and flies to the window under `pointer`, at zoom 1 |
 | `home-toggle` | yes | the `home_toggle` command |
 | `zoom-in`, `zoom-out`, `zoom-reset`, `zoom-to-fit` | yes | the command of the same name |
 | `go-to-bookmark <name>` | yes | flies to the bookmark; `navigation` is `null` when there is none |
@@ -46,10 +72,11 @@ Names are case-sensitive kebab-case; directions (`up`, `down`, `left`, `right`,
 | `nudge-window <dir>` | yes | moves the focused window by `navigation.nudge_step`; `dirty` is true; needs no output |
 | `exec <cmd>`, `spawn <cmd>`, `exec-terminal`, `exec-launcher` | yes | `effects` is one `exec` for the shell to run; needs no output |
 | `reload-config` | yes | `effects` is `[{"op":"reload_config"}]`; needs no output |
-| `close-window`, `suspend-window`, `grow-window`, `shrink-window`, `center-window`, `center-nearest`, `focus-center`, `cycle-windows`, `move-to-bookmark`, `zoom-to-fit-snapped`, `toggle-fullscreen`, `fit-window`, `fit-window-snapped`, `fill-window`, `send-to-output`, `send-cursor-to-output`, `switch-layout`, `toggle-pin-to-screen`, `toggle-cursor-pan`, `set-trackpad` | no | parsed with upstream's argument rules, then refused |
+| `close-window`, `suspend-window`, `grow-window`, `shrink-window`, `move-to-bookmark`, `zoom-to-fit-snapped`, `toggle-fullscreen`, `fit-window`, `fit-window-snapped`, `fill-window`, `send-to-output`, `send-cursor-to-output`, `switch-layout`, `toggle-pin-to-screen`, `toggle-cursor-pan`, `set-trackpad` | no | parsed with upstream's argument rules, then refused |
 
-[CONFIG.md](CONFIG.md#actions-that-run-now) describes the nudge, exec and
-reload actions. An `exec` effect is not run by the controller. Because `ipc`
+[NAVIGATION.md](NAVIGATION.md#window-navigation-actions) describes the four
+window navigation actions, and [CONFIG.md](CONFIG.md#actions-that-run-now) the
+nudge, exec and reload actions. An `exec` effect is not run by the controller. Because `ipc`
 accepts `{"Action":…}`, whoever can write to the shell's socket can have the
 shell run a command, as with upstream's `driftwm msg action exec`.
 
@@ -75,9 +102,15 @@ exactly as the direct commands do.
 not one here: the reply is `{"navigation":null,"effects":[],"dirty":false}`. For
 this action `navigation` is `null` only in that case.
 
-Upstream's `execute_action` first ends an Alt-Tab cycle in progress and stops
-scroll momentum. Neither happens here: `action` calls the existing handlers
-unchanged, and focus cycles end through the [focus commands](FOCUS.md).
+Upstream's `execute_action` first ends an Alt-Tab cycle in progress, committing
+its selection, unless the action is itself `cycle-windows`. So does `action`,
+for every action that parses, `quit` and `exec` included: a selection whose
+request was answered (confirmed, or `focus_logical`) moves to the head of the
+focus history, and one still waiting for its answer is promoted by that answer
+instead (see [FOCUS.md](FOCUS.md#upstream-entry-points)). A refused action
+rolls the cycle back with everything else. The direct commands (`pan_viewport`, `zoom_in`, …)
+are not actions and leave a cycle alone. Upstream also stops scroll momentum,
+which does not exist here.
 
 ## Bookmarks
 
@@ -137,7 +170,10 @@ save past its 32 MiB limit, and every save then fails until some are deleted.
 ```
 
 `request` is one upstream `Request` in its wire form; `output` is the active
-output (upstream: the one under the pointer), or `null`. The reply is
+output (upstream: the one under the pointer), or `null`. An optional `pointer`
+is the pointer's global screen point, as for `action`: `{"Action":"focus-center"}`
+reads it. A request is never `held`: an IPC `cycle-windows` is a single
+committed step, as upstream's modifier-less fire is. The reply is
 
 ```json
 {"reply":{"Ok":{"Camera":{"x":500.0,"y":300.0}}},"effects":[],"dirty":false,"navigation":{…}}
@@ -156,11 +192,10 @@ before the request is decoded).
 `effects` may hold the existing focus effect
 `{"op":"focus_native_window",effect_id,window,identity,generation}`. It is the
 same obligation `focus` and `navigate_window` return under `effect`: perform it
-and acknowledge it with `focus_result`, or it stays pending until superseded. It
-is never evidence that native focus changed. The app's shell acts on
-`{"op":"quit"}`, `{"op":"exec"}` and `{"op":"reload_config"}` only: it neither
-performs nor acknowledges a focus effect that `ipc` returns, so an IPC focus of
-a bound window leaves that effect pending.
+and acknowledge it with `focus_result`, or answer it `focus_logical`, or it
+stays pending until superseded. It is never evidence that native focus
+changed. Which effects the app's shell
+performs is the [shell's](../../native/desktop/README.md) to say.
 
 ### Coordinates
 
@@ -196,7 +231,7 @@ into `i32` or its far edge would pass `i32::MAX`.
 | `{"Zoom":null}` | yes | `Zoom(z)`: the current zoom. |
 | `{"Zoom":z}` | yes | Clamps to `[dynamic minimum, 1]` (the minimum `zoom_out` uses), flies there anchored on the usable center and replies with the clamped value. Refuses non-positive numbers. No snap to 1 and no "never zoom in" rule: the value is explicit. |
 | `{"Focus":null}` | no | `Focused({id,app_id})` for the logical focus, or `Focused(null)`. |
-| `{"Focus":<selector>}` | yes | Logical focus and raise, plus upstream's camera rule: a frame already wholly inside the usable area is only focused; a window with a bound source is navigated to at zoom 1 (upstream's default `zoom.reset_on_activation`), exactly as `navigate_window` with `reset` does; a detached placeholder is panned to at the current zoom, as upstream's `reveal_suspended` does for a stand-in. `effects` holds the focus effect when the window has a bound source; `dirty` is true because focus and stacking are saved. |
+| `{"Focus":<selector>}` | yes | Logical focus and raise, plus upstream's camera rule: a frame already wholly inside the usable area is only focused; a window with a bound source is navigated to at zoom 1, or at the current zoom when `zoom.reset_on_activation` is off, exactly as `navigate_window` does; a detached placeholder is panned to at the current zoom, as upstream's `reveal_suspended` does for a stand-in. `effects` holds the focus effect when the window has a bound source; `dirty` is true because focus and stacking are saved. |
 | `{"Move":{window?,to?}}` | no | Without `to`: `Position{x,y}`, the frame's center. With `to`: a logical world move that puts the frame's top-left on whole points and keeps its size; `dirty` is true. Refused while a drag or resize gesture is installed, while a native resize transaction on that window is live, and when the destination frame would leave the `i32` range (`window geometry exceeds integer range`). |
 | `{"Resize":{window?,to?}}` | no | Without `to`: `Size{width,height}`. With `to`: `Err`, `resize is not implemented on macOS yet: native layout resize is not available` (a non-positive size gets upstream's `size must be positive`). |
 | `{"Action":"…"}` | per action | Runs the `action` command's handler. `Ok` whenever it runs, even with no effect; every refusal above is an `Err` reply. |
@@ -291,6 +326,11 @@ is its spec, joined by single spaces. Parsing is by hand; there is no clap.
   gesture, as every navigation command here does. Upstream has no such gate.
 - Fullscreen does not exist here, so nothing exits it.
 - `Focus` with no active output is refused instead of focusing without a camera.
+- `{"Action":"cycle-windows …"}` is always a single committed step. Upstream
+  keeps the session open when a real modifier happens to be down as the request
+  arrives.
+- `{"Action":"focus-center"}` uses the `pointer` the shell passes with the
+  command; with none it does nothing. Upstream reads its own seat.
 - `StateInfo` without an active output reports the origin at zoom 1.
 - The active bookmark is re-evaluated per accepted command, not per frame.
 - Reply member order (above).
@@ -312,7 +352,9 @@ set / go-to / list / delete and the save file with and without the `bookmarks`
 key, `Move` with its range refusal, `Focus` of a bound window (zoom 1) and of a
 placeholder (current zoom), every refused, unknown and unimplemented request
 against an unchanged `snapshot`, and an accept / reject table for the action
-grammar. The client is driven through `driftwm_desktop_msg` against a throwaway
+grammar. The window navigation actions, `pointer`, `held` and the cycle prelude
+are covered by `tests/navigation_actions_flow.rs`, described under
+[Window navigation actions](NAVIGATION.md#window-navigation-actions). The client is driven through `driftwm_desktop_msg` against a throwaway
 `UnixListener` in the temporary directory: the request line it sends, its exit
 statuses, and one round trip in which the test stands in for the shell and
 answers from a real controller's `ipc` command.

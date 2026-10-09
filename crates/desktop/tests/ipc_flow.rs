@@ -879,17 +879,14 @@ fn action_strings_follow_upstream_grammar() {
     };
     // Every other name upstream binds parses, and is refused by that name.
     // exec, spawn, exec-terminal, exec-launcher, nudge-window and reload-config
-    // run now: tests/config_flow.rs covers them.
+    // run now: tests/config_flow.rs covers them. So do center-window,
+    // center-nearest, cycle-windows and focus-center:
+    // tests/navigation_actions_flow.rs covers those.
     for (name, sample) in [
-        ("center-nearest", "center-nearest up"),
-        ("center-window", "center-window"),
         ("close-window", "close-window"),
-        ("cycle-windows", "cycle-windows forward"),
-        ("cycle-windows", "cycle-windows backward"),
         ("fill-window", "fill-window"),
         ("fit-window", "fit-window"),
         ("fit-window-snapped", "fit-window-snapped"),
-        ("focus-center", "focus-center"),
         ("grow-window", "grow-window up"),
         ("move-to-bookmark", "move-to-bookmark 1"),
         ("send-cursor-to-output", "send-cursor-to-output up"),
@@ -973,6 +970,11 @@ fn action_strings_follow_upstream_grammar() {
         "zoom-to-fit",
         "go-to-bookmark my desk",
         "set-bookmark x",
+        "center-window",
+        "center-nearest up",
+        "cycle-windows forward",
+        "cycle-windows backward",
+        "focus-center",
     ] {
         assert_eq!(refuse(Value::Null, action), "no active output", "{action}");
         assert_eq!(refuse(json!(99), action), "unknown output", "{action}");

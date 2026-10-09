@@ -265,7 +265,7 @@
         }
       ],
       "required": true,
-      "implementation_note": "Only explicit selected ordinary-window reset navigation is wired experimentally. Full RestoreFillElseReset, nearest fallback, suspended/fullscreen/pin/fill behavior and native verification remain incomplete."
+      "implementation_note": "center-window runs through the action command in every normal launch: it ends a cycle in progress, then focuses and flies to the focused window, or with none to the window whose centre is nearest the viewport centre (detached placeholders included), at zoom 1. Default shell: toolbar Center and the config file's binding (upstream's default mod+c, Control-Option-C under the default super chord). Known mismatches: upstream's RestoreFillElseReset is always Reset because Infinify has no fill; fullscreen, pinned and modal handling are absent; the native focus request it returns is performed only with Accessibility access and has never been exercised live. No evidence entry is recorded for this change: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/navigation_actions_flow.rs, expected targets derived by hand, not from an executed upstream oracle), the headless coordinator regression (tests/e2e/desktop-navigation.sh) and scripted msg sessions against the built app in --windowed mode on 2026-10-09 with detached placeholders only (with a focused window, after focus --id, and with focus cleared), which left no saved evidence. The toolbar button, hot-key delivery and native focus are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.CenterNearest",
@@ -277,7 +277,7 @@
       },
       "contract": "Match Action::CenterNearest dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -285,7 +285,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "center-nearest <direction> runs through the action command in every normal launch, with driftwm-core's find_nearest and upstream's closest-point rule: candidates are every window (detached placeholders included) and the navigation.anchors points; the search starts at the focused window while all of it is on the output (upstream's threshold 1.0) and at the viewport centre otherwise; a window is focused and flown to at the current zoom (NavZoom::Keep), and an anchor clears focus and flies the camera there. Default shell: the config file's bindings (upstream's default mod+arrows, Control-Option-arrows under the default super chord). Known mismatches: representative points come from the world rectangle, which has no separate title-bar strip; a fractional frame's visibility is measured by the largest whole-pixel rectangle inside it; there is no just-exited-fullscreen anchor; an anchor outside the ±1e12 world is not a candidate; the pointer and gesture forms (MouseAction.CenterNearest, ThresholdAction.CenterNearest) are not implemented; the native focus request is performed only with Accessibility access and has never been exercised live. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/navigation_actions_flow.rs, expected targets derived by hand, not from an executed upstream oracle) and scripted msg sessions against the built app in --windowed mode on 2026-10-09 with detached placeholders only (right, left, up, down and up-right, a kept zoom, the viewport-centre origin, an anchor), which left no saved evidence. Hot-key delivery and native focus are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.CycleWindows",
@@ -314,7 +315,7 @@
         }
       ],
       "required": true,
-      "implementation_note": "Experimental native shell uses confirmed MRU and held/unheld cycles, with headless event-order checks. Real hotkey/focus behavior and modal/widget/pin/fullscreen policies remain incomplete."
+      "implementation_note": "cycle-windows forward|backward runs through the action command in every normal launch: one step through the frozen focus history from upstream's cycle anchor (the logical focus), flown to at the current zoom. A fire with a real modifier physically down keeps the cycle open, and the shell ends it when the cycle_hold modifiers are no longer all down, by sampling the session's modifier state 60 times a second; a modifier-less fire (toolbar Previous and Next, IPC) is a single committed step; any other action ends the cycle first. Default shell: upstream's default alt+Tab and alt+shift+Tab as Option-Tab and Option-Shift-Tab hot keys from the config, replacing the former hard-coded ones, and toolbar Previous and Next. Known mismatches: with native focus allowed the focus history is promoted only by confirmed or observed native focus, so a selection whose focus request fails, or is superseded before it is confirmed, is not promoted where upstream would promote it; without Accessibility access or with --no-native-focus the shell answers every focus request focus_logical and the history follows logical focus instead, as upstream's follows keyboard focus; every canvas press ends an open cycle at the press, committing a settled selection, where upstream ends it only when another window takes focus or the hold modifiers are let go; an IPC cycle-windows is a single step even with a modifier down; modal, widget, pin and fullscreen policies are absent. No evidence entry is recorded for this change: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/navigation_actions_flow.rs, focus_cycle_flow.rs) and the headless coordinator regression (tests/e2e/desktop-navigation.sh, injected driver and modifier readings); in scripted msg sessions against the built app on 2026-10-09 the action replied Ok and changed nothing, because the scene held detached placeholders only and they never enter the history. A cycle that changes the order in the running app, the hot keys, the Option release and native focus are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.HomeToggle",
@@ -633,7 +634,7 @@
       },
       "contract": "Match Action::FocusCenter dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -641,7 +642,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "focus-center runs through the action command in every normal launch: it focuses and flies to the topmost window under the pointer on the active output, at zoom 1; with nothing under the pointer it does nothing. The shell supplies the pointer's global position with every action and IPC request. Default shell: the config file's binding (upstream's default mod+x, Control-Option-X under the default super chord). Known mismatches: upstream's RestoreFillElseReset is always Reset because Infinify has no fill; upstream reads its own seat pointer and skips pinned windows, which do not exist here; the native focus request is performed only with Accessibility access and has never been exercised live. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/navigation_actions_flow.rs); one msg action focus-center against the built app on 2026-10-09 replied Ok with an unknown pointer position and established nothing. Hot-key delivery is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.TogglePinToScreen",
@@ -1850,7 +1852,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Read returns the focused window as id (Infinify's logical window id) and app_id (the bundle identifier). Write, by id or by bundle identifier, makes the window the logical focus and navigates the camera as upstream's focus request does (a window with a bound source at zoom 1, a detached placeholder at the current zoom, neither when already wholly in view), returning the existing focus effect in the reply's effects; when matching by bundle identifier a bound source wins over a detached placeholder. Reached as msg focus [APP_ID | --id N]. Known mismatches: the write changes logical focus and the camera only, the default shell does not dispatch the returned effect, and native application focus is neither changed nor claimed to change; widgets, fullscreen, pin and modal policies do not exist here; the active output is supplied by the shell. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and the Unix-socket server, the msg client against a running app and rendered motion are unverified on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Read returns the focused window as id (Infinify's logical window id) and app_id (the bundle identifier). Write, by id or by bundle identifier, makes the window the logical focus and navigates the camera as upstream's focus request does (a window with a bound source at zoom 1, a detached placeholder at the current zoom, neither when already wholly in view), returning the existing focus effect in the reply's effects; when matching by bundle identifier a bound source wins over a detached placeholder. Reached as msg focus [APP_ID | --id N]. Known mismatches: the write changes logical focus and the camera; the default shell now hands the returned effect to its native focus driver when Accessibility access exists, which has never been exercised live, and native application focus is not claimed to change; with zoom.reset_on_activation off a bound window is flown to at the current zoom; widgets, fullscreen, pin and modal policies do not exist here; the active output is supplied by the shell. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and the Unix-socket server, the msg client against a running app and rendered motion are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ipc.Request.Move",
@@ -2013,7 +2015,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Runs the request's action string through the full upstream action grammar and the same handlers that the default shell's shortcuts and toolbar buttons use. Implemented: pan-viewport, home-toggle, zoom-in, zoom-out, zoom-reset, zoom-to-fit, go-to-bookmark, set-bookmark and quit (see the Action rows); every other upstream action parses but is answered with an Err starting action not implemented on macOS yet, and a string upstream does not parse with an Err starting unknown action. Reached as msg action followed by the action string. Known mismatches: upstream replies Ok whenever a spec parses, even when it had no effect, where Infinify answers Err for a parsed action it does not implement; most upstream actions are unimplemented; quit reaches the shell as an effect. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and the Unix-socket server, the msg client against a running app and rendered motion are unverified on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Runs the request's action string through the full upstream action grammar and the same handlers that the default shell's shortcuts and toolbar buttons use. Implemented: pan-viewport, home-toggle, zoom-in, zoom-out, zoom-reset, zoom-to-fit, center-window, center-nearest, cycle-windows (always a single committed step over IPC), focus-center, go-to-bookmark, set-bookmark and quit (see the Action rows); every other upstream action parses but is answered with an Err starting action not implemented on macOS yet, and a string upstream does not parse with an Err starting unknown action. Reached as msg action followed by the action string. Known mismatches: upstream replies Ok whenever a spec parses, even when it had no effect, where Infinify answers Err for a parsed action it does not implement; most upstream actions are unimplemented; quit reaches the shell as an effect. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and the Unix-socket server, the msg client against a running app and rendered motion are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ipc.Request.Bookmark",
@@ -2726,7 +2728,7 @@
       "evidence": [],
       "source_type": "Option<FocusPlacement>",
       "required": true,
-      "implementation_note": "Once a config is loaded, window navigation parks the window where focus_placement says, in place of the placement set_navigation_context supplied. An [[outputs]] entry overrides it for the output whose stable id (a display UUID, or windowed) equals its name, or for name = \"*\"; upstream matches a connector name, and no other [[outputs]] field is used. Known mismatches: the app registers no usable area, so placement is relative to the whole view; the shell's native focus navigation stays behind --experimental-native-navigation. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Once a config is loaded, window navigation parks the window where focus_placement says, in place of the placement set_navigation_context supplied. An [[outputs]] entry overrides it for the output whose stable id (a display UUID, or windowed) equals its name, or for name = \"*\"; upstream matches a connector name, and no other [[outputs]] field is used. Known mismatches: the app registers no usable area, so placement is relative to the whole view; the shell's window navigation runs in every normal launch, and its native focus has never been exercised live. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.OutputOutlineSettings.color",
@@ -4428,7 +4430,7 @@
         }
       ],
       "required": true,
-      "implementation_note": "Stage focus/cycling at2842602 and ordinary selected-window/cycle camera navigation at21b454d run through the controller C ABI. Native dispatch, frame scheduling and complete upstream target/mode/action behavior remain open."
+      "implementation_note": "Stage focus/cycling at2842602 and ordinary selected-window/cycle camera navigation at21b454d run through the controller C ABI. The default shell now runs center-window, center-nearest, cycle-windows with hold-to-commit, focus-center, click-to-focus and followed native focus in every normal launch (see those Action rows); native focus has never been exercised live, the focus history is fed by confirmed or observed native focus, or by logical focus when the shell performs no native focus, and output transfer and the fullscreen, pin, fill and modal modes remain open."
     },
     {
       "id": "navigation.fullscreen",
@@ -4700,7 +4702,7 @@
           "value": "center"
         }
       ],
-      "implementation_note": "Once a config is loaded, window navigation parks the window where focus_placement says, in place of the placement set_navigation_context supplied. Known mismatches: the app registers no usable area, so placement is relative to the whole view; the shell's native focus navigation stays behind --experimental-native-navigation. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Once a config is loaded, window navigation parks the window where focus_placement says, in place of the placement set_navigation_context supplied. Known mismatches: the app registers no usable area, so placement is relative to the whole view; the shell's window navigation runs in every normal launch, and its native focus has never been exercised live. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.autostart",
@@ -5809,7 +5811,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for navigation.auto_navigate_on_click.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -5822,7 +5824,8 @@
           "source_assignment": "auto_navigate_on_click = false  # completed click on a partially off-screen window also pans it in",
           "value": false
         }
-      ]
+      ],
+      "implementation_note": "Read by driftwm-core (default false). The press of a click only focuses (activate with cause click, sent before the press is forwarded) and never moves the camera. With the option on, the release of a completed click, which the shell recognises as upstream's resolve_click_navigate does (the same button lifting within 5 points of the press on the same output, after the release has been forwarded), sends activate with cause click_release, and the controller flies the camera to the window at the current zoom if it still holds logical focus and is not wholly inside the usable area (upstream's fire_click_navigate). Known mismatches: there is no double-click deferral and no title-bar case, so every completed click on a clipped window pans at once. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/navigation_actions_flow.rs); the shell's press and release path is compiled and reviewed only, and no click was made on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.navigation.nudge_step",
@@ -5952,7 +5955,7 @@
           ]
         }
       ],
-      "implementation_note": "zoom-to-fit frames navigation.anchors together with the windows, as upstream's ZoomToFit does: points with Y up, truncated to whole pixels. Known mismatches: upstream also uses the anchors in center-nearest, which does not run here. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "zoom-to-fit frames navigation.anchors together with the windows, as upstream's ZoomToFit does: points with Y up, truncated to whole pixels. center-nearest also treats each anchor as a candidate, and landing on one clears focus and flies the camera there. Known mismatches: an anchor outside the ±1e12 world is not a center-nearest candidate. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs, navigation_actions_flow.rs) and one center-nearest landing on an anchor written to the config of the running built app on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.navigation.bookmarks.1",
@@ -6383,7 +6386,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for zoom.reset_on_activation.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -6396,7 +6399,8 @@
           "source_assignment": "reset_on_activation = true  # animate zoom to 1.0 when an off-screen window",
           "value": true
         }
-      ]
+      ],
+      "implementation_note": "Read by driftwm-core (default true). It decides whether a clipped window is flown to at zoom 1 or at the current zoom in two places: the activate command with cause native, which the shell sends when it observes that native focus moved to a canvas window by itself (upstream's activation request and activate_window_output_local), and the IPC Focus request. Known mismatches: macOS has no xdg-activation, so the trigger is the shell's twice-a-second read of the frontmost application's focused window; a detached placeholder is always flown to at the current zoom. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/navigation_actions_flow.rs); followed native focus is compiled, reviewed and covered by the headless coordinator regression (tests/e2e/desktop-navigation.sh), and unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.zoom.interact_min",
@@ -6499,7 +6503,7 @@
           "value": 0.0
         }
       ],
-      "implementation_note": "Once a config is loaded snap.outer_gap is the inset of a placed window in window navigation, in place of the gap set_navigation_context supplied. Known mismatches: it has no other effect here, since nothing else places a window against a screen edge; the shell's native focus navigation stays behind --experimental-native-navigation. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Once a config is loaded snap.outer_gap is the inset of a placed window in window navigation, in place of the gap set_navigation_context supplied. Known mismatches: it has no other effect here, since nothing else places a window against a screen edge; the shell's window navigation runs in every normal launch, and its native focus has never been exercised live. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.snap.distance",
@@ -7636,7 +7640,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+c.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -7649,7 +7653,8 @@
           "source_assignment": "\"mod+c\" = \"center-window\"",
           "value": "center-window"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-C under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs center-window through the action command, with the pointer's position and whether a modifier is physically down. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. See Action.CenterWindow for the action's own mismatches. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs, navigation_actions_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+x",
@@ -7661,7 +7666,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+x.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -7674,7 +7679,8 @@
           "source_assignment": "\"mod+x\" = \"focus-center\"",
           "value": "focus-center"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-X under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs focus-center through the action command, with the pointer's position and whether a modifier is physically down. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. See Action.FocusCenter for the action's own mismatches. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs, navigation_actions_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+a",
@@ -7712,7 +7718,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+up.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -7725,7 +7731,8 @@
           "source_assignment": "\"mod+up\" = \"center-nearest up\"",
           "value": "center-nearest up"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-Up under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs center-nearest up through the action command, with the pointer's position and whether a modifier is physically down. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. See Action.CenterNearest for the action's own mismatches. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs, navigation_actions_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+down",
@@ -7737,7 +7744,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+down.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -7750,7 +7757,8 @@
           "source_assignment": "\"mod+down\" = \"center-nearest down\"",
           "value": "center-nearest down"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-Down under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs center-nearest down through the action command, with the pointer's position and whether a modifier is physically down. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. See Action.CenterNearest for the action's own mismatches. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs, navigation_actions_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+left",
@@ -7762,7 +7770,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+left.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -7775,7 +7783,8 @@
           "source_assignment": "\"mod+left\" = \"center-nearest left\"",
           "value": "center-nearest left"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-Left under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs center-nearest left through the action command, with the pointer's position and whether a modifier is physically down. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. See Action.CenterNearest for the action's own mismatches. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs, navigation_actions_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+right",
@@ -7787,7 +7796,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+right.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -7800,7 +7809,8 @@
           "source_assignment": "\"mod+right\" = \"center-nearest right\"",
           "value": "center-nearest right"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-Right under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs center-nearest right through the action command, with the pointer's position and whether a modifier is physically down. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. See Action.CenterNearest for the action's own mismatches. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs, navigation_actions_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+shift+up",
@@ -8020,7 +8030,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.alt+tab.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -8033,7 +8043,8 @@
           "source_assignment": "\"alt+tab\" = \"cycle-windows forward\"",
           "value": "cycle-windows forward"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Option-Tab. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed), which takes the chord from every application, and runs cycle-windows forward through the action command, with the pointer's position and whether a modifier is physically down; its modifiers are the cycle_hold set whose release commits the cycle. It replaces the hot key the shell used to hard-code behind --experimental-native-navigation. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. See Action.CycleWindows for the action's own mismatches. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs, navigation_actions_flow.rs); the shell side is compiled and reviewed only, and hot-key registration, delivery and the Option release are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.alt+shift+tab",
@@ -8045,7 +8056,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.alt+shift+tab.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -8058,7 +8069,8 @@
           "source_assignment": "\"alt+shift+tab\" = \"cycle-windows backward\"",
           "value": "cycle-windows backward"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Option-Shift-Tab. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed), which takes the chord from every application, and runs cycle-windows backward through the action command, with the pointer's position and whether a modifier is physically down. It replaces the hot key the shell used to hard-code behind --experimental-native-navigation. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. See Action.CycleWindows for the action's own mismatches. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs, navigation_actions_flow.rs); the shell side is compiled and reviewed only, and hot-key registration, delivery and the Option release are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+equal",
@@ -11200,7 +11212,7 @@
           "value": "right"
         }
       ],
-      "implementation_note": "Once a config is loaded, window navigation parks the window where focus_placement says, in place of the placement set_navigation_context supplied. An [[outputs]] entry overrides it for the output whose stable id (a display UUID, or windowed) equals its name, or for name = \"*\"; upstream matches a connector name, and no other [[outputs]] field is used. Known mismatches: the app registers no usable area, so placement is relative to the whole view; the shell's native focus navigation stays behind --experimental-native-navigation. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Once a config is loaded, window navigation parks the window where focus_placement says, in place of the placement set_navigation_context supplied. An [[outputs]] entry overrides it for the output whose stable id (a display UUID, or windowed) equals its name, or for name = \"*\"; upstream matches a connector name, and no other [[outputs]] field is used. Known mismatches: the app registers no usable area, so placement is relative to the whole view; the shell's window navigation runs in every normal launch, and its native focus has never been exercised live. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.outputs.hot_corners.threshold",
@@ -11981,13 +11993,14 @@
       },
       "contract": "Match Config.auto_navigate_on_click type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "bool"
+      "source_type": "bool",
+      "implementation_note": "Read by driftwm-core (default false). The press of a click only focuses (activate with cause click, sent before the press is forwarded) and never moves the camera. With the option on, the release of a completed click, which the shell recognises as upstream's resolve_click_navigate does (the same button lifting within 5 points of the press on the same output, after the release has been forwarded), sends activate with cause click_release, and the controller flies the camera to the window at the current zoom if it still holds logical focus and is not wholly inside the usable area (upstream's fire_click_navigate). Known mismatches: there is no double-click deferral and no title-bar case, so every completed click on a clipped window pans at once. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/navigation_actions_flow.rs); the shell's press and release path is compiled and reviewed only, and no click was made on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.cycle_hold",
@@ -11999,13 +12012,14 @@
       },
       "contract": "Match Config.cycle_hold type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "Modifiers"
+      "source_type": "Modifiers",
+      "implementation_note": "Derived by driftwm-core from the cycle-windows forward binding's modifiers (Alt when it has none or is unbound) and reported by the bindings command as physical macOS modifiers (cycle_hold: Option by default, null when the set has no macOS chord). The shell keeps a held cycle open while those modifiers are all physically down, sampling the session's modifier state 60 times a second, and sends end_focus_cycle at the first sample where they are not. Known mismatches: upstream checks on each key event, so the commit here can be one sample (17 ms) late; the controller sees no keys and does not enforce the rule itself. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/navigation_actions_flow.rs) and the headless coordinator regression with injected modifier readings (tests/e2e/desktop-navigation.sh); a real Option release is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.zoom_step",
@@ -12128,13 +12142,14 @@
       },
       "contract": "Match Config.zoom_reset_on_activation type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "bool"
+      "source_type": "bool",
+      "implementation_note": "Read by driftwm-core (default true). It decides whether a clipped window is flown to at zoom 1 or at the current zoom in two places: the activate command with cause native, which the shell sends when it observes that native focus moved to a canvas window by itself (upstream's activation request and activate_window_output_local), and the IPC Focus request. Known mismatches: macOS has no xdg-activation, so the trigger is the shell's twice-a-second read of the frontmost application's focused window; a detached placeholder is always flown to at the current zoom. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/navigation_actions_flow.rs); followed native focus is compiled, reviewed and covered by the headless coordinator regression (tests/e2e/desktop-navigation.sh), and unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.zoom_interact_min",
@@ -12209,7 +12224,7 @@
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
       "source_type": "f64",
-      "implementation_note": "Once a config is loaded snap.outer_gap is the inset of a placed window in window navigation, in place of the gap set_navigation_context supplied. Known mismatches: it has no other effect here, since nothing else places a window against a screen edge; the shell's native focus navigation stays behind --experimental-native-navigation. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Once a config is loaded snap.outer_gap is the inset of a placed window in window navigation, in place of the gap set_navigation_context supplied. Known mismatches: it has no other effect here, since nothing else places a window against a screen edge; the shell's window navigation runs in every normal launch, and its native focus has never been exercised live. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.snap_distance",
@@ -12593,7 +12608,7 @@
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
       "source_type": "Vec<Point<f64, Logical>>",
-      "implementation_note": "zoom-to-fit frames navigation.anchors together with the windows, as upstream's ZoomToFit does: points with Y up, truncated to whole pixels. Known mismatches: upstream also uses the anchors in center-nearest, which does not run here. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "zoom-to-fit frames navigation.anchors together with the windows, as upstream's ZoomToFit does: points with Y up, truncated to whole pixels. center-nearest also treats each anchor as a candidate, and landing on one clears focus and flies the camera there. Known mismatches: an anchor outside the ±1e12 world is not a center-nearest candidate. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs, navigation_actions_flow.rs) and one center-nearest landing on an anchor written to the config of the running built app on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.navigation_bookmarks",
@@ -12739,7 +12754,7 @@
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
       "source_type": "FocusPlacement",
-      "implementation_note": "Once a config is loaded, window navigation parks the window where focus_placement says, in place of the placement set_navigation_context supplied. Known mismatches: the app registers no usable area, so placement is relative to the whole view; the shell's native focus navigation stays behind --experimental-native-navigation. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Once a config is loaded, window navigation parks the window where focus_placement says, in place of the placement set_navigation_context supplied. Known mismatches: the app registers no usable area, so placement is relative to the whole view; the shell's window navigation runs in every normal launch, and its native focus has never been exercised live. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.env",

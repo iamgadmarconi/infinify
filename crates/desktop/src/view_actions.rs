@@ -45,7 +45,7 @@ pub(crate) struct ViewReturn {
 }
 
 /// Upstream policy works in i32 logical pixels; reject rather than saturate.
-fn pixel(value: f64) -> Result<i32, Error> {
+pub(crate) fn pixel(value: f64) -> Result<i32, Error> {
     if (f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&value) {
         Ok(value as i32)
     } else {

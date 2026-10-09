@@ -179,6 +179,51 @@ device-specific behavior also need the corresponding hardware.
   whose feature is absent are parsed and unused. See the
   [desktop shell notes](../../native/desktop/README.md#configuration) and the
   [configuration contract](../../crates/desktop/CONFIG.md).
+- This milestone, window navigation and focus (commit pending), makes DriftWM's
+  `center-window`, `center-nearest`, `cycle-windows` and `focus-center` run in the
+  default shell through the action grammar, and so through key bindings, the
+  toolbar (Center, Previous, Next) and `msg action`, with upstream's cycle prelude,
+  `find_nearest` and visibility thresholds from `driftwm-core`, anchors as
+  `center-nearest` targets, and new `activate`, `clear_focus` and `focus_logical`
+  controller commands for click-to-focus and the completed click's reveal,
+  followed native focus, the empty-canvas click, and focus that stays logical.
+  The navigation coordinator and native focus driver, until now behind
+  `--experimental-native-navigation`, run in every normal launch (the flag is
+  accepted and ignored; `--no-native-focus` keeps focus logical). Native focus
+  needs Accessibility only; hold-to-commit samples the modifier state instead of
+  using an event tap, and the hard-coded Option-Tab hot keys are replaced by the
+  configured binding. Coverage is controller scenarios through the exported C ABI
+  (`crates/desktop/tests/navigation_actions_flow.rs`), the headless coordinator
+  regression (`tests/e2e/desktop-navigation.sh`, injected focus driver, clock and
+  scheduler), and four scripted launches on 2026-10-09 of the built app in
+  `--windowed` mode on a private scene, config and socket (macOS 27.2, Apple
+  Silicon, three seeded detached placeholders), which left no saved evidence.
+  Exercised there through the socket: `center-nearest` right, left, up, down and
+  up-right from known starting points with the focused window or the viewport
+  centre as origin, at zoom 1 and with a kept zoom of 0.5, an anchor from a config
+  file written while running, `center-window` with and without a focused window,
+  `focus --id` followed by `center-window`, `cycle-windows`, upstream's messages
+  for four malformed specs, both launch flags, and exit on SIGTERM. Evidence
+  boundary: native focus of a real window was not exercised by any route; no
+  window had a bound source, so no focus request was produced, and with
+  placeholders only the focus history is empty, so `cycle-windows` replied Ok and
+  changed nothing and no cycle that changes the order was seen in the app; no hot
+  key, Option release, toolbar button, click, followed native focus or drawn
+  frame was observed; one output only. Known mismatches: with native focus
+  allowed the focus history is fed only by confirmed or observed native focus,
+  so a window whose focus request fails or is superseded before it is confirmed
+  stays out of it (without Accessibility or with `--no-native-focus` the shell
+  answers each request `focus_logical` and the history follows logical focus, as
+  upstream's follows keyboard focus); a click is forwarded while its native
+  focus request is still in flight, not after it; `center-window` is always
+  Reset because there is no fill; `auto_navigate_on_click` pans at a completed
+  click's release as upstream does, without upstream's title-bar double-click
+  deferral; every canvas press ends an open cycle at the press; an IPC
+  `cycle-windows` is always one committed step; the pointer `center-nearest`
+  swipe, `focus_follows_mouse` and `auto_navigate_on_close` are absent. See the
+  [desktop shell notes](../../native/desktop/README.md#window-navigation-and-native-focus)
+  and the [navigation](../../crates/desktop/NAVIGATION.md#window-navigation-actions)
+  and [focus](../../crates/desktop/FOCUS.md) contracts.
 
 These milestones add evidence to partial rows. None satisfies an entire native
 behavior row or changes the completion requirement.

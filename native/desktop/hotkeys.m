@@ -67,7 +67,7 @@ static OSStatus hotKeyEvent(EventHandlerCallRef next,EventRef event,void *contex
     return self;
 }
 - (void)inputSourceChanged:(NSNotification *)notification { (void)notification;if(self.changed)self.changed(); }
-- (void)setBindings:(NSDictionary *)bindings reserved:(NSDictionary<NSNumber *,NSString *> *)reserved {
+- (void)setBindings:(NSDictionary *)bindings {
     [self stop];_bindings=typed(bindings,NSDictionary.class);
     // Upstream looks the active layout's keysym up first in both modes (keyboard.rs: modified_sym, then Config::lookup);
     // layout_independent, its default and what absent means here, only adds a fallback: here the ANSI position.
@@ -85,7 +85,6 @@ static OSStatus hotKeyEvent(EventHandlerCallRef next,EventRef event,void *contex
         UInt32 c=code.unsignedIntValue,modifiers=([typed(held[@"control"],NSNumber.class)boolValue]?controlKey:0)|([typed(held[@"option"],NSNumber.class)boolValue]?optionKey:0)|([typed(held[@"shift"],NSNumber.class)boolValue]?shiftKey:0)|([typed(held[@"command"],NSNumber.class)boolValue]?cmdKey:0);
         NSString *name=keyName(c)?:(keypad(c)?[@"Keypad " stringByAppendingString:keyCharacter(layout,c,NO)?:@"key"]:nil)?:keyCharacter(layout,c,NO).uppercaseString?:character.uppercaseString?:[NSString stringWithFormat:@"key %u",c];
         NSNumber *chord=DWChord(c,modifiers);NSString *label=[DWModifierGlyphs(modifiers) stringByAppendingString:name];
-        if(reserved[chord]){[notes addObject:[NSString stringWithFormat:@"%@ (%@) stays with %@",label,action,reserved[chord]]];continue;}
         if(inert)continue;
         if([taken containsObject:chord]){[notes addObject:[NSString stringWithFormat:@"%@ (%@) is already bound",label,action]];continue;}
         [taken addObject:chord];[keys addObject:@{@"action":action,@"combo":combo,@"chord":chord,@"modifiers":DWModifierGlyphs(modifiers),@"key":name,@"repeat":@([typed(key[@"repeat"],NSNumber.class)boolValue])}];

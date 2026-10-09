@@ -429,6 +429,10 @@ impl Scene {
         self.focused = Some(id);
         Ok(())
     }
+    /// Leave no window focused. Stacking order and focus history are untouched.
+    pub fn clear_focus(&mut self) {
+        self.focused = None;
+    }
     /// Find and focus the nearest center within a ±45° directional cone.
     /// Starts at the focused window, or the viewport center if nothing is focused.
     pub fn directional_focus(

@@ -12,6 +12,7 @@ mod resize_transaction;
 mod settings;
 mod storage;
 mod view_actions;
+mod window_actions;
 use bindings::Platform;
 pub use bindings::{MacModifiers, PointerContext, PointerTrigger, ScrollSource};
 pub use ffi::*;
@@ -22,6 +23,7 @@ pub use resize_transaction::{NativeResizeResult, ResizeOutcome};
 use settings::{CameraSeed, Settings};
 pub use view_actions::ViewDirection;
 use view_actions::ViewReturn;
+pub use window_actions::ActivationCause;
 
 use driftwm_canvas::{
     DragGesture, OutputId, Point, Rect, ResizeEdges, ResizeGesture, Scene, Size, SnapOptions,
@@ -150,6 +152,9 @@ struct FocusRuntime {
     pending_effect: Option<FocusEffect>,
     last_result: Option<Value>,
     release_pending: bool,
+    /// The focused window whose request the adapter answered `focus_logical`:
+    /// logical focus stands in for a native confirmation that cannot come.
+    logical: Option<WindowId>,
 }
 #[derive(Clone, Debug, Default)]
 pub struct Controller {
@@ -288,15 +293,39 @@ pub enum Command {
         output: OutputId,
     },
     /// One upstream action string, as a key binding or `msg action` spells it.
+    /// `pointer` is the pointer's global screen point. `held` says a real
+    /// modifier is physically down as the action fires.
     Action {
         output: Option<OutputId>,
         action: String,
+        #[serde(default)]
+        pointer: Option<Point>,
+        #[serde(default)]
+        held: bool,
     },
-    /// One upstream IPC request. `output` is the active output.
+    /// One upstream IPC request. `output` is the active output and `pointer`
+    /// the pointer's global screen point.
     Ipc {
         output: Option<OutputId>,
         request: Value,
+        #[serde(default)]
+        pointer: Option<Point>,
     },
+    /// A press on a window of the canvas, that press released as a completed
+    /// click, or native focus the shell saw move to the window. `output` is
+    /// the active output. `identity` and `generation`, when given, must be the
+    /// window's current binding.
+    Activate {
+        window: WindowId,
+        output: Option<OutputId>,
+        cause: ActivationCause,
+        #[serde(default)]
+        identity: Option<SourceIdentity>,
+        #[serde(default)]
+        generation: Option<u64>,
+    },
+    /// A click on empty canvas: no window holds logical focus.
+    ClearFocus {},
     /// Read upstream's config file. No `path` is upstream's own default path.
     LoadConfig {
         path: Option<String>,
@@ -375,6 +404,15 @@ pub enum Command {
         generation: u64,
         success: bool,
     },
+    /// The adapter performs no native focus in this run (no Accessibility
+    /// access, or `--no-native-focus`): the pending request is settled by
+    /// logical focus alone. Nothing is claimed or recorded about native focus.
+    FocusLogical {
+        effect_id: u64,
+        window: WindowId,
+        identity: SourceIdentity,
+        generation: u64,
+    },
     ObserveFocus {
         window: WindowId,
         identity: SourceIdentity,
@@ -444,6 +482,12 @@ fn text_valid(s: &str, max: usize) -> bool {
 }
 fn point_valid(p: Point) -> bool {
     p.x.is_finite() && p.y.is_finite() && p.x.abs() <= 1e12 && p.y.abs() <= 1e12
+}
+fn valid_pointer(pointer: Option<Point>) -> Result<Option<Point>, Error> {
+    match pointer {
+        Some(point) if !point_valid(point) => Err(Error::Invalid("invalid pointer")),
+        pointer => Ok(pointer),
+    }
 }
 fn rect_valid(r: Rect) -> bool {
     point_valid(r.origin)
@@ -575,28 +619,17 @@ impl Controller {
                 output,
                 zoom_policy,
             } => {
-                let navigation = self.arm_navigation(window, output, zoom_policy)?;
-                self.finish_cycle();
-                self.scene.focus(window)?;
-                let mut result = self.request_focus(window)?;
-                result["navigation"] = navigation;
-                return Ok(result);
+                return Ok(self
+                    .navigate_to_window(window, output, zoom_policy)?
+                    .reply());
             }
             Command::CycleNavigate {
                 output,
                 backward,
                 held,
             } => {
-                self.navigation_context(output)?;
-                self.focus.release_pending = false;
-                if let Some(window) = self.scene.cycle_focus(backward)? {
-                    let navigation = self.arm_navigation(window, output, ZoomPolicy::Keep)?;
-                    let mut result = self.request_focus(window)?;
-                    if !held {
-                        self.release_cycle();
-                    }
-                    result["navigation"] = navigation;
-                    return Ok(result);
+                if let Some(moved) = self.cycle_navigate(output, backward, held)? {
+                    return Ok(moved.reply());
                 }
             }
             Command::TickNavigation { timestamp_ns } => return self.tick_navigation(timestamp_ns),
@@ -627,8 +660,25 @@ impl Controller {
             Command::ZoomOut { output } => return self.zoom_out(output),
             Command::ZoomReset { output } => return self.zoom_reset(output),
             Command::ZoomToFit { output } => return self.zoom_to_fit(output),
-            Command::Action { output, action } => return self.action(output, &action),
-            Command::Ipc { output, request } => return Ok(self.ipc(output, request)),
+            Command::Action {
+                output,
+                action,
+                pointer,
+                held,
+            } => return self.action(output, &action, valid_pointer(pointer)?, held),
+            Command::Ipc {
+                output,
+                request,
+                pointer,
+            } => return Ok(self.ipc(output, request, valid_pointer(pointer)?)),
+            Command::Activate {
+                window,
+                output,
+                cause,
+                identity,
+                generation,
+            } => return self.activate(window, output, cause, identity, generation),
+            Command::ClearFocus {} => return Ok(json!({"dirty":self.clear_focus()})),
             Command::LoadConfig { path } => return self.load_config(path),
             Command::SetPlatform { super_chord } => return self.set_platform(&super_chord),
             Command::Bindings {} => return Ok(self.bindings()),
@@ -894,11 +944,13 @@ impl Controller {
             Command::CancelFocusCycle {} => {
                 self.scene.cancel_cycle();
                 self.focus.pending_effect = None;
+                self.focus.logical = None;
                 self.focus.release_pending = false;
             }
             Command::FocusLost {} => {
                 self.scene.cancel_cycle();
                 self.focus.pending_effect = None;
+                self.focus.logical = None;
                 self.focus.observed_native = None;
                 self.focus.release_pending = false;
             }
@@ -934,6 +986,35 @@ impl Controller {
                     self.focus.release_pending = false;
                 }
             }
+            Command::FocusLogical {
+                effect_id,
+                window,
+                identity,
+                generation,
+            } => {
+                let expected = FocusEffect {
+                    op: "focus_native_window",
+                    effect_id,
+                    window,
+                    identity,
+                    generation,
+                };
+                if self.focus.pending_effect.as_ref() != Some(&expected) {
+                    return Err(Error::Invalid("stale or superseded focus result"));
+                }
+                self.check_generation(window, &expected.identity, generation)?;
+                self.focus.pending_effect = None;
+                self.focus.last_result =
+                    Some(json!({"effect": expected, "success": false, "logical": true}));
+                // Upstream focus_changed: the focused window enters the history,
+                // which a cycle in progress keeps frozen. `observed_native` is
+                // left as it was.
+                self.focus.logical = Some(window);
+                self.scene.confirm_focus(window)?;
+                if self.focus.release_pending {
+                    self.finish_cycle();
+                }
+            }
             Command::ObserveFocus {
                 window,
                 identity,
@@ -942,6 +1023,7 @@ impl Controller {
                 self.check_generation(window, &identity, generation)?;
                 self.finish_cycle();
                 self.focus.pending_effect = None;
+                self.focus.logical = None;
                 self.scene.focus(window)?;
                 self.scene.confirm_focus(window)?;
                 self.focus.observed_native = Some(FocusEffect {
@@ -1072,6 +1154,7 @@ impl Controller {
     }
     fn request_focus(&mut self, window: WindowId) -> Result<Value, Error> {
         self.focus.pending_effect = None;
+        self.focus.logical = None;
         let Some(source) = self.sources.get(&window) else {
             return Ok(json!({"effect": null}));
         };
@@ -1090,14 +1173,17 @@ impl Controller {
         Ok(json!({"effect": effect}))
     }
     fn finish_cycle(&mut self) {
-        // Only a confirmed current selection can be committed. A pending
-        // selection must not accidentally promote the previous observation.
+        // Only a confirmed current selection can be committed: one the adapter
+        // observed, or one it answered `focus_logical`. A pending selection
+        // must not accidentally promote the previous observation.
+        let focused = self.scene.focused();
         if self.focus.pending_effect.is_none()
-            && self
+            && (self
                 .focus
                 .observed_native
                 .as_ref()
-                .is_some_and(|f| Some(f.window) == self.scene.focused())
+                .is_some_and(|f| Some(f.window) == focused)
+                || (focused.is_some() && self.focus.logical == focused))
             && self
                 .scene
                 .stage()
@@ -1147,6 +1233,9 @@ impl Controller {
             .is_some_and(|f| f.window == window)
         {
             self.focus.observed_native = None;
+        }
+        if self.focus.logical == Some(window) {
+            self.focus.logical = None;
         }
     }
     fn sync_output(&mut self, id: OutputId) -> Result<(), Error> {

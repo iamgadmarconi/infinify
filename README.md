@@ -25,10 +25,15 @@ Screen Recording access is needed for capture and Accessibility access for nativ
 
 Saved scenes retain world positions. Display cameras are saved too, but are restored on restart only with `[session] restore_camera = true`; with DriftWM's default (off) each display starts with its top-left corner on the world origin at zoom 1. On restart, windows appear as detached placeholders and must be explicitly rebound through the chooser. Native resizing, popovers, context menus and richer pointer interactions are unfinished. See the [desktop app guide](native/desktop/README.md) for the disposable demo, exact controls, persistence and limitations.
 
-The optional `--experimental-native-navigation` launch flag connects selected-window
-centering, focus cycling and camera animation to the native shell. Its coordinator
-and event-order policy pass headless integration checks; live focus and shortcut
-delivery remain unverified. Default launch retains the configured controls described above.
+Window navigation is part of every normal launch: Control-Option-arrows jump to the
+nearest window, Control-Option-C centres the focused one, Option-Tab cycles windows
+most recently focused first, and a click focuses the window it lands on. With
+Accessibility access the focused window's real window is activated and raised;
+`--no-native-focus` keeps focus logical, and `--experimental-native-navigation` is
+accepted and ignored. The actions were driven live through the IPC socket on detached
+placeholders; native focus, hot keys and clicks have only been compiled, reviewed and
+covered by a headless coordinator regression. See
+[Window navigation and native focus](native/desktop/README.md#window-navigation-and-native-focus).
 
 The separate `--experimental-native-resize` flag connects eight resize handles to
 the native adapter. It commits observed sizes and withholds input and captured

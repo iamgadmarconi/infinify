@@ -11,25 +11,22 @@
 @interface DWHotKeys : NSObject
 // fire receives the "action" of a pressed key, once per press and once per repeat.
 - (instancetype)initWithFire:(void (^)(NSString *action))fire;
-// The keyboard input source changed: ask the controller again and call -setBindings:reserved:.
+// The keyboard input source changed: ask the controller again and call -setBindings:.
 @property (copy) void (^changed)(void);
-// Unregisters, then resolves every key against the current layout. A key on a chord
-// in `reserved` (DWChord → the owner's name) stays with that owner and is noted; any
-// other key the reply marks "implemented": false is left out silently, its chord untouched.
-- (void)setBindings:(NSDictionary *)bindings reserved:(NSDictionary<NSNumber *,NSString *> *)reserved;
+// Unregisters, then resolves every key against the current layout. A key the reply
+// marks "implemented": false is left out silently, its chord untouched.
+- (void)setBindings:(NSDictionary *)bindings;
 // Resolved keys, first of a physical chord only, in the reply's order: those the
 // layout resolves, then those that fell back to "key_code". Each has "action",
 // "combo", "chord" (DWChord), "modifiers" (⌃⌥⇧⌘), "key" (A, ←, F5) and "repeat".
 @property (readonly) NSArray<NSDictionary *> *keys;
-// Keys left out by -setBindings:reserved:, one line each.
+// Keys left out by -setBindings:, one line each.
 @property (readonly) NSArray<NSString *> *notes;
 - (BOOL)holds:(NSNumber *)chord;
 // Display chords bound to one action, as "⌃⌥A".
 - (NSArray<NSString *> *)chords:(NSString *)action;
 // Registers every key; returns one line per chord macOS refused. No-op while started.
 - (NSArray<NSString *> *)start;
-// Ends a running repeat: for a hot key the shell registered itself, which this object never sees.
-- (void)endRepeat;
 // Unregisters every key and ends any repeat; the keys stay resolved for -start.
 - (void)stop;
 // -stop, and no further `changed`. Required before release.

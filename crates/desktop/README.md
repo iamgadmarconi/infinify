@@ -38,6 +38,8 @@ Preserve them as integers in native code.
 | `pan` | `output`, `screen_delta` point | `{}`; positive X reveals world to right |
 | `zoom` | `output`, `zoom` in `[0.001,1]`, global `anchor` point | `{}`; anchor world point stays fixed |
 | `focus` | `window` | `effect` or null; raises logical world z-order |
+| `activate` | `window`, `output` or null, `cause: click / click_release / native`, optional `identity`, `generation` | `effect` or null (absent for `click_release`), `navigation` or null, `dirty`; see [NAVIGATION.md](NAVIGATION.md#activate) |
+| `clear_focus` | none | `{dirty}`; no window holds logical focus |
 | `hit` | `output`, global `screen` point | `hit` object or null |
 | `input` | `output`, global `screen` point, expected `identity` | same hit object; rejects absent/unbound/stale target |
 | `begin_drag` | `window`, `output`, optional `group` boolean (default false) | `{}` |
@@ -48,7 +50,7 @@ Preserve them as integers in native code.
 | `save` / `load` | explicit caller `path` string | `{}` |
 | `load_config` | `path` string or null | `{path, exists, errors, warnings, dirty}` |
 | `set_platform` | `super` chord | `{super}` |
-| `bindings` | none | key bindings as macOS chords |
+| `bindings` | none | key bindings as macOS chords, and the `cycle_hold` modifiers |
 | `mouse_binding` | `trigger`, `source`, `modifiers`, `context` | `{binding}` or `{binding: null}` |
 
 See [focus/cycle commands](FOCUS.md) for the additive focus ABI and
@@ -135,7 +137,7 @@ already exist. Loads are bounded at 32 MiB and never modify the input file.
 Verification:
 
 ```sh
-cargo test -p driftwm-desktop --test navigation_flow --test focus_cycle_flow --test controller_flow --test config_flow --locked
+cargo test -p driftwm-desktop --test navigation_flow --test navigation_actions_flow --test focus_cycle_flow --test controller_flow --test config_flow --locked
 cargo clippy -p driftwm-desktop --all-targets -- -D warnings
 cargo fmt -p driftwm-desktop --check
 cargo build -p driftwm-desktop

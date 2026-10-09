@@ -4,7 +4,8 @@
 Apple Silicon / macOS 26+. The build does not launch anything. Open the app to
 choose ordinary local application windows. No window is automatically selected.
 Screen Recording permission is required for capture; Accessibility permission
-is required for native input. The chooser explains a missing grant and offers an
+is required for native input and for focusing a native window from the canvas.
+The chooser explains a missing grant and offers an
 Allow… button: the app asks macOS for access only from that click, then opens
 the matching System Settings pane. Screen Recording takes effect after a
 relaunch. Automated probes and tests never request permissions or change privacy
@@ -20,6 +21,8 @@ world. Each visible `(logical window, display)` has its own
 a source. This is continuous live capture of native application content.
 Ordinary native windows remain where their owners put them. Cameras and world
 movement do not move, transform, park, or resize native windows.
+[Window navigation](#window-navigation-and-native-focus) activates and raises
+the one window it focuses, and nothing else.
 
 ## Controls
 
@@ -34,8 +37,9 @@ movement do not move, transform, park, or resize native windows.
   grammar; [Configuration](#configuration) has the file, the modifier mapping
   and the default tables. With no file, DriftWM's default bindings apply. The
   chords named in this list are those defaults under the default super chord
-  (Control-Option). The status line shows the pointer, view, pan and bookmark
-  chords the running app resolved, and each toolbar tooltip its own action's;
+  (Control-Option). The status line shows the pointer, window, view, pan and
+  bookmark chords the running app resolved, and each toolbar tooltip its own
+  action's;
   it does not list every bound key (the default table under
   [Configuration](#configuration) has the rest, three of which start a program).
 - Pan a display's camera: drag or two-finger scroll on empty canvas, or
@@ -60,6 +64,23 @@ movement do not move, transform, park, or resize native windows.
   pinch, or a scroll that actually pans or zooms the canvas stops a flight where
   it is. A scroll that is forwarded to a window, has no delta, or is already at
   the zoom limit leaves the flight alone.
+- Window navigation, in every normal run (toolbar buttons Center, Previous and
+  Next; the hot keys only while panels are open and not with `--windowed`):
+  Control-Option with an arrow key (`center-nearest <direction>`) focuses the
+  nearest window in that direction and flies the camera to it at the current
+  zoom; Control-Option-C (`center-window`) centres the focused window, or the
+  one nearest the middle of the view, at 1:1; Control-Option-X (`focus-center`)
+  does the same for the window under the pointer; Option-Tab and
+  Option-Shift-Tab (`cycle-windows forward` / `backward`) step through the
+  windows most recently focused first, and letting go of Option commits the
+  choice. A click on a window gives it canvas focus and starts its native
+  focus, then the click is forwarded; a click on empty canvas unfocuses, and
+  focusing a canvas window in its own application (Command-Tab, the Dock) is
+  followed by the canvas. Focusing means logical focus, raising in the canvas,
+  and, when Infinify has Accessibility access, activating and raising the real
+  window.
+  [Window navigation and native focus](#window-navigation-and-native-focus) has
+  the rules, the flags and what has and has not been run.
 - Bookmarks: Control-Option-1 to 4 (`go-to-bookmark N`) fly the camera of the
   display under the pointer to bookmark 1 to 4 (zoom is left alone and any Fit
   return is forgotten); Control-Option-Shift-1 to 4 (`set-bookmark N`) save the
@@ -80,15 +101,16 @@ movement do not move, transform, park, or resize native windows.
   on the toolbar runs an upstream action string through the same controller
   command as `Infinify msg action`. Camera motion is animated with the
   controller's upstream-derived lerp at `navigation.camera_speed`. The view
-  actions move cameras only; they never move, resize, focus or otherwise touch
-  native windows. If macOS refuses a hot key the status line names it and the
+  and bookmark actions move cameras only; they never move, resize, focus or
+  otherwise touch native windows. The window navigation actions also focus a
+  window. If macOS refuses a hot key the status line names it and the
   toolbar still works. The Quit button and Control-Option-Escape call the
   shell's quit directly instead of sending the `quit` action, so exit never
   depends on the controller or on an active output. Control-Option-Escape stays
   the exit chord unless a config binding resolves to that chord, which then
   takes it. DriftWM's own `quit` binding, `mod+ctrl+shift+q`, is
-  Control-Option-Command-Shift-Q. The experimental navigation and resize
-  controls below keep their own gates.
+  Control-Option-Command-Shift-Q. The experimental resize controls below keep
+  their own gate.
 - Option-drag on a window: move the logical world window, using Rust snapping
   and hysteresis with the `[snap]` settings. Add Shift to move its connected
   cluster. Control-Option-Shift with an arrow key (`nudge-window <direction>`)
@@ -96,13 +118,19 @@ movement do not move, transform, park, or resize native windows.
   Neither moves a native window.
 - An unbound click, drag or scroll on a window is forwarded through Rust inverse
   hit mapping to the selected native source. With DriftWM's defaults that is
-  every unmodified one, with the left, right or middle button. The original
+  every unmodified one, with the left, right or middle button. An unbound press
+  first focuses the window (click-to-focus, see
+  [Window navigation and native focus](#window-navigation-and-native-focus));
+  a detached placeholder is focused the same way and receives nothing. The original
   application owns keyboard focus, text editing, shortcuts, and IME; the overlay
   does not emulate a text field. Right and middle buttons travel the same
   validated per-window route as the left one, down, drag and up. Whether real
   applications accept them there has not been tried, and a context menu, if one
   opens, opens at the native window's real screen position, not in the canvas.
-  An unbound press on empty canvas does nothing, as upstream.
+  An unbound press on empty canvas does nothing, as upstream. A press there
+  that is bound to pan (the default left button) and is released within 5
+  points of where it went down leaves no window focused, as upstream's pan
+  grab does.
 - Control-Option-click a detached placeholder dismisses it only while no mouse
   binding claims that press, and the placeholder shows the hint only then.
   DriftWM's defaults do claim it under the default super chord (`mod+left` pans
@@ -117,8 +145,13 @@ movement do not move, transform, park, or resize native windows.
   Resize the original application on the desktop; observation reconciles native
   bounds and capture dimensions without replacing persistent world geometry.
 
-A normal source click requests activation only for its freshly validated owning
-application. Identity validation checks PID, process birth, window number, current
+A click on a source asks for native focus of that one window only: in a normal
+run through the controller's focus request and the focus driver, which acts on
+the window whose freshly validated identity matches the binding the controller
+named; in the fixture modes by activating its owning application, as before.
+With `--no-native-focus` the shell activates nothing on a click (what the
+forwarded click makes the application do itself was not tried); without
+Accessibility access no input is delivered at all. Identity validation checks PID, process birth, window number, current
 owner PID, and the last observed native bounds immediately around delivery.
 Private per-window routing is reused verbatim from
 `../captured-windows/captured.m`, including its Cantrip signature provenance.
@@ -217,6 +250,10 @@ only while a canvas panel is open; `--windowed` registers none.
 | ⌃⌥0, ⌃⌥Z | `mod+0`, `mod+z` | `zoom-reset` |
 | ⌃⌥⌘ arrows | `mod+ctrl+<arrow>` | `pan-viewport <direction>` (repeat) |
 | ⌃⌥⇧ arrows | `mod+shift+<arrow>` | `nudge-window <direction>` (repeat) |
+| ⌃⌥ arrows | `mod+<arrow>` | `center-nearest <direction>` |
+| ⌃⌥C | `mod+c` | `center-window` |
+| ⌃⌥X | `mod+x` | `focus-center` |
+| ⌥Tab / ⌥⇧Tab | `alt+Tab` / `alt+shift+Tab` | `cycle-windows forward` / `backward` (repeat) |
 | ⌃⌥1 to ⌃⌥4 | `mod+1` to `mod+4` | `go-to-bookmark 1` to `4` |
 | ⌃⌥⇧1 to ⌃⌥⇧4 | `mod+shift+1` to `mod+shift+4` | `set-bookmark 1` to `4` |
 | ⌃⌥Return | `mod+return` | `exec-terminal`: `$TERMINAL`, else `open -a Terminal "$HOME"` |
@@ -225,17 +262,17 @@ only while a canvas panel is open; `--windowed` registers none.
 | ⌃⌥⇧⌘Q | `mod+ctrl+shift+q` | `quit` |
 | ⌃⌥Esc | none (the shell's own) | exit, until a binding takes the chord |
 
-Those are 26 of upstream's 57 default key bindings. The rest are not
+Those are 34 of upstream's 57 default key bindings. ⌥Tab and ⌥⇧Tab are taken
+from every application while a canvas panel is open; rebind or unbind
+`cycle-windows` in the config file to give them back. The rest are not
 registered, so their chords stay with the applications:
 
-- 19 whose action does not run on macOS yet: ⌥Tab and ⌥⇧Tab (`cycle-windows`),
-  ⌃⌥ arrows (`center-nearest`), ⌃⌥⇧⌘ arrows (`send-to-output`), ⌃⌥Q
-  (`close-window`), ⌃⌥C (`center-window`), ⌃⌥X (`focus-center`), ⌃⌥E
-  (`toggle-cursor-pan`), ⌃⌥F (`toggle-fullscreen`), ⌃⌥M and ⌃⌥⇧M (`fit-window`,
-  `fit-window-snapped`), ⌃⌥⇧W (`zoom-to-fit-snapped`) and ⌃⌥T
-  (`toggle-pin-to-screen`). Bound in a config file they are skipped the same
-  way, without a message; `Infinify msg action` answers the not-implemented
-  error for each.
+- 11 whose action does not run on macOS yet: ⌃⌥⇧⌘ arrows (`send-to-output`),
+  ⌃⌥Q (`close-window`), ⌃⌥E (`toggle-cursor-pan`), ⌃⌥F (`toggle-fullscreen`),
+  ⌃⌥M and ⌃⌥⇧M (`fit-window`, `fit-window-snapped`), ⌃⌥⇧W
+  (`zoom-to-fit-snapped`) and ⌃⌥T (`toggle-pin-to-screen`). Bound in a config
+  file they are skipped the same way, without a message; `Infinify msg action`
+  answers the not-implemented error for each.
 - 8 on media keys (volume, mute, brightness, play, next, previous), and 4 on
   keys a Mac keyboard lacks (`Print`, `shift+Print`, `XF86AudioPause`,
   `XF86AudioStop`).
@@ -243,13 +280,11 @@ registered, so their chords stay with the applications:
 Upstream's default commands are Linux programs and are passed through
 unchanged: ⌃⌥L is registered and runs `swaylock`, which `sh` will not find on a
 Mac. Rebind it (for example `"mod+l" = "exec pmset displaysleepnow"`) or remove
-it (`"mod+l" = "none"`). With `--experimental-native-navigation`, ⌥Tab and ⌥⇧Tab
-belong to that feature: a binding on either is skipped and the status line says
-so once after each load.
+it (`"mod+l" = "none"`).
 
 **Key repeat.** A held hot key whose action upstream marks repeatable
-(`zoom-in`, `zoom-out`, `pan-viewport`, `nudge-window` and `spawn` among those
-that run) fires again after `[input.keyboard] repeat_delay` (200 ms) and then
+(`zoom-in`, `zoom-out`, `pan-viewport`, `nudge-window`, `cycle-windows` and
+`spawn` among those that run) fires again after `[input.keyboard] repeat_delay` (200 ms) and then
 `repeat_rate` (25) times a second. It stops when the key is released, when
 another hot key is pressed, when the chord's modifiers are let go, and on Return
 to desktop or quit. A held `spawn` binding therefore starts its command again
@@ -265,7 +300,7 @@ context before `anywhere`.
 
 | Press or scroll | On a window | On empty canvas |
 | --- | --- | --- |
-| left drag | the application's | pan (`left`) |
+| left click or drag | focuses the window, then the application's | pan (`left`); released within 5 points, unfocus |
 | two-finger scroll | the application's | pan (`trackpad-scroll`) |
 | mouse wheel | the application's | zoom (`wheel-scroll`) |
 | ⌥ left drag | move the logical window (`alt+left`) | nothing |
@@ -274,12 +309,14 @@ context before `anywhere`.
 | ⌥ / ⌥⇧ / ⌃⌥ middle | `fit-window` / `fit-window-snapped` / `toggle-fullscreen`: not implemented, the status line says so | nothing |
 | ⌃⌥ left drag | pan (`mod+left`) | pan |
 | ⌃⌥ two-finger scroll / wheel | pan / zoom (`mod+trackpad-scroll`, `mod+wheel-scroll`) | pan / zoom |
-| ⌃⌥⌘ left drag | `center-nearest`: not implemented, a status note | the same |
-| anything else | the application's | nothing |
+| ⌃⌥⌘ left drag | `center-nearest` by pointer swipe: not implemented, a status note (the keyboard action runs) | the same |
+| anything else | the application's; a press focuses the window first | nothing |
 
 A resize binding picks its edges from the pointer's place in the window, a 3×3 grid whose centre resizes from the
 bottom right, as upstream's resize grab does. A mouse binding that names an
-action first focuses the window under the pointer, then runs the action. After a
+action first focuses the window under the pointer, a placeholder included, then
+runs the action. A press bound to move or resize a window does not focus it,
+where upstream's does. After a
 two-finger scroll has panned, scrolls stay with the canvas for 150 ms even if a
 window slides under the pointer, as upstream. One gesture runs at a time: a
 second button pressed during a gesture is ignored. Upstream's `wheel-up` and
@@ -295,7 +332,10 @@ Applied now:
 | `mod_key`, `[keybindings]`, `[mouse.*]`, `[bindings] disable_defaults` | the hot keys registered and the pointer dispatch above |
 | `[input.keyboard] repeat_delay`, `repeat_rate`, `layout_independent` | key repeat and key lookup |
 | `[navigation] pan_step`, `nudge_step`, `camera_speed` | `pan-viewport`, `nudge-window`, the speed of every camera flight |
-| `[navigation] anchors` | points `zoom-to-fit` frames together with the windows |
+| `[navigation] anchors` | points `zoom-to-fit` frames together with the windows, and that `center-nearest` can land on (focus is then cleared) |
+| `[navigation] auto_navigate_on_click` | off by default; on, a completed click (released within 5 points of the press) on a window that is not wholly in view also flies the camera to it, when the button comes up |
+| `[zoom] reset_on_activation` | on by default: a canvas window focused in its own application, or by `msg focus`, is flown to at 1:1 when it is clipped; off keeps the zoom |
+| the `cycle-windows forward` binding's modifiers | the modifiers that hold a cycle open (upstream's `cycle_hold`): Option by default |
 | `[navigation.bookmarks]` | the bookmarks every launch starts from |
 | `[navigation] trackpad_speed` | multiplies a bound two-finger scroll pan (1.5 by default) |
 | `[zoom] step`, `fit_padding` | `zoom-in` / `zoom-out`, `zoom-to-fit` and the zoom-out limit |
@@ -314,8 +354,8 @@ Read and validated by upstream's parser, then unused because the feature does
 not exist here: `[navigation] mouse_speed` (a drag pans 1:1), `[zoom]
 trackpad_speed` (pinch is unscaled), `focus_follows_mouse`, `window_placement`,
 `autostart`, `[session] suspend_on_close` and `restore_windows`, `[navigation]
-resize_step`, `drift`, `touch_speed`, `auto_navigate_on_*` and `edge_pan`,
-`[zoom] touch_speed`, `reset_on_*` and `interact_min`, keyboard layout and lock
+resize_step`, `drift`, `touch_speed`, `auto_navigate_on_close` and `edge_pan`,
+`[zoom] touch_speed`, `reset_on_new_window` and `interact_min`, keyboard layout and lock
 keys, `[input.trackpad]`, `[input.mouse]`, `[input.touch]`, `[input.tablet]`,
 `[cursor]` (theme and size reach only the environment of a run command),
 `[background]`, `[decorations]`, `[effects]`, `[backend]`,
@@ -474,8 +514,9 @@ world is top-left, Y-down, and the controller converts. A window is selected by
 part of its bundle identifier, where a window with a bound source wins over a
 detached placeholder. Requests act on the active output: the one under the
 pointer, else the one of the panel under the pointer, else the first. Before the
-canvas first opens there is none: `camera`, `zoom`, setting `focus` and the view
-and bookmark actions (`pan-viewport`, `home-toggle`, the zoom actions,
+canvas first opens there is none: `camera`, `zoom`, setting `focus` and the view,
+window and bookmark actions (`pan-viewport`, `home-toggle`, the zoom actions,
+`center-window`, `center-nearest`, `cycle-windows`, `focus-center`,
 `go-to-bookmark`, `set-bookmark`) answer `no active output`, and everything else
 answers as it always does: `state`, `bookmark`, `move`, `debug-counters`, reading
 `focus` or `resize`, `action quit`, and the unknown and not-implemented replies.
@@ -488,7 +529,7 @@ experimental native resize is unresolved `a native resize is pending`.
 | `state` | Camera, zoom, windows (id, bundle id as `app_id`, title, centre position, size, `suspended` for a detached placeholder), outputs (stable id as `name`, `active`) and the active bookmark. `layout`, `fullscreen`, `pinned` and the layer lists are always empty. |
 | `camera [X Y]` | Read the view centre, or fly the camera there at the current zoom. |
 | `zoom [LEVEL]` | Read the zoom, or animate to a level about the view centre. The level is clamped to the range the zoom shortcuts use and the reply is the level applied. |
-| `focus [APP_ID] [--id N]` | Read the focused window. Setting makes a window the logical focus and, unless it is already wholly in view, flies the camera to it as upstream does: at 1:1 for a window with a bound source, at the current zoom for a detached placeholder. Native application focus does not change: the app does not perform the focus request the controller returns. |
+| `focus [APP_ID] [--id N]` | Read the focused window. Setting makes a window the logical focus and, unless it is already wholly in view, flies the camera to it as upstream does: at 1:1 for a window with a bound source (at the current zoom with `[zoom] reset_on_activation = false`), at the current zoom for a detached placeholder. For a window with a bound source the app also performs the controller's focus request on the native window when native focus is allowed (see [Window navigation and native focus](#window-navigation-and-native-focus)); that has not been run. |
 | `move [X Y] [--id N]` | Read a window's centre, or move the logical window there (whole points). The native window is not touched. A move is refused while a gesture is active, and when it would put the frame outside the 32-bit integer range every other request reads positions in. |
 | `resize [WIDTH HEIGHT] [--id N]` | Read the size only. Setting one answers an error: native layout resize is not available yet. |
 | `action SPEC...` | Run an upstream action string, below. |
@@ -501,9 +542,14 @@ experimental native resize is unresolved `a native resize is pending`.
 `action` parses the full upstream action grammar with upstream's spelling: it
 is the grammar the config file's bindings use. These run:
 `pan-viewport <direction>`, `home-toggle`, `zoom-in`, `zoom-out`, `zoom-reset`,
-`zoom-to-fit`, `go-to-bookmark NAME`, `set-bookmark NAME`,
-`nudge-window <direction>`, `exec COMMAND`, `spawn COMMAND`, `exec-terminal`,
-`exec-launcher`, `reload-config` and `quit`. `exec` and `spawn` make the app run
+`zoom-to-fit`, `center-window`, `center-nearest <direction>`,
+`cycle-windows forward|backward`, `focus-center`, `go-to-bookmark NAME`,
+`set-bookmark NAME`, `nudge-window <direction>`, `exec COMMAND`, `spawn COMMAND`,
+`exec-terminal`, `exec-launcher`, `reload-config` and `quit`. Over the socket
+`cycle-windows` is always one committed step, where upstream keeps the cycle
+open if a modifier happens to be down, and `focus-center` uses the real pointer's
+position at that moment. Every action but `cycle-windows` first ends a cycle in
+progress, as upstream's does. `exec` and `spawn` make the app run
 the command through `/bin/sh -c`, so the socket lets any process of yours that
 can write to it run a command, as upstream's does. Every other upstream action
 parses and answers `action not implemented on
@@ -575,9 +621,10 @@ registered. A size must be at least 960x480 (the width that keeps the toolbar an
 status line visible) and at most 16384 in each direction, or the app exits 64; the
 panel is then clamped to the main display's visible area and centred on it. It is
 the same borderless panel as the full-screen ones: it cannot be dragged, it closes
-only through Return to desktop or Quit, and a display change rebuilds it. With
-`--experimental-native-navigation` the Option-Tab hot keys are not registered, but
-that flag's listen-only input observer still is.
+only through Return to desktop or Quit, and a display change rebuilds it. Window
+navigation and native focus run here as in any normal run; with no hot keys,
+cycling is the toolbar's Previous and Next or `msg action cycle-windows …`, one
+committed step each.
 
 Launched on 2026-10-09 as `--windowed 1100x700` with `--state`, `--config` and
 `--socket`: `msg state` reported one output named `windowed` of 1100x636 (the
@@ -623,8 +670,10 @@ world geometry. Hover, cross-boundary pointer capture, context-menu/popover
 capture, native drag-and-drop, and application-specific floating child windows
 are not implemented. Right and middle clicks are forwarded through the
 per-window route but have never been delivered to a real application. Ordinary selected app activation
-works with the tested native window, but choosing among multiple native windows
-of one application and app-specific focus rules needs broader validation.
+works with the tested native window in the fixture modes; a normal run's click
+now focuses through the focus driver instead, which has not been exercised, and
+choosing among multiple native windows of one application and app-specific
+focus rules needs broader validation.
 A held pointer drag cannot retarget another source. Only the last validated
 in-window point receives a synthetic button-up if a pointer leaves its source; arbitrary outside-source drag delivery is not claimed.
 Minimized/hidden/Space transitions, display hotplug, IME composition, the
@@ -642,15 +691,20 @@ key repeat and every pointer binding are compiled and reviewed but have not
 been exercised in a running app, and neither has a non-US keyboard layout.
 Media keys, tap-modifier bindings, `wheel-up` / `wheel-down`, trackpad and
 touch gestures, and every setting whose feature is absent are read and unused.
-Nineteen of upstream's default key bindings and four of its default mouse
-bindings (three window actions and `center-nearest`) do not run here yet, and
-its two resize bindings need the experimental flag. Upstream's default `spawn`
+Eleven of upstream's default key bindings and four of its default mouse
+bindings (three window actions and the pointer `center-nearest` swipe) do not
+run here yet, and its two resize bindings need the experimental flag. Window
+navigation and native focus have their own list of limits under
+[Window navigation and native focus](#window-navigation-and-native-focus):
+above all, native focus has never been exercised live, and a click reaches
+the application before its window has native focus. Upstream's default `spawn`
 commands are Linux programs. With the default bindings a detached placeholder
 cannot be dismissed with the pointer.
-The IPC surface is a subset of DriftWM's. Most upstream actions parse but are
+The IPC surface is a subset of DriftWM's. Many upstream actions parse but are
 not implemented; `layout`, `opacity`, `pin`, `close`, `suspend`, `relaunch`,
 `screenshot` and `subscribe` are not implemented; `resize` is read-only. An IPC
-focus is logical focus and camera navigation only and changes no native focus, and
+focus is logical focus and camera navigation, plus a native focus request for a
+window with a bound source that no run has yet performed, and
 an IPC move is a logical world move that never moves the native window. Nested
 `--windowed` mode registers no global shortcuts and has one output.
 Cluster behavior uses the controller contract; fixture evidence currently has a
@@ -659,73 +713,272 @@ run during development. Ad-hoc signing is local development packaging, not a
 notarized distribution build. Private SkyLight input symbols can change with OS
 updates; unavailable symbols leave live viewing functional and input disabled.
 
-## Experimental native navigation
+## Window navigation and native focus
 
-`--experimental-native-navigation` opts into the native navigation integration.
-It can accompany `--state /absolute/file.json` or the interactive `--demo DIR`;
-probe and internal child modes reject it. The default click/activation path is
-unchanged. This flag is an experimental runtime authorization for explicitly
-selected sources, not evidence of third-party compatibility.
+Every normal run (the default launch and `--state`, with or without
+`--windowed`) navigates between windows as DriftWM does and tries to give the
+real window native focus. The fixture and child modes (`--source`, `--demo`,
+`--demo-probe`, `--demo-probe-guard`, the owned-resize modes) have none of it
+and keep their fixed click activation. The controller's rules are in
+[NAVIGATION.md](../../crates/desktop/NAVIGATION.md#window-navigation-actions)
+and [FOCUS.md](../../crates/desktop/FOCUS.md); this section says what the shell
+does with them.
 
-The gated toolbar adds **Center selected**, **Previous**, and **Next**. Center
-uses the controller's `navigate_window` with reset zoom; this does not claim the
-complete upstream `CenterWindow` action. Previous/Next use unheld cycles. Toolbar
-navigation resolves the toolbar's display; shortcuts resolve the pointer's
-output. A multi-output demo toolbar requires the pointer inside an output.
-No arbitrary first display is selected. Already-reserved toolbar space is not
-subtracted a second time.
+**Native focus (raising the real window) was not exercised live in this
+milestone. It is compiled, reviewed and covered by the headless coordinator
+regression only.** No hot key, toolbar button, click or Option release was
+exercised live either;
+[What has been run for navigation](#what-has-been-run-for-navigation) has the
+exact boundary.
 
-Option-Tab and Option-Shift-Tab use Carbon hotkeys only while the experimental
-panels are open. A listen-only event observer tracks the accepted keypress,
-actual Option release, and human interruption. Delayed Carbon delivery after
-release is unheld; delivery after cancellation is rejected. Canceled presses
-remain as tombstones so an old callback cannot borrow a later press; each panel
-lifecycle uses fresh hotkey IDs. Excessive queued presses fail closed; reopening
-panels resets the queue. Actual native event ordering still requires live validation. Failed registration
-leaves the buttons available. A missing or disabled input observer disables
-native focus dispatch, including button focus, while camera navigation remains
-available. No event-suppression fallback or permission prompt is used.
+### Flags
 
-Only these explicit navigation actions dispatch native focus effects. A serial
-worker receives immutable effect/identity/generation tickets, bounded deadlines,
-and cancellation epochs. Ownership, unchanged native bounds, and foreground
-process birth are checked without entering the controller from the worker.
-Workspace activation notifications permanently invalidate a lease after a
-foreign foreground transition. Success requires independent exact-window
-readback from the focus adapter. Mouse, keyboard and other human intent cancel
-pending focus work and the held cycle before the legacy pointer path; clicks are
-never saved for later replay. Observed input does not stop camera flights: a
-pointer press, scroll or pinch on a canvas stops them, as in the default app,
-and so does the system disabling the observer. Detach, rebind, chooser, screen
-changes, cleanup, and shutdown invalidate work, camera flights included, before
-teardown. Unsupported non-null owner authority fails closed rather than being
-silently discarded.
+- `--experimental-native-navigation` is still accepted and does nothing: what
+  it used to gate is now the default. It is still rejected (exit 64) together
+  with `--source`, `--demo-probe` and `--demo-probe-guard`, and no longer adds
+  anything to `--demo`.
+- `--no-native-focus` keeps focus logical: the shell activates no application
+  and raises no window, for navigation or for a click, and installs no input
+  observer. What a forwarded click makes the application do itself was not
+  tried. Everything else in this section still happens. It is rejected (exit
+  64) in the fixture and child modes and when given twice.
 
-Coalesced bounded observation runs at most once per half second on the same
-serial worker. Expected confirmations use `focus_result`, duplicate confirmed
-observations do nothing, independently validated external focus ends cycling,
-and failed/unknown readback does not claim focus loss. A single common-mode
-60 Hz main-thread timer advances all active camera flights and renders once per
-frame; idle polling keeps the clock current and completed flights save once.
-The default app runs the same timer for view-action flights without this flag,
-ticking the controller directly on the same clock. With the flag the coordinator
-ticks them, and they stop on the same input as without it: the observer's
-cancellation above is limited to focus work, so a shortcut's own key release,
-pointer movement, or a click outside a canvas leaves a flight flying. View
-actions combined with this flag are unrun.
-The navigation flag does not enable resizing; resizing has a separate experimental flag.
+### Actions
 
-`./tests/e2e/desktop-navigation.sh` runs the real Objective-C coordinator and
-input-order policy against the actual Rust C ABI with injected nonmutating
-focus, clock, and scheduling. It covers exact identities, binding generations,
-held/reverse/release-pending cycles, supersession, rejected commands, teardown,
-observation reconciliation, pointer cancellation, focus-only cancellation that
-leaves a camera flight armed, two-output intermediate camera poses, and saved
-final poses. It starts no NSApplication, windows, fixture,
-capture, hotkeys, or event taps. The app build and this test are integration
-checks only. Live native focus, multiple windows of one app, third-party apps,
-physical displays, shortcut delivery, foreground notifications, and input-tap
-behavior remain unrun and unproven for this path.
+| Control | Action | What it does |
+| --- | --- | --- |
+| ⌃⌥ arrow | `center-nearest <direction>` | Focuses the nearest window in a 90° cone and flies the camera to it at the current zoom. The search starts at the focused window while all of it is on the display, otherwise at the middle of the view. Detached placeholders are candidates, and so are `[navigation] anchors`: landing on an anchor flies the camera there and leaves no window focused. Nothing in the cone: nothing happens. |
+| ⌃⌥C, toolbar Center | `center-window` | Flies to the focused window, or with none to the window nearest the middle of the view, and focuses it, at 1:1. |
+| ⌃⌥X | `focus-center` | The same for the topmost window under the pointer; over empty canvas, nothing. |
+| ⌥Tab / ⌥⇧Tab, toolbar Next / Previous | `cycle-windows forward` / `backward` | One step through the windows in most-recently-focused order, flown to at the current zoom. |
+
+The chords are DriftWM's defaults under the default super chord; a config file
+rebinds them like any other key. Center, Previous and Next are on the toolbar of
+every normal run, `--windowed` included, and not in the fixture modes. Hot keys
+act on the display under the pointer, toolbar buttons on their own display, and
+every one of them goes through the same `action` command as
+`Infinify msg action`, with the pointer's position and whether a modifier is
+physically down added by the shell.
+
+`center-window` is upstream's `RestoreFillElseReset`. Infinify has no fill
+yet, so there is never a stored view to restore and the action always resets
+the zoom to 1.
+
+### Cycling and hold-to-commit
+
+A `cycle-windows` hot key that fires while any of Control, Option, Shift or
+Command is physically down opens a cycle that stays open: each further press
+steps deeper into the order as it was when the cycle began. While it is open the
+shell reads the session's modifier state 60 times a second
+(`CGEventSourceFlagsState`, which needs no event tap and no Input Monitoring
+grant), and at the first reading where the hold modifiers are no longer all
+down it ends the cycle, which commits the selection to the front of the order.
+The hold modifiers are upstream's `cycle_hold`: those of the
+`cycle-windows forward` binding, Option by default. Upstream ends the cycle on
+the key event of the release; sampling ends it up to 17 ms later.
+
+A hot key step with no modifier down is committed at once, and so is every step
+from the toolbar's Previous and Next and from `msg action cycle-windows …`,
+which are never held. Any other action ends an open cycle first, committing it,
+as upstream's does.
+
+### Clicks
+
+A press on a window that no mouse binding claims focuses that window first
+(upstream's click-to-focus) and is then forwarded to the application as before.
+"First" is the canvas's own focus: the window is the logical focus and raised
+in the canvas before the press is forwarded. The native focus request is only
+started by then. It runs on a worker, so the application receives the press
+while that request is still in flight, not after its window has been made main
+and raised. A detached placeholder is focused the same way and has nothing to
+forward to.
+
+With `[navigation] auto_navigate_on_click = true` a completed click on a window
+that is not wholly in view also flies the camera to it at the current zoom, as
+upstream does: when the button comes up, after the release has been forwarded,
+and only if the pointer is within 5 points of where it went down, on the same
+display, and the window still holds focus. The press itself never moves the
+camera, so a drag that begins inside a clipped window reaches the application
+as the drag it is. Upstream's extra wait after a title-bar click (so that a
+double-click can still fit the window) does not exist here.
+
+Any canvas press ends an open cycle the way letting go of its modifiers does: a
+selection that has settled is committed, and a click on a window then puts that
+window in front of it, as upstream does. A selection whose native focus is
+still in flight is dropped with its request.
+
+A press on empty canvas that is bound to pan and released within 5 points of
+where it went down leaves no window focused; that is logical only, nothing is
+asked of any application.
+
+### What focusing does natively
+
+Each of the above makes the window the logical focus and raises it in the
+canvas at once. For a window with a bound source the controller also returns a
+focus request, and the shell performs it when native focus is allowed: on a
+serial worker the focus driver validates the window's identity (PID, process
+birth, window id, current owner and unchanged bounds) against the binding the
+controller named, activates its application, sets the window main and focused
+through Accessibility, raises it, and reads back that exactly that window now
+holds focus, all inside 1.5 seconds. Only that window is acted on; no other
+application's window is raised, moved or resized. The result goes back to the
+controller, and only a confirmed focus enters the most-recently-focused order;
+a request the driver tried and failed cancels an open cycle.
+A newer request, a canvas press, a scroll that pans or zooms the canvas, a
+pinch, opening the chooser, adding, rebinding or losing a source, Return to
+desktop and a display change all withdraw a request that is still in flight.
+
+Native focus is allowed when Infinify has Accessibility access and
+`--no-native-focus` was not given. Access is re-read twice a second, so a grant
+made while the app runs should take effect without a restart (not tried).
+Without it focus stays logical, all of the navigation above still works,
+cycling included, and the status line and stderr say so once:
+`Native window focus needs Accessibility access: focus is logical only;
+navigation still works.`
+
+When native focus is not allowed the focus driver is never asked. The shell
+answers each of the controller's focus requests at once as logical
+(`focus_logical`), which claims nothing about any native window: the window
+enters the most-recently-focused order as it would under upstream, where
+focusing is all there is, and a held cycle steps on and commits on release.
+What is lost is only the native half: the real window is not activated or
+raised, so keys still go to whichever application was frontmost.
+
+Native focus does not depend on Input Monitoring. If that access has already
+been granted (the app never asks for it), a listen-only observer of mouse
+presses and scrolls is also installed: a press or scroll outside the canvas
+panels while a focus request is in flight withdraws that request. It observes
+no keys and nothing else depends on it.
+
+### Native focus is followed
+
+Twice a second, when Accessibility access exists, the shell reads which window
+the frontmost application has focused. If that is a window on the canvas and
+the canvas did not ask for it (Command-Tab, the Dock, an application raising
+its own window), the canvas follows as upstream follows an activation request:
+the window becomes the logical focus, is raised and moves to the front of the
+most-recently-focused order; if it is clipped on the display that shows its
+centre, that display's camera flies to it, at 1:1 unless `[zoom]
+reset_on_activation = false`; a window already wholly visible there is left
+where it is. If the frontmost window is not on the canvas, the canvas forgets
+that a canvas window held native focus and drops an open cycle without
+committing it; logical focus stays.
+
+### Limits the owner will notice
+
+- **What enters the cycle order.** With native focus allowed, the
+  most-recently-focused order holds only windows whose native focus the driver
+  confirmed or the shell observed: a window whose focus request fails, or is
+  overtaken by the next one before it is confirmed, is not in it, where
+  upstream would have put it there. Without native focus (no Accessibility
+  access, or `--no-native-focus`) every window you focus on the canvas enters
+  it. A detached placeholder is never in the order (upstream's stand-ins are
+  not either), so a canvas of placeholders alone cannot be cycled.
+- **A click reaches the application before its window has native focus.** The
+  press is forwarded while the native focus request is still in flight. What an
+  application does with a press that arrives while it is not yet active (take
+  it as an activation click, for instance) has not been tried.
+- Option-Tab and Option-Shift-Tab are global hot keys while a canvas panel is
+  open: other applications do not receive them.
+- A canvas press ends an open cycle at the press, on empty canvas too, where
+  upstream ends it when another window takes focus or the modifiers are let go.
+- Every click on a window with a bound source, including one inside the window
+  that already has focus, runs the whole native focus sequence again.
+- `auto_navigate_on_click` has no double-click deferral and no title-bar case:
+  every completed click on a clipped window pans at once.
+- A press bound to move or resize a window does not focus it, where upstream's
+  does. The pointer form of `center-nearest` (upstream's ⌃⌥⌘-drag swipe) is not
+  implemented; the status line says so.
+- `focus_follows_mouse` and `auto_navigate_on_close` are read from the config
+  and do nothing. Fullscreen, fit-window, pinned and modal windows do not exist
+  here, so none of upstream's special cases for them apply.
+- Following native focus moves the camera by itself when an application on the
+  canvas takes focus while its window is clipped.
+- If the controller refuses to follow a native focus change (a drag or resize
+  is in progress), the focus is still recorded, the camera stays, and the
+  refusal text shows in the status line.
+
+### What has been run for navigation
+
+Automated, no window and no native effect:
+`crates/desktop/tests/navigation_actions_flow.rs` and the other controller
+scenarios drive the actions, `activate`, `clear_focus` and the cycle rules
+through the exported C ABI with synthetic identities and focus results, and
+`./tests/e2e/desktop-navigation.sh` runs the real Objective-C coordinator
+against the real Rust library with an injected focus driver, clock and
+scheduler. The regression covers exact identities and binding generations,
+held, reverse and release-pending cycles, the hold opened and ended by injected
+modifier readings, a canvas press on a held cycle with its selection settled and
+still in flight, unrelated input with and without a request in flight, a focus
+request carried inside an action reply's `effects`, a request the controller
+dropped, logical-only focus never reaching the driver while it enters the order
+and a held cycle steps and commits on it, authorization, failure
+and deadline, supersession, rejected commands, native focus followed through
+`activate`, focus lost, two-output camera flights and their saved poses, and
+teardown. It starts no NSApplication, window, hot key or event tap and focuses
+nothing.
+
+Live, on 2026-10-09 (ad-hoc signed build of this tree, macOS 27.2, Apple
+Silicon): four launches as `--windowed 1100x700` with a private `--state`,
+`--config` and `--socket`, on a seeded scene of three detached placeholders
+(Notes 640x420 centred on 520,-360; Browser 900x600 on 1950,0; Terminal 560x380
+on -620,-890, in `msg` coordinates), driven only through `Infinify msg` and
+read back with `msg camera`, `msg zoom`, `msg focus` and `msg state` once each
+flight had settled. Nothing from them is saved as evidence. Observed:
+
+- `center-nearest right` with nothing focused, from the launch view (camera
+  550 -318): focus on Browser, camera 1950 0;
+- from there `left`: Notes, camera 520 -360; `down` and `up` from Notes with no
+  anchors: nothing changed; `left`: Terminal, camera -620 -890; `up-right` from
+  Terminal: Notes;
+- `[navigation] anchors = [[520.0, -3000.0]]` written to the config file
+  while running: `down` from Notes then landed on 520 -3000 with no window
+  focused, `up` from there chose Terminal over Notes, as the scoring rule says
+  (2305 against 2430), and `down` from Terminal went back to the anchor;
+- with nothing focused and the view moved to 520 600, above Notes, `down`
+  chose Notes; with Notes focused and the view moved to 520 -1500, so that
+  Notes was off the display, `up` chose Notes, which only a search from the
+  middle of the view finds;
+- at zoom 0.5, `right` from Notes: Browser, zoom still 0.5;
+- `center-window` with Terminal focused after `msg camera 2000 2000`: camera
+  -620 -890, zoom 1; after `msg zoom 0.5` and `msg focus --id 2` (camera 1950 0,
+  zoom still 0.5), `center-window` kept the camera and brought the zoom to 1;
+  with focus cleared on the anchor at zoom 0.5, `center-window` chose
+  Terminal, the window nearest the middle of the view, at zoom 1;
+- `cycle-windows forward`, `forward`, `backward`: `ok` each time, and focus,
+  camera and `msg state` were the same before and after, because no
+  placeholder is ever in the order (the first limit above). `msg state` lists
+  the focused window and then the stacking order, not the
+  most-recently-focused order, so that order is not readable through `msg`;
+- `center-nearest sideways` answered `unknown direction: sideways`, a bare
+  `center-nearest` `center-nearest requires a direction`, a bare
+  `cycle-windows` `cycle-windows requires forward or backward`, and
+  `cycle-windows sideways` `cycle-windows: expected forward or backward, got
+  'sideways'`, each with exit status 1;
+- `focus-center` answered `ok` with the pointer wherever it happened to be and
+  changed nothing; its effect was not established;
+- a launch with `--experimental-native-navigation --no-native-focus` started,
+  navigated and answered like the others;
+- each launch exited 0 on SIGTERM with its socket removed, and the scene file
+  read after the last held that run's focus, stacking order, camera and zoom.
+
+No launch printed the missing-Accessibility note, so the session presumably
+had Accessibility access and native focus was allowed in the three launches
+without `--no-native-focus`; that was not checked separately. With no bound
+source the controller produced no focus request, so neither the focus driver
+nor the logical-only answer was reached, and no window on the canvas could be
+found frontmost; nothing in the output shows any of those paths doing
+anything.
+
+Not run at all: native focus of a real window by any route; a window with a
+bound source; any hot key, Option-Tab and the release that commits it; the
+toolbar's Center, Previous and Next; any click, click-to-focus, the reveal at
+a completed click's release, a press that ends a cycle, and the empty-canvas
+unfocus; native focus being followed; the observer withdrawing a request; a
+cycle that changes the order in the running app, with native focus or on
+logical focus alone; the status note for missing Accessibility;
+`auto_navigate_on_click` and `reset_on_activation` in the app; anything drawn;
+more than one display.
 
 ## Experimental native resizing
 

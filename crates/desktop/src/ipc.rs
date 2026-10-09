@@ -291,12 +291,17 @@ impl Controller {
     /// Answer one upstream request. A request that does not decode or is
     /// refused becomes `{"Err":…}` in `reply` and leaves every bit of
     /// controller state as it was; it is never a controller-level error.
-    pub(crate) fn ipc(&mut self, output: Option<OutputId>, request: Value) -> Value {
+    pub(crate) fn ipc(
+        &mut self,
+        output: Option<OutputId>,
+        request: Value,
+        pointer: Option<Point>,
+    ) -> Value {
         let mut next = self.clone();
         let mut outcome = Outcome::default();
         let reply: Reply = serde_json::from_value::<Request>(request)
             .map_err(|e| format!("invalid request: {e}"))
-            .and_then(|request| next.dispatch(output, request, &mut outcome))
+            .and_then(|request| next.dispatch(output, request, pointer, &mut outcome))
             .and_then(|response| {
                 next.scene
                     .validate()
@@ -314,6 +319,7 @@ impl Controller {
         &mut self,
         output: Option<OutputId>,
         request: Request,
+        pointer: Option<Point>,
         outcome: &mut Outcome,
     ) -> Reply {
         let active = || output.ok_or_else(|| "no active output".to_string());
@@ -329,7 +335,10 @@ impl Controller {
             Request::Move { window, to } => self.cmd_move(window.as_ref(), to, outcome),
             Request::Resize { window, to } => self.cmd_resize(window.as_ref(), to),
             Request::Action(spec) => {
-                *outcome = self.run_action(output, &spec).map_err(text)?;
+                // A request has no key held under it: a cycle step commits.
+                *outcome = self
+                    .run_action(output, &spec, pointer, false)
+                    .map_err(text)?;
                 Ok(Response::Ok)
             }
             Request::Bookmark { name, to, delete } => self.cmd_bookmark(name, to, delete, outcome),
@@ -522,7 +531,11 @@ impl Controller {
         }
     }
     /// Is the whole frame inside the output's usable area at its current pose?
-    fn fully_in_viewport(&self, window: WindowId, output: OutputId) -> Result<bool, String> {
+    pub(crate) fn fully_in_viewport(
+        &self,
+        window: WindowId,
+        output: OutputId,
+    ) -> Result<bool, String> {
         let viewport = self.viewport(output)?;
         let usable = self
             .navigation_context(output)
@@ -542,7 +555,8 @@ impl Controller {
     }
     /// Logical focus plus upstream's camera rule: a window already fully on
     /// screen is only raised and focused; a window with a bound source is
-    /// navigated to at zoom 1 (upstream's default `zoom.reset_on_activation`);
+    /// navigated to at zoom 1, or at the current zoom with
+    /// `zoom.reset_on_activation` off;
     /// a detached placeholder is panned to at the current zoom (upstream's
     /// `reveal_suspended`). The native focus effect is a request to the shell,
     /// never a claim that native focus changed.
@@ -555,7 +569,8 @@ impl Controller {
         let window = self.select(Some(selector))?;
         let info = self.focused_info(window);
         if !self.fully_in_viewport(window, output)? {
-            let policy = if self.sources.contains_key(&window) {
+            let reset = self.config().zoom_reset_on_activation;
+            let policy = if reset && self.sources.contains_key(&window) {
                 ZoomPolicy::Reset
             } else {
                 ZoomPolicy::Keep
