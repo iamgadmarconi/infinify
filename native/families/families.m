@@ -20,6 +20,7 @@ static NSArray *birth(pid_t pid) { struct proc_bsdinfo b={0};return proc_pidinfo
 static NSDictionary *cg(uint32_t wid) { NSArray *all=CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow,wid));for(NSDictionary *w in all)if([w[(id)kCGWindowNumber]unsignedIntValue]==wid)return w;return nil; }
 static NSArray *rect(CGRect r) {return @[@(r.origin.x),@(r.origin.y),@(r.size.width),@(r.size.height)];}
 static CGRect fromRect(NSArray *a) { return a.count==4?CGRectMake([a[0]doubleValue],[a[1]doubleValue],[a[2]doubleValue],[a[3]doubleValue]):CGRectZero; }
+#include "window-server-family.h"
 static NSUInteger untagged;
 @interface FamilyApplication : NSApplication
 @end
@@ -45,6 +46,7 @@ static NSUInteger untagged;
 @property NSInteger actions;
 - (void)openPanel:(id)sender;
 - (void)closePanel:(id)sender;
+- (void)openLeftUpPanel:(id)sender;
 - (void)openSheet:(id)sender;
 - (void)closeSheet:(id)sender;
 @end
@@ -56,6 +58,7 @@ static NSWindow *window(NSString *title, NSRect frame, NSInteger kind, BOOL pane
 static void button(NSWindow *w, Family *f, NSString *name, SEL action, CGFloat x) { NSButton *b=[NSButton buttonWithTitle:name target:f action:action];b.frame=NSMakeRect(x,110,140,32);b.accessibilityIdentifier=name;[w.contentView addSubview:b]; }
 @implementation Family
 - (void)openPanel:(id)sender { (void)sender;if(self.panel)return;self.actions++;self.panel=(NSPanel *)window(@"family-child-panel",NSMakeRect(self.a.frame.origin.x+300,self.a.frame.origin.y+30,190,170),2,YES);button(self.panel,self,@"dismiss-panel",@selector(closePanel:),10);[self.a addChildWindow:self.panel ordered:NSWindowAbove];[self.panel orderFront:nil]; }
+- (void)openLeftUpPanel:(id)sender { (void)sender;if(self.panel)return;self.actions++;self.panel=(NSPanel *)window(@"family-left-up-panel",NSMakeRect(self.a.frame.origin.x-80,self.a.frame.origin.y+240,190,170),2,YES);button(self.panel,self,@"dismiss-panel",@selector(closePanel:),10);[self.a addChildWindow:self.panel ordered:NSWindowAbove];[self.panel orderFront:nil]; }
 - (void)closePanel:(id)sender { (void)sender;if(!self.panel)return;self.actions++;[self.a removeChildWindow:self.panel];[self.panel close];self.panel=nil; }
 - (void)openSheet:(id)sender { (void)sender;if(self.sheet)return;self.actions++;self.sheet=window(@"family-child-sheet",NSMakeRect(0,0,220,170),3,NO);button(self.sheet,self,@"dismiss-sheet",@selector(closeSheet:),10);[self.a beginSheet:self.sheet completionHandler:nil]; }
 - (void)closeSheet:(id)sender { (void)sender;if(!self.sheet)return;self.actions++;[self.a endSheet:self.sheet];[self.sheet orderOut:nil];[self.sheet close];self.sheet=nil; }
@@ -67,8 +70,8 @@ static int source(NSString *dir, NSString *nonce, double seconds) {
     [f.a orderFront:nil];[f.b orderFront:nil];NSDate *start=NSDate.date;
     NSInteger setupPhase=0;
     while(!halted&&getppid()==parent&&-start.timeIntervalSinceNow<seconds) {
-        NSInteger desired=MIN(4,(NSInteger)(-start.timeIntervalSinceNow/6));
-        if(desired>setupPhase){if(desired==1)[f openPanel:nil];if(desired==2)[f closePanel:nil];if(desired==3)[f openSheet:nil];if(desired==4)[f closeSheet:nil];setupPhase=desired;}
+        NSInteger desired=MIN(6,(NSInteger)(-start.timeIntervalSinceNow/6));
+        if(desired>setupPhase){if(desired==1)[f openPanel:nil];if(desired==2)[f closePanel:nil];if(desired==3)[f openSheet:nil];if(desired==4)[f closeSheet:nil];if(desired==5)[f openLeftUpPanel:nil];if(desired==6)[f closePanel:nil];setupPhase=desired;}
         NSMutableArray *windows=[NSMutableArray array];for(NSWindow *w in @[f.a,f.b,f.panel?:NSNull.null,f.sheet?:NSNull.null])if([w isKindOfClass:NSWindow.class]) { ColorView *v=(ColorView *)w.contentView;v.phase=((NSInteger)(-start.timeIntervalSinceNow*2))%2;v.needsDisplay=YES;[w displayIfNeeded];[windows addObject:identity(w,@[@"parent",@"other-top",@"panel",@"sheet"][v.kind])]; }
         save(@{@"pid":@(getpid()),@"birth":birth(getpid())?:@[],@"nonce":nonce,@"windows":windows,@"setup_phase":@(setupPhase),@"actions":@(f.actions),@"untagged":@(untagged),@"tick":@(-start.timeIntervalSinceNow)},[dir stringByAppendingPathComponent:@"source.json"]);pump(.05);
     }
@@ -99,6 +102,8 @@ static SCShareableContent *shareable(void) {__block BOOL done=NO;__block SCShare
 @property NSDictionary *filterMetadata;
 @property NSDictionary *normalization;
 @property NSMutableArray *extentChanges;
+@property pid_t sourcePID;
+@property NSArray *sourceBirth;
 @end
 @implementation Capture
 - (void)dealloc {if(_image)CGImageRelease(_image);}
@@ -121,13 +126,15 @@ static SCShareableContent *shareable(void) {__block BOOL done=NO;__block SCShare
         pixels.size.width>0&&pixels.size.height>0&&pixels.origin.x>=-.5&&pixels.origin.y>=-.5&&
         CGRectGetMaxX(pixels)<=(CGFloat)width+.5&&CGRectGetMaxY(pixels)<=(CGFloat)height+.5&&
         content.size.width/contentScale>=screen.size.width-.5&&content.size.height/contentScale>=screen.size.height-.5;
-    // screenRect remains the selected root rectangle on the observed OS. The
-    // original captured size comes from surface content size / contentScale.
-    // Anchoring at screenRect.origin is a candidate, verified below against actual
-    // pixels; extension to the left/above the root is deliberately not claimed.
-    CGRect extent=CGRectMake(screen.origin.x,screen.origin.y,valid?content.size.width/contentScale:0,valid?content.size.height/contentScale:0);
-    NSDictionary *normalization=@{@"valid":@(valid),@"native_extent":rect(extent),@"screen_rect":rect(screen),@"pixel_rect":rect(pixels),@"buffer_size":@[@(width),@(height)],
-        @"pixel_to_native_scale":@(valid?1/(scale*contentScale):0),@"frame":@(self.frames+1)};
+    // Genuine WindowServer associations/parent IDs supply the native origin.
+    // The original size still comes independently from frame metadata. A mismatch
+    // is an unsupported or transitional frame, never a guessed family mapping.
+    NSDictionary *family=discoverOwnedFamily(self.wid.unsignedIntValue,self.sourcePID,self.sourceBirth);
+    CGRect native=fromRect(family[@"native_bounds"]);BOOL mapped=valid&&[family[@"valid"]boolValue]&&
+        fabs(content.size.width/contentScale-native.size.width)<1&&fabs(content.size.height/contentScale-native.size.height)<1;
+    CGRect extent=CGRectMake(native.origin.x,native.origin.y,valid?content.size.width/contentScale:0,valid?content.size.height/contentScale:0);
+    NSDictionary *normalization=@{@"valid":@(mapped),@"native_extent":rect(extent),@"screen_rect":rect(screen),@"pixel_rect":rect(pixels),@"buffer_size":@[@(width),@(height)],
+        @"pixel_to_native_scale":@(mapped?1/(scale*contentScale):0),@"frame":@(self.frames+1),@"native_family":family};
     if(!self.extentChanges)self.extentChanges=[NSMutableArray array];
     if(![self.normalization[@"native_extent"]isEqual:normalization[@"native_extent"]]||![self.normalization[@"pixel_rect"]isEqual:normalization[@"pixel_rect"]])
         [self.extentChanges addObject:@{@"normalization":normalization,@"metadata":m}];
@@ -137,7 +144,7 @@ static SCShareableContent *shareable(void) {__block BOOL done=NO;__block SCShare
 }
 @end
 static Capture *startCapture(SCWindow *window, NSString *kind) {
-    Capture *c=[Capture new];c.bounds=window.frame;c.kind=kind;c.wid=@(window.windowID);
+    Capture *c=[Capture new];c.bounds=window.frame;c.kind=kind;c.wid=@(window.windowID);c.sourcePID=window.owningApplication.processID;c.sourceBirth=birth(c.sourcePID);
     SCContentFilter *filter=[[SCContentFilter alloc]initWithDesktopIndependentWindow:window];
     c.filterMetadata=@{@"content_rect":rect(filter.contentRect),@"point_pixel_scale":@(filter.pointPixelScale),@"style":@(filter.style)};
     SCStreamConfiguration *config=[SCStreamConfiguration new];
@@ -156,7 +163,7 @@ static NSDictionary *render(NSArray<Capture *> *captures, NSString *dir, NSStrin
     // Top-down source/display coordinates: each exact SCWindow image keeps its measured
     // relative position; both cameras have independent pan and scale and hard clipping.
     CGContextTranslateCTM(ctx,0,height);CGContextScaleCTM(ctx,1,-1);NSMutableArray *views=[NSMutableArray array];CGRect origin=captures.firstObject.bounds;
-    for(int i=0;i<2;i++){CGRect clip=CGRectMake(i?540:20,20,480,480);CGFloat zoom=i?.9:.6;CGPoint pan=i?CGPointMake(60,-30):CGPointMake(-20,-30);CGContextSaveGState(ctx);CGContextClipToRect(ctx,clip);NSMutableArray *placements=[NSMutableArray array];
+    for(int i=0;i<2;i++){CGRect clip=CGRectMake(i?540:20,20,480,i?180:480);CGFloat zoom=i?.75:.6;CGPoint pan=i?CGPointMake(0,-10):CGPointMake(-20,-30);CGContextSaveGState(ctx);CGContextClipToRect(ctx,clip);NSMutableArray *placements=[NSMutableArray array];
         for(Capture *c in captures){CGRect b=fromRect(c.normalization[@"native_extent"]);CGRect dest=CGRectMake(clip.origin.x+(b.origin.x-origin.origin.x-pan.x)*zoom,clip.origin.y+(b.origin.y-origin.origin.y-pan.y)*zoom,b.size.width*zoom,b.size.height*zoom);
             if(c.image&&[c.normalization[@"valid"]boolValue]){
                 CGRect pixel=fromRect(c.normalization[@"pixel_rect"]);CGFloat sx=dest.size.width/pixel.size.width,sy=dest.size.height/pixel.size.height;
@@ -172,13 +179,14 @@ static NSDictionary *render(NSArray<Capture *> *captures, NSString *dir, NSStrin
 }
 static BOOL guarded(NSDictionary *s,NSTask *child,NSArray *enrolled,NSString *nonce,pid_t foreground) {return !halted&&child.running&&[s[@"pid"]intValue]==child.processIdentifier&&[s[@"nonce"]isEqual:nonce]&&[s[@"birth"]isEqual:enrolled]&&[birth(child.processIdentifier)isEqual:enrolled]&&![s[@"untagged"]unsignedIntegerValue]&&NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier==foreground;}
 static int host(NSString *dir,NSString *executable) {
-    NSMutableDictionary *report=[@{@"permission_requests":@0,@"activation_requests":@0,@"global_input_posts":@0,@"source_custom_surface_exports":@0,@"control_route":@"Passive scheduled fixture setup invokes the real AppKit actions; native buttons retained, AXPress/pointer/keyboard parity NOT proven",@"capture_route":@"One desktopIndependentWindow stream per explicitly selected root; normalize each frame from SCK screenRect, contentRect, contentScale, scaleFactor and buffer dimensions; no child streams or display fallback",@"stages":[NSMutableArray array],@"controls":[NSMutableArray array],@"closed_streams":[NSMutableArray array]}mutableCopy];
+    NSMutableDictionary *report=[@{@"permission_requests":@0,@"activation_requests":@0,@"global_input_posts":@0,@"source_custom_surface_exports":@0,@"control_route":@"Passive scheduled fixture setup invokes the real AppKit actions; native buttons retained, AXPress/pointer/keyboard parity NOT proven",@"capture_route":@"One desktopIndependentWindow stream per explicitly selected root; normalize each frame from SCK screenRect, contentRect, contentScale, scaleFactor and buffer dimensions; native origin from verified WindowServer parent/association IDs and CG bounds; no child streams or display fallback",@"stages":[NSMutableArray array],@"controls":[NSMutableArray array],@"closed_streams":[NSMutableArray array]}mutableCopy];
+    report[@"runtime"]=@{@"os":NSProcessInfo.processInfo.operatingSystemVersionString,@"architecture":@"arm64",@"private_abi_provenance":@"yabai dd845723416f5fe92af49fad5ebab00369e07edd"};
     if(!CGPreflightScreenCaptureAccess()||!AXIsProcessTrusted()){report[@"failure"]=@"Existing screen capture and accessibility permissions required; no prompts requested";save(report,[dir stringByAppendingPathComponent:@"receipt.json"]);return 2;}
     NSTask *child=[NSTask new];NSString *nonce=NSUUID.UUID.UUIDString;child.executableURL=[NSURL fileURLWithPath:executable];child.arguments=@[@"--source",dir,nonce];NSError *error=nil;if(![child launchAndReturnError:&error])return 2;
     pid_t foreground=NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier;report[@"foreground_pid"]=@(foreground);report[@"source_pid"]=@(child.processIdentifier);
-    NSString *statePath=[dir stringByAppendingPathComponent:@"source.json"];NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:35];NSDictionary *state=nil;for(int n=0;n<100&&child.running&&!halted;n++){state=load(statePath);if([state[@"windows"]count]==2)break;pump(.03);}NSArray *enrolled=state[@"birth"];
+    NSString *statePath=[dir stringByAppendingPathComponent:@"source.json"];NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:45];NSDictionary *state=nil;for(int n=0;n<100&&child.running&&!halted;n++){state=load(statePath);if([state[@"windows"]count]==2)break;pump(.03);}NSArray *enrolled=state[@"birth"];
     AXUIElementRef app=AXUIElementCreateApplication(child.processIdentifier);AXUIElementSetMessagingTimeout(app,1);axWindow=dlsym(RTLD_DEFAULT,"_AXUIElementGetWindow");NSMutableDictionary<NSNumber *,Capture *> *streams=[NSMutableDictionary dictionary];NSMutableDictionary<NSNumber *,NSDictionary *> *priorChildren=[NSMutableDictionary dictionary];BOOL okay=YES;
-    NSArray *names=@[@"baseline",@"panel",@"panel-dismissed",@"sheet",@"sheet-dismissed"];
+    NSArray *names=@[@"baseline",@"panel",@"panel-dismissed",@"sheet",@"sheet-dismissed",@"left-up-panel",@"left-up-dismissed"];
     pump(.4);
     for(NSUInteger phase=0;phase<names.count&&okay;phase++) {
         do {pump(.03);state=load(statePath);} while([state[@"setup_phase"]unsignedIntegerValue]<phase&&guarded(state,child,enrolled,nonce,foreground)&&deadline.timeIntervalSinceNow>0);

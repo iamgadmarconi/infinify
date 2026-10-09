@@ -15,7 +15,7 @@ from verify_normalized import verify
 base=pathlib.Path(sys.argv[1]).resolve();base.mkdir(parents=True,exist_ok=True)
 run=pathlib.Path(tempfile.mkdtemp(prefix='run-',dir=base))
 binary=pathlib.Path('target/native-families/native-families').resolve()
-inputs=[pathlib.Path(p) for p in ('native/families/families.m','native/families/verify.py','native/families/verify_normalized.py','native/families/run.py','scripts/build-families.sh','tests/e2e/native-families.sh')]+[binary]
+inputs=[pathlib.Path(p) for p in ('native/families/families.m','native/families/window-server-family.h','native/families/YABAI-NOTICE.txt','native/families/verify.py','native/families/verify_normalized.py','native/families/run.py','scripts/build-families.sh','tests/e2e/native-families.sh')]+[binary]
 report={'passed':False,'implementation_sha256':{str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs},'checks':[]}
 report['base_commit']=subprocess.run(['git','rev-parse','HEAD'],check=True,capture_output=True,text=True).stdout.strip()
 for source_file in inputs[:-1]:
@@ -51,7 +51,7 @@ try:
     assert subprocess.run([str(binary)],capture_output=True,timeout=3).returncode==0
     if not lifecycle_only:
         folder,p=launch('proof')
-        assert p.wait(timeout=45)==0, json.loads((folder/'receipt.json').read_text()).get('failure')
+        assert p.wait(timeout=55)==0, json.loads((folder/'receipt.json').read_text()).get('failure')
         proof_folder=folder
     for sig in (signal.SIGTERM,signal.SIGINT,signal.SIGKILL):
         folder,p=launch(sig.name);state=ready(folder,p);p.send_signal(sig);p.wait(timeout=8)

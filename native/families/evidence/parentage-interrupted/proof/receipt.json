@@ -1,0 +1,175 @@
+{
+  "failure": "Native other-top window unavailable or mismatched in SC/CG",
+  "signal": 0,
+  "capture_route": "One desktopIndependentWindow stream per explicitly selected root; normalize each frame from SCK screenRect, contentRect, contentScale, scaleFactor and buffer dimensions; native origin from verified WindowServer parent/association IDs and CG bounds; no child streams or display fallback",
+  "capture_sequence_completed": false,
+  "source_custom_surface_exports": 0,
+  "stages": [
+    {
+      "windows": [
+        {
+          "bounds": [
+            59,
+            1078,
+            139,
+            105
+          ],
+          "parent": 0,
+          "sc_bounds": [
+            63,
+            1075,
+            137,
+            104
+          ],
+          "visible": true,
+          "id": 77799,
+          "cg_owner": 22969,
+          "identity_verified": false,
+          "cg_bounds": [
+            65,
+            1073,
+            136,
+            103
+          ],
+          "kind": "parent",
+          "sc_found": 1,
+          "sheet_parent": 0
+        },
+        {
+          "bounds": [
+            101,
+            1055,
+            139,
+            105
+          ],
+          "parent": 0,
+          "sc_bounds": [
+            104,
+            1053,
+            137,
+            103
+          ],
+          "visible": true,
+          "id": 77800,
+          "cg_owner": 22969,
+          "identity_verified": false,
+          "cg_bounds": [
+            106,
+            1050,
+            136,
+            103
+          ],
+          "kind": "other-top",
+          "sc_found": 1,
+          "sheet_parent": 0
+        }
+      ],
+      "ax": [
+        {
+          "ancestor_window": 0,
+          "depth": 0,
+          "identifier": "",
+          "role": "",
+          "window": 0
+        }
+      ],
+      "source": {
+        "untagged": 0,
+        "pid": 22969,
+        "tick": 0.77879798412323,
+        "birth": [
+          1791508352,
+          204859
+        ],
+        "windows": [
+          {
+            "parent": 0,
+            "id": 77799,
+            "kind": "parent",
+            "sheet_parent": 0,
+            "bounds": [
+              59,
+              1078,
+              139,
+              105
+            ],
+            "visible": true
+          },
+          {
+            "parent": 0,
+            "id": 77800,
+            "kind": "other-top",
+            "sheet_parent": 0,
+            "bounds": [
+              101,
+              1055,
+              139,
+              105
+            ],
+            "visible": true
+          }
+        ],
+        "setup_phase": 0,
+        "actions": 0
+      },
+      "name": "baseline",
+      "dismissed": [],
+      "frames": []
+    }
+  ],
+  "runtime": {
+    "os": "Version 27.2 (Build 26B5091g)",
+    "architecture": "arm64",
+    "private_abi_provenance": "yabai dd845723416f5fe92af49fad5ebab00369e07edd"
+  },
+  "control_route": "Passive scheduled fixture setup invokes the real AppKit actions; native buttons retained, AXPress/pointer/keyboard parity NOT proven",
+  "foreground_pid": 21889,
+  "source_pid": 22969,
+  "global_input_posts": 0,
+  "activation_requests": 0,
+  "closed_streams": [],
+  "controls": [],
+  "foreground_after": 21889,
+  "permission_requests": 0,
+  "source_final": {
+    "untagged": 0,
+    "pid": 22969,
+    "tick": 0.8387709856033325,
+    "birth": [
+      1791508352,
+      204859
+    ],
+    "windows": [
+      {
+        "parent": 0,
+        "id": 77799,
+        "kind": "parent",
+        "sheet_parent": 0,
+        "bounds": [
+          64,
+          1073,
+          137,
+          103
+        ],
+        "visible": true
+      },
+      {
+        "parent": 0,
+        "id": 77800,
+        "kind": "other-top",
+        "sheet_parent": 0,
+        "bounds": [
+          106,
+          1051,
+          136,
+          103
+        ],
+        "visible": true
+      }
+    ],
+    "setup_phase": 0,
+    "actions": 0
+  },
+  "source_reaped": 1,
+  "source_exit_status": 0
+}

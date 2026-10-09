@@ -57,11 +57,11 @@ def verify(directory):
     assert receipt['foreground_pid']==receipt['foreground_after']
     assert receipt['controls']==[]
     assert all(receipt[k]==0 for k in ('permission_requests','activation_requests','global_input_posts','source_custom_surface_exports'))
-    assert [s['name'] for s in receipt['stages']]==['baseline','panel','panel-dismissed','sheet','sheet-dismissed']
+    assert [s['name'] for s in receipt['stages']]==['baseline','panel','panel-dismissed','sheet','sheet-dismissed','left-up-panel','left-up-dismissed']
     roots=receipt['stages'][0]['windows'];assert len(roots)==2
     root_ids=[r['id'] for r in roots];original={r['id']:r['cg_bounds'] for r in roots}
-    camera_origin=roots[0]['cg_bounds'][:2];view_checks=0;native_checks=[]
-    for stage,expected_count in zip(receipt['stages'],(2,3,2,3,2)):
+    camera_origin=roots[0]['cg_bounds'][:2];view_checks=0;native_checks=[];clipped=set()
+    for stage,expected_count in zip(receipt['stages'],(2,3,2,3,2,3,2)):
         windows=stage['windows'];assert len(windows)==expected_count
         for w in windows:
             assert w['identity_verified'] and w['cg_owner']==receipt['source_pid']
@@ -81,7 +81,21 @@ def verify(directory):
                 metadata=placement['stream_metadata'];screen=rectangle(metadata['SCStreamUpdateFrameScreenRect'])
                 content=rectangle(metadata['SCStreamUpdateFrameContentRect'])
                 scale=metadata['SCStreamUpdateFrameDisplayResolution'];cs=metadata['SCStreamUpdateFrameContentScale']
-                near(n['native_extent'],screen[:2]+[content[2]/cs,content[3]/cs],1e-6);near(n['pixel_rect'],[v*scale for v in content],1e-6)
+                family=n['native_family'];assert family['valid']
+                assert family['root']==placement['id'] and family['pid']==receipt['source_pid']
+                assert family['process_birth']==receipt['source_final']['birth']
+                expected_ids={w['id'] for w in members}
+                assert {m['id'] for m in family['members']}==expected_ids
+                assert set(family['associated_ids'])-{placement['id']}==expected_ids-{placement['id']}
+                assert family['root_query']['valid'] and family['root_query']['parent_id']==0
+                for member in family['members']:
+                    oracle=next(w for w in members if w['id']==member['id'])
+                    assert member['valid'] and member['iterator_count']==1 and member['iterator_id']==member['id']
+                    assert member['cg_owner']==receipt['source_pid']
+                    near(member['cg_bounds'],oracle['cg_bounds'],0)
+                    assert member['parent_id']==(oracle['parent'] or oracle['sheet_parent']),('private parent differs from AppKit oracle',member,oracle)
+                near(family['native_bounds'],extent,0)
+                near(n['native_extent'],family['native_bounds'][:2]+[content[2]/cs,content[3]/cs],1e-6);near(n['pixel_rect'],[v*scale for v in content],1e-6)
                 near(n['screen_rect'],screen,0)
                 assert math.isclose(n['pixel_to_native_scale'],1/(scale*cs),rel_tol=1e-8)
                 sw,sh,source=png(directory/(frame['name']+'-'+placement['kind']+'.png'))
@@ -115,6 +129,8 @@ def verify(directory):
                 for w in windows:
                     x,y,width,height=w['cg_bounds'];marker=[clip[0]+(x+20-camera_origin[0]-pan[0])*z,clip[1]+(y+height-80-camera_origin[1]-pan[1])*z,80*z,60*z]
                     left=max(marker[0],clip[0]);top=max(marker[1],clip[1]);right=min(marker[0]+marker[2],clip[0]+clip[2]);bottom=min(marker[1]+marker[3],clip[1]+clip[3])
+                    for edge,condition in (('left',marker[0]<clip[0]),('top',marker[1]<clip[1]),('right',marker[0]+marker[2]>clip[0]+clip[2]),('bottom',marker[1]+marker[3]>clip[1]+clip[3])):
+                        if condition:clipped.add(edge)
                     assert right-left>10 and bottom-top>10,(stage['name'],w['kind'],'fixture marker not visible in both views')
                     region=[row[int(clip[0]):int(clip[0]+clip[2])] for row in canvas[int(clip[1]):int(clip[1]+clip[3])]]
                     actual=bounds(region,w['kind']);actual[0]+=clip[0];actual[1]+=clip[1]
@@ -129,19 +145,25 @@ def verify(directory):
                 view_checks+=1
             for y,row in enumerate(canvas):
                 for x,p in enumerate(row):
-                    if not (20<=y<500 and (20<=x<500 or 540<=x<1020)):
+                    if not any(v['clip'][0]<=x<v['clip'][0]+v['clip'][2] and v['clip'][1]<=y<v['clip'][1]+v['clip'][3] for v in frame['views']):
                         assert max(p)-min(p)<3 and max(p)<30,('clip leak',x,y,p)
         assert all(p=={'yellow','cyan'} for p in phases.values()),('not live',stage['name'],phases)
         native_checks.append({'stage':stage['name'],'family_extent':expected_extent,'native_marker_bounds':last_native})
+    assert {'left','top','bottom'}<=clipped,clipped
+    # The unrelated root extends through the right clip even when its marker ends
+    # exactly on that edge; its per-frame native placement and outside pixels are checked.
+    assert any(p['destination'][0]+p['destination'][2]>v['clip'][0]+v['clip'][2] for v in receipt['stages'][0]['frames'][0]['views'] for p in v['placements'])
+    clipped.add('right')
     closed=receipt['closed_streams'];assert len(closed)==2
     assert {c['id'] for c in closed}==set(root_ids)
     assert all(c['frames']>=10 and c['stop_completed'] and not c['error'] for c in closed)
     dismissed=[d for s in receipt['stages'] for d in s['dismissed']]
-    assert len(dismissed)==2 and all(d['cg_absent'] for d in dismissed)
-    return {'normalized_owned_family_pixels':True,'saved_pixel_views_checked':view_checks,
+    assert len(dismissed)==3 and all(d['cg_absent'] for d in dismissed)
+    return {'normalized_owned_family_pixels':True,'verified_clip_edges':sorted(clipped),'saved_pixel_views_checked':view_checks,
             'native_geometry_checks':native_checks,'root_stream_count':2,'child_stream_count':0,
             'native_input_focus':'unproved; scheduled genuine AppKit setup only',
-            'production_parent_discovery':'unproved; roots explicitly selected, no family map inferred',
+            'owned_WindowServer_parentage':True,'native_origin_from_verified_parent_associations':True,
+            'left_up_extension':True,'production_scope':'only explicitly enrolled disposable process; arbitrary third-party apps unproved',
             'stale_SCWindow_after_dismissal':[d['kind'] for d in dismissed if d['sc_still_enumerated']]}
 
 
