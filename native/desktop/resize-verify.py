@@ -53,6 +53,11 @@ def decode_png(data):
             require((w, h, depth, compression, filtering, interlace) ==
                     (WIDTH, HEIGHT, 8, 0, 0, 0) and color in (2, 6),
                     'expected 1040x600, noninterlaced 8-bit RGB/RGBA PNG')
+        elif kind == b'tRNS':
+            # RGB color-key transparency would otherwise be mistaken for an
+            # opaque fiducial. Evidence accepts only RGB without tRNS or RGBA
+            # with the explicit alpha checks below.
+            raise ValueError('PNG tRNS transparency is unsupported for opaque evidence')
         elif kind == b'IDAT':
             require(not idat_closed, 'noncontiguous IDAT')
             seen_idat = True

@@ -175,6 +175,17 @@ def main():
         transparent = bytearray(after_pixels)
         transparent[(91 * 1040 + 51) * 4 + 3] = 128
         case('translucent fiducial', post=png(transparent))
+        # Valid RGB PNGs with a color-key chunk make every orange marker
+        # invisible despite unchanged RGB samples. Verify the actual CLI
+        # rejects that evidence, including when only the after PNG uses it.
+        rgb_before, rgb_after = png(before_pixels, channels=3), png(after_pixels, channels=3)
+        transparency = chunk(b'tRNS', struct.pack('>HHH', 255, 64, 0))
+        transparent_before = rgb_before[:33] + transparency + rgb_before[33:]
+        transparent_after = rgb_after[:33] + transparency + rgb_after[33:]
+        case('RGB tRNS invisible markers', pre=transparent_before, post=transparent_after)
+        case('RGB tRNS after only', pre=rgb_before, post=transparent_after)
+        saved = json.loads((directory / 'independent-pixels.json').read_text())
+        assert 'tRNS transparency' in saved['error']
         case('missing PNG', alter=lambda d: (d / 'after.png').unlink())
         case('malformed receipt', alter=lambda d: (d / 'receipt.json').write_text('{'))
         bad_crc = bytearray(after)
