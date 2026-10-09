@@ -1,0 +1,14 @@
+{
+  "evidence": "/Users/gad/Documents/Codex/2026-10-09/https-github-com-malbiruk-driftwm-https/outputs/driftwm-macos/native/surfaces/evidence/verified/run-w9_4wioe",
+  "checks": [
+    "two live remote copies: red and blue observed in both; distinct exact pan/zoom geometry; actual right-edge clipping",
+    "host deadline: own window closed and source reaped",
+    "SIGTERM: host exited, exact source reaped",
+    "SIGINT: host exited, exact source reaped",
+    "source has its own bounded deadline",
+    "host SIGKILL: source detected parent loss and exited"
+  ],
+  "scope": "cooperative_layers_only",
+  "input_proven": false,
+  "passed": true
+}

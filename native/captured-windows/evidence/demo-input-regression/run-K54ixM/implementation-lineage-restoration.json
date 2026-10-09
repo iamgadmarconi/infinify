@@ -1,0 +1,13 @@
+{
+  "reason": "Corrected export helper that had incorrectly replaced historical implementation hashes with current checkout hashes.",
+  "source": "Original pre-sanitation exported manifest recorded in the implementation worker tool output.",
+  "validation": "The unchanged native source, regression helper and build script still match. The original harness and README contents were reconstructed by reversing the bounded sanitation additions and matched the recorded original SHA-256 values exactly.",
+  "original_implementation": {
+    "native/captured-windows/captured.m": "daa1ae93968c9213a185692ff526461d9e9ce3bee5af229b1999e3224d79bf9e",
+    "native/captured-windows/demo-input-regression.m": "edc43f95be602e977895ebe6f86f6db9c25927e5190968fc1af162389e4d30bb",
+    "tests/e2e/captured-windows.sh": "7c8ffedb816c53410e71ebbbf8fafa05b72670285cce86da8dde5e0ce2688ef4",
+    "scripts/build-captured-windows.sh": "3de39d6adf29eabe3f2182bd45beac245e8e4658688d3ce44dea10632c90b13b",
+    "native/captured-windows/README.md": "abfd03996302e98a0addc8ed16540ef4ffc6c0aaecf3a3b6c5ec6eceacfd63f0"
+  },
+  "export_tool_not_part_of_tested_implementation": true
+}

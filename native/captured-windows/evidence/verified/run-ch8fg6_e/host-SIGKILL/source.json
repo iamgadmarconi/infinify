@@ -1,0 +1,25 @@
+{
+  "key_window": false,
+  "actions": [],
+  "scroll_y": 0,
+  "tick": 0.11513400077819824,
+  "birth": [
+    1791504789,
+    447818
+  ],
+  "untagged_events": 0,
+  "phase": 0,
+  "first_responder": "NSTextView",
+  "text_sha256": "be87b24e68e5af7df183aefff1890942b3496ab7a0a4b967f5f17ca07a4fcc66",
+  "window": 76084,
+  "app_active": false,
+  "clicks": 0,
+  "pid": 84579,
+  "bounds": {
+    "X": 120,
+    "Height": 420,
+    "Y": 769,
+    "Width": 560
+  },
+  "events": []
+}

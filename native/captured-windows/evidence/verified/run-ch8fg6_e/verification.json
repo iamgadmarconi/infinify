@@ -1,0 +1,25 @@
+{
+  "evidence": "/Users/gad/Documents/code/personal/infinify/target/captured-windows/evidence/run-ch8fg6_e",
+  "checks": [
+    "default/help read-only",
+    "actual host pixels: two live copies, exact distinct scale/pan geometry, synchronized updates and clipping",
+    "private scoped route: marked native button action, exact edited text and native scroll from each scaled view",
+    "source bounds unchanged and updating behind covering host; exact child reaped",
+    "deadline, SIGTERM, SIGINT and host SIGKILL dispose source without user-window restoration"
+  ],
+  "passed": true,
+  "public_controls": [
+    {
+      "camera": 0,
+      "button_proven": 0,
+      "text_proven": 1,
+      "scroll_proven": 0
+    },
+    {
+      "camera": 1,
+      "button_proven": 0,
+      "text_proven": 0,
+      "scroll_proven": 0
+    }
+  ]
+}

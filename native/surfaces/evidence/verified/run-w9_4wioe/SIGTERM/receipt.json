@@ -1,0 +1,48 @@
+{
+  "unrelated_window_mutation_calls" : 0,
+  "arbitrary_app_window_hosting_proven" : false,
+  "host_pid" : 76274,
+  "screen_capture_preflight" : true,
+  "context_id" : 2174555292,
+  "scope" : "cooperative_CAContext_two_processes_only",
+  "input_proven" : false,
+  "source_pid" : 76278,
+  "source_reaped" : 1,
+  "exit_reason" : "signal",
+  "source_exit_status" : 0,
+  "private_api_available" : true,
+  "frames" : [
+
+  ],
+  "window_id" : 75569,
+  "signal" : 15,
+  "permission_requests" : 0,
+  "cameras" : [
+    {
+      "pan" : [
+        0,
+        0
+      ],
+      "viewport" : [
+        20,
+        20,
+        400,
+        300
+      ],
+      "zoom" : 1
+    },
+    {
+      "pan" : [
+        40,
+        30
+      ],
+      "viewport" : [
+        460,
+        20,
+        300,
+        300
+      ],
+      "zoom" : 1.5
+    }
+  ]
+}

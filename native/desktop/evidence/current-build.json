@@ -1,0 +1,36 @@
+{
+  "os_version": "27.2",
+  "source_and_build_sha256": {
+    "native/desktop/main.m": "b3ce8569b256e80bb1eae69a8ded6bbc49033766a112fd7900c29df0ba6409ec",
+    "native/captured-windows/captured.m": "daa1ae93968c9213a185692ff526461d9e9ce3bee5af229b1999e3224d79bf9e",
+    "native/desktop/Info.plist": "fa8c7033262193de6dd75438804af4986af0d093bdfcac431e78f77e89c745c2",
+    "scripts/build-app.sh": "071edfe87a6c723caec80954165b4b617a35eb78580f905fea721b7210c367de",
+    "tests/e2e/desktop-app.sh": "a768adffde2952488f580c17c52a60313c73593d13415f11fa3cd7b1d199ba21",
+    "target/release/libdriftwm_desktop.a": "b02e30233ec1b5f0b31a06d2c435803cd34311f4cb35a18197880cd288865598",
+    "target/app/Infinify.app/Contents/MacOS/Infinify": "f53cc2a083ff8fe7182eb1f5c74633e2faf416890888d9f550427a750017d151"
+  },
+  "build_command": "./scripts/build-app.sh",
+  "build_result": "success",
+  "bundle": "target/app/Infinify.app",
+  "full_current_binary_native_controls": "not established; clean runs interrupted by human input or foreground changes; no further focus-changing runs performed",
+  "codesign": {
+    "exit_code": 0,
+    "output": ""
+  },
+  "plist": {
+    "exit_code": 0,
+    "output": "target/app/Infinify.app/Contents/Info.plist: OK\n"
+  },
+  "architecture": {
+    "exit_code": 0,
+    "output": "target/app/Infinify.app/Contents/MacOS/Infinify: Mach-O 64-bit executable arm64\n"
+  },
+  "deployment_target": {
+    "exit_code": 0,
+    "output": "target/app/Infinify.app/Contents/MacOS/Infinify:\nLoad command 11\n      cmd LC_BUILD_VERSION\n  cmdsize 32\n platform MACOS\n    minos 26.0\n      sdk 27.0\n   ntools 1\n     tool LD\n  version 27037.0\n"
+  },
+  "shell_syntax": {
+    "exit_code": 0,
+    "output": ""
+  }
+}

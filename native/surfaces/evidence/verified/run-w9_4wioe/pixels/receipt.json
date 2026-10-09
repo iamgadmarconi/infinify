@@ -1,0 +1,371 @@
+{
+  "unrelated_window_mutation_calls" : 0,
+  "arbitrary_app_window_hosting_proven" : false,
+  "host_pid" : 76215,
+  "screen_capture_preflight" : true,
+  "context_id" : 4148886988,
+  "scope" : "cooperative_CAContext_two_processes_only",
+  "input_proven" : false,
+  "source_pid" : 76216,
+  "source_reaped" : 1,
+  "exit_reason" : "deadline",
+  "source_exit_status" : 0,
+  "private_api_available" : true,
+  "frames" : [
+    {
+      "views" : [
+        {
+          "green_bounds" : [
+            80,
+            90,
+            50,
+            40
+          ],
+          "red_pixels" : 7997,
+          "blue_pixels" : 0,
+          "changing_bounds" : [
+            200,
+            120,
+            100,
+            80
+          ],
+          "green_pixels" : 1998,
+          "colored_pixels_outside_clip" : 0
+        },
+        {
+          "green_bounds" : [
+            490,
+            80,
+            75,
+            60
+          ],
+          "red_pixels" : 10796,
+          "blue_pixels" : 0,
+          "changing_bounds" : [
+            670,
+            125,
+            90,
+            120
+          ],
+          "green_pixels" : 4500,
+          "colored_pixels_outside_clip" : 0
+        }
+      ],
+      "elapsed_seconds" : 0.84897804260253906,
+      "source_observation" : {
+        "phase" : 0,
+        "context_id" : 4148886988,
+        "scene_size" : [
+          400,
+          300
+        ],
+        "pid" : 76216,
+        "updates" : 1
+      },
+      "width" : 800,
+      "png" : "\/Users\/gad\/Documents\/Codex\/2026-10-09\/https-github-com-malbiruk-driftwm-https\/outputs\/driftwm-macos\/native\/surfaces\/evidence\/verified\/run-w9_4wioe\/pixels\/frame-0.png",
+      "height" : 360
+    },
+    {
+      "views" : [
+        {
+          "green_bounds" : [
+            80,
+            90,
+            50,
+            40
+          ],
+          "red_pixels" : 0,
+          "blue_pixels" : 7994,
+          "changing_bounds" : [
+            200,
+            120,
+            100,
+            80
+          ],
+          "green_pixels" : 1998,
+          "colored_pixels_outside_clip" : 0
+        },
+        {
+          "green_bounds" : [
+            490,
+            80,
+            75,
+            60
+          ],
+          "red_pixels" : 0,
+          "blue_pixels" : 10796,
+          "changing_bounds" : [
+            670,
+            125,
+            90,
+            120
+          ],
+          "green_pixels" : 4500,
+          "colored_pixels_outside_clip" : 0
+        }
+      ],
+      "elapsed_seconds" : 1.6739031076431274,
+      "source_observation" : {
+        "phase" : 1,
+        "context_id" : 4148886988,
+        "scene_size" : [
+          400,
+          300
+        ],
+        "pid" : 76216,
+        "updates" : 2
+      },
+      "width" : 800,
+      "png" : "\/Users\/gad\/Documents\/Codex\/2026-10-09\/https-github-com-malbiruk-driftwm-https\/outputs\/driftwm-macos\/native\/surfaces\/evidence\/verified\/run-w9_4wioe\/pixels\/frame-1.png",
+      "height" : 360
+    },
+    {
+      "views" : [
+        {
+          "green_bounds" : [
+            80,
+            90,
+            50,
+            40
+          ],
+          "red_pixels" : 7997,
+          "blue_pixels" : 0,
+          "changing_bounds" : [
+            200,
+            120,
+            100,
+            80
+          ],
+          "green_pixels" : 1998,
+          "colored_pixels_outside_clip" : 0
+        },
+        {
+          "green_bounds" : [
+            490,
+            80,
+            75,
+            60
+          ],
+          "red_pixels" : 10796,
+          "blue_pixels" : 0,
+          "changing_bounds" : [
+            670,
+            125,
+            90,
+            120
+          ],
+          "green_pixels" : 4500,
+          "colored_pixels_outside_clip" : 0
+        }
+      ],
+      "elapsed_seconds" : 2.4924631118774414,
+      "source_observation" : {
+        "phase" : 0,
+        "context_id" : 4148886988,
+        "scene_size" : [
+          400,
+          300
+        ],
+        "pid" : 76216,
+        "updates" : 3
+      },
+      "width" : 800,
+      "png" : "\/Users\/gad\/Documents\/Codex\/2026-10-09\/https-github-com-malbiruk-driftwm-https\/outputs\/driftwm-macos\/native\/surfaces\/evidence\/verified\/run-w9_4wioe\/pixels\/frame-2.png",
+      "height" : 360
+    },
+    {
+      "views" : [
+        {
+          "green_bounds" : [
+            80,
+            90,
+            50,
+            40
+          ],
+          "red_pixels" : 0,
+          "blue_pixels" : 7994,
+          "changing_bounds" : [
+            200,
+            120,
+            100,
+            80
+          ],
+          "green_pixels" : 1998,
+          "colored_pixels_outside_clip" : 0
+        },
+        {
+          "green_bounds" : [
+            490,
+            80,
+            75,
+            60
+          ],
+          "red_pixels" : 0,
+          "blue_pixels" : 10796,
+          "changing_bounds" : [
+            670,
+            125,
+            90,
+            120
+          ],
+          "green_pixels" : 4500,
+          "colored_pixels_outside_clip" : 0
+        }
+      ],
+      "elapsed_seconds" : 3.3120230436325073,
+      "source_observation" : {
+        "phase" : 1,
+        "context_id" : 4148886988,
+        "scene_size" : [
+          400,
+          300
+        ],
+        "pid" : 76216,
+        "updates" : 4
+      },
+      "width" : 800,
+      "png" : "\/Users\/gad\/Documents\/Codex\/2026-10-09\/https-github-com-malbiruk-driftwm-https\/outputs\/driftwm-macos\/native\/surfaces\/evidence\/verified\/run-w9_4wioe\/pixels\/frame-3.png",
+      "height" : 360
+    },
+    {
+      "views" : [
+        {
+          "green_bounds" : [
+            80,
+            90,
+            50,
+            40
+          ],
+          "red_pixels" : 7997,
+          "blue_pixels" : 0,
+          "changing_bounds" : [
+            200,
+            120,
+            100,
+            80
+          ],
+          "green_pixels" : 1998,
+          "colored_pixels_outside_clip" : 0
+        },
+        {
+          "green_bounds" : [
+            490,
+            80,
+            75,
+            60
+          ],
+          "red_pixels" : 10796,
+          "blue_pixels" : 0,
+          "changing_bounds" : [
+            670,
+            125,
+            90,
+            120
+          ],
+          "green_pixels" : 4500,
+          "colored_pixels_outside_clip" : 0
+        }
+      ],
+      "elapsed_seconds" : 4.1285181045532227,
+      "source_observation" : {
+        "phase" : 0,
+        "context_id" : 4148886988,
+        "scene_size" : [
+          400,
+          300
+        ],
+        "pid" : 76216,
+        "updates" : 5
+      },
+      "width" : 800,
+      "png" : "\/Users\/gad\/Documents\/Codex\/2026-10-09\/https-github-com-malbiruk-driftwm-https\/outputs\/driftwm-macos\/native\/surfaces\/evidence\/verified\/run-w9_4wioe\/pixels\/frame-4.png",
+      "height" : 360
+    },
+    {
+      "views" : [
+        {
+          "green_bounds" : [
+            80,
+            90,
+            50,
+            40
+          ],
+          "red_pixels" : 7997,
+          "blue_pixels" : 0,
+          "changing_bounds" : [
+            200,
+            120,
+            100,
+            80
+          ],
+          "green_pixels" : 1998,
+          "colored_pixels_outside_clip" : 0
+        },
+        {
+          "green_bounds" : [
+            490,
+            80,
+            75,
+            60
+          ],
+          "red_pixels" : 10796,
+          "blue_pixels" : 0,
+          "changing_bounds" : [
+            670,
+            125,
+            90,
+            120
+          ],
+          "green_pixels" : 4500,
+          "colored_pixels_outside_clip" : 0
+        }
+      ],
+      "elapsed_seconds" : 4.936379075050354,
+      "source_observation" : {
+        "phase" : 0,
+        "context_id" : 4148886988,
+        "scene_size" : [
+          400,
+          300
+        ],
+        "pid" : 76216,
+        "updates" : 5
+      },
+      "width" : 800,
+      "png" : "\/Users\/gad\/Documents\/Codex\/2026-10-09\/https-github-com-malbiruk-driftwm-https\/outputs\/driftwm-macos\/native\/surfaces\/evidence\/verified\/run-w9_4wioe\/pixels\/frame-5.png",
+      "height" : 360
+    }
+  ],
+  "window_id" : 75565,
+  "signal" : 0,
+  "permission_requests" : 0,
+  "cameras" : [
+    {
+      "pan" : [
+        0,
+        0
+      ],
+      "viewport" : [
+        20,
+        20,
+        400,
+        300
+      ],
+      "zoom" : 1
+    },
+    {
+      "pan" : [
+        40,
+        30
+      ],
+      "viewport" : [
+        460,
+        20,
+        300,
+        300
+      ],
+      "zoom" : 1.5
+    }
+  ]
+}

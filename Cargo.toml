@@ -1,0 +1,21 @@
+[workspace]
+members = ["crates/canvas", "crates/macos-backend", "crates/driftwm", "crates/runtime", "crates/desktop"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+rust-version = "1.88"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+
+[profile.release]
+# Keep proc-macro Mach-O linkedit intact on the macOS 27 toolchain.
+strip = "none"
+lto = "thin"
+codegen-units = 1

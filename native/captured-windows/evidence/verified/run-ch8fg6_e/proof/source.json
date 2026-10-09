@@ -1,0 +1,371 @@
+{
+  "key_window": true,
+  "actions": [
+    {
+      "count": 1,
+      "tag": 573626403
+    },
+    {
+      "count": 2,
+      "tag": 573626404
+    }
+  ],
+  "scroll_y": 200,
+  "tick": 15.863272070884705,
+  "birth": [
+    1791504770,
+    615080
+  ],
+  "untagged_events": 0,
+  "phase": 1,
+  "first_responder": "NSTextView",
+  "text_sha256": "0b441b73b9104f55a7a3ed123009b4298238ee6353a1b91cf13c2b882df08651",
+  "window": 76051,
+  "app_active": true,
+  "clicks": 2,
+  "pid": 84505,
+  "bounds": {
+    "X": 120,
+    "Height": 420,
+    "Y": 769,
+    "Width": 560
+  },
+  "events": [
+    {
+      "window": 0,
+      "local": [
+        240,
+        440
+      ],
+      "tag": 573626401,
+      "marked_text_sha256": "",
+      "type": 1,
+      "key_code": 0,
+      "flags": 0
+    },
+    {
+      "window": 0,
+      "local": [
+        240,
+        440
+      ],
+      "tag": 573626401,
+      "marked_text_sha256": "",
+      "type": 2,
+      "key_code": 0,
+      "flags": 0
+    },
+    {
+      "window": 0,
+      "local": [
+        290,
+        365
+      ],
+      "tag": 573626401,
+      "marked_text_sha256": "",
+      "type": 1,
+      "key_code": 0,
+      "flags": 0
+    },
+    {
+      "window": 0,
+      "local": [
+        290,
+        365
+      ],
+      "tag": 573626401,
+      "marked_text_sha256": "",
+      "type": 2,
+      "key_code": 0,
+      "flags": 0
+    },
+    {
+      "window": 76051,
+      "local": [
+        0,
+        420
+      ],
+      "tag": 573626401,
+      "marked_text_sha256": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+      "type": 10,
+      "key_code": 0,
+      "flags": 1048576
+    },
+    {
+      "window": 76051,
+      "local": [
+        0,
+        420
+      ],
+      "tag": 573626401,
+      "marked_text_sha256": "93981d64a567cf384080df2bf1475299540fe771d2f37053a60cf8dde63b0241",
+      "type": 10,
+      "key_code": 0,
+      "flags": 0
+    },
+    {
+      "window": 0,
+      "local": [
+        320,
+        260
+      ],
+      "tag": 573626401,
+      "marked_text_sha256": "",
+      "type": 22,
+      "key_code": 0,
+      "flags": 0
+    },
+    {
+      "window": 0,
+      "local": [
+        240,
+        440
+      ],
+      "tag": 573626402,
+      "marked_text_sha256": "",
+      "type": 1,
+      "key_code": 0,
+      "flags": 0
+    },
+    {
+      "window": 0,
+      "local": [
+        240,
+        440
+      ],
+      "tag": 573626402,
+      "marked_text_sha256": "",
+      "type": 2,
+      "key_code": 0,
+      "flags": 0
+    },
+    {
+      "window": 0,
+      "local": [
+        290,
+        365
+      ],
+      "tag": 573626402,
+      "marked_text_sha256": "",
+      "type": 1,
+      "key_code": 0,
+      "flags": 0
+    },
+    {
+      "window": 0,
+      "local": [
+        290,
+        365
+      ],
+      "tag": 573626402,
+      "marked_text_sha256": "",
+      "type": 2,
+      "key_code": 0,
+      "flags": 0
+    },
+    {
+      "window": 76051,
+      "local": [
+        0,
+        420
+      ],
+      "tag": 573626402,
+      "marked_text_sha256": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+      "type": 10,
+      "key_code": 0,
+      "flags": 1048576
+    },
+    {
+      "window": 76051,
+      "local": [
+        0,
+        420
+      ],
+      "tag": 573626402,
+      "marked_text_sha256": "8c262e1704789231ec75e9884a0271213b10b6fa21ef88012fa91e8958b06cd0",
+      "type": 10,
+      "key_code": 0,
+      "flags": 0
+    },
+    {
+      "window": 0,
+      "local": [
+        320,
+        260
+      ],
+      "tag": 573626402,
+      "marked_text_sha256": "",
+      "type": 22,
+      "key_code": 0,
+      "flags": 0
+    },
+    {
+      "window": 76051,
+      "local": [
+        120,
+        300
+      ],
+      "tag": 573626403,
+      "marked_text_sha256": "",
+      "type": 1,
+      "key_code": 0,
+      "flags": 0
+    },
+    {
+      "window": 76051,
+      "local": [
+        120,
+        300
+      ],
+      "tag": 573626403,
+      "marked_text_sha256": "",
+      "type": 2,
+      "key_code": 0,
+      "flags": 0
+    },
+    {
+      "window": 76051,
+      "local": [
+        170,
+        225
+      ],
+      "tag": 573626403,
+      "marked_text_sha256": "",
+      "type": 1,
+      "key_code": 0,
+      "flags": 0
+    },
+    {
+      "window": 76051,
+      "local": [
+        170,
+        225
+      ],
+      "tag": 573626403,
+      "marked_text_sha256": "",
+      "type": 2,
+      "key_code": 0,
+      "flags": 0
+    },
+    {
+      "window": 76051,
+      "local": [
+        170,
+        225
+      ],
+      "tag": 573626403,
+      "marked_text_sha256": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+      "type": 10,
+      "key_code": 0,
+      "flags": 1048576
+    },
+    {
+      "window": 76051,
+      "local": [
+        170,
+        225
+      ],
+      "tag": 573626403,
+      "marked_text_sha256": "150bc6458e46a9edd3965a8e0f1e7c9bba29d4864cf9c51e59906358e5fd0e4a",
+      "type": 10,
+      "key_code": 0,
+      "flags": 0
+    },
+    {
+      "window": 76051,
+      "local": [
+        200,
+        120
+      ],
+      "tag": 573626403,
+      "marked_text_sha256": "",
+      "type": 22,
+      "key_code": 0,
+      "flags": 0
+    },
+    {
+      "window": 76051,
+      "local": [
+        120,
+        300
+      ],
+      "tag": 573626404,
+      "marked_text_sha256": "",
+      "type": 1,
+      "key_code": 0,
+      "flags": 0
+    },
+    {
+      "window": 76051,
+      "local": [
+        120,
+        300
+      ],
+      "tag": 573626404,
+      "marked_text_sha256": "",
+      "type": 2,
+      "key_code": 0,
+      "flags": 0
+    },
+    {
+      "window": 76051,
+      "local": [
+        170,
+        225
+      ],
+      "tag": 573626404,
+      "marked_text_sha256": "",
+      "type": 1,
+      "key_code": 0,
+      "flags": 0
+    },
+    {
+      "window": 76051,
+      "local": [
+        170,
+        225
+      ],
+      "tag": 573626404,
+      "marked_text_sha256": "",
+      "type": 2,
+      "key_code": 0,
+      "flags": 0
+    },
+    {
+      "window": 76051,
+      "local": [
+        170,
+        225
+      ],
+      "tag": 573626404,
+      "marked_text_sha256": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+      "type": 10,
+      "key_code": 0,
+      "flags": 1048576
+    },
+    {
+      "window": 76051,
+      "local": [
+        170,
+        225
+      ],
+      "tag": 573626404,
+      "marked_text_sha256": "0b441b73b9104f55a7a3ed123009b4298238ee6353a1b91cf13c2b882df08651",
+      "type": 10,
+      "key_code": 0,
+      "flags": 0
+    },
+    {
+      "window": 76051,
+      "local": [
+        200,
+        120
+      ],
+      "tag": 573626404,
+      "marked_text_sha256": "",
+      "type": 22,
+      "key_code": 0,
+      "flags": 0
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+Infinify — DriftWM macOS development port
+SPDX-License-Identifier: GPL-3.0-or-later
+
+Upstream: DriftWM, https://github.com/malbiruk/driftwm
+Source baseline: 352333a8fa1b22171492d4b71a54102045c9a19d
+Upstream primary maintainer: Maksim Kononenko (malbiruk), with contributors.
+The GPL version 3 license text in LICENSE is copied unchanged from that baseline.
+Upstream README declares GPL-3.0-or-later.
+
+This project is a new Rust/macOS implementation informed by DriftWM's infinite
+canvas design. It does not claim to compile or run the upstream Wayland/Smithay
+compositor on macOS. Canvas algorithm adaptations and any copied source have
+additional provenance in their source files. Most macOS platform integration is
+new. The optional native/privileged/loader.m is adapted from yabai at commit
+dd845723416f5fe92af49fad5ebab00369e07edd and retains its MIT license, copyright,
+and Jeremy Legendre arm64e attribution. The exact upstream license is retained
+in native/privileged/YABAI-LICENSE.txt.
+All project source is distributed under GPL-3.0-or-later. Third-party Cargo
+packages retain their respective licenses; Cargo.lock pins their versions.
+
+No upstream endorsement or compatibility guarantee is implied.

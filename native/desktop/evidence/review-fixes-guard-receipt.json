@@ -1,0 +1,687 @@
+{
+  "enrolled": true,
+  "orphan_native_drag_rejected": 1,
+  "reopened_snapshot": {
+    "windows": [
+      {
+        "metadata": {
+          "title": "DriftWM disposable native source",
+          "bundle_id": "com.marengox.infinify"
+        },
+        "source": null,
+        "world_rect": {
+          "origin": {
+            "x": 61.24999999999999,
+            "y": 53.4375
+          },
+          "size": {
+            "width": 560,
+            "height": 420
+          }
+        },
+        "window": 1
+      }
+    ],
+    "placements": [],
+    "evidence": "logical_controller_only",
+    "focused": null,
+    "outputs": []
+  },
+  "native_resize": "explicitly unsupported",
+  "self_test_untagged_injection": true,
+  "controls": [],
+  "detached_input_rejected": 1,
+  "source_reaped": 1,
+  "snapshot_after": {
+    "windows": [
+      {
+        "metadata": {
+          "title": "DriftWM disposable native source",
+          "bundle_id": "com.marengox.infinify"
+        },
+        "source": {
+          "identity": {
+            "birth_usec": 836480,
+            "wid": 76618,
+            "owner": null,
+            "birth_sec": 1791505967,
+            "pid": 94230
+          },
+          "buffer": {
+            "width": 1120,
+            "height": 840
+          },
+          "observed_rect": {
+            "origin": {
+              "x": 120,
+              "y": 769
+            },
+            "size": {
+              "width": 560,
+              "height": 420
+            }
+          },
+          "original_rect": {
+            "origin": {
+              "x": 120,
+              "y": 769
+            },
+            "size": {
+              "width": 560,
+              "height": 420
+            }
+          }
+        },
+        "world_rect": {
+          "origin": {
+            "x": 30,
+            "y": 30
+          },
+          "size": {
+            "width": 560,
+            "height": 420
+          }
+        },
+        "window": 1
+      }
+    ],
+    "placements": [
+      {
+        "clip_rect": {
+          "origin": {
+            "x": 149.2,
+            "y": 703.2
+          },
+          "size": {
+            "width": 358.4000000000001,
+            "height": 268.80000000000007
+          }
+        },
+        "output": 1,
+        "screen_rect": {
+          "origin": {
+            "x": 149.2,
+            "y": 703.2
+          },
+          "size": {
+            "width": 358.4000000000001,
+            "height": 268.80000000000007
+          }
+        },
+        "buffer_crop": {
+          "origin": {
+            "x": 0,
+            "y": 0
+          },
+          "size": {
+            "width": 1120,
+            "height": 840
+          }
+        },
+        "source": {
+          "identity": {
+            "birth_usec": 836480,
+            "wid": 76618,
+            "owner": null,
+            "birth_sec": 1791505967,
+            "pid": 94230
+          },
+          "buffer": {
+            "width": 1120,
+            "height": 840
+          },
+          "observed_rect": {
+            "origin": {
+              "x": 120,
+              "y": 769
+            },
+            "size": {
+              "width": 560,
+              "height": 420
+            }
+          },
+          "original_rect": {
+            "origin": {
+              "x": 120,
+              "y": 769
+            },
+            "size": {
+              "width": 560,
+              "height": 420
+            }
+          }
+        },
+        "window": 1,
+        "world_local_crop": {
+          "origin": {
+            "x": 0,
+            "y": 0
+          },
+          "size": {
+            "width": 560,
+            "height": 420
+          }
+        }
+      },
+      {
+        "clip_rect": {
+          "origin": {
+            "x": 661.6,
+            "y": 690.6
+          },
+          "size": {
+            "width": 403.19999999999993,
+            "height": 302.4
+          }
+        },
+        "output": 2,
+        "screen_rect": {
+          "origin": {
+            "x": 661.6,
+            "y": 690.6
+          },
+          "size": {
+            "width": 403.2,
+            "height": 302.4
+          }
+        },
+        "buffer_crop": {
+          "origin": {
+            "x": 0,
+            "y": 0
+          },
+          "size": {
+            "width": 1119.9999999999998,
+            "height": 840
+          }
+        },
+        "source": {
+          "identity": {
+            "birth_usec": 836480,
+            "wid": 76618,
+            "owner": null,
+            "birth_sec": 1791505967,
+            "pid": 94230
+          },
+          "buffer": {
+            "width": 1120,
+            "height": 840
+          },
+          "observed_rect": {
+            "origin": {
+              "x": 120,
+              "y": 769
+            },
+            "size": {
+              "width": 560,
+              "height": 420
+            }
+          },
+          "original_rect": {
+            "origin": {
+              "x": 120,
+              "y": 769
+            },
+            "size": {
+              "width": 560,
+              "height": 420
+            }
+          }
+        },
+        "window": 1,
+        "world_local_crop": {
+          "origin": {
+            "x": 0,
+            "y": 0
+          },
+          "size": {
+            "width": 559.9999999999999,
+            "height": 420
+          }
+        }
+      }
+    ],
+    "evidence": "logical_controller_only",
+    "focused": null,
+    "outputs": [
+      {
+        "id": 1,
+        "zoom": 0.6400000000000001,
+        "camera": {
+          "x": -15.624999999999975,
+          "y": -23.437499999999975
+        },
+        "screen_bounds": {
+          "origin": {
+            "x": 120,
+            "y": 669
+          },
+          "size": {
+            "width": 480,
+            "height": 500
+          }
+        }
+      },
+      {
+        "id": 2,
+        "zoom": 0.72,
+        "camera": {
+          "x": 0,
+          "y": 0
+        },
+        "screen_bounds": {
+          "origin": {
+            "x": 640,
+            "y": 669
+          },
+          "size": {
+            "width": 480,
+            "height": 500
+          }
+        }
+      }
+    ]
+  },
+  "snapshot_before": {
+    "windows": [
+      {
+        "metadata": {
+          "title": "DriftWM disposable native source",
+          "bundle_id": "com.marengox.infinify"
+        },
+        "source": {
+          "identity": {
+            "birth_usec": 836480,
+            "wid": 76618,
+            "owner": null,
+            "birth_sec": 1791505967,
+            "pid": 94230
+          },
+          "buffer": {
+            "width": 1120,
+            "height": 840
+          },
+          "observed_rect": {
+            "origin": {
+              "x": 120,
+              "y": 769
+            },
+            "size": {
+              "width": 560,
+              "height": 420
+            }
+          },
+          "original_rect": {
+            "origin": {
+              "x": 120,
+              "y": 769
+            },
+            "size": {
+              "width": 560,
+              "height": 420
+            }
+          }
+        },
+        "world_rect": {
+          "origin": {
+            "x": 30,
+            "y": 30
+          },
+          "size": {
+            "width": 560,
+            "height": 420
+          }
+        },
+        "window": 1
+      }
+    ],
+    "placements": [
+      {
+        "clip_rect": {
+          "origin": {
+            "x": 144,
+            "y": 693
+          },
+          "size": {
+            "width": 448,
+            "height": 336
+          }
+        },
+        "output": 1,
+        "screen_rect": {
+          "origin": {
+            "x": 144,
+            "y": 693
+          },
+          "size": {
+            "width": 448,
+            "height": 336
+          }
+        },
+        "buffer_crop": {
+          "origin": {
+            "x": 0,
+            "y": 0
+          },
+          "size": {
+            "width": 1120,
+            "height": 840
+          }
+        },
+        "source": {
+          "identity": {
+            "birth_usec": 836480,
+            "wid": 76618,
+            "owner": null,
+            "birth_sec": 1791505967,
+            "pid": 94230
+          },
+          "buffer": {
+            "width": 1120,
+            "height": 840
+          },
+          "observed_rect": {
+            "origin": {
+              "x": 120,
+              "y": 769
+            },
+            "size": {
+              "width": 560,
+              "height": 420
+            }
+          },
+          "original_rect": {
+            "origin": {
+              "x": 120,
+              "y": 769
+            },
+            "size": {
+              "width": 560,
+              "height": 420
+            }
+          }
+        },
+        "window": 1,
+        "world_local_crop": {
+          "origin": {
+            "x": 0,
+            "y": 0
+          },
+          "size": {
+            "width": 560,
+            "height": 420
+          }
+        }
+      },
+      {
+        "clip_rect": {
+          "origin": {
+            "x": 661.6,
+            "y": 690.6
+          },
+          "size": {
+            "width": 403.19999999999993,
+            "height": 302.4
+          }
+        },
+        "output": 2,
+        "screen_rect": {
+          "origin": {
+            "x": 661.6,
+            "y": 690.6
+          },
+          "size": {
+            "width": 403.2,
+            "height": 302.4
+          }
+        },
+        "buffer_crop": {
+          "origin": {
+            "x": 0,
+            "y": 0
+          },
+          "size": {
+            "width": 1119.9999999999998,
+            "height": 840
+          }
+        },
+        "source": {
+          "identity": {
+            "birth_usec": 836480,
+            "wid": 76618,
+            "owner": null,
+            "birth_sec": 1791505967,
+            "pid": 94230
+          },
+          "buffer": {
+            "width": 1120,
+            "height": 840
+          },
+          "observed_rect": {
+            "origin": {
+              "x": 120,
+              "y": 769
+            },
+            "size": {
+              "width": 560,
+              "height": 420
+            }
+          },
+          "original_rect": {
+            "origin": {
+              "x": 120,
+              "y": 769
+            },
+            "size": {
+              "width": 560,
+              "height": 420
+            }
+          }
+        },
+        "window": 1,
+        "world_local_crop": {
+          "origin": {
+            "x": 0,
+            "y": 0
+          },
+          "size": {
+            "width": 559.9999999999999,
+            "height": 420
+          }
+        }
+      }
+    ],
+    "evidence": "logical_controller_only",
+    "focused": null,
+    "outputs": [
+      {
+        "id": 1,
+        "zoom": 0.8,
+        "camera": {
+          "x": 0,
+          "y": 0
+        },
+        "screen_bounds": {
+          "origin": {
+            "x": 120,
+            "y": 669
+          },
+          "size": {
+            "width": 480,
+            "height": 500
+          }
+        }
+      },
+      {
+        "id": 2,
+        "zoom": 0.72,
+        "camera": {
+          "x": 0,
+          "y": 0
+        },
+        "screen_bounds": {
+          "origin": {
+            "x": 640,
+            "y": 669
+          },
+          "size": {
+            "width": 480,
+            "height": 500
+          }
+        }
+      }
+    ]
+  },
+  "capture_foreground_pid": 94230,
+  "stream_frames": 16,
+  "source_pid": 94230,
+  "invalid_scene_preserved": 1,
+  "source_exit_status": 0,
+  "pointer_unchanged": false,
+  "frames": [],
+  "drag_test_event": {
+    "flags": 786432,
+    "hit": {
+      "output": 1,
+      "window": 1,
+      "local": {
+        "x": 80.00000000000001,
+        "y": 80.00000000000031
+      },
+      "requires_native_revalidation": true,
+      "identity": {
+        "birth_usec": 836480,
+        "wid": 76618,
+        "owner": null,
+        "birth_sec": 1791505967,
+        "pid": 94230
+      },
+      "buffer_local": {
+        "x": 160.00000000000003,
+        "y": 160.00000000000063
+      },
+      "native_screen": {
+        "x": 200,
+        "y": 849.0000000000003
+      }
+    },
+    "output": 1,
+    "expected_screen": {
+      "x": 200.4,
+      "y": 754.4000000000001
+    },
+    "actual_screen": {
+      "x": 200.4,
+      "y": 754.4000000000001
+    }
+  },
+  "interruption_reason": "missing_telemetry_or_untagged_source_event",
+  "chooser_selection_attached": 1,
+  "world_drag_changed_only_world": 1,
+  "source_final": {
+    "key_window": true,
+    "actions": [
+      {
+        "count": 1,
+        "tag": 0
+      }
+    ],
+    "scroll_y": 0,
+    "tick": 1.5546889305114746,
+    "birth": [
+      1791505967,
+      836480
+    ],
+    "untagged_events": 2,
+    "phase": 1,
+    "first_responder": "NSTextView",
+    "text_sha256": "be87b24e68e5af7df183aefff1890942b3496ab7a0a4b967f5f17ca07a4fcc66",
+    "window": 76618,
+    "app_active": true,
+    "clicks": 1,
+    "pid": 94230,
+    "bounds": {
+      "Width": 560,
+      "Height": 420,
+      "Y": 769,
+      "X": 120
+    },
+    "events": [
+      {
+        "window": 76618,
+        "local": [
+          120,
+          300
+        ],
+        "tag": 0,
+        "marked_text_sha256": "",
+        "type": 1,
+        "key_code": 0,
+        "flags": 0
+      },
+      {
+        "window": 76618,
+        "local": [
+          120,
+          300
+        ],
+        "tag": 0,
+        "marked_text_sha256": "",
+        "type": 2,
+        "key_code": 0,
+        "flags": 0
+      }
+    ]
+  },
+  "global_input_posts": 0,
+  "native_moves": 0,
+  "reopen_unbound": true,
+  "sources_detached": 1,
+  "native_bounds_unchanged": 1,
+  "kind": "Infinify packaged desktop fixture E2E",
+  "foreground_restore_attempted": true,
+  "accessibility": 1,
+  "screen_capture": true,
+  "pointer_anchor_stable": 1,
+  "screenshots_suppressed": true,
+  "separate_live_layers": 1,
+  "drag_mode": 2,
+  "source_initial": {
+    "key_window": true,
+    "actions": [],
+    "scroll_y": 0,
+    "tick": 0.10679292678833008,
+    "birth": [
+      1791505967,
+      836480
+    ],
+    "untagged_events": 0,
+    "phase": 0,
+    "first_responder": "NSTextView",
+    "text_sha256": "be87b24e68e5af7df183aefff1890942b3496ab7a0a4b967f5f17ca07a4fcc66",
+    "window": 76618,
+    "app_active": true,
+    "clicks": 0,
+    "pid": 94230,
+    "bounds": {
+      "Width": 560,
+      "Height": 420,
+      "Y": 769,
+      "X": 120
+    },
+    "events": []
+  },
+  "human_interrupted": true,
+  "permission_requests": 0,
+  "panels_closed": 1,
+  "source_active_before_controls": 1,
+  "passed": false,
+  "independent_second_camera": true,
+  "world_fixed_during_camera_changes": true,
+  "streams_stopped": 1,
+  "build_source_sha256": "b3ce8569b256e80bb1eae69a8ded6bbc49033766a112fd7900c29df0ba6409ec",
+  "captured_source_sha256": "daa1ae93968c9213a185692ff526461d9e9ce3bee5af229b1999e3224d79bf9e",
+  "binary_sha256": "f53cc2a083ff8fe7182eb1f5c74633e2faf416890888d9f550427a750017d151",
+  "os_version": "27.2",
+  "nonce_redaction": "Enrollment nonces removed after source reaped; original evidence is private temporary data."
+}

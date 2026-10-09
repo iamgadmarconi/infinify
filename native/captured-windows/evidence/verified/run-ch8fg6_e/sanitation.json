@@ -1,0 +1,14 @@
+{
+  "redacted_fields": [
+    "nonce"
+  ],
+  "nonce_fields_removed": 21,
+  "source_records_checked": 5,
+  "cleanup_verified_before_redaction": true,
+  "native_measurements_and_pixels_preserved": true,
+  "implementation_lineage": "not recorded in original manifest; not inferred",
+  "export_tool": {
+    "path": "native/captured-windows/sanitize-evidence.py",
+    "sha256": "9200ebd6fccc2a1b9d2d528228ef253ff3fc91b65df0537c675aea2e35d45281"
+  }
+}

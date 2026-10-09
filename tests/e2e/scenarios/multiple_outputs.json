@@ -1,0 +1,16 @@
+{
+  "version":1,
+  "name":"independent outputs and clipping",
+  "operations":[
+    {"op":"add_output","id":1,"bounds":[0,0,500,400],"camera":[0,0],"zoom":1},
+    {"op":"add_output","id":2,"bounds":[500,0,500,400],"camera":[200,0],"zoom":0.5},
+    {"op":"add_window","id":1,"rect":[400,100,200,100],"title":"Across output edges"},
+    {"op":"assert_positions","placements":[
+      {"window":1,"output":1,"screen":[400,100,200,100],"clip":[400,100,100,100],"source":[0,0,100,100]},
+      {"window":1,"output":2,"screen":[600,50,100,50],"clip":[600,50,100,50],"source":[0,0,200,100]}
+    ]},
+    {"op":"assert_hit","output":1,"point":[550,125],"window":null},
+    {"op":"assert_hit","output":2,"point":[650,75],"window":1,"local":[100,50]},
+    {"op":"assert_hit","output":2,"point":[700,75],"window":null}
+  ]
+}

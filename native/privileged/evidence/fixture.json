@@ -1,0 +1,789 @@
+{
+  "status": "PASS",
+  "tests": [
+    {
+      "test": "independent_parent_screen_rect",
+      "before": [
+        221.0,
+        817.0,
+        480.0,
+        352.0
+      ],
+      "after": [
+        0.0,
+        0.0,
+        320.0,
+        235.0
+      ],
+      "transform": {
+        "recovery_persisted": true,
+        "set_status": 0,
+        "readback": {
+          "readback_ok": true,
+          "matrix": [
+            1.5,
+            0,
+            0,
+            1.5,
+            0,
+            0
+          ],
+          "bounds": [
+            221,
+            817,
+            480,
+            352
+          ],
+          "screen_rect": [
+            0,
+            0,
+            320,
+            235
+          ]
+        },
+        "ok": true,
+        "v": 1,
+        "readback_matches_requested": true
+      },
+      "second_transform": {
+        "recovery_persisted": true,
+        "set_status": 0,
+        "readback": {
+          "readback_ok": true,
+          "matrix": [
+            2,
+            0,
+            0,
+            2,
+            0,
+            0
+          ],
+          "bounds": [
+            221,
+            817,
+            480,
+            352
+          ],
+          "screen_rect": [
+            0,
+            0,
+            240,
+            176
+          ]
+        },
+        "ok": true,
+        "v": 1,
+        "readback_matches_requested": true
+      }
+    },
+    {
+      "test": "disconnect",
+      "receipt": {
+        "ok": true,
+        "reason": "disconnect",
+        "set_status": 0,
+        "readback": {
+          "readback_ok": true,
+          "matrix": [
+            1,
+            0,
+            0,
+            1,
+            -221,
+            -817
+          ],
+          "bounds": [
+            221,
+            817,
+            480,
+            352
+          ],
+          "screen_rect": [
+            221,
+            817,
+            480,
+            352
+          ]
+        },
+        "restored": true,
+        "v": 1,
+        "original": [
+          1,
+          0,
+          0,
+          1,
+          -221,
+          -817
+        ],
+        "identity": {
+          "birth_usec": 518191,
+          "birth_sec": 1791504012,
+          "owner": 6848295,
+          "wid": 75666,
+          "pid": 79739
+        }
+      }
+    },
+    {
+      "test": "lease expired",
+      "receipt": {
+        "ok": true,
+        "reason": "lease expired",
+        "set_status": 0,
+        "readback": {
+          "readback_ok": true,
+          "matrix": [
+            1,
+            0,
+            0,
+            1,
+            -221,
+            -817
+          ],
+          "bounds": [
+            221,
+            817,
+            480,
+            352
+          ],
+          "screen_rect": [
+            221,
+            817,
+            480,
+            352
+          ]
+        },
+        "restored": true,
+        "v": 1,
+        "original": [
+          1,
+          0,
+          0,
+          1,
+          -221,
+          -817
+        ],
+        "identity": {
+          "birth_usec": 518191,
+          "birth_sec": 1791504012,
+          "owner": 6848295,
+          "wid": 75666,
+          "pid": 79739
+        }
+      }
+    },
+    {
+      "test": "explicit restore",
+      "response": {
+        "ok": true,
+        "reason": "explicit",
+        "set_status": 0,
+        "recovery_persisted": true,
+        "readback": {
+          "readback_ok": true,
+          "matrix": [
+            1,
+            0,
+            0,
+            1,
+            -221,
+            -817
+          ],
+          "bounds": [
+            221,
+            817,
+            480,
+            352
+          ],
+          "screen_rect": [
+            221,
+            817,
+            480,
+            352
+          ]
+        },
+        "restored": true,
+        "v": 1,
+        "original": [
+          1,
+          0,
+          0,
+          1,
+          -221,
+          -817
+        ],
+        "identity": {
+          "birth_usec": 518191,
+          "birth_sec": 1791504012,
+          "owner": 6848295,
+          "wid": 75666,
+          "pid": 79739
+        }
+      }
+    },
+    {
+      "test": "fixture journal obstruction and explicit retry",
+      "failed": {
+        "ok": false,
+        "reason": "explicit",
+        "set_status": 0,
+        "recovery_persisted": false,
+        "readback": {
+          "readback_ok": true,
+          "matrix": [
+            1,
+            0,
+            0,
+            1,
+            -221,
+            -817
+          ],
+          "bounds": [
+            221,
+            817,
+            480,
+            352
+          ],
+          "screen_rect": [
+            221,
+            817,
+            480,
+            352
+          ]
+        },
+        "restored": true,
+        "v": 1,
+        "original": [
+          1,
+          0,
+          0,
+          1,
+          -221,
+          -817
+        ],
+        "identity": {
+          "birth_usec": 518191,
+          "birth_sec": 1791504012,
+          "owner": 6848295,
+          "wid": 75666,
+          "pid": 79739
+        },
+        "error": "restoration readback obtained but receipt persistence failed"
+      },
+      "retry_while_obstructed": {
+        "ok": false,
+        "reason": "explicit",
+        "set_status": 0,
+        "recovery_persisted": false,
+        "readback": {
+          "readback_ok": true,
+          "matrix": [
+            1,
+            0,
+            0,
+            1,
+            -221,
+            -817
+          ],
+          "bounds": [
+            221,
+            817,
+            480,
+            352
+          ],
+          "screen_rect": [
+            221,
+            817,
+            480,
+            352
+          ]
+        },
+        "restored": true,
+        "v": 1,
+        "original": [
+          1,
+          0,
+          0,
+          1,
+          -221,
+          -817
+        ],
+        "identity": {
+          "birth_usec": 518191,
+          "birth_sec": 1791504012,
+          "owner": 6848295,
+          "wid": 75666,
+          "pid": 79739
+        },
+        "error": "restoration readback obtained but receipt persistence failed"
+      },
+      "mutation_blocked": {
+        "v": 1,
+        "error": "recovery unresolved; mutation disabled",
+        "ok": false
+      },
+      "retried": {
+        "ok": true,
+        "reason": "explicit",
+        "set_status": 0,
+        "recovery_persisted": true,
+        "readback": {
+          "readback_ok": true,
+          "matrix": [
+            1,
+            0,
+            0,
+            1,
+            -221,
+            -817
+          ],
+          "bounds": [
+            221,
+            817,
+            480,
+            352
+          ],
+          "screen_rect": [
+            221,
+            817,
+            480,
+            352
+          ]
+        },
+        "restored": true,
+        "v": 1,
+        "original": [
+          1,
+          0,
+          0,
+          1,
+          -221,
+          -817
+        ],
+        "identity": {
+          "birth_usec": 518191,
+          "birth_sec": 1791504012,
+          "owner": 6848295,
+          "wid": 75666,
+          "pid": 79739
+        }
+      },
+      "durable_receipt": {
+        "ok": true,
+        "reason": "explicit",
+        "set_status": 0,
+        "readback": {
+          "readback_ok": true,
+          "matrix": [
+            1,
+            0,
+            0,
+            1,
+            -221,
+            -817
+          ],
+          "bounds": [
+            221,
+            817,
+            480,
+            352
+          ],
+          "screen_rect": [
+            221,
+            817,
+            480,
+            352
+          ]
+        },
+        "restored": true,
+        "v": 1,
+        "original": [
+          1,
+          0,
+          0,
+          1,
+          -221,
+          -817
+        ],
+        "identity": {
+          "birth_usec": 518191,
+          "birth_sec": 1791504012,
+          "owner": 6848295,
+          "wid": 75666,
+          "pid": 79739
+        }
+      }
+    },
+    {
+      "test": "automatic retry",
+      "receipt": {
+        "ok": true,
+        "reason": "automatic retry",
+        "set_status": 0,
+        "readback": {
+          "readback_ok": true,
+          "matrix": [
+            1,
+            0,
+            0,
+            1,
+            -221,
+            -817
+          ],
+          "bounds": [
+            221,
+            817,
+            480,
+            352
+          ],
+          "screen_rect": [
+            221,
+            817,
+            480,
+            352
+          ]
+        },
+        "restored": true,
+        "v": 1,
+        "original": [
+          1,
+          0,
+          0,
+          1,
+          -221,
+          -817
+        ],
+        "identity": {
+          "birth_usec": 518191,
+          "birth_sec": 1791504012,
+          "owner": 6848295,
+          "wid": 75666,
+          "pid": 79739
+        }
+      }
+    },
+    {
+      "test": "fixture journal obstruction and autonomous recovery",
+      "failed_retries": [
+        {
+          "ok": false,
+          "reason": "automatic retry",
+          "set_status": 0,
+          "recovery_persisted": false,
+          "readback": {
+            "readback_ok": true,
+            "matrix": [
+              1,
+              0,
+              0,
+              1,
+              -221,
+              -817
+            ],
+            "bounds": [
+              221,
+              817,
+              480,
+              352
+            ],
+            "screen_rect": [
+              221,
+              817,
+              480,
+              352
+            ]
+          },
+          "restored": true,
+          "v": 1,
+          "original": [
+            1,
+            0,
+            0,
+            1,
+            -221,
+            -817
+          ],
+          "identity": {
+            "birth_usec": 518191,
+            "birth_sec": 1791504012,
+            "owner": 6848295,
+            "wid": 75666,
+            "pid": 79739
+          },
+          "error": "restoration readback obtained but receipt persistence failed"
+        },
+        {
+          "ok": false,
+          "reason": "automatic retry",
+          "set_status": 0,
+          "recovery_persisted": false,
+          "readback": {
+            "readback_ok": true,
+            "matrix": [
+              1,
+              0,
+              0,
+              1,
+              -221,
+              -817
+            ],
+            "bounds": [
+              221,
+              817,
+              480,
+              352
+            ],
+            "screen_rect": [
+              221,
+              817,
+              480,
+              352
+            ]
+          },
+          "restored": true,
+          "v": 1,
+          "original": [
+            1,
+            0,
+            0,
+            1,
+            -221,
+            -817
+          ],
+          "identity": {
+            "birth_usec": 518191,
+            "birth_sec": 1791504012,
+            "owner": 6848295,
+            "wid": 75666,
+            "pid": 79739
+          },
+          "error": "restoration readback obtained but receipt persistence failed"
+        }
+      ],
+      "durable_receipt": {
+        "ok": true,
+        "reason": "automatic retry",
+        "set_status": 0,
+        "readback": {
+          "readback_ok": true,
+          "matrix": [
+            1,
+            0,
+            0,
+            1,
+            -221,
+            -817
+          ],
+          "bounds": [
+            221,
+            817,
+            480,
+            352
+          ],
+          "screen_rect": [
+            221,
+            817,
+            480,
+            352
+          ]
+        },
+        "restored": true,
+        "v": 1,
+        "original": [
+          1,
+          0,
+          0,
+          1,
+          -221,
+          -817
+        ],
+        "identity": {
+          "birth_usec": 518191,
+          "birth_sec": 1791504012,
+          "owner": 6848295,
+          "wid": 75666,
+          "pid": 79739
+        }
+      }
+    },
+    {
+      "test": "wrong nonce",
+      "response": {
+        "v": 1,
+        "error": "authentication failed",
+        "ok": false
+      }
+    },
+    {
+      "test": "unsupported version",
+      "response": {
+        "v": 1,
+        "error": "unsupported protocol version",
+        "ok": false
+      }
+    },
+    {
+      "test": "singular matrix",
+      "response": {
+        "v": 1,
+        "error": "matrix nonfinite, singular, or exceeds bound",
+        "ok": false
+      }
+    },
+    {
+      "test": "wrong birth",
+      "response": {
+        "v": 1,
+        "error": "identity mismatch",
+        "ok": false
+      }
+    },
+    {
+      "test": "out of scope enrollment",
+      "response": {
+        "v": 1,
+        "error": "fixture scope violation",
+        "ok": false
+      }
+    },
+    {
+      "test": "boolean matrix",
+      "response": {
+        "v": 1,
+        "error": "matrix must contain numbers",
+        "ok": false
+      }
+    },
+    {
+      "test": "unknown field",
+      "response": {
+        "v": 1,
+        "error": "invalid request fields",
+        "ok": false
+      }
+    },
+    {
+      "test": "unknown operation",
+      "response": {
+        "v": 1,
+        "error": "unknown operation",
+        "ok": false
+      }
+    },
+    {
+      "test": "nonfinite number",
+      "response": {
+        "v": 1,
+        "error": "unsupported protocol version",
+        "ok": false
+      }
+    },
+    {
+      "test": "oversize packet",
+      "receipt": {
+        "ok": true,
+        "reason": "oversize packet",
+        "set_status": 0,
+        "readback": {
+          "readback_ok": true,
+          "matrix": [
+            1,
+            0,
+            0,
+            1,
+            -221,
+            -817
+          ],
+          "bounds": [
+            221,
+            817,
+            480,
+            352
+          ],
+          "screen_rect": [
+            221,
+            817,
+            480,
+            352
+          ]
+        },
+        "restored": true,
+        "v": 1,
+        "original": [
+          1,
+          0,
+          0,
+          1,
+          -221,
+          -817
+        ],
+        "identity": {
+          "birth_usec": 518191,
+          "birth_sec": 1791504012,
+          "owner": 6848295,
+          "wid": 75666,
+          "pid": 79739
+        }
+      }
+    },
+    {
+      "test": "companion client",
+      "response": {
+        "ok": true,
+        "scope": "cooperative fixture only",
+        "lease_ms": 2000,
+        "readback": {
+          "readback_ok": true,
+          "matrix": [
+            1,
+            0,
+            0,
+            1,
+            -221,
+            -817
+          ],
+          "bounds": [
+            221,
+            817,
+            480,
+            352
+          ],
+          "screen_rect": [
+            221,
+            817,
+            480,
+            352
+          ]
+        },
+        "v": 1,
+        "identity": {
+          "birth_usec": 518191,
+          "birth_sec": 1791504012,
+          "owner": 6848295,
+          "wid": 75666,
+          "pid": 79739
+        },
+        "dirty": false
+      }
+    }
+  ],
+  "doctor": {
+    "settings_changed": false,
+    "status": "injection unavailable under current SIP/boot policy",
+    "implementation": "transform-only dlsym; no Dock offsets, pattern scanning or Space manipulation",
+    "injection_preflight_passed": 0,
+    "arm64e_preview_abi": 0,
+    "v": 1,
+    "injection_executed": false,
+    "sip_config": 0,
+    "sip_query_ok": 1,
+    "task_for_pid_relaxed": 0,
+    "filesystem_relaxed": 0
+  },
+  "scope": "only spawned NSWindow; independent parent screen-rect observation; no Dock injection",
+  "limits": [
+    "production injection and foreign windows untested",
+    "cross-UID rejection enforced by getpeereid but cannot simulate another UID without privilege",
+    "server process death cannot run restoration; durable recovery journal remains"
+  ]
+}

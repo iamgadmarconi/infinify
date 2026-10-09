@@ -1,0 +1,20 @@
+{
+  "files": {
+    "demo/receipt.json": "ca1417cbd88911e0b99846d3a2b86a3c0b0006b1316d60feedaff8f0aaafc57b",
+    "demo/source-exit.json": "04bb540ada5f09bfa53ceabf4bb2751f53e9b9e8fa91e362da5099bcf067cac0",
+    "demo/source.json": "f8f615524687cd539a0cb83af17d333e58d48d6118d2a2f133cce9679d39c4ba",
+    "implementation-lineage-restoration.json": "6a111abd67bd5bfd84fcf79092dfaf807b9e120927186e9c6d1417944a5c7949",
+    "probe/receipt.json": "9f57d8a7e36706aa9df04084bb12bce7b70da132fa5f90fd624203496c609515",
+    "probe/source-exit.json": "bb6298699eb9d5610020e11fad70adeb6213d72fcc9cc40aaf89caef6ba2df8c",
+    "probe/source.json": "cebd68f0e9f50eb8a2a5f03cb571bb0129ab862683e31eb546403f66a8669bec",
+    "sanitation.json": "8d380aac05b78b6abe83bfff07584c0b33c798b3d82fd406c30746ccf483b65e",
+    "verification.json": "0f6633523e595d86150b77e5c1634ad07cef024966333ecb9c86775ad7a0cb4a"
+  },
+  "implementation": {
+    "native/captured-windows/captured.m": "daa1ae93968c9213a185692ff526461d9e9ce3bee5af229b1999e3224d79bf9e",
+    "native/captured-windows/demo-input-regression.m": "edc43f95be602e977895ebe6f86f6db9c25927e5190968fc1af162389e4d30bb",
+    "tests/e2e/captured-windows.sh": "7c8ffedb816c53410e71ebbbf8fafa05b72670285cce86da8dde5e0ce2688ef4",
+    "scripts/build-captured-windows.sh": "3de39d6adf29eabe3f2182bd45beac245e8e4658688d3ce44dea10632c90b13b",
+    "native/captured-windows/README.md": "abfd03996302e98a0addc8ed16540ef4ffc6c0aaecf3a3b6c5ec6eceacfd63f0"
+  }
+}

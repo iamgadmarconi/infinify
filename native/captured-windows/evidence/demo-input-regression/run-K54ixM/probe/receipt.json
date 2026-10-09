@@ -1,0 +1,134 @@
+{
+  "window_transform_calls": 0,
+  "pointer_before": [
+    916.91796875,
+    742.88671875
+  ],
+  "source_reaped": 1,
+  "source_behind_covering_host": 1,
+  "activation_policy": "owned source only, short private keyboard probe or explicit demo click",
+  "stream_stopped": true,
+  "controls_by_camera": [
+    {
+      "scroll": false,
+      "camera": 0,
+      "button": false,
+      "text": false
+    },
+    {
+      "scroll": false,
+      "camera": 1,
+      "button": false,
+      "text": false
+    }
+  ],
+  "stream_frames": 8,
+  "source_exit_status": 0,
+  "source_pid": 86503,
+  "screen_capture_preflight": true,
+  "source_window": 76231,
+  "identity_enrolled": true,
+  "foreground_before_cleanup": 1329,
+  "frames": [],
+  "host_bounds": {
+    "X": 100,
+    "Height": 600,
+    "Y": 609,
+    "Width": 1040
+  },
+  "prior_foreground_pid": 1329,
+  "source_final": {
+    "key_window": false,
+    "actions": [],
+    "scroll_y": 0,
+    "tick": 1.4562920331954956,
+    "birth": [
+      1791505175,
+      240817
+    ],
+    "untagged_events": 1,
+    "phase": 1,
+    "first_responder": "NSTextView",
+    "text_sha256": "be87b24e68e5af7df183aefff1890942b3496ab7a0a4b967f5f17ca07a4fcc66",
+    "window": 76231,
+    "app_active": false,
+    "clicks": 0,
+    "pid": 86503,
+    "bounds": {
+      "Width": 560,
+      "Height": 420,
+      "Y": 769,
+      "X": 120
+    },
+    "events": [
+      {
+        "window": 0,
+        "local": [
+          130,
+          550
+        ],
+        "tag": 0,
+        "marked_text_sha256": "",
+        "type": 2,
+        "key_code": 0,
+        "flags": 0
+      }
+    ]
+  },
+  "global_input_posts": 0,
+  "attempts": [],
+  "sent": [],
+  "source_custom_surface_exports": 0,
+  "pointer_after": [
+    327.63671875,
+    546.54296875
+  ],
+  "human_input_interrupted_capture": true,
+  "source_initial": {
+    "key_window": false,
+    "actions": [],
+    "scroll_y": 0,
+    "tick": 0.4455890655517578,
+    "birth": [
+      1791505175,
+      240817
+    ],
+    "untagged_events": 1,
+    "phase": 0,
+    "first_responder": "NSTextView",
+    "text_sha256": "be87b24e68e5af7df183aefff1890942b3496ab7a0a4b967f5f17ca07a4fcc66",
+    "window": 76231,
+    "app_active": false,
+    "clicks": 0,
+    "pid": 86503,
+    "bounds": {
+      "Width": 560,
+      "Height": 420,
+      "Y": 769,
+      "X": 120
+    },
+    "events": [
+      {
+        "window": 0,
+        "local": [
+          130,
+          550
+        ],
+        "tag": 0,
+        "marked_text_sha256": "",
+        "type": 2,
+        "key_code": 0,
+        "flags": 0
+      }
+    ]
+  },
+  "permission_requests": 0,
+  "signal": 1,
+  "host_pid": 86502,
+  "screenshots_suppressed_after_input": true,
+  "accessibility_preflight": 1,
+  "identity_still_valid": true,
+  "input_mappings": [],
+  "host_window": 76236,
+  "stream_error": ""
+}
