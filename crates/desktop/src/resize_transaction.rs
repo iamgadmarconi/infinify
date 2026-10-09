@@ -420,7 +420,9 @@ impl Controller {
         if t.cancelled {
             t.coalesced_latest = None;
         }
-        if let Some(size) = t.coalesced_latest.take() {
+        if let Some(size) = t.coalesced_latest.take()
+            && size != t.last_committed_size
+        {
             // Baseline validation may release motion queued during Preparing.
             // Continue accepting motion only while the pointer remains held.
             t.phase = if t.released {

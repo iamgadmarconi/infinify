@@ -820,3 +820,44 @@ fn baseline_releases_queued_motion_and_continues_accepting_held_drag() {
     h.ok(reply(&read, "observed", false, true, 240., 150.));
     assert_eq!(h.snap()["native_resize"]["phase"], "complete");
 }
+
+#[test]
+fn queued_return_to_origin_skips_setter_after_baseline_for_held_and_released_drag() {
+    for released in [false, true] {
+        let mut h = setup();
+        let baseline = begin(&mut h, "right");
+        assert!(motion(&mut h, &baseline, 20., 0.).is_null());
+        assert!(motion(&mut h, &baseline, 0., 0.).is_null());
+        if released {
+            finish(&mut h, &baseline, false);
+        }
+        let result = h.ok(reply(&baseline, "observed", false, true, 200., 150.));
+        assert!(result["effect"].is_null());
+        let state = h.snap()["native_resize"].clone();
+        assert!(state["pending_effect"].is_null());
+        assert!(state["coalesced_latest"].is_null());
+        assert_eq!(
+            state["phase"],
+            if released { "complete" } else { "dragging" }
+        );
+        assert_eq!(world(&mut h), rect(100., 100., 200., 150.));
+        assert_eq!(h.snap()["windows"][0]["source"]["capture_revision"], 0);
+        if !released {
+            let setter = motion(&mut h, &baseline, 30., 0.);
+            assert_eq!(setter["requested"], json!({"width":230.,"height":150.}));
+        }
+    }
+}
+#[test]
+fn skipping_coalesced_size_already_observed_still_drains_final_read_after_setter() {
+    let mut h = setup();
+    let t = ready(&mut h, "right");
+    let first = motion(&mut h, &t, 20., 0.);
+    assert!(motion(&mut h, &t, 40., 0.).is_null());
+    finish(&mut h, &t, false);
+    let final_read = h.ok(reply(&first, "clamped", true, true, 240., 150.))["effect"].clone();
+    assert_eq!(final_read["op"], "observe_resize_source");
+    assert!(h.snap()["native_resize"]["coalesced_latest"].is_null());
+    h.ok(reply(&final_read, "observed", false, true, 240., 150.));
+    assert_eq!(h.snap()["native_resize"]["phase"], "complete");
+}
