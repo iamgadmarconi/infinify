@@ -6,6 +6,10 @@ A GPL-3.0-or-later Rust/macOS development port of [DriftWM](https://github.com/m
 
 Disposable AppKit fixtures verify live content, clipping, camera gestures and native button, text and scroll input. Broad third-party application compatibility and physical multi-display behavior remain unverified. This is a development build, not a complete replacement for the macOS desktop.
 
+The completion requirement is **exact DriftWM behavior for native Mac apps**.
+The [source-pinned parity contract](docs/parity/README.md) tracks known differences
+and required proof. Literal Wayland/X11 client hosting is outside the agreed scope.
+
 ## Run the app
 
 From `/Users/gad/Documents/code/personal/infinify`:
