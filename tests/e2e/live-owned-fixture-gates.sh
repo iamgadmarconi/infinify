@@ -7,7 +7,7 @@ cd "$(dirname "$0")/../.."
 root=$PWD
 harness=$(mktemp -d "${TMPDIR:-/tmp}/infinify-live-gates.XXXXXX")
 trap 'rm -rf "$harness"' EXIT HUP INT TERM
-mkdir -p "$harness/tests/e2e" "$harness/scripts" "$harness/bin"
+mkdir -p "$harness/tests/e2e" "$harness/scripts" "$harness/bin" "$harness/tmp"
 for name in native-resize captured-windows desktop-app live-surfaces native-families native-fixture privileged-fixture; do
   cp "$root/tests/e2e/$name.sh" "$harness/tests/e2e/"
 done
@@ -62,6 +62,7 @@ chmod +x "$harness/bin/"*
 
 export PATH="$harness/bin:$PATH"
 export GATE_LOG="$harness/calls.log"
+export TMPDIR="$harness/tmp"
 cd "$harness"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
