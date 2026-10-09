@@ -15,6 +15,7 @@ mod geometry;
 mod gestures;
 mod layout;
 mod momentum;
+pub mod policy;
 mod session;
 pub use geometry::{Point, Rect, Size};
 pub use gestures::{DragGesture, ResizeEdges, ResizeGesture};

@@ -33,3 +33,28 @@ Smithay-dependent wrappers are not themselves executed by this harness.
 These traces prove the compared canvas outputs for the tested inputs. They do
 not establish native macOS behavior, all upstream compositor paths, or exhaustive
 floating-point/integer equivalence. See `../../SNAPPING.md` for the boundary.
+
+## Canvas policy oracle
+
+`canvas.rs` is also copied byte-for-byte from `src/canvas.rs` at the same pinned
+commit. `policy_flow` compiles the complete unchanged file, substituting only
+Smithay geometry storage, ordinary arithmetic/conversion, and config Direction
+through `tests/support/canvas_shim.rs`. Run:
+
+```sh
+cargo test -p driftwm-canvas --test policy_flow policy_
+```
+
+The filter skips upstream's own 44 unit tests. Public policy pipelines compare
+fit/dynamic minimum/camera centers, visibility/culling, nearest direction,
+bookmark selection, zoom anchoring, and momentum event/tick traces with the
+original helper bodies. The shim contains no camera, selection, or momentum
+algorithm. The eight direction vectors are independently copied from
+`src/config/types.rs::Direction::to_unit_vec`; that source file's SHA-256 at the
+pinned commit is
+`d709bb9c4adc8212ff38e21b60676ceddbbed24b0ab184acb7745255d78fb1b2`.
+The test shim does not establish equivalence to all Smithay geometry operations.
+Only the field storage, tuple construction, Point addition/subtraction, and i32
+to f64 casts needed to compile the original file are implemented.
+
+See `../../POLICY.md` for the public helper contracts and integration boundaries.
