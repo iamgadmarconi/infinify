@@ -228,7 +228,7 @@ explicitly authorized owned-fixture gate must cross real handles, AX mutation, S
 renderer pixels, independent AX/CG observation, clamp behavior, static-frame refresh,
 Escape handling, and cleanup. No such integrated live proof has been run or claimed.
 
-## Prepared owned resize gate — live runtime UNRUN
+## Prepared noninteractive owned resize gate — runtime UNRUN
 
 `tests/e2e/desktop-native-resize.sh` defaults to building the signed app, reading
 pre-AppKit help, the existing headless resize integration, and 66 offline PNG
@@ -244,8 +244,10 @@ After an explicitly authorized desktop test interval, select one bounded case:
 The native internal entry point is `--owned-resize-probe EMPTY_DIRECTORY [SCENARIO]`.
 Only this entry point spawns/enrolls its exact nonce/PID/kernel-birth/window fixture;
 there is no arbitrary PID/window option. `--owned-resize-fixture` validates its
-actual parent identity and lease before AppKit startup. A fresh isolated scene is
-used. The chooser attaches the exact SCK source, and the runner calls the real
+actual parent identity and lease before AppKit startup. The foreground PID and
+kernel birth are captured **before** NSApplication initialization and rechecked
+after startup and before every window order. Startup self-activation fails; it
+never becomes an accepted baseline. A fresh isolated scene is used. The chooser attaches the exact SCK source, and the runner calls the real
 DesktopView mouseDown/Dragged/Up at a real projected orange handle. Normal input
 forwarding is disabled only for this internal mode, so a vanished handle cannot
 fall through to activation. Production capture policies and reconfiguration are
@@ -276,10 +278,27 @@ the external saved-byte PNG oracle. Native origin movement is recorded honestly;
 world opposite-edge anchoring and unchanged cameras are separate assertions.
 Controller crop metadata and fixture child frames are not oracle inputs.
 
+This mode is exclusively a **noninteractive owned layout/capture probe**. Its
+root, decoy, child and chooser use a dedicated NSWindow subclass that refuses key
+and main status and sets ignoresMouseEvents before any ordering or child attachment.
+Its host panel has the same contract plus the nonactivating style. A dedicated
+NSApplication is installed from startup and rejects unexpected queued pointer,
+button, drag, scroll, keyboard, flags, gesture, tablet and unknown events before
+normal dispatch, atomically latching failure. Framework housekeeping alone passes;
+there is no event-tag exemption. Scripted DesktopView calls bypass the event queue.
+All owned-window exclusion contracts are checked before capture and mutation.
+
 Every setter checks the exact owned identity, unchanged read-only transform,
-recognized geometry, deadline, foreground identity, and HID inactivity. Human or
-foreground interruption is sticky; restored idleness cannot resume work. Source
-and host screenshots are only of enrolled owned windows and are deleted after
+recognized geometry, deadline, foreground identity, fresh fixture exclusion state,
+and sticky input-exclusion status. The same foreground application's unrelated
+input is allowed: this mode does not query global HID inactivity or require an
+input-observation grant. Switching foreground apps still aborts, and unexpected
+input delivered to the probe is dropped and permanently aborts the session.
+Owned mode registers neither the global Escape monitor nor the exit hotkey; use
+the supervisor's SIGINT or the bounded deadline. Visible chooser buttons are inert
+in this probe, and the host toolbar explicitly labels the noninteractive mode.
+Other desktop/demo modes retain their existing controls. This does not prove physical-input handling or ordinary
+application compatibility. Source and host screenshots are only of enrolled owned windows and are deleted after
 interruption. No global event posting, foreground activation/restoration, transform
 setter, permission prompt, SIP or settings change is used. The fixture watchdog
 runs in common and event-tracking modes, checks exact parent birth, reconciles only
@@ -291,9 +310,14 @@ the surviving supervisor can independently read AX/CG and transform before
 acknowledging closure. A missed hold or missing readback is restoration-unproved
 and fails; a fixture receipt plus disappearance alone cannot pass cleanup.
 
-`resize-live.py` records exact source hashes including both `.inc.m` inputs and
+`resize-live.py` records exact source hashes including the `.inc.m` inputs and
 runs `resize-verify.py` only after native-path completion. Abnormal/family scenarios
-never claim pixel/layout proof; missing scenarios are not marked passed. No live
-result has been frozen for this integration. Full native resizing parity, reliable
+never claim pixel/layout proof; missing scenarios are not marked passed. No
+successful live result has been frozen for this integration. Startup/preflight,
+AX enrollment, per-guard conditions, first contamination, and restoration evidence
+record separate booleans, exact owned bounds and initial/current transforms; no
+human text is recorded. A transform failure does not silently replace the initial
+baseline. The new noninteractive path remains runtime-unrun. Full native resizing
+parity, reliable
 static SCK refresh, real desktop interruption handling, and third-party support
 remain **unrun and incomplete**.

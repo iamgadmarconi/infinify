@@ -7,25 +7,29 @@ static NSDictionary *cg(uint32_t wid){return windowInfo(wid);}
 static BOOL rpNear(CGRect a,CGRect b) {return fabs(a.origin.x-b.origin.x)<=1&&fabs(a.origin.y-b.origin.y)<=1&&fabs(a.size.width-b.size.width)<=1&&fabs(a.size.height-b.size.height)<=1;}
 // Independent readback: deliberately does not call the resize adapter or use its
 // result, controller observed_rect, fixture subview frames, or capture crop.
-static NSDictionary *rpObserve(pid_t pid,NSArray *expectedBirth,uint32_t wid) {
-    if(![birth(pid)isEqual:expectedBirth])return nil;
-    AXError (*getID)(AXUIElementRef,uint32_t *)=dlsym(RTLD_DEFAULT,"_AXUIElementGetWindow");if(!getID)return nil;
+static NSDictionary *rpObserveDetailed(pid_t pid,NSArray *expectedBirth,uint32_t wid,NSMutableDictionary *details) {
+    BOOL birthMatches=[birth(pid)isEqual:expectedBirth];details[@"pid_birth_matches"]=@(birthMatches);if(!birthMatches)return nil;
+    AXError (*getID)(AXUIElementRef,uint32_t *)=dlsym(RTLD_DEFAULT,"_AXUIElementGetWindow");details[@"ax_window_id_symbol"]=@(getID!=NULL);if(!getID)return nil;
     AXUIElementRef app=AXUIElementCreateApplication(pid);AXUIElementSetMessagingTimeout(app,.15);CFTypeRef list=NULL;
-    AXError error=AXUIElementCopyAttributeValue(app,kAXWindowsAttribute,&list);CFRelease(app);
+    AXError error=AXUIElementCopyAttributeValue(app,kAXWindowsAttribute,&list);CFRelease(app);details[@"ax_windows_error"]=@(error);details[@"ax_windows_array"]=@(list&&CFGetTypeID(list)==CFArrayGetTypeID());
     if(error||!list||CFGetTypeID(list)!=CFArrayGetTypeID()){if(list)CFRelease(list);return nil;}
+    details[@"ax_window_count"]=@(CFArrayGetCount((CFArrayRef)list));
     CGPoint point=CGPointZero;CGSize size=CGSizeZero;NSUInteger matches=0;BOOL valid=YES;double deadline=CACurrentMediaTime()+.8;
     for(id object in (__bridge NSArray *)list){
         AXUIElementRef element=(__bridge AXUIElementRef)object;uint32_t candidate=0;
-        if(CACurrentMediaTime()>deadline||CFGetTypeID(element)!=AXUIElementGetTypeID()||AXUIElementSetMessagingTimeout(element,.15)||getID(element,&candidate)){valid=NO;break;}
+        AXError idError=kAXErrorSuccess;if(CACurrentMediaTime()>deadline||CFGetTypeID(element)!=AXUIElementGetTypeID()||(idError=AXUIElementSetMessagingTimeout(element,.15))||(idError=getID(element,&candidate))){details[@"ax_identity_error"]=@(idError);details[@"readback_deadline_expired"]=@(CACurrentMediaTime()>deadline);valid=NO;break;}
         if(candidate!=wid)continue;matches++;CFTypeRef position=NULL,extent=NULL;
-        BOOL ok=!AXUIElementCopyAttributeValue(element,kAXPositionAttribute,&position)&&!AXUIElementCopyAttributeValue(element,kAXSizeAttribute,&extent);
+        AXError positionError=AXUIElementCopyAttributeValue(element,kAXPositionAttribute,&position),sizeError=AXUIElementCopyAttributeValue(element,kAXSizeAttribute,&extent);details[@"ax_position_error"]=@(positionError);details[@"ax_size_error"]=@(sizeError);BOOL ok=!positionError&&!sizeError;
         ok=ok&&position&&extent&&CFGetTypeID(position)==AXValueGetTypeID()&&CFGetTypeID(extent)==AXValueGetTypeID()&&AXValueGetValue(position,kAXValueCGPointType,&point)&&AXValueGetValue(extent,kAXValueCGSizeType,&size);
         if(position)CFRelease(position);if(extent)CFRelease(extent);valid&=ok;
     }
     CFRelease(list);NSDictionary *info=windowInfo(wid);CGRect cg=CGRectZero,ax={point,size};
-    if(!valid||matches!=1||![birth(pid)isEqual:expectedBirth]||[info[(id)kCGWindowOwnerPID]intValue]!=pid||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)info[(id)kCGWindowBounds],&cg)||!rpNear(ax,cg)||size.width<=0||size.height<=0)return nil;
+    BOOL owner=[info[(id)kCGWindowOwnerPID]intValue]==pid,hasBounds=info&&CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)info[(id)kCGWindowBounds],&cg),finalBirth=[birth(pid)isEqual:expectedBirth];
+    details[@"exact_ax_matches"]=@(matches);details[@"ax_readback_valid"]=@(valid);details[@"cg_owner_matches"]=@(owner);details[@"cg_bounds_available"]=@(hasBounds);details[@"final_birth_matches"]=@(finalBirth);details[@"ax"]=rpFrame(ax);details[@"cg"]=rpFrame(cg);details[@"ax_cg_agree"]=@(hasBounds&&rpNear(ax,cg));
+    if(!valid||matches!=1||!finalBirth||!owner||!hasBounds||!rpNear(ax,cg)||size.width<=0||size.height<=0)return nil;
     return @{@"ax":rpFrame(ax),@"cg":rpFrame(cg)};
 }
+static NSDictionary *rpObserve(pid_t pid,NSArray *expectedBirth,uint32_t wid){return rpObserveDetailed(pid,expectedBirth,wid,nil);}
 static CGRect rpRect(NSArray *r){return CGRectMake([r[0]doubleValue],[r[1]doubleValue],[r[2]doubleValue],[r[3]doubleValue]);}
 @interface RPLease : NSObject
 @property NSString *directory,*nonce;
@@ -37,20 +41,23 @@ static CGRect rpRect(NSArray *r){return CGRectMake([r[0]doubleValue],[r[1]double
 @property CGRect initial;
 @property CGSize requested;
 @property NSMutableArray *results;
+@property (atomic,copy) NSDictionary *lastChecks;
 - (BOOL)check;
 - (BOOL)prepare:(NSDictionary *)effect;
 - (BOOL)authorize;
 @end
 @implementation RPLease
 - (BOOL)check {
-    NSDictionary *ready=readJSON([self.directory stringByAppendingPathComponent:@"ready.json"]);
-    BOOL ok=!stopped&&!self.interrupted&&CACurrentMediaTime()<self.deadline&&rpIdleSince(self.start)&&NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier==self.foreground&&[birth(self.foreground)isEqual:self.foregroundBirth]&&[birth(self.pid)isEqual:self.processBirth]&&[ready[@"nonce"]isEqual:self.nonce]&&[ready[@"window"]unsignedIntValue]==self.wid&&[rpTransform(self.wid)isEqual:self.transform];
-    CGRect current=CGRectZero;NSDictionary *info=windowInfo(self.wid);
+    NSDictionary *ready=readJSON([self.directory stringByAppendingPathComponent:@"ready.json"]),*fixtureState=readJSON([self.directory stringByAppendingPathComponent:@"fixture-state.json"]);
+    NSArray *currentTransform=rpTransform(self.wid);NSDictionary *info=windowInfo(self.wid);CGRect current=CGRectZero;
     BOOL hasFrame=[info[(id)kCGWindowOwnerPID]intValue]==self.pid&&CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)info[(id)kCGWindowBounds],&current);
-    if(self.initial.size.width>0){BOOL expected=rpNear(current,self.initial);
-        if(self.consumed){CGSize size=CGSizeMake(fmax(260,fmin(500,self.requested.width)),fmax(200,fmin(360,self.requested.height)));expected|=CGSizeEqualToSize(current.size,size)&&current.origin.x==self.initial.origin.x&&(current.origin.y==self.initial.origin.y||CGRectGetMaxY(current)==CGRectGetMaxY(self.initial));}
-        ok&=hasFrame&&expected;}
-    ok&=!stopped&&CACurrentMediaTime()<self.deadline&&rpIdleSince(self.start)&&NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier==self.foreground;
+    BOOL expected=hasFrame&&(self.initial.size.width<=0||rpNear(current,self.initial));
+    if(self.consumed){CGSize size=CGSizeMake(fmax(260,fmin(500,self.requested.width)),fmax(200,fmin(360,self.requested.height)));expected|=hasFrame&&CGSizeEqualToSize(current.size,size)&&current.origin.x==self.initial.origin.x&&(current.origin.y==self.initial.origin.y||CGRectGetMaxY(current)==CGRectGetMaxY(self.initial));}
+    BOOL fixtureFresh=fixtureState&&CACurrentMediaTime()-[fixtureState[@"timestamp"]doubleValue]<=.5;
+    NSMutableDictionary *checks=[@{@"signal_clear":@(!stopped),@"deadline_valid":@(CACurrentMediaTime()<self.deadline),@"foreground_pid_matches":@(NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier==self.foreground),@"foreground_birth_matches":@([birth(self.foreground)isEqual:self.foregroundBirth]),@"fixture_birth_matches":@([birth(self.pid)isEqual:self.processBirth]),@"nonce_matches":@([ready[@"nonce"]isEqual:self.nonce]),@"window_id_matches":@([ready[@"window"]unsignedIntValue]==self.wid),@"transform_unchanged":@(self.transform&&[currentTransform isEqual:self.transform]),@"cg_frame_recognized":@(expected),@"fixture_state_fresh":@(fixtureFresh),@"fixture_input_excluded":@([fixtureState[@"input_excluded"]boolValue]),@"fixture_uncontaminated":@(fixtureState&&![fixtureState[@"contaminated"]boolValue]),@"controller_input_excluded":@(rpInputExcluded()),@"sticky_clear":@(!self.interrupted)}mutableCopy];
+    BOOL ok=YES;for(NSNumber *value in checks.allValues)ok&=value.boolValue;
+    checks[@"initial_transform"]=self.transform?:@[];checks[@"current_transform"]=currentTransform?:@[];checks[@"cg_frame"]=rpFrame(current);checks[@"isolation"]=rpIsolationDiagnostics();self.lastChecks=checks;
+    ok&=!stopped&&CACurrentMediaTime()<self.deadline&&NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier==self.foreground&&rpInputExcluded()&&!self.interrupted;
     if(!ok)self.interrupted=YES;return ok;
 }
 - (BOOL)prepare:(NSDictionary *)effect {
@@ -68,7 +75,7 @@ static CGRect rpRect(NSArray *r){return CGRectMake([r[0]doubleValue],[r[1]double
     // Atomic properties keep the sticky interruption write independent of slow
     // preparation. Only this serial-worker callback consumes the one-shot ticket.
     BOOL valid=!self.consumed&&!stopped&&CACurrentMediaTime()<self.deadline&&NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier==self.foreground;
-    valid&=rpIdleSince(self.start); // after the foreground query
+    valid&=rpInputExcluded()&&rpIsolation.windowsExcluded; // atomic state after foreground query
     valid&=!self.interrupted;       // final atomic latch read, never reset
     if(!valid){self.interrupted=YES;return NO;}
     self.consumed=YES;return YES;
@@ -77,7 +84,7 @@ static CGRect rpRect(NSArray *r){return CGRectMake([r[0]doubleValue],[r[1]double
 static void rpTouch(NSString *directory,NSString *name){[NSData.data writeToFile:[directory stringByAppendingPathComponent:name] atomically:YES];}
 static BOOL rpWait(Desktop *desktop,RPLease *lease,double seconds,BOOL (^condition)(void)) {
     double end=fmin(lease.deadline,CACurrentMediaTime()+seconds);
-    do {if(![lease check]||desktop.probeHumanInput)return NO;[desktop poll];if(condition())return YES;pump(.02);}while(CACurrentMediaTime()<end);
+    do {if(!rpCheckWindows()||![lease check]||desktop.probeHumanInput)return NO;[desktop poll];if(condition())return YES;pump(.02);}while(CACurrentMediaTime()<end);
     return NO;
 }
 static NSEvent *rpEvent(DesktopView *view,CGPoint point,NSEventType type) {
@@ -86,7 +93,7 @@ static NSEvent *rpEvent(DesktopView *view,CGPoint point,NSEventType type) {
     return [NSEvent mouseEventWithType:type location:windowPoint modifierFlags:0 timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:view.window.windowNumber context:nil eventNumber:1 clickCount:1 pressure:1];
 }
 static BOOL rpCapture(Desktop *desktop,RPLease *lease,NSString *phase,NSMutableArray *observations) {
-    if(![lease check])return NO;
+    if(!rpCheckWindows()||![lease check])return NO;
     NSDictionary *native=rpObserve(lease.pid,lease.processBirth,lease.wid);if(!native)return NO;
     SCWindow *host=findWindow(getpid(),(uint32_t)desktop.panels.firstObject.windowNumber);if(!host)return NO;
     NSString *png=[phase stringByAppendingString:@".png"];
@@ -104,10 +111,12 @@ static BOOL rpScenario(NSString *scenario,NSString **edge,NSString **action) {
 }
 static int runOwnedResize(NSString *directory,NSString *scenario) {
     NSString *edge=nil,*action=nil;rpScenario(scenario,&edge,&action);
-    NSMutableDictionary *report=[@{@"kind":@"owned native desktop resize",@"scenario":scenario,@"edge":edge,@"action":action,@"zooms":@[@.6,@.9],@"camera":@[@0,@0],@"runtime_status":@"failed",@"native_passed":@NO,@"fixture_scope":@"borderless resizable AppKit only; not third-party parity",@"permission_requests":@0,@"activation_calls":@0,@"global_input_posts":@0}mutableCopy];
+    NSMutableDictionary *report=[@{@"kind":@"owned native desktop resize",@"scenario":scenario,@"edge":edge,@"action":action,@"zooms":@[@.6,@.9],@"camera":@[@0,@0],@"runtime_status":@"failed",@"native_passed":@NO,@"fixture_scope":@"noninteractive borderless owned layout/capture only; no physical-input or third-party parity",@"permission_requests":@0,@"activation_calls":@0,@"global_input_posts":@0}mutableCopy];
     NSString *receipt=[directory stringByAppendingPathComponent:@"receipt.json"];
-    if(!CGPreflightScreenCaptureAccess()||!AXIsProcessTrusted()||!CGPreflightListenEventAccess()||CGEventSourceSecondsSinceLastEventType(kCGEventSourceStateHIDSystemState,kCGAnyInputEventType)<3){report[@"error"]=@"Existing capture, AX, input-observation grants and 3 seconds of HID inactivity required; no prompts.";save(report,receipt);return 2;}
-    RPLease *lease=[RPLease new];lease.directory=directory;lease.nonce=NSUUID.UUID.UUIDString;lease.start=CACurrentMediaTime();lease.deadline=lease.start+23;lease.foreground=NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier;lease.foregroundBirth=birth(lease.foreground);lease.results=[NSMutableArray array];
+    report[@"startup"]=rpIsolation.startup?:@{};
+    NSDictionary *preflight=@{@"screen_capture_granted":@(CGPreflightScreenCaptureAccess()),@"accessibility_granted":@(AXIsProcessTrusted()),@"foreground_preserved":@(rpForegroundMatches()),@"input_exclusion_installed":@(rpInputExcluded())};report[@"preflight"]=preflight;
+    for(NSNumber *condition in preflight.allValues)if(!condition.boolValue){report[@"error"]=@"Noninteractive preflight failed; see individual conditions. No permissions requested.";save(report,receipt);return 2;}
+    RPLease *lease=[RPLease new];lease.directory=directory;lease.nonce=NSUUID.UUID.UUIDString;lease.start=CACurrentMediaTime();lease.deadline=lease.start+23;lease.foreground=rpIsolation.foreground;lease.foregroundBirth=rpIsolation.foregroundBirth;lease.results=[NSMutableArray array];
     if(!lease.foregroundBirth){report[@"error"]=@"Unknown foreground birth";save(report,receipt);return 2;}
     if(!rpPrivateSave(@{@"nonce":lease.nonce,@"parent":@(getpid()),@"parent_birth":birth(getpid()),@"start":@(lease.start),@"deadline":@(lease.start+25),@"foreground":@(lease.foreground),@"foreground_birth":lease.foregroundBirth},[directory stringByAppendingPathComponent:@"lease.json"]))return 2;
     id foregroundObserver=nil;
@@ -121,9 +130,12 @@ static int runOwnedResize(NSString *directory,NSString *scenario) {
     while(fixture.running&&!stopped&&CACurrentMediaTime()<readyEnd){ready=readJSON([directory stringByAppendingPathComponent:@"ready.json"]);if(ready)break;pump(.02);}
     lease.wid=[ready[@"window"]unsignedIntValue];
     lease.transform=rpTransform(lease.wid);
-    NSDictionary *initial=rpObserve(lease.pid,lease.processBirth,lease.wid);
+    NSMutableDictionary *axDiagnostics=[NSMutableDictionary dictionary];
+    NSDictionary *initial=rpObserveDetailed(lease.pid,lease.processBirth,lease.wid,axDiagnostics);
+    report[@"ax_enrollment"]=axDiagnostics;report[@"fixture_startup"]=readJSON([directory stringByAppendingPathComponent:@"fixture-startup.json"])?:@{};
     save(@{@"fixture":@(lease.pid),@"birth":lease.processBirth?:@[],@"windows":@[@(lease.wid),ready[@"decoy"]?:@0],@"original":initial?:@{},@"transform":lease.transform?:@[]},[directory stringByAppendingPathComponent:@"identity.json"]);
     SCWindow *selected=findWindow(lease.pid,lease.wid);
+    report[@"enrollment"]=@{@"sck_exact_window_found":@(selected!=nil),@"ax_cg_observed":@(initial!=nil),@"transform_available":@(lease.transform!=nil),@"controller_transform":lease.transform?:@[],@"fixture_initial_transform":ready[@"transform"]?:@[],@"nonce_matches":@([ready[@"nonce"]isEqual:lease.nonce]),@"birth_matches":@([ready[@"birth"]isEqual:lease.processBirth]),@"input_exclusion_reported":@([ready[@"input_excluded"]boolValue]),@"fixture_registration":ready[@"registration"]?:@{}};
     @try {
         if(!selected||!initial||!lease.transform||![ready[@"nonce"]isEqual:lease.nonce]||![ready[@"birth"]isEqual:lease.processBirth]||![lease check])@throw @"fixture identity, AX or transform unavailable";
         lease.initial=rpRect(initial[@"cg"]);if(lease.initial.size.width!=440||lease.initial.size.height!=280)@throw @"fixture initial extent differs";
@@ -181,9 +193,10 @@ static int runOwnedResize(NSString *directory,NSString *scenario) {
     BOOL restoreVerified=restoredNative&&initial&&[restoredNative isEqual:initial]&&[restored[@"restored"]boolValue]&&[rpTransform(lease.wid)isEqual:lease.transform];rpTouch(directory,@"close");
     double exitEnd=CACurrentMediaTime()+2;while(fixture.running&&CACurrentMediaTime()<exitEnd)pump(.02);
     BOOL gone=!fixture.running&&!windowInfo(lease.wid)&&!windowInfo([ready[@"decoy"]unsignedIntValue]);if(!fixture.running)[fixture waitUntilExit];
-    BOOL interrupted=lease.interrupted||desktop.probeHumanInput||stopped||!rpIdleSince(lease.start)||NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier!=lease.foreground;
+    BOOL interrupted=lease.interrupted||desktop.probeHumanInput||stopped||!rpInputExcluded()||NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier!=lease.foreground;
     if(interrupted){for(NSString *name in @[@"before.png",@"after.png"])[NSFileManager.defaultManager removeItemAtPath:[directory stringByAppendingPathComponent:name]error:nil];}
     @synchronized(lease){report[@"native_results"]=lease.results.copy;}
+    report[@"guard_checks"]=lease.lastChecks?:@{};report[@"isolation"]=rpIsolationDiagnostics();
     report[@"observations"]=observations;report[@"interrupted"]=@(interrupted);report[@"restoration_independently_verified"]=@(restoreVerified);report[@"fixture_gone"]=@(gone);report[@"fixture_exit"]=readJSON([directory stringByAppendingPathComponent:@"fixture-exit.json"])?:@{};
     report[@"native_passed"]=@(ok&&!interrupted&&restoreVerified&&gone&&[report[@"fixture_exit"][@"restored"]boolValue]&&![report[@"fixture_exit"][@"contaminated"]boolValue]);report[@"runtime_status"]=[report[@"native_passed"]boolValue]?@"native-path-complete-pixels-require-external-oracle":@"failed";if(!ok)report[@"error"]=failure;
     // Nonce files are ephemeral ownership credentials, not retained evidence.
@@ -201,9 +214,21 @@ static int ownedResizeEntry(int argc,const char **argv) {
     NSString *scenario=argc==4?@(argv[3]):@"right-shrink",*edge=nil,*action=nil;
     if(!fixture&&!rpScenario(scenario,&edge,&action))return 64;
     if(fixture){NSDictionary *lease=readJSON([directory stringByAppendingPathComponent:@"lease.json"]);if([lease[@"parent"]intValue]!=getppid()||![lease[@"parent_birth"]isEqual:birth(getppid())]||![lease[@"nonce"]isEqual:scenario])return 64;}
+    // Capture the foreground before the first NSApplication initialization. A
+    // startup activation is a failure, never a new accepted foreground baseline.
+    pid_t beforePID=NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier;NSArray *beforeBirth=birth(beforePID);
+    NSDictionary *parentLease=fixture?readJSON([directory stringByAppendingPathComponent:@"lease.json"]):nil;
+    rpIsolation=[RPIsolationState new];rpIsolation.foreground=fixture?[parentLease[@"foreground"]intValue]:beforePID;rpIsolation.foregroundBirth=fixture?parentLease[@"foreground_birth"]:beforeBirth;
+    NSMutableDictionary *startup=[@{@"expected_foreground_pid":@(rpIsolation.foreground),@"expected_foreground_birth":rpIsolation.foregroundBirth?:@[],@"before_appkit_pid":@(beforePID),@"before_appkit_birth":beforeBirth?:@[],@"prestartup_matches":@(beforeBirth&&beforePID==rpIsolation.foreground&&[beforeBirth isEqual:rpIsolation.foregroundBirth]&&beforePID!=getpid())}mutableCopy];
+    NSString *startupPath=[directory stringByAppendingPathComponent:fixture?@"fixture-startup.json":@"controller-startup.json"];
+    if(![startup[@"prestartup_matches"]boolValue]){save(startup,startupPath);return 2;}
+    id observer=[NSWorkspace.sharedWorkspace.notificationCenter addObserverForName:NSWorkspaceDidActivateApplicationNotification object:nil queue:nil usingBlock:^(NSNotification *note){NSRunningApplication *app=note.userInfo[NSWorkspaceApplicationKey];if(app.processIdentifier!=rpIsolation.foreground)rpIsolation.foregroundInterrupted=YES;}];
     signal(SIGTERM,stopSignal);signal(SIGINT,stopSignal);signal(SIGHUP,stopSignal);
-    [ProbeApplication sharedApplication];[NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];[NSApp finishLaunching];
-    return fixture?ownedResizeFixture(directory,scenario):runOwnedResize(directory,scenario);
+    [RPIsolatedApplication sharedApplication];[NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];[NSApp finishLaunching];
+    startup[@"after_appkit_pid"]=@(NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier);startup[@"after_appkit_birth"]=birth(NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier)?:@[];startup[@"poststartup_matches"]=@(rpForegroundMatches());startup[@"input_exclusion_installed"]=@(rpInputExcluded());rpIsolation.startup=startup;save(startup,startupPath);
+    int result=2;
+    if([startup[@"poststartup_matches"]boolValue]&&rpInputExcluded())result=fixture?ownedResizeFixture(directory,scenario):runOwnedResize(directory,scenario);
+    [NSWorkspace.sharedWorkspace.notificationCenter removeObserver:observer];return result;
 }
 
 // Read-only supervisor check: never creates NSApplication or enrolls a source.

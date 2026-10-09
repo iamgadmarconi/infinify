@@ -6,10 +6,6 @@ static BOOL rpPrivateSave(id value,NSString *path) {
     return data&&[data writeToFile:path atomically:YES]&&[NSFileManager.defaultManager setAttributes:@{NSFilePosixPermissions:@0600}ofItemAtPath:path error:nil];
 }
 static NSArray *rpFrame(NSRect r) {return @[@(r.origin.x),@(r.origin.y),@(r.size.width),@(r.size.height)];}
-static BOOL rpIdleSince(double start) {
-    double idle=CGEventSourceSecondsSinceLastEventType(kCGEventSourceStateHIDSystemState,kCGAnyInputEventType);
-    return isfinite(idle)&&idle>=CACurrentMediaTime()-start;
-}
 // Read-only private signature precedent: native/backend/bridge.m, yabai
 // dd845723416f5fe92af49fad5ebab00369e07edd. No transform setter is loaded.
 static NSArray *rpTransform(uint32_t wid) {
@@ -37,13 +33,11 @@ static BOOL rpExpectedFrame(NSRect current,NSRect last,NSDictionary *intent,NSSt
     NSSize expected=NSMakeSize(fmax(260,fmin(500,requested.width)),fmax(200,fmin(360,requested.height)));
     return [intent[@"nonce"]isEqual:nonce]&&NSEqualSizes(current.size,expected)&&current.origin.x==last.origin.x&&(current.origin.y==last.origin.y||NSMaxY(current)==NSMaxY(last));
 }
-// Notifications may arrive while a native query is in progress. The atomic
-// latch is independent of the fixture main-thread geometry bookkeeping.
-@interface RPRestorationInterruption : NSObject
-@property (atomic) BOOL interrupted;
-@end
-@implementation RPRestorationInterruption
-@end
+static NSDictionary *rpFixtureDiagnostics(NSWindow *root,NSWindow *decoy,NSWindow *child,NSRect original,NSRect last,NSRect decoyOriginal,NSArray *transform) {
+    NSArray *currentTransform=rpTransform((uint32_t)root.windowNumber);
+    BOOL excluded=rpCheckWindows()&&rpWindowExcluded(root)&&rpWindowExcluded(decoy)&&(!child||rpWindowExcluded(child));
+    return @{@"timestamp":@(CACurrentMediaTime()),@"input_excluded":@(excluded),@"isolation":rpIsolationDiagnostics(),@"foreground_pid_matches":@(NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier==rpIsolation.foreground),@"foreground_birth_matches":@([birth(rpIsolation.foreground)isEqual:rpIsolation.foregroundBirth]),@"initial_transform":transform?:@[],@"current_transform":currentTransform?:@[],@"transform_available":@(currentTransform!=nil),@"transform_unchanged":@(transform&&[currentTransform isEqual:transform]),@"original_frame":rpFrame(original),@"current_frame":rpFrame(root.frame),@"last_recognized_frame":rpFrame(last),@"decoy_unchanged":@(NSEqualRects(decoy.frame,decoyOriginal))};
+}
 static int ownedResizeFixture(NSString *directory,NSString *nonce) {
     NSDictionary *lease=readJSON([directory stringByAppendingPathComponent:@"lease.json"]);
     pid_t parent=getppid();NSArray *parentBirth=birth(parent);
@@ -51,13 +45,16 @@ static int ownedResizeFixture(NSString *directory,NSString *nonce) {
     double start=[lease[@"start"]doubleValue],deadline=[lease[@"deadline"]doubleValue];
     if(CACurrentMediaTime()>=deadline||deadline-start>25)return 64;
     pid_t foreground=[lease[@"foreground"]intValue];NSArray *foregroundBirth=lease[@"foreground_birth"];
-    NSWindow *root=[[FixtureWindow alloc]initWithContentRect:NSMakeRect(120,140,440,280) styleMask:NSWindowStyleMaskBorderless|NSWindowStyleMaskResizable backing:NSBackingStoreBuffered defer:NO];
+    NSWindow *root=rpMakeWindow(NSMakeRect(120,140,440,280),@"Owned native resize",NSWindowStyleMaskBorderless|NSWindowStyleMaskResizable);
     root.title=@"Owned native resize";root.releasedWhenClosed=NO;root.animationBehavior=NSWindowAnimationBehaviorNone;root.hasShadow=NO;root.minSize=NSMakeSize(260,200);root.maxSize=NSMakeSize(500,360);
-    root.contentView=[[RPLayout alloc]initWithFrame:NSMakeRect(0,0,440,280)];[root orderFront:nil];[root display];
-    NSWindow *decoy=makeWindow(NSMakeRect(30,30,100,80),root.title);[decoy orderFront:nil];
-    NSRect original=root.frame,decoyOriginal=decoy.frame;__block NSRect last=original;NSArray *transform=rpTransform((uint32_t)root.windowNumber);
-    rpPrivateSave(@{@"pid":@(getpid()),@"birth":birth(getpid())?:@[],@"nonce":nonce,@"window":@(root.windowNumber),@"decoy":@(decoy.windowNumber),@"original":rpFrame(original),@"transform":transform?:@[]},[directory stringByAppendingPathComponent:@"ready.json"]);
-    RPRestorationInterruption *interruption=[RPRestorationInterruption new];
+    root.contentView=[[RPLayout alloc]initWithFrame:NSMakeRect(0,0,440,280)];NSRect original=root.frame;
+    if(!rpBeforeOrder(root)){save(rpIsolationDiagnostics(),[directory stringByAppendingPathComponent:@"fixture-order-failure.json"]);[root close];return 2;}[root orderFront:nil];[root display];
+    NSWindow *decoy=rpMakeWindow(NSMakeRect(30,30,100,80),root.title,NSWindowStyleMaskBorderless);NSRect decoyOriginal=decoy.frame;
+    if(!rpBeforeOrder(decoy)){save(rpIsolationDiagnostics(),[directory stringByAppendingPathComponent:@"fixture-order-failure.json"]);[root close];[decoy close];return 2;}[decoy orderFront:nil];
+    __block NSRect last=original;NSArray *transform=rpTransform((uint32_t)root.windowNumber);
+    NSDictionary *registration=windowInfo((uint32_t)root.windowNumber);
+    rpPrivateSave(@{@"registration":@{@"cg_owner_matches":@([registration[(id)kCGWindowOwnerPID]intValue]==getpid()),@"cg_bounds":registration[(id)kCGWindowBounds]?:@{},@"frame_unchanged_after_order":@(NSEqualRects(root.frame,original))},@"pid":@(getpid()),@"birth":birth(getpid())?:@[],@"nonce":nonce,@"window":@(root.windowNumber),@"decoy":@(decoy.windowNumber),@"original":rpFrame(original),@"transform":transform?:@[],@"input_excluded":@(rpCheckWindows()),@"startup":rpIsolation.startup?:@{}},[directory stringByAppendingPathComponent:@"ready.json"]);
+    __block NSDictionary *firstContamination=nil;
     __block BOOL contaminated=NO,restored=NO,finished=NO;__block NSString *reason=@"deadline";__block NSWindow *child=nil;
     void (^finish)(void)=^{
         if(finished)return;finished=YES;
@@ -67,53 +64,56 @@ static int ownedResizeFixture(NSString *directory,NSString *nonce) {
     BOOL sameForegroundBirth=[birth(foreground)isEqual:foregroundBirth];
     BOOL sameTransform=transform&&[rpTransform((uint32_t)root.windowNumber)isEqual:transform];
     BOOL sameForeground=NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier==foreground;
-    BOOL idle=rpIdleSince(start);
-    // Only atomic/in-process state reads follow the final HID sample. The owned
+    BOOL inputExcluded=rpCheckWindows()&&rpInputExcluded();
+    // Only atomic/in-process state reads follow the final exclusion check. The owned
     // NSWindow frame getters do not query AX/WindowServer or pump the run loop.
     NSRect current=root.frame;
     BOOL knownFrame=NSEqualRects(current,last)||rpExpectedFrame(current,last,pending,nonce);
     BOOL decoyUnchanged=NSEqualRects(decoy.frame,decoyOriginal);
-    contaminated|=!sameForegroundBirth||!sameTransform||!sameForeground||!idle||!knownFrame||!decoyUnchanged||interruption.interrupted;
+    contaminated|=!sameForegroundBirth||!sameTransform||!sameForeground||!inputExcluded||!knownFrame||!decoyUnchanged||rpIsolation.foregroundInterrupted||rpIsolation.unexpectedInput;
     if(!contaminated){[root setFrame:original display:YES];restored=NSEqualRects(root.frame,original);}
-    save(@{@"reason":reason,@"restored":@(restored),@"contaminated":@(contaminated),@"original":rpFrame(original),@"final":rpFrame(root.frame),@"transform_unchanged":@([rpTransform((uint32_t)root.windowNumber)isEqual:transform])},[directory stringByAppendingPathComponent:@"restored.json"]);
+    NSDictionary *authorization=@{@"foreground_birth_matches":@(sameForegroundBirth),@"transform_unchanged":@(sameTransform),@"foreground_pid_matches":@(sameForeground),@"input_excluded":@(inputExcluded),@"frame_lineage_known":@(knownFrame),@"decoy_unchanged":@(decoyUnchanged),@"pre_restore_frame":rpFrame(current),@"isolation":rpIsolationDiagnostics()};
+    if(contaminated&&!firstContamination)firstContamination=authorization;
+    NSDictionary *finishDiagnostics=rpFixtureDiagnostics(root,decoy,child,original,last,decoyOriginal,transform);
+    save(@{@"authorization":authorization,@"first_contamination":firstContamination?:@{},@"diagnostics":finishDiagnostics,@"reason":reason,@"restored":@(restored),@"contaminated":@(contaminated),@"original":rpFrame(original),@"final":rpFrame(root.frame),@"transform_unchanged":@([rpTransform((uint32_t)root.windowNumber)isEqual:transform])},[directory stringByAppendingPathComponent:@"restored.json"]);
     // Normal cleanup leaves a short independent AX/CG inspection interval.
     double grace=CACurrentMediaTime()+2;
     while(([reason isEqual:@"requested"]||[reason isEqual:@"controller-death"])&&CACurrentMediaTime()<grace&&![NSFileManager.defaultManager fileExistsAtPath:[directory stringByAppendingPathComponent:@"close"]])pump(.01);
     // The observer remains live through the readback hold. A later interruption
     // cannot trigger a second restoration and must not produce a clean receipt.
-    contaminated|=interruption.interrupted||!rpIdleSince(start)||NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier!=foreground||!NSEqualRects(root.frame,original)||!NSEqualRects(decoy.frame,decoyOriginal);
+    contaminated|=!rpInputExcluded()||NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier!=foreground||!NSEqualRects(root.frame,original)||!NSEqualRects(decoy.frame,decoyOriginal);
     [child close];[root close];[decoy close];
-    save(@{@"restored":@(restored),@"contaminated":@(contaminated),@"reason":reason,@"closed_owned_windows":@YES},[directory stringByAppendingPathComponent:@"fixture-exit.json"]);
+    save(@{@"restored":@(restored),@"contaminated":@(contaminated),@"reason":reason,@"closed_owned_windows":@YES,@"diagnostics":finishDiagnostics,@"final_isolation":rpIsolationDiagnostics(),@"first_contamination":firstContamination?:@{}},[directory stringByAppendingPathComponent:@"fixture-exit.json"]);
     };
-    id foregroundObserver=[NSWorkspace.sharedWorkspace.notificationCenter addObserverForName:NSWorkspaceDidActivateApplicationNotification object:nil queue:nil usingBlock:^(NSNotification *note){NSRunningApplication *app=note.userInfo[NSWorkspaceApplicationKey];if(app.processIdentifier!=foreground)interruption.interrupted=YES;}];
     // Common/tracking modes also run while AppKit owns a native resize loop.
     NSTimer *watchdog=[NSTimer timerWithTimeInterval:.04 repeats:YES block:^(NSTimer *timer){
         (void)timer;
-        if(interruption.interrupted||!rpIdleSince(start)||NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier!=foreground||![birth(foreground)isEqual:foregroundBirth])contaminated=YES;
+        if(!rpInputExcluded()||!rpCheckWindows()||NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier!=foreground||![birth(foreground)isEqual:foregroundBirth])contaminated=YES;
         if(contaminated||stopped||CACurrentMediaTime()>=deadline||getppid()!=parent||![birth(parent)isEqual:parentBirth]){
-            reason=contaminated?@"human-or-foreground-interruption":stopped?@"signal":CACurrentMediaTime()>=deadline?@"deadline":@"controller-death";finish();
+            if(contaminated&&!firstContamination)firstContamination=rpFixtureDiagnostics(root,decoy,child,original,last,decoyOriginal,transform);
+            reason=contaminated?@"input-exclusion-or-foreground-failure":stopped?@"signal":CACurrentMediaTime()>=deadline?@"deadline":@"controller-death";finish();
         }
     }];
     [NSRunLoop.mainRunLoop addTimer:watchdog forMode:NSRunLoopCommonModes];
     [NSRunLoop.mainRunLoop addTimer:watchdog forMode:NSEventTrackingRunLoopMode];
     while(!finished&&!stopped&&CACurrentMediaTime()<deadline) {
         if(getppid()!=parent||![birth(parent)isEqual:parentBirth]){reason=@"controller-death";break;}
-        if(interruption.interrupted||!rpIdleSince(start)||NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier!=foreground||![birth(foreground)isEqual:foregroundBirth])contaminated=YES;
+        if(!rpInputExcluded()||!rpCheckWindows()||NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier!=foreground||![birth(foreground)isEqual:foregroundBirth])contaminated=YES;
         NSDictionary *intent=readJSON([directory stringByAppendingPathComponent:@"intent.json"]);
         if(!NSEqualRects(root.frame,last)){
             NSRect current=root.frame;
             if(!rpExpectedFrame(current,last,intent,nonce))contaminated=YES;
             if(!contaminated)last=current;
         }
-        save(@{@"frame":rpFrame(last),@"contaminated":@(contaminated)},[directory stringByAppendingPathComponent:@"fixture-state.json"]);
-        if(!NSEqualRects(decoy.frame,decoyOriginal)||![rpTransform((uint32_t)root.windowNumber)isEqual:transform])contaminated=YES;
-        if([NSFileManager.defaultManager fileExistsAtPath:[directory stringByAppendingPathComponent:@"family"]]&&!child){child=makeWindow(NSMakeRect(130,150,90,70),@"Owned attached child");[root addChildWindow:child ordered:NSWindowAbove];[child orderFront:nil];save(@{@"window":@(child.windowNumber)},[directory stringByAppendingPathComponent:@"family-ready.json"]);}
+        NSMutableDictionary *state=[rpFixtureDiagnostics(root,decoy,child,original,last,decoyOriginal,transform)mutableCopy];
+        if(![state[@"decoy_unchanged"]boolValue]||![state[@"transform_unchanged"]boolValue]||![state[@"input_excluded"]boolValue])contaminated=YES;
+        state[@"frame"]=rpFrame(last);state[@"contaminated"]=@(contaminated);if(contaminated&&!firstContamination)firstContamination=state.copy;save(state,[directory stringByAppendingPathComponent:@"fixture-state.json"]);
+        if([NSFileManager.defaultManager fileExistsAtPath:[directory stringByAppendingPathComponent:@"family"]]&&!child){child=rpMakeWindow(NSMakeRect(130,150,90,70),@"Owned attached child",NSWindowStyleMaskBorderless);if(!rpBeforeOrder(child)){contaminated=YES;continue;}[root addChildWindow:child ordered:NSWindowAbove];if(!rpBeforeOrder(child)){contaminated=YES;continue;}[child orderFront:nil];save(@{@"window":@(child.windowNumber)},[directory stringByAppendingPathComponent:@"family-ready.json"]);}
         if([NSFileManager.defaultManager fileExistsAtPath:[directory stringByAppendingPathComponent:@"restore"]]){reason=@"requested";break;}
         pump(.015);
     }
     if(stopped)reason=@"signal";
     [watchdog invalidate];
     finish();
-    [NSWorkspace.sharedWorkspace.notificationCenter removeObserver:foregroundObserver];
     return restored?0:2;
 }

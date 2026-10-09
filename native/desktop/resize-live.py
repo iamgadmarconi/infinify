@@ -115,7 +115,13 @@ def run(scenario, directory):
         signalled and proc.returncode == (-signal.SIGKILL if scenario == 'controller-death' else 2)
         if abnormal else proc.returncode == 0 and native.get('native_passed') and
         (native.get('family_refused') if scenario == 'family' else pixels is True))
-    result = {'scenario': scenario, 'passed': bool(passed), 'controller_exit': proc.returncode,
+    result = {'proof_scope': 'noninteractive owned fixture layout/capture; no physical-input or third-party claim',
+              'startup': read(directory / 'controller-startup.json'),
+              'fixture_startup': read(directory / 'fixture-startup.json'),
+              'preflight': native.get('preflight', {}), 'enrollment': native.get('enrollment', {}),
+              'ax_enrollment': native.get('ax_enrollment', {}),
+              'guard_checks': native.get('guard_checks', {}), 'input_isolation': native.get('isolation', {}),
+              'native_error': native.get('error'), 'scenario': scenario, 'passed': bool(passed), 'controller_exit': proc.returncode,
               'cleanup': cleanup, 'fixture_receipt': fixture, 'timed_out': timed_out,
               'interrupted': interrupted, 'abnormal_signal_sent': signalled,
               'pixels_passed': pixels, 'native_rendering_proved': bool(passed and not abnormal and pixels),
