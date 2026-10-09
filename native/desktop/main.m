@@ -273,7 +273,7 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
         for(NSDictionary *placement in [snapshot[@"placements"]reverseObjectEnumerator])if([placement[@"output"]isEqual:output]&&[placement[@"window"]isEqual:snapshot[@"focused"]]&&[placement[@"presentation_settled"]boolValue]){
             BOOL occluded=NO;for(NSDictionary *front in [snapshot[@"placements"]reverseObjectEnumerator]){if(front==placement)break;if([front[@"output"]isEqual:output]&&CGRectContainsPoint(jsonRect(front[@"clip_rect"]),p)){occluded=YES;break;}}if(occluded)continue;
             for(NSDictionary *h in DWResizeHandles(jsonRect(placement[@"screen_rect"]),jsonRect(placement[@"clip_rect"])))if(hypot(p.x-[h[@"x"]doubleValue],p.y-[h[@"y"]doubleValue])<=7){
-                NSDictionary *reply=[self.desktop.resize request:@{@"op":@"begin_native_resize",@"window":placement[@"window"],@"output":output,@"edges":h[@"edge"],@"start_screen":pointJSON(p),@"group":@((e.modifierFlags&NSEventModifierFlagShift)!=0)}];
+                NSDictionary *reply=[self.desktop.resize request:@{@"op":@"begin_native_resize",@"window":placement[@"window"],@"output":output,@"edges":h[@"edge"],@"start_screen":pointJSON(p),@"group":(e.modifierFlags&NSEventModifierFlagShift)?@YES:@NO}];
                 if(reply){self.resizeTransaction=reply[@"transaction"];self.gesture=4;}[self.desktop render];return;
             }
         }
@@ -440,7 +440,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     [self.resize cancel];if(self.resize&&![self.resize canRemove:nil])return;
     NSNumber *output=[self navigationOutput:sender.superview];if(!output)return;
     if(sender.tag==0){id window=[self call:@{@"op":@"snapshot"}][@"focused"];if([window isKindOfClass:NSNumber.class])[self.navigation navigate:@{@"op":@"navigate_window",@"window":window,@"output":output,@"zoom_policy":@"reset"}];}
-    else [self.navigation navigate:@{@"op":@"cycle_navigate",@"output":output,@"backward":@(sender.tag==1),@"held":@NO}];
+    else [self.navigation navigate:@{@"op":@"cycle_navigate",@"output":output,@"backward":sender.tag==1?@YES:@NO,@"held":@NO}];
 }
 - (void)cycleNavigation:(BOOL)backward {
     [self.resize cancel];if(self.resize&&![self.resize canRemove:nil])return;
