@@ -100,12 +100,17 @@ Additional experimental paths are available separately:
 - [Desktop controller](crates/desktop/README.md): a Rust library and C interface
   joining real canvas geometry, camera gestures, transient source bindings,
   clipped placements, input coordinates and persistent unbound placeholders.
+  Its [focus contract](crates/desktop/FOCUS.md) adds one window/stacking authority,
+  confirmed focus history and held cycling, with stale native results rejected.
 - [Native desktop app](native/desktop/README.md): a signed local app bundle,
   explicit source chooser, per-display panels, shared live streams, native input,
   world dragging, camera controls and saved scenes.
 - [Native resize adapter](native/resize/README.md): exact AX window identity,
   observed accepted geometry, constraints/rejection and restoration, verified on
   disposable windows. Integration into desktop resizing remains unfinished.
+- [Native focus adapter](native/focus/README.md): exact selected-window requests,
+  external focus readback and guarded input checks. Source review and nonmutating
+  checks pass; its live focus and cleanup scenarios remain unrun.
 - [Window family diagnostic](native/families/README.md): genuine native panels
   and sheets exposed a failed capture-placement assumption. Metadata normalization
   now passes saved-pixel checks for a right-extending panel and an in-bounds sheet

@@ -72,6 +72,11 @@ device-specific behavior also need the corresponding hardware.
   policies with an unchanged-source differential oracle. These helpers are not
   yet integrated into Scene/controller behavior; see
   [policy contracts](../../crates/canvas/POLICY.md).
+- `2842602` integrates Stage ownership, confirmed MRU history and held cycling
+  through the exported controller C ABI. Stale results after rebind/load are
+  rejected. Camera navigation, native dispatch and modal/fullscreen/pin/widget
+  policy remain separate requirements; see the
+  [focus contract](../../crates/desktop/FOCUS.md).
 
 These milestones add evidence to partial rows. None satisfies an entire native
 behavior row or changes the completion requirement.

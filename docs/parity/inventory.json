@@ -4311,10 +4311,24 @@
           "source_sha256": "5f0874fd878c38980218530123d122718dca9ed3b81585f9d03c622292043697",
           "result": "Eight-direction nearest, visibility and active-bookmark helpers compared against unchanged upstream canvas.rs in seven focused integration tests; Astra reviewed.",
           "limits": "Helper contracts only; not installed in Scene/controller or native app behavior. See crates/canvas/POLICY.md."
+        },
+        {
+          "kind": "controller_c_abi",
+          "path": "crates/desktop/tests/focus_cycle_flow.rs",
+          "revision": "2842602",
+          "result": "Five exported-C-ABI tests cover confirmed MRU, frozen cycling/release/cancel, failures, stale effects, rebind and same-handle load. Differential Stage trace matches unchanged upstream source; Astra independently reviewed and reran focused checks.",
+          "limits": "Synthetic native observations; no native focus or camera navigation proof. Modal/fullscreen/pin/widget policies absent."
+        },
+        {
+          "kind": "native_adapter_source_review",
+          "path": "native/focus/README.md",
+          "revision": "1be117e",
+          "result": "Exact identity focus adapter and guarded owned-fixture harness pass independent source review and nonmutating build/C-ABI/geometry checks.",
+          "limits": "All live focus, geometry-race and partial-click cleanup scenarios remain unrun; no native capability acceptance."
         }
       ],
       "required": true,
-      "implementation_note": "Existing partial behavior remains; the source-equivalent helper module is a foundation for future integration, not complete action or native behavior parity."
+      "implementation_note": "Ordinary-window controller focus history/cycling and confirmation boundary integrated at2842602. Pure navigation helpers and a source-reviewed native focus adapter exist; camera navigation, native dispatch and complete upstream action/mode behavior remain open."
     },
     {
       "id": "navigation.fullscreen",
