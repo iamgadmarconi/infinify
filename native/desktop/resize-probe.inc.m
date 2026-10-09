@@ -158,21 +158,37 @@ static int runOwnedResize(NSString *directory,NSString *scenario) {
         DesktopView *view=desktop.views.firstObject;LiveSource *source=desktop.sources.allValues.firstObject;
         if(!source||desktop.sources.count!=1||view.outputs.count!=2||desktop.chooser.visible)@throw @"chooser attachment failed";
         report[@"chooser_attached"]=@YES;
+        // Select the source in the real scene model. The raw controller call does
+        // not dispatch its returned native-focus effect; this probe never activates.
+        NSDictionary *focusReply=[desktop call:@{@"op":@"focus",@"window":source.logical}];
+        report[@"logical_focus"]=@{@"requested_window":source.logical,@"command_succeeded":@(focusReply!=nil),@"native_effect_dispatched":@NO};
+        if(!focusReply)@throw @"logical source focus failed";
         for(NSUInteger i=0;i<2;i++){CGPoint origin=CGPointMake(view.globalBounds.origin.x+ports[i].origin.x,view.globalBounds.origin.y+ports[i].origin.y);[desktop call:@{@"op":@"zoom",@"output":view.outputs[i],@"zoom":i?@.9:@.6,@"anchor":pointJSON(origin)}];}
         [desktop render];
         BOOL (^settled)(void)=^BOOL{NSArray *placements=[desktop call:@{@"op":@"snapshot"}][@"placements"];if(placements.count!=2)return NO;for(NSDictionary *p in placements)if(![p[@"presentation_settled"]boolValue])return NO;return YES;};
         if(!rpWait(desktop,lease,4,settled))@throw @"initial real capture did not settle";
         NSDictionary *before=[desktop call:@{@"op":@"snapshot"}];
         for(NSUInteger i=0;i<2;i++){NSDictionary *o=before[@"outputs"][i];if(!CGPointEqualToPoint(jsonPoint(o[@"camera"]),CGPointZero)||fabs([o[@"zoom"]doubleValue]-(i?.9:.6))>.000001)@throw @"camera contract differs";}
-        if(!rpCapture(desktop,lease,@"before",observations))@throw @"initial screenshot refused";
-        NSDictionary *handle=nil;for(NSDictionary *p in before[@"placements"])if([p[@"output"]isEqual:view.outputs[0]])for(NSDictionary *h in DWResizeHandles(jsonRect(p[@"screen_rect"]),jsonRect(p[@"clip_rect"])))if([h[@"edge"]isEqual:edge])handle=h;
+        NSDictionary *handle=nil,*placement=nil;for(NSDictionary *p in before[@"placements"])if([p[@"output"]isEqual:view.outputs[0]]&&[p[@"window"]isEqual:source.logical]){placement=p;for(NSDictionary *h in DWResizeHandles(jsonRect(p[@"screen_rect"]),jsonRect(p[@"clip_rect"])))if([h[@"edge"]isEqual:edge])handle=h;}
+        NSMutableDictionary *handleDiagnostics=[@{@"focused_window":before[@"focused"]?:NSNull.null,@"source_window":source.logical,@"output":view.outputs[0],@"experimental_resize":@(desktop.experimentalResize),@"presentation_settled":placement[@"presentation_settled"]?:@NO,@"screen_rect":placement[@"screen_rect"]?:@{},@"clip_rect":placement[@"clip_rect"]?:@{},@"handle":handle?:@{}}mutableCopy];report[@"handle_preparation"]=handleDiagnostics;
+        if(![before[@"focused"]isEqual:source.logical])@throw @"logical source is not focused";
         if(!handle)@throw @"actual handle not visible";
         CGPoint point=CGPointMake([handle[@"x"]doubleValue],[handle[@"y"]doubleValue]);
+        CALayer *tile=view.tiles[[NSString stringWithFormat:@"%@:%@",source.logical,view.outputs[0]]];CGRect clip=jsonRect(placement[@"clip_rect"]);BOOL renderedHandle=NO;NSUInteger renderedCount=0;
+        for(CALayer *layer in tile.sublayers)if([layer.name isEqual:@"resize-handle"]){renderedCount++;if(!layer.hidden&&layer.opacity>0&&hypot(CGRectGetMidX(layer.frame)+clip.origin.x-point.x,CGRectGetMidY(layer.frame)+clip.origin.y-point.y)<.01)renderedHandle=YES;}
+        renderedHandle&=tile&&tile.superlayer==view.layer&&!tile.hidden&&tile.opacity>0&&view.window.visible&&!view.hidden;
+        handleDiagnostics[@"rendered_handle_count"]=@(renderedCount);handleDiagnostics[@"rendered_requested_handle"]=@(renderedHandle);
+        if(!renderedHandle)@throw @"requested real resize overlay is absent";
+        if(!rpCapture(desktop,lease,@"before",observations))@throw @"initial screenshot refused";
         if([scenario isEqual:@"family"]){rpTouch(directory,@"family");if(!rpWait(desktop,lease,1,^BOOL{return readJSON([directory stringByAppendingPathComponent:@"family-ready.json"])!=nil;}))@throw @"owned child not created";}
         if([scenario isEqual:@"family"]){NSDictionary *family=discoverOwnedFamily(lease.wid,lease.pid,lease.processBirth);report[@"family_observation"]=family;NSNumber *childID=readJSON([directory stringByAppendingPathComponent:@"family-ready.json"])[@"window"];BOOL found=NO;for(NSDictionary *member in family[@"members"])if([member[@"id"]isEqual:childID])found=YES;if(![family[@"valid"]boolValue]||[family[@"members"]count]<2||!found)@throw @"owned child family not independently established";}
         if(![lease check])@throw @"interrupted before gesture";
-        desktop.probeDrivingGesture=YES;[view mouseDown:rpEvent(view,point,NSEventTypeLeftMouseDown)];
+        NSEvent *down=rpEvent(view,point,NSEventTypeLeftMouseDown);CGPoint actual=[view screenPoint:down];NSNumber *actualOutput=[view outputAt:actual];NSDictionary *driveSnapshot=[desktop call:@{@"op":@"snapshot"}];
+        handleDiagnostics[@"expected_pointer"]=pointJSON(point);handleDiagnostics[@"actual_pointer"]=pointJSON(actual);handleDiagnostics[@"pointer_output"]=actualOutput?:NSNull.null;handleDiagnostics[@"focused_at_drive"]=driveSnapshot[@"focused"]?:NSNull.null;handleDiagnostics[@"pointer_modifiers"]=@(down.modifierFlags);
+        if(![driveSnapshot[@"focused"]isEqual:source.logical]||![actualOutput isEqual:view.outputs[0]]||hypot(actual.x-point.x,actual.y-point.y)>.01)@throw @"handle pointer or logical focus changed before gesture";
+        desktop.probeDrivingGesture=YES;[view mouseDown:down];
         BOOL began=view.gesture==4;
+        handleDiagnostics[@"gesture_after_down"]=@(view.gesture);handleDiagnostics[@"resize_transaction"]=view.resizeTransaction?:NSNull.null;
         if(began){double width=[action isEqual:@"grow"]?480:[action isEqual:@"shrink"]?320:100,height=[action isEqual:@"grow"]?320:[action isEqual:@"shrink"]?160:100;
             double dx=[edge containsString:@"left"]?440-width:[edge containsString:@"right"]?width-440:0;
             double dy=[edge containsString:@"top"]?280-height:[edge containsString:@"bottom"]?height-280:0;

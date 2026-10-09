@@ -247,7 +247,12 @@ there is no arbitrary PID/window option. `--owned-resize-fixture` validates its
 actual parent identity and lease before AppKit startup. The foreground PID and
 kernel birth are captured **before** NSApplication initialization and rechecked
 after startup and before every window order. Startup self-activation fails; it
-never becomes an accepted baseline. A fresh isolated scene is used. The chooser attaches the exact SCK source, and the runner calls the real
+never becomes an accepted baseline. A fresh isolated scene is used. The chooser attaches the exact SCK source. The runner selects that source through the real
+controller focus command without dispatching its returned native-focus effect;
+this establishes logical selection only. It verifies the focused source, settled
+placement, actual rendered handle layer and converted pointer/output before calling
+the gesture path. Receipts record those checks and the resulting gesture/transaction.
+The runner calls the real
 DesktopView mouseDown/Dragged/Up at a real projected orange handle. Normal input
 forwarding is disabled only for this internal mode, so a vanished handle cannot
 fall through to activation. Production capture policies and reconfiguration are
