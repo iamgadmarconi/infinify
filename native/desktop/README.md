@@ -152,7 +152,7 @@ observations do nothing, independently validated external focus ends cycling,
 and failed/unknown readback does not claim focus loss. A single common-mode
 60 Hz main-thread timer advances all active camera flights and renders once per
 frame; idle polling keeps the clock current and completed flights save once.
-There are no native resize changes.
+The navigation flag does not enable resizing; resizing has a separate experimental flag.
 
 `./tests/e2e/desktop-navigation.sh` runs the real Objective-C coordinator and
 input-order policy against the actual Rust C ABI with injected nonmutating
@@ -208,7 +208,10 @@ last accepted sample is retained with its revision for newly visible placements 
 static sources; a new layer that cannot install it remains inert. Generic geometry
 polling is disabled for managed sources; the capture gate reconciles fresh idle
 geometry only when the controller permits structural changes, then requires a
-post-observation frame. Active or uncertain transactions retain exclusive ownership.
+post-observation frame. Active or uncertain transactions retain exclusive ownership. A half-second read-only
+validation tick also checks roots independently of frame arrival; input delivery
+performs the same validation. Newly observed loss after recovery advances the token
+even when no frame has restored capture authority.
 
 A revision change requests updated stream dimensions after the cutoff; its callback
 is never proof of fresh pixels. Whether static native applications reliably emit a

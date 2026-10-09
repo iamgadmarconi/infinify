@@ -16,6 +16,8 @@
 - (NSDictionary *)request:(NSDictionary *)command;
 - (void)consume:(NSDictionary *)reply;
 - (void)cancel;
+- (void)observeBindings;
+- (BOOL)validate:(NSNumber *)window;
 - (void)shutdown;
 - (BOOL)canRemove:(NSNumber *)window;
 - (void)invalidate:(NSNumber *)window;

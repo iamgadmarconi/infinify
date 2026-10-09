@@ -81,6 +81,17 @@ NSArray<NSDictionary *> *DWResizeHandles(CGRect full,CGRect clip){
     NSMutableDictionary *binding=self.bindings[window];if(binding)binding[@"loss_reason"]=@"explicit";
     [self consume:self.command(@{@"op":@"invalidate_native_capture",@"window":window,@"identity":s[@"identity"],@"generation":s[@"generation"]})];
 }
+- (BOOL)validate:(NSNumber *)window {
+    NSMutableDictionary *b=self.bindings[window];NSDictionary *s=[self source:window];
+    if(!b||!s||![b[@"identity"]isEqual:s[@"identity"]]||![b[@"generation"]isEqual:s[@"generation"]])return NO;
+    NSDictionary *extent=[self.driver rootExtent:s[@"identity"]];
+    BOOL matches=extent&&CGRectEqualToRect(rjson(extent),rjson(s[@"observed_rect"]));if(matches){b[@"native_state"]=@"valid";return YES;}
+    NSString *reason=extent?@"geometry":@"family";BOOL transition=![b[@"native_state"]isEqual:reason]||![b[@"loss_reason"]isEqual:reason];b[@"native_state"]=reason;
+    if(transition){[self invalidate:window];b[@"loss_reason"]=reason;if(!extent)[self cancel];}
+    if(extent&&[self canRemove:window]){self.command(@{@"op":@"observe",@"window":window,@"identity":s[@"identity"],@"source_rect":extent,@"buffer":s[@"buffer"]});[self sync];}
+    return NO;
+}
+- (void)observeBindings {for(NSNumber *window in self.bindings.allKeys)[self validate:window];}
 - (void)bind:(NSNumber *)window stream:(id)stream {
     NSDictionary *s=[self source:window];if(!s)return;
     self.bindings[window]=[@{@"stream":stream,@"identity":s[@"identity"],@"generation":s[@"generation"],@"revision":s[@"observation_revision"],@"cutoff":@(self.clock())}mutableCopy];
@@ -94,6 +105,7 @@ NSArray<NSDictionary *> *DWResizeHandles(CGRect full,CGRect clip){
     uint64_t cutoff=MAX([b[@"cutoff"]unsignedLongLongValue],[b[@"last_time"]unsignedLongLongValue]);
     if(timestamp&&timestamp.unsignedLongLongValue<=cutoff)return NO;
     NSDictionary *extent=[self.driver rootExtent:s[@"identity"]];
+    NSString *nativeState=!extent?@"family":(CGRectEqualToRect(rjson(extent),rjson(s[@"observed_rect"]))?@"valid":@"geometry");BOOL nativeTransition=![b[@"native_state"]isEqual:nativeState];b[@"native_state"]=nativeState;
     if(extent&&!CGRectEqualToRect(rjson(extent),rjson(s[@"observed_rect"]))&&[self canRemove:window]){
         // Idle external changes update native mapping, never committed world geometry.
         [self invalidate:window];
@@ -101,7 +113,7 @@ NSArray<NSDictionary *> *DWResizeHandles(CGRect full,CGRect clip){
         [self sync];return NO; // Require a subsequent post-observation frame.
     }
     NSDictionary *metadata=extent&&CGRectEqualToRect(rjson(extent),rjson(s[@"observed_rect"]))?DWResizeCaptureMetadata(sample,cutoff,rjson(extent)):nil;
-    if(!metadata){NSString *reason=!extent?@"family":(!CGRectEqualToRect(rjson(extent),rjson(s[@"observed_rect"]))?@"geometry":@"metadata");if(![b[@"loss_reason"]isEqual:reason]){[self invalidate:window];b[@"loss_reason"]=reason;if(!extent)[self cancel];}return NO;}
+    if(!metadata){NSString *reason=!extent?@"family":(!CGRectEqualToRect(rjson(extent),rjson(s[@"observed_rect"]))?@"geometry":@"metadata");if(nativeTransition||![b[@"loss_reason"]isEqual:reason]){[self invalidate:window];b[@"loss_reason"]=reason;if(!extent)[self cancel];}return NO;}
     NSMutableDictionary *ack=[metadata mutableCopy];[ack addEntriesFromDictionary:@{@"op":@"native_resize_capture_ready",@"window":window,@"identity":b[@"identity"],@"generation":b[@"generation"],@"observation_revision":b[@"revision"]}];
     if(!self.command(ack))return NO;
     NSDictionary *fresh=[self source:window];if(![fresh[@"identity"]isEqual:b[@"identity"]]||![fresh[@"generation"]isEqual:b[@"generation"]]||![fresh[@"capture_revision"]isEqual:b[@"revision"]])return NO;

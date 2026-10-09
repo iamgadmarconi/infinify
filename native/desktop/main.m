@@ -88,6 +88,7 @@ static CGRect topRect(NSRect r) { return CGRectMake(r.origin.x,screenTop()-NSMax
 @property DWNavigationCoordinator *navigation;
 @property NSTimer *frameTimer;
 @property CFTimeInterval lastObservation;
+@property CFTimeInterval lastResizeObservation;
 @property DWNavigationInput *navigationInput;
 @property CFMachPortRef navigationTap;
 @property CFRunLoopSourceRef navigationTapSource;
@@ -195,7 +196,7 @@ static CGRect topRect(NSRect r) { return CGRectMake(r.origin.x,screenTop()-NSMax
     if(!e||!output)return NO;
     if(!AXIsProcessTrusted()){self.desktop.statusText=@"Input requires Accessibility access. Enable it in System Settings, then reopen.";return NO;}
     NSDictionary *hit=[self hit:p output:output];if(![hit isKindOfClass:NSDictionary.class])return NO;
-    LiveSource *source=self.desktop.sources[hit[@"window"]];if(!source||![source.router valid])return NO;
+    LiveSource *source=self.desktop.sources[hit[@"window"]];if(!source||![source.router valid]||(source.resize&&![source.resize validate:source.logical]))return NO;
     // Unsupported cross-source pointer capture must never retarget a held drag.
     if(CGEventGetType(e)==kCGEventLeftMouseDragged&&source!=self.pressedSource)return NO;
     NSDictionary *validated=[self.desktop call:@{@"op":@"input",@"output":output,@"screen":pointJSON(p),@"identity":source.identity}][@"hit"];
@@ -476,6 +477,7 @@ static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) {
 }
 - (void)poll {
     if(self.cleaning)return;
+    if(self.resize&&CACurrentMediaTime()-self.lastResizeObservation>=.5){self.lastResizeObservation=CACurrentMediaTime();[self.resize observeBindings];}
     if(self.navigation&&!self.frameTimer)[self.navigation frame];
     if(self.navigation&&CACurrentMediaTime()-self.lastObservation>=.5){self.lastObservation=CACurrentMediaTime();[self.navigation observe];}
     for(LiveSource *source in self.sources.allValues){

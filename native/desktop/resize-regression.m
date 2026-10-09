@@ -77,15 +77,34 @@ static void scenario(NSString *edge,NSString *outcome,BOOL cancel,BOOL timeout,B
     if(timeout){check([after[@"native_resize"][@"phase"]isEqual:@"needs_observation"],@"timeout remains unresolved");check(![co accept:s window:@1 stream:stream install:^BOOL(CMSampleBufferRef x){(void)x;return YES;}],@"timeout blocks capture");}
     else {CMSampleBufferRef fresh=sample(driver.bounds,@{SCStreamFrameInfoDisplayTime:@300});check([co accept:fresh window:@1 stream:stream install:^BOOL(CMSampleBufferRef x){check(x==fresh,@"post-resize sample identity");return YES;}],@"post-resize capture");CFRelease(fresh);}
     if(!timeout&&!removeOutput){
+        driver.family=NO;[co observeBindings];NSDictionary *lost=snap(c);check(lost[@"windows"][0][@"source"][@"capture_revision"]==NSNull.null,@"family loss without a frame revokes authority");
+        [co observeBindings];check([lost isEqual:snap(c)],@"same observed loss does not churn tokens");
+        driver.family=YES;[co observeBindings];driver.family=NO;[co observeBindings];NSDictionary *lostAgain=snap(c);
+        check([lostAgain[@"windows"][0][@"source"][@"observation_revision"]unsignedLongLongValue]>[lost[@"windows"][0][@"source"][@"observation_revision"]unsignedLongLongValue],@"new native loss after tick-only recovery fences already invalid capture");
+        driver.family=YES;CMSampleBufferRef recovered=sample(driver.bounds,@{SCStreamFrameInfoDisplayTime:@301});check([co accept:recovered window:@1 stream:stream install:^BOOL(CMSampleBufferRef x){(void)x;return YES;}],@"frame restores verified root");CFRelease(recovered);
         NSDictionary *before=snap(c);CMSampleBufferRef old=sample(driver.bounds,@{SCStreamFrameInfoDisplayTime:@299});
         check(![co accept:old window:@1 stream:stream install:^BOOL(CMSampleBufferRef x){(void)x;return YES;}],@"out-of-order frame discarded");check([before isEqual:snap(c)],@"old frame preserves current authority");CFRelease(old);
-        driver.bounds=CGRectOffset(driver.bounds,5,7);CMSampleBufferRef moved=sample(driver.bounds,@{SCStreamFrameInfoDisplayTime:@400});
-        check(![co accept:moved window:@1 stream:stream install:^BOOL(CMSampleBufferRef x){(void)x;return YES;}],@"idle move establishes new cutoff");
+        driver.bounds=CGRectOffset(driver.bounds,5,7);[co observeBindings];check(snap(c)[@"windows"][0][@"source"][@"capture_revision"]==NSNull.null,@"idle native relocation without a frame revokes authority");CMSampleBufferRef moved=sample(driver.bounds,@{SCStreamFrameInfoDisplayTime:@400});
         check([co accept:moved window:@1 stream:stream install:^BOOL(CMSampleBufferRef x){(void)x;return YES;}],@"idle move fresh mapping restored");
         check([before[@"windows"][0][@"world_rect"]isEqual:snap(c)[@"windows"][0][@"world_rect"]],@"idle reconciliation preserves world geometry");CFRelease(moved);
     }
     [co invalidate:@1];check(!call(c,@{@"op":@"input",@"output":@1,@"screen":@{@"x":@120,@"y":@120},@"identity":identity()}),@"invalidation blocks input");
     CFRelease(s);driftwm_desktop_destroy(c);
+}
+static void preparing(BOOL cancel,BOOL noOp){
+    DriftDesktop *c=driftwm_desktop_create();Driver *driver=[Driver new];driver.bounds=CGRectMake(10,20,200,150);driver.family=YES;
+    NSMutableArray *workers=[NSMutableArray array],*mains=[NSMutableArray array];
+    DWResizeCoordinator *co=[[DWResizeCoordinator alloc]initWithCommand:^NSDictionary *(NSDictionary *command){return call(c,command);}driver:driver clock:^uint64_t{return 100;}worker:^(DWJob job){[workers addObject:[job copy]];}main:^(DWJob job){[mains addObject:[job copy]];}];co.enabled=YES;
+    call(c,@{@"op":@"register_output",@"stable_id":@"one",@"screen_bounds":rect(0,0,1000,800)});
+    call(c,@{@"op":@"attach",@"identity":identity(),@"bundle_id":@"test",@"title":@"source",@"buffer":@{@"width":@400,@"height":@300},@"source_rect":rect(10,20,200,150),@"world_rect":rect(100,100,200,150)});
+    NSDictionary *initial=snap(c);NSDictionary *begin=[co request:@{@"op":@"begin_native_resize",@"window":@1,@"output":@1,@"edges":@"right",@"start_screen":@{@"x":@50,@"y":@50}}];NSNumber *transaction=begin[@"transaction"];
+    check([co request:@{@"op":@"native_resize_to",@"transaction":transaction,@"screen":@{@"x":@65,@"y":@50}}]!=nil,@"motion accepted while baseline queued");
+    check([co request:@{@"op":@"native_resize_to",@"transaction":transaction,@"screen":@{@"x":noOp?@50:@70,@"y":@50}}]!=nil,@"latest preparing motion coalesces");
+    check(driver.setters==0&&workers.count==1,@"preparing never dispatches setter");
+    if(cancel)[co cancel];else [co request:@{@"op":@"end_native_resize",@"transaction":transaction}];drain(workers,mains);
+    check(driver.setters==(cancel||noOp?0:1),@"quick release applies latest once; cancellation/no-op applies none");
+    check([snap(c)[@"native_resize"][@"last_committed_size"][@"width"]doubleValue]==(cancel||noOp?200:220),@"quick drag commits observed final size");
+    check([initial[@"outputs"]isEqual:snap(c)[@"outputs"]],@"quick drag keeps cameras fixed");check(co.obligations==0&&[co canRemove:@1],@"quick drag drains before structural change");driftwm_desktop_destroy(c);
 }
 int main(void){@autoreleasepool{
     CGRect native=CGRectMake(10,20,200,150);CMSampleBufferRef s=sample(native,@{});NSDictionary *m=DWResizeCaptureMetadata(s,100,native);check([m[@"buffer"][@"width"]intValue]==480&&[m[@"content_rect"][@"origin"][@"x"]intValue]==20,@"actual padded crop");CFRelease(s);
@@ -94,5 +113,6 @@ int main(void){@autoreleasepool{
     check(DWResizeHandles(CGRectMake(0,0,100,100),CGRectMake(0,0,100,100)).count==8,@"eight handles");check(DWResizeHandles(CGRectMake(-50,-50,200,200),CGRectMake(0,0,100,100)).count==0,@"no clipped-edge handles");
     for(NSString *edge in @[@"top_left",@"top",@"top_right",@"right",@"bottom_right",@"bottom",@"bottom_left",@"left"])scenario(edge,nil,NO,NO,NO);
     scenario(@"right",@"clamped",NO,NO,NO);scenario(@"right",@"rejected",YES,NO,NO);scenario(@"right",nil,YES,YES,NO);scenario(@"right",nil,NO,NO,YES);
+    preparing(NO,NO);preparing(YES,NO);preparing(NO,YES);
     puts("PASS: production resize coordinator + Rust C ABI + real synthetic CV/CMSampleBuffer metadata; no native app/window/AX/capture started");return 0;
 }}
