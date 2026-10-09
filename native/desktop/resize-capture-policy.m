@@ -32,3 +32,7 @@ NSDictionary *DWResizeCaptureMetadata(CMSampleBufferRef sample,uint64_t cutoff,C
     if(!width||!height||!isfinite(CGRectGetMaxX(crop))||!isfinite(CGRectGetMaxY(crop))||crop.origin.x<0||crop.origin.y<0||CGRectGetMaxX(crop)>width||CGRectGetMaxY(crop)>height)return nil;
     return @{ @"buffer":@{@"width":@(width),@"height":@(height)},@"content_rect":@{@"origin":@{@"x":@(crop.origin.x),@"y":@(crop.origin.y)},@"size":@{@"width":@(crop.size.width),@"height":@(crop.size.height)}} };
 }
+
+BOOL DWResizeConfigurationCurrent(id requestedStream,id currentStream,NSNumber *requestedRevision,NSNumber *currentRevision,BOOL detached) {
+    return !detached&&requestedStream&&requestedStream==currentStream&&requestedRevision&&[requestedRevision isEqual:currentRevision];
+}

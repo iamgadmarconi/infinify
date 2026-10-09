@@ -98,6 +98,7 @@ static void preparing(BOOL cancel,BOOL noOp){
     call(c,@{@"op":@"register_output",@"stable_id":@"one",@"screen_bounds":rect(0,0,1000,800)});
     call(c,@{@"op":@"attach",@"identity":identity(),@"bundle_id":@"test",@"title":@"source",@"buffer":@{@"width":@400,@"height":@300},@"source_rect":rect(10,20,200,150),@"world_rect":rect(100,100,200,150)});
     NSDictionary *initial=snap(c);NSDictionary *begin=[co request:@{@"op":@"begin_native_resize",@"window":@1,@"output":@1,@"edges":@"right",@"start_screen":@{@"x":@50,@"y":@50}}];NSNumber *transaction=begin[@"transaction"];
+    if(cancel&&noOp){drain(workers,mains);NSDictionary *removal=call(c,@{@"op":@"remove_output",@"output":@1});check([removal[@"effect"]isKindOfClass:NSDictionary.class],@"output removal emits final observation");[co consume:removal];check(co.obligations==1,@"output removal effect dispatched");drain(workers,mains);check(co.obligations==0&&[co canRemove:@1],@"output removal observation drained");driftwm_desktop_destroy(c);return;}
     check([co request:@{@"op":@"native_resize_to",@"transaction":transaction,@"screen":@{@"x":@65,@"y":@50}}]!=nil,@"motion accepted while baseline queued");
     check([co request:@{@"op":@"native_resize_to",@"transaction":transaction,@"screen":@{@"x":noOp?@50:@70,@"y":@50}}]!=nil,@"latest preparing motion coalesces");
     check(driver.setters==0&&workers.count==1,@"preparing never dispatches setter");
@@ -107,12 +108,17 @@ static void preparing(BOOL cancel,BOOL noOp){
     check([initial[@"outputs"]isEqual:snap(c)[@"outputs"]],@"quick drag keeps cameras fixed");check(co.obligations==0&&[co canRemove:@1],@"quick drag drains before structural change");driftwm_desktop_destroy(c);
 }
 int main(void){@autoreleasepool{
+    id configuredStream=[NSObject new];
+    check(DWResizeConfigurationCurrent(configuredStream,configuredStream,@2,@2,NO),@"current configuration error remains actionable");
+    check(!DWResizeConfigurationCurrent(configuredStream,configuredStream,@1,@2,NO),@"superseded configuration error ignored");
+    check(!DWResizeConfigurationCurrent(configuredStream,[NSObject new],@2,@2,NO),@"old stream configuration completion ignored");
+    check(!DWResizeConfigurationCurrent(configuredStream,configuredStream,@2,@2,YES),@"detached configuration completion ignored");
     CGRect native=CGRectMake(10,20,200,150);CMSampleBufferRef s=sample(native,@{});NSDictionary *m=DWResizeCaptureMetadata(s,100,native);check([m[@"buffer"][@"width"]intValue]==480&&[m[@"content_rect"][@"origin"][@"x"]intValue]==20,@"actual padded crop");CFRelease(s);
     NSArray *invalid=@[@{SCStreamFrameInfoDisplayTime:NSNull.null},@{SCStreamFrameInfoDisplayTime:@100},@{SCStreamFrameInfoDisplayTime:@(-1)},@{SCStreamFrameInfoDisplayTime:@100.5},@{SCStreamFrameInfoDisplayTime:@1e30},@{SCStreamFrameInfoStatus:NSNull.null},@{SCStreamFrameInfoStatus:@.5},@{SCStreamFrameInfoContentScale:@0},@{SCStreamFrameInfoScreenRect:NSNull.null},@{SCStreamFrameInfoContentRect:CFBridgingRelease(CGRectCreateDictionaryRepresentation(CGRectMake(100,100,200,150)))}];
     for(NSDictionary *override in invalid){s=sample(native,override);check(DWResizeCaptureMetadata(s,100,native)==nil,@"invalid metadata rejected");CFRelease(s);}
     check(DWResizeHandles(CGRectMake(0,0,100,100),CGRectMake(0,0,100,100)).count==8,@"eight handles");check(DWResizeHandles(CGRectMake(-50,-50,200,200),CGRectMake(0,0,100,100)).count==0,@"no clipped-edge handles");
     for(NSString *edge in @[@"top_left",@"top",@"top_right",@"right",@"bottom_right",@"bottom",@"bottom_left",@"left"])scenario(edge,nil,NO,NO,NO);
     scenario(@"right",@"clamped",NO,NO,NO);scenario(@"right",@"rejected",YES,NO,NO);scenario(@"right",nil,YES,YES,NO);scenario(@"right",nil,NO,NO,YES);
-    preparing(NO,NO);preparing(YES,NO);preparing(NO,YES);
+    preparing(NO,NO);preparing(YES,NO);preparing(NO,YES);preparing(YES,YES);
     puts("PASS: production resize coordinator + Rust C ABI + real synthetic CV/CMSampleBuffer metadata; no native app/window/AX/capture started");return 0;
 }}
