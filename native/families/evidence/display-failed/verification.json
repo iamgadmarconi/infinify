@@ -1,0 +1,34 @@
+{
+  "passed": false,
+  "implementation_sha256": {
+    "native/families/families.m": "4d70b5e83c01ffc2fb64a862d4cf3f2896378dbba83e40329abf59afed000d2a",
+    "native/families/verify.py": "ca5a4a29879ba152172e150007b4cf309a494a6e43bde386c02bb2e490ba22f0",
+    "native/families/run.py": "d4cf73faeff5a8ac16ea6baf2439424e8b5b4c9e17273990594c3671f86c7d6f",
+    "scripts/build-families.sh": "77116e1784ee5e9f82bb7198d4fad476ecd5edf39ad452fdcf667a2ebc46b9c2",
+    "tests/e2e/native-families.sh": "b2783deda49261250b01e7e74260cb63991d12031d3fab43a1ac8ffcd36be8c5",
+    "/Users/gad/Documents/code/personal/infinify/target/worktrees/native-family/target/native-families/native-families": "29b8ddcc9e647d6e70fb34b2cf69ad4b8f862dbe5eb7806871f6d662adfc56dc"
+  },
+  "checks": [],
+  "failure": "Native panel window unavailable or mismatched in SC/CG",
+  "evidence_sha256": {
+    "proof/baseline-0-parent.png": "ec07cf575ce25787a5597910065f3458647cabf553f4c6dfd6a9c4fafab1f6dd",
+    "proof/source.json": "637549470cc63a68ea789daed152a1c77a9fe723cfb2d3f447fb4d6883627972",
+    "proof/baseline-2-parent.png": "e6aa01fb971f568d20809eaad4baa49b6bdd6c0bdb378649021f7f6dac7ef207",
+    "proof/baseline-3-other-top.png": "6c2220a8fa5f583bdd9996dd804d743afd97e92530c088a62e6265d40df1c6bd",
+    "proof/display-baseline-1.png": "184f959fba21eeba054457276f3ffee71b9b787719c6a441eef6205f5c534329",
+    "proof/display-baseline-0.png": "184f959fba21eeba054457276f3ffee71b9b787719c6a441eef6205f5c534329",
+    "proof/baseline-0-other-top.png": "6c2220a8fa5f583bdd9996dd804d743afd97e92530c088a62e6265d40df1c6bd",
+    "proof/display-baseline-2.png": "184f959fba21eeba054457276f3ffee71b9b787719c6a441eef6205f5c534329",
+    "proof/display-baseline-3.png": "184f959fba21eeba054457276f3ffee71b9b787719c6a441eef6205f5c534329",
+    "proof/baseline-1-other-top.png": "6c2220a8fa5f583bdd9996dd804d743afd97e92530c088a62e6265d40df1c6bd",
+    "proof/baseline-2-other-top.png": "aa333086d417d114364569593ffea22c961b3ddb34346df36983446c3644217a",
+    "proof/baseline-1-parent.png": "ec07cf575ce25787a5597910065f3458647cabf553f4c6dfd6a9c4fafab1f6dd",
+    "proof/source-exit.json": "b14a11a11e434938753699b3aeddb04211bc1cc8d9c4c4356e9fbaab90e5d4c6",
+    "proof/baseline-0.png": "e7674d43355ffe251df51b9558734240715588c54db0681068d854b1417d362d",
+    "proof/baseline-1.png": "e7674d43355ffe251df51b9558734240715588c54db0681068d854b1417d362d",
+    "proof/baseline-3.png": "e7674d43355ffe251df51b9558734240715588c54db0681068d854b1417d362d",
+    "proof/baseline-2.png": "2f67bf9c040ce0e550e245bad2bcfcbf131cf5ee9724ff6cbee916cf24f591c6",
+    "proof/receipt.json": "71dc916ea7c37227798b975c322f4d8a2f574b61be8e4e2b4b2b63882e0b4edc",
+    "proof/baseline-3-parent.png": "ec07cf575ce25787a5597910065f3458647cabf553f4c6dfd6a9c4fafab1f6dd"
+  }
+}
