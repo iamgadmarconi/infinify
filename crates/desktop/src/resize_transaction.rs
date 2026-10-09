@@ -302,14 +302,34 @@ impl Controller {
             && (result.actual_ax.origin.y - result.actual_cg.origin.y).abs() <= 1.0
             && (result.actual_ax.size.width - result.actual_cg.size.width).abs() <= 1.0
             && (result.actual_ax.size.height - result.actual_cg.size.height).abs() <= 1.0;
-        let settled_outcome = matches!(
-            result.outcome,
-            ResizeOutcome::Applied | ResizeOutcome::Clamped | ResizeOutcome::Rejected
-        );
-        if (settled_outcome && (!result.mutation_attempted || !result.observed))
-            || (result.outcome == ResizeOutcome::Observed
-                && (!result.observed || result.mutation_attempted || effect.requested.is_some()))
-            || (result.outcome == ResizeOutcome::Unsupported && result.mutation_attempted)
+        // Match the actual adapter paths: resolve failures have no observation;
+        // unsupported and pre-setter timeouts can retain the successful preflight
+        // read. Post-setter successful reads always become a settled outcome.
+        let setter = effect.requested.is_some();
+        let flags_valid = match result.outcome {
+            ResizeOutcome::Observed => !setter && result.observed && !result.mutation_attempted,
+            ResizeOutcome::Applied | ResizeOutcome::Clamped | ResizeOutcome::Rejected => {
+                setter && result.observed && result.mutation_attempted
+            }
+            ResizeOutcome::Unsupported => setter && result.observed && !result.mutation_attempted,
+            ResizeOutcome::InvalidRequest => {
+                setter && !result.observed && !result.mutation_attempted
+            }
+            ResizeOutcome::Unavailable
+            | ResizeOutcome::MissingWindow
+            | ResizeOutcome::AmbiguousWindow => !result.observed && !result.mutation_attempted,
+            ResizeOutcome::StaleIdentity | ResizeOutcome::ReadbackFailed => {
+                !result.observed && (setter || !result.mutation_attempted)
+            }
+            ResizeOutcome::TimedOut => {
+                if result.observed {
+                    setter && !result.mutation_attempted
+                } else {
+                    setter || !result.mutation_attempted
+                }
+            }
+        };
+        if !flags_valid
             || (result.observed && !agrees)
             || (effect.requested.is_none() && result.mutation_attempted)
             || (result.observed && (!rect_valid(result.actual_ax) || !rect_valid(result.actual_cg)))

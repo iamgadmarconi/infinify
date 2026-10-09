@@ -445,3 +445,107 @@ fn second_commit_anchors_against_last_actual_size_and_save_while_settling() {
     assert_eq!(world(&mut h), rect(expected[2], expected[3], 175., 125.));
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn adapter_outcome_flags_are_validated_atomically_for_reads_and_setters() {
+    // Enumerated from resize.m: resolve/readback failures versus setter paths.
+    // Bit order is (mutation_attempted, observed): FF, FT, TF, TT.
+    for (outcome, read_flags, setter_flags) in [
+        (
+            "observed",
+            [false, true, false, false],
+            [false, false, false, false],
+        ),
+        (
+            "applied",
+            [false, false, false, false],
+            [false, false, false, true],
+        ),
+        (
+            "clamped",
+            [false, false, false, false],
+            [false, false, false, true],
+        ),
+        (
+            "rejected",
+            [false, false, false, false],
+            [false, false, false, true],
+        ),
+        (
+            "invalid_request",
+            [false, false, false, false],
+            [true, false, false, false],
+        ),
+        (
+            "stale_identity",
+            [true, false, false, false],
+            [true, false, true, false],
+        ),
+        (
+            "unavailable",
+            [true, false, false, false],
+            [true, false, false, false],
+        ),
+        (
+            "missing_window",
+            [true, false, false, false],
+            [true, false, false, false],
+        ),
+        (
+            "ambiguous_window",
+            [true, false, false, false],
+            [true, false, false, false],
+        ),
+        (
+            "unsupported",
+            [false, false, false, false],
+            [false, true, false, false],
+        ),
+        (
+            "readback_failed",
+            [true, false, false, false],
+            [true, false, true, false],
+        ),
+        (
+            "timed_out",
+            [true, false, false, false],
+            [true, true, true, false],
+        ),
+    ] {
+        for setter in [false, true] {
+            for (index, (attempted, observed)) in
+                [(false, false), (false, true), (true, false), (true, true)]
+                    .into_iter()
+                    .enumerate()
+            {
+                let mut h = setup();
+                let effect = if setter {
+                    let t = ready(&mut h, "right");
+                    motion(&mut h, &t, 20., 0.)
+                } else {
+                    begin(&mut h, "right")
+                };
+                let response = reply(&effect, outcome, attempted, observed, 200., 150.);
+                let allowed = if setter {
+                    setter_flags[index]
+                } else {
+                    read_flags[index]
+                };
+                if allowed {
+                    h.ok(response);
+                } else {
+                    h.rejects(response);
+                    // A rejected result leaves the original effect usable.
+                    h.ok(reply(
+                        &effect,
+                        if setter { "applied" } else { "observed" },
+                        setter,
+                        true,
+                        if setter { 220. } else { 200. },
+                        150.,
+                    ));
+                }
+            }
+        }
+    }
+}
