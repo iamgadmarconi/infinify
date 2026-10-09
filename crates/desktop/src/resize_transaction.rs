@@ -467,9 +467,19 @@ impl Controller {
         generation: u64,
         observation_revision: u64,
         buffer: BufferSize,
+        content_rect: Option<Rect>,
     ) -> Result<Value, Error> {
         self.check_generation(window, &identity, generation)?;
         buffer.validate()?;
+        let content_rect = content_rect.unwrap_or_else(|| buffer.full_rect());
+        if !rect_valid(content_rect)
+            || content_rect.origin.x < 0.0
+            || content_rect.origin.y < 0.0
+            || content_rect.origin.x + content_rect.size.width > buffer.width as f64
+            || content_rect.origin.y + content_rect.size.height > buffer.height as f64
+        {
+            return Err(Error::Invalid("capture content rectangle outside buffer"));
+        }
         if self.native_resize.as_ref().is_some_and(|t| {
             t.window == window
                 && (t.uncertain_mutation
@@ -484,6 +494,7 @@ impl Controller {
             return Err(Error::Invalid("stale resize capture observation"));
         }
         source.buffer = buffer;
+        source.content_rect = content_rect;
         source.capture_revision = Some(observation_revision);
         Ok(json!({}))
     }

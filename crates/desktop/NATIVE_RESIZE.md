@@ -75,11 +75,34 @@ then have `presentation_settled:false` and no `buffer_crop`; hit/input reject.
 The shell must show an inert placeholder or otherwise withhold stale content.
 AX sizes never synthesize capture buffer dimensions. Fresh actual pixels are the
 host's responsibility, reported with
-`native_resize_capture_ready {window, identity, generation, observation_revision, buffer}`.
+`native_resize_capture_ready {window, identity, generation, observation_revision, buffer, content_rect?}`.
+The acknowledgement may also include `content_rect`, a finite, positive rectangle
+wholly inside `buffer`, expressed in actual buffer pixels. Omission (or null)
+means the whole buffer for compatibility with existing callers. Attach and rebind
+also begin with the whole buffer. `Source.content_rect` is transient capture
+metadata. Placement `buffer_crop` and hit `buffer_local` apply its offset and
+scale; hit `local` and `native_screen` still map the full observed native frame,
+independently of buffer padding.
+
 The acknowledgement must match the current revision and a valid actual buffer,
-with no pending setter or uncertain mutation. Legacy `observe` cannot grant this
-authority; changes to source size after native resizing invalidate it again.
-Tests synthesize this acknowledgement and do not establish native frame freshness.
+with no pending setter or uncertain mutation. The host may invalidate capture
+without changing any geometry using
+`invalidate_native_capture {window, identity, generation}`. It validates the exact
+binding (including owner), advances the checked `observation_revision`, clears
+capture authority, and returns `{observation_revision}`. Repeated invalidations
+advance again; callers should send them for actual state transitions. Revisions
+therefore fence capture invalidation as well as size observations. Earlier
+acknowledgements reject atomically, including those omitting `content_rect`.
+
+Legacy `observe` never grants lost capture authority. An unchanged buffer size
+and native frame size retain the acknowledged crop, including when native origin
+moves. A change to either size resets crop metadata to the new whole buffer.
+For a cropped capture or one already using observation revisions, that change
+also advances the revision and clears authority; the reset crop stays inactive
+until a new exact-revision acknowledgement. Original revision-zero whole-buffer
+callers retain their existing synchronous `observe` behavior. Neither path copies
+native coordinates into world geometry. Tests synthesize acknowledgements and do
+not establish native frame freshness.
 
 ## Persistence and evidence
 

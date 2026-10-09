@@ -69,6 +69,9 @@ pub struct BufferSize {
     pub height: u32,
 }
 impl BufferSize {
+    fn full_rect(self) -> Rect {
+        Rect::new(0.0, 0.0, self.width as f64, self.height as f64)
+    }
     fn validate(self) -> Result<(), Error> {
         if self.width == 0 || self.height == 0 || self.width > 65536 || self.height > 65536 {
             return Err(Error::Invalid("invalid buffer dimensions"));
@@ -81,6 +84,7 @@ pub struct Source {
     pub generation: u64,
     pub identity: SourceIdentity,
     pub buffer: BufferSize,
+    pub content_rect: Rect,
     pub original_rect: Rect,
     pub observed_rect: Rect,
     pub observation_known: bool,
@@ -192,12 +196,19 @@ pub enum Command {
         generation: u64,
         lifetime_ended: bool,
     },
+    InvalidateNativeCapture {
+        window: WindowId,
+        identity: SourceIdentity,
+        generation: u64,
+    },
     NativeResizeCaptureReady {
         window: WindowId,
         identity: SourceIdentity,
         generation: u64,
         observation_revision: u64,
         buffer: BufferSize,
+        #[serde(default)]
+        content_rect: Option<Rect>,
     },
     NavigateWindow {
         window: WindowId,
@@ -442,12 +453,28 @@ impl Controller {
                     lifetime_ended,
                 );
             }
+            Command::InvalidateNativeCapture {
+                window,
+                identity,
+                generation,
+            } => {
+                self.check_generation(window, &identity, generation)?;
+                let source = self.sources.get_mut(&window).expect("binding validated");
+                // Revisions also fence capture authority loss without changing geometry.
+                source.observation_revision = source
+                    .observation_revision
+                    .checked_add(1)
+                    .ok_or(Error::Invalid("observation revisions exhausted"))?;
+                source.capture_revision = None;
+                return Ok(json!({"observation_revision":source.observation_revision}));
+            }
             Command::NativeResizeCaptureReady {
                 window,
                 identity,
                 generation,
                 observation_revision,
                 buffer,
+                content_rect,
             } => {
                 return self.native_resize_capture_ready(
                     window,
@@ -455,6 +482,7 @@ impl Controller {
                     generation,
                     observation_revision,
                     buffer,
+                    content_rect,
                 );
             }
             Command::NavigateWindow {
@@ -635,6 +663,7 @@ impl Controller {
                         generation: self.next_generation,
                         identity,
                         buffer,
+                        content_rect: buffer.full_rect(),
                         original_rect: source_rect,
                         observed_rect: source_rect,
                         observation_known: true,
@@ -661,13 +690,23 @@ impl Controller {
                     .sources
                     .get_mut(&window)
                     .ok_or(Error::Invalid("unbound source"))?;
-                if source.observation_revision > 0 && source.observed_rect.size != source_rect.size
-                {
+                let capture_metadata_changed = source.buffer.width != buffer.width
+                    || source.buffer.height != buffer.height
+                    || source.observed_rect.size != source_rect.size;
+                let managed_capture = source.observation_revision > 0
+                    || source.content_rect != source.buffer.full_rect();
+                if capture_metadata_changed && managed_capture {
                     source.observation_revision = source
                         .observation_revision
                         .checked_add(1)
                         .ok_or(Error::Invalid("observation revisions exhausted"))?;
                     source.capture_revision = None;
+                }
+                // Unchanged observations retain the acknowledged crop. Legacy
+                // full-buffer captures may reset synchronously; managed/cropped
+                // captures require a new revision acknowledgement after change.
+                if capture_metadata_changed {
+                    source.content_rect = buffer.full_rect();
                 }
                 source.observed_rect = source_rect;
                 source.buffer = buffer;
@@ -1044,11 +1083,8 @@ impl Controller {
             .ok_or(Error::Invalid("unknown window"))?
             .world_rect;
         let local = scale_point(hit.local, world.size, source.observed_rect.size);
-        let buffer_local = scale_point(
-            hit.local,
-            world.size,
-            Size::new(source.buffer.width as f64, source.buffer.height as f64),
-        );
+        let buffer_local = source.content_rect.origin
+            + scale_point(hit.local, world.size, source.content_rect.size);
         Ok(
             json!({"hit": {"window": hit.window, "output": output, "identity": source.identity, "local": local, "buffer_local": buffer_local, "native_screen": source.observed_rect.origin + local, "requires_native_revalidation": true}}),
         )
@@ -1058,7 +1094,7 @@ impl Controller {
             let source = self.sources.get(&p.window);
             let world_size = self.scene.window(p.window).expect("placement references scene window").world_rect.size;
             let settled = source.is_some_and(|s| s.observation_known && s.capture_revision == Some(s.observation_revision));
-            let buffer_crop = source.filter(|_| settled).map(|s| scale_rect(p.source_rect, world_size, Size::new(s.buffer.width as f64, s.buffer.height as f64)));
+            let buffer_crop = source.filter(|_| settled).map(|s| { let mut crop = scale_rect(p.source_rect, world_size, s.content_rect.size); crop.origin = crop.origin + s.content_rect.origin; crop });
             json!({"window": p.window, "output": p.output, "screen_rect": p.screen_rect, "clip_rect": p.clip_rect, "world_local_crop": p.source_rect, "buffer_crop": buffer_crop, "presentation_settled": settled, "source": source})
         }).collect();
         let windows: Vec<_> = self.scene.windows().iter().map(|w| json!({"window": w.id, "world_rect": w.world_rect, "metadata": self.metadata.get(&w.id), "source": self.sources.get(&w.id)})).collect();

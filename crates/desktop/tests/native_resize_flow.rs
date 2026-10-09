@@ -549,3 +549,200 @@ fn adapter_outcome_flags_are_validated_atomically_for_reads_and_setters() {
         }
     }
 }
+
+fn capture_ack(revision: u64, content: Option<Value>) -> Value {
+    let mut command = json!({"op":"native_resize_capture_ready","window":1,"identity":identity(),"generation":1,"observation_revision":revision,"buffer":{"width":400,"height":300}});
+    if let Some(content) = content {
+        command["content_rect"] = content;
+    }
+    command
+}
+fn invalidate_capture(h: &mut Host) -> u64 {
+    h.ok(json!({"op":"invalidate_native_capture","window":1,"identity":identity(),"generation":1}))
+        ["observation_revision"]
+        .as_u64()
+        .unwrap()
+}
+fn capture_input() -> Value {
+    json!({"op":"input","output":1,"screen":{"x":150.,"y":175.},"identity":identity()})
+}
+fn observe_capture(source_rect: Value, width: u32, height: u32) -> Value {
+    json!({"op":"observe","window":1,"identity":identity(),"source_rect":source_rect,"buffer":{"width":width,"height":height}})
+}
+#[test]
+fn padded_capture_maps_clipped_pixels_without_changing_native_coordinates() {
+    let mut h = setup();
+    h.ok(json!({"op":"register_output","stable_id":"one","screen_bounds":rect(0.,0.,250.,200.)}));
+    let world_before = world(&mut h);
+    let crop = rect(10.5, 20.25, 300.5, 201.75);
+    h.ok(capture_ack(0, Some(crop.clone())));
+    let snapshot = h.snap();
+    assert_eq!(snapshot["windows"][0]["source"]["content_rect"], crop);
+    assert_eq!(
+        snapshot["placements"][0]["buffer_crop"],
+        rect(10.5, 20.25, 225.375, 134.5)
+    );
+    let hit = h.ok(capture_input())["hit"].clone();
+    assert_eq!(hit["buffer_local"], json!({"x":85.625,"y":121.125}));
+    assert_eq!(hit["local"], json!({"x":50.,"y":75.}));
+    assert_eq!(hit["native_screen"], json!({"x":60.,"y":95.}));
+    assert_eq!(world(&mut h), world_before);
+    h.ok(capture_ack(0, None));
+    assert_eq!(
+        h.snap()["windows"][0]["source"]["content_rect"],
+        rect(0., 0., 400., 300.)
+    );
+    assert_eq!(
+        h.ok(capture_input())["hit"]["buffer_local"],
+        json!({"x":100.,"y":150.})
+    );
+}
+#[test]
+fn capture_content_validation_rejects_invalid_and_out_of_buffer_rectangles_atomically() {
+    let mut h = setup();
+    for crop in [
+        rect(-0.1, 0., 10., 10.),
+        rect(0., -0.1, 10., 10.),
+        rect(0., 0., 0., 10.),
+        rect(0., 0., 10., -1.),
+        rect(399.5, 0., 1., 10.),
+        rect(0., 299.5, 10., 1.),
+        rect(0., 0., 1e100, 10.),
+        json!({"origin":{"x":"NaN","y":0},"size":{"width":10,"height":10}}),
+        json!({"origin":{"x":null,"y":0},"size":{"width":10,"height":10}}),
+    ] {
+        h.rejects(capture_ack(0, Some(crop)));
+    }
+    let mut bad_buffer = capture_ack(0, Some(rect(0., 0., 10., 10.)));
+    bad_buffer["buffer"]["width"] = json!(0);
+    h.rejects(bad_buffer);
+    h.ok(capture_ack(0, Some(rect(0.25, 0.5, 399.75, 299.5))));
+}
+#[test]
+fn invalidation_fences_old_capture_ack_without_moving_geometry() {
+    let mut h = setup();
+    h.ok(capture_ack(0, Some(rect(10., 10., 380., 280.))));
+    let before = h.snap();
+    let old = capture_ack(0, None);
+    assert_eq!(invalidate_capture(&mut h), 1);
+    assert_eq!(invalidate_capture(&mut h), 2);
+    let invalidated = h.snap();
+    assert_eq!(invalidated["outputs"], before["outputs"]);
+    assert_eq!(
+        invalidated["windows"][0]["world_rect"],
+        before["windows"][0]["world_rect"]
+    );
+    assert_eq!(
+        invalidated["windows"][0]["source"]["observed_rect"],
+        before["windows"][0]["source"]["observed_rect"]
+    );
+    assert_eq!(
+        invalidated["windows"][0]["source"]["observation_known"],
+        true
+    );
+    assert_eq!(invalidated["placements"][0]["presentation_settled"], false);
+    assert!(invalidated["placements"][0]["buffer_crop"].is_null());
+    h.rejects(capture_input());
+    h.rejects(old);
+    h.rejects(capture_ack(1, Some(rect(10., 10., 380., 280.))));
+    h.ok(capture_ack(2, Some(rect(10., 10., 380., 280.))));
+    assert_eq!(h.snap()["placements"][0]["presentation_settled"], true);
+    h.ok(capture_input());
+}
+#[test]
+fn capture_binding_generation_and_owner_must_match_after_rebind() {
+    let mut h = setup();
+    let invalidation =
+        json!({"op":"invalidate_native_capture","window":1,"identity":identity(),"generation":1});
+    for mut command in [capture_ack(0, None), invalidation.clone()] {
+        command["identity"]["owner"] = json!(900);
+        h.rejects(command);
+    }
+    h.ok(json!({"op":"remove_source","window":1,"identity":identity(),"keep_placeholder":true}));
+    attach(&mut h, Some(1), identity());
+    assert_eq!(
+        h.snap()["windows"][0]["source"]["content_rect"],
+        rect(0., 0., 400., 300.)
+    );
+    h.rejects(invalidation.clone());
+    h.rejects(capture_ack(0, None));
+    let mut current = invalidation;
+    current["generation"] = json!(2);
+    assert_eq!(h.ok(current)["observation_revision"], 1);
+    let mut ack = capture_ack(1, Some(rect(20., 20., 360., 260.)));
+    ack["generation"] = json!(2);
+    h.ok(ack);
+}
+#[test]
+fn legacy_observe_preserves_crop_but_changed_capture_metadata_requires_ack() {
+    let mut h = setup();
+    let crop = rect(10.5, 20.25, 300.5, 201.75);
+    h.ok(capture_ack(0, Some(crop.clone())));
+    h.ok(observe_capture(rect(10., 20., 200., 150.), 400, 300));
+    assert_eq!(h.snap()["windows"][0]["source"]["content_rect"], crop);
+    h.ok(observe_capture(rect(30., 40., 200., 150.), 400, 300));
+    assert_eq!(
+        h.ok(capture_input())["hit"]["native_screen"],
+        json!({"x":80.,"y":115.})
+    );
+    assert_eq!(h.snap()["windows"][0]["source"]["content_rect"], crop);
+    h.ok(observe_capture(rect(30., 40., 200., 150.), 800, 600));
+    assert_eq!(h.snap()["windows"][0]["source"]["observation_revision"], 1);
+    assert_eq!(
+        h.snap()["windows"][0]["source"]["content_rect"],
+        rect(0., 0., 800., 600.)
+    );
+    h.rejects(capture_input());
+    h.rejects(capture_ack(0, Some(crop)));
+    h.ok(observe_capture(rect(30., 40., 200., 150.), 800, 600));
+    h.rejects(capture_input());
+    let mut ack = capture_ack(1, None);
+    ack["buffer"] = json!({"width":800,"height":600});
+    h.ok(ack);
+    h.ok(observe_capture(rect(30., 40., 400., 300.), 800, 600));
+    assert_eq!(h.snap()["windows"][0]["source"]["observation_revision"], 2);
+    h.rejects(capture_input());
+    let mut ack = capture_ack(2, Some(rect(20., 20., 760., 560.)));
+    ack["buffer"] = json!({"width":800,"height":600});
+    h.ok(ack);
+    assert_eq!(
+        h.ok(capture_input())["hit"]["local"],
+        json!({"x":100.,"y":150.})
+    );
+    assert_eq!(world(&mut h), rect(100., 100., 200., 150.));
+    // Existing ABI callers that never opted into crop/revision authority retain
+    // whole-buffer observe semantics.
+    let mut legacy = setup();
+    legacy.ok(observe_capture(rect(30., 40., 400., 300.), 800, 600));
+    assert_eq!(
+        legacy.snap()["windows"][0]["source"]["observation_revision"],
+        0
+    );
+    assert_eq!(
+        legacy.ok(capture_input())["hit"]["buffer_local"],
+        json!({"x":200.,"y":300.})
+    );
+}
+#[test]
+fn capture_contract_is_transient_and_does_not_bypass_uncertain_setter() {
+    let mut h = setup();
+    let path =
+        std::env::temp_dir().join(format!("capture-contract-save-{}.json", std::process::id()));
+    h.ok(json!({"op":"save","path":path}));
+    let saved = std::fs::read(&path).unwrap();
+    let revision = invalidate_capture(&mut h);
+    h.ok(capture_ack(revision, Some(rect(10., 20., 380., 270.))));
+    h.ok(json!({"op":"save","path":path}));
+    assert_eq!(std::fs::read(&path).unwrap(), saved);
+    let t = ready(&mut h, "right");
+    let e = motion(&mut h, &t, 20., 0.);
+    let revision = invalidate_capture(&mut h);
+    h.rejects(capture_ack(revision, Some(rect(10., 20., 380., 270.))));
+    let read = h.ok(reply(&e, "timed_out", true, false, 0., 0.))["effect"].clone();
+    h.ok(reply(&read, "observed", false, true, 220., 150.));
+    let revision = h.snap()["windows"][0]["source"]["observation_revision"]
+        .as_u64()
+        .unwrap();
+    h.rejects(capture_ack(revision, None));
+    std::fs::remove_file(path).unwrap();
+}
