@@ -106,3 +106,58 @@ single source. Production chooser/managing of existing user windows has not been
 run during development. Ad-hoc signing is local development packaging, not a
 notarized distribution build. Private SkyLight input symbols can change with OS
 updates; unavailable symbols leave live viewing functional and input disabled.
+
+## Experimental native navigation
+
+`--experimental-native-navigation` opts into the native navigation integration.
+It can accompany `--state /absolute/file.json` or the interactive `--demo DIR`;
+probe and internal child modes reject it. The default click/activation path is
+unchanged. This flag is an experimental runtime authorization for explicitly
+selected sources, not evidence of third-party compatibility.
+
+The gated toolbar adds **Center selected**, **Previous**, and **Next**. Center
+uses the controller's `navigate_window` with reset zoom; this does not claim the
+complete upstream `CenterWindow` action. Previous/Next use unheld cycles. Toolbar
+navigation resolves the toolbar's display; shortcuts resolve the pointer's
+output. A multi-output demo toolbar requires the pointer inside an output.
+No arbitrary first display is selected. Already-reserved toolbar space is not
+subtracted a second time.
+
+Option-Tab and Option-Shift-Tab use Carbon hotkeys only while the experimental
+panels are open. A listen-only event observer tracks the accepted keypress,
+actual Option release, and human interruption. Delayed Carbon delivery after
+release is unheld; delivery after cancellation is rejected. Failed registration
+leaves the buttons available. A missing or disabled input observer disables
+native focus dispatch, including button focus, while camera navigation remains
+available. No event-suppression fallback or permission prompt is used.
+
+Only these explicit navigation actions dispatch native focus effects. A serial
+worker receives immutable effect/identity/generation tickets, bounded deadlines,
+and cancellation epochs. Ownership, unchanged native bounds, and foreground
+process birth are checked without entering the controller from the worker.
+Workspace activation notifications permanently invalidate a lease after a
+foreign foreground transition. Success requires independent exact-window
+readback from the focus adapter. Mouse and other human intent cancel pending
+work and camera flights before the legacy pointer path; clicks are never saved
+for later replay. Detach, rebind, chooser, screen changes, cleanup, and shutdown
+invalidate work before teardown. Unsupported non-null owner authority fails
+closed rather than being silently discarded.
+
+Coalesced bounded observation runs at most once per half second on the same
+serial worker. Expected confirmations use `focus_result`, duplicate confirmed
+observations do nothing, independently validated external focus ends cycling,
+and failed/unknown readback does not claim focus loss. A single common-mode
+60 Hz main-thread timer advances all active camera flights and renders once per
+frame; idle polling keeps the clock current and completed flights save once.
+There are no native resize changes.
+
+`./tests/e2e/desktop-navigation.sh` runs the real Objective-C coordinator and
+input-order policy against the actual Rust C ABI with injected nonmutating
+focus, clock, and scheduling. It covers exact identities, binding generations,
+held/reverse/release-pending cycles, supersession, rejected commands, teardown,
+observation reconciliation, pointer cancellation, two-output intermediate camera
+poses, and saved final poses. It starts no NSApplication, windows, fixture,
+capture, hotkeys, or event taps. The app build and this test are integration
+checks only. Live native focus, multiple windows of one app, third-party apps,
+physical displays, shortcut delivery, foreground notifications, and input-tap
+behavior remain unrun and unproven for this path.
