@@ -102,6 +102,9 @@ Additional experimental paths are available separately:
   clipped placements, input coordinates and persistent unbound placeholders.
   Its [focus contract](crates/desktop/FOCUS.md) adds one window/stacking authority,
   confirmed focus history and held cycling, with stale native results rejected.
+  [Normal-window navigation](crates/desktop/NAVIGATION.md) adds animated camera
+  targets, cancellation and current-camera persistence through the same C API;
+  native shell dispatch and frame scheduling remain unfinished.
 - [Native desktop app](native/desktop/README.md): a signed local app bundle,
   explicit source chooser, per-display panels, shared live streams, native input,
   world dragging, camera controls and saved scenes.

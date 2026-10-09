@@ -77,6 +77,11 @@ device-specific behavior also need the corresponding hardware.
   rejected. Camera navigation, native dispatch and modal/fullscreen/pin/widget
   policy remain separate requirements; see the
   [focus contract](../../crates/desktop/FOCUS.md).
+- `21b454d` connects normal-window Keep/Reset navigation and held cycling to
+  per-output camera animation, placements and hit mapping through the C ABI.
+  Differential tests execute exact upstream method bodies. Native frame scheduling
+  and the full center-window action remain unfinished; see
+  [navigation contracts](../../crates/desktop/NAVIGATION.md).
 
 These milestones add evidence to partial rows. None satisfies an entire native
 behavior row or changes the completion requirement.

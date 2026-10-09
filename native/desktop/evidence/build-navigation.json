@@ -1,0 +1,51 @@
+{
+  "target_revision": "21b454dc9c6c19fecd3c58cfdfc68d97a2360239",
+  "scope": "Packaged build after reviewed Stage/focus and normal-window camera navigation controller integration. Native shell has not yet wired these new actions/effects. No current-binary native-control E2E run; historical proofs retain their exact sources.",
+  "build_command": "./scripts/build-app.sh",
+  "build_result": "success",
+  "runtime_os": "27.2",
+  "rustc": "rustc 1.96.0 (ac68faa20 2026-05-25)",
+  "input_sha256": {
+    "Cargo.toml": "2dab63ce777bfda9616cdafafa94d21c35db0ffa2846a3434c4c9336286290e4",
+    "Cargo.lock": "108dff38e5f976b138dd3fabb21289dd885fe91f9d1650df532ced48ebc0cb56",
+    ".cargo/config.toml": "87a866d0646d61ac5aa85ae36f37e6389c9c2c55f251dd6693ad2abf349c54d2",
+    "crates/canvas/Cargo.toml": "18f2fb7e41a60e91fb514c257d082cdcf10e42be8226338d7412a07e7429bfa4",
+    "crates/desktop/Cargo.toml": "cff64a3c97c0aad4859a5f6283803acad0d37d9e53d5b274fcf2a5d1c5d8f687",
+    "crates/desktop/include/driftwm_desktop.h": "47dc9ece2aa6e2329e9f1956e0d43928df34f92e30b743b47f0cd1c0475f70d2",
+    "native/desktop/main.m": "b3ce8569b256e80bb1eae69a8ded6bbc49033766a112fd7900c29df0ba6409ec",
+    "native/desktop/Info.plist": "fa8c7033262193de6dd75438804af4986af0d093bdfcac431e78f77e89c745c2",
+    "native/captured-windows/captured.m": "daa1ae93968c9213a185692ff526461d9e9ce3bee5af229b1999e3224d79bf9e",
+    "scripts/build-app.sh": "071edfe87a6c723caec80954165b4b617a35eb78580f905fea721b7210c367de",
+    "crates/canvas/src/cluster_resize.rs": "9ec6c968f5a54a93272ad585fe855d0e91f974b1f23f6aff125ab34f650634e8",
+    "crates/canvas/src/geometry.rs": "0434eb48f696c908572fbd1632b8c10865eece5d020b882f5838ae48824e9426",
+    "crates/canvas/src/gestures.rs": "95ee6c8206b7dffcd5c52c788441a86887734ca5fcaf5d0ab4bc255b15368de4",
+    "crates/canvas/src/layout.rs": "679be9137e3f6c8665d6e2cac221ef3c2b4cdf146e8e93267a15f3efc0f75604",
+    "crates/canvas/src/lib.rs": "748540d9d0e70888c12fdcfe462caa52c2b8526b6a0a56662ab0f780b9b1c2b0",
+    "crates/canvas/src/momentum.rs": "001c5920ee5d8efa4edd9096883d3245616bf308e5a77b020f5f933462746ed7",
+    "crates/canvas/src/policy.rs": "5f0874fd878c38980218530123d122718dca9ed3b81585f9d03c622292043697",
+    "crates/canvas/src/session.rs": "d0eda8b8570454e4a31271fc9f9fd7492d2bd24a354b506bcc8cd8613f32b497",
+    "crates/canvas/src/stage.rs": "9e40aac93bf0a02bd956bd8cb406e0f16b870e0ddb5063c5607a3bee987780b7",
+    "crates/desktop/src/ffi.rs": "c810bafacc902c8f92602050f98e51893b4e41c803d7dd080a6f32961f3248b3",
+    "crates/desktop/src/lib.rs": "946f09d6f640ba25aeb0d298771eeb0302519024abdb11ef0a36d71850f5bae6",
+    "crates/desktop/src/navigation.rs": "9656da68afdb3cba7da503c34d5d32c3dcc755dc78b65cd341dcc855c092a00e",
+    "crates/desktop/src/storage.rs": "a3d22a6db2c1f1cf6899b9519424a8b4860d6d31f03bbda79e6a412d77be5e09"
+  },
+  "artifact_sha256": {
+    "target/release/libdriftwm_desktop.a": "568a22cd906ef3c5b5b68c34279982905791815963404716ec555a92d4733967",
+    "target/app/Infinify.app/Contents/MacOS/Infinify": "2d3e862c84d5a66f3ffc1bd98537302f62fc192f12aea11fe872629e39019bf8"
+  },
+  "checks": {
+    "signature": {
+      "exit_code": 0,
+      "output": ""
+    },
+    "architecture": {
+      "exit_code": 0,
+      "output": "target/app/Infinify.app/Contents/MacOS/Infinify: Mach-O 64-bit executable arm64\n"
+    },
+    "deployment_target": {
+      "exit_code": 0,
+      "output": "target/app/Infinify.app/Contents/MacOS/Infinify:\nLoad command 11\n      cmd LC_BUILD_VERSION\n  cmdsize 32\n platform MACOS\n    minos 26.0\n      sdk 27.0\n   ntools 1\n     tool LD\n  version 27037.0\n"
+    }
+  }
+}

@@ -51,4 +51,13 @@ semantics have separate focused differential/controller tests; no full native
 control run was performed on this newly linked binary. Earlier native-control
 and safety-regression receipts remain evidence for their own recorded builds.
 
+## Build after controller focus and navigation integration
+
+`build-navigation.json` records the packaged build at revision `21b454d`.
+The current canvas/controller sources, native shell, static library and signed
+executable are hashed; arm64, minimum macOS 26.0 and signature checks pass.
+The new Stage/focus and normal-window navigation APIs have separately reviewed
+C ABI tests. The native shell has not yet connected those new actions/effects,
+and this binary has no new native-control E2E result. The build was not launched.
+
 `SHA256SUMS` covers the final bytes of all evidence files except itself.
