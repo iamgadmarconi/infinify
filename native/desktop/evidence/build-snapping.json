@@ -1,0 +1,47 @@
+{
+  "target_revision": "4ca7f5e8b9e7d8d5f50fa099caade75b8c2ee416",
+  "scope": "Packaged build after reviewed snap algorithm changes. No current-binary native-control E2E run. Historical native-control and review-guard proofs remain separate.",
+  "build_command": "./scripts/build-app.sh",
+  "build_result": "success",
+  "runtime_os": "27.2",
+  "rustc": "rustc 1.96.0 (ac68faa20 2026-05-25)",
+  "input_sha256": {
+    "Cargo.toml": "2dab63ce777bfda9616cdafafa94d21c35db0ffa2846a3434c4c9336286290e4",
+    "Cargo.lock": "108dff38e5f976b138dd3fabb21289dd885fe91f9d1650df532ced48ebc0cb56",
+    ".cargo/config.toml": "87a866d0646d61ac5aa85ae36f37e6389c9c2c55f251dd6693ad2abf349c54d2",
+    "crates/canvas/Cargo.toml": "18f2fb7e41a60e91fb514c257d082cdcf10e42be8226338d7412a07e7429bfa4",
+    "crates/desktop/Cargo.toml": "cff64a3c97c0aad4859a5f6283803acad0d37d9e53d5b274fcf2a5d1c5d8f687",
+    "native/desktop/main.m": "b3ce8569b256e80bb1eae69a8ded6bbc49033766a112fd7900c29df0ba6409ec",
+    "native/desktop/Info.plist": "fa8c7033262193de6dd75438804af4986af0d093bdfcac431e78f77e89c745c2",
+    "native/captured-windows/captured.m": "daa1ae93968c9213a185692ff526461d9e9ce3bee5af229b1999e3224d79bf9e",
+    "scripts/build-app.sh": "071edfe87a6c723caec80954165b4b617a35eb78580f905fea721b7210c367de",
+    "crates/canvas/src/cluster_resize.rs": "9ec6c968f5a54a93272ad585fe855d0e91f974b1f23f6aff125ab34f650634e8",
+    "crates/canvas/src/geometry.rs": "0434eb48f696c908572fbd1632b8c10865eece5d020b882f5838ae48824e9426",
+    "crates/canvas/src/gestures.rs": "45b8f678ed34625dee8141fd3fa43069b6895bd9c298e54dbc197a6ba1244faf",
+    "crates/canvas/src/layout.rs": "679be9137e3f6c8665d6e2cac221ef3c2b4cdf146e8e93267a15f3efc0f75604",
+    "crates/canvas/src/lib.rs": "c05a1d9bbe80e2224e026144fa10c1bbd3c4424e8763fe7c2d87927ab108b84d",
+    "crates/canvas/src/momentum.rs": "001c5920ee5d8efa4edd9096883d3245616bf308e5a77b020f5f933462746ed7",
+    "crates/canvas/src/session.rs": "d0eda8b8570454e4a31271fc9f9fd7492d2bd24a354b506bcc8cd8613f32b497",
+    "crates/desktop/src/ffi.rs": "c810bafacc902c8f92602050f98e51893b4e41c803d7dd080a6f32961f3248b3",
+    "crates/desktop/src/lib.rs": "245200640ff417a3874f4e4a643ef49b1e73da19123b50ff6c93cfdbe96e6f85",
+    "crates/desktop/src/storage.rs": "b2ad99199c786305b70981661f49f03d151d91b672badded387851b4c63510f9"
+  },
+  "artifact_sha256": {
+    "target/release/libdriftwm_desktop.a": "80618592d954534b9bab51dd881df66d5980192bbecf7376658e8f7411b13e67",
+    "target/app/Infinify.app/Contents/MacOS/Infinify": "f889dae7e2744d0414081c4770957b6f0454262293df34abe372d3449e948fb0"
+  },
+  "checks": {
+    "signature": {
+      "exit_code": 0,
+      "output": ""
+    },
+    "architecture": {
+      "exit_code": 0,
+      "output": "target/app/Infinify.app/Contents/MacOS/Infinify: Mach-O 64-bit executable arm64\n"
+    },
+    "deployment_target": {
+      "exit_code": 0,
+      "output": "target/app/Infinify.app/Contents/MacOS/Infinify:\nLoad command 11\n      cmd LC_BUILD_VERSION\n  cmdsize 32\n platform MACOS\n    minos 26.0\n      sdk 27.0\n   ntools 1\n     tool LD\n  version 27037.0\n"
+    }
+  }
+}

@@ -18,9 +18,9 @@ anchored zoom, native-handler world dragging, native button/text/scroll behavior
 in both views, unbound restore, stale-input rejection, and cleanup for that exact
 historical implementation. It is not a full-control result for the newest binary.
 
-## Current review fixes and safety regression
+## Review fixes and safety regression at the initial checkpoint
 
-`current-build.json` records current source and compiled binary hashes, build
+`current-build.json` records the initial checkpoint's source and compiled binary hashes, build
 success, arm64 / minimum macOS 26.0 metadata, strict signature verification,
 Info.plist validity, and shell syntax checks.
 
@@ -35,11 +35,20 @@ pressed source. This covers the production guard that also refuses retargeting
 an already held drag to a different source; a two-source native drag scenario
 has not been run.
 
-The final clean full-control reruns were interrupted by physical canvas input or
+The clean full-control reruns for that checkpoint were interrupted by physical canvas input or
 foreground changes. The hardened probe correctly removed screenshots and stopped
 input. Further focus-changing attempts were stopped while the workstation was
 active. Current full native-control proof remains unestablished; retain this
 boundary when describing readiness. The historical core proof and current
 focused safety regression are deliberately separate.
+
+## Build after snapping changes
+
+`build-snapping.json` records the packaged build at revision `4ca7f5e`, including
+all canvas/controller source inputs, native source, static library and executable
+hashes. Signature, architecture and deployment-target checks passed. Snapping
+semantics have separate focused differential/controller tests; no full native
+control run was performed on this newly linked binary. Earlier native-control
+and safety-regression receipts remain evidence for their own recorded builds.
 
 `SHA256SUMS` covers the final bytes of all evidence files except itself.

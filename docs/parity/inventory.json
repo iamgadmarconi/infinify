@@ -4231,8 +4231,17 @@
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
-      "evidence": [],
-      "required": true
+      "evidence": [
+        {
+          "kind": "differential_integration",
+          "path": "crates/canvas/tests/snap_parity.rs",
+          "revision": "4ca7f5e",
+          "result": "7 focused differential tests execute unchanged upstream snap/cluster algorithms; gesture_flow7, scene_flow4, controller_flow4 also passed and Astra reviewed.",
+          "limits": "No full native behavior parity, fractional/upstream rounding, native geometry or pointer/camera crossing proof."
+        }
+      ],
+      "required": true,
+      "implementation_note": "At4ca7f5e defaults/candidate families/resize snaps/current-zoom distances match pinned algorithms in tested integer traces. Fractional rounding, motion coordinates, native constraints and complete desktop behaviors remain open; see crates/canvas/SNAPPING.md."
     },
     {
       "id": "layout.cluster",
