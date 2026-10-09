@@ -4,8 +4,14 @@
 Apple Silicon / macOS 26+. The build does not launch anything. Open the app to
 choose ordinary local application windows. No window is automatically selected.
 Screen Recording permission is required for capture; Accessibility permission
-is required for native input. Missing grants are explained in the chooser; this
-app and its tests never request permissions or change privacy settings or SIP.
+is required for native input. The chooser explains a missing grant and offers an
+Allow… button: the app asks macOS for access only from that click, then opens
+the matching System Settings pane. Screen Recording takes effect after a
+relaunch. Automated probes and tests never request permissions or change privacy
+settings or SIP. An ad-hoc signature changes with every build, so macOS drops
+both grants on each rebuild; build with
+`INFINIFY_SIGN_IDENTITY="<stable signing identity>" ./scripts/build-app.sh` to
+keep them.
 
 The app links the actual Rust desktop static library. Every connected display
 gets a nonactivating panel and an independently persisted camera on the shared
@@ -20,8 +26,33 @@ movement do not move, transform, park, or resize native windows.
 - Choose windows: add a selected native source, or explicitly rebind a saved
   placeholder using the chooser's drop-down. Same-source duplicate attachments
   are rejected; the existing world window is visible through every display camera.
+- Open canvas (chooser): show the saved world and its cameras without adding a
+  window. Placeholders, panning, zooming and the view actions need no capture,
+  so this works before any source is chosen and without Screen Recording access.
 - Drag blank canvas or Option-drag / Option-scroll: pan that display's camera.
-- Command-scroll or pinch: pointer-anchored zoom, from 0.001 to 1.0.
+- Command-scroll or pinch: pointer-anchored zoom, from 0.001 to 1.0. The view
+  actions below are the animated toolbar and keyboard equivalents.
+- View actions: toolbar buttons Home, Fit, −, 1:1 and + on every canvas panel,
+  and while panels are open the global shortcuts Control-Option-A (home toggle),
+  Control-Option-W (zoom to fit; press again to return), Control-Option-= (zoom
+  in), Control-Option-- (zoom out), Control-Option-0 or Control-Option-Z (zoom
+  1:1), and Control-Option-Command with an arrow key (pan one step). Buttons act
+  on their own display (in the two-viewport demo panel, the viewport last
+  clicked, scrolled or pinched, else the first); shortcuts act on the display
+  under the pointer, or the first display when the pointer is over no panel.
+  Home goes to the origin at 1:1 and Fit frames every window, detached
+  placeholders included; a second press returns to the view left, and any other
+  pan or zoom forgets the Fit return. Zoom in stops at 1:1. Zoom out stops at
+  half the zoom that fits all windows and does nothing if a gesture already
+  zoomed past that. A pointer press, scroll or pinch on a canvas stops a flight
+  where it is.
+- View actions have no configuration yet: Control-Option stands in for DriftWM's
+  "mod", the chords are hardcoded, and the pan step (100 screen points), zoom step
+  (1.1) and fit padding (80) are upstream's defaults. Camera motion is
+  animated with the controller's upstream-derived lerp. These actions move
+  cameras only; they never move, resize, focus or otherwise touch native windows.
+  If a shortcut cannot be registered the toolbar still works. A held chord is
+  one step: it does not auto-repeat as upstream's zoom in, zoom out and pan do.
 - Control-Option-drag: move the logical world window, using Rust snapping and
   hysteresis. Add Shift to move its connected cluster.
 - Normal left-click, left drag, and scroll: forward through Rust inverse hit
@@ -52,7 +83,9 @@ The default scene file is
 selects another file whose parent directory already exists. Saves use the Rust
 controller's private temporary file, fsync, atomic rename, and directory sync.
 Only world geometry, display UUID cameras and app/title metadata are persisted;
-PIDs, window IDs, process births, and captures are not saved. Reloaded windows are
+PIDs, window IDs, process births, and captures are not saved. Home and Fit return
+positions are per display, in memory only: not saved, and dropped on reload, on
+Return to desktop, and whenever a display change recreates the panels. Reloaded windows are
 unbound placeholders. A chooser selection is always required to rebind; there is
 no PID or title guess. A failed load blocks source selection and disables every
 save path, preserving the original bytes until an explicit different state path
@@ -99,8 +132,13 @@ works with the tested native window, but choosing among multiple native windows
 of one application and app-specific focus rules needs broader validation.
 A held pointer drag cannot retarget another source. Only the last validated
 in-window point receives a synthetic button-up if a pointer leaves its source; arbitrary outside-source drag delivery is not claimed.
-Minimized/hidden/Space transitions, display hotplug, IME composition and the
-registered exit hotkey require manual validation on the intended workstation.
+Minimized/hidden/Space transitions, display hotplug, IME composition, the
+registered exit hotkey and the view-action shortcuts require manual validation on
+the intended workstation. The view actions have exported-C-ABI controller test
+coverage only: their rendered animation, toolbar buttons and global-shortcut
+delivery have not been verified on a live run. They omit upstream's fullscreen
+interaction (Infinify has no fullscreen yet, so Home has no fullscreen-return
+leg or pointer warp), configurable chords and steps, and `nav_anchors` in Fit.
 Cluster behavior uses the controller contract; fixture evidence currently has a
 single source. Production chooser/managing of existing user windows has not been
 run during development. Ad-hoc signing is local development packaging, not a
@@ -140,11 +178,14 @@ and cancellation epochs. Ownership, unchanged native bounds, and foreground
 process birth are checked without entering the controller from the worker.
 Workspace activation notifications permanently invalidate a lease after a
 foreign foreground transition. Success requires independent exact-window
-readback from the focus adapter. Mouse and other human intent cancel pending
-work and camera flights before the legacy pointer path; clicks are never saved
-for later replay. Detach, rebind, chooser, screen changes, cleanup, and shutdown
-invalidate work before teardown. Unsupported non-null owner authority fails
-closed rather than being silently discarded.
+readback from the focus adapter. Mouse, keyboard and other human intent cancel
+pending focus work and the held cycle before the legacy pointer path; clicks are
+never saved for later replay. Observed input does not stop camera flights: a
+pointer press, scroll or pinch on a canvas stops them, as in the default app,
+and so does the system disabling the observer. Detach, rebind, chooser, screen
+changes, cleanup, and shutdown invalidate work, camera flights included, before
+teardown. Unsupported non-null owner authority fails closed rather than being
+silently discarded.
 
 Coalesced bounded observation runs at most once per half second on the same
 serial worker. Expected confirmations use `focus_result`, duplicate confirmed
@@ -152,14 +193,21 @@ observations do nothing, independently validated external focus ends cycling,
 and failed/unknown readback does not claim focus loss. A single common-mode
 60 Hz main-thread timer advances all active camera flights and renders once per
 frame; idle polling keeps the clock current and completed flights save once.
+The default app runs the same timer for view-action flights without this flag,
+ticking the controller directly on the same clock. With the flag the coordinator
+ticks them, and they stop on the same input as without it: the observer's
+cancellation above is limited to focus work, so a shortcut's own key release,
+pointer movement, or a click outside a canvas leaves a flight flying. View
+actions combined with this flag are unrun.
 The navigation flag does not enable resizing; resizing has a separate experimental flag.
 
 `./tests/e2e/desktop-navigation.sh` runs the real Objective-C coordinator and
 input-order policy against the actual Rust C ABI with injected nonmutating
 focus, clock, and scheduling. It covers exact identities, binding generations,
 held/reverse/release-pending cycles, supersession, rejected commands, teardown,
-observation reconciliation, pointer cancellation, two-output intermediate camera
-poses, and saved final poses. It starts no NSApplication, windows, fixture,
+observation reconciliation, pointer cancellation, focus-only cancellation that
+leaves a camera flight armed, two-output intermediate camera poses, and saved
+final poses. It starts no NSApplication, windows, fixture,
 capture, hotkeys, or event taps. The app build and this test are integration
 checks only. Live native focus, multiple windows of one app, third-party apps,
 physical displays, shortcut delivery, foreground notifications, and input-tap
@@ -326,7 +374,8 @@ input is allowed: this mode does not query global HID inactivity or require an
 input-observation grant. Switching foreground apps still aborts, and unexpected
 actionable or unknown input delivered to the probe is dropped and permanently
 aborts the session.
-Owned mode registers neither the global Escape monitor nor the exit hotkey; use
+Owned mode registers neither the global Escape monitor, the exit hotkey nor the
+view-action shortcuts, and its toolbar has no view-action buttons; use
 the supervisor's SIGINT or the bounded deadline. Visible chooser buttons are inert
 in this probe, and the host toolbar explicitly labels the noninteractive mode.
 Other desktop/demo modes retain their existing controls. This does not prove physical-input handling or ordinary

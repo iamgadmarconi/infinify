@@ -142,6 +142,8 @@ impl Controller {
             navigation_contexts: BTreeMap::new(),
             navigation_clock: None,
             next_navigation: 0,
+            home_returns: BTreeMap::new(),
+            overview_returns: BTreeMap::new(),
             native_resize: None,
             next_resize: 0,
             retired_resize_identities: Vec::new(),

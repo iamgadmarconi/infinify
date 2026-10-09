@@ -222,7 +222,7 @@
       },
       "contract": "Match Action::PanViewport dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -230,7 +230,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Camera-only controller pan_viewport extends the output's existing flight destination by pan_step/zoom in one of eight directions, dropping any pending zoom target and Fit return; the default shell binds Control-Option-Command arrow keys. Known mismatches: hardcoded chords and upstream default pan_step 100 instead of configuration; the shell binds only the four arrow keys; a held chord does not auto-repeat, where upstream repeats PanViewport; no fullscreen interaction (Infinify has no fullscreen yet). No evidence entry is recorded yet: coverage is an exported-C-ABI controller scenario only, and rendered animation and global-shortcut delivery are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.CenterWindow",
@@ -320,7 +321,7 @@
       },
       "contract": "Match Action::HomeToggle dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -328,7 +329,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Camera-only controller home_toggle saves the output's current camera and zoom, then animates to the origin at 1:1 about the usable-area centre; at home it animates back to the saved view, or does nothing when none is saved. Default shell: toolbar Home and Control-Option-A. Known mismatches: hardcoded chord instead of configuration; no fullscreen-return leg and no pointer warp (Infinify has no fullscreen yet); the return position is per display, in memory only, and is not persisted across restarts or reloads. No evidence entry is recorded yet: coverage is an exported-C-ABI controller scenario only, and rendered animation and global-shortcut delivery are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.GoToBookmark",
@@ -400,7 +402,7 @@
       },
       "contract": "Match Action::ZoomIn dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -408,7 +410,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Camera-only controller zoom_in animates a usable-centre-anchored zoom to snap(min(zoom * 1.1, 1.0)) and clears the output's Fit return. Default shell: toolbar + and Control-Option-=. Known mismatches: hardcoded chord and upstream default zoom step 1.1 instead of configuration; a held chord does not auto-repeat, where upstream repeats ZoomIn; no fullscreen interaction (Infinify has no fullscreen yet). No evidence entry is recorded yet: coverage is an exported-C-ABI controller scenario only, and rendered animation and global-shortcut delivery are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.ZoomOut",
@@ -420,7 +423,7 @@
       },
       "contract": "Match Action::ZoomOut dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -428,7 +431,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Camera-only controller zoom_out animates a usable-centre-anchored zoom to snap(max(zoom / 1.1, dynamic minimum)), the minimum being half the zoom that fits every window with padding 80, and clears the output's Fit return. Default shell: toolbar - and Control-Option--. Known mismatches: hardcoded chord and upstream default zoom step 1.1 and fit_padding 80 instead of configuration; a held chord does not auto-repeat, where upstream repeats ZoomOut; no fullscreen interaction (Infinify has no fullscreen yet); documented deviation: interactive pinch/scroll zoom still uses the static 0.001 floor, so when the current zoom is already below the dynamic minimum ZoomOut is a no-op, where upstream would zoom in to the minimum. No evidence entry is recorded yet: coverage is an exported-C-ABI controller scenario only, and rendered animation and global-shortcut delivery are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.ZoomReset",
@@ -440,7 +444,7 @@
       },
       "contract": "Match Action::ZoomReset dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -448,7 +452,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Camera-only controller zoom_reset animates a usable-centre-anchored zoom to 1.0 and clears the output's Fit return. Default shell: toolbar 1:1, Control-Option-0 and Control-Option-Z. Known mismatches: hardcoded chords instead of configuration; no fullscreen interaction (Infinify has no fullscreen yet). No evidence entry is recorded yet: coverage is an exported-C-ABI controller scenario only, and rendered animation and global-shortcut delivery are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.ZoomToFit",
@@ -460,7 +465,7 @@
       },
       "contract": "Match Action::ZoomToFit dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -468,7 +473,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Camera-only controller zoom_to_fit is a toggle: the first press saves the output's camera and zoom as its Fit return and animates to frame every scene window, detached placeholders included, with padding 80; the next press animates back, and any other pan or zoom discards the return; no windows is a no-op. Default shell: toolbar Fit and Control-Option-W. Known mismatches: hardcoded chord and upstream default fit_padding 80 instead of configuration; nav_anchors are ignored (no configuration); no fullscreen interaction (Infinify has no fullscreen yet); the return position is per display, in memory only, and is not persisted. No evidence entry is recorded yet: coverage is an exported-C-ABI controller scenario only, and rendered animation and global-shortcut delivery are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.ZoomToFitSnapped",

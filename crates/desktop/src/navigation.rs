@@ -41,22 +41,22 @@ impl FocusPlacement {
 }
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct NavigationContext {
-    usable_rect_local: Rect,
+    pub(crate) usable_rect_local: Rect,
     focus_placement: FocusPlacement,
     camera_speed: f64,
     outer_gap: f64,
 }
 #[derive(Clone, Copy, Debug, Serialize)]
-struct Anchor {
-    canvas: Point,
-    screen: Point,
+pub(crate) struct Anchor {
+    pub(crate) canvas: Point,
+    pub(crate) screen: Point,
 }
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct ViewFlight {
-    camera_target: Option<Point>,
-    zoom_target: Option<f64>,
-    zoom_animation_anchor: Option<Anchor>,
-    generation: u64,
+    pub(crate) camera_target: Option<Point>,
+    pub(crate) zoom_target: Option<f64>,
+    pub(crate) zoom_animation_anchor: Option<Anchor>,
+    pub(crate) generation: u64,
 }
 /// Derived per request: the native visible frame already includes its titlebar.
 struct NavigationFrame {
@@ -201,6 +201,8 @@ impl Controller {
             .next_navigation
             .checked_add(1)
             .ok_or(Error::Invalid("navigation generations exhausted"))?;
+        // Upstream set_camera_anchor: window navigation disarms a zoom-to-fit return.
+        self.overview_returns.remove(&output);
         self.flights.insert(
             output,
             ViewFlight {

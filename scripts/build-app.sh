@@ -13,5 +13,7 @@ xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werr
 cp native/desktop/Info.plist "$app/Contents/Info.plist"
 cp native/families/YABAI-NOTICE.txt "$app/Contents/Resources/"
 cp LICENSE NOTICE "$app/Contents/Resources/"
-codesign --force --sign - "$app"
+# Ad-hoc signatures change with every build, so macOS drops the app's privacy
+# grants each time. A stable identity keeps them: INFINIFY_SIGN_IDENTITY="Developer ID Application: ...".
+codesign --force --sign "${INFINIFY_SIGN_IDENTITY:--}" "$app"
 printf '%s\n' "Built $app (arm64, macOS 26+); nothing launched."

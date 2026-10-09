@@ -18,7 +18,8 @@ typedef BOOL (^DWGuard)(void);
 @property (copy) DWJob settled;
 - (void)navigate:(NSDictionary *)command;
 - (void)releaseCycle;
-- (void)invalidate;
+- (void)cancelFocus; // pending focus work and the held cycle; camera flights keep flying
+- (void)invalidate; // cancelFocus, and stops every camera flight
 - (void)shutdown;
 - (void)observe;
 - (BOOL)frame;

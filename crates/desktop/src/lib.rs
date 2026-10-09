@@ -6,11 +6,14 @@ mod ffi;
 mod navigation;
 mod resize_transaction;
 mod storage;
+mod view_actions;
 pub use ffi::*;
 pub use navigation::{FocusPlacement, ZoomPolicy};
 use navigation::{NavigationContext, ViewFlight};
 use resize_transaction::NativeResizeTransaction;
 pub use resize_transaction::{NativeResizeResult, ResizeOutcome};
+pub use view_actions::ViewDirection;
+use view_actions::ViewReturn;
 
 use driftwm_canvas::{
     DragGesture, OutputId, Point, Rect, ResizeEdges, ResizeGesture, Scene, Size, SnapOptions,
@@ -150,6 +153,8 @@ pub struct Controller {
     navigation_contexts: BTreeMap<OutputId, NavigationContext>,
     navigation_clock: Option<u64>,
     next_navigation: u64,
+    home_returns: BTreeMap<OutputId, ViewReturn>,
+    overview_returns: BTreeMap<OutputId, ViewReturn>,
     native_resize: Option<NativeResizeTransaction>,
     next_resize: u64,
     retired_resize_identities: Vec<SourceIdentity>,
@@ -232,6 +237,25 @@ pub enum Command {
         focus_placement: FocusPlacement,
         camera_speed: f64,
         outer_gap: f64,
+    },
+    PanViewport {
+        output: OutputId,
+        direction: ViewDirection,
+    },
+    HomeToggle {
+        output: OutputId,
+    },
+    ZoomIn {
+        output: OutputId,
+    },
+    ZoomOut {
+        output: OutputId,
+    },
+    ZoomReset {
+        output: OutputId,
+    },
+    ZoomToFit {
+        output: OutputId,
     },
     RegisterOutput {
         stable_id: String,
@@ -534,6 +558,14 @@ impl Controller {
                     outer_gap,
                 )?;
             }
+            Command::PanViewport { output, direction } => {
+                return self.pan_viewport(output, direction);
+            }
+            Command::HomeToggle { output } => return self.home_toggle(output),
+            Command::ZoomIn { output } => return self.zoom_in(output),
+            Command::ZoomOut { output } => return self.zoom_out(output),
+            Command::ZoomReset { output } => return self.zoom_reset(output),
+            Command::ZoomToFit { output } => return self.zoom_to_fit(output),
             Command::RegisterOutput {
                 stable_id,
                 screen_bounds,
@@ -585,6 +617,8 @@ impl Controller {
                 let viewport = self.scene.remove_output(output)?;
                 self.flights.remove(&output);
                 self.navigation_contexts.remove(&output);
+                self.home_returns.remove(&output);
+                self.overview_returns.remove(&output);
                 self.outputs
                     .get_mut(&output)
                     .ok_or(Error::Invalid("missing output metadata"))?
@@ -739,6 +773,7 @@ impl Controller {
                 screen_delta,
             } => {
                 self.flights.remove(&output);
+                self.overview_returns.remove(&output);
                 self.scene.pan(output, screen_delta)?;
                 self.sync_output(output)?;
             }
@@ -748,6 +783,7 @@ impl Controller {
                 anchor,
             } => {
                 self.flights.remove(&output);
+                self.overview_returns.remove(&output);
                 self.scene.zoom_at(output, zoom, anchor)?;
                 self.sync_output(output)?;
             }
@@ -1099,7 +1135,7 @@ impl Controller {
         }).collect();
         let windows: Vec<_> = self.scene.windows().iter().map(|w| json!({"window": w.id, "world_rect": w.world_rect, "metadata": self.metadata.get(&w.id), "source": self.sources.get(&w.id)})).collect();
         Ok(
-            json!({"evidence": "logical_controller_only", "capabilities": ["normal_window_navigation", "native_resize_controller_contract"], "native_resize": self.native_resize, "navigation": {"flights": self.flights, "clock_ns": self.navigation_clock, "contexts": self.navigation_contexts}, "outputs": self.scene.outputs(), "windows": windows, "focused": self.scene.focused(), "focus": {"intent": self.scene.focused(), "observed_native": self.focus.observed_native, "pending_effect": self.focus.pending_effect, "last_result": self.focus.last_result, "history": self.scene.stage().focus_history(), "cycle": self.scene.stage().cycle_state(), "release_pending": self.focus.release_pending}, "placements": placements}),
+            json!({"evidence": "logical_controller_only", "capabilities": ["normal_window_navigation", "native_resize_controller_contract"], "native_resize": self.native_resize, "navigation": {"flights": self.flights, "clock_ns": self.navigation_clock, "contexts": self.navigation_contexts, "home_returns": self.home_returns, "overview_returns": self.overview_returns}, "outputs": self.scene.outputs(), "windows": windows, "focused": self.scene.focused(), "focus": {"intent": self.scene.focused(), "observed_native": self.focus.observed_native, "pending_effect": self.focus.pending_effect, "last_result": self.focus.last_result, "history": self.scene.stage().focus_history(), "cycle": self.scene.stage().cycle_state(), "release_pending": self.focus.release_pending}, "placements": placements}),
         )
     }
 }

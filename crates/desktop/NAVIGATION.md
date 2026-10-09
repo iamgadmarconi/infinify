@@ -76,8 +76,119 @@ Parity claims apply only to source-representable traces. This executes selected
 original methods, not the whole upstream compositor or its scheduler. It proves
 no native rendering, capture, input delivery, or usable third-party compositing.
 
-The shell now supplies an experimental frame timer and selected-window/cycle
+The shell now supplies a frame timer, and selected-window/cycle
 actions behind `--experimental-native-navigation`. Its separate headless check
 executes the actual Objective-C coordinator and input-order policy with this C ABI;
 it does not execute native focus or prove real shortcut delivery. See the
 [shell integration scope](../../native/desktop/README.md).
+
+## View actions
+
+Six camera-only commands adapt upstream's `PanViewport`, `HomeToggle`, `ZoomIn`,
+`ZoomOut`, `ZoomReset` and `ZoomToFit` (`src/input/actions.rs` at the pinned
+commit, with `try_restore_overview`, `fit_to_bbox`, `zoom_to_anchored`, and
+`min_zoom` from `src/state/navigation.rs`). They are ordinary ABI 1 commands with
+no snapshot capability or flag of their own. Each arms the same per-output flight
+that `tick_navigation` advances; none touches a window, a source, logical or
+native focus, or another output.
+
+| Command | Fields | Destination |
+| --- | --- | --- |
+| `pan_viewport` | `output`, `direction: up / down / left / right / up_left / up_right / down_left / down_right` | camera moves `100 / zoom` world points along the unit vector |
+| `home_toggle` | `output` | world origin under the usable center at zoom 1, or back |
+| `zoom_in` | `output` | zoom × 1.1, at most 1 |
+| `zoom_out` | `output` | zoom ÷ 1.1, at least the dynamic minimum |
+| `zoom_reset` | `output` | zoom 1 |
+| `zoom_to_fit` | `output` | every window inside the usable area, or back |
+
+The reply is `{"navigation":{output,generation,target_camera,target_zoom,animating}}`
+when a flight was armed and `{"navigation":null}` when the action has nothing to
+do. `target_zoom` is the flight's zoom target; for `pan_viewport`, which carries
+none, it is the current zoom. Generations share the window-navigation counter.
+An unknown output rejects, and every action rejects with
+`navigation during active gesture` while a drag or resize gesture is installed,
+before changing any state. A destination whose viewport would leave the ±1e12
+world, camera or far corner, rejects with `navigation target out of bounds`
+instead of arming a flight that no tick could apply. `navigate_window` and
+`cycle_navigate` still check the camera only.
+
+All geometry is logical: the output's current camera and zoom, its
+`screen_bounds` size, the navigation context's `usable_rect_local`, and window
+world rectangles. Observed or original native rectangles are never read. The
+screen anchor is the usable rectangle's center in output-local points
+(upstream `usable_center_screen`); the world point under it is
+`camera + center / zoom`. Actions read the current pose, not a pending flight's
+destination, with one exception below.
+
+- `pan_viewport` keeps a pending camera target and adds one step to it, so
+  presses made before a frame extend the destination instead of restarting from
+  the partially animated camera. A pending zoom target and anchor are dropped:
+  zoom stays where the animation had brought it.
+- `home_toggle` is at home when `|zoom - 1| < 0.01` and the world origin is
+  inside the whole output (edges inclusive). Away from home it remembers the
+  current pose and flies to camera `-center`, zoom 1. At home it flies back to
+  the remembered pose and forgets it; with nothing remembered it is a no-op.
+- `zoom_in`, `zoom_out` and `zoom_reset` anchor the world point under the usable
+  center. Step targets pass through upstream's `snap_zoom` (±0.05 around 1).
+  `zoom_in` at zoom 1 still arms a flight to the same zoom, as upstream does.
+- `zoom_to_fit` flies back to a remembered pose if one is pending. Otherwise it
+  fits the bounding box of every Scene window, detached placeholders included,
+  centers the box on the usable center, and remembers the pose it left. With no
+  windows it is a no-op.
+
+Constants are upstream's runtime defaults from `src/config/mod.rs` (pinned copy
+in `tests/upstream`): `navigation.pan_step = 100`, `zoom.step = 1.1`,
+`zoom.fit_padding = 80` screen points. They are not configurable here. The fit
+zoom is `min((usable - 2·padding) / box)` per axis, clamped to `[0.001, 1]`;
+the dynamic minimum is half the fit zoom, floored at 0.001, with upstream's 5×5
+box at (-2,-2) when there are no windows.
+
+`driftwm_canvas::policy` works in upstream's integer logical pixels and leaves
+the rounding to its caller. A window's world rectangle becomes the smallest
+enclosing integer rectangle: the origin is floored and the far edge ceiled, so
+a fit never clips a fractional frame. Output and usable extents are rounded to
+the nearest integer. A value outside `i32`, including a bounding-box extent,
+rejects the command instead of saturating.
+
+Return poses are runtime state per output, visible as `navigation.home_returns`
+and `navigation.overview_returns` in the snapshot. A pending fit return is
+disarmed by `pan`, `zoom`, `navigate_window`, an armed `cycle_navigate`,
+`pan_viewport`, `zoom_in`, `zoom_out`, `zoom_reset`, and leaving for home; only
+`home_toggle` consumes a home return. Cancelling a flight, starting a gesture,
+changing the navigation context, or re-registering a connected output leaves
+both in place. Removing the output drops both. Neither is saved: save schema 1
+is unchanged and load starts with none.
+
+Differences from upstream:
+
+- Upstream's pinch and pointer zoom clamp to the dynamic minimum. The `zoom`
+  command here still accepts the static 0.001 floor, so a pose can already sit
+  below the minimum. `zoom_out` is then a complete no-op (`{"navigation":null}`,
+  fit return untouched) rather than a flight that zooms in.
+- `HomeToggle`'s fullscreen legs (instant snap, fullscreen restore, pointer
+  warp), `ZoomToFit`'s configured navigation anchors, `ZoomToFitSnapped`, and
+  momentum are absent. Every Scene window counts as a canvas window.
+- Upstream's `execute_action` prelude commits an in-progress focus cycle before
+  any non-cycle action. These commands leave logical focus and a held cycle
+  exactly as they were.
+
+### Evidence and limits
+
+`view_actions_flow` drives the six commands through the exported C ABI and
+`tick_navigation` until `needs_frames` is false, on an output whose global
+origin is not (0,0) and whose usable rectangle is asymmetric, beside a second
+output whose pose must not change. It checks the settled fit against Scene
+placements and the 80 px padding, exact toggle returns, the fixed world point on
+every zoom frame, extended pan destinations, each fit-return disarm except
+`cycle_navigate` (which arms through the same path as `navigate_window`), the
+`zoom_out` deviation, gesture, schema and out-of-world rejection, save/load and
+output removal. Expected values are derived by hand from the contract above; unlike
+`navigation_flow`, upstream's action bodies are not executed as an oracle, so
+parity with them is by reading, not by differential test. The pure helpers they
+call are covered by the canvas crate's `policy_flow`.
+
+This is controller ABI evidence only. It shows no key binding, shell dispatch,
+frame scheduling, native rendering, capture, or input delivery. The default
+shell binds these commands to toolbar buttons and global shortcuts and ticks
+their flights with its own 60 Hz timer, without the experimental flag; that path
+is built but unrun. See the [shell README](../../native/desktop/README.md).

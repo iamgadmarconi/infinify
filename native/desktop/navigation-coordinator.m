@@ -20,7 +20,8 @@ static BOOL sameIdentity(NSDictionary *a,NSDictionary *b) {
 }
 - (BOOL)current:(uint64_t)epoch { [self.lock lock];BOOL valid=!self.closed&&self.epoch==epoch;[self.lock unlock];return valid; }
 - (uint64_t)advance { [self.lock lock];uint64_t epoch=++self.epoch;[self.lock unlock];return epoch; }
-- (void)invalidate { [self advance];if(!self.closed&&self.enabled){self.command(@{@"op":@"cancel_focus_cycle"});for(NSDictionary *o in self.command(@{@"op":@"snapshot"})[@"outputs"])self.command(@{@"op":@"cancel_navigation",@"output":o[@"id"]});} }
+- (void)cancelFocus { [self advance];if(!self.closed&&self.enabled)self.command(@{@"op":@"cancel_focus_cycle"}); }
+- (void)invalidate { [self cancelFocus];if(!self.closed&&self.enabled)for(NSDictionary *o in self.command(@{@"op":@"snapshot"})[@"outputs"])self.command(@{@"op":@"cancel_navigation",@"output":o[@"id"]}); }
 - (void)shutdown { [self invalidate];[self.lock lock];self.closed=YES;[self.lock unlock];self.command=nil;self.changed=nil;self.settled=nil; }
 - (BOOL)binding:(NSDictionary *)effect snapshot:(NSDictionary *)snapshot {
     for(NSDictionary *window in snapshot[@"windows"])if([window[@"window"]isEqual:effect[@"window"]]){

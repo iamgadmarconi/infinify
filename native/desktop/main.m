@@ -17,6 +17,9 @@ static CGRect jsonRect(NSDictionary *r) { return CGRectMake([r[@"origin"][@"x"] 
 static CGPoint jsonPoint(NSDictionary *p) { return CGPointMake([p[@"x"] doubleValue],[p[@"y"] doubleValue]); }
 static CGFloat screenTop(void) { return NSMaxY(NSScreen.screens.firstObject.frame); }
 static CGRect topRect(NSRect r) { return CGRectMake(r.origin.x,screenTop()-NSMaxY(r),r.size.width,r.size.height); }
+static NSString *const helpText=@"Option-drag: pan · ⌘-wheel/pinch: zoom · ⌃⌥-drag: move · +Shift: cluster · ⌃⌥A: home · ⌃⌥W: fit · ⌃⌥=/-/0: zoom · ⌃⌥⌘-arrows: pan view · ⌃⌥Esc: exit";
+// Fitted widths keep every toolbar button, experimental navigation included, inside the 1040 px demo panel.
+static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.frame=NSMakeRect(x,8,ceil(button.fittingSize.width),26);[view addSubview:button];return NSMaxX(button.frame)+4; }
 #include "resize-isolation.inc.m"
 @class Desktop, DesktopView;
 @interface LiveSource : NSObject <SCStreamOutput,SCStreamDelegate>
@@ -70,12 +73,14 @@ static CGRect topRect(NSRect r) { return CGRectMake(r.origin.x,screenTop()-NSMax
 @property CGPoint startPoint;
 @property CGPoint lastPoint;
 @property NSNumber *dragOutput;
+@property NSNumber *lastOutput; // most recently interacted output: toolbar view-action target
 @property LiveSource *pressedSource;
 @property CGPoint pressedLocal;
 @property NSNumber *resizeTransaction;
 @property NSInteger gesture; // 1 pan, 2 logical world drag, 3 native pointer
 - (void)render:(NSDictionary *)snapshot;
 - (NSNumber *)outputAt:(CGPoint)p;
+- (NSNumber *)actionOutput;
 - (BOOL)forward:(CGEventRef)event at:(CGPoint)p output:(NSNumber *)output activate:(BOOL)activate;
 @end
 @interface Desktop : NSObject <NSTableViewDataSource,NSTableViewDelegate,NSWindowDelegate>
@@ -105,6 +110,13 @@ static CGRect topRect(NSRect r) { return CGRectMake(r.origin.x,screenTop()-NSMax
 - (void)navigateButton:(NSButton *)sender;
 - (void)cycleNavigation:(BOOL)backward;
 - (void)ensureFrames;
+- (BOOL)cameraFrame;
+@property BOOL flying;
+@property EventHandlerRef viewHandler;
+@property BOOL viewKeysWarned;
+@property NSUInteger statusToken;
+- (NSNumber *)viewOutput;
+- (void)viewAction:(NSString *)op direction:(NSString *)direction output:(NSNumber *)output;
 
 @property NSMutableArray<NSPanel *> *panels;
 @property NSMutableArray<DesktopView *> *views;
@@ -116,6 +128,7 @@ static CGRect topRect(NSRect r) { return CGRectMake(r.origin.x,screenTop()-NSMax
 @property NSTableView *table;
 @property NSTextField *chooserStatus;
 @property NSPopUpButton *rebind;
+@property NSButton *grant;
 @property NSString *statePath;
 @property NSString *startupError;
 @property NSString *statusText;
@@ -135,6 +148,8 @@ static CGRect topRect(NSRect r) { return CGRectMake(r.origin.x,screenTop()-NSMax
 - (void)showChooser:(id)sender;
 - (void)quit:(id)sender;
 - (void)attachChoice:(id)sender;
+- (void)openCanvas:(id)sender;
+- (void)grantAccess:(id)sender;
 - (BOOL)attach:(SCWindow *)window logical:(NSNumber *)logical world:(NSDictionary *)world;
 - (void)poll;
 - (void)saveScene;
@@ -149,6 +164,7 @@ static CGRect topRect(NSRect r) { return CGRectMake(r.origin.x,screenTop()-NSMax
     for(NSDictionary *o in [self.desktop call:@{@"op":@"snapshot"}][@"outputs"])if([self.outputs containsObject:o[@"id"]]&&CGRectContainsPoint(jsonRect(o[@"screen_bounds"]),p))return o[@"id"];
     return nil;
 }
+- (NSNumber *)actionOutput { return [self.outputs containsObject:self.lastOutput]?self.lastOutput:self.outputs.firstObject; }
 - (void)render:(NSDictionary *)snapshot {
     NSMutableSet *keys=[NSMutableSet set],*invalidate=[NSMutableSet set]; [CATransaction begin];[CATransaction setDisableActions:YES];
     for(NSDictionary *p in snapshot[@"placements"]){
@@ -221,7 +237,7 @@ static CGRect topRect(NSRect r) { return CGRectMake(r.origin.x,screenTop()-NSMax
     [self.desktop cancelNavigation];
     if(self.desktop.resize&&![self.desktop.resize canRemove:nil]){[self.desktop.resize cancel];return;}
     CGPoint p=[self screenPoint:e];NSNumber *output=[self outputAt:p];if(!output)return;
-    self.startPoint=self.lastPoint=p;self.dragOutput=output;
+    self.startPoint=self.lastPoint=p;self.dragOutput=self.lastOutput=output;
     if(self.desktop.experimentalResize&&!(e.modifierFlags&(NSEventModifierFlagControl|NSEventModifierFlagOption))){NSDictionary *snapshot=[self.desktop call:@{@"op":@"snapshot"}];
         for(NSDictionary *placement in [snapshot[@"placements"]reverseObjectEnumerator])if([placement[@"output"]isEqual:output]&&[placement[@"window"]isEqual:snapshot[@"focused"]]&&[placement[@"presentation_settled"]boolValue]){
             BOOL occluded=NO;for(NSDictionary *front in [snapshot[@"placements"]reverseObjectEnumerator]){if(front==placement)break;if([front[@"output"]isEqual:output]&&CGRectContainsPoint(jsonRect(front[@"clip_rect"]),p)){occluded=YES;break;}}if(occluded)continue;
@@ -270,11 +286,12 @@ static CGRect topRect(NSRect r) { return CGRectMake(r.origin.x,screenTop()-NSMax
     if(self.desktop.probe){self.desktop.probeHumanInput=YES;return;}
     [self.desktop cancelNavigation];
     CGPoint p=[self screenPoint:e];NSNumber *output=[self outputAt:p];if(!output)return;
+    self.lastOutput=output;
     if(e.modifierFlags&NSEventModifierFlagCommand)[self zoom:exp(e.scrollingDeltaY*.01) at:p output:output];
     else if((e.modifierFlags&NSEventModifierFlagOption)||![[self hit:p output:output]isKindOfClass:NSDictionary.class]){[self.desktop call:@{@"op":@"pan",@"output":output,@"screen_delta":pointJSON(CGPointMake(-e.scrollingDeltaX,-e.scrollingDeltaY))}];[self.desktop render];[self.desktop saveScene];}
     else {CGEventRef cg=CGEventCreateCopy(e.CGEvent);[self forward:cg at:p output:output activate:NO];CFRelease(cg);}
 }
-- (void)magnifyWithEvent:(NSEvent *)e { if(self.desktop.resize&&![self.desktop.resize canRemove:nil])return; [self.desktop cancelNavigation]; if(self.desktop.probe){self.desktop.probeHumanInput=YES;return;} CGPoint p=[self screenPoint:e];NSNumber *output=[self outputAt:p];if(output)[self zoom:1+e.magnification at:p output:output]; }
+- (void)magnifyWithEvent:(NSEvent *)e { if(self.desktop.resize&&![self.desktop.resize canRemove:nil])return; [self.desktop cancelNavigation]; if(self.desktop.probe){self.desktop.probeHumanInput=YES;return;} CGPoint p=[self screenPoint:e];NSNumber *output=[self outputAt:p];if(output){self.lastOutput=output;[self zoom:1+e.magnification at:p output:output];} }
 @end
 static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEventRef event,void *context) {
     (void)proxy;Desktop *desktop=(__bridge Desktop *)context;
@@ -282,12 +299,14 @@ static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEvent
     if(type==kCGEventTapDisabledByTimeout||type==kCGEventTapDisabledByUserInput){desktop.navigation.focusAllowed=NO;[desktop.navigationInput cancel];[desktop.navigation invalidate];return event;}
     CGEventFlags flags=CGEventGetFlags(event);
     NSUInteger modifiers=((flags&kCGEventFlagMaskAlternate)?1:0)|((flags&kCGEventFlagMaskShift)?2:0)|((flags&(kCGEventFlagMaskCommand|kCGEventFlagMaskControl|kCGEventFlagMaskSecondaryFn|kCGEventFlagMaskAlphaShift))?4:0);
-    if(type==kCGEventFlagsChanged){NSInteger action=[desktop.navigationInput flagsChanged:modifiers];if(action==1)[desktop.navigation invalidate];else if(action==2)[desktop.navigation releaseCycle];return event;}
+    // Observed keys, modifiers and pointer events cancel focus work only. Camera flights,
+    // view actions included, stop on a canvas press, scroll or pinch via -cancelNavigation.
+    if(type==kCGEventFlagsChanged){NSInteger action=[desktop.navigationInput flagsChanged:modifiers];if(action==1)[desktop.navigation cancelFocus];else if(action==2)[desktop.navigation releaseCycle];return event;}
     if(CGEventGetIntegerValueField(event,kCGKeyboardEventKeycode)==48){
         if(type==kCGEventKeyDown&&[desktop.navigationInput tabDown:modifiers])return event;
         if(type==kCGEventKeyUp&&[desktop.navigationInput tabUp])return event;
     }
-    [desktop.navigationInput cancel];[desktop.navigation invalidate];return event;
+    [desktop.navigationInput cancel];[desktop.navigation cancelFocus];return event;
 }
 static OSStatus navigationKey(EventHandlerCallRef next,EventRef event,void *context) {
     (void)next;EventHotKeyID key={0};GetEventParameter(event,kEventParamDirectObject,typeEventHotKeyID,NULL,sizeof(key),NULL,&key);
@@ -296,9 +315,21 @@ static OSStatus navigationKey(EventHandlerCallRef next,EventRef event,void *cont
     [desktop cycleNavigation:key.id==desktop.previousNavigationKey];return noErr;
 }
 static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) { (void)next;EventHotKeyID key={0};GetEventParameter(event,kEventParamDirectObject,typeEventHotKeyID,NULL,sizeof(key),NULL,&key);if(key.signature!='Infi'||key.id!=1)return eventNotHandledErr;[(__bridge Desktop *)context quit:nil];return noErr; }
-@implementation Desktop
+// DriftWM view actions: ⌃⌥ stands in for upstream "mod", and ⌘ for the extra ctrl of
+// upstream's mod+ctrl+arrow pan because Control is already part of the chord.
+// Hot key id = row + 1; append rows (numbered bookmarks) without renumbering.
+static const struct { UInt32 key,modifiers;const char *op,*direction; } viewKeys[]={
+    {0,controlKey|optionKey,"home_toggle",NULL},{13,controlKey|optionKey,"zoom_to_fit",NULL},{24,controlKey|optionKey,"zoom_in",NULL},{27,controlKey|optionKey,"zoom_out",NULL},{29,controlKey|optionKey,"zoom_reset",NULL},{6,controlKey|optionKey,"zoom_reset",NULL},
+    {123,controlKey|optionKey|cmdKey,"pan_viewport","left"},{124,controlKey|optionKey|cmdKey,"pan_viewport","right"},{125,controlKey|optionKey|cmdKey,"pan_viewport","down"},{126,controlKey|optionKey|cmdKey,"pan_viewport","up"}};
+static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
+    (void)next;EventHotKeyID key={0};GetEventParameter(event,kEventParamDirectObject,typeEventHotKeyID,NULL,sizeof(key),NULL,&key);
+    if(key.signature!='InfV'||key.id<1||key.id>sizeof(viewKeys)/sizeof(*viewKeys))return eventNotHandledErr;
+    Desktop *desktop=(__bridge Desktop *)context;const char *direction=viewKeys[key.id-1].direction;
+    [desktop viewAction:@(viewKeys[key.id-1].op) direction:direction?@(direction):nil output:[desktop viewOutput]];return noErr;
+}
+@implementation Desktop { EventHotKeyRef _viewHotkeys[sizeof(viewKeys)/sizeof(*viewKeys)]; }
 - (instancetype)init {
-    if((self=[super init])){_controller=driftwm_desktop_create();_panels=[NSMutableArray array];_views=[NSMutableArray array];_sources=[NSMutableDictionary dictionary];_choices=[NSMutableArray array];_pendingStops=[NSMutableArray array];_statusText=@"Option-drag: pan · ⌘-wheel/pinch: zoom · ⌃⌥-drag: move · +Shift: cluster · ⌃⌥Esc: exit";}
+    if((self=[super init])){_controller=driftwm_desktop_create();_panels=[NSMutableArray array];_views=[NSMutableArray array];_sources=[NSMutableDictionary dictionary];_choices=[NSMutableArray array];_pendingStops=[NSMutableArray array];_statusText=helpText;}
     return self;
 }
 - (void)configureResize {
@@ -337,18 +368,31 @@ static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) {
     }
     [self.navigation frame];
 }
-- (void)cancelNavigation { [self.navigationInput cancel];[self.navigation invalidate]; }
+- (void)cancelNavigation {
+    [self.navigationInput cancel];[self.navigation invalidate];
+    // Without the coordinator, pointer intent still stops every view-action flight.
+    if(!self.navigation)for(DesktopView *view in self.views)for(NSNumber *output in view.outputs)[self call:@{@"op":@"cancel_navigation",@"output":output}];
+}
 - (void)stopNavigation {
     self.nextNavigationKey=0;self.previousNavigationKey=0;
-    [self.navigationInput cancel];self.navigationInput=nil;[self.navigation shutdown];self.navigation=nil;[self.frameTimer invalidate];self.frameTimer=nil;
+    [self.navigationInput cancel];self.navigationInput=nil;[self.navigation shutdown];self.navigation=nil;[self.frameTimer invalidate];self.frameTimer=nil;self.flying=NO;
     if(self.navigationTapSource){CFRunLoopRemoveSource(CFRunLoopGetMain(),self.navigationTapSource,kCFRunLoopCommonModes);CFRelease(self.navigationTapSource);self.navigationTapSource=NULL;}
     if(self.navigationTap){CFMachPortInvalidate(self.navigationTap);CFRelease(self.navigationTap);self.navigationTap=NULL;}
     if(self.nextHotkey){UnregisterEventHotKey(self.nextHotkey);self.nextHotkey=NULL;}if(self.previousHotkey){UnregisterEventHotKey(self.previousHotkey);self.previousHotkey=NULL;}if(self.navigationHandler){RemoveEventHandler(self.navigationHandler);self.navigationHandler=NULL;}
 }
+// One camera frame for every armed flight. The experimental coordinator owns the tick
+// when it exists; the default app ticks the controller itself on the same clock.
+- (BOOL)cameraFrame {
+    if(self.cleaning)return NO;
+    if(self.navigation)return [self.navigation frame];
+    NSDictionary *result=[self call:@{@"op":@"tick_navigation",@"timestamp_ns":@((uint64_t)(CACurrentMediaTime()*1e9))}];
+    if([result[@"changed_outputs"]count])[self render];
+    BOOL active=[result[@"needs_frames"]boolValue];if(!active&&self.flying)[self saveScene];self.flying=active;return active;
+}
 - (void)ensureFrames {
-    if(self.frameTimer||!self.navigation)return;
+    if(self.frameTimer||self.cleaning)return;
     if(![[self call:@{@"op":@"snapshot"}][@"navigation"][@"flights"]count])return;
-    __weak Desktop *weak=self;self.frameTimer=[NSTimer timerWithTimeInterval:1.0/60 repeats:YES block:^(NSTimer *timer){Desktop *desktop=weak;if(!desktop||![desktop.navigation frame]){[timer invalidate];desktop.frameTimer=nil;}}];
+    __weak Desktop *weak=self;self.frameTimer=[NSTimer timerWithTimeInterval:1.0/60 repeats:YES block:^(NSTimer *timer){Desktop *desktop=weak;if(!desktop||![desktop cameraFrame]){[timer invalidate];desktop.frameTimer=nil;}}];
     [[NSRunLoop mainRunLoop]addTimer:self.frameTimer forMode:NSRunLoopCommonModes];
 }
 - (NSNumber *)navigationOutput:(NSView *)view {
@@ -369,6 +413,59 @@ static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(!self.navigation.focusAllowed||!self.nextHotkey||!self.previousHotkey)return;
     NSNumber *held=[self.navigationInput takeShortcut:backward];if(!held)return;
     NSNumber *output=[self navigationOutput:nil];if(output)[self.navigation navigate:@{@"op":@"cycle_navigate",@"output":output,@"backward":@(backward),@"held":held}];
+}
+// Hotkey target: the output under the pointer, else the panel under it (a display
+// panel's toolbar strip lies outside its output), else the first registered output.
+- (NSNumber *)viewOutput {
+    CGPoint point=pointer();
+    for(DesktopView *view in self.views){NSNumber *output=[view outputAt:point];if(output)return output;}
+    for(DesktopView *view in self.views)if(view.outputs.count&&CGRectContainsPoint(view.globalBounds,point))return [view actionOutput];
+    for(DesktopView *view in self.views)if(view.outputs.count)return view.outputs[0];
+    return nil;
+}
+- (void)flashStatus:(NSString *)text {
+    self.statusText=text;NSUInteger token=++self.statusToken;__weak Desktop *weak=self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(2*NSEC_PER_SEC)),dispatch_get_main_queue(),^{Desktop *d=weak;if(d.statusToken!=token||d.cleaning||![d.statusText isEqual:text])return;d.statusText=helpText;[d render];});
+}
+- (NSString *)viewFeedback:(NSString *)op flight:(NSDictionary *)flight output:(NSNumber *)output {
+    BOOL home=[op isEqual:@"home_toggle"];
+    if(home||[op isEqual:@"zoom_to_fit"]){
+        if(!flight)return home?@"Already home":@"Nothing to fit";
+        // The toggle keeps its return view while away; an armed flight without one is the way back.
+        id returns=[self call:@{@"op":@"snapshot"}][@"navigation"][home?@"home_returns":@"overview_returns"];
+        if([returns isKindOfClass:NSDictionary.class]&&!returns[output.stringValue])return @"Previous view";
+        return home?@"Home":@"Zoom to fit";
+    }
+    if([op isEqual:@"pan_viewport"])return nil;
+    if(!flight)return @"Zoom limit reached";
+    double zoom=[flight[@"target_zoom"]doubleValue];return zoom==1?@"Zoom 1:1":[NSString stringWithFormat:@"Zoom %.3g%%",zoom*100];
+}
+// Camera-only DriftWM view actions. An existing flight is deliberately not cancelled
+// first: pan_viewport extends its in-flight target.
+- (void)viewAction:(NSString *)op direction:(NSString *)direction output:(NSNumber *)output {
+    [self.resize cancel];if(self.resize&&![self.resize canRemove:nil])return;
+    if(self.cleaning||!output)return;
+    NSDictionary *reply=[self call:direction?@{@"op":op,@"output":output,@"direction":direction}:@{@"op":op,@"output":output}];
+    NSDictionary *flight=[reply[@"navigation"]isKindOfClass:NSDictionary.class]?reply[@"navigation"]:nil;
+    NSString *text=reply?[self viewFeedback:op flight:flight output:output]:self.statusText;if(text)[self flashStatus:text];
+    if(flight&&!self.navigation)self.flying=YES;
+    [self render];if(flight)[self ensureFrames];
+}
+- (void)viewButton:(NSButton *)sender {
+    if(self.probe&&sender){self.probeHumanInput=YES;return;}
+    DesktopView *view=[sender.superview isKindOfClass:DesktopView.class]?(DesktopView *)sender.superview:nil;
+    [self viewAction:sender.identifier direction:nil output:[view actionOutput]];
+}
+- (void)configureViewKeys {
+    if(self.viewHandler)return;
+    EventTypeSpec type={kEventClassKeyboard,kEventHotKeyPressed};BOOL missing=InstallApplicationEventHandler(viewKey,1,&type,(__bridge void *)self,&_viewHandler)!=noErr;
+    // Non-fatal: every chord that did register stays live and the toolbar covers the rest.
+    if(!missing)for(UInt32 i=0;i<sizeof(viewKeys)/sizeof(*viewKeys);i++){EventHotKeyID key={'InfV',i+1};if(RegisterEventHotKey(viewKeys[i].key,viewKeys[i].modifiers,key,GetApplicationEventTarget(),0,&_viewHotkeys[i])!=noErr){_viewHotkeys[i]=NULL;missing=YES;}}
+    if(missing&&!self.viewKeysWarned){self.viewKeysWarned=YES;self.statusText=@"Some view shortcuts are unavailable; the Home, Fit and zoom buttons still work.";}
+}
+- (void)stopViewKeys {
+    for(size_t i=0;i<sizeof(viewKeys)/sizeof(*viewKeys);i++)if(_viewHotkeys[i]){UnregisterEventHotKey(_viewHotkeys[i]);_viewHotkeys[i]=NULL;}
+    if(_viewHandler){RemoveEventHandler(_viewHandler);_viewHandler=NULL;}
 }
 - (NSDictionary *)call:(NSDictionary *)command {
     NSData *request=[NSJSONSerialization dataWithJSONObject:@{@"version":@1,@"command":command} options:0 error:nil];
@@ -398,8 +495,12 @@ static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) {
     NSArray *names=self.ownedResizeProbe?@[]:@[@"Choose windows",@"Return to desktop",@"Resize status",@"Quit ⌃⌥Esc"];
     if(self.ownedResizeProbe)[view addSubview:label(@"Noninteractive owned resize probe — supervisor signal or deadline exits",NSMakeRect(15,8,720,26))];
     SEL actions[]={@selector(showChooser:),@selector(returnDesktop:),@selector(resizeUnavailable:),@selector(quit:)};
-    CGFloat x=12;for(NSUInteger i=0;i<names.count;i++){NSButton *b=[NSButton buttonWithTitle:names[i] target:self action:actions[i]];b.frame=NSMakeRect(x,8,i==1?155:135,26);[view addSubview:b];x+=i==1?163:143;}
-    if(self.experimentalNavigation){NSArray *titles=@[@"Center selected",@"Previous",@"Next"];for(NSUInteger i=0;i<titles.count;i++){NSButton *button=[NSButton buttonWithTitle:titles[i] target:self action:@selector(navigateButton:)];button.tag=i;button.frame=NSMakeRect(x,8,i==0?125:80,26);[view addSubview:button];x+=i==0?130:85;}}
+    CGFloat x=12;for(NSUInteger i=0;i<names.count;i++)x=toolbarButton(view,[NSButton buttonWithTitle:names[i] target:self action:actions[i]],x);
+    if(!self.ownedResizeProbe){NSArray *titles=@[@"Home",@"Fit",@"−",@"1:1",@"+"],*ops=@[@"home_toggle",@"zoom_to_fit",@"zoom_out",@"zoom_reset",@"zoom_in"],*tips=@[@"Home: origin at 1:1; again returns to the previous view (⌃⌥A)",@"Zoom to fit every window; again returns to the previous view (⌃⌥W)",@"Zoom out (⌃⌥-)",@"Zoom 1:1 (⌃⌥0 or ⌃⌥Z)",@"Zoom in (⌃⌥=)"];
+        // The accessory app is rarely active, so tooltips must not wait for activation.
+        if(!self.probe)panel.allowsToolTipsWhenApplicationIsInactive=YES;
+        for(NSUInteger i=0;i<titles.count;i++){NSButton *button=[NSButton buttonWithTitle:titles[i] target:self action:@selector(viewButton:)];button.identifier=ops[i];button.toolTip=tips[i];x=toolbarButton(view,button,x);}}
+    if(self.experimentalNavigation){NSArray *titles=@[@"Center selected",@"Previous",@"Next"];for(NSUInteger i=0;i<titles.count;i++){NSButton *button=[NSButton buttonWithTitle:titles[i] target:self action:@selector(navigateButton:)];button.tag=i;x=toolbarButton(view,button,x);}}
     view.status=label(self.statusText,NSMakeRect(15,37,MAX(100,frame.size.width-30),22));view.status.textColor=NSColor.lightGrayColor;view.status.font=[NSFont systemFontOfSize:11];[view addSubview:view.status];
     [self.panels addObject:panel];[self.views addObject:view];if(self.ownedResizeProbe&&!rpBeforeOrder(panel)){self.probeHumanInput=YES;return view;}[panel orderFrontRegardless];return view;
 }
@@ -407,6 +508,7 @@ static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(self.panels.count)return;self.cleaning=NO;
     if(self.demo){NSRect frame=NSMakeRect(100,120,1040,600);CGRect global=topRect(frame);NSMutableArray *rects=[NSMutableArray array];for(int i=0;i<2;i++)[rects addObject:rectJSON(CGRectOffset(ports[i],global.origin.x,global.origin.y))];[self panel:frame outputRects:rects identities:@[@"fixture-view-a",@"fixture-view-b"]];}
     else for(NSScreen *screen in NSScreen.screens){NSNumber *display=screen.deviceDescription[@"NSScreenNumber"];CFUUIDRef uuid=CGDisplayCreateUUIDFromDisplayID(display.unsignedIntValue);NSString *name=uuid?CFBridgingRelease(CFUUIDCreateString(NULL,uuid)):nil;if(uuid)CFRelease(uuid);if(!name)continue;CGRect output=topRect(screen.frame);output.origin.y+=64;output.size.height-=64;[self panel:screen.frame outputRects:@[rectJSON(output)] identities:@[name]];}
+    if(!self.probe&&!self.ownedResizeProbe)[self configureViewKeys];
     if(!self.ownedResizeProbe){
     EventTypeSpec type={kEventClassKeyboard,kEventHotKeyPressed};OSStatus handler=InstallApplicationEventHandler(exitKey,1,&type,(__bridge void *)self,&_hotkeyHandler);EventHotKeyID key={'Infi',1};
     if(handler!=noErr||RegisterEventHotKey(53,controlKey|optionKey,key,GetApplicationEventTarget(),0,&_exitHotkey)!=noErr)self.statusText=@"Exit shortcut unavailable; use the visible Quit button.";
@@ -417,7 +519,9 @@ static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(self.probe&&sender){self.probeHumanInput=YES;return;}
     (void)sender;[self.choices removeAllObjects];[self.table reloadData];
     if(self.startupError){self.chooserStatus.stringValue=self.startupError;return;}
-    if(!CGPreflightScreenCaptureAccess()){self.chooserStatus.stringValue=@"Screen Recording access is required. Enable Infinify in System Settings → Privacy & Security, then reopen. No permission request was made.";return;}
+    // The app asks macOS for a grant only from the user's own click on this button.
+    BOOL capture=CGPreflightScreenCaptureAccess();self.grant.hidden=self.demo||(capture&&AXIsProcessTrusted());self.grant.title=capture?@"Allow input…":@"Allow screen recording…";
+    if(!capture){self.chooserStatus.stringValue=@"No windows are listed: Infinify has no Screen Recording access. Click Allow screen recording…, enable Infinify in System Settings, then quit and reopen. Open canvas works without it.";return;}
     self.chooserStatus.stringValue=@"Reading available local windows…";
     [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO completionHandler:^(SCShareableContent *content,NSError *error){dispatch_async(dispatch_get_main_queue(),^{
         self.shareable=content.windows;[self.choices removeAllObjects];
@@ -434,11 +538,13 @@ static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(!self.chooser){self.chooser=[[(self.ownedResizeProbe?RPIsolatedWindow.class:FixtureWindow.class) alloc]initWithContentRect:NSMakeRect(200,180,720,470) styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable backing:NSBackingStoreBuffered defer:NO];self.chooser.title=@"Infinify — choose native windows";self.chooser.level=NSFloatingWindowLevel+1;self.chooser.releasedWhenClosed=NO;self.chooser.delegate=self;
         NSView *v=self.chooser.contentView;NSScrollView *scroll=[[NSScrollView alloc]initWithFrame:NSMakeRect(18,130,684,315)];scroll.hasVerticalScroller=YES;
         self.table=[[NSTableView alloc]initWithFrame:scroll.bounds];NSTableColumn *column=[[NSTableColumn alloc]initWithIdentifier:@"Window"];column.title=@"Application — native window";column.width=675;[self.table addTableColumn:column];self.table.dataSource=self;self.table.delegate=self;scroll.documentView=self.table;[v addSubview:scroll];
-        self.chooserStatus=label(@"",NSMakeRect(18,55,684,60));self.chooserStatus.maximumNumberOfLines=3;[v addSubview:self.chooserStatus];
-        self.rebind=[[NSPopUpButton alloc]initWithFrame:NSMakeRect(18,15,265,30) pullsDown:NO];[v addSubview:self.rebind];
-        NSButton *attach=[NSButton buttonWithTitle:@"Add selected window" target:self action:@selector(attachChoice:)];attach.frame=NSMakeRect(295,15,180,30);[v addSubview:attach];
-        NSButton *refresh=[NSButton buttonWithTitle:@"Refresh" target:self action:@selector(refreshChoices:)];refresh.frame=NSMakeRect(485,15,95,30);[v addSubview:refresh];
-        NSButton *quit=[NSButton buttonWithTitle:@"Quit" target:self action:@selector(quit:)];quit.frame=NSMakeRect(590,15,95,30);[v addSubview:quit];}
+        self.chooserStatus=label(@"",NSMakeRect(18,55,480,60));self.chooserStatus.maximumNumberOfLines=3;[v addSubview:self.chooserStatus];
+        self.grant=[NSButton buttonWithTitle:@"" target:self action:@selector(grantAccess:)];self.grant.frame=NSMakeRect(507,70,195,30);self.grant.hidden=YES;[v addSubview:self.grant];
+        self.rebind=[[NSPopUpButton alloc]initWithFrame:NSMakeRect(18,15,205,30) pullsDown:NO];[v addSubview:self.rebind];
+        NSButton *attach=[NSButton buttonWithTitle:@"Add selected window" target:self action:@selector(attachChoice:)];attach.frame=NSMakeRect(229,15,170,30);[v addSubview:attach];
+        NSButton *canvas=[NSButton buttonWithTitle:@"Open canvas" target:self action:@selector(openCanvas:)];canvas.frame=NSMakeRect(405,15,120,30);canvas.toolTip=@"Show the saved world without adding a window";[v addSubview:canvas];
+        NSButton *refresh=[NSButton buttonWithTitle:@"Refresh" target:self action:@selector(refreshChoices:)];refresh.frame=NSMakeRect(531,15,85,30);[v addSubview:refresh];
+        NSButton *quit=[NSButton buttonWithTitle:@"Quit" target:self action:@selector(quit:)];quit.frame=NSMakeRect(622,15,80,30);[v addSubview:quit];}
     [self.rebind removeAllItems];[self.rebind addItemWithTitle:@"Create a new world window"];
     for(NSDictionary *w in [self call:@{@"op":@"snapshot"}][@"windows"])if(!self.sources[w[@"window"]]){[self.rebind addItemWithTitle:[NSString stringWithFormat:@"Rebind %@: %@",w[@"window"],w[@"metadata"][@"title"]?:@"window"]];self.rebind.lastItem.representedObject=w[@"window"];}
     if(self.ownedResizeProbe){if(!rpBeforeOrder(self.chooser)){self.probeHumanInput=YES;return;}[self.chooser orderFrontRegardless];}else {[self.chooser makeKeyAndOrderFront:nil];[NSApp activate];}[self refreshChoices:nil];
@@ -446,9 +552,23 @@ static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) {
 - (BOOL)windowShouldClose:(NSWindow *)window { (void)window;if(!self.panels.count)stopped=1;return YES; }
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView { (void)tableView;return self.choices.count; }
 - (id)tableView:(NSTableView *)tableView objectValueForTableColumn:(NSTableColumn *)column row:(NSInteger)row {(void)tableView;(void)column;return self.choices[row][@"label"];}
+// The saved world and its cameras need no capture: placeholders, navigation and
+// view actions work before any source is chosen or any privacy grant exists.
+- (void)openCanvas:(id)sender {
+    if(self.probe&&sender){self.probeHumanInput=YES;return;}
+    (void)sender;if(self.startupError){self.chooserStatus.stringValue=self.startupError;return;}
+    [self openPanels];[self.chooser orderOut:nil];[self render];
+}
+- (void)grantAccess:(id)sender {
+    if(self.probe&&sender){self.probeHumanInput=YES;return;}
+    (void)sender;BOOL capture=CGPreflightScreenCaptureAccess();
+    if(!capture)CGRequestScreenCaptureAccess();else AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)@{(__bridge id)kAXTrustedCheckOptionPrompt:@YES});
+    [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:capture?@"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility":@"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"]];
+    self.chooserStatus.stringValue=capture?@"Enable Infinify under Accessibility, then click Refresh.":@"Enable Infinify under Screen & System Audio Recording, then quit and reopen Infinify.";
+}
 - (void)attachChoice:(id)sender {
     if(self.probe&&sender){self.probeHumanInput=YES;return;}
-    (void)sender;NSInteger row=self.table.selectedRow;if(row<0||row>=(NSInteger)self.choices.count){self.chooserStatus.stringValue=@"Select a source window first.";return;}
+    (void)sender;NSInteger row=self.table.selectedRow;if(row<0||row>=(NSInteger)self.choices.count){if(CGPreflightScreenCaptureAccess())self.chooserStatus.stringValue=@"Select a source window first.";else [self refreshChoices:nil];return;}
     [self openPanels];NSNumber *logical=self.rebind.selectedItem.representedObject;
     if([self attach:self.choices[row][@"window"] logical:logical world:nil]){[self.chooser orderOut:nil];[self saveScene];[self render];}else self.chooserStatus.stringValue=self.statusText;
 }
@@ -483,13 +603,14 @@ static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) {
     for(DesktopView *view in self.views){[view releasePressed];for(NSNumber *output in view.outputs){NSDictionary *reply=[self call:@{@"op":@"remove_output",@"output":output}];[self.resize consume:reply];}}
     for(NSPanel *panel in self.panels){[panel orderOut:nil];[panel close];}
     [self.panels removeAllObjects];[self.views removeAllObjects];for(LiveSource *source in self.sources.allValues)[source.surfaces removeAllObjects];
-    if(self.exitHotkey){UnregisterEventHotKey(self.exitHotkey);self.exitHotkey=NULL;}if(self.hotkeyHandler){RemoveEventHandler(self.hotkeyHandler);self.hotkeyHandler=NULL;}
+    if(self.exitHotkey){UnregisterEventHotKey(self.exitHotkey);self.exitHotkey=NULL;}if(self.hotkeyHandler){RemoveEventHandler(self.hotkeyHandler);self.hotkeyHandler=NULL;}[self stopViewKeys];
     [self openPanels];[self saveScene];
 }
 - (void)poll {
     if(self.cleaning)return;
     if(self.resize&&CACurrentMediaTime()-self.lastResizeObservation>=.5){self.lastResizeObservation=CACurrentMediaTime();[self.resize observeBindings];}
-    if(self.navigation&&!self.frameTimer)[self.navigation frame];
+    // Idle polling keeps the clock current; a flight found without its timer regains 60 Hz.
+    if(!self.frameTimer&&[self cameraFrame])[self ensureFrames];
     if(self.navigation&&CACurrentMediaTime()-self.lastObservation>=.5){self.lastObservation=CACurrentMediaTime();[self.navigation observe];}
     for(LiveSource *source in self.sources.allValues){
         if(source.resize){if(source.error&&!source.resizeFailureHandled){source.resizeFailureHandled=YES;[self.resize invalidate:source.logical];[self.resize cancel];self.statusText=@"Capture failed; source retained until resize obligations settle";}continue;}
@@ -522,13 +643,13 @@ static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) {
     while(self.pendingStops.count){self.statusText=@"Shutdown pending: waiting for capture streams";pump(.01);}
     for(DesktopView *view in self.views)for(NSNumber *output in view.outputs){NSDictionary *reply=[self call:@{@"op":@"remove_output",@"output":output}];[self.resize consume:reply];}
     for(NSPanel *panel in self.panels){[panel orderOut:nil];[panel close];}[self.panels removeAllObjects];[self.views removeAllObjects];
-    if(self.exitHotkey){UnregisterEventHotKey(self.exitHotkey);self.exitHotkey=NULL;}if(self.hotkeyHandler){RemoveEventHandler(self.hotkeyHandler);self.hotkeyHandler=NULL;}
+    if(self.exitHotkey){UnregisterEventHotKey(self.exitHotkey);self.exitHotkey=NULL;}if(self.hotkeyHandler){RemoveEventHandler(self.hotkeyHandler);self.hotkeyHandler=NULL;}[self stopViewKeys];
     if(self.resizeKeyMonitor){[NSEvent removeMonitor:self.resizeKeyMonitor];self.resizeKeyMonitor=nil;}
     if(self.resizeGlobalKeyMonitor){[NSEvent removeMonitor:self.resizeGlobalKeyMonitor];self.resizeGlobalKeyMonitor=nil;}
     if(!self.sources.count)self.resize=nil;
 
 }
-- (void)dealloc { [self stopNavigation];if(_controller)driftwm_desktop_destroy(_controller); }
+- (void)dealloc { [self stopNavigation];[self stopViewKeys];if(_controller)driftwm_desktop_destroy(_controller); }
 @end
 static CGPoint projected(Desktop *desktop,NSNumber *window,NSNumber *output,CGPoint sourcePoint) {
     for(NSDictionary *p in [desktop call:@{@"op":@"snapshot"}][@"placements"])if([p[@"window"]isEqual:window]&&[p[@"output"]isEqual:output]){
@@ -661,7 +782,7 @@ int main(int argc,const char **argv) { @autoreleasepool {
     BOOL experimental=NO,resize=NO;const char *filtered[argc+1];int count=0;
     for(int i=0;i<argc;i++){if(i>0&&!strcmp(argv[i],"--experimental-native-resize")){resize=YES;continue;}if(i>0&&!strcmp(argv[i],"--experimental-native-navigation")){experimental=YES;continue;}filtered[count++]=argv[i];}filtered[count]=NULL;argc=count;argv=filtered;
 
-    if(argc==2&&!strcmp(argv[1],"--help")){puts("Infinify.app — macOS 26+ Apple Silicon native window canvas\nDefault: show chooser; only explicitly selected windows are captured.\n--owned-resize-probe EMPTY_DIRECTORY [SCENARIO]: explicit noninteractive owned-fixture resize probe (live)\n--demo EMPTY_DIRECTORY: disposable interactive fixture, bounded to 60 seconds\n--demo-probe EMPTY_DIRECTORY: automated own-fixture E2E, no permission prompts\n--demo-probe-guard EMPTY_DIRECTORY: own-fixture interruption regression (expected exit 2)\n--experimental-native-resize: experimental eight-handle size-only native resize\n--experimental-native-navigation: gated Center/Previous/Next and Option-Tab focus navigation\n--state ABSOLUTE_PATH: explicit persistent scene file (default Application Support/Infinify/scene.json)\n--source DIR SECONDS NONCE: internal disposable child only\nOption-drag / blank scroll: pan. Command-wheel / pinch: anchored zoom (max 1x).\nControl-Option-drag: world move/snap; add Shift: cluster.\nNative left-click/drag/scroll forwarded only to selected, freshly validated source.\nNative keyboard/IME remain with the real app. Control-Option-Escape or Quit exits.\nResize status explains unavailable native layout resizing. No SIP/settings changes.");return 0;}
+    if(argc==2&&!strcmp(argv[1],"--help")){puts("Infinify.app — macOS 26+ Apple Silicon native window canvas\nDefault: show chooser; only explicitly selected windows are captured. Open canvas shows the saved world without adding one.\n--owned-resize-probe EMPTY_DIRECTORY [SCENARIO]: explicit noninteractive owned-fixture resize probe (live)\n--demo EMPTY_DIRECTORY: disposable interactive fixture, bounded to 60 seconds\n--demo-probe EMPTY_DIRECTORY: automated own-fixture E2E, no permission prompts\n--demo-probe-guard EMPTY_DIRECTORY: own-fixture interruption regression (expected exit 2)\n--experimental-native-resize: experimental eight-handle size-only native resize\n--experimental-native-navigation: gated Center/Previous/Next and Option-Tab focus navigation\n--state ABSOLUTE_PATH: explicit persistent scene file (default Application Support/Infinify/scene.json)\n--source DIR SECONDS NONCE: internal disposable child only\nOption-drag / blank scroll: pan. Command-wheel / pinch: anchored zoom (max 1x).\nView actions animate one view's camera only (toolbar Home, Fit, -, 1:1, + or global shortcuts while the canvas is open):\n  Control-Option-A: home toggle (origin at 1:1, again to return). Control-Option-W: zoom-to-fit toggle.\n  Control-Option-Equals / Control-Option-Minus: zoom in / out. Control-Option-0 or Control-Option-Z: zoom 1:1.\n  Control-Option-Command-arrows: pan the view under the pointer.\nControl-Option-drag: world move/snap; add Shift: cluster.\nNative left-click/drag/scroll forwarded only to selected, freshly validated source.\nNative keyboard/IME remain with the real app. Control-Option-Escape or Quit exits.\nResize status explains unavailable native layout resizing. No SIP/settings changes.");return 0;}
     BOOL child=argc==5&&!strcmp(argv[1],"--source"),demo=argc==3&&!strcmp(argv[1],"--demo"),guard=argc==3&&!strcmp(argv[1],"--demo-probe-guard"),probe=argc==3&&!strcmp(argv[1],"--demo-probe"),state=argc==3&&!strcmp(argv[1],"--state");
     if(argc!=1&&!child&&!demo&&!probe&&!guard&&!state)return 64;
     if((experimental||resize)&&(child||probe||guard))return 64;
