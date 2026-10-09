@@ -3,8 +3,11 @@
 //! to deliver an event. The native caller must validate ownership and process
 //! birth immediately before and after event delivery.
 mod ffi;
+mod navigation;
 mod storage;
 pub use ffi::*;
+pub use navigation::{FocusPlacement, ZoomPolicy};
+use navigation::{NavigationContext, ViewFlight};
 
 use driftwm_canvas::{
     DragGesture, OutputId, Point, Rect, ResizeEdges, ResizeGesture, Scene, Size, SnapOptions,
@@ -132,6 +135,10 @@ pub struct Controller {
     focus: FocusRuntime,
     next_effect: u64,
     next_generation: u64,
+    flights: BTreeMap<OutputId, ViewFlight>,
+    navigation_contexts: BTreeMap<OutputId, NavigationContext>,
+    navigation_clock: Option<u64>,
+    next_navigation: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -144,6 +151,29 @@ pub struct Request {
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
     Snapshot {},
+    NavigateWindow {
+        window: WindowId,
+        output: OutputId,
+        zoom_policy: ZoomPolicy,
+    },
+    CycleNavigate {
+        output: OutputId,
+        backward: bool,
+        held: bool,
+    },
+    TickNavigation {
+        timestamp_ns: u64,
+    },
+    CancelNavigation {
+        output: OutputId,
+    },
+    SetNavigationContext {
+        output: OutputId,
+        usable_rect_local: Rect,
+        focus_placement: FocusPlacement,
+        camera_speed: f64,
+        outer_gap: f64,
+    },
     RegisterOutput {
         stable_id: String,
         screen_bounds: Rect,
@@ -319,6 +349,55 @@ impl Controller {
     fn apply(&mut self, command: Command) -> Result<Value, Error> {
         match command {
             Command::Snapshot {} => return self.snapshot(),
+            Command::NavigateWindow {
+                window,
+                output,
+                zoom_policy,
+            } => {
+                let navigation = self.arm_navigation(window, output, zoom_policy)?;
+                self.finish_cycle();
+                self.scene.focus(window)?;
+                let mut result = self.request_focus(window)?;
+                result["navigation"] = navigation;
+                return Ok(result);
+            }
+            Command::CycleNavigate {
+                output,
+                backward,
+                held,
+            } => {
+                self.navigation_context(output)?;
+                self.focus.release_pending = false;
+                if let Some(window) = self.scene.cycle_focus(backward)? {
+                    let navigation = self.arm_navigation(window, output, ZoomPolicy::Keep)?;
+                    let mut result = self.request_focus(window)?;
+                    if !held {
+                        self.release_cycle();
+                    }
+                    result["navigation"] = navigation;
+                    return Ok(result);
+                }
+            }
+            Command::TickNavigation { timestamp_ns } => return self.tick_navigation(timestamp_ns),
+            Command::CancelNavigation { output } => {
+                self.navigation_context(output)?;
+                self.flights.remove(&output);
+            }
+            Command::SetNavigationContext {
+                output,
+                usable_rect_local,
+                focus_placement,
+                camera_speed,
+                outer_gap,
+            } => {
+                self.set_navigation_context(
+                    output,
+                    usable_rect_local,
+                    focus_placement,
+                    camera_speed,
+                    outer_gap,
+                )?;
+            }
             Command::RegisterOutput {
                 stable_id,
                 screen_bounds,
@@ -354,6 +433,8 @@ impl Controller {
                 } else {
                     self.scene.add_output(viewport.clone())?;
                 }
+                self.flights.remove(&id);
+                self.navigation_contexts.remove(&id);
                 self.outputs.insert(
                     id,
                     SavedOutput {
@@ -365,6 +446,8 @@ impl Controller {
             }
             Command::RemoveOutput { output } => {
                 let viewport = self.scene.remove_output(output)?;
+                self.flights.remove(&output);
+                self.navigation_contexts.remove(&output);
                 self.outputs
                     .get_mut(&output)
                     .ok_or(Error::Invalid("missing output metadata"))?
@@ -481,6 +564,7 @@ impl Controller {
                 output,
                 screen_delta,
             } => {
+                self.flights.remove(&output);
                 self.scene.pan(output, screen_delta)?;
                 self.sync_output(output)?;
             }
@@ -489,6 +573,7 @@ impl Controller {
                 zoom,
                 anchor,
             } => {
+                self.flights.remove(&output);
                 self.scene.zoom_at(output, zoom, anchor)?;
                 self.sync_output(output)?;
             }
@@ -592,6 +677,7 @@ impl Controller {
                     threshold: 24.0 / zoom,
                     ..SnapOptions::default()
                 };
+                self.flights.clear();
                 self.gesture = Some(Gesture::Drag {
                     state: self.scene.begin_drag(window, options, 32.0 / zoom, group)?,
                     zoom,
@@ -612,6 +698,7 @@ impl Controller {
                     .output(output)
                     .ok_or(Error::Invalid("unknown output"))?
                     .zoom;
+                self.flights.clear();
                 self.gesture = Some(Gesture::Resize {
                     state: self
                         .scene
@@ -673,6 +760,7 @@ impl Controller {
             Command::Load { path } => {
                 let mut loaded = Self::load(&path)?;
                 loaded.next_effect = self.next_effect;
+                loaded.next_navigation = self.next_navigation;
                 loaded.next_generation = self.next_generation;
                 *self = loaded;
             }
@@ -829,7 +917,7 @@ impl Controller {
         }).collect();
         let windows: Vec<_> = self.scene.windows().iter().map(|w| json!({"window": w.id, "world_rect": w.world_rect, "metadata": self.metadata.get(&w.id), "source": self.sources.get(&w.id)})).collect();
         Ok(
-            json!({"evidence": "logical_controller_only", "outputs": self.scene.outputs(), "windows": windows, "focused": self.scene.focused(), "focus": {"intent": self.scene.focused(), "observed_native": self.focus.observed_native, "pending_effect": self.focus.pending_effect, "last_result": self.focus.last_result, "history": self.scene.stage().focus_history(), "cycle": self.scene.stage().cycle_state(), "release_pending": self.focus.release_pending}, "placements": placements}),
+            json!({"evidence": "logical_controller_only", "capabilities": ["normal_window_navigation"], "navigation": {"flights": self.flights, "clock_ns": self.navigation_clock, "contexts": self.navigation_contexts}, "outputs": self.scene.outputs(), "windows": windows, "focused": self.scene.focused(), "focus": {"intent": self.scene.focused(), "observed_native": self.focus.observed_native, "pending_effect": self.focus.pending_effect, "last_result": self.focus.last_result, "history": self.scene.stage().focus_history(), "cycle": self.scene.stage().cycle_state(), "release_pending": self.focus.release_pending}, "placements": placements}),
         )
     }
 }

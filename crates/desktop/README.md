@@ -37,7 +37,7 @@ Preserve them as integers in native code.
 | `forget` | `window` | `{}`; removes source and world placeholder |
 | `pan` | `output`, `screen_delta` point | `{}`; positive X reveals world to right |
 | `zoom` | `output`, `zoom` in `[0.001,1]`, global `anchor` point | `{}`; anchor world point stays fixed |
-| `focus` | `window` | `{}`; raises logical world z-order |
+| `focus` | `window` | `effect` or null; raises logical world z-order |
 | `hit` | `output`, global `screen` point | `hit` object or null |
 | `input` | `output`, global `screen` point, expected `identity` | same hit object; rejects absent/unbound/stale target |
 | `begin_drag` | `window`, `output`, optional `group` boolean (default false) | `{}` |
@@ -46,6 +46,10 @@ Preserve them as integers in native code.
 | `end_gesture` | none | `{}` |
 | `snapshot` | none | `outputs`, `windows`, `focused`, `placements`, `evidence` |
 | `save` / `load` | explicit caller `path` string | `{}` |
+
+See [focus/cycle commands](FOCUS.md) for the additive focus ABI and
+[normal-window navigation](NAVIGATION.md) for camera commands, runtime snapshots,
+and the native frame-clock contract.
 
 `edges` is `left`, `right`, `top`, `bottom`, `top_left`, `top_right`,
 `bottom_left` or `bottom_right`. One gesture is active per controller. Motion
@@ -98,7 +102,7 @@ already exist. Loads are bounded at 32 MiB and never modify the input file.
 Verification:
 
 ```sh
-cargo test -p driftwm-desktop --test controller_flow
+cargo test -p driftwm-desktop --test navigation_flow --test focus_cycle_flow --test controller_flow --locked
 cargo clippy -p driftwm-desktop --all-targets -- -D warnings
 cargo fmt -p driftwm-desktop --check
 cargo build -p driftwm-desktop

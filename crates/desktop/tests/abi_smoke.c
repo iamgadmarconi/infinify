@@ -27,6 +27,10 @@ int main(void) {
     request(scene, "{\"version\":1,\"command\":{\"op\":\"end_focus_cycle\"}}", "\"ok\":true");
     request(scene, "{\"version\":1,\"command\":{\"op\":\"focus_result\",\"window\":1,\"identity\":{\"pid\":123,\"birth_sec\":1800000000,\"birth_usec\":1,\"wid\":456},\"generation\":1,\"effect_id\":2,\"success\":false}}", "\"ok\":true");
     request(scene, "{\"version\":1,\"command\":{\"op\":\"snapshot\"}}", "\"history\":[1]");
+    request(scene, "{\"version\":1,\"command\":{\"op\":\"tick_navigation\",\"timestamp_ns\":0}}", "\"needs_frames\":false");
+    request(scene, "{\"version\":1,\"command\":{\"op\":\"navigate_window\",\"window\":1,\"output\":1,\"zoom_policy\":\"keep\"}}", "\"target_zoom\":1.0");
+    request(scene, "{\"version\":1,\"command\":{\"op\":\"tick_navigation\",\"timestamp_ns\":16666667}}", "\"needs_frames\":false");
+    request(scene, "{\"version\":1,\"command\":{\"op\":\"cancel_navigation\",\"output\":1}}", "\"ok\":true");
     driftwm_desktop_destroy(scene);
     puts("C ABI controller smoke passed (logical controller only)");
     return 0;

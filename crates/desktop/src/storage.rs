@@ -138,6 +138,10 @@ impl Controller {
             focus: FocusRuntime::default(),
             next_effect: 0,
             next_generation: 0,
+            flights: BTreeMap::new(),
+            navigation_contexts: BTreeMap::new(),
+            navigation_clock: None,
+            next_navigation: 0,
         })
     }
 }
