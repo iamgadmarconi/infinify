@@ -28,7 +28,9 @@ def read(path):
 def run(scenario, directory):
     directory.mkdir(mode=0o700)
     interrupted = False
-    log = (directory / 'stderr.txt').open('wb')
+    # Keep the native entry's empty-directory admission invariant. The private
+    # anonymous log is published only after the controller has exited/reaped.
+    log = tempfile.TemporaryFile()
     proc = subprocess.Popen([str(APP), '--owned-resize-probe', str(directory), scenario],
                             stdout=subprocess.DEVNULL, stderr=log)
     start = time.monotonic()
@@ -85,6 +87,8 @@ def run(scenario, directory):
             if not (directory / 'identity.json').exists() and proc.poll() is not None:
                 break
             time.sleep(.1)
+        log.seek(0)
+        (directory / 'stderr.txt').write_bytes(log.read())
         log.close()
         # A killed controller cannot suppress its screenshots or scrub its lease.
         if interrupted or scenario in ABNORMAL or timed_out:
