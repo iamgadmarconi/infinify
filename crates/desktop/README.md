@@ -60,6 +60,10 @@ displacement still uses gesture-start zoom. See the [snapping contract](../canva
 for the verified algorithm scope and remaining coordinate/rounding differences.
 Resize changes the world representation; native resize delivery
 is the host's responsibility. No command itself changes a native window.
+For observed native resizing, the separate
+[native resize transaction](NATIVE_RESIZE.md) keeps proposals apart from committed
+geometry, coalesces effects, handles late results and gates stale capture/input.
+Its native shell connection and actual frame-freshness proof remain unfinished.
 
 A source identity is `{pid,birth_sec,birth_usec,wid,owner?}`; `owner` optionally
 records the WindowServer connection and is compared exactly, including presence.

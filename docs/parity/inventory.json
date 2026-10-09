@@ -4136,10 +4136,17 @@
           "source_sha256": "7dd3d3b023cc6ade33161d822b9c77d94a53616eb5908ba20799660071b2d5c7",
           "result": "pass for selected resize, clamp/rejection, identity, timeout, restoration and cleanup; not full row acceptance",
           "runtime": "arm64 macOS27.2"
+        },
+        {
+          "kind": "controller_c_abi_differential",
+          "path": "crates/desktop/tests/native_resize_flow.rs",
+          "revision": "f5007b8",
+          "result": "Thirteen C ABI tests cover eight edges, delayed incremental settlement after world drag, coalescing, release/cancel, capture gating, uncertainty/lifetime guards, persistence and 96 result-contract combinations. Exact upstream request/clamp/settlement blocks verified; Astra reviewed and reran focused checks plus standalone rejection repro.",
+          "limits": "Synthetic adapter/capture reports only; native adapter and shell connection, actual captured fresh layout, groups and fractional upstream parity remain unproven."
         }
       ],
       "required": true,
-      "implementation_note": "Verified bounded AX resize adapter at target revision8a93b81; desktop action, anchored-edge/world transactions and group resize remain unimplemented or unverified."
+      "implementation_note": "Bounded AX adapter owned-fixture proof at8a93b81; separate reviewed controller transaction atf5007b8 commits observed sizes and gates unsettled input. Actual end-to-end adapter/controller/shell integration and full row acceptance remain open."
     },
     {
       "id": "native.gestures",

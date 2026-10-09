@@ -82,6 +82,12 @@ device-specific behavior also need the corresponding hardware.
   Differential tests execute exact upstream method bodies. Native frame scheduling
   and the full center-window action remain unfinished; see
   [navigation contracts](../../crates/desktop/NAVIGATION.md).
+- `f5007b8` adds single-window native resize transactions through the C ABI:
+  coalesced requests, actual-size settlement, incremental edge anchoring and
+  capture/input gates. Thirteen focused tests include an outcome-validation
+  matrix, independently reviewed after fixing a contradictory-result defect.
+  The separately tested AX adapter is not yet connected through this transaction
+  in the shell; see [resize contracts](../../crates/desktop/NATIVE_RESIZE.md).
 
 These milestones add evidence to partial rows. None satisfies an entire native
 behavior row or changes the completion requirement.

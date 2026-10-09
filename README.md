@@ -110,7 +110,9 @@ Additional experimental paths are available separately:
   world dragging, camera controls and saved scenes.
 - [Native resize adapter](native/resize/README.md): exact AX window identity,
   observed accepted geometry, constraints/rejection and restoration, verified on
-  disposable windows. Integration into desktop resizing remains unfinished.
+  disposable windows. The [controller transaction](crates/desktop/NATIVE_RESIZE.md)
+  adds coalescing, actual-size settlement and capture/input gates; native shell
+  integration and an end-to-end run through both components remain unfinished.
 - [Native focus adapter](native/focus/README.md): exact selected-window requests,
   external focus readback and guarded input checks. Source review and nonmutating
   checks pass; its live focus and cleanup scenarios remain unrun.

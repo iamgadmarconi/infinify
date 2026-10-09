@@ -60,4 +60,12 @@ The new Stage/focus and normal-window navigation APIs have separately reviewed
 C ABI tests. The native shell has not yet connected those new actions/effects,
 and this binary has no new native-control E2E result. The build was not launched.
 
+## Build after controller resize integration
+
+`build-resize-transactions.json` records the build at revision `f5007b8`, after
+independent review of the transaction and its outcome-validation fix. It hashes
+the current source inputs, static library and every packaged app file. Signature,
+arm64 and minimum macOS 26.0 checks pass. New controller APIs remain disconnected
+from native shell actions, and no live native test ran against this build.
+
 `SHA256SUMS` covers the final bytes of all evidence files except itself.
