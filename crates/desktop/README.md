@@ -46,18 +46,45 @@ Preserve them as integers in native code.
 | `end_gesture` | none | `{}` |
 | `snapshot` | none | `outputs`, `windows`, `focused`, `placements`, `evidence` |
 | `save` / `load` | explicit caller `path` string | `{}` |
+| `load_config` | `path` string or null | `{path, exists, errors, warnings, dirty}` |
+| `set_platform` | `super` chord | `{super}` |
+| `bindings` | none | key bindings as macOS chords |
+| `mouse_binding` | `trigger`, `source`, `modifiers`, `context` | `{binding}` or `{binding: null}` |
 
 See [focus/cycle commands](FOCUS.md) for the additive focus ABI and
 [normal-window navigation](NAVIGATION.md) for camera commands, runtime snapshots,
 and the native frame-clock contract. [Actions, bookmarks and IPC](IPC.md)
 covers the `action` and `ipc` commands, the saved bookmark map, and the exported
-`driftwm_desktop_msg` client.
+`driftwm_desktop_msg` client. [Configuration](CONFIG.md) covers the last four
+commands: DriftWM's TOML file, what of it is applied, and the binding map.
+
+## macOS modifiers
+
+Bindings are written in upstream's modifiers and mapped to a Mac keyboard:
+
+- `ctrl` is Control, `alt` is Option, `shift` is Shift.
+- `logo` (`super`, and `mod` when `mod_key = "super"`, upstream's default) is a
+  physical chord: Control+Option unless `set_platform` chooses another subset of
+  `ctrl`, `alt` and `cmd`. `{"super":"cmd"}` gives upstream's chords literally.
+- A binding that holds `logo` and a modifier the chord already contains is
+  displaced so it stays distinct: `ctrl` becomes Command and `alt` becomes
+  Command+Shift. With the default chord `mod+ctrl+Right` is ⌃⌥⌘→ and
+  `mod+alt+Right` is ⌃⌥⇧⌘→. A chord that contains Command leaves nothing to
+  displace to, and such a binding is skipped with a warning.
+- `mod3` has no macOS equivalent: such bindings are skipped with a warning.
+- Two bindings on one physical chord: the first by upstream combo text keeps
+  it, the other is reported. Control+Option+Escape is the shell's exit chord
+  unless a binding claims it.
+
+[CONFIG.md](CONFIG.md) has the key identity rules and upstream's default table
+as it lands on a Mac.
 
 `edges` is `left`, `right`, `top`, `bottom`, `top_left`, `top_right`,
 `bottom_left` or `bottom_right`. One gesture is active per controller. Motion
 uses gesture-start zoom and real canvas snapshot/hysteresis/group semantics.
-The snap threshold is 24 screen points, break force 32 screen points, and gap
-12 world points. Threshold and break force use current output zoom on each update;
+The snap distance is 24 screen points, break force 32 screen points, and gap
+12 world points unless the [config](CONFIG.md)'s `[snap]` table says otherwise.
+Distance and break force use current output zoom on each update;
 displacement still uses gesture-start zoom. See the [snapping contract](../canvas/SNAPPING.md)
 for the verified algorithm scope and remaining coordinate/rounding differences.
 Resize changes the world representation; native resize delivery
@@ -108,7 +135,7 @@ already exist. Loads are bounded at 32 MiB and never modify the input file.
 Verification:
 
 ```sh
-cargo test -p driftwm-desktop --test navigation_flow --test focus_cycle_flow --test controller_flow --locked
+cargo test -p driftwm-desktop --test navigation_flow --test focus_cycle_flow --test controller_flow --test config_flow --locked
 cargo clippy -p driftwm-desktop --all-targets -- -D warnings
 cargo fmt -p driftwm-desktop --check
 cargo build -p driftwm-desktop

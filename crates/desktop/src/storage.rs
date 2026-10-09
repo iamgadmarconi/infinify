@@ -38,7 +38,14 @@ impl Controller {
             outputs: self.outputs.clone(),
             next_window: self.next_window,
             next_output: self.next_output,
-            bookmarks: self.bookmarks.clone(),
+            // Upstream: with restore on, the live registry is the durable one.
+            // With it off runtime edits are ephemeral, so the file's registry
+            // is carried forward untouched instead.
+            bookmarks: if !self.configured || self.config().session.restore_bookmarks {
+                self.bookmarks.clone()
+            } else {
+                self.durable_bookmarks.clone()
+            },
         };
         let bytes = serde_json::to_vec_pretty(&saved)?;
         if bytes.len() as u64 > MAX_SAVE_BYTES {
@@ -88,6 +95,8 @@ impl Controller {
     }
     /// Load detached placeholders. The host must register connected outputs and
     /// explicitly attach newly observed identities before requesting input.
+    /// The result is unconfigured: the `load` command carries the configuration
+    /// in force across and applies its session rules.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, Error> {
         let mut bytes = Vec::new();
         File::open(path)?
@@ -136,11 +145,15 @@ impl Controller {
         if saved.bookmarks.values().flatten().any(|v| !v.is_finite()) {
             return Err(Error::Invalid("invalid saved bookmark"));
         }
+        let mut outputs = saved.outputs;
+        for output in outputs.values_mut() {
+            output.seed = CameraSeed::File;
+        }
         Ok(Self {
             scene: saved.scene,
             metadata: saved.metadata,
             sources: BTreeMap::new(),
-            outputs: saved.outputs,
+            outputs,
             next_window: saved.next_window,
             next_output: saved.next_output,
             gesture: None,
@@ -153,11 +166,15 @@ impl Controller {
             next_navigation: 0,
             home_returns: BTreeMap::new(),
             overview_returns: BTreeMap::new(),
-            bookmarks: saved.bookmarks,
+            bookmarks: saved.bookmarks.clone(),
             active_bookmarks: BTreeMap::new(),
             native_resize: None,
             next_resize: 0,
             retired_resize_identities: Vec::new(),
+            settings: Arc::default(),
+            configured: false,
+            platform: Platform::default(),
+            durable_bookmarks: saved.bookmarks,
         })
     }
 }

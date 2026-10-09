@@ -3,6 +3,7 @@
 // src/state/{navigation,viewport,viewport_animation}.rs. Native frame geometry
 // includes the titlebar; there is no additional compositor border.
 use super::*;
+use driftwm_core::config::FocusPlacement as ConfigFocusPlacement;
 
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -23,6 +24,21 @@ pub enum FocusPlacement {
     TopRight,
     BottomLeft,
     BottomRight,
+}
+impl From<ConfigFocusPlacement> for FocusPlacement {
+    fn from(value: ConfigFocusPlacement) -> Self {
+        match value {
+            ConfigFocusPlacement::Center => Self::Center,
+            ConfigFocusPlacement::Top => Self::Top,
+            ConfigFocusPlacement::Bottom => Self::Bottom,
+            ConfigFocusPlacement::Left => Self::Left,
+            ConfigFocusPlacement::Right => Self::Right,
+            ConfigFocusPlacement::TopLeft => Self::TopLeft,
+            ConfigFocusPlacement::TopRight => Self::TopRight,
+            ConfigFocusPlacement::BottomLeft => Self::BottomLeft,
+            ConfigFocusPlacement::BottomRight => Self::BottomRight,
+        }
+    }
 }
 impl FocusPlacement {
     fn pull(self) -> (i8, i8) {
@@ -108,26 +124,45 @@ impl NavigationContext {
 }
 
 impl Controller {
+    /// The output's usable rectangle, and how navigation places and animates.
+    /// Once a config is loaded the placement, camera speed and outer gap are
+    /// the config's: `focus_placement` (an `[[outputs]]` entry named after the
+    /// output's stable id, or `*`, overrides it as upstream's per-output rule
+    /// does), `navigation.camera_speed` and `snap.outer_gap`. Before that they
+    /// are what `set_navigation_context` supplied.
     pub(crate) fn navigation_context(&self, output: OutputId) -> Result<NavigationContext, Error> {
         let viewport = self
             .scene
             .output(output)
             .ok_or(Error::Invalid("unknown output"))?;
-        Ok(self
-            .navigation_contexts
-            .get(&output)
-            .cloned()
-            .unwrap_or(NavigationContext {
-                usable_rect_local: Rect::new(
-                    0.0,
-                    0.0,
-                    viewport.screen_bounds.size.width,
-                    viewport.screen_bounds.size.height,
-                ),
-                focus_placement: FocusPlacement::Center,
-                camera_speed: 0.3,
-                outer_gap: 0.0,
-            }))
+        let mut context =
+            self.navigation_contexts
+                .get(&output)
+                .cloned()
+                .unwrap_or(NavigationContext {
+                    usable_rect_local: Rect::new(
+                        0.0,
+                        0.0,
+                        viewport.screen_bounds.size.width,
+                        viewport.screen_bounds.size.height,
+                    ),
+                    focus_placement: FocusPlacement::Center,
+                    camera_speed: 0.3,
+                    outer_gap: 0.0,
+                });
+        if self.configured {
+            let config = self.config();
+            context.focus_placement = self
+                .outputs
+                .get(&output)
+                .and_then(|saved| config.output_config(&saved.stable_id))
+                .and_then(|rule| rule.focus_placement)
+                .unwrap_or(config.focus_placement)
+                .into();
+            context.camera_speed = config.camera_speed;
+            context.outer_gap = config.snap_outer_gap.min(1e12);
+        }
+        Ok(context)
     }
     pub(crate) fn set_navigation_context(
         &mut self,

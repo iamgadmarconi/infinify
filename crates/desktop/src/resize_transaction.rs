@@ -149,18 +149,12 @@ impl Controller {
             .ok_or(Error::Invalid("unknown window"))?
             .world_rect
             .size;
+        let snap = self.snap(zoom);
         let snap_intent = self
             .scene
-            .begin_resize(
-                window,
-                edges.into(),
-                SnapOptions {
-                    threshold: 24.0 / zoom,
-                    ..SnapOptions::default()
-                },
-                false,
-            )?
-            .with_break_force(32.0 / zoom)?;
+            .begin_resize(window, edges.into(), snap.options, false)?
+            .with_break_force(snap.break_force)?
+            .with_same_edge(snap.corners);
         self.next_resize = self
             .next_resize
             .checked_add(1)
@@ -248,8 +242,10 @@ impl Controller {
             .output(t.output)
             .ok_or(Error::Invalid("unknown resize output"))?
             .zoom;
+        let snap = self.snap(zoom);
         let t = self.native_resize.as_mut().expect("resize exists");
-        t.snap_intent.set_snap_distances(24.0 / zoom, 32.0 / zoom)?;
+        t.snap_intent
+            .set_snap_distances(snap.options.threshold, snap.break_force)?;
         let outline = self
             .scene
             .resize_proposal(&mut t.snap_intent, (screen - t.start_screen) / t.start_zoom)?;

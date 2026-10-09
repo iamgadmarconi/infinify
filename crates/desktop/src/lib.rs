@@ -3,18 +3,23 @@
 //! to deliver an event. The native caller must validate ownership and process
 //! birth immediately before and after event delivery.
 mod actions;
+mod bindings;
 mod ffi;
 mod ipc;
 mod ipc_client;
 mod navigation;
 mod resize_transaction;
+mod settings;
 mod storage;
 mod view_actions;
+use bindings::Platform;
+pub use bindings::{MacModifiers, PointerContext, PointerTrigger, ScrollSource};
 pub use ffi::*;
 pub use navigation::{FocusPlacement, ZoomPolicy};
 use navigation::{NavigationContext, ViewFlight};
 use resize_transaction::NativeResizeTransaction;
 pub use resize_transaction::{NativeResizeResult, ResizeOutcome};
+use settings::{CameraSeed, Settings};
 pub use view_actions::ViewDirection;
 use view_actions::ViewReturn;
 
@@ -25,6 +30,7 @@ use driftwm_canvas::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub const ABI_VERSION: u32 = 1;
 pub const SAVE_VERSION: u32 = 1;
@@ -112,6 +118,8 @@ pub struct Metadata {
 struct SavedOutput {
     stable_id: String,
     viewport: Viewport,
+    #[serde(skip)]
+    seed: CameraSeed,
 }
 
 #[derive(Clone, Debug)]
@@ -169,6 +177,17 @@ pub struct Controller {
     native_resize: Option<NativeResizeTransaction>,
     next_resize: u64,
     retired_resize_identities: Vec<SourceIdentity>,
+    /// Upstream's configuration, the built-in defaults until a file is loaded.
+    settings: Arc<Settings>,
+    /// False until the first `load_config`. Until then nothing is seeded from
+    /// the config and a scene file restores its bookmarks and cameras, as
+    /// before configuration existed. From then on upstream's session rules hold.
+    configured: bool,
+    /// The physical chord of upstream's `logo` modifier.
+    platform: Platform,
+    /// The scene file's bookmark registry. With `session.restore_bookmarks` off
+    /// runtime edits are ephemeral and a save carries this forward untouched.
+    durable_bookmarks: BTreeMap<String, [f64; 2]>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -277,6 +296,26 @@ pub enum Command {
     Ipc {
         output: Option<OutputId>,
         request: Value,
+    },
+    /// Read upstream's config file. No `path` is upstream's own default path.
+    LoadConfig {
+        path: Option<String>,
+    },
+    /// Choose the physical chord of upstream's `logo` modifier.
+    SetPlatform {
+        #[serde(rename = "super")]
+        super_chord: String,
+    },
+    /// The key bindings as macOS chords.
+    Bindings {},
+    /// The pointer binding of one physical chord, button or scroll, and context.
+    #[serde(rename = "mouse_binding")]
+    PointerBinding {
+        trigger: PointerTrigger,
+        #[serde(default)]
+        source: Option<ScrollSource>,
+        modifiers: MacModifiers,
+        context: PointerContext,
     },
     RegisterOutput {
         stable_id: String,
@@ -590,6 +629,15 @@ impl Controller {
             Command::ZoomToFit { output } => return self.zoom_to_fit(output),
             Command::Action { output, action } => return self.action(output, &action),
             Command::Ipc { output, request } => return Ok(self.ipc(output, request)),
+            Command::LoadConfig { path } => return self.load_config(path),
+            Command::SetPlatform { super_chord } => return self.set_platform(&super_chord),
+            Command::Bindings {} => return Ok(self.bindings()),
+            Command::PointerBinding {
+                trigger,
+                source,
+                modifiers,
+                context,
+            } => return Ok(self.mouse_binding(trigger, source, modifiers, context)),
             Command::RegisterOutput {
                 stable_id,
                 screen_bounds,
@@ -608,18 +656,33 @@ impl Controller {
                         .ok_or(Error::Invalid("output IDs exhausted"))?;
                     OutputId(self.next_output)
                 };
-                let viewport = self.outputs.get(&id).map_or(
-                    Viewport {
+                // Upstream saved_camera_state: a camera read from the scene
+                // file seeds its output only while `session.restore_camera` is
+                // on. A camera of this session always survives a reconnect.
+                let saved = self.outputs.get(&id);
+                let previous = saved.map(|o| o.seed);
+                let withheld = previous == Some(CameraSeed::File)
+                    && self.configured
+                    && !self.config().session.restore_camera;
+                let viewport = match saved {
+                    Some(o) if !withheld => Viewport {
+                        screen_bounds,
+                        ..o.viewport.clone()
+                    },
+                    _ => Viewport {
                         id,
                         camera: Point::default(),
                         zoom: 1.0,
                         screen_bounds,
                     },
-                    |o| Viewport {
-                        screen_bounds,
-                        ..o.viewport.clone()
-                    },
-                );
+                };
+                // Shown before any config: the first config may still withhold it.
+                let seed = match previous {
+                    Some(CameraSeed::File | CameraSeed::FileShown) if !self.configured => {
+                        CameraSeed::FileShown
+                    }
+                    _ => CameraSeed::Live,
+                };
                 if self.scene.output(id).is_some() {
                     self.scene.update_output(viewport.clone())?;
                 } else {
@@ -632,6 +695,7 @@ impl Controller {
                     SavedOutput {
                         stable_id,
                         viewport,
+                        seed,
                     },
                 );
                 return Ok(json!({"output": id}));
@@ -907,13 +971,13 @@ impl Controller {
                     .output(output)
                     .ok_or(Error::Invalid("unknown output"))?
                     .zoom;
-                let options = SnapOptions {
-                    threshold: 24.0 / zoom,
-                    ..SnapOptions::default()
-                };
+                let snap = self.snap(zoom);
                 self.flights.clear();
                 self.gesture = Some(Gesture::Drag {
-                    state: self.scene.begin_drag(window, options, 32.0 / zoom, group)?,
+                    state: self
+                        .scene
+                        .begin_drag(window, snap.options, snap.break_force, group)?
+                        .with_alignment(snap.corners, snap.centers),
                     zoom,
                     output,
                 });
@@ -933,20 +997,14 @@ impl Controller {
                     .output(output)
                     .ok_or(Error::Invalid("unknown output"))?
                     .zoom;
+                let snap = self.snap(zoom);
                 self.flights.clear();
                 self.gesture = Some(Gesture::Resize {
                     state: self
                         .scene
-                        .begin_resize(
-                            window,
-                            edges.into(),
-                            SnapOptions {
-                                threshold: 24.0 / zoom,
-                                ..SnapOptions::default()
-                            },
-                            group,
-                        )?
-                        .with_break_force(32.0 / zoom)?,
+                        .begin_resize(window, edges.into(), snap.options, group)?
+                        .with_break_force(snap.break_force)?
+                        .with_same_edge(snap.corners),
                     zoom,
                     output,
                 });
@@ -955,35 +1013,23 @@ impl Controller {
                 if !point_valid(screen_delta) {
                     return Err(Error::Invalid("invalid gesture delta"));
                 }
-                match self
-                    .gesture
-                    .as_mut()
-                    .ok_or(Error::Invalid("no active gesture"))?
-                {
-                    Gesture::Drag {
-                        state,
-                        zoom,
-                        output,
-                    } => {
-                        let current_zoom = self
-                            .scene
-                            .output(*output)
-                            .ok_or(Error::Invalid("unknown gesture output"))?
-                            .zoom;
-                        state.set_snap_distances(24.0 / current_zoom, 32.0 / current_zoom)?;
+                let output = match self.gesture.as_ref() {
+                    Some(Gesture::Drag { output, .. } | Gesture::Resize { output, .. }) => *output,
+                    None => return Err(Error::Invalid("no active gesture")),
+                };
+                let current_zoom = self
+                    .scene
+                    .output(output)
+                    .ok_or(Error::Invalid("unknown gesture output"))?
+                    .zoom;
+                let snap = self.snap(current_zoom);
+                match self.gesture.as_mut().expect("gesture checked above") {
+                    Gesture::Drag { state, zoom, .. } => {
+                        state.set_snap_distances(snap.options.threshold, snap.break_force)?;
                         self.scene.drag_to(state, screen_delta / *zoom)?;
                     }
-                    Gesture::Resize {
-                        state,
-                        zoom,
-                        output,
-                    } => {
-                        let current_zoom = self
-                            .scene
-                            .output(*output)
-                            .ok_or(Error::Invalid("unknown gesture output"))?
-                            .zoom;
-                        state.set_snap_distances(24.0 / current_zoom, 32.0 / current_zoom)?;
+                    Gesture::Resize { state, zoom, .. } => {
+                        state.set_snap_distances(snap.options.threshold, snap.break_force)?;
                         self.scene.resize_to(state, screen_delta / *zoom)?;
                     }
                 }
@@ -1002,6 +1048,12 @@ impl Controller {
                 loaded.next_effect = self.next_effect;
                 loaded.next_navigation = self.next_navigation;
                 loaded.next_generation = self.next_generation;
+                loaded.settings = self.settings.clone();
+                loaded.platform = self.platform;
+                loaded.configured = self.configured;
+                if loaded.configured {
+                    loaded.seed_bookmarks();
+                }
                 *self = loaded;
             }
         }

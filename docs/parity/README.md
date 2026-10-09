@@ -110,7 +110,7 @@ device-specific behavior also need the corresponding hardware.
   animation have not been exercised live; chords, steps and fit padding are
   hardcoded and fullscreen interaction is absent. See
   [navigation contracts](../../crates/desktop/NAVIGATION.md).
-- This milestone (commit pending) routes every default-shell view and bookmark
+- `6574ad1` routes every default-shell view and bookmark
   shortcut and view toolbar button through DriftWM's action-string grammar (Quit and
   Control-Option-Escape still call the shell's quit directly), adds a Unix-domain IPC socket with
   an `Infinify msg` client for the upstream requests that have a native meaning,
@@ -135,6 +135,50 @@ device-specific behavior also need the corresponding hardware.
   exercised against the app. See the
   [desktop shell notes](../../native/desktop/README.md) and the
   [IPC contract](../../crates/desktop/IPC.md).
+- `386d57e` adds `driftwm-core`: upstream's pure modules (`config`, `canvas`,
+  `layout`, `session`, `stage` and the touch recognizer) carried over verbatim
+  from the pinned commit, with their 675 upstream tests retained. It is source
+  the app can call, not app behavior: nothing in the shell or controller used
+  it at that commit.
+- This milestone (commit pending) configures the default shell exactly as DriftWM
+  is configured: one TOML file in upstream's grammar, parsed by `driftwm-core`,
+  decides key bindings, mouse bindings and settings. The controller holds the
+  `Config`, replaces its own copy of the action grammar with upstream's, and maps
+  upstream's modifiers and keysyms to a Mac keyboard (`ctrl` Control, `alt` Option,
+  `super` a physical chord, Control-Option unless `--super` picks another, with
+  displacement and deterministic collision handling). The shell loads the file at
+  launch (`--config`), watches it and reloads on change, registers the reported
+  bindings as global hot keys in place of its fixed table, repeats repeatable
+  actions while held, and asks the controller for the binding of every press and
+  scroll in place of its fixed gestures. Pan step, zoom step, fit padding, camera
+  speed, nudge step, navigation anchors, config bookmarks, focus placement, the
+  snap settings and the two session restore flags now come from the file.
+  `nudge-window`, `exec`, `spawn`, `exec-terminal`, `exec-launcher` and
+  `reload-config` run. Coverage is controller scenarios through the exported C ABI
+  (`crates/desktop/tests/config_flow.rs`) plus one scripted session of two launches
+  on 2026-10-09 against the built app in `--windowed` mode on a private scene, config and socket
+  (macOS 27.2, Apple Silicon, three seeded detached placeholders), which left no
+  saved evidence. Exercised there through the socket: the defaults with no file;
+  a file created, edited and broken while running, each picked up without
+  a restart (pan step, zoom step, fit padding, bookmark seeds; the broken file
+  keeping its predecessor); an accepted file moved away and back, which kept the
+  configuration and the runtime bookmarks and reported upstream's read failure;
+  a relaunch with no file starting at a new output's camera and the seed
+  bookmarks; `reload-config`; `nudge-window`; `spawn` and `exec`
+  starting real processes with the `[env]` environment; the unknown and
+  not-implemented replies; exit on SIGTERM. Evidence boundary: no hot key was
+  registered (`--windowed` registers none) and none was pressed; key repeat, every
+  pointer press, drag and scroll, right and middle button forwarding, key lookup
+  on another keyboard layout inside the app (the lookup code alone was run in a
+  scratch harness against installed layout tables, registering nothing), `--super`,
+  `exec-terminal` and `exec-launcher` were not run; nothing drawn was observed (status line, tooltips, help); no window had
+  a bound source; one output only. Nineteen of upstream's default key bindings and
+  four of its default mouse bindings name actions that still do not run, media
+  keys are not registered, and trackpad and touch gesture bindings, window rules,
+  decorations, effects, backgrounds, input-device settings and every other setting
+  whose feature is absent are parsed and unused. See the
+  [desktop shell notes](../../native/desktop/README.md#configuration) and the
+  [configuration contract](../../crates/desktop/CONFIG.md).
 
 These milestones add evidence to partial rows. None satisfies an entire native
 behavior row or changes the completion requirement.

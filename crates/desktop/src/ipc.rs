@@ -401,6 +401,7 @@ impl Controller {
         [
             ("active_bookmarks", self.active_bookmarks.len()),
             ("bookmarks", self.bookmarks.len()),
+            ("durable_bookmarks", self.durable_bookmarks.len()),
             ("flights", self.flights.len()),
             ("home_returns", self.home_returns.len()),
             ("metadata", self.metadata.len()),
@@ -631,16 +632,23 @@ impl Controller {
             let [x, y] = internal_to_rule(loc, size)?;
             return Ok(Response::Position { x, y });
         };
+        let moved = Rect {
+            origin: rule_to_internal(x, y, size),
+            size: rect.size,
+        };
+        self.place_window(window, moved)?;
+        outcome.dirty = true;
+        Ok(Response::Position { x, y })
+    }
+    /// Give a window a new world frame outside any gesture: `Move` and
+    /// `nudge-window` both end here.
+    pub(crate) fn place_window(&mut self, window: WindowId, moved: Rect) -> Result<(), String> {
         // A live gesture recomputes rectangles from its own start anchors on
         // every motion, so anything written mid-drag would be erased or fought.
         if self.gesture.is_some() {
             return Err("a window is under an interactive move or resize".to_string());
         }
         self.guard_resize_structure(Some(window)).map_err(text)?;
-        let moved = Rect {
-            origin: rule_to_internal(x, y, size),
-            size: rect.size,
-        };
         // Refuse a destination no later request could read: the top-left must
         // round into i32 (State, Move, Resize) and so must the far edge (the
         // enclosing integer rectangle the fit and zoom policy takes).
@@ -651,9 +659,7 @@ impl Controller {
         }
         self.scene
             .set_window_rect(window, moved)
-            .map_err(|e| e.to_string())?;
-        outcome.dirty = true;
-        Ok(Response::Position { x, y })
+            .map_err(|e| e.to_string())
     }
     fn cmd_resize(&self, selector: Option<&WindowSelector>, to: Option<(i32, i32)>) -> Reply {
         let window = self.select(selector)?;

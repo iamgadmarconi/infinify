@@ -42,7 +42,7 @@
       },
       "contract": "Match Action::Exec dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -50,7 +50,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "The controller action exec <cmd> runs nothing itself: it returns an exec effect carrying the command and the config's child environment, and the shell runs /bin/sh -c <cmd> with posix_spawn, detached in a session of its own with standard input and output on /dev/null, never waiting on the main loop. Reachable from a key or mouse binding in the config file and as msg action exec <cmd> over the IPC socket; fixture modes ignore the effect. Known mismatches: upstream's five Wayland toolkit environment fallbacks are withheld unless the file's [env] sets them; the cursor is not revealed; any same-user process that can write to the socket can have the app run a command, as with upstream's msg action exec. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios (the effect, not the process), and one scripted msg session against the built app in --windowed mode, in which an exec'd command wrote its environment to a file, left no saved evidence; a key or mouse binding firing it is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.ExecTerminal",
@@ -62,7 +63,7 @@
       },
       "contract": "Match Action::ExecTerminal dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -70,7 +71,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "The controller action exec-terminal returns an exec effect for $TERMINAL, read from the app's environment as upstream reads it, else for open -a Terminal \"$HOME\" (a new Terminal window); the shell runs it as it runs exec. Default shell: Control-Option-Return (upstream mod+return); also msg action exec-terminal. Known mismatches: upstream probes a list of Linux terminals and falls back to foot, none of which exists on macOS, so the fallback is a macOS substitute rather than upstream's list. No evidence entry is recorded yet: automated coverage is limited to an exported-C-ABI/JSON controller scenario of the effect; the command itself, the Terminal window and the hot key were never run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.ExecLauncher",
@@ -82,7 +84,7 @@
       },
       "contract": "Match Action::ExecLauncher dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -90,7 +92,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "The controller action exec-launcher returns an exec effect for $LAUNCHER, read from the app's environment as upstream reads it, else for open -a Apps (the macOS 26 application launcher); the shell runs it as it runs exec. Default shell: Control-Option-D (upstream mod+d); also msg action exec-launcher. Known mismatches: upstream probes a list of Linux launchers and falls back to fuzzel, none of which exists on macOS, so the fallback is a macOS substitute rather than upstream's list. No evidence entry is recorded yet: automated coverage is limited to an exported-C-ABI/JSON controller scenario of the effect; the command itself, the launcher and the hot key were never run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.Spawn",
@@ -102,7 +105,7 @@
       },
       "contract": "Match Action::Spawn dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -110,7 +113,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "The controller action spawn <cmd> returns the same exec effect as exec <cmd>, which the shell runs as /bin/sh -c <cmd>, detached. Unlike exec it is repeatable, as upstream: a hot key bound to it fires again while held, after input.keyboard.repeat_delay and then repeat_rate times a second. Reachable from a key or mouse binding in the config file and as msg action spawn <cmd>. Known mismatches: as for exec (Wayland toolkit environment fallbacks withheld, no cursor reveal, the socket lets a same-user process run a command); upstream's default spawn bindings (swaylock, wpctl, brightnessctl, playerctl, grim) name Linux programs that sh will not find on a Mac, and those on media keys are not registered at all. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios (the effect, not the process), and one scripted msg session against the built app in --windowed mode, in which spawn touch <file> created the file, left no saved evidence; a key binding firing it and its repeat are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.CloseWindow",
@@ -162,7 +166,7 @@
       },
       "contract": "Match Action::NudgeWindow dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -170,7 +174,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "The controller action nudge-window <dir> moves the focused logical window by navigation.nudge_step world points along the direction's unit vector, each axis rounded as upstream rounds it; with no focused window nothing happens and nothing is saved. It is a logical world move through the same path as the IPC Move: refused during a drag or resize gesture, during a live native resize of that window, and for a destination outside the 32-bit range. Default shell: Control-Option-Shift with an arrow key (upstream mod+shift+arrow), repeating while held; also msg action nudge-window <dir>. Known mismatches: the native window is never moved; the frame jumps at once where upstream animates it from its old place; the window is not raised; there is no fill restore point to clear. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and one scripted msg session against the built app in --windowed mode, in which a focused placeholder moved by the configured step, left no saved evidence; the hot key and its repeat are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.GrowWindow",
@@ -231,7 +236,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Camera-only controller pan_viewport extends the output's existing flight destination by pan_step/zoom in one of eight directions, dropping any pending zoom target and Fit return; the default shell binds Control-Option-Command arrow keys. Known mismatches: hardcoded chords and upstream default pan_step 100 instead of configuration; the shell binds only the four arrow keys; a held chord does not auto-repeat, where upstream repeats PanViewport; no fullscreen interaction (Infinify has no fullscreen yet). No evidence entry is recorded yet: coverage is an exported-C-ABI controller scenario only, and rendered animation and global-shortcut delivery are unverified on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Camera-only controller pan_viewport extends the output's existing flight destination by navigation.pan_step/zoom in one of eight directions, dropping any pending zoom target and Fit return. The chords are the config file's key bindings: upstream's defaults, mod+ctrl with the four arrow keys, are Control-Option-Command arrow keys under the default super chord, and a held chord repeats through the shell's timer (repeat_delay, repeat_rate). Known mismatches: key repeat is compiled and reviewed only, unrun on a live run; no fullscreen interaction (Infinify has no fullscreen yet). No evidence entry is recorded yet: coverage is an exported-C-ABI controller scenario only, and rendered animation and global-shortcut delivery are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.CenterWindow",
@@ -330,7 +335,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Camera-only controller home_toggle saves the output's current camera and zoom, then animates to the origin at 1:1 about the usable-area centre; at home it animates back to the saved view, or does nothing when none is saved. Default shell: toolbar Home and Control-Option-A. Known mismatches: hardcoded chord instead of configuration; no fullscreen-return leg and no pointer warp (Infinify has no fullscreen yet); the return position is per display, in memory only, and is not persisted across restarts or reloads. No evidence entry is recorded yet: coverage is an exported-C-ABI controller scenario only, and rendered animation and global-shortcut delivery are unverified on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Camera-only controller home_toggle saves the output's current camera and zoom, then animates to the origin at 1:1 about the usable-area centre; at home it animates back to the saved view, or does nothing when none is saved. Default shell: toolbar Home and the config file's binding of home-toggle (upstream's default mod+a, Control-Option-A under the default super chord). Known mismatches: no fullscreen-return leg and no pointer warp (Infinify has no fullscreen yet); the return position is per display, in memory only, and is not persisted across restarts or reloads. No evidence entry is recorded yet: coverage is an exported-C-ABI controller scenario only, and rendered animation and global-shortcut delivery are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.GoToBookmark",
@@ -351,7 +356,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Camera-only controller go-to-bookmark <name>, parsed by the upstream action grammar, animates the output's camera so its usable-area centre lands on the stored canvas point, leaves zoom untouched and clears the output's Fit return. Bookmarks are the controller's own name -> [x, y] map of centre points, Y up, saved in the scene file; they are separate from the canvas Scene's camera-and-zoom bookmark map. Default shell: Control-Option-1 to 4 (names 1 to 4), with a status-line hint when the bookmark does not exist; also reachable as msg action go-to-bookmark <name>. Known mismatches: hardcoded chords for names 1 to 4 instead of upstream's configurable keybindings; no navigation.bookmarks configuration, so no seeded bookmarks; no fullscreen interaction (Infinify has no fullscreen yet). No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and shortcut delivery, the Unix-socket path and rendered animation are unverified on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Camera-only controller go-to-bookmark <name>, parsed by the upstream action grammar, animates the output's camera so its usable-area centre lands on the stored canvas point, leaves zoom untouched and clears the output's Fit return. Bookmarks are the controller's own name -> [x, y] registry of centre points, Y up, seeded from the config's [navigation.bookmarks] (upstream's four corner seeds 1 to 4 when the file has no such table) and read back from the scene file only with session.restore_bookmarks = true; they are separate from the canvas Scene's camera-and-zoom bookmark map. Default shell: the config file's bindings of go-to-bookmark <name> (upstream's defaults mod+1 to mod+4, Control-Option-1 to 4 under the default super chord), with a status-line hint when the bookmark does not exist; also reachable as msg action go-to-bookmark <name>. Known mismatches: no fullscreen interaction (Infinify has no fullscreen yet). No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and shortcut delivery, the Unix-socket path and rendered animation are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.SetBookmark",
@@ -372,7 +377,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Camera-only controller set-bookmark <name> stores, as a centre point with Y up, the canvas point under the output's usable-area centre, computed as upstream does from the pending camera target, else the camera, and the current zoom: that is the destination of a camera-only flight (pan-viewport, go-to-bookmark, an IPC camera write), but an anchored zoom flight (home toggle, zoom step, fit, their returns, an IPC zoom write, window navigation) drops its camera target on its first tick, so a bookmark set during one captures the point under the usable-area centre at that moment (before that tick, the camera target paired with the zoom not yet changed), which is the flight's destination only by coincidence. It replaces any bookmark of that name and reports the scene dirty so the shell saves it; zoom is never stored. Default shell: Control-Option-Shift-1 to 4 with a Bookmark saved status line; also reachable as msg action set-bookmark <name> and msg bookmark <name> <x> <y>. Known mismatches: hardcoded chords for names 1 to 4 instead of upstream's configurable keybindings; bookmarks are always saved in the scene file, where upstream has a session.restore_bookmarks setting (reference default false) that is not implemented; a scene file that contains bookmarks cannot be read by older builds. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and shortcut delivery, the Unix-socket path and a live scene save are unverified. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Camera-only controller set-bookmark <name> stores, as a centre point with Y up, the canvas point under the output's usable-area centre, computed as upstream does from the pending camera target, else the camera, and the current zoom: that is the destination of a camera-only flight (pan-viewport, go-to-bookmark, an IPC camera write), but an anchored zoom flight (home toggle, zoom step, fit, their returns, an IPC zoom write, window navigation) drops its camera target on its first tick, so a bookmark set during one captures the point under the usable-area centre at that moment (before that tick, the camera target paired with the zoom not yet changed), which is the flight's destination only by coincidence. It replaces any bookmark of that name in the live registry and reports the scene dirty; zoom is never stored. The registry is written to the scene file only with session.restore_bookmarks = true: with upstream's default (false) a bookmark set at runtime lasts until quit, and a save carries the file's earlier bookmarks forward untouched. Default shell: the config file's bindings of set-bookmark <name> (upstream's defaults mod+shift+1 to mod+shift+4, Control-Option-Shift-1 to 4 under the default super chord) with a Bookmark saved status line; also reachable as msg action set-bookmark <name> and msg bookmark <name> <x> <y>. Known mismatches: a scene file that contains bookmarks cannot be read by older builds. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and shortcut delivery, the Unix-socket path and a live scene save are unverified. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.MoveToBookmark",
@@ -413,7 +418,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Camera-only controller zoom_in animates a usable-centre-anchored zoom to snap(min(zoom * 1.1, 1.0)) and clears the output's Fit return. Default shell: toolbar + and Control-Option-=. Known mismatches: hardcoded chord and upstream default zoom step 1.1 instead of configuration; a held chord does not auto-repeat, where upstream repeats ZoomIn; no fullscreen interaction (Infinify has no fullscreen yet). No evidence entry is recorded yet: coverage is an exported-C-ABI controller scenario only, and rendered animation and global-shortcut delivery are unverified on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Camera-only controller zoom_in animates a usable-centre-anchored zoom to snap(clamp(zoom * zoom.step, 0.001, 1.0)) and clears the output's Fit return. Default shell: toolbar + and the config file's binding of zoom-in (upstream's default mod+equal, Control-Option-= under the default super chord); a held chord repeats through the shell's timer (repeat_delay, repeat_rate). Known mismatches: a zoom.step below 1 stops at the 0.001 scene floor, where upstream sets no lower bound; key repeat is compiled and reviewed only, unrun on a live run; no fullscreen interaction (Infinify has no fullscreen yet). No evidence entry is recorded yet: coverage is an exported-C-ABI controller scenario only, and rendered animation and global-shortcut delivery are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.ZoomOut",
@@ -434,7 +439,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Camera-only controller zoom_out animates a usable-centre-anchored zoom to snap(max(zoom / 1.1, dynamic minimum)), the minimum being half the zoom that fits every window with padding 80, and clears the output's Fit return. Default shell: toolbar - and Control-Option--. Known mismatches: hardcoded chord and upstream default zoom step 1.1 and fit_padding 80 instead of configuration; a held chord does not auto-repeat, where upstream repeats ZoomOut; no fullscreen interaction (Infinify has no fullscreen yet); documented deviation: interactive pinch/scroll zoom still uses the static 0.001 floor, so when the current zoom is already below the dynamic minimum ZoomOut is a no-op, where upstream would zoom in to the minimum. No evidence entry is recorded yet: coverage is an exported-C-ABI controller scenario only, and rendered animation and global-shortcut delivery are unverified on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Camera-only controller zoom_out animates a usable-centre-anchored zoom to snap(max(zoom / zoom.step, dynamic minimum)), the minimum being half the zoom that fits every window with zoom.fit_padding, and clears the output's Fit return. Default shell: toolbar - and the config file's binding of zoom-out (upstream's default mod+minus, Control-Option-- under the default super chord); a held chord repeats through the shell's timer (repeat_delay, repeat_rate). Known mismatches: key repeat is compiled and reviewed only, unrun on a live run; no fullscreen interaction (Infinify has no fullscreen yet); documented deviation: interactive pinch/scroll zoom still uses the static 0.001 floor, so when the current zoom is already below the dynamic minimum ZoomOut is a no-op, where upstream would zoom in to the minimum. No evidence entry is recorded yet: coverage is an exported-C-ABI controller scenario only, and rendered animation and global-shortcut delivery are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.ZoomReset",
@@ -455,7 +460,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Camera-only controller zoom_reset animates a usable-centre-anchored zoom to 1.0 and clears the output's Fit return. Default shell: toolbar 1:1, Control-Option-0 and Control-Option-Z. Known mismatches: hardcoded chords instead of configuration; no fullscreen interaction (Infinify has no fullscreen yet). No evidence entry is recorded yet: coverage is an exported-C-ABI controller scenario only, and rendered animation and global-shortcut delivery are unverified on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Camera-only controller zoom_reset animates a usable-centre-anchored zoom to 1.0 and clears the output's Fit return. Default shell: toolbar 1:1 and the config file's bindings of zoom-reset (upstream's defaults mod+0 and mod+z, Control-Option-0 and Control-Option-Z under the default super chord). Known mismatches: no fullscreen interaction (Infinify has no fullscreen yet). No evidence entry is recorded yet: coverage is an exported-C-ABI controller scenario only, and rendered animation and global-shortcut delivery are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.ZoomToFit",
@@ -476,7 +481,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Camera-only controller zoom_to_fit is a toggle: the first press saves the output's camera and zoom as its Fit return and animates to frame every scene window, detached placeholders included, with padding 80; the next press animates back, and any other pan or zoom discards the return; no windows is a no-op. Default shell: toolbar Fit and Control-Option-W. Known mismatches: hardcoded chord and upstream default fit_padding 80 instead of configuration; nav_anchors are ignored (no configuration); no fullscreen interaction (Infinify has no fullscreen yet); the return position is per display, in memory only, and is not persisted. No evidence entry is recorded yet: coverage is an exported-C-ABI controller scenario only, and rendered animation and global-shortcut delivery are unverified on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Camera-only controller zoom_to_fit is a toggle: the first press saves the output's camera and zoom as its Fit return and animates to frame every scene window, detached placeholders included, together with the config's navigation.anchors, with zoom.fit_padding; the next press animates back, and any other pan or zoom discards the return; with no window and no anchor it is a no-op. Default shell: toolbar Fit and the config file's binding of zoom-to-fit (upstream's default mod+w, Control-Option-W under the default super chord). Known mismatches: no fullscreen interaction (Infinify has no fullscreen yet); the return position is per display, in memory only, and is not persisted. No evidence entry is recorded yet: coverage is an exported-C-ABI controller scenario only, and rendered animation and global-shortcut delivery are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.ZoomToFitSnapped",
@@ -688,7 +693,7 @@
       },
       "contract": "Match Action::ReloadConfig dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -696,7 +701,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "The controller action reload-config returns a reload_config effect; the shell sends load_config again, re-reads the bindings, re-registers its hot keys and refreshes the status line, tooltips and Quit title. The shell also reloads on its own when the config file changes (vnode watch on the file and its directory, 150 ms debounce). The controller follows upstream's reload: a file that cannot be read or parsed keeps the configuration in force and reports upstream's message, an accepted one replaces it whole, and config bookmarks are reconciled with the live registry (added or changed names re-asserted, removed names dropped, untouched names left at their runtime value). No default binding; reachable from a binding in the config file and as msg action reload-config. A file that goes missing after it was accepted is such a read failure: the configuration and the bookmark registry stay. Known mismatches: the shell's file watch also reloads when the file is deleted and so reports that read failure at once, where upstream's watcher ignores a deleted file; a reload while no file has been accepted yet reports no error for a missing file, where upstream reports a read failure; only the settings applied here are re-applied, since no keyboard layout, cursor theme, device, output rule or render cache exists to rebuild. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and one scripted msg session against the built app in --windowed mode (a file created, edited, broken, and moved away and back while running, and reload-config repeating a load) left no saved evidence; hot-key re-registration and the refreshed status line and tooltips are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.ToggleCursorPan",
@@ -2028,7 +2034,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "List returns every bookmark as name -> [x, y]; get returns one as x and y; set (a name with a point) creates or overwrites it and echoes it; delete removes it. Points are centre points with Y up and never carry zoom. Set and delete report the scene dirty so the shell saves it; bookmarks persist in the scene file. Reached as msg bookmark [NAME] [X Y] [--delete]. Known mismatches: bookmarks are the controller's own map, not the canvas Scene's camera-and-zoom bookmarks; no navigation.bookmarks configuration and no session.restore_bookmarks policy; a scene file that contains bookmarks cannot be read by older builds. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and the Unix-socket server, the msg client against a running app and a live scene save are unverified. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "List returns every bookmark as name -> [x, y]; get returns one as x and y; set (a name with a point) creates or overwrites it and echoes it; delete removes it. Points are centre points with Y up and never carry zoom. Set and delete report the scene dirty. The registry starts from the config's [navigation.bookmarks] seeds (upstream's four corner seeds when the file has no such table) and is written to, and read back from, the scene file only with session.restore_bookmarks = true; with upstream's default (false) a bookmark set at runtime lasts until quit. Reached as msg bookmark [NAME] [X Y] [--delete]. Known mismatches: bookmarks are the controller's own map, not the canvas Scene's camera-and-zoom bookmarks; a scene file that contains bookmarks cannot be read by older builds. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and the Unix-socket server, the msg client against a running app and a live scene save are unverified. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ipc.Request.Screenshot",
@@ -2713,13 +2719,14 @@
       },
       "contract": "Match OutputConfig.focus_placement type, validation, default and live effect.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "Option<FocusPlacement>",
-      "required": true
+      "required": true,
+      "implementation_note": "Once a config is loaded, window navigation parks the window where focus_placement says, in place of the placement set_navigation_context supplied. An [[outputs]] entry overrides it for the output whose stable id (a display UUID, or windowed) equals its name, or for name = \"*\"; upstream matches a connector name, and no other [[outputs]] field is used. Known mismatches: the app registers no usable area, so placement is relative to the whole view; the shell's native focus navigation stays behind --experimental-native-navigation. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.OutputOutlineSettings.color",
@@ -4603,7 +4610,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for mod_key.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -4616,7 +4623,8 @@
           "source_assignment": "mod_key = \"super\"",
           "value": "super"
         }
-      ]
+      ],
+      "implementation_note": "Parsed by driftwm-core, upstream's own config code, from the file load_config reads; it decides which upstream modifier mod means in every key and mouse binding the controller reports. On macOS ctrl is Control, alt is Option, and super is a physical chord, Control+Option unless --super picks another subset of ctrl, alt and cmd. Known mismatches: the map is not one to one (a modifier the super chord already holds is displaced to Command or Command+Shift, and bindings that land on one chord are settled by sorted combo text); mod3 has no macOS equivalent and its bindings are skipped with a warning. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and pointer dispatch are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.focus_follows_mouse",
@@ -4678,7 +4686,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for focus_placement.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -4691,7 +4699,8 @@
           "source_assignment": "focus_placement = \"center\"",
           "value": "center"
         }
-      ]
+      ],
+      "implementation_note": "Once a config is loaded, window navigation parks the window where focus_placement says, in place of the placement set_navigation_context supplied. Known mismatches: the app registers no usable area, so placement is relative to the whole view; the shell's native focus navigation stays behind --experimental-native-navigation. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.autostart",
@@ -4787,7 +4796,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for session.restore_camera.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -4800,7 +4809,8 @@
           "source_assignment": "restore_camera = false",
           "value": false
         }
-      ]
+      ],
+      "implementation_note": "Read at the first load_config of a run. Off, upstream's default: an output that connects starts at a new output's camera instead of the one saved in the scene file. On: the saved camera is restored. Cameras are always saved, and an output this session has already shown keeps its camera across a disconnect. Known mismatches: a new output's camera puts the world origin at its top-left corner, where upstream centres it; the scene file stands in for upstream's session store. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.session.restore_bookmarks",
@@ -4812,7 +4822,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for session.restore_bookmarks.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -4825,7 +4835,8 @@
           "source_assignment": "restore_bookmarks = false",
           "value": false
         }
-      ]
+      ],
+      "implementation_note": "Read at the first load_config of a run. On: the scene file's bookmark registry is laid over the config seeds, a saved value winning per name, and runtime edits are saved. Off, upstream's default: the registry starts from the config seeds alone, runtime edits last until quit, and a save carries the file's registry forward untouched. Known mismatches: the scene file stands in for upstream's session store. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.env.QT_WAYLAND_DISABLE_WINDOWDECORATION",
@@ -5012,7 +5023,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for input.keyboard.repeat_rate.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -5025,7 +5036,8 @@
           "source_assignment": "repeat_rate = 25           # keys/sec",
           "value": 25
         }
-      ]
+      ],
+      "implementation_note": "Reported by the bindings command as repeat_rate_hz. The shell starts a timer when a hot key whose action upstream marks repeatable is pressed (zoom-in, zoom-out, pan-viewport, nudge-window and spawn among those that run), fires the action again after repeat_delay and then repeat_rate times a second, and stops on the key's release, on another hot key, when the chord's modifiers are let go, and on cleanup. Known mismatches: repeat is driven by Carbon hot-key press and release events rather than a keyboard device, so a binding with no modifiers whose release event is lost repeats until another hot key. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and key repeat is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.input.keyboard.repeat_delay",
@@ -5037,7 +5049,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for input.keyboard.repeat_delay.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -5050,7 +5062,8 @@
           "source_assignment": "repeat_delay = 200         # ms before repeat starts",
           "value": 200
         }
-      ]
+      ],
+      "implementation_note": "Reported by the bindings command as repeat_delay_ms. The shell starts a timer when a hot key whose action upstream marks repeatable is pressed (zoom-in, zoom-out, pan-viewport, nudge-window and spawn among those that run), fires the action again after repeat_delay and then repeat_rate times a second, and stops on the key's release, on another hot key, when the chord's modifiers are let go, and on cleanup. Known mismatches: repeat is driven by Carbon hot-key press and release events rather than a keyboard device, so a binding with no modifiers whose release event is lost repeats until another hot key. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and key repeat is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.input.keyboard.layout_independent",
@@ -5062,7 +5075,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for input.keyboard.layout_independent.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -5075,7 +5088,8 @@
           "source_assignment": "layout_independent = true  # match bindings by physical key position across layouts",
           "value": true
         }
-      ]
+      ],
+      "implementation_note": "Reported by the bindings command. In both modes the shell registers a binding on the key that types its character in the current keyboard layout (TIS/UCKeyTranslate; unshifted, or with Shift for a binding that holds Shift) and resolves again when the input source changes, as upstream matches the active layout's keysym first. True, upstream's default: when no key types the character the binding falls back to its US ANSI key position. False: it is left out and noted. A key the layout resolves takes its chord before one that fell back. Known mismatches: the true fallback is the US ANSI position, where upstream falls back to the key's Latin keysym from another configured layout; with the flag false a binding that holds Shift is still found on the key that types its character without Shift, where upstream finds it there only through the fallback; only unshifted US-ANSI characters and named keys are bindable, and a symbol that needs Shift or another layout is reported as skipped. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell's lookup was run only outside the app, linked into a scratch harness against the installed US, British, German, French, Dvorak and Russian layout tables with nothing registered, and hot-key registration, a key press on a non-US layout and an input-source change are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.input.keyboard.num_lock",
@@ -5618,7 +5632,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for navigation.trackpad_speed.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -5631,7 +5645,8 @@
           "source_assignment": "trackpad_speed = 1.5        # trackpad (scroll/gestures) pan multiplier (1.0 = direct, 0 = off)",
           "value": 1.5
         }
-      ]
+      ],
+      "implementation_note": "Carried with every pointer binding the controller reports; the shell multiplies a bound two-finger scroll pan by it (1.5 by default). Known mismatches: navigation.mouse_speed is reported alongside it but a drag pan stays 1:1. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.navigation.mouse_speed",
@@ -5718,7 +5733,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for navigation.camera_speed.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -5731,7 +5746,8 @@
           "source_assignment": "camera_speed = 0.3          # camera lerp factor, 0-1 (higher = faster, 1 = instant)",
           "value": 0.3
         }
-      ]
+      ],
+      "implementation_note": "Once a config is loaded every tick_navigation animates camera flights with navigation.camera_speed, after upstream's own range validation, in place of the speed set_navigation_context supplied. Known mismatches: those of the flights themselves (camera only, no fullscreen legs). No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.navigation.auto_navigate_on_close",
@@ -5818,7 +5834,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for navigation.nudge_step.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -5831,7 +5847,8 @@
           "source_assignment": "nudge_step = 20             # px per nudge-window action (mod-shift-arrow by default)",
           "value": 20
         }
-      ]
+      ],
+      "implementation_note": "nudge-window moves the focused logical window by navigation.nudge_step world points; see Action.NudgeWindow for the action's own mismatches. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.navigation.resize_step",
@@ -5868,7 +5885,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for navigation.pan_step.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -5881,7 +5898,8 @@
           "source_assignment": "pan_step = 100.0            # px per pan-viewport action (mod-ctrl-arrow by default)",
           "value": 100.0
         }
-      ]
+      ],
+      "implementation_note": "pan-viewport and the pan_viewport command step by navigation.pan_step divided by the zoom, in place of the former constant 100; see Action.PanViewport for the action's own mismatches. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.navigation.anchors",
@@ -5893,7 +5911,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for navigation.anchors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -5933,7 +5951,8 @@
             ]
           ]
         }
-      ]
+      ],
+      "implementation_note": "zoom-to-fit frames navigation.anchors together with the windows, as upstream's ZoomToFit does: points with Y up, truncated to whole pixels. Known mismatches: upstream also uses the anchors in center-nearest, which does not run here. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.navigation.bookmarks.1",
@@ -5945,7 +5964,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for navigation.bookmarks.1.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -5961,7 +5980,8 @@
             1750
           ]
         }
-      ]
+      ],
+      "implementation_note": "[navigation.bookmarks] seeds the controller's bookmark registry at launch; with no such table upstream's four corner seeds 1 to 4 apply, this row's among them. A reload re-asserts a name the file added or changed, drops one it removed and leaves the others at their runtime value, as upstream's reload does; session.restore_bookmarks decides whether saved bookmarks are laid over the seeds. Known mismatches: the scene file stands in for upstream's session store; go-to-bookmark and set-bookmark keep the mismatches recorded on their own rows. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.navigation.bookmarks.2",
@@ -5973,7 +5993,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for navigation.bookmarks.2.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -5989,7 +6009,8 @@
             1750
           ]
         }
-      ]
+      ],
+      "implementation_note": "[navigation.bookmarks] seeds the controller's bookmark registry at launch; with no such table upstream's four corner seeds 1 to 4 apply, this row's among them. A reload re-asserts a name the file added or changed, drops one it removed and leaves the others at their runtime value, as upstream's reload does; session.restore_bookmarks decides whether saved bookmarks are laid over the seeds. Known mismatches: the scene file stands in for upstream's session store; go-to-bookmark and set-bookmark keep the mismatches recorded on their own rows. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.navigation.bookmarks.3",
@@ -6001,7 +6022,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for navigation.bookmarks.3.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -6017,7 +6038,8 @@
             -1750
           ]
         }
-      ]
+      ],
+      "implementation_note": "[navigation.bookmarks] seeds the controller's bookmark registry at launch; with no such table upstream's four corner seeds 1 to 4 apply, this row's among them. A reload re-asserts a name the file added or changed, drops one it removed and leaves the others at their runtime value, as upstream's reload does; session.restore_bookmarks decides whether saved bookmarks are laid over the seeds. Known mismatches: the scene file stands in for upstream's session store; go-to-bookmark and set-bookmark keep the mismatches recorded on their own rows. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.navigation.bookmarks.4",
@@ -6029,7 +6051,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for navigation.bookmarks.4.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -6045,7 +6067,8 @@
             -1750
           ]
         }
-      ]
+      ],
+      "implementation_note": "[navigation.bookmarks] seeds the controller's bookmark registry at launch; with no such table upstream's four corner seeds 1 to 4 apply, this row's among them. A reload re-asserts a name the file added or changed, drops one it removed and leaves the others at their runtime value, as upstream's reload does; session.restore_bookmarks decides whether saved bookmarks are laid over the seeds. Known mismatches: the scene file stands in for upstream's session store; go-to-bookmark and set-bookmark keep the mismatches recorded on their own rows. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.navigation.edge_pan.zone",
@@ -6207,7 +6230,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for zoom.step.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -6220,7 +6243,8 @@
           "source_assignment": "step = 1.1                  # multiplier per keypress (1.1 = 10% per press)",
           "value": 1.1
         }
-      ]
+      ],
+      "implementation_note": "zoom-in and zoom-out step by zoom.step in place of the former constant 1.1, and the value is carried with each pointer binding for the shell's wheel zoom; see Action.ZoomIn and Action.ZoomOut for the actions' own mismatches. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.zoom.trackpad_speed",
@@ -6257,7 +6281,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for zoom.mouse_speed.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -6270,7 +6294,8 @@
           "source_assignment": "mouse_speed = 1.0           # mouse-wheel zoom multiplier (1.0 = direct, 0 = off)",
           "value": 1.0
         }
-      ]
+      ],
+      "implementation_note": "Carried with every pointer binding the controller reports; the shell zooms a bound wheel scroll about the pointer by zoom.step ^ (lines / 2 x zoom.mouse_speed), one wheel line counted as one notch of 15 axis units. Known mismatches: the pointer zoom clamps to the static 0.001 floor and 1.0 rather than upstream's dynamic minimum; zoom.trackpad_speed is reported alongside it but pinch is not scaled by it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.zoom.touch_speed",
@@ -6307,7 +6332,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for zoom.fit_padding.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -6320,7 +6345,8 @@
           "source_assignment": "fit_padding = 80.0          # viewport px padding for zoom-to-fit (screen space)",
           "value": 80.0
         }
-      ]
+      ],
+      "implementation_note": "zoom-to-fit and the dynamic minimum zoom that limits zoom-out use zoom.fit_padding in place of the former constant 80; see Action.ZoomToFit for the action's own mismatches. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.zoom.reset_on_new_window",
@@ -6407,7 +6433,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for snap.enabled.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -6420,7 +6446,8 @@
           "source_assignment": "enabled = true               # magnetic edge snapping during window drag",
           "value": true
         }
-      ]
+      ],
+      "implementation_note": "The logical drag and resize gestures (begin_drag, begin_resize, gesture_to) and the native resize transaction's snap intent read [snap] on every update. With snap.enabled = false the snap distance is zero: nothing docks, and a group drag still finds its cluster through snap.gap. Known mismatches: in the app these settings reach the logical window drag only, since the logical resize gesture has no pointer path in the default shell and native resize stays gated; fractional rounding and native constraints remain open as recorded for the snapping port. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and the pointer drag that starts the gesture is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.snap.gap",
@@ -6432,7 +6459,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for snap.gap.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -6445,7 +6472,8 @@
           "source_assignment": "gap = 12.0                   # spacing kept between windows, in canvas px —",
           "value": 12.0
         }
-      ]
+      ],
+      "implementation_note": "The logical drag and resize gestures (begin_drag, begin_resize, gesture_to) and the native resize transaction's snap intent read [snap] on every update. snap.gap, in world points, is the gap a docked window keeps and the gap a cluster is found through. Known mismatches: in the app these settings reach the logical window drag only, since the logical resize gesture has no pointer path in the default shell and native resize stays gated; fractional rounding and native constraints remain open as recorded for the snapping port. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and the pointer drag that starts the gesture is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.snap.outer_gap",
@@ -6457,7 +6485,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for snap.outer_gap.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -6470,7 +6498,8 @@
           "source_assignment": "outer_gap = 0.0              # inset from the usable area's edge to a window's",
           "value": 0.0
         }
-      ]
+      ],
+      "implementation_note": "Once a config is loaded snap.outer_gap is the inset of a placed window in window navigation, in place of the gap set_navigation_context supplied. Known mismatches: it has no other effect here, since nothing else places a window against a screen edge; the shell's native focus navigation stays behind --experimental-native-navigation. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.snap.distance",
@@ -6482,7 +6511,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for snap.distance.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -6495,7 +6524,8 @@
           "source_assignment": "distance = 24.0              # activation threshold (screen px from edge)",
           "value": 24.0
         }
-      ]
+      ],
+      "implementation_note": "The logical drag and resize gestures (begin_drag, begin_resize, gesture_to) and the native resize transaction's snap intent read [snap] on every update. snap.distance, in screen points divided by the current zoom, is the distance within which an edge docks. Known mismatches: in the app these settings reach the logical window drag only, since the logical resize gesture has no pointer path in the default shell and native resize stays gated; fractional rounding and native constraints remain open as recorded for the snapping port. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and the pointer drag that starts the gesture is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.snap.break_force",
@@ -6507,7 +6537,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for snap.break_force.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -6520,7 +6550,8 @@
           "source_assignment": "break_force = 32.0           # screen px past snap to break free",
           "value": 32.0
         }
-      ]
+      ],
+      "implementation_note": "The logical drag and resize gestures (begin_drag, begin_resize, gesture_to) and the native resize transaction's snap intent read [snap] on every update. snap.break_force, in screen points divided by the current zoom, is the pull needed to leave a dock. Known mismatches: in the app these settings reach the logical window drag only, since the logical resize gesture has no pointer path in the default shell and native resize stays gated; fractional rounding and native constraints remain open as recorded for the snapping port. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and the pointer drag that starts the gesture is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.snap.corners",
@@ -6532,7 +6563,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for snap.corners.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -6545,7 +6576,8 @@
           "source_assignment": "corners = false              # also align corners (parallel edges line up: top-to-top, left-to-left)",
           "value": false
         }
-      ]
+      ],
+      "implementation_note": "The logical drag and resize gestures (begin_drag, begin_resize, gesture_to) and the native resize transaction's snap intent read [snap] on every update. snap.corners turns same-edge alignment on for drags and resizes. Known mismatches: in the app these settings reach the logical window drag only, since the logical resize gesture has no pointer path in the default shell and native resize stays gated; fractional rounding and native constraints remain open as recorded for the snapping port. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and the pointer drag that starts the gesture is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.snap.centers",
@@ -6557,7 +6589,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for snap.centers.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -6570,7 +6602,8 @@
           "source_assignment": "centers = false              # also align centers (midpoints line up along the moved axis)",
           "value": false
         }
-      ]
+      ],
+      "implementation_note": "The logical drag and resize gestures (begin_drag, begin_resize, gesture_to) and the native resize transaction's snap intent read [snap] on every update. snap.centers turns centre alignment on for drags. Known mismatches: in the app these settings reach the logical window drag only, since the logical resize gesture has no pointer path in the default shell and native resize stays gated; fractional rounding and native constraints remain open as recorded for the snapping port. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and the pointer drag that starts the gesture is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.decorations.bg_color",
@@ -7367,7 +7400,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for bindings.disable_defaults.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -7388,7 +7421,8 @@
             "keys"
           ]
         }
-      ]
+      ],
+      "implementation_note": "Parsed by driftwm-core: \"keys\" drops upstream's default key bindings and \"mouse\" its default mouse bindings before the file's own are read, and the bindings and mouse_binding commands report the result. Known mismatches: \"gestures\" and \"touch\" are accepted and change nothing, because trackpad and touch gesture bindings are not dispatched here. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and pointer dispatch are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+return",
@@ -7400,7 +7434,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+return.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -7413,7 +7447,8 @@
           "source_assignment": "\"mod+return\" = \"exec-terminal\"   # $TERMINAL, else first of: foot, alacritty, ptyxis, kitty, wezterm, gnome-terminal, konsole",
           "value": "exec-terminal"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-Return under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs exec-terminal through the action command. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. Known mismatches: exec-terminal runs $TERMINAL, else open -a Terminal \"$HOME\", in place of upstream's Linux terminal probe; it was never run. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+d",
@@ -7425,7 +7460,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+d.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -7438,7 +7473,8 @@
           "source_assignment": "\"mod+d\" = \"exec-launcher\"        # $LAUNCHER, else first of: fuzzel, wofi, rofi, bemenu-run, wmenu-run, tofi-drun, mew-run",
           "value": "exec-launcher"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-D under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs exec-launcher through the action command. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. Known mismatches: exec-launcher runs $LAUNCHER, else open -a Apps, in place of upstream's Linux launcher probe; it was never run. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+q",
@@ -7650,7 +7686,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+a.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -7663,7 +7699,8 @@
           "source_assignment": "\"mod+a\" = \"home-toggle\"",
           "value": "home-toggle"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-A under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs home-toggle through the action command. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+up",
@@ -7775,7 +7812,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+shift+up.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -7788,7 +7825,8 @@
           "source_assignment": "\"mod+shift+up\" = \"nudge-window up\"",
           "value": "nudge-window up"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-Shift-Up under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs nudge-window up through the action command, repeating while held. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+shift+down",
@@ -7800,7 +7838,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+shift+down.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -7813,7 +7851,8 @@
           "source_assignment": "\"mod+shift+down\" = \"nudge-window down\"",
           "value": "nudge-window down"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-Shift-Down under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs nudge-window down through the action command, repeating while held. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+shift+left",
@@ -7825,7 +7864,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+shift+left.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -7838,7 +7877,8 @@
           "source_assignment": "\"mod+shift+left\" = \"nudge-window left\"",
           "value": "nudge-window left"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-Shift-Left under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs nudge-window left through the action command, repeating while held. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+shift+right",
@@ -7850,7 +7890,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+shift+right.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -7863,7 +7903,8 @@
           "source_assignment": "\"mod+shift+right\" = \"nudge-window right\"",
           "value": "nudge-window right"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-Shift-Right under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs nudge-window right through the action command, repeating while held. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+ctrl+up",
@@ -7875,7 +7916,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+ctrl+up.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -7888,7 +7929,8 @@
           "source_assignment": "\"mod+ctrl+up\" = \"pan-viewport up\"",
           "value": "pan-viewport up"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-Command-Up (ctrl displaced to Command) under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs pan-viewport up through the action command, repeating while held. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+ctrl+down",
@@ -7900,7 +7942,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+ctrl+down.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -7913,7 +7955,8 @@
           "source_assignment": "\"mod+ctrl+down\" = \"pan-viewport down\"",
           "value": "pan-viewport down"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-Command-Down (ctrl displaced to Command) under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs pan-viewport down through the action command, repeating while held. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+ctrl+left",
@@ -7925,7 +7968,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+ctrl+left.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -7938,7 +7981,8 @@
           "source_assignment": "\"mod+ctrl+left\" = \"pan-viewport left\"",
           "value": "pan-viewport left"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-Command-Left (ctrl displaced to Command) under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs pan-viewport left through the action command, repeating while held. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+ctrl+right",
@@ -7950,7 +7994,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+ctrl+right.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -7963,7 +8007,8 @@
           "source_assignment": "\"mod+ctrl+right\" = \"pan-viewport right\"",
           "value": "pan-viewport right"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-Command-Right (ctrl displaced to Command) under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs pan-viewport right through the action command, repeating while held. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.alt+tab",
@@ -8025,7 +8070,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+equal.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -8038,7 +8083,8 @@
           "source_assignment": "\"mod+equal\" = \"zoom-in\"",
           "value": "zoom-in"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-= under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs zoom-in through the action command, repeating while held. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+minus",
@@ -8050,7 +8096,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+minus.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -8063,7 +8109,8 @@
           "source_assignment": "\"mod+minus\" = \"zoom-out\"",
           "value": "zoom-out"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-- under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs zoom-out through the action command, repeating while held. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+0",
@@ -8075,7 +8122,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+0.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -8088,7 +8135,8 @@
           "source_assignment": "\"mod+0\" = \"zoom-reset\"",
           "value": "zoom-reset"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-0 under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs zoom-reset through the action command. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+z",
@@ -8100,7 +8148,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+z.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -8113,7 +8161,8 @@
           "source_assignment": "\"mod+z\" = \"zoom-reset\"",
           "value": "zoom-reset"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-Z under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs zoom-reset through the action command. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+w",
@@ -8125,7 +8174,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+w.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -8138,7 +8187,8 @@
           "source_assignment": "\"mod+w\" = \"zoom-to-fit\"",
           "value": "zoom-to-fit"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-W under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs zoom-to-fit through the action command. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+shift+w",
@@ -8175,7 +8225,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+1.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -8188,7 +8238,8 @@
           "source_assignment": "\"mod+1\" = \"go-to-bookmark 1\"     # jump to bookmark 1 (top-left corner by default)",
           "value": "go-to-bookmark 1"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-1 under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs go-to-bookmark 1 through the action command. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+2",
@@ -8200,7 +8251,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+2.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -8213,7 +8264,8 @@
           "source_assignment": "\"mod+2\" = \"go-to-bookmark 2\"     # jump to bookmark 2 (top-right corner)",
           "value": "go-to-bookmark 2"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-2 under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs go-to-bookmark 2 through the action command. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+3",
@@ -8225,7 +8277,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+3.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -8238,7 +8290,8 @@
           "source_assignment": "\"mod+3\" = \"go-to-bookmark 3\"     # jump to bookmark 3 (bottom-right corner)",
           "value": "go-to-bookmark 3"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-3 under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs go-to-bookmark 3 through the action command. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+4",
@@ -8250,7 +8303,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+4.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -8263,7 +8316,8 @@
           "source_assignment": "\"mod+4\" = \"go-to-bookmark 4\"     # jump to bookmark 4 (bottom-left corner)",
           "value": "go-to-bookmark 4"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-4 under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs go-to-bookmark 4 through the action command. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+shift+1",
@@ -8275,7 +8329,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+shift+1.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -8288,7 +8342,8 @@
           "source_assignment": "\"mod+shift+1\" = \"set-bookmark 1\"  # overwrite bookmark 1 at the current view",
           "value": "set-bookmark 1"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-Shift-1 under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs set-bookmark 1 through the action command. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+shift+2",
@@ -8300,7 +8355,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+shift+2.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -8313,7 +8368,8 @@
           "source_assignment": "\"mod+shift+2\" = \"set-bookmark 2\"",
           "value": "set-bookmark 2"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-Shift-2 under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs set-bookmark 2 through the action command. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+shift+3",
@@ -8325,7 +8381,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+shift+3.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -8338,7 +8394,8 @@
           "source_assignment": "\"mod+shift+3\" = \"set-bookmark 3\"",
           "value": "set-bookmark 3"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-Shift-3 under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs set-bookmark 3 through the action command. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+shift+4",
@@ -8350,7 +8407,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+shift+4.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -8363,7 +8420,8 @@
           "source_assignment": "\"mod+shift+4\" = \"set-bookmark 4\"",
           "value": "set-bookmark 4"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-Shift-4 under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs set-bookmark 4 through the action command. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+alt+up",
@@ -8475,7 +8533,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+l.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -8488,7 +8546,8 @@
           "source_assignment": "\"mod+l\" = \"spawn swaylock -f -c 000000 -kl\"",
           "value": "spawn swaylock -f -c 000000 -kl"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-L under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs spawn swaylock -f -c 000000 -kl through the action command, repeating while held. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. Known mismatches: the command is upstream's Linux screen locker, passed through unchanged, so sh will not find it on a Mac until the file rebinds the key. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+ctrl+shift+q",
@@ -8500,7 +8559,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+ctrl+shift+q.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -8513,7 +8572,8 @@
           "source_assignment": "\"mod+ctrl+shift+q\" = \"quit\"",
           "value": "quit"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-Command-Shift-Q (ctrl displaced to Command) under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs quit through the action command. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.XF86AudioRaiseVolume",
@@ -9100,7 +9160,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for mouse.on-window.alt+left.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -9113,7 +9173,8 @@
           "source_assignment": "\"alt+left\" = \"move-window\"",
           "value": "move-window"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default mouse binding, read by driftwm-core. The shell asks the mouse_binding command on every press and scroll with the physical modifiers held and the window or canvas context, and upstream's ContextBindings lookup (the pointer's own context before anywhere) answers move_window for Option + left button over a window; the shell then starts its logical world drag of that window. An entry for the same combo in the same [mouse.*] table replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.mouse.on-window.alt+shift+left",
@@ -9125,7 +9186,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for mouse.on-window.alt+shift+left.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -9138,7 +9199,8 @@
           "source_assignment": "\"alt+shift+left\" = \"move-snapped-windows\"",
           "value": "move-snapped-windows"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default mouse binding, read by driftwm-core. The shell asks the mouse_binding command on every press and scroll with the physical modifiers held and the window or canvas context, and upstream's ContextBindings lookup (the pointer's own context before anywhere) answers move_snapped_windows for Option-Shift + left button over a window; the shell then starts its logical world drag of that window's connected cluster. An entry for the same combo in the same [mouse.*] table replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.mouse.on-window.alt+right",
@@ -9275,7 +9337,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for mouse.on-canvas.left.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -9288,7 +9350,8 @@
           "source_assignment": "\"left\" = \"pan-viewport\"            # unmodified left-click on empty canvas → pan",
           "value": "pan-viewport"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default mouse binding, read by driftwm-core. The shell asks the mouse_binding command on every press and scroll with the physical modifiers held and the window or canvas context, and upstream's ContextBindings lookup (the pointer's own context before anywhere) answers pan_viewport for an unmodified left button on empty canvas; the shell then starts its pan gesture. An entry for the same combo in the same [mouse.*] table replaces it, and \"none\" removes it. Known mismatches: navigation.mouse_speed is not applied to the drag. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.mouse.on-canvas.trackpad-scroll",
@@ -9300,7 +9363,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for mouse.on-canvas.trackpad-scroll.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -9313,7 +9376,8 @@
           "source_assignment": "\"trackpad-scroll\" = \"pan-viewport\" # trackpad scroll on empty canvas → pan",
           "value": "pan-viewport"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default mouse binding, read by driftwm-core. The shell asks the mouse_binding command on every press and scroll with the physical modifiers held and the window or canvas context, and upstream's ContextBindings lookup (the pointer's own context before anywhere) answers pan_viewport for an unmodified two-finger scroll on empty canvas; the shell then pans by the scroll delta times navigation.trackpad_speed. An entry for the same combo in the same [mouse.*] table replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.mouse.on-canvas.wheel-scroll",
@@ -9325,7 +9389,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for mouse.on-canvas.wheel-scroll.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -9338,7 +9402,8 @@
           "source_assignment": "\"wheel-scroll\" = \"zoom\"            # mouse wheel on empty canvas → zoom",
           "value": "zoom"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default mouse binding, read by driftwm-core. The shell asks the mouse_binding command on every press and scroll with the physical modifiers held and the window or canvas context, and upstream's ContextBindings lookup (the pointer's own context before anywhere) answers zoom for an unmodified mouse wheel on empty canvas; the shell then zooms about the pointer by zoom.step ^ (lines / 2 x zoom.mouse_speed). An entry for the same combo in the same [mouse.*] table replaces it, and \"none\" removes it. Known mismatches: the pointer zoom clamps to the static 0.001 floor and 1.0 rather than upstream's dynamic minimum. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.mouse.anywhere.mod+left",
@@ -9350,7 +9415,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for mouse.anywhere.mod+left.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -9363,7 +9428,8 @@
           "source_assignment": "\"mod+left\" = \"pan-viewport\"",
           "value": "pan-viewport"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default mouse binding, read by driftwm-core. The shell asks the mouse_binding command on every press and scroll with the physical modifiers held and the window or canvas context, and upstream's ContextBindings lookup (the pointer's own context before anywhere) answers pan_viewport for Control-Option + left button, over a window or empty canvas; the shell then starts its pan gesture. An entry for the same combo in the same [mouse.*] table replaces it, and \"none\" removes it. Known mismatches: navigation.mouse_speed is not applied to the drag; the binding also claims the Control-Option-click that used to dismiss a detached placeholder. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.mouse.anywhere.mod+ctrl+left",
@@ -9400,7 +9466,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for mouse.anywhere.mod+trackpad-scroll.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -9413,7 +9479,8 @@
           "source_assignment": "\"mod+trackpad-scroll\" = \"pan-viewport\"",
           "value": "pan-viewport"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default mouse binding, read by driftwm-core. The shell asks the mouse_binding command on every press and scroll with the physical modifiers held and the window or canvas context, and upstream's ContextBindings lookup (the pointer's own context before anywhere) answers pan_viewport for Control-Option + two-finger scroll, over a window or empty canvas; the shell then pans by the scroll delta times navigation.trackpad_speed. An entry for the same combo in the same [mouse.*] table replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.mouse.anywhere.mod+wheel-scroll",
@@ -9425,7 +9492,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for mouse.anywhere.mod+wheel-scroll.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -9438,7 +9505,8 @@
           "source_assignment": "\"mod+wheel-scroll\" = \"zoom\"",
           "value": "zoom"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default mouse binding, read by driftwm-core. The shell asks the mouse_binding command on every press and scroll with the physical modifiers held and the window or canvas context, and upstream's ContextBindings lookup (the pointer's own context before anywhere) answers zoom for Control-Option + mouse wheel, over a window or empty canvas; the shell then zooms about the pointer by zoom.step ^ (lines / 2 x zoom.mouse_speed). An entry for the same combo in the same [mouse.*] table replaces it, and \"none\" removes it. Known mismatches: the pointer zoom clamps to the static 0.001 floor and 1.0 rather than upstream's dynamic minimum. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.gestures.swipe_threshold",
@@ -11118,7 +11186,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for outputs[].focus_placement.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -11131,7 +11199,8 @@
           "source_assignment": "focus_placement = \"right\"   # park the active window against this ultrawide's right edge",
           "value": "right"
         }
-      ]
+      ],
+      "implementation_note": "Once a config is loaded, window navigation parks the window where focus_placement says, in place of the placement set_navigation_context supplied. An [[outputs]] entry overrides it for the output whose stable id (a display UUID, or windowed) equals its name, or for name = \"*\"; upstream matches a connector name, and no other [[outputs]] field is used. Known mismatches: the app registers no usable area, so placement is relative to the whole view; the shell's native focus navigation stays behind --experimental-native-navigation. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.outputs.hot_corners.threshold",
@@ -11545,13 +11614,14 @@
       },
       "contract": "Match Config.mod_key type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "ModKey"
+      "source_type": "ModKey",
+      "implementation_note": "Parsed by driftwm-core, upstream's own config code, from the file load_config reads; it decides which upstream modifier mod means in every key and mouse binding the controller reports. On macOS ctrl is Control, alt is Option, and super is a physical chord, Control+Option unless --super picks another subset of ctrl, alt and cmd. Known mismatches: the map is not one to one (a modifier the super chord already holds is displaced to Command or Command+Shift, and bindings that land on one chord are settled by sorted combo text); mod3 has no macOS equivalent and its bindings are skipped with a warning. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and pointer dispatch are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.focus_follows_mouse",
@@ -11599,13 +11669,14 @@
       },
       "contract": "Match Config.trackpad_speed type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "f64"
+      "source_type": "f64",
+      "implementation_note": "Carried with every pointer binding the controller reports; the shell multiplies a bound two-finger scroll pan by it (1.5 by default). Known mismatches: navigation.mouse_speed is reported alongside it but a drag pan stays 1:1. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.mouse_speed",
@@ -11671,13 +11742,14 @@
       },
       "contract": "Match Config.nudge_step type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "i32"
+      "source_type": "i32",
+      "implementation_note": "nudge-window moves the focused logical window by navigation.nudge_step world points; see Action.NudgeWindow for the action's own mismatches. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.resize_step",
@@ -11707,13 +11779,14 @@
       },
       "contract": "Match Config.pan_step type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "f64"
+      "source_type": "f64",
+      "implementation_note": "pan-viewport and the pan_viewport command step by navigation.pan_step divided by the zoom, in place of the former constant 100; see Action.PanViewport for the action's own mismatches. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.repeat_delay",
@@ -11725,13 +11798,14 @@
       },
       "contract": "Match Config.repeat_delay type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "i32"
+      "source_type": "i32",
+      "implementation_note": "Reported by the bindings command as repeat_delay_ms. The shell starts a timer when a hot key whose action upstream marks repeatable is pressed (zoom-in, zoom-out, pan-viewport, nudge-window and spawn among those that run), fires the action again after repeat_delay and then repeat_rate times a second, and stops on the key's release, on another hot key, when the chord's modifiers are let go, and on cleanup. Known mismatches: repeat is driven by Carbon hot-key press and release events rather than a keyboard device, so a binding with no modifiers whose release event is lost repeats until another hot key. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and key repeat is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.repeat_rate",
@@ -11743,13 +11817,14 @@
       },
       "contract": "Match Config.repeat_rate type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "i32"
+      "source_type": "i32",
+      "implementation_note": "Reported by the bindings command as repeat_rate_hz. The shell starts a timer when a hot key whose action upstream marks repeatable is pressed (zoom-in, zoom-out, pan-viewport, nudge-window and spawn among those that run), fires the action again after repeat_delay and then repeat_rate times a second, and stops on the key's release, on another hot key, when the chord's modifiers are let go, and on cleanup. Known mismatches: repeat is driven by Carbon hot-key press and release events rather than a keyboard device, so a binding with no modifiers whose release event is lost repeats until another hot key. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and key repeat is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.edge_zone",
@@ -11869,13 +11944,14 @@
       },
       "contract": "Match Config.camera_speed type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "f64"
+      "source_type": "f64",
+      "implementation_note": "Once a config is loaded every tick_navigation animates camera flights with navigation.camera_speed, after upstream's own range validation, in place of the speed set_navigation_context supplied. Known mismatches: those of the flights themselves (camera only, no fullscreen legs). No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.auto_navigate_on_close",
@@ -11941,13 +12017,14 @@
       },
       "contract": "Match Config.zoom_step type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "f64"
+      "source_type": "f64",
+      "implementation_note": "zoom-in and zoom-out step by zoom.step in place of the former constant 1.1, and the value is carried with each pointer binding for the shell's wheel zoom; see Action.ZoomIn and Action.ZoomOut for the actions' own mismatches. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.zoom_touch_speed",
@@ -11995,13 +12072,14 @@
       },
       "contract": "Match Config.zoom_mouse_speed type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "f64"
+      "source_type": "f64",
+      "implementation_note": "Carried with every pointer binding the controller reports; the shell zooms a bound wheel scroll about the pointer by zoom.step ^ (lines / 2 x zoom.mouse_speed), one wheel line counted as one notch of 15 axis units. Known mismatches: the pointer zoom clamps to the static 0.001 floor and 1.0 rather than upstream's dynamic minimum; zoom.trackpad_speed is reported alongside it but pinch is not scaled by it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.zoom_fit_padding",
@@ -12013,13 +12091,14 @@
       },
       "contract": "Match Config.zoom_fit_padding type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "f64"
+      "source_type": "f64",
+      "implementation_note": "zoom-to-fit and the dynamic minimum zoom that limits zoom-out use zoom.fit_padding in place of the former constant 80; see Action.ZoomToFit for the action's own mismatches. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.zoom_reset_on_new_window",
@@ -12085,13 +12164,14 @@
       },
       "contract": "Match Config.snap_enabled type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "bool"
+      "source_type": "bool",
+      "implementation_note": "The logical drag and resize gestures (begin_drag, begin_resize, gesture_to) and the native resize transaction's snap intent read [snap] on every update. With snap.enabled = false the snap distance is zero: nothing docks, and a group drag still finds its cluster through snap.gap. Known mismatches: in the app these settings reach the logical window drag only, since the logical resize gesture has no pointer path in the default shell and native resize stays gated; fractional rounding and native constraints remain open as recorded for the snapping port. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and the pointer drag that starts the gesture is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.snap_gap",
@@ -12103,13 +12183,14 @@
       },
       "contract": "Match Config.snap_gap type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "f64"
+      "source_type": "f64",
+      "implementation_note": "The logical drag and resize gestures (begin_drag, begin_resize, gesture_to) and the native resize transaction's snap intent read [snap] on every update. snap.gap, in world points, is the gap a docked window keeps and the gap a cluster is found through. Known mismatches: in the app these settings reach the logical window drag only, since the logical resize gesture has no pointer path in the default shell and native resize stays gated; fractional rounding and native constraints remain open as recorded for the snapping port. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and the pointer drag that starts the gesture is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.snap_outer_gap",
@@ -12121,13 +12202,14 @@
       },
       "contract": "Match Config.snap_outer_gap type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "f64"
+      "source_type": "f64",
+      "implementation_note": "Once a config is loaded snap.outer_gap is the inset of a placed window in window navigation, in place of the gap set_navigation_context supplied. Known mismatches: it has no other effect here, since nothing else places a window against a screen edge; the shell's native focus navigation stays behind --experimental-native-navigation. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.snap_distance",
@@ -12139,13 +12221,14 @@
       },
       "contract": "Match Config.snap_distance type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "f64"
+      "source_type": "f64",
+      "implementation_note": "The logical drag and resize gestures (begin_drag, begin_resize, gesture_to) and the native resize transaction's snap intent read [snap] on every update. snap.distance, in screen points divided by the current zoom, is the distance within which an edge docks. Known mismatches: in the app these settings reach the logical window drag only, since the logical resize gesture has no pointer path in the default shell and native resize stays gated; fractional rounding and native constraints remain open as recorded for the snapping port. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and the pointer drag that starts the gesture is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.snap_break_force",
@@ -12157,13 +12240,14 @@
       },
       "contract": "Match Config.snap_break_force type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "f64"
+      "source_type": "f64",
+      "implementation_note": "The logical drag and resize gestures (begin_drag, begin_resize, gesture_to) and the native resize transaction's snap intent read [snap] on every update. snap.break_force, in screen points divided by the current zoom, is the pull needed to leave a dock. Known mismatches: in the app these settings reach the logical window drag only, since the logical resize gesture has no pointer path in the default shell and native resize stays gated; fractional rounding and native constraints remain open as recorded for the snapping port. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and the pointer drag that starts the gesture is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.snap_corners",
@@ -12175,13 +12259,14 @@
       },
       "contract": "Match Config.snap_corners type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "bool"
+      "source_type": "bool",
+      "implementation_note": "The logical drag and resize gestures (begin_drag, begin_resize, gesture_to) and the native resize transaction's snap intent read [snap] on every update. snap.corners turns same-edge alignment on for drags and resizes. Known mismatches: in the app these settings reach the logical window drag only, since the logical resize gesture has no pointer path in the default shell and native resize stays gated; fractional rounding and native constraints remain open as recorded for the snapping port. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and the pointer drag that starts the gesture is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.snap_centers",
@@ -12193,13 +12278,14 @@
       },
       "contract": "Match Config.snap_centers type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "bool"
+      "source_type": "bool",
+      "implementation_note": "The logical drag and resize gestures (begin_drag, begin_resize, gesture_to) and the native resize transaction's snap intent read [snap] on every update. snap.centers turns centre alignment on for drags. Known mismatches: in the app these settings reach the logical window drag only, since the logical resize gesture has no pointer path in the default shell and native resize stays gated; fractional rounding and native constraints remain open as recorded for the snapping port. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and the pointer drag that starts the gesture is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.background",
@@ -12337,13 +12423,14 @@
       },
       "contract": "Match Config.layout_independent type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "bool"
+      "source_type": "bool",
+      "implementation_note": "Reported by the bindings command. In both modes the shell registers a binding on the key that types its character in the current keyboard layout (TIS/UCKeyTranslate; unshifted, or with Shift for a binding that holds Shift) and resolves again when the input source changes, as upstream matches the active layout's keysym first. True, upstream's default: when no key types the character the binding falls back to its US ANSI key position. False: it is left out and noted. A key the layout resolves takes its chord before one that fell back. Known mismatches: the true fallback is the US ANSI position, where upstream falls back to the key's Latin keysym from another configured layout; with the flag false a binding that holds Shift is still found on the key that types its character without Shift, where upstream finds it there only through the fallback; only unshifted US-ANSI characters and named keys are bindable, and a symbol that needs Shift or another layout is reported as skipped. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell's lookup was run only outside the app, linked into a scratch harness against the installed US, British, German, French, Dvorak and Russian layout tables with nothing registered, and hot-key registration, a key press on a non-US layout and an input-source change are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.keyboard_layout",
@@ -12499,13 +12586,14 @@
       },
       "contract": "Match Config.nav_anchors type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "Vec<Point<f64, Logical>>"
+      "source_type": "Vec<Point<f64, Logical>>",
+      "implementation_note": "zoom-to-fit frames navigation.anchors together with the windows, as upstream's ZoomToFit does: points with Y up, truncated to whole pixels. Known mismatches: upstream also uses the anchors in center-nearest, which does not run here. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.navigation_bookmarks",
@@ -12517,13 +12605,14 @@
       },
       "contract": "Match Config.navigation_bookmarks type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "BTreeMap<String, [f64; 2]>"
+      "source_type": "BTreeMap<String, [f64; 2]>",
+      "implementation_note": "[navigation.bookmarks] seeds the controller's bookmark registry at launch; with no such table upstream's four corner seeds 1 to 4 apply. A reload re-asserts a name the file added or changed, drops one it removed and leaves the others at their runtime value, as upstream's reload does; session.restore_bookmarks decides whether saved bookmarks are laid over the seeds. Known mismatches: the scene file stands in for upstream's session store; go-to-bookmark and set-bookmark keep the mismatches recorded on their own rows. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.backend",
@@ -12643,13 +12732,14 @@
       },
       "contract": "Match Config.focus_placement type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "FocusPlacement"
+      "source_type": "FocusPlacement",
+      "implementation_note": "Once a config is loaded, window navigation parks the window where focus_placement says, in place of the placement set_navigation_context supplied. Known mismatches: the app registers no usable area, so placement is relative to the whole view; the shell's native focus navigation stays behind --experimental-native-navigation. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.env",
@@ -12661,13 +12751,14 @@
       },
       "contract": "Match Config.env type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "HashMap<String, String>"
+      "source_type": "HashMap<String, String>",
+      "implementation_note": "The file's [env] entries are the environment of every exec effect: the shell overlays them on its own environment for the /bin/sh -c child. Known mismatches: upstream's five Wayland toolkit fallbacks (MOZ_ENABLE_WAYLAND, QT_QPA_PLATFORM, SDL_VIDEODRIVER, GDK_BACKEND, ELECTRON_OZONE_PLATFORM_HINT) are withheld unless the file's own [env] sets them; autostart is not run here. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.child_env",
@@ -12679,13 +12770,14 @@
       },
       "contract": "Match Config.child_env type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "HashMap<String, String>"
+      "source_type": "HashMap<String, String>",
+      "implementation_note": "The file's [env] entries, merged by upstream's child_env with the cursor theme and size, are the environment of every exec effect: the shell overlays them on its own environment for the /bin/sh -c child. Known mismatches: upstream's five Wayland toolkit fallbacks (MOZ_ENABLE_WAYLAND, QT_QPA_PLATFORM, SDL_VIDEODRIVER, GDK_BACKEND, ELECTRON_OZONE_PLATFORM_HINT) are withheld unless the file's own [env] sets them; autostart is not run here. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.output_configs",
@@ -12715,13 +12807,14 @@
       },
       "contract": "Match Config.mouse type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "ContextBindings<MouseBinding, MouseAction>"
+      "source_type": "ContextBindings<MouseBinding, MouseAction>",
+      "implementation_note": "The mouse binding tables ([mouse.on-window], [mouse.on-canvas], [mouse.anywhere]) are driftwm-core's. The mouse_binding command looks a physical chord, a button or scroll source and a context up through upstream's ContextBindings lookup, and the shell asks it on every press and scroll and maps move, cluster move, pan, zoom and action bindings onto its gestures. Known mismatches: resize bindings need --experimental-native-resize; center-nearest answers a status note; wheel-up and wheel-down triggers are never returned; upstream's grammar has no name for the back and forward buttons. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.resize_on_border",
@@ -12895,13 +12988,14 @@
       },
       "contract": "Match SessionConfig.restore_camera type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "bool"
+      "source_type": "bool",
+      "implementation_note": "Read at the first load_config of a run. Off, upstream's default: an output that connects starts at a new output's camera instead of the one saved in the scene file. On: the saved camera is restored. Cameras are always saved, and an output this session has already shown keeps its camera across a disconnect. Known mismatches: a new output's camera puts the world origin at its top-left corner, where upstream centres it; the scene file stands in for upstream's session store. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.SessionConfig.restore_bookmarks",
@@ -12913,13 +13007,14 @@
       },
       "contract": "Match SessionConfig.restore_bookmarks type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "bool"
+      "source_type": "bool",
+      "implementation_note": "Read at the first load_config of a run. On: the scene file's bookmark registry is laid over the config seeds, a saved value winning per name, and runtime edits are saved. Off, upstream's default: the registry starts from the config seeds alone, runtime edits last until quit, and a save carries the file's registry forward untouched. Known mismatches: the scene file stands in for upstream's session store. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/config_flow.rs). Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.TabletSettings.map_to_output",

@@ -25,11 +25,12 @@ back as one line. No command here performs a native operation.
   `{output,generation,target_camera,target_zoom,animating}` exactly as the
   [view actions](NAVIGATION.md#view-actions) return it, or `null` when nothing
   flies. Schedule frames while it is an object.
-- `effects` are requests to the shell. `{"op":"quit"}` is the only one an action
-  produces.
+- `effects` are requests to the shell: `{"op":"quit"}`,
+  `{"op":"exec","command":…,"env":{…}}` and `{"op":"reload_config"}`.
 - `dirty` is true when saved state changed and the shell should save.
 
-The string is parsed with upstream's `parse_action`: the first
+The string is parsed by upstream's own `parse_action`, from `driftwm-core`; the
+same grammar reads the [config file](CONFIG.md)'s bindings. The first
 whitespace-delimited word is the name and the trimmed remainder its argument.
 Names are case-sensitive kebab-case; directions (`up`, `down`, `left`, `right`,
 `up-left`, `up-right`, `down-left`, `down-right`) are case-insensitive.
@@ -42,7 +43,15 @@ Names are case-sensitive kebab-case; directions (`up`, `down`, `left`, `right`,
 | `go-to-bookmark <name>` | yes | flies to the bookmark; `navigation` is `null` when there is none |
 | `set-bookmark <name>` | yes | stores the bookmark; `dirty` is true, `navigation` is `null` |
 | `quit` | yes | `effects` is `[{"op":"quit"}]`; needs no output |
-| `exec`, `spawn`, `exec-terminal`, `exec-launcher`, `close-window`, `suspend-window`, `nudge-window`, `grow-window`, `shrink-window`, `center-window`, `center-nearest`, `focus-center`, `cycle-windows`, `move-to-bookmark`, `zoom-to-fit-snapped`, `toggle-fullscreen`, `fit-window`, `fit-window-snapped`, `fill-window`, `send-to-output`, `send-cursor-to-output`, `switch-layout`, `toggle-pin-to-screen`, `reload-config`, `toggle-cursor-pan`, `set-trackpad` | no | parsed with upstream's argument rules, then refused |
+| `nudge-window <dir>` | yes | moves the focused window by `navigation.nudge_step`; `dirty` is true; needs no output |
+| `exec <cmd>`, `spawn <cmd>`, `exec-terminal`, `exec-launcher` | yes | `effects` is one `exec` for the shell to run; needs no output |
+| `reload-config` | yes | `effects` is `[{"op":"reload_config"}]`; needs no output |
+| `close-window`, `suspend-window`, `grow-window`, `shrink-window`, `center-window`, `center-nearest`, `focus-center`, `cycle-windows`, `move-to-bookmark`, `zoom-to-fit-snapped`, `toggle-fullscreen`, `fit-window`, `fit-window-snapped`, `fill-window`, `send-to-output`, `send-cursor-to-output`, `switch-layout`, `toggle-pin-to-screen`, `toggle-cursor-pan`, `set-trackpad` | no | parsed with upstream's argument rules, then refused |
+
+[CONFIG.md](CONFIG.md#actions-that-run-now) describes the nudge, exec and
+reload actions. An `exec` effect is not run by the controller. Because `ipc`
+accepts `{"Action":…}`, whoever can write to the shell's socket can have the
+shell run a command, as with upstream's `driftwm msg action exec`.
 
 A refused action is a controller error and changes nothing. Three refusals are
 kept apart and checked in this order:
@@ -98,6 +107,10 @@ save past its 32 MiB limit, and every save then fails until some are deleted.
   home toggle, zoom step or fit still in the air) therefore keeps flying and its
   next tick drops the bookmark target: upstream behaves the same, and the reply's
   `target_camera` is then not where the camera comes to rest.
+- Under a loaded [config](CONFIG.md#session) the map is a registry seeded from
+  `[navigation.bookmarks]`, and `session.restore_bookmarks` decides whether a
+  saved map comes back and whether runtime edits are written. What follows
+  describes a controller no config was loaded into.
 - The map is saved under the top-level `bookmarks` key of the save file. The key
   is additive under save schema 1: a file without it loads with no bookmarks,
   and it is omitted while the map is empty. A build from before bookmarks
@@ -145,8 +158,9 @@ before the request is decoded).
 same obligation `focus` and `navigate_window` return under `effect`: perform it
 and acknowledge it with `focus_result`, or it stays pending until superseded. It
 is never evidence that native focus changed. The app's shell acts on
-`{"op":"quit"}` only: it neither performs nor acknowledges a focus effect that
-`ipc` returns, so an IPC focus of a bound window leaves that effect pending.
+`{"op":"quit"}`, `{"op":"exec"}` and `{"op":"reload_config"}` only: it neither
+performs nor acknowledges a focus effect that `ipc` returns, so an IPC focus of
+a bound window leaves that effect pending.
 
 ### Coordinates
 

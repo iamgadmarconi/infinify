@@ -1,219 +1,155 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
-// src/config/types.rs (Action, LayoutSwitch, TrackpadState), src/config/parse.rs
-// (parse_action, parse_direction) and src/input/actions.rs (execute_action's
-// dispatch). The grammar is complete; only the camera, bookmark and quit
-// actions execute. Every other action parses and is then refused by name.
+// src/input/actions.rs (execute_action's dispatch, exec_command, NudgeWindow,
+// detect_terminal, detect_launcher). The grammar itself is not adapted: it is
+// driftwm-core's `config::{Action, parse_action}`, upstream's own code. The
+// camera, bookmark, nudge, exec, reload and quit actions execute; every other
+// action parses and is then refused by name.
 use super::*;
+use driftwm_core::config::{Action, Direction, LayoutSwitch, TrackpadState, parse_action};
 
-/// Upstream `config::Action`, variant for variant. `Direction` is the existing
-/// `ViewDirection`. Arguments of actions that parse but do not run yet are
-/// grammar only, hence the allowance.
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-pub(crate) enum Action {
-    Exec(String),
-    ExecTerminal,
-    ExecLauncher,
-    Spawn(String),
-    CloseWindow,
-    SuspendWindow,
-    NudgeWindow(ViewDirection),
-    GrowWindow(ViewDirection),
-    ShrinkWindow(ViewDirection),
-    PanViewport(ViewDirection),
-    CenterWindow,
-    CenterNearest(ViewDirection),
-    CycleWindows { backward: bool },
-    HomeToggle,
-    GoToBookmark(String),
-    SetBookmark(String),
-    MoveToBookmark(String),
-    ZoomIn,
-    ZoomOut,
-    ZoomReset,
-    ZoomToFit,
-    ZoomToFitSnapped,
-    ToggleFullscreen,
-    FitWindow,
-    FitWindowSnapped,
-    FillWindow,
-    SendToOutput(ViewDirection),
-    SendCursorToOutput(ViewDirection),
-    FocusCenter,
-    TogglePinToScreen,
-    SwitchLayout(LayoutSwitch),
-    ReloadConfig,
-    ToggleCursorPan,
-    SetTrackpad(TrackpadState),
-    Quit,
-}
-/// Cycle relative to the active keyboard layout, or jump to a keymap index.
-#[allow(dead_code)]
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum LayoutSwitch {
-    Next,
-    Prev,
-    Index(usize),
-}
-/// Desired trackpad send-events state, as set by `set-trackpad`.
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum TrackpadState {
-    Toggle,
-    On,
-    Off,
-}
-impl Action {
-    /// The name `parse_action` matched, as upstream's catalog spells it.
-    fn name(&self) -> &'static str {
-        match self {
-            Self::Exec(_) => "exec",
-            Self::ExecTerminal => "exec-terminal",
-            Self::ExecLauncher => "exec-launcher",
-            Self::Spawn(_) => "spawn",
-            Self::CloseWindow => "close-window",
-            Self::SuspendWindow => "suspend-window",
-            Self::NudgeWindow(_) => "nudge-window",
-            Self::GrowWindow(_) => "grow-window",
-            Self::ShrinkWindow(_) => "shrink-window",
-            Self::PanViewport(_) => "pan-viewport",
-            Self::CenterWindow => "center-window",
-            Self::CenterNearest(_) => "center-nearest",
-            Self::CycleWindows { .. } => "cycle-windows",
-            Self::HomeToggle => "home-toggle",
-            Self::GoToBookmark(_) => "go-to-bookmark",
-            Self::SetBookmark(_) => "set-bookmark",
-            Self::MoveToBookmark(_) => "move-to-bookmark",
-            Self::ZoomIn => "zoom-in",
-            Self::ZoomOut => "zoom-out",
-            Self::ZoomReset => "zoom-reset",
-            Self::ZoomToFit => "zoom-to-fit",
-            Self::ZoomToFitSnapped => "zoom-to-fit-snapped",
-            Self::ToggleFullscreen => "toggle-fullscreen",
-            Self::FitWindow => "fit-window",
-            Self::FitWindowSnapped => "fit-window-snapped",
-            Self::FillWindow => "fill-window",
-            Self::SendToOutput(_) => "send-to-output",
-            Self::SendCursorToOutput(_) => "send-cursor-to-output",
-            Self::FocusCenter => "focus-center",
-            Self::TogglePinToScreen => "toggle-pin-to-screen",
-            Self::SwitchLayout(_) => "switch-layout",
-            Self::ReloadConfig => "reload-config",
-            Self::ToggleCursorPan => "toggle-cursor-pan",
-            Self::SetTrackpad(_) => "set-trackpad",
-            Self::Quit => "quit",
+/// Upstream's compositor-side toolkit fallbacks in `Config::child_env`
+/// (src/config/mod.rs `TOOLKIT_DEFAULTS`). They select Wayland backends, which
+/// would stop a Qt, SDL or GTK program from starting on macOS, so an `exec`
+/// effect carries them only when the user's own `[env]` sets them.
+const WAYLAND_TOOLKIT_ENV: [&str; 5] = [
+    "MOZ_ENABLE_WAYLAND",
+    "QT_QPA_PLATFORM",
+    "SDL_VIDEODRIVER",
+    "GDK_BACKEND",
+    "ELECTRON_OZONE_PLATFORM_HINT",
+];
+/// What `exec-terminal` runs when `$TERMINAL` is unset: macOS always ships
+/// Terminal, and opening a folder in it makes a new window, as upstream's
+/// terminals do. Upstream's own fallback list is Linux binaries.
+const DEFAULT_TERMINAL: &str = "open -a Terminal \"$HOME\"";
+/// What `exec-launcher` runs when `$LAUNCHER` is unset: the system application
+/// launcher of macOS 26 and later.
+const DEFAULT_LAUNCHER: &str = "open -a Apps";
+
+impl From<&Direction> for ViewDirection {
+    fn from(value: &Direction) -> Self {
+        match value {
+            Direction::Up => Self::Up,
+            Direction::Down => Self::Down,
+            Direction::Left => Self::Left,
+            Direction::Right => Self::Right,
+            Direction::UpLeft => Self::UpLeft,
+            Direction::UpRight => Self::UpRight,
+            Direction::DownLeft => Self::DownLeft,
+            Direction::DownRight => Self::DownRight,
         }
     }
 }
-
-/// Parse a keyboard action string like "exec foot" or "center-nearest up".
-pub(crate) fn parse_action(s: &str) -> Result<Action, String> {
-    let s = s.trim();
-    let (name, arg) = match s.split_once(char::is_whitespace) {
-        Some((n, a)) => (n, Some(a.trim())),
-        None => (s, None),
-    };
-    let direction = |arg: Option<&str>| {
-        parse_direction(arg.ok_or_else(|| format!("{name} requires a direction"))?)
-    };
-    let bookmark = |arg: Option<&str>| {
-        arg.filter(|a| !a.is_empty())
-            .map(str::to_string)
-            .ok_or_else(|| format!("{name} requires a bookmark name"))
-    };
-    match name {
-        "exec" => Ok(Action::Exec(
-            arg.ok_or("exec requires a command argument")?.to_string(),
-        )),
-        "spawn" => Ok(Action::Spawn(
-            arg.ok_or("spawn requires a command argument")?.to_string(),
-        )),
-        "exec-terminal" => Ok(Action::ExecTerminal),
-        "exec-launcher" => Ok(Action::ExecLauncher),
-        "close-window" => Ok(Action::CloseWindow),
-        "suspend-window" => Ok(Action::SuspendWindow),
-        "nudge-window" => Ok(Action::NudgeWindow(direction(arg)?)),
-        // Upstream reaches this only from a keybinding: its mouse and gesture
-        // parsers match these as continuous actions first.
-        "resize-window" | "resize-window-snapped" => Err(format!(
-            "{name} is a drag action for mouse, gesture and touch bindings — on a keybinding use \
-             grow-window <dir> or shrink-window <dir>"
-        )),
-        "grow-window" => Ok(Action::GrowWindow(direction(arg)?)),
-        "shrink-window" => Ok(Action::ShrinkWindow(direction(arg)?)),
-        "pan-viewport" => Ok(Action::PanViewport(direction(arg)?)),
-        "center-window" => Ok(Action::CenterWindow),
-        "focus-center" => Ok(Action::FocusCenter),
-        "center-nearest" => Ok(Action::CenterNearest(direction(arg)?)),
-        "cycle-windows" => match arg.ok_or("cycle-windows requires forward or backward")? {
-            "forward" => Ok(Action::CycleWindows { backward: false }),
-            "backward" => Ok(Action::CycleWindows { backward: true }),
-            other => Err(format!(
-                "cycle-windows: expected forward or backward, got '{other}'"
-            )),
-        },
-        "home-toggle" => Ok(Action::HomeToggle),
-        "go-to" => Err(
-            "go-to was removed — save the point as a bookmark and use go-to-bookmark <name>"
-                .to_string(),
-        ),
-        "go-to-bookmark" => Ok(Action::GoToBookmark(bookmark(arg)?)),
-        "set-bookmark" => Ok(Action::SetBookmark(bookmark(arg)?)),
-        "move-to-bookmark" => Ok(Action::MoveToBookmark(bookmark(arg)?)),
-        "zoom-in" => Ok(Action::ZoomIn),
-        "zoom-out" => Ok(Action::ZoomOut),
-        "zoom-reset" => Ok(Action::ZoomReset),
-        "zoom-to-fit" => Ok(Action::ZoomToFit),
-        "zoom-to-fit-snapped" => Ok(Action::ZoomToFitSnapped),
-        "toggle-fullscreen" => Ok(Action::ToggleFullscreen),
-        "fit-window" => Ok(Action::FitWindow),
-        "fit-window-snapped" => Ok(Action::FitWindowSnapped),
-        "fill-window" => Ok(Action::FillWindow),
-        "send-to-output" => Ok(Action::SendToOutput(direction(arg)?)),
-        "send-cursor-to-output" => Ok(Action::SendCursorToOutput(direction(arg)?)),
-        "switch-layout" => {
-            let arg = arg.ok_or("switch-layout requires next, prev, or a layout index")?;
-            Ok(Action::SwitchLayout(
-                match arg.trim().to_lowercase().as_str() {
-                    "next" => LayoutSwitch::Next,
-                    "prev" | "previous" => LayoutSwitch::Prev,
-                    other => LayoutSwitch::Index(other.parse().map_err(|_| {
-                        format!("switch-layout: expected next, prev, or an index, got '{other}'")
-                    })?),
-                },
-            ))
-        }
-        "toggle-pin-to-screen" => Ok(Action::TogglePinToScreen),
-        "reload-config" => Ok(Action::ReloadConfig),
-        "toggle-cursor-pan" => Ok(Action::ToggleCursorPan),
-        "set-trackpad" => Ok(Action::SetTrackpad(match arg {
-            None => return Err("set-trackpad requires on, off, or toggle".to_string()),
-            Some(a) if a.eq_ignore_ascii_case("on") => TrackpadState::On,
-            Some(a) if a.eq_ignore_ascii_case("off") => TrackpadState::Off,
-            Some(a) if a.eq_ignore_ascii_case("toggle") => TrackpadState::Toggle,
-            Some(other) => {
-                return Err(format!(
-                    "set-trackpad: expected on, off, or toggle, got '{other}'"
-                ));
-            }
-        })),
-        "quit" => Ok(Action::Quit),
-        other => Err(format!("unknown action: {other}")),
+/// The name `parse_action` matched, as upstream's catalog spells it.
+fn action_name(action: &Action) -> &'static str {
+    match action {
+        Action::Exec(_) => "exec",
+        Action::ExecTerminal => "exec-terminal",
+        Action::ExecLauncher => "exec-launcher",
+        Action::Spawn(_) => "spawn",
+        Action::CloseWindow => "close-window",
+        Action::SuspendWindow => "suspend-window",
+        Action::NudgeWindow(_) => "nudge-window",
+        Action::GrowWindow(_) => "grow-window",
+        Action::ShrinkWindow(_) => "shrink-window",
+        Action::PanViewport(_) => "pan-viewport",
+        Action::CenterWindow => "center-window",
+        Action::CenterNearest(_) => "center-nearest",
+        Action::CycleWindows { .. } => "cycle-windows",
+        Action::HomeToggle => "home-toggle",
+        Action::GoToBookmark(_) => "go-to-bookmark",
+        Action::SetBookmark(_) => "set-bookmark",
+        Action::MoveToBookmark(_) => "move-to-bookmark",
+        Action::ZoomIn => "zoom-in",
+        Action::ZoomOut => "zoom-out",
+        Action::ZoomReset => "zoom-reset",
+        Action::ZoomToFit => "zoom-to-fit",
+        Action::ZoomToFitSnapped => "zoom-to-fit-snapped",
+        Action::ToggleFullscreen => "toggle-fullscreen",
+        Action::FitWindow => "fit-window",
+        Action::FitWindowSnapped => "fit-window-snapped",
+        Action::FillWindow => "fill-window",
+        Action::SendToOutput(_) => "send-to-output",
+        Action::SendCursorToOutput(_) => "send-cursor-to-output",
+        Action::FocusCenter => "focus-center",
+        Action::TogglePinToScreen => "toggle-pin-to-screen",
+        Action::SwitchLayout(_) => "switch-layout",
+        Action::ReloadConfig => "reload-config",
+        Action::ToggleCursorPan => "toggle-cursor-pan",
+        Action::SetTrackpad(_) => "set-trackpad",
+        Action::Quit => "quit",
     }
 }
-/// Parse a direction string (case-insensitive).
-fn parse_direction(s: &str) -> Result<ViewDirection, String> {
-    match s.trim().to_lowercase().as_str() {
-        "up" => Ok(ViewDirection::Up),
-        "down" => Ok(ViewDirection::Down),
-        "left" => Ok(ViewDirection::Left),
-        "right" => Ok(ViewDirection::Right),
-        "up-left" => Ok(ViewDirection::UpLeft),
-        "up-right" => Ok(ViewDirection::UpRight),
-        "down-left" => Ok(ViewDirection::DownLeft),
-        "down-right" => Ok(ViewDirection::DownRight),
-        other => Err(format!("unknown direction: {other}")),
+fn direction_name(direction: &Direction) -> &'static str {
+    match direction {
+        Direction::Up => "up",
+        Direction::Down => "down",
+        Direction::Left => "left",
+        Direction::Right => "right",
+        Direction::UpLeft => "up-left",
+        Direction::UpRight => "up-right",
+        Direction::DownLeft => "down-left",
+        Direction::DownRight => "down-right",
     }
+}
+/// The canonical config string of an action: `parse_action` reads it back as
+/// the same action.
+pub(crate) fn action_string(action: &Action) -> String {
+    let name = action_name(action);
+    let argument = match action {
+        Action::Exec(text)
+        | Action::Spawn(text)
+        | Action::GoToBookmark(text)
+        | Action::SetBookmark(text)
+        | Action::MoveToBookmark(text) => text.clone(),
+        Action::NudgeWindow(direction)
+        | Action::GrowWindow(direction)
+        | Action::ShrinkWindow(direction)
+        | Action::PanViewport(direction)
+        | Action::CenterNearest(direction)
+        | Action::SendToOutput(direction)
+        | Action::SendCursorToOutput(direction) => direction_name(direction).to_owned(),
+        Action::CycleWindows { backward: false } => "forward".to_owned(),
+        Action::CycleWindows { backward: true } => "backward".to_owned(),
+        Action::SwitchLayout(LayoutSwitch::Next) => "next".to_owned(),
+        Action::SwitchLayout(LayoutSwitch::Prev) => "prev".to_owned(),
+        Action::SwitchLayout(LayoutSwitch::Index(index)) => index.to_string(),
+        Action::SetTrackpad(TrackpadState::On) => "on".to_owned(),
+        Action::SetTrackpad(TrackpadState::Off) => "off".to_owned(),
+        Action::SetTrackpad(TrackpadState::Toggle) => "toggle".to_owned(),
+        _ => return name.to_owned(),
+    };
+    format!("{name} {argument}")
+}
+/// Does `run_action` execute this action, or refuse it by name?
+pub(crate) fn runs_here(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::Quit
+            | Action::ReloadConfig
+            | Action::Exec(_)
+            | Action::Spawn(_)
+            | Action::ExecTerminal
+            | Action::ExecLauncher
+            | Action::NudgeWindow(_)
+            | Action::PanViewport(_)
+            | Action::HomeToggle
+            | Action::ZoomIn
+            | Action::ZoomOut
+            | Action::ZoomReset
+            | Action::ZoomToFit
+            | Action::GoToBookmark(_)
+            | Action::SetBookmark(_)
+    )
+}
+/// Upstream detect_terminal / detect_launcher, less their probe of installed
+/// Linux programs: the user's environment variable, else the macOS default.
+fn from_environment(variable: &str, fallback: &str) -> String {
+    std::env::var(variable)
+        .ok()
+        .filter(|command| !command.is_empty())
+        .unwrap_or_else(|| fallback.to_owned())
 }
 
 /// What one action or IPC request asks of the shell beyond its own reply.
@@ -231,6 +167,41 @@ impl Controller {
         let outcome = self.run_action(output, spec)?;
         Ok(json!({"navigation":outcome.navigation,"effects":outcome.effects,"dirty":outcome.dirty}))
     }
+    /// Upstream spawn_command as a request to the shell: `sh -c command` with
+    /// the config's child environment, less the Wayland toolkit fallbacks.
+    fn exec_effect(&self, command: &str) -> Value {
+        let config = self.config();
+        let env: BTreeMap<&String, &String> = config
+            .child_env
+            .iter()
+            .filter(|(key, _)| {
+                config.env.contains_key(*key) || !WAYLAND_TOOLKIT_ENV.contains(&key.as_str())
+            })
+            .collect();
+        json!({"op":"exec","command":command,"env":env})
+    }
+    /// Upstream NudgeWindow: the focused window moves by `navigation.nudge_step`
+    /// world points, each axis rounded. A logical world move, applied at once:
+    /// upstream animates the frame from its old place, and clears a fill restore
+    /// point that does not exist here. No focused window is no error upstream.
+    fn nudge_window(&mut self, direction: &Direction) -> Result<bool, Error> {
+        let Some(window) = self.scene.focused() else {
+            return Ok(false);
+        };
+        let rect = self
+            .scene
+            .window(window)
+            .ok_or(Error::Invalid("unknown window"))?
+            .world_rect;
+        let step = f64::from(self.config().nudge_step);
+        let (ux, uy) = direction.to_unit_vec();
+        let moved = Rect {
+            origin: rect.origin + Point::new((ux * step).round(), (uy * step).round()),
+            size: rect.size,
+        };
+        self.place_window(window, moved).map_err(Error::Refused)?;
+        Ok(true)
+    }
     /// Parse and execute one action string. An unknown string, a known action
     /// that does not run here yet, and a missing active output are three
     /// different refusals, checked in that order.
@@ -243,12 +214,36 @@ impl Controller {
         let mut outcome = Outcome::default();
         let active = || output.ok_or(Error::Invalid("no active output"));
         let mut reply = match &action {
-            // The shell owns the process: quitting is its effect to perform.
+            // The shell owns the process: quitting, running a command and
+            // re-reading the config file are its effects to perform.
             Action::Quit => {
                 outcome.effects.push(json!({"op":"quit"}));
                 return Ok(outcome);
             }
-            Action::PanViewport(direction) => self.pan_viewport(active()?, *direction)?,
+            Action::ReloadConfig => {
+                outcome.effects.push(json!({"op":"reload_config"}));
+                return Ok(outcome);
+            }
+            // Upstream's exec also reveals the cursor; there is none to hide here.
+            Action::Exec(command) | Action::Spawn(command) => {
+                outcome.effects.push(self.exec_effect(command));
+                return Ok(outcome);
+            }
+            Action::ExecTerminal => {
+                let command = from_environment("TERMINAL", DEFAULT_TERMINAL);
+                outcome.effects.push(self.exec_effect(&command));
+                return Ok(outcome);
+            }
+            Action::ExecLauncher => {
+                let command = from_environment("LAUNCHER", DEFAULT_LAUNCHER);
+                outcome.effects.push(self.exec_effect(&command));
+                return Ok(outcome);
+            }
+            Action::NudgeWindow(direction) => {
+                outcome.dirty = self.nudge_window(direction)?;
+                return Ok(outcome);
+            }
+            Action::PanViewport(direction) => self.pan_viewport(active()?, direction.into())?,
             Action::HomeToggle => self.home_toggle(active()?)?,
             Action::ZoomIn => self.zoom_in(active()?)?,
             Action::ZoomOut => self.zoom_out(active()?)?,
@@ -262,7 +257,7 @@ impl Controller {
             _ => {
                 return Err(Error::Refused(format!(
                     "action not implemented on macOS yet: {}",
-                    action.name()
+                    action_name(&action)
                 )));
             }
         };

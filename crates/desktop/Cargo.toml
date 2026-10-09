@@ -10,7 +10,12 @@ crate-type = ["rlib", "staticlib"]
 
 [dependencies]
 driftwm-canvas = { path = "../canvas" }
+# Upstream's configuration: the TOML grammar, the action grammar and the bindings.
+driftwm-core = { path = "../core" }
 serde.workspace = true
 # Exact float parsing: a saved or scripted coordinate must not move by one ULP.
 serde_json = { workspace = true, features = ["float_roundtrip"] }
 thiserror.workspace = true
+# Same requirement as driftwm-core. Used only to read the key names of a config
+# file's [keybindings] table, so a binding on a key macOS lacks is reported.
+toml = "0.8"

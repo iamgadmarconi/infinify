@@ -878,29 +878,25 @@ fn action_strings_follow_upstream_grammar() {
         response["error"].as_str().unwrap().to_owned()
     };
     // Every other name upstream binds parses, and is refused by that name.
+    // exec, spawn, exec-terminal, exec-launcher, nudge-window and reload-config
+    // run now: tests/config_flow.rs covers them.
     for (name, sample) in [
         ("center-nearest", "center-nearest up"),
         ("center-window", "center-window"),
         ("close-window", "close-window"),
         ("cycle-windows", "cycle-windows forward"),
         ("cycle-windows", "cycle-windows backward"),
-        ("exec", "exec open -a Terminal"),
-        ("exec-launcher", "exec-launcher"),
-        ("exec-terminal", "exec-terminal"),
         ("fill-window", "fill-window"),
         ("fit-window", "fit-window"),
         ("fit-window-snapped", "fit-window-snapped"),
         ("focus-center", "focus-center"),
         ("grow-window", "grow-window up"),
         ("move-to-bookmark", "move-to-bookmark 1"),
-        ("nudge-window", "nudge-window Up-Left"),
-        ("reload-config", "reload-config"),
         ("send-cursor-to-output", "send-cursor-to-output up"),
         ("send-to-output", "send-to-output up"),
         ("set-trackpad", "set-trackpad toggle"),
         ("set-trackpad", "set-trackpad OFF"),
         ("shrink-window", "shrink-window up"),
-        ("spawn", "spawn foo"),
         ("suspend-window", "suspend-window"),
         ("switch-layout", "switch-layout next"),
         ("switch-layout", "switch-layout PREVIOUS"),

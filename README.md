@@ -19,16 +19,16 @@ From `/Users/gad/Documents/code/personal/infinify`:
 open target/app/Infinify.app
 ```
 
-Choose the windows to add. Drag blank canvas or Option-drag to pan, use Command-scroll or pinch to zoom, and Control-Option-drag a window to move it in the world. Normal clicks and scrolling reach its native application; that application retains keyboard focus. Return to desktop closes the canvas panels. Quit with the visible button or Control-Option-Escape.
+Choose the windows to add. With no config file, DriftWM's default bindings apply under the default super chord (Control-Option): drag blank canvas or Control-Option-drag anywhere to pan; use the mouse wheel on blank canvas, Control-Option-wheel anywhere, or pinch to zoom; and Option-drag a window to move it in the world (add Shift to move its snapped cluster). A DriftWM-grammar config file or `--super` changes these; see [Configuration](native/desktop/README.md#configuration). Unmodified clicks and scrolling on a window reach its native application; that application retains keyboard focus. Return to desktop closes the canvas panels. Quit with the visible button or Control-Option-Escape.
 
 Screen Recording access is needed for capture and Accessibility access for native input. The chooser explains missing access. The build and tests do not change privacy settings or SIP. The capture-based app does not require disabling SIP; its private input path still needs validation on each supported macOS release.
 
-Saved scenes retain world positions and display cameras. On restart, windows appear as detached placeholders and must be explicitly rebound through the chooser. Native resizing, popovers, context menus and richer pointer interactions are unfinished. See the [desktop app guide](native/desktop/README.md) for the disposable demo, exact controls, persistence and limitations.
+Saved scenes retain world positions. Display cameras are saved too, but are restored on restart only with `[session] restore_camera = true`; with DriftWM's default (off) each display starts with its top-left corner on the world origin at zoom 1. On restart, windows appear as detached placeholders and must be explicitly rebound through the chooser. Native resizing, popovers, context menus and richer pointer interactions are unfinished. See the [desktop app guide](native/desktop/README.md) for the disposable demo, exact controls, persistence and limitations.
 
 The optional `--experimental-native-navigation` launch flag connects selected-window
 centering, focus cycling and camera animation to the native shell. Its coordinator
 and event-order policy pass headless integration checks; live focus and shortcut
-delivery remain unverified. Default launch retains the existing controls.
+delivery remain unverified. Default launch retains the configured controls described above.
 
 The separate `--experimental-native-resize` flag connects eight resize handles to
 the native adapter. It commits observed sizes and withholds input and captured

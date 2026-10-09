@@ -10,7 +10,10 @@
 #import "resize-driver.h"
 #import "resize-capture-policy.h"
 #import "ipc-server.h"
+#import "hotkeys.h"
+#import "config-watcher.h"
 #include <mach/mach_time.h>
+#include <spawn.h>
 
 static NSDictionary *pointJSON(CGPoint p) { return @{@"x":@(p.x),@"y":@(p.y)}; }
 static NSDictionary *rectJSON(CGRect r) { return @{@"origin":pointJSON(r.origin),@"size":@{@"width":@(r.size.width),@"height":@(r.size.height)}}; }
@@ -43,8 +46,41 @@ static NSData *jsonMember(NSData *object,const char *key) {
     return nil;
 }
 static NSData *ipcError(NSString *message) { return [NSJSONSerialization dataWithJSONObject:@{@"Err":message} options:NSJSONWritingWithoutEscapingSlashes error:nil]; }
+static NSArray *asArray(id value) { return [value isKindOfClass:NSArray.class]?value:@[]; }
+static NSString *asString(id value) { return [value isKindOfClass:NSString.class]?value:nil; }
+static NSNumber *asNumber(id value) { return [value isKindOfClass:NSNumber.class]?value:nil; }
+// The first line and how many follow: the status line has room for one.
+static NSString *summary(NSString *subject,NSArray<NSString *> *lines) { return [NSString stringWithFormat:@"%@: %@%@",subject,lines[0],lines.count>1?[NSString stringWithFormat:@" (+%lu more)",(unsigned long)lines.count-1]:@""]; }
+// The exec effect, as upstream's exec_command: /bin/sh -c in a session of its own on
+// /dev/null, with no other descriptor inherited and never waited on by the main loop.
+// env overlays this process's environment; a null value removes the variable.
+static NSString *execCommand(NSString *command,NSDictionary *env) {
+    NSMutableDictionary<NSString *,NSString *> *environment=[NSProcessInfo.processInfo.environment mutableCopy];
+    for(NSString *name in env){if(asString(env[name]))environment[name]=env[name];else [environment removeObjectForKey:name];}
+    NSMutableData *pointers=[NSMutableData data];const char *end=NULL;
+    for(NSString *name in environment){const char *entry=[NSString stringWithFormat:@"%@=%@",name,environment[name]].UTF8String;if(entry)[pointers appendBytes:&entry length:sizeof(entry)];}
+    [pointers appendBytes:&end length:sizeof(end)];
+    char *const arguments[]={"sh","-c",(char *)command.UTF8String,NULL};
+    posix_spawn_file_actions_t actions;posix_spawn_file_actions_init(&actions);
+    for(int descriptor=0;descriptor<3;descriptor++)posix_spawn_file_actions_addopen(&actions,descriptor,"/dev/null",descriptor?O_WRONLY:O_RDONLY,0);
+    posix_spawnattr_t attributes;posix_spawnattr_init(&attributes);sigset_t none,all;sigemptyset(&none);sigfillset(&all);
+    posix_spawnattr_setsigmask(&attributes,&none);posix_spawnattr_setsigdefault(&attributes,&all);
+    posix_spawnattr_setflags(&attributes,POSIX_SPAWN_SETSID|POSIX_SPAWN_CLOEXEC_DEFAULT|POSIX_SPAWN_SETSIGMASK|POSIX_SPAWN_SETSIGDEF);
+    pid_t pid=0;int error=posix_spawn(&pid,"/bin/sh",&actions,&attributes,arguments,(char *const *)pointers.bytes);
+    posix_spawn_file_actions_destroy(&actions);posix_spawnattr_destroy(&attributes);
+    if(error)return [NSString stringWithFormat:@"exec failed: %s",strerror(error)];
+    // Reaped off the main queue whenever it exits.
+    dispatch_source_t exited=dispatch_source_create(DISPATCH_SOURCE_TYPE_PROC,(uintptr_t)pid,DISPATCH_PROC_EXIT,dispatch_get_global_queue(QOS_CLASS_UTILITY,0));
+    dispatch_source_set_event_handler(exited,^{int status=0;waitpid(pid,&status,0);dispatch_source_cancel(exited);});
+    dispatch_resume(exited);return nil;
+}
+// Probe, demo and owned-fixture runs: their fixed gestures and chords. A normal run
+// builds its help from the bindings the config gives it.
 static NSString *const helpText=@"Option-drag: pan · ⌘-wheel/pinch: zoom · ⌃⌥-drag: move · +Shift: cluster · ⌃⌥A: home · ⌃⌥W: fit · ⌃⌥=/-/0: zoom · ⌃⌥⌘-arrows: pan view · ⌃⌥1-4: bookmark (⇧ sets) · ⌃⌥Esc: exit";
-static NSString *const windowedHelpText=@"Windowed, no global shortcuts · Option-drag: pan · ⌘-wheel/pinch: zoom · ⌃⌥-drag: move · +Shift: cluster · toolbar or Infinify msg: view actions and bookmarks";
+// Toolbar view actions: title, upstream action, tooltip, and the fixed chord of the runs above.
+static NSArray<NSArray<NSString *> *> *toolbarActions(void) {
+    return @[@[@"Home",@"home-toggle",@"Home: origin at 1:1; again returns to the previous view",@"⌃⌥A"],@[@"Fit",@"zoom-to-fit",@"Zoom to fit every window; again returns to the previous view",@"⌃⌥W"],@[@"−",@"zoom-out",@"Zoom out",@"⌃⌥-"],@[@"1:1",@"zoom-reset",@"Zoom 1:1",@"⌃⌥0 or ⌃⌥Z"],@[@"+",@"zoom-in",@"Zoom in",@"⌃⌥="]];
+}
 // Fitted widths keep every toolbar button, experimental navigation included, inside the 1040 px demo panel.
 static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.frame=NSMakeRect(x,8,ceil(button.fittingSize.width),26);[view addSubview:button];return NSMaxX(button.frame)+4; }
 #include "resize-isolation.inc.m"
@@ -103,8 +139,11 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
 @property NSNumber *lastOutput; // most recently interacted output: toolbar view-action target
 @property LiveSource *pressedSource;
 @property CGPoint pressedLocal;
+@property int64_t pressedButton; // CGMouseButton held down in pressedSource
 @property NSNumber *resizeTransaction;
-@property NSInteger gesture; // 1 pan, 2 logical world drag, 3 native pointer
+@property NSInteger gesture; // 1 pan, 2 logical world drag, 3 native pointer, 4 native resize
+@property NSInteger gestureButton; // NSEvent button number that began the gesture
+@property CFTimeInterval lastScrollPan; // last finger scroll that panned, 0 for none
 - (void)render:(NSDictionary *)snapshot;
 - (NSNumber *)outputAt:(CGPoint)p;
 - (NSNumber *)actionOutput;
@@ -144,6 +183,20 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
 @property NSUInteger statusToken;
 - (NSNumber *)viewOutput;
 - (void)action:(NSString *)action output:(NSNumber *)output;
+- (void)flashStatus:(NSString *)text;
+// Normal runs only: keys, pointer gestures and settings come from the DriftWM config.
+// Probe, demo and owned-fixture runs leave it off and keep the fixed chords and
+// gestures they were validated with; they read no config and ask for no binding.
+@property BOOL configured;
+@property NSString *configPath; // --config; nil is the controller's default path
+@property NSString *superChord; // --super; nil is ctrl+alt
+@property DWHotKeys *hotKeys;
+@property DWConfigWatcher *configWatcher;
+@property NSString *configNote; // the config file's first problem and a count, upstream's error bar
+@property NSString *help; // the chords registered, for the status line
+@property BOOL dismissFree; // no binding claims ⌃⌥-click on a window
+- (void)loadConfig:(BOOL)platform;
+- (NSDictionary *)mouseBinding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window;
 @property BOOL windowed;
 @property NSSize windowSize;
 @property DWIPCServer *ipc;
@@ -219,7 +272,7 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
             }
         }else{
             if(surface){[surface.sampleBufferRenderer flush];[surface removeFromSuperlayer];[self.surfaces removeObjectForKey:key];}
-            if(!tile.sublayers.count){CATextLayer *text=[CATextLayer layer];text.string=[NSString stringWithFormat:@"Detached window %@\nChoose a source to rebind\n⌃⌥ click to dismiss",p[@"window"]];text.fontSize=17;text.foregroundColor=NSColor.whiteColor.CGColor;text.wrapped=YES;text.frame=CGRectMake(12,12,MAX(40,clip.size.width-24),100);text.contentsScale=NSScreen.mainScreen.backingScaleFactor;[tile addSublayer:text];}
+            if(!tile.sublayers.count){CATextLayer *text=[CATextLayer layer];text.string=[NSString stringWithFormat:@"Detached window %@\nChoose a source to rebind%@",p[@"window"],self.desktop.configured&&!self.desktop.dismissFree?@"":@"\n⌃⌥ click to dismiss"];text.fontSize=17;text.foregroundColor=NSColor.whiteColor.CGColor;text.wrapped=YES;text.frame=CGRectMake(12,12,MAX(40,clip.size.width-24),100);text.contentsScale=NSScreen.mainScreen.backingScaleFactor;[tile addSublayer:text];}
         }
         for(CALayer *child in tile.sublayers.copy)if([child.name isEqual:@"resize-handle"])[child removeFromSuperlayer];
         if(self.desktop.experimentalResize&&[snapshot[@"focused"]isEqual:p[@"window"]]&&[p[@"presentation_settled"]boolValue])for(NSDictionary *handle in DWResizeHandles(full,clip)){
@@ -249,27 +302,63 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
     NSDictionary *hit=[self hit:p output:output];if(![hit isKindOfClass:NSDictionary.class])return NO;
     LiveSource *source=self.desktop.sources[hit[@"window"]];if(!source||![source.router valid]||(source.resize&&![source.resize validate:source.logical]))return NO;
     // Unsupported cross-source pointer capture must never retarget a held drag.
-    if(CGEventGetType(e)==kCGEventLeftMouseDragged&&source!=self.pressedSource)return NO;
+    CGEventType type=CGEventGetType(e);
+    if((type==kCGEventLeftMouseDragged||type==kCGEventRightMouseDragged||type==kCGEventOtherMouseDragged)&&source!=self.pressedSource)return NO;
     NSDictionary *validated=[self.desktop call:@{@"op":@"input",@"output":output,@"screen":pointJSON(p),@"identity":source.identity}][@"hit"];
     if(![validated isKindOfClass:NSDictionary.class]||![source.router valid])return NO;
-    if(activate){
-        NSRunningApplication *current=NSWorkspace.sharedWorkspace.frontmostApplication;
-        if(current.processIdentifier!=source.router.pid){self.desktop.previousFocus=current;self.desktop.previousFocusBirth=current.launchDate;[[NSRunningApplication runningApplicationWithProcessIdentifier:source.router.pid] activateWithOptions:0];}
-        [self.desktop call:@{@"op":@"focus",@"window":source.logical}];
-    }
+    if(activate)[self focusSource:source];
     CGPoint local=jsonPoint(validated[@"local"]);
     BOOL sent=[source.router post:e at:local];
-    if(sent && CGEventGetType(e)==kCGEventLeftMouseDown){self.pressedSource=source;self.pressedLocal=local;}
+    if(sent&&(type==kCGEventLeftMouseDown||type==kCGEventRightMouseDown||type==kCGEventOtherMouseDown)){self.pressedSource=source;self.pressedLocal=local;self.pressedButton=CGEventGetIntegerValueField(e,kCGMouseEventButtonNumber);}
     if(sent&&self.pressedSource==source)self.pressedLocal=local;
     return sent;
 }
+// Native activation and logical focus of one source's window, as a click on it gives.
+- (void)focusSource:(LiveSource *)source {
+    NSRunningApplication *current=NSWorkspace.sharedWorkspace.frontmostApplication;
+    if(current.processIdentifier!=source.router.pid){self.desktop.previousFocus=current;self.desktop.previousFocusBirth=current.launchDate;[[NSRunningApplication runningApplicationWithProcessIdentifier:source.router.pid] activateWithOptions:0];}
+    [self.desktop call:@{@"op":@"focus",@"window":source.logical}];
+}
+// Edges as upstream's edges_from_position picks them: a 3×3 grid over the window,
+// its centre resizing from the bottom right. The rect is the controller's placement.
+- (void)beginResize:(NSNumber *)window snapped:(BOOL)snapped at:(CGPoint)p output:(NSNumber *)output {
+    if(!self.desktop.resize){[self.desktop flashStatus:@"Window resize is gated behind --experimental-native-resize"];return;}
+    for(NSDictionary *placement in [self.desktop call:@{@"op":@"snapshot"}][@"placements"])if([placement[@"output"]isEqual:output]&&[placement[@"window"]isEqual:window]){
+        CGRect r=jsonRect(placement[@"screen_rect"]);CGFloat x=p.x-r.origin.x,y=p.y-r.origin.y;
+        BOOL left=x<r.size.width/3,right=x>r.size.width*2/3,top=y<r.size.height/3,bottom=y>r.size.height*2/3;
+        NSString *edges=left&&top?@"top_left":right&&top?@"top_right":left&&bottom?@"bottom_left":right&&bottom?@"bottom_right":left?@"left":right?@"right":top?@"top":bottom?@"bottom":@"bottom_right";
+        NSDictionary *reply=[self.desktop.resize request:@{@"op":@"begin_native_resize",@"window":window,@"output":output,@"edges":edges,@"start_screen":pointJSON(p),@"group":@(snapped)}];
+        if(reply){self.resizeTransaction=reply[@"transaction"];self.gesture=4;}return;
+    }
+}
+// A normal run's press, dispatched as upstream's on_pointer_button does: the binding
+// for the held modifiers in the window or canvas context, else the native window
+// under the pointer. An unbound press on empty canvas means nothing to upstream either.
+- (void)press:(NSEvent *)e button:(NSInteger)button hit:(NSDictionary *)hit at:(CGPoint)p output:(NSNumber *)output {
+    NSArray<NSString *> *triggers=@[@"left",@"right",@"middle",@"back",@"forward"];LiveSource *source=hit?self.desktop.sources[hit[@"window"]]:nil;self.lastScrollPan=0;
+    NSDictionary *binding=button<(NSInteger)triggers.count?[self.desktop mouseBinding:triggers[button] source:nil flags:e.modifierFlags window:hit!=nil]:nil;NSString *kind=asString(binding[@"kind"]),*action=asString(binding[@"action"]);
+    BOOL move=[kind isEqual:@"move_window"]||[kind isEqual:@"move_snapped_windows"],resize=[kind isEqual:@"resize_window"]||[kind isEqual:@"resize_window_snapped"];
+    // ⌃⌥-click still dismisses a detached placeholder while no binding claims that press.
+    if(!binding&&!button&&hit&&!source&&(e.modifierFlags&NSEventModifierFlagControl)&&(e.modifierFlags&NSEventModifierFlagOption)){[self.desktop call:@{@"op":@"forget",@"window":hit[@"window"]}];[self.desktop render];[self.desktop saveScene];return;}
+    if(move&&hit){if([self.desktop call:@{@"op":@"begin_drag",@"window":hit[@"window"],@"output":output,@"group":@([kind isEqual:@"move_snapped_windows"])}])self.gesture=2;}
+    else if(resize&&hit)[self beginResize:hit[@"window"] snapped:[kind isEqual:@"resize_window_snapped"] at:p output:output];
+    else if([kind isEqual:@"pan_viewport"])self.gesture=1;
+    else if([kind isEqual:@"center_nearest"])[self.desktop flashStatus:@"center-nearest by pointer is not implemented yet"];
+    // Upstream raises and focuses the window under the pointer, then runs the action on it.
+    else if([kind isEqual:@"action"]&&action){if(source&&[source.router valid])[self focusSource:source];[self.desktop action:action output:output];return;}
+    // Unbound, or bound to a gesture with nothing to act on here: the press is the native window's.
+    else if(hit){self.gesture=3;CGEventRef cg=CGEventCreateCopy(e.CGEvent);[self forward:cg at:p output:output activate:YES];CFRelease(cg);}
+    [self.desktop render];
+}
 - (void)mouseDown:(NSEvent *)e {
     if(self.desktop.probe&&!self.desktop.probeDrivingGesture){self.desktop.probeHumanInput=YES;return;}
+    // One gesture at a time: another button waits until the first is released.
+    NSInteger button=self.desktop.configured?e.buttonNumber:0;if(self.gesture&&button!=self.gestureButton)return;
     [self.desktop cancelNavigation];
     if(self.desktop.resize&&![self.desktop.resize canRemove:nil]){[self.desktop.resize cancel];return;}
     CGPoint p=[self screenPoint:e];NSNumber *output=[self outputAt:p];if(!output)return;
-    self.startPoint=self.lastPoint=p;self.dragOutput=self.lastOutput=output;
-    if(self.desktop.experimentalResize&&!(e.modifierFlags&(NSEventModifierFlagControl|NSEventModifierFlagOption))){NSDictionary *snapshot=[self.desktop call:@{@"op":@"snapshot"}];
+    self.startPoint=self.lastPoint=p;self.dragOutput=self.lastOutput=output;self.gestureButton=button;
+    if(!button&&self.desktop.experimentalResize&&!(e.modifierFlags&(NSEventModifierFlagControl|NSEventModifierFlagOption))){NSDictionary *snapshot=[self.desktop call:@{@"op":@"snapshot"}];
         for(NSDictionary *placement in [snapshot[@"placements"]reverseObjectEnumerator])if([placement[@"output"]isEqual:output]&&[placement[@"window"]isEqual:snapshot[@"focused"]]&&[placement[@"presentation_settled"]boolValue]){
             BOOL occluded=NO;for(NSDictionary *front in [snapshot[@"placements"]reverseObjectEnumerator]){if(front==placement)break;if([front[@"output"]isEqual:output]&&CGRectContainsPoint(jsonRect(front[@"clip_rect"]),p)){occluded=YES;break;}}if(occluded)continue;
             for(NSDictionary *h in DWResizeHandles(jsonRect(placement[@"screen_rect"]),jsonRect(placement[@"clip_rect"])))if(hypot(p.x-[h[@"x"]doubleValue],p.y-[h[@"y"]doubleValue])<=7){
@@ -281,6 +370,8 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
     // Internal resize probe never falls through into native click activation.
     if(self.desktop.ownedResizeProbe)return;
     NSDictionary *hit=[self hit:p output:output];BOOL isHit=[hit isKindOfClass:NSDictionary.class];
+    if(self.desktop.configured){[self press:e button:button hit:isHit?hit:nil at:p output:output];return;}
+    // Fixed gestures of probe, demo and owned-fixture runs.
     BOOL option=(e.modifierFlags&NSEventModifierFlagOption)!=0,control=(e.modifierFlags&NSEventModifierFlagControl)!=0;
     if(control&&option&&isHit&&!self.desktop.sources[hit[@"window"]]){[self.desktop call:@{@"op":@"forget",@"window":hit[@"window"]}];[self.desktop render];[self.desktop saveScene];return;}
     if(control&&option&&isHit){
@@ -289,8 +380,15 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
     else { self.gesture=3;CGEventRef cg=CGEventCreateCopy(e.CGEvent);[self forward:cg at:p output:output activate:YES];CFRelease(cg); }
     [self.desktop render];
 }
+- (void)rightMouseDown:(NSEvent *)e { if(self.desktop.configured)[self mouseDown:e];else [super rightMouseDown:e]; }
+- (void)otherMouseDown:(NSEvent *)e { if(self.desktop.configured)[self mouseDown:e];else [super otherMouseDown:e]; }
+- (void)rightMouseDragged:(NSEvent *)e { if(self.desktop.configured)[self mouseDragged:e];else [super rightMouseDragged:e]; }
+- (void)otherMouseDragged:(NSEvent *)e { if(self.desktop.configured)[self mouseDragged:e];else [super otherMouseDragged:e]; }
+- (void)rightMouseUp:(NSEvent *)e { if(self.desktop.configured)[self mouseUp:e];else [super rightMouseUp:e]; }
+- (void)otherMouseUp:(NSEvent *)e { if(self.desktop.configured)[self mouseUp:e];else [super otherMouseUp:e]; }
 - (void)mouseDragged:(NSEvent *)e {
     if(self.desktop.probe&&!self.desktop.probeDrivingGesture){self.desktop.probeHumanInput=YES;return;}
+    if(self.desktop.configured&&e.buttonNumber!=self.gestureButton)return;
     CGPoint p=[self screenPoint:e];
     if(self.gesture==4)[self.desktop.resize request:@{@"op":@"native_resize_to",@"transaction":self.resizeTransaction,@"screen":pointJSON(p)}];
     else if(self.gesture==1)[self.desktop call:@{@"op":@"pan",@"output":self.dragOutput,@"screen_delta":pointJSON(CGPointMake(self.lastPoint.x-p.x,self.lastPoint.y-p.y))}];
@@ -305,16 +403,47 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
         // Refresh only the already-pressed identity before releasing its button.
         NSDictionary *current=windowInfo(router.wid);
         if([birth(router.pid)isEqual:router.processBirth]&&[current[(id)kCGWindowOwnerPID]intValue]==router.pid&&current[(id)kCGWindowBounds])router.bounds=current[(id)kCGWindowBounds];
-        sig_atomic_t wasStopped=stopped;stopped=0;CGEventRef up=CGEventCreateMouseEvent(self.pressedSource.router.eventSource,kCGEventLeftMouseUp,CGPointZero,kCGMouseButtonLeft);[self.pressedSource.router post:up at:self.pressedLocal];CFRelease(up);if(wasStopped)stopped=wasStopped;self.pressedSource=nil;}
+        // The button that went down in the source is the one that comes up.
+        CGMouseButton button=(CGMouseButton)self.pressedButton;CGEventType type=button==kCGMouseButtonLeft?kCGEventLeftMouseUp:button==kCGMouseButtonRight?kCGEventRightMouseUp:kCGEventOtherMouseUp;
+        sig_atomic_t wasStopped=stopped;stopped=0;CGEventRef up=CGEventCreateMouseEvent(self.pressedSource.router.eventSource,type,CGPointZero,button);[self.pressedSource.router post:up at:self.pressedLocal];CFRelease(up);if(wasStopped)stopped=wasStopped;self.pressedSource=nil;}
 }
-- (void)mouseUp:(NSEvent *)e { if(self.desktop.probe&&!self.desktop.probeDrivingGesture){self.desktop.probeHumanInput=YES;return;} (void)e;if(self.gesture==4)[self.desktop.resize request:@{@"op":@"end_native_resize",@"transaction":self.resizeTransaction}];self.resizeTransaction=nil;[self releasePressed];if(self.gesture==2)[self.desktop call:@{@"op":@"end_gesture"}];self.gesture=0;[self.desktop saveScene]; }
-- (void)zoom:(double)factor at:(CGPoint)p output:(NSNumber *)output {
-    for(NSDictionary *o in [self.desktop call:@{@"op":@"snapshot"}][@"outputs"])if([o[@"id"] isEqual:output]){[self.desktop call:@{@"op":@"zoom",@"output":output,@"zoom":@(MAX(.001,MIN(1,[o[@"zoom"] doubleValue]*factor))),@"anchor":pointJSON(p)}];break;}
+- (void)mouseUp:(NSEvent *)e { if(self.desktop.probe&&!self.desktop.probeDrivingGesture){self.desktop.probeHumanInput=YES;return;} if(self.desktop.configured&&e.buttonNumber!=self.gestureButton)return;if(self.gesture==4)[self.desktop.resize request:@{@"op":@"end_native_resize",@"transaction":self.resizeTransaction}];self.resizeTransaction=nil;[self releasePressed];if(self.gesture==2)[self.desktop call:@{@"op":@"end_gesture"}];self.gesture=0;[self.desktop saveScene]; }
+- (void)zoom:(double)factor at:(CGPoint)p output:(NSNumber *)output { [self zoom:factor at:p output:output moving:NO]; }
+// moving: a zoom the limit swallows sends nothing, and only one that changes the view ends a flight.
+- (void)zoom:(double)factor at:(CGPoint)p output:(NSNumber *)output moving:(BOOL)moving {
+    for(NSDictionary *o in [self.desktop call:@{@"op":@"snapshot"}][@"outputs"])if([o[@"id"] isEqual:output]){
+        double zoom=[o[@"zoom"] doubleValue],target=MAX(.001,MIN(1,zoom*factor));
+        if(moving){if(target==zoom)return;[self.desktop cancelNavigation];}
+        [self.desktop call:@{@"op":@"zoom",@"output":output,@"zoom":@(target),@"anchor":pointJSON(p)}];break;}
     [self.desktop render];[self.desktop saveScene];
+}
+// A normal run's scroll, dispatched as upstream's on_pointer_axis does: a bound scroll
+// pans or zooms the canvas and never reaches a window, an unbound one goes to the
+// native window under it. Only a scroll that moves the camera ends a flight.
+- (void)scroll:(NSEvent *)e {
+    CGPoint p=[self screenPoint:e];NSNumber *output=[self outputAt:p];if(!output)return;
+    self.lastOutput=output;BOOL precise=e.hasPreciseScrollingDeltas;
+    // Upstream keeps a finger pan on the canvas for 150 ms, so a window sliding under the pointer cannot take the gesture.
+    BOOL panning=self.lastScrollPan&&CACurrentMediaTime()-self.lastScrollPan<.15,window=!panning&&[[self hit:p output:output]isKindOfClass:NSDictionary.class];
+    NSDictionary *binding=[self.desktop mouseBinding:@"scroll" source:precise?@"finger":@"wheel" flags:e.modifierFlags window:window];NSString *kind=asString(binding[@"kind"]);
+    if(!binding){if(window){CGEventRef cg=CGEventCreateCopy(e.CGEvent);[self forward:cg at:p output:output activate:NO];CFRelease(cg);}return;}
+    // Upstream's axis units: finger points as they are, one wheel line as one notch of 15.
+    double sx=e.scrollingDeltaX,sy=e.scrollingDeltaY,dx=sx,dy=sy;
+    if(!precise&&e.CGEvent){dx=15.0*CGEventGetIntegerValueField(e.CGEvent,kCGScrollWheelEventDeltaAxis2);dy=15.0*CGEventGetIntegerValueField(e.CGEvent,kCGScrollWheelEventDeltaAxis1);}
+    // Speeds are the config's when the lookup reports them: upstream zooms by zoom.step^(notches/2 × zoom.mouse_speed) and pans by navigation.trackpad_speed.
+    NSNumber *step=asNumber(binding[@"zoom_step"]),*zoomSpeed=asNumber(binding[@"zoom_mouse_speed"]),*panSpeed=asNumber(binding[@"trackpad_speed"]);
+    if([kind isEqual:@"zoom"]){double factor=step&&zoomSpeed?pow(step.doubleValue,dy/30*zoomSpeed.doubleValue):exp(sy*.01);if(isfinite(factor)&&factor>0)[self zoom:factor at:p output:output moving:YES];}
+    else if([kind isEqual:@"pan_viewport"]){
+        CGPoint delta=panSpeed?CGPointMake(-dx*panSpeed.doubleValue,-dy*panSpeed.doubleValue):CGPointMake(-sx,-sy);if(!delta.x&&!delta.y)return;
+        if(precise)self.lastScrollPan=CACurrentMediaTime();
+        [self.desktop cancelNavigation];[self.desktop call:@{@"op":@"pan",@"output":output,@"screen_delta":pointJSON(delta)}];[self.desktop render];[self.desktop saveScene];
+    }
 }
 - (void)scrollWheel:(NSEvent *)e {
     if(self.desktop.resize&&![self.desktop.resize canRemove:nil])return;
     if(self.desktop.probe){self.desktop.probeHumanInput=YES;return;}
+    if(self.desktop.configured){[self scroll:e];return;}
+    // Fixed gestures of probe, demo and owned-fixture runs.
     [self.desktop cancelNavigation];
     CGPoint p=[self screenPoint:e];NSNumber *output=[self outputAt:p];if(!output)return;
     self.lastOutput=output;
@@ -346,8 +475,11 @@ static OSStatus navigationKey(EventHandlerCallRef next,EventRef event,void *cont
     [desktop cycleNavigation:key.id==desktop.previousNavigationKey];return noErr;
 }
 static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) { (void)next;EventHotKeyID key={0};GetEventParameter(event,kEventParamDirectObject,typeEventHotKeyID,NULL,sizeof(key),NULL,&key);if(key.signature!='Infi'||key.id!=1)return eventNotHandledErr;[(__bridge Desktop *)context quit:nil];return noErr; }
-// DriftWM view actions: ⌃⌥ stands in for upstream "mod", and ⌘ for the extra ctrl of
-// upstream's mod+ctrl+arrow pan because Control is already part of the chord.
+// ⌃⌥Esc is the shell's own exit chord until a config binding claims it.
+static NSNumber *exitChord(void) { return DWChord(53,controlKey|optionKey); }
+// The fixed chords of an interactive --demo run, which reads no config; a normal run
+// registers the config's bindings through DWHotKeys instead. ⌃⌥ stands in for upstream
+// "mod", and ⌘ for the extra ctrl of upstream's mod+ctrl+arrow pan because Control is already part of the chord.
 // Every row binds an upstream action string. Hot key id = row + 1; append rows without renumbering.
 static const struct { UInt32 key,modifiers;const char *action; } viewKeys[]={
     {0,controlKey|optionKey,"home-toggle"},{13,controlKey|optionKey,"zoom-to-fit"},{24,controlKey|optionKey,"zoom-in"},{27,controlKey|optionKey,"zoom-out"},{29,controlKey|optionKey,"zoom-reset"},{6,controlKey|optionKey,"zoom-reset"},
@@ -443,6 +575,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     else [self.navigation navigate:@{@"op":@"cycle_navigate",@"output":output,@"backward":sender.tag==1?@YES:@NO,@"held":@NO}];
 }
 - (void)cycleNavigation:(BOOL)backward {
+    [self.hotKeys endRepeat];
     [self.resize cancel];if(self.resize&&![self.resize canRemove:nil])return;
     if(!self.navigation.focusAllowed||!self.nextHotkey||!self.previousHotkey)return;
     NSNumber *held=[self.navigationInput takeShortcut:backward];if(!held)return;
@@ -459,8 +592,10 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 }
 - (void)flashStatus:(NSString *)text {
     self.statusText=text;NSUInteger token=++self.statusToken;__weak Desktop *weak=self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(2*NSEC_PER_SEC)),dispatch_get_main_queue(),^{Desktop *d=weak;if(d.statusToken!=token||d.cleaning||![d.statusText isEqual:text])return;d.statusText=d.windowed?windowedHelpText:helpText;[d render];});
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(2*NSEC_PER_SEC)),dispatch_get_main_queue(),^{Desktop *d=weak;if(d.statusToken!=token||d.cleaning||![d.statusText isEqual:text])return;d.statusText=[d restingStatus];[d render];});
 }
+// What the status line returns to: a problem in the config file stays up like upstream's error bar, else the help.
+- (NSString *)restingStatus { return self.configured?self.configNote?:self.help?:@"":helpText; }
 - (NSString *)actionFeedback:(NSString *)action flight:(NSDictionary *)flight output:(NSNumber *)output {
     BOOL home=[action isEqual:@"home-toggle"];
     if(home||[action isEqual:@"zoom-to-fit"]){
@@ -473,15 +608,24 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if([action hasPrefix:@"pan-viewport "])return nil;
     if([action hasPrefix:@"set-bookmark "])return [NSString stringWithFormat:@"Bookmark %@ saved",[action substringFromIndex:13]];
     if([action hasPrefix:@"go-to-bookmark "])return [NSString stringWithFormat:@"Bookmark %@",[action substringFromIndex:15]];
+    // Every other bound action, exec and nudge-window among them, reports only its errors.
+    if(![@[@"zoom-in",@"zoom-out",@"zoom-reset"]containsObject:action])return nil;
     if(!flight)return @"Zoom limit reached";
     double zoom=[flight[@"target_zoom"]doubleValue];return zoom==1?@"Zoom 1:1":[NSString stringWithFormat:@"Zoom %.3g%%",zoom*100];
 }
-// Shared tail of every bound or scripted command: redraw, fly, persist, quit.
+// Shared tail of every bound or scripted command: redraw, fly, persist, and the effects
+// the shell owns: quit, exec, and a config reload.
 - (void)applyReply:(NSDictionary *)reply {
     BOOL flight=asDict(reply[@"navigation"])!=nil;if(flight&&!self.navigation)self.flying=YES;
     [self render];if(flight)[self ensureFrames];
     if([reply[@"dirty"]isEqual:@YES])[self saveScene];
-    for(id effect in [reply[@"effects"]isKindOfClass:NSArray.class]?reply[@"effects"]:@[])if([asDict(effect)[@"op"]isEqual:@"quit"])[self quit:nil];
+    for(id effect in asArray(reply[@"effects"])){NSDictionary *e=asDict(effect);NSString *op=asString(e[@"op"]);
+        if([op isEqual:@"quit"])[self quit:nil];
+        else if(!self.configured)continue;
+        else if([op isEqual:@"exec"]&&asString(e[@"command"])){NSString *error=execCommand(e[@"command"],asDict(e[@"env"]));if(error)[self flashStatus:error];}
+        // Deferred: a reload replaces the hot keys, and this may be running inside one of their handlers.
+        else if([op isEqual:@"reload_config"]){__weak Desktop *weak=self;dispatch_async(dispatch_get_main_queue(),^{Desktop *d=weak;if(d&&!d.cleaning)[d loadConfig:NO];});}
+    }
 }
 // Every hot key and toolbar button runs an upstream action string. An existing flight
 // is deliberately not cancelled first: pan-viewport extends its in-flight target.
@@ -492,7 +636,9 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     NSString *name=[action hasPrefix:@"go-to-bookmark "]?[action substringFromIndex:15]:nil;
     BOOL unset=name&&!asDict(asDict([self call:@{@"op":@"ipc",@"output":output,@"request":@{@"Bookmark":@{@"name":name}}}])[@"reply"])[@"Ok"];
     NSDictionary *reply=[self call:@{@"op":@"action",@"output":output,@"action":action}];
-    NSString *text=unset?[NSString stringWithFormat:@"No bookmark %@ yet — ⌃⌥⇧%@ sets it",name,name]:reply?[self actionFeedback:action flight:asDict(reply[@"navigation"]) output:output]:self.statusText;
+    NSString *sets=self.configured?[self.hotKeys chords:[@"set-bookmark " stringByAppendingString:name?:@""]].firstObject:[@"⌃⌥⇧" stringByAppendingString:name?:@""];
+    NSString *missing=[NSString stringWithFormat:@"No bookmark %@ yet%@",name,sets?[NSString stringWithFormat:@" — %@ sets it",sets]:@""];
+    NSString *text=unset?missing:reply?[self actionFeedback:action flight:asDict(reply[@"navigation"]) output:output]:self.statusText;
     if(text)[self flashStatus:text];
     [self applyReply:reply];
 }
@@ -511,6 +657,138 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 - (void)stopViewKeys {
     for(size_t i=0;i<sizeof(viewKeys)/sizeof(*viewKeys);i++)if(_viewHotkeys[i]){UnregisterEventHotKey(_viewHotkeys[i]);_viewHotkeys[i]=NULL;}
     if(_viewHandler){RemoveEventHandler(_viewHandler);_viewHandler=NULL;}
+}
+- (void)configureExitKey {
+    if(self.hotkeyHandler)return;
+    EventTypeSpec type={kEventClassKeyboard,kEventHotKeyPressed};OSStatus handler=InstallApplicationEventHandler(exitKey,1,&type,(__bridge void *)self,&_hotkeyHandler);EventHotKeyID key={'Infi',1};
+    if(handler!=noErr||RegisterEventHotKey(53,controlKey|optionKey,key,GetApplicationEventTarget(),0,&_exitHotkey)!=noErr)self.statusText=@"Exit shortcut unavailable; use the visible Quit button.";
+}
+- (void)stopExitKey { if(self.exitHotkey){UnregisterEventHotKey(self.exitHotkey);self.exitHotkey=NULL;}if(self.hotkeyHandler){RemoveEventHandler(self.hotkeyHandler);self.hotkeyHandler=NULL;} }
+// A normal run's global hot keys: the config's bindings, then the exit chord unless one
+// of them claimed it. Windowed mode registers none. Returns the chords macOS refused.
+- (NSArray<NSString *> *)startKeys {
+    if(self.windowed)return @[];
+    NSArray<NSString *> *refused=[self.hotKeys start];if(![self.hotKeys holds:exitChord()])[self configureExitKey];
+    return refused;
+}
+- (void)stopKeys { [self.hotKeys stop];[self stopExitKey]; }
+// Upstream's binding lookup for one press or scroll: physical modifiers, trigger and
+// context in; the bound gesture, or nil for none, out. The binding carries the config's
+// pointer speeds. Modifiers are JSON booleans: a boxed comparison would be sent as 0 or 1.
+- (NSDictionary *)mouseBinding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window {
+    NSDictionary *modifiers=@{@"control":flags&NSEventModifierFlagControl?@YES:@NO,@"option":flags&NSEventModifierFlagOption?@YES:@NO,@"shift":flags&NSEventModifierFlagShift?@YES:@NO,@"command":flags&NSEventModifierFlagCommand?@YES:@NO};
+    NSDictionary *reply=[self call:@{@"op":@"mouse_binding",@"trigger":trigger,@"source":source?:NSNull.null,@"modifiers":modifiers,@"context":window?@"window":@"canvas"}],*binding=asDict(reply[@"binding"]);
+    return binding;
+}
+// The pointer half of the help line, read from the lookup itself: every modifier set is
+// asked for each trigger in both contexts, lightest chord first, and each gesture shows
+// the first chord found on empty canvas and the first found on a window.
+- (NSArray<NSString *> *)pointerHelp {
+    NSArray<NSArray *> *triggers=@[@[@"left",NSNull.null,@"drag"],@[@"scroll",@"finger",@"scroll"],@[@"scroll",@"wheel",@"wheel"],@[@"right",NSNull.null,@"right-drag"],@[@"middle",NSNull.null,@"middle-drag"]];
+    NSArray<NSString *> *kinds=@[@"pan_viewport",@"zoom",@"move_window",@"move_snapped_windows",@"resize_window"],*words=@[@"pan",@"zoom",@"move",@"cluster",@"resize"];
+    NSMutableDictionary<NSString *,NSMutableArray<NSString *> *> *found=[NSMutableDictionary dictionary];NSString *status=self.statusText;
+    for(int held=0;held<=4;held++)for(unsigned mask=0;mask<16;mask++){
+        if(__builtin_popcount(mask)!=held)continue;
+        UInt32 carbon=(mask&1?controlKey:0)|(mask&2?optionKey:0)|(mask&4?shiftKey:0)|(mask&8?cmdKey:0);
+        NSEventModifierFlags flags=(mask&1?NSEventModifierFlagControl:0)|(mask&2?NSEventModifierFlagOption:0)|(mask&4?NSEventModifierFlagShift:0)|(mask&8?NSEventModifierFlagCommand:0);
+        for(NSArray *trigger in triggers){
+            BOOL scroll=[trigger[0]isEqual:@"scroll"];NSString *label=held?[NSString stringWithFormat:@"%@-%@",DWModifierGlyphs(carbon),trigger[2]]:trigger[2];
+            NSString *canvas=asString([self mouseBinding:trigger[0] source:asString(trigger[1]) flags:flags window:NO][@"kind"]),*window=asString([self mouseBinding:trigger[0] source:asString(trigger[1]) flags:flags window:YES][@"kind"]);
+            for(int place=0;place<2;place++){
+                NSString *kind=place?window:canvas;BOOL camera=[kind isEqual:@"pan_viewport"]||[kind isEqual:@"zoom"];
+                // A scroll only pans or zooms, and a button never zooms.
+                if(!kind||(scroll?!camera:[kind isEqual:@"zoom"]))continue;
+                NSMutableArray<NSString *> *chords=found[kind]?:(found[kind]=[@[@"",@""]mutableCopy]);if(chords[place].length)continue;
+                // A camera chord good in one place only says which.
+                chords[place]=[canvas isEqual:window]||!camera?label:[NSString stringWithFormat:@"%@ %@",place?@"window":@"canvas",label];
+            }
+        }
+    }
+    self.statusText=status;NSMutableArray<NSString *> *parts=[NSMutableArray array];
+    for(NSUInteger i=0;i<kinds.count;i++){
+        NSArray<NSString *> *chords=found[kinds[i]];if(!chords||(i==4&&!self.experimentalResize))continue;
+        NSString *both=chords[0].length&&chords[1].length&&![chords[0]isEqual:chords[1]]?[NSString stringWithFormat:@"%@ or %@",chords[0],chords[1]]:chords[0].length?chords[0]:chords[1];
+        [parts addObject:[NSString stringWithFormat:@"%@: %@",both,words[i]]];
+    }
+    return parts;
+}
+// The status line's help: the chords this run answers to.
+- (NSString *)helpLine {
+    NSMutableArray<NSString *> *parts=[[self pointerHelp]mutableCopy];
+    if(self.windowed){[parts insertObject:@"Windowed, no global shortcuts" atIndex:0];[parts addObject:@"toolbar or Infinify msg: view actions and bookmarks"];return [parts componentsJoinedByString:@" · "];}
+    NSString *(^chord)(NSString *)=^NSString *(NSString *action){return [self.hotKeys chords:action].firstObject;};
+    // Four arrows or digits on one modifier set read as a single entry.
+    NSString *(^family)(NSString *,NSArray<NSString *> *,NSArray<NSString *> *,NSString *)=^NSString *(NSString *action,NSArray<NSString *> *arguments,NSArray<NSString *> *names,NSString *range){
+        NSString *modifiers=nil;
+        for(NSUInteger i=0;i<arguments.count;i++){
+            NSDictionary *key=nil;NSString *full=[NSString stringWithFormat:@"%@ %@",action,arguments[i]];
+            for(NSDictionary *k in self.hotKeys.keys)if([k[@"action"]isEqual:full]&&[k[@"key"]isEqual:names[i]]){key=k;break;}
+            if(!key||(modifiers&&![modifiers isEqual:key[@"modifiers"]]))return nil;modifiers=key[@"modifiers"];
+        }
+        return [modifiers stringByAppendingString:range];
+    };
+    for(NSArray<NSString *> *row in @[@[@"home-toggle",@"home"],@[@"zoom-to-fit",@"fit"],@[@"zoom-in",@"zoom in"],@[@"zoom-out",@"zoom out"],@[@"zoom-reset",@"1:1"]])if(chord(row[0]))[parts addObject:[NSString stringWithFormat:@"%@: %@",chord(row[0]),row[1]]];
+    NSArray<NSString *> *arrows=@[@"left",@"right",@"up",@"down"],*arrowKeys=@[@"←",@"→",@"↑",@"↓"],*digits=@[@"1",@"2",@"3",@"4"];
+    NSString *pan=family(@"pan-viewport",arrows,arrowKeys,@"-arrows"),*go=family(@"go-to-bookmark",digits,digits,@"1-4"),*set=family(@"set-bookmark",digits,digits,@"1-4");
+    if(pan)[parts addObject:[pan stringByAppendingString:@": pan view"]];if(go)[parts addObject:[go stringByAppendingString:@": bookmark"]];if(set)[parts addObject:[set stringByAppendingString:@": set"]];
+    if(![self.hotKeys holds:exitChord()])[parts addObject:@"⌃⌥Esc: exit"];
+    return [parts componentsJoinedByString:@" · "];
+}
+- (NSString *)quitTitle { return self.windowed||[self.hotKeys holds:exitChord()]?@"Quit":@"Quit ⌃⌥Esc"; }
+// A toolbar tooltip names the chords bound to its action: the config's in a normal run, the fixed one otherwise.
+- (NSString *)tooltip:(NSArray<NSString *> *)row {
+    NSString *chords=self.configured?[[self.hotKeys chords:row[1]]componentsJoinedByString:@" or "]:row[3];
+    return self.windowed||!chords.length?row[2]:[NSString stringWithFormat:@"%@ (%@)",row[2],chords];
+}
+// After a config load on an open canvas: the Quit title, the tooltips and the
+// placeholder hint follow the chords now bound, and the toolbar is laid out again.
+- (void)refreshChrome {
+    for(DesktopView *view in self.views){
+        CGFloat x=12;
+        for(NSView *subview in view.subviews.copy){
+            NSButton *button=[subview isKindOfClass:NSButton.class]?(NSButton *)subview:nil;if(!button)continue;
+            if(button.action==@selector(quit:))button.title=[self quitTitle];
+            for(NSArray<NSString *> *row in toolbarActions())if([row[1]isEqual:button.identifier])button.toolTip=[self tooltip:row];
+            x=toolbarButton(view,button,x);
+        }
+        for(NSString *key in view.tiles)if(!view.surfaces[key])for(CALayer *child in view.tiles[key].sublayers.copy)[child removeFromSuperlayer];
+    }
+    [self render];
+}
+// The controller's binding table as hot keys, help and tooltips: after every config
+// load, and again whenever the keyboard input source changes. Returns what was left out.
+- (NSArray<NSString *> *)refreshBindings {
+    NSString *status=self.statusText,*help=self.help;NSMutableArray<NSString *> *notes=[NSMutableArray array];
+    NSDictionary *bindings=[self call:@{@"op":@"bindings"}];if(!bindings)[notes addObject:self.statusText?:@"bindings unavailable"];
+    for(id warning in asArray(bindings[@"warnings"]))if(asString(warning))[notes addObject:warning];
+    if(!self.hotKeys){__weak Desktop *weak=self;self.hotKeys=[[DWHotKeys alloc]initWithFire:^(NSString *action){[weak action:action output:[weak viewOutput]];}];self.hotKeys.changed=^{Desktop *d=weak;NSArray<NSString *> *left=[d refreshBindings];for(NSString *line in left)fprintf(stderr,"%s\n",line.UTF8String);if(left.count){d.statusText=summary(@"Bindings",left);[d render];}};}
+    BOOL open=self.panels.count!=0;if(open)[self stopKeys];
+    // Option-Tab and Option-Shift-Tab stay with experimental navigation while its flag is on.
+    NSString *owner=self.experimentalNavigation&&!self.windowed?@"experimental navigation":nil;
+    [self.hotKeys setBindings:bindings reserved:owner?@{DWChord(48,optionKey):owner,DWChord(48,optionKey|shiftKey):owner}:@{}];
+    [notes addObjectsFromArray:self.hotKeys.notes];
+    self.dismissFree=![self mouseBinding:@"left" source:nil flags:NSEventModifierFlagControl|NSEventModifierFlagOption window:YES];
+    self.statusText=status;if(open)[notes addObjectsFromArray:[self startKeys]];
+    self.help=[self helpLine];if(help&&[self.statusText isEqual:help])self.statusText=self.help;
+    if(open)[self refreshChrome];
+    return notes;
+}
+// Startup, a change of the config file, the reload-config action, and a canvas reopened
+// after Return to desktop. Reload semantics are the controller's, which are upstream's:
+// a file that fails to parse leaves the previous config in force and says why.
+- (void)loadConfig:(BOOL)platform {
+    NSMutableArray<NSString *> *problems=[NSMutableArray array];
+    if(platform&&![self call:@{@"op":@"set_platform",@"super":self.superChord?:@"ctrl+alt"}])[problems addObject:self.statusText?:@"set_platform failed"];
+    NSDictionary *loaded=[self call:@{@"op":@"load_config",@"path":self.configPath?:NSNull.null}];if(!loaded)[problems addObject:self.statusText?:@"load_config failed"];
+    // A reload can change what is saved (config bookmarks); the launch load precedes the scene and saves nothing.
+    if(!platform&&[loaded[@"dirty"]isEqual:@YES])[self saveScene];
+    for(NSString *key in @[@"errors",@"warnings"])for(id message in asArray(loaded[key]))if(asString(message))[problems addObject:message];
+    NSString *path=asString(loaded[@"path"])?:self.configPath;NSArray<NSString *> *all=[problems arrayByAddingObjectsFromArray:[self refreshBindings]];
+    for(NSString *line in all)fprintf(stderr,"%s\n",line.UTF8String);
+    NSString *note=all.count?summary(problems.count?[@"Config " stringByAppendingString:(path?:@"").stringByAbbreviatingWithTildeInPath]:@"Bindings",all):nil;
+    self.configNote=problems.count?note:nil;self.statusText=note?:[self restingStatus];
+    if(!self.configWatcher){__weak Desktop *weak=self;self.configWatcher=[[DWConfigWatcher alloc]initWithChanged:^{[weak loadConfig:NO];}];}
+    [self.configWatcher watch:path];[self render];
 }
 - (NSDictionary *)call:(NSDictionary *)command { return [self call:command raw:NULL]; }
 // raw receives the controller's own response bytes.
@@ -562,20 +840,22 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     panel.releasedWhenClosed=NO;panel.level=self.windowed?NSNormalWindowLevel:NSFloatingWindowLevel;panel.animationBehavior=NSWindowAnimationBehaviorNone;panel.collectionBehavior=NSWindowCollectionBehaviorMoveToActiveSpace|NSWindowCollectionBehaviorFullScreenAuxiliary;
     DesktopView *view=[[DesktopView alloc]initWithFrame:NSMakeRect(0,0,frame.size.width,frame.size.height)];view.desktop=self;view.globalBounds=topRect(frame);view.outputs=[NSMutableArray array];view.tiles=[NSMutableDictionary dictionary];view.surfaces=[NSMutableDictionary dictionary];view.wantsLayer=YES;view.layer.backgroundColor=[NSColor colorWithSRGBRed:.045 green:.065 blue:.10 alpha:1].CGColor;panel.contentView=view;
     for(NSUInteger i=0;i<rects.count;i++){NSNumber *output=[self call:@{@"op":@"register_output",@"stable_id":identities[i],@"screen_bounds":rects[i]}][@"output"];if(output)[view.outputs addObject:output];}
-    NSArray *names=self.ownedResizeProbe?@[]:@[@"Choose windows",@"Return to desktop",@"Resize status",self.windowed?@"Quit":@"Quit ⌃⌥Esc"];
+    NSArray *names=self.ownedResizeProbe?@[]:@[@"Choose windows",@"Return to desktop",@"Resize status",[self quitTitle]];
     if(self.ownedResizeProbe)[view addSubview:label(@"Noninteractive owned resize probe — supervisor signal or deadline exits",NSMakeRect(15,8,720,26))];
     SEL actions[]={@selector(showChooser:),@selector(returnDesktop:),@selector(resizeUnavailable:),@selector(quit:)};
     CGFloat x=12;for(NSUInteger i=0;i<names.count;i++)x=toolbarButton(view,[NSButton buttonWithTitle:names[i] target:self action:actions[i]],x);
-    if(!self.ownedResizeProbe){NSArray *titles=@[@"Home",@"Fit",@"−",@"1:1",@"+"],*actions=@[@"home-toggle",@"zoom-to-fit",@"zoom-out",@"zoom-reset",@"zoom-in"],*tips=@[@"Home: origin at 1:1; again returns to the previous view",@"Zoom to fit every window; again returns to the previous view",@"Zoom out",@"Zoom 1:1",@"Zoom in"],*keys=@[@"⌃⌥A",@"⌃⌥W",@"⌃⌥-",@"⌃⌥0 or ⌃⌥Z",@"⌃⌥="];
+    if(!self.ownedResizeProbe){
         // The accessory app is rarely active, so tooltips must not wait for activation.
         if(!self.probe)panel.allowsToolTipsWhenApplicationIsInactive=YES;
-        for(NSUInteger i=0;i<titles.count;i++){NSButton *button=[NSButton buttonWithTitle:titles[i] target:self action:@selector(viewButton:)];button.identifier=actions[i];button.toolTip=self.windowed?tips[i]:[NSString stringWithFormat:@"%@ (%@)",tips[i],keys[i]];x=toolbarButton(view,button,x);}}
+        for(NSArray<NSString *> *row in toolbarActions()){NSButton *button=[NSButton buttonWithTitle:row[0] target:self action:@selector(viewButton:)];button.identifier=row[1];button.toolTip=[self tooltip:row];x=toolbarButton(view,button,x);}}
     if(self.experimentalNavigation){NSArray *titles=@[@"Center selected",@"Previous",@"Next"];for(NSUInteger i=0;i<titles.count;i++){NSButton *button=[NSButton buttonWithTitle:titles[i] target:self action:@selector(navigateButton:)];button.tag=i;x=toolbarButton(view,button,x);}}
     view.status=label(self.statusText,NSMakeRect(15,37,MAX(100,frame.size.width-30),22));view.status.textColor=NSColor.lightGrayColor;view.status.font=[NSFont systemFontOfSize:11];[view addSubview:view.status];
     [self.panels addObject:panel];[self.views addObject:view];if(self.ownedResizeProbe&&!rpBeforeOrder(panel)){self.probeHumanInput=YES;return view;}[panel orderFrontRegardless];return view;
 }
 - (void)openPanels {
     if(self.panels.count)return;self.cleaning=NO;
+    // Return to desktop stopped the config watcher and dropped the key table: read the config again.
+    if(self.configured&&!self.configWatcher)[self loadConfig:NO];
     if(self.demo){NSRect frame=NSMakeRect(100,120,1040,600);CGRect global=topRect(frame);NSMutableArray *rects=[NSMutableArray array];for(int i=0;i<2;i++)[rects addObject:rectJSON(CGRectOffset(ports[i],global.origin.x,global.origin.y))];[self panel:frame outputRects:rects identities:@[@"fixture-view-a",@"fixture-view-b"]];}
     // The analogue of upstream's nested winit backend: one ordinary window, one output.
     else if(self.windowed){NSScreen *screen=NSScreen.mainScreen?:NSScreen.screens.firstObject;NSRect area=screen.visibleFrame;CGFloat width=MIN(self.windowSize.width,area.size.width),height=MIN(self.windowSize.height,area.size.height);
@@ -583,10 +863,10 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         if(screen)[self panel:frame outputRects:@[rectJSON(output)] identities:@[@"windowed"]];}
     else for(NSScreen *screen in NSScreen.screens){NSNumber *display=screen.deviceDescription[@"NSScreenNumber"];CFUUIDRef uuid=CGDisplayCreateUUIDFromDisplayID(display.unsignedIntValue);NSString *name=uuid?CFBridgingRelease(CFUUIDCreateString(NULL,uuid)):nil;if(uuid)CFRelease(uuid);if(!name)continue;CGRect output=topRect(screen.frame);output.origin.y+=64;output.size.height-=64;[self panel:screen.frame outputRects:@[rectJSON(output)] identities:@[name]];}
     // Windowed mode registers no global hot key: toolbar, pointer and IPC only.
+    if(self.configured){NSArray<NSString *> *refused=[self startKeys];if(refused.count)self.statusText=summary(@"Shortcut unavailable",refused);}
+    else {
     if(!self.probe&&!self.ownedResizeProbe&&!self.windowed)[self configureViewKeys];
-    if(!self.ownedResizeProbe&&!self.windowed){
-    EventTypeSpec type={kEventClassKeyboard,kEventHotKeyPressed};OSStatus handler=InstallApplicationEventHandler(exitKey,1,&type,(__bridge void *)self,&_hotkeyHandler);EventHotKeyID key={'Infi',1};
-    if(handler!=noErr||RegisterEventHotKey(53,controlKey|optionKey,key,GetApplicationEventTarget(),0,&_exitHotkey)!=noErr)self.statusText=@"Exit shortcut unavailable; use the visible Quit button.";
+    if(!self.ownedResizeProbe&&!self.windowed)[self configureExitKey];
     }
     [self configureResize];[self configureNavigation];[self render];
 }
@@ -678,7 +958,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     for(DesktopView *view in self.views){[view releasePressed];for(NSNumber *output in view.outputs){NSDictionary *reply=[self call:@{@"op":@"remove_output",@"output":output}];[self.resize consume:reply];}}
     for(NSPanel *panel in self.panels){[panel orderOut:nil];[panel close];}
     [self.panels removeAllObjects];[self.views removeAllObjects];for(LiveSource *source in self.sources.allValues)[source.surfaces removeAllObjects];
-    if(self.exitHotkey){UnregisterEventHotKey(self.exitHotkey);self.exitHotkey=NULL;}if(self.hotkeyHandler){RemoveEventHandler(self.hotkeyHandler);self.hotkeyHandler=NULL;}[self stopViewKeys];
+    [self stopKeys];[self stopViewKeys];
     [self openPanels];[self saveScene];
 }
 - (void)poll {
@@ -702,7 +982,10 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(!self.frameTimer)[self render];
 }
 - (void)cleanup {
-    if(self.cleaning)return;self.cleaning=YES;[self.resize shutdown];[self stopNavigation];
+    if(self.cleaning)return;self.cleaning=YES;
+    // Inert from here until the canvas reopens: no config hot key, key repeat, input-source observer or config watch outlives this line.
+    [self.hotKeys invalidate];self.hotKeys=nil;[self.configWatcher stop];self.configWatcher=nil;
+    [self.resize shutdown];[self stopNavigation];
     while(self.resize.obligations){self.statusText=@"Quit pending: waiting for native resize result";[self render];pump(.01);}
     if(self.resize&&![self.resize canRemove:nil]){self.statusText=@"Resize uncertainty remains unresolved at shutdown";fprintf(stderr,"%s\n",self.statusText.UTF8String);}
     [self saveScene];
@@ -718,13 +1001,13 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     while(self.pendingStops.count){self.statusText=@"Shutdown pending: waiting for capture streams";pump(.01);}
     for(DesktopView *view in self.views)for(NSNumber *output in view.outputs){NSDictionary *reply=[self call:@{@"op":@"remove_output",@"output":output}];[self.resize consume:reply];}
     for(NSPanel *panel in self.panels){[panel orderOut:nil];[panel close];}[self.panels removeAllObjects];[self.views removeAllObjects];
-    if(self.exitHotkey){UnregisterEventHotKey(self.exitHotkey);self.exitHotkey=NULL;}if(self.hotkeyHandler){RemoveEventHandler(self.hotkeyHandler);self.hotkeyHandler=NULL;}[self stopViewKeys];
+    [self stopKeys];[self stopViewKeys];
     if(self.resizeKeyMonitor){[NSEvent removeMonitor:self.resizeKeyMonitor];self.resizeKeyMonitor=nil;}
     if(self.resizeGlobalKeyMonitor){[NSEvent removeMonitor:self.resizeGlobalKeyMonitor];self.resizeGlobalKeyMonitor=nil;}
     if(!self.sources.count)self.resize=nil;
 
 }
-- (void)dealloc { [_ipc stop];[self stopNavigation];[self stopViewKeys];if(_controller)driftwm_desktop_destroy(_controller); }
+- (void)dealloc { [_ipc stop];[self stopNavigation];[self stopViewKeys];[_hotKeys invalidate];[_configWatcher stop];if(_controller)driftwm_desktop_destroy(_controller); }
 @end
 static CGPoint projected(Desktop *desktop,NSNumber *window,NSNumber *output,CGPoint sourcePoint) {
     for(NSDictionary *p in [desktop call:@{@"op":@"snapshot"}][@"placements"])if([p[@"window"]isEqual:window]&&[p[@"output"]isEqual:output]){
@@ -859,29 +1142,34 @@ static BOOL parseWindowSize(const char *text,NSSize *size) {
 int main(int argc,const char **argv) { @autoreleasepool {
     // The IPC client runs before any AppKit initialisation: no window, no privacy grant.
     if(argc>=2&&!strcmp(argv[1],"msg"))return driftwm_desktop_msg(argc-2,argv+2);
-    if(argc>=2&&!strncmp(argv[1],"--owned-resize-",15))for(int i=2;i<argc;i++)if(!strcmp(argv[i],"--windowed")||!strcmp(argv[i],"--socket"))return 64;
+    if(argc>=2&&!strncmp(argv[1],"--owned-resize-",15))for(int i=2;i<argc;i++)if(!strcmp(argv[i],"--windowed")||!strcmp(argv[i],"--socket")||!strcmp(argv[i],"--config")||!strcmp(argv[i],"--super"))return 64;
     if(argc==3&&!strcmp(argv[1],"--owned-resize-check-restoration"))return ownedResizeCheckRestoration(@(argv[2]));
     if(argc==3&&!strcmp(argv[1],"--owned-resize-check-cleanup"))return ownedResizeCheckCleanup(@(argv[2]));
     if(argc>=2&&(!strcmp(argv[1],"--owned-resize-probe")||!strcmp(argv[1],"--owned-resize-fixture")))return ownedResizeEntry(argc,argv);
-    BOOL experimental=NO,resize=NO,windowed=NO;const char *socket=NULL;NSSize windowSize=NSMakeSize(1200,800);const char *filtered[argc+1];int count=0;
+    BOOL experimental=NO,resize=NO,windowed=NO;const char *socket=NULL,*config=NULL,*chord=NULL;NSSize windowSize=NSMakeSize(1200,800);const char *filtered[argc+1];int count=0;
     for(int i=0;i<argc;i++){if(i>0&&!strcmp(argv[i],"--experimental-native-resize")){resize=YES;continue;}if(i>0&&!strcmp(argv[i],"--experimental-native-navigation")){experimental=YES;continue;}
         if(i>0&&!strcmp(argv[i],"--socket")){if(socket||i+1>=argc||argv[i+1][0]!='/')return 64;socket=argv[++i];continue;}
+        if(i>0&&!strcmp(argv[i],"--config")){if(config||i+1>=argc||argv[i+1][0]!='/')return 64;config=argv[++i];continue;}
+        // The chord's grammar is the controller's; one it rejects is reported in the status line.
+        if(i>0&&!strcmp(argv[i],"--super")){if(chord||i+1>=argc||!argv[i+1][0])return 64;chord=argv[++i];continue;}
         if(i>0&&!strcmp(argv[i],"--windowed")){if(windowed)return 64;windowed=YES;if(i+1<argc&&isdigit((unsigned char)argv[i+1][0])&&!parseWindowSize(argv[++i],&windowSize))return 64;continue;}
         filtered[count++]=argv[i];}filtered[count]=NULL;argc=count;argv=filtered;
 
-    if(argc==2&&!strcmp(argv[1],"--help")){puts("Infinify.app — macOS 26+ Apple Silicon native window canvas\nDefault: show chooser; only explicitly selected windows are captured. Open canvas shows the saved world without adding one.\n--owned-resize-probe EMPTY_DIRECTORY [SCENARIO]: explicit noninteractive owned-fixture resize probe (live)\n--demo EMPTY_DIRECTORY: disposable interactive fixture, bounded to 60 seconds\n--demo-probe EMPTY_DIRECTORY: automated own-fixture E2E, no permission prompts\n--demo-probe-guard EMPTY_DIRECTORY: own-fixture interruption regression (expected exit 2)\n--experimental-native-resize: experimental eight-handle size-only native resize\n--experimental-native-navigation: gated Center/Previous/Next and Option-Tab focus navigation\n--state ABSOLUTE_PATH: explicit persistent scene file (default Application Support/Infinify/scene.json)\n--socket ABSOLUTE_PATH: IPC socket of a normal run (default Application Support/Infinify/infinify.sock)\n--windowed [WIDTHxHEIGHT]: open the canvas at launch in one ordinary window (default 1200x800, at least 960x480) with no global shortcuts\nmsg [--json] [--socket PATH] COMMAND ...: DriftWM-style IPC client for the running app; opens no window\n--source DIR SECONDS NONCE: internal disposable child only\nOption-drag / blank scroll: pan. Command-wheel / pinch: anchored zoom (max 1x).\nView actions animate one view's camera only (toolbar Home, Fit, -, 1:1, + or global shortcuts while the canvas is open):\n  Control-Option-A: home toggle (origin at 1:1, again to return). Control-Option-W: zoom-to-fit toggle.\n  Control-Option-Equals / Control-Option-Minus: zoom in / out. Control-Option-0 or Control-Option-Z: zoom 1:1.\n  Control-Option-Command-arrows: pan the view under the pointer.\n  Control-Option-1 to 4: fly to bookmark 1 to 4. Control-Option-Shift-1 to 4: set it.\nControl-Option-drag: world move/snap; add Shift: cluster.\nNative left-click/drag/scroll forwarded only to selected, freshly validated source.\nNative keyboard/IME remain with the real app. Control-Option-Escape or Quit exits.\nResize status explains unavailable native layout resizing. No SIP/settings changes.");return 0;}
+    if(argc==2&&!strcmp(argv[1],"--help")){puts("Infinify.app — macOS 26+ Apple Silicon native window canvas\nDefault: show chooser; only explicitly selected windows are captured. Open canvas shows the saved world without adding one.\n--owned-resize-probe EMPTY_DIRECTORY [SCENARIO]: explicit noninteractive owned-fixture resize probe (live)\n--demo EMPTY_DIRECTORY: disposable interactive fixture, bounded to 60 seconds\n--demo-probe EMPTY_DIRECTORY: automated own-fixture E2E, no permission prompts\n--demo-probe-guard EMPTY_DIRECTORY: own-fixture interruption regression (expected exit 2)\n--experimental-native-resize: experimental eight-handle size-only native resize\n--experimental-native-navigation: gated Center/Previous/Next and Option-Tab focus navigation\n--state ABSOLUTE_PATH: explicit persistent scene file (default Application Support/Infinify/scene.json)\n--socket ABSOLUTE_PATH: IPC socket of a normal run (default Application Support/Infinify/infinify.sock)\n--windowed [WIDTHxHEIGHT]: open the canvas at launch in one ordinary window (default 1200x800, at least 960x480) with no global shortcuts\n--config ABSOLUTE_PATH: DriftWM config file of a normal run (default $XDG_CONFIG_HOME/infinify/config.toml, else ~/.config/infinify/config.toml; DriftWM's built-in defaults when it is missing); read again whenever it changes\n--super CHORD: the physical keys of DriftWM's super/mod, a +-joined subset of ctrl|alt|cmd (default ctrl+alt)\nmsg [--json] [--socket PATH] COMMAND ...: DriftWM-style IPC client for the running app; opens no window\n--source DIR SECONDS NONCE: internal disposable child only\nKeys and pointer gestures are DriftWM's bindings from the config file: ctrl is Control, alt is Option, super (mod) is the --super chord. The status line shows the pointer, view, pan and bookmark chords registered, and each toolbar tooltip its own action's. With no config file and --super ctrl+alt the registered chords are:\n  Drag or two-finger scroll on empty canvas, Control-Option-drag or -scroll anywhere: pan. Wheel on empty canvas, Control-Option-wheel anywhere, pinch: anchored zoom (max 1x).\n  Option-drag on a window: world move/snap; add Shift: cluster.\n  View actions animate one view's camera only (toolbar Home, Fit, -, 1:1, + or global shortcuts while the canvas is open; held zoom, pan and nudge keys repeat):\n  Control-Option-A: home toggle (origin at 1:1, again to return). Control-Option-W: zoom-to-fit toggle.\n  Control-Option-Equals / Control-Option-Minus: zoom in / out. Control-Option-0 or Control-Option-Z: zoom 1:1.\n  Control-Option-Command-arrows: pan the view under the pointer. Control-Option-Shift-arrows: nudge the focused window.\n  Control-Option-1 to 4: fly to bookmark 1 to 4. Control-Option-Shift-1 to 4: set it.\n  Control-Option-Return: exec-terminal ($TERMINAL, else a new Terminal window). Control-Option-D: exec-launcher ($LAUNCHER, else Apps).\n  Control-Option-L: spawn swaylock -f -c 000000 -kl, DriftWM's default lock command, which macOS lacks; it repeats while held. Rebind or unbind it in the config file.\nThe fixture modes (--demo*, --owned-resize-*) read no config and keep Option-drag pan, Command-wheel zoom and Control-Option-drag move.\nAn unbound click, drag or scroll on a window (left, right or middle button) is forwarded only to its selected, freshly validated source.\nNative keyboard/IME remain with the real app. Control-Option-Escape (until a binding takes that chord), Control-Option-Command-Shift-Q or Quit exits.\nResize status explains unavailable native layout resizing. No SIP/settings changes.");return 0;}
     BOOL child=argc==5&&!strcmp(argv[1],"--source"),demo=argc==3&&!strcmp(argv[1],"--demo"),guard=argc==3&&!strcmp(argv[1],"--demo-probe-guard"),probe=argc==3&&!strcmp(argv[1],"--demo-probe"),state=argc==3&&!strcmp(argv[1],"--state");
     if(argc!=1&&!child&&!demo&&!probe&&!guard&&!state)return 64;
     if((experimental||resize)&&(child||probe||guard))return 64;
-    if((windowed||socket)&&(child||demo||probe||guard))return 64;
+    if((windowed||socket||config||chord)&&(child||demo||probe||guard))return 64;
     signal(SIGTERM,stopSignal);signal(SIGINT,stopSignal);signal(SIGHUP,stopSignal);
     [ProbeApplication sharedApplication];[NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];[NSApp finishLaunching];
     if(child){char *end=NULL;double seconds=strtod(argv[3],&end);if(!end||*end||!isfinite(seconds)||seconds<1||seconds>65)return 64;return source(@(argv[2]),seconds,@(argv[4]));}
-    Desktop *desktop=[Desktop new];desktop.experimentalNavigation=experimental;desktop.experimentalResize=resize;desktop.demo=demo||probe||guard;desktop.probe=probe||guard;desktop.interruptProbe=guard;desktop.windowed=windowed;desktop.windowSize=windowSize;if(windowed)desktop.statusText=windowedHelpText;
+    Desktop *desktop=[Desktop new];desktop.experimentalNavigation=experimental;desktop.experimentalResize=resize;desktop.demo=demo||probe||guard;desktop.probe=probe||guard;desktop.interruptProbe=guard;desktop.windowed=windowed;desktop.windowSize=windowSize;
     if(demo||probe||guard){NSString *dir=@(argv[2]);BOOL isDir=NO;if(![NSFileManager.defaultManager fileExistsAtPath:dir isDirectory:&isDir]||!isDir||[NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:nil].count)return 64;desktop.statePath=[dir stringByAppendingPathComponent:@"scene.json"];return runDemo(desktop,dir,probe||guard);}
     NSString *dir=[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/Infinify"];
     if(state){desktop.statePath=@(argv[2]);if(!desktop.statePath.isAbsolutePath)return 64;if(!socket)[NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:nil];}
     else {if(![NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:nil])return 2;desktop.statePath=[dir stringByAppendingPathComponent:@"scene.json"];}
+    // Before the scene: the config decides what a load restores.
+    desktop.configured=YES;desktop.configPath=config?@(config):nil;desktop.superChord=chord?@(chord):nil;[desktop loadConfig:YES];
     [desktop loadScene:desktop.statePath];
     // The app serves --socket or the default path only; INFINIFY_SOCKET is the client's.
     [desktop startIPC:socket?@(socket):[dir stringByAppendingPathComponent:@"infinify.sock"]];

@@ -4,18 +4,12 @@
 // ZoomIn, ZoomOut, ZoomReset, ZoomToFit, go_to_canvas_point,
 // try_restore_overview, fit_to_bbox, zoom_to_anchored), src/state/navigation.rs
 // (min_zoom) and src/state/viewport.rs (set_camera_target). Camera-only:
-// fullscreen legs, nav anchors and pointer warps are absent, and no native
-// geometry is read.
+// fullscreen legs and pointer warps are absent, and no native geometry is read.
+// `navigation.pan_step`, `zoom.step`, `zoom.fit_padding` and
+// `navigation.anchors` come from the configuration in force.
 use super::navigation::Anchor;
 use super::*;
 use driftwm_canvas::policy::{self, PixelPoint, PixelSize};
-
-/// Upstream src/config/mod.rs runtime default `navigation.pan_step`, screen points.
-const PAN_STEP: f64 = 100.0;
-/// Upstream src/config/mod.rs runtime default `zoom.step`.
-const ZOOM_STEP: f64 = 1.1;
-/// Upstream src/config/mod.rs runtime default `zoom.fit_padding`, screen points.
-const ZOOM_FIT_PADDING: f64 = 80.0;
 
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -81,14 +75,27 @@ impl Controller {
     }
     /// Every scene frame, detached placeholders included, at the integer boundary
     /// crates/canvas/POLICY.md leaves to the caller: floor the origin and ceil
-    /// the far edge, so a fit never clips a fractional frame.
-    fn pixel_windows(&self) -> Result<Vec<(PixelPoint, PixelSize)>, Error> {
-        let (mut low, mut high) = ((i32::MAX, i32::MAX), (i32::MIN, i32::MIN));
-        let mut windows = Vec::with_capacity(self.scene.windows().len());
+    /// the far edge, so a fit never clips a fractional frame. With `anchors`,
+    /// upstream ZoomToFit's `navigation.anchors` follow as zero-size points,
+    /// truncated to whole pixels as upstream's `as i32` does.
+    fn pixel_windows(&self, anchors: bool) -> Result<Vec<(PixelPoint, PixelSize)>, Error> {
+        let mut frames = Vec::with_capacity(self.scene.windows().len());
         for window in self.scene.windows() {
             let rect = window.world_rect;
-            let (x, y) = (pixel(rect.origin.x.floor())?, pixel(rect.origin.y.floor())?);
-            let (right, bottom) = (pixel(rect.right().ceil())?, pixel(rect.bottom().ceil())?);
+            frames.push((
+                (pixel(rect.origin.x.floor())?, pixel(rect.origin.y.floor())?),
+                (pixel(rect.right().ceil())?, pixel(rect.bottom().ceil())?),
+            ));
+        }
+        if anchors {
+            frames.extend(self.config().nav_anchors.iter().map(|point| {
+                let at = (point.x as i32, point.y as i32);
+                (at, at)
+            }));
+        }
+        let (mut low, mut high) = ((i32::MAX, i32::MAX), (i32::MIN, i32::MIN));
+        let mut windows = Vec::with_capacity(frames.len());
+        for ((x, y), (right, bottom)) in frames {
             low = (low.0.min(x), low.1.min(y));
             high = (high.0.max(right), high.1.max(bottom));
             // The bounding box subtracts these extremes in i32, as each size does.
@@ -156,7 +163,7 @@ impl Controller {
     ) -> Result<Value, Error> {
         let (viewport, _) = self.view(output)?;
         self.overview_returns.remove(&output);
-        let step = PAN_STEP / viewport.zoom;
+        let step = self.config().pan_step / viewport.zoom;
         let (ux, uy) = policy::Direction::from(direction).to_unit_vec();
         // Repeated presses extend the destination instead of restarting from the
         // partially animated camera. A zoom flight stops at the current zoom.
@@ -214,19 +221,25 @@ impl Controller {
     /// Upstream min_zoom: far enough out to see every window in the usable area.
     pub(crate) fn min_zoom(&self, usable: Rect) -> Result<f64, Error> {
         Ok(policy::dynamic_min_zoom(
-            self.pixel_windows()?.into_iter(),
+            self.pixel_windows(false)?.into_iter(),
             pixel_size(usable.size)?,
-            ZOOM_FIT_PADDING,
+            self.config().zoom_fit_padding,
         ))
     }
     pub(crate) fn zoom_in(&mut self, output: OutputId) -> Result<Value, Error> {
         let (viewport, usable) = self.view(output)?;
-        let target = policy::snap_zoom((viewport.zoom * ZOOM_STEP).min(policy::MAX_ZOOM));
+        let step = self.config().zoom_step;
+        // Upstream has no lower bound here. A `zoom.step` below 1 zooms out, and
+        // a target under the scene's floor could never land.
+        let target = policy::snap_zoom(
+            (viewport.zoom * step).clamp(policy::MIN_ZOOM_FLOOR, policy::MAX_ZOOM),
+        );
         self.zoom_to_anchored(output, &viewport, usable.center(), target)
     }
     pub(crate) fn zoom_out(&mut self, output: OutputId) -> Result<Value, Error> {
         let (viewport, usable) = self.view(output)?;
-        let target = policy::snap_zoom((viewport.zoom / ZOOM_STEP).max(self.min_zoom(usable)?));
+        let step = self.config().zoom_step;
+        let target = policy::snap_zoom((viewport.zoom / step).max(self.min_zoom(usable)?));
         // Deviation: pinch and scroll zoom keep the static 0.001 floor, so the
         // pose may already sit below the dynamic minimum. Never zoom in from there.
         if target > viewport.zoom {
@@ -246,10 +259,11 @@ impl Controller {
         if let Some(ret) = self.overview_returns.remove(&output) {
             return self.restore_view(output, ret, center);
         }
-        let Some(bbox) = policy::all_windows_bbox(self.pixel_windows()?.into_iter()) else {
+        let Some(bbox) = policy::all_windows_bbox(self.pixel_windows(true)?.into_iter()) else {
             return idle();
         };
-        let fit = policy::zoom_to_fit(bbox, pixel_size(usable.size)?, ZOOM_FIT_PADDING);
+        let padding = self.config().zoom_fit_padding;
+        let fit = policy::zoom_to_fit(bbox, pixel_size(usable.size)?, padding);
         let anchor = Anchor {
             canvas: Point::new(
                 f64::from(bbox.loc.x) + f64::from(bbox.size.w) / 2.0,

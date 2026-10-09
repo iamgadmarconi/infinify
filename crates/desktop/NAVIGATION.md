@@ -28,6 +28,9 @@ that tick performs the camera movement itself. Flight entries disappear together
 on arrival or cancellation. Context and clock are inspectable runtime state.
 
 The whole output, center placement, camera speed 0.3 and outer gap 0 are defaults.
+Once a [config](CONFIG.md) is loaded, placement, camera speed and outer gap are
+the config's (`focus_placement`, `navigation.camera_speed`, `snap.outer_gap`)
+and only `usable_rect_local` is taken from this command.
 Usable rectangles use output-local coordinates, including their nonzero origin,
 and must fit inside the output. Placement accepts center, top, bottom, left,
 right, top_left, top_right, bottom_left, bottom_right. Speed must be finite in
@@ -97,10 +100,10 @@ native focus, or another output.
 
 | Command | Fields | Destination |
 | --- | --- | --- |
-| `pan_viewport` | `output`, `direction: up / down / left / right / up_left / up_right / down_left / down_right` | camera moves `100 / zoom` world points along the unit vector |
+| `pan_viewport` | `output`, `direction: up / down / left / right / up_left / up_right / down_left / down_right` | camera moves `pan_step / zoom` world points along the unit vector |
 | `home_toggle` | `output` | world origin under the usable center at zoom 1, or back |
-| `zoom_in` | `output` | zoom × 1.1, at most 1 |
-| `zoom_out` | `output` | zoom ÷ 1.1, at least the dynamic minimum |
+| `zoom_in` | `output` | zoom × `zoom.step`, at most 1 |
+| `zoom_out` | `output` | zoom ÷ `zoom.step`, at least the dynamic minimum |
 | `zoom_reset` | `output` | zoom 1 |
 | `zoom_to_fit` | `output` | every window inside the usable area, or back |
 
@@ -139,9 +142,9 @@ destination, with one exception below.
   centers the box on the usable center, and remembers the pose it left. With no
   windows it is a no-op.
 
-Constants are upstream's runtime defaults from `src/config/mod.rs` (pinned copy
-in `tests/upstream`): `navigation.pan_step = 100`, `zoom.step = 1.1`,
-`zoom.fit_padding = 80` screen points. They are not configurable here. The fit
+The steps are the [config](CONFIG.md)'s `navigation.pan_step`, `zoom.step` and
+`zoom.fit_padding`; upstream's defaults are 100, 1.1 and 80 screen points.
+`zoom_to_fit` also fits the config's `navigation.anchors`, as points. The fit
 zoom is `min((usable - 2·padding) / box)` per axis, clamped to `[0.001, 1]`;
 the dynamic minimum is half the fit zoom, floored at 0.001, with upstream's 5×5
 box at (-2,-2) when there are no windows.
@@ -169,8 +172,8 @@ Differences from upstream:
   below the minimum. `zoom_out` is then a complete no-op (`{"navigation":null}`,
   fit return untouched) rather than a flight that zooms in.
 - `HomeToggle`'s fullscreen legs (instant snap, fullscreen restore, pointer
-  warp), `ZoomToFit`'s configured navigation anchors, `ZoomToFitSnapped`, and
-  momentum are absent. Every Scene window counts as a canvas window.
+  warp), `ZoomToFitSnapped`, and momentum are absent. Every Scene window counts
+  as a canvas window.
 - Upstream's `execute_action` prelude commits an in-progress focus cycle before
   any non-cycle action. These commands leave logical focus and a held cycle
   exactly as they were.

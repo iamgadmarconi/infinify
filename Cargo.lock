@@ -77,9 +77,11 @@ name = "driftwm-desktop"
 version = "0.1.0"
 dependencies = [
  "driftwm-canvas",
+ "driftwm-core",
  "serde",
  "serde_json",
  "thiserror",
+ "toml",
 ]
 
 [[package]]

@@ -26,62 +26,93 @@ movement do not move, transform, park, or resize native windows.
 - Choose windows: add a selected native source, or explicitly rebind a saved
   placeholder using the chooser's drop-down. Same-source duplicate attachments
   are rejected; the existing world window is visible through every display camera.
-- Open canvas (chooser): show the saved world and its cameras without adding a
-  window. Placeholders, panning, zooming and the view actions need no capture,
+- Open canvas (chooser): show the saved world without adding a window, at its
+  saved cameras only with `[session] restore_camera = true` (see
+  [Persistence](#persistence-and-lifecycle)). Placeholders, panning, zooming and the view actions need no capture,
   so this works before any source is chosen and without Screen Recording access.
-- Drag blank canvas or Option-drag / Option-scroll: pan that display's camera.
-- Command-scroll or pinch: pointer-anchored zoom, from 0.001 to 1.0. The view
-  actions below are the animated toolbar and keyboard equivalents.
+- Keys, pointer gestures and settings come from one TOML file in DriftWM's own
+  grammar; [Configuration](#configuration) has the file, the modifier mapping
+  and the default tables. With no file, DriftWM's default bindings apply. The
+  chords named in this list are those defaults under the default super chord
+  (Control-Option). The status line shows the pointer, view, pan and bookmark
+  chords the running app resolved, and each toolbar tooltip its own action's;
+  it does not list every bound key (the default table under
+  [Configuration](#configuration) has the rest, three of which start a program).
+- Pan a display's camera: drag or two-finger scroll on empty canvas, or
+  Control-Option-drag / Control-Option-scroll anywhere. Zoom, pointer-anchored,
+  from 0.001 to 1.0: mouse wheel on empty canvas, Control-Option-wheel anywhere,
+  or pinch. The view actions below are the animated toolbar and keyboard
+  equivalents.
 - View actions: toolbar buttons Home, Fit, −, 1:1 and + on every canvas panel,
-  and while panels are open the global shortcuts Control-Option-A (home toggle),
-  Control-Option-W (zoom to fit; press again to return), Control-Option-= (zoom
-  in), Control-Option-- (zoom out), Control-Option-0 or Control-Option-Z (zoom
-  1:1), and Control-Option-Command with an arrow key (pan one step). Buttons act
-  on their own display (in the two-viewport demo panel, the viewport last
-  clicked, scrolled or pinched, else the first); shortcuts act on the display
+  and while panels are open the global hot keys bound to `home-toggle`
+  (Control-Option-A), `zoom-to-fit` (Control-Option-W; press again to return),
+  `zoom-in` (Control-Option-=), `zoom-out` (Control-Option--), `zoom-reset`
+  (Control-Option-0 or Control-Option-Z) and `pan-viewport <direction>`
+  (Control-Option-Command with an arrow key, one `navigation.pan_step`). Buttons
+  act on their own display (in the two-viewport demo panel, the viewport last
+  clicked, scrolled or pinched, else the first); hot keys act on the display
   under the pointer, or the first display when the pointer is over no panel.
   Home goes to the origin at 1:1 and Fit frames every window, detached
-  placeholders included; a second press returns to the view left, and any other
-  pan or zoom forgets the Fit return. Zoom in stops at 1:1. Zoom out stops at
-  half the zoom that fits all windows and does nothing if a gesture already
-  zoomed past that. A pointer press, scroll or pinch on a canvas stops a flight
-  where it is.
-- Bookmarks: Control-Option-1 to 4 fly the camera of the display under the pointer
-  to saved point 1 to 4 (zoom is left alone and any Fit return is forgotten);
-  Control-Option-Shift-1 to 4 save the usable-area centre of the current view as
-  that bookmark. Pressed while a pan step or a bookmark jump is still flying, they
-  save where it is heading. During a Home, Fit or zoom flight the saved point is
-  not reliably the destination, here as upstream (mid-flight it is whatever point
-  is passing under the centre), so let those land first. The
-  status line confirms ("Bookmark 2 saved") or says the bookmark is missing ("No
-  bookmark 2 yet", with the chord that sets it). A bookmark holds a canvas position
-  only, never a zoom. There is one set of bookmarks for every display, and it is
-  saved in the scene file. They are global shortcuts only: with `--windowed`, use
-  `Infinify msg bookmark` or `Infinify msg action` below.
-- Shortcuts and toolbar buttons have no configuration yet: Control-Option stands in
-  for DriftWM's "mod", the chords are hardcoded (bookmarks cover names 1 to 4 only),
-  and the pan step (100 screen points), zoom step (1.1) and fit padding (80) are
-  upstream's defaults. Every view and bookmark shortcut and every view button on the
-  toolbar now runs an upstream action string (`home-toggle`, `zoom-to-fit`, `zoom-out`,
-  `zoom-reset`, `zoom-in`, `pan-viewport <direction>`, `go-to-bookmark N`,
-  `set-bookmark N`) through the same controller command as `Infinify msg action`.
-  Camera motion is animated with the controller's upstream-derived lerp. These
+  placeholders included, together with any `navigation.anchors`; a second press
+  returns to the view left, and any other pan or zoom forgets the Fit return.
+  Zoom in stops at 1:1. Zoom out stops at half the zoom that fits all windows
+  and does nothing if a gesture already zoomed past that. A pointer press, a
+  pinch, or a scroll that actually pans or zooms the canvas stops a flight where
+  it is. A scroll that is forwarded to a window, has no delta, or is already at
+  the zoom limit leaves the flight alone.
+- Bookmarks: Control-Option-1 to 4 (`go-to-bookmark N`) fly the camera of the
+  display under the pointer to bookmark 1 to 4 (zoom is left alone and any Fit
+  return is forgotten); Control-Option-Shift-1 to 4 (`set-bookmark N`) save the
+  usable-area centre of the current view as that bookmark. Pressed while a pan
+  step or a bookmark jump is still flying, they save where it is heading. During
+  a Home, Fit or zoom flight the saved point is not reliably the destination,
+  here as upstream (mid-flight it is whatever point is passing under the
+  centre), so let those land first. The status line confirms ("Bookmark 2
+  saved") or says the bookmark is missing ("No bookmark 2 yet", with the chord
+  that sets it when one is bound). A bookmark holds a canvas position only,
+  never a zoom. There is one registry of bookmarks for every display. It starts
+  from the config's `[navigation.bookmarks]`, or from DriftWM's four corner
+  bookmarks `1` to `4` at (±1750, ±1750) when the file has no such table;
+  [Persistence](#persistence-and-lifecycle) says what a restart keeps. These are
+  global hot keys only: with `--windowed`, use `Infinify msg bookmark` or
+  `Infinify msg action` below.
+- Every hot key, every mouse binding that names an action, and every view button
+  on the toolbar runs an upstream action string through the same controller
+  command as `Infinify msg action`. Camera motion is animated with the
+  controller's upstream-derived lerp at `navigation.camera_speed`. The view
   actions move cameras only; they never move, resize, focus or otherwise touch
-  native windows. If a shortcut cannot be registered the toolbar still works. A
-  held chord is one step: it does not auto-repeat as upstream's zoom in, zoom out
-  and pan do. The Quit button and Control-Option-Escape call the shell's quit
-  directly instead of sending the `quit` action, so exit never depends on the
-  controller or on an active output. The experimental navigation and resize
-  controls below were not changed by this.
-- Control-Option-drag: move the logical world window, using Rust snapping and
-  hysteresis. Add Shift to move its connected cluster.
-- Normal left-click, left drag, and scroll: forward through Rust inverse hit
-  mapping to the selected native source. The original application owns keyboard
-  focus, text editing, shortcuts, and IME; the overlay does not emulate a text field.
-- Control-Option-click a detached placeholder: dismiss it.
+  native windows. If macOS refuses a hot key the status line names it and the
+  toolbar still works. The Quit button and Control-Option-Escape call the
+  shell's quit directly instead of sending the `quit` action, so exit never
+  depends on the controller or on an active output. Control-Option-Escape stays
+  the exit chord unless a config binding resolves to that chord, which then
+  takes it. DriftWM's own `quit` binding, `mod+ctrl+shift+q`, is
+  Control-Option-Command-Shift-Q. The experimental navigation and resize
+  controls below keep their own gates.
+- Option-drag on a window: move the logical world window, using Rust snapping
+  and hysteresis with the `[snap]` settings. Add Shift to move its connected
+  cluster. Control-Option-Shift with an arrow key (`nudge-window <direction>`)
+  moves the focused logical window by `navigation.nudge_step` world points.
+  Neither moves a native window.
+- An unbound click, drag or scroll on a window is forwarded through Rust inverse
+  hit mapping to the selected native source. With DriftWM's defaults that is
+  every unmodified one, with the left, right or middle button. The original
+  application owns keyboard focus, text editing, shortcuts, and IME; the overlay
+  does not emulate a text field. Right and middle buttons travel the same
+  validated per-window route as the left one, down, drag and up. Whether real
+  applications accept them there has not been tried, and a context menu, if one
+  opens, opens at the native window's real screen position, not in the canvas.
+  An unbound press on empty canvas does nothing, as upstream.
+- Control-Option-click a detached placeholder dismisses it only while no mouse
+  binding claims that press, and the placeholder shows the hint only then.
+  DriftWM's defaults do claim it under the default super chord (`mod+left` pans
+  anywhere), so out of the box there is no pointer way to dismiss a placeholder.
+  `[mouse.anywhere]` with `"mod+left" = "none"`, or a `--super` chord other than
+  `ctrl+alt`, frees the press.
 - Return to desktop: stop capture, close panels, and show the chooser.
-- Quit or the registered Control-Option-Escape hotkey: save and exit. The visible
-  Quit button remains available if hotkey registration fails.
+- Quit, the registered Control-Option-Escape hot key, or a key bound to `quit`:
+  save and exit. The visible Quit button remains available if hot key
+  registration fails.
 - Resize status: explains that native layout resizing is currently unavailable.
   Resize the original application on the desktop; observation reconciles native
   bounds and capture dimensions without replacing persistent world geometry.
@@ -92,9 +123,268 @@ owner PID, and the last observed native bounds immediately around delivery.
 Private per-window routing is reused verbatim from
 `../captured-windows/captured.m`, including its Cantrip signature provenance.
 There is no global synthetic event fallback. Release-on-cleanup applies only to
-left buttons pressed by this shell; user keyboard state is never synthesized or
-released. Lost/closed sources become inert placeholders. Stream errors detach
+the button this shell pressed in a source; user keyboard state is never
+synthesized or released. Lost/closed sources become inert placeholders. Stream errors detach
 rather than leaving stale content eligible for input.
+
+## Configuration
+
+A normal run is configured exactly like DriftWM: one TOML file in upstream's
+grammar decides key bindings, mouse bindings and settings. The parser, defaults
+and binding tables are upstream's own code (`driftwm-core`); the controller maps
+them to a Mac keyboard and the shell registers what it reports.
+[CONFIG.md](../../crates/desktop/CONFIG.md) is the controller's contract and has
+the complete default table.
+
+- **File.** `--config /absolute/path.toml`, else
+  `$XDG_CONFIG_HOME/infinify/config.toml`, else `~/.config/infinify/config.toml`
+  (upstream's own path logic with `infinify` as the directory name; its
+  `DRIFTWM_CONFIG` variable still overrides the default path). A missing file is
+  not an error while the run has read no file: DriftWM's built-in defaults
+  apply. The app never writes the file.
+- **Problems.** A file that cannot be read or parsed leaves the previous
+  configuration in force (at launch: the defaults). So does a file that goes
+  missing after the run has read it, which is upstream's read failure
+  (`config: failed to read <path>: No such file or directory`): settings,
+  bindings and bookmarks stay as they were. While the file has such an
+  error, or a value upstream's parser warns about, the status line rests on the
+  first message, a count of the rest and the path, as upstream's error bar
+  does, until a later load is clean. Notes about bindings that were skipped are
+  shown once, until the next status message. Every message also goes to stderr,
+  upstream's own verbatim.
+- **Live reload.** The app watches the file and its directory and reloads
+  within about 150 ms of a change, whether the file is written in place,
+  replaced by a rename, created or deleted. The `reload-config` action does the
+  same on demand. Every load re-registers the hot keys and refreshes the status
+  line, the tooltips and the Quit button. Deleting or moving the file away
+  keeps the configuration and reports the read failure until the file is back;
+  upstream's watcher says nothing about a deleted file and reports it only on
+  `reload-config`.
+- **Modes.** `--source`, `--demo`, `--demo-probe`, `--demo-probe-guard` and the
+  owned-resize modes read no config, reject `--config` and `--super`, and keep
+  the fixed controls they were validated with (in `--demo`: Option-drag pan,
+  Command-wheel zoom, Control-Option-drag move, and the Control-Option view and
+  bookmark chords).
+
+### Modifiers and `--super`
+
+| DriftWM | macOS |
+| --- | --- |
+| `ctrl` | Control ⌃ |
+| `alt` | Option ⌥ |
+| `shift` | Shift ⇧ |
+| `super`, and `mod` while `mod_key = "super"` (the default) | the super chord: Control-Option ⌃⌥ unless `--super` says otherwise |
+| `mod3` | none; such a binding is skipped with a warning |
+
+`--super CHORD` picks the super chord at launch: a `+`-joined subset of `ctrl`,
+`alt` and `cmd`. `--super cmd` gives upstream-literal chords (`mod+a` is ⌘A,
+`mod+ctrl+Right` is ⌃⌘→), which takes ⌘A, ⌘W, ⌘Z, ⌘0 to ⌘4 and others away from
+every application while the canvas is open. A chord the controller rejects is
+reported in the status line and the default stays.
+
+A binding that holds super together with a modifier the super chord already
+contains would be indistinguishable from the binding without it, so that
+modifier is displaced: `ctrl` becomes Command and `alt` becomes Command-Shift.
+With the default chord `mod+ctrl+Right` is ⌃⌥⌘→ and `mod+alt+Right` is ⌃⌥⇧⌘→.
+When the super chord itself contains Command there is nowhere to displace to and
+the binding is skipped with a warning. Two bindings that land on one physical
+chord are settled by upstream combo text: the first in sorted order keeps the
+chord and the other is reported.
+
+A binding on a character is registered on the key that types that character in
+the current keyboard layout (unshifted, or with Shift for a binding that holds
+Shift), and resolved again when the input source changes: `mod+z` is the key
+labelled Z on QWERTZ and on AZERTY alike. Upstream matches the active layout's
+keysym first in the same way. When no key types the character,
+`[input.keyboard] layout_independent = true` (upstream's default) falls back to
+the key's US ANSI position, where upstream falls back to another configured
+layout's Latin keysym; with `false` the binding is left out and the status line
+says so. A key the layout resolves takes its chord before one that fell back.
+Media keys
+(volume, brightness, play) are not Carbon hot keys and are not registered, so
+the Mac's own handling of them is untouched.
+
+### Default key bindings as registered
+
+With no config file and the default super chord. Hot keys are global and exist
+only while a canvas panel is open; `--windowed` registers none.
+
+| Chord | DriftWM binding | Action |
+| --- | --- | --- |
+| ⌃⌥A | `mod+a` | `home-toggle` |
+| ⌃⌥W | `mod+w` | `zoom-to-fit` |
+| ⌃⌥= / ⌃⌥- | `mod+equal` / `mod+minus` | `zoom-in` / `zoom-out` (repeat) |
+| ⌃⌥0, ⌃⌥Z | `mod+0`, `mod+z` | `zoom-reset` |
+| ⌃⌥⌘ arrows | `mod+ctrl+<arrow>` | `pan-viewport <direction>` (repeat) |
+| ⌃⌥⇧ arrows | `mod+shift+<arrow>` | `nudge-window <direction>` (repeat) |
+| ⌃⌥1 to ⌃⌥4 | `mod+1` to `mod+4` | `go-to-bookmark 1` to `4` |
+| ⌃⌥⇧1 to ⌃⌥⇧4 | `mod+shift+1` to `mod+shift+4` | `set-bookmark 1` to `4` |
+| ⌃⌥Return | `mod+return` | `exec-terminal`: `$TERMINAL`, else `open -a Terminal "$HOME"` |
+| ⌃⌥D | `mod+d` | `exec-launcher`: `$LAUNCHER`, else `open -a Apps` |
+| ⌃⌥L | `mod+l` | `spawn swaylock -f -c 000000 -kl` (repeat) |
+| ⌃⌥⇧⌘Q | `mod+ctrl+shift+q` | `quit` |
+| ⌃⌥Esc | none (the shell's own) | exit, until a binding takes the chord |
+
+Those are 26 of upstream's 57 default key bindings. The rest are not
+registered, so their chords stay with the applications:
+
+- 19 whose action does not run on macOS yet: ⌥Tab and ⌥⇧Tab (`cycle-windows`),
+  ⌃⌥ arrows (`center-nearest`), ⌃⌥⇧⌘ arrows (`send-to-output`), ⌃⌥Q
+  (`close-window`), ⌃⌥C (`center-window`), ⌃⌥X (`focus-center`), ⌃⌥E
+  (`toggle-cursor-pan`), ⌃⌥F (`toggle-fullscreen`), ⌃⌥M and ⌃⌥⇧M (`fit-window`,
+  `fit-window-snapped`), ⌃⌥⇧W (`zoom-to-fit-snapped`) and ⌃⌥T
+  (`toggle-pin-to-screen`). Bound in a config file they are skipped the same
+  way, without a message; `Infinify msg action` answers the not-implemented
+  error for each.
+- 8 on media keys (volume, mute, brightness, play, next, previous), and 4 on
+  keys a Mac keyboard lacks (`Print`, `shift+Print`, `XF86AudioPause`,
+  `XF86AudioStop`).
+
+Upstream's default commands are Linux programs and are passed through
+unchanged: ⌃⌥L is registered and runs `swaylock`, which `sh` will not find on a
+Mac. Rebind it (for example `"mod+l" = "exec pmset displaysleepnow"`) or remove
+it (`"mod+l" = "none"`). With `--experimental-native-navigation`, ⌥Tab and ⌥⇧Tab
+belong to that feature: a binding on either is skipped and the status line says
+so once after each load.
+
+**Key repeat.** A held hot key whose action upstream marks repeatable
+(`zoom-in`, `zoom-out`, `pan-viewport`, `nudge-window` and `spawn` among those
+that run) fires again after `[input.keyboard] repeat_delay` (200 ms) and then
+`repeat_rate` (25) times a second. It stops when the key is released, when
+another hot key is pressed, when the chord's modifiers are let go, and on Return
+to desktop or quit. A held `spawn` binding therefore starts its command again
+on every repeat, as upstream's does.
+
+### Default mouse bindings as dispatched
+
+Every left, right, middle and other button press and every scroll first asks
+the controller for the binding of the physical modifiers held, in the `window`
+context when the pointer is over a window (placeholders included) and the
+`canvas` context otherwise. Upstream's precedence applies: the pointer's own
+context before `anywhere`.
+
+| Press or scroll | On a window | On empty canvas |
+| --- | --- | --- |
+| left drag | the application's | pan (`left`) |
+| two-finger scroll | the application's | pan (`trackpad-scroll`) |
+| mouse wheel | the application's | zoom (`wheel-scroll`) |
+| ⌥ left drag | move the logical window (`alt+left`) | nothing |
+| ⌥⇧ left drag | move its cluster (`alt+shift+left`) | nothing |
+| ⌥ / ⌥⇧ right drag | `resize-window` / `resize-window-snapped`: only with `--experimental-native-resize`, else a status note | nothing |
+| ⌥ / ⌥⇧ / ⌃⌥ middle | `fit-window` / `fit-window-snapped` / `toggle-fullscreen`: not implemented, the status line says so | nothing |
+| ⌃⌥ left drag | pan (`mod+left`) | pan |
+| ⌃⌥ two-finger scroll / wheel | pan / zoom (`mod+trackpad-scroll`, `mod+wheel-scroll`) | pan / zoom |
+| ⌃⌥⌘ left drag | `center-nearest`: not implemented, a status note | the same |
+| anything else | the application's | nothing |
+
+A resize binding picks its edges from the pointer's place in the window, a 3×3 grid whose centre resizes from the
+bottom right, as upstream's resize grab does. A mouse binding that names an
+action first focuses the window under the pointer, then runs the action. After a
+two-finger scroll has panned, scrolls stay with the canvas for 150 ms even if a
+window slides under the pointer, as upstream. One gesture runs at a time: a
+second button pressed during a gesture is ignored. Upstream's `wheel-up` and
+`wheel-down` triggers are parsed but never fire, and the grammar has no name for
+the back and forward buttons. Pinch is not a mouse binding and is unchanged.
+
+### Settings
+
+Applied now:
+
+| Config | Effect |
+| --- | --- |
+| `mod_key`, `[keybindings]`, `[mouse.*]`, `[bindings] disable_defaults` | the hot keys registered and the pointer dispatch above |
+| `[input.keyboard] repeat_delay`, `repeat_rate`, `layout_independent` | key repeat and key lookup |
+| `[navigation] pan_step`, `nudge_step`, `camera_speed` | `pan-viewport`, `nudge-window`, the speed of every camera flight |
+| `[navigation] anchors` | points `zoom-to-fit` frames together with the windows |
+| `[navigation.bookmarks]` | the bookmarks every launch starts from |
+| `[navigation] trackpad_speed` | multiplies a bound two-finger scroll pan (1.5 by default) |
+| `[zoom] step`, `fit_padding` | `zoom-in` / `zoom-out`, `zoom-to-fit` and the zoom-out limit |
+| `[zoom] step`, `mouse_speed` | a bound wheel zooms by `step ^ (lines / 2 × mouse_speed)` |
+| `[snap] enabled`, `gap`, `distance`, `break_force`, `corners`, `centers` | the logical window drag and its cluster |
+| `[snap] outer_gap`, `focus_placement`, `[[outputs]] focus_placement` | where window navigation parks a window; an `[[outputs]]` entry is matched by display UUID, `windowed`, or `*` |
+| `[session] restore_camera`, `restore_bookmarks` | what a restart restores, see [Persistence](#persistence-and-lifecycle) |
+| `[env]` | the environment of commands run by `exec`, `spawn`, `exec-terminal` and `exec-launcher` |
+
+`exec` and `spawn` run their command as `/bin/sh -c`, detached in a session of
+their own with standard input and output on `/dev/null`; the app never waits for
+it. Upstream's Wayland toolkit variables (`QT_QPA_PLATFORM` and four others) are
+left out of that environment unless `[env]` sets them.
+
+Read and validated by upstream's parser, then unused because the feature does
+not exist here: `[navigation] mouse_speed` (a drag pans 1:1), `[zoom]
+trackpad_speed` (pinch is unscaled), `focus_follows_mouse`, `window_placement`,
+`autostart`, `[session] suspend_on_close` and `restore_windows`, `[navigation]
+resize_step`, `drift`, `touch_speed`, `auto_navigate_on_*` and `edge_pan`,
+`[zoom] touch_speed`, `reset_on_*` and `interact_min`, keyboard layout and lock
+keys, `[input.trackpad]`, `[input.mouse]`, `[input.touch]`, `[input.tablet]`,
+`[cursor]` (theme and size reach only the environment of a run command),
+`[background]`, `[decorations]`, `[effects]`, `[backend]`,
+`[output]`, the rest of `[[outputs]]`, `[[window_rules]]`, `[gestures.*]`,
+`[touch.*]`, `[mouse] resize_on_border` and the decoration settings, and
+tap-modifier bindings (a bare `alt+shift`), which are reported and skipped.
+
+### Removed fixed gestures
+
+Normal runs no longer have Option-drag or Option-scroll pan, Command-scroll
+zoom, or Control-Option-drag move with Shift for the cluster. Their DriftWM
+equivalents are in the tables above: Control-Option-drag or -scroll pans,
+Control-Option-wheel zooms, Option-drag moves a window. Two more things changed
+with them: a mouse wheel on empty canvas now zooms where every scroll there
+used to pan, and a two-finger scroll pans 1.5 times the finger's travel
+(`navigation.trackpad_speed`) where it used to pan 1:1. Control-Option-click on
+a detached placeholder survives only while no binding claims it (see Controls).
+
+### What has been run
+
+`crates/desktop/tests/config_flow.rs` drives the controller side through the
+exported C ABI. On 2026-10-09 the built app (ad-hoc signed, macOS 27.2, Apple
+Silicon) was also launched twice as `--windowed 1100x700` with its own
+`--state`, `--config` and `--socket` on a seeded scene of three detached
+placeholders and driven through `Infinify msg`; nothing from those runs is
+saved as evidence. Observed there, each read back over the socket:
+
+- no config file: bookmarks `1` to `4` at the four corners, `pan-viewport right`
+  moving the camera 100 points, `zoom-in` from 0.5 landing on 0.55, and
+  `zoom-to-fit` on 0.2848… (padding 80);
+- the file then created by rename, with no restart and no request: the bookmark
+  list became the file's single `desk`, the pan step 250, `zoom-in` from 0.4
+  landing on 0.6 (`step = 1.5`), `zoom-to-fit` 0.3212… (`fit_padding = 20`),
+  and `go-to-bookmark desk` landed on its point;
+- the file edited in place (pan step 60 applied, and the warning for a `mod3`
+  binding on stderr), then `reload-config` printing that warning again;
+- a file with a syntax error: upstream's TOML message on stderr, the previous
+  pan step and bookmarks still in force, the app still answering;
+- the file, now with `restore_bookmarks = true`, moved away and 0.8 s later
+  moved back unchanged, after bookmarks `1`, `desk` and `here` had been set at
+  runtime: upstream's `config: failed to read …: No such file or directory (os
+  error 2)` on stderr from the watch and again from `reload-config`, the pan
+  step still 250 while the file was gone, and the three bookmarks unchanged in
+  the registry and in the scene file before, during and after;
+- `nudge-window right` moving the focused placeholder 40 points with
+  `nudge_step = 40`, and `up-left` 28 on each axis;
+- `spawn touch FILE` creating the file, and an `exec` whose command wrote its
+  environment showing the `[env]` variable and none of the Wayland toolkit
+  ones;
+- `unknown action: frobnicate` and `action not implemented on macOS yet:
+  close-window`, each with exit status 1; SIGTERM exiting 0 with the socket
+  removed;
+- a second launch on the scene that run saved, with no config file: the camera
+  at a new output's pose (`msg camera` 550 -318, where the file held the view
+  centred on 520 -360), the four corner bookmarks instead of the file's three,
+  and a bookmark set at runtime left out of the save, which carried the file's
+  three forward.
+
+Not run at all: hot key registration and delivery, key repeat, any pointer
+press, drag or scroll (the dispatch table above is what the controller answers
+to the lookups the shell sends at each config load, as logged from a scratch
+build of the same sources; no real press, drag or scroll was made), right and
+middle button delivery to an application, key lookup inside the app on a
+non-US layout or after an input-source change (the lookup code alone was linked
+into a scratch harness and pointed at the installed US, British, German, French,
+Dvorak and Russian layout tables, registering nothing),
+`--super` with any value, `exec-terminal` and `exec-launcher`, the status line,
+tooltips and anything else drawn, the default config path, and every one of
+these with a bound source or more than one display.
 
 ## Persistence and lifecycle
 
@@ -109,7 +399,17 @@ files written by older builds still load, with no bookmarks. Older builds reject
 fields they do not know, so an older build cannot read a scene file that contains
 bookmarks; keep a copy of a scene file before opening it with an older build.
 A bookmark change or window move made over the IPC socket below is saved the same
-way. Home and Fit return positions are per display, in memory only: not saved, and
+way. What a restart brings back follows DriftWM's `[session]` settings, whose
+defaults are both off. With `restore_camera = false` every display starts as a
+new one does, its top-left corner on the world origin at zoom 1, instead of at
+its saved camera (cameras are still written, and a display that reconnects
+during a run keeps the camera it had). With
+`restore_bookmarks = false` the bookmarks start from the config's seeds alone,
+bookmarks set at runtime last until quit, and a save carries the file's earlier
+bookmarks forward untouched; set it to `true` to have runtime bookmarks saved
+and laid over the seeds at launch. On a config reload a bookmark the file adds
+or changes is re-asserted, one it removes is dropped, and the others keep their
+runtime value. Home and Fit return positions are per display, in memory only: not saved, and
 dropped on reload, on Return to desktop, and whenever a display change recreates
 the panels. Reloaded windows are unbound placeholders. A chooser selection is
 always required to rebind; there is no PID or title guess. A failed load blocks
@@ -198,10 +498,15 @@ experimental native resize is unresolved `a native resize is pending`.
 `layout`, `opacity`, `pin`, `close`, `suspend`, `relaunch`, `screenshot` and
 `subscribe` answer `<name> is not implemented on macOS yet`.
 
-`action` parses the full upstream action grammar with upstream's spelling. These
-run: `pan-viewport <direction>`, `home-toggle`, `zoom-in`, `zoom-out`,
-`zoom-reset`, `zoom-to-fit`, `go-to-bookmark NAME`, `set-bookmark NAME` and
-`quit`. Every other upstream action parses and answers `action not implemented on
+`action` parses the full upstream action grammar with upstream's spelling: it
+is the grammar the config file's bindings use. These run:
+`pan-viewport <direction>`, `home-toggle`, `zoom-in`, `zoom-out`, `zoom-reset`,
+`zoom-to-fit`, `go-to-bookmark NAME`, `set-bookmark NAME`,
+`nudge-window <direction>`, `exec COMMAND`, `spawn COMMAND`, `exec-terminal`,
+`exec-launcher`, `reload-config` and `quit`. `exec` and `spawn` make the app run
+the command through `/bin/sh -c`, so the socket lets any process of yours that
+can write to it run a command, as upstream's does. Every other upstream action
+parses and answers `action not implemented on
 macOS yet: …`; a string upstream does not parse answers upstream's own message,
 such as `unknown action: …` or `unknown direction: …`. Upstream replies Ok to any
 spec that parses; Infinify reports the not-implemented case instead.
@@ -215,8 +520,8 @@ can send a whole-valued float where upstream requires an integer (`100.0` for
 `100` in `move`) and have it accepted, and a line holding a number such as `1e999`
 answers a bare `invalid request`. `msg` sends neither. Requests
 that move a camera start a flight and answer at once: poll `camera` or `zoom` to
-see it land. A pointer press, scroll or pinch on the canvas stops a scripted
-flight where it is, like any other. A client must wait for its reply: a
+see it land. A pointer press or pinch on the canvas, or a scroll that pans or
+zooms it, stops a scripted flight where it is, like any other. A client must wait for its reply: a
 connection whose peer has already closed when the server accepts it is dropped
 unread, where upstream would still run the request.
 
@@ -262,9 +567,11 @@ single output whose stable id is `windowed`. No global hot keys are registered, 
 use the toolbar, the pointer and `Infinify msg`; the chooser is not shown at
 launch but stays reachable from the toolbar. It is rejected in `--source`,
 `--demo`, `--demo-probe`, `--demo-probe-guard` and owned-resize modes. It saves to
-the default scene file and takes the default socket unless `--state` and `--socket`
-say otherwise, so give a development window its own when you also use Infinify
-normally. A size must be at least 960x480 (the width that keeps the toolbar and
+the default scene file, takes the default socket and reads the default config
+file unless `--state`, `--socket` and `--config` say otherwise, so give a
+development window its own when you also use Infinify normally. Pointer
+bindings and settings from the config apply; key bindings are read but not
+registered. A size must be at least 960x480 (the width that keeps the toolbar and
 status line visible) and at most 16384 in each direction, or the app exits 64; the
 panel is then clamped to the main display's visible area and centred on it. It is
 the same borderless panel as the full-screen ones: it cannot be dragged, it closes
@@ -272,10 +579,12 @@ only through Return to desktop or Quit, and a display change rebuilds it. With
 `--experimental-native-navigation` the Option-Tab hot keys are not registered, but
 that flag's listen-only input observer still is.
 
-Launched on 2026-10-09 as `--windowed 1100x700` with `--state` and `--socket`:
-`msg state` reported one output named `windowed` of 1100x636 (the panel less its
-64-point toolbar strip), and its camera was saved under that name and restored on
-the next launch. The panel itself, its window level, the toolbar and the absence
+Launched on 2026-10-09 as `--windowed 1100x700` with `--state`, `--config` and
+`--socket`: `msg state` reported one output named `windowed` of 1100x636 (the
+panel less its 64-point toolbar strip), and its camera was saved under that
+name. The next launch, with no config file, did not restore it
+(`session.restore_camera` is off by default) and started at a new output's
+pose. The panel itself, its window level, the toolbar and the absence
 of global hot keys were not inspected.
 
 ## Safe disposable demo and verification
@@ -310,9 +619,10 @@ or arbitrary third-party app compatibility.
 ## Known limits
 
 Native AX layout resizing is deliberately gated, not simulated by changing
-world geometry. Right/middle click, hover, cross-boundary pointer capture,
-context-menu/popover capture, native drag-and-drop, and application-specific
-floating child windows are not implemented. Ordinary selected app activation
+world geometry. Hover, cross-boundary pointer capture, context-menu/popover
+capture, native drag-and-drop, and application-specific floating child windows
+are not implemented. Right and middle clicks are forwarded through the
+per-window route but have never been delivered to a real application. Ordinary selected app activation
 works with the tested native window, but choosing among multiple native windows
 of one application and app-specific focus rules needs broader validation.
 A held pointer drag cannot retarget another source. Only the last validated
@@ -326,9 +636,17 @@ saved evidence. Their rendered animation, toolbar buttons, global-shortcut
 delivery and status feedback have not been verified on a live run, and neither
 has IPC with bound sources or more than one display. The view actions omit upstream's fullscreen
 interaction (Infinify has no fullscreen yet, so Home has no fullscreen-return
-leg or pointer warp), configurable chords and steps, and `nav_anchors` in Fit.
-Bookmark chords cover names 1 to 4 and there is no bookmark configuration or
-upstream `restore_bookmarks` switch: bookmarks are always saved.
+leg or pointer warp). Configuration covers key bindings, mouse bindings and the
+settings listed under [Configuration](#configuration); hot key registration,
+key repeat and every pointer binding are compiled and reviewed but have not
+been exercised in a running app, and neither has a non-US keyboard layout.
+Media keys, tap-modifier bindings, `wheel-up` / `wheel-down`, trackpad and
+touch gestures, and every setting whose feature is absent are read and unused.
+Nineteen of upstream's default key bindings and four of its default mouse
+bindings (three window actions and `center-nearest`) do not run here yet, and
+its two resize bindings need the experimental flag. Upstream's default `spawn`
+commands are Linux programs. With the default bindings a detached placeholder
+cannot be dismissed with the pointer.
 The IPC surface is a subset of DriftWM's. Most upstream actions parse but are
 not implemented; `layout`, `opacity`, `pin`, `close`, `suspend`, `relaunch`,
 `screenshot` and `subscribe` are not implemented; `resize` is read-only. An IPC
