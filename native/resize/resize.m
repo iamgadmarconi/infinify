@@ -98,7 +98,7 @@ DWResizeResult dw_resize_observe(DWResizeIdentity i) { @autoreleasepool {
     DWResizeResult r=result(DWResizeObserved); double deadline=now()+2.; AXUIElementRef w=resolve(i,deadline,&r);
     if (w) { if (readback(i,w,deadline,&r)) r.outcome=DWResizeObserved; CFRelease(w); } return r;
 } }
-DWResizeResult dw_resize_apply_guarded(DWResizeIdentity i, CGSize size, DWResizeGuard guard, void *context) { @autoreleasepool {
+DWResizeResult dw_resize_apply_scoped(DWResizeIdentity i, CGSize size, DWResizeGuard guard, DWResizeGuard final_authorize, void *context) { @autoreleasepool {
     DWResizeResult r=result(DWResizeInvalidRequest); r.requested=size;
     if (!isfinite(size.width)||!isfinite(size.height)||size.width<1||size.height<1||size.width>32768||size.height>32768) return r;
     double deadline=now()+2.; AXUIElementRef w=resolve(i,deadline,&r); if (!w) return r;
@@ -113,7 +113,15 @@ DWResizeResult dw_resize_apply_guarded(DWResizeIdentity i, CGSize size, DWResize
     if (guard && !guard(i,context)) { r.outcome=DWResizeUnsupported; CFRelease(w); return r; }
     if (guard && !owner(i,NULL)) { r.outcome=DWResizeStaleIdentity; r.observed=false; CFRelease(w); return r; }
     if (guard) { r.ax_error=timeout(w,deadline); if(r.ax_error!=kAXErrorSuccess) {r.outcome=DWResizeTimedOut;CFRelease(w);return r;} }
-    AXValueRef v=AXValueCreate(kAXValueCGSizeType,&size); r.mutation_attempted=true;
+    AXValueRef v=AXValueCreate(kAXValueCGSizeType,&size);
+    if (!v) { r.outcome=DWResizeUnavailable; CFRelease(w); return r; }
+    // A scoped final callback must be lightweight: no AX/family/file operations.
+    // No native call intervenes between final authorization and the AXSize setter.
+    if (final_authorize && !final_authorize(i,context)) { r.outcome=DWResizeUnsupported; CFRelease(v); CFRelease(w); return r; }
+    // Reserve the already configured <=150ms timeout, avoiding an AX timeout
+    // update after final authorization. Legacy wrappers preserve their ordering.
+    if (final_authorize && now()+.15>deadline) { r.outcome=DWResizeTimedOut; r.ax_error=kAXErrorCannotComplete; CFRelease(v); CFRelease(w); return r; }
+    r.mutation_attempted=true;
     AXError setter=AXUIElementSetAttributeValue(w,kAXSizeAttribute,v); CFRelease(v);
     r.observed=false; r.outcome=now()>=deadline?DWResizeTimedOut:DWResizeReadbackFailed;
     // Always read back even after an error: the receiver may have accepted a timed-out call.
@@ -127,6 +135,7 @@ DWResizeResult dw_resize_apply_guarded(DWResizeIdentity i, CGSize size, DWResize
     if (setter!=kAXErrorSuccess) r.ax_error=setter;
     CFRelease(w); return r;
 } }
+DWResizeResult dw_resize_apply_guarded(DWResizeIdentity i, CGSize size, DWResizeGuard guard, void *context) { return dw_resize_apply_scoped(i,size,guard,NULL,context); }
 DWResizeResult dw_resize_apply(DWResizeIdentity i, CGSize size) { return dw_resize_apply_guarded(i,size,NULL,NULL); }
 DWResizeResult dw_resize_snapshot(DWResizeIdentity i,DWResizeSnapshot *s) {
     DWResizeResult r=dw_resize_observe(i); if (s) *s=(DWResizeSnapshot){.identity=i,.original=r.actual_ax,.valid=r.observed}; return r;

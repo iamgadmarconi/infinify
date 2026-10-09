@@ -19,6 +19,16 @@ and process-info calls are OS calls without a cancellable timeout. The remaining
 AX timeout is refreshed per message. No activation, input posting, camera state,
 position changes, UI loop, or background observer is owned by this adapter.
 
+`dw_resize_apply_scoped` adds separate slow preparation and final lightweight
+caller-authorization callbacks. Existing `apply`/`apply_guarded` wrappers retain
+their identity recheck and timeout setup order. After slow preparation, the adapter
+freshly checks ownership, sets the AX timeout, and allocates the size value. Final
+authorization then runs; only a local monotonic deadline check follows before
+AXSize. It must not perform AX, family, or file work. The scoped path reserves the
+entire configured <=150 ms setter timeout and refuses if insufficient time remains.
+Frozen prior adapter evidence remains historical; the new owned desktop gate is
+live-unrun.
+
 Results distinguish observed/applied/clamped/rejected/unsupported, invalid/stale,
 unavailable/missing/ambiguous, and readback failures/timeouts. `mutation_attempted`
 means a setter was sent, including when final identity/readback is lost. `observed`

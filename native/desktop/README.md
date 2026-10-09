@@ -66,7 +66,7 @@ main event loop; ScreenCaptureKit buffers independently report pixel dimensions.
 ./scripts/build-app.sh
 mkdir /tmp/infinify-demo-unique
 ./target/app/Infinify.app/Contents/MacOS/Infinify --demo /tmp/infinify-demo-unique
-./tests/e2e/desktop-app.sh
+./tests/e2e/desktop-app.sh --live-owned-fixture
 ```
 
 Both demo modes accept only an empty evidence directory, launch their own
@@ -227,3 +227,73 @@ The existing independent resize fixture does **not** prove this integration. A f
 explicitly authorized owned-fixture gate must cross real handles, AX mutation, SCK,
 renderer pixels, independent AX/CG observation, clamp behavior, static-frame refresh,
 Escape handling, and cleanup. No such integrated live proof has been run or claimed.
+
+## Prepared owned resize gate — live runtime UNRUN
+
+`tests/e2e/desktop-native-resize.sh` defaults to building the signed app, reading
+pre-AppKit help, the existing headless resize integration, and 66 offline PNG
+oracle CLI regressions. It creates no windows, starts no capture, makes no AX
+calls, and registers no input observers. Its success proves preparation only.
+
+After an explicitly authorized desktop test interval, select one bounded case:
+
+```sh
+./tests/e2e/desktop-native-resize.sh --live-owned-fixture --scenario right-shrink
+```
+
+The native internal entry point is `--owned-resize-probe EMPTY_DIRECTORY [SCENARIO]`.
+Only this entry point spawns/enrolls its exact nonce/PID/kernel-birth/window fixture;
+there is no arbitrary PID/window option. `--owned-resize-fixture` validates its
+actual parent identity and lease before AppKit startup. A fresh isolated scene is
+used. The chooser attaches the exact SCK source, and the runner calls the real
+DesktopView mouseDown/Dragged/Up at a real projected orange handle. Normal input
+forwarding is disabled only for this internal mode, so a vanished handle cannot
+fall through to activation. Production capture policies and reconfiguration are
+unchanged. A driver lease composes with the existing root-only check immediately
+before AXSize. Its hooks are frozen before dispatch; native results pass through
+unchanged and are drained during shutdown.
+
+Cases are `EDGE-grow`, `EDGE-shrink`, and `EDGE-clamp` for `top_left`, `top`,
+`top_right`, `right`, `bottom_right`, `bottom`, `bottom_left`, and `left`; also
+`static`, `family`, `sigint`, `sigterm`, and `controller-death`. Default is one
+right-shrink case. `--scenario matrix` explicitly requests all cases and stops on
+the first failure. Each controller has a 23-second work deadline and each fixture
+an independent 25-second lifetime. Synchronous OS-call stalls cannot be forcibly
+bounded safely: a stalled controller is terminated and, after a four-second drain grace, killed
+and reaped as an explicitly failed run. SIGKILL is also used for the selected
+controller-death case, never as fixture restoration proof.
+
+The fixture is deliberately a **borderless resizable AppKit window** with real
+min/max constraints, a same-title decoy, and (for `family`) a real attached child.
+It does not override AX setters. Unsupported exact AX identity or AXSize fails;
+it does not widen the scope or claim ordinary titled/third-party compatibility.
+It draws once and invalidates only when actual content bounds resize: fixed
+24-point markers on opposite edges and six 36-point saturated tiles wrap at a
+400-point content width. No animation or manual redraw during capture waiting
+makes static refresh appear successful. Two actual AV render surfaces use .6 and
+.9 cameras; independent AX/CG rectangles plus fixed layout/output constants drive
+the external saved-byte PNG oracle. Native origin movement is recorded honestly;
+world opposite-edge anchoring and unchanged cameras are separate assertions.
+Controller crop metadata and fixture child frames are not oracle inputs.
+
+Every setter checks the exact owned identity, unchanged read-only transform,
+recognized geometry, deadline, foreground identity, and HID inactivity. Human or
+foreground interruption is sticky; restored idleness cannot resume work. Source
+and host screenshots are only of enrolled owned windows and are deleted after
+interruption. No global event posting, foreground activation/restoration, transform
+setter, permission prompt, SIP or settings change is used. The fixture watchdog
+runs in common and event-tracking modes, checks exact parent birth, reconciles only
+recognized pending resize intent, and skips restoration after unknown/human state.
+It closes only its own windows and writes an honest receipt. Normal and signal restoration
+are independently checked through AX/CG while the fixture remains alive. On
+controller death, the fixture holds its restored window for at most two seconds so
+the surviving supervisor can independently read AX/CG and transform before
+acknowledging closure. A missed hold or missing readback is restoration-unproved
+and fails; a fixture receipt plus disappearance alone cannot pass cleanup.
+
+`resize-live.py` records exact source hashes including both `.inc.m` inputs and
+runs `resize-verify.py` only after native-path completion. Abnormal/family scenarios
+never claim pixel/layout proof; missing scenarios are not marked passed. No live
+result has been frozen for this integration. Full native resizing parity, reliable
+static SCK refresh, real desktop interruption handling, and third-party support
+remain **unrun and incomplete**.

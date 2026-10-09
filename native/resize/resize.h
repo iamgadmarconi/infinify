@@ -27,6 +27,11 @@ DWResizeResult dw_resize_observe(DWResizeIdentity identity);
 DWResizeResult dw_resize_apply(DWResizeIdentity identity, CGSize size);
 typedef bool (*DWResizeGuard)(DWResizeIdentity identity, void *context);
 DWResizeResult dw_resize_apply_guarded(DWResizeIdentity identity, CGSize size, DWResizeGuard guard, void *context);
+// Additive scoped path: guard is slow preparation; final_authorize runs after
+// identity/timeout/value setup. Only a local deadline check follows before AXSize.
+// Final authorization must not perform AX, family or file operations. It reserves
+// the entire configured <=150ms timeout; old wrappers keep their original order.
+DWResizeResult dw_resize_apply_scoped(DWResizeIdentity identity, CGSize size, DWResizeGuard guard, DWResizeGuard final_authorize, void *context);
 DWResizeResult dw_resize_snapshot(DWResizeIdentity identity, DWResizeSnapshot *snapshot);
 // Restore size only. Actual origin is returned: no native position or camera changes occur.
 DWResizeResult dw_resize_restore(DWResizeSnapshot snapshot);
