@@ -1,0 +1,184 @@
+{
+  "target_revision": "6a49484c6a8030d77ae15cc60e0128c944760453",
+  "reviewed_worker_revision": "d436b03543c1cdb9017c24e872cc0e8c2b63771a",
+  "independent_review": {
+    "model": "gpt-6-astra",
+    "verdict": "approved",
+    "reviewer_verification": [
+      "Headless production coordinator/capture-policy C ABI E2E",
+      "Strict signed app build without launch",
+      "Diff check; clean final worker tree"
+    ],
+    "findings_resolved": [
+      "Dropped motion before asynchronous baseline",
+      "Redundant no-op setter after queued return to initial size",
+      "Acknowledged frame installation and backpressure handling",
+      "Idle source/family changes without a newer frame",
+      "Repeated authority loss after recovery while capture remained invalid",
+      "Final settled geometry save and lifetime draining",
+      "Delayed superseded configuration error"
+    ]
+  },
+  "evidence": "headless_native_shell_integration_only",
+  "command": "./tests/e2e/desktop-resize.sh",
+  "exit_code": 0,
+  "output": "   Compiling driftwm-desktop v0.1.0 (/Users/gad/Documents/code/personal/infinify/crates/desktop)\n    Finished `release` profile [optimized] target(s) in 4.83s\nPASS: production resize coordinator + Rust C ABI + real synthetic CV/CMSampleBuffer metadata; no native app/window/AX/capture started\n",
+  "input_sha256": {
+    ".cargo/config.toml": "87a866d0646d61ac5aa85ae36f37e6389c9c2c55f251dd6693ad2abf349c54d2",
+    "Cargo.lock": "108dff38e5f976b138dd3fabb21289dd885fe91f9d1650df532ced48ebc0cb56",
+    "Cargo.toml": "2dab63ce777bfda9616cdafafa94d21c35db0ffa2846a3434c4c9336286290e4",
+    "LICENSE": "ff3dae1cabc80d5a2b57bc9dfb6f2ee332beaa6dce9fac53168e412de09ca70f",
+    "NOTICE": "087caf42aad995dd5362dfd889cc984b524ee2d3e0a71f27139a5e9a2482a7ac",
+    "crates/canvas/Cargo.toml": "18f2fb7e41a60e91fb514c257d082cdcf10e42be8226338d7412a07e7429bfa4",
+    "crates/canvas/src/cluster_resize.rs": "9ec6c968f5a54a93272ad585fe855d0e91f974b1f23f6aff125ab34f650634e8",
+    "crates/canvas/src/geometry.rs": "0434eb48f696c908572fbd1632b8c10865eece5d020b882f5838ae48824e9426",
+    "crates/canvas/src/gestures.rs": "bd1e90d222bd3c6d0f5254b2b36a0e91cd750535c7fe81246e88fd18addd7c9b",
+    "crates/canvas/src/layout.rs": "679be9137e3f6c8665d6e2cac221ef3c2b4cdf146e8e93267a15f3efc0f75604",
+    "crates/canvas/src/lib.rs": "748540d9d0e70888c12fdcfe462caa52c2b8526b6a0a56662ab0f780b9b1c2b0",
+    "crates/canvas/src/momentum.rs": "001c5920ee5d8efa4edd9096883d3245616bf308e5a77b020f5f933462746ed7",
+    "crates/canvas/src/policy.rs": "5f0874fd878c38980218530123d122718dca9ed3b81585f9d03c622292043697",
+    "crates/canvas/src/session.rs": "d0eda8b8570454e4a31271fc9f9fd7492d2bd24a354b506bcc8cd8613f32b497",
+    "crates/canvas/src/stage.rs": "9e40aac93bf0a02bd956bd8cb406e0f16b870e0ddb5063c5607a3bee987780b7",
+    "crates/desktop/Cargo.toml": "cff64a3c97c0aad4859a5f6283803acad0d37d9e53d5b274fcf2a5d1c5d8f687",
+    "crates/desktop/include/driftwm_desktop.h": "47dc9ece2aa6e2329e9f1956e0d43928df34f92e30b743b47f0cd1c0475f70d2",
+    "crates/desktop/src/ffi.rs": "c810bafacc902c8f92602050f98e51893b4e41c803d7dd080a6f32961f3248b3",
+    "crates/desktop/src/lib.rs": "2bb9d7a7aae451e668e105dab8c202ab3fc23de0cfd1a7b79752abd4763b6921",
+    "crates/desktop/src/navigation.rs": "9656da68afdb3cba7da503c34d5d32c3dcc755dc78b65cd341dcc855c092a00e",
+    "crates/desktop/src/resize_transaction.rs": "e36e9cf4e3c7fc7b37b33c1d1694d964a0221089cee5d8d1abce473492dd0973",
+    "crates/desktop/src/storage.rs": "b1fd3e52146ff599a60325f2108c83611a5183973fcb646ce20bdd21b582f475",
+    "crates/desktop/tests/controller_flow.rs": "c0e1a7f1d1a887273b846d47c76b498b3f1977be23f828e1619a7a6465ecf295",
+    "crates/desktop/tests/focus_cycle_flow.rs": "6af003e46c4a51d86b4407d3b5127564b27c7bb7056b818c29ccdb13db75a423",
+    "crates/desktop/tests/native_resize_flow.rs": "5c34a78e701fc8a57a9076f8ea9795cee0e4739bc0e9250e04b374d5ab5d07b3",
+    "crates/desktop/tests/navigation_flow.rs": "5398429f8e914e4c381c49eadd457aad93765229b2d70e4dbffb7adb0360629f",
+    "native/desktop/navigation-coordinator.h": "efecf38a1051e8e16b8da83c051e38e1cd0e6665a087236ba840058285a4a768",
+    "native/desktop/resize-capture-policy.h": "365187ebda917251362577225b6a4bd1ee83c837a959ea59e321577307f0e2be",
+    "native/desktop/resize-capture-policy.m": "d13c9ef87191ba62a30016a6ea85795abd6999254e3773a42e34a22ceab48e01",
+    "native/desktop/resize-coordinator.h": "ce914582d8da28780c254ed4ad2ca4be55591c7b5d93edd914dfd4f94835ce02",
+    "native/desktop/resize-coordinator.m": "6613c8015f8d93dedfd9fbf7f1a40097cc0f44a9efdda6a32cff25878732f028",
+    "native/desktop/resize-regression.m": "1e18beb80809838438e8db0e181ee239beba81836973c53c97f049a3db9e0eee",
+    "tests/e2e/desktop-resize.sh": "4a47b276fe032f04530dabcbb0f84de9d92d5b87b7498051174fb79ed434089e"
+  },
+  "artifact_sha256": {
+    "target/release/libdriftwm_desktop.a": "bc7b692db38105d72a1c87490c6f2395f0a08ea1bcfc6da6e02a76dab6268759",
+    "target/resize/desktop-regression": "af8b7f3bca64cdf5918f90438fd493a6e21c35b0cac0f7880a8f789c60e554ae"
+  },
+  "landing_checks": [
+    {
+      "command": [
+        "./tests/e2e/desktop-resize.sh"
+      ],
+      "exit_code": 0,
+      "output": "   Compiling driftwm-desktop v0.1.0 (/Users/gad/Documents/code/personal/infinify/crates/desktop)\n    Finished `release` profile [optimized] target(s) in 4.83s\nPASS: production resize coordinator + Rust C ABI + real synthetic CV/CMSampleBuffer metadata; no native app/window/AX/capture started\n"
+    },
+    {
+      "command": [
+        "./tests/e2e/desktop-navigation.sh"
+      ],
+      "exit_code": 0,
+      "output": "    Finished `release` profile [optimized] target(s) in 0.01s\nPASS: headless Objective-C coordinator with actual Rust ABI; no native focus or UI proof.\n"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "driftwm-desktop",
+        "--test",
+        "native_resize_flow",
+        "--test",
+        "controller_flow",
+        "--test",
+        "focus_cycle_flow",
+        "--test",
+        "navigation_flow"
+      ],
+      "exit_code": 0,
+      "output": "   Compiling driftwm-desktop v0.1.0 (/Users/gad/Documents/code/personal/infinify/crates/desktop)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s\n     Running tests/controller_flow.rs (target/debug/deps/controller_flow-f1cc209311c391a2)\n\nrunning 4 tests\ntest strict_schema_numeric_failures_and_ffi_limits_are_atomic ... ok\ntest two_outputs_clipping_inverse_input_and_world_gestures ... ok\ntest snap_defaults_use_current_zoom_while_displacement_keeps_start_zoom ... ok\ntest save_reload_detaches_and_explicit_rebind_retains_world_and_cameras ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s\n\n     Running tests/focus_cycle_flow.rs (target/debug/deps/focus_cycle_flow-d920ae791c526600)\n\nrunning 5 tests\ntest removal_clamps_frozen_history_without_losing_unrelated_request ... ok\ntest native_focus_ownership_loss_cancels_without_fabricating_history ... ok\ntest detach_rebind_cancel_and_rejected_commands_are_atomic ... ok\ntest frozen_cycle_supersession_release_failure_and_external_focus ... ok\ntest version_one_roundtrip_preserves_geometry_order_intent_and_clears_authority ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s\n\n     Running tests/native_resize_flow.rs (target/debug/deps/native_resize_flow-4c3b0f3702fa72a6)\n\nrunning 25 tests\ntest baseline_releases_queued_motion_and_continues_accepting_held_drag ... ok\ntest begin_cancels_all_navigation_flights_and_end_before_baseline_drains ... ok\ntest padded_capture_maps_clipped_pixels_without_changing_native_coordinates ... ok\ntest cancellation_before_baseline_discards_unsent_motion ... ok\ntest cancel_and_output_removal_drain_already_sent_mutation ... ok\ntest queued_return_to_origin_skips_setter_after_baseline_for_held_and_released_drag ... ok\ntest baseline_mismatch_rejects_and_start_zoom_freezes_displacement ... ok\ntest capture_binding_generation_and_owner_must_match_after_rebind ... ok\ntest coalesces_latest_release_waits_and_focus_is_independent ... ok\ntest capture_ack_gates_placements_and_input_and_legacy_observe_cannot_bypass ... ok\ntest skipping_coalesced_size_already_observed_still_drains_final_read_after_setter ... ok\ntest timeout_error_with_observation_still_cannot_establish_quiescence ... ok\ntest rejected_actual_size_is_authority_and_unsupported_disables_binding ... ok\ntest invalidation_fences_old_capture_ack_without_moving_geometry ... ok\ntest legacy_observe_preserves_crop_but_changed_capture_metadata_requires_ack ... ok\ntest quick_drag_release_queues_only_latest_motion_until_baseline_is_validated ... ok\ntest capture_content_validation_rejects_invalid_and_out_of_buffer_rectangles_atomically ... ok\ntest failed_or_mismatched_baseline_never_dispatches_queued_motion ... ok\ntest unobserved_timeout_stays_uncertain_after_read_and_requires_ended_lifetime ... ok\ntest stale_duplicate_and_invalid_commands_are_atomic ... ok\ntest save_committed_geometry_load_guard_and_monotonic_ids ... ok\ntest capture_contract_is_transient_and_does_not_bypass_uncertain_setter ... ok\ntest adapter_outcome_flags_are_validated_atomically_for_reads_and_setters ... ok\ntest second_commit_anchors_against_last_actual_size_and_save_while_settling ... ok\ntest eight_edges_match_original_request_and_incremental_settlement_blocks ... ok\n\ntest result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s\n\n     Running tests/navigation_flow.rs (target/debug/deps/navigation_flow-ad7c3cfd0dbafeb2)\n\nrunning 5 tests\ntest cycle_navigation_context_and_explicit_cancel ... ok\ntest shared_clock_and_hits_track_intermediate_camera ... ok\ntest transactional_cancellation_focus_outputs_hits_and_persistence ... ok\ntest strict_arrival_boundaries_fractional_frames_and_negative_inset_oracle ... ok\ntest source_parity_keep_reset_placements_timing_and_retarget ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.14s\n\n"
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "driftwm-desktop",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "output": "    Checking driftwm-canvas v0.1.0 (/Users/gad/Documents/code/personal/infinify/crates/canvas)\n    Checking driftwm-desktop v0.1.0 (/Users/gad/Documents/code/personal/infinify/crates/desktop)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.95s\n"
+    },
+    {
+      "command": [
+        "cargo",
+        "fmt",
+        "-p",
+        "driftwm-desktop",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "./scripts/build-app.sh"
+      ],
+      "exit_code": 0,
+      "output": "    Finished `release` profile [optimized] target(s) in 0.07s\ntarget/app/Infinify.app: replacing existing signature\nBuilt target/app/Infinify.app (arm64, macOS 26+); nothing launched.\n"
+    },
+    {
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "exit_code": 0,
+      "output": ""
+    }
+  ],
+  "invocation_corrections": [
+    {
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "driftwm-desktop",
+        "--test",
+        "native_resize_flow",
+        "--test",
+        "controller_flow",
+        "--test",
+        "focus_flow",
+        "--test",
+        "navigation_flow"
+      ],
+      "exit_code": 101,
+      "reason": "Initial test selector focus_flow did not exist; corrected to focus_cycle_flow. No tests ran in that invocation."
+    }
+  ],
+  "coverage": [
+    "Eight edges and true-edge handle placement",
+    "Coalescing, observed clamp/rejection and fixed cameras",
+    "Fast drag/release/cancel before baseline; out-and-back no-op",
+    "Release drains latest intent; cancellation drops unsent intent only",
+    "Output removal observation dispatch, duplicate effects and shutdown drain",
+    "Timeout uncertainty preserves unresolved binding and disables capture/input",
+    "Actual synthetic buffer dimensions, padded crop and strict typed metadata",
+    "Stream, identity, generation, observation revision and timestamp fencing",
+    "Installation failure, retry and reentrant invalidation",
+    "No-frame family/geometry loss and recovery/loss token renewal",
+    "Production configuration completion ticket predicate; actual SCK scheduling unrun",
+    "25 resize and 14 controller/focus/navigation C ABI tests"
+  ],
+  "limits": [
+    "Injected native driver, clock and scheduling; synthetic pixels only",
+    "No NSApplication startup, live windows, AX, capture streams, event taps or fixture execution",
+    "Actual guarded native adapter calls and concurrency not exercised by this headless harness",
+    "Renderer readiness, saved native pixels, static-app post-cutoff refresh and screenRect coordinate assumptions unverified",
+    "Configuration predicate tested; actual SCK callback ordering and global Escape observation unverified",
+    "Integrated live fixture runner not authored; older fixture proof does not establish this new integration",
+    "macOS26 runtime, physical display behavior, arbitrary third-party compatibility, groups and exact fractional parity remain unverified"
+  ]
+}

@@ -84,4 +84,20 @@ in these checks. Production driver concurrency, actual Carbon/tap ordering,
 foreground notifications and visible animation still require live verification.
 Existing first-click delivery and native resize integration remain separate work.
 
+## Experimental native resize integration
+
+`build-shell-resize.json` records a signed build with the separately gated native
+resize path. `resize-headless.json` records the production coordinator and capture
+metadata policy exercised through the real Rust C ABI, with an injected native
+driver, scheduler and clock. Real synthetic CVPixelBuffer/CMSampleBuffer objects
+exercise the metadata path; they contain no captured native application content.
+
+The checks cover eight edges, fast drags before baseline observation, coalescing,
+release/cancel/output removal, timeout uncertainty, result draining, capture crops,
+revision and stream fences, installation failure, and source changes without new
+frames. No application, AX mutation, capture stream, event tap or fixture was
+launched. The new guarded AX adapter and complete visible resize path require
+separate live verification. Historical native resize evidence refers to its
+recorded source bytes, not this newer adapter or shell integration.
+
 `SHA256SUMS` covers the final bytes of all evidence files except itself.

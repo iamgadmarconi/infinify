@@ -30,6 +30,12 @@ centering, focus cycling and camera animation to the native shell. Its coordinat
 and event-order policy pass headless integration checks; live focus and shortcut
 delivery remain unverified. Default launch retains the existing controls.
 
+The separate `--experimental-native-resize` flag connects eight resize handles to
+the native adapter. It commits observed sizes and withholds input and captured
+content until a fresh frame passes the capture checks. Focused headless checks
+cover the controller and coordinator; the complete native resize and rendering
+path has not been run. See the [resize integration guide](native/desktop/README.md#experimental-native-resizing).
+
 ## Build and inspect
 
 Install Rust (1.88+), Xcode command-line tools, and the macOS SDK on an Apple Silicon Mac running macOS 26+. The build sets `MACOSX_DEPLOYMENT_TARGET=26.0`.

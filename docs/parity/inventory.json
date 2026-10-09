@@ -4136,6 +4136,13 @@
           "revision": "9a190b1917afa151f0f7f41a6b189b7a9d543e50",
           "result": "Experimental Objective-C coordinator and input-order policy pass with real Rust C ABI; reviewed cancellation, rejected command and delayed shortcut fixes.",
           "limits": "Injected focus/clock/scheduler; no native focus, real Carbon/tap ordering, rendered animation or full-row acceptance."
+        },
+        {
+          "kind": "headless_native_shell_integration",
+          "path": "native/desktop/evidence/resize-headless.json",
+          "revision": "6a49484c6a8030d77ae15cc60e0128c944760453",
+          "result": "Reviewed experimental eight-handle resize connects the real Rust C ABI, native effect coordinator and capture gate. Headless scenarios cover fast motion, coalescing, release/cancel, result draining, padded buffers, revision fences, installation failure and source changes without frames. Twenty-five focused controller resize tests pass.",
+          "limits": "Injected resize driver/clock/scheduler and synthetic buffers; actual guarded AX calls, native pixels, static-window refresh, OS callback order, groups and exact fractional parity remain unproved. No whole-row acceptance."
         }
       ],
       "required": true
@@ -4169,6 +4176,13 @@
           "revision": "f5007b8",
           "result": "Thirteen C ABI tests cover eight edges, delayed incremental settlement after world drag, coalescing, release/cancel, capture gating, uncertainty/lifetime guards, persistence and 96 result-contract combinations. Exact upstream request/clamp/settlement blocks verified; Astra reviewed and reran focused checks plus standalone rejection repro.",
           "limits": "Synthetic adapter/capture reports only; native adapter and shell connection, actual captured fresh layout, groups and fractional upstream parity remain unproven."
+        },
+        {
+          "kind": "headless_native_shell_integration",
+          "path": "native/desktop/evidence/resize-headless.json",
+          "revision": "6a49484c6a8030d77ae15cc60e0128c944760453",
+          "result": "Reviewed experimental eight-handle resize connects the real Rust C ABI, native effect coordinator and capture gate. Headless scenarios cover fast motion, coalescing, release/cancel, result draining, padded buffers, revision fences, installation failure and source changes without frames. Twenty-five focused controller resize tests pass.",
+          "limits": "Injected resize driver/clock/scheduler and synthetic buffers; actual guarded AX calls, native pixels, static-window refresh, OS callback order, groups and exact fractional parity remain unproved. No whole-row acceptance."
         }
       ],
       "required": true,

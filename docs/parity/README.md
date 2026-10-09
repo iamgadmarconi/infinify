@@ -86,14 +86,21 @@ device-specific behavior also need the corresponding hardware.
   coalesced requests, actual-size settlement, incremental edge anchoring and
   capture/input gates. Thirteen focused tests include an outcome-validation
   matrix, independently reviewed after fixing a contradictory-result defect.
-  The separately tested AX adapter is not yet connected through this transaction
-  in the shell; see [resize contracts](../../crates/desktop/NATIVE_RESIZE.md).
+  At that checkpoint the separately tested AX adapter was not connected through
+  this transaction in the shell; see [resize contracts](../../crates/desktop/NATIVE_RESIZE.md).
 - `9a190b1` connects normal-window focus/navigation to the native shell behind an
   explicit experimental launch flag. Headless checks exercise its real coordinator,
   event-order policy and Rust C ABI, including cancellation and delayed shortcuts.
   Independent review approved the corrected implementation. Native focus, real
   shortcut delivery and rendered animation remain unverified; see
   [integration evidence](../../native/desktop/evidence/navigation-headless.json).
+- `6a49484` connects experimental native resize handles, the transaction, the AX
+  adapter and a strict capture gate. Headless checks cover early motion, coalescing,
+  cancellation, result draining, padded buffers, stale frames and source validation
+  without new frames. Independent review fixes preserve final settlement and reject
+  stale work. Actual handle-to-AX-to-renderer behavior, static-window refresh, groups
+  and fractional upstream equivalence remain unproved; see
+  [integration evidence](../../native/desktop/evidence/resize-headless.json).
 
 These milestones add evidence to partial rows. None satisfies an entire native
 behavior row or changes the completion requirement.
