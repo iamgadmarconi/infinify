@@ -1,8 +1,10 @@
 # Controller focus and cycle boundary
 
-This is a controller selection slice, not complete Alt-Tab. The native shell must
-still navigate the camera, dispatch focus requests, and report independently
-observed native focus. No command here changes a native app or proves compositing.
+This is a controller selection slice, not complete Alt-Tab. The native shell's
+[experimental navigation path](../../native/desktop/README.md) connects camera
+animation, focus dispatch and observed native focus. That integration has headless
+checks; live focus and shortcut delivery remain unverified. No command here alone
+changes a native app or proves compositing.
 
 ABI_VERSION and SAVE_VERSION are independently fixed at 1. Existing `focus`
 updates logical intent and raises the window. Its response now contains `effect`,
@@ -60,6 +62,6 @@ Modal parent relationships, widget/pin eligibility and fullscreen exclusion are
 not represented by this slice. It deliberately neither infers relationships from
 titles/PIDs nor claims those modes are supported. A future verified relationship
 surface must apply upstream modal redirection and its ten-hop limit before native
-focus and history selection. Camera navigation and native-shell integration are
-also deferred. Tests use synthetic observations through the actual exported C ABI
-and establish only these controller contracts.
+focus and history selection. Camera navigation has a separate controller contract
+and an experimental native-shell integration. Tests here use synthetic observations
+through the actual exported C ABI and establish only these controller contracts.

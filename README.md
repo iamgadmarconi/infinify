@@ -25,6 +25,11 @@ Screen Recording access is needed for capture and Accessibility access for nativ
 
 Saved scenes retain world positions and display cameras. On restart, windows appear as detached placeholders and must be explicitly rebound through the chooser. Native resizing, popovers, context menus and richer pointer interactions are unfinished. See the [desktop app guide](native/desktop/README.md) for the disposable demo, exact controls, persistence and limitations.
 
+The optional `--experimental-native-navigation` launch flag connects selected-window
+centering, focus cycling and camera animation to the native shell. Its coordinator
+and event-order policy pass headless integration checks; live focus and shortcut
+delivery remain unverified. Default launch retains the existing controls.
+
 ## Build and inspect
 
 Install Rust (1.88+), Xcode command-line tools, and the macOS SDK on an Apple Silicon Mac running macOS 26+. The build sets `MACOSX_DEPLOYMENT_TARGET=26.0`.

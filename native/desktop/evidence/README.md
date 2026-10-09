@@ -1,6 +1,7 @@
 # Desktop app verification evidence
 
-These are own-fixture observations on macOS 27.2 with SDK 27.0; the app targets
+This directory preserves historical own-fixture observations and later build and
+headless integration receipts on macOS 27.2 with SDK 27.0; the app targets
 macOS 26.0+ on arm64. No ordinary user application was selected for management. Enrollment
 nonces were removed only after each child was reaped. All PNGs depict the
 app's own native fixture, captured from the exact compositor host window.
@@ -67,5 +68,20 @@ independent review of the transaction and its outcome-validation fix. It hashes
 the current source inputs, static library and every packaged app file. Signature,
 arm64 and minimum macOS 26.0 checks pass. New controller APIs remain disconnected
 from native shell actions, and no live native test ran against this build.
+
+## Experimental native navigation integration
+
+`build-shell-navigation.json` records the signed build at revision `9a190b1`.
+`navigation-headless.json` records the production Objective-C coordinator and
+input-order policy exercised with the real Rust C ABI and injected focus/clock/
+scheduling. Independent Astra review approved worker revision `1f4ee5b`, whose
+implementation matches the landed source. Review reproduced and then verified
+fixes for an orphaned request after command rejection and stale shortcut delivery.
+
+This path requires `--experimental-native-navigation`. No application launch,
+capture, activation, native focus mutation, hotkey registration or event tap ran
+in these checks. Production driver concurrency, actual Carbon/tap ordering,
+foreground notifications and visible animation still require live verification.
+Existing first-click delivery and native resize integration remain separate work.
 
 `SHA256SUMS` covers the final bytes of all evidence files except itself.

@@ -88,6 +88,12 @@ device-specific behavior also need the corresponding hardware.
   matrix, independently reviewed after fixing a contradictory-result defect.
   The separately tested AX adapter is not yet connected through this transaction
   in the shell; see [resize contracts](../../crates/desktop/NATIVE_RESIZE.md).
+- `9a190b1` connects normal-window focus/navigation to the native shell behind an
+  explicit experimental launch flag. Headless checks exercise its real coordinator,
+  event-order policy and Rust C ABI, including cancellation and delayed shortcuts.
+  Independent review approved the corrected implementation. Native focus, real
+  shortcut delivery and rendered animation remain unverified; see
+  [integration evidence](../../native/desktop/evidence/navigation-headless.json).
 
 These milestones add evidence to partial rows. None satisfies an entire native
 behavior row or changes the completion requirement.

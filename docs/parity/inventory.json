@@ -242,15 +242,24 @@
       },
       "contract": "Match Action::CenterWindow dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
         "native.input"
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
-      "evidence": [],
-      "required": true
+      "evidence": [
+        {
+          "kind": "headless_native_shell_integration",
+          "path": "native/desktop/evidence/navigation-headless.json",
+          "revision": "9a190b1917afa151f0f7f41a6b189b7a9d543e50",
+          "result": "Experimental Objective-C coordinator and input-order policy pass with real Rust C ABI; reviewed cancellation, rejected command and delayed shortcut fixes.",
+          "limits": "Injected focus/clock/scheduler; no native focus, real Carbon/tap ordering, rendered animation or full-row acceptance."
+        }
+      ],
+      "required": true,
+      "implementation_note": "Only explicit selected ordinary-window reset navigation is wired experimentally. Full RestoreFillElseReset, nearest fallback, suspended/fullscreen/pin/fill behavior and native verification remain incomplete."
     },
     {
       "id": "Action.CenterNearest",
@@ -282,15 +291,24 @@
       },
       "contract": "Match Action::CycleWindows dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
         "native.input"
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
-      "evidence": [],
-      "required": true
+      "evidence": [
+        {
+          "kind": "headless_native_shell_integration",
+          "path": "native/desktop/evidence/navigation-headless.json",
+          "revision": "9a190b1917afa151f0f7f41a6b189b7a9d543e50",
+          "result": "Experimental Objective-C coordinator and input-order policy pass with real Rust C ABI; reviewed cancellation, rejected command and delayed shortcut fixes.",
+          "limits": "Injected focus/clock/scheduler; no native focus, real Carbon/tap ordering, rendered animation or full-row acceptance."
+        }
+      ],
+      "required": true,
+      "implementation_note": "Experimental native shell uses confirmed MRU and held/unheld cycles, with headless event-order checks. Real hotkey/focus behavior and modal/widget/pin/fullscreen policies remain incomplete."
     },
     {
       "id": "Action.HomeToggle",
@@ -4111,7 +4129,15 @@
       "owner": "native",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
-      "evidence": [],
+      "evidence": [
+        {
+          "kind": "headless_native_shell_integration",
+          "path": "native/desktop/evidence/navigation-headless.json",
+          "revision": "9a190b1917afa151f0f7f41a6b189b7a9d543e50",
+          "result": "Experimental Objective-C coordinator and input-order policy pass with real Rust C ABI; reviewed cancellation, rejected command and delayed shortcut fixes.",
+          "limits": "Injected focus/clock/scheduler; no native focus, real Carbon/tap ordering, rendered animation or full-row acceptance."
+        }
+      ],
       "required": true
     },
     {
@@ -4238,6 +4264,13 @@
           "revision": "21b454d",
           "result": "Five C ABI flows compare normal-window Keep/Reset navigation, animation, placements/hits, two outputs, retarget/cancel and persistence to exact extracted upstream methods. Astra independently verified full-source/method hashes and reran focused checks.",
           "limits": "No native scheduling/rendering/input proof; complete center-window dispatch and excluded modes remain unsupported. Fractional extension is not claimed as exact upstream integer parity."
+        },
+        {
+          "kind": "headless_native_shell_integration",
+          "path": "native/desktop/evidence/navigation-headless.json",
+          "revision": "9a190b1917afa151f0f7f41a6b189b7a9d543e50",
+          "result": "Experimental Objective-C coordinator and input-order policy pass with real Rust C ABI; reviewed cancellation, rejected command and delayed shortcut fixes.",
+          "limits": "Injected focus/clock/scheduler; no native focus, real Carbon/tap ordering, rendered animation or full-row acceptance."
         }
       ],
       "required": true,
@@ -4346,6 +4379,13 @@
           "revision": "21b454d",
           "result": "Five C ABI flows compare normal-window Keep/Reset navigation, animation, placements/hits, two outputs, retarget/cancel and persistence to exact extracted upstream methods. Astra independently verified full-source/method hashes and reran focused checks.",
           "limits": "No native scheduling/rendering/input proof; complete center-window dispatch and excluded modes remain unsupported. Fractional extension is not claimed as exact upstream integer parity."
+        },
+        {
+          "kind": "headless_native_shell_integration",
+          "path": "native/desktop/evidence/navigation-headless.json",
+          "revision": "9a190b1917afa151f0f7f41a6b189b7a9d543e50",
+          "result": "Experimental Objective-C coordinator and input-order policy pass with real Rust C ABI; reviewed cancellation, rejected command and delayed shortcut fixes.",
+          "limits": "Injected focus/clock/scheduler; no native focus, real Carbon/tap ordering, rendered animation or full-row acceptance."
         }
       ],
       "required": true,

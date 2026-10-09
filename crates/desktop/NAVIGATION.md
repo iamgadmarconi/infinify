@@ -75,3 +75,9 @@ commands cannot express, against the same source oracle boundary values.
 Parity claims apply only to source-representable traces. This executes selected
 original methods, not the whole upstream compositor or its scheduler. It proves
 no native rendering, capture, input delivery, or usable third-party compositing.
+
+The shell now supplies an experimental frame timer and selected-window/cycle
+actions behind `--experimental-native-navigation`. Its separate headless check
+executes the actual Objective-C coordinator and input-order policy with this C ABI;
+it does not execute native focus or prove real shortcut delivery. See the
+[shell integration scope](../../native/desktop/README.md).
