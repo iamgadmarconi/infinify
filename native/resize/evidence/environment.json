@@ -1,0 +1,8 @@
+{
+  "captured_at_utc": "2026-10-09T00:49:05.004153+00:00",
+  "macos": "27.2",
+  "machine": "arm64",
+  "command": "./tests/e2e/native-resize.sh",
+  "scope": "owned disposable AppKit fixture only; no activation or input injection",
+  "adapter_source_sha256": "7dd3d3b023cc6ade33161d822b9c77d94a53616eb5908ba20799660071b2d5c7"
+}

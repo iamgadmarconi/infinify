@@ -1,0 +1,294 @@
+{
+  "unsupported" : {
+    "observed" : true,
+    "outcome" : "unsupported",
+    "cg" : [
+      221,
+      837,
+      460,
+      332
+    ],
+    "ax_error" : 0,
+    "mutation_attempted" : false,
+    "ax" : [
+      221,
+      837,
+      460,
+      332
+    ]
+  },
+  "unchanged_2" : {
+    "observed" : true,
+    "outcome" : "observed",
+    "cg" : [
+      221,
+      797,
+      460,
+      332
+    ],
+    "ax_error" : 0,
+    "mutation_attempted" : false,
+    "ax" : [
+      221,
+      797,
+      460,
+      332
+    ]
+  },
+  "unchanged_1" : {
+    "observed" : true,
+    "outcome" : "observed",
+    "cg" : [
+      221,
+      837,
+      460,
+      332
+    ],
+    "ax_error" : 0,
+    "mutation_attempted" : false,
+    "ax" : [
+      221,
+      837,
+      460,
+      332
+    ]
+  },
+  "stale_birth" : {
+    "observed" : false,
+    "outcome" : "stale_identity",
+    "cg" : [
+      0,
+      0,
+      0,
+      0
+    ],
+    "ax_error" : 0,
+    "mutation_attempted" : false,
+    "ax" : [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "input_posts" : 0,
+  "stale_window" : {
+    "observed" : false,
+    "outcome" : "stale_identity",
+    "cg" : [
+      0,
+      0,
+      0,
+      0
+    ],
+    "ax_error" : 0,
+    "mutation_attempted" : false,
+    "ax" : [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "ignored_setter" : {
+    "observed" : true,
+    "outcome" : "rejected",
+    "cg" : [
+      221,
+      797,
+      460,
+      332
+    ],
+    "ax_error" : 0,
+    "mutation_attempted" : true,
+    "ax" : [
+      221,
+      797,
+      460,
+      332
+    ]
+  },
+  "wrong_owner" : {
+    "observed" : false,
+    "outcome" : "stale_identity",
+    "cg" : [
+      0,
+      0,
+      0,
+      0
+    ],
+    "ax_error" : 0,
+    "mutation_attempted" : false,
+    "ax" : [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "restore" : {
+    "observed" : true,
+    "outcome" : "applied",
+    "cg" : [
+      296,
+      822,
+      460,
+      332
+    ],
+    "ax_error" : 0,
+    "mutation_attempted" : true,
+    "ax" : [
+      296,
+      822,
+      460,
+      332
+    ]
+  },
+  "resize" : {
+    "observed" : true,
+    "outcome" : "applied",
+    "cg" : [
+      221,
+      877,
+      620,
+      440
+    ],
+    "ax_error" : 0,
+    "mutation_attempted" : true,
+    "ax" : [
+      221,
+      877,
+      620,
+      440
+    ]
+  },
+  "activation_calls" : 0,
+  "initial_0" : {
+    "observed" : true,
+    "outcome" : "observed",
+    "cg" : [
+      221,
+      877,
+      460,
+      332
+    ],
+    "ax_error" : 0,
+    "mutation_attempted" : false,
+    "ax" : [
+      221,
+      877,
+      460,
+      332
+    ]
+  },
+  "initial_2" : {
+    "observed" : true,
+    "outcome" : "observed",
+    "cg" : [
+      221,
+      797,
+      460,
+      332
+    ],
+    "ax_error" : 0,
+    "mutation_attempted" : false,
+    "ax" : [
+      221,
+      797,
+      460,
+      332
+    ]
+  },
+  "oversized" : {
+    "observed" : false,
+    "outcome" : "invalid_request",
+    "cg" : [
+      0,
+      0,
+      0,
+      0
+    ],
+    "ax_error" : 0,
+    "mutation_attempted" : false,
+    "ax" : [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "after_native_move" : {
+    "observed" : true,
+    "outcome" : "applied",
+    "cg" : [
+      296,
+      822,
+      610,
+      430
+    ],
+    "ax_error" : 0,
+    "mutation_attempted" : true,
+    "ax" : [
+      296,
+      822,
+      610,
+      430
+    ]
+  },
+  "invalid_size" : {
+    "observed" : false,
+    "outcome" : "invalid_request",
+    "cg" : [
+      0,
+      0,
+      0,
+      0
+    ],
+    "ax_error" : 0,
+    "mutation_attempted" : false,
+    "ax" : [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "position_setters" : 0,
+  "initial_1" : {
+    "observed" : true,
+    "outcome" : "observed",
+    "cg" : [
+      221,
+      837,
+      460,
+      332
+    ],
+    "ax_error" : 0,
+    "mutation_attempted" : false,
+    "ax" : [
+      221,
+      837,
+      460,
+      332
+    ]
+  },
+  "passed" : 1,
+  "minimum" : {
+    "observed" : true,
+    "outcome" : "clamped",
+    "cg" : [
+      221,
+      877,
+      280,
+      200
+    ],
+    "ax_error" : 0,
+    "mutation_attempted" : true,
+    "ax" : [
+      221,
+      877,
+      280,
+      200
+    ]
+  }
+}
