@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-use super::{Controller, MAX_REQUEST_BYTES, VERSION};
+use super::{Controller, MAX_REQUEST_BYTES, VERSION, ipc_client};
 use serde_json::json;
 use std::{
-    ffi::{CString, c_char},
+    ffi::{CStr, CString, c_char},
     panic::{AssertUnwindSafe, catch_unwind},
     ptr,
 };
@@ -76,4 +76,37 @@ pub unsafe extern "C" fn driftwm_desktop_response_free(response: *mut c_char) {
             drop(unsafe { CString::from_raw(response) });
         }));
     }
+}
+/// Run the `msg` client: `argv` holds the `argc` arguments that follow `msg`.
+/// Sends one request to a running Infinify's IPC socket, prints the reply and
+/// returns the process exit status: 0 on `Ok`, 1 on an `Err` reply or a
+/// connection failure, 2 on a usage error. It creates no controller and
+/// performs no native action.
+///
+/// # Safety
+/// `argv` must point to `argc` readable pointers to NUL-terminated strings that
+/// stay valid for this call, or `argc` must be zero or negative.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn driftwm_desktop_msg(argc: i32, argv: *const *const c_char) -> i32 {
+    catch_unwind(AssertUnwindSafe(|| {
+        let mut args = Vec::new();
+        for index in 0..usize::try_from(argc).unwrap_or(0) {
+            // SAFETY: the caller supplies argc readable argument pointers.
+            let arg = if argv.is_null() {
+                std::ptr::null()
+            } else {
+                unsafe { *argv.add(index) }
+            };
+            // SAFETY: each non-null argument is a NUL-terminated string.
+            match (!arg.is_null()).then(|| unsafe { CStr::from_ptr(arg) }.to_str()) {
+                Some(Ok(arg)) => args.push(arg.to_owned()),
+                _ => {
+                    eprintln!("error: arguments must be present and valid UTF-8");
+                    return 2;
+                }
+            }
+        }
+        ipc_client::run(&args)
+    }))
+    .unwrap_or(1)
 }

@@ -49,7 +49,9 @@ Preserve them as integers in native code.
 
 See [focus/cycle commands](FOCUS.md) for the additive focus ABI and
 [normal-window navigation](NAVIGATION.md) for camera commands, runtime snapshots,
-and the native frame-clock contract.
+and the native frame-clock contract. [Actions, bookmarks and IPC](IPC.md)
+covers the `action` and `ipc` commands, the saved bookmark map, and the exported
+`driftwm_desktop_msg` client.
 
 `edges` is `left`, `right`, `top`, `bottom`, `top_left`, `top_right`,
 `bottom_left` or `bottom_right`. One gesture is active per controller. Motion

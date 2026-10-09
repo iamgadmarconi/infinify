@@ -18,6 +18,10 @@ struct Saved {
     outputs: BTreeMap<OutputId, SavedOutput>,
     next_window: u64,
     next_output: u64,
+    /// Additive: absent from files written before bookmarks existed, and
+    /// omitted while empty, so an older build still reads a save that has none.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    bookmarks: BTreeMap<String, [f64; 2]>,
 }
 impl Controller {
     /// Save world geometry and output cameras, never live bindings or gestures.
@@ -34,6 +38,7 @@ impl Controller {
             outputs: self.outputs.clone(),
             next_window: self.next_window,
             next_output: self.next_output,
+            bookmarks: self.bookmarks.clone(),
         };
         let bytes = serde_json::to_vec_pretty(&saved)?;
         if bytes.len() as u64 > MAX_SAVE_BYTES {
@@ -127,6 +132,10 @@ impl Controller {
             }
             validation.add_output(output.viewport.clone())?;
         }
+        // Names are unrestricted, as upstream's are: load accepts what set stores.
+        if saved.bookmarks.values().flatten().any(|v| !v.is_finite()) {
+            return Err(Error::Invalid("invalid saved bookmark"));
+        }
         Ok(Self {
             scene: saved.scene,
             metadata: saved.metadata,
@@ -144,6 +153,8 @@ impl Controller {
             next_navigation: 0,
             home_returns: BTreeMap::new(),
             overview_returns: BTreeMap::new(),
+            bookmarks: saved.bookmarks,
+            active_bookmarks: BTreeMap::new(),
             native_resize: None,
             next_resize: 0,
             retired_resize_identities: Vec::new(),

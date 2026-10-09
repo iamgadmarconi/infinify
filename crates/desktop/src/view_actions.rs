@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
-// src/input/actions.rs (PanViewport, HomeToggle, ZoomIn, ZoomOut, ZoomReset,
-// ZoomToFit, try_restore_overview, fit_to_bbox, zoom_to_anchored) and
-// src/state/navigation.rs (min_zoom). Camera-only: fullscreen legs, nav anchors
-// and pointer warps are absent, and no native geometry is read.
+// src/input/actions.rs (PanViewport, HomeToggle, GoToBookmark, SetBookmark,
+// ZoomIn, ZoomOut, ZoomReset, ZoomToFit, go_to_canvas_point,
+// try_restore_overview, fit_to_bbox, zoom_to_anchored), src/state/navigation.rs
+// (min_zoom) and src/state/viewport.rs (set_camera_target). Camera-only:
+// fullscreen legs, nav anchors and pointer warps are absent, and no native
+// geometry is read.
 use super::navigation::Anchor;
 use super::*;
 use driftwm_canvas::policy::{self, PixelPoint, PixelSize};
@@ -56,7 +58,7 @@ fn pixel(value: f64) -> Result<i32, Error> {
         Err(Error::Invalid("view geometry exceeds integer range"))
     }
 }
-fn pixel_size(size: Size) -> Result<PixelSize, Error> {
+pub(crate) fn pixel_size(size: Size) -> Result<PixelSize, Error> {
     Ok((pixel(size.width.round())?, pixel(size.height.round())?).into())
 }
 fn idle() -> Result<Value, Error> {
@@ -66,7 +68,7 @@ fn idle() -> Result<Value, Error> {
 impl Controller {
     /// The output's current pose and its output-local usable rectangle, whose
     /// center is upstream's usable_center_screen.
-    fn view(&self, output: OutputId) -> Result<(Viewport, Rect), Error> {
+    pub(crate) fn view(&self, output: OutputId) -> Result<(Viewport, Rect), Error> {
         if self.gesture.is_some() {
             return Err(Error::Invalid("navigation during active gesture"));
         }
@@ -194,7 +196,7 @@ impl Controller {
         self.arm_view(output, Point::new(-center.x, -center.y), 1.0, Some(anchor))
     }
     /// Animate to `target`, keeping the world point under the usable center fixed.
-    fn zoom_to_anchored(
+    pub(crate) fn zoom_to_anchored(
         &mut self,
         output: OutputId,
         viewport: &Viewport,
@@ -209,6 +211,14 @@ impl Controller {
         let camera = policy::zoom_anchor_camera(anchor.canvas, center, target);
         self.arm_view(output, camera, target, Some(anchor))
     }
+    /// Upstream min_zoom: far enough out to see every window in the usable area.
+    pub(crate) fn min_zoom(&self, usable: Rect) -> Result<f64, Error> {
+        Ok(policy::dynamic_min_zoom(
+            self.pixel_windows()?.into_iter(),
+            pixel_size(usable.size)?,
+            ZOOM_FIT_PADDING,
+        ))
+    }
     pub(crate) fn zoom_in(&mut self, output: OutputId) -> Result<Value, Error> {
         let (viewport, usable) = self.view(output)?;
         let target = policy::snap_zoom((viewport.zoom * ZOOM_STEP).min(policy::MAX_ZOOM));
@@ -216,12 +226,7 @@ impl Controller {
     }
     pub(crate) fn zoom_out(&mut self, output: OutputId) -> Result<Value, Error> {
         let (viewport, usable) = self.view(output)?;
-        let min = policy::dynamic_min_zoom(
-            self.pixel_windows()?.into_iter(),
-            pixel_size(usable.size)?,
-            ZOOM_FIT_PADDING,
-        );
-        let target = policy::snap_zoom((viewport.zoom / ZOOM_STEP).max(min));
+        let target = policy::snap_zoom((viewport.zoom / ZOOM_STEP).max(self.min_zoom(usable)?));
         // Deviation: pinch and scroll zoom keep the static 0.001 floor, so the
         // pose may already sit below the dynamic minimum. Never zoom in from there.
         if target > viewport.zoom {
@@ -260,5 +265,109 @@ impl Controller {
             },
         );
         self.arm_view(output, anchor.canvas - center / fit, fit, Some(anchor))
+    }
+    /// Upstream set_camera_target: only the camera destination changes. A
+    /// pending zoom target and its anchor stay armed, and an anchored zoom tick
+    /// then drops this target, exactly as upstream's tick does.
+    pub(crate) fn set_camera_target(
+        &mut self,
+        output: OutputId,
+        target: Point,
+    ) -> Result<Value, Error> {
+        let viewport = self
+            .scene
+            .output(output)
+            .ok_or(Error::Invalid("unknown output"))?;
+        let (size, zoom) = (viewport.screen_bounds.size, viewport.zoom);
+        // As arm_view: a destination no tick could apply is never armed.
+        if !point_valid(target) || !point_valid(target + Point::new(size.width, size.height) / zoom)
+        {
+            return Err(Error::Invalid("navigation target out of bounds"));
+        }
+        self.next_navigation = self
+            .next_navigation
+            .checked_add(1)
+            .ok_or(Error::Invalid("navigation generations exhausted"))?;
+        let generation = self.next_navigation;
+        let flight = self.flights.entry(output).or_insert(ViewFlight {
+            camera_target: None,
+            zoom_target: None,
+            zoom_animation_anchor: None,
+            generation,
+        });
+        flight.camera_target = Some(target);
+        flight.generation = generation;
+        let target_zoom = flight.zoom_target.unwrap_or(zoom);
+        Ok(
+            json!({"navigation":{"output":output,"generation":generation,"target_camera":target,"target_zoom":target_zoom,"animating":true}}),
+        )
+    }
+    /// Fly the camera until the usable center shows the Y-up canvas point
+    /// `(x, y)`. Zoom is untouched, and a zoom-to-fit return is disarmed.
+    fn go_to_canvas_point(&mut self, output: OutputId, x: f64, y: f64) -> Result<Value, Error> {
+        let (viewport, usable) = self.view(output)?;
+        let center = usable.center();
+        let target = Point::new(x - center.x / viewport.zoom, -y - center.y / viewport.zoom);
+        self.overview_returns.remove(&output);
+        self.set_camera_target(output, target)
+    }
+    /// A missing bookmark is not an error upstream: nothing is armed.
+    pub(crate) fn go_to_bookmark(&mut self, output: OutputId, name: &str) -> Result<Value, Error> {
+        self.view(output)?;
+        match self.bookmarks.get(name) {
+            Some(&[x, y]) => self.go_to_canvas_point(output, x, y),
+            None => idle(),
+        }
+    }
+    /// Remember the canvas point under the usable center. A pending camera
+    /// target is captured instead of a mid-flight frame, so set-bookmark then
+    /// go-to-bookmark lands where the flight was heading: the exact inverse of
+    /// go_to_canvas_point. Only a camera-only flight keeps that target: an
+    /// anchored zoom tick drops it, here as upstream, and the frame is captured.
+    pub(crate) fn set_bookmark(&mut self, output: OutputId, name: &str) -> Result<Value, Error> {
+        let center = self.navigation_context(output)?.usable_rect_local.center();
+        let viewport = self
+            .scene
+            .output(output)
+            .ok_or(Error::Invalid("unknown output"))?;
+        let camera = self
+            .flights
+            .get(&output)
+            .and_then(|flight| flight.camera_target)
+            .unwrap_or(viewport.camera);
+        let point = [
+            camera.x + center.x / viewport.zoom,
+            -(camera.y + center.y / viewport.zoom),
+        ];
+        self.bookmarks.insert(name.to_owned(), point);
+        idle()
+    }
+    /// Upstream refreshes each output's active bookmark once per rendered
+    /// frame; here every accepted command is that frame. Hysteresis favors the
+    /// incumbent, so the result depends on the poses the camera passed through.
+    pub(crate) fn refresh_active_bookmarks(&mut self) {
+        let mut active = BTreeMap::new();
+        if !self.bookmarks.is_empty() {
+            for viewport in self.scene.outputs() {
+                let (Ok(context), Ok(size)) = (
+                    self.navigation_context(viewport.id),
+                    pixel_size(viewport.screen_bounds.size),
+                ) else {
+                    continue;
+                };
+                let incumbent = self.active_bookmarks.get(&viewport.id).map(String::as_str);
+                if let Some(name) = policy::active_bookmark(
+                    &self.bookmarks,
+                    viewport.camera,
+                    size,
+                    viewport.zoom,
+                    context.usable_rect_local.center(),
+                    incumbent,
+                ) {
+                    active.insert(viewport.id, name);
+                }
+            }
+        }
+        self.active_bookmarks = active;
     }
 }

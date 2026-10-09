@@ -46,13 +46,33 @@ movement do not move, transform, park, or resize native windows.
   half the zoom that fits all windows and does nothing if a gesture already
   zoomed past that. A pointer press, scroll or pinch on a canvas stops a flight
   where it is.
-- View actions have no configuration yet: Control-Option stands in for DriftWM's
-  "mod", the chords are hardcoded, and the pan step (100 screen points), zoom step
-  (1.1) and fit padding (80) are upstream's defaults. Camera motion is
-  animated with the controller's upstream-derived lerp. These actions move
-  cameras only; they never move, resize, focus or otherwise touch native windows.
-  If a shortcut cannot be registered the toolbar still works. A held chord is
-  one step: it does not auto-repeat as upstream's zoom in, zoom out and pan do.
+- Bookmarks: Control-Option-1 to 4 fly the camera of the display under the pointer
+  to saved point 1 to 4 (zoom is left alone and any Fit return is forgotten);
+  Control-Option-Shift-1 to 4 save the usable-area centre of the current view as
+  that bookmark. Pressed while a pan step or a bookmark jump is still flying, they
+  save where it is heading. During a Home, Fit or zoom flight the saved point is
+  not reliably the destination, here as upstream (mid-flight it is whatever point
+  is passing under the centre), so let those land first. The
+  status line confirms ("Bookmark 2 saved") or says the bookmark is missing ("No
+  bookmark 2 yet", with the chord that sets it). A bookmark holds a canvas position
+  only, never a zoom. There is one set of bookmarks for every display, and it is
+  saved in the scene file. They are global shortcuts only: with `--windowed`, use
+  `Infinify msg bookmark` or `Infinify msg action` below.
+- Shortcuts and toolbar buttons have no configuration yet: Control-Option stands in
+  for DriftWM's "mod", the chords are hardcoded (bookmarks cover names 1 to 4 only),
+  and the pan step (100 screen points), zoom step (1.1) and fit padding (80) are
+  upstream's defaults. Every view and bookmark shortcut and every view button on the
+  toolbar now runs an upstream action string (`home-toggle`, `zoom-to-fit`, `zoom-out`,
+  `zoom-reset`, `zoom-in`, `pan-viewport <direction>`, `go-to-bookmark N`,
+  `set-bookmark N`) through the same controller command as `Infinify msg action`.
+  Camera motion is animated with the controller's upstream-derived lerp. These
+  actions move cameras only; they never move, resize, focus or otherwise touch
+  native windows. If a shortcut cannot be registered the toolbar still works. A
+  held chord is one step: it does not auto-repeat as upstream's zoom in, zoom out
+  and pan do. The Quit button and Control-Option-Escape call the shell's quit
+  directly instead of sending the `quit` action, so exit never depends on the
+  controller or on an active output. The experimental navigation and resize
+  controls below were not changed by this.
 - Control-Option-drag: move the logical world window, using Rust snapping and
   hysteresis. Add Shift to move its connected cluster.
 - Normal left-click, left drag, and scroll: forward through Rust inverse hit
@@ -82,16 +102,181 @@ The default scene file is
 `~/Library/Application Support/Infinify/scene.json`. `--state /absolute/file.json`
 selects another file whose parent directory already exists. Saves use the Rust
 controller's private temporary file, fsync, atomic rename, and directory sync.
-Only world geometry, display UUID cameras and app/title metadata are persisted;
-PIDs, window IDs, process births, and captures are not saved. Home and Fit return
-positions are per display, in memory only: not saved, and dropped on reload, on
-Return to desktop, and whenever a display change recreates the panels. Reloaded windows are
-unbound placeholders. A chooser selection is always required to rebind; there is
-no PID or title guess. A failed load blocks source selection and disables every
-save path, preserving the original bytes until an explicit different state path
-or repaired file is provided. Display changes recreate panels while retaining cameras
-by stable display UUID. Source lifecycle and normal bounds are polled on the
+Only world geometry, display UUID cameras, bookmarks and app/title metadata are
+persisted; PIDs, window IDs, process births, and captures are not saved. Bookmarks
+are an additive field of the same file and the format version is unchanged: scene
+files written by older builds still load, with no bookmarks. Older builds reject
+fields they do not know, so an older build cannot read a scene file that contains
+bookmarks; keep a copy of a scene file before opening it with an older build.
+A bookmark change or window move made over the IPC socket below is saved the same
+way. Home and Fit return positions are per display, in memory only: not saved, and
+dropped on reload, on Return to desktop, and whenever a display change recreates
+the panels. Reloaded windows are unbound placeholders. A chooser selection is
+always required to rebind; there is no PID or title guess. A failed load blocks
+source selection and disables every save path, preserving the original bytes until
+an explicit different state path or repaired file is provided. Display changes
+recreate panels while retaining cameras by stable display UUID. Source lifecycle and normal bounds are polled on the
 main event loop; ScreenCaptureKit buffers independently report pixel dimensions.
+
+## Scripting (IPC)
+
+A normal run listens on a Unix-domain socket, and `Infinify msg` is the macOS
+counterpart of `driftwm msg`: upstream's requests and JSON shapes (one JSON line
+out, one back), with the arguments after `msg` mirroring upstream's CLI.
+
+```sh
+APP=./target/app/Infinify.app/Contents/MacOS/Infinify
+$APP msg state
+$APP msg --json camera 500 300
+$APP msg action zoom-to-fit
+$APP msg bookmark inbox 500 300
+```
+
+`msg` runs before AppKit starts, so it opens no window and asks for no permission.
+It prints a readable reply, or the reply as JSON with `--json`. An error reply or
+a failed connection prints `error: …` on stderr and exits 1; with `--json` an
+error reply is printed as JSON on stdout instead, still with status 1, as upstream
+does. A usage error exits 2. `--json` and `--socket` may go before or after the
+command (upstream takes them before it); command options such as `--id N` go
+after it.
+
+The default socket is `~/Library/Application Support/Infinify/infinify.sock`. The
+app's `--socket PATH` flag moves it; the path must be absolute. `--state` does not
+move the socket, so a second instance on its own scene file needs its own
+`--socket` as well. `msg` looks for `--socket PATH`, then the `INFINIFY_SOCKET`
+environment variable, then the default; the app itself does not read
+`INFINIFY_SOCKET`. The socket's parent directory must exist, be owned by you and
+not be group- or world-writable, the socket is mode 0600, and a peer with another
+user ID is hung up on. A request is one line of at most 64 KiB (a longer one is
+hung up on without a reply), at most 16 connections are served at once, and one
+that completes no request for 30 seconds is closed. A stale socket file is removed
+only after connecting to it fails. Nothing serializes that check and the bind
+between instances, so two started on one path at the same moment can both find it
+stale, and the later one then replaces the earlier one's socket; give instances
+their own paths rather than rely on the check. If another running Infinify
+answers, or the
+path is unusable (longer than 103 bytes, a directory that fails the checks above,
+a file that is not a socket), this app keeps running without IPC and says so in
+its status line and on stderr rather than taking the socket over. The socket is
+removed on quit. The server runs in normal runs only, never in `--source`,
+`--demo`, `--demo-probe`, `--demo-probe-guard` or owned-resize modes. As
+upstream's does, the socket is a full control surface (`msg action quit` quits the
+app), guarded only by those checks.
+
+Coordinates follow DriftWM, not the scene file: camera, window and bookmark
+positions are canvas points with Y up (larger Y is higher). A camera position is
+the centre of the view (the output below the toolbar strip), a window position the
+centre of its frame in whole points, and a bookmark the point under the centre of
+the view's usable area. The app registers no usable area yet, so that is the whole
+view and a bookmark set at a view equals its camera position. The controller's own
+world is top-left, Y-down, and the controller converts. A window is selected by
+`--id N`, the Infinify window id that `state` prints, or by a case-insensitive
+part of its bundle identifier, where a window with a bound source wins over a
+detached placeholder. Requests act on the active output: the one under the
+pointer, else the one of the panel under the pointer, else the first. Before the
+canvas first opens there is none: `camera`, `zoom`, setting `focus` and the view
+and bookmark actions (`pan-viewport`, `home-toggle`, the zoom actions,
+`go-to-bookmark`, `set-bookmark`) answer `no active output`, and everything else
+answers as it always does: `state`, `bookmark`, `move`, `debug-counters`, reading
+`focus` or `resize`, `action quit`, and the unknown and not-implemented replies.
+After Return to desktop every request answers `the
+canvas is closed`, after a failed scene load the load error, and while an
+experimental native resize is unresolved `a native resize is pending`.
+
+| Command | What it does now |
+| --- | --- |
+| `state` | Camera, zoom, windows (id, bundle id as `app_id`, title, centre position, size, `suspended` for a detached placeholder), outputs (stable id as `name`, `active`) and the active bookmark. `layout`, `fullscreen`, `pinned` and the layer lists are always empty. |
+| `camera [X Y]` | Read the view centre, or fly the camera there at the current zoom. |
+| `zoom [LEVEL]` | Read the zoom, or animate to a level about the view centre. The level is clamped to the range the zoom shortcuts use and the reply is the level applied. |
+| `focus [APP_ID] [--id N]` | Read the focused window. Setting makes a window the logical focus and, unless it is already wholly in view, flies the camera to it as upstream does: at 1:1 for a window with a bound source, at the current zoom for a detached placeholder. Native application focus does not change: the app does not perform the focus request the controller returns. |
+| `move [X Y] [--id N]` | Read a window's centre, or move the logical window there (whole points). The native window is not touched. A move is refused while a gesture is active, and when it would put the frame outside the 32-bit integer range every other request reads positions in. |
+| `resize [WIDTH HEIGHT] [--id N]` | Read the size only. Setting one answers an error: native layout resize is not available yet. |
+| `action SPEC...` | Run an upstream action string, below. |
+| `bookmark [NAME] [X Y] [--delete]` | List bookmarks, get or set one, or delete it. |
+| `debug-counters` | A small map of controller collection sizes; the keys are Infinify's own and not stable. |
+
+`layout`, `opacity`, `pin`, `close`, `suspend`, `relaunch`, `screenshot` and
+`subscribe` answer `<name> is not implemented on macOS yet`.
+
+`action` parses the full upstream action grammar with upstream's spelling. These
+run: `pan-viewport <direction>`, `home-toggle`, `zoom-in`, `zoom-out`,
+`zoom-reset`, `zoom-to-fit`, `go-to-bookmark NAME`, `set-bookmark NAME` and
+`quit`. Every other upstream action parses and answers `action not implemented on
+macOS yet: …`; a string upstream does not parse answers upstream's own message,
+such as `unknown action: …` or `unknown direction: …`. Upstream replies Ok to any
+spec that parses; Infinify reports the not-implemented case instead.
+`go-to-bookmark` with a name that is not set answers Ok and does nothing, as
+upstream's does.
+
+On the socket itself the members of a reply object arrive in alphabetical order,
+not upstream's declaration order; `msg --json` prints upstream's order. The app
+re-encodes each request line before the controller decodes it, so a raw client
+can send a whole-valued float where upstream requires an integer (`100.0` for
+`100` in `move`) and have it accepted, and a line holding a number such as `1e999`
+answers a bare `invalid request`. `msg` sends neither. Requests
+that move a camera start a flight and answer at once: poll `camera` or `zoom` to
+see it land. A pointer press, scroll or pinch on the canvas stops a scripted
+flight where it is, like any other. A client must wait for its reply: a
+connection whose peer has already closed when the server accepts it is dropped
+unread, where upstream would still run the request.
+
+Status: automated coverage is controller scenarios through the exported C ABI/JSON
+path. On 2026-10-09 the built app was also driven by a script over a private
+socket in `--windowed` mode on a seeded scene of three detached placeholders
+(macOS 27.2, Apple Silicon); nothing from those runs is saved as evidence.
+Observed there through `Infinify msg` and the raw socket: `state`;
+camera and zoom reads and writes landing on their targets (with the exceptions
+below), the zoom clamp included; `zoom-in`, `zoom-out`, `zoom-reset`; `zoom-to-fit` to the pose that
+frames the seeded windows and back; `home-toggle` there and back; `pan-viewport`;
+bookmark set, get, list, delete, `set-bookmark` and `go-to-bookmark` with the
+active bookmark in `state`; `move` by id, and a move past the integer range
+refused with the scene still readable; `focus` by id and by bundle identifier
+flying to an out-of-view placeholder with the zoom left at 0.5, and moving
+nothing for one already in view; `zoom nan` and `camera inf 0` refused by `msg`;
+the unknown, not-implemented and refused replies with their exit statuses; an
+invalid line; `debug-counters`; `INFINIFY_SOCKET`; the socket's 0600 mode; a
+stale socket replaced; a second instance on the same path left without IPC while
+the first kept answering; bookmarks, the moved window, focus and the camera in
+the scene file and after a restart; `msg action quit` and SIGTERM both answering,
+exiting 0 and removing the socket. The last two runs were made after the review fixes
+to `focus`, `move` and `msg`, and every flight in them landed; they did not repeat
+the zoom clamp, `zoom-in`, `zoom-out`, `zoom-reset`, `INFINIFY_SOCKET`, the stale
+socket, the restart or `msg action quit`, which stand as observed before those
+fixes. Three flights in the earlier runs did not land
+exactly: `camera 0 0` stopped short in one full run and in one of six short
+launches, having landed in the first full run and the other five, and one flight
+ended 0.31 points off in x alone. The machine's own pointer input reaching the
+panel is the likely cause and was not confirmed. Not observed:
+anything drawn (the panel, tiles, animation frames, the status line), the
+toolbar, every shortcut and its status feedback, bound sources and so the focus
+effect and the 1:1 focus flight, a multi-display active output, requests before the canvas opens or after
+Return to desktop, the default socket path, the peer user check, and the
+connection, line-length and idle limits against the app.
+
+## Nested development window
+
+`--windowed [WIDTHxHEIGHT]` (default 1200x800) is the macOS analogue of upstream's
+nested winit backend. Instead of one full-screen floating panel per display it
+opens the canvas immediately in one ordinary-level, non-activating panel with a
+single output whose stable id is `windowed`. No global hot keys are registered, so
+use the toolbar, the pointer and `Infinify msg`; the chooser is not shown at
+launch but stays reachable from the toolbar. It is rejected in `--source`,
+`--demo`, `--demo-probe`, `--demo-probe-guard` and owned-resize modes. It saves to
+the default scene file and takes the default socket unless `--state` and `--socket`
+say otherwise, so give a development window its own when you also use Infinify
+normally. A size must be at least 960x480 (the width that keeps the toolbar and
+status line visible) and at most 16384 in each direction, or the app exits 64; the
+panel is then clamped to the main display's visible area and centred on it. It is
+the same borderless panel as the full-screen ones: it cannot be dragged, it closes
+only through Return to desktop or Quit, and a display change rebuilds it. With
+`--experimental-native-navigation` the Option-Tab hot keys are not registered, but
+that flag's listen-only input observer still is.
+
+Launched on 2026-10-09 as `--windowed 1100x700` with `--state` and `--socket`:
+`msg state` reported one output named `windowed` of 1100x636 (the panel less its
+64-point toolbar strip), and its camera was saved under that name and restored on
+the next launch. The panel itself, its window level, the toolbar and the absence
+of global hot keys were not inspected.
 
 ## Safe disposable demo and verification
 
@@ -133,12 +318,23 @@ of one application and app-specific focus rules needs broader validation.
 A held pointer drag cannot retarget another source. Only the last validated
 in-window point receives a synthetic button-up if a pointer leaves its source; arbitrary outside-source drag delivery is not claimed.
 Minimized/hidden/Space transitions, display hotplug, IME composition, the
-registered exit hotkey and the view-action shortcuts require manual validation on
-the intended workstation. The view actions have exported-C-ABI controller test
-coverage only: their rendered animation, toolbar buttons and global-shortcut
-delivery have not been verified on a live run. They omit upstream's fullscreen
+registered exit hotkey and the view-action and bookmark shortcuts require manual
+validation on the intended workstation. The view actions, bookmarks and IPC
+requests have exported-C-ABI/JSON controller test coverage, and scripted `msg`
+sessions against a running `--windowed` app (see Scripting above) that left no
+saved evidence. Their rendered animation, toolbar buttons, global-shortcut
+delivery and status feedback have not been verified on a live run, and neither
+has IPC with bound sources or more than one display. The view actions omit upstream's fullscreen
 interaction (Infinify has no fullscreen yet, so Home has no fullscreen-return
 leg or pointer warp), configurable chords and steps, and `nav_anchors` in Fit.
+Bookmark chords cover names 1 to 4 and there is no bookmark configuration or
+upstream `restore_bookmarks` switch: bookmarks are always saved.
+The IPC surface is a subset of DriftWM's. Most upstream actions parse but are
+not implemented; `layout`, `opacity`, `pin`, `close`, `suspend`, `relaunch`,
+`screenshot` and `subscribe` are not implemented; `resize` is read-only. An IPC
+focus is logical focus and camera navigation only and changes no native focus, and
+an IPC move is a logical world move that never moves the native window. Nested
+`--windowed` mode registers no global shortcuts and has one output.
 Cluster behavior uses the controller contract; fixture evidence currently has a
 single source. Production chooser/managing of existing user windows has not been
 run during development. Ad-hoc signing is local development packaging, not a

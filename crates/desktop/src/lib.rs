@@ -2,7 +2,10 @@
 //! Desktop scene controller. Native observations are ephemeral, never authority
 //! to deliver an event. The native caller must validate ownership and process
 //! birth immediately before and after event delivery.
+mod actions;
 mod ffi;
+mod ipc;
+mod ipc_client;
 mod navigation;
 mod resize_transaction;
 mod storage;
@@ -33,6 +36,9 @@ pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 pub enum Error {
     #[error("{0}")]
     Invalid(&'static str),
+    /// A refusal whose text names the offending input, such as an action string.
+    #[error("{0}")]
+    Refused(String),
     #[error(transparent)]
     Scene(#[from] driftwm_canvas::Error),
     #[error(transparent)]
@@ -155,6 +161,11 @@ pub struct Controller {
     next_navigation: u64,
     home_returns: BTreeMap<OutputId, ViewReturn>,
     overview_returns: BTreeMap<OutputId, ViewReturn>,
+    /// Upstream bookmarks: name to the canvas point under the usable center,
+    /// Y up. Saved. Unrelated to `Scene`'s camera-and-zoom bookmark map.
+    bookmarks: BTreeMap<String, [f64; 2]>,
+    /// Each output's active-bookmark incumbent. Ephemeral, like upstream's.
+    active_bookmarks: BTreeMap<OutputId, String>,
     native_resize: Option<NativeResizeTransaction>,
     next_resize: u64,
     retired_resize_identities: Vec<SourceIdentity>,
@@ -256,6 +267,16 @@ pub enum Command {
     },
     ZoomToFit {
         output: OutputId,
+    },
+    /// One upstream action string, as a key binding or `msg action` spells it.
+    Action {
+        output: Option<OutputId>,
+        action: String,
+    },
+    /// One upstream IPC request. `output` is the active output.
+    Ipc {
+        output: Option<OutputId>,
+        request: Value,
     },
     RegisterOutput {
         stable_id: String,
@@ -415,6 +436,7 @@ impl Controller {
         let mut next = self.clone();
         let result = next.apply(request.command)?;
         next.scene.validate()?;
+        next.refresh_active_bookmarks();
         *self = next;
         Ok(result)
     }
@@ -566,6 +588,8 @@ impl Controller {
             Command::ZoomOut { output } => return self.zoom_out(output),
             Command::ZoomReset { output } => return self.zoom_reset(output),
             Command::ZoomToFit { output } => return self.zoom_to_fit(output),
+            Command::Action { output, action } => return self.action(output, &action),
+            Command::Ipc { output, request } => return Ok(self.ipc(output, request)),
             Command::RegisterOutput {
                 stable_id,
                 screen_bounds,
@@ -1135,7 +1159,7 @@ impl Controller {
         }).collect();
         let windows: Vec<_> = self.scene.windows().iter().map(|w| json!({"window": w.id, "world_rect": w.world_rect, "metadata": self.metadata.get(&w.id), "source": self.sources.get(&w.id)})).collect();
         Ok(
-            json!({"evidence": "logical_controller_only", "capabilities": ["normal_window_navigation", "native_resize_controller_contract"], "native_resize": self.native_resize, "navigation": {"flights": self.flights, "clock_ns": self.navigation_clock, "contexts": self.navigation_contexts, "home_returns": self.home_returns, "overview_returns": self.overview_returns}, "outputs": self.scene.outputs(), "windows": windows, "focused": self.scene.focused(), "focus": {"intent": self.scene.focused(), "observed_native": self.focus.observed_native, "pending_effect": self.focus.pending_effect, "last_result": self.focus.last_result, "history": self.scene.stage().focus_history(), "cycle": self.scene.stage().cycle_state(), "release_pending": self.focus.release_pending}, "placements": placements}),
+            json!({"evidence": "logical_controller_only", "capabilities": ["normal_window_navigation", "native_resize_controller_contract"], "native_resize": self.native_resize, "navigation": {"flights": self.flights, "clock_ns": self.navigation_clock, "contexts": self.navigation_contexts, "home_returns": self.home_returns, "overview_returns": self.overview_returns, "active_bookmarks": self.active_bookmarks}, "bookmarks": self.bookmarks, "outputs": self.scene.outputs(), "windows": windows, "focused": self.scene.focused(), "focus": {"intent": self.scene.focused(), "observed_native": self.focus.observed_native, "pending_effect": self.focus.pending_effect, "last_result": self.focus.last_result, "history": self.scene.stage().focus_history(), "cycle": self.scene.stage().cycle_state(), "release_pending": self.focus.release_pending}, "placements": placements}),
         )
     }
 }

@@ -84,6 +84,9 @@ it does not execute native focus or prove real shortcut delivery. See the
 
 ## View actions
 
+The same six handlers, and the bookmark actions, are also reachable by upstream
+action string and IPC request: see [actions, bookmarks and IPC](IPC.md).
+
 Six camera-only commands adapt upstream's `PanViewport`, `HomeToggle`, `ZoomIn`,
 `ZoomOut`, `ZoomReset` and `ZoomToFit` (`src/input/actions.rs` at the pinned
 commit, with `try_restore_overview`, `fit_to_bbox`, `zoom_to_anchored`, and

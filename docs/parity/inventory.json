@@ -342,7 +342,7 @@
       },
       "contract": "Match Action::GoToBookmark dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -350,7 +350,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Camera-only controller go-to-bookmark <name>, parsed by the upstream action grammar, animates the output's camera so its usable-area centre lands on the stored canvas point, leaves zoom untouched and clears the output's Fit return. Bookmarks are the controller's own name -> [x, y] map of centre points, Y up, saved in the scene file; they are separate from the canvas Scene's camera-and-zoom bookmark map. Default shell: Control-Option-1 to 4 (names 1 to 4), with a status-line hint when the bookmark does not exist; also reachable as msg action go-to-bookmark <name>. Known mismatches: hardcoded chords for names 1 to 4 instead of upstream's configurable keybindings; no navigation.bookmarks configuration, so no seeded bookmarks; no fullscreen interaction (Infinify has no fullscreen yet). No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and shortcut delivery, the Unix-socket path and rendered animation are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.SetBookmark",
@@ -362,7 +363,7 @@
       },
       "contract": "Match Action::SetBookmark dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -370,7 +371,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Camera-only controller set-bookmark <name> stores, as a centre point with Y up, the canvas point under the output's usable-area centre, computed as upstream does from the pending camera target, else the camera, and the current zoom: that is the destination of a camera-only flight (pan-viewport, go-to-bookmark, an IPC camera write), but an anchored zoom flight (home toggle, zoom step, fit, their returns, an IPC zoom write, window navigation) drops its camera target on its first tick, so a bookmark set during one captures the point under the usable-area centre at that moment (before that tick, the camera target paired with the zoom not yet changed), which is the flight's destination only by coincidence. It replaces any bookmark of that name and reports the scene dirty so the shell saves it; zoom is never stored. Default shell: Control-Option-Shift-1 to 4 with a Bookmark saved status line; also reachable as msg action set-bookmark <name> and msg bookmark <name> <x> <y>. Known mismatches: hardcoded chords for names 1 to 4 instead of upstream's configurable keybindings; bookmarks are always saved in the scene file, where upstream has a session.restore_bookmarks setting (reference default false) that is not implemented; a scene file that contains bookmarks cannot be read by older builds. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and shortcut delivery, the Unix-socket path and a live scene save are unverified. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.MoveToBookmark",
@@ -746,7 +748,7 @@
       },
       "contract": "Match Action::Quit dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -754,7 +756,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "The controller action quit does not stop anything itself: it returns a quit effect that the shell applies by saving and exiting through its normal quit path. Reachable as msg action quit over the IPC socket. Known mismatches: upstream's Quit ends the compositor session, where this ends the Infinify app only and never touches native windows or other applications; the socket is a full control surface, protected only by its 0600 mode and the same-user peer check. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios (the effect, not the exit), and the Unix-socket path and the shell's handling of the quit effect are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "MouseAction.MoveWindow",
@@ -1708,7 +1711,7 @@
       },
       "contract": "Match wire format, CLI grammar, selectors, coordinates, reply semantics, errors and subscriptions for Request::Camera.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [
         "native.input",
@@ -1716,7 +1719,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Read returns the centre of the active output's whole view (its screen_bounds size, not the usable area) as a canvas point with Y up, as upstream's camera_center does; write animates the camera so that centre lands on the given point, using the canvas policy crate's viewport-centre and camera-for-centre conventions, and reports the flight in the reply's navigation field. Reached as msg camera [X Y] over the IPC socket. Known mismatches: the active output is supplied by the shell, and a request that needs one when there is none is answered with Err; no fullscreen to exit first (Infinify has no fullscreen yet). No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and the Unix-socket server, the msg client against a running app and rendered motion are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ipc.Request.Zoom",
@@ -1728,7 +1732,7 @@
       },
       "contract": "Match wire format, CLI grammar, selectors, coordinates, reply semantics, errors and subscriptions for Request::Zoom.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [
         "native.input",
@@ -1736,7 +1740,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Read returns the active output's zoom; write sets it with an animated flight about the usable-area centre. Reached as msg zoom [LEVEL] over the IPC socket. Known mismatches: the clamp range of a write is not separately checked against upstream's IPC zoom path; the active output is supplied by the shell, and a request that needs one when there is none is answered with Err; no fullscreen to exit first (Infinify has no fullscreen yet). No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and the Unix-socket server, the msg client against a running app and rendered motion are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ipc.Request.Layout",
@@ -1768,7 +1773,7 @@
       },
       "contract": "Match wire format, CLI grammar, selectors, coordinates, reply semantics, errors and subscriptions for Request::State.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [
         "native.input",
@@ -1776,7 +1781,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Returns upstream's StateInfo shape. Camera and zoom are the centre of the request output's whole view (its screen_bounds size, not the usable area; Y up) and its zoom, and each output's camera is the same centre of that output. Each window carries id (Infinify's logical window id), app_id (the bundle identifier), title, position (the world rect's centre, Y up, rounded to integers), size, is_focused, is_widget (always false), suspended (the window has no bound source, so a detached placeholder is Infinify's stand-in) and mode (always Normal). Outputs carry name (the output's stable id), camera, zoom, size and active (the request's output, supplied by the shell); active_bookmark comes from the canvas policy crate's active-bookmark helper with a per-output incumbent kept as ephemeral state. Reached as msg state, with --json for the raw reply. Known mismatches: layout, layout_short, fullscreen, pinned, layers and canvas_layers have no macOS counterpart and are reported empty; mode is never Fit or Fill; transport is a Unix socket at a default, --socket or INFINIFY_SOCKET path rather than one derived from WAYLAND_DISPLAY or DRIFTWM_SOCKET. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and the Unix-socket server and the msg client against a running app are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ipc.Request.DebugCounters",
@@ -1788,7 +1794,7 @@
       },
       "contract": "Match wire format, CLI grammar, selectors, coordinates, reply semantics, errors and subscriptions for Request::DebugCounters.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [
         "native.input",
@@ -1796,7 +1802,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Returns a small map of controller collection sizes (name -> count), the shape of upstream's leak-diagnosis endpoint; reached as msg debug-counters. Known mismatches: the keys are Infinify's own rather than upstream's decorations or stage_entries, and are unstable as upstream's are; the counts describe what the controller holds and make no claim about leaks in the shell, capture or native layers. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and the Unix-socket server and the msg client against a running app are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ipc.Request.Subscribe",
@@ -1828,7 +1835,7 @@
       },
       "contract": "Match wire format, CLI grammar, selectors, coordinates, reply semantics, errors and subscriptions for Request::Focus.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [
         "native.input",
@@ -1836,7 +1843,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Read returns the focused window as id (Infinify's logical window id) and app_id (the bundle identifier). Write, by id or by bundle identifier, makes the window the logical focus and navigates the camera as upstream's focus request does (a window with a bound source at zoom 1, a detached placeholder at the current zoom, neither when already wholly in view), returning the existing focus effect in the reply's effects; when matching by bundle identifier a bound source wins over a detached placeholder. Reached as msg focus [APP_ID | --id N]. Known mismatches: the write changes logical focus and the camera only, the default shell does not dispatch the returned effect, and native application focus is neither changed nor claimed to change; widgets, fullscreen, pin and modal policies do not exist here; the active output is supplied by the shell. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and the Unix-socket server, the msg client against a running app and rendered motion are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ipc.Request.Move",
@@ -1848,7 +1856,7 @@
       },
       "contract": "Match wire format, CLI grammar, selectors, coordinates, reply semantics, errors and subscriptions for Request::Move.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [
         "native.input",
@@ -1856,7 +1864,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Read returns the window's centre point with Y up, rounded to integers as upstream does; write moves the logical world window so its centre lands on the given point, reports the scene dirty so the shell saves it, and is refused with Err during an active gesture or when the moved frame would leave the i32 range every read uses. Reached as msg move [X Y] [--id N]. Known mismatches: this is a logical world move only; the native window is not moved, resized or otherwise touched; upstream's pinned and fullscreen refusals do not apply because neither exists here. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and the Unix-socket server, the msg client against a running app and a live scene save are unverified. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ipc.Request.Resize",
@@ -1868,7 +1877,7 @@
       },
       "contract": "Match wire format, CLI grammar, selectors, coordinates, reply semantics, errors and subscriptions for Request::Resize.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [
         "native.input",
@@ -1876,7 +1885,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Partial: read only. Read returns the window's logical world size as width and height (msg resize [--id N]). A write is refused with an Err explaining that native layout resize is not available yet; native resizing stays gated behind its own experimental flag and is never simulated by changing world geometry. Known mismatches: no resize write, no clamping to client limits and no echo of a requested size, so the main behaviour of the request is missing. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and the Unix-socket server and the msg client against a running app are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ipc.Request.Opacity",
@@ -1988,7 +1998,7 @@
       },
       "contract": "Match wire format, CLI grammar, selectors, coordinates, reply semantics, errors and subscriptions for Request::Action.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [
         "native.input",
@@ -1996,7 +2006,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Runs the request's action string through the full upstream action grammar and the same handlers that the default shell's shortcuts and toolbar buttons use. Implemented: pan-viewport, home-toggle, zoom-in, zoom-out, zoom-reset, zoom-to-fit, go-to-bookmark, set-bookmark and quit (see the Action rows); every other upstream action parses but is answered with an Err starting action not implemented on macOS yet, and a string upstream does not parse with an Err starting unknown action. Reached as msg action followed by the action string. Known mismatches: upstream replies Ok whenever a spec parses, even when it had no effect, where Infinify answers Err for a parsed action it does not implement; most upstream actions are unimplemented; quit reaches the shell as an effect. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and the Unix-socket server, the msg client against a running app and rendered motion are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ipc.Request.Bookmark",
@@ -2008,7 +2019,7 @@
       },
       "contract": "Match wire format, CLI grammar, selectors, coordinates, reply semantics, errors and subscriptions for Request::Bookmark.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [
         "native.input",
@@ -2016,7 +2027,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "List returns every bookmark as name -> [x, y]; get returns one as x and y; set (a name with a point) creates or overwrites it and echoes it; delete removes it. Points are centre points with Y up and never carry zoom. Set and delete report the scene dirty so the shell saves it; bookmarks persist in the scene file. Reached as msg bookmark [NAME] [X Y] [--delete]. Known mismatches: bookmarks are the controller's own map, not the canvas Scene's camera-and-zoom bookmarks; no navigation.bookmarks configuration and no session.restore_bookmarks policy; a scene file that contains bookmarks cannot be read by older builds. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and the Unix-socket server, the msg client against a running app and a live scene save are unverified. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ipc.Request.Screenshot",

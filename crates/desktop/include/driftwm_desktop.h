@@ -22,6 +22,9 @@ void driftwm_desktop_destroy(DriftDesktop *controller);
 char *driftwm_desktop_request(DriftDesktop *, const uint8_t *bytes, size_t len);
 /* Free only unmodified returned response pointers, exactly once; NULL is safe. */
 void driftwm_desktop_response_free(char *response);
+/* `Infinify msg` IPC client; argv holds the arguments after "msg". Needs no handle.
+ * Returns the process exit status: 0, or non-zero after an error on stderr. */
+int32_t driftwm_desktop_msg(int32_t argc, const char *const *argv);
 #ifdef __cplusplus
 }
 #endif

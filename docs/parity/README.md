@@ -101,6 +101,40 @@ device-specific behavior also need the corresponding hardware.
   stale work. Actual handle-to-AX-to-renderer behavior, static-window refresh, groups
   and fractional upstream equivalence remain unproved; see
   [integration evidence](../../native/desktop/evidence/resize-headless.json).
+- `7e9d59c` adds animated PanViewport, HomeToggle, ZoomIn, ZoomOut, ZoomReset and
+  ZoomToFit to the default shell as camera-only controller commands on the existing
+  flight tick, with toolbar buttons and Control-Option shortcuts, an Open canvas
+  chooser entry that needs no capture, and an access request that runs only from the
+  user's click. Coverage is a controller scenario through the exported C ABI and the
+  headless coordinator regression. The toolbar, shortcut delivery and rendered
+  animation have not been exercised live; chords, steps and fit padding are
+  hardcoded and fullscreen interaction is absent. See
+  [navigation contracts](../../crates/desktop/NAVIGATION.md).
+- This milestone (commit pending) routes every default-shell view and bookmark
+  shortcut and view toolbar button through DriftWM's action-string grammar (Quit and
+  Control-Option-Escape still call the shell's quit directly), adds a Unix-domain IPC socket with
+  an `Infinify msg` client for the upstream requests that have a native meaning,
+  controller bookmarks saved in the scene file (additive; older builds cannot read
+  a file that contains them), and `--windowed`, a single nested development panel
+  with no global shortcuts. Upstream actions and requests without a macOS
+  implementation parse but answer a not-implemented error; focus writes are logical
+  focus and camera navigation only, moves are logical world moves, and resize writes
+  are refused. Coverage is controller scenarios through the exported C ABI
+  (`crates/desktop/tests/ipc_flow.rs`) plus scripted sessions on 2026-10-09
+  against the built app in `--windowed` mode on a private scene and socket (macOS
+  27.2, Apple Silicon, three seeded detached placeholders), which left no saved
+  evidence. Exercised there through the socket: state, camera and zoom reads and
+  writes, the six view actions, bookmark set/get/list/delete/go-to, move, focus
+  by id and by bundle identifier, the unknown, not-implemented and refused
+  replies, the scene file after bookmark and move changes and after a restart, a stale socket,
+  a second instance refused the same socket, and exit on `quit` and on SIGTERM.
+  Evidence boundary: no rendered pixels, toolbar clicks, hot keys or status
+  feedback were observed; no window had a bound source, so no native focus effect
+  was produced and none is dispatched for IPC focus; one output only; the default
+  socket path, the peer-user check and the server's connection limits were not
+  exercised against the app. See the
+  [desktop shell notes](../../native/desktop/README.md) and the
+  [IPC contract](../../crates/desktop/IPC.md).
 
 These milestones add evidence to partial rows. None satisfies an entire native
 behavior row or changes the completion requirement.

@@ -11,5 +11,6 @@ crate-type = ["rlib", "staticlib"]
 [dependencies]
 driftwm-canvas = { path = "../canvas" }
 serde.workspace = true
-serde_json.workspace = true
+# Exact float parsing: a saved or scripted coordinate must not move by one ULP.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 thiserror.workspace = true
