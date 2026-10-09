@@ -42,8 +42,11 @@ The reply is `{"navigation":<flight or null>,"effects":[…],"dirty":<bool>}`:
 - `effects` are requests to the shell: `{"op":"quit"}`,
   `{"op":"exec","command":…,"env":{…}}`, `{"op":"reload_config"}`,
   `{"op":"warp_pointer","screen":{x,y},"output":…}`,
-  `{"op":"switch_layout","target":…,"index":…}` and, from the four window
-  navigation actions, at most one
+  `{"op":"switch_layout","target":…,"index":…}`, from the
+  [window lifecycle](LIFECYCLE.md#actions-and-ipc)
+  `{"op":"close_window","window":…,"identity":…,"generation":…}` and
+  `{"op":"launch","bundle_id":…,"window":…}`, and, from the four window
+  navigation actions and from a dismissal that moves the focus, at most one
   `{"op":"focus_native_window",effect_id,window,identity,generation}`. The
   controller performs none of them. The last is the [focus effect](FOCUS.md)
   `focus` and `navigate_window` return under `effect`: perform it and
@@ -78,12 +81,15 @@ Names are case-sensitive kebab-case; directions (`up`, `down`, `left`, `right`,
 | `send-to-output <dir>` | yes | moves the focused window to the adjacent output; `dirty` is true when it moved; needs an output only when no output shows the window |
 | `send-cursor-to-output <dir>` | yes | `effects` is one `warp_pointer`, or empty with no adjacent output |
 | `switch-layout next`, `prev`, `<index>` | yes | `effects` is one `switch_layout`; needs no output |
-| `close-window`, `suspend-window`, `grow-window`, `shrink-window`, `move-to-bookmark`, `zoom-to-fit-snapped`, `toggle-fullscreen`, `fit-window`, `fit-window-snapped`, `fill-window`, `toggle-pin-to-screen`, `toggle-cursor-pan`, `set-trackpad` | no | parsed with upstream's argument rules, then refused |
+| `close-window` | yes | a focused live window: `effects` is one `close_window`, marked a real close for the next ten seconds; a focused placeholder is dismissed and `dirty` is true; needs no output |
+| `suspend-window` | yes | a focused live window: `effects` is one `close_window`, and a stand-in takes its place if it closes within ten seconds; a focused placeholder is dismissed; needs no output |
+| `grow-window`, `shrink-window`, `move-to-bookmark`, `zoom-to-fit-snapped`, `toggle-fullscreen`, `fit-window`, `fit-window-snapped`, `fill-window`, `toggle-pin-to-screen`, `toggle-cursor-pan`, `set-trackpad` | no | parsed with upstream's argument rules, then refused |
 
 [NAVIGATION.md](NAVIGATION.md#window-navigation-actions) describes the four
 window navigation actions, [CONFIG.md](CONFIG.md#actions-that-run-now) the
 nudge, exec and reload actions, [Outputs](CONFIG.md#outputs) the two output
-actions, and [Keyboard layouts](CONFIG.md#keyboard-layouts) `switch-layout`.
+actions, [Keyboard layouts](CONFIG.md#keyboard-layouts) `switch-layout`, and
+[LIFECYCLE.md](LIFECYCLE.md#actions-and-ipc) the close and suspend actions.
 An `exec` effect is not run by the controller. Because `ipc`
 accepts `{"Action":…}`, whoever can write to the shell's socket can have the
 shell run a command, as with upstream's `driftwm msg action exec`.
@@ -204,9 +210,11 @@ before the request is decoded).
 same obligation `focus` and `navigate_window` return under `effect`: perform it
 and acknowledge it with `focus_result`, or answer it `focus_logical`, or it
 stays pending until superseded. It is never evidence that native focus
-changed. `ipc` can also return the other effects `action` does, and
-`{"op":"subscribe","line":…}` for a `Subscribe` request. Which effects the
-app's shell performs is the [shell's](../../native/desktop/README.md) to say.
+changed. The same obligation comes back under `effect` from a new-window
+`attach` and from `window_closed`. `ipc` can also return the other effects
+`action` does, and `{"op":"subscribe","line":…}` for a `Subscribe` request.
+Which effects the app's shell performs is the
+[shell's](../../native/desktop/README.md) to say.
 
 ### Coordinates
 
@@ -250,10 +258,13 @@ into `i32` or its far edge would pass `i32::MAX`.
 | `{"Action":"…"}` | per action | Runs the `action` command's handler. `Ok` whenever it runs, even with no effect; every refusal above is an `Err` reply. |
 | `{"Bookmark":{name?,to?,delete?}}` | no | Upstream's four forms: list (`Bookmarks{…}`, sorted by name), get and set (`Bookmark{x,y}`), delete (`Ok`). Set and delete report `dirty`. Errors are upstream's: `no bookmark named '…'`, `bookmark delete requires a name`, `bookmark delete does not take coordinates`, `bookmark coordinates require a name`, `bookmark coordinates must be finite`. |
 | `"DebugCounters"` | no | Sizes of the controller's own collections, keyed by field name. Unstable. |
+| `{"Close":<selector or null>}` | no | Upstream's `cmd_close`. A live window: `Ok`, `effects` is one `close_window`, and the close is marked real so `session.suspend_on_close` leaves no stand-in. Else a detached placeholder: dismissed, `Ok`, `dirty`. Else the selector's `Err`. |
+| `{"Suspend":<selector or null>}` | no | Upstream's `cmd_suspend`. A live window is focused first if it is not (a focus effect, `dirty`, no camera move), then the `suspend-window` action runs: `Ok`, `effects` ends with one `close_window`. A detached placeholder: `Err("window is already suspended")`. |
+| `{"Relaunch":<selector or null>}` | no | Upstream's `cmd_relaunch`. A detached placeholder: `Ok`, `effects` is one `launch`, and the next window of that app to appear within thirty seconds takes the placeholder's slot; while that relaunch is pending the request is `Ok` with no effect, upstream's no-op. Anything else: `Err("no suspended window matching selector")`. A placeholder without a bundle identifier: `Err("the app has no bundle identifier to relaunch")`. |
 | `{"Layout":{"short":false}}` | no | `Layout(name)`: the display name of the keyboard layout the shell last reported with [`layout_changed`](CONFIG.md#keyboard-layouts), or `""` before any report. |
 | `{"Layout":{"short":true}}` | no | `Layout(short)`: its short code, or the display name when the code is empty, as upstream falls back. |
 | `"Subscribe"` | no | `Ok`, and the effect `{"op":"subscribe","line":…}` carrying the current snapshot. See [Event stream](#event-stream). With an `output` that is not registered: `Err("unknown output")`, as `State`. |
-| `{"Opacity":…}`, `{"Pin":…}`, `{"Close":…}`, `{"Suspend":…}`, `{"Relaunch":…}`, `{"Screenshot":…}` | no | Decoded, then `Err`: `<name> is not implemented on macOS yet`, with the `msg` command's name. |
+| `{"Opacity":…}`, `{"Pin":…}`, `{"Screenshot":…}` | no | Decoded, then `Err`: `<name> is not implemented on macOS yet`, with the `msg` command's name. |
 
 A missing output where one is needed is `Err("no active output")`; an id that is
 not registered is `Err("unknown output")`. Camera and zoom writes reject with
@@ -263,7 +274,11 @@ A selector is upstream's: a JSON number is an Infinify logical window id, exact;
 a JSON string is a case-insensitive substring of the bundle id. Among several
 matches a window with a bound source wins over a detached placeholder
 (upstream's live client over stand-in); within each group stage order decides.
-No selector means the focused window, or `no focused window`.
+No selector means the focused window, or `no focused window`. `Close`,
+`Suspend` and `Relaunch` keep upstream's two tiers apart: `Close` and `Suspend`
+look among windows with a bound source first and then among detached
+placeholders, `Relaunch` among detached placeholders only, by id, by app id and
+by focus alike. [LIFECYCLE.md](LIFECYCLE.md) has what each then does.
 
 ### State
 
@@ -520,7 +535,10 @@ saved as evidence. Observed, each read back through the socket:
 - `unknown action: frobnicate`, `action not implemented on macOS yet:
   toggle-fullscreen`, `unknown direction: sideways`, the `go-to` removal
   message, the `resize` write refusal and the eight `<name> is not implemented
-  on macOS yet` replies, each with exit status 1; `{"Err":"invalid request"}`
+  on macOS yet` replies (three since: `layout` and `subscribe` are answered
+  now, and `close`, `suspend` and `relaunch` since the
+  [lifecycle](LIFECYCLE.md) work), each
+  with exit status 1; `{"Err":"invalid request"}`
   for a line that is not JSON.
 - The reply's alphabetical member order on the raw socket; the client's output
   in both forms; `$INFINIFY_SOCKET`.

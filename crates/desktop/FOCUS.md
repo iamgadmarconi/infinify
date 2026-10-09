@@ -89,7 +89,10 @@ focus history when its request is answered, not when it is made.
 - Upstream's history follows keyboard focus, which a compositor simply sets.
   Here a focus is a request, so the history is promoted by `focus_result` with
   `success: true`, by `focus_logical`, by `observe_focus`, and by `activate`
-  with cause `native`, and by nothing else. A shell that performs native focus
+  with cause `native`, and by nothing else that asks. The one focus that never
+  asks is a window [adopted during the launch pass](LIFECYCLE.md#1-adoption)
+  into the slot that held the focus: no request is made for it, so it is
+  promoted as it is adopted. A shell that performs native focus
   promotes what its adapter confirmed or observed. A shell that performs none
   answers every request `focus_logical`, and the history then follows logical
   focus as upstream's follows keyboard focus, with nothing recorded as observed.
@@ -114,7 +117,9 @@ focus history when its request is answered, not when it is made.
 
 `snapshot.focused` remains the logical-intent alias. `snapshot.focus` exposes
 `intent`, `observed_native`, `pending_effect`, `last_result`, `history`, `cycle`,
-and `release_pending`. Attached sources expose their generation. There is only
+and `release_pending`. `history` is the one focus history: the cycle walks it,
+and so do the tiers that decide
+[who follows a closed window](LIFECYCLE.md#a-window-closes). Attached sources expose their generation. There is only
 one authoritative pending effect; an effect returned earlier becomes stale when
 superseded. Snapshot reads do not allocate or acknowledge effects.
 

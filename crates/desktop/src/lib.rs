@@ -9,6 +9,7 @@ mod ffi;
 mod ipc;
 mod ipc_client;
 mod keyboard_layout;
+mod lifecycle;
 mod navigation;
 mod output_actions;
 mod resize_transaction;
@@ -20,6 +21,7 @@ use bindings::Platform;
 pub use bindings::{MacModifiers, PointerContext, PointerTrigger, ScrollSource};
 pub use ffi::*;
 use keyboard_layout::KeyboardLayout;
+use lifecycle::{Arrival, Lifecycle};
 pub use navigation::{FocusPlacement, ZoomPolicy};
 use navigation::{NavigationContext, ViewFlight};
 pub use output_actions::Corner;
@@ -203,6 +205,8 @@ pub struct Controller {
     /// Upstream's `ipc_last_event_hash`: the last State event `state_event`
     /// returned. Ephemeral.
     last_event: Option<u64>,
+    /// Stand-ins, close marks, pending relaunches and the launch adoption pass.
+    lifecycle: Lifecycle,
 }
 
 #[derive(Debug, Deserialize)]
@@ -210,6 +214,14 @@ pub struct Controller {
 pub struct Request {
     pub version: u32,
     pub command: Command,
+}
+/// A window that exists but could not be offered, as `adoption_complete` names
+/// it: by application and title, never by a native identity.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PresentWindow {
+    pub bundle_id: String,
+    pub title: String,
 }
 #[derive(Debug, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
@@ -395,6 +407,32 @@ pub enum Command {
         logical_id: Option<WindowId>,
         #[serde(default)]
         world_rect: Option<Rect>,
+        /// The active output and the pointer, a global screen point. Read only
+        /// for a new window: an attach with neither `logical_id` nor
+        /// `world_rect`, which adopts a slot or is placed by the config.
+        #[serde(default)]
+        output: Option<OutputId>,
+        #[serde(default)]
+        pointer: Option<Point>,
+    },
+    /// The native window is gone. `output` is the active output, if known.
+    WindowClosed {
+        window: WindowId,
+        identity: SourceIdentity,
+        #[serde(default)]
+        output: Option<OutputId>,
+    },
+    Retitle {
+        window: WindowId,
+        identity: SourceIdentity,
+        title: String,
+    },
+    /// The shell has ended a discovery pass: every window on screen was
+    /// offered. `present` names the windows that still exist but were not
+    /// offered because they are not on screen: their slots keep waiting.
+    AdoptionComplete {
+        #[serde(default)]
+        present: Vec<PresentWindow>,
     },
     Observe {
         window: WindowId,
@@ -552,6 +590,8 @@ impl Controller {
         let result = next.apply(request.command)?;
         next.scene.validate()?;
         next.refresh_active_bookmarks();
+        next.lifecycle
+            .prune(&next.scene, &next.sources, next.navigation_clock);
         *self = next;
         Ok(result)
     }
@@ -819,6 +859,8 @@ impl Controller {
                 source_rect,
                 logical_id,
                 world_rect,
+                output,
+                pointer,
             } => {
                 identity.validate()?;
                 if self.retired_resize_identities.iter().any(|old| {
@@ -844,6 +886,14 @@ impl Controller {
                 {
                     return Err(Error::Invalid("source already attached"));
                 }
+                // A caller that names the slot or the world frame decides both
+                // itself. Otherwise a new window has appeared.
+                let arrival = match (logical_id, world_rect) {
+                    (None, None) => {
+                        Some(self.arrival(output, pointer, &bundle_id, &title, source_rect.size)?)
+                    }
+                    _ => None,
+                };
                 let id = if let Some(id) = logical_id {
                     if world_rect.is_some() {
                         return Err(Error::Invalid("rebind cannot replace saved world geometry"));
@@ -855,15 +905,21 @@ impl Controller {
                         return Err(Error::Invalid("logical window already bound"));
                     }
                     id
+                } else if let Some(Arrival::Adopt(id)) = arrival {
+                    id
                 } else {
                     self.next_window = self
                         .next_window
                         .checked_add(1)
                         .ok_or(Error::Invalid("window IDs exhausted"))?;
                     let id = WindowId(self.next_window);
+                    let world_rect = match arrival {
+                        Some(Arrival::Place { rect, .. }) => rect,
+                        _ => world_rect.unwrap_or(source_rect),
+                    };
                     self.scene.add_window(Window {
                         id,
-                        world_rect: world_rect.unwrap_or(source_rect),
+                        world_rect,
                         native: None,
                         title: title.clone(),
                     })?;
@@ -889,8 +945,22 @@ impl Controller {
                         resize_disabled: false,
                     },
                 );
-                return Ok(json!({"window": id}));
+                return match arrival {
+                    Some(arrival) => self.settle_arrival(id, output, arrival),
+                    None => Ok(json!({"window": id})),
+                };
             }
+            Command::WindowClosed {
+                window,
+                identity,
+                output,
+            } => return self.window_closed(window, identity, output),
+            Command::Retitle {
+                window,
+                identity,
+                title,
+            } => return self.retitle(window, identity, title),
+            Command::AdoptionComplete { present } => return self.adoption_complete(&present),
             Command::Observe {
                 window,
                 identity,
@@ -1175,6 +1245,10 @@ impl Controller {
                 loaded.next_effect = self.next_effect;
                 loaded.next_navigation = self.next_navigation;
                 loaded.next_generation = self.next_generation;
+                // The launch pass happens once: a scene loaded after it brings
+                // slots, which the next discovery pass decides, and windows
+                // that appear are still focused and revealed.
+                loaded.lifecycle.settled = self.lifecycle.settled;
                 loaded.settings = self.settings.clone();
                 loaded.platform = self.platform;
                 loaded.configured = self.configured;
@@ -1347,7 +1421,7 @@ impl Controller {
         }).collect();
         let windows: Vec<_> = self.scene.windows().iter().map(|w| json!({"window": w.id, "world_rect": w.world_rect, "metadata": self.metadata.get(&w.id), "source": self.sources.get(&w.id)})).collect();
         Ok(
-            json!({"evidence": "logical_controller_only", "capabilities": ["normal_window_navigation", "native_resize_controller_contract"], "native_resize": self.native_resize, "navigation": {"flights": self.flights, "clock_ns": self.navigation_clock, "contexts": self.navigation_contexts, "home_returns": self.home_returns, "overview_returns": self.overview_returns, "active_bookmarks": self.active_bookmarks}, "bookmarks": self.bookmarks, "keyboard_layout": self.layout, "outputs": self.scene.outputs(), "windows": windows, "focused": self.scene.focused(), "focus": {"intent": self.scene.focused(), "observed_native": self.focus.observed_native, "pending_effect": self.focus.pending_effect, "last_result": self.focus.last_result, "history": self.scene.stage().focus_history(), "cycle": self.scene.stage().cycle_state(), "release_pending": self.focus.release_pending}, "placements": placements}),
+            json!({"evidence": "logical_controller_only", "capabilities": ["normal_window_navigation", "native_resize_controller_contract"], "native_resize": self.native_resize, "lifecycle": self.lifecycle, "navigation": {"flights": self.flights, "clock_ns": self.navigation_clock, "contexts": self.navigation_contexts, "home_returns": self.home_returns, "overview_returns": self.overview_returns, "active_bookmarks": self.active_bookmarks}, "bookmarks": self.bookmarks, "keyboard_layout": self.layout, "outputs": self.scene.outputs(), "windows": windows, "focused": self.scene.focused(), "focus": {"intent": self.scene.focused(), "observed_native": self.focus.observed_native, "pending_effect": self.focus.pending_effect, "last_result": self.focus.last_result, "history": self.scene.stage().focus_history(), "cycle": self.scene.stage().cycle_state(), "release_pending": self.focus.release_pending}, "placements": placements}),
         )
     }
 }

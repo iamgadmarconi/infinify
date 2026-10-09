@@ -220,11 +220,12 @@ device-specific behavior also need the corresponding hardware.
   click's release as upstream does, without upstream's title-bar double-click
   deferral; every canvas press ends an open cycle at the press; an IPC
   `cycle-windows` is always one committed step; the pointer `center-nearest`
-  swipe, `focus_follows_mouse` and `auto_navigate_on_close` are absent. See the
+  swipe and `focus_follows_mouse` are absent, and so was
+  `auto_navigate_on_close` until the window lifecycle milestone below. See the
   [desktop shell notes](../../native/desktop/README.md#window-navigation-and-native-focus)
   and the [navigation](../../crates/desktop/NAVIGATION.md#window-navigation-actions)
   and [focus](../../crates/desktop/FOCUS.md) contracts.
-- This milestone (commit pending) adds six independent behaviours to the default
+- `5812d6f` adds six independent behaviours to the default
   shell. Hot corners: an `[[outputs]]` entry (upstream's exact-name or `*` rule,
   matched against the display's stable id) binds actions to corners, the shell
   runs upstream's `check_hot_corners` latch over a polled pointer and the
@@ -288,6 +289,90 @@ device-specific behavior also need the corresponding hardware.
   [desktop shell notes](../../native/desktop/README.md#displays-hot-corners-layouts-and-autostart),
   the [configuration contract](../../crates/desktop/CONFIG.md#outputs) and the
   [event stream contract](../../crates/desktop/IPC.md#event-stream).
+- This milestone (commit pending), window lifecycle: every ordinary application
+  window is meant to live on the canvas by itself, as every toplevel is managed
+  in DriftWM. The controller adopts a window that appears into a waiting slot of
+  its application or places it with upstream's `window_placement` policy
+  (`center`, `cursor`, or `auto` through `driftwm-core`'s own `place_auto`, with
+  upstream's cascade), then raises, focuses and navigates to it with
+  `zoom.reset_on_new_window`; `window_closed` removes it or leaves a stand-in by
+  `session.suspend_on_close`, a window rule or a close/suspend mark that
+  lapses after upstream's 10 seconds, with upstream's focus-follow tiers and
+  `navigation.auto_navigate_on_close` read from the one focus history that
+  `cycle-windows` walks, which a shell without native focus fills by answering
+  each request `focus_logical`, so they need no report of native focus;
+  `retitle` follows titles; `close-window`, `suspend-window` and the IPC
+  `Close`, `Suspend` and `Relaunch` requests run and return `close_window` and
+  `launch` effects, a relaunch staying pending for upstream's 30 seconds. The
+  macOS rule that replaces upstream's session restore: applications outlive
+  Infinify, so the scene file keeps one slot per window (stand-ins listed in an
+  additive `standins` key), running windows are re-adopted into their slots by
+  bundle identifier and title in a discovery pass at launch and whenever the
+  canvas reopens, a slot whose titled window the pass names as existing off
+  screen keeps waiting for it, and at `adoption_complete` the other unmatched
+  slots are dropped unless `session.restore_windows` keeps them as stand-ins;
+  a config file refused at launch decides nothing. The shell gains a window
+  manager (discovery over the window list, ScreenCaptureKit streams started and
+  stopped on demand, an Accessibility close-button press on a freshly validated
+  identity, `NSWorkspace` launch), opens the canvas at launch when Screen
+  Recording access exists, and keeps the chooser-first run as `--manual`.
+  It lands on top of `c11fece` and `5812d6f`: the focus request of a new
+  window and of the window that follows a close goes to the navigation
+  coordinator like every other (performed natively, or answered
+  `focus_logical`), the controller keeps one focus history for cycling and for
+  the close tiers, the IPC event stream reports the windows that come and go,
+  and `close-window` and `suspend-window` are reported as implemented by
+  `bindings`, leaving six of upstream's default key bindings on actions that do
+  not run.
+  Coverage is controller scenarios through the exported C ABI
+  (`crates/desktop/tests/lifecycle_flow.rs`, synthetic identities, expected
+  positions derived by hand from upstream's rules, expiry driven by
+  `tick_navigation` timestamps) plus ten short scripted launches on 2026-10-09
+  of the built app on a private scene, config and socket (macOS 27.2, Apple
+  Silicon), six on the build before the review fixes and four on the build with
+  them, which left no saved evidence, and one more of the merged build on the
+  same day (below). Those ten launches had neither Screen
+  Recording nor Accessibility access. Exercised there: the windowed canvas
+  opening and reporting on stderr that it manages nothing; `state` with seeded
+  waiting slots (and, in the earlier six, one stand-in); `close`, `suspend`,
+  `relaunch`, `close-window` and `suspend-window` on placeholders (dismissal,
+  upstream's error replies, a relaunch of a bundle identifier with no
+  application reported and survived, and in the later four a second request for
+  it answering `ok` with no second attempt); the stand-in list in the scene
+  file and after a restart (earlier six); `--manual` opening on the chooser
+  with no canvas; exit on SIGTERM. The launch of the merged build, `--windowed`
+  with no Screen Recording access (the missing-Accessibility note was not
+  printed, so that access presumably existed; it was not checked), repeated on
+  one build what the earlier milestones and this one had shown apart:
+  `center-nearest right` landing on the seeded window at 1950 0,
+  `pan-viewport right` moving the camera 100 points, `zoom-to-fit` and back,
+  the not-managed line on stderr, three waiting slots in `state`,
+  `focus --id` then `close-window` dismissing one, `suspend` and `relaunch`
+  answering as above, an `exec` child and the autostart command both carrying
+  `INFINIFY_SOCKET`, and a `subscribe` client receiving the state without the
+  dismissed window; it exited 0 on SIGTERM with its socket removed.
+  Evidence boundary: no window was discovered,
+  adopted, placed, captured, retitled, closed or relaunched;
+  `adoption_complete` was never sent, so the slot drop, held slots, the refused
+  config rule and `restore_windows` were not exercised in the app; no mark or
+  relaunch was seen to lapse there and no close was followed; the close-button
+  press, on-demand capture and the launch of a real application are compiled
+  and read only; no hot key (⌃⌥Q is now registered), status line or pixel was
+  observed; one output only. Known mismatches: expiry is measured on the
+  navigation clock the host ticks, not a wall clock, and the identity match of
+  a pending relaunch stays open for the whole 30 seconds because there is no
+  activation token; slot matching by title is a macOS addition and is greedy
+  one window at a time; no parent, modal, widget, pin or fullscreen tiers;
+  window rules apply only `suspend_on_close` and `restore_windows`; the native
+  focus request for a new or follow-focused window has never been performed on
+  a real window, and with native focus allowed a window whose request failed
+  or was superseded is in no tier's history; upstream's blank-slate rule for
+  auto placement after a click on empty canvas is not carried over; stand-ins
+  have no upstream chrome and no click or Enter relaunch; a window that is off
+  screen during a discovery pass keeps its slot only if it is titled and the
+  slot has that exact title. See the
+  [lifecycle contract](../../crates/desktop/LIFECYCLE.md) and the
+  [desktop shell notes](../../native/desktop/README.md#managed-windows).
 
 These milestones add evidence to partial rows. None satisfies an entire native
 behavior row or changes the completion requirement.

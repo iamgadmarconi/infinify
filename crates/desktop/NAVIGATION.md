@@ -43,7 +43,8 @@ compositor border is zero. The internal alignment equation preserves upstream's
 Oversize frames fall back to center separately on each axis.
 
 Initialize the clock with `tick_navigation` before the first navigation and keep
-it updated while idle. Every call computes one elapsed time for all outputs,
+it updated while idle; close marks and pending relaunches also lapse on it
+([LIFECYCLE.md](LIFECYCLE.md#differences-from-upstream)). Every call computes one elapsed time for all outputs,
 capped at 33 ms. The first call establishes the clock with zero elapsed time;
 repeated timestamps use zero elapsed time, and decreasing timestamps reject
 atomically. Arrival checks still run on zero-time ticks, as upstream does. A
@@ -236,8 +237,9 @@ Two different tests are upstream's and both are kept:
   waits out the double-click window before panning after a click on a
   server-side title bar; there is no separate title bar here, so
   `click_release` always pans at once.
-- `focus_follows_mouse`, `auto_navigate_on_close` and `zoom.interact_min`'s
-  pick mode are not implemented.
+- `focus_follows_mouse` and `zoom.interact_min`'s pick mode are not
+  implemented. `auto_navigate_on_close` belongs to the
+  [window lifecycle](LIFECYCLE.md#a-window-closes).
 - The focus history is promoted when a focus request is answered, not when
   logical focus is set: see [FOCUS.md](FOCUS.md#upstream-entry-points). A shell
   that performs no native focus answers `focus_logical`, and cycling then

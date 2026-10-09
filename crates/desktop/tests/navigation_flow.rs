@@ -53,7 +53,7 @@ fn setup() -> Host {
         (1, 2000.0, 1000.0, 200.0, 100.0),
         (2, 10.0, 20.0, 1200.0, 500.0),
     ] {
-        h.ok(json!({"op":"attach","identity":{"pid":123,"birth_sec":1800000000,"birth_usec":0,"wid":id},"bundle_id":"test","title":"fixture","buffer":{"width":200,"height":100},"source_rect":rect(x,y,w,height)}));
+        h.ok(json!({"op":"attach","identity":{"pid":123,"birth_sec":1800000000,"birth_usec":0,"wid":id},"bundle_id":"test","title":"fixture","buffer":{"width":200,"height":100},"source_rect":rect(x,y,w,height),"world_rect":rect(x,y,w,height)}));
     }
     h
 }
@@ -371,7 +371,7 @@ fn strict_arrival_boundaries_fractional_frames_and_negative_inset_oracle() {
     // immediately below, exactly at, and immediately above the strict 0.5 threshold.
     for delta in [0.499999, 0.5, 0.500001] {
         let mut h = setup();
-        h.ok(json!({"op":"attach","identity":{"pid":123,"birth_sec":1800000000,"birth_usec":0,"wid":3},"bundle_id":"test","title":"fractional","buffer":{"width":200,"height":100},"source_rect":rect(400.0+delta,350.0,200.0,100.0)}));
+        h.ok(json!({"op":"attach","identity":{"pid":123,"birth_sec":1800000000,"birth_usec":0,"wid":3},"bundle_id":"test","title":"fractional","buffer":{"width":200,"height":100},"source_rect":rect(400.0+delta,350.0,200.0,100.0),"world_rect":rect(400.0+delta,350.0,200.0,100.0)}));
         trace.push_str("pose 0 0 1\n");
         actual.push(trace_pose(&mut h));
         trace.push_str(&format!("anchor {} 400 500 400 1\n", 500.0 + delta));

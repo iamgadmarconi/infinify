@@ -33,6 +33,10 @@ pub(crate) struct Settings {
     /// Parsed from a file. False for the built-in defaults, whether no file was
     /// found or the launch file was refused.
     pub(crate) from_file: bool,
+    /// The file was there and could not be read or parsed while no file had
+    /// been accepted: the built-in defaults are in force without speaking for
+    /// what the user wrote. An accepted load replaces it.
+    pub(crate) refused: bool,
 }
 /// Where a saved output's viewport comes from. Never saved.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -99,6 +103,7 @@ impl Settings {
             extra_keysyms,
             written_keys,
             from_file: true,
+            refused: false,
         }
     }
 }
@@ -239,7 +244,17 @@ impl Controller {
                 }
                 (Vec::new(), warnings)
             }
-            Err(error) => (vec![error], Vec::new()),
+            Err(error) => {
+                // No file is the built-in defaults by choice. A file that is
+                // there and refused before any was accepted is not.
+                if !self.settings.from_file {
+                    self.settings = std::sync::Arc::new(Settings {
+                        refused: true,
+                        ..Settings::default()
+                    });
+                }
+                (vec![error], Vec::new())
+            }
         };
         let mut effects = Vec::new();
         if launch {

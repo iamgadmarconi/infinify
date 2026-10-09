@@ -213,7 +213,7 @@ bottom_right = "exec say corner"
 name = "right"
 [outputs.hot_corners]
 disable_while_dragging = false
-top_left = "close-window"
+top_left = "fill-window"
 bottom_left = "send-cursor-to-output left"
 bottom_right = "spawn say dragged"
 
@@ -248,7 +248,7 @@ fn hot_corners_follow_the_outputs_entry_and_upstreams_wildcard() {
             {"output":1,"stable_id":"left","threshold":6.0,"disable_while_dragging":true,"disable_when_fullscreen":true,
              "corners":{"top_left":"zoom-to-fit","bottom_right":"exec say corner"}},
             {"output":2,"stable_id":"right","threshold":4.0,"disable_while_dragging":false,"disable_when_fullscreen":true,
-             "corners":{"top_left":"close-window","bottom_left":"send-cursor-to-output left","bottom_right":"spawn say dragged"}},
+             "corners":{"top_left":"fill-window","bottom_left":"send-cursor-to-output left","bottom_right":"spawn say dragged"}},
             unarmed(3, "above"),
         ])
     );
@@ -279,7 +279,7 @@ fn hot_corners_follow_the_outputs_entry_and_upstreams_wildcard() {
     // An action that does not run here is refused by name, as a binding's is.
     assert_eq!(
         h.error(json!({"op":"hot_corner","output":2,"corner":"top_left"})),
-        "action not implemented on macOS yet: close-window"
+        "action not implemented on macOS yet: fill-window"
     );
     assert_eq!(
         h.error(json!({"op":"hot_corner","output":99,"corner":"top_left"})),

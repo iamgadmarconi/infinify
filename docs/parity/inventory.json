@@ -126,7 +126,7 @@
       },
       "contract": "Match Action::CloseWindow dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -134,7 +134,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "The controller action close-window acts on the focused window. For a window with a bound source it returns a close_window effect naming that binding (window, identity, generation) and marks the close as real, so session.suspend_on_close leaves no stand-in when window_closed later reports the window gone; nothing is removed until then. A focused detached placeholder (stand-in or waiting slot) is dismissed, with upstream's focus-follow. With no focused window nothing happens. Default shell: Control-Option-Q (upstream mod+q) and msg action close-window; the shell performs the effect only from an action or IPC reply, by pressing that window's own close button through Accessibility after validating process id, process birth and window number afresh, and only when Accessibility access exists. The mark lapses after upstream's 10 seconds. Known mismatches: those 10 seconds are measured on the navigation clock the host ticks (the app's shell ticks it every 80 ms while the canvas is open), not on a wall clock, and a press the shell skipped is not reported back, so its mark simply lapses; the focused window is the canvas's logical focus, which follows native focus only where native focus is allowed (Accessibility access, and no --no-native-focus); an Accessibility press that is not answered in time is treated as sent; no fullscreen, modal or widget policy. No evidence entry is recorded yet: automated coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/lifecycle_flow.rs); the scripted msg launches of the built app on 2026-10-09 had neither Screen Recording nor Accessibility access, reached placeholders only and left no saved evidence: a focused placeholder was dismissed there, and the close button press and the hot key are unrun. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.SuspendWindow",
@@ -146,7 +147,7 @@
       },
       "contract": "Match Action::SuspendWindow dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -154,7 +155,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "The controller action suspend-window acts on the focused window. For a window with a bound source it marks the window for suspension and returns the same close_window effect as close-window; when window_closed reports the window gone, a stand-in (a detached placeholder keeping the logical id, world frame and stacking, listed in the scene file's standins) takes its place. A window without a bundle identifier could not be relaunched and is closed for real instead. A focused placeholder is dismissed, upstream's second press. Default shell: msg action suspend-window or a config binding (upstream binds no default key); the effect is performed as for close-window. Known mismatches: the window is not converted at once, the stand-in appears only when the native window has gone, so an application that refuses to close keeps its live window; the suspend mark lapses after upstream's 10 seconds, measured on the navigation clock the host ticks rather than a wall clock, so an application that takes longer to close leaves what suspend_on_close says; the stand-in keeps the window's current world frame, not the frame at the moment of the action; a stand-in is drawn like any detached placeholder, without upstream's name label and without click or Enter relaunch; no dialog or widget exclusions. No evidence entry is recorded yet: automated coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/lifecycle_flow.rs); the scripted msg launches of the built app on 2026-10-09 had neither Screen Recording nor Accessibility access, reached placeholders only and left no saved evidence: a focused stand-in was dismissed there, and the suspension of a live window is unrun. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.NudgeWindow",
@@ -1365,12 +1367,13 @@
       },
       "contract": "Match WindowPlacement::Center dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "A window that appears by itself (attach with neither logical_id nor world_rect) and adopts no saved slot is placed under the active output's focus_placement point, taken at the zoom the following navigation lands at and converted through the current camera and zoom with upstream's rounding and truncating halving, then cascaded down the diagonal by decorations.title_bar_height while it would sit within two points of another window's top-left. Center is the default and the fallback of cursor without a pointer and of auto without an anchor or a free slot. The frame's size is the native window's; no world position derives from native geometry. The window is then raised, focused and navigated to. Default shell: the window manager sends that attach for every window it discovers, with the output under the pointer. Known mismatches: chrome is zero because a native frame includes its title bar; the app registers no usable area, so the point is relative to the whole view; no parent-centred child placement, no window-rule position or size and no fullscreen tier; without an active output the origin is used; during the launch pass a placed window is neither focused nor navigated to. No evidence entry is recorded yet: automated coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/lifecycle_flow.rs, expected positions derived by hand from upstream's rules); the scripted msg launches of the built app on 2026-10-09 had no Screen Recording access, so no window was discovered or placed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "WindowPlacement.Cursor",
@@ -1382,12 +1385,13 @@
       },
       "contract": "Match WindowPlacement::Cursor dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "With window_placement = cursor a window that appears by itself and adopts no saved slot is centred on the pointer, a global screen point read through the active output's own bounds and camera, and held inside the usable area, an oversized frame keeping its top-left on the usable edge; then upstream's cascade applies. The window is raised and focused and the camera stays put, unless zoom.reset_on_new_window is on and the output is zoomed out, upstream's overview rescue. Without a pointer it is center. Default shell: the window manager sends the pointer with every new-window attach. Known mismatches: chrome is zero because a native frame includes its title bar; the app registers no usable area, so the clamp is to the whole view; no window-rule position or size and no fullscreen tier; during the launch pass a placed window is not focused. No evidence entry is recorded yet: automated coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/lifecycle_flow.rs, expected positions derived by hand from upstream's rules); the scripted msg launches of the built app on 2026-10-09 had no Screen Recording access, so no window was discovered or placed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "WindowPlacement.Auto",
@@ -1399,12 +1403,13 @@
       },
       "contract": "Match WindowPlacement::Auto dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "With window_placement = auto a window that appears by itself and adopts no saved slot is placed by driftwm-core's layout::auto_placement::place_auto, upstream's own code, beside the snap cluster of the focused window while at least a third of that window is in the active output's view, else of the element nearest the usable centre, the topmost of equally near ones; the spacing is snap.gap, every window is an obstacle and detached placeholders anchor like windows. With nothing in view, or no free slot, it falls back to center. Then upstream's cascade applies and the window is raised, focused and navigated to. Known mismatches: no blank-slate suppression of the nearest-element anchor after a click on empty canvas: clear_focus clears the focus without that memory; no widget, pinned or fullscreen exclusions; chrome is zero; the app registers no usable area. No evidence entry is recorded yet: automated coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/lifecycle_flow.rs, expected positions derived by hand from upstream's rules); the scripted msg launches of the built app on 2026-10-09 had no Screen Recording access, so no window was discovered or placed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "FocusPlacement.Center",
@@ -1955,7 +1960,7 @@
       },
       "contract": "Match wire format, CLI grammar, selectors, coordinates, reply semantics, errors and subscriptions for Request::Close.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [
         "native.input",
@@ -1963,7 +1968,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Upstream's cmd_close with its two selector tiers (no selector: the focused window; a number: the logical window id; a string: a case-insensitive part of the bundle identifier). A window with a bound source: Ok, a close_window effect naming that binding and a real-close mark, so session.suspend_on_close leaves no stand-in. Else a detached placeholder the selector names: dismissed, Ok. Else the selector's error (no focused window, no window with id N, no window matching 'text'). Reached as msg close [APP_ID] [--id N]; the shell presses the window's own close button through Accessibility on the freshly validated identity the controller named. Known mismatches: Ok means the request was issued, not that the application closed the window; the mark lapses after upstream's 10 seconds, measured on the navigation clock the host ticks rather than a wall clock; any detached placeholder is dismissed, waiting slots as well as stand-ins. No evidence entry is recorded yet: automated coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/lifecycle_flow.rs, crates/desktop/tests/ipc_flow.rs); the scripted msg launches of the built app on 2026-10-09 had neither Screen Recording nor Accessibility access and left no saved evidence: dismissal of a placeholder by id and the error replies were observed there, the close of a live window was not. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ipc.Request.Suspend",
@@ -1975,7 +1981,7 @@
       },
       "contract": "Match wire format, CLI grammar, selectors, coordinates, reply semantics, errors and subscriptions for Request::Suspend.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [
         "native.input",
@@ -1983,7 +1989,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Upstream's cmd_suspend: a window with a bound source is made the logical focus first if it is not (no camera move), then the suspend-window action runs, so the reply is Ok with a close_window effect and a stand-in takes the window's place once it has closed. A detached placeholder answers window is already suspended; anything else answers the selector's error. Reached as msg suspend [APP_ID] [--id N]. Known mismatches: those of Action.SuspendWindow (no conversion until the native window has gone, a 10-second mark measured on the navigation clock, the stand-in's frame and missing chrome); the focus effect returned with it goes to the shell's navigation coordinator like every other and has never been performed on a real window; a waiting slot answers already suspended like a stand-in. No evidence entry is recorded yet: automated coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/lifecycle_flow.rs, crates/desktop/tests/ipc_flow.rs); the scripted msg launches of the built app on 2026-10-09 had neither Screen Recording nor Accessibility access and left no saved evidence: the already-suspended and unknown-id replies were observed there, the suspension of a live window was not. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ipc.Request.Relaunch",
@@ -1995,7 +2002,7 @@
       },
       "contract": "Match wire format, CLI grammar, selectors, coordinates, reply semantics, errors and subscriptions for Request::Relaunch.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [
         "native.input",
@@ -2003,7 +2010,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Upstream's cmd_relaunch: the detached placeholder the selector names (the focused one without a selector) gets a launch effect carrying its bundle identifier and is queued as a pending relaunch for upstream's 30 seconds; the next window of that bundle identifier that appears within them adopts its slot (logical id, world frame, stacking), oldest request first, and a request for a relaunch already pending answers Ok with no effect, upstream's no-op. Anything else answers no suspended window matching selector. The shell opens the application through NSWorkspace by bundle identifier. Reached as msg relaunch [APP_ID] [--id N]. Known mismatches: any detached placeholder can be relaunched, waiting slots as well as stand-ins; there is no activation token, so the identity match stays open for the whole 30 seconds instead of upstream's 5 and takes the next window of that application whatever its title; the 30 seconds are measured on the navigation clock the host ticks, not a wall clock; an application that is not installed answers Ok and is reported by the shell in the status line and on stderr, where upstream answers <name> is no longer installed and records nothing; a placeholder without a bundle identifier answers the app has no bundle identifier to relaunch; Enter and a click on a stand-in's name do not relaunch. No evidence entry is recorded yet: automated coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/lifecycle_flow.rs, crates/desktop/tests/ipc_flow.rs); the scripted msg launches of the built app on 2026-10-09 had no Screen Recording access and left no saved evidence: Ok with the shell's failure report for a bundle identifier that no application has, and the selector errors, were observed there; no application was launched and no adoption was seen. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ipc.Request.Action",
@@ -2024,7 +2032,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Runs the request's action string through the full upstream action grammar and the same handlers that the default shell's shortcuts and toolbar buttons use. Implemented: pan-viewport, home-toggle, zoom-in, zoom-out, zoom-reset, zoom-to-fit, center-window, center-nearest, cycle-windows (always a single committed step over IPC), focus-center, go-to-bookmark, set-bookmark, nudge-window, send-to-output, send-cursor-to-output, switch-layout, exec, spawn, exec-terminal, exec-launcher, reload-config and quit (see the Action rows); every other upstream action parses but is answered with an Err starting action not implemented on macOS yet, and a string upstream does not parse with an Err starting unknown action. Reached as msg action followed by the action string. Known mismatches: upstream replies Ok whenever a spec parses, even when it had no effect, where Infinify answers Err for a parsed action it does not implement; thirteen upstream actions are unimplemented; quit, exec, a config reload, a pointer warp and a layout switch reach the shell as effects. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and the Unix-socket server, the msg client against a running app and rendered motion are unverified on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Runs the request's action string through the full upstream action grammar and the same handlers that the default shell's shortcuts and toolbar buttons use. Implemented: pan-viewport, home-toggle, zoom-in, zoom-out, zoom-reset, zoom-to-fit, center-window, center-nearest, cycle-windows (always a single committed step over IPC), focus-center, go-to-bookmark, set-bookmark, nudge-window, close-window, suspend-window, send-to-output, send-cursor-to-output, switch-layout, exec, spawn, exec-terminal, exec-launcher, reload-config and quit (see the Action rows); every other upstream action parses but is answered with an Err starting action not implemented on macOS yet, and a string upstream does not parse with an Err starting unknown action. Reached as msg action followed by the action string. Known mismatches: upstream replies Ok whenever a spec parses, even when it had no effect, where Infinify answers Err for a parsed action it does not implement; eleven upstream actions are unimplemented; quit, exec, a config reload, a pointer warp, a layout switch, a window's close and an application launch reach the shell as effects. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and the Unix-socket server, the msg client against a running app and rendered motion are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ipc.Request.Bookmark",
@@ -2301,13 +2309,14 @@
       },
       "contract": "Match WindowRule.suspend_on_close type, validation, default and live effect.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "Option<bool>",
-      "required": true
+      "required": true,
+      "implementation_note": "A [[window_rules]] entry's suspend_on_close overrides session.suspend_on_close for the windows it matches when window_closed reports one gone: the rule's app_id is matched against the bundle identifier and its title against the window's current title, through driftwm-core's own rule resolver. Known mismatches: suspend_on_close and restore_windows are the only window-rule fields applied here, so a rule's position, size, focus_on_open, widget and the others shape nothing; a close-window or suspend-window mark still overrides the rule for its 10 seconds; a window without a bundle identifier never leaves a stand-in. No evidence entry is recorded yet: automated coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/lifecycle_flow.rs); the scripted msg launches of the built app on 2026-10-09 had no Screen Recording access, so no window was bound and none closed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.WindowRule.restore_windows",
@@ -2319,13 +2328,14 @@
       },
       "contract": "Match WindowRule.restore_windows type, validation, default and live effect.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "Option<bool>",
-      "required": true
+      "required": true,
+      "implementation_note": "A [[window_rules]] entry's restore_windows overrides session.restore_windows for a saved slot at adoption_complete, which ends each discovery pass of the shell: at launch and when the canvas reopens. It is asked twice, as upstream asks it: with the slot's title, where upstream decides whether to record the window, and by application alone, where upstream restores it; both must hold, so a rule keyed on a title alone restores nothing. The rule's app_id is matched against the bundle identifier. Known mismatches: the flag decides at launch whether an unmatched slot stays as a stand-in, not at save time whether a window is recorded; suspend_on_close and restore_windows are the only window-rule fields applied here; never read in a run without Screen Recording access or with --manual, nor while the launch config file was refused. No evidence entry is recorded yet: automated coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/lifecycle_flow.rs); the scripted msg launches of the built app on 2026-10-09 had no Screen Recording access and adoption_complete was never sent. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.WindowRule.preserve_aspect_ratio",
@@ -4486,12 +4496,13 @@
       },
       "contract": "Suspend/relaunch native apps, single/multiple windows, matching and fallback policies.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "session",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Partial. A stand-in is a detached placeholder that keeps a closed window's logical id, world frame and stacking; the scene file lists stand-ins in an additive standins key, by logical id only. A window becomes one when it closes under session.suspend_on_close, a matching window rule or a suspend mark, provided it has a bundle identifier; close-window and IPC Close mark a real close instead. Relaunch asks the shell to open the application by bundle identifier and the next window of that application adopts the slot, oldest pending relaunch first; dismissal removes a stand-in and passes the focus on. In place of upstream's session restore there is a macOS rule, because applications outlive Infinify: every window keeps a slot in the scene file, running windows are re-adopted by bundle identifier and title in a discovery pass at launch and whenever the canvas reopens, a slot whose titled window the pass names as existing off screen keeps waiting for it, and at adoption_complete the other unmatched slots are dropped unless session.restore_windows keeps them as stand-ins. Marks lapse after upstream's 10 seconds and a pending relaunch after its 30. Known mismatches: both are measured on the navigation clock the host ticks, not a wall clock; there is no activation token, so the identity match stays open for the whole 30 seconds instead of 5; matching a slot by title is a macOS addition and is greedy one window at a time, so a slot can go to a sibling window of the same application; no dialog or widget exclusions and no parent or modal tiers; a stand-in is drawn like any detached placeholder, with no name label and no click or Enter relaunch; a relaunch of an application that is not installed answers Ok and is reported by the shell; a window that is off screen during a discovery pass keeps its slot only if it has a title and the slot has that exact title, otherwise the slot is dropped or made a stand-in and the window is placed afresh; while the launch config file is refused no slot is dropped or made a stand-in. No evidence entry is recorded yet: automated coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/lifecycle_flow.rs); the scripted msg launches of the built app on 2026-10-09 had neither Screen Recording nor Accessibility access and left no saved evidence: a seeded stand-in was listed, saved, read back after a restart, refused a second suspend, failed to relaunch a bundle identifier that no application has, and was dismissed; no live window was suspended, no application was relaunched and no adoption was seen. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "render.chrome",
@@ -4673,7 +4684,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for window_placement.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -4686,7 +4697,8 @@
           "source_assignment": "window_placement = \"center\"",
           "value": "center"
         }
-      ]
+      ],
+      "implementation_note": "Read from the loaded config each time a window appears by itself and adopts no saved slot: center (upstream's default), cursor or auto pick its world position as the WindowPlacement.Center, WindowPlacement.Cursor and WindowPlacement.Auto rows describe, and a reload applies to the next window. Known mismatches: those of the three variant rows (zero chrome, no usable area registered by the app, no parent, fullscreen or blank-slate tiers); a window rule's position and size are not applied; windows adopted into a saved slot keep the slot's frame and are not placed at all. No evidence entry is recorded yet: automated coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/lifecycle_flow.rs); the scripted msg launches of the built app on 2026-10-09 had no Screen Recording access, so no window was discovered or placed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.focus_placement",
@@ -4759,7 +4771,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for session.suspend_on_close.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -4772,7 +4784,8 @@
           "source_assignment": "suspend_on_close = false",
           "value": false
         }
-      ]
+      ],
+      "implementation_note": "Read when window_closed reports that a bound window is gone. On: a window with a bundle identifier leaves a stand-in, a detached placeholder that keeps its logical id, world frame and stacking. Off, upstream's default: the window leaves the scene and the focus follows. A [[window_rules]] suspend_on_close that matches the bundle identifier (as app_id) or the title overrides the section, and a close-window or suspend-window mark overrides both. Known mismatches: the marks lapse after upstream's 10 seconds, but measured on the navigation clock the host ticks rather than a wall clock; a window without a bundle identifier never leaves a stand-in; the shell reports a window as closed only when its window number leaves the system window list or its process ends, so a window an application merely hides is not seen as closed; no dialog or widget exclusions. No evidence entry is recorded yet: automated coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/lifecycle_flow.rs); the scripted msg launches of the built app on 2026-10-09 had no Screen Recording access, so no window was bound and none closed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.session.restore_windows",
@@ -4784,7 +4797,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for session.restore_windows.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -4797,7 +4810,8 @@
           "source_assignment": "restore_windows = false",
           "value": false
         }
-      ]
+      ],
+      "implementation_note": "Read at every adoption_complete, which the shell sends after the first read of each discovery pass: at launch and when the canvas reopens. On: a saved slot that no running window took back stays as a dormant stand-in. Off, upstream's default: it is dropped. A slot whose titled window the pass names as still existing off screen keeps waiting either way, and while a config file that exists was refused at launch nothing is dropped or made a stand-in, because the built-in defaults do not speak for the file. Stand-ins are kept either way and slots without a bundle identifier are dropped either way. A [[window_rules]] restore_windows overrides the section and is asked twice, with the title and by application alone, as upstream asks it. Known mismatches: upstream reads the flag at save time to decide whether an open window is recorded and restores what was recorded; here applications outlive the canvas, so every window is always saved as a slot, running windows take their slots back by bundle identifier and title, and the flag decides at launch whether an unmatched slot stays; in a run without Screen Recording access or with --manual no discovery pass completes, the flag is never read and no slot is dropped; an untitled window, or one retitled meanwhile, that is off screen during the pass counts as unmatched. No evidence entry is recorded yet: automated coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/lifecycle_flow.rs); the scripted msg launches of the built app on 2026-10-09 had no Screen Recording access, adoption_complete was never sent, and the flag made no observable difference there. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.session.restore_camera",
@@ -5772,7 +5786,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for navigation.auto_navigate_on_close.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -5785,7 +5799,8 @@
           "source_assignment": "auto_navigate_on_close = true  # on close, pan to the newly focused window if off-screen",
           "value": true
         }
-      ]
+      ],
+      "implementation_note": "Read when a closed or dismissed window passes the focus on. On, upstream's default: a spatially related follower from the focus history, the one cycle-windows walks, which a shell without native focus fills by answering every request focus_logical (a window in the closed frame's snap cluster, or overlapping it) that is not wholly inside the usable area is focused and the camera of the active output flies to it at the current zoom. Off: such a window is not a candidate, and the focus goes to the most recent or nearest window still visible, or to nobody. Known mismatches: the follower gets logical focus and a native focus request, which the shell's navigation coordinator performs or answers focus_logical like every other and which has never been performed on a real window, and macOS itself activates a window of its own choosing after a close; a window whose focus request failed or was superseded before its answer is not in the history and is not preferred; no parent or modal tier and no layer-surface condition; the app registers no usable area, so the visibility test is against the whole view. No evidence entry is recorded yet: automated coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/lifecycle_flow.rs); the scripted msg launches of the built app on 2026-10-09 had no Screen Recording access, so no bound window closed and no follow flight was seen. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.navigation.false",
@@ -6372,7 +6387,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for zoom.reset_on_new_window.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -6385,7 +6400,8 @@
           "source_assignment": "reset_on_new_window = true  # animate zoom to 1.0 when a new window is mapped",
           "value": true
         }
-      ]
+      ],
+      "implementation_note": "Read when a window that appeared by itself has been placed and is navigated to. On, upstream's default: the flight lands at zoom 1. Off: it keeps the current zoom. It also picks the zoom at which the center placement point is taken, and under cursor placement, which otherwise leaves the camera alone, a zoomed-out view is navigated only when it is on. Known mismatches: not applied to a window adopted into a saved slot (the camera stays, as in upstream's adopt_relaunched), to windows reported during the launch pass, or while a drag or resize gesture is active; the native focus request that accompanies the navigation goes to the shell's navigation coordinator like every other and has never been performed on a real window. No evidence entry is recorded yet: automated coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/lifecycle_flow.rs); the scripted msg launches of the built app on 2026-10-09 had no Screen Recording access, so no window was placed and no such flight was seen. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.zoom.reset_on_activation",
@@ -11992,13 +12008,14 @@
       },
       "contract": "Match Config.auto_navigate_on_close type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "bool"
+      "source_type": "bool",
+      "implementation_note": "Read when a closed or dismissed window passes the focus on. On, upstream's default: a spatially related follower from the focus history, the one cycle-windows walks, which a shell without native focus fills by answering every request focus_logical (a window in the closed frame's snap cluster, or overlapping it) that is not wholly inside the usable area is focused and the camera of the active output flies to it at the current zoom. Off: such a window is not a candidate, and the focus goes to the most recent or nearest window still visible, or to nobody. Known mismatches: the follower gets logical focus and a native focus request, which the shell's navigation coordinator performs or answers focus_logical like every other and which has never been performed on a real window, and macOS itself activates a window of its own choosing after a close; a window whose focus request failed or was superseded before its answer is not in the history and is not preferred; no parent or modal tier and no layer-surface condition; the app registers no usable area, so the visibility test is against the whole view. No evidence entry is recorded yet: automated coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/lifecycle_flow.rs); the scripted msg launches of the built app on 2026-10-09 had no Screen Recording access, so no bound window closed and no follow flight was seen. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.auto_navigate_on_click",
@@ -12141,13 +12158,14 @@
       },
       "contract": "Match Config.zoom_reset_on_new_window type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "bool"
+      "source_type": "bool",
+      "implementation_note": "Read when a window that appeared by itself has been placed and is navigated to. On, upstream's default: the flight lands at zoom 1. Off: it keeps the current zoom. It also picks the zoom at which the center placement point is taken, and under cursor placement, which otherwise leaves the camera alone, a zoomed-out view is navigated only when it is on. Known mismatches: not applied to a window adopted into a saved slot (the camera stays, as in upstream's adopt_relaunched), to windows reported during the launch pass, or while a drag or resize gesture is active; the native focus request that accompanies the navigation goes to the shell's navigation coordinator like every other and has never been performed on a real window. No evidence entry is recorded yet: automated coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/lifecycle_flow.rs); the scripted msg launches of the built app on 2026-10-09 had no Screen Recording access, so no window was placed and no such flight was seen. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.zoom_reset_on_activation",
@@ -12747,13 +12765,14 @@
       },
       "contract": "Match Config.window_placement type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "WindowPlacement"
+      "source_type": "WindowPlacement",
+      "implementation_note": "Read from the loaded config each time a window appears by itself and adopts no saved slot: center (upstream's default), cursor or auto pick its world position as the WindowPlacement.Center, WindowPlacement.Cursor and WindowPlacement.Auto rows describe, and a reload applies to the next window. Known mismatches: those of the three variant rows (zero chrome, no usable area registered by the app, no parent, fullscreen or blank-slate tiers); a window rule's position and size are not applied; windows adopted into a saved slot keep the slot's frame and are not placed at all. No evidence entry is recorded yet: automated coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/lifecycle_flow.rs); the scripted msg launches of the built app on 2026-10-09 had no Screen Recording access, so no window was discovered or placed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.focus_placement",
@@ -12985,13 +13004,14 @@
       },
       "contract": "Match SessionConfig.suspend_on_close type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "bool"
+      "source_type": "bool",
+      "implementation_note": "Read when window_closed reports that a bound window is gone. On: a window with a bundle identifier leaves a stand-in, a detached placeholder that keeps its logical id, world frame and stacking. Off, upstream's default: the window leaves the scene and the focus follows. A [[window_rules]] suspend_on_close that matches the bundle identifier (as app_id) or the title overrides the section, and a close-window or suspend-window mark overrides both. Known mismatches: the marks lapse after upstream's 10 seconds, but measured on the navigation clock the host ticks rather than a wall clock; a window without a bundle identifier never leaves a stand-in; the shell reports a window as closed only when its window number leaves the system window list or its process ends, so a window an application merely hides is not seen as closed; no dialog or widget exclusions. No evidence entry is recorded yet: automated coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/lifecycle_flow.rs); the scripted msg launches of the built app on 2026-10-09 had no Screen Recording access, so no window was bound and none closed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.SessionConfig.restore_windows",
@@ -13003,13 +13023,14 @@
       },
       "contract": "Match SessionConfig.restore_windows type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "bool"
+      "source_type": "bool",
+      "implementation_note": "Read at every adoption_complete, which the shell sends after the first read of each discovery pass: at launch and when the canvas reopens. On: a saved slot that no running window took back stays as a dormant stand-in. Off, upstream's default: it is dropped. A slot whose titled window the pass names as still existing off screen keeps waiting either way, and while a config file that exists was refused at launch nothing is dropped or made a stand-in, because the built-in defaults do not speak for the file. Stand-ins are kept either way and slots without a bundle identifier are dropped either way. A [[window_rules]] restore_windows overrides the section and is asked twice, with the title and by application alone, as upstream asks it. Known mismatches: upstream reads the flag at save time to decide whether an open window is recorded and restores what was recorded; here applications outlive the canvas, so every window is always saved as a slot, running windows take their slots back by bundle identifier and title, and the flag decides at launch whether an unmatched slot stays; in a run without Screen Recording access or with --manual no discovery pass completes, the flag is never read and no slot is dropped; an untitled window, or one retitled meanwhile, that is off screen during the pass counts as unmatched. No evidence entry is recorded yet: automated coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/lifecycle_flow.rs); the scripted msg launches of the built app on 2026-10-09 had no Screen Recording access, adoption_complete was never sent, and the flag made no observable difference there. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.SessionConfig.restore_camera",

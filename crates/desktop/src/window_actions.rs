@@ -152,7 +152,7 @@ impl Controller {
     }
     /// Upstream raise_and_focus. A focus change that is not a cycle step ends a
     /// cycle in progress first, as upstream's focus_changed does.
-    fn raise_and_focus(&mut self, window: WindowId) -> Result<Moved, Error> {
+    pub(crate) fn raise_and_focus(&mut self, window: WindowId) -> Result<Moved, Error> {
         self.finish_cycle();
         self.scene.focus(window)?;
         Ok(Moved {

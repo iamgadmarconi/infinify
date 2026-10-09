@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use super::*;
 use std::{
+    collections::BTreeSet,
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::Path,
@@ -22,9 +23,15 @@ struct Saved {
     /// omitted while empty, so an older build still reads a save that has none.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     bookmarks: BTreeMap<String, [f64; 2]>,
+    /// Additive in the same way: the logical ids of the stand-ins. Every other
+    /// window was open at the save, bound or not, and is a slot its own window
+    /// may come back to. A file written before stand-ins existed has only those.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    standins: BTreeSet<WindowId>,
 }
 impl Controller {
     /// Save world geometry and output cameras, never live bindings or gestures.
+    /// Which windows are stand-ins is saved; marks and relaunches are not.
     /// Rename commits atomically; directory sync errors may occur after commit.
     pub fn save(&self, path: impl AsRef<Path>) -> Result<(), Error> {
         let mut scene = self.scene.clone();
@@ -46,6 +53,13 @@ impl Controller {
             } else {
                 self.durable_bookmarks.clone()
             },
+            standins: self
+                .lifecycle
+                .standins
+                .iter()
+                .copied()
+                .filter(|id| self.scene.window(*id).is_some() && !self.sources.contains_key(id))
+                .collect(),
         };
         let bytes = serde_json::to_vec_pretty(&saved)?;
         if bytes.len() as u64 > MAX_SAVE_BYTES {
@@ -145,6 +159,13 @@ impl Controller {
         if saved.bookmarks.values().flatten().any(|v| !v.is_finite()) {
             return Err(Error::Invalid("invalid saved bookmark"));
         }
+        if saved
+            .standins
+            .iter()
+            .any(|id| saved.scene.window(*id).is_none())
+        {
+            return Err(Error::Invalid("invalid saved stand-in"));
+        }
         let mut outputs = saved.outputs;
         for output in outputs.values_mut() {
             output.seed = CameraSeed::File;
@@ -177,6 +198,10 @@ impl Controller {
             durable_bookmarks: saved.bookmarks,
             layout: None,
             last_event: None,
+            lifecycle: Lifecycle {
+                standins: saved.standins,
+                ..Lifecycle::default()
+            },
         })
     }
 }

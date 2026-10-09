@@ -1,11 +1,14 @@
 # Infinify native desktop shell
 
 `./scripts/build-app.sh` builds and ad-hoc signs `target/app/Infinify.app` for
-Apple Silicon / macOS 26+. The build does not launch anything. Open the app to
-choose ordinary local application windows. No window is automatically selected.
+Apple Silicon / macOS 26+. The build does not launch anything. As in DriftWM,
+where every toplevel is managed, the app puts every ordinary application window
+on the canvas by itself once it has Screen Recording access; without that
+access, or with `--manual`, it opens on the chooser and captures only the
+windows picked there. [Managed windows](#managed-windows) has the rules.
 Screen Recording permission is required for capture; Accessibility permission
-is required for native input and for focusing a native window from the canvas.
-The chooser explains a missing grant and offers an
+is required for native input, for focusing a native window from the canvas and
+for closing one. The chooser explains a missing grant and offers an
 Allow… button: the app asks macOS for access only from that click, then opens
 the matching System Settings pane. Screen Recording takes effect after a
 relaunch. Automated probes and tests never request permissions or change privacy
@@ -29,10 +32,20 @@ the one window it focuses, and nothing else.
 - Choose windows: add a selected native source, or explicitly rebind a saved
   placeholder using the chooser's drop-down. Same-source duplicate attachments
   are rejected; the existing world window is visible through every display camera.
+  While the app manages windows by itself this is the manual tool: for a window
+  it did not take, or to rebind one whose capture failed.
 - Open canvas (chooser): show the saved world without adding a window, at its
   saved cameras only with `[session] restore_camera = true` (see
   [Persistence](#persistence-and-lifecycle)). Placeholders, panning, zooming and the view actions need no capture,
   so this works before any source is chosen and without Screen Recording access.
+  Without that access a canvas opened this way manages no window and its status
+  line says so.
+- Close and suspend: Control-Option-Q (`close-window`) asks the focused window's
+  application to close it, by pressing that window's own close button through
+  Accessibility; on a focused placeholder it dismisses the placeholder.
+  `suspend-window` (no default key) does the same and leaves a stand-in behind.
+  `Infinify msg close`, `suspend` and `relaunch` are the scripted forms. See
+  [Managed windows](#managed-windows).
 - Keys, pointer gestures and settings come from one TOML file in DriftWM's own
   grammar; [Configuration](#configuration) has the file, the modifier mapping
   and the default tables. With no file, DriftWM's default bindings apply. The
@@ -168,8 +181,304 @@ Private per-window routing is reused verbatim from
 `../captured-windows/captured.m`, including its Cantrip signature provenance.
 There is no global synthetic event fallback. Release-on-cleanup applies only to
 the button this shell pressed in a source; user keyboard state is never
-synthesized or released. Lost/closed sources become inert placeholders. Stream errors detach
-rather than leaving stale content eligible for input.
+synthesized or released. While the app manages windows, a window that closes
+leaves the canvas or leaves a stand-in ([Managed windows](#managed-windows));
+in a manual run a lost or closed source becomes an inert placeholder, unless
+`close-window` or `suspend-window` asked it to close in the ten seconds before.
+Stream errors detach rather than leaving stale content eligible for input, in both.
+
+## Managed windows
+
+In DriftWM every toplevel is managed from the moment it exists. This is that
+rule for native Mac windows: the app finds the ordinary windows itself, places
+them, follows their titles and lets them go when they close. The decisions are
+the controller's and are upstream's; [LIFECYCLE.md](../../crates/desktop/LIFECYCLE.md)
+is the contract and lists every difference. **None of what this section says
+about real windows has been run**: no test launch had Screen Recording access.
+[What was run](#what-was-run-for-managed-windows) says what was.
+
+**At launch.**
+
+- With Screen Recording access: no chooser. The canvas opens at once on every
+  display (in its one panel with `--windowed`) and the app starts managing.
+- Without it: the chooser, as before, with its Allow screen recording… button
+  and Open canvas. A canvas opened from there, and a `--windowed` canvas (which
+  opens at launch either way), manages nothing and says why in the status line
+  and on stderr: `Windows are not managed: Infinify has no Screen Recording
+  access. …`. The app still never asks macOS for the grant by itself. Access is
+  read when the canvas opens and macOS applies a new grant at the next launch:
+  quit and reopen.
+- `--manual`: the previous behaviour whatever the grants are. The chooser comes
+  first, only windows picked there are captured, nothing is adopted and no saved
+  placeholder is dropped. A source that closes leaves a placeholder to rebind,
+  except one that `close-window` or `suspend-window` asked to close: when it
+  goes within ten seconds of the command it leaves nothing, or a stand-in, as
+  in a managed run. It combines with `--windowed`.
+- Never in `--source`, `--demo`, `--demo-probe`, `--demo-probe-guard` or the
+  owned-resize modes, which also reject `--manual` (exit 64). A saved scene that
+  failed to load suppresses it too.
+
+**Which windows.** What the chooser lists, restricted to what is on screen:
+normal-layer windows of regular (Dock) applications other than Infinify, at
+least 40x40 points. **Every such window is captured** while it is in view on
+some display, with no further question: a managed canvas shows whatever those
+windows show. Use `--manual` to keep choosing window by window.
+
+**Windows that are already open.** The first discovery pass reports each one
+that is on screen, back to front. A window whose application and title match a
+saved slot takes that slot back, with its logical id and world frame; failing a
+title match it takes the lowest free slot of its application; otherwise it is
+placed like a new window. The pass focuses none of them and moves no camera. A
+window that exists but is not on screen (minimized, hidden, on another Space)
+is not captured, but the pass names it by application and title, and the slot
+with that application and title is kept for it: when the window comes on screen
+it returns to its frame, and that adoption asks for no focus and moves no
+camera either. Then the slots nothing matched are dropped,
+**including placeholders an earlier build saved**, unless
+`[session] restore_windows = true`, which keeps them as stand-ins. Stand-ins
+are always kept. If the config file exists but was refused at launch, nothing
+is dropped and nothing is made a stand-in in that pass: the defaults that are
+in force do not speak for the file's `restore_windows`. This is the macOS form
+of upstream's session rule: on Wayland quitting the compositor ends its
+clients, here the applications outlive Infinify, so the scene file keeps one
+slot per window and the running windows return to theirs.
+
+That is the adoption alone. With Accessibility access
+[native focus is followed](#native-focus-is-followed) in every normal run, and
+an adopted window is on the canvas like any other: when it is the window the
+frontmost application has focused, the next read, at most about half a second
+later, takes it as an activation. It then replaces the saved focus, is raised
+and heads the most-recently-focused order, and if it is clipped on the display
+that shows its centre that display's camera flies to it, at 1:1 unless `[zoom]
+reset_on_activation = false`, a camera that `[session] restore_camera` restored
+included. Without Accessibility access nothing follows, and the saved focus and
+the cameras stay as the pass left them.
+
+The same pass runs again whenever the canvas is reopened after Return to
+desktop: the windows return to their slots, and the slot of a window that
+closed in between is dropped, or kept as a stand-in with `restore_windows`.
+
+**A window that appears later** is offered once its frame has held still from
+one poll to the next (about 80 ms). Its size is the native window's. Its place
+on the canvas is never where the native window sits on the desktop: it comes
+from `window_placement`, `center` (the default: under the `focus_placement`
+point, the centre of the view, of the display under the pointer), `cursor` or
+`auto` (beside the focused window's cluster), stepped down the diagonal while it
+would sit exactly on another window. It goes on top, takes the canvas's logical
+focus, and the camera of that display flies to it, to 1:1 unless `[zoom]
+reset_on_new_window = false`; under `cursor` placement the camera stays.
+
+**A window that closes** leaves the canvas. With `[session] suspend_on_close =
+true` (or a `[[window_rules]]` entry that sets it for that application) it
+leaves a stand-in instead: a placeholder that keeps the id, the frame and the
+place in the stack. The focus moves as upstream's does, to the window that
+last had the canvas's focus among those docked to or overlapping the closed
+one, else the last one still in view, else the nearest in view, else to none;
+with `[navigation] auto_navigate_on_close` (on by default) the camera flies to
+a docked or overlapping follower that is not wholly in view. "Had the focus"
+is the one most-recently-focused order of the canvas, the order Option-Tab
+walks ([Window navigation and native focus](#window-navigation-and-native-focus)):
+a click in the canvas, a new window, `msg focus` or a followed native focus
+enters it once the real window's focus is confirmed, or at once when the app
+performs no native focus (no Accessibility access, or `--no-native-focus`). A
+drag in progress on another window goes on, and then no camera flies. A window counts as closed when its
+window number is gone from the system's window list or its process is gone; a
+capture stream that fails while the window is still there keeps the old
+behaviour, a detached placeholder to rebind from the chooser.
+
+**Titles** follow the native window and are saved, because slots are matched by
+title at the next launch.
+
+**Capture on demand.** A ScreenCaptureKit stream runs only while its window is
+in view on some display. It stops about two seconds after the window left every
+view and starts again when it returns; a window that returns within those two
+seconds shows its last frame at once, one that returns later shows an empty
+tile until the restarted stream delivers. With `--experimental-native-resize`
+every stream runs continuously, as before.
+
+**Closing, suspending and relaunching** are explicit actions only; nothing
+closes a window by itself.
+
+| Entry | A focused or selected live window | A stand-in or other placeholder |
+| --- | --- | --- |
+| ⌃⌥Q, `msg action close-window`, `msg close [APP_ID] [--id N]` | its close button is pressed; when it goes it leaves no stand-in, whatever `suspend_on_close` says | dismissed |
+| `msg action suspend-window` | its close button is pressed; when it goes a stand-in stays | dismissed |
+| `msg suspend [APP_ID] [--id N]` | focused first, then as `suspend-window` | `window is already suspended` |
+| `msg relaunch [APP_ID] [--id N]` | `no suspended window matching selector` | its application is opened by bundle identifier; the next window of that application to appear within thirty seconds takes the slot. Asked again within those thirty seconds: `ok`, and nothing more happens |
+
+The press goes through Accessibility to exactly the window the controller
+named, after the identity checks the focus driver makes (process id, process
+birth, window number, and that the controller still binds that window), once
+before looking the window up and again immediately before pressing. Without
+Accessibility access the status line says so and nothing is pressed. The window
+stays on the canvas until it has really gone, so an application that asks about
+unsaved changes keeps its window. The command is remembered for ten seconds, as
+upstream remembers it: a window that goes later than that, because the
+application asked first or because nothing was pressed, leaves what
+`suspend_on_close` says. An application that is not installed gives a
+status note and a line on stderr (`Relaunch failed: no application with bundle
+identifier "…" is installed`).
+
+**Known limits**, from reading the code:
+
+- Only windows on screen are captured. A window that is minimized, hidden or on
+  another Space during a discovery pass keeps its saved slot only if it has a
+  title and the slot has that same title. One without a title, or retitled
+  while Infinify was not looking, loses its slot (kept as a stand-in with
+  `restore_windows`) and is placed as a new window when it comes on screen. A
+  slot kept this way whose window then closes without ever coming on screen
+  stays a placeholder until the next pass. A window with no saved slot is
+  placed, focused and flown to when it first comes on screen, like any new
+  window. A native tab is a window of its own that is on screen only while
+  selected, so each tab selected while the app is managing becomes a canvas
+  window.
+- Slots are matched one window at a time, in the order the windows are
+  reported. Of two windows of one application whose titles changed while
+  Infinify was not running, each takes the lowest free slot, and one that kept
+  its title can find its slot taken by a retitled sibling reported before it:
+  the two then sit in each other's frames.
+- An application that hides a window on close instead of destroying it keeps
+  its window number, so that window stays on the canvas.
+- ⌃⌥Q acts on the canvas's logical focus: the window last clicked in the
+  canvas, the newest window, the one `msg focus` named or a navigation chose,
+  or, with Accessibility access, the canvas window last focused in its own
+  application (Command-Tab, the Dock), which the canvas follows twice a second.
+  Without that access, or with `--no-native-focus`, a focus change outside the
+  canvas is not followed. Look at which window the canvas has focused before
+  pressing it. With `--windowed` no hot key exists; use `msg`.
+- The focus request that comes with a new window, or with the window that
+  takes the focus after a close, goes to the same coordinator as every other
+  focus request: with Accessibility access the real window is activated and
+  raised, without it the request is answered as logical focus. For a new window
+  that asks for what macOS has usually just done itself. Neither has been run
+  with a real window.
+- Who takes the focus after a close is read from the most-recently-focused
+  order, with its limit: where native focus is allowed, a window whose focus
+  request failed or was overtaken before it was confirmed is not in that order,
+  so it is not preferred as the follower, where upstream would have gone back
+  to it.
+- A stand-in looks like every detached placeholder ("Detached window N"): no
+  name label, and neither a click nor Return relaunches it as upstream's do. A
+  click focuses it like any window, and ⌃⌥Q then dismisses it; it is relaunched
+  through `msg relaunch`; there is no toolbar button for close.
+- A close or suspend request is forgotten after 10 seconds and a relaunch after
+  30, as upstream forgets them, measured on the clock the app ticks every
+  80 ms while the canvas is open. Within its 30 seconds a pending relaunch
+  takes the next window of that application whatever its title; upstream
+  narrows that to 5 seconds with an activation token macOS does not have.
+  Opening an application that is already running with other windows makes no
+  window, so such a relaunch simply lapses. `msg relaunch` answers `ok` for an
+  application that is not installed, where upstream answers `<name> is no
+  longer installed`.
+- After Return to desktop and Open canvas the windows return to their slots,
+  but one opened in between is treated as new: each is focused and flown to in
+  turn, the last one winning. The limits of the first pass apply to every
+  reopening: a window that is off screen without a matching title, still being
+  moved after the two-second wait, or missing from both reads of the shareable
+  windows loses its slot and is placed afresh when it is next offered.
+- A window whose capture failed, or that the controller refused, is not offered
+  again until it has left the screen and come back, or the canvas is reopened.
+  Until then another window of that application with a different title can
+  take its waiting slot.
+- If a read of the shareable windows fails it is tried again about every two
+  seconds while Screen Recording access stands, and the status line says so
+  each time (stderr once per reason).
+  Until one succeeds the first pass does not complete: nothing is dropped and
+  later windows are neither focused nor flown to as new windows are (followed
+  native focus aside).
+- With a config file that was refused at launch, no slot is dropped or made a
+  stand-in until a discovery pass runs with an accepted config: fix the file
+  and reopen the canvas, or relaunch.
+- Every poll makes one window-list query and one controller call per managed
+  window; with very many windows this has not been measured.
+- A press that Accessibility does not answer in time is treated as sent, so an
+  application that does not respond gives no status note.
+
+### What was run for managed windows
+
+On 2026-10-09 (macOS 27.2, Apple Silicon): `./scripts/build-app.sh`, the
+controller scenarios in `crates/desktop/tests/lifecycle_flow.rs` through the
+exported C ABI, and four short launches of the built, ad-hoc signed app on a
+private scene, config and socket, driven by a script through `Infinify msg`.
+The launches had **no Screen Recording and no Accessibility grant**, so
+discovery stayed inert and every window was a seeded placeholder: three slots
+a save recorded as open, with a bundle identifier (`org.example.seed`) that
+belongs to no application. Nothing from them is saved as evidence. Observed:
+
+- `--windowed 1100x700` opened its one panel (1100x700, normal level, read from
+  the system window list), printed the not-managed line on stderr and answered
+  `msg state` with the three placeholders, all `suspended`, on one output of
+  1100x636.
+- No discovery pass ran, so the pass rule was not applied: three seconds after
+  launch nothing had been dropped, in a run without `restore_windows` and in
+  one with it. That flag was therefore not exercised; its outcomes are covered
+  by `lifecycle_flow` only. Leaving the scene alone is the intended behaviour:
+  without a discovery pass the app cannot tell an open window from a closed
+  one.
+- `msg focus --id 1` then `msg action close-window`: placeholder 1 gone.
+  `msg close --id 2`: gone. `msg suspend --id` on a placeholder: `window is
+  already suspended`; on an unknown id: `no window with id 99`.
+- `msg relaunch --id 3`: `ok`, the `Relaunch failed: …` line on stderr, and the
+  app kept answering. Asked again a second later: `ok` and no second line,
+  because that relaunch was still pending. With an unknown id:
+  `no suspended window matching selector`.
+- Restart: the file that windowed run saved held the one placeholder left, with
+  no pid or window number anywhere in it. A reseeded scene of three survived a
+  windowed run and two `--manual` runs with `restore_windows = true` unchanged.
+- `--manual`: one window of the chooser's size (720x502) at the chooser's level
+  and no canvas (`msg state` lists no output), nothing on stderr, the three
+  placeholders untouched.
+- Every launch exited 0 on SIGTERM and removed its socket.
+
+Not run, because it needs the grants: the canvas opening by itself at launch,
+discovery, adoption of a running window into its slot, a slot kept for a window
+that is off screen, placement of a real window, the drop at the end of a pass
+(at launch or on reopening), `window_closed` and `retitle` for a real window,
+who takes the focus after a real close and the camera flying there, capture
+starting and stopping on demand, a failed read being tried again, the close
+button press, a relaunch that opens an application and its adoption. Also not
+run: a relaunch or a close request lapsing in the app (no launch lasted thirty
+seconds), a refused config file at launch, Return to desktop and Open canvas,
+⌃⌥Q or any other hot key, more than one display, and anything drawn, the
+not-managed status line included (only its stderr copy was read). Those paths
+are compiled, type-checked and read, nothing more. Six earlier launches the
+same day ran on the build before the review fixes and are superseded by these.
+
+**The build that holds this together with window navigation, hot corners, the
+event stream and autostart** was launched once more that day, as
+`--windowed 1100x700` for 20 seconds on a private scene (the same three seeded
+slots), config (`autostart = ["printenv INFINIFY_SOCKET > FILE"]`) and socket,
+driven through `Infinify msg`. It had no Screen Recording access. The
+missing-Accessibility note was not printed, so that access presumably existed;
+it was not checked. Nothing from it is saved as evidence. Observed:
+
+- the not-managed line on stderr at launch; `state` with the three slots at
+  `[520, -360]`, `[1950, 0]` and `[-620, -890]` on one output `windowed` of
+  1100x636, camera `550 -318`;
+- `action center-nearest right`: `focus` answered window 2 and `camera` read
+  `1950 -0` (the client prints the negative zero); `action pan-viewport right`:
+  `2050 -0`; `action zoom-to-fit`: camera `750 -390`, zoom 0.28484848484848485,
+  and a second one back at `2050 -0`, zoom 1;
+- `--json state`: the three windows, all `suspended`, the focused one first;
+  `focus --id 1` then `action close-window`: two windows left and no focus;
+- `suspend --id 2`: `window is already suspended`; `relaunch --id 2`: `ok` and
+  the `Relaunch failed: …` line on stderr, asked again: `ok` and no second line;
+  `close --id 99`: `no window with id 99`; `relaunch --id 99`: `no suspended
+  window matching selector`; `action suspend-window` with nothing focused: `ok`
+  and nothing changed;
+- `action exec printenv INFINIFY_SOCKET > FILE` and the autostart command each
+  wrote the path of the socket this instance served;
+- a `msg subscribe` client received 109 states, the first with three windows
+  and the last with two: the dismissal reached the subscriber;
+- SIGTERM: exit status 0, the subscriber exited 0, the socket was removed.
+
+No window had a bound source in that launch either, so no focus request was
+produced: that the request of a new window, or of the window that follows a
+close, reaches the coordinator and enters the most-recently-focused order rests
+on the controller scenarios (`lifecycle_flow`, `navigation_actions_flow`), the
+headless coordinator regression and a reading of the shell. The status line was
+not read, so neither was the not-managed note sharing it with the
+Accessibility note.
 
 ## Configuration
 
@@ -271,15 +580,16 @@ only while a canvas panel is open; `--windowed` registers none.
 | ⌃⌥Return | `mod+return` | `exec-terminal`: `$TERMINAL`, else `open -a Terminal "$HOME"` |
 | ⌃⌥D | `mod+d` | `exec-launcher`: `$LAUNCHER`, else `open -a Apps` |
 | ⌃⌥L | `mod+l` | `exec /usr/bin/pmset displaysleepnow`, standing in for upstream's `spawn swaylock -f -c 000000 -kl` (see [Linux-only default commands](#linux-only-default-commands)) |
+| ⌃⌥Q | `mod+q` | `close-window`: close the focused window, or dismiss a focused placeholder |
 | ⌃⌥⇧⌘Q | `mod+ctrl+shift+q` | `quit` |
 | ⌃⌥Esc | none (the shell's own) | exit, until a binding takes the chord |
 
-Those are 38 of upstream's 57 default key bindings. ⌥Tab and ⌥⇧Tab are taken
+Those are 39 of upstream's 57 default key bindings. ⌥Tab and ⌥⇧Tab are taken
 from every application while a canvas panel is open; rebind or unbind
 `cycle-windows` in the config file to give them back. The rest are not
 registered, so their chords stay with the applications:
 
-- 7 whose action does not run on macOS yet: ⌃⌥Q (`close-window`), ⌃⌥E
+- 6 whose action does not run on macOS yet: ⌃⌥E
   (`toggle-cursor-pan`), ⌃⌥F (`toggle-fullscreen`), ⌃⌥M and ⌃⌥⇧M (`fit-window`,
   `fit-window-snapped`), ⌃⌥⇧W (`zoom-to-fit-snapped`) and ⌃⌥T
   (`toggle-pin-to-screen`). Bound in a config file they are skipped the same
@@ -473,6 +783,11 @@ Applied now:
 | `[[outputs]] hot_corners` (`top_left`, `top_right`, `bottom_left`, `bottom_right`, `threshold`, `disable_while_dragging`) | [hot corners](#displays-hot-corners-layouts-and-autostart) |
 | `autostart` | commands run once at launch |
 | `[session] restore_camera`, `restore_bookmarks` | what a restart restores, see [Persistence](#persistence-and-lifecycle) |
+| `window_placement` | where a window that appears by itself is placed: `center`, `cursor` or `auto` |
+| `[zoom] reset_on_new_window` | whether the camera's flight to a new window lands at 1:1 |
+| `[navigation] auto_navigate_on_close` | whether the camera flies to the window that takes the focus after a close, when that window is docked to the closed one or overlaps it and is not wholly in view |
+| `[session] suspend_on_close`, `restore_windows`; the same two keys of a `[[window_rules]]` entry, matched by bundle identifier as `app_id` and by `title` | whether a window that closes by itself leaves a stand-in; whether a saved slot whose window is gone stays as one after a discovery pass, at launch or when the canvas reopens. See [Managed windows](#managed-windows) |
+| `[decorations] title_bar_height` | the diagonal step of the placement cascade, and nothing else |
 | `[env]` | the environment of commands run by `exec`, `spawn`, `exec-terminal`, `exec-launcher` and `autostart`; its `PATH`, when set, is also where a default binding's program is looked for, and its `INFINIFY_SOCKET`, when set, replaces the one the app adds |
 
 `exec` and `spawn` run their command as `/bin/sh -c`, detached in a session of
@@ -486,18 +801,18 @@ without IPC: a command it starts reaches this instance with a plain
 
 Read and validated by upstream's parser, then unused because the feature does
 not exist here: `[navigation] mouse_speed` (a drag pans 1:1), `[zoom]
-trackpad_speed` (pinch is unscaled), `focus_follows_mouse`, `window_placement`,
-`[session] suspend_on_close` and `restore_windows`, `[navigation]
-resize_step`, `drift`, `touch_speed`, `auto_navigate_on_close` and `edge_pan`,
-`[zoom] touch_speed`, `reset_on_new_window` and `interact_min`, `[input.keyboard]
+trackpad_speed` (pinch is unscaled), `focus_follows_mouse`, `[navigation]
+resize_step`, `drift`, `touch_speed` and `edge_pan`, `[zoom] touch_speed` and
+`interact_min`, `[input.keyboard]
 layout`, `variant`, `options`, `model`, `remember_layout_per_window`, `num_lock`
 and `caps_lock` (macOS owns the input sources and the lock keys),
 `[input.trackpad]`, `[input.mouse]`, `[input.touch]`, `[input.tablet]`,
 `[cursor]` (theme and size reach only the environment of a run command),
-`[background]`, `[decorations]`, `[effects]`, `[backend]`,
+`[background]`, the rest of `[decorations]`, `[effects]`, `[backend]`,
 `[output]`, `[[outputs]]` `scale`, `transform`, `position` and `mode` (macOS
 owns the display arrangement) and `hot_corners.disable_when_fullscreen`,
-`[[window_rules]]`, `[gestures.*]`,
+the rest of `[[window_rules]]` (`position`, `size`, `focus_on_open`, `widget`
+and the others shape no window), `[gestures.*]`,
 `[touch.*]`, `[mouse] resize_on_border` and the decoration settings, and
 tap-modifier bindings (a bare `alt+shift`), which are reported and skipped.
 
@@ -544,7 +859,8 @@ saved as evidence. Observed there, each read back over the socket:
   environment showing the `[env]` variable and none of the Wayland toolkit
   ones;
 - `unknown action: frobnicate` and `action not implemented on macOS yet:
-  close-window`, each with exit status 1; SIGTERM exiting 0 with the socket
+  close-window`, each with exit status 1 (`close-window` has run since the
+  [managed windows](#managed-windows) work); SIGTERM exiting 0 with the socket
   removed;
 - a second launch on the scene that run saved, with no config file: the camera
   at a new output's pose (`msg camera` 550 -318, where the file held the view
@@ -648,12 +964,14 @@ The default scene file is
 `~/Library/Application Support/Infinify/scene.json`. `--state /absolute/file.json`
 selects another file whose parent directory already exists. Saves use the Rust
 controller's private temporary file, fsync, atomic rename, and directory sync.
-Only world geometry, display UUID cameras, bookmarks and app/title metadata are
+Only world geometry, display UUID cameras, bookmarks, app/title metadata and
+which placeholders are stand-ins (by logical id) are
 persisted; PIDs, window IDs, process births, and captures are not saved. Bookmarks
-are an additive field of the same file and the format version is unchanged: scene
-files written by older builds still load, with no bookmarks. Older builds reject
+and the stand-in list (`standins`, written only while there is one) are additive
+fields of the same file and the format version is unchanged: scene
+files written by older builds still load, with no bookmarks and no stand-ins. Older builds reject
 fields they do not know, so an older build cannot read a scene file that contains
-bookmarks; keep a copy of a scene file before opening it with an older build.
+either; keep a copy of a scene file before opening it with an older build.
 A bookmark change or window move made over the IPC socket below is saved the same
 way. What a restart brings back follows DriftWM's `[session]` settings, whose
 defaults are both off. With `restore_camera = false` every display starts as a
@@ -667,8 +985,16 @@ and laid over the seeds at launch. On a config reload a bookmark the file adds
 or changes is re-asserted, one it removes is dropped, and the others keep their
 runtime value. Home and Fit return positions are per display, in memory only: not saved, and
 dropped on reload, on Return to desktop, and whenever a display change recreates
-the panels. Reloaded windows are unbound placeholders. A chooser selection is
-always required to rebind; there is no PID or title guess. A failed load blocks
+the panels. Reloaded windows are unbound placeholders: one slot for every window
+that was on the canvas at the save. While the app manages windows, a running
+window takes its slot back by bundle identifier and title, never by PID or
+window number, and the slots left over are dropped after each discovery pass
+unless `[session] restore_windows = true` keeps them as stand-ins; a slot
+whose titled window still exists off screen is kept, and nothing is decided
+while the config file is refused
+([Managed windows](#managed-windows)). With `--manual`, or without Screen
+Recording access, nothing is matched and nothing is dropped: a chooser selection
+is required to rebind. A failed load blocks
 source selection and disables every save path, preserving the original bytes until
 an explicit different state path or repaired file is provided. Display changes
 recreate panels while retaining cameras by stable display UUID. Source lifecycle and normal bounds are polled on the
@@ -755,17 +1081,23 @@ experimental native resize is unresolved `a native resize is pending`.
 | `resize [WIDTH HEIGHT] [--id N]` | Read the size only. Setting one answers an error: native layout resize is not available yet. |
 | `action SPEC...` | Run an upstream action string, below. |
 | `bookmark [NAME] [X Y] [--delete]` | List bookmarks, get or set one, or delete it. |
+| `close [APP_ID] [--id N]` | A window with a bound source: ask its application to close it (its close button, through Accessibility); it leaves no stand-in. A placeholder: dismiss it. |
+| `suspend [APP_ID] [--id N]` | A window with a bound source: focus it, close it the same way and leave a stand-in. A placeholder: `window is already suspended`. |
+| `relaunch [APP_ID] [--id N]` | A placeholder: open its application by bundle identifier; the next window of that application takes the slot. Answers `ok` once the request is made, also for an application that is not installed (status line and stderr then say so). |
 | `debug-counters` | A small map of controller collection sizes; the keys are Infinify's own and not stable. |
 
-`opacity`, `pin`, `close`, `suspend`, `relaunch` and `screenshot` answer
-`<name> is not implemented on macOS yet`.
+`opacity`, `pin` and `screenshot` answer
+`<name> is not implemented on macOS yet`. `close`, `suspend`
+and `relaunch` with no selector act on the focused window;
+[Managed windows](#managed-windows) has their rules and limits.
 
 `action` parses the full upstream action grammar with upstream's spelling: it
 is the grammar the config file's bindings use. These run:
 `pan-viewport <direction>`, `home-toggle`, `zoom-in`, `zoom-out`, `zoom-reset`,
 `zoom-to-fit`, `center-window`, `center-nearest <direction>`,
 `cycle-windows forward|backward`, `focus-center`, `go-to-bookmark NAME`,
-`set-bookmark NAME`, `nudge-window <direction>`, `send-to-output <direction>`,
+`set-bookmark NAME`, `nudge-window <direction>`, `close-window`,
+`suspend-window`, `send-to-output <direction>`,
 `send-cursor-to-output <direction>`, `switch-layout next|prev|INDEX`,
 `exec COMMAND`, `spawn COMMAND`, `exec-terminal`, `exec-launcher`,
 `reload-config` and `quit`. Over the socket `cycle-windows` is always one
@@ -773,7 +1105,8 @@ committed step, where upstream keeps the cycle open if a modifier happens to be
 down, and `focus-center` uses the real pointer's position at that moment.
 Every action but `cycle-windows` first ends a cycle in progress, as upstream's
 does. `send-cursor-to-output` moves the real pointer and `switch-layout`
-changes the selected input source, for whoever sends them. `exec` and `spawn`
+changes the selected input source, for whoever sends them. `close-window` and
+`suspend-window` press the focused window's own close button. `exec` and `spawn`
 make the app run
 the command through `/bin/sh -c`, so the socket lets any process of yours that
 can write to it run a command, as upstream's does. Every other upstream action
@@ -876,7 +1209,10 @@ nested winit backend. Instead of one full-screen floating panel per display it
 opens the canvas immediately in one ordinary-level, non-activating panel with a
 single output whose stable id is `windowed`. No global hot keys are registered, so
 use the toolbar, the pointer and `Infinify msg`; the chooser is not shown at
-launch but stays reachable from the toolbar. It is rejected in `--source`,
+launch but stays reachable from the toolbar. With Screen Recording access it
+manages windows like a normal run unless `--manual` is given; without, the
+canvas still opens and says that it manages nothing
+([Managed windows](#managed-windows)). It is rejected in `--source`,
 `--demo`, `--demo-probe`, `--demo-probe-guard` and owned-resize modes. It saves to
 the default scene file, takes the default socket and reads the default config
 file unless `--state`, `--socket` and `--config` say otherwise, so give a
@@ -958,7 +1294,7 @@ key repeat and every pointer binding are compiled and reviewed but have not
 been exercised in a running app, and neither has a non-US keyboard layout.
 Media keys, tap-modifier bindings, `wheel-up` / `wheel-down`, trackpad and
 touch gestures, and every setting whose feature is absent are read and unused.
-Seven of upstream's default key bindings and four of its default mouse
+Six of upstream's default key bindings and four of its default mouse
 bindings (three window actions and the pointer `center-nearest` swipe) do not
 run here yet, and its two resize bindings need the experimental flag. Window
 navigation and native focus have their own list of limits under
@@ -968,7 +1304,8 @@ the application before its window has native focus. Upstream's lock binding
 puts the displays to sleep with `pmset`, which locks the session only as far
 as the Lock Screen setting does; that command has not been run from the app.
 With the default bindings a detached placeholder
-cannot be dismissed with the pointer.
+cannot be dismissed with the pointer alone: a click focuses it, and
+`close-window` (⌃⌥Q, or `msg`) then dismisses it.
 Hot corners are watched by polling the pointer (every 80 ms, 60 times a second
 during a flight), so a pointer that crosses a corner without resting there can
 be missed, and none has been fired on a live run, so the `--windowed` rule that
@@ -980,8 +1317,8 @@ it selects nothing; selecting an input method (as opposed to a plain keyboard
 layout) from this accessory app is untried. The event stream reporting the
 output under the pointer becoming active, within one idle poll, is unrun: it
 needs a second display.
-The IPC surface is a subset of DriftWM's. Many upstream actions parse but are
-not implemented; `opacity`, `pin`, `close`, `suspend`, `relaunch` and
+The IPC surface is a subset of DriftWM's. Several upstream actions parse but are
+not implemented; `opacity`, `pin` and
 `screenshot` are not implemented; `resize` is read-only. An IPC
 focus is logical focus and camera navigation, plus a native focus request for a
 window with a bound source that no run has yet performed, and
@@ -989,7 +1326,9 @@ an IPC move is a logical world move that never moves the native window. Nested
 `--windowed` mode registers no global shortcuts and has one output.
 Cluster behavior uses the controller contract; fixture evidence currently has a
 single source. Production chooser/managing of existing user windows has not been
-run during development. Ad-hoc signing is local development packaging, not a
+run during development: automatic adoption, placement of a real window,
+capture on demand, the close button press and relaunch are compiled and read
+only, and [Managed windows](#managed-windows) lists their known limits. Ad-hoc signing is local development packaging, not a
 notarized distribution build. Private SkyLight input symbols can change with OS
 updates; unavailable symbols leave live viewing functional and input disabled.
 
@@ -1153,7 +1492,9 @@ committing it; logical focus stays.
   upstream would have put it there. Without native focus (no Accessibility
   access, or `--no-native-focus`) every window you focus on the canvas enters
   it. A detached placeholder is never in the order (upstream's stand-ins are
-  not either), so a canvas of placeholders alone cannot be cycled.
+  not either), so a canvas of placeholders alone cannot be cycled. The same
+  order decides who takes the focus when a window closes
+  ([Managed windows](#managed-windows)).
 - **A click reaches the application before its window has native focus.** The
   press is forwarded while the native focus request is still in flight. What an
   application does with a press that arrives while it is not yet active (take
@@ -1169,9 +1510,9 @@ committing it; logical focus stays.
 - A press bound to move or resize a window does not focus it, where upstream's
   does. The pointer form of `center-nearest` (upstream's ⌃⌥⌘-drag swipe) is not
   implemented; the status line says so.
-- `focus_follows_mouse` and `auto_navigate_on_close` are read from the config
-  and do nothing. Fullscreen, fit-window, pinned and modal windows do not exist
-  here, so none of upstream's special cases for them apply.
+- `focus_follows_mouse` is read from the config and does nothing. Fullscreen,
+  fit-window, pinned and modal windows do not exist here, so none of upstream's
+  special cases for them apply.
 - Following native focus moves the camera by itself when an application on the
   canvas takes focus while its window is clipped.
 - If the controller refuses to follow a native focus change (a drag or resize

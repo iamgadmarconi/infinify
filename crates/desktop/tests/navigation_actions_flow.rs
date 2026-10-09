@@ -646,8 +646,8 @@ fn cycle_windows_holds_commits_and_yields_to_other_actions() {
     h.ok(json!({"op":"zoom_in","output":1}));
     assert_eq!(h.focus_state()["cycle"], 1);
     assert_eq!(
-        h.error(json!({"op":"action","output":1,"action":"close-window"})),
-        "action not implemented on macOS yet: close-window"
+        h.error(json!({"op":"action","output":1,"action":"fill-window"})),
+        "action not implemented on macOS yet: fill-window"
     );
     assert_eq!(
         h.error(json!({"op":"action","output":1,"action":"frobnicate"})),

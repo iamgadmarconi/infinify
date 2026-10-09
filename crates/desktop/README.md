@@ -31,7 +31,10 @@ Preserve them as integers in native code.
 | --- | --- | --- |
 | `register_output` | `stable_id` string, `screen_bounds` rect | `output` logical ID |
 | `remove_output` | `output` | `{}`; camera retained by stable identity |
-| `attach` | `identity`, `bundle_id`, `title`, `buffer:{width,height}`, `source_rect`, optional `logical_id`, optional `world_rect` | `window` logical ID |
+| `attach` | `identity`, `bundle_id`, `title`, `buffer:{width,height}`, `source_rect`, optional `logical_id`, optional `world_rect`, optional `output`, optional `pointer` | `window` logical ID; for a new window also `adopted`, `effect`, `navigation`, `dirty` |
+| `window_closed` | `window`, `identity`, optional `output` | `{standin, effect, navigation, dirty}` |
+| `retitle` | `window`, `identity`, `title` | `{dirty}` |
+| `adoption_complete` | optional `present`, an array of `{bundle_id, title}` | `{dropped, standins, dirty}` |
 | `observe` | `window`, `identity`, `source_rect`, `buffer` | `{}`; never changes world geometry |
 | `remove_source` | `window`, `identity`, `keep_placeholder` boolean | `{}` |
 | `forget` | `window` | `{}`; removes source and world placeholder |
@@ -46,7 +49,7 @@ Preserve them as integers in native code.
 | `begin_resize` | `window`, `output`, `edges`, optional `group` boolean | `{}` |
 | `gesture_to` | total `screen_delta` from gesture start | `{}` |
 | `end_gesture` | none | `{}` |
-| `snapshot` | none | `outputs`, `windows`, `focused`, `placements`, `evidence` |
+| `snapshot` | none | `outputs`, `windows`, `focused`, `placements`, `lifecycle`, `evidence` |
 | `save` / `load` | explicit caller `path` string | `{}` |
 | `load_config` | `path` string or null | `{path, exists, errors, warnings, dirty, effects}` |
 | `set_platform` | `super` chord | `{super}` |
@@ -64,7 +67,10 @@ the event stream, and the exported `driftwm_desktop_msg` client.
 [Configuration](CONFIG.md) covers the six commands from `load_config` to
 `layout_changed`: DriftWM's TOML file, what of it is applied, the binding map,
 outputs, hot corners, keyboard layouts, autostart, and what stands for
-upstream's Linux commands.
+upstream's Linux commands. [Window lifecycle](LIFECYCLE.md) covers a window
+that appears or closes by itself: adoption, placement, stand-ins,
+`window_closed`, `retitle`, `adoption_complete` and the close, suspend and
+relaunch actions.
 
 ## macOS modifiers
 
@@ -111,10 +117,13 @@ window ownership and optional connection immediately around native delivery.**
 A saved binding never authorizes native input. `input` checks identity equality
 with the currently attached source; it does not deliver an event.
 
-`attach` without `logical_id` creates a new world window. Its initial world frame
-is `world_rect` if supplied, otherwise `source_rect`. A supplied `logical_id`
-explicitly rebinds an existing unattached placeholder; `world_rect` is then
-forbidden, preserving saved geometry. PID/title matching is never automatic.
+`attach` with a `world_rect` creates a new world window with that frame. A
+supplied `logical_id` explicitly rebinds an existing unattached placeholder;
+`world_rect` is then forbidden, preserving saved geometry. Both are the caller's
+choice and nothing is matched or focused. With neither, a window has appeared by
+itself: it takes over a waiting placeholder of its app or is placed by the
+config's `window_placement`, as [LIFECYCLE.md](LIFECYCLE.md) describes, and
+`source_rect` gives the world frame its size only. A PID is never matched.
 Existing live bindings must first be detached before replacing their identity.
 
 Each placement is a separate `(window,output)` instance, ordered bottom-to-top
@@ -130,9 +139,9 @@ window-local logical points), `buffer_local` pixels, `native_screen`, and
 `requires_native_revalidation:true`. Hits use topmost world z-order. An unbound
 placeholder blocks input with an error rather than clicking through it.
 
-Saves contain scene geometry, app bundle/title metadata and cameras keyed by
-stable display identity. They contain no PID, window number, process birth,
-connection, capture buffer, credentials, or gesture. Reload retains unattached
+Saves contain scene geometry, app bundle/title metadata, which placeholders are
+stand-ins, and cameras keyed by stable display identity. They contain no PID,
+window number, process birth, connection, capture buffer, credentials, or gesture. Reload retains unattached
 world placeholders and detached camera records; the shell must register actual
 connected displays, then explicitly attach selected fresh sources. Output IDs
 and cameras survive disconnect/reconnect and restart. Writes use a private
@@ -143,7 +152,7 @@ already exist. Loads are bounded at 32 MiB and never modify the input file.
 Verification:
 
 ```sh
-cargo test -p driftwm-desktop --test navigation_flow --test navigation_actions_flow --test focus_cycle_flow --test controller_flow --test config_flow --locked
+cargo test -p driftwm-desktop --test navigation_flow --test navigation_actions_flow --test focus_cycle_flow --test controller_flow --test config_flow --test lifecycle_flow --locked
 cargo clippy -p driftwm-desktop --all-targets -- -D warnings
 cargo fmt -p driftwm-desktop --check
 cargo build -p driftwm-desktop

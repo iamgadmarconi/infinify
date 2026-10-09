@@ -738,14 +738,10 @@ const REFUSED: &str = r#"
 {"Opacity":{"window":3,"value":0.5}} | opacity is not implemented on macOS yet
 {"Pin":{}} | pin is not implemented on macOS yet
 {"Pin":{"window":"terminal","value":true}} | pin is not implemented on macOS yet
-{"Close":null} | close is not implemented on macOS yet
-{"Close":3} | close is not implemented on macOS yet
-{"Suspend":"terminal"} | suspend is not implemented on macOS yet
-{"Relaunch":null} | relaunch is not implemented on macOS yet
 {"Screenshot":{"target":"Viewport","scale":1.0,"path":"/nonexistent/shot.png"}} | screenshot is not implemented on macOS yet
 {"Screenshot":{"target":{"Window":{}},"scale":2.0,"path":"/nonexistent/shot.png"}} | screenshot is not implemented on macOS yet
 {"Action":"frobnicate"} | unknown action: frobnicate
-{"Action":"close-window"} | action not implemented on macOS yet: close-window
+{"Action":"fill-window"} | action not implemented on macOS yet: fill-window
 {"Action":"pan-viewport"} | pan-viewport requires a direction
 {"Action":"go-to 0 0"} | go-to was removed — save the point as a bookmark and use go-to-bookmark <name>
 "#;
@@ -881,8 +877,9 @@ fn action_strings_follow_upstream_grammar() {
     // center-nearest, cycle-windows and focus-center:
     // tests/navigation_actions_flow.rs covers those. So do send-to-output,
     // send-cursor-to-output and switch-layout: tests/platform_actions_flow.rs.
+    // close-window and suspend-window run too: tests/lifecycle_flow.rs covers
+    // those.
     for (name, sample) in [
-        ("close-window", "close-window"),
         ("fill-window", "fill-window"),
         ("fit-window", "fit-window"),
         ("fit-window-snapped", "fit-window-snapped"),
@@ -891,7 +888,6 @@ fn action_strings_follow_upstream_grammar() {
         ("set-trackpad", "set-trackpad toggle"),
         ("set-trackpad", "set-trackpad OFF"),
         ("shrink-window", "shrink-window up"),
-        ("suspend-window", "suspend-window"),
         ("toggle-cursor-pan", "toggle-cursor-pan"),
         ("toggle-fullscreen", "toggle-fullscreen"),
         ("toggle-pin-to-screen", "toggle-pin-to-screen"),
@@ -1056,7 +1052,7 @@ opacity 0.85 --id 5 | {"Opacity":{"window":5,"value":0.85}} | {"Ok":{"Opacity":0
 pin ON --id 3 | {"Pin":{"window":3,"value":true}} | {"Ok":{"Pin":true}} | 0
 pin 0 | {"Pin":{"window":null,"value":false}} | {"Ok":{"Pin":false}} | 0
 close firefox | {"Close":"firefox"} | {"Ok":"Ok"} | 0
-suspend | {"Suspend":null} | {"Err":"suspend is not implemented on macOS yet"} | 1
+suspend | {"Suspend":null} | {"Err":"no focused window"} | 1
 relaunch --id 9 | {"Relaunch":9} | {"Ok":"Ok"} | 0
 bookmark | {"Bookmark":{"name":null,"to":null,"delete":false}} | {"Ok":{"Bookmarks":{"home":[0.0,0.0]}}} | 0
 bookmark inbox 500 -300 | {"Bookmark":{"name":"inbox","to":[500.0,-300.0],"delete":false}} | {"Ok":{"Bookmark":{"x":500.0,"y":-300.0}}} | 0

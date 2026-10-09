@@ -36,7 +36,11 @@ code and wins over both.
   force untouched. `errors` holds upstream's one message,
   `config: failed to read <path>: <io error>` or `config error: <toml error>`.
   On the first load of a run that configuration is the built-in defaults, which
-  is what upstream's startup falls back to as well.
+  is what upstream's startup falls back to as well, with one exception: those
+  defaults do not decide the saved slots. While such a file is the only one
+  the run has seen, `adoption_complete` drops no slot and makes no stand-in
+  ([LIFECYCLE.md](LIFECYCLE.md#slots-and-re-adoption-the-macos-rule)); a typo
+  elsewhere in the file must not cost what its `restore_windows` would keep.
 - A file that **goes missing after one was accepted** is such a read failure,
   as in upstream's reload: `exists` is false, `errors` holds
   `config: failed to read <path>: No such file or directory (os error 2)`, the
@@ -81,9 +85,16 @@ constants they replaced.
 | `[zoom] fit_padding` | `zoom-to-fit`, and the dynamic minimum zoom |
 | `[snap] enabled`, `gap`, `distance`, `break_force`, `corners`, `centers` | `begin_drag`, `begin_resize`, `gesture_to` and the native resize transaction's snap intent |
 | `[snap] outer_gap` | the inset of a placed window in window navigation |
-| `focus_placement`, `[[outputs]] focus_placement` | where window navigation and `send-to-output` park the window |
+| `focus_placement`, `[[outputs]] focus_placement` | where window navigation and `send-to-output` park the window, and with it where `window_placement = "center"` spawns one |
 | `[[outputs]] name`, `[outputs.hot_corners]` | which output an entry governs and its [hot corners](#hot-corners) |
 | `autostart` | `exec` effects of the launch load, see [Autostart](#autostart) |
+| `window_placement` | where a window that appears by itself is placed: `center`, `cursor` or `auto`, see [LIFECYCLE.md](LIFECYCLE.md#2-placement) |
+| `[decorations] title_bar_height` | the diagonal step of the placement cascade, and nothing else |
+| `[snap] gap` | also the spacing of an `auto` placement, and the cluster test for who takes the focus after a close |
+| `[zoom] reset_on_new_window` | whether the navigation to a new window lands at zoom 1 |
+| `[navigation] auto_navigate_on_close` | whether the camera flies to the window that takes the focus after a close, when that window is in the closed one's snap cluster or overlaps it and is not wholly in view |
+| `[session] suspend_on_close`; `[[window_rules]] suspend_on_close` | whether a window that closes by itself leaves a stand-in; the rule's `app_id` is matched against the bundle identifier |
+| `[session] restore_windows`; `[[window_rules]] restore_windows` | whether a saved slot whose window is gone stays as a stand-in at `adoption_complete`; not decided while the launch config file is refused |
 | `[session] restore_camera`, `restore_bookmarks` | what `load` restores, see [Session](#session) |
 | `[env]`, `[cursor] theme`, `size` | the environment of an `exec` effect |
 
@@ -102,25 +113,25 @@ edges and divided by the current zoom on each update, as before.
 Everything else in the file is parsed, validated and warned about by upstream's
 code, and then unused, because the feature it configures does not exist here:
 
-- `focus_follows_mouse`, `window_placement`, `[xwayland]`
-- `[session] suspend_on_close`, `restore_windows` (the scene always saves and
-  restores its placeholders)
+- `focus_follows_mouse`, `[xwayland]`
 - `[navigation] mouse_speed` and `[zoom] trackpad_speed`: reported with each
   pointer binding and by `bindings`, but the shell's drag pan follows the
   pointer 1:1 and its pinch is unscaled
-- `[navigation] resize_step`, `drift`, `touch_speed`, `auto_navigate_on_close`,
-  `[navigation.edge_pan]`
-- `[zoom] touch_speed`, `reset_on_new_window`, `interact_min`
+- `[navigation] resize_step`, `drift`, `touch_speed`, `[navigation.edge_pan]`
+- `[zoom] touch_speed`, `interact_min`
 - `[input.keyboard] layout`, `variant`, `options`, `model`,
   `remember_layout_per_window`, `num_lock`, `caps_lock`: these have no macOS
   meaning, see [Keyboard layouts](#keyboard-layouts)
 - `[input.trackpad]`, `[input.mouse]`, `[input.touch]`, `[input.tablet]`
 - `[cursor] inactive_opacity` (theme and size reach only the `exec` environment)
-- `[background]`, `[decorations]`, `[effects]`, `[backend]`, `[output]`
+- `[background]`, `[decorations]` other than `title_bar_height`, `[effects]`,
+  `[backend]`, `[output]`
 - `[[outputs]] scale`, `transform`, `position`, `mode`, and
   `[outputs.hot_corners] disable_when_fullscreen`: macOS arranges the displays
   and there is no fullscreen, see [Outputs](#outputs)
-- `[[window_rules]]`, including `pass_keys` and `pass_mouse`
+- `[[window_rules]]` other than `suspend_on_close` and `restore_windows`, so
+  `position`, `size`, `focus_on_open`, `widget`, `pass_keys` and `pass_mouse`
+  included
 - `[gestures.*]`, `[touch.*]`, and their thresholds
 - `[mouse] resize_on_border`, `decoration_resize_snapped`, `decoration_fit_snapped`
 - the mouse triggers `wheel-up` and `wheel-down`: `mouse_binding` has no notch
@@ -290,7 +301,7 @@ no Mac key.
 | `mod+l` | ⌃⌥L | 37 | `exec /usr/bin/pmset displaysleepnow`, for upstream's `spawn swaylock -f -c 000000 -kl` |  | yes |
 | `mod+m` | ⌃⌥M | 46 | `fit-window` |  | no |
 | `mod+minus` | ⌃⌥- | 27 | `zoom-out` | yes | yes |
-| `mod+q` | ⌃⌥Q | 12 | `close-window` |  | no |
+| `mod+q` | ⌃⌥Q | 12 | `close-window` |  | yes |
 | `mod+shift+1` | ⌃⌥⇧1 | 18 | `set-bookmark 1` |  | yes |
 | `mod+shift+2` | ⌃⌥⇧2 | 19 | `set-bookmark 2` |  | yes |
 | `mod+shift+3` | ⌃⌥⇧3 | 20 | `set-bookmark 3` |  | yes |
@@ -420,6 +431,13 @@ window) and `open -a Apps` (the macOS 26 application launcher).
 
 `reload-config` returns the effect `{"op":"reload_config"}`: the shell sends
 `load_config` again and re-reads `bindings`.
+
+`close-window` and `suspend-window` act on the focused window. For a window with
+a bound source they return the effect
+`{"op":"close_window","window":…,"identity":…,"generation":…}` and remember
+what the close will mean; a focused placeholder is dismissed. Nothing happens
+with no focused window. [LIFECYCLE.md](LIFECYCLE.md#actions-and-ipc) has the
+whole contract.
 
 `send-to-output <dir>`, `send-cursor-to-output <dir>` and `switch-layout` are
 described under [Outputs](#outputs) and [Keyboard layouts](#keyboard-layouts).
@@ -713,7 +731,10 @@ was restored too early back to a new output's pose.
   clear.
 - A new output's camera is the world origin at its top-left corner, as before;
   upstream centers the origin.
-- Window placeholders are saved and restored whatever `restore_windows` says.
+- Every window is saved as a slot whatever `restore_windows` says, because
+  applications outlive the canvas; the flag decides at `adoption_complete`
+  whether a slot whose window is gone stays as a stand-in. See
+  [LIFECYCLE.md](LIFECYCLE.md#slots-and-re-adoption-the-macos-rule).
 - `[navigation] auto_navigate_on_click` navigates when the shell sends
   `activate` with cause `click_release`. Upstream's 5 px click slop is the
   shell's to apply before sending it, and upstream's deferral past the

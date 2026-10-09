@@ -130,6 +130,18 @@ impl NavigationContext {
         });
         Point::new(placed[0], placed[1])
     }
+    /// Upstream align_point_on for a frame that is not on the canvas yet: where
+    /// a navigation landing at `zoom` would park a window of `size`.
+    pub(crate) fn align_point(&self, size: Size, zoom: f64) -> Point {
+        let frame = NavigationFrame {
+            visual_rect_world: Rect {
+                origin: Point::default(),
+                size,
+            },
+            extra_compositor_border: 0.0,
+        };
+        self.align(&frame, zoom)
+    }
 }
 
 impl Controller {

@@ -4,8 +4,8 @@
 // exec_command, NudgeWindow, detect_terminal, detect_launcher). The grammar
 // itself is not adapted: it is driftwm-core's `config::{Action, parse_action}`,
 // upstream's own code. The camera, bookmark, window navigation, nudge, exec,
-// reload, quit, output transfer and layout actions execute; every other action
-// parses and is then refused by name.
+// reload, quit, close, suspend, output transfer and layout actions execute;
+// every other action parses and is then refused by name.
 use super::keyboard_layout::switch_effect;
 use super::window_actions::Moved;
 use super::*;
@@ -135,6 +135,8 @@ pub(crate) fn runs_here(action: &Action) -> bool {
             | Action::Spawn(_)
             | Action::ExecTerminal
             | Action::ExecLauncher
+            | Action::CloseWindow
+            | Action::SuspendWindow
             | Action::NudgeWindow(_)
             | Action::PanViewport(_)
             | Action::CenterWindow
@@ -290,6 +292,19 @@ impl Controller {
             Action::ExecLauncher => {
                 let command = from_environment("LAUNCHER", DEFAULT_LAUNCHER);
                 outcome.effects.push(self.exec_effect(&command));
+                return Ok(outcome);
+            }
+            // Upstream acts on the focused element and does nothing without one.
+            Action::CloseWindow => {
+                if let Some(window) = self.scene.focused() {
+                    self.close_window(window, output, &mut outcome)?;
+                }
+                return Ok(outcome);
+            }
+            Action::SuspendWindow => {
+                if let Some(window) = self.scene.focused() {
+                    self.suspend_window(window, output, &mut outcome)?;
+                }
                 return Ok(outcome);
             }
             Action::NudgeWindow(direction) => {

@@ -3,9 +3,10 @@
 // src/ipc/protocol.rs (every wire type: names, serde shapes and field order),
 // src/ipc/mod.rs (dispatch, cmd_camera, cmd_zoom, cmd_layout, state_info, the
 // selector rules, cmd_focus, cmd_action, cmd_bookmark, cmd_move, cmd_resize,
-// camera_center, subscribe, broadcast_state_event), src/canvas.rs
-// (internal_to_rule, rule_to_internal) and
-// src/state/navigation.rs (window_fully_in_viewport). The transport lives in
+// camera_center, subscribe, broadcast_state_event) and src/canvas.rs
+// (internal_to_rule, rule_to_internal). Close, Suspend and Relaunch are
+// answered in lifecycle.rs, which also holds upstream's
+// window_fully_in_viewport. The transport lives in
 // the shell. Native frames already include their title bar, so chrome is zero.
 use super::actions::Outcome;
 use super::view_actions::pixel_size;
@@ -281,6 +282,16 @@ fn rule_to_internal(x: i32, y: i32, size: [i64; 2]) -> Point {
         (-i64::from(y) - size[1] / 2) as f64,
     )
 }
+/// Can every later request read this frame? The top-left must round into
+/// `i32` (State, Move, Resize) and so must the far edge (the enclosing integer
+/// rectangle the fit and zoom policy takes).
+pub(crate) fn readable(rect: Rect) -> Result<(), String> {
+    frame(rect)?;
+    if rect.right().ceil() > f64::from(i32::MAX) || rect.bottom().ceil() > f64::from(i32::MAX) {
+        return Err("window geometry exceeds integer range".to_string());
+    }
+    Ok(())
+}
 fn not_implemented(name: &str) -> Reply {
     Err(format!("{name} is not implemented on macOS yet"))
 }
@@ -343,6 +354,15 @@ impl Controller {
                 Ok(Response::Ok)
             }
             Request::Bookmark { name, to, delete } => self.cmd_bookmark(name, to, delete, outcome),
+            Request::Close(selector) => self
+                .cmd_close(output, selector.as_ref(), outcome)
+                .map(|()| Response::Ok),
+            Request::Suspend(selector) => self
+                .cmd_suspend(output, selector.as_ref(), outcome)
+                .map(|()| Response::Ok),
+            Request::Relaunch(selector) => self
+                .cmd_relaunch(selector.as_ref(), outcome)
+                .map(|()| Response::Ok),
             Request::Layout { short: true } => Ok(Response::Layout(self.layout_short())),
             Request::Layout { short: false } => Ok(Response::Layout(self.layout_name())),
             // Upstream subscribe: the ack, then the current snapshot on the same
@@ -354,9 +374,6 @@ impl Controller {
             }
             Request::Opacity { .. } => not_implemented("opacity"),
             Request::Pin { .. } => not_implemented("pin"),
-            Request::Close(_) => not_implemented("close"),
-            Request::Suspend(_) => not_implemented("suspend"),
-            Request::Relaunch(_) => not_implemented("relaunch"),
             Request::Screenshot { .. } => not_implemented("screenshot"),
         }
     }
@@ -565,22 +582,12 @@ impl Controller {
         window: WindowId,
         output: OutputId,
     ) -> Result<bool, String> {
-        let viewport = self.viewport(output)?;
-        let usable = self
-            .navigation_context(output)
-            .map_err(text)?
-            .usable_rect_local;
-        let rect = self
-            .scene
+        self.viewport(output)?;
+        self.navigation_context(output).map_err(text)?;
+        self.scene
             .window(window)
-            .ok_or_else(|| "unknown window".to_string())?
-            .world_rect;
-        let low = (rect.origin - viewport.camera) * viewport.zoom;
-        let high = (Point::new(rect.right(), rect.bottom()) - viewport.camera) * viewport.zoom;
-        Ok(low.x >= usable.origin.x
-            && low.y >= usable.origin.y
-            && high.x <= usable.right()
-            && high.y <= usable.bottom())
+            .ok_or_else(|| "unknown window".to_string())?;
+        Ok(self.fully_on(window, output))
     }
     /// Logical focus plus upstream's camera rule: a window already fully on
     /// screen is only raised and focused; a window with a bound source is
@@ -693,14 +700,8 @@ impl Controller {
             return Err("a window is under an interactive move or resize".to_string());
         }
         self.guard_resize_structure(Some(window)).map_err(text)?;
-        // Refuse a destination no later request could read: the top-left must
-        // round into i32 (State, Move, Resize) and so must the far edge (the
-        // enclosing integer rectangle the fit and zoom policy takes).
-        frame(moved)?;
-        if moved.right().ceil() > f64::from(i32::MAX) || moved.bottom().ceil() > f64::from(i32::MAX)
-        {
-            return Err("window geometry exceeds integer range".to_string());
-        }
+        // Refuse a destination no later request could read.
+        readable(moved)?;
         self.scene
             .set_window_rect(window, moved)
             .map_err(|e| e.to_string())
