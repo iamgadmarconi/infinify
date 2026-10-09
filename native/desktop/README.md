@@ -126,7 +126,10 @@ subtracted a second time.
 Option-Tab and Option-Shift-Tab use Carbon hotkeys only while the experimental
 panels are open. A listen-only event observer tracks the accepted keypress,
 actual Option release, and human interruption. Delayed Carbon delivery after
-release is unheld; delivery after cancellation is rejected. Failed registration
+release is unheld; delivery after cancellation is rejected. Canceled presses
+remain as tombstones so an old callback cannot borrow a later press; each panel
+lifecycle uses fresh hotkey IDs. Excessive queued presses fail closed until
+panels reopen. Actual native event ordering still requires live validation. Failed registration
 leaves the buttons available. A missing or disabled input observer disables
 native focus dispatch, including button focus, while camera navigation remains
 available. No event-suppression fallback or permission prompt is used.

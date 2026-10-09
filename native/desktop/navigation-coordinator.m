@@ -75,12 +75,12 @@ static BOOL sameIdentity(NSDictionary *a,NSDictionary *b) {
 }
 @end
 @interface DWNavigationInput ()
-@property NSMutableArray<NSNumber *> *presses;
-@property BOOL tab, option;
+@property NSMutableArray<NSDictionary *> *presses;
+@property BOOL tab, option, saturated;
 @end
 @implementation DWNavigationInput
 - (instancetype)init {if((self=[super init]))_presses=[NSMutableArray array];return self;}
-- (void)cancel {[self.presses removeAllObjects];self.tab=NO;}
+- (void)cancel {for(NSUInteger i=0;i<self.presses.count;i++)self.presses[i]=@{@"backward":self.presses[i][@"backward"],@"valid":@NO};self.tab=NO;}
 - (NSInteger)flagsChanged:(NSUInteger)flags {
     BOOL wasOption=self.option;self.option=(flags&1)!=0;
     if(flags&4){[self cancel];return 1;}
@@ -89,13 +89,16 @@ static BOOL sameIdentity(NSDictionary *a,NSDictionary *b) {
     return 0;
 }
 - (BOOL)tabDown:(NSUInteger)flags {
+    if(self.saturated)return NO;
     self.option=(flags&1)!=0;
     if(!self.option||(flags&4)){[self cancel];return NO;}
-    self.tab=YES;[self.presses addObject:@((flags&2)!=0)];return YES;
+    if(self.presses.count>=128){self.saturated=YES;[self cancel];return NO;}
+    self.tab=YES;[self.presses addObject:@{@"backward":@((flags&2)!=0),@"valid":@YES}];return YES;
 }
 - (BOOL)tabUp {BOOL accepted=self.tab;self.tab=NO;return accepted;}
 - (NSNumber *)takeShortcut:(BOOL)backward {
-    if(!self.presses.count||self.presses[0].boolValue!=backward)return nil;
-    [self.presses removeObjectAtIndex:0];return @(self.option);
+    if(self.saturated)return nil;
+    if(!self.presses.count||[self.presses[0][@"backward"]boolValue]!=backward)return nil;
+    BOOL valid=[self.presses[0][@"valid"]boolValue];[self.presses removeObjectAtIndex:0];return valid?@(self.option):nil;
 }
 @end

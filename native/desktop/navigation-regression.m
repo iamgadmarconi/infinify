@@ -32,6 +32,8 @@ int main(void){__weak DWNavigationCoordinator *weak;@autoreleasepool{
     check(![input tabDown:5]&&[input takeShortcut:NO]==nil,@"extra modifier cannot authorize focus");
     [input tabDown:3];check([[input takeShortcut:YES]isEqual:@YES],@"reverse held shortcut accepted");
     check([input flagsChanged:5]==1,@"unrelated modifier cancels");
+    DWNavigationInput *repress=[DWNavigationInput new];[repress tabDown:1];[repress cancel];[repress tabDown:1];
+    check([repress takeShortcut:NO]==nil,@"canceled old Carbon delivery cannot borrow new press");check([[repress takeShortcut:NO]isEqual:@YES],@"new press retains its own delivery");
     DriftDesktop *host=driftwm_desktop_create();NSMutableArray *worker=[NSMutableArray array],*main=[NSMutableArray array];FakeDriver *driver=[FakeDriver new];driver.permitted=driver.success=YES;
     __block uint64_t clock=1000000000;__block NSUInteger saved=0,rendered=0;
     DWNavigationCoordinator *nav=[[DWNavigationCoordinator alloc]initWithCommand:^NSDictionary *(NSDictionary *c){return call(host,c);} driver:driver clock:^uint64_t{return clock;} worker:^(DWJob job){[worker addObject:[job copy]];} main:^(DWJob job){[main addObject:[job copy]];}];

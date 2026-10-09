@@ -70,6 +70,8 @@ static CGRect topRect(NSRect r) { return CGRectMake(r.origin.x,screenTop()-NSMax
 @property CFMachPortRef navigationTap;
 @property CFRunLoopSourceRef navigationTapSource;
 @property EventHotKeyRef nextHotkey, previousHotkey;
+@property UInt32 nextNavigationKey, previousNavigationKey;
+- (void)cancelNavigation;
 @property EventHandlerRef navigationHandler;
 - (void)configureNavigation;
 - (void)stopNavigation;
@@ -153,7 +155,7 @@ static CGRect topRect(NSRect r) { return CGRectMake(r.origin.x,screenTop()-NSMax
     return [self.desktop call:@{@"op":@"hit",@"output":output,@"screen":pointJSON(p)}][@"hit"];
 }
 - (BOOL)forward:(CGEventRef)e at:(CGPoint)p output:(NSNumber *)output activate:(BOOL)activate {
-    if(activate)[self.desktop.navigation invalidate];
+    if(activate)[self.desktop cancelNavigation];
     if(!e||!output)return NO;
     if(!AXIsProcessTrusted()){self.desktop.statusText=@"Input requires Accessibility access. Enable it in System Settings, then reopen.";return NO;}
     NSDictionary *hit=[self hit:p output:output];if(![hit isKindOfClass:NSDictionary.class])return NO;
@@ -175,7 +177,7 @@ static CGRect topRect(NSRect r) { return CGRectMake(r.origin.x,screenTop()-NSMax
 }
 - (void)mouseDown:(NSEvent *)e {
     if(self.desktop.probe&&!self.desktop.probeDrivingGesture){self.desktop.probeHumanInput=YES;return;}
-    [self.desktop.navigation invalidate];
+    [self.desktop cancelNavigation];
     CGPoint p=[self screenPoint:e];NSNumber *output=[self outputAt:p];if(!output)return;
     self.startPoint=self.lastPoint=p;self.dragOutput=output;
     NSDictionary *hit=[self hit:p output:output];BOOL isHit=[hit isKindOfClass:NSDictionary.class];
@@ -211,13 +213,13 @@ static CGRect topRect(NSRect r) { return CGRectMake(r.origin.x,screenTop()-NSMax
 }
 - (void)scrollWheel:(NSEvent *)e {
     if(self.desktop.probe){self.desktop.probeHumanInput=YES;return;}
-    [self.desktop.navigation invalidate];
+    [self.desktop cancelNavigation];
     CGPoint p=[self screenPoint:e];NSNumber *output=[self outputAt:p];if(!output)return;
     if(e.modifierFlags&NSEventModifierFlagCommand)[self zoom:exp(e.scrollingDeltaY*.01) at:p output:output];
     else if((e.modifierFlags&NSEventModifierFlagOption)||![[self hit:p output:output]isKindOfClass:NSDictionary.class]){[self.desktop call:@{@"op":@"pan",@"output":output,@"screen_delta":pointJSON(CGPointMake(-e.scrollingDeltaX,-e.scrollingDeltaY))}];[self.desktop render];[self.desktop saveScene];}
     else {CGEventRef cg=CGEventCreateCopy(e.CGEvent);[self forward:cg at:p output:output activate:NO];CFRelease(cg);}
 }
-- (void)magnifyWithEvent:(NSEvent *)e { [self.desktop.navigation invalidate]; if(self.desktop.probe){self.desktop.probeHumanInput=YES;return;} CGPoint p=[self screenPoint:e];NSNumber *output=[self outputAt:p];if(output)[self zoom:1+e.magnification at:p output:output]; }
+- (void)magnifyWithEvent:(NSEvent *)e { [self.desktop cancelNavigation]; if(self.desktop.probe){self.desktop.probeHumanInput=YES;return;} CGPoint p=[self screenPoint:e];NSNumber *output=[self outputAt:p];if(output)[self zoom:1+e.magnification at:p output:output]; }
 @end
 static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEventRef event,void *context) {
     (void)proxy;Desktop *desktop=(__bridge Desktop *)context;
@@ -233,8 +235,9 @@ static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEvent
 }
 static OSStatus navigationKey(EventHandlerCallRef next,EventRef event,void *context) {
     (void)next;EventHotKeyID key={0};GetEventParameter(event,kEventParamDirectObject,typeEventHotKeyID,NULL,sizeof(key),NULL,&key);
-    if(key.signature!='NavI'||(key.id!=1&&key.id!=2))return eventNotHandledErr;
-    [(__bridge Desktop *)context cycleNavigation:key.id==2];return noErr;
+    Desktop *desktop=(__bridge Desktop *)context;
+    if(key.signature!='NavI'||(key.id!=desktop.nextNavigationKey&&key.id!=desktop.previousNavigationKey))return eventNotHandledErr;
+    [desktop cycleNavigation:key.id==desktop.previousNavigationKey];return noErr;
 }
 static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) { (void)next;EventHotKeyID key={0};GetEventParameter(event,kEventParamDirectObject,typeEventHotKeyID,NULL,sizeof(key),NULL,&key);if(key.signature!='Infi'||key.id!=1)return eventNotHandledErr;[(__bridge Desktop *)context quit:nil];return noErr; }
 @implementation Desktop
@@ -252,14 +255,18 @@ static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) {
     CGEventMask mask=CGEventMaskBit(kCGEventFlagsChanged)|CGEventMaskBit(kCGEventKeyDown)|CGEventMaskBit(kCGEventKeyUp)|CGEventMaskBit(kCGEventLeftMouseDown)|CGEventMaskBit(kCGEventRightMouseDown)|CGEventMaskBit(kCGEventOtherMouseDown)|CGEventMaskBit(kCGEventScrollWheel)|CGEventMaskBit(kCGEventMouseMoved)|CGEventMaskBit(kCGEventLeftMouseDragged)|CGEventMaskBit(kCGEventRightMouseDragged)|CGEventMaskBit(kCGEventOtherMouseDragged)|CGEventMaskBit(kCGEventLeftMouseUp)|CGEventMaskBit(kCGEventRightMouseUp)|CGEventMaskBit(kCGEventOtherMouseUp);
     self.navigationTap=CGEventTapCreate(kCGSessionEventTap,kCGHeadInsertEventTap,kCGEventTapOptionListenOnly,mask,navigationInput,(__bridge void *)self);
     if(self.navigationTap){self.navigationTapSource=CFMachPortCreateRunLoopSource(NULL,self.navigationTap,0);if(self.navigationTapSource){CFRunLoopAddSource(CFRunLoopGetMain(),self.navigationTapSource,kCFRunLoopCommonModes);self.navigation.focusAllowed=YES;}}
-    EventTypeSpec type={kEventClassKeyboard,kEventHotKeyPressed};EventHotKeyID next={'NavI',1},previous={'NavI',2};
+    static UInt32 nextIdentifier=1;if(nextIdentifier>UINT32_MAX-2){self.navigation.focusAllowed=NO;return;}
+    self.nextNavigationKey=nextIdentifier++;self.previousNavigationKey=nextIdentifier++;
+    EventTypeSpec type={kEventClassKeyboard,kEventHotKeyPressed};EventHotKeyID next={'NavI',self.nextNavigationKey},previous={'NavI',self.previousNavigationKey};
     if(!self.navigation.focusAllowed||InstallApplicationEventHandler(navigationKey,1,&type,(__bridge void *)self,&_navigationHandler)!=noErr||RegisterEventHotKey(48,optionKey,next,GetApplicationEventTarget(),0,&_nextHotkey)!=noErr||RegisterEventHotKey(48,optionKey|shiftKey,previous,GetApplicationEventTarget(),0,&_previousHotkey)!=noErr){
         if(self.nextHotkey){UnregisterEventHotKey(self.nextHotkey);self.nextHotkey=NULL;}if(self.previousHotkey){UnregisterEventHotKey(self.previousHotkey);self.previousHotkey=NULL;}
         self.statusText=@"Experimental held cycling unavailable; use navigation buttons. Native focus requires a working input observer.";
     }
     [self.navigation frame];
 }
+- (void)cancelNavigation { [self.navigationInput cancel];[self.navigation invalidate]; }
 - (void)stopNavigation {
+    self.nextNavigationKey=0;self.previousNavigationKey=0;
     [self.navigationInput cancel];self.navigationInput=nil;[self.navigation shutdown];self.navigation=nil;[self.frameTimer invalidate];self.frameTimer=nil;
     if(self.navigationTapSource){CFRunLoopRemoveSource(CFRunLoopGetMain(),self.navigationTapSource,kCFRunLoopCommonModes);CFRelease(self.navigationTapSource);self.navigationTapSource=NULL;}
     if(self.navigationTap){CFMachPortInvalidate(self.navigationTap);CFRelease(self.navigationTap);self.navigationTap=NULL;}
@@ -295,7 +302,7 @@ static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) {
     NSDictionary *reply=[NSJSONSerialization JSONObjectWithData:data options:0 error:nil];if(![reply[@"ok"]boolValue]){self.statusText=reply[@"error"]?:@"Controller error";return nil;}return reply[@"data"];
 }
 - (BOOL)loadScene:(NSString *)path {
-    [self.navigation invalidate];
+    [self cancelNavigation];
     self.statePath=path;
     if(![NSFileManager.defaultManager fileExistsAtPath:path])return YES;
     if([self call:@{@"op":@"load",@"path":path}])return YES;
@@ -342,7 +349,7 @@ static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) {
     });}];
 }
 - (void)showChooser:(id)sender {
-    [self.navigation invalidate];
+    [self cancelNavigation];
     if(self.probe&&sender){self.probeHumanInput=YES;return;}
     (void)sender;
     if(!self.chooser){self.chooser=[[FixtureWindow alloc]initWithContentRect:NSMakeRect(200,180,720,470) styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable backing:NSBackingStoreBuffered defer:NO];self.chooser.title=@"Infinify — choose native windows";self.chooser.level=NSFloatingWindowLevel+1;self.chooser.releasedWhenClosed=NO;self.chooser.delegate=self;
@@ -367,7 +374,7 @@ static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) {
     if([self attach:self.choices[row][@"window"] logical:logical world:nil]){[self.chooser orderOut:nil];[self saveScene];[self render];}else self.chooserStatus.stringValue=self.statusText;
 }
 - (BOOL)attach:(SCWindow *)window logical:(NSNumber *)logical world:(NSDictionary *)world {
-    [self.navigation invalidate];
+    [self cancelNavigation];
     pid_t pid=window.owningApplication.processID;uint32_t wid=window.windowID;NSArray *processBirth=birth(pid);NSDictionary *info=windowInfo(wid);CGRect bounds=CGRectZero;
     if(!processBirth||[info[(id)kCGWindowOwnerPID]intValue]!=pid||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)info[(id)kCGWindowBounds],&bounds)){self.statusText=@"Source closed or identity changed; refresh the chooser.";return NO;}
     for(LiveSource *existing in self.sources.allValues)if(existing.router.pid==pid&&existing.router.wid==wid){self.statusText=@"This source is already attached; every display can view the same world window.";return NO;}
@@ -385,7 +392,7 @@ static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) {
     [self render];return YES;
 }
 - (void)detach:(LiveSource *)source {
-    [self.navigation invalidate];
+    [self cancelNavigation];
     if(source.detached)return;for(DesktopView *view in self.views)if(view.pressedSource==source)[view releasePressed];source.detached=YES;
     [self call:@{@"op":@"remove_source",@"window":source.logical,@"identity":source.identity,@"keep_placeholder":@YES}];
     [self.pendingStops addObject:source];[source.stream stopCaptureWithCompletionHandler:^(NSError *error){(void)error;dispatch_async(dispatch_get_main_queue(),^{source.streamStopped=YES;source.stream=nil;[self.pendingStops removeObject:source];});}];[source.surfaces removeAllObjects];[self.sources removeObjectForKey:source.logical];
