@@ -1,7 +1,16 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")/../.."
+
+case ${1:-} in
+  '') live=false ;;
+  --live-owned-fixture) live=true; shift ;;
+  *) echo "Usage: $0 [--live-owned-fixture [receipt-path]]" >&2; exit 2 ;;
+esac
+[ "$#" -le 1 ] || { echo "Usage: $0 [--live-owned-fixture [receipt-path]]" >&2; exit 2; }
+
 cargo build -p driftwm-macos-backend --bins --locked
+[ "$live" = true ] || { echo 'LIVE NOT RUN: pass --live-owned-fixture to launch the disposable native fixture.'; exit 0; }
 cargo test -p driftwm-macos-backend --test native_fixture --locked
 receipt="${1:-native/backend/evidence/latest-probe.json}"
 ./target/debug/driftwm-native-probe probe > "$receipt"

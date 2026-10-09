@@ -37,8 +37,9 @@ the snapshot and reconcile any native movement. The owned test fixture also save
 and restores its full original frames locally during teardown, including signals,
 parent death and a 30-second deadline. Decoys must remain unchanged.
 
-`./tests/e2e/native-resize.sh [evidence-directory]` builds only this adapter and
-runs an external AppKit fixture with three identical-title windows: selected,
+`./tests/e2e/native-resize.sh` builds only this adapter. An explicit
+`./tests/e2e/native-resize.sh --live-owned-fixture [evidence-directory]` runs an
+external AppKit fixture with three identical-title windows: selected,
 non-settable decoy and an ignoring-setter window. The controller proves native
 geometry through independent AX + CG reads, including minimum constraints,
 stale identity, invalid dimensions, ignored success, native relocation with retained

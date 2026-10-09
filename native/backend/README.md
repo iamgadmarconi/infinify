@@ -11,9 +11,11 @@ cargo build -p driftwm-macos-backend --bins --locked
 target/debug/driftwm-native-probe doctor
 target/debug/driftwm-native-probe list
 tests/e2e/native-fixture.sh
+tests/e2e/native-fixture.sh --live-owned-fixture
 ```
 
-The executable without arguments runs read-only doctor. `probe` explicitly opens
+The test launcher builds only by default; its native Rust integration test and
+disposable AppKit probe require `--live-owned-fixture`. The executable without arguments runs read-only doctor. `probe` explicitly opens
 one disposable native fixture and briefly transforms and clicks its own native
 button, then restores the transform, pointer, and closes the fixture. The fixture
 has actual AppKit editable text, a button, scrolling content and a popup. It joins

@@ -8,9 +8,11 @@ route input, or implement the persistent desktop canvas.
 ```sh
 ./scripts/build-surfaces.sh
 ./tests/e2e/live-surfaces.sh
+./tests/e2e/live-surfaces.sh --live-owned-fixture
 ```
 
-The E2E creates unique evidence directories under `target/surfaces/evidence` (or
+The test launcher builds only by default; `--live-owned-fixture` explicitly opts
+into the live E2E. The E2E creates unique evidence directories under `target/surfaces/evidence` (or
 the first argument), opens one disposable borderless host window for six seconds,
 and tests shorter lifecycle cases. It never requests permissions or changes user
 settings. Pixel verification requires existing screen-capture access: without it,

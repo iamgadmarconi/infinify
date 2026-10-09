@@ -4,6 +4,8 @@
 `target/privileged`. `./tests/e2e/privileged-fixture.sh` exercises a disposable
 NSWindow host, its dlopened arm64 payload, actual Unix RPC, and independent
 parent-process SkyLight screen rectangles. It never injects into Dock.
+The test launcher builds only by default; pass `--live-owned-fixture` to run that
+disposable fixture test.
 `target/privileged/doctor` is a read-only SIP/boot-policy report. This host's SIP
 policy prevents injection. Transform-only code uses dynamically resolved SkyLight
 symbols, without Dock offsets, Space functions or pattern scanning; no claim that

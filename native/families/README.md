@@ -13,11 +13,13 @@ focus, production parent discovery, and third-party parity are not claimed.
 ```sh
 ./scripts/build-families.sh
 ./tests/e2e/native-families.sh
-./tests/e2e/native-families.sh --lifecycle-only
+./tests/e2e/native-families.sh --live-owned-fixture
+./tests/e2e/native-families.sh --live-owned-fixture --lifecycle-only
 ```
 
 Apple Silicon / macOS 26+, with existing Screen Recording and Accessibility access,
-is required. Default/help does not initialize AppKit or request permissions. The
+is required. The test launcher builds only by default; live fixture execution requires
+the explicit `--live-owned-fixture` gate. Default/help does not initialize AppKit or request permissions. The
 full test returns nonzero when the real capture gate fails. The
 lifecycle-only test proves cleanup; it makes no capture capability assertion.
 Do not run beside other native probes. Stop on foreground/input/bounds interference.

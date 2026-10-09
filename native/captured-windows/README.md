@@ -11,12 +11,13 @@ never parked offscreen, transformed, or replaced by a custom exported surface.
 ./scripts/build-captured-windows.sh
 ./tests/e2e/captured-windows.sh
 # Focused demo lifetime regression, without keyboard or activation requests:
-./tests/e2e/captured-windows.sh --demo-input-only
+./tests/e2e/captured-windows.sh --live-owned-fixture --demo-input-only
 mkdir -p /tmp/infinify-demo-evidence-UNIQUE
 ./target/captured-windows/captured-windows --demo /tmp/infinify-demo-evidence-UNIQUE 30
 ```
 
-The default invocation and `--help` are read-only. `--probe EMPTY_DIRECTORY 16`
+The test launcher builds only by default; live fixture execution requires
+`--live-owned-fixture`. The native binary's default invocation and `--help` are read-only. `--probe EMPTY_DIRECTORY 16`
 runs the bounded scripted proof. `--demo EMPTY_DIRECTORY SECONDS` accepts 1–60
 seconds and opens only its own host and disposable source. Existing screen capture
 and accessibility access are required; preflight failure produces a receipt and

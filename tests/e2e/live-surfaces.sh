@@ -1,7 +1,16 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")/../.."
+
+case ${1:-} in
+  '') live=false ;;
+  --live-owned-fixture) live=true; shift ;;
+  *) echo "Usage: $0 [--live-owned-fixture [evidence-directory]]" >&2; exit 2 ;;
+esac
+[ "$#" -le 1 ] || { echo "Usage: $0 [--live-owned-fixture [evidence-directory]]" >&2; exit 2; }
+
 ./scripts/build-surfaces.sh
+[ "$live" = true ] || { echo 'LIVE NOT RUN: pass --live-owned-fixture to launch the disposable native fixture.'; exit 0; }
 python3 - "${1:-target/surfaces/evidence}" <<'PY'
 import json, os, pathlib, signal, subprocess, sys, tempfile, time
 

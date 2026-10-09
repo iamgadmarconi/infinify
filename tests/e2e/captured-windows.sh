@@ -1,7 +1,21 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")/../.."
+
+case ${1:-} in
+  '') live=false ;;
+  --live-owned-fixture) live=true; shift ;;
+  *) echo "Usage: $0 [--live-owned-fixture [--demo-input-only [evidence-directory]|evidence-directory]]" >&2; exit 2 ;;
+esac
+case ${1:-} in
+  '') [ "$#" -eq 0 ] || exit 2 ;;
+  --demo-input-only) [ "$#" -le 2 ] || { echo "Usage: $0 [--live-owned-fixture [--demo-input-only [evidence-directory]|evidence-directory]]" >&2; exit 2; } ;;
+  -*) echo "Usage: $0 [--live-owned-fixture [--demo-input-only [evidence-directory]|evidence-directory]]" >&2; exit 2 ;;
+  *) [ "$#" -eq 1 ] || { echo "Usage: $0 [--live-owned-fixture [--demo-input-only [evidence-directory]|evidence-directory]]" >&2; exit 2; } ;;
+esac
+
 ./scripts/build-captured-windows.sh
+[ "$live" = true ] || { echo 'LIVE NOT RUN: pass --live-owned-fixture to launch the disposable native fixture.'; exit 0; }
 # Focused regression: no keyboard/focus sequence and no global event posting.
 if [ "${1:-}" = --demo-input-only ]; then
   xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror \
