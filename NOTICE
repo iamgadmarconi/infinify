@@ -15,6 +15,12 @@ new. The optional native/privileged/loader.m is adapted from yabai at commit
 dd845723416f5fe92af49fad5ebab00369e07edd and retains its MIT license, copyright,
 and Jeremy Legendre arm64e attribution. The exact upstream license is retained
 in native/privileged/YABAI-LICENSE.txt.
+crates/core carries DriftWM's pure modules (canvas, config, layout, session,
+stage and the touch gesture recogniser) from the source baseline with their
+tests; each file records its upstream path, and crates/core/PORT.md lists every
+hash and deviation. Its stand-ins for Smithay geometry and input types follow
+Smithay 0.7.0 (MIT, Copyright (c) 2017 Victor Berger and Victoria Brekenfeld),
+and its key-name lookup reimplements libxkbcommon's rules (MIT/X11).
 All project source is distributed under GPL-3.0-or-later. Third-party Cargo
 packages retain their respective licenses; Cargo.lock pins their versions.
 

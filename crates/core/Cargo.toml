@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# NEW FILE, not ported from upstream. One self-contained package holding the
+# pure, compositor-independent parts of DriftWM
+# (https://github.com/malbiruk/driftwm at commit
+# 352333a8fa1b22171492d4b71a54102045c9a19d, crate `driftwm` 0.19.0). See PORT.md.
+
+[package]
+name = "driftwm-core"
+# Mirrors the upstream crate version the sources were taken from.
+version = "0.19.0"
+edition = "2024"
+rust-version = "1.88"
+license = "GPL-3.0-or-later"
+authors = ["Klim Kostiuk <2601074@gmail.com>"]
+description = "Platform-neutral port of DriftWM's pure modules: canvas, config, layout, session, stage and the touch gesture recogniser"
+repository = "https://github.com/malbiruk/driftwm"
+publish = false
+
+[lib]
+name = "driftwm_core"
+
+[dependencies]
+# Same requirements as upstream's Cargo.toml for the crates the ported modules use.
+serde = { version = "1", features = ["derive"] }
+# session.rs reads and writes session.json; config uses it in one embedded test.
+serde_json = "1"
+toml = "0.8"
+regex = "1"
+tracing = "0.1"
+# Upstream gets this through smithay -> xkbcommon 0.9.0; it is the `Keysym` type.
+xkeysym = "0.2.1"
+
+[dev-dependencies]
+# Property tests in layout::fill, stage, the touch recogniser and
+# tests/config_robustness_test.rs.
+proptest = "1"
+
+# Carried over from upstream's Cargo.toml.
+[lints.clippy]
+significant_drop_in_scrutinee = "warn"
