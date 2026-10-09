@@ -33,6 +33,12 @@ static bool guard(DWFocusIdentity i,void *raw){Context *c=(__bridge Context *)ra
     return true;
 }
 static NSDictionary *observation(DWFocusResult r){return @{@"outcome":@(dw_focus_outcome_name(r.outcome)),@"ax_error":@(r.ax_error),@"mutation_attempted":@(r.mutation_attempted),@"system_pid":@(r.system_pid),@"system_window":@(r.system_window),@"app_window":@(r.app_window),@"actual_native_focus":@(r.focused),@"bounds":@[@(r.bounds.origin.x),@(r.bounds.origin.y),@(r.bounds.size.width),@(r.bounds.size.height)]};}
+static BOOL fixtureReady(NSDictionary *s,NSString *key,pid_t controller){
+    if(!verified(s,key)||![s[@"ready"]boolValue]||[s[@"controller"]intValue]!=controller||[s[@"pid"]intValue]<=0)return NO;
+    NSArray *processBirth=s[@"birth"],*windows=s[@"windows"];if(processBirth.count!=2||[processBirth[0]unsignedLongLongValue]==0||windows.count!=2)return NO;
+    uint32_t first=0;for(NSUInteger n=0;n<windows.count;n++){NSDictionary *w=windows[n];DWFocusIdentity i=identity(w);if(i.pid!=[s[@"pid"]intValue]||i.window==0||i.seconds==0||![w[@"birth"]isEqual:processBirth]||!dw_focus_owner(i,NULL)||(n&&i.window==first))return NO;if(!n)first=i.window;}
+    return YES;
+}
 // Private event ABI provenance: Cantrip 4da10af479701c8007074c65f9eb6a2db03c8ffc,
 // macos/skylight.rs, same signatures/fields as native/captured-windows/captured.m.
 // No global post fallback, physical pointer movement, or target inference from title.
@@ -74,12 +80,12 @@ static BOOL keyProof(Context *c,DWFocusIdentity i,NSUInteger after){NSString *na
 static int run(NSString *dir){
     NSDictionary *config=load([dir stringByAppendingPathComponent:@"private.json"]);if(!config)return 64;
     NSDate *armedEnd=[NSDate dateWithTimeIntervalSinceNow:2];BOOL armed=NO;
-    while(!armed&&!interrupted&&armedEnd.timeIntervalSinceNow>0){armed=YES;for(NSString *name in @[@"A",@"B"]){NSDictionary *s=load([dir stringByAppendingPathComponent:[name stringByAppendingString:@".json"]]);armed&=verified(s,config[@"key"])&&[s[@"controller"]intValue]==getpid();}if(!armed)pump(.02);}
+    while(!armed&&!interrupted&&armedEnd.timeIntervalSinceNow>0){armed=YES;for(NSString *name in @[@"A",@"B"]){NSDictionary *s=load([dir stringByAppendingPathComponent:[name stringByAppendingString:@".json"]]);armed&=fixtureReady(s,config[@"key"],getpid());}if(!armed)pump(.02);}
     if(!armed){save(@{@"passed":@NO,@"error":@"fixtures did not acknowledge owned controller"},[dir stringByAppendingPathComponent:@"probe.json"]);return 2;}
     sessionTag=[config[@"tag"]longLongValue];Context *c=[Context new];c.dir=dir;c.key=config[@"key"];c.deadline=[NSDate dateWithTimeIntervalSinceNow:15];c.pointer=pointer();c.failure=@"";
     NSMutableDictionary *report=[@{@"passed":@NO,@"steps":[NSMutableArray new],@"scope":@"owned same-title ordinary NSWindows; no IME, menus or drag-and-drop claim"}mutableCopy];
     NSString *receipt=[dir stringByAppendingPathComponent:@"probe.json"];
-    NSMutableArray *owned=[NSMutableArray new];for(NSString *name in @[@"A",@"B"]){NSDictionary *s=load([dir stringByAppendingPathComponent:[name stringByAppendingString:@".json"]]);if(!verified(s,c.key)||[s[@"windows"]count]!=2){report[@"error"]=@"fixture enrollment failed";save(report,receipt);return 2;}for(NSDictionary *w in s[@"windows"]){DWFocusIdentity i=identity(w);if(!dw_focus_owner(i,NULL)){save(report,receipt);return 2;}[owned addObject:ident(i)];}}
+    NSMutableArray *owned=[NSMutableArray new];for(NSString *name in @[@"A",@"B"]){NSDictionary *s=load([dir stringByAppendingPathComponent:[name stringByAppendingString:@".json"]]);if(!fixtureReady(s,c.key,getpid())){report[@"error"]=@"fixture signed readiness validation failed";save(report,receipt);return 2;}for(NSDictionary *w in s[@"windows"])[owned addObject:ident(identity(w))];}
     c.owned=owned;
     DWFocusIdentity stale=identity(owned[0]);stale.seconds++;DWFocusResult rejected=dw_focus_observe(stale);
     DWFocusIdentity wrongOwner=identity(owned[0]);wrongOwner.pid=[owned[2][@"pid"]intValue];DWFocusResult rejectedOwner=dw_focus_observe(wrongOwner);

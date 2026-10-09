@@ -2,6 +2,7 @@
 """Opt-in owned native focus gate. Python owns and reaps all three children."""
 import argparse
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -24,15 +25,52 @@ fixture = Path('target/focus/fixture').resolve()
 def load(path):
     return json.loads(path.read_text())
 
-def wait_for(path, child, seconds=4):
+def signed(value, key):
+    if not isinstance(value, dict) or not isinstance(value.get('signature'), str):
+        return False
+    unsigned = dict(value)
+    actual = unsigned.pop('signature')
+    encoded = json.dumps(unsigned, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
+    return hmac.compare_digest(actual, hmac.new(key.encode(), encoded, hashlib.sha256).hexdigest())
+
+def ready_state(value, child, name, key):
+    if not signed(value, key):
+        return False, 'snapshot signature is missing or invalid'
+    if value.get('ready') is not True or value.get('pid') != child.pid:
+        return False, f'ready/pid mismatch (ready={value.get("ready")!r}, pid={value.get("pid")!r})'
+    birth = value.get('birth')
+    if not isinstance(birth, list) or len(birth) != 2 or not isinstance(birth[0], int) or birth[0] <= 0 or not isinstance(birth[1], int) or birth[1] < 0:
+        return False, f'invalid process birth identity: {birth!r}'
+    windows = value.get('windows')
+    if not isinstance(windows, list) or len(windows) != 2:
+        return False, f'expected two windows, got {windows!r}'
+    identities = []
+    for index, window in enumerate(windows, 1):
+        identity = (window.get('pid'), window.get('window'), window.get('birth'))
+        if identity[0] != child.pid or not isinstance(identity[1], int) or identity[1] <= 0 or identity[2] != birth:
+            return False, f'invalid {name}{index} identity: {identity!r}'
+        identities.append(identity[1])
+    if len(set(identities)) != 2:
+        return False, f'fixture windows are not distinct: {identities!r}'
+    return True, None
+
+def wait_for(path, child, seconds=4, validator=None):
     deadline = time.monotonic() + seconds
+    last_error = 'file not published'
     while time.monotonic() < deadline:
-        if path.exists():
-            return load(path)
         if child.poll() is not None:
-            raise RuntimeError(f'child exited before {path.name}: {child.returncode}')
+            raise RuntimeError(f'child exited before valid {path.name}: {child.returncode}; last state: {last_error}')
+        if path.exists():
+            try:
+                value = load(path)
+                valid, error = validator(value) if validator else (True, None)
+                if valid:
+                    return value
+                last_error = error
+            except (OSError, json.JSONDecodeError) as exc:
+                last_error = f'{type(exc).__name__}: {exc}'
         time.sleep(.025)
-    raise TimeoutError(path.name)
+    raise TimeoutError(f'timed out waiting for valid {path.name}; last state: {last_error}')
 
 # Read-only before creating ordinary windows. Do not request missing permissions.
 doctor = json.loads(subprocess.check_output([probe, '--doctor'], timeout=3))
@@ -45,7 +83,8 @@ base.mkdir(parents=True, exist_ok=True)
 run = Path(tempfile.mkdtemp(prefix='run-', dir=base))
 os.chmod(run, 0o700)
 private = run / 'private.json'
-private.write_text(json.dumps({'key': secrets.token_hex(32), 'tag': secrets.randbits(51) + 1, 'prior': doctor['prior'], 'scenario': args.scenario}))
+audit_key = secrets.token_hex(32)
+private.write_text(json.dumps({'key': audit_key, 'tag': secrets.randbits(51) + 1, 'prior': doctor['prior'], 'scenario': args.scenario}))
 os.chmod(private, 0o600)
 children = []
 fixtures = []
@@ -68,9 +107,7 @@ try:
     for name in ('A', 'B'):
         child = launch(fixture, '--owned-fixture', str(run), name)
         fixtures.append((name, child))
-        state = wait_for(run / f'{name}.json', child)
-        assert state['pid'] == child.pid and len(state['windows']) == 2
-        assert len({w['window'] for w in state['windows']}) == 2
+        state = wait_for(run / f'{name}.json', child, validator=lambda value, child=child, name=name: ready_state(value, child, name, audit_key))
     controller = launch(probe, '--run-owned', str(run))
     # proc birth comes from the fixture's read-only helper mode, never guessed.
     # ps does not expose the microsecond identity used by the adapter.

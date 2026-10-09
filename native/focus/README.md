@@ -43,7 +43,12 @@ available and HID input has been idle for three seconds. Each fixture has TWO
 ordinary titled NSWindows with identical titles, actual NSButton/NSTextField
 controls, and distinct CGWindowIDs. Both fixtures are owned direct children of the
 Python supervisor. A third child runs the focus controller. Controller enrollment
-is acknowledged by signed fixture telemetry before activation is permitted.
+is acknowledged by signed fixture telemetry before activation is permitted. A
+fixture publishes no startup snapshot until both WindowServer identities resolve
+to its exact PID and AppKit window numbers, with positive process-birth seconds
+and distinct nonzero CGWindowIDs. The supervisor waits for that signed explicit
+readiness state while checking the child on every iteration, and the controller
+independently revalidates signed readiness and current ownership before enrollment.
 
 The live sequence is A1 -> A2 -> B1, repeated through two camera inverses (0.75x
 and 1.5x with different pan/origins). At every step the controller explicitly
