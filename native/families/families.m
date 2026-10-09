@@ -62,12 +62,12 @@ static void button(NSWindow *w, Family *f, NSString *name, SEL action, CGFloat x
 @end
 static NSDictionary *identity(NSWindow *w, NSString *kind) {NSDictionary *info=cg((uint32_t)w.windowNumber);CGRect r=CGRectZero;if(info)CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)info[(id)kCGWindowBounds],&r);return @{@"kind":kind,@"id":@(w.windowNumber),@"parent":@(w.parentWindow.windowNumber),@"sheet_parent":@(w.sheetParent.windowNumber),@"bounds":rect(r),@"visible":@(w.visible)};}
 static int source(NSString *dir, NSString *nonce, double seconds) {
-    pid_t parent=getppid();if(parent<=1)return 2;Family *f=[Family new];f.a=window(@"family-parent-A",NSMakeRect(60,150,360,240),0,NO);f.b=window(@"family-top-B",NSMakeRect(470,150,360,240),1,NO);
+    pid_t parent=getppid();if(parent<=1)return 2;Family *f=[Family new];f.a=window(@"family-parent-A",NSMakeRect(300,150,360,240),0,NO);f.b=window(@"family-top-B",NSMakeRect(840,150,360,240),1,NO);
     button(f.a,f,@"create-panel",@selector(openPanel:),10);button(f.a,f,@"create-sheet",@selector(openSheet:),170);
     [f.a orderFront:nil];[f.b orderFront:nil];NSDate *start=NSDate.date;
     NSInteger setupPhase=0;
     while(!halted&&getppid()==parent&&-start.timeIntervalSinceNow<seconds) {
-        NSInteger desired=MIN(4,(NSInteger)(-start.timeIntervalSinceNow/4));
+        NSInteger desired=MIN(4,(NSInteger)(-start.timeIntervalSinceNow/6));
         if(desired>setupPhase){if(desired==1)[f openPanel:nil];if(desired==2)[f closePanel:nil];if(desired==3)[f openSheet:nil];if(desired==4)[f closeSheet:nil];setupPhase=desired;}
         NSMutableArray *windows=[NSMutableArray array];for(NSWindow *w in @[f.a,f.b,f.panel?:NSNull.null,f.sheet?:NSNull.null])if([w isKindOfClass:NSWindow.class]) { ColorView *v=(ColorView *)w.contentView;v.phase=((NSInteger)(-start.timeIntervalSinceNow*2))%2;v.needsDisplay=YES;[w displayIfNeeded];[windows addObject:identity(w,@[@"parent",@"other-top",@"panel",@"sheet"][v.kind])]; }
         save(@{@"pid":@(getpid()),@"birth":birth(getpid())?:@[],@"nonce":nonce,@"windows":windows,@"setup_phase":@(setupPhase),@"actions":@(f.actions),@"untagged":@(untagged),@"tick":@(-start.timeIntervalSinceNow)},[dir stringByAppendingPathComponent:@"source.json"]);pump(.05);
@@ -97,6 +97,8 @@ static SCShareableContent *shareable(void) {__block BOOL done=NO;__block SCShare
 @property NSNumber *wid;
 @property NSDictionary *metadata;
 @property NSDictionary *filterMetadata;
+@property NSDictionary *normalization;
+@property NSMutableArray *extentChanges;
 @end
 @implementation Capture
 - (void)dealloc {if(_image)CGImageRelease(_image);}
@@ -107,15 +109,47 @@ static SCShareableContent *shareable(void) {__block BOOL done=NO;__block SCShare
     if([attachments.firstObject[SCStreamFrameInfoStatus]integerValue]!=SCFrameStatusComplete)return;
     NSMutableDictionary *metadata=[NSMutableDictionary dictionary];for(NSString *key in @[SCStreamFrameInfoContentRect,SCStreamFrameInfoScreenRect,SCStreamFrameInfoBoundingRect,SCStreamFrameInfoContentScale,SCStreamFrameInfoScaleFactor])if(attachments.firstObject[key])metadata[key]=attachments.firstObject[key];self.metadata=metadata;
     CVPixelBufferRef buffer=CMSampleBufferGetImageBuffer(sample);if(!buffer)return;
-    CIImage *ci=[CIImage imageWithCVPixelBuffer:buffer];CGImageRef next=[[CIContext contextWithOptions:nil]createCGImage:ci fromRect:ci.extent];if(next){if(self.image)CGImageRelease(self.image);self.image=next;self.frames++;}
+    NSDictionary *m=self.metadata;CGRect screen=CGRectZero,content=CGRectZero;
+    BOOL rects=[m[SCStreamFrameInfoScreenRect]isKindOfClass:NSDictionary.class]&&[m[SCStreamFrameInfoContentRect]isKindOfClass:NSDictionary.class]&&
+        CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)m[SCStreamFrameInfoScreenRect],&screen)&&CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)m[SCStreamFrameInfoContentRect],&content);
+    CGFloat scale=[m[SCStreamFrameInfoScaleFactor]doubleValue],contentScale=[m[SCStreamFrameInfoContentScale]doubleValue];
+    size_t width=CVPixelBufferGetWidth(buffer),height=CVPixelBufferGetHeight(buffer);
+    CGRect pixels=CGRectMake(content.origin.x*scale,content.origin.y*scale,content.size.width*scale,content.size.height*scale);
+    BOOL valid=rects&&isfinite(scale)&&isfinite(contentScale)&&scale>0&&contentScale>0&&screen.size.width>0&&screen.size.height>0&&
+        isfinite(screen.origin.x)&&isfinite(screen.origin.y)&&isfinite(screen.size.width)&&isfinite(screen.size.height)&&
+        isfinite(pixels.origin.x)&&isfinite(pixels.origin.y)&&isfinite(pixels.size.width)&&isfinite(pixels.size.height)&&
+        pixels.size.width>0&&pixels.size.height>0&&pixels.origin.x>=-.5&&pixels.origin.y>=-.5&&
+        CGRectGetMaxX(pixels)<=(CGFloat)width+.5&&CGRectGetMaxY(pixels)<=(CGFloat)height+.5&&
+        content.size.width/contentScale>=screen.size.width-.5&&content.size.height/contentScale>=screen.size.height-.5;
+    // screenRect remains the selected root rectangle on the observed OS. The
+    // original captured size comes from surface content size / contentScale.
+    // Anchoring at screenRect.origin is a candidate, verified below against actual
+    // pixels; extension to the left/above the root is deliberately not claimed.
+    CGRect extent=CGRectMake(screen.origin.x,screen.origin.y,valid?content.size.width/contentScale:0,valid?content.size.height/contentScale:0);
+    NSDictionary *normalization=@{@"valid":@(valid),@"native_extent":rect(extent),@"screen_rect":rect(screen),@"pixel_rect":rect(pixels),@"buffer_size":@[@(width),@(height)],
+        @"pixel_to_native_scale":@(valid?1/(scale*contentScale):0),@"frame":@(self.frames+1)};
+    if(!self.extentChanges)self.extentChanges=[NSMutableArray array];
+    if(![self.normalization[@"native_extent"]isEqual:normalization[@"native_extent"]]||![self.normalization[@"pixel_rect"]isEqual:normalization[@"pixel_rect"]])
+        [self.extentChanges addObject:@{@"normalization":normalization,@"metadata":m}];
+    CIImage *ci=[CIImage imageWithCVPixelBuffer:buffer];CGImageRef next=[[CIContext contextWithOptions:nil]createCGImage:ci fromRect:ci.extent];
+    if(next){if(self.image)CGImageRelease(self.image);self.image=next;self.normalization=normalization;self.frames++;}
+
 }
 @end
-static Capture *startCapture(SCWindow *window, NSString *kind, SCDisplay *display, CGRect crop) {Capture *c=[Capture new];c.bounds=display?crop:window.frame;c.kind=kind;c.wid=@(window.windowID);
-    SCContentFilter *filter=display?[[SCContentFilter alloc]initWithDisplay:display includingApplications:@[window.owningApplication] exceptingWindows:@[]]:[[SCContentFilter alloc]initWithDesktopIndependentWindow:window];c.filterMetadata=@{@"content_rect":rect(filter.contentRect),@"point_pixel_scale":@(filter.pointPixelScale),@"style":@(filter.style)};SCStreamConfiguration *config=[SCStreamConfiguration new];config.width=(size_t)c.bounds.size.width;config.height=(size_t)c.bounds.size.height;if(display){config.sourceRect=CGRectOffset(crop,-display.frame.origin.x,-display.frame.origin.y);config.includeChildWindows=YES;config.ignoreShadowsDisplay=YES;}config.showsCursor=NO;config.ignoreShadowsSingleWindow=YES;config.pixelFormat=kCVPixelFormatType_32BGRA;config.minimumFrameInterval=CMTimeMake(1,15);config.queueDepth=3;
-    c.stream=[[SCStream alloc]initWithFilter:filter configuration:config delegate:c];NSError *e=nil;if(![c.stream addStreamOutput:c type:SCStreamOutputTypeScreen sampleHandlerQueue:dispatch_get_main_queue() error:&e])c.error=e.description;
+static Capture *startCapture(SCWindow *window, NSString *kind) {
+    Capture *c=[Capture new];c.bounds=window.frame;c.kind=kind;c.wid=@(window.windowID);
+    SCContentFilter *filter=[[SCContentFilter alloc]initWithDesktopIndependentWindow:window];
+    c.filterMetadata=@{@"content_rect":rect(filter.contentRect),@"point_pixel_scale":@(filter.pointPixelScale),@"style":@(filter.style)};
+    SCStreamConfiguration *config=[SCStreamConfiguration new];
+    config.width=(size_t)ceil(filter.contentRect.size.width*filter.pointPixelScale);
+    config.height=(size_t)ceil(filter.contentRect.size.height*filter.pointPixelScale);
+    config.showsCursor=NO;config.ignoreShadowsSingleWindow=YES;config.pixelFormat=kCVPixelFormatType_32BGRA;
+    config.minimumFrameInterval=CMTimeMake(1,15);config.queueDepth=3;
+    c.stream=[[SCStream alloc]initWithFilter:filter configuration:config delegate:c];NSError *e=nil;
+    if(![c.stream addStreamOutput:c type:SCStreamOutputTypeScreen sampleHandlerQueue:dispatch_get_main_queue() error:&e])c.error=e.description;
     [c.stream startCaptureWithCompletionHandler:^(NSError *error){if(error)dispatch_async(dispatch_get_main_queue(),^{c.error=error.description;});}];return c;
 }
-static NSDictionary *finishCapture(Capture *c) {__block BOOL done=NO;[c.stream stopCaptureWithCompletionHandler:^(NSError *e){dispatch_async(dispatch_get_main_queue(),^{if(e&&!c.error)c.error=e.description;done=YES;});}];NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:2];while(!done&&deadline.timeIntervalSinceNow>0)pump(.01);c.stopped=done;[c.stream removeStreamOutput:c type:SCStreamOutputTypeScreen error:nil];c.stream=nil;return @{@"id":c.wid,@"kind":c.kind,@"frames":@(c.frames),@"stop_completed":@(done),@"error":c.error?:@""};}
+static NSDictionary *finishCapture(Capture *c) {__block BOOL done=NO;[c.stream stopCaptureWithCompletionHandler:^(NSError *e){dispatch_async(dispatch_get_main_queue(),^{if(e&&!c.error)c.error=e.description;done=YES;});}];NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:2];while(!done&&deadline.timeIntervalSinceNow>0)pump(.01);c.stopped=done;[c.stream removeStreamOutput:c type:SCStreamOutputTypeScreen error:nil];c.stream=nil;return @{@"id":c.wid,@"kind":c.kind,@"frames":@(c.frames),@"stop_completed":@(done),@"error":c.error?:@"",@"extent_changes":c.extentChanges?:@[]};}
 static void png(CGImageRef image, NSString *path) {NSBitmapImageRep *rep=[[NSBitmapImageRep alloc]initWithCGImage:image];[[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}]writeToFile:path atomically:YES];}
 static NSDictionary *render(NSArray<Capture *> *captures, NSString *dir, NSString *name) {
     const size_t width=1040,height=520;CGColorSpaceRef space=CGColorSpaceCreateWithName(kCGColorSpaceSRGB);CGContextRef ctx=CGBitmapContextCreate(NULL,width,height,8,width*4,space,kCGImageAlphaPremultipliedLast|kCGBitmapByteOrder32Big);CGContextSetRGBFillColor(ctx,.05,.05,.05,1);CGContextFillRect(ctx,CGRectMake(0,0,width,height));
@@ -123,9 +157,14 @@ static NSDictionary *render(NSArray<Capture *> *captures, NSString *dir, NSStrin
     // relative position; both cameras have independent pan and scale and hard clipping.
     CGContextTranslateCTM(ctx,0,height);CGContextScaleCTM(ctx,1,-1);NSMutableArray *views=[NSMutableArray array];CGRect origin=captures.firstObject.bounds;
     for(int i=0;i<2;i++){CGRect clip=CGRectMake(i?540:20,20,480,480);CGFloat zoom=i?.9:.6;CGPoint pan=i?CGPointMake(60,-30):CGPointMake(-20,-30);CGContextSaveGState(ctx);CGContextClipToRect(ctx,clip);NSMutableArray *placements=[NSMutableArray array];
-        for(Capture *c in captures){CGRect b=c.bounds;CGRect dest=CGRectMake(clip.origin.x+(b.origin.x-origin.origin.x-pan.x)*zoom,clip.origin.y+(b.origin.y-origin.origin.y-pan.y)*zoom,b.size.width*zoom,b.size.height*zoom);
-            if(c.image){CGContextSaveGState(ctx);CGContextTranslateCTM(ctx,dest.origin.x,dest.origin.y+dest.size.height);CGContextScaleCTM(ctx,1,-1);CGContextDrawImage(ctx,CGRectMake(0,0,dest.size.width,dest.size.height),c.image);CGContextRestoreGState(ctx);}
-            [placements addObject:@{@"id":c.wid,@"kind":c.kind,@"destination":rect(dest),@"native_bounds":rect(b),@"frames":@(c.frames),@"stream_metadata":c.metadata?:@{},@"filter_metadata":c.filterMetadata?:@{}}];
+        for(Capture *c in captures){CGRect b=fromRect(c.normalization[@"native_extent"]);CGRect dest=CGRectMake(clip.origin.x+(b.origin.x-origin.origin.x-pan.x)*zoom,clip.origin.y+(b.origin.y-origin.origin.y-pan.y)*zoom,b.size.width*zoom,b.size.height*zoom);
+            if(c.image&&[c.normalization[@"valid"]boolValue]){
+                CGRect pixel=fromRect(c.normalization[@"pixel_rect"]);CGFloat sx=dest.size.width/pixel.size.width,sy=dest.size.height/pixel.size.height;
+                CGRect imageDest=CGRectMake(dest.origin.x-pixel.origin.x*sx,dest.origin.y-pixel.origin.y*sy,CGImageGetWidth(c.image)*sx,CGImageGetHeight(c.image)*sy);
+                CGContextSaveGState(ctx);CGContextClipToRect(ctx,dest);CGContextTranslateCTM(ctx,imageDest.origin.x,imageDest.origin.y+imageDest.size.height);
+                CGContextScaleCTM(ctx,1,-1);CGContextDrawImage(ctx,CGRectMake(0,0,imageDest.size.width,imageDest.size.height),c.image);CGContextRestoreGState(ctx);
+            }
+            [placements addObject:@{@"id":c.wid,@"kind":c.kind,@"destination":rect(dest),@"native_bounds":rect(b),@"frames":@(c.frames),@"stream_metadata":c.metadata?:@{},@"filter_metadata":c.filterMetadata?:@{},@"normalization":c.normalization?:@{}}];
         }CGContextRestoreGState(ctx);[views addObject:@{@"clip":rect(clip),@"zoom":@(zoom),@"pan":@[@(pan.x),@(pan.y)],@"placements":placements}];
     }CGImageRef image=CGBitmapContextCreateImage(ctx);png(image,[dir stringByAppendingPathComponent:[name stringByAppendingString:@".png"]]);CGImageRelease(image);CGContextRelease(ctx);CGColorSpaceRelease(space);
     for(Capture *c in captures)if(c.image)png(c.image,[dir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@-%@.png",name,c.kind]]);
@@ -133,12 +172,12 @@ static NSDictionary *render(NSArray<Capture *> *captures, NSString *dir, NSStrin
 }
 static BOOL guarded(NSDictionary *s,NSTask *child,NSArray *enrolled,NSString *nonce,pid_t foreground) {return !halted&&child.running&&[s[@"pid"]intValue]==child.processIdentifier&&[s[@"nonce"]isEqual:nonce]&&[s[@"birth"]isEqual:enrolled]&&[birth(child.processIdentifier)isEqual:enrolled]&&![s[@"untagged"]unsignedIntegerValue]&&NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier==foreground;}
 static int host(NSString *dir,NSString *executable) {
-    NSMutableDictionary *report=[@{@"permission_requests":@0,@"activation_requests":@0,@"global_input_posts":@0,@"source_custom_surface_exports":@0,@"control_route":@"Passive scheduled fixture setup invokes the real AppKit actions; native buttons retained, AXPress/pointer/keyboard parity NOT proven",@"capture_route":@"Compare separate desktopIndependentWindow streams with display-bound owned-app stream, includeChildWindows=YES, cropped to native family union",@"stages":[NSMutableArray array],@"controls":[NSMutableArray array],@"closed_streams":[NSMutableArray array]}mutableCopy];
+    NSMutableDictionary *report=[@{@"permission_requests":@0,@"activation_requests":@0,@"global_input_posts":@0,@"source_custom_surface_exports":@0,@"control_route":@"Passive scheduled fixture setup invokes the real AppKit actions; native buttons retained, AXPress/pointer/keyboard parity NOT proven",@"capture_route":@"One desktopIndependentWindow stream per explicitly selected root; normalize each frame from SCK screenRect, contentRect, contentScale, scaleFactor and buffer dimensions; no child streams or display fallback",@"stages":[NSMutableArray array],@"controls":[NSMutableArray array],@"closed_streams":[NSMutableArray array]}mutableCopy];
     if(!CGPreflightScreenCaptureAccess()||!AXIsProcessTrusted()){report[@"failure"]=@"Existing screen capture and accessibility permissions required; no prompts requested";save(report,[dir stringByAppendingPathComponent:@"receipt.json"]);return 2;}
     NSTask *child=[NSTask new];NSString *nonce=NSUUID.UUID.UUIDString;child.executableURL=[NSURL fileURLWithPath:executable];child.arguments=@[@"--source",dir,nonce];NSError *error=nil;if(![child launchAndReturnError:&error])return 2;
     pid_t foreground=NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier;report[@"foreground_pid"]=@(foreground);report[@"source_pid"]=@(child.processIdentifier);
     NSString *statePath=[dir stringByAppendingPathComponent:@"source.json"];NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:35];NSDictionary *state=nil;for(int n=0;n<100&&child.running&&!halted;n++){state=load(statePath);if([state[@"windows"]count]==2)break;pump(.03);}NSArray *enrolled=state[@"birth"];
-    AXUIElementRef app=AXUIElementCreateApplication(child.processIdentifier);AXUIElementSetMessagingTimeout(app,1);axWindow=dlsym(RTLD_DEFAULT,"_AXUIElementGetWindow");NSMutableDictionary<NSNumber *,Capture *> *streams=[NSMutableDictionary dictionary];BOOL okay=YES;
+    AXUIElementRef app=AXUIElementCreateApplication(child.processIdentifier);AXUIElementSetMessagingTimeout(app,1);axWindow=dlsym(RTLD_DEFAULT,"_AXUIElementGetWindow");NSMutableDictionary<NSNumber *,Capture *> *streams=[NSMutableDictionary dictionary];NSMutableDictionary<NSNumber *,NSDictionary *> *priorChildren=[NSMutableDictionary dictionary];BOOL okay=YES;
     NSArray *names=@[@"baseline",@"panel",@"panel-dismissed",@"sheet",@"sheet-dismissed"];
     pump(.4);
     for(NSUInteger phase=0;phase<names.count&&okay;phase++) {
@@ -151,16 +190,30 @@ static int host(NSString *dir,NSString *executable) {
             NSDictionary *info=cg(wid.unsignedIntValue);BOOL identity=match&&[info[(id)kCGWindowOwnerPID]intValue]==child.processIdentifier&&CGRectEqualToRect(match.frame,fromRect(s[@"bounds"]));
             NSMutableDictionary *record=[s mutableCopy];record[@"cg_owner"]=info[(id)kCGWindowOwnerPID]?:@0;record[@"sc_found"]=@(match!=nil);record[@"identity_verified"]=@(identity);record[@"sc_bounds"]=match?rect(match.frame):@[];CGRect liveBounds=CGRectZero;if(info)CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)info[(id)kCGWindowBounds],&liveBounds);record[@"cg_bounds"]=rect(liveBounds);[observed addObject:record];
             if(!identity){report[@"failure"]=[NSString stringWithFormat:@"Native %@ window unavailable or mismatched in SC/CG",s[@"kind"]];okay=NO;continue;}
-            [live addObject:wid];Capture *c=streams[wid];if(!c){c=startCapture(match,s[@"kind"],nil,CGRectZero);streams[wid]=c;}[selected addObject:c];
+            [live addObject:wid];
+            // The two roots are explicitly enrolled at baseline. Fixture parent IDs
+            // never select streams or derive their captured extent.
+            if(phase==0){Capture *c=startCapture(match,s[@"kind"]);streams[wid]=c;}
+            if(streams[wid])[selected addObject:streams[wid]];
         }
-        for(NSNumber *wid in streams.allKeys)if(![live containsObject:wid]) {Capture *c=streams[wid];NSMutableDictionary *closed=[finishCapture(c)mutableCopy];closed[@"cg_absent_after_dismissal"]=@(cg(wid.unsignedIntValue)==nil);BOOL absent=YES;for(SCWindow *w in content.windows)if(w.windowID==wid.unsignedIntValue)absent=NO;closed[@"sc_absent_after_dismissal"]=@(absent);[report[@"closed_streams"]addObject:closed];[streams removeObjectForKey:wid];}
-        NSMutableDictionary *stage=[@{@"name":names[phase],@"source":state?:@{},@"windows":observed,@"ax":ax,@"frames":[NSMutableArray array]}mutableCopy];[report[@"stages"]addObject:stage];
+        for(NSNumber *wid in streams.allKeys)if(![live containsObject:wid]){report[@"failure"]=@"Enrolled root disappeared";okay=NO;}
+        NSMutableArray *dismissed=[NSMutableArray array];
+        for(NSNumber *wid in priorChildren)if(![live containsObject:wid]){BOOL present=NO;for(SCWindow *w in content.windows)if(w.windowID==wid.unsignedIntValue)present=YES;
+            [dismissed addObject:@{@"id":wid,@"kind":priorChildren[wid][@"kind"],@"cg_absent":@(cg(wid.unsignedIntValue)==nil),@"sc_still_enumerated":@(present)}];}
+        [priorChildren removeAllObjects];for(NSDictionary *w in observed)if(!streams[w[@"id"]])priorChildren[w[@"id"]]=w;
+        NSMutableDictionary *stage=[@{@"name":names[phase],@"source":state?:@{},@"windows":observed,@"ax":ax,@"dismissed":dismissed,@"frames":[NSMutableArray array]}mutableCopy];[report[@"stages"]addObject:stage];
         if(!okay)break;
-        CGRect crop=CGRectNull;for(NSDictionary *w in observed)crop=CGRectUnion(crop,fromRect(w[@"bounds"]));SCWindow *anchor=nil;for(SCWindow *w in content.windows)if(w.windowID==[observed.firstObject[@"id"]unsignedIntValue])anchor=w;SCDisplay *display=nil;for(SCDisplay *d in content.displays)if(CGRectContainsRect(d.frame,crop))display=d;
-        Capture *appCapture=display?startCapture(anchor,@"application",display,crop):nil;stage[@"display_frames"]=[NSMutableArray array];stage[@"display_native_bounds"]=rect(crop);stage[@"display_id"]=@(display.displayID);
-        if(!appCapture){okay=NO;report[@"failure"]=@"Owned family does not fit one enumerated display";break;}
-        for(int sample=0;sample<4;sample++){pump(.65);NSDictionary *current=load(statePath);BOOL stable=YES;for(NSDictionary *expected in observed){BOOL found=NO;for(NSDictionary *now in current[@"windows"])if([now[@"id"]isEqual:expected[@"id"]]&&[now[@"bounds"]isEqual:expected[@"bounds"]])found=YES;stable&=found;}if(!stable||!guarded(current,child,enrolled,nonce,foreground)){okay=NO;report[@"failure"]=@"Native bounds, human input or foreground changed during capture";break;}NSString *name=[NSString stringWithFormat:@"%@-%d",names[phase],sample];[stage[@"frames"]addObject:render(selected,dir,name)];[stage[@"display_frames"]addObject:render(@[appCapture],dir,[@"display-" stringByAppendingString:name])];}
-        stage[@"display_stream"]=finishCapture(appCapture);
+        if(selected.count!=2){okay=NO;report[@"failure"]=@"Expected exactly two enrolled root streams";break;}
+        for(int sample=0;sample<4;sample++){
+            pump(.65);NSDictionary *current=load(statePath);BOOL stable=[current[@"setup_phase"]unsignedIntegerValue]==phase&&[current[@"windows"]count]==observed.count;
+            for(NSDictionary *expected in observed){BOOL found=NO;for(NSDictionary *now in current[@"windows"])if([now[@"id"]isEqual:expected[@"id"]]&&[now[@"bounds"]isEqual:expected[@"bounds"]])found=YES;stable&=found;}
+            for(Capture *c in selected){NSDictionary *now=cg(c.wid.unsignedIntValue);CGRect actual=CGRectZero;if(now)CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)now[(id)kCGWindowBounds],&actual);stable&=CGRectEqualToRect(actual,c.bounds);}
+            if(!stable||!guarded(current,child,enrolled,nonce,foreground)){okay=NO;report[@"failure"]=@"Native bounds, human input or foreground changed during capture";break;}
+            NSString *name=[NSString stringWithFormat:@"%@-%d",names[phase],sample];
+            [stage[@"frames"]addObject:render(selected,dir,name)];
+            for(Capture *c in selected)if(![c.normalization[@"valid"]boolValue]||c.error){okay=NO;report[@"failure"]=@"Frame metadata cannot substantiate a native extent mapping";}
+            if(!okay)break;
+        }
 
     }
     for(Capture *c in streams.allValues)[report[@"closed_streams"]addObject:finishCapture(c)];CFRelease(app);

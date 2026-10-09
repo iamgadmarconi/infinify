@@ -1,0 +1,13 @@
+{
+  "proof_manifest_sha256": "8103120c02445101d8d1d169e2c5d78083c530bd1bb145d1bac79989cf1e6f43",
+  "review_host": "ProductName:\t\tmacOS\nProductVersion:\t\t27.2\nBuildVersion:\t\t26B5091g",
+  "visual_inspection": [
+    "normalized-pass/proof/panel-1.png",
+    "normalized-pass/proof/sheet-1.png"
+  ],
+  "boundaries": [
+    "right-extending panel and in-bounds sheet only",
+    "left/up extent origin unproved",
+    "production parent discovery, z-order interleaving, native input/focus unproved"
+  ]
+}

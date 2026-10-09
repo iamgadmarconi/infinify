@@ -1,0 +1,58 @@
+{
+  "failure": "Owned identity, foreground, input guard or deadline interrupted",
+  "capture_sequence_completed": false,
+  "capture_route": "One desktopIndependentWindow stream per explicitly selected root; normalize each frame from SCK screenRect, contentRect, contentScale, scaleFactor and buffer dimensions; no child streams or display fallback",
+  "source_custom_surface_exports": 0,
+  "stages": [],
+  "foreground_pid": 1329,
+  "control_route": "Passive scheduled fixture setup invokes the real AppKit actions; native buttons retained, AXPress/pointer/keyboard parity NOT proven",
+  "source_pid": 15987,
+  "activation_requests": 0,
+  "global_input_posts": 0,
+  "source_final": {
+    "untagged": 0,
+    "pid": 15987,
+    "tick": 0.019214987754821777,
+    "birth": [
+      1791507785,
+      839771
+    ],
+    "windows": [
+      {
+        "parent": 0,
+        "id": 77362,
+        "kind": "parent",
+        "sheet_parent": 0,
+        "bounds": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "visible": true
+      },
+      {
+        "parent": 0,
+        "id": 77363,
+        "kind": "other-top",
+        "sheet_parent": 0,
+        "bounds": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "visible": true
+      }
+    ],
+    "setup_phase": 0,
+    "actions": 0
+  },
+  "closed_streams": [],
+  "controls": [],
+  "foreground_after": 1329,
+  "permission_requests": 0,
+  "source_reaped": 1,
+  "source_exit_status": 0,
+  "signal": 15
+}

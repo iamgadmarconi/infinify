@@ -1,0 +1,39 @@
+{
+  "untagged": 0,
+  "tick": 0.9570260047912598,
+  "birth": [
+    1791507786,
+    670436
+  ],
+  "windows": [
+    {
+      "visible": true,
+      "id": 77373,
+      "kind": "parent",
+      "sheet_parent": 0,
+      "bounds": [
+        300,
+        907,
+        360,
+        272
+      ],
+      "parent": 0
+    },
+    {
+      "visible": true,
+      "id": 77374,
+      "kind": "other-top",
+      "sheet_parent": 0,
+      "bounds": [
+        840,
+        907,
+        360,
+        272
+      ],
+      "parent": 0
+    }
+  ],
+  "setup_phase": 0,
+  "actions": 0,
+  "pid": 16021
+}

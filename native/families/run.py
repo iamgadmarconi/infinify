@@ -5,17 +5,23 @@ import json
 import os
 import pathlib
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
-from verify import verify
+from verify_normalized import verify
 
 base=pathlib.Path(sys.argv[1]).resolve();base.mkdir(parents=True,exist_ok=True)
 run=pathlib.Path(tempfile.mkdtemp(prefix='run-',dir=base))
 binary=pathlib.Path('target/native-families/native-families').resolve()
-inputs=[pathlib.Path(p) for p in ('native/families/families.m','native/families/verify.py','native/families/run.py','scripts/build-families.sh','tests/e2e/native-families.sh')]+[binary]
+inputs=[pathlib.Path(p) for p in ('native/families/families.m','native/families/verify.py','native/families/verify_normalized.py','native/families/run.py','scripts/build-families.sh','tests/e2e/native-families.sh')]+[binary]
 report={'passed':False,'implementation_sha256':{str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs},'checks':[]}
+report['base_commit']=subprocess.run(['git','rev-parse','HEAD'],check=True,capture_output=True,text=True).stdout.strip()
+for source_file in inputs[:-1]:
+    snapshot=run/'implementation'/source_file
+    snapshot.parent.mkdir(parents=True,exist_ok=True)
+    shutil.copyfile(source_file,snapshot)
 children=[]
 lifecycle_only='--lifecycle-only' in sys.argv[2:]
 def gone(pid):
@@ -63,7 +69,7 @@ try:
     report['checks'].append('source deadline, SIGTERM/SIGINT cleanup and host-SIGKILL parent-death self-exit')
     if not lifecycle_only:
         report['proof']=verify(proof_folder)
-        report['checks'].append('actual saved display-bound app pixels: two top levels, attached panel, sheet, two transforms, clipping, live changes and destruction; independent-window candidate result recorded separately')
+        report['checks'].append('actual metadata-normalized root-family pixels: two root streams, no child stream/double count, native sizes/offsets, two transforms, clipping, live changes and destruction')
     else:
         report['scope']='lifecycle-only; no capture capability assertion'
     report['passed']=True

@@ -1,0 +1,239 @@
+{
+  "passed": true,
+  "implementation_sha256": {
+    "native/families/families.m": "0f35a2d435d882909948661e99985730a0219ab13afb383740c63e001bd90588",
+    "native/families/verify.py": "b75de55c0f593e75142a2bafe7b308494acb731330f3540ff06f811507bbe722",
+    "native/families/verify_normalized.py": "f31df35e516ba4ba3b535bf6e7b07a159c45aafad7051c0828c18dd114b919f9",
+    "native/families/run.py": "c808a42a6c82fd3cd4a38d1a983787bc6b869911b0987c781797cea83c7fa058",
+    "scripts/build-families.sh": "77116e1784ee5e9f82bb7198d4fad476ecd5edf39ad452fdcf667a2ebc46b9c2",
+    "tests/e2e/native-families.sh": "18f21cc9e62f2a3913cca24feb2e3c31c6cd707878b1d6e8da2f8781e8ebaf41",
+    "/Users/gad/Documents/code/personal/infinify/target/worktrees/native-family/target/native-families/native-families": "c68362b4ba53309d8d54e3c02bb85a97f5224c86addba6f3f57d13f68f87cb94"
+  },
+  "checks": [
+    "source deadline, SIGTERM/SIGINT cleanup and host-SIGKILL parent-death self-exit",
+    "actual metadata-normalized root-family pixels: two root streams, no child stream/double count, native sizes/offsets, two transforms, clipping, live changes and destruction"
+  ],
+  "base_commit": "b279730369568f22aabfb472579ceb5af6be5d80",
+  "proof": {
+    "normalized_owned_family_pixels": true,
+    "saved_pixel_views_checked": 40,
+    "native_geometry_checks": [
+      {
+        "stage": "baseline",
+        "family_extent": [
+          300,
+          907,
+          360,
+          272
+        ],
+        "native_marker_bounds": {
+          "parent": [
+            320.0,
+            1099.0,
+            80.0,
+            60.0
+          ],
+          "other-top": [
+            860.0,
+            1099.0,
+            80.0,
+            60.0
+          ]
+        }
+      },
+      {
+        "stage": "panel",
+        "family_extent": [
+          300,
+          907,
+          490,
+          272
+        ],
+        "native_marker_bounds": {
+          "parent": [
+            319.73611091505046,
+            1098.916664760146,
+            80.98611030658638,
+            60.56944384274108
+          ],
+          "panel": [
+            620.5416634823714,
+            1068.9722206131728,
+            80.30555475779154,
+            59.88888829394624
+          ],
+          "other-top": [
+            860.0,
+            1099.0,
+            80.0,
+            60.0
+          ]
+        }
+      },
+      {
+        "stage": "panel-dismissed",
+        "family_extent": [
+          300,
+          907,
+          360,
+          272
+        ],
+        "native_marker_bounds": {
+          "parent": [
+            320.0,
+            1099.0,
+            80.0,
+            60.0
+          ],
+          "other-top": [
+            860.0,
+            1099.0,
+            80.0,
+            60.0
+          ]
+        }
+      },
+      {
+        "stage": "sheet",
+        "family_extent": [
+          300,
+          907,
+          360,
+          272
+        ],
+        "native_marker_bounds": {
+          "parent": [
+            320.0,
+            1099.0,
+            80.0,
+            60.0
+          ],
+          "sheet": [
+            390.0,
+            1048.0,
+            80.0,
+            60.0
+          ],
+          "other-top": [
+            860.0,
+            1099.0,
+            80.0,
+            60.0
+          ]
+        }
+      },
+      {
+        "stage": "sheet-dismissed",
+        "family_extent": [
+          300,
+          907,
+          360,
+          272
+        ],
+        "native_marker_bounds": {
+          "parent": [
+            320.0,
+            1099.0,
+            80.0,
+            60.0
+          ],
+          "other-top": [
+            860.0,
+            1099.0,
+            80.0,
+            60.0
+          ]
+        }
+      }
+    ],
+    "root_stream_count": 2,
+    "child_stream_count": 0,
+    "native_input_focus": "unproved; scheduled genuine AppKit setup only",
+    "production_parent_discovery": "unproved; roots explicitly selected, no family map inferred",
+    "stale_SCWindow_after_dismissal": [
+      "panel",
+      "sheet"
+    ]
+  },
+  "evidence_sha256": {
+    "proof/sheet-dismissed-3-parent.png": "ad818679613a26c797be9959775e3b1e5163004fd59b344d16ee1a89c7f60ad9",
+    "proof/baseline-0-parent.png": "ad818679613a26c797be9959775e3b1e5163004fd59b344d16ee1a89c7f60ad9",
+    "proof/sheet-dismissed-3-other-top.png": "52b85062a9035bd1cf3506a19ff2123eacab6e10c3ae8de81bc89e90e8ffa7d7",
+    "proof/sheet-3-parent.png": "0191535c7d45b584cd06d4eb9790a2187d0d223ead69cce76a76e23e04c675e7",
+    "proof/sheet-dismissed-0-other-top.png": "52b85062a9035bd1cf3506a19ff2123eacab6e10c3ae8de81bc89e90e8ffa7d7",
+    "proof/panel-dismissed-3-parent.png": "ad818679613a26c797be9959775e3b1e5163004fd59b344d16ee1a89c7f60ad9",
+    "proof/source.json": "472fa6272134b0791eb4efbfa6b36640c64372384b60f7a2b8a646b80fe7111c",
+    "proof/panel-0-parent.png": "db37b172b4798db04a41f1c980c441dbbbbdc9dcf6bc2588d6b73eadca711205",
+    "proof/panel-dismissed-2-other-top.png": "52b85062a9035bd1cf3506a19ff2123eacab6e10c3ae8de81bc89e90e8ffa7d7",
+    "proof/sheet-dismissed-1-parent.png": "e90c11ee4d72f0f4bbc80bec806277265c7bab99a340ac2ce003df647c337708",
+    "proof/panel-1-other-top.png": "bd274db29e04c312b87512768febcf6dc4dac328da63839a42be68f04951dc78",
+    "proof/baseline-2-parent.png": "e90c11ee4d72f0f4bbc80bec806277265c7bab99a340ac2ce003df647c337708",
+    "proof/sheet-1-parent.png": "b5a1d709e6b0410d42716bf7b6b7d6508f683bd69739e69e0d1d6c2ec3d70c39",
+    "proof/baseline-3-other-top.png": "52b85062a9035bd1cf3506a19ff2123eacab6e10c3ae8de81bc89e90e8ffa7d7",
+    "proof/sheet-3-other-top.png": "52b85062a9035bd1cf3506a19ff2123eacab6e10c3ae8de81bc89e90e8ffa7d7",
+    "proof/panel-2-other-top.png": "52b85062a9035bd1cf3506a19ff2123eacab6e10c3ae8de81bc89e90e8ffa7d7",
+    "proof/panel-dismissed-1-parent.png": "e90c11ee4d72f0f4bbc80bec806277265c7bab99a340ac2ce003df647c337708",
+    "proof/panel-dismissed-0.png": "c7bd0708c06b5856b0ca05a9da25fd180de80803a7b298467d3ef99af8e98664",
+    "proof/panel-dismissed-1.png": "fcbcae01f5c6cfe607d5aaba5bdad7c4762479027a8091138b30cbd58d901cd2",
+    "proof/sheet-0-other-top.png": "52b85062a9035bd1cf3506a19ff2123eacab6e10c3ae8de81bc89e90e8ffa7d7",
+    "proof/baseline-0-other-top.png": "52b85062a9035bd1cf3506a19ff2123eacab6e10c3ae8de81bc89e90e8ffa7d7",
+    "proof/panel-2-parent.png": "252c9e8ee361814c7d2c4387177bfdbab3e36717061586e600a04b9c9d6f2c33",
+    "proof/panel-dismissed-3.png": "c7bd0708c06b5856b0ca05a9da25fd180de80803a7b298467d3ef99af8e98664",
+    "proof/panel-dismissed-2.png": "bafd871b65676d1829b27fb09e0200612e9d307a22c11205480fcfc5f8e25850",
+    "proof/panel-dismissed-1-other-top.png": "bd274db29e04c312b87512768febcf6dc4dac328da63839a42be68f04951dc78",
+    "proof/sheet-1-other-top.png": "bd274db29e04c312b87512768febcf6dc4dac328da63839a42be68f04951dc78",
+    "proof/baseline-1-other-top.png": "52b85062a9035bd1cf3506a19ff2123eacab6e10c3ae8de81bc89e90e8ffa7d7",
+    "proof/panel-3-other-top.png": "52b85062a9035bd1cf3506a19ff2123eacab6e10c3ae8de81bc89e90e8ffa7d7",
+    "proof/panel-dismissed-2-parent.png": "ad818679613a26c797be9959775e3b1e5163004fd59b344d16ee1a89c7f60ad9",
+    "proof/panel-dismissed-0-other-top.png": "bd274db29e04c312b87512768febcf6dc4dac328da63839a42be68f04951dc78",
+    "proof/panel-1-parent.png": "db37b172b4798db04a41f1c980c441dbbbbdc9dcf6bc2588d6b73eadca711205",
+    "proof/sheet-0.png": "0c8e5ae429362e3255bed2e2460c58b8458526efb7ef8484f31dc3d4b7389df7",
+    "proof/sheet-dismissed-2-parent.png": "e90c11ee4d72f0f4bbc80bec806277265c7bab99a340ac2ce003df647c337708",
+    "proof/sheet-dismissed-3.png": "bafd871b65676d1829b27fb09e0200612e9d307a22c11205480fcfc5f8e25850",
+    "proof/panel-dismissed-3-other-top.png": "bd274db29e04c312b87512768febcf6dc4dac328da63839a42be68f04951dc78",
+    "proof/sheet-dismissed-2.png": "fcbcae01f5c6cfe607d5aaba5bdad7c4762479027a8091138b30cbd58d901cd2",
+    "proof/sheet-1.png": "febdfca57dc779de27ccb967b55631d611c8fc3c600ade0727bfd5fad54dec60",
+    "proof/baseline-2-other-top.png": "bd274db29e04c312b87512768febcf6dc4dac328da63839a42be68f04951dc78",
+    "proof/sheet-2-other-top.png": "bd274db29e04c312b87512768febcf6dc4dac328da63839a42be68f04951dc78",
+    "proof/sheet-3.png": "0c8e5ae429362e3255bed2e2460c58b8458526efb7ef8484f31dc3d4b7389df7",
+    "proof/baseline-1-parent.png": "ad818679613a26c797be9959775e3b1e5163004fd59b344d16ee1a89c7f60ad9",
+    "proof/sheet-dismissed-0.png": "bafd871b65676d1829b27fb09e0200612e9d307a22c11205480fcfc5f8e25850",
+    "proof/sheet-2-parent.png": "b5a1d709e6b0410d42716bf7b6b7d6508f683bd69739e69e0d1d6c2ec3d70c39",
+    "proof/sheet-dismissed-1.png": "fcbcae01f5c6cfe607d5aaba5bdad7c4762479027a8091138b30cbd58d901cd2",
+    "proof/sheet-2.png": "febdfca57dc779de27ccb967b55631d611c8fc3c600ade0727bfd5fad54dec60",
+    "proof/panel-0-other-top.png": "bd274db29e04c312b87512768febcf6dc4dac328da63839a42be68f04951dc78",
+    "proof/panel-dismissed-0-parent.png": "ad818679613a26c797be9959775e3b1e5163004fd59b344d16ee1a89c7f60ad9",
+    "proof/sheet-dismissed-1-other-top.png": "bd274db29e04c312b87512768febcf6dc4dac328da63839a42be68f04951dc78",
+    "proof/source-exit.json": "5544392b0348da088697ddd1559a6c6dc9d92daf90587fb52c62cd0e6f9c7c17",
+    "proof/panel-3-parent.png": "252c9e8ee361814c7d2c4387177bfdbab3e36717061586e600a04b9c9d6f2c33",
+    "proof/panel-3.png": "1222d3ea07da6baf5d9e59244207d3bff3e8038d5890a9670a9116f87f27e5c0",
+    "proof/baseline-0.png": "bafd871b65676d1829b27fb09e0200612e9d307a22c11205480fcfc5f8e25850",
+    "proof/baseline-1.png": "bafd871b65676d1829b27fb09e0200612e9d307a22c11205480fcfc5f8e25850",
+    "proof/sheet-dismissed-0-parent.png": "ad818679613a26c797be9959775e3b1e5163004fd59b344d16ee1a89c7f60ad9",
+    "proof/panel-2.png": "1222d3ea07da6baf5d9e59244207d3bff3e8038d5890a9670a9116f87f27e5c0",
+    "proof/panel-0.png": "8a6d5cc8a7300663e84e03994f299b2131f06e4151f8c10c971c664820f3abec",
+    "proof/baseline-3.png": "bafd871b65676d1829b27fb09e0200612e9d307a22c11205480fcfc5f8e25850",
+    "proof/baseline-2.png": "fcbcae01f5c6cfe607d5aaba5bdad7c4762479027a8091138b30cbd58d901cd2",
+    "proof/receipt.json": "f212ea34a5f32160939ea7b8a27e67995ed0677c0dd7ce20971d80ef2abe098b",
+    "proof/sheet-dismissed-2-other-top.png": "bd274db29e04c312b87512768febcf6dc4dac328da63839a42be68f04951dc78",
+    "proof/baseline-3-parent.png": "ad818679613a26c797be9959775e3b1e5163004fd59b344d16ee1a89c7f60ad9",
+    "proof/sheet-0-parent.png": "0191535c7d45b584cd06d4eb9790a2187d0d223ead69cce76a76e23e04c675e7",
+    "proof/panel-1.png": "8a6d5cc8a7300663e84e03994f299b2131f06e4151f8c10c971c664820f3abec",
+    "deadline/source.json": "238f808348ffe4cdec80b2a5e08e3f20964b9747e69e35bf09f7f409ecae6932",
+    "deadline/source-exit.json": "d42f3d56a883c66678c939a9977e6eefec26849fe6965ae40fe61992f23a080e",
+    "SIGKILL/source.json": "f912756106f3e7e58ff1f32ac72d7c8fe45e3ed4254e820988dfcd484a5c17a4",
+    "SIGKILL/source-exit.json": "f5add2d5341d4ea25dcd80132f1e83f7e03833a6cc795587c74062bd7e590515",
+    "SIGTERM/source.json": "994e41753eec1461d67a1e168d93911cea20ae0bf24a38b8e42372442ed30fb7",
+    "SIGTERM/source-exit.json": "44077d02f411cda4e7de6b22952fe1190b34b4c193eeccef8c3ff17709c480f2",
+    "SIGTERM/receipt.json": "bfa4ebf8b01ef5e327bfba551ba4c5c5f410ce9dc045b8266a8508931f5a48bd",
+    "SIGINT/source.json": "744e944dc547f1370a086192ba4f7c6b452ca504f82469be606bbdb5e702f61a",
+    "SIGINT/source-exit.json": "2dc217c8aae74ede6f85bef2606e978c884803e51b331fb8b59aae3835a9a986",
+    "SIGINT/receipt.json": "b63462ab8f844f0603e29c1c6a567712afb385aec425856eb4d2160559ef8567",
+    "implementation/scripts/build-families.sh": "77116e1784ee5e9f82bb7198d4fad476ecd5edf39ad452fdcf667a2ebc46b9c2",
+    "implementation/tests/e2e/native-families.sh": "18f21cc9e62f2a3913cca24feb2e3c31c6cd707878b1d6e8da2f8781e8ebaf41",
+    "implementation/native/families/run.py": "c808a42a6c82fd3cd4a38d1a983787bc6b869911b0987c781797cea83c7fa058",
+    "implementation/native/families/verify_normalized.py": "f31df35e516ba4ba3b535bf6e7b07a159c45aafad7051c0828c18dd114b919f9",
+    "implementation/native/families/families.m": "0f35a2d435d882909948661e99985730a0219ab13afb383740c63e001bd90588",
+    "implementation/native/families/verify.py": "b75de55c0f593e75142a2bafe7b308494acb731330f3540ff06f811507bbe722"
+  }
+}
