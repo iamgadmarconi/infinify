@@ -34,10 +34,18 @@ static bool guard(DWFocusIdentity i,void *raw){Context *c=(__bridge Context *)ra
 }
 static NSDictionary *observation(DWFocusResult r){return @{@"outcome":@(dw_focus_outcome_name(r.outcome)),@"ax_error":@(r.ax_error),@"mutation_attempted":@(r.mutation_attempted),@"system_pid":@(r.system_pid),@"system_window":@(r.system_window),@"app_window":@(r.app_window),@"actual_native_focus":@(r.focused),@"bounds":@[@(r.bounds.origin.x),@(r.bounds.origin.y),@(r.bounds.size.width),@(r.bounds.size.height)]};}
 static BOOL fixtureReady(NSDictionary *s,NSString *key,pid_t controller){
-    if(!verified(s,key)||![s[@"ready"]boolValue]||[s[@"controller"]intValue]!=controller||[s[@"pid"]intValue]<=0)return NO;
+    if(!verified(s,key)||![s[@"ready"]boolValue]||[s[@"controller"]intValue]!=controller||[s[@"pid"]intValue]<=0||![s[@"foreign_events"]isKindOfClass:NSNumber.class]||[s[@"foreign_events"]unsignedIntegerValue]!=0)return NO;
     NSArray *processBirth=s[@"birth"],*windows=s[@"windows"];if(processBirth.count!=2||[processBirth[0]unsignedLongLongValue]==0||windows.count!=2)return NO;
     uint32_t first=0;for(NSUInteger n=0;n<windows.count;n++){NSDictionary *w=windows[n];DWFocusIdentity i=identity(w);if(i.pid!=[s[@"pid"]intValue]||i.window==0||i.seconds==0||![w[@"birth"]isEqual:processBirth]||!dw_focus_owner(i,NULL)||(n&&i.window==first))return NO;if(!n)first=i.window;}
     return YES;
+}
+static BOOL matchesProcess(pid_t pid,NSArray *processBirth,NSDictionary *candidate){return pid>0&&processBirth.count==2&&[candidate[@"pid"]intValue]==pid&&[candidate[@"birth"]isEqual:processBirth];}
+static BOOL matchesOwnedProcess(pid_t pid,NSArray *processBirth,NSArray *owned){for(NSDictionary *candidate in owned)if(matchesProcess(pid,processBirth,candidate))return YES;return NO;}
+static BOOL allowedForeground(pid_t pid,NSArray *processBirth,NSDictionary *prior,NSArray *owned){return matchesProcess(pid,processBirth,prior)||matchesOwnedProcess(pid,processBirth,owned);}
+static int checkPreflightPolicy(void){
+    NSDictionary *prior=@{@"pid":@10,@"birth":@[@100,@0]};NSArray *owned=@[@{@"pid":@20,@"birth":@[@200,@0],@"window":@1},@{@"pid":@20,@"birth":@[@200,@0],@"window":@2}];
+    NSDictionary *checks=@{@"original":@(allowedForeground(10,@[@100,@0],prior,owned)),@"owned":@(allowedForeground(20,@[@200,@0],prior,owned)),@"unknown_rejected":@(!allowedForeground(30,@[@300,@0],prior,owned)),@"reused_pid_rejected":@(!allowedForeground(20,@[@201,@0],prior,owned))};
+    BOOL passed=YES;for(NSNumber *value in checks.allValues)passed&=value.boolValue;NSMutableDictionary *report=[checks mutableCopy];report[@"passed"]=@(passed);puts([[NSString alloc]initWithData:[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingSortedKeys error:NULL] encoding:NSUTF8StringEncoding].UTF8String);return passed?0:2;
 }
 // Private event ABI provenance: Cantrip 4da10af479701c8007074c65f9eb6a2db03c8ffc,
 // macos/skylight.rs, same signatures/fields as native/captured-windows/captured.m.
@@ -91,8 +99,10 @@ static int run(NSString *dir){
     DWFocusIdentity wrongOwner=identity(owned[0]);wrongOwner.pid=[owned[2][@"pid"]intValue];DWFocusResult rejectedOwner=dw_focus_observe(wrongOwner);
     DWFocusIdentity absent=identity(owned[0]);absent.window=0;DWFocusResult rejectedWindow=dw_focus_observe(absent);
     report[@"invalid_identity_rejection"]=@[@(rejected.outcome==DWFocusStale&&!rejected.mutation_attempted),@(rejectedOwner.outcome==DWFocusStale&&!rejectedOwner.mutation_attempted),@(rejectedWindow.outcome==DWFocusStale&&!rejectedWindow.mutation_attempted)];
-    c.previous=[config[@"prior"][@"pid"]intValue];c.previousBirth=config[@"prior"][@"birth"];
-    if(!AXIsProcessTrusted()||!CGPreflightListenEventAccess()||NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier!=c.previous||![birth(c.previous)isEqual:c.previousBirth]||CGEventSourceSecondsSinceLastEventType(kCGEventSourceStateHIDSystemState,kCGAnyInputEventType)<3){report[@"error"]=@"preflight unavailable, foreground changed or human input in last 3 seconds";save(report,receipt);return 2;}
+    BOOL axTrusted=AXIsProcessTrusted(),listenGranted=CGPreflightListenEventAccess();pid_t front=NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier;NSArray *frontBirth=birth(front)?:@[];BOOL priorFront=matchesProcess(front,frontBirth,config[@"prior"]),ownedFront=matchesOwnedProcess(front,frontBirth,owned);NSTimeInterval idle=CGEventSourceSecondsSinceLastEventType(kCGEventSourceStateHIDSystemState,kCGAnyInputEventType);BOOL foregroundAllowed=priorFront||ownedFront,idleEnough=idle>=3;
+    report[@"preflight"]=@{@"fixture_readiness_validated":@YES,@"ax_trusted":@(axTrusted),@"listen_granted":@(listenGranted),@"foreground":@{@"pid":@(front),@"birth":frontBirth},@"original_prior":config[@"prior"]?:@{},@"foreground_matches_original":@(priorFront),@"foreground_matches_enrolled_owned":@(ownedFront),@"foreground_allowed":@(foregroundAllowed),@"idle_seconds":@(idle),@"idle_requirement_met":@(idleEnough)};
+    if(!axTrusted||!listenGranted||!foregroundAllowed||!idleEnough){report[@"error"]=@"preflight unavailable, foreground not original/enrolled-owned, or human input in last 3 seconds";save(report,receipt);return 2;}
+    c.previous=front;c.previousBirth=frontBirth;
     CGEventMask mask=CGEventMaskBit(kCGEventLeftMouseDown)|CGEventMaskBit(kCGEventLeftMouseUp)|CGEventMaskBit(kCGEventRightMouseDown)|CGEventMaskBit(kCGEventRightMouseUp)|CGEventMaskBit(kCGEventMouseMoved)|CGEventMaskBit(kCGEventLeftMouseDragged)|CGEventMaskBit(kCGEventRightMouseDragged)|CGEventMaskBit(kCGEventKeyDown)|CGEventMaskBit(kCGEventKeyUp)|CGEventMaskBit(kCGEventFlagsChanged)|CGEventMaskBit(kCGEventScrollWheel)|CGEventMaskBit(kCGEventOtherMouseDown)|CGEventMaskBit(kCGEventOtherMouseUp)|CGEventMaskBit(kCGEventOtherMouseDragged)|CGEventMaskBit(kCGEventTabletPointer)|CGEventMaskBit(kCGEventTabletProximity);
     tap=CGEventTapCreate(kCGSessionEventTap,kCGHeadInsertEventTap,kCGEventTapOptionListenOnly,mask,monitor,NULL);if(!tap){report[@"error"]=@"listen-only input guard unavailable";save(report,receipt);return 2;}
     CFRunLoopSourceRef source=CFMachPortCreateRunLoopSource(NULL,tap,0);CFRunLoopAddSource(CFRunLoopGetCurrent(),source,kCFRunLoopCommonModes);
@@ -150,7 +160,8 @@ static int run(NSString *dir){
     save(report,receipt);return [report[@"passed"]boolValue]?0:2;
 }
 int main(int argc,const char **argv){@autoreleasepool{
-    if(argc==1||!strcmp(argv[1],"--help")){puts("focus-probe --doctor | --run-owned EMPTY_PREPARED_DIRECTORY\nDefault/doctor never activates or injects. Live gate requires explicit e2e --live-owned-focus flag.");return 0;}
+    if(argc==1||!strcmp(argv[1],"--help")){puts("focus-probe --doctor | --preflight-policy-check | --run-owned EMPTY_PREPARED_DIRECTORY\nDefault/doctor/policy check never activates or injects. Live gate requires explicit e2e --live-owned-focus flag.");return 0;}
+    if(argc==2&&!strcmp(argv[1],"--preflight-policy-check"))return checkPreflightPolicy();
     if(argc==3&&!strcmp(argv[1],"--birth")){NSArray *b=birth(atoi(argv[2]));if(!b)return 2;printf("[%llu,%llu]\n",[b[0]unsignedLongLongValue],[b[1]unsignedLongLongValue]);return 0;}
     if(argc==2&&!strcmp(argv[1],"--doctor")){pid_t p=NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier;NSDictionary *v=@{@"ax_trusted":@(AXIsProcessTrusted()),@"listen_granted":@(CGPreflightListenEventAccess()),@"private_ax_symbol":@(dlsym(RTLD_DEFAULT,"_AXUIElementGetWindow")!=NULL),@"prior":@{@"pid":@(p),@"birth":birth(p)?:@[]},@"idle_seconds":@(CGEventSourceSecondsSinceLastEventType(kCGEventSourceStateHIDSystemState,kCGAnyInputEventType))};puts([[NSString alloc]initWithData:[NSJSONSerialization dataWithJSONObject:v options:0 error:NULL] encoding:NSUTF8StringEncoding].UTF8String);return 0;}
     if(argc!=3||strcmp(argv[1],"--run-owned"))return 64;signals();[NSApplication sharedApplication];[NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];[NSApp finishLaunching];return run(@(argv[2]));

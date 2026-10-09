@@ -28,9 +28,11 @@ not authorization. Private AX signature provenance is pinned in `focus.m`.
 ```
 
 Builds with warnings as errors, compiles the API from C, checks the pure camera
-inverse contract and invalid/no-guard requests, then runs read-only doctor. It
-never launches fixture windows, activates applications, injects input, requests
-permissions, or changes settings.
+inverse contract, invalid/no-guard requests, and the foreground-admission policy,
+then runs read-only doctor. The policy check admits exact original and enrolled
+owned PID/birth pairs while rejecting unknown and PID-reuse cases. It never
+launches fixture windows, activates applications, injects input, requests permissions,
+or changes settings.
 
 Only after a concrete desktop test window has been approved:
 
@@ -75,6 +77,15 @@ fallback or pointer warp. An unrelated foreground app is never reactivated by
 the selection guard. During activation, only the previous foreground or selected
 owned app is accepted; transient windows inside that owned app are not treated as
 successful focus.
+
+Immediately before installing the event tap, evidence records AX trust, listen
+access, HID idle time, and the current foreground PID/birth alongside the original
+foreground identity. The foreground gate accepts only an exact original identity
+or an exact identity from signed, foreign-input-free fixture readiness that still
+passes native ownership validation. The observed allowed identity seeds the first
+focus transition; the original identity remains unchanged for conditional cleanup
+restoration. An owned fixture being foreground is admitted without asserting what
+caused that foreground state.
 
 Fixture event records and snapshots are HMAC-SHA256 signed with an ephemeral
 session key in a mode-0600 file inside a mode-0700 evidence directory. The
