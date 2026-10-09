@@ -10,8 +10,11 @@ fit/fill placement ownership and aspect ratio are outside this contract.
 
 - `begin_native_resize {window, output, edges, start_screen, group:false}` returns
   a transaction ID and `observe_resize_source` effect. The host must supply a
-  fresh result before motion; the actual frame size must exactly match committed
-  world size. A scaled/mismatched baseline fails explicitly. Beginning cancels
+  fresh result before any setter; the actual frame size must exactly match
+  committed world size. Motion during this asynchronous baseline read is coalesced
+  into the existing latest-request slot without committing geometry. Release keeps
+  that intent for baseline validation, setter, and final read; cancel drops it.
+  Failed or mismatched baselines never dispatch the queued setter. A scaled/mismatched baseline fails explicitly. Beginning cancels
   camera flights on every output.
 - `native_resize_to {transaction, screen}` uses absolute screen displacement from
   `start_screen`, divided by start zoom. Live zoom only changes snap distances.

@@ -232,7 +232,15 @@ impl Controller {
         screen: Point,
     ) -> Result<Value, Error> {
         let t = self.resize_id(transaction)?;
-        if t.phase != Phase::Dragging || t.released || !point_valid(screen) {
+        let waiting_for_baseline = t.phase == Phase::Preparing
+            && !t.baseline_observed
+            && t.pending_effect
+                .as_ref()
+                .is_some_and(|e| e.requested.is_none());
+        if (t.phase != Phase::Dragging && !waiting_for_baseline)
+            || t.released
+            || !point_valid(screen)
+        {
             return Err(Error::Invalid("resize is not accepting motion"));
         }
         let zoom = self
@@ -351,6 +359,7 @@ impl Controller {
             source.observation_known = true;
             if preparing && result.actual_ax.size != t.initial_size {
                 t.phase = Phase::Failed;
+                t.coalesced_latest = None;
                 source.capture_revision = None;
                 return Ok(
                     json!({"effect":null,"failure":"baseline size differs from committed logical size"}),
@@ -412,6 +421,13 @@ impl Controller {
             t.coalesced_latest = None;
         }
         if let Some(size) = t.coalesced_latest.take() {
+            // Baseline validation may release motion queued during Preparing.
+            // Continue accepting motion only while the pointer remains held.
+            t.phase = if t.released {
+                Phase::Settling
+            } else {
+                Phase::Dragging
+            };
             return self.emit_resize(Some(size));
         }
         if t.released || t.cancelled {

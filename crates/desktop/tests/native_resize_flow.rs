@@ -746,3 +746,77 @@ fn capture_contract_is_transient_and_does_not_bypass_uncertain_setter() {
     h.rejects(capture_ack(revision, None));
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn quick_drag_release_queues_only_latest_motion_until_baseline_is_validated() {
+    let mut h = setup();
+    let initial = world(&mut h);
+    let baseline = begin(&mut h, "bottom_right");
+    for delta in [10., 25., 40.] {
+        assert!(motion(&mut h, &baseline, delta, delta).is_null());
+        assert_eq!(h.snap()["native_resize"]["pending_effect"], baseline);
+        assert_eq!(world(&mut h), initial);
+    }
+    assert!(finish(&mut h, &baseline, false).is_null());
+    h.rejects(json!({"op":"native_resize_to","transaction":baseline["transaction"],"screen":{"x":100.,"y":100.}}));
+    let setter = h.ok(reply(&baseline, "observed", false, true, 200., 150.))["effect"].clone();
+    assert_eq!(setter["op"], "resize_native_window");
+    assert_eq!(setter["requested"], json!({"width":240.,"height":190.}));
+    assert_eq!(h.snap()["native_resize"]["phase"], "settling");
+    let read = h.ok(reply(&setter, "applied", true, true, 240., 190.))["effect"].clone();
+    assert_eq!(read["op"], "observe_resize_source");
+    h.ok(reply(&read, "observed", false, true, 240., 190.));
+    assert_eq!(h.snap()["native_resize"]["phase"], "complete");
+    assert_eq!(world(&mut h), rect(100., 100., 240., 190.));
+}
+#[test]
+fn cancellation_before_baseline_discards_unsent_motion() {
+    let mut h = setup();
+    let baseline = begin(&mut h, "left");
+    assert!(motion(&mut h, &baseline, 30., 0.).is_null());
+    assert!(finish(&mut h, &baseline, true).is_null());
+    let response = h.ok(reply(&baseline, "observed", false, true, 200., 150.));
+    assert!(response["effect"].is_null());
+    assert!(h.snap()["native_resize"]["coalesced_latest"].is_null());
+    assert_eq!(h.snap()["native_resize"]["phase"], "failed");
+    assert_eq!(world(&mut h), rect(100., 100., 200., 150.));
+}
+#[test]
+fn failed_or_mismatched_baseline_never_dispatches_queued_motion() {
+    for (outcome, observed, width) in [
+        ("observed", true, 180.),
+        ("timed_out", false, 0.),
+        ("readback_failed", false, 0.),
+        ("stale_identity", false, 0.),
+        ("unavailable", false, 0.),
+        ("missing_window", false, 0.),
+        ("ambiguous_window", false, 0.),
+    ] {
+        let mut h = setup();
+        let baseline = begin(&mut h, "right");
+        assert!(motion(&mut h, &baseline, 30., 0.).is_null());
+        finish(&mut h, &baseline, false);
+        let response = h.ok(reply(&baseline, outcome, false, observed, width, 150.));
+        assert!(response["effect"].is_null());
+        let state = h.snap()["native_resize"].clone();
+        assert_eq!(state["phase"], "failed");
+        assert!(state["pending_effect"].is_null());
+        assert!(state["coalesced_latest"].is_null());
+        assert_eq!(world(&mut h), rect(100., 100., 200., 150.));
+    }
+}
+#[test]
+fn baseline_releases_queued_motion_and_continues_accepting_held_drag() {
+    let mut h = setup();
+    let baseline = begin(&mut h, "right");
+    motion(&mut h, &baseline, 20., 0.);
+    let first = h.ok(reply(&baseline, "observed", false, true, 200., 150.))["effect"].clone();
+    assert_eq!(h.snap()["native_resize"]["phase"], "dragging");
+    assert!(motion(&mut h, &baseline, 40., 0.).is_null());
+    let second = h.ok(reply(&first, "applied", true, true, 220., 150.))["effect"].clone();
+    assert_eq!(second["requested"], json!({"width":240.,"height":150.}));
+    h.ok(reply(&second, "applied", true, true, 240., 150.));
+    let read = finish(&mut h, &baseline, false);
+    h.ok(reply(&read, "observed", false, true, 240., 150.));
+    assert_eq!(h.snap()["native_resize"]["phase"], "complete");
+}
