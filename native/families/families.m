@@ -21,6 +21,7 @@ static NSDictionary *cg(uint32_t wid) { NSArray *all=CFBridgingRelease(CGWindowL
 static NSArray *rect(CGRect r) {return @[@(r.origin.x),@(r.origin.y),@(r.size.width),@(r.size.height)];}
 static CGRect fromRect(NSArray *a) { return a.count==4?CGRectMake([a[0]doubleValue],[a[1]doubleValue],[a[2]doubleValue],[a[3]doubleValue]):CGRectZero; }
 #include "window-server-family.h"
+#include "owned-window-geometry.h"
 static NSUInteger untagged;
 @interface FamilyApplication : NSApplication
 @end
@@ -63,17 +64,24 @@ static void button(NSWindow *w, Family *f, NSString *name, SEL action, CGFloat x
 - (void)openSheet:(id)sender { (void)sender;if(self.sheet)return;self.actions++;self.sheet=window(@"family-child-sheet",NSMakeRect(0,0,220,170),3,NO);button(self.sheet,self,@"dismiss-sheet",@selector(closeSheet:),10);[self.a beginSheet:self.sheet completionHandler:nil]; }
 - (void)closeSheet:(id)sender { (void)sender;if(!self.sheet)return;self.actions++;[self.a endSheet:self.sheet];[self.sheet orderOut:nil];[self.sheet close];self.sheet=nil; }
 @end
-static NSDictionary *identity(NSWindow *w, NSString *kind) {NSDictionary *info=cg((uint32_t)w.windowNumber);CGRect r=CGRectZero;if(info)CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)info[(id)kCGWindowBounds],&r);return @{@"kind":kind,@"id":@(w.windowNumber),@"parent":@(w.parentWindow.windowNumber),@"sheet_parent":@(w.sheetParent.windowNumber),@"bounds":rect(r),@"visible":@(w.visible)};}
+static NSDictionary *identity(NSWindow *w, NSString *kind, NSArray *enrolledBirth) {
+    NSDictionary *info=cg((uint32_t)w.windowNumber);CGRect r=CGRectZero;
+    if(info)CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)info[(id)kCGWindowBounds],&r);
+    return @{@"kind":kind,@"id":@(w.windowNumber),@"parent":@(w.parentWindow.windowNumber),
+        @"sheet_parent":@(w.sheetParent.windowNumber),@"bounds":rect(r),@"visible":@(w.visible),
+        @"bounds_coordinate_basis":@"CG global screen coordinates, top-left origin, y down",
+        @"geometry_diagnostic":ownedGeometry((uint32_t)w.windowNumber,getpid(),enrolledBirth,w)};
+}
 static int source(NSString *dir, NSString *nonce, double seconds) {
-    pid_t parent=getppid();if(parent<=1)return 2;Family *f=[Family new];f.a=window(@"family-parent-A",NSMakeRect(300,150,360,240),0,NO);f.b=window(@"family-top-B",NSMakeRect(840,150,360,240),1,NO);
+    pid_t parent=getppid();if(parent<=1)return 2;NSArray *enrolledBirth=birth(getpid());if(!enrolledBirth)return 2;Family *f=[Family new];f.a=window(@"family-parent-A",NSMakeRect(300,150,360,240),0,NO);f.b=window(@"family-top-B",NSMakeRect(840,150,360,240),1,NO);
     button(f.a,f,@"create-panel",@selector(openPanel:),10);button(f.a,f,@"create-sheet",@selector(openSheet:),170);
     [f.a orderFront:nil];[f.b orderFront:nil];NSDate *start=NSDate.date;
     NSInteger setupPhase=0;
     while(!halted&&getppid()==parent&&-start.timeIntervalSinceNow<seconds) {
         NSInteger desired=MIN(6,(NSInteger)(-start.timeIntervalSinceNow/6));
         if(desired>setupPhase){if(desired==1)[f openPanel:nil];if(desired==2)[f closePanel:nil];if(desired==3)[f openSheet:nil];if(desired==4)[f closeSheet:nil];if(desired==5)[f openLeftUpPanel:nil];if(desired==6)[f closePanel:nil];setupPhase=desired;}
-        NSMutableArray *windows=[NSMutableArray array];for(NSWindow *w in @[f.a,f.b,f.panel?:NSNull.null,f.sheet?:NSNull.null])if([w isKindOfClass:NSWindow.class]) { ColorView *v=(ColorView *)w.contentView;v.phase=((NSInteger)(-start.timeIntervalSinceNow*2))%2;v.needsDisplay=YES;[w displayIfNeeded];[windows addObject:identity(w,@[@"parent",@"other-top",@"panel",@"sheet"][v.kind])]; }
-        save(@{@"pid":@(getpid()),@"birth":birth(getpid())?:@[],@"nonce":nonce,@"windows":windows,@"setup_phase":@(setupPhase),@"actions":@(f.actions),@"untagged":@(untagged),@"tick":@(-start.timeIntervalSinceNow)},[dir stringByAppendingPathComponent:@"source.json"]);pump(.05);
+        NSMutableArray *windows=[NSMutableArray array];for(NSWindow *w in @[f.a,f.b,f.panel?:NSNull.null,f.sheet?:NSNull.null])if([w isKindOfClass:NSWindow.class]) { ColorView *v=(ColorView *)w.contentView;v.phase=((NSInteger)(-start.timeIntervalSinceNow*2))%2;v.needsDisplay=YES;[w displayIfNeeded];[windows addObject:identity(w,@[@"parent",@"other-top",@"panel",@"sheet"][v.kind],enrolledBirth)]; }
+        save(@{@"pid":@(getpid()),@"birth":enrolledBirth,@"nonce":nonce,@"windows":windows,@"setup_phase":@(setupPhase),@"actions":@(f.actions),@"untagged":@(untagged),@"tick":@(-start.timeIntervalSinceNow)},[dir stringByAppendingPathComponent:@"source.json"]);pump(.05);
     }
     [f closeSheet:nil];[f closePanel:nil];[f.a close];[f.b close];save(@{@"reason":getppid()!=parent?@"parent_exit":halted?@"signal":@"deadline",@"pid":@(getpid())},[dir stringByAppendingPathComponent:@"source-exit.json"]);return 0;
 }
@@ -190,13 +198,13 @@ static int host(NSString *dir,NSString *executable) {
     pump(.4);
     for(NSUInteger phase=0;phase<names.count&&okay;phase++) {
         do {pump(.03);state=load(statePath);} while([state[@"setup_phase"]unsignedIntegerValue]<phase&&guarded(state,child,enrolled,nonce,foreground)&&deadline.timeIntervalSinceNow>0);
-        if(!guarded(state,child,enrolled,nonce,foreground)||deadline.timeIntervalSinceNow<=0){report[@"failure"]=@"Owned identity, foreground, input guard or deadline interrupted";okay=NO;break;}
+        if(!guarded(state,child,enrolled,nonce,foreground)||deadline.timeIntervalSinceNow<=0){report[@"failure"]=@"Owned identity, foreground, input guard or deadline interrupted";report[@"guard_failure_source_snapshot"]=state?:@{};okay=NO;break;}
         pump(.3);state=load(statePath);
         SCShareableContent *content=shareable();NSMutableArray *selected=[NSMutableArray array],*observed=[NSMutableArray array],*ax=[NSMutableArray array];AXUIElementRef unused=NULL;walkAX(app,ax,nil,&unused,0,0);
         NSMutableSet *live=[NSMutableSet set];for(NSDictionary *s in state[@"windows"]) {
             NSNumber *wid=s[@"id"];SCWindow *match=nil;for(SCWindow *w in content.windows)if(w.windowID==wid.unsignedIntValue&&w.owningApplication.processID==child.processIdentifier)match=w;
             NSDictionary *info=cg(wid.unsignedIntValue);BOOL identity=match&&[info[(id)kCGWindowOwnerPID]intValue]==child.processIdentifier&&CGRectEqualToRect(match.frame,fromRect(s[@"bounds"]));
-            NSMutableDictionary *record=[s mutableCopy];record[@"cg_owner"]=info[(id)kCGWindowOwnerPID]?:@0;record[@"sc_found"]=@(match!=nil);record[@"identity_verified"]=@(identity);record[@"sc_bounds"]=match?rect(match.frame):@[];CGRect liveBounds=CGRectZero;if(info)CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)info[(id)kCGWindowBounds],&liveBounds);record[@"cg_bounds"]=rect(liveBounds);[observed addObject:record];
+            NSMutableDictionary *record=[s mutableCopy];record[@"cg_owner"]=info[(id)kCGWindowOwnerPID]?:@0;record[@"sc_found"]=@(match!=nil);record[@"identity_verified"]=@(identity);record[@"sc_bounds"]=match?rect(match.frame):@[];CGRect liveBounds=CGRectZero;if(info)CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)info[(id)kCGWindowBounds],&liveBounds);record[@"cg_bounds"]=rect(liveBounds);record[@"host_geometry_diagnostic"]=ownedGeometry(wid.unsignedIntValue,child.processIdentifier,enrolled,nil);[observed addObject:record];
             if(!identity){report[@"failure"]=[NSString stringWithFormat:@"Native %@ window unavailable or mismatched in SC/CG",s[@"kind"]];okay=NO;continue;}
             [live addObject:wid];
             // The two roots are explicitly enrolled at baseline. Fixture parent IDs
@@ -216,7 +224,7 @@ static int host(NSString *dir,NSString *executable) {
             pump(.65);NSDictionary *current=load(statePath);BOOL stable=[current[@"setup_phase"]unsignedIntegerValue]==phase&&[current[@"windows"]count]==observed.count;
             for(NSDictionary *expected in observed){BOOL found=NO;for(NSDictionary *now in current[@"windows"])if([now[@"id"]isEqual:expected[@"id"]]&&[now[@"bounds"]isEqual:expected[@"bounds"]])found=YES;stable&=found;}
             for(Capture *c in selected){NSDictionary *now=cg(c.wid.unsignedIntValue);CGRect actual=CGRectZero;if(now)CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)now[(id)kCGWindowBounds],&actual);stable&=CGRectEqualToRect(actual,c.bounds);}
-            if(!stable||!guarded(current,child,enrolled,nonce,foreground)){okay=NO;report[@"failure"]=@"Native bounds, human input or foreground changed during capture";break;}
+            if(!stable||!guarded(current,child,enrolled,nonce,foreground)){okay=NO;report[@"failure"]=@"Native bounds, human input or foreground changed during capture";report[@"guard_failure_source_snapshot"]=current?:@{};break;}
             NSString *name=[NSString stringWithFormat:@"%@-%d",names[phase],sample];
             [stage[@"frames"]addObject:render(selected,dir,name)];
             for(Capture *c in selected)if(![c.normalization[@"valid"]boolValue]||c.error){okay=NO;report[@"failure"]=@"Frame metadata cannot substantiate a native extent mapping";}

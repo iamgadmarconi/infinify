@@ -106,13 +106,42 @@ left, top, right, and bottom clipping. The verifier also checks the private pare
 against the owned AppKit oracle and keeps the unrelated root out of the family.
 
 `evidence/parentage-interrupted` records the first attempted run. At baseline, the
-ordinary windows were actively scaled/moved between snapshots (roughly 139-by-105
+reported window bounds shrank/moved between snapshots (roughly 139-by-105
 then 136-by-103 instead of their 360-by-272 native setup). SC and fresh CG bounds
 disagreed, so enrollment aborted before any stream or parent/association query.
 Foreground stayed unchanged and all sources were reaped before redaction/hashing.
-No retry was made while the desktop was changing. Strict build and syntax checks
+The cause is unknown; these records do not establish user activity or a Stage Manager cause.
+No retry was made after the interruption. Strict build and syntax checks
 pass, but the new private API path and left/up pixel test remain unverified. The
 prior normalized pass below applies only to its archived implementation snapshots.
+
+## Owned geometry diagnostics (runtime unverified)
+
+`source.json` now records each owned NSWindow's actual `frame` and content-view
+frame converted to screen coordinates, alongside the existing CG bounds. AppKit
+frames describe logical geometry in bottom-left-origin, y-up screen points. They
+are not proof of WindowServer physical presentation. Each diagnostic carries its
+exact CGID, PID, enrolled process birth, and sampling uptime interval.
+
+The diagnostic-only adapter `owned-window-geometry.h` dynamically resolves only
+SLSMainConnectionID and the query functions SLSGetWindowBounds,
+SLSGetScreenRectForWindow, and SLSGetWindowTransform. Their ABI/call sequences follow
+`native/backend/bridge.m` and `native/privileged/payload.m`, with the pinned yabai
+provenance above. Private rectangles and affine coefficients retain their raw
+WindowServer basis; no assumed conversion or equivalence with AppKit/CG is applied.
+Every private query checks exact CG ownership and fresh PID birth before and after.
+Unavailable symbols, API errors, nonfinite values and stale identities have explicit
+statuses; stale samples discard geometry values. Readbacks are sequential, not an
+atomic presentation snapshot, even when identity remains valid.
+
+Enrollment records include separate fresh host readbacks. Guard-failure receipts
+retain the source snapshot at interruption; source AppKit values are timestamped
+observations, not fresh host reads (and may be stale if the source stopped writing).
+Host diagnostics explicitly mark AppKit data unavailable there. Existing equality
+checks, capture extent calculation and input routing do not consume this telemetry.
+Future authorized runs snapshot and hash the new adapter through `run.py`; archived
+runs and manifests remain unchanged. Build/static checks alone do not validate these
+readbacks at runtime or explain the saved interruption.
 
 ## Archived bounded pass (2026-10-09)
 

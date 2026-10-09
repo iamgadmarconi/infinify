@@ -15,7 +15,7 @@ from verify_normalized import verify
 base=pathlib.Path(sys.argv[1]).resolve();base.mkdir(parents=True,exist_ok=True)
 run=pathlib.Path(tempfile.mkdtemp(prefix='run-',dir=base))
 binary=pathlib.Path('target/native-families/native-families').resolve()
-inputs=[pathlib.Path(p) for p in ('native/families/families.m','native/families/window-server-family.h','native/families/YABAI-NOTICE.txt','native/families/verify.py','native/families/verify_normalized.py','native/families/run.py','scripts/build-families.sh','tests/e2e/native-families.sh')]+[binary]
+inputs=[pathlib.Path(p) for p in ('native/families/families.m','native/families/window-server-family.h','native/families/owned-window-geometry.h','native/families/YABAI-NOTICE.txt','native/families/verify.py','native/families/verify_normalized.py','native/families/run.py','scripts/build-families.sh','tests/e2e/native-families.sh')]+[binary]
 report={'passed':False,'implementation_sha256':{str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs},'checks':[]}
 report['base_commit']=subprocess.run(['git','rev-parse','HEAD'],check=True,capture_output=True,text=True).stdout.strip()
 for source_file in inputs[:-1]:
