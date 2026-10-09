@@ -97,16 +97,21 @@ for name in native-resize captured-windows desktop-app live-surfaces native-fami
 done
 
 assert_rejected ./tests/e2e/native-resize.sh --live-owned-fixture one two
+assert_rejected ./tests/e2e/native-resize.sh --live-owned-fixture --unknown
 assert_rejected ./tests/e2e/captured-windows.sh --live-owned-fixture --bad-mode
+assert_rejected ./tests/e2e/captured-windows.sh --live-owned-fixture --demo-input-only --unknown
 assert_rejected ./tests/e2e/desktop-app.sh --live-owned-fixture extra
 assert_rejected ./tests/e2e/live-surfaces.sh --live-owned-fixture one two
+assert_rejected ./tests/e2e/live-surfaces.sh --live-owned-fixture --unknown
 assert_rejected ./tests/e2e/native-families.sh --live-owned-fixture --bad-mode
+assert_rejected ./tests/e2e/native-families.sh --live-owned-fixture --lifecycle-only --unknown
 assert_rejected ./tests/e2e/native-fixture.sh --live-owned-fixture one two
+assert_rejected ./tests/e2e/native-fixture.sh --live-owned-fixture --unknown
 assert_rejected ./tests/e2e/privileged-fixture.sh --live-owned-fixture extra
 
 : > "$GATE_LOG"
-./tests/e2e/native-resize.sh --live-owned-fixture resize-out
-assert_line 'python3|native/resize/e2e.py resize-out'
+./tests/e2e/native-resize.sh --live-owned-fixture 'resize out'
+assert_line 'python3|native/resize/e2e.py resize out'
 
 : > "$GATE_LOG"
 ./tests/e2e/captured-windows.sh --live-owned-fixture captured-out

@@ -9,7 +9,10 @@ case ${1:-} in
 esac
 case ${1:-} in
   '') [ "$#" -eq 0 ] || exit 2 ;;
-  --lifecycle-only) [ "$#" -le 2 ] || { echo "Usage: $0 [--live-owned-fixture [--lifecycle-only [evidence-directory]|evidence-directory]]" >&2; exit 2; } ;;
+  --lifecycle-only)
+    [ "$#" -le 2 ] || { echo "Usage: $0 [--live-owned-fixture [--lifecycle-only [evidence-directory]|evidence-directory]]" >&2; exit 2; }
+    case ${2:-} in -*) echo "Usage: $0 [--live-owned-fixture [--lifecycle-only [evidence-directory]|evidence-directory]]" >&2; exit 2 ;; esac
+    ;;
   -*) echo "Usage: $0 [--live-owned-fixture [--lifecycle-only [evidence-directory]|evidence-directory]]" >&2; exit 2 ;;
   *) [ "$#" -eq 1 ] || { echo "Usage: $0 [--live-owned-fixture [--lifecycle-only [evidence-directory]|evidence-directory]]" >&2; exit 2; } ;;
 esac

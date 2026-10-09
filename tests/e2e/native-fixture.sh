@@ -8,6 +8,7 @@ case ${1:-} in
   *) echo "Usage: $0 [--live-owned-fixture [receipt-path]]" >&2; exit 2 ;;
 esac
 [ "$#" -le 1 ] || { echo "Usage: $0 [--live-owned-fixture [receipt-path]]" >&2; exit 2; }
+case ${1:-} in -*) echo "Usage: $0 [--live-owned-fixture [receipt-path]]" >&2; exit 2 ;; esac
 
 cargo build -p driftwm-macos-backend --bins --locked
 [ "$live" = true ] || { echo 'LIVE NOT RUN: pass --live-owned-fixture to launch the disposable native fixture.'; exit 0; }
