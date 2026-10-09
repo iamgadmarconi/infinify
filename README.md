@@ -103,6 +103,12 @@ Additional experimental paths are available separately:
 - [Native desktop app](native/desktop/README.md): a signed local app bundle,
   explicit source chooser, per-display panels, shared live streams, native input,
   world dragging, camera controls and saved scenes.
+- [Native resize adapter](native/resize/README.md): exact AX window identity,
+  observed accepted geometry, constraints/rejection and restoration, verified on
+  disposable windows. Integration into desktop resizing remains unfinished.
+- [Window family diagnostic](native/families/README.md): genuine native panels
+  and sheets exposed a failed capture-placement assumption. Preserved pixels and
+  metadata document the gap; this is not a supported popup compositor.
 
 A complete deliverable still requires broader native application compatibility, native layout resizing, popovers and dialogs, richer input, and validation of display hotplug, hidden/minimized sources and multiple physical displays. Overlapping independent output cameras require separate live surface instances for the same window; one global WindowServer transform cannot satisfy that requirement. The capture app implements those separate instances, while the transform helper remains a separate experiment. The development host runs macOS 27.2, so a deployment target of 26.0 does not establish runtime verification on macOS 26. Private WindowServer interfaces require runtime validation for each supported macOS release; this repository does not claim that SIP-enabled or SIP-disabled third-party control is already proven.
 

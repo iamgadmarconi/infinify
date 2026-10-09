@@ -4076,8 +4076,17 @@
       "owner": "native",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
-      "evidence": [],
-      "required": true
+      "evidence": [
+        {
+          "kind": "failed_capability_gate",
+          "path": "native/families/evidence/reanalysis.json",
+          "revision": "e8ffb2e",
+          "result": "independent saved pixels confirm grouped/scaled family mismatch; display-bound alternative unestablished after interruption",
+          "limits": "scheduled genuine AppKit transients, no native input/focus proof; historical hashes retained in each run"
+        }
+      ],
+      "required": true,
+      "implementation_note": "Independent-window placement capability gate failed: captured parent/child family expands and duplicates when each stream is placed by individualCGbounds. Normalization investigation continues; native parent discovery/input/focus remain unverified."
     },
     {
       "id": "native.input",
@@ -4106,12 +4115,22 @@
       },
       "contract": "Actual client resize, constraints/ratio/anchors, accepted geometry and application rejection.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "native",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
-      "evidence": [],
-      "required": true
+      "evidence": [
+        {
+          "kind": "owned_fixture_capability",
+          "path": "native/resize/evidence/run-va6cx9ox/verification.json",
+          "revision": "8a93b81",
+          "source_sha256": "7dd3d3b023cc6ade33161d822b9c77d94a53616eb5908ba20799660071b2d5c7",
+          "result": "pass for selected resize, clamp/rejection, identity, timeout, restoration and cleanup; not full row acceptance",
+          "runtime": "arm64 macOS27.2"
+        }
+      ],
+      "required": true,
+      "implementation_note": "Verified bounded AX resize adapter at target revision8a93b81; desktop action, anchored-edge/world transactions and group resize remain unimplemented or unverified."
     },
     {
       "id": "native.gestures",
