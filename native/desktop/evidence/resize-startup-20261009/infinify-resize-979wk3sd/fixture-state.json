@@ -1,0 +1,93 @@
+{
+  "current_transform" : [
+    1,
+    0,
+    0,
+    1,
+    -120,
+    -909
+  ],
+  "isolation" : {
+    "last_sharing_helper_scan" : [
+      {
+        "is_key" : false,
+        "visible" : false,
+        "can_become_main" : false,
+        "is_main" : false,
+        "class" : "NSLocalWindowSharingWindow",
+        "can_become_key" : false,
+        "window_id" : 80213,
+        "ignores_mouse_events" : false,
+        "accepted_inert_auxiliary" : false
+      }
+    ],
+    "first_accepted_inert_helper" : {
+      "is_key" : false,
+      "visible" : false,
+      "can_become_main" : false,
+      "is_main" : false,
+      "class" : "NSLocalWindowSharingWindow",
+      "can_become_key" : false,
+      "window_id" : -1,
+      "ignores_mouse_events" : false,
+      "accepted_inert_auxiliary" : true
+    },
+    "unexpected_input" : false,
+    "first_rejected_event_type" : 0,
+    "exclusion_failed" : true,
+    "dedicated_application" : true,
+    "foreground_interrupted" : false,
+    "first_window_exclusion_failure" : {
+      "is_key" : false,
+      "visible" : false,
+      "can_become_main" : false,
+      "is_main" : false,
+      "class" : "NSLocalWindowSharingWindow",
+      "can_become_key" : false,
+      "window_id" : 80213,
+      "known_isolated_class" : false,
+      "ignores_mouse_events" : false
+    },
+    "windows_excluded" : false
+  },
+  "foreground_birth_matches" : true,
+  "current_frame" : [
+    120,
+    140,
+    440,
+    280
+  ],
+  "contaminated" : true,
+  "timestamp" : 1004606.7675033335,
+  "frame" : [
+    120,
+    140,
+    440,
+    280
+  ],
+  "initial_transform" : [
+    1,
+    0,
+    0,
+    1,
+    -120,
+    -909
+  ],
+  "decoy_unchanged" : true,
+  "input_excluded" : false,
+  "foreground_pid_matches" : 1,
+  "transform_available" : 1,
+  "original_frame" : [
+    120,
+    140,
+    440,
+    280
+  ],
+  "transform_unchanged" : 1,
+  "last_recognized_frame" : [
+    120,
+    140,
+    440,
+    280
+  ]
+}

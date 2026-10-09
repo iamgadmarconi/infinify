@@ -1,0 +1,18 @@
+{
+  "transform_unchanged" : false,
+  "original" : [
+    120,
+    140,
+    440,
+    280
+  ],
+  "reason" : "human-or-foreground-interruption",
+  "restored" : false,
+  "contaminated" : true,
+  "final" : [
+    120,
+    140,
+    440,
+    280
+  ]
+}

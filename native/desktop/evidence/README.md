@@ -100,4 +100,17 @@ launched. The new guarded AX adapter and complete visible resize path require
 separate live verification. Historical native resize evidence refers to its
 recorded source bytes, not this newer adapter or shell integration.
 
+## Owned resize startup attempts
+
+`resize-startup-20261009/index.json` identifies the reviewed source revision for
+each failed live attempt. Its saved supervisor receipts contain source and
+executable hashes, enrollment observations, interruption diagnostics, and cleanup
+checks. Every recorded source hash was compared with that exact Git revision.
+Enrollment credentials and local scene saves are excluded.
+
+These attempts exposed premature WindowServer registration, passive tracking
+events, and hidden capture-helper handling in the disposable test harness. They
+did not reach a native resize setter or establish fresh rendered pixels. Later
+guard changes do not turn these historical failures into successful tests.
+
 `SHA256SUMS` covers the final bytes of all evidence files except itself.

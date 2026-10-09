@@ -33,8 +33,10 @@ delivery remain unverified. Default launch retains the existing controls.
 The separate `--experimental-native-resize` flag connects eight resize handles to
 the native adapter. It commits observed sizes and withholds input and captured
 content until a fresh frame passes the capture checks. Focused headless checks
-cover the controller and coordinator; the complete native resize and rendering
-path has not been run. See the [resize integration guide](native/desktop/README.md#experimental-native-resizing).
+cover the controller and coordinator. Live disposable-window attempts have reached
+capture enrollment but stop before resizing or pixel verification; the complete
+native resize and rendering path remains unproved. See the
+[resize integration guide](native/desktop/README.md#experimental-native-resizing).
 
 ## Build and inspect
 

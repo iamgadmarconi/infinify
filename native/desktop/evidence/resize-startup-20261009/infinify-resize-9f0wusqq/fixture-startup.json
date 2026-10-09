@@ -1,0 +1,20 @@
+{
+  "expected_foreground_birth" : [
+    1791540931,
+    317658
+  ],
+  "before_appkit_birth" : [
+    1791540931,
+    317658
+  ],
+  "after_appkit_pid" : 56250,
+  "expected_foreground_pid" : 56250,
+  "after_appkit_birth" : [
+    1791540931,
+    317658
+  ],
+  "prestartup_matches" : 1,
+  "before_appkit_pid" : 56250,
+  "input_exclusion_installed" : true,
+  "poststartup_matches" : true
+}

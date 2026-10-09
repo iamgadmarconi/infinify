@@ -1,0 +1,58 @@
+{
+  "current_transform" : [
+    1,
+    0,
+    0,
+    1,
+    -120,
+    -909
+  ],
+  "isolation" : {
+    "first_rejected_event_type" : 0,
+    "exclusion_failed" : false,
+    "windows_excluded" : true,
+    "foreground_interrupted" : false,
+    "unexpected_input" : false,
+    "dedicated_application" : true
+  },
+  "foreground_birth_matches" : true,
+  "current_frame" : [
+    120,
+    140,
+    440,
+    280
+  ],
+  "contaminated" : true,
+  "timestamp" : 1003446.2382114585,
+  "frame" : [
+    120,
+    140,
+    440,
+    280
+  ],
+  "initial_transform" : [
+    1,
+    0,
+    0,
+    1,
+    -0,
+    -0
+  ],
+  "decoy_unchanged" : true,
+  "input_excluded" : true,
+  "foreground_pid_matches" : 1,
+  "transform_available" : 1,
+  "original_frame" : [
+    120,
+    140,
+    440,
+    280
+  ],
+  "transform_unchanged" : 0,
+  "last_recognized_frame" : [
+    120,
+    140,
+    440,
+    280
+  ]
+}
