@@ -4072,7 +4072,7 @@
       },
       "contract": "Real parent/child/popup/modal surface trees, independent views, correct geometry, native focus and cleanup.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "native",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
@@ -4083,10 +4083,19 @@
           "revision": "e8ffb2e",
           "result": "independent saved pixels confirm grouped/scaled family mismatch; display-bound alternative unestablished after interruption",
           "limits": "scheduled genuine AppKit transients, no native input/focus proof; historical hashes retained in each run"
+        },
+        {
+          "kind": "owned_fixture_saved_pixels",
+          "path": "native/families/evidence/normalized-review.json",
+          "revision": "e133f91",
+          "source_sha256": "0f35a2d435d882909948661e99985730a0219ab13afb383740c63e001bd90588",
+          "result": "40 saved camera views independently checked; right-extending panel and in-bounds sheet retain measured extent, appear once per view, update and disappear with native lifecycle.",
+          "runtime": "arm64 macOS27.2",
+          "limits": "Passive fixture setup only; left/up extent, parent discovery, interleaved stacking and native input/focus remain unverified."
         }
       ],
       "required": true,
-      "implementation_note": "Independent-window placement capability gate failed: captured parent/child family expands and duplicates when each stream is placed by individualCGbounds. Normalization investigation continues; native parent discovery/input/focus remain unverified."
+      "implementation_note": "Initial per-window placement failed. Root-family metadata normalization passes a bounded owned-fixture pixel gate at e133f91; not integrated into the desktop compositor and not full row acceptance."
     },
     {
       "id": "native.input",
@@ -4180,8 +4189,18 @@
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
-      "evidence": [],
-      "required": true
+      "evidence": [
+        {
+          "kind": "pure_policy_differential",
+          "path": "crates/canvas/tests/policy_flow.rs",
+          "revision": "2fb6218",
+          "source_sha256": "5f0874fd878c38980218530123d122718dca9ed3b81585f9d03c622292043697",
+          "result": "Fit/minimum zoom, near-native dead zone and anchored-camera helpers compared against unchanged upstream canvas.rs in seven focused integration tests; Astra reviewed.",
+          "limits": "Helper contracts only; not installed in Scene/controller or native app behavior. See crates/canvas/POLICY.md."
+        }
+      ],
+      "required": true,
+      "implementation_note": "Existing partial behavior remains; the source-equivalent helper module is a foundation for future integration, not complete action or native behavior parity."
     },
     {
       "id": "canvas.motion",
@@ -4197,8 +4216,18 @@
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
-      "evidence": [],
-      "required": true
+      "evidence": [
+        {
+          "kind": "pure_policy_differential",
+          "path": "crates/canvas/tests/policy_flow.rs",
+          "revision": "2fb6218",
+          "source_sha256": "5f0874fd878c38980218530123d122718dca9ed3b81585f9d03c622292043697",
+          "result": "Velocity sampling and upstream momentum helpers compared against unchanged upstream canvas.rs in seven focused integration tests; Astra reviewed.",
+          "limits": "Helper contracts only; not installed in Scene/controller or native app behavior. See crates/canvas/POLICY.md."
+        }
+      ],
+      "required": true,
+      "implementation_note": "Existing partial behavior remains; the source-equivalent helper module is a foundation for future integration, not complete action or native behavior parity."
     },
     {
       "id": "canvas.edge_pan",
@@ -4274,8 +4303,18 @@
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
-      "evidence": [],
-      "required": true
+      "evidence": [
+        {
+          "kind": "pure_policy_differential",
+          "path": "crates/canvas/tests/policy_flow.rs",
+          "revision": "2fb6218",
+          "source_sha256": "5f0874fd878c38980218530123d122718dca9ed3b81585f9d03c622292043697",
+          "result": "Eight-direction nearest, visibility and active-bookmark helpers compared against unchanged upstream canvas.rs in seven focused integration tests; Astra reviewed.",
+          "limits": "Helper contracts only; not installed in Scene/controller or native app behavior. See crates/canvas/POLICY.md."
+        }
+      ],
+      "required": true,
+      "implementation_note": "Existing partial behavior remains; the source-equivalent helper module is a foundation for future integration, not complete action or native behavior parity."
     },
     {
       "id": "navigation.fullscreen",

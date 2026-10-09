@@ -57,6 +57,25 @@ The development host runs macOS 27.2. Building with deployment target 26.0 is no
 evidence of runtime compatibility with macOS 26. Physical multiple-display and
 device-specific behavior also need the corresponding hardware.
 
+## Later bounded milestones
+
+- `4ca7f5e` ports snap defaults and candidate/resize policies, checked against the
+  unchanged pinned upstream algorithms. Fractional rounding, native constraints
+  and complete desktop gesture behavior remain open; see
+  [snapping limits](../../crates/canvas/SNAPPING.md).
+- `e133f91` normalizes captured root families using frame metadata. Independent
+  saved-pixel checks pass for a right-extending native panel and an in-bounds
+  sheet through two clipped views. This does not establish left/up extents,
+  parent discovery, interleaved stacking or native popup interaction; see the
+  [family evidence](../../native/families/evidence/normalized-review.json).
+- `2fb6218` adds upstream fit/minimum-zoom, navigation, bookmark and motion helper
+  policies with an unchanged-source differential oracle. These helpers are not
+  yet integrated into Scene/controller behavior; see
+  [policy contracts](../../crates/canvas/POLICY.md).
+
+These milestones add evidence to partial rows. None satisfies an entire native
+behavior row or changes the completion requirement.
+
 ## Native feasibility gates
 
 Before expanding the capture architecture, prove its treatment of real native
@@ -65,9 +84,11 @@ modal dialogs and IME candidate surfaces. Test independent camera views,
 clipping, input target/focus, outside-frame pointer grabs and lifecycle. Separate
 actual pixels/native effects from successful API calls and logical projections.
 
-The current `desktopIndependentWindow` ScreenCaptureKit filter captures a specified
-window. SDK documentation scopes `includeChildWindows` to display-bound window
-and application sharing; setting it is not proof of arbitrary popup capture.
+The `desktopIndependentWindow` ScreenCaptureKit filter selects a specified window.
+The owned macOS 27.2 experiment observed grouped parent/child pixels despite that
+selection, so native geometry cannot be inferred from the selected window alone.
+SDK documentation scopes `includeChildWindows` to display-bound window and
+application sharing; setting it is not proof of arbitrary popup capture.
 See [Apple's filter contract](https://developer.apple.com/documentation/screencapturekit/sccontentfilter/init(desktopindependentwindow:))
 and [child-window property](https://developer.apple.com/documentation/screencapturekit/scstreamconfiguration/includechildwindows).
 
