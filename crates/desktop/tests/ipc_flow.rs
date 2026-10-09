@@ -734,8 +734,6 @@ fn move_resize_and_focus_address_logical_windows() {
 
 /// One refusal per line: an upstream request | its `Err` reply.
 const REFUSED: &str = r#"
-"Subscribe" | subscribe is not implemented on macOS yet
-{"Layout":{"short":false}} | layout is not implemented on macOS yet
 {"Opacity":{}} | opacity is not implemented on macOS yet
 {"Opacity":{"window":3,"value":0.5}} | opacity is not implemented on macOS yet
 {"Pin":{}} | pin is not implemented on macOS yet
@@ -881,7 +879,8 @@ fn action_strings_follow_upstream_grammar() {
     // exec, spawn, exec-terminal, exec-launcher, nudge-window and reload-config
     // run now: tests/config_flow.rs covers them. So do center-window,
     // center-nearest, cycle-windows and focus-center:
-    // tests/navigation_actions_flow.rs covers those.
+    // tests/navigation_actions_flow.rs covers those. So do send-to-output,
+    // send-cursor-to-output and switch-layout: tests/platform_actions_flow.rs.
     for (name, sample) in [
         ("close-window", "close-window"),
         ("fill-window", "fill-window"),
@@ -889,15 +888,10 @@ fn action_strings_follow_upstream_grammar() {
         ("fit-window-snapped", "fit-window-snapped"),
         ("grow-window", "grow-window up"),
         ("move-to-bookmark", "move-to-bookmark 1"),
-        ("send-cursor-to-output", "send-cursor-to-output up"),
-        ("send-to-output", "send-to-output up"),
         ("set-trackpad", "set-trackpad toggle"),
         ("set-trackpad", "set-trackpad OFF"),
         ("shrink-window", "shrink-window up"),
         ("suspend-window", "suspend-window"),
-        ("switch-layout", "switch-layout next"),
-        ("switch-layout", "switch-layout PREVIOUS"),
-        ("switch-layout", "switch-layout 2"),
         ("toggle-cursor-pan", "toggle-cursor-pan"),
         ("toggle-fullscreen", "toggle-fullscreen"),
         ("toggle-pin-to-screen", "toggle-pin-to-screen"),
@@ -975,6 +969,7 @@ fn action_strings_follow_upstream_grammar() {
         "cycle-windows forward",
         "cycle-windows backward",
         "focus-center",
+        "send-cursor-to-output up",
     ] {
         assert_eq!(refuse(Value::Null, action), "no active output", "{action}");
         assert_eq!(refuse(json!(99), action), "unknown output", "{action}");
@@ -1071,8 +1066,8 @@ action go-to-bookmark my desk | {"Action":"go-to-bookmark my desk"} | {"Ok":"Ok"
 action exec say --json -1 | {"Action":"exec say --json -1"} | {"Err":"action not implemented on macOS yet: exec"} | 1
 screenshot region 1,2 30x40 --from-screen -o /nonexistent/shot.png --scale 2 | {"Screenshot":{"target":{"Region":{"x":1,"y":2,"w":30,"h":40,"from_screen":true}},"scale":2.0,"path":"/nonexistent/shot.png"}} | {"Err":"screenshot is not implemented on macOS yet"} | 1
 screenshot window --id 2 --output=/nonexistent/w.png | {"Screenshot":{"target":{"Window":{"window":2}},"scale":1.0,"path":"/nonexistent/w.png"}} | {"Err":"screenshot is not implemented on macOS yet"} | 1
-subscribe | "Subscribe" | {"Err":"subscribe is not implemented on macOS yet"} | 1
---json subscribe | "Subscribe" | {"Err":"subscribe is not implemented on macOS yet"} | 1
+subscribe | "Subscribe" | {"Err":"cannot subscribe: too many subscribers"} | 1
+--json subscribe | "Subscribe" | {"Err":"cannot subscribe: too many subscribers"} | 1
 zoom | {"Zoom":null} | not json | 1
 zoom | {"Zoom":null} |  | 1
 "#;
@@ -1214,5 +1209,80 @@ fn msg_client_reaches_a_controller_through_the_ipc_command() {
         json!({"x":-1000.0,"y":-800.0})
     );
     assert_eq!(server.join().unwrap().len(), 9);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn msg_subscribe_streams_the_controllers_event_lines_until_the_server_hangs_up() {
+    // The test stands in for the shell: the ack, the snapshot the `subscribe`
+    // effect carries, then every line `state_event` hands out, each on a line of
+    // its own, and a hang-up, on which upstream's client exits 0.
+    let (listener, path) = bind();
+    let socket = path.to_str().unwrap().to_owned();
+    let (sent, answers) = std::sync::mpsc::channel();
+    let server = serve(
+        listener,
+        2,
+        || (setup(), 0),
+        move |(h, connection), line| {
+            assert_eq!(line, "\"Subscribe\"");
+            let data = h.ipc(json!("Subscribe"));
+            let mut answer = vec![
+                data["reply"].to_string(),
+                data["effects"][0]["line"].as_str().unwrap().to_owned(),
+            ];
+            for step in 0..3 {
+                if step == 1 {
+                    h.ipc(json!({"Move":{"window":2,"to":[40 + *connection,-60]}}));
+                }
+                let event = h.ok(json!({"op":"state_event","output":1}))["line"].clone();
+                answer.extend(event.as_str().map(str::to_owned));
+            }
+            *connection += 1;
+            sent.send(answer.clone()).unwrap();
+            answer.join("\n")
+        },
+    );
+    // The human-readable form decodes every line as upstream's typed event, so
+    // exit status 0 says each one was an event upstream's own client accepts.
+    assert_eq!(msg(&["--socket", &socket, "subscribe"]), 0);
+    assert_eq!(msg(&["--json", "--socket", &socket, "subscribe"]), 0);
+    assert_eq!(server.join().unwrap(), ["\"Subscribe\"", "\"Subscribe\""]);
+    let answers: Vec<Vec<String>> = answers.try_iter().collect();
+    // The first subscriber gets the first broadcast of the run and the move;
+    // an unchanged state is never sent again. The second gets its snapshot and
+    // then only its own move.
+    assert_eq!(answers[0].len(), 4, "{:?}", answers[0]);
+    assert_eq!(answers[1].len(), 3, "{:?}", answers[1]);
+    for (connection, answer) in answers.iter().enumerate() {
+        assert_eq!(answer[0], "{\"Ok\":\"Ok\"}");
+        for line in &answer[1..] {
+            assert!(line.starts_with("{\"State\":{\"camera\":["), "{line}");
+            assert!(!line.contains('\n'));
+        }
+        let last: Value = serde_json::from_str(answer.last().unwrap()).unwrap();
+        let moved = last["State"]["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|window| window["id"] == 2)
+            .unwrap();
+        assert_eq!(moved["position"], json!([40 + connection, -60]));
+    }
+    std::fs::remove_file(path).unwrap();
+
+    // A pushed line that is no event stops the human form with an error, while
+    // --json relays lines as they come, as upstream's client does.
+    let (listener, path) = bind();
+    let socket = path.to_str().unwrap().to_owned();
+    let server = serve(
+        listener,
+        2,
+        || (),
+        |_, _| "{\"Ok\":\"Ok\"}\n{\"State\":{\"camera\":\"here\"}}".to_owned(),
+    );
+    assert_eq!(msg(&["--socket", &socket, "subscribe"]), 1);
+    assert_eq!(msg(&["--json", "--socket", &socket, "subscribe"]), 0);
+    assert_eq!(server.join().unwrap().len(), 2);
     std::fs::remove_file(path).unwrap();
 }

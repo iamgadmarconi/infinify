@@ -97,7 +97,7 @@ visibility measures are `driftwm-core`'s `canvas::find_nearest`,
 `visible_fraction` and `visible_canvas_rect`: upstream's own code.
 
 Four action strings run through [`action`](IPC.md#action), and therefore through
-key bindings and `msg action`. Each one that lands does what upstream's
+key bindings, [hot corners](CONFIG.md#hot-corners) and `msg action`. Each one that lands does what upstream's
 `navigate_to_window` does: it raises the window, makes it the logical focus,
 asks for native focus with the existing [focus effect](FOCUS.md), and arms the
 same per-output flight `tick_navigation` advances. All but `cycle-windows`,
@@ -259,7 +259,10 @@ the prelude of another action, with every request confirmed and with every
 request answered `focus_logical`; `focus-center` with the pointer over a
 window, over empty canvas and absent; `activate` for its three causes with
 `auto_navigate_on_click` and `zoom.reset_on_activation` on and off, for
-visible, clipped and off-screen windows; `clear_focus`; flights settled by
+visible, clipped and off-screen windows; `clear_focus`; a
+[hot corner](CONFIG.md#hot-corners) bound to `focus-center`, to `cycle-windows`
+and to another action, with and without `pointer` and `held`, and the cycle
+prelude of the output and layout actions; flights settled by
 `tick_navigation`; and the identity each effect carries. Expected targets are
 derived by hand from the rules above. Upstream's action bodies are not executed
 as an oracle, so parity with them is by reading.

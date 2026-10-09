@@ -116,6 +116,17 @@ the one window it focuses, and nothing else.
   cluster. Control-Option-Shift with an arrow key (`nudge-window <direction>`)
   moves the focused logical window by `navigation.nudge_step` world points.
   Neither moves a native window.
+- Control-Option-Command-Shift with an arrow key (`send-to-output <direction>`)
+  moves the focused logical window into the view of the display on that side,
+  where a navigation on that display would park it. `send-cursor-to-output
+  <direction>` (no default key) moves the pointer to the centre of that display.
+  With one display, or none on that side, both do nothing. See
+  [Displays, hot corners, layouts and autostart](#displays-hot-corners-layouts-and-autostart).
+- Hot corners: an `[[outputs]]` entry of the config file can bind an action to
+  each corner of a display. It runs once when the pointer arrives in the corner
+  and is armed again when the pointer leaves. None is bound by default.
+- `switch-layout next`, `prev` or `<index>` (no default key) selects another of
+  the keyboard input sources already enabled in System Settings.
 - An unbound click, drag or scroll on a window is forwarded through Rust inverse
   hit mapping to the selected native source. With DriftWM's defaults that is
   every unmodified one, with the left, right or middle button. An unbound press
@@ -250,6 +261,7 @@ only while a canvas panel is open; `--windowed` registers none.
 | ⌃⌥0, ⌃⌥Z | `mod+0`, `mod+z` | `zoom-reset` |
 | ⌃⌥⌘ arrows | `mod+ctrl+<arrow>` | `pan-viewport <direction>` (repeat) |
 | ⌃⌥⇧ arrows | `mod+shift+<arrow>` | `nudge-window <direction>` (repeat) |
+| ⌃⌥⇧⌘ arrows | `mod+alt+<arrow>` | `send-to-output <direction>` |
 | ⌃⌥ arrows | `mod+<arrow>` | `center-nearest <direction>` |
 | ⌃⌥C | `mod+c` | `center-window` |
 | ⌃⌥X | `mod+x` | `focus-center` |
@@ -258,29 +270,24 @@ only while a canvas panel is open; `--windowed` registers none.
 | ⌃⌥⇧1 to ⌃⌥⇧4 | `mod+shift+1` to `mod+shift+4` | `set-bookmark 1` to `4` |
 | ⌃⌥Return | `mod+return` | `exec-terminal`: `$TERMINAL`, else `open -a Terminal "$HOME"` |
 | ⌃⌥D | `mod+d` | `exec-launcher`: `$LAUNCHER`, else `open -a Apps` |
-| ⌃⌥L | `mod+l` | `spawn swaylock -f -c 000000 -kl` (repeat) |
+| ⌃⌥L | `mod+l` | `exec /usr/bin/pmset displaysleepnow`, standing in for upstream's `spawn swaylock -f -c 000000 -kl` (see [Linux-only default commands](#linux-only-default-commands)) |
 | ⌃⌥⇧⌘Q | `mod+ctrl+shift+q` | `quit` |
 | ⌃⌥Esc | none (the shell's own) | exit, until a binding takes the chord |
 
-Those are 34 of upstream's 57 default key bindings. ⌥Tab and ⌥⇧Tab are taken
+Those are 38 of upstream's 57 default key bindings. ⌥Tab and ⌥⇧Tab are taken
 from every application while a canvas panel is open; rebind or unbind
 `cycle-windows` in the config file to give them back. The rest are not
 registered, so their chords stay with the applications:
 
-- 11 whose action does not run on macOS yet: ⌃⌥⇧⌘ arrows (`send-to-output`),
-  ⌃⌥Q (`close-window`), ⌃⌥E (`toggle-cursor-pan`), ⌃⌥F (`toggle-fullscreen`),
-  ⌃⌥M and ⌃⌥⇧M (`fit-window`, `fit-window-snapped`), ⌃⌥⇧W
-  (`zoom-to-fit-snapped`) and ⌃⌥T (`toggle-pin-to-screen`). Bound in a config
-  file they are skipped the same way, without a message; `Infinify msg action`
-  answers the not-implemented error for each.
-- 8 on media keys (volume, mute, brightness, play, next, previous), and 4 on
-  keys a Mac keyboard lacks (`Print`, `shift+Print`, `XF86AudioPause`,
-  `XF86AudioStop`).
-
-Upstream's default commands are Linux programs and are passed through
-unchanged: ⌃⌥L is registered and runs `swaylock`, which `sh` will not find on a
-Mac. Rebind it (for example `"mod+l" = "exec pmset displaysleepnow"`) or remove
-it (`"mod+l" = "none"`).
+- 7 whose action does not run on macOS yet: ⌃⌥Q (`close-window`), ⌃⌥E
+  (`toggle-cursor-pan`), ⌃⌥F (`toggle-fullscreen`), ⌃⌥M and ⌃⌥⇧M (`fit-window`,
+  `fit-window-snapped`), ⌃⌥⇧W (`zoom-to-fit-snapped`) and ⌃⌥T
+  (`toggle-pin-to-screen`). Bound in a config file they are skipped the same
+  way, without a message; `Infinify msg action` answers the not-implemented
+  error for each.
+- 8 on media keys (volume, mute, brightness, play, next, previous), which macOS
+  handles itself, and 4 on keys a Mac keyboard lacks (`Print`, `shift+Print`,
+  `XF86AudioPause`, `XF86AudioStop`).
 
 **Key repeat.** A held hot key whose action upstream marks repeatable
 (`zoom-in`, `zoom-out`, `pan-viewport`, `nudge-window`, `cycle-windows` and
@@ -288,7 +295,128 @@ it (`"mod+l" = "none"`).
 `repeat_rate` (25) times a second. It stops when the key is released, when
 another hot key is pressed, when the chord's modifiers are let go, and on Return
 to desktop or quit. A held `spawn` binding therefore starts its command again
-on every repeat, as upstream's does.
+on every repeat, as upstream's does, with one exception: a `spawn` whose program
+is not found when the config is loaded does not repeat at all, and a command
+that `sh` reports it could not find or run (exit status 127 or 126) ends the
+repeat in progress and says `sh could not run: <command>` on the status line.
+
+### Linux-only default commands
+
+Upstream's default bindings run `swaylock`, `wpctl`, `brightnessctl`,
+`playerctl` and `grim`, which a Mac does not have. A **default** binding whose
+program is not found on `PATH` (the config's `[env] PATH` when it sets one, else
+the app's own) is not registered as upstream wrote it:
+
+| Upstream default | On a Mac without that program |
+| --- | --- |
+| `mod+l` = `spawn swaylock -f -c 000000 -kl` | ⌃⌥L runs `exec /usr/bin/pmset displaysleepnow`: the displays go dark, and macOS asks for the password as System Settings › Lock Screen says. It does not repeat while held. |
+| volume up, down and mute = `spawn wpctl …` | nothing registered: macOS handles the volume keys itself |
+| brightness up and down = `spawn brightnessctl …` | nothing registered: macOS handles the brightness keys itself |
+| play, next and previous = `spawn playerctl …` | nothing registered: macOS handles the media keys itself |
+| `Print`, `shift+Print` = `spawn grim …` | no such key on a Mac keyboard; screenshots stay the system's ⇧⌘3, ⇧⌘4 and ⇧⌘5 |
+
+Two default chords therefore behave differently from earlier builds, with no
+config file at all. ⌃⌥L used to start `swaylock`, which `sh` could not find, so
+nothing visible happened; it now puts the displays to sleep. And ⌃⌥⇧⌘ with an
+arrow key (`send-to-output`) used to be left with the applications because the
+action did not run; it is now a global hot key while a canvas panel is open.
+`"mod+l" = "none"` and `"mod+alt+Left" = "none"` (and the other three arrows)
+give them back.
+
+A binding **you** write in `[keybindings]` is always registered exactly as
+written, a missing program included (that one only loses its key repeat, and
+stderr and the status line say so once after the load). Where one of those five
+programs is installed, its default binding is upstream's own again. macOS has no
+public command that locks the session whatever the Lock Screen setting says, so
+"lock" here is as strong as that setting; to bind something else, write
+`"mod+l" = "exec <your command>"`, or `"mod+l" = "none"` to free the chord.
+
+### Displays, hot corners, layouts and autostart
+
+**Display names.** An `[[outputs]]` entry is matched by `name`: a display's UUID
+(`Infinify msg state` prints it as the output's name), `windowed` for the
+`--windowed` panel, or `"*"` for every display without an entry of its own. An
+exact entry replaces the `*` entry whole, as upstream: one without a
+`hot_corners` table has no hot corners.
+
+**Hot corners.**
+
+```toml
+[[outputs]]
+name = "*"
+[outputs.hot_corners]
+top_left = "zoom-to-fit"
+bottom_right = "exec-launcher"
+# threshold = 4                  # zone size in points, upstream's default
+# disable_while_dragging = true  # upstream's default
+```
+
+The action runs once when the pointer arrives within `threshold` points of both
+edges of that corner, and again only after the pointer has left the corner and
+come back. With `disable_while_dragging` nothing runs while a mouse button is
+held or a canvas gesture is in progress, and a drag that ends inside the corner
+does not fire it either: the pointer has to leave and return. The rule is
+upstream's `check_hot_corners`, with these differences:
+
+- A display's corners are the corners of its panel, that is of the whole
+  display including the toolbar strip, so a pointer flicked into a physical
+  screen corner counts. With `--windowed` they are the corners of that window,
+  and count only while it is the window under the pointer: covered there by
+  another window, or left on another Space, it has no pointer in its corner, as
+  upstream's nested window is sent no motion then.
+- The pointer is looked at only while some corner is bound, every 80 ms and 60
+  times a second during a camera flight, not on every motion as upstream. A
+  pointer that passes through a corner and out again between two looks is
+  missed; one that comes to rest there is not.
+- Corners are watched only while a canvas panel is open, and never in the
+  fixture modes. macOS's own Hot Corners (System Settings › Desktop & Dock) are
+  not touched and fire as well if you have set any.
+- `disable_when_fullscreen` is read and has nothing to suppress.
+
+A corner's action runs as the same action on a key would at that moment, with
+the pointer where it is and the modifiers that are down: `focus-center` takes
+the window under the pointer, and a `cycle-windows` step fired with a modifier
+held stays open until the cycle's hold modifiers are let go (see
+[Cycling and hold-to-commit](#cycling-and-hold-to-commit)). Any other action
+ends a cycle in progress first.
+
+**Sending to another display.** `send-to-output <direction>` and
+`send-cursor-to-output <direction>` pick the display as upstream picks an
+output: from the centre of the current display, the nearest other display whose
+centre lies within about 60 degrees of the direction. The current display is,
+for the window, the first whose view shows the window's centre, and when none
+shows it the display under the pointer; for the pointer, the display under the
+pointer (the first display when it is over no panel). The window is moved in the
+world so that it
+appears on the target display where window navigation would park it there
+(`focus_placement`), at that display's current zoom; its size and the cameras do
+not change, and the native window is not touched. The pointer is moved with
+`CGWarpMouseCursorPosition` to the centre of the target display's view. With one
+display both do nothing, as upstream.
+
+**Keyboard layouts.** DriftWM's layouts are xkb groups from its config. Here
+they are the keyboard input sources enabled in System Settings › Keyboard ›
+Input Sources, in the order of the input menu. `switch-layout next` and `prev`
+step through them and wrap, and `switch-layout <index>` selects by 0-based
+position (an index past the end selects nothing and the status line says so).
+Infinify only selects among sources you have already enabled: it never enables,
+disables, installs or reorders one. The selected source, whoever selected it, is
+what `Infinify msg layout` and the `layout` of `msg state` report: its localized
+name, and with `--short` its first language code (`en` for the British layout;
+upstream reports the xkb layout token, so two layouts of one language differ
+there and not here). `[input.keyboard] layout`, `variant`, `options`, `model`,
+`remember_layout_per_window`, `num_lock` and `caps_lock` are read and unused:
+macOS owns all of them.
+
+**Autostart.** `autostart = ["cmd", …]` at the top of the config file runs each
+command once, 100 ms after the app has started and its socket answers, exactly
+as an `exec` binding would (`/bin/sh -c`, the `[env]` environment, and
+`INFINIFY_SOCKET` naming this instance's socket, so `Infinify msg …` in a
+command talks to the app that started it). It never
+runs again: not on a reload, not when the list changes, not when the canvas is
+reopened. If the file cannot be read or parsed at launch nothing starts, then or
+later. `--windowed` runs them too, as upstream's nested backend does; the
+fixture modes read no config and start nothing.
 
 ### Default mouse bindings as dispatched
 
@@ -341,25 +469,35 @@ Applied now:
 | `[zoom] step`, `fit_padding` | `zoom-in` / `zoom-out`, `zoom-to-fit` and the zoom-out limit |
 | `[zoom] step`, `mouse_speed` | a bound wheel zooms by `step ^ (lines / 2 × mouse_speed)` |
 | `[snap] enabled`, `gap`, `distance`, `break_force`, `corners`, `centers` | the logical window drag and its cluster |
-| `[snap] outer_gap`, `focus_placement`, `[[outputs]] focus_placement` | where window navigation parks a window; an `[[outputs]]` entry is matched by display UUID, `windowed`, or `*` |
+| `[snap] outer_gap`, `focus_placement`, `[[outputs]] focus_placement` | where window navigation and `send-to-output` park a window; an `[[outputs]]` entry is matched by display UUID, `windowed`, or `*` |
+| `[[outputs]] hot_corners` (`top_left`, `top_right`, `bottom_left`, `bottom_right`, `threshold`, `disable_while_dragging`) | [hot corners](#displays-hot-corners-layouts-and-autostart) |
+| `autostart` | commands run once at launch |
 | `[session] restore_camera`, `restore_bookmarks` | what a restart restores, see [Persistence](#persistence-and-lifecycle) |
-| `[env]` | the environment of commands run by `exec`, `spawn`, `exec-terminal` and `exec-launcher` |
+| `[env]` | the environment of commands run by `exec`, `spawn`, `exec-terminal`, `exec-launcher` and `autostart`; its `PATH`, when set, is also where a default binding's program is looked for, and its `INFINIFY_SOCKET`, when set, replaces the one the app adds |
 
 `exec` and `spawn` run their command as `/bin/sh -c`, detached in a session of
 their own with standard input and output on `/dev/null`; the app never waits for
 it. Upstream's Wayland toolkit variables (`QT_QPA_PLATFORM` and four others) are
-left out of that environment unless `[env]` sets them.
+left out of that environment unless `[env]` sets them. Where upstream adds
+`WAYLAND_DISPLAY`, from which its `msg` finds the socket, the app adds
+`INFINIFY_SOCKET`, the socket it serves, unless `[env]` sets it or the app runs
+without IPC: a command it starts reaches this instance with a plain
+`Infinify msg …`, whichever `--socket` the app was given.
 
 Read and validated by upstream's parser, then unused because the feature does
 not exist here: `[navigation] mouse_speed` (a drag pans 1:1), `[zoom]
 trackpad_speed` (pinch is unscaled), `focus_follows_mouse`, `window_placement`,
-`autostart`, `[session] suspend_on_close` and `restore_windows`, `[navigation]
+`[session] suspend_on_close` and `restore_windows`, `[navigation]
 resize_step`, `drift`, `touch_speed`, `auto_navigate_on_close` and `edge_pan`,
-`[zoom] touch_speed`, `reset_on_new_window` and `interact_min`, keyboard layout and lock
-keys, `[input.trackpad]`, `[input.mouse]`, `[input.touch]`, `[input.tablet]`,
+`[zoom] touch_speed`, `reset_on_new_window` and `interact_min`, `[input.keyboard]
+layout`, `variant`, `options`, `model`, `remember_layout_per_window`, `num_lock`
+and `caps_lock` (macOS owns the input sources and the lock keys),
+`[input.trackpad]`, `[input.mouse]`, `[input.touch]`, `[input.tablet]`,
 `[cursor]` (theme and size reach only the environment of a run command),
 `[background]`, `[decorations]`, `[effects]`, `[backend]`,
-`[output]`, the rest of `[[outputs]]`, `[[window_rules]]`, `[gestures.*]`,
+`[output]`, `[[outputs]]` `scale`, `transform`, `position` and `mode` (macOS
+owns the display arrangement) and `hot_corners.disable_when_fullscreen`,
+`[[window_rules]]`, `[gestures.*]`,
 `[touch.*]`, `[mouse] resize_on_border` and the decoration settings, and
 tap-modifier bindings (a bare `alt+shift`), which are reported and skipped.
 
@@ -413,6 +551,84 @@ saved as evidence. Observed there, each read back over the socket:
   centred on 520 -360), the four corner bookmarks instead of the file's three,
   and a bookmark set at runtime left out of the save, which carried the file's
   three forward.
+
+The hot corners, the two display actions, keyboard layouts, the event stream,
+autostart and the Linux-command rule were built together and launched twice more
+that day, again as `--windowed 1100x700` on a private scene (three seeded
+placeholders), config and socket. The config held `autostart = ["touch FILE"]`
+and a `name = "*"` output with `top_left = "zoom-to-fit"`. Nothing from those
+runs is saved as evidence. Observed, each over the socket or in the file system:
+
+- **Autostart.** The file was there when first looked for, 1.2 and 1.5 s after
+  the two launches. Deleted, it was not
+  created again by `reload-config`, nor by an edit of the config file that the
+  watch picked up. Two further launches after the review fixes, set up the same
+  way: an autostart `printenv INFINIFY_SOCKET` wrote this instance's `--socket`
+  path, once with the variable unset in the launching shell and once with
+  another path set there; an autostart `Infinify msg --json layout` with no
+  `--socket` was answered by this instance (`{"Ok":{"Layout":"British"}}`);
+  `msg action exec printenv INFINIFY_SOCKET` wrote the same path, and, after an
+  `[env] INFINIFY_SOCKET` entry was added to the file and reloaded, the file's
+  value. The flag file was again created once and not after the reload.
+- **Layout.** `msg layout` printed `British`, `msg layout --short` printed `en`,
+  and `msg state` and every event line carried both, so the launch report
+  reached the controller. That machine has one input source enabled:
+  `switch-layout next` answered `ok` and the layout was `British` before and
+  after. No input source was ever selected by the app.
+- **Event stream.** `msg --json subscribe` and a raw client on the same socket
+  received byte-identical lines; the raw one began with `{"Ok":"Ok"}` and the
+  state in upstream's member order. One line while idle. `camera 100 100`: 21
+  lines, one per frame, the last exactly `[100.0,100.0]`, then none.
+  `zoom 0.5`: 17 lines ending at 0.5, and `zoom-in` from there 11 ending at
+  0.55, the count unchanged 0.4 s after each. `zoom-in` at 1:1 (the limit),
+  `state`, `send-to-output right`, `reload-config` and `switch-layout next`:
+  none. Setting a bookmark that became the active one: one line
+  (`active_bookmark`), deleting it: one. `focus --id 1`: one line (`is_focused`), then 16 for the flight. No
+  two adjacent lines were equal. With eight subscribers connected a ninth was
+  refused with the message above and status 1, in both output forms, while other
+  requests were still answered; after one subscriber was killed a new one was
+  admitted. A subscribed connection that then sent `"State"` got its reply as a
+  whole line between events, and a second `"Subscribe"` on it got the ack and
+  the state again. Six subscribers left alone ended with identical 51-line
+  transcripts. On SIGTERM the app exited 0, `msg subscribe` exited 0 and the
+  socket was gone.
+- In the first of the two runs 33 more lines were camera changes in steps of
+  1/256 point that no command had asked for, in three bursts shaped like a
+  two-finger scroll with momentum. The machine's own scroll input reaching the
+  panel, which pans the canvas, is the likely cause and was not confirmed; the
+  same was suspected in the earlier runs under [Scripting](#scripting-ipc).
+  Each of those pans was reported as an event, which is what the stream is for,
+  and they are the reason the per-command counts above are quoted from quiet
+  stretches and from the second run, which had none. The zoom stayed at 1
+  through all of them, so the bound top-left corner (`zoom-to-fit`) did not
+  fire during them.
+- **Display actions with one display.** With window 1 focused,
+  `send-to-output right` answered `ok` and `msg move --id 1` read `520 -360`
+  before and after. `send-cursor-to-output right` answered `ok`. Nothing was
+  warped: with one display the controller returns no pointer effect.
+- `toggle-fullscreen` and `fit-window` were still refused as not implemented.
+  `spawn` of a program that does not exist answered `ok` and the app went on
+  answering; the status-line note for it was not looked at.
+- The config with the hot corner loaded with nothing on stderr. Read through
+  the same controller library with one output named `windowed`, that config
+  reports `"corners":{"top_left":"zoom-to-fit"}` with threshold 4, and with no
+  config file it reports ⌃⌥L as `exec /usr/bin/pmset displaysleepnow` with
+  `"upstream":"spawn swaylock -f -c 000000 -kl"`, 45 keys, no media key and 12
+  skipped. None of the five Linux programs is on that machine's `PATH`.
+
+Not run in those launches, and so compiled and reviewed only: any hot corner
+firing (no pointer was moved into a corner, and whether the shell had armed the
+corner cannot be read over the socket); the pointer warp (it needs a second
+display); an input source actually being selected, and the report after the
+input source changes (they need a second enabled source); `send-to-output`
+moving a window to another display; the ⌃⌥⇧⌘-arrow hot keys (`--windowed`
+registers none); `/usr/bin/pmset displaysleepnow` (it would have blanked the
+displays); the `sh could not run` note and the end of a key repeat; a subscriber
+dropped after 30 stalled seconds and one kept beyond 30 quiet seconds (each run
+lasted under 30 s; the server file alone was driven through both in a scratch
+harness by its author, with the idle time shortened to 2 s); `subscribe` before
+the canvas opens and after Return to desktop; autostart in a launch that shows
+the chooser; and every one of these with a bound source.
 
 Not run at all: hot key registration and delivery, key repeat, any pointer
 press, drag or scroll (the dispatch table above is what the controller answers
@@ -484,12 +700,15 @@ The default socket is `~/Library/Application Support/Infinify/infinify.sock`. Th
 app's `--socket PATH` flag moves it; the path must be absolute. `--state` does not
 move the socket, so a second instance on its own scene file needs its own
 `--socket` as well. `msg` looks for `--socket PATH`, then the `INFINIFY_SOCKET`
-environment variable, then the default; the app itself does not read
-`INFINIFY_SOCKET`. The socket's parent directory must exist, be owned by you and
+environment variable, then the default. The app itself does not read
+`INFINIFY_SOCKET` to choose where it serves; it sets the variable to the socket
+it serves for every command it starts (`exec`, `spawn`, `autostart`), so `msg`
+from one of them reaches this instance. The socket's parent directory must exist, be owned by you and
 not be group- or world-writable, the socket is mode 0600, and a peer with another
 user ID is hung up on. A request is one line of at most 64 KiB (a longer one is
 hung up on without a reply), at most 16 connections are served at once, and one
-that completes no request for 30 seconds is closed. A stale socket file is removed
+that completes no request for 30 seconds is closed, unless it has subscribed
+(see [Event stream](#event-stream)). A stale socket file is removed
 only after connecting to it fails. Nothing serializes that check and the bind
 between instances, so two started on one path at the same moment can both find it
 stale, and the later one then replaces the earlier one's socket; give instances
@@ -526,7 +745,9 @@ experimental native resize is unresolved `a native resize is pending`.
 
 | Command | What it does now |
 | --- | --- |
-| `state` | Camera, zoom, windows (id, bundle id as `app_id`, title, centre position, size, `suspended` for a detached placeholder), outputs (stable id as `name`, `active`) and the active bookmark. `layout`, `fullscreen`, `pinned` and the layer lists are always empty. |
+| `state` | Camera, zoom, the keyboard layout (the selected input source's name and short code), windows (id, bundle id as `app_id`, title, centre position, size, `suspended` for a detached placeholder), outputs (stable id as `name`, `active`) and the active bookmark. `fullscreen`, `pinned` and the layer lists are always empty. |
+| `subscribe` | Keep the connection and print the state now and again after every change, until the app exits. See [Event stream](#event-stream). |
+| `layout [--short]` | The selected keyboard input source: its name, or with `--short` its first language code. Empty until the app has reported one, which it does at launch. |
 | `camera [X Y]` | Read the view centre, or fly the camera there at the current zoom. |
 | `zoom [LEVEL]` | Read the zoom, or animate to a level about the view centre. The level is clamped to the range the zoom shortcuts use and the reply is the level applied. |
 | `focus [APP_ID] [--id N]` | Read the focused window. Setting makes a window the logical focus and, unless it is already wholly in view, flies the camera to it as upstream does: at 1:1 for a window with a bound source (at the current zoom with `[zoom] reset_on_activation = false`), at the current zoom for a detached placeholder. For a window with a bound source the app also performs the controller's focus request on the native window when native focus is allowed (see [Window navigation and native focus](#window-navigation-and-native-focus)); that has not been run. |
@@ -536,20 +757,24 @@ experimental native resize is unresolved `a native resize is pending`.
 | `bookmark [NAME] [X Y] [--delete]` | List bookmarks, get or set one, or delete it. |
 | `debug-counters` | A small map of controller collection sizes; the keys are Infinify's own and not stable. |
 
-`layout`, `opacity`, `pin`, `close`, `suspend`, `relaunch`, `screenshot` and
-`subscribe` answer `<name> is not implemented on macOS yet`.
+`opacity`, `pin`, `close`, `suspend`, `relaunch` and `screenshot` answer
+`<name> is not implemented on macOS yet`.
 
 `action` parses the full upstream action grammar with upstream's spelling: it
 is the grammar the config file's bindings use. These run:
 `pan-viewport <direction>`, `home-toggle`, `zoom-in`, `zoom-out`, `zoom-reset`,
 `zoom-to-fit`, `center-window`, `center-nearest <direction>`,
 `cycle-windows forward|backward`, `focus-center`, `go-to-bookmark NAME`,
-`set-bookmark NAME`, `nudge-window <direction>`, `exec COMMAND`, `spawn COMMAND`,
-`exec-terminal`, `exec-launcher`, `reload-config` and `quit`. Over the socket
-`cycle-windows` is always one committed step, where upstream keeps the cycle
-open if a modifier happens to be down, and `focus-center` uses the real pointer's
-position at that moment. Every action but `cycle-windows` first ends a cycle in
-progress, as upstream's does. `exec` and `spawn` make the app run
+`set-bookmark NAME`, `nudge-window <direction>`, `send-to-output <direction>`,
+`send-cursor-to-output <direction>`, `switch-layout next|prev|INDEX`,
+`exec COMMAND`, `spawn COMMAND`, `exec-terminal`, `exec-launcher`,
+`reload-config` and `quit`. Over the socket `cycle-windows` is always one
+committed step, where upstream keeps the cycle open if a modifier happens to be
+down, and `focus-center` uses the real pointer's position at that moment.
+Every action but `cycle-windows` first ends a cycle in progress, as upstream's
+does. `send-cursor-to-output` moves the real pointer and `switch-layout`
+changes the selected input source, for whoever sends them. `exec` and `spawn`
+make the app run
 the command through `/bin/sh -c`, so the socket lets any process of yours that
 can write to it run a command, as upstream's does. Every other upstream action
 parses and answers `action not implemented on
@@ -570,6 +795,43 @@ see it land. A pointer press or pinch on the canvas, or a scroll that pans or
 zooms it, stops a scripted flight where it is, like any other. A client must wait for its reply: a
 connection whose peer has already closed when the server accepts it is dropped
 unread, where upstream would still run the request.
+
+### Event stream
+
+`Infinify msg subscribe` is `driftwm msg subscribe`. The connection stays open:
+after the `{"Ok":"Ok"}` ack the app sends the whole state as one `{"State":{…}}`
+line, the same payload `state` answers, and another such line whenever that
+state changes: a camera or zoom move (one line per frame while a flight
+animates, at most 60 a second, as upstream sends one per rendered frame), a
+window added, moved, focused or removed, a bookmark becoming or ceasing to be
+the active one, another keyboard layout. Nothing is sent while
+nothing changes, and a state that serializes to the same bytes as the last one
+sent is never repeated. `msg subscribe` prints upstream's readable state block
+and a blank line for every event; `msg --json subscribe` prints each event line
+as it arrived, members in upstream's order. The client exits 0 when the app
+quits and the stream ends.
+
+- At most 8 connections subscribe at once, out of the 16 the server holds. One
+  more is answered `{"Err":"cannot subscribe: 8 subscribers are already
+  connected"}`; upstream has no limit.
+- A subscriber is never closed for being quiet. The app never waits on one: a
+  subscriber that reads slowly is owed at most the unwritten rest of one event
+  and the newest event behind it (older ones waiting there are superseded, since
+  each is the whole state), as upstream. One that takes no byte of an owed event
+  for 30 seconds is hung up on, where upstream keeps it. One that closes its end
+  is dropped.
+- A subscribed connection may go on sending requests. Each reply is a whole line
+  of its own, written after any half-sent event has been finished. A second
+  `subscribe` on it is answered with the ack and the current state again.
+- The state is looked at after each redraw and each layout report, which covers
+  every request, gesture and animation frame. The idle poll redraws as well,
+  every 80 ms, so a change nothing else announces is still found: with several
+  displays, the pointer moving to another one changes which output is `active`,
+  and that is reported by itself within one poll.
+- After Return to desktop subscribers stay connected and receive nothing until
+  the canvas is open again; a new `subscribe` is then refused like every other
+  request. Before the canvas first opens a `subscribe` is accepted and its
+  first line has no active output.
 
 Status: automated coverage is controller scenarios through the exported C ABI/JSON
 path. On 2026-10-09 the built app was also driven by a script over a private
@@ -602,7 +864,10 @@ anything drawn (the panel, tiles, animation frames, the status line), the
 toolbar, every shortcut and its status feedback, bound sources and so the focus
 effect and the 1:1 focus flight, a multi-display active output, requests before the canvas opens or after
 Return to desktop, the default socket path, the peer user check, and the
-connection, line-length and idle limits against the app.
+connection, line-length and idle limits against the app. `subscribe`, `layout`,
+the subscriber limit and the display and layout actions were observed in two
+later launches the same day, listed under
+[What has been run](#what-has-been-run) with what those left unrun.
 
 ## Nested development window
 
@@ -617,7 +882,9 @@ the default scene file, takes the default socket and reads the default config
 file unless `--state`, `--socket` and `--config` say otherwise, so give a
 development window its own when you also use Infinify normally. Pointer
 bindings and settings from the config apply; key bindings are read but not
-registered. A size must be at least 960x480 (the width that keeps the toolbar and
+registered. `autostart` commands run, as they do under upstream's nested
+backend, and hot corners bound for `windowed` or `*` are the corners of this
+window while it is the window under the pointer. A size must be at least 960x480 (the width that keeps the toolbar and
 status line visible) and at most 16384 in each direction, or the app exits 64; the
 panel is then clamped to the main display's visible area and centred on it. It is
 the same borderless panel as the full-screen ones: it cannot be dragged, it closes
@@ -691,18 +958,31 @@ key repeat and every pointer binding are compiled and reviewed but have not
 been exercised in a running app, and neither has a non-US keyboard layout.
 Media keys, tap-modifier bindings, `wheel-up` / `wheel-down`, trackpad and
 touch gestures, and every setting whose feature is absent are read and unused.
-Eleven of upstream's default key bindings and four of its default mouse
+Seven of upstream's default key bindings and four of its default mouse
 bindings (three window actions and the pointer `center-nearest` swipe) do not
 run here yet, and its two resize bindings need the experimental flag. Window
 navigation and native focus have their own list of limits under
 [Window navigation and native focus](#window-navigation-and-native-focus):
 above all, native focus has never been exercised live, and a click reaches
-the application before its window has native focus. Upstream's default `spawn`
-commands are Linux programs. With the default bindings a detached placeholder
+the application before its window has native focus. Upstream's lock binding
+puts the displays to sleep with `pmset`, which locks the session only as far
+as the Lock Screen setting does; that command has not been run from the app.
+With the default bindings a detached placeholder
 cannot be dismissed with the pointer.
+Hot corners are watched by polling the pointer (every 80 ms, 60 times a second
+during a flight), so a pointer that crosses a corner without resting there can
+be missed, and none has been fired on a live run, so the `--windowed` rule that
+a covered window's corners do not fire is unrun as well. `send-to-output` and
+`send-cursor-to-output` have run live only with a single display, where they do
+nothing: the window move to another display and the pointer warp are unrun.
+`switch-layout` has run only on a machine with one enabled input source, where
+it selects nothing; selecting an input method (as opposed to a plain keyboard
+layout) from this accessory app is untried. The event stream reporting the
+output under the pointer becoming active, within one idle poll, is unrun: it
+needs a second display.
 The IPC surface is a subset of DriftWM's. Many upstream actions parse but are
-not implemented; `layout`, `opacity`, `pin`, `close`, `suspend`, `relaunch`,
-`screenshot` and `subscribe` are not implemented; `resize` is read-only. An IPC
+not implemented; `opacity`, `pin`, `close`, `suspend`, `relaunch` and
+`screenshot` are not implemented; `resize` is read-only. An IPC
 focus is logical focus and camera navigation, plus a native focus request for a
 window with a bound source that no run has yet performed, and
 an IPC move is a logical world move that never moves the native window. Nested
@@ -724,10 +1004,10 @@ and keep their fixed click activation. The controller's rules are in
 and [FOCUS.md](../../crates/desktop/FOCUS.md); this section says what the shell
 does with them.
 
-**Native focus (raising the real window) was not exercised live in this
-milestone. It is compiled, reviewed and covered by the headless coordinator
-regression only.** No hot key, toolbar button, click or Option release was
-exercised live either;
+**Native focus (raising the real window) has not been exercised live. It is
+compiled, reviewed and covered by the headless coordinator regression only.**
+No hot key, toolbar button, click or Option release has been exercised live
+either;
 [What has been run for navigation](#what-has-been-run-for-navigation) has the
 exact boundary.
 
@@ -766,8 +1046,8 @@ the zoom to 1.
 
 ### Cycling and hold-to-commit
 
-A `cycle-windows` hot key that fires while any of Control, Option, Shift or
-Command is physically down opens a cycle that stays open: each further press
+A `cycle-windows` hot key (or hot corner) that fires while any of Control,
+Option, Shift or Command is physically down opens a cycle that stays open: each further press
 steps deeper into the order as it was when the cycle began. While it is open the
 shell reads the session's modifier state 60 times a second
 (`CGEventSourceFlagsState`, which needs no event tap and no Input Monitoring

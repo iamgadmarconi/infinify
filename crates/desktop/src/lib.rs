@@ -4,10 +4,13 @@
 //! birth immediately before and after event delivery.
 mod actions;
 mod bindings;
+mod default_commands;
 mod ffi;
 mod ipc;
 mod ipc_client;
+mod keyboard_layout;
 mod navigation;
+mod output_actions;
 mod resize_transaction;
 mod settings;
 mod storage;
@@ -16,8 +19,10 @@ mod window_actions;
 use bindings::Platform;
 pub use bindings::{MacModifiers, PointerContext, PointerTrigger, ScrollSource};
 pub use ffi::*;
+use keyboard_layout::KeyboardLayout;
 pub use navigation::{FocusPlacement, ZoomPolicy};
 use navigation::{NavigationContext, ViewFlight};
+pub use output_actions::Corner;
 use resize_transaction::NativeResizeTransaction;
 pub use resize_transaction::{NativeResizeResult, ResizeOutcome};
 use settings::{CameraSeed, Settings};
@@ -193,6 +198,11 @@ pub struct Controller {
     /// The scene file's bookmark registry. With `session.restore_bookmarks` off
     /// runtime edits are ephemeral and a save carries this forward untouched.
     durable_bookmarks: BTreeMap<String, [f64; 2]>,
+    /// The keyboard layout the shell last reported. Ephemeral, never saved.
+    layout: Option<KeyboardLayout>,
+    /// Upstream's `ipc_last_event_hash`: the last State event `state_event`
+    /// returned. Ephemeral.
+    last_event: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -335,8 +345,30 @@ pub enum Command {
         #[serde(rename = "super")]
         super_chord: String,
     },
-    /// The key bindings as macOS chords.
+    /// The key bindings as macOS chords, and each output's armed hot corners.
     Bindings {},
+    /// Run the action bound to one hot corner of one output. `pointer` and
+    /// `held` are as `action` takes them.
+    HotCorner {
+        output: OutputId,
+        corner: Corner,
+        #[serde(default)]
+        pointer: Option<Point>,
+        #[serde(default)]
+        held: bool,
+    },
+    /// The keyboard layout now in force, as the shell observed it.
+    LayoutChanged {
+        name: String,
+        short: String,
+        index: usize,
+        count: usize,
+    },
+    /// The State event line for subscribers, when it changed. `output` is the
+    /// active output.
+    StateEvent {
+        output: Option<OutputId>,
+    },
     /// The pointer binding of one physical chord, button or scroll, and context.
     #[serde(rename = "mouse_binding")]
     PointerBinding {
@@ -682,6 +714,19 @@ impl Controller {
             Command::LoadConfig { path } => return self.load_config(path),
             Command::SetPlatform { super_chord } => return self.set_platform(&super_chord),
             Command::Bindings {} => return Ok(self.bindings()),
+            Command::HotCorner {
+                output,
+                corner,
+                pointer,
+                held,
+            } => return self.hot_corner(output, corner, valid_pointer(pointer)?, held),
+            Command::LayoutChanged {
+                name,
+                short,
+                index,
+                count,
+            } => return self.layout_changed(name, short, index, count),
+            Command::StateEvent { output } => return self.state_event(output),
             Command::PointerBinding {
                 trigger,
                 source,
@@ -1133,6 +1178,8 @@ impl Controller {
                 loaded.settings = self.settings.clone();
                 loaded.platform = self.platform;
                 loaded.configured = self.configured;
+                loaded.layout = self.layout.clone();
+                loaded.last_event = self.last_event;
                 if loaded.configured {
                     loaded.seed_bookmarks();
                 }
@@ -1300,7 +1347,7 @@ impl Controller {
         }).collect();
         let windows: Vec<_> = self.scene.windows().iter().map(|w| json!({"window": w.id, "world_rect": w.world_rect, "metadata": self.metadata.get(&w.id), "source": self.sources.get(&w.id)})).collect();
         Ok(
-            json!({"evidence": "logical_controller_only", "capabilities": ["normal_window_navigation", "native_resize_controller_contract"], "native_resize": self.native_resize, "navigation": {"flights": self.flights, "clock_ns": self.navigation_clock, "contexts": self.navigation_contexts, "home_returns": self.home_returns, "overview_returns": self.overview_returns, "active_bookmarks": self.active_bookmarks}, "bookmarks": self.bookmarks, "outputs": self.scene.outputs(), "windows": windows, "focused": self.scene.focused(), "focus": {"intent": self.scene.focused(), "observed_native": self.focus.observed_native, "pending_effect": self.focus.pending_effect, "last_result": self.focus.last_result, "history": self.scene.stage().focus_history(), "cycle": self.scene.stage().cycle_state(), "release_pending": self.focus.release_pending}, "placements": placements}),
+            json!({"evidence": "logical_controller_only", "capabilities": ["normal_window_navigation", "native_resize_controller_contract"], "native_resize": self.native_resize, "navigation": {"flights": self.flights, "clock_ns": self.navigation_clock, "contexts": self.navigation_contexts, "home_returns": self.home_returns, "overview_returns": self.overview_returns, "active_bookmarks": self.active_bookmarks}, "bookmarks": self.bookmarks, "keyboard_layout": self.layout, "outputs": self.scene.outputs(), "windows": windows, "focused": self.scene.focused(), "focus": {"intent": self.scene.focused(), "observed_native": self.focus.observed_native, "pending_effect": self.focus.pending_effect, "last_result": self.focus.last_result, "history": self.scene.stage().focus_history(), "cycle": self.scene.stage().cycle_state(), "release_pending": self.focus.release_pending}, "placements": placements}),
         )
     }
 }

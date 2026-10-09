@@ -48,17 +48,23 @@ Preserve them as integers in native code.
 | `end_gesture` | none | `{}` |
 | `snapshot` | none | `outputs`, `windows`, `focused`, `placements`, `evidence` |
 | `save` / `load` | explicit caller `path` string | `{}` |
-| `load_config` | `path` string or null | `{path, exists, errors, warnings, dirty}` |
+| `load_config` | `path` string or null | `{path, exists, errors, warnings, dirty, effects}` |
 | `set_platform` | `super` chord | `{super}` |
-| `bindings` | none | key bindings as macOS chords, and the `cycle_hold` modifiers |
+| `bindings` | none | key bindings as macOS chords, the `cycle_hold` modifiers, and each output's hot corners |
 | `mouse_binding` | `trigger`, `source`, `modifiers`, `context` | `{binding}` or `{binding: null}` |
+| `hot_corner` | `output`, `corner`, optional `pointer`, `held` | `{navigation, effects, dirty}` |
+| `layout_changed` | `name`, `short`, `index`, `count` | `{}` |
+| `state_event` | `output` or null | `{line}`: the State event line, or null when unchanged |
 
 See [focus/cycle commands](FOCUS.md) for the additive focus ABI and
 [normal-window navigation](NAVIGATION.md) for camera commands, runtime snapshots,
 and the native frame-clock contract. [Actions, bookmarks and IPC](IPC.md)
-covers the `action` and `ipc` commands, the saved bookmark map, and the exported
-`driftwm_desktop_msg` client. [Configuration](CONFIG.md) covers the last four
-commands: DriftWM's TOML file, what of it is applied, and the binding map.
+covers the `action`, `ipc` and `state_event` commands, the saved bookmark map,
+the event stream, and the exported `driftwm_desktop_msg` client.
+[Configuration](CONFIG.md) covers the six commands from `load_config` to
+`layout_changed`: DriftWM's TOML file, what of it is applied, the binding map,
+outputs, hot corners, keyboard layouts, autostart, and what stands for
+upstream's Linux commands.
 
 ## macOS modifiers
 

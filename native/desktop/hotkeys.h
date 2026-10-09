@@ -27,6 +27,8 @@
 - (NSArray<NSString *> *)chords:(NSString *)action;
 // Registers every key; returns one line per chord macOS refused. No-op while started.
 - (NSArray<NSString *> *)start;
+// Ends a running repeat: for the shell, when the command a held key runs cannot be started.
+- (void)endRepeat;
 // Unregisters every key and ends any repeat; the keys stay resolved for -start.
 - (void)stop;
 // -stop, and no further `changed`. Required before release.

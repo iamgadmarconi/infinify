@@ -1255,3 +1255,82 @@ fn clear_focus_and_the_reported_cycle_hold() {
     let mut h = empty("[bindings]\ndisable_defaults = [\"keys\"]\n");
     assert_eq!(h.ok(json!({"op":"bindings"}))["cycle_hold"], option);
 }
+
+/// Hot corners on every output: window navigation actions, and an action of
+/// another family.
+const CORNERS: &str = r#"
+[[outputs]]
+name = "*"
+[outputs.hot_corners]
+top_left = "focus-center"
+top_right = "cycle-windows forward"
+bottom_left = "send-to-output right"
+"#;
+#[test]
+fn a_hot_corner_runs_window_navigation_with_the_pointer_and_modifiers_it_fires_under() {
+    let mut h = layout(CORNERS);
+    for window in [1, 2, 4] {
+        h.focus(window);
+    }
+    assert_eq!(h.history(), json!([4, 2, 1]));
+    let corner = |h: &mut Host, corner: &str, pointer: Value, held: bool| {
+        h.ok(json!({"op":"hot_corner","output":1,"corner":corner,"pointer":pointer,"held":held}))
+    };
+
+    // focus-center reads the pointer the corner fired under, exactly as the
+    // action does; a corner sent without one finds nothing.
+    assert_eq!(
+        h.ok(json!({"op":"hot_corner","output":1,"corner":"top_left"})),
+        nothing()
+    );
+    let over = pointer(&mut h, 950.0, 200.0);
+    let data = corner(&mut h, "top_left", over.clone(), false);
+    let wanted = effect(&mut h, &data, 2);
+    assert_eq!(data["navigation"]["target_zoom"], 1.0);
+    assert_eq!(data["navigation"]["target_camera"], centered(B, 1.0));
+    h.confirm(&wanted);
+    assert_eq!(h.history(), json!([2, 4, 1]));
+    assert_eq!(
+        h.error(
+            json!({"op":"hot_corner","output":1,"corner":"top_left","pointer":point(1e13, 0.0)})
+        ),
+        "invalid pointer"
+    );
+
+    // cycle-windows from a corner: with no modifier down it is one committed
+    // step, and with one down the session stays open, as a key binding's does.
+    let data = h.ok(json!({"op":"hot_corner","output":1,"corner":"top_right"}));
+    let step = effect(&mut h, &data, 4);
+    assert_eq!(h.focus_state()["release_pending"], true);
+    h.confirm(&step);
+    assert_eq!(h.history(), json!([4, 2, 1]));
+    assert_eq!(h.focus_state()["cycle"], Value::Null);
+    let data = corner(&mut h, "top_right", Value::Null, true);
+    let step = effect(&mut h, &data, 2);
+    h.confirm(&step);
+    assert_eq!(h.focus_state()["cycle"], 1);
+    assert_eq!(h.history(), json!([4, 2, 1]));
+    // A corner bound to any other action ends that cycle before it runs, as
+    // upstream's execute_action does for every input source. With one output
+    // send-to-output then has nowhere to send the window.
+    assert_eq!(corner(&mut h, "bottom_left", over, true), nothing());
+    assert_eq!(h.focus_state()["cycle"], Value::Null);
+    assert_eq!(h.history(), json!([2, 4, 1]));
+
+    // The output and layout actions end a held cycle first like any other.
+    for other in [
+        "send-to-output right",
+        "send-cursor-to-output left",
+        "switch-layout next",
+    ] {
+        let head = h.history()[0].clone();
+        let data = h.held("cycle-windows forward");
+        let step = data["effects"][0].clone();
+        assert_ne!(step["window"], head);
+        h.confirm(&step);
+        assert_eq!(h.history()[0], head, "{other}");
+        h.action(other);
+        assert_eq!(h.focus_state()["cycle"], Value::Null, "{other}");
+        assert_eq!(h.history()[0], step["window"], "{other}");
+    }
+}

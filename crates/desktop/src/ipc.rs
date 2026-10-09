@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
 // src/ipc/protocol.rs (every wire type: names, serde shapes and field order),
-// src/ipc/mod.rs (dispatch, cmd_camera, cmd_zoom, state_info, the selector
-// rules, cmd_focus, cmd_action, cmd_bookmark, cmd_move, cmd_resize,
-// camera_center), src/canvas.rs (internal_to_rule, rule_to_internal) and
+// src/ipc/mod.rs (dispatch, cmd_camera, cmd_zoom, cmd_layout, state_info, the
+// selector rules, cmd_focus, cmd_action, cmd_bookmark, cmd_move, cmd_resize,
+// camera_center, subscribe, broadcast_state_event), src/canvas.rs
+// (internal_to_rule, rule_to_internal) and
 // src/state/navigation.rs (window_fully_in_viewport). The transport lives in
 // the shell. Native frames already include their title bar, so chrome is zero.
 use super::actions::Outcome;
@@ -247,7 +248,7 @@ pub(crate) struct CanvasLayerInfo {
 
 /// A world frame at upstream's integer boundary: top-left and size, each
 /// rounded to the nearest logical pixel. Out-of-range geometry is refused.
-fn frame(rect: Rect) -> Result<([i64; 2], [i64; 2]), String> {
+pub(crate) fn frame(rect: Rect) -> Result<([i64; 2], [i64; 2]), String> {
     let round = |value: f64| {
         let value = value.round();
         if (f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&value) {
@@ -342,15 +343,43 @@ impl Controller {
                 Ok(Response::Ok)
             }
             Request::Bookmark { name, to, delete } => self.cmd_bookmark(name, to, delete, outcome),
-            Request::Layout { .. } => not_implemented("layout"),
+            Request::Layout { short: true } => Ok(Response::Layout(self.layout_short())),
+            Request::Layout { short: false } => Ok(Response::Layout(self.layout_name())),
+            // Upstream subscribe: the ack, then the current snapshot on the same
+            // connection, which only the shell can write to.
+            Request::Subscribe => {
+                let line = self.event_line(output)?;
+                outcome.effects.push(json!({"op":"subscribe","line":line}));
+                Ok(Response::Ok)
+            }
             Request::Opacity { .. } => not_implemented("opacity"),
             Request::Pin { .. } => not_implemented("pin"),
             Request::Close(_) => not_implemented("close"),
             Request::Suspend(_) => not_implemented("suspend"),
             Request::Relaunch(_) => not_implemented("relaunch"),
             Request::Screenshot { .. } => not_implemented("screenshot"),
-            Request::Subscribe => not_implemented("subscribe"),
         }
+    }
+    /// One pushed line: upstream's `Event::State` serialized from the typed
+    /// value, so its members keep upstream's order and its floats their form.
+    fn event_line(&self, output: Option<OutputId>) -> Result<String, String> {
+        serde_json::to_string(&Event::State(self.state_info(output)?)).map_err(|e| e.to_string())
+    }
+    /// Upstream broadcast_state_event: the current State event line, or null
+    /// when it is the one this command returned last. A snapshot that
+    /// serializes to the same bytes carries no information and is not resent;
+    /// upstream compares a hash of those bytes, and so does this.
+    pub(crate) fn state_event(&mut self, output: Option<OutputId>) -> Result<Value, Error> {
+        use std::hash::{Hash, Hasher};
+        let line = self.event_line(output).map_err(Error::Refused)?;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        line.hash(&mut hasher);
+        let digest = hasher.finish();
+        if self.last_event == Some(digest) {
+            return Ok(json!({"line":null}));
+        }
+        self.last_event = Some(digest);
+        Ok(json!({"line":line}))
     }
     /// The viewport center, Y-up, over the whole output: upstream camera_center.
     fn camera_center(viewport: &Viewport) -> Result<(f64, f64), String> {
@@ -482,8 +511,8 @@ impl Controller {
         Ok(StateInfo {
             camera,
             zoom,
-            layout: String::new(),
-            layout_short: String::new(),
+            layout: self.layout_name(),
+            layout_short: self.layout_short(),
             windows,
             fullscreen: Vec::new(),
             pinned: Vec::new(),

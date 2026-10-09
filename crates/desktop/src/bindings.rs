@@ -23,7 +23,11 @@
 //! The mapping is not one to one, so two bindings can land on one chord. Sorted
 //! by upstream combo text, the first keeps the chord and the rest are reported.
 //! Control+Option+Escape is the shell's exit chord unless a binding claims it.
+//!
+//! A default binding that runs a program this Mac does not have is replaced by
+//! its macOS equivalent or left out; see `default_commands`.
 use super::actions::{action_string, runs_here};
+use super::default_commands::{Equivalent, SearchPath, equivalent, program};
 use super::*;
 use driftwm_core::config::{
     Action, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, Config, ModKey, Modifiers, MouseAction, MouseBinding,
@@ -467,12 +471,14 @@ impl Controller {
             "zoom_trackpad_speed":finite(config.zoom_trackpad_speed),
         })
     }
-    /// The key bindings as macOS chords, for the shell to register.
+    /// The key bindings as macOS chords, for the shell to register, and each
+    /// registered output's hot corners, for it to watch.
     pub(crate) fn bindings(&self) -> Value {
         let config = self.config();
         let defaults = defaults(config.mod_key);
-        let (mut keys, mut media_keys, mut skipped, mut warnings) =
-            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let path = SearchPath::new(config.child_env.get("PATH"));
+        let (mut keys, mut media_keys, mut skipped, mut warnings, mut unrepeated) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
         let mut skip = |combo: &str, action: &Action, reason: String, warn: bool| {
             let action = action_string(action);
             if warn {
@@ -483,9 +489,9 @@ impl Controller {
         // (media key?, code, chord) to the combo that holds it.
         let mut claimed: BTreeMap<(bool, u16, MacModifiers), String> = BTreeMap::new();
         for bound in self.key_bindings() {
-            let (is_media, key) = match bound.place {
-                Place::Ansi(key, _) | Place::Code(key) => (false, key),
-                Place::Media(key_type) => (true, u16::from(key_type)),
+            let (media_key, key) = match bound.place {
+                Place::Ansi(key, _) | Place::Code(key) => (None, key),
+                Place::Media(key_type) => (Some(key_type), u16::from(key_type)),
                 Place::Nowhere => {
                     // Upstream's own defaults on keys a Mac lacks are listed
                     // without a warning: the user did not ask for them.
@@ -501,27 +507,62 @@ impl Controller {
                     continue;
                 }
             };
+            // A program `sh` would not find: a default is then replaced by its
+            // macOS equivalent or left out, and what the file wrote stays as
+            // written, but must not start a failing shell at the repeat rate.
+            let missing = program(bound.action).filter(|program| !path.finds(program));
+            let is_media = media_key.is_some();
+            let substitute = match missing {
+                Some(program) if !self.settings.wrote(&bound.modifiers, bound.sym) => {
+                    match equivalent(program, media_key) {
+                        Equivalent::Substitute(action) => Some(action),
+                        Equivalent::Platform(reason) => {
+                            skip(&bound.combo, bound.action, reason.to_owned(), false);
+                            continue;
+                        }
+                        Equivalent::Nothing => {
+                            let reason =
+                                format!("'{program}' is not installed and has no macOS equivalent");
+                            skip(&bound.combo, bound.action, reason, false);
+                            continue;
+                        }
+                    }
+                }
+                _ => None,
+            };
+            let action = substitute.as_ref().unwrap_or(bound.action);
             let chord = match self.platform.physical(&bound.modifiers) {
                 Ok(chord) => chord,
                 Err(reason) => {
-                    skip(&bound.combo, bound.action, reason, true);
+                    skip(&bound.combo, action, reason, true);
                     continue;
                 }
             };
             if let Some(winner) = claimed.get(&(is_media, key, chord)) {
                 let reason = format!("'{winner}' already holds this macOS chord");
-                skip(&bound.combo, bound.action, reason, true);
+                skip(&bound.combo, action, reason, true);
                 continue;
             }
             claimed.insert((is_media, key, chord), bound.combo.clone());
+            let stalled = missing.filter(|_| substitute.is_none() && action.is_repeatable());
+            if let Some(program) = stalled {
+                unrepeated.push(format!(
+                    "binding '{}' = '{}': '{program}' was not found, so it will not repeat while held",
+                    bound.combo,
+                    action_string(action)
+                ));
+            }
             let mut entry = json!({
                 "modifiers":chord,
-                "action":action_string(bound.action),
+                "action":action_string(action),
                 "combo":bound.combo,
                 "chord":format!("{}{}", chord.symbols(), key_label(bound.sym)),
-                "repeat":bound.action.is_repeatable(),
-                "implemented":runs_here(bound.action),
+                "repeat":action.is_repeatable() && stalled.is_none(),
+                "implemented":runs_here(action),
             });
+            if substitute.is_some() {
+                entry["upstream"] = json!(action_string(bound.action));
+            }
             if is_media {
                 entry["nx_key_type"] = json!(key);
                 media_keys.push(entry);
@@ -550,10 +591,12 @@ impl Controller {
             option: true,
             ..MacModifiers::default()
         };
+        warnings.extend(unrepeated);
         json!({
             "keys":keys,
             "media_keys":media_keys,
             "skipped":skipped,
+            "hot_corners":self.hot_corners(),
             "reserved":[{"purpose":"exit","key_code":EXIT_KEY_CODE,"modifiers":exit,"claimed_by":claimed.get(&(false, EXIT_KEY_CODE, exit))}],
             "layout_independent":config.layout_independent,
             "repeat_delay_ms":config.repeat_delay,

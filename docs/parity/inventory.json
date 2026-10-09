@@ -51,7 +51,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "The controller action exec <cmd> runs nothing itself: it returns an exec effect carrying the command and the config's child environment, and the shell runs /bin/sh -c <cmd> with posix_spawn, detached in a session of its own with standard input and output on /dev/null, never waiting on the main loop. Reachable from a key or mouse binding in the config file and as msg action exec <cmd> over the IPC socket; fixture modes ignore the effect. Known mismatches: upstream's five Wayland toolkit environment fallbacks are withheld unless the file's [env] sets them; the cursor is not revealed; any same-user process that can write to the socket can have the app run a command, as with upstream's msg action exec. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios (the effect, not the process), and one scripted msg session against the built app in --windowed mode, in which an exec'd command wrote its environment to a file, left no saved evidence; a key or mouse binding firing it is unrun on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "The controller action exec <cmd> runs nothing itself: it returns an exec effect carrying the command and the config's child environment, and the shell runs /bin/sh -c <cmd> with posix_spawn, detached in a session of its own with standard input and output on /dev/null, never waiting on the main loop. Reachable from a key or mouse binding in the config file and as msg action exec <cmd> over the IPC socket; fixture modes ignore the effect. Known mismatches: upstream's five Wayland toolkit environment fallbacks are withheld unless the file's [env] sets them; the shell adds INFINIFY_SOCKET (the socket it serves) where upstream's child_env carries WAYLAND_DISPLAY, unless [env] sets it; the cursor is not revealed; any same-user process that can write to the socket can have the app run a command, as with upstream's msg action exec. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios (the effect, not the process), and one scripted msg session against the built app in --windowed mode, in which an exec'd command wrote its environment to a file, left no saved evidence; a key or mouse binding firing it is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.ExecTerminal",
@@ -594,7 +594,7 @@
       },
       "contract": "Match Action::SendToOutput dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -602,7 +602,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "The controller action send-to-output <dir> picks the adjacent output as upstream's output_in_direction does, over the outputs' screen_bounds (from the centre of the source output, the nearest other output whose centre lies within about 60 degrees of the direction), and moves the focused logical window so that its centre lands on the target viewport's focus_placement point at the target's current zoom, truncated toward zero as upstream's cast is; the window is raised and the scene is dirty. The source output is the first whose viewport shows the window's centre, else the active output. No focused window, a single output and no output in that direction do nothing, as upstream. Default shell: Control-Option-Command-Shift with an arrow key (upstream mod+alt+arrow); also msg action send-to-output <dir>. Known mismatches: the native window is never moved; native focus is not asserted again (the window already holds the logical focus); with no output showing the window and no active output the action is refused, where upstream falls back to its first output; upstream's fullscreen and pinned legs do not exist. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios (crates/desktop/tests/platform_actions_flow.rs), and one scripted msg session against the built app in --windowed mode, which has a single output, in which the action answered Ok and the focused window stayed where it was, left no saved evidence; a window sent to another display and the hot key are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.SendCursorToOutput",
@@ -614,7 +615,7 @@
       },
       "contract": "Match Action::SendCursorToOutput dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -622,7 +623,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "The controller action send-cursor-to-output <dir> picks the output adjacent to the active one as send-to-output does and returns a warp_pointer effect carrying the centre of the target output's usable area in global screen coordinates; the shell performs it with CGWarpMouseCursorPosition, in normal runs only. With a single output, or none in that direction, there is no effect, as upstream. Reachable from a key binding in the config file (upstream binds none by default) and as msg action send-cursor-to-output <dir>. Known mismatches: with no active output the action is refused, where upstream falls back to its first output; the active output after the warp is whichever the shell next finds under the pointer; the app registers no usable area, so the target is the centre of the whole view. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios (the effect, not the pointer), and one scripted msg session against the built app in --windowed mode, in which the single-output answer (Ok, no effect) was seen, left no saved evidence; the pointer has never been warped on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.FocusCenter",
@@ -675,7 +677,7 @@
       },
       "contract": "Match Action::SwitchLayout dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -683,7 +685,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "The controller action switch-layout next|prev|previous|<index> returns a switch_layout effect; the shell selects among the keyboard input sources the user has already enabled (Text Input Sources, in the input menu's order; next and prev wrap, and an index past the end selects nothing, as upstream ignores it) and reports the selected source back with layout_changed, as it also does at startup and whenever the input source changes. Nothing is enabled, disabled, installed or reordered. Reachable from a key binding in the config file (upstream binds none by default) and as msg action switch-layout <target>. Known mismatches: the layouts are macOS input sources, the modes of input methods included, not xkb groups built from [input.keyboard] layout, variant and options, which are read and unused; the controller does not range-check an index; the short code reported is a language code. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios (the effect and the cached report), and one scripted msg session against the built app on a machine with a single enabled input source, in which switch-layout next answered Ok and selected nothing, left no saved evidence; no input source has ever been selected by the app, and the report after an input-source change is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.ReloadConfig",
@@ -1566,12 +1569,13 @@
       },
       "contract": "Match HotCorner::TopLeft dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "An [[outputs]] hot_corners entry binds an action to the top-left corner of the output whose stable id (a display UUID, or windowed) equals the entry's name, or of every output without an entry of its own for name = \"*\"; the bindings command reports the bound corners of each registered output. While some corner is bound the shell reads the pointer and runs upstream's check_hot_corners latch: the action fires once when the pointer comes within threshold points of both edges of the corner, is armed again when the pointer leaves, and under disable_while_dragging an entry made while a mouse button is held or a gesture runs is latched without firing. The controller's hot_corner command then runs the bound action through the normal action dispatch with that output active. Normal runs only. Known mismatches: the pointer is sampled every 80 ms (60 times a second during a camera flight) instead of on every motion, so a pass through the corner between two samples is missed; the corner is measured on the display's panel, the toolbar strip included, not on the output; disable_when_fullscreen has nothing to suppress. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/platform_actions_flow.rs); the shell's latch was run only in its author's scratch harness, and no corner has been fired on a live run (a launch of the built app with top_left bound loaded its config cleanly, and no pointer was moved into the corner). Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "HotCorner.TopRight",
@@ -1583,12 +1587,13 @@
       },
       "contract": "Match HotCorner::TopRight dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "An [[outputs]] hot_corners entry binds an action to the top-right corner of the output whose stable id (a display UUID, or windowed) equals the entry's name, or of every output without an entry of its own for name = \"*\"; the bindings command reports the bound corners of each registered output. While some corner is bound the shell reads the pointer and runs upstream's check_hot_corners latch: the action fires once when the pointer comes within threshold points of both edges of the corner, is armed again when the pointer leaves, and under disable_while_dragging an entry made while a mouse button is held or a gesture runs is latched without firing. The controller's hot_corner command then runs the bound action through the normal action dispatch with that output active. Normal runs only. Known mismatches: the pointer is sampled every 80 ms (60 times a second during a camera flight) instead of on every motion, so a pass through the corner between two samples is missed; the corner is measured on the display's panel, the toolbar strip included, not on the output; disable_when_fullscreen has nothing to suppress. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/platform_actions_flow.rs); the shell's latch was run only in its author's scratch harness, and no corner has been fired on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "HotCorner.BottomLeft",
@@ -1600,12 +1605,13 @@
       },
       "contract": "Match HotCorner::BottomLeft dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "An [[outputs]] hot_corners entry binds an action to the bottom-left corner of the output whose stable id (a display UUID, or windowed) equals the entry's name, or of every output without an entry of its own for name = \"*\"; the bindings command reports the bound corners of each registered output. While some corner is bound the shell reads the pointer and runs upstream's check_hot_corners latch: the action fires once when the pointer comes within threshold points of both edges of the corner, is armed again when the pointer leaves, and under disable_while_dragging an entry made while a mouse button is held or a gesture runs is latched without firing. The controller's hot_corner command then runs the bound action through the normal action dispatch with that output active. Normal runs only. Known mismatches: the pointer is sampled every 80 ms (60 times a second during a camera flight) instead of on every motion, so a pass through the corner between two samples is missed; the corner is measured on the display's panel, the toolbar strip included, not on the output; disable_when_fullscreen has nothing to suppress. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/platform_actions_flow.rs); the shell's latch was run only in its author's scratch harness, and no corner has been fired on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "HotCorner.BottomRight",
@@ -1617,12 +1623,13 @@
       },
       "contract": "Match HotCorner::BottomRight dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "An [[outputs]] hot_corners entry binds an action to the bottom-right corner of the output whose stable id (a display UUID, or windowed) equals the entry's name, or of every output without an entry of its own for name = \"*\"; the bindings command reports the bound corners of each registered output. While some corner is bound the shell reads the pointer and runs upstream's check_hot_corners latch: the action fires once when the pointer comes within threshold points of both edges of the corner, is armed again when the pointer leaves, and under disable_while_dragging an entry made while a mouse button is held or a gesture runs is latched without firing. The controller's hot_corner command then runs the bound action through the normal action dispatch with that output active. Normal runs only. Known mismatches: the pointer is sampled every 80 ms (60 times a second during a camera flight) instead of on every motion, so a pass through the corner between two samples is missed; the corner is measured on the display's panel, the toolbar strip included, not on the output; disable_when_fullscreen has nothing to suppress. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/platform_actions_flow.rs); the shell's latch was run only in its author's scratch harness, and no corner has been fired on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "BackgroundKind.Shader",
@@ -1761,7 +1768,7 @@
       },
       "contract": "Match wire format, CLI grammar, selectors, coordinates, reply semantics, errors and subscriptions for Request::Layout.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [
         "native.input",
@@ -1769,7 +1776,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Returns Layout(name): the name of the keyboard input source the shell last reported with layout_changed, or with short its short code (the name when the code is empty, as upstream falls back); an empty string until the first report, which the shell sends at launch. Reached as msg layout [--short]. Known mismatches: the layout is macOS's selected keyboard input source, not an xkb group; the name is its localized name and the short code its first language code, where upstream reports xkb's layout name and the [input.keyboard] layout token. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and one scripted msg session against the built app in --windowed mode, in which the launch report was read back (British, en), left no saved evidence; a report after the input source changes is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ipc.Request.State",
@@ -1790,7 +1798,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Returns upstream's StateInfo shape. Camera and zoom are the centre of the request output's whole view (its screen_bounds size, not the usable area; Y up) and its zoom, and each output's camera is the same centre of that output. Each window carries id (Infinify's logical window id), app_id (the bundle identifier), title, position (the world rect's centre, Y up, rounded to integers), size, is_focused, is_widget (always false), suspended (the window has no bound source, so a detached placeholder is Infinify's stand-in) and mode (always Normal). Outputs carry name (the output's stable id), camera, zoom, size and active (the request's output, supplied by the shell); active_bookmark comes from the canvas policy crate's active-bookmark helper with a per-output incumbent kept as ephemeral state. Reached as msg state, with --json for the raw reply. Known mismatches: layout, layout_short, fullscreen, pinned, layers and canvas_layers have no macOS counterpart and are reported empty; mode is never Fit or Fill; transport is a Unix socket at a default, --socket or INFINIFY_SOCKET path rather than one derived from WAYLAND_DISPLAY or DRIFTWM_SOCKET. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and the Unix-socket server and the msg client against a running app are unverified on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Returns upstream's StateInfo shape. Camera and zoom are the centre of the request output's whole view (its screen_bounds size, not the usable area; Y up) and its zoom, and each output's camera is the same centre of that output. Each window carries id (Infinify's logical window id), app_id (the bundle identifier), title, position (the world rect's centre, Y up, rounded to integers), size, is_focused, is_widget (always false), suspended (the window has no bound source, so a detached placeholder is Infinify's stand-in) and mode (always Normal). Outputs carry name (the output's stable id), camera, zoom, size and active (the request's output, supplied by the shell); active_bookmark comes from the canvas policy crate's active-bookmark helper with a per-output incumbent kept as ephemeral state. Reached as msg state, with --json for the raw reply. Known mismatches: layout and layout_short are macOS's selected keyboard input source as the shell last reported it (its name and first language code, empty before the first report), not an xkb group; fullscreen, pinned, layers and canvas_layers have no macOS counterpart and are reported empty; mode is never Fit or Fill; transport is a Unix socket at a default, --socket or INFINIFY_SOCKET path rather than one derived from WAYLAND_DISPLAY or DRIFTWM_SOCKET, and the app sets INFINIFY_SOCKET to the socket it serves for the commands it starts, as upstream sets WAYLAND_DISPLAY for its own. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and the Unix-socket server and the msg client against a running app are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ipc.Request.DebugCounters",
@@ -1823,7 +1831,7 @@
       },
       "contract": "Match wire format, CLI grammar, selectors, coordinates, reply semantics, errors and subscriptions for Request::Subscribe.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [
         "native.input",
@@ -1831,7 +1839,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Acks, sends the current state as one Event::State line and keeps the connection. The controller serializes upstream's typed event (upstream's member order and float form), and its state_event command returns a new line only when the serialized state differs from the last one it returned, by a hash of the bytes as upstream's broadcast_state_event compares. The shell asks after every redraw and layout report, at most once per frame, and its socket server writes each line to every subscriber without blocking, holding for a slow one at most the unwritten tail of one event and the newest event behind it, as upstream. A repeat Subscribe on a subscribed connection sends the ack and the state again, and such a connection keeps answering requests. Reached as msg subscribe, which prints upstream's state block for every event, or each line with --json, until the server hangs up. Known mismatches: at most 8 subscribers, a ninth being answered Err, where upstream has no limit; a subscriber that takes nothing of an owed event for 30 seconds is hung up on, where upstream keeps it; a change is found by comparing the serialized state when the shell redraws (every frame of a flight, and every 80 ms idle poll otherwise), not from upstream's per-frame dirty flags, so a change of active output alone is reported by itself within one poll; the active bookmark is re-evaluated per accepted command. No evidence entry is recorded yet: automated coverage is exported-C-ABI/JSON controller scenarios and a client test against a stand-in listener, and two scripted sessions against the built app in --windowed mode (the ack and first state, one line per frame of a flight and none while idle, no repeated line, a ninth subscriber refused, requests on a subscribed connection, the stream ending when the app exits) left no saved evidence; the stalled-subscriber drop, a subscription before the canvas opens and a change of active output (one display) are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ipc.Request.Focus",
@@ -2015,7 +2024,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Runs the request's action string through the full upstream action grammar and the same handlers that the default shell's shortcuts and toolbar buttons use. Implemented: pan-viewport, home-toggle, zoom-in, zoom-out, zoom-reset, zoom-to-fit, center-window, center-nearest, cycle-windows (always a single committed step over IPC), focus-center, go-to-bookmark, set-bookmark and quit (see the Action rows); every other upstream action parses but is answered with an Err starting action not implemented on macOS yet, and a string upstream does not parse with an Err starting unknown action. Reached as msg action followed by the action string. Known mismatches: upstream replies Ok whenever a spec parses, even when it had no effect, where Infinify answers Err for a parsed action it does not implement; most upstream actions are unimplemented; quit reaches the shell as an effect. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and the Unix-socket server, the msg client against a running app and rendered motion are unverified on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Runs the request's action string through the full upstream action grammar and the same handlers that the default shell's shortcuts and toolbar buttons use. Implemented: pan-viewport, home-toggle, zoom-in, zoom-out, zoom-reset, zoom-to-fit, center-window, center-nearest, cycle-windows (always a single committed step over IPC), focus-center, go-to-bookmark, set-bookmark, nudge-window, send-to-output, send-cursor-to-output, switch-layout, exec, spawn, exec-terminal, exec-launcher, reload-config and quit (see the Action rows); every other upstream action parses but is answered with an Err starting action not implemented on macOS yet, and a string upstream does not parse with an Err starting unknown action. Reached as msg action followed by the action string. Known mismatches: upstream replies Ok whenever a spec parses, even when it had no effect, where Infinify answers Err for a parsed action it does not implement; thirteen upstream actions are unimplemented; quit, exec, a config reload, a pointer warp and a layout switch reach the shell as effects. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and the Unix-socket server, the msg client against a running app and rendered motion are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ipc.Request.Bookmark",
@@ -2703,13 +2712,14 @@
       },
       "contract": "Match OutputConfig.hot_corners type, validation, default and live effect.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "HotCorners",
-      "required": true
+      "required": true,
+      "implementation_note": "Parsed by upstream's own config code and applied per output: the entry whose name equals the output's stable id (a display UUID, or windowed), else the name = \"*\" entry, an exact entry replacing the wildcard whole as upstream. The bindings command reports each registered output's bound corners with threshold and disable_while_dragging; the shell's latch watches the pointer, and the controller's hot_corner command runs the bound action through the normal action dispatch. Known mismatches: the pointer is sampled every 80 ms (60 times a second during a camera flight) instead of on every motion; a corner is measured on the display's panel, the toolbar strip included, not on the output; disable_when_fullscreen is read and has nothing to suppress. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/platform_actions_flow.rs); the shell's latch was run only in its author's scratch harness, and no corner has been fired on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.OutputConfig.focus_placement",
@@ -4714,7 +4724,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for autostart.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -4736,7 +4746,8 @@
             "swaync"
           ]
         }
-      ]
+      ],
+      "implementation_note": "The first load_config of a run returns one exec effect per autostart command, in file order, and the shell runs them once, 100 ms after startup, through the exec path (/bin/sh -c with the config's child environment, less upstream's Wayland toolkit fallbacks). No later load returns any, a changed list included, and a launch file that cannot be read or parsed starts nothing, then or later. --windowed runs them, as upstream's nested backend does; fixture modes read no config. Known mismatches: no XDG autostart entries or systemd session as under driftwm-session; where upstream adds WAYLAND_DISPLAY to the environment, from which its msg client derives the socket, the shell adds INFINIFY_SOCKET (the socket it serves) to every exec child, so a msg in a command reaches the instance that started it, and an [env] entry of that name wins where upstream's insert overwrites. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios (the effects, not the processes), and two scripted launches of the built app in --windowed mode, in which an autostart command created a file once and neither reload-config nor a watched change of the file created it again, and two more, in which an autostart printenv showed INFINIFY_SOCKET as the served --socket path (with the variable unset, and set to another path, in the launching shell) and an autostart msg with no --socket was answered by that instance, left no saved evidence; a launch that shows the chooser is unrun. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.session.suspend_on_close",
@@ -11224,7 +11235,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for outputs.hot_corners.threshold.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -11237,7 +11248,8 @@
           "source_assignment": "threshold = 4         # corner zone size in logical px (default: 4)",
           "value": 4
         }
-      ]
+      ],
+      "implementation_note": "Reported per output by the bindings command and used by the shell's hot-corner latch as upstream's HotCorner::contains uses it: a corner is active while the pointer is within threshold points of both of its edges (4 by default). Known mismatches: the distance is measured on the display's panel, the toolbar strip included, not on the output, and against a pointer sampled every 80 ms (60 times a second during a camera flight). No evidence entry is recorded yet: the reported value is covered by exported-C-ABI/JSON controller scenarios (crates/desktop/tests/platform_actions_flow.rs); the shell's zone test was run only in its author's scratch harness, and no corner has been fired on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.outputs.hot_corners.top_left",
@@ -11249,7 +11261,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for outputs.hot_corners.top_left.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -11262,7 +11274,8 @@
           "source_assignment": "top_left = \"zoom-to-fit\"",
           "value": "zoom-to-fit"
         }
-      ]
+      ],
+      "implementation_note": "The action bound to the top-left corner of the matching output (the entry named after its stable id, else name = \"*\"; none leaves the corner unbound). The bindings command reports it, and the controller's hot_corner command runs it through the normal action dispatch when the shell's latch sees the pointer enter the corner; an action that does not run on macOS yet is refused there as it is from a key. Known mismatches: the pointer is sampled every 80 ms (60 times a second during a camera flight) instead of on every motion, and the corner is measured on the display's panel, the toolbar strip included, not on the output. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/platform_actions_flow.rs); no corner has been fired on a live run (a launch of the built app with top_left = \"zoom-to-fit\" loaded its config cleanly, and no pointer was moved into the corner). Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.outputs.hot_corners.top_right",
@@ -11274,7 +11287,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for outputs.hot_corners.top_right.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -11287,7 +11300,8 @@
           "source_assignment": "top_right = \"none\"",
           "value": "none"
         }
-      ]
+      ],
+      "implementation_note": "The action bound to the top-right corner of the matching output (the entry named after its stable id, else name = \"*\"; none leaves the corner unbound). The bindings command reports it, and the controller's hot_corner command runs it through the normal action dispatch when the shell's latch sees the pointer enter the corner; an action that does not run on macOS yet is refused there as it is from a key. Known mismatches: the pointer is sampled every 80 ms (60 times a second during a camera flight) instead of on every motion, and the corner is measured on the display's panel, the toolbar strip included, not on the output. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/platform_actions_flow.rs); no corner has been fired on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.outputs.hot_corners.bottom_left",
@@ -11299,7 +11313,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for outputs.hot_corners.bottom_left.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -11312,7 +11326,8 @@
           "source_assignment": "bottom_left = \"spawn grim - | wl-copy\"",
           "value": "spawn grim - | wl-copy"
         }
-      ]
+      ],
+      "implementation_note": "The action bound to the bottom-left corner of the matching output (the entry named after its stable id, else name = \"*\"; none leaves the corner unbound). The bindings command reports it, and the controller's hot_corner command runs it through the normal action dispatch when the shell's latch sees the pointer enter the corner; an action that does not run on macOS yet is refused there as it is from a key. Known mismatches: the pointer is sampled every 80 ms (60 times a second during a camera flight) instead of on every motion, and the corner is measured on the display's panel, the toolbar strip included, not on the output. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/platform_actions_flow.rs); no corner has been fired on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.outputs.hot_corners.bottom_right",
@@ -11324,7 +11339,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for outputs.hot_corners.bottom_right.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -11337,7 +11352,8 @@
           "source_assignment": "bottom_right = \"exec-launcher\"",
           "value": "exec-launcher"
         }
-      ]
+      ],
+      "implementation_note": "The action bound to the bottom-right corner of the matching output (the entry named after its stable id, else name = \"*\"; none leaves the corner unbound). The bindings command reports it, and the controller's hot_corner command runs it through the normal action dispatch when the shell's latch sees the pointer enter the corner; an action that does not run on macOS yet is refused there as it is from a key. Known mismatches: the pointer is sampled every 80 ms (60 times a second during a camera flight) instead of on every motion, and the corner is measured on the display's panel, the toolbar strip included, not on the output. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/platform_actions_flow.rs); no corner has been fired on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.outputs.hot_corners.disable_when_fullscreen",
@@ -11374,7 +11390,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for outputs.hot_corners.disable_while_dragging.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -11387,7 +11403,8 @@
           "source_assignment": "disable_while_dragging  = true   # suppress hot-corners while any mouse button is held, or a pointer grab (move/resize/pan) is active (default: true)",
           "value": true
         }
-      ]
+      ],
+      "implementation_note": "Applied in two halves, as upstream's check combines a pointer grab with held buttons: the shell latches without firing an entry made while any mouse button is held or one of its pointer gestures runs, and the controller answers idle to hot_corner while one of its own drag or resize gestures is installed. The entry is recorded all the same, so the pointer has to leave the corner and come back, as upstream. True by default. Known mismatches: the pointer and the buttons are sampled every 80 ms (60 times a second during a camera flight), so a button pressed and released between two samples is not seen. No evidence entry is recorded yet: the controller's half is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/platform_actions_flow.rs); the shell's half was run only in its author's scratch harness, and neither has been exercised on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.window_rules[].title",
@@ -12493,13 +12510,14 @@
       },
       "contract": "Match Config.autostart type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "Vec<String>"
+      "source_type": "Vec<String>",
+      "implementation_note": "The first load_config of a run returns one exec effect per autostart command, in file order, and the shell runs them once, 100 ms after startup, through the exec path (/bin/sh -c with the config's child environment, less upstream's Wayland toolkit fallbacks). No later load returns any, a changed list included, and a launch file that cannot be read or parsed starts nothing, then or later. --windowed runs them, as upstream's nested backend does; fixture modes read no config. Known mismatches: no XDG autostart entries or systemd session as under driftwm-session; where upstream adds WAYLAND_DISPLAY to the environment, from which its msg client derives the socket, the shell adds INFINIFY_SOCKET (the socket it serves) to every exec child, so a msg in a command reaches the instance that started it, and an [env] entry of that name wins where upstream's insert overwrites. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios (the effects, not the processes), and two scripted launches of the built app in --windowed mode, in which an autostart command created a file once and neither reload-config nor a watched change of the file created it again, and two more, in which an autostart printenv showed INFINIFY_SOCKET as the served --socket path (with the variable unset, and set to another path, in the launching shell) and an autostart msg with no --socket was answered by that instance, left no saved evidence; a launch that shows the chooser is unrun. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.cursor_theme",
@@ -12773,7 +12791,7 @@
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
       "source_type": "HashMap<String, String>",
-      "implementation_note": "The file's [env] entries are the environment of every exec effect: the shell overlays them on its own environment for the /bin/sh -c child. Known mismatches: upstream's five Wayland toolkit fallbacks (MOZ_ENABLE_WAYLAND, QT_QPA_PLATFORM, SDL_VIDEODRIVER, GDK_BACKEND, ELECTRON_OZONE_PLATFORM_HINT) are withheld unless the file's own [env] sets them; autostart is not run here. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "The file's [env] entries are the environment of every exec effect: the shell overlays them on its own environment for the /bin/sh -c child. Known mismatches: upstream's five Wayland toolkit fallbacks (MOZ_ENABLE_WAYLAND, QT_QPA_PLATFORM, SDL_VIDEODRIVER, GDK_BACKEND, ELECTRON_OZONE_PLATFORM_HINT) are withheld unless the file's own [env] sets them; where upstream's child_env adds WAYLAND_DISPLAY the shell adds INFINIFY_SOCKET, the socket it serves, and an [env] entry of that name wins. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.child_env",
@@ -12792,7 +12810,7 @@
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
       "source_type": "HashMap<String, String>",
-      "implementation_note": "The file's [env] entries, merged by upstream's child_env with the cursor theme and size, are the environment of every exec effect: the shell overlays them on its own environment for the /bin/sh -c child. Known mismatches: upstream's five Wayland toolkit fallbacks (MOZ_ENABLE_WAYLAND, QT_QPA_PLATFORM, SDL_VIDEODRIVER, GDK_BACKEND, ELECTRON_OZONE_PLATFORM_HINT) are withheld unless the file's own [env] sets them; autostart is not run here. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "The file's [env] entries, merged by upstream's child_env with the cursor theme and size, are the environment of every exec effect: the shell overlays them on its own environment for the /bin/sh -c child. Known mismatches: upstream's five Wayland toolkit fallbacks (MOZ_ENABLE_WAYLAND, QT_QPA_PLATFORM, SDL_VIDEODRIVER, GDK_BACKEND, ELECTRON_OZONE_PLATFORM_HINT) are withheld unless the file's own [env] sets them; where upstream's child_env adds WAYLAND_DISPLAY the shell adds INFINIFY_SOCKET, the socket it serves, and an [env] entry of that name wins. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.output_configs",

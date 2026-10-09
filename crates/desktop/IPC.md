@@ -1,9 +1,10 @@
 # Actions, bookmarks and IPC, ABI 1
 
-Two additive ABI 1 commands make the controller scriptable in DriftWM's own
-words: `action` runs one upstream action string, and `ipc` answers one upstream
-IPC request. The exported `driftwm_desktop_msg` is the matching `msg` client.
-All three are adapted from malbiruk/driftwm at
+Three additive ABI 1 commands make the controller scriptable in DriftWM's own
+words: `action` runs one upstream action string, `ipc` answers one upstream IPC
+request, and `state_event` produces the lines of upstream's
+[event stream](#event-stream). The exported `driftwm_desktop_msg` is the
+matching `msg` client. All four are adapted from malbiruk/driftwm at
 `352333a8fa1b22171492d4b71a54102045c9a19d` (`src/config/{types,parse}.rs`,
 `src/input/actions.rs`, `src/ipc/{protocol,mod,client}.rs`). Existing commands,
 their shapes, `ABI_VERSION` and `SAVE_VERSION` are unchanged.
@@ -39,14 +40,16 @@ The reply is `{"navigation":<flight or null>,"effects":[…],"dirty":<bool>}`:
   [view actions](NAVIGATION.md#view-actions) return it, or `null` when nothing
   flies. Schedule frames while it is an object.
 - `effects` are requests to the shell: `{"op":"quit"}`,
-  `{"op":"exec","command":…,"env":{…}}`, `{"op":"reload_config"}` and, from the
-  four window navigation actions, at most one
-  `{"op":"focus_native_window",effect_id,window,identity,generation}`. That is
-  the [focus effect](FOCUS.md) `focus` and `navigate_window` return under
-  `effect`: perform it and acknowledge it with `focus_result`, or answer it
-  `focus_logical` when no native focus is performed in this run, and never read
-  it as evidence that native focus changed. Focusing a detached placeholder
-  adds no effect.
+  `{"op":"exec","command":…,"env":{…}}`, `{"op":"reload_config"}`,
+  `{"op":"warp_pointer","screen":{x,y},"output":…}`,
+  `{"op":"switch_layout","target":…,"index":…}` and, from the four window
+  navigation actions, at most one
+  `{"op":"focus_native_window",effect_id,window,identity,generation}`. The
+  controller performs none of them. The last is the [focus effect](FOCUS.md)
+  `focus` and `navigate_window` return under `effect`: perform it and
+  acknowledge it with `focus_result`, or answer it `focus_logical` when no
+  native focus is performed in this run, and never read it as evidence that
+  native focus changed. Focusing a detached placeholder adds no effect.
 - `dirty` is true when saved state changed and the shell should save. Focus and
   stacking are saved, so a window navigation that focuses a window is dirty,
   and so is one that clears a focus.
@@ -72,11 +75,16 @@ Names are case-sensitive kebab-case; directions (`up`, `down`, `left`, `right`,
 | `nudge-window <dir>` | yes | moves the focused window by `navigation.nudge_step`; `dirty` is true; needs no output |
 | `exec <cmd>`, `spawn <cmd>`, `exec-terminal`, `exec-launcher` | yes | `effects` is one `exec` for the shell to run; needs no output |
 | `reload-config` | yes | `effects` is `[{"op":"reload_config"}]`; needs no output |
-| `close-window`, `suspend-window`, `grow-window`, `shrink-window`, `move-to-bookmark`, `zoom-to-fit-snapped`, `toggle-fullscreen`, `fit-window`, `fit-window-snapped`, `fill-window`, `send-to-output`, `send-cursor-to-output`, `switch-layout`, `toggle-pin-to-screen`, `toggle-cursor-pan`, `set-trackpad` | no | parsed with upstream's argument rules, then refused |
+| `send-to-output <dir>` | yes | moves the focused window to the adjacent output; `dirty` is true when it moved; needs an output only when no output shows the window |
+| `send-cursor-to-output <dir>` | yes | `effects` is one `warp_pointer`, or empty with no adjacent output |
+| `switch-layout next`, `prev`, `<index>` | yes | `effects` is one `switch_layout`; needs no output |
+| `close-window`, `suspend-window`, `grow-window`, `shrink-window`, `move-to-bookmark`, `zoom-to-fit-snapped`, `toggle-fullscreen`, `fit-window`, `fit-window-snapped`, `fill-window`, `toggle-pin-to-screen`, `toggle-cursor-pan`, `set-trackpad` | no | parsed with upstream's argument rules, then refused |
 
 [NAVIGATION.md](NAVIGATION.md#window-navigation-actions) describes the four
-window navigation actions, and [CONFIG.md](CONFIG.md#actions-that-run-now) the
-nudge, exec and reload actions. An `exec` effect is not run by the controller. Because `ipc`
+window navigation actions, [CONFIG.md](CONFIG.md#actions-that-run-now) the
+nudge, exec and reload actions, [Outputs](CONFIG.md#outputs) the two output
+actions, and [Keyboard layouts](CONFIG.md#keyboard-layouts) `switch-layout`.
+An `exec` effect is not run by the controller. Because `ipc`
 accepts `{"Action":…}`, whoever can write to the shell's socket can have the
 shell run a command, as with upstream's `driftwm msg action exec`.
 
@@ -104,7 +112,9 @@ this action `navigation` is `null` only in that case.
 
 Upstream's `execute_action` first ends an Alt-Tab cycle in progress, committing
 its selection, unless the action is itself `cycle-windows`. So does `action`,
-for every action that parses, `quit` and `exec` included: a selection whose
+for every action that parses, `quit` and `exec` included, and so does
+[`hot_corner`](CONFIG.md#hot-corners), which runs its corner's action through
+the same handler with the same `pointer` and `held`: a selection whose
 request was answered (confirmed, or `focus_logical`) moves to the head of the
 focus history, and one still waiting for its answer is promoted by that answer
 instead (see [FOCUS.md](FOCUS.md#upstream-entry-points)). A refused action
@@ -194,8 +204,9 @@ before the request is decoded).
 same obligation `focus` and `navigate_window` return under `effect`: perform it
 and acknowledge it with `focus_result`, or answer it `focus_logical`, or it
 stays pending until superseded. It is never evidence that native focus
-changed. Which effects the app's shell
-performs is the [shell's](../../native/desktop/README.md) to say.
+changed. `ipc` can also return the other effects `action` does, and
+`{"op":"subscribe","line":…}` for a `Subscribe` request. Which effects the
+app's shell performs is the [shell's](../../native/desktop/README.md) to say.
 
 ### Coordinates
 
@@ -208,9 +219,11 @@ with Y down. Two centers are in play and they are not interchangeable:
 - Bookmarks, zoom anchoring and the focus visibility test use the **usable
   rectangle**, as upstream's `usable_center_screen` and usable area are.
 
-Only `screen_bounds` sizes, the navigation context and world rectangles are
-read. `screen_bounds` origins, and observed or original native rectangles, never
-enter the math.
+Only `screen_bounds`, the navigation context and world rectangles are read, and
+of `screen_bounds` only the size enters any camera or window position. Its
+origin is read in two places: the adjacency of outputs, and the screen point of
+a `warp_pointer` effect. Observed and original native rectangles never enter
+the math.
 
 Window positions and sizes cross upstream's integer boundary: a world
 rectangle's top-left and size are each rounded to the nearest whole point, and
@@ -237,7 +250,10 @@ into `i32` or its far edge would pass `i32::MAX`.
 | `{"Action":"…"}` | per action | Runs the `action` command's handler. `Ok` whenever it runs, even with no effect; every refusal above is an `Err` reply. |
 | `{"Bookmark":{name?,to?,delete?}}` | no | Upstream's four forms: list (`Bookmarks{…}`, sorted by name), get and set (`Bookmark{x,y}`), delete (`Ok`). Set and delete report `dirty`. Errors are upstream's: `no bookmark named '…'`, `bookmark delete requires a name`, `bookmark delete does not take coordinates`, `bookmark coordinates require a name`, `bookmark coordinates must be finite`. |
 | `"DebugCounters"` | no | Sizes of the controller's own collections, keyed by field name. Unstable. |
-| `{"Layout":…}`, `{"Opacity":…}`, `{"Pin":…}`, `{"Close":…}`, `{"Suspend":…}`, `{"Relaunch":…}`, `{"Screenshot":…}`, `"Subscribe"` | no | Decoded, then `Err`: `<name> is not implemented on macOS yet`, with the `msg` command's name. |
+| `{"Layout":{"short":false}}` | no | `Layout(name)`: the display name of the keyboard layout the shell last reported with [`layout_changed`](CONFIG.md#keyboard-layouts), or `""` before any report. |
+| `{"Layout":{"short":true}}` | no | `Layout(short)`: its short code, or the display name when the code is empty, as upstream falls back. |
+| `"Subscribe"` | no | `Ok`, and the effect `{"op":"subscribe","line":…}` carrying the current snapshot. See [Event stream](#event-stream). With an `output` that is not registered: `Err("unknown output")`, as `State`. |
+| `{"Opacity":…}`, `{"Pin":…}`, `{"Close":…}`, `{"Suspend":…}`, `{"Relaunch":…}`, `{"Screenshot":…}` | no | Decoded, then `Err`: `<name> is not implemented on macOS yet`, with the `msg` command's name. |
 
 A missing output where one is needed is `Err("no active output")`; an id that is
 not registered is `Err("unknown output")`. Camera and zoom writes reject with
@@ -253,7 +269,8 @@ No selector means the focused window, or `no focused window`.
 
 `StateInfo` has upstream's fields in upstream's order. `camera` and `zoom` are
 the active output's; with no active output they read `[0.0, 0.0]` and `1.0` and
-no output is marked active. `layout` and `layout_short` are empty strings.
+no output is marked active. `layout` and `layout_short` are what the `Layout`
+request answers, long and short.
 `fullscreen`, `pinned`, `layers` and `canvas_layers` are always empty: none of
 those exist here.
 
@@ -271,6 +288,52 @@ JSON object members arrive in alphabetical order, not upstream's declaration
 order, because replies travel through the ABI's `serde_json::Value`. Member
 order carries no meaning in JSON; the `msg` client re-serializes the typed reply
 and so prints `--json` in upstream's order.
+
+## Event stream
+
+Upstream's `Subscribe` turns a connection into a feed: an `{"Ok":"Ok"}` ack, the
+current state as one `{"State":{…}}` line, then one such line whenever the state
+changes. The controller produces every line; the socket is the shell's.
+
+`{"op":"ipc","output":…,"request":"Subscribe"}` answers `reply: {"Ok":"Ok"}`
+and one effect:
+
+```json
+{"op":"subscribe","line":"{\"State\":{\"camera\":[500.0,-400.0],\"zoom\":1.0,…}}"}
+```
+
+`line` is the whole event line without its newline: upstream's
+`Event::State(StateInfo)` serialized from the typed value, so its members are in
+upstream's order and its floats keep their `.0`. The shell writes the ack, then
+`line` byte for byte, and keeps the connection as a subscriber. A second
+`Subscribe` on one connection gets the ack and the snapshot again, as upstream.
+
+```json
+{"op":"state_event","output":1}
+```
+
+is upstream's `broadcast_state_event`. `output` is the active output or `null`.
+The reply is `{"line":"…"}` when the event differs from the last one this
+command returned, and `{"line":null}` when it is the same: the comparison is a
+hash of the serialized bytes, as upstream's. A non-null `line` goes to every
+subscriber. A `Subscribe` snapshot does not move that baseline, so the first
+`state_event` of a run always returns a line. An `output` that is not
+registered is a controller error, `unknown output`, and moves nothing.
+
+The shell calls `state_event` while it has subscribers, after every redraw and
+every `layout_changed` (so after any request, gesture or tick that may have
+changed what `State` reports), and at most once per frame while a flight
+animates. It also calls it once while answering a `Subscribe`, before the new
+connection joins: earlier subscribers then get a change not yet sent to them,
+and the newcomer, whose snapshot is that same state, is not sent it twice. The
+active output is part of the state: it decides the top-level `camera`, `zoom`,
+`active_bookmark` and each output's `active`. The shell also redraws at every
+idle poll, 80 ms apart, so a change of active output alone (the pointer moving
+to another display) is reported by itself within one poll. Upstream buffers
+at most the event in flight and the newest queued one for a subscriber that
+reads slowly, and never drops a connection for it; how the shell bounds and
+drops subscribers is in the
+[shell notes](../../native/desktop/README.md#event-stream).
 
 ## `msg` client
 
@@ -299,7 +362,11 @@ and `debug-counters`. Negative numbers are values where upstream allows them
 is its spec, joined by single spaces. Parsing is by hand; there is no clap.
 
 - Socket: `--socket PATH`, else `$INFINIFY_SOCKET`, else
-  `~/Library/Application Support/Infinify/infinify.sock`.
+  `~/Library/Application Support/Infinify/infinify.sock`. The app sets
+  `INFINIFY_SOCKET` to the socket it serves in the environment of every command
+  it starts (`exec`, `spawn`, `autostart`), so a `msg` run from one of them
+  reaches that instance without `--socket`: the stand-in for upstream's
+  `WAYLAND_DISPLAY` in `child_env`.
 - `--json` prints the reply as pretty JSON; otherwise the rendering is
   upstream's `print_response` / `print_state`, which is not a stable format.
 - Exit status 0 on an `Ok` reply. Exit status 1 with `error: …` on stderr for an
@@ -310,13 +377,18 @@ is its spec, joined by single spaces. Parsing is by hand; there is no clap.
   upstream does. Exit status 2 with `error: …` on stderr for a usage error.
   `-h` / `--help` prints the command list and exits 0.
 - Beyond upstream, `--json` and `--socket` are also accepted after the command
-  (except inside an `action` spec), and `--socket` replaces `DRIFTWM_SOCKET` /
-  `WAYLAND_DISPLAY`. A non-finite `zoom` or `camera` argument (`nan`, `inf`) is
+  (except inside an `action` spec), and `--socket` and `$INFINIFY_SOCKET`
+  replace `DRIFTWM_SOCKET` / `WAYLAND_DISPLAY`. A non-finite `zoom` or `camera` argument (`nan`, `inf`) is
   refused by the client as `opacity` and `bookmark` ones are; upstream's client
   sends those two as `null`, which reads the zoom back with status 0 and fails
   to decode as a camera write.
-- `subscribe` and `screenshot` build upstream's requests (an absolute path, a
-  temporary file for `-o -`) and print the server's refusal.
+- `subscribe` reads the ack and then, as upstream's `stream_events` does,
+  prints every pushed line until the server hangs up, flushing after each:
+  the line itself with `--json`, else upstream's `print_state` block and a
+  blank line. Without `--json` a line that is not an event ends the client with
+  status 1. An `Err` ack is reported like any other `Err` reply.
+- `screenshot` builds upstream's request (an absolute path, a temporary file
+  for `-o -`) and prints the server's refusal.
 
 ## Differences from upstream
 
@@ -333,7 +405,15 @@ is its spec, joined by single spaces. Parsing is by hand; there is no clap.
   command; with none it does nothing. Upstream reads its own seat.
 - `StateInfo` without an active output reports the origin at zoom 1.
 - The active bookmark is re-evaluated per accepted command, not per frame.
-- Reply member order (above).
+- Reply member order (above). An event line is not a reply: it is a string the
+  controller serialized itself, in upstream's order.
+- Upstream detects a state change from its own dirty flags once per rendered
+  frame and then compares the event's hash. Here nothing is rendered by the
+  controller: the shell asks with `state_event` and only the hash comparison
+  remains, so an event goes out exactly when the serialized state differs.
+- Upstream's `Subscribe` can fail with `cannot subscribe: <io error>` when the
+  connection cannot be cloned. The controller owns no connection and always
+  acks; a refusal for want of room is the shell's to send.
 - The app's shell parses each client line with `NSJSONSerialization` and
   re-encodes it into the command, so the controller never sees the client's own
   bytes. A whole-valued float in an integer field
@@ -359,10 +439,28 @@ are covered by `tests/navigation_actions_flow.rs`, described under
 statuses, and one round trip in which the test stands in for the shell and
 answers from a real controller's `ipc` command.
 
+`tests/platform_actions_flow.rs` covers the `subscribe` effect and
+`state_event`: the line against the `State` reply and upstream's member order,
+the baseline across changing and unchanging requests, a change of active
+output, and each frame of a flight. In `tests/ipc_flow.rs` the client's
+`subscribe` runs against a throwaway listener that answers as the shell would,
+from a real controller: the ack, the effect's line, every `state_event` line,
+then a hang-up, in both output forms, and once with a line that is not an
+event.
+
 Not covered by tests: the client's printed output (only its exit status and
-request line are asserted), the `$INFINIFY_SOCKET` and default-path resolution,
-the `screenshot -o -` relay and the `subscribe` event stream (both need a server
-that answers `Ok`, and this one refuses). Upstream's own sources are not
+request line are asserted; for `subscribe` without `--json`, status 0 also says
+every line decoded as upstream's typed event), the `$INFINIFY_SOCKET` and
+default-path resolution, and the `screenshot -o -` relay, which needs a server
+that answers `Ok`. The shell's side of the stream is not covered by these tests
+at all: its socket writes, its subscriber limit, how it drops a peer that stops
+reading, and when it calls `state_event`. Two launches of the built app on
+2026-10-09, described in the
+[shell notes](../../native/desktop/README.md#what-has-been-run), observed the
+stream over the real socket (the ack and first line, one line per frame of a
+flight and none while idle, no repeated line, the limit of eight, requests on a
+subscribed connection, a clean end on exit); they left no saved evidence and
+did not reach the stalled-subscriber drop. Upstream's own sources are not
 executed: expected values are worked out from the adapted formulas, not from an
 oracle build.
 

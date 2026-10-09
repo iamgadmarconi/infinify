@@ -175,6 +175,8 @@ impl Controller {
             configured: false,
             platform: Platform::default(),
             durable_bookmarks: saved.bookmarks,
+            layout: None,
+            last_event: None,
         })
     }
 }

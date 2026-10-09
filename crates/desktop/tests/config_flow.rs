@@ -128,6 +128,24 @@ fn attach(h: &mut Host, wid: u64, world: Value) {
 fn register(h: &mut Host) {
     h.ok(json!({"op":"register_output","stable_id":"view","screen_bounds":rect(0.0,0.0,1000.0,800.0)}));
 }
+/// An `[env]` table whose `PATH` is one directory of this scratch holding an
+/// executable for each program upstream's default bindings run. With it those
+/// defaults are registered as upstream wrote them, on any machine;
+/// tests/platform_actions_flow.rs covers what a Mac without them registers.
+fn linux_programs(scratch: &Scratch) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = scratch.path("linux-bin");
+    std::fs::create_dir_all(&directory).unwrap();
+    for name in ["swaylock", "wpctl", "brightnessctl", "playerctl", "grim"] {
+        let file = directory.join(name);
+        std::fs::write(&file, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    format!(
+        "\n[env]\nPATH = {}\n",
+        toml_string(directory.to_str().unwrap())
+    )
+}
 /// One output, no windows, and the given config file in force.
 fn configured(scratch: &Scratch, toml: &str) -> Host {
     let mut h = Host::new();
@@ -213,7 +231,7 @@ fn no_file_is_upstreams_defaults_and_a_file_changes_what_commands_do() {
     assert_eq!(h.bookmarks(), json!({}));
     assert_eq!(
         h.load_config(&absent),
-        json!({"path":absent,"exists":false,"errors":[],"warnings":[],"dirty":false})
+        json!({"path":absent,"exists":false,"errors":[],"warnings":[],"dirty":false,"effects":[]})
     );
     // Upstream seeds the four corner bookmarks when the section is absent.
     assert_eq!(h.bookmarks(), seeds());
@@ -474,7 +492,7 @@ fn a_broken_file_keeps_the_previous_config_and_reports_upstreams_message() {
         assert!(upstream.contains(piece), "{upstream}");
         assert_eq!(
             h.load_config(&path),
-            json!({"path":path,"exists":true,"errors":[upstream],"warnings":[],"dirty":false})
+            json!({"path":path,"exists":true,"errors":[upstream],"warnings":[],"dirty":false,"effects":[]})
         );
         assert_eq!(pan(&mut h), 250.0, "{broken}");
         assert_eq!(h.bookmarks(), before);
@@ -537,7 +555,7 @@ fn a_broken_file_keeps_the_previous_config_and_reports_upstreams_message() {
         );
         assert_eq!(
             reply,
-            json!({"path":path,"exists":false,"errors":[error],"warnings":[],"dirty":false})
+            json!({"path":path,"exists":false,"errors":[error],"warnings":[],"dirty":false,"effects":[]})
         );
         assert_eq!(pan(&mut h), 250.0);
         assert_eq!(h.bookmarks(), kept);
@@ -546,7 +564,7 @@ fn a_broken_file_keeps_the_previous_config_and_reports_upstreams_message() {
     scratch.write("config.toml", toml);
     assert_eq!(
         h.load_config(&path),
-        json!({"path":path,"exists":true,"errors":[],"warnings":[],"dirty":false})
+        json!({"path":path,"exists":true,"errors":[],"warnings":[],"dirty":false,"effects":[]})
     );
     assert_eq!(pan(&mut h), 250.0);
     assert_eq!(h.bookmarks(), kept);
@@ -558,7 +576,7 @@ fn a_broken_file_keeps_the_previous_config_and_reports_upstreams_message() {
     for _ in 0..2 {
         assert_eq!(
             fresh.load_config(&absent),
-            json!({"path":absent,"exists":false,"errors":[],"warnings":[],"dirty":false})
+            json!({"path":absent,"exists":false,"errors":[],"warnings":[],"dirty":false,"effects":[]})
         );
         assert_eq!(pan(&mut fresh), 100.0);
         assert_eq!(fresh.bookmarks(), seeds());
@@ -576,7 +594,7 @@ fn a_broken_file_keeps_the_previous_config_and_reports_upstreams_message() {
 #[test]
 fn default_bindings_map_to_macos_chords() {
     let scratch = Scratch::new();
-    let mut h = configured(&scratch, "");
+    let mut h = configured(&scratch, &linux_programs(&scratch));
     let reply = h.ok(json!({"op":"bindings"}));
     let table = listing(&reply);
     let keys = by_combo(&reply["keys"]);
@@ -599,7 +617,8 @@ fn default_bindings_map_to_macos_chords() {
     assert_eq!(keys["mod+a"]["chord"], "⌃⌥A", "{table}");
     assert_eq!(keys["mod+alt+Right"]["chord"], "⌃⌥⇧⌘Right", "{table}");
     // Upstream binds 57 keys by default: 45 on Mac keys, 8 on media keys, and 4
-    // on keys a Mac keyboard lacks. None collide and none warn.
+    // on keys a Mac keyboard lacks. None collide and none warn. Their programs
+    // are on this config's PATH, so each is registered as upstream wrote it.
     assert_eq!(reply["warnings"], json!([]), "{table}");
     assert_eq!(keys.len(), 45, "{table}");
     let chords: BTreeSet<String> = keys
@@ -814,9 +833,10 @@ fn colliding_and_unreachable_bindings_are_reported_with_a_deterministic_winner()
 "mod+Escape" = "quit"
 "ctrl+alt+a" = "zoom-to-fit"
 "#;
+    let toml = format!("{toml}{}", linux_programs(&scratch));
     let mut h = Host::new();
     register(&mut h);
-    let loaded = h.load_config(&scratch.write("config.toml", toml));
+    let loaded = h.load_config(&scratch.write("config.toml", &toml));
     assert_eq!(loaded["errors"], json!([]));
     assert_eq!(loaded["warnings"], json!([]));
     let reply = h.ok(json!({"op":"bindings"}));

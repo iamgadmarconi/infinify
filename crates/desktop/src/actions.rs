@@ -4,8 +4,9 @@
 // exec_command, NudgeWindow, detect_terminal, detect_launcher). The grammar
 // itself is not adapted: it is driftwm-core's `config::{Action, parse_action}`,
 // upstream's own code. The camera, bookmark, window navigation, nudge, exec,
-// reload and quit actions execute; every other action parses and is then
-// refused by name.
+// reload, quit, output transfer and layout actions execute; every other action
+// parses and is then refused by name.
+use super::keyboard_layout::switch_effect;
 use super::window_actions::Moved;
 use super::*;
 use driftwm_core::config::{Action, Direction, LayoutSwitch, TrackpadState, parse_action};
@@ -147,6 +148,9 @@ pub(crate) fn runs_here(action: &Action) -> bool {
             | Action::ZoomToFit
             | Action::GoToBookmark(_)
             | Action::SetBookmark(_)
+            | Action::SendToOutput(_)
+            | Action::SendCursorToOutput(_)
+            | Action::SwitchLayout(_)
     )
 }
 /// Upstream detect_terminal / detect_launcher, less their probe of installed
@@ -179,6 +183,10 @@ impl Outcome {
         self.dirty |= moved.refocused;
         self
     }
+    /// The reply of `action` and `hot_corner`.
+    pub(crate) fn reply(self) -> Value {
+        json!({"navigation":self.navigation,"effects":self.effects,"dirty":self.dirty})
+    }
 }
 impl Controller {
     pub(crate) fn action(
@@ -188,12 +196,11 @@ impl Controller {
         pointer: Option<Point>,
         held: bool,
     ) -> Result<Value, Error> {
-        let outcome = self.run_action(output, spec, pointer, held)?;
-        Ok(json!({"navigation":outcome.navigation,"effects":outcome.effects,"dirty":outcome.dirty}))
+        Ok(self.run_action(output, spec, pointer, held)?.reply())
     }
     /// Upstream spawn_command as a request to the shell: `sh -c command` with
     /// the config's child environment, less the Wayland toolkit fallbacks.
-    fn exec_effect(&self, command: &str) -> Value {
+    pub(crate) fn exec_effect(&self, command: &str) -> Value {
         let config = self.config();
         let env: BTreeMap<&String, &String> = config
             .child_env
@@ -239,6 +246,17 @@ impl Controller {
         held: bool,
     ) -> Result<Outcome, Error> {
         let action = parse_action(spec).map_err(Error::Refused)?;
+        self.run(output, &action, pointer, held)
+    }
+    /// Execute one parsed action: a key binding's, an IPC request's or a hot
+    /// corner's. `pointer` and `held` are as `run_action` takes them.
+    pub(crate) fn run(
+        &mut self,
+        output: Option<OutputId>,
+        action: &Action,
+        pointer: Option<Point>,
+        held: bool,
+    ) -> Result<Outcome, Error> {
         // Upstream execute_action: a non-cycle action ends an Alt-Tab cycle in
         // progress before it runs. A refused action is rolled back with it.
         if !matches!(action, Action::CycleWindows { .. })
@@ -248,7 +266,7 @@ impl Controller {
         }
         let mut outcome = Outcome::default();
         let active = || output.ok_or(Error::Invalid("no active output"));
-        let mut reply = match &action {
+        let mut reply = match action {
             // The shell owns the process: quitting, running a command and
             // re-reading the config file are its effects to perform.
             Action::Quit => {
@@ -289,6 +307,20 @@ impl Controller {
                 let moved = self.cycle_navigate(active()?, *backward, held)?;
                 return Ok(outcome.moved(moved.unwrap_or_default()));
             }
+            Action::SendToOutput(direction) => {
+                outcome.dirty = self.send_to_output(output, direction)?;
+                return Ok(outcome);
+            }
+            Action::SendCursorToOutput(direction) => {
+                let warp = self.send_cursor_to_output(active()?, direction)?;
+                outcome.effects.extend(warp);
+                return Ok(outcome);
+            }
+            // The enabled input sources are the shell's to list and select.
+            Action::SwitchLayout(target) => {
+                outcome.effects.push(switch_effect(target));
+                return Ok(outcome);
+            }
             Action::PanViewport(direction) => self.pan_viewport(active()?, direction.into())?,
             Action::HomeToggle => self.home_toggle(active()?)?,
             Action::ZoomIn => self.zoom_in(active()?)?,
@@ -303,7 +335,7 @@ impl Controller {
             _ => {
                 return Err(Error::Refused(format!(
                     "action not implemented on macOS yet: {}",
-                    action_name(&action)
+                    action_name(action)
                 )));
             }
         };

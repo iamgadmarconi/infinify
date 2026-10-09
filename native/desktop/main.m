@@ -13,6 +13,8 @@
 #import "hotkeys.h"
 #import "config-watcher.h"
 #import "cycle-hold.h"
+#import "hot-corners.h"
+#import "input-sources.h"
 #include <mach/mach_time.h>
 #include <spawn.h>
 
@@ -55,7 +57,9 @@ static NSString *summary(NSString *subject,NSArray<NSString *> *lines) { return 
 // The exec effect, as upstream's exec_command: /bin/sh -c in a session of its own on
 // /dev/null, with no other descriptor inherited and never waited on by the main loop.
 // env overlays this process's environment; a null value removes the variable.
-static NSString *execCommand(NSString *command,NSDictionary *env) {
+// `missing` runs on the main queue when sh exits as it does for a program it
+// cannot find (127) or cannot execute (126).
+static NSString *execCommand(NSString *command,NSDictionary *env,void (^missing)(void)) {
     NSMutableDictionary<NSString *,NSString *> *environment=[NSProcessInfo.processInfo.environment mutableCopy];
     for(NSString *name in env){if(asString(env[name]))environment[name]=env[name];else [environment removeObjectForKey:name];}
     NSMutableData *pointers=[NSMutableData data];const char *end=NULL;
@@ -72,7 +76,7 @@ static NSString *execCommand(NSString *command,NSDictionary *env) {
     if(error)return [NSString stringWithFormat:@"exec failed: %s",strerror(error)];
     // Reaped off the main queue whenever it exits.
     dispatch_source_t exited=dispatch_source_create(DISPATCH_SOURCE_TYPE_PROC,(uintptr_t)pid,DISPATCH_PROC_EXIT,dispatch_get_global_queue(QOS_CLASS_UTILITY,0));
-    dispatch_source_set_event_handler(exited,^{int status=0;waitpid(pid,&status,0);dispatch_source_cancel(exited);});
+    dispatch_source_set_event_handler(exited,^{int status=0;pid_t reaped=waitpid(pid,&status,0);dispatch_source_cancel(exited);if(missing&&reaped==pid&&WIFEXITED(status)&&(WEXITSTATUS(status)==127||WEXITSTATUS(status)==126))dispatch_async(dispatch_get_main_queue(),missing);});
     dispatch_resume(exited);return nil;
 }
 // Probe, demo and owned-fixture runs: their fixed gestures and chords. A normal run
@@ -208,6 +212,16 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
 @property NSSize windowSize;
 @property DWIPCServer *ipc;
 - (void)startIPC:(NSString *)path;
+@property NSString *socketPath; // the socket this instance serves; nil while IPC is not up
+// Normal runs only, like the config they come from: hot corners, the keyboard
+// layout report, the IPC event stream and autostart.
+@property DWHotCorners *corners;
+@property NSTimer *statePush; // the one pending event for IPC subscribers
+@property CFTimeInterval lastStatePush;
+@property NSArray *autostart; // the launch load's exec effects until they have run
+- (void)watchCorners;
+- (void)publishState;
+- (void)runAutostart;
 
 @property NSMutableArray<NSPanel *> *panels;
 @property NSMutableArray<DesktopView *> *views;
@@ -568,7 +582,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 - (void)ensureFrames {
     if(self.frameTimer||self.cleaning)return;
     if(![[self call:@{@"op":@"snapshot"}][@"navigation"][@"flights"]count])return;
-    __weak Desktop *weak=self;self.frameTimer=[NSTimer timerWithTimeInterval:1.0/60 repeats:YES block:^(NSTimer *timer){Desktop *desktop=weak;if(!desktop||![desktop cameraFrame]){[timer invalidate];desktop.frameTimer=nil;}}];
+    __weak Desktop *weak=self;self.frameTimer=[NSTimer timerWithTimeInterval:1.0/60 repeats:YES block:^(NSTimer *timer){Desktop *desktop=weak;[desktop watchCorners];if(!desktop||![desktop cameraFrame]){[timer invalidate];desktop.frameTimer=nil;}}];
     [[NSRunLoop mainRunLoop]addTimer:self.frameTimer forMode:NSRunLoopCommonModes];
 }
 // Hot key target and the IPC active output: the output under the pointer, else the panel
@@ -603,8 +617,27 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(!flight)return @"Zoom limit reached";
     double zoom=[flight[@"target_zoom"]doubleValue];return zoom==1?@"Zoom 1:1":[NSString stringWithFormat:@"Zoom %.3g%%",zoom*100];
 }
+// One exec effect. A command sh cannot find or run says so on the status line and
+// ends the key repeat in progress: a held chord never starts a missing program
+// over and over.
+- (void)exec:(NSDictionary *)effect {
+    NSString *command=effect[@"command"];__weak Desktop *weak=self;
+    // Upstream puts WAYLAND_DISPLAY in every child's environment and its msg client derives the
+    // socket from it; the served socket path stands for it here. An [env] entry of that name wins.
+    NSMutableDictionary *env=[asDict(effect[@"env"]) mutableCopy]?:[NSMutableDictionary dictionary];
+    if(self.ipc&&self.socketPath&&env[@"INFINIFY_SOCKET"]==nil)env[@"INFINIFY_SOCKET"]=self.socketPath;
+    NSString *error=execCommand(command,env,^{Desktop *d=weak;if(!d||d.cleaning)return;[d.hotKeys endRepeat];[d flashStatus:[@"sh could not run: " stringByAppendingString:command]];[d render];});
+    if(error)[self flashStatus:error];
+}
+// macOS's selected keyboard input source, for the controller's Layout and State answers.
+- (void)reportLayout {
+    NSMutableDictionary *command=[DWCurrentLayout()mutableCopy];if(!command)return;
+    NSString *status=self.statusText;command[@"op"]=@"layout_changed";
+    if(![self call:command]){fprintf(stderr,"layout_changed: %s\n",self.statusText.UTF8String);self.statusText=status;}
+    [self publishState];
+}
 // Shared tail of every bound or scripted command: redraw, fly, persist, and the effects
-// the shell owns: quit, exec, and a config reload.
+// the shell owns: quit, exec, a config reload, a pointer warp and a keyboard layout switch.
 - (void)applyReply:(NSDictionary *)reply {
     BOOL flight=asDict(reply[@"navigation"])!=nil;if(flight&&!self.navigation)self.flying=YES;
     // The reply's focus request, if any, is the coordinator's to perform on the native window.
@@ -614,25 +647,87 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     for(id effect in asArray(reply[@"effects"])){NSDictionary *e=asDict(effect);NSString *op=asString(e[@"op"]);
         if([op isEqual:@"quit"])[self quit:nil];
         else if(!self.configured)continue;
-        else if([op isEqual:@"exec"]&&asString(e[@"command"])){NSString *error=execCommand(e[@"command"],asDict(e[@"env"]));if(error)[self flashStatus:error];}
+        else if([op isEqual:@"exec"]&&asString(e[@"command"]))[self exec:e];
+        // send-cursor-to-output, an explicit user action: the point is in the coordinates of screen_bounds.
+        // Re-associating lifts the pause macOS puts on pointer movement after a warp.
+        else if([op isEqual:@"warp_pointer"]){NSDictionary *screen=asDict(e[@"screen"]);CGPoint to=jsonPoint(screen);if(asNumber(screen[@"x"])&&asNumber(screen[@"y"])&&isfinite(to.x)&&isfinite(to.y)){CGWarpMouseCursorPosition(to);CGAssociateMouseAndMouseCursorPosition(true);}}
+        // The selection is reported at once; the input-source notification reports it again.
+        else if([op isEqual:@"switch_layout"]){NSString *error=DWSwitchLayout(e);if(error)[self flashStatus:error];[self reportLayout];}
         // Deferred: a reload replaces the hot keys, and this may be running inside one of their handlers.
         else if([op isEqual:@"reload_config"]){__weak Desktop *weak=self;dispatch_async(dispatch_get_main_queue(),^{Desktop *d=weak;if(d&&!d.cleaning)[d loadConfig:NO];});}
     }
 }
+// Which corners are bound depends on the outputs registered: read from the bindings
+// after every config load, and again whenever panels open.
+- (void)armCorners:(NSDictionary *)bindings { if(!self.corners)self.corners=[DWHotCorners new];[self.corners arm:asArray(bindings[@"hot_corners"])]; }
+// Upstream checks hot corners on every pointer motion. Here the pointer is read at
+// the poll and frame cadence, and only while some corner is bound. A display's
+// corners are its panel's: the output and the shell's own toolbar strip above it,
+// which is where the pointer comes to rest. The controller picks and runs the action.
+- (void)watchCorners {
+    if(self.cleaning||!self.corners.armed)return;
+    CGPoint p=pointer();BOOL dragging=NSEvent.pressedMouseButtons!=0;
+    for(DesktopView *view in self.views)if(view.gesture||view.pressedSource)dragging=YES;
+    for(DesktopView *view in self.views){
+        CGRect display=view.globalBounds;if(view.outputs.count!=1||!CGRectContainsPoint(display,p))continue;
+        // Upstream's nested backend sees only the motion its own window is sent: an ordinary window
+        // covered at the pointer, or left on another Space, has no pointer in its corner. Not asked of
+        // the full-screen panels, whose top corners lie under the menu bar.
+        if(self.windowed&&[NSWindow windowNumberAtPoint:NSMakePoint(p.x,screenTop()-p.y) belowWindowWithWindowNumber:0]!=view.window.windowNumber)continue;
+        NSNumber *output=view.outputs[0];NSString *corner=[self.corners enter:CGPointMake(p.x-display.origin.x,p.y-display.origin.y) size:display.size output:output dragging:dragging];
+        if(corner)[self action:[self.corners action:corner output:output] output:output at:p held:[DWCycleHold modifiersDown]!=0 corner:corner];
+        return;
+    }
+    [self.corners leave];
+}
+// Upstream's broadcast: the controller's state_event returns the State event line
+// only when it differs from the last one it returned, and that line goes to every
+// subscriber. Without an active output there is no State, which is no news for the status line.
+- (void)broadcastState {
+    NSString *status=self.statusText,*line=asString([self call:@{@"op":@"state_event",@"output":[self viewOutput]?:NSNull.null}][@"line"]);self.statusText=status;
+    if(line)[self.ipc publish:[line dataUsingEncoding:NSUTF8StringEncoding]];
+}
+// Subscribers get the State after anything that may have changed what it reports:
+// asked for by every redraw, broadcast at most once a frame, and on a later turn
+// of the main queue so that a request's own reply is written first. Nothing is
+// asked of the controller while nobody subscribes.
+- (void)publishState {
+    if(self.statePush||self.cleaning||!self.ipc.subscribers)return;
+    __weak Desktop *weak=self;
+    self.statePush=[NSTimer timerWithTimeInterval:MAX(0,self.lastStatePush+1.0/60-CACurrentMediaTime()) repeats:NO block:^(NSTimer *timer){
+        Desktop *d=weak;if(!d||d.statePush!=timer)return;
+        d.statePush=nil;d.lastStatePush=CACurrentMediaTime();if(!d.cleaning&&d.ipc.subscribers)[d broadcastState];
+    }];
+    [NSRunLoop.mainRunLoop addTimer:self.statePush forMode:NSRunLoopCommonModes];
+}
+// Upstream's autostart: once, a moment after startup, when the socket already
+// answers a command that talks to this app: exec: hands every child the served
+// socket as INFINIFY_SOCKET, so `Infinify msg` in a command reaches this instance.
+- (void)runAutostart {
+    NSArray *effects=self.autostart;self.autostart=nil;if(!effects.count)return;
+    __weak Desktop *weak=self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(.1*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+        Desktop *d=weak;if(!d||stopped)return;
+        for(id effect in effects){NSDictionary *e=asDict(effect);if([e[@"op"]isEqual:@"exec"]&&asString(e[@"command"]))[d exec:e];}
+    });
+}
 // A hot key's pointer and modifiers are the physical ones at the moment it fires.
 - (void)action:(NSString *)action output:(NSNumber *)output { [self action:action output:output at:pointer() held:[DWCycleHold modifiersDown]!=0]; }
-// Every hot key and toolbar button runs an upstream action string. An existing flight
-// is deliberately not cancelled first: pan-viewport extends its in-flight target.
+- (void)action:(NSString *)action output:(NSNumber *)output at:(CGPoint)point held:(BOOL)held { [self action:action output:output at:point held:held corner:nil]; }
+// Every hot key, toolbar button and hot corner runs an upstream action string. An existing
+// flight is deliberately not cancelled first: pan-viewport extends its in-flight target.
 // A normal run also says where the pointer is, for focus-center, and whether a real
 // modifier is down: upstream then keeps a cycle-windows session open until the hold
 // modifiers are let go, and commits a modifier-less step at once.
-- (void)action:(NSString *)action output:(NSNumber *)output at:(CGPoint)point held:(BOOL)held {
+// A hot corner's action is the controller's to pick and run: `action` is then only what
+// the status line reports and what decides whether a cycle session is held open.
+- (void)action:(NSString *)action output:(NSNumber *)output at:(CGPoint)point held:(BOOL)held corner:(NSString *)corner {
     [self.resize cancel];if(self.resize&&![self.resize canRemove:nil])return;
     if(self.cleaning||!output)return;
     // Upstream's go-to-bookmark is silent on an unset name, so the bookmark table is asked first.
     NSString *name=[action hasPrefix:@"go-to-bookmark "]?[action substringFromIndex:15]:nil;
     BOOL unset=name&&!asDict(asDict([self call:@{@"op":@"ipc",@"output":output,@"request":@{@"Bookmark":@{@"name":name}}}])[@"reply"])[@"Ok"];
-    NSMutableDictionary *command=[@{@"op":@"action",@"output":output,@"action":action}mutableCopy];
+    NSMutableDictionary *command=[(corner?@{@"op":@"hot_corner",@"output":output,@"corner":corner}:@{@"op":@"action",@"output":output,@"action":action})mutableCopy];
     if(self.configured){command[@"pointer"]=pointJSON(point);command[@"held"]=held?@YES:@NO;}
     NSDictionary *reply=[self call:command];
     // Hold-to-commit: a held step keeps the session open until the hold modifiers are let go; any other action that ran has ended it.
@@ -789,9 +884,12 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(!mask)for(NSDictionary *key in self.hotKeys.keys)if([key[@"action"]isEqual:@"cycle-windows forward"]){mask=[key[@"chord"]unsignedIntValue]&(controlKey|optionKey|shiftKey|cmdKey);break;}
     self.cycleModifiers=mask?:optionKey;
     self.dismissFree=![self mouseBinding:@"left" source:nil flags:NSEventModifierFlagControl|NSEventModifierFlagOption window:YES];
+    [self armCorners:bindings];
     self.statusText=status;if(open)[notes addObjectsFromArray:[self startKeys]];
     self.help=[self helpLine];if(help&&[self.statusText isEqual:help])self.statusText=self.help;
     if(open)[self refreshChrome];
+    // Startup, and every change of the input source, also tell the controller the layout.
+    [self reportLayout];
     return notes;
 }
 // Startup, a change of the config file, the reload-config action, and a canvas reopened
@@ -803,6 +901,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     NSDictionary *loaded=[self call:@{@"op":@"load_config",@"path":self.configPath?:NSNull.null}];if(!loaded)[problems addObject:self.statusText?:@"load_config failed"];
     // A reload can change what is saved (config bookmarks); the launch load precedes the scene and saves nothing.
     if(!platform&&[loaded[@"dirty"]isEqual:@YES])[self saveScene];
+    // The launch load's effects are the config's autostart commands: kept for main() to run once. A reload's are never looked at.
+    if(platform)self.autostart=asArray(loaded[@"effects"]);
     for(NSString *key in @[@"errors",@"warnings"])for(id message in asArray(loaded[key]))if(asString(message))[problems addObject:message];
     NSString *path=asString(loaded[@"path"])?:self.configPath;NSArray<NSString *> *all=[problems arrayByAddingObjectsFromArray:[self refreshBindings]];
     for(NSString *line in all)fprintf(stderr,"%s\n",line.UTF8String);
@@ -823,7 +923,9 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // queue. Every refusal is an {"Err":…} line; an answer is the controller's own bytes.
 // Before the canvas opens there is no active output and the controller says so itself;
 // after Return to desktop the shell is inert, and a failed load must not take changes.
-- (NSData *)ipcLine:(NSData *)line {
+// The controller answers Subscribe with a subscribe effect carrying the current
+// State event: the connection is then kept, and that line follows the ack.
+- (NSData *)ipcLine:(NSData *)line subscribe:(BOOL *)subscribe event:(NSData *__autoreleasing *)event {
     if(self.cleaning)return ipcError(@"the canvas is closed");
     if(self.startupError)return ipcError(self.startupError);
     if(self.resize&&![self.resize canRemove:nil])return ipcError(@"a native resize is pending");
@@ -834,13 +936,18 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     // A controller-level refusal still answers the client and leaves the status line alone.
     if(!asDict(data[@"reply"])){NSString *error=data?@"invalid controller reply":self.statusText?:@"controller error";self.statusText=status;return ipcError(error);}
     [self applyReply:data];
+    for(id effect in asArray(data[@"effects"])){NSString *first=asString(asDict(effect)[@"line"]);if([asDict(effect)[@"op"]isEqual:@"subscribe"]&&first){*subscribe=YES;*event=[first dataUsingEncoding:NSUTF8StringEncoding];}}
+    // That snapshot is the current State. The broadcast is brought up to it before the connection joins:
+    // earlier subscribers get a change not yet sent to them, and the new one is not sent its snapshot twice.
+    if(*subscribe)[self broadcastState];
     return jsonMember(jsonMember(raw,"data"),"reply")?:[NSJSONSerialization dataWithJSONObject:data[@"reply"] options:NSJSONWritingWithoutEscapingSlashes error:nil];
 }
 // Normal runs only: main() starts the server once and stops it before the final cleanup.
 - (void)startIPC:(NSString *)path {
     __weak Desktop *weak=self;NSString *error=nil;
-    self.ipc=[DWIPCServer serverAtPath:path handler:^NSData *(NSData *line){return [weak ipcLine:line];} error:&error];
+    self.ipc=[DWIPCServer serverAtPath:path handler:^NSData *(NSData *line,BOOL *subscribe,NSData *__autoreleasing *event){return [weak ipcLine:line subscribe:subscribe event:event];} error:&error];
     if(!self.ipc){self.statusText=[NSString stringWithFormat:@"Running without IPC: %@ (%@)",error,path];fprintf(stderr,"%s\n",self.statusText.UTF8String);}
+    else self.socketPath=path;
 }
 - (BOOL)loadScene:(NSString *)path {
     [self cancelNavigation];[self.resize cancel];if(self.resize&&![self.resize canRemove:nil]){self.statusText=@"Resize must settle before loading";return NO;}
@@ -852,7 +959,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     self.statePath=nil;return NO;
 }
 - (void)saveScene { if(self.statePath)[self call:@{@"op":@"save",@"path":self.statePath}]; }
-- (void)render { NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}];for(DesktopView *view in self.views)[view render:snapshot]; }
+- (void)render { NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}];for(DesktopView *view in self.views)[view render:snapshot];[self publishState]; }
 - (void)quit:(id)sender { (void)sender;[self.resize shutdown];[self stopNavigation];stopped=1; }
 - (void)resizeUnavailable:(id)sender { if(self.probe&&sender){self.probeHumanInput=YES;return;} (void)sender;if(self.experimentalResize){self.statusText=@"Experimental: select one source, then drag an orange edge handle. Unknown family or capture mapping stays inert; Escape cancels shell input.";[self render];return;}self.statusText=@"Native layout resize is unavailable. Resize the original app on the desktop, then return; capture reconciles without changing world geometry.";[self render]; }
 - (void)returnDesktop:(id)sender { [self.resize cancel];if(self.resize&&![self.resize canRemove:nil]){self.statusText=@"Resize is pending or unresolved; source retained";[self render];return;} if(self.probe&&sender){self.probeHumanInput=YES;return;} (void)sender;[self cleanup];[self showChooser:nil]; }
@@ -883,7 +990,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         if(screen)[self panel:frame outputRects:@[rectJSON(output)] identities:@[@"windowed"]];}
     else for(NSScreen *screen in NSScreen.screens){NSNumber *display=screen.deviceDescription[@"NSScreenNumber"];CFUUIDRef uuid=CGDisplayCreateUUIDFromDisplayID(display.unsignedIntValue);NSString *name=uuid?CFBridgingRelease(CFUUIDCreateString(NULL,uuid)):nil;if(uuid)CFRelease(uuid);if(!name)continue;CGRect output=topRect(screen.frame);output.origin.y+=64;output.size.height-=64;[self panel:screen.frame outputRects:@[rectJSON(output)] identities:@[name]];}
     // Windowed mode registers no global hot key: toolbar, pointer and IPC only.
-    if(self.configured){NSArray<NSString *> *refused=[self startKeys];if(refused.count)self.statusText=summary(@"Shortcut unavailable",refused);}
+    if(self.configured){NSArray<NSString *> *refused=[self startKeys];if(refused.count)self.statusText=summary(@"Shortcut unavailable",refused);[self armCorners:[self call:@{@"op":@"bindings"}]];}
     else {
     if(!self.probe&&!self.ownedResizeProbe&&!self.windowed)[self configureViewKeys];
     if(!self.ownedResizeProbe&&!self.windowed)[self configureExitKey];
@@ -984,6 +1091,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 - (void)poll {
     if(self.cleaning)return;
     if(self.resize&&CACurrentMediaTime()-self.lastResizeObservation>=.5){self.lastResizeObservation=CACurrentMediaTime();[self.resize observeBindings];}
+    [self watchCorners];
     // Idle polling keeps the clock current; a flight found without its timer regains 60 Hz.
     if(!self.frameTimer&&[self cameraFrame])[self ensureFrames];
     if(self.navigation&&CACurrentMediaTime()-self.lastObservation>=.5){self.lastObservation=CACurrentMediaTime();[self refreshFocusAccess];[self.navigation observe];}
@@ -1003,8 +1111,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 }
 - (void)cleanup {
     if(self.cleaning)return;self.cleaning=YES;
-    // Inert from here until the canvas reopens: no config hot key, key repeat, input-source observer or config watch outlives this line.
-    [self.hotKeys invalidate];self.hotKeys=nil;[self.configWatcher stop];self.configWatcher=nil;
+    // Inert from here until the canvas reopens: no config hot key, key repeat, input-source observer, config watch, hot corner or pending event outlives this line.
+    [self.hotKeys invalidate];self.hotKeys=nil;[self.configWatcher stop];self.configWatcher=nil;self.corners=nil;[self.statePush invalidate];self.statePush=nil;
     [self.resize shutdown];[self stopNavigation];
     while(self.resize.obligations){self.statusText=@"Quit pending: waiting for native resize result";[self render];pump(.01);}
     if(self.resize&&![self.resize canRemove:nil]){self.statusText=@"Resize uncertainty remains unresolved at shutdown";fprintf(stderr,"%s\n",self.statusText.UTF8String);}
@@ -1027,7 +1135,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(!self.sources.count)self.resize=nil;
 
 }
-- (void)dealloc { [_ipc stop];[self stopNavigation];[self stopViewKeys];[_hotKeys invalidate];[_configWatcher stop];if(_controller)driftwm_desktop_destroy(_controller); }
+- (void)dealloc { [_ipc stop];[self stopNavigation];[self stopViewKeys];[_hotKeys invalidate];[_configWatcher stop];[_statePush invalidate];if(_controller)driftwm_desktop_destroy(_controller); }
 @end
 static CGPoint projected(Desktop *desktop,NSNumber *window,NSNumber *output,CGPoint sourcePoint) {
     for(NSDictionary *p in [desktop call:@{@"op":@"snapshot"}][@"placements"])if([p[@"window"]isEqual:window]&&[p[@"output"]isEqual:output]){
@@ -1176,7 +1284,7 @@ int main(int argc,const char **argv) { @autoreleasepool {
         if(i>0&&!strcmp(argv[i],"--windowed")){if(windowed)return 64;windowed=YES;if(i+1<argc&&isdigit((unsigned char)argv[i+1][0])&&!parseWindowSize(argv[++i],&windowSize))return 64;continue;}
         filtered[count++]=argv[i];}filtered[count]=NULL;argc=count;argv=filtered;
 
-    if(argc==2&&!strcmp(argv[1],"--help")){puts("Infinify.app — macOS 26+ Apple Silicon native window canvas\nDefault: show chooser; only explicitly selected windows are captured. Open canvas shows the saved world without adding one.\n--owned-resize-probe EMPTY_DIRECTORY [SCENARIO]: explicit noninteractive owned-fixture resize probe (live)\n--demo EMPTY_DIRECTORY: disposable interactive fixture, bounded to 60 seconds\n--demo-probe EMPTY_DIRECTORY: automated own-fixture E2E, no permission prompts\n--demo-probe-guard EMPTY_DIRECTORY: own-fixture interruption regression (expected exit 2)\n--experimental-native-resize: experimental eight-handle size-only native resize\n--experimental-native-navigation: accepted and ignored; window navigation and native focus are part of every normal run\n--no-native-focus: window focus stays logical; no native window is activated or raised\n--state ABSOLUTE_PATH: explicit persistent scene file (default Application Support/Infinify/scene.json)\n--socket ABSOLUTE_PATH: IPC socket of a normal run (default Application Support/Infinify/infinify.sock)\n--windowed [WIDTHxHEIGHT]: open the canvas at launch in one ordinary window (default 1200x800, at least 960x480) with no global shortcuts\n--config ABSOLUTE_PATH: DriftWM config file of a normal run (default $XDG_CONFIG_HOME/infinify/config.toml, else ~/.config/infinify/config.toml; DriftWM's built-in defaults when it is missing); read again whenever it changes\n--super CHORD: the physical keys of DriftWM's super/mod, a +-joined subset of ctrl|alt|cmd (default ctrl+alt)\nmsg [--json] [--socket PATH] COMMAND ...: DriftWM-style IPC client for the running app; opens no window\n--source DIR SECONDS NONCE: internal disposable child only\nKeys and pointer gestures are DriftWM's bindings from the config file: ctrl is Control, alt is Option, super (mod) is the --super chord. The status line shows the pointer, view, pan and bookmark chords registered, and each toolbar tooltip its own action's. With no config file and --super ctrl+alt the registered chords are:\n  Drag or two-finger scroll on empty canvas, Control-Option-drag or -scroll anywhere: pan. Wheel on empty canvas, Control-Option-wheel anywhere, pinch: anchored zoom (max 1x).\n  Option-drag on a window: world move/snap; add Shift: cluster.\n  View actions animate one view's camera only (toolbar Home, Fit, -, 1:1, + or global shortcuts while the canvas is open; held zoom, pan and nudge keys repeat):\n  Control-Option-A: home toggle (origin at 1:1, again to return). Control-Option-W: zoom-to-fit toggle.\n  Control-Option-Equals / Control-Option-Minus: zoom in / out. Control-Option-0 or Control-Option-Z: zoom 1:1.\n  Control-Option-Command-arrows: pan the view under the pointer. Control-Option-Shift-arrows: nudge the focused window.\n  Control-Option-1 to 4: fly to bookmark 1 to 4. Control-Option-Shift-1 to 4: set it.\n  Window navigation flies the camera and focuses the window, natively when Infinify has Accessibility access (toolbar Center, Previous, Next):\n  Option-Tab / Option-Shift-Tab: cycle windows, most recently focused first; letting go of Option commits the choice.\n  Control-Option-arrows: the nearest window in that direction. Control-Option-C: center the focused window. Control-Option-X: center the window under the pointer.\n  A click on a window gives it canvas focus and starts its native focus, then the click is forwarded; a click on empty canvas unfocuses. Focusing a canvas window in its own application is followed.\n  Control-Option-Return: exec-terminal ($TERMINAL, else a new Terminal window). Control-Option-D: exec-launcher ($LAUNCHER, else Apps).\n  Control-Option-L: spawn swaylock -f -c 000000 -kl, DriftWM's default lock command, which macOS lacks; it repeats while held. Rebind or unbind it in the config file.\nThe fixture modes (--demo*, --owned-resize-*) read no config and keep Option-drag pan, Command-wheel zoom and Control-Option-drag move.\nAn unbound click, drag or scroll on a window (left, right or middle button) is forwarded only to its selected, freshly validated source.\nNative keyboard/IME remain with the real app. Control-Option-Escape (until a binding takes that chord), Control-Option-Command-Shift-Q or Quit exits.\nResize status explains unavailable native layout resizing. No SIP/settings changes.");return 0;}
+    if(argc==2&&!strcmp(argv[1],"--help")){puts("Infinify.app — macOS 26+ Apple Silicon native window canvas\nDefault: show chooser; only explicitly selected windows are captured. Open canvas shows the saved world without adding one.\n--owned-resize-probe EMPTY_DIRECTORY [SCENARIO]: explicit noninteractive owned-fixture resize probe (live)\n--demo EMPTY_DIRECTORY: disposable interactive fixture, bounded to 60 seconds\n--demo-probe EMPTY_DIRECTORY: automated own-fixture E2E, no permission prompts\n--demo-probe-guard EMPTY_DIRECTORY: own-fixture interruption regression (expected exit 2)\n--experimental-native-resize: experimental eight-handle size-only native resize\n--experimental-native-navigation: accepted and ignored; window navigation and native focus are part of every normal run\n--no-native-focus: window focus stays logical; no native window is activated or raised\n--state ABSOLUTE_PATH: explicit persistent scene file (default Application Support/Infinify/scene.json)\n--socket ABSOLUTE_PATH: IPC socket of a normal run (default Application Support/Infinify/infinify.sock)\n--windowed [WIDTHxHEIGHT]: open the canvas at launch in one ordinary window (default 1200x800, at least 960x480) with no global shortcuts\n--config ABSOLUTE_PATH: DriftWM config file of a normal run (default $XDG_CONFIG_HOME/infinify/config.toml, else ~/.config/infinify/config.toml; DriftWM's built-in defaults when it is missing); read again whenever it changes\n--super CHORD: the physical keys of DriftWM's super/mod, a +-joined subset of ctrl|alt|cmd (default ctrl+alt)\nmsg [--json] [--socket PATH] COMMAND ...: DriftWM-style IPC client for the running app; opens no window\n--source DIR SECONDS NONCE: internal disposable child only\nKeys and pointer gestures are DriftWM's bindings from the config file: ctrl is Control, alt is Option, super (mod) is the --super chord. The status line shows the pointer, view, pan and bookmark chords registered, and each toolbar tooltip its own action's. With no config file and --super ctrl+alt the registered chords are:\n  Drag or two-finger scroll on empty canvas, Control-Option-drag or -scroll anywhere: pan. Wheel on empty canvas, Control-Option-wheel anywhere, pinch: anchored zoom (max 1x).\n  Option-drag on a window: world move/snap; add Shift: cluster.\n  View actions animate one view's camera only (toolbar Home, Fit, -, 1:1, + or global shortcuts while the canvas is open; held zoom, pan and nudge keys repeat):\n  Control-Option-A: home toggle (origin at 1:1, again to return). Control-Option-W: zoom-to-fit toggle.\n  Control-Option-Equals / Control-Option-Minus: zoom in / out. Control-Option-0 or Control-Option-Z: zoom 1:1.\n  Control-Option-Command-arrows: pan the view under the pointer. Control-Option-Shift-arrows: nudge the focused window.\n  Control-Option-1 to 4: fly to bookmark 1 to 4. Control-Option-Shift-1 to 4: set it.\n  Window navigation flies the camera and focuses the window, natively when Infinify has Accessibility access (toolbar Center, Previous, Next):\n  Option-Tab / Option-Shift-Tab: cycle windows, most recently focused first; letting go of Option commits the choice.\n  Control-Option-arrows: the nearest window in that direction. Control-Option-C: center the focused window. Control-Option-X: center the window under the pointer.\n  A click on a window gives it canvas focus and starts its native focus, then the click is forwarded; a click on empty canvas unfocuses. Focusing a canvas window in its own application is followed.\n  Control-Option-Return: exec-terminal ($TERMINAL, else a new Terminal window). Control-Option-D: exec-launcher ($LAUNCHER, else Apps).\n  Control-Option-Command-Shift-arrows: send-to-output, the focused window to the display on that side (a world move; nothing with one display).\n  Control-Option-L: DriftWM's lock binding. Its swaylock is a Linux program: where that is not installed the displays are put to sleep instead, and macOS asks for the password as its Lock Screen setting says.\n  DriftWM's volume, brightness and media key defaults run Linux programs too: without those installed the keys stay with macOS.\nThe fixture modes (--demo*, --owned-resize-*) read no config and keep Option-drag pan, Command-wheel zoom and Control-Option-drag move.\nAn unbound click, drag or scroll on a window (left, right or middle button) is forwarded only to its selected, freshly validated source.\nNative keyboard/IME remain with the real app. Control-Option-Escape (until a binding takes that chord), Control-Option-Command-Shift-Q or Quit exits.\nResize status explains unavailable native layout resizing. No SIP/settings changes.");return 0;}
     BOOL child=argc==5&&!strcmp(argv[1],"--source"),demo=argc==3&&!strcmp(argv[1],"--demo"),guard=argc==3&&!strcmp(argv[1],"--demo-probe-guard"),probe=argc==3&&!strcmp(argv[1],"--demo-probe"),state=argc==3&&!strcmp(argv[1],"--state");
     if(argc!=1&&!child&&!demo&&!probe&&!guard&&!state)return 64;
     if((experimental||resize)&&(child||probe||guard))return 64;
@@ -1192,10 +1300,13 @@ int main(int argc,const char **argv) { @autoreleasepool {
     // Before the scene: the config decides what a load restores.
     desktop.configured=YES;desktop.configPath=config?@(config):nil;desktop.superChord=chord?@(chord):nil;[desktop loadConfig:YES];
     [desktop loadScene:desktop.statePath];
-    // The app serves --socket or the default path only; INFINIFY_SOCKET is the client's.
+    // The app serves --socket or the default path only. INFINIFY_SOCKET is the client's: the app
+    // never reads it, and sets it to the served path for the commands it starts.
     [desktop startIPC:socket?@(socket):[dir stringByAppendingPathComponent:@"infinify.sock"]];
     [[NSNotificationCenter defaultCenter]addObserver:desktop selector:@selector(screensChanged:) name:NSApplicationDidChangeScreenParametersNotification object:nil];
     if(windowed&&!desktop.startupError)[desktop openCanvas:nil];else [desktop showChooser:nil];
+    // Upstream's nested backend runs autostart as well, so --windowed does too.
+    [desktop runAutostart];
     while(!stopped){[desktop poll];pump(.08);}
     // Stopped first: the pending quit reply is written, and no request can arrive during cleanup.
     [desktop.ipc stop];desktop.ipc=nil;[desktop cleanup];[desktop.chooser close];return 0;

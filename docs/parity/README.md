@@ -140,8 +140,8 @@ device-specific behavior also need the corresponding hardware.
   from the pinned commit, with their 675 upstream tests retained. It is source
   the app can call, not app behavior: nothing in the shell or controller used
   it at that commit.
-- This milestone (commit pending) configures the default shell exactly as DriftWM
-  is configured: one TOML file in upstream's grammar, parsed by `driftwm-core`,
+- `4dd642b` configures the default shell exactly as DriftWM is configured: one
+  TOML file in upstream's grammar, parsed by `driftwm-core`,
   decides key bindings, mouse bindings and settings. The controller holds the
   `Config`, replaces its own copy of the action grammar with upstream's, and maps
   upstream's modifiers and keysyms to a Mac keyboard (`ctrl` Control, `alt` Option,
@@ -172,15 +172,15 @@ device-specific behavior also need the corresponding hardware.
   on another keyboard layout inside the app (the lookup code alone was run in a
   scratch harness against installed layout tables, registering nothing), `--super`,
   `exec-terminal` and `exec-launcher` were not run; nothing drawn was observed (status line, tooltips, help); no window had
-  a bound source; one output only. Nineteen of upstream's default key bindings and
-  four of its default mouse bindings name actions that still do not run, media
-  keys are not registered, and trackpad and touch gesture bindings, window rules,
-  decorations, effects, backgrounds, input-device settings and every other setting
-  whose feature is absent are parsed and unused. See the
+  a bound source; one output only. At that commit nineteen of upstream's default
+  key bindings and four of its default mouse bindings named actions that did not
+  run; media keys are not registered, and trackpad and touch gesture bindings,
+  window rules, decorations, effects, backgrounds, input-device settings and every
+  other setting whose feature is absent are parsed and unused. See the
   [desktop shell notes](../../native/desktop/README.md#configuration) and the
   [configuration contract](../../crates/desktop/CONFIG.md).
-- This milestone, window navigation and focus (commit pending), makes DriftWM's
-  `center-window`, `center-nearest`, `cycle-windows` and `focus-center` run in the
+- `c11fece`, window navigation and focus, makes DriftWM's `center-window`,
+  `center-nearest`, `cycle-windows` and `focus-center` run in the
   default shell through the action grammar, and so through key bindings, the
   toolbar (Center, Previous, Next) and `msg action`, with upstream's cycle prelude,
   `find_nearest` and visibility thresholds from `driftwm-core`, anchors as
@@ -224,6 +224,70 @@ device-specific behavior also need the corresponding hardware.
   [desktop shell notes](../../native/desktop/README.md#window-navigation-and-native-focus)
   and the [navigation](../../crates/desktop/NAVIGATION.md#window-navigation-actions)
   and [focus](../../crates/desktop/FOCUS.md) contracts.
+- This milestone (commit pending) adds six independent behaviours to the default
+  shell. Hot corners: an `[[outputs]]` entry (upstream's exact-name or `*` rule,
+  matched against the display's stable id) binds actions to corners, the shell
+  runs upstream's `check_hot_corners` latch over a polled pointer and the
+  controller runs the action through the normal dispatch (`hot_corner`), with
+  the pointer position and modifier state the corner fired under, so a corner
+  bound to `focus-center` or `cycle-windows` behaves as that key binding does.
+  `send-to-output` and `send-cursor-to-output`: upstream's `output_in_direction`
+  over the outputs' `screen_bounds`, the focused window teleported to the target
+  viewport's `focus_placement` point, and the cursor move returned as a
+  `warp_pointer` effect the shell performs. `switch-layout`: a `switch_layout`
+  effect, performed by selecting among the keyboard input sources the user has
+  already enabled, with the selected source reported back (`layout_changed`) and
+  answered by the IPC `Layout` request and `StateInfo.layout` / `layout_short`.
+  The IPC event stream: `Subscribe` and `msg subscribe` with upstream's ack,
+  snapshot, per-change `Event::State` lines, hash dedupe and two-slot coalescing.
+  `autostart`: run once, 100 ms after launch, never on reload; each command,
+  like every `exec`, is given `INFINIFY_SOCKET`, the socket the app serves, in
+  place of upstream's `WAYLAND_DISPLAY`, so a `msg` in it reaches the instance
+  that started it. Upstream's
+  Linux-only default commands: a default binding whose program is not on `PATH`
+  is replaced by a macOS equivalent (`mod+l` puts the displays to sleep with
+  `pmset`), or left to macOS (volume, brightness and media keys), and a binding
+  the user wrote is registered as written. Coverage is controller scenarios
+  through the exported C ABI (`crates/desktop/tests/platform_actions_flow.rs`,
+  additions to `config_flow.rs` and `ipc_flow.rs`, and one scenario in
+  `navigation_actions_flow.rs` for a corner that runs window navigation) plus
+  two launches on 2026-10-09 of the built app in `--windowed` mode on a private
+  scene, config and
+  socket (macOS 27.2, Apple Silicon, one display, one enabled input source, three
+  seeded detached placeholders), which left no saved evidence. Exercised there
+  through the socket: the event stream end to end (ack, first state, one line
+  per frame of a flight and none while idle, no repeated line, eight subscribers
+  and a ninth refused, requests on a subscribed connection, a clean end when the
+  app exits); `msg layout` and `state` carrying the launch layout report; an
+  autostart command starting once and not again on `reload-config` or a watched
+  file change; in two further launches after review fixes, an autostart child
+  and an IPC `exec` child carrying `INFINIFY_SOCKET` as the served socket path
+  (the file's `[env]` value once it set one), and an autostart `msg` with no
+  `--socket` answered through it; and the single-display answers of `send-to-output` (window
+  unmoved) and `send-cursor-to-output` (no effect). Evidence boundary: no hot
+  corner fired (no pointer was moved into one, and arming is not readable over
+  the socket); the pointer was never warped and no window was sent to another
+  display (one display); no input source was selected and no input-source change
+  was reported (`switch-layout next` ran with one source enabled and selected
+  nothing); `pmset displaysleepnow` was not run, and it locks the session only
+  as far as the user's Lock Screen setting does; the hot keys for
+  `send-to-output` were not registered (`--windowed` registers none); the
+  30-second drop of a stalled subscriber, `subscribe` before the canvas opens and
+  autostart in a chooser launch were not reached; nothing drawn was observed; no
+  window had a bound source. Known mismatches: the pointer is sampled every 80 ms
+  (60 Hz during a flight) instead of on every motion, and a corner is measured on
+  the display's panel (toolbar strip included) rather than on the output;
+  subscribers are capped at eight and a stalled one is dropped, where upstream
+  does neither; a change of active output alone is found at the next idle poll
+  (80 ms) rather than the next frame; an `[env]` `INFINIFY_SOCKET` wins over the
+  one the shell adds, where upstream's `WAYLAND_DISPLAY` insert overwrites;
+  `layout_short` is a language code, not an xkb token; fullscreen and pinned
+  legs of the output actions do not exist; `[input.keyboard]` layout options and
+  `[[outputs]]` `scale`, `transform`, `position` and `mode` stay read and
+  unused. See the
+  [desktop shell notes](../../native/desktop/README.md#displays-hot-corners-layouts-and-autostart),
+  the [configuration contract](../../crates/desktop/CONFIG.md#outputs) and the
+  [event stream contract](../../crates/desktop/IPC.md#event-stream).
 
 These milestones add evidence to partial rows. None satisfies an entire native
 behavior row or changes the completion requirement.

@@ -5,18 +5,21 @@ parser, the defaults, the action grammar and the binding tables are upstream's
 code, carried in `driftwm-core` (malbiruk/driftwm at
 `352333a8fa1b22171492d4b71a54102045c9a19d`, `src/config/`); nothing here
 re-implements them. What is new is the map from upstream's modifiers and keysyms
-to a Mac keyboard, and four additive ABI 1 commands. Existing commands, their
+to a Mac keyboard, and six additive ABI 1 commands. Existing commands, their
 shapes, `ABI_VERSION` and `SAVE_VERSION` are unchanged.
 
 | `command.op` | Fields | Result data |
 | --- | --- | --- |
-| `load_config` | `path` string or `null` | `{path, exists, errors, warnings, dirty}` |
+| `load_config` | `path` string or `null` | `{path, exists, errors, warnings, dirty, effects}` |
 | `set_platform` | `super`: a `+`-joined subset of `ctrl`, `alt`, `cmd` | `{super}` in canonical order |
 | `bindings` | none | key bindings as macOS chords, see [Key bindings](#key-bindings) |
 | `mouse_binding` | `trigger`, `source`, `modifiers`, `context` | `{binding}`, see [Mouse bindings](#mouse-bindings) |
+| `hot_corner` | `output`, `corner`, optional `pointer`, `held` | `{navigation, effects, dirty}`, see [Hot corners](#hot-corners) |
+| `layout_changed` | `name`, `short`, `index`, `count` | `{}`, see [Keyboard layouts](#keyboard-layouts) |
 
-The controller reads the file and nothing else: it registers no hot key,
-watches no directory and runs no command. The shell does those.
+The controller reads the file, and looks on `PATH` for the programs its key
+bindings run. It registers no hot key, watches no directory or pointer, selects
+no input source and runs no command. The shell does those.
 
 ## The file
 
@@ -45,6 +48,8 @@ code and wins over both.
   `config: navigation.camera_speed 0 must be in (0, 1] (0 freezes the camera), using 0.3`.
 - `dirty` is true when the reload changed the bookmark registry and the shell
   should save.
+- `effects` holds the [autostart](#autostart) commands on the launch load and is
+  empty on every later one.
 
 Files larger than 4 MiB are refused as unreadable. That bound is not upstream's.
 
@@ -76,7 +81,9 @@ constants they replaced.
 | `[zoom] fit_padding` | `zoom-to-fit`, and the dynamic minimum zoom |
 | `[snap] enabled`, `gap`, `distance`, `break_force`, `corners`, `centers` | `begin_drag`, `begin_resize`, `gesture_to` and the native resize transaction's snap intent |
 | `[snap] outer_gap` | the inset of a placed window in window navigation |
-| `focus_placement`, `[[outputs]] focus_placement` | where window navigation parks the window |
+| `focus_placement`, `[[outputs]] focus_placement` | where window navigation and `send-to-output` park the window |
+| `[[outputs]] name`, `[outputs.hot_corners]` | which output an entry governs and its [hot corners](#hot-corners) |
+| `autostart` | `exec` effects of the launch load, see [Autostart](#autostart) |
 | `[session] restore_camera`, `restore_bookmarks` | what `load` restores, see [Session](#session) |
 | `[env]`, `[cursor] theme`, `size` | the environment of an `exec` effect |
 
@@ -95,7 +102,7 @@ edges and divided by the current zoom on each update, as before.
 Everything else in the file is parsed, validated and warned about by upstream's
 code, and then unused, because the feature it configures does not exist here:
 
-- `focus_follows_mouse`, `window_placement`, `autostart`, `[xwayland]`
+- `focus_follows_mouse`, `window_placement`, `[xwayland]`
 - `[session] suspend_on_close`, `restore_windows` (the scene always saves and
   restores its placeholders)
 - `[navigation] mouse_speed` and `[zoom] trackpad_speed`: reported with each
@@ -105,12 +112,15 @@ code, and then unused, because the feature it configures does not exist here:
   `[navigation.edge_pan]`
 - `[zoom] touch_speed`, `reset_on_new_window`, `interact_min`
 - `[input.keyboard] layout`, `variant`, `options`, `model`,
-  `remember_layout_per_window`, `num_lock`, `caps_lock`; `[input.trackpad]`,
-  `[input.mouse]`, `[input.touch]`, `[input.tablet]`
+  `remember_layout_per_window`, `num_lock`, `caps_lock`: these have no macOS
+  meaning, see [Keyboard layouts](#keyboard-layouts)
+- `[input.trackpad]`, `[input.mouse]`, `[input.touch]`, `[input.tablet]`
 - `[cursor] inactive_opacity` (theme and size reach only the `exec` environment)
 - `[background]`, `[decorations]`, `[effects]`, `[backend]`, `[output]`
-- `[[outputs]]` other than `focus_placement`; `[[window_rules]]`, including
-  `pass_keys` and `pass_mouse`
+- `[[outputs]] scale`, `transform`, `position`, `mode`, and
+  `[outputs.hot_corners] disable_when_fullscreen`: macOS arranges the displays
+  and there is no fullscreen, see [Outputs](#outputs)
+- `[[window_rules]]`, including `pass_keys` and `pass_mouse`
 - `[gestures.*]`, `[touch.*]`, and their thresholds
 - `[mouse] resize_on_border`, `decoration_resize_snapped`, `decoration_fit_snapped`
 - the mouse triggers `wheel-up` and `wheel-down`: `mouse_binding` has no notch
@@ -196,8 +206,9 @@ which the user did not ask for.
 ```json
 {"keys":[{"key_code":0,"character":"a","modifiers":{"control":true,"option":true,"shift":false,"command":false},
           "action":"home-toggle","combo":"mod+a","chord":"⌃⌥A","repeat":false,"implemented":true}],
- "media_keys":[{"nx_key_type":0,"modifiers":{…},"action":"spawn …","combo":"XF86AudioRaiseVolume","chord":"…","repeat":true,"implemented":true}],
+ "media_keys":[{"nx_key_type":16,"modifiers":{…},"action":"spawn …","combo":"XF86AudioPlay","chord":"…","repeat":true,"implemented":true}],
  "skipped":[{"combo":"Print","action":"spawn grim - | wl-copy","reason":"the key has no macOS equivalent"}],
+ "hot_corners":[{"output":1,"stable_id":"…","threshold":4.0,"disable_while_dragging":true,"disable_when_fullscreen":true,"corners":{}}],
  "reserved":[{"purpose":"exit","key_code":53,"modifiers":{…},"claimed_by":null}],
  "layout_independent":true,"repeat_delay_ms":200,"repeat_rate_hz":25,"super":"ctrl+alt",
  "cycle_hold":{"control":false,"option":true,"shift":false,"command":false},
@@ -211,7 +222,11 @@ which the user did not ask for.
 - `repeat` is upstream's `Action::is_repeatable`: `zoom-in`, `zoom-out`,
   `nudge-window`, `grow-window`, `shrink-window`, `pan-viewport`,
   `cycle-windows` and `spawn` repeat while held, after `repeat_delay_ms` and
-  then `repeat_rate_hz` times a second.
+  then `repeat_rate_hz` times a second. A `spawn` whose program is not found
+  does not, see [Upstream's Linux commands](#upstreams-linux-commands).
+- `upstream` is present only on a default binding that was replaced by its
+  macOS equivalent, and holds the action upstream binds there.
+- `hot_corners` lists every registered output, see [Hot corners](#hot-corners).
 - `implemented` is false when the `action` command would refuse the action with
   `action not implemented on macOS yet: <name>`. The binding is listed all the
   same; registering its chord takes the chord from every app for nothing.
@@ -226,7 +241,8 @@ which the user did not ask for.
   is skipped for the same reason.
 - `settings` are the speeds a pointer gesture scales by, see below.
 - `warnings` are this map's own, one per skipped binding the user should know
-  about: `binding '<combo>' = '<action>' skipped: <reason>`.
+  about, `binding '<combo>' = '<action>' skipped: <reason>`, followed by one
+  per binding of the file that will not repeat.
 
 The key table is private to `driftwm-core`, which this crate may not change, so
 the bindings are found by asking `Config::lookup` for every known keysym under
@@ -236,9 +252,11 @@ as skipped instead of vanishing.
 
 ### Upstream's defaults as registered
 
-With no config file, the default super chord and `mod_key = "super"`. "Runs" is
-`implemented`. Upstream binds 57 keys: 45 land on Mac keys, 8 on media keys, and
-4 have no Mac key.
+With no config file, the default super chord and `mod_key = "super"`, on a Mac
+that has none of upstream's Linux programs. "Runs" is `implemented`. Upstream
+binds 57 keys: 45 land on Mac keys and are registered, one of them with a
+substituted command; 8 are on media keys that macOS handles itself; and 4 have
+no Mac key.
 
 | Upstream | macOS chord | `key_code` | Action | Repeats | Runs |
 | --- | --- | --- | --- | --- | --- |
@@ -255,10 +273,10 @@ With no config file, the default super chord and `mod_key = "super"`. "Runs" is
 | `mod+Right` | ⌃⌥Right | 124 | `center-nearest right` |  | yes |
 | `mod+Up` | ⌃⌥Up | 126 | `center-nearest up` |  | yes |
 | `mod+a` | ⌃⌥A | 0 | `home-toggle` |  | yes |
-| `mod+alt+Down` | ⌃⌥⇧⌘Down | 125 | `send-to-output down` |  | no |
-| `mod+alt+Left` | ⌃⌥⇧⌘Left | 123 | `send-to-output left` |  | no |
-| `mod+alt+Right` | ⌃⌥⇧⌘Right | 124 | `send-to-output right` |  | no |
-| `mod+alt+Up` | ⌃⌥⇧⌘Up | 126 | `send-to-output up` |  | no |
+| `mod+alt+Down` | ⌃⌥⇧⌘Down | 125 | `send-to-output down` |  | yes |
+| `mod+alt+Left` | ⌃⌥⇧⌘Left | 123 | `send-to-output left` |  | yes |
+| `mod+alt+Right` | ⌃⌥⇧⌘Right | 124 | `send-to-output right` |  | yes |
+| `mod+alt+Up` | ⌃⌥⇧⌘Up | 126 | `send-to-output up` |  | yes |
 | `mod+c` | ⌃⌥C | 8 | `center-window` |  | yes |
 | `mod+ctrl+Down` | ⌃⌥⌘Down | 125 | `pan-viewport down` | yes | yes |
 | `mod+ctrl+Left` | ⌃⌥⌘Left | 123 | `pan-viewport left` | yes | yes |
@@ -269,7 +287,7 @@ With no config file, the default super chord and `mod_key = "super"`. "Runs" is
 | `mod+e` | ⌃⌥E | 14 | `toggle-cursor-pan` |  | no |
 | `mod+equal` | ⌃⌥= | 24 | `zoom-in` | yes | yes |
 | `mod+f` | ⌃⌥F | 3 | `toggle-fullscreen` |  | no |
-| `mod+l` | ⌃⌥L | 37 | `spawn swaylock -f -c 000000 -kl` | yes | yes |
+| `mod+l` | ⌃⌥L | 37 | `exec /usr/bin/pmset displaysleepnow`, for upstream's `spawn swaylock -f -c 000000 -kl` |  | yes |
 | `mod+m` | ⌃⌥M | 46 | `fit-window` |  | no |
 | `mod+minus` | ⌃⌥- | 27 | `zoom-out` | yes | yes |
 | `mod+q` | ⌃⌥Q | 12 | `close-window` |  | no |
@@ -291,26 +309,29 @@ With no config file, the default super chord and `mod_key = "super"`. "Runs" is
 Under `{"super":"cmd"}` every ⌃⌥ above is ⌘, `mod+ctrl+…` is ⌃⌘…, `mod+alt+…`
 is ⌥⌘… and `mod+ctrl+shift+q` is ⌃⇧⌘Q; nothing is displaced.
 
-`media_keys`, listed and not registrable as hot keys:
+`media_keys` is empty. `skipped` lists upstream's eight media-key defaults,
+which macOS handles itself:
 
-| Upstream | `nx_key_type` | Action |
-| --- | --- | --- |
-| `XF86AudioLowerVolume` | 1 | `spawn wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-` |
-| `XF86AudioMute` | 7 | `spawn wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle` |
-| `XF86AudioNext` | 17 | `spawn playerctl next` |
-| `XF86AudioPlay` | 16 | `spawn playerctl play-pause` |
-| `XF86AudioPrev` | 18 | `spawn playerctl previous` |
-| `XF86AudioRaiseVolume` | 0 | `spawn wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+` |
-| `XF86MonBrightnessDown` | 3 | `spawn brightnessctl set 5%-` |
-| `XF86MonBrightnessUp` | 2 | `spawn brightnessctl set +5%` |
+| Upstream | `nx_key_type` | Upstream's action | Reason |
+| --- | --- | --- | --- |
+| `XF86AudioLowerVolume` | 1 | `spawn wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-` | `macOS handles the volume keys itself` |
+| `XF86AudioMute` | 7 | `spawn wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle` | `macOS handles the volume keys itself` |
+| `XF86AudioNext` | 17 | `spawn playerctl next` | `macOS handles the media keys itself` |
+| `XF86AudioPlay` | 16 | `spawn playerctl play-pause` | `macOS handles the media keys itself` |
+| `XF86AudioPrev` | 18 | `spawn playerctl previous` | `macOS handles the media keys itself` |
+| `XF86AudioRaiseVolume` | 0 | `spawn wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+` | `macOS handles the volume keys itself` |
+| `XF86MonBrightnessDown` | 3 | `spawn brightnessctl set 5%-` | `macOS handles the brightness keys itself` |
+| `XF86MonBrightnessUp` | 2 | `spawn brightnessctl set +5%` | `macOS handles the brightness keys itself` |
 
-`skipped`, with no Mac key: `Print` and `shift+Print` (`spawn grim …`),
-`XF86AudioPause` (`spawn playerctl play-pause`) and `XF86AudioStop`
-(`spawn playerctl stop`).
+and the four with no Mac key, as `the key has no macOS equivalent`: `Print` and
+`shift+Print` (`spawn grim …`), `XF86AudioPause` (`spawn playerctl play-pause`)
+and `XF86AudioStop` (`spawn playerctl stop`).
 
-Upstream's default commands (`swaylock`, `wpctl`, `brightnessctl`, `playerctl`,
-`grim`) are Linux programs. They are passed through unchanged; on a Mac the
-shell's `sh -c` will not find them until the file rebinds those keys.
+[Upstream's Linux commands](#upstreams-linux-commands) has the rule. On a
+machine where those programs are installed the table is upstream's own:
+`mod+l` runs `spawn swaylock -f -c 000000 -kl` and repeats, and the eight media
+keys are listed under `media_keys` with their `nx_key_type`. A media key is not
+a virtual key code, so nothing registers it as a hot key in either case.
 
 ## Mouse bindings
 
@@ -400,6 +421,242 @@ window) and `open -a Apps` (the macOS 26 application launcher).
 `reload-config` returns the effect `{"op":"reload_config"}`: the shell sends
 `load_config` again and re-reads `bindings`.
 
+`send-to-output <dir>`, `send-cursor-to-output <dir>` and `switch-layout` are
+described under [Outputs](#outputs) and [Keyboard layouts](#keyboard-layouts).
+
+## Outputs
+
+An output is what `register_output` registers: a stable id and its
+`screen_bounds`, a rectangle in the shell's global screen space with the origin
+at the top left and Y down. An `[[outputs]]` entry is matched by `name` against
+the stable id, and `name = "*"` is upstream's wildcard: it applies to every
+output with no exact entry, and an exact entry replaces it whole, so an exact
+entry without a `hot_corners` table has no hot corners. `focus_placement` and
+`hot_corners` are applied. `scale`, `transform`, `position` and `mode` are read
+and unused: macOS owns the display arrangement, and `screen_bounds` is its
+result.
+
+**Adjacency** is upstream's `output_in_direction` with `screen_bounds` standing
+in for the output's layout position and size. From the center of the source
+output, every other output whose center is at least one point away and lies
+within about 60 degrees of the direction (the normalised dot product is strictly
+above 0.5) is a candidate, and the nearest center wins; among equals, the
+earliest registered. `up` is the smaller y.
+
+`send-to-output <dir>` moves the focused window to the adjacent output:
+
+1. No focused window: nothing happens, as upstream.
+2. The source output is the first registered output whose viewport shows the
+   window's center (upstream's `output_for_window`: the visible canvas rectangle
+   is `policy::visible_canvas_rect` at the camera rounded to whole points, and
+   the center is truncated), else the command's `output`. With neither the
+   action is refused with `no active output`.
+3. No adjacent output in that direction, a single output included: nothing
+   happens, as upstream.
+4. The window lands where a navigation on the target output would park it:
+   with the target's camera `c`, zoom `z` and placement point `a` (the
+   [focus placement](#applied-now) of the target output for this window at `z`),
+   its center goes to `c + a / z` and its top-left to that minus half its size,
+   each coordinate truncated toward zero as upstream's `as i32` does. The size
+   is kept, the window is raised, and `dirty` is true.
+
+It is a logical world move like `nudge-window`, refused during a gesture or a
+live native resize of that window. `navigation` is null and `effects` is empty:
+no camera moves and the window keeps the logical focus it had.
+
+`send-cursor-to-output <dir>` needs the active output as `output`. With an
+adjacent output it returns the effect
+
+```json
+{"op":"warp_pointer","screen":{"x":1800.0,"y":570.0},"output":2}
+```
+
+`screen` is the center of the target output's usable rectangle in global screen
+coordinates (`screen_bounds.origin + usable_rect_local.center()`), which is
+where upstream's canvas-space warp puts the cursor on that monitor, and
+`output` is the target. The shell moves the pointer there; the controller moves
+nothing. With no adjacent output `effects` is empty.
+
+## Hot corners
+
+```toml
+[[outputs]]
+name = "*"
+[outputs.hot_corners]
+threshold = 4
+top_left = "zoom-to-fit"
+bottom_right = "exec-launcher"
+disable_while_dragging = true
+```
+
+`bindings` reports them for every registered output, in registration order:
+
+```json
+"hot_corners":[{"output":1,"stable_id":"…","threshold":4.0,
+                "disable_while_dragging":true,"disable_when_fullscreen":true,
+                "corners":{"top_left":"zoom-to-fit","bottom_right":"exec-launcher"}}]
+```
+
+`corners` maps each armed corner (`top_left`, `top_right`, `bottom_left`,
+`bottom_right`) to its canonical action string and is empty when the output has
+none. The list changes with the config and with the registered outputs, so the
+shell reads `bindings` again after either.
+
+The trigger is the shell's, and it is upstream's `check_hot_corners`: with the
+pointer at `(x, y)` from the top-left of a rectangle `w` by `h`, a corner is
+active while `x < threshold` or `x > w - threshold` on its side and
+`y < threshold` or `y > h - threshold` on its side, the first of the four in the
+order above. One latch holds the output and corner the pointer is in. An action
+fires when the latch changes to a corner, never while the pointer stays in it,
+and leaving the corner or the output clears the latch. The entry is latched even
+when the action is then suppressed: with `disable_while_dragging`, while any
+mouse button is held or a pointer gesture is running.
+
+Upstream's rectangle is the output. The shell's is the output's panel: the
+whole display, which is `screen_bounds` plus the 64-point toolbar strip the
+shell keeps above it (with `--windowed`, the window). `screen_bounds` alone
+would put the top corners 64 points below the physical screen corners, where a
+flicked pointer never rests. That rectangle is the shell's own panel frame; it
+reaches the controller only as the `output` of `hot_corner` and enters no camera
+or world math. The shell reads the pointer at its poll and frame cadence, and
+only while some output has a bound corner, where upstream checks every motion
+event.
+
+```json
+{"op":"hot_corner","output":1,"corner":"top_left"}
+{"op":"hot_corner","output":1,"corner":"top_left","pointer":{"x":2.0,"y":1.5},"held":false}
+```
+
+runs the action bound to that corner of that output through the same dispatch
+as `action`, with that output as the active one, and answers
+`{navigation, effects, dirty}` as `action` does. `pointer` and `held` are
+[`action`'s](IPC.md#action): the pointer's global screen point, which
+`focus-center` reads, and whether a real modifier is down, which keeps a
+`cycle-windows` step open. Upstream runs a corner's action through
+`execute_action` like any other, so a corner bound to a non-cycle action ends a
+cycle in progress first. A corner with no binding, and
+any corner while a controller gesture (a drag or resize) is installed on an
+output whose `disable_while_dragging` is on, answers
+`{"navigation":null,"effects":[],"dirty":false}`. An unregistered output is a
+controller error, and so is an action that does not run here.
+`disable_when_fullscreen` is reported and has nothing to suppress: there is no
+fullscreen.
+
+## Keyboard layouts
+
+Upstream's layouts are xkb groups built from `[input.keyboard] layout`. On
+macOS they are the keyboard layout input sources the user has enabled in System
+Settings; nothing here creates, removes or reorders one.
+
+`switch-layout next`, `switch-layout prev` (or `previous`) and
+`switch-layout <index>` return one effect and need no output:
+
+```json
+{"op":"switch_layout","target":"next","index":null}
+{"op":"switch_layout","target":"prev","index":null}
+{"op":"switch_layout","target":"index","index":2}
+```
+
+The shell selects among the enabled layouts, wrapping for `next` and `prev`. An
+index past the last layout selects nothing, as upstream warns and ignores it.
+The controller does not range-check the index: the shell's list is the
+authority.
+
+```json
+{"op":"layout_changed","name":"U.S.","short":"en","index":0,"count":2}
+```
+
+tells the controller the layout now in force: once at startup and whenever the
+input source changes, whoever changed it. `name` is the layout's display name,
+`short` a short code for a status bar, `index` its place among the `count`
+enabled layouts. The shell sends the input source's localized name and, as
+`short`, its first language code (`en` is what the British layout reported on
+the development machine), or the last component of its identifier when it lists
+no language. `count` must be at least 1 and `index` below it, and each
+string at most 1024 bytes. The controller
+caches it for the IPC [`Layout`](IPC.md#requests) request and `StateInfo`; it is
+never saved, and a `load` keeps it. Until the first report both read as empty
+strings.
+
+`[input.keyboard] layout`, `variant`, `options`, `model`,
+`remember_layout_per_window`, `num_lock` and `caps_lock` are read and unused:
+macOS owns the layout list, the modifier options and the lock keys, and it
+remembers the input source per document itself when the user asks it to.
+
+## Autostart
+
+`autostart = ["cmd", …]` runs once, at launch. The first `load_config` of a
+controller returns one `exec` effect per command in `effects`, in file order,
+each exactly what `exec <cmd>` returns: `sh -c` with the config's child
+environment. Every later `load_config` returns an empty `effects`, a changed
+list included: upstream's reload logs `autostart changes only apply at startup`.
+When the launch file cannot be read or parsed the built-in defaults are in force
+and nothing starts, then or after a later successful reload, as upstream.
+
+Upstream starts them from `main` for every backend, the nested winit one
+included, 100 ms after its event loop starts. The shell keeps the effects of its
+launch `load_config` and runs them once, 100 ms after its socket is up and the
+chooser or canvas is shown, `--windowed` included; it never looks at the
+`effects` of a later load. Probe, demo and owned-fixture runs never send
+`load_config`, so they never start anything.
+
+Upstream inserts `WAYLAND_DISPLAY` into `child_env` for these commands, and its
+`msg` client derives the socket from that variable, so a child always talks to
+the compositor that started it. The controller does not know which socket the
+app serves, so an `exec` effect's `env` carries nothing for it; the shell adds
+`INFINIFY_SOCKET=<the socket it serves>` to the environment of every `exec`
+child, autostart included. `Infinify msg …` in an autostart command or an `exec`
+binding then reaches the instance that started it, one on its own `--socket`
+included, whatever `INFINIFY_SOCKET` the app itself was launched with. It is not
+added when the app runs without IPC. One difference: upstream's insert
+overwrites a `WAYLAND_DISPLAY` the file's `[env]` sets, and here an `[env]`
+`INFINIFY_SOCKET` wins, because that variable is also the client's explicit
+override, upstream's `DRIFTWM_SOCKET`.
+
+## Upstream's Linux commands
+
+Thirteen of upstream's default key bindings run programs that do not exist on a
+Mac, nine on keys a Mac keyboard has and four on keys it lacks. A **default**
+binding (one the file's `[keybindings]` table does not bind or unbind) whose
+program is not found is not registered as written:
+
+| Upstream default | On macOS |
+| --- | --- |
+| `mod+l` = `spawn swaylock -f -c 000000 -kl` | registered as `exec /usr/bin/pmset displaysleepnow` |
+| `XF86AudioRaiseVolume`, `XF86AudioLowerVolume`, `XF86AudioMute` = `spawn wpctl …` | not registered: macOS handles the volume keys itself |
+| `XF86MonBrightnessUp`, `XF86MonBrightnessDown` = `spawn brightnessctl …` | not registered: macOS handles the brightness keys itself |
+| `XF86AudioPlay`, `XF86AudioNext`, `XF86AudioPrev` = `spawn playerctl …` | not registered: macOS handles the media keys itself |
+| `Print`, `shift+Print` = `spawn grim …`; `XF86AudioPause`, `XF86AudioStop` = `spawn playerctl …` | no such key on a Mac keyboard, as before; screenshots are the system's ⇧⌘3, ⇧⌘4 and ⇧⌘5 |
+
+- **Found** means an executable file of that name in a directory of `PATH`: the
+  `PATH` of the file's `[env]` when it sets one, else the controller's own.
+  That is the `PATH` an `exec` effect runs with. The program is the first word
+  of the command; a command that starts with anything but a plain word, with a
+  relative path or with a shell builtin is taken as found.
+- The substituted binding carries `"upstream"`, the action it stands for, and
+  is an `exec`, which does not repeat: a held chord must not ask for the lock at
+  the repeat rate.
+- A platform-handled binding moves from `media_keys` to `skipped` with the
+  reason above and no warning. Any other default whose program is missing would
+  be skipped with `'<program>' is not installed and has no macOS equivalent`;
+  none of upstream's is.
+- When the program is found, the default is registered exactly as upstream
+  wrote it.
+- A binding the **file** makes is always registered exactly as written. If it is
+  a `spawn` whose program is not found, `repeat` is false, so a held chord does
+  not start a failing shell at the repeat rate, and `warnings` says so:
+  `binding '<combo>' = '<action>': '<program>' was not found, so it will not repeat while held`.
+- An entry upstream's loader rejects (an action that does not parse, reported in
+  `load_config`'s `warnings` as `config: invalid action …`) binds nothing, as
+  upstream: the default on that combo is still a default, and is substituted or
+  skipped by the rules above.
+
+`pmset displaysleepnow` turns the displays off. macOS then asks for the password
+according to System Settings › Lock Screen › "Require password after screen
+saver begins or display is turned off"; set to "Immediately", that is a locked
+session. No setting is read or changed here. macOS has no public command that
+locks the session regardless of that setting.
+
 ## Session
 
 Upstream keeps bookmarks in a live registry seeded from the config, and reads
@@ -447,6 +704,9 @@ was restored too early back to a new output's pose.
   toolkit fallbacks (`MOZ_ENABLE_WAYLAND`, `QT_QPA_PLATFORM`, `SDL_VIDEODRIVER`,
   `GDK_BACKEND`, `ELECTRON_OZONE_PLATFORM_HINT`), which would stop a Qt, SDL or
   GTK program from starting on macOS. One the file's own `[env]` sets is kept.
+- Upstream's `child_env` also carries `WAYLAND_DISPLAY`. An `exec` effect's
+  `env` has no counterpart; the shell adds `INFINIFY_SOCKET` to the child
+  instead, see [Autostart](#autostart).
 - `exec` does not reveal the cursor; upstream's does for a few seconds.
 - `nudge-window` is applied at once; upstream animates the frame from its old
   place. It does not raise the window, and there is no fill restore point to
@@ -463,6 +723,34 @@ was restored too early back to a new output's pose.
 - A reload re-applies only what the table above lists. Upstream also rebuilds
   its keyboard layout, cursor theme, device settings, output rules and render
   caches, none of which exist here.
+- `send-to-output` asks nothing of native focus: the window already holds the
+  logical focus, and is only raised. Upstream activates it and sets keyboard
+  focus again. A focused window that no output shows needs the command's
+  `output`, where upstream falls back to its first output.
+  Fullscreen and pinned windows, which upstream moves in screen space, do not
+  exist here. A frame with a fractional origin or size is read at upstream's
+  integer boundary for the source output and the half size, and keeps its size.
+- `send-cursor-to-output` with no `output` is refused, where upstream falls
+  back to its first output. The pointer is the shell's, so the warp is an
+  effect, and the next action's active output is whatever the shell then
+  reports.
+- Output adjacency reads `screen_bounds` as given, where upstream's layout
+  positions and logical sizes are whole numbers.
+- The hot-corner latch and the held-button half of `disable_while_dragging` are
+  the shell's. The controller suppresses a corner only for its own drag or
+  resize gesture; a native resize is driven with a button held, which is the
+  shell's to see. The shell measures a corner on the display's panel, not on
+  `screen_bounds`, and samples the pointer instead of seeing every motion, so a
+  pointer that crosses a corner between two samples fires nothing.
+- `switch-layout` selects among macOS's enabled input sources instead of xkb
+  groups. Upstream's `layout_short` is the `[input.keyboard] layout` token of
+  the active group; here it is the short code the shell reports, a language
+  code, so two layouts of one language share it.
+- Autostart effects are returned with the launch `load_config`, before any
+  output is registered; the shell holds them until 100 ms after startup, which
+  is when upstream starts them.
+- Upstream registers its Linux default commands whether or not they are
+  installed. See [Upstream's Linux commands](#upstreams-linux-commands).
 
 ## Evidence and limits
 
@@ -482,13 +770,56 @@ deterministic winner; one binding of every action through a config file and
 back; upstream's default mouse bindings in both contexts with every scroll
 source, and two bindings on one physical chord answered from the pointer's own
 context table first; the new actions' effects; and both session flags in both orders of
-`load` and `load_config`.
+`load` and `load_config`. The default key table there is read with upstream's
+five Linux programs present as executables on the config's own `PATH`, so it is
+upstream's table on any machine.
+
+`tests/platform_actions_flow.rs` drives the same ABI for what this page adds:
+
+- hot corners from a config file with a wildcard entry, an exact entry, an exact
+  entry without corners and a `none` corner: the `bindings` list before and
+  after the config, after an output is removed and after a reload; each corner
+  run, unarmed or refused; and the dragging rule on and off during a gesture
+  (a corner that runs window navigation, with its `pointer` and `held`, is in
+  `tests/navigation_actions_flow.rs`);
+- `send-to-output` over two and three outputs whose bounds are neither aligned
+  nor equal, in each of the four directions, with the target at another zoom,
+  under a usable area that is not the whole output, with the placement point
+  from the navigation context and from `focus_placement` in a config file; the
+  source output by registration order, by the rounded camera, the truncated
+  center and the half-open view edge, and by the active output when no output
+  shows the window; truncation toward zero for odd and fractional frames; the
+  raise; the refusals; and a single output;
+- `send-cursor-to-output` for all eight directions from each of three outputs,
+  with the effect's coordinates;
+- every `switch-layout` form, `layout_changed` feeding `Layout`, `StateInfo` and
+  the snapshot, its refusals, and a scene save and load;
+- the `subscribe` effect's line against the `State` reply and against
+  upstream's member order, and `state_event` across requests that change the
+  state, requests that do not, a change of active output, and every frame of a
+  flight;
+- autostart effects on the launch load and on no later one;
+- the default key table with an empty `PATH`, with all five programs present,
+  with one present and two not executable; bindings the file wrote, the
+  two that repeat upstream's defaults word for word included; and two entries
+  the loader rejects, whose defaults stay defaults.
+
+The expected positions and adjacency were worked out by hand from the adapted
+rules, with no oracle build of upstream. Each of the output rules was also
+changed in the source once (rounding in place of truncation, a narrower cone,
+the camera floored or rounded up, the center floored, a closed view edge, the
+active output preferred) to see the tests fail, and restored.
 
 Those are controller scenarios. They are not evidence that a chord is registered
 with macOS, that a key press, button or scroll reaches the shell, that a
 character resolves through a keyboard layout, that an `exec` effect starts a
 process, that the config file is watched, or that anything is drawn. The key
-codes were read from the macOS SDK headers; none was pressed.
+codes were read from the macOS SDK headers; none was pressed. Nor are they
+evidence that the pointer is watched or reaches a corner, that it is warped,
+that an input source is listed, selected or reported, or that an autostart
+command starts. `/usr/bin/pmset displaysleepnow` was not run: the file exists on
+the development machine (macOS 27.2), and what it does to the session there,
+and whether a key release wakes the display at once, was not observed.
 
 The shell's side is described in the
 [shell notes](../../native/desktop/README.md#configuration). Their
@@ -496,4 +827,14 @@ The shell's side is described in the
 scripted session against the built app on 2026-10-09 in which the file watch,
 `reload-config`, a broken file, a file moved away and back, `nudge-window`,
 `spawn` and `exec` were observed over the IPC socket, and names what stayed unrun: every hot key
-and every pointer binding.
+and every pointer binding. Two more launches that day, listed there as well,
+observed an `autostart` command starting once and not again on a reload, the
+launch `layout_changed` report in `Layout` and `State`, `switch-layout next`
+with a single enabled input source (nothing selected), and `send-to-output` and
+`send-cursor-to-output` with a single output (nothing moved, no warp). Two
+further launches after the review fixes observed `INFINIFY_SOCKET` in an
+autostart child and in an IPC `exec` child (the served socket, and the file's
+`[env]` value once it set one), and an autostart `msg` with no `--socket`
+answered by that instance. No hot
+corner was fired, no pointer was warped, no input source was selected and
+`pmset` was not run in any of them.

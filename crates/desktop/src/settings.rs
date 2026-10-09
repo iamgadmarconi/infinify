@@ -6,11 +6,14 @@
 // registry), src/config/mod.rs (load_from_collect: at startup a missing file is
 // the built-in defaults) and src/state/session_store.rs
 // (load_session and saved_camera_state: what restore_bookmarks and
-// restore_camera let a saved session bring back). The configuration itself is
+// restore_camera let a saved session bring back) and src/main.rs (the
+// autostart commands, spawned once after startup). The configuration itself is
 // driftwm-core's `Config`, upstream's own code.
 use super::bindings::{Platform, key_known};
 use super::*;
-use driftwm_core::config::{Config, config_path, parse_key_combo, parse_tap_combo};
+use driftwm_core::config::{
+    Config, Modifiers, config_path, parse_action, parse_key_combo, parse_tap_combo,
+};
 use std::io::Read;
 
 /// A config file is hand-written text; anything larger is not one.
@@ -25,6 +28,8 @@ pub(crate) struct Settings {
     /// does not have, each with the key name as the file spells it, so their
     /// bindings can be reported instead of vanishing.
     pub(crate) extra_keysyms: Vec<(u32, String)>,
+    /// Every key combo the file's `[keybindings]` table binds or unbinds.
+    written_keys: Vec<(Modifiers, u32)>,
     /// Parsed from a file. False for the built-in defaults, whether no file was
     /// found or the launch file was refused.
     pub(crate) from_file: bool,
@@ -48,33 +53,54 @@ pub(crate) struct Snap {
     pub(crate) centers: bool,
 }
 
-/// The key names of the file's `[keybindings]` table that parse as a key combo
-/// on a keysym outside the macOS key table. Upstream normalizes each combo
-/// before storing it, so the same is done before the keysym is kept.
-fn extra_keysyms(contents: &str, config: &Config) -> Vec<(u32, String)> {
-    let Ok(table) = contents.parse::<toml::Table>() else {
-        return Vec::new();
-    };
-    let mut extra: Vec<(u32, String)> = Vec::new();
-    for name in table
-        .get("keybindings")
-        .and_then(toml::Value::as_table)
-        .into_iter()
-        .flat_map(|bindings| bindings.keys())
-    {
-        if parse_tap_combo(name, config.mod_key).is_some() {
-            continue;
-        }
-        if let Ok(mut combo) = parse_key_combo(name, config.mod_key) {
-            combo.normalize();
-            let sym = combo.sym.raw();
-            if !key_known(sym) && extra.iter().all(|(known, _)| *known != sym) {
-                let key = name.rsplit('+').next().unwrap_or(name).trim();
-                extra.push((sym, key.to_owned()));
+impl Settings {
+    /// Did the file's `[keybindings]` table bind or unbind this combo? If
+    /// not, a binding on it is one of upstream's defaults.
+    pub(crate) fn wrote(&self, modifiers: &Modifiers, sym: u32) -> bool {
+        self.written_keys
+            .iter()
+            .any(|(written, key)| written == modifiers && *key == sym)
+    }
+    /// An accepted file's configuration, with what its `[keybindings]` table
+    /// names: every key combo upstream's loader took the entry of (`none`, or
+    /// an action that parses; an entry it warns about and drops leaves the
+    /// default on that combo a default), and the key names on a keysym outside
+    /// the macOS key table. Upstream normalizes each combo before storing it,
+    /// so the same is done before the combo is kept.
+    fn of_file(contents: &str, config: Config) -> Self {
+        let (mut written_keys, mut extra_keysyms) = (Vec::new(), Vec::<(u32, String)>::new());
+        let table = contents.parse::<toml::Table>().unwrap_or_default();
+        for (name, action) in table
+            .get("keybindings")
+            .and_then(toml::Value::as_table)
+            .into_iter()
+            .flatten()
+        {
+            if parse_tap_combo(name, config.mod_key).is_some() {
+                continue;
+            }
+            if let Ok(mut combo) = parse_key_combo(name, config.mod_key) {
+                combo.normalize();
+                let sym = combo.sym.raw();
+                if !key_known(sym) && extra_keysyms.iter().all(|(known, _)| *known != sym) {
+                    let key = name.rsplit('+').next().unwrap_or(name).trim();
+                    extra_keysyms.push((sym, key.to_owned()));
+                }
+                if action
+                    .as_str()
+                    .is_some_and(|action| action == "none" || parse_action(action).is_ok())
+                {
+                    written_keys.push((combo.modifiers, sym));
+                }
             }
         }
+        Self {
+            config,
+            extra_keysyms,
+            written_keys,
+            from_file: true,
+        }
     }
-    extra
 }
 
 impl Controller {
@@ -143,7 +169,8 @@ impl Controller {
         Ok(json!({"super":self.platform.super_text()}))
     }
     /// Load upstream's config file, or keep what is in force. `errors` and
-    /// `warnings` are upstream's own messages. A file that is missing is the
+    /// `warnings` are upstream's own messages. `effects` are the `autostart`
+    /// commands, on the first load only. A file that is missing is the
     /// built-in defaults and no error until a file has been accepted; after
     /// that a missing file is a read failure like any other. A file that cannot
     /// be read or parsed leaves the previous configuration in force, as
@@ -170,17 +197,7 @@ impl Controller {
             Ok(contents) => (
                 true,
                 Config::from_toml_collect(&contents)
-                    .map(|(config, warnings)| {
-                        let extra_keysyms = extra_keysyms(&contents, &config);
-                        (
-                            Settings {
-                                config,
-                                extra_keysyms,
-                                from_file: true,
-                            },
-                            warnings,
-                        )
-                    })
+                    .map(|(config, warnings)| (Settings::of_file(&contents, config), warnings))
                     .map_err(|e| format!("config error: {e}")),
             ),
             // Upstream's startup: no file is the built-in defaults. Once a file
@@ -224,12 +241,17 @@ impl Controller {
             }
             Err(error) => (vec![error], Vec::new()),
         };
+        let mut effects = Vec::new();
         if launch {
             self.seed_bookmarks();
             self.settle_shown_cameras()?;
+            // Upstream main: the launch config's autostart commands, spawned
+            // as an `exec` is. A reload never runs them, a changed list included.
+            let config = self.config();
+            effects.extend(config.autostart.iter().map(|cmd| self.exec_effect(cmd)));
         }
         Ok(
-            json!({"path":path.to_string_lossy(),"exists":exists,"errors":errors,"warnings":warnings,"dirty":dirty}),
+            json!({"path":path.to_string_lossy(),"exists":exists,"errors":errors,"warnings":warnings,"dirty":dirty,"effects":effects}),
         )
     }
 }

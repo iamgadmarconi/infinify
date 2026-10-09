@@ -88,6 +88,15 @@ impl NavigationFrame {
     }
 }
 impl NavigationContext {
+    /// Upstream align_point_on for a window's world frame: the output-local
+    /// point where a navigation landing at `zoom` parks the frame's center.
+    pub(crate) fn align_rect(&self, visual_rect_world: Rect, zoom: f64) -> Point {
+        let frame = NavigationFrame {
+            visual_rect_world,
+            extra_compositor_border: 0.0,
+        };
+        self.align(&frame, zoom)
+    }
     fn align(&self, frame: &NavigationFrame, zoom: f64) -> Point {
         let center = self.usable_rect_local.center();
         let (px, py) = self.focus_placement.pull();
