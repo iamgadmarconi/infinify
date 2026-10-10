@@ -20,7 +20,14 @@
 // the order of the error bar's messages) and src/state/window_animation_driver.rs
 // (start_window_open_animation, snapshot_closing_window, flatten_scale_for_canvas_rect:
 // an event on no output animates nothing, and the density a closing window is baked
-// at). New code over the controller's snapshot; cameras, world rectangles and pinned
+// at). The background's chunk caches (a baked cache_shader, a pyramidal TIFF's chunks)
+// are the background module's (BACKGROUND-NOTES.md, section 17); from here come
+// upstream's one cache per output and its shrink while a fullscreen window conceals the
+// canvas (src/render/mod.rs, the bg_elements of compose_frame), the frames that keep
+// coming while a cache fills (has_pending_bakes and has_pending_loads, as
+// src/backend/udev.rs asks them) and what a capture draws instead of a cache
+// (src/render/capture_background.rs, CaptureBackground::prepare).
+// New code over the controller's snapshot; cameras, world rectangles and pinned
 // screen rectangles are the controller's, and no native window geometry is read.
 #import "canvas-renderer.h"
 #import "compositor.h"
@@ -89,6 +96,8 @@ static NSDictionary *refusal(NSString *message) { return @{@"error":message}; }
 @interface DWCanvasOutput : NSObject
 @property IFCompositorLayer *layer;
 @property IFCompositorFrame *frame;
+// The background as this output draws it: its own chunk cache when the program has one, else the program itself.
+@property IFBackgroundProgram *background;
 @property NSMutableDictionary<NSNumber *,IFCompositorElement *> *elements;
 @property NSMutableDictionary<NSNumber *,NSDictionary *> *placements;
 @property NSUInteger style; // the configuration its frame carries
@@ -108,6 +117,10 @@ static NSDictionary *refusal(NSString *message) { return @{@"error":message}; }
 @property NSMutableDictionary<NSNumber *,NSNumber *> *owed; // of the unseen windows, those held for their size: since when
 @property uint64_t serial; // the newest lifecycle event this output was described with
 @property double presented; // the time of the last frame its layer drew
+// A filling chunk cache is given one frame per tick of the shell's frame timer, as upstream's allowances are per output frame. drawn: the layer drew since
+// the last tick asked (-animates:draw:) for a reason of its own (the camera frame of a flight, a window's picture, a decoded chunk's wake-up), and that draw
+// is the tick's frame. forced: the redraw a tick asked for itself, which is no such reason.
+@property BOOL drawn,forced;
 @end
 @implementation DWCanvasOutput
 @end
@@ -143,6 +156,8 @@ static NSDictionary *refusal(NSString *message) { return @{@"error":message}; }
     IFBackgroundConfig *config=[IFBackgroundConfig configWithTypeString:text(b[@"type"]) path:text(b[@"path"]) texture:text(b[@"texture"]) warning:&warning];
     config.mirrorTile=[number(b[@"mirror_tile"])boolValue];config.transparentShader=[number(b[@"transparent_shader"])boolValue];config.cacheShader=[number(b[@"cache_shader"])boolValue];
     config.animateFPS=(NSUInteger)lround(fmin(fmax([number(b[@"animate_fps"])doubleValue],0),1000));
+    // Upstream's u32 of megabytes; a controller that does not report the key leaves upstream's default of 128.
+    if(number(b[@"cache_budget_mb"]))config.cacheBudgetMB=(NSUInteger)llround(fmin(fmax([b[@"cache_budget_mb"]doubleValue],0),UINT32_MAX));
     self.program=[IFBackgroundProgram programWithConfig:config device:nil];self.note=self.program.errorText?:warning;
     IFCompositorChromeStyle *style=[IFCompositorChromeStyle new];
     style.backgroundColor=colorOf(c[@"background"],style.backgroundColor);style.foregroundColor=colorOf(c[@"foreground"],style.foregroundColor);
@@ -170,6 +185,16 @@ static NSDictionary *refusal(NSString *message) { return @{@"error":message}; }
     NSMutableArray<NSString *> *errors=[NSMutableArray array];for(id message in list(render[@"errors"]))if(text(message))[errors addObject:message];
     if(self.program.errorText)[errors insertObject:self.program.errorText atIndex:MIN(errors.count,(NSUInteger)1)];
     self.errors=errors.count?errors:nil;return YES;
+}
+// Upstream keeps a background's chunk cache per output (cached_shader_chunks, cached_tile_chunks): each output draws from a program
+// of its own, which for a background without a cache is the shared one. A chunk decoded off the main thread redraws that output alone,
+// unless a fullscreen window conceals its canvas; the frame is forced, since nothing in its description changed. Under such a window
+// the chunk is one a decoder was still working on when the cache was shrunk: it is discarded at once, as upstream's shrink on every
+// frame of that session does, where nothing here would drain it until the output is next described.
+- (void)cache:(DWCanvasOutput *)state {
+    state.background=[self.program programForOutput];if(state.background==self.program)return;
+    __weak DWCanvasRenderer *weak=self;__weak DWCanvasOutput *output=state;
+    state.background.chunkReadyHandler=^{DWCanvasOutput *shown=output;if(!shown.frame.background){[shown.background shrinkChunkCache];return;}shown.dirty=YES;[shown.layer setNeedsRedraw];[weak setNeedsFlush];};
 }
 // The live picture of one window element, or none.
 - (void)content:(IFCompositorElement *)element window:(NSNumber *)window placement:(NSDictionary *)placement {
@@ -284,7 +309,7 @@ static const double sizeHold=10;
         CGRect place=CGRectOffset(bounds,-origin.x,-origin.y);if(!CGRectEqualToRect(state.layer.frame,place))state.layer.frame=place;
         IFCompositorFrame *frame=state.frame;CGPoint camera=pointOf(o[@"camera"]);double zoom=[number(o[@"zoom"])doubleValue];
         frame.size=bounds.size;frame.scale=scale>0?scale:1;frame.cameraX=camera.x;frame.cameraY=camera.y;frame.zoom=zoom;frame.clear=IFCompositorClearOpaqueBlack;frame.decorationScale=decorationScale;
-        if(state.style!=self.style){state.style=self.style;frame.background=self.program;frame.chrome=self.chrome;frame.placeholderColor=self.chrome.backgroundColor;frame.outline=self.outline;frame.effects=self.effects;frame.errorMessages=self.errors;}
+        if(state.style!=self.style){state.style=self.style;[self cache:state];frame.background=state.background;frame.chrome=self.chrome;frame.placeholderColor=self.chrome.backgroundColor;frame.outline=self.outline;frame.effects=self.effects;frame.errorMessages=self.errors;}
         // The other outputs' viewports, projected as upstream's build_output_outline_elements does.
         NSMutableData *outlines=[NSMutableData data];
         for(NSDictionary *other in all){
@@ -377,7 +402,8 @@ static const double sizeHold=10;
     // "black": nothing but the clear colour lies behind the window. "canvas": its opacity is below 1 and the canvas shows through it.
     BOOL concealed=full&&![text(full[@"backdrop"])isEqual:@"canvas"],parked=NO;
     for(NSDictionary *other in all)if(other!=o&&dict(other[@"fullscreen"]))parked=YES;
-    frame.background=concealed?nil:self.program;if(concealed)[frame setOutlineRects:NULL count:0];
+    // Upstream shrinks a concealed output's chunk cache on every such frame: it frees its chunks, keeps its floor and has nothing pending.
+    frame.background=concealed?nil:state.background;if(concealed){[state.background shrinkChunkCache];[frame setOutlineRects:NULL count:0];}
     else if(parked){
         NSMutableData *outlines=[NSMutableData data];
         for(NSDictionary *other in all){
@@ -413,7 +439,16 @@ static const double sizeHold=10;
 }
 - (BOOL)animates:(NSArray<NSNumber *> *)outputs draw:(BOOL)draw {
     BOOL any=NO;
-    for(NSNumber *output in outputs){DWCanvasOutput *state=self.states[output];if(!state.layer.renderer||!state.frame.needsContinuousRedraw)continue;any=YES;if(draw){state.dirty=YES;[self setNeedsFlush];}}
+    for(NSNumber *output in outputs){
+        DWCanvasOutput *state=self.states[output];if(!state.layer.renderer)continue;
+        // A chunk cache that is still filling (cells of a baked shader left for the next frame, chunks of a TIFF being decoded) is drawn
+        // again as an animation is, until nothing is pending. That frame is forced: its description is the one already drawn.
+        BOOL filling=state.frame.background.pendingChunkCount>0;if(!filling&&!state.frame.needsContinuousRedraw)continue;
+        // Every frame drawn spends the cache's allowances (two bakes, eight uploads), which upstream grants once per output frame. An output that has drawn since
+        // the last tick, as it does inside this very tick when a flight's camera frame is described and flushed before this is asked, has had this tick's frame:
+        // forcing another would spend them twice a tick, and on a 120 Hz display link draw the output twice in 8 ms.
+        any=YES;if(draw){BOOL had=state.drawn;state.drawn=NO;state.dirty=YES;if(filling&&!had){state.forced=YES;[state.layer setNeedsRedraw];}[self setNeedsFlush];}
+    }
     return any;
 }
 // A burst of stream frames and animation ticks in one turn of the run loop describes
@@ -429,7 +464,7 @@ static const double sizeHold=10;
 - (void)flush {
     self.pending=NO;double now=canvasTime();
     for(DWCanvasOutput *state in self.states.allValues){
-        if(!state.dirty)continue;state.dirty=NO;IFCompositorFrame *frame=state.frame;frame.time=now;@autoreleasepool{if([state.layer updateWithFrame:frame])state.presented=now;}
+        if(!state.dirty)continue;state.dirty=NO;IFCompositorFrame *frame=state.frame;frame.time=now;BOOL forced=state.forced;state.forced=NO;@autoreleasepool{if([state.layer updateWithFrame:frame]){state.presented=now;if(!forced)state.drawn=YES;}}
         // An animation that has run out at this frame's time, which the frame no longer showed: upstream drops the snapshot or the fade, and a window that has opened is the plain window.
         for(IFCompositorElement *element in state.leaving.count?state.leaving.copy:nil)if([frame lifecycleFinishedForElement:element]){[state.leaving removeObject:element];[frame.elements removeObject:element];}
         for(IFCompositorElement *element in frame.elements)if(element.lifecycle==IFCompositorLifecycleOpening&&[frame lifecycleFinishedForElement:element]){element.lifecycle=IFCompositorLifecycleNone;element.lifecycleStartTime=NAN;}
@@ -535,10 +570,12 @@ static const double sizeHold=10;
         if(CGRectEqualToRect(dest,region))wallpaper=NO;
     }
     // Upstream's capture: zoom 1, a transparent target, no outlines, and the background
-    // under every scene but not under a window captured alone.
+    // under every scene but not under a window captured alone. A capture draws no chunk
+    // cache: a baked shader is rendered live and a pyramidal TIFF from one level of at
+    // most 4096 pixels, whatever the outputs have loaded (the module's captureProgram).
     IFCompositorFrame *frame=[IFCompositorFrame new];
     frame.size=region.size;frame.scale=scale;frame.cameraX=region.origin.x;frame.cameraY=region.origin.y;frame.zoom=1;frame.time=canvasTime();frame.clear=IFCompositorClearTransparent;
-    frame.chrome=self.chrome;frame.placeholderColor=self.chrome.backgroundColor;frame.background=isolate||wallpaper?nil:self.program;
+    frame.chrome=self.chrome;frame.placeholderColor=self.chrome.backgroundColor;frame.background=isolate||wallpaper?nil:self.program.captureProgram;
     for(IFCompositorElement *element in elements){
         // Nothing of an element farther away than its bar, border and shadow reaches the region.
         double reach=ceil(element.decoration.shadowRadius)+1;

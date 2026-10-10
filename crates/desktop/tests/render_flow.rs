@@ -223,7 +223,7 @@ fn default_block(revision: u64) -> Value {
     let effects = EffectsConfig::default();
     assert_eq!(config.effects, effects);
     json!({
-        "background":{"type":"default","path":null,"texture":null,"mirror_tile":config.background.mirror_tile,"transparent_shader":config.background.transparent_shader,"animate_fps":config.background.animate_fps,"cache_shader":config.background.cache_shader},
+        "background":{"type":"default","path":null,"texture":null,"mirror_tile":config.background.mirror_tile,"transparent_shader":config.background.transparent_shader,"animate_fps":config.background.animate_fps,"cache_shader":config.background.cache_shader,"cache_budget_mb":config.background.cache_budget_mb},
         "chrome":{"background":rgba(decorations.bg_color),"foreground":rgba(decorations.fg_color),"corner_radius":decorations.corner_radius,"title_bar_height":decorations.title_bar_height,"font":decorations.font,"font_size":decorations.font_size,"font_weight":"medium","title_align":"center"},
         "outline":{"color":rgba(outline.color),"thickness":outline.thickness,"opacity":outline.opacity},
         "effects":{"blur_radius":effects.blur_radius,"blur_strength":effects.blur_strength,"animate_blur_fps":effects.animate_blur_fps,"animation_speed":effects.animation_speed,"animation_scale":effects.animation_scale},
@@ -356,20 +356,20 @@ fn a_reload_changes_the_block_and_every_accepted_one_spends_a_revision() {
     };
     let backgrounds = [
         (
-            "type = \"shader\"\npath = \"/opt/shaders/smoke.glsl\"\ntexture = \"~/Pictures/photo.jpg\"\ntransparent_shader = true\nanimate_fps = 30\ncache_shader = true\n",
-            json!({"type":"shader","path":"/opt/shaders/smoke.glsl","texture":home("Pictures/photo.jpg"),"mirror_tile":false,"transparent_shader":true,"animate_fps":30,"cache_shader":true}),
+            "type = \"shader\"\npath = \"/opt/shaders/smoke.glsl\"\ntexture = \"~/Pictures/photo.jpg\"\ntransparent_shader = true\nanimate_fps = 30\ncache_shader = true\ncache_budget_mb = 512\n",
+            json!({"type":"shader","path":"/opt/shaders/smoke.glsl","texture":home("Pictures/photo.jpg"),"mirror_tile":false,"transparent_shader":true,"animate_fps":30,"cache_shader":true,"cache_budget_mb":512}),
         ),
         (
             "type = \"tile\"\npath = \"~/Pictures/tile.png\"\nmirror_tile = true\n",
-            json!({"type":"tile","path":home("Pictures/tile.png"),"texture":null,"mirror_tile":true,"transparent_shader":false,"animate_fps":0,"cache_shader":false}),
+            json!({"type":"tile","path":home("Pictures/tile.png"),"texture":null,"mirror_tile":true,"transparent_shader":false,"animate_fps":0,"cache_shader":false,"cache_budget_mb":128}),
         ),
         (
             "type = \"wallpaper\"\npath = \"/Library/Desktop Pictures/hill.heic\"\n",
-            json!({"type":"wallpaper","path":"/Library/Desktop Pictures/hill.heic","texture":null,"mirror_tile":false,"transparent_shader":false,"animate_fps":0,"cache_shader":false}),
+            json!({"type":"wallpaper","path":"/Library/Desktop Pictures/hill.heic","texture":null,"mirror_tile":false,"transparent_shader":false,"animate_fps":0,"cache_shader":false,"cache_budget_mb":128}),
         ),
         (
             "type = \"none\"\n",
-            json!({"type":"none","path":null,"texture":null,"mirror_tile":false,"transparent_shader":false,"animate_fps":0,"cache_shader":false}),
+            json!({"type":"none","path":null,"texture":null,"mirror_tile":false,"transparent_shader":false,"animate_fps":0,"cache_shader":false,"cache_budget_mb":128}),
         ),
     ];
     let mut revision = 3;
@@ -441,6 +441,68 @@ fn a_reload_changes_the_block_and_every_accepted_one_spends_a_revision() {
     let mut second = first.clone();
     second["revision"] = json!(2);
     assert_eq!(launched.configure(&scratch, shader), second);
+}
+
+#[test]
+fn the_cache_budget_is_cores_parsed_value_and_a_change_spends_a_revision() {
+    let scratch = Scratch::new();
+    // The block with `[background] cache_budget_mb` at `budget` and every
+    // other table at upstream's defaults.
+    let budgeted = |budget: u32, revision: u64| {
+        let mut block = default_block(revision);
+        block["background"]["cache_budget_mb"] = json!(budget);
+        block
+    };
+    // Upstream's default of 128 MB, from driftwm-core: with no config at all,
+    // and under a launch file that does not name the key, which spends
+    // nothing.
+    let default = Config::default().background.cache_budget_mb;
+    assert_eq!(default, 128);
+    let mut h = Host::new();
+    assert_eq!(h.render()["background"]["cache_budget_mb"], default);
+    let unrelated = "[navigation]\npan_step = 123\n";
+    assert_eq!(h.configure(&scratch, unrelated), default_block(0));
+
+    // A reload that changes the budget alone: that key, and one revision.
+    let toml = format!("{unrelated}[background]\ncache_budget_mb = 64\n");
+    assert_eq!(h.configure(&scratch, &toml), budgeted(64, 1));
+    // A reload that changes something else leaves the budget where it was:
+    // the same block, but for the revision every accepted reload spends.
+    let elsewhere = toml.replace("pan_step = 123", "pan_step = 321");
+    assert_ne!(elsewhere, toml);
+    assert_eq!(h.configure(&scratch, &elsewhere), budgeted(64, 2));
+    // The value is core's `u32` as parsed, in megabytes, and nothing here
+    // clamps it: what a budget too small for one chunk draws is the shell's.
+    for (budget, revision) in [(0, 3), (u32::MAX, 4)] {
+        let toml = format!("[background]\ncache_budget_mb = {budget}\n");
+        assert_eq!(h.configure(&scratch, &toml), budgeted(budget, revision));
+    }
+    // A value core's parser refuses is a refused file: the budget in force
+    // stays, and the revision moves for the message alone.
+    std::fs::write(
+        scratch.path("config.toml"),
+        "[background]\ncache_budget_mb = -1\n",
+    )
+    .unwrap();
+    let refused = h.ok(json!({"op":"load_config","path":scratch.path("config.toml")}));
+    assert_eq!(refused["errors"].as_array().unwrap().len(), 1, "{refused}");
+    let mut failed = budgeted(u32::MAX, 5);
+    failed["errors"] = refused["errors"].clone();
+    assert_eq!(h.render(), failed);
+    // A file without the key is upstream's default again.
+    assert_eq!(h.configure(&scratch, unrelated), default_block(6));
+
+    // The launch load spends a revision only for a file whose drawn tables
+    // are not the defaults, and the budget is one of [background]'s keys: a
+    // launch file that changes it alone spends the first, as one that changes
+    // any other key of the table does, and one that writes the default spends
+    // none, as the unrelated launch file above spent none.
+    let mut launched = Host::new();
+    let changed = "[background]\ncache_budget_mb = 64\n";
+    assert_eq!(launched.configure(&scratch, changed), budgeted(64, 1));
+    let mut unchanged = Host::new();
+    let written = format!("[background]\ncache_budget_mb = {default}\n");
+    assert_eq!(unchanged.configure(&scratch, &written), default_block(0));
 }
 
 /// The fields a placement gained, as one object.

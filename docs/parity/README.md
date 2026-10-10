@@ -755,9 +755,10 @@ device-specific behavior also need the corresponding hardware.
   was compared with a pixel from DriftWM itself. Known mismatches: blur,
   `[effects]` and the open and close animations were not drawn by this
   milestone and are by the effects milestone below, and move and resize
-  animations are not drawn at all; `cache_shader` is
-  accepted and ignored (a shader always renders live) and gigapixel TIFF tiles
-  are not supported; text is CoreText's,
+  animations are not drawn at all; `cache_shader` was
+  accepted and ignored (a shader always rendered live) and gigapixel TIFF
+  tiles were not supported by this milestone, and both are drawn since the
+  background caches milestone below; text is CoreText's,
   not cosmic-text's; a window whose rectangle lies just outside an output
   casts no shadow into it; a screenshot path's missing directories are not
   created; captures are not tiled; in a capture a wallpaper is cover-cropped
@@ -1571,8 +1572,8 @@ device-specific behavior also need the corresponding hardware.
   resize pass exists. See the
   [fullscreen contract](../../crates/desktop/FULLSCREEN.md) and the
   [desktop shell notes](../../native/desktop/README.md#fullscreen).
-- This milestone (commit pending), tap bindings, closes one gap of a default
-  launch, with no flag. A `[keybindings]` entry that is a bare modifier chord
+- `72be7ea`, tap bindings, closes one gap of a default launch, with no flag.
+  A `[keybindings]` entry that is a bare modifier chord
   (`"alt+shift" = "switch-layout next"`) is no longer skipped: the `bindings`
   reply lists it under `taps` with the macOS chord a key binding's modifiers
   map to, and a new `tap {modifiers, output}` command runs the bound action
@@ -1674,6 +1675,133 @@ device-specific behavior also need the corresponding hardware.
   the [configuration contract](../../crates/desktop/CONFIG.md#tap-bindings)
   and the
   [desktop shell notes](../../native/desktop/README.md#what-has-been-run-for-tap-bindings).
+- This milestone (commit pending), the background caches: the two things the
+  Metal background port had left out, both in a default launch.
+  `[background] cache_shader = true` bakes a static shader into canvas-space
+  chunk textures and pans those: upstream's rule for which shader qualifies
+  (it declares `u_camera` and neither `u_time` nor `u_zoom`, has no `texture`
+  and is not under `transparent_shader`), its 1024-unit chunks over eight
+  levels with a one-texel apron, the resident coarse cover, two bakes a frame
+  and sixteen when the level changes, and least-recently-shown eviction. A
+  `type = "tile"` path ending in `.tif` or `.tiff` is upstream's gigapixel
+  wallpaper: a tiled pyramidal TIFF drawn from its levels chunk by chunk, with
+  upstream's level choice by zoom, chunk aggregation, six decodes at a time
+  off the main thread, eight uploads a frame and the always-loaded fallback
+  level under the chunks still loading; a file upstream refuses falls back to
+  the dot grid with upstream's text on stderr and the error bar.
+  `cache_budget_mb` bounds each output's cache of either kind, and the
+  controller now reports it as `render.background.cache_budget_mb`. A chunk
+  that becomes ready redraws its own output and nothing is drawn while
+  nothing is pending. While a cache fills, its output is given one frame per
+  tick of the frame timer, the display link at the display's refresh rate,
+  and upstream's allowances are spent once a frame, unscaled, as upstream
+  spends them per frame of its output. A blurred window over either cache
+  has its frost
+  recomputed in the frame a chunk lands, as upstream's blur refreshes when
+  the background's elements change: review found the frost left a blur of
+  the coarse picture, and the fix is the one change this milestone makes to
+  `compositor.m`. Four rows became `implemented_unverified` (the field
+  and reference rows of `cache_shader` and `cache_budget_mb`), and the notes
+  of six background rows that said the opposite were corrected.
+  Known mismatches, each upstream's own unless marked: the bake is not the
+  live render everywhere (equal, to one level on at most 0.056 % of pixels,
+  only at zoom 1, 0.5, 0.25 … with the camera on the baked level's grid;
+  shifted by under a pixel at a fractional camera; the next coarser level
+  stretched between those zooms); on a 2x display the default budget of 128
+  is 0.4 MB short of a view that lies across the canvas origin on both axes,
+  the home view among them, which then shows the coarse cover alone, a blur,
+  until `cache_budget_mb` is raised; a TIFF's level follows the zoom alone
+  and its chunks have no apron; `msg screenshot` draws neither cache, a baked
+  shader live and a TIFF from one level of at most 4096 pixels, which was not
+  what this milestone's brief asked of it and is what
+  `capture_background.rs` does. The port's own: tiles are decoded by ImageIO
+  one at a time, and a tile whose compressed data is damaged is not detected
+  (what upstream's decoder does with such a tile was not established);
+  a coarse cover or a TIFF view that does not fit the budget is drawn live or
+  from the coarser levels that fit, where upstream bakes or requests and
+  evicts every frame; the bake waits on the main thread inside the frame;
+  one frame timer follows the fastest display, so beside it a slower
+  display's cache is offered frames at the faster rate, where upstream gives
+  each output its own.
+  Evidence boundary. The controller's side is one scenario in `render_flow`
+  (five modules, 37 scenarios, passed). The caches' pictures were compared
+  only by a throwaway harness outside the repository that links the module
+  and the shell's renderer, rebuilt from the final tree: baked against live
+  for five upstream shaders at ten cameras, zooms and scales (ten frame pairs
+  byte-identical, the other on-grid ones one level apart on 1 to 1078
+  pixels, the off-grid ones different as above); the renderer on a detached
+  2x layer of the app's size (baked equal to live at zoom 1 and 0.5 away from
+  the origin; at the home view 86 % of pixels different under the default
+  budget and 506 pixels by one level under 256; one draw, then none in thirty
+  idle ticks); a generated 16384×8192 seven-level pyramid against the same
+  picture as a PNG tile (byte-identical at zoom 1 on a 1x target at three
+  cameras, 0.2 % of pixels on chunk edges at 2x, different at zoom 0.5 on 2x
+  where the level follows the zoom); and pans of 300 and 400 frames in which
+  the chunk bytes were never above a budget of 512, 128, 32 or 8 MB. After
+  the review the harness, rebuilt, drew one blurred window over each cache
+  through the compositor's offscreen encode: in eight sequences (a jump of
+  the view, the frame after concealed ones, a first frame) the frost was
+  recomputed on the frames a chunk landed in and the settled frame was
+  pixel-identical to one from a renderer with no frost yet, with no
+  recompute and no difference over a live shader and a PNG tile. The app
+  built from this tree was launched five times on 2026-10-10 on three
+  placeholders (private scene, config and socket, no Screen Recording access;
+  7 to 13 seconds, exit status 0 and the socket removed each time), and three
+  more times after the review fixes (13, 8 and 8 seconds, the same exits,
+  the same results). Seen
+  there, in the PNGs `msg screenshot` wrote, all opened, and on the app's
+  stderr: viewport captures with `cache_shader` on and off byte-identical at
+  three cameras and two zooms, which shows a capture unaffected and nothing
+  about the bake; a 4096×2048 pyramid byte-identical to its PNG at zoom 1,
+  0.5 and 0.25; the 16384×8192 pyramid 39 % to 54 % different from its PNG,
+  the capture being its 4096 level, and byte-identical to that level as a PNG
+  tile at the matching scale; a stripped, a greyscale and a missing TIFF with
+  upstream's three texts and captures byte-identical to the dot grid; and the
+  caches' own lines for a view over the budget, carrying the budgets the
+  configs named (128, 40 and 1 for the shader, 8 and 2 for the TIFF), which
+  is the one sign in the app that the layer's caches ran and took the
+  controller's number. All of that was on the tree the caches were built in,
+  before the display-link frame timer (`a476e93`) and the tap bindings
+  (`72be7ea`); they landed on the tree that has both, and one thing changed
+  at that join. A tick of the frame timer that had already drawn its output,
+  as every tick of a flight has, forced a second frame of a filling cache and
+  so spent upstream's per-frame allowances twice; now an output that has
+  drawn since the last tick is not forced again. A second throwaway program
+  outside the repository, which links the landed `frame-driver.m` with the
+  renderer and the module and copies `main.m`'s rule for the timer, measured
+  it on a 120 Hz display: after a jump to cells never shown the timer
+  started, baked two chunks a tick at 120 ticks a second and ended by itself,
+  with no tick and no chunk in the idle half second after; a flight over
+  fresh cells baked up to four a tick at 79 ticks a second as the two sides
+  merged and two a tick at 119 to 120 after the change (94 and 111 at 2x); a
+  pyramid's timer started with its decodes outstanding and ended by itself,
+  and its ready handler was never called off the main thread. On the landed
+  tree seven controller test modules (63 scenarios) and the headless
+  navigation coordinator script passed, and the app built from it was
+  launched four times on the three placeholders (2.9 to 7.4 seconds, exit
+  status 0 and the socket removed each time), with dark sea baked under the
+  default budget, under 1 (the live fallback's line on stderr) and under
+  256, a shader path that does not exist (upstream's text and the dot grid's
+  capture), an 8192×4096 pyramid (its picture in the capture) and a stripped
+  file (upstream's text). `center-nearest right` settled on camera `1950 -0`
+  in three of the four, and `pan-viewport right` on `2050 -0` and
+  `zoom-to-fit` on zoom `0.28484848484848485` in the two that sent them from
+  there. In the other one the same first command came to rest at `1661.93
+  3682.86`, with every later command exact from that place; the next launch
+  of the same binary, config and script did not repeat it, and nothing
+  recorded says what moved the camera (a scroll reaching the panel, which is
+  on the owner's display, would). That is the renderer and the frame driver
+  outside the shell, and the app answering with the caches on: the shell's
+  own frame block was not seen serving a filling cache, no flight was watched
+  over one, and no tap was made. Not seen: either cache's picture on the
+  app's panel
+  (no screen capture from an agent session), eviction in the app, a real
+  gigapixel file or one written by `vips` or GDAL, a second display, a
+  display whose scale changes, a live window over a cached background, a
+  blurred one over it anywhere but in the harness, and memory over a long
+  run. See the
+  [render contract](../../crates/desktop/RENDER.md) and the
+  [desktop shell notes](../../native/desktop/README.md#background-caches).
 
 These milestones add evidence to partial rows. None satisfies an entire native
 behavior row or changes the completion requirement.
@@ -1731,21 +1859,23 @@ tree at `ed34eec`. 24 of them described behaviour a default launch already has
 and became `implemented_unverified`; the other 190 stay `missing`, each with a
 note that says why. No row is `verified` or `blocked`, and the sweep moved none
 to `out_of_scope`: that is the owner's decision, which a note only recommends.
-The tap-bindings milestone has since moved one more row,
-`config.keybindings.alt+shift`, to `implemented_unverified`; the table is
-counted from the file as it stands after that. `protocol.layer_shell` stays
-`missing` and stays counted as a gap for the panel and overlay policy it still
-lacks; its other clause, a reserved area, is not one: by the owner's decision
-of 2026-10-10 nothing is reserved for the menu bar and the Dock.
+Two milestones have moved rows since, and the table is counted from the file
+as it stands after both. The tap-bindings milestone moved one,
+`config.keybindings.alt+shift`, to `implemented_unverified`. The background
+caches milestone above took four more out of the real gaps, the field and
+reference rows of `cache_shader` and `cache_budget_mb`. `protocol.layer_shell`
+stays `missing` and stays counted as a gap for the panel and overlay policy it
+still lacks; its other clause, a reserved area, is not one: by the owner's
+decision of 2026-10-10 nothing is reserved for the menu bar and the Dock.
 
 | Rows | Count |
 | --- | --- |
-| `implemented_unverified` | 396 |
-| `missing` | 189 |
+| `implemented_unverified` | 400 |
+| `missing` | 185 |
 | of which gated behind `--experimental-native-resize` | 29 |
 | of which provided or owned by macOS | 68 |
 | of which with no Mac counterpart | 67 |
-| of which real gaps | 25 |
+| of which real gaps | 21 |
 | `out_of_scope` | 3 |
 | all rows | 588 |
 
@@ -1775,7 +1905,7 @@ The `missing` rows, by group:
   opacity on inactive outputs; Num Lock and the XKB keyboard model; the primary
   selection; shortcut inhibition by a client; the media stop key; the reference
   config's tablet `map_to_output`.
-- **Real gaps (25).** Nothing but the work is waited for here:
+- **Real gaps (21).** Nothing but the work is waited for here:
   - a resize carried to the snapped neighbours, by pointer
     (`resize_window_snapped`) or from a window's own edge or zoom button
     (`decoration_resize_snapped`, `decoration_fit_snapped`): the controller
@@ -1791,7 +1921,6 @@ The `missing` rows, by group:
   - any policy for panel or overlay windows; the row's other clause, the
     area a panel reserves, is no gap but the owner's decision: nothing is
     reserved for the menu bar and the Dock (1);
-  - the background shader cache and its budget (4);
   - the two brightness swipe examples, whose command is a Linux program with
     no Mac substitute (2);
   - the acceptance pass itself, on the M5 and macOS 26 target (1).

@@ -13,7 +13,10 @@ typedef DWCanvasContent (^DWCanvasSource)(NSNumber *window,NSDictionary *placeme
 // viewports, every window with its shadow, border, rounded corners and opacity, and
 // stand-ins; widgets below the other windows, screen-pinned windows above them at
 // their own size whatever the camera), and the canvas offscreen for `msg screenshot`,
-// which holds no pinned window. An output the controller reports fullscreen
+// which holds no pinned window. A background with a chunk cache ([background] cache_shader
+// on a static shader, a tiled pyramidal TIFF as a tile) has one cache per output, bounded
+// by cache_budget_mb, and is redrawn while that cache fills; a capture draws no cache
+// (BACKGROUND-NOTES.md, section 17). An output the controller reports fullscreen
 // (outputs[].fullscreen) shows what its placements list and nothing else: the placement
 // marked fullscreen bare at its screen_rect, over black, or over the canvas background
 // and the outlines when the backdrop is "canvas". No output draws the viewport outline
@@ -62,14 +65,18 @@ typedef DWCanvasContent (^DWCanvasSource)(NSNumber *window,NSDictionary *placeme
 // -animates:draw: now says so.
 - (BOOL)contentChanged:(NSNumber *)window;
 // Is the background of one of these outputs animated, or is an open or close animation
-// running on one? draw: each such output is also redrawn, the background at the rate
-// its animate_fps allows and an animation on every call.
+// running on one, or is the background's chunk cache of one still filling? draw: each
+// such output is also redrawn, the background at the rate its animate_fps allows and an
+// animation on every call. A filling cache is redrawn once a call, the shell's one call
+// per frame-timer tick, unless its output has drawn since the last call for another
+// reason (a camera frame, a window's picture, a decoded chunk): that draw was the
+// tick's frame, since each frame drawn spends upstream's per-frame allowances.
 - (BOOL)animates:(NSArray<NSNumber *> *)outputs draw:(BOOL)draw;
 // Describes every changed output to its layer now, which draws only when the
 // description, a pixel buffer or an animated background's clock changed. The shell
 // calls it inside the transaction that moves its own layers.
 - (void)flush;
-// Removes every layer and lets go of every pixel buffer and closing snapshot. Before the panels close.
+// Removes every layer and lets go of every pixel buffer and closing snapshot, and of every output's background chunk cache with its decoders. Before the panels close.
 - (void)reset;
 // The controller's screenshot effect {target,scale,path,output,region}: renders the
 // effect's canvas region, or upstream's region for the target when it carries none,

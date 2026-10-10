@@ -1,6 +1,6 @@
 # Infinify compositor — port notes
 
-> Carried into `native/desktop/` with `compositor.{h,m}` as the standalone module's own notes, unchanged apart from this paragraph: first the port's, and with the effects the notes of the copy that added them, which are the port's (Part I) with Part II after them. Where `compositor.h` and `compositor.m` say `NOTES.md` they mean this file; where `background.h` and `background.m` say it they mean [BACKGROUND-NOTES.md](BACKGROUND-NOTES.md). The notes were written before the module was adopted: "this directory", "this copy" and `compositor-effects/` are that standalone copy, `comprender.m`, `build.sh`, `scenes/`, `assets/`, `out/`, `verify/` and `review-renders/` were not carried in, "the shell" is the shell as it drew before adoption, and sections 3 and 18 are the protocols `canvas-renderer.m` now follows. How it follows section 18 is written where it does so, in `canvas-renderer.h` and `canvas-renderer.m`: which of the controller's lifecycle events plays which animation, and the four things that are the shell's own there. An animation begins one 60 Hz tick before the frame that first shows it when the output has drawn nothing more recent, because this canvas draws on demand (18.2, "Cadence"). A window that opens is held at the animation's first instant, which is invisible, until its stream has delivered its first picture, for a second at most (18.3), and the stand-in whose slot a relaunched window adopted stays whole until that window's first picture likewise (18.4). Each output bakes its own closing snapshot, at upstream's one density, instead of sharing a texture (18.2, "Scale"). And upstream's age limit on a closing window's pixels has nothing to test: the bake is taken from the element of the frame last described, the picture that was on screen (18.2, "When not to"). What the port was run with once adopted is in [README.md](README.md#rendering), and what the effects were run with, joined to the controller, under [What was run for effects](README.md#what-was-run-for-effects).
+> Carried into `native/desktop/` with `compositor.{h,m}` as the standalone module's own notes, unchanged apart from this paragraph and from what section 19.1 says of a background drawn from a chunk cache under "When it is recomputed" (added in this repository with the background's chunk caches): first the port's, and with the effects the notes of the copy that added them, which are the port's (Part I) with Part II after them. Where `compositor.h` and `compositor.m` say `NOTES.md` they mean this file; where `background.h` and `background.m` say it they mean [BACKGROUND-NOTES.md](BACKGROUND-NOTES.md). The notes were written before the module was adopted: "this directory", "this copy" and `compositor-effects/` are that standalone copy, `comprender.m`, `build.sh`, `scenes/`, `assets/`, `out/`, `verify/` and `review-renders/` were not carried in, "the shell" is the shell as it drew before adoption, and sections 3 and 18 are the protocols `canvas-renderer.m` now follows. How it follows section 18 is written where it does so, in `canvas-renderer.h` and `canvas-renderer.m`: which of the controller's lifecycle events plays which animation, and the four things that are the shell's own there. An animation begins one 60 Hz tick before the frame that first shows it when the output has drawn nothing more recent, because this canvas draws on demand (18.2, "Cadence"). A window that opens is held at the animation's first instant, which is invisible, until its stream has delivered its first picture, for a second at most (18.3), and the stand-in whose slot a relaunched window adopted stays whole until that window's first picture likewise (18.4). Each output bakes its own closing snapshot, at upstream's one density, instead of sharing a texture (18.2, "Scale"). And upstream's age limit on a closing window's pixels has nothing to test: the bake is taken from the element of the frame last described, the picture that was on screen (18.2, "When not to"). What the port was run with once adopted is in [README.md](README.md#rendering), and what the effects were run with, joined to the controller, under [What was run for effects](README.md#what-was-run-for-effects).
 
 A standalone Metal port of DriftWM's per-output frame composition: canvas
 background, outlines of other outputs' viewports, and every window with its
@@ -1223,7 +1223,8 @@ after the window's shadow and before its border.
 
 **When it is recomputed.** A frost is kept per element and reused while a
 64-bit hash of everything it is made from is unchanged: the view (output
-size, scale, camera, zoom), the background object, the chrome style and
+size, scale, camera, zoom), the background object and, for a background drawn
+from a chunk cache, the generation of its chunks (below), the chrome style and
 decoration scale, the placeholder colour, the outlines, `blur_radius` and
 `blur_strength`, the window's own description *without* the identity of its
 content, and the full description — content identity included — of every
@@ -1238,6 +1239,18 @@ window's own content (`mask_warmup_commits`), so a first buffer that arrives
 empty does not leave an empty mask behind. A background that moves on its own
 (`isAnimated`) re-blurs every frost at most `animate_blur_fps` times a second
 of `frame.time`, never at 0 (`shared_refresh_due`).
+
+A background drawn from a chunk cache (a baked `cache_shader`, a pyramidal
+TIFF: [BACKGROUND-NOTES.md](BACKGROUND-NOTES.md), section 17) changes its
+picture at a fixed view while its cache fills: a chunk is baked or uploaded
+and a sharper level replaces a coarser one. Upstream draws each chunk as an
+element of the background, and a changed list of those is a refresh that is
+due at once, like a change of view (`background_structure_changed`). Here
+`-[IFBackgroundProgram chunkGenerationForFrame:]` stands for that list: the
+encode calls it before `-prepareFrosts:…`, on frames that have a blurred
+window, which makes the background do that frame's chunk work then instead of
+inside its own encode later, and the number it returns is mixed into the
+shared refresh and into each window's hash. It is 0 for any other background.
 
 **Nothing beneath.** When no draw reaches the capture (no background, no
 lower element there) there is no frost at all, as upstream zeroes it instead

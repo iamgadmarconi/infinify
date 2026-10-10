@@ -1,6 +1,6 @@
 # Infinify canvas background — port notes
 
-> Carried into `native/desktop/` with `background.{h,m}` as the standalone port's own notes, unchanged apart from this paragraph. Where `background.h` and `background.m` say `NOTES.md` they mean this file. The copy of the module in this directory is the one in the compositor port, which adds one method ([COMPOSITOR-NOTES.md](COMPOSITOR-NOTES.md), section 14). The notes were written before the module was adopted: `bgrender.m`, `build.sh`, `verify/`, `assets/`, `out/`, `fix-renders/` and `review-renders/` were not carried in, and section 3 describes a host that draws the background with a layer of its own, which the compositor layer replaced.
+> Carried into `native/desktop/` with `background.{h,m}` as the standalone port's own notes. Sections 1 to 16 are those notes; what the two chunk caches changed in them (`cache_shader` and tiled pyramidal TIFF tiles, added in this repository) is marked "section 17" where it stands, and section 17 is new. Where `background.h` and `background.m` say `NOTES.md` they mean this file. The copy of the module in this directory is the one in the compositor port, which adds one method ([COMPOSITOR-NOTES.md](COMPOSITOR-NOTES.md), section 14). The notes were written before the module was adopted: `bgrender.m`, `build.sh`, `verify/`, `assets/`, `out/`, `fix-renders/` and `review-renders/` were not carried in, and section 3 describes a host that draws the background with a layer of its own, which the compositor layer replaced.
 
 A standalone Metal port of DriftWM's per-output canvas background: the built-in
 dot grid, user GLSL shaders (with or without an image), tiled images and
@@ -35,9 +35,12 @@ are kept so the two can be read side by side.
 | `ifbg_dot_grid` | `src/shaders/dot_grid.glsl` | `a2dde8d16cc974ab3d0192020b30c2f60da8620216952eb36fac0f72a83d5683` |
 | `ifbg_tile`, `ifbg_tile_mirror` | `src/shaders/tile_bg.glsl` (plain, and with `#define MIRROR` prepended as `compile_tile_bg_mirror_shader` does) | `f30921426cc816cead08a580937db5edc30977448997e1819a9c2865c053e839` |
 | `ifbg_wallpaper` | `src/shaders/wallpaper_bg.glsl` | `50a2605d87382512f40d5cfe4207f837cb3c6a57afb5656af7b2d6d3a028f463` |
+| `ifbg_chunk` (with `ifbg_chunk_vertex`, `kIFBGChunkMSL`) | `src/shaders/chunk_bg.glsl` | `ee97fa3361ef758e155bbd440b2672865052073eea2a344bf8882737fa2e29a0` |
 
-`src/shaders/chunk_bg.glsl` (`ee97fa33…f27e2a0`) is not translated: it is used
-only by the two chunk caches that are not ported (section 9).
+`ifbg_chunk` draws one chunk of either chunk cache (section 17). It is the one
+built-in drawn as a quad of its own instead of a triangle over the whole
+target; its vertex function has no upstream counterpart (smithay places the
+element).
 
 The logic in `background.m` mirrors `src/render/background.rs` function by
 function (`init_background`, `init_shader_bg`, `texture_or_shader_fallback`,
@@ -52,7 +55,8 @@ Everything is in `background.h`.
 - `IFBackgroundConfig` — the upstream `[background]` table, field for field:
   `type` (`default | shader | tile | wallpaper | none`), `path`, `texture`,
   `mirrorTile`, `cacheShader`, `transparentShader`, `cacheBudgetMB` (128),
-  `animateFPS` (0, clamped to 1000).
+  `animateFPS` (0, clamped to 1000). `cacheShader` and `cacheBudgetMB` drive
+  the chunk caches of section 17.
   `+configWithTypeString:path:texture:warning:` reproduces
   `resolve_background_kind`, including its two warnings and `~` expansion.
 - `IFBackgroundFrame` — `{cameraX, cameraY, zoom, width, height, scale, time}`.
@@ -64,6 +68,11 @@ Everything is in `background.h`.
   `translatedShaderSource`. Rendering: `-encodeFrame:intoTexture:commandBuffer:`,
   `-newImageForFrame:error:`, `-writePNGForFrame:toURL:error:` (offscreen: no
   window, no layer, no privacy permission).
+- The chunk caches (section 17): `cache`, `-programForOutput`,
+  `-captureProgram`, `pendingChunkCount`, `-chunkGenerationForFrame:`,
+  `chunkReadyHandler`, `-shrinkChunkCache` and five diagnostics counters. All
+  additive: a program without a cache behaves exactly as before, and for it
+  `-programForOutput` and `-captureProgram` return the program itself.
 - `IFBackgroundLayer : CAMetalLayer` — one output's background.
   `program` (or `-setConfig:`), `-updateWithFrame:` (returns YES when it drew),
   `animated`, `errorText`, `-setNeedsRedraw`, `drawCount`, and a diagnostics-only
@@ -401,7 +410,15 @@ colon comes from this platform.
 | JPEG whose data ends early | ``background image '<path>': unexpected end of file (the JPEG is truncated or damaged, ImageIO status -5)`` |
 | image larger than 16384 px on a side | ``background image '<path>': upload failed (image likely too large) — gigapixel wallpapers need a tiled pyramidal TIFF`` |
 | wallpaper with a `.tif` / `.tiff` path | ``wallpaper '<path>': TIFF isn't supported in wallpaper mode (PNG/JPEG only) — use [background] type = "tile" for TIFF images`` |
-| tile with a `.tif` / `.tiff` path | ``tile bg '<path>': tiled pyramidal TIFF (gigapixel) backgrounds are not supported by this port`` (deviation) |
+| tile with a `.tif` / `.tiff` path that cannot be opened | ``tile bg '<path>': open <path>: No such file or directory (os error 2)`` |
+| … that is not a TIFF, or whose first directory cannot be read | ``tile bg '<path>': not a TIFF (<path>): the file does not begin with a TIFF signature`` |
+| … with a later directory that cannot be read | ``tile bg '<path>': next_image during scan: …`` |
+| … with a page stored in strips | ``tile bg '<path>': TIFF is stripped, not tiled — needs a tiled, pyramidal TIFF`` |
+| … with a planar page | ``tile bg '<path>': planar TIFF (PlanarConfiguration=Planar) not supported`` |
+| … with a page that is not 8-bit RGB or RGBA | ``tile bg '<path>': unsupported color type Gray(8) (need RGB8 or RGBA8)`` (also `RGB(16)`, `CMYK(8)`, `YCbCr(8)`, `Palette(8)`, …) |
+| … with tiles that are not square | ``tile bg '<path>': LOD 0: non-square tile dims (256, 128) not supported`` |
+| … whose fallback level cannot be decoded at all, or uploaded | ``tile bg '<path>': LOD 2: every tile failed to decode`` / ``tile bg '<path>': fallback texture upload: …`` |
+| `cache_shader` with a bakeable shader that does not compile | ``background shader '<path>': compile error: …`` (with the path, where the live path's message has none: upstream's `try_init_shader_chunks`) |
 | `type` without `path`, unknown `type` | ``config: [background] type="shader" requires `path`, using default`` / ``… unknown type "x", using default`` (returned as the config helper's `warning`) |
 
 Compiler output is condensed to its `error:` diagnostics; warnings and Metal's
@@ -491,8 +508,8 @@ See deviation 13 for where this may differ from upstream's decoders.
 10. **Transparent compositing** is done by Core Animation: the same
     premultiplied source-over as upstream's blend, but in the window server's
     colour pipeline.
-11. **Tile with a TIFF path** falls back to the dot grid with an error, instead
-    of streaming chunks (section 9).
+11. **Tile with a TIFF path**: drawn from the pyramid since section 17, which
+    lists that path's own differences from upstream.
 12. **Alpha is forced to 1 on the plain-shader path** unless
     `transparent_shader` is set. `docs/shaders.md` says the alpha component "is
     ignored by default — backgrounds are composited opaque", and
@@ -534,16 +551,13 @@ See deviation 13 for where this may differ from upstream's decoders.
 
 ## 9. Not supported
 
-- **Tiled pyramidal TIFF (gigapixel) backgrounds**: `tile_chunks*.rs`,
-  `tile_worker.rs`, `chunk_bg.glsl` and `docs/gigapixel-wallpapers.md` are not
-  ported. A `type = "tile"` path ending in `.tif` / `.tiff` draws the dot grid
-  and reports it.
-- **`cache_shader`** is accepted and has no effect: the shader always renders
-  live. Upstream's bake draws the same picture for the shaders it applies to;
-  only the cost differs. **`cache_budget_mb`** is accepted and unused.
 - The `NO_ALPHA` and `DEBUG_FLAGS` shader variants (never selected for a
   background: images are always uploaded as RGBA8).
 - Image formats other than PNG and JPEG are rejected, as upstream's build does.
+  A TIFF is read only as `type = "tile"`, and only when it is tiled (section 17).
+- A pyramid stored in SubIFDs (`vips tiffsave --subifd`) is read as its first
+  page alone: upstream's reader follows the chain of pages and nothing else,
+  and so does this one.
 - The GLSL constructs listed at the end of section 5.
 
 ## 10. Upstream behaviour kept on purpose
@@ -881,3 +895,473 @@ shows each failing command with the reviewed binary and with the fixed one.
 
 Not changed: `background.h`, `bgrender.m`, `build.sh`, the built-in shaders,
 the uniform mapping, the layer.
+
+## 17. Chunk caches: `cache_shader` and tiled pyramidal TIFF tiles
+
+Added in this repository (milestone 19), after the port above was adopted.
+Upstream, same commit: `src/render/shader_chunks.rs`,
+`src/render/tile_chunks.rs`, `src/render/tile_chunks_tiff.rs`,
+`src/render/tile_worker.rs`, `src/shaders/chunk_bg.glsl`,
+`src/render/capture_background.rs`, `docs/gigapixel-wallpapers.md`, and in
+`src/render/background.rs` `init_tile_chunks_bg`, `try_init_shader_chunks` and
+`shader_no_texture_dispatch`.
+
+| File | What it holds |
+|---|---|
+| `background.m`, "Chunk caches" | `IFBGShaderChunks` (`ShaderChunkCache`), `IFBGTileChunks` (`BgChunkCache`), `IFBGTileLayout` (`derive_chunk_layout`, `compute_aggregations`, the fallback level), `pick_lod`, the visibility queries, `evict_lru_to_budget`, and where a chunk lands in pixels |
+| `background.m`, "Program" | which program gets a cache (`-load`, `-loadPyramid:`), the frame of a cached program (`-chunkDrawsForFrame:`, its work, and `-encodeChunksOfFrame:inEncoder:`, its draw), `-chunkGenerationForFrame:`, `-programForOutput`, `-captureProgram` |
+| `background-tiff.{h,m}` | `IFBGTiffSource` (`TiffSource`: the walk over the file's pages, `read_block`, `read_whole_lod`) and `IFBGTileWorkerPool` (`WorkerPool`). No Metal, no dependency on the rest of the module |
+| `canvas-renderer.m` | the host's side: one cache per output, its redraws while it fills, its shrink under a fullscreen window, the capture |
+| `compositor.m` | the one thing changed there: the chunk generation of a cached background, asked before the frosts are prepared and mixed into the two keys a frost is kept by (17.3) |
+
+### 17.1 What is cached
+
+- **`cache_shader = true`** on `type = "shader"` without a `texture` and
+  without `transparent_shader`, when the shader declares `uniform vec2
+  u_camera` and declares neither `uniform float u_time` nor `uniform float
+  u_zoom` (upstream's `references_uniform`, the same substring test as section
+  5: a declaration in a comment counts). Everything else is drawn live exactly
+  as before, silently: the default dot grid, a textured shader, an animated or
+  zoom-reading one, one without `u_camera` (it is fixed to the screen; baked
+  into canvas chunks it would scroll). `IFBackgroundProgram.cache` says which
+  it is. A shader that moves with the camera at any rate but 1:1 (`u_camera *
+  0.5`) bakes wrong, upstream too: its documentation calls it a footgun.
+- **`type = "tile"` with a path ending in `.tif` / `.tiff`**: a tiled TIFF
+  whose pages are 8-bit RGB or RGBA, chunky, with square tiles. Each page is
+  one level, page 0 the full resolution. A file with a single tiled page is
+  accepted (upstream's code has no refusal for "no pyramid": that level is
+  then the whole picture, one texture, and must fit one). `mirror_tile` does
+  nothing here, as upstream documents. `wallpaper` with a TIFF is refused as
+  before.
+
+### 17.2 One cache per output
+
+Upstream keeps `cached_shader_chunks` and `cached_tile_chunks` per output: the
+chunks are baked at that output's scale, and the budget, the per-frame
+allowances, the LOD bookkeeping and the decode pool are that output's. Here
+`-[IFBackgroundProgram programForOutput]` returns, for a cached program, a
+program that shares everything loaded and owns one cache; `canvas-renderer.m`
+asks once per output and per configuration. `cache_budget_mb` therefore bounds
+each output's cache, not their sum, as upstream's does. Shared between the
+outputs, where upstream has one per output: the open file, the decoded
+fallback level, the compiled shader.
+
+Invalidation: a config load builds a new program (RENDER.md, `revision`), the
+outputs take new programs from it and the old caches, with their decoders,
+are released: upstream's `reload` clears both maps. A baked cache is for one
+output scale (`bake_px = round(1024 × scale)`): a frame at another scale starts
+it again, as upstream drops an output's cache when its scale changes. A TIFF
+cache holds nothing that depends on the scale and is kept. `-[DWCanvasRenderer
+reset]` drops every output and with it every cache.
+
+### 17.3 How the host drives a cached program
+
+A cached program is drawn through the same two calls as any other
+(`-encodeFrame:inEncoder:` from the compositor's pass, `-newImageForFrame:`
+offscreen). What is new:
+
+- **Encoding a frame works first.** A baked shader bakes the chunks this frame
+  may (below) in one command buffer of the module's own queue and waits for it
+  (`waitUntilCompleted`) before the caller's pass samples them: upstream's
+  bake is synchronous in its frame too. A TIFF cache turns at most eight
+  decoded blocks into textures and asks its decoders for what is missing.
+  Main thread only.
+- **Each instant is one frame.** When a window is frosted the compositor asks
+  a cached background three times in one frame (the chunk generation below,
+  then two encodes: its backdrop copy and the pass). The same
+  `IFBackgroundFrame`, `time` included, returns the same quads and spends
+  nothing more; the next instant spends the next allowance.
+- **`-chunkGenerationForFrame:`** does a frame's chunk work without its draw
+  and returns a number that changes whenever the chunks a frame draws from
+  did: a bake, an upload, an eviction, a shrink that dropped something. It is
+  0 for a program without a cache. Upstream's blur refreshes a frost,
+  uncapped, when the list of background elements changes (`blur.rs`
+  `background_structure_changed`, `shared_refresh_due`), and each drawn chunk
+  is one element. The encode is what bakes and uploads, and the compositor
+  computes its frost keys before it encodes, so `compositor.m` calls this
+  first, on frames that have a blurred window, and mixes the number into the
+  shared refresh and into each window's key: the frame a chunk lands in is
+  the frame that recomputes the frost over it. Without it the frost under a
+  blurred window stayed the blur of the coarse cover or of the fallback level
+  until the camera next moved (found in review; 17.9). The number says more
+  than upstream's list: evicting a chunk outside the view changes it too,
+  which costs one frost recompute on a frame that baked or uploaded anyway.
+- **`pendingChunkCount`** is upstream's `has_pending_bakes` /
+  `has_pending_loads`: while it is not zero the output is redrawn at display
+  rate. `-[DWCanvasRenderer animates:draw:]` reports it with the animations,
+  so the shell's one frame timer serves it and stops when nothing is pending:
+  a display link at the display's refresh rate
+  ([README.md](README.md#rendering)), 120 Hz on a ProMotion display. The
+  redraw is forced on the layer because its description did not change, and
+  it is one a tick at most: an output that has drawn since the last tick for
+  a reason of its own (the camera frame of a flight, which the shell
+  describes and draws inside the tick before it asks; a window's picture; a
+  decoded chunk's wake-up) has had that tick's frame and is not forced again,
+  since every frame drawn spends the allowances below, which upstream grants
+  once per output frame. With nothing pending nothing is drawn.
+- **`chunkReadyHandler`** is upstream's `loop_signal.wakeup()`: called on the
+  main thread when a decoded chunk waits, once however many arrived before it
+  ran. The renderer marks that one output dirty.
+- **`-shrinkChunkCache`** is upstream's `shrink`, called for an output whose
+  canvas a fullscreen window conceals, on every such description. Upstream
+  calls it on every frame of that session, so that a block a decoder was
+  still working on when the cache was shrunk is discarded when it arrives;
+  here no frame is drawn for a description that did not change, so the
+  renderer's ready handler shrinks again for a concealed output, which
+  discards the block then.
+
+### 17.4 The baked shader
+
+`shader_chunks.rs` function by function. Chunks are squares of
+`1024 << LOD` canvas units, LOD 0 to 7, each a texture of `bake_px` texels a
+side plus a one-texel apron of its neighbours' pixels (`apron_dims`), so 1026²
+texels (4.2 MB) at every LOD at 1x, and at 2x 2052² at LOD 0 and 2050² at
+every LOD above it (16.8 MB either way: there the apron is half a canvas unit
+at LOD 0, rounded up to a whole one). A chunk is baked
+by running the shader once with `size` the padded span and `u_camera` its
+top-left corner, through the live pipeline and uniform block. Per frame: the
+LOD 7 cover of the visible rectangle is baked at once and stamped; the target
+LOD is `pick_lod(zoom)` (`ceil(-log2 zoom)`, 0 from zoom 1 up); its missing
+cells are baked two a frame, sixteen on the frame the target LOD changes; the
+rest are pending and show the finest coarser chunk that is cached. A view whose
+cover and target cells together exceed the budget is "degraded": only the cover
+is drawn (upstream logs it; so does this port, on stderr, in upstream's words).
+Eviction is least-recently-stamped first, after the frame's chunks were chosen.
+
+**Where upstream's bake is not its live render.** The task of this port was
+to match the live render wherever upstream's bake does. It does so only here:
+
+| Camera and zoom | Baked against live, this port (five shaders, 800×600 points) |
+|---|---|
+| zoom 1, 0.5 or 0.25, camera on the level's texel grid, 1x and 2x (five frames a shader) | `dot_grid.glsl` byte-identical in all five; the four `static/` shaders differ by one level on 1 to 1078 of 0.48 to 1.92 million pixels (at most 0.056 %): the bake computes `v_coords × size + u_camera` from other float operands than a live frame |
+| zoom 1, camera (250000, −180000) | byte-identical, all five |
+| zoom 1, camera (300.4, −150.3) | different: 0.1 % of pixels up to 173 levels (`dot_grid`), 5 % by one level (`pink_cloud`), 40 % up to 33 (`dark_sea`) |
+| zoom 0.5, camera (301, −151) | different: up to 85 % of pixels, up to 250 levels |
+| zoom 0.7 and 0.33 | different: 0.5 % to 77 % of pixels, up to 251 levels |
+
+The reasons are upstream's design, reproduced:
+
+1. A chunk is placed at `camera.round()`, the live shader reads the unrounded
+   camera: up to half a canvas pixel apart.
+2. At a zoom that is not a power of two the target LOD is the next coarser
+   one, sampled once per `2^LOD` canvas units and stretched bilinearly by up
+   to 2. The picture is softer, and what is thinner than `2^LOD` canvas pixels
+   is lost between samples: at zoom 0.7 `dot_grid.glsl`'s dots are all but
+   gone in the baked frame and plain in the live one (looked at).
+3. At a power-of-two zoom the samples coincide with the live frame's only when
+   the rounded camera lies on that LOD's texel grid; otherwise the frame is a
+   half-texel blend.
+4. A chunk's rectangle is rounded corner by corner to whole pixels, twice
+   (scale, then zoom): at a fractional zoom its edges move by under a pixel.
+5. A degraded view is the LOD 7 cover alone: one texel per 128 canvas units at
+   1x. With the default 128 MB a 2x output holds seven chunks, and a 1728×1117
+   point output needs up to ten (one cover, nine cells): measured over a
+   400-frame pan there, 21 frames were cover only. Upstream's remedy is its
+   documentation's: raise `cache_budget_mb` on a HiDPI display.
+   The same sum decides the view a user starts from. The canvas origin is the
+   corner of four LOD 7 cells and of four LOD 0 cells, so a view that lies
+   across it on both axes, as the home view does on any output, wants four
+   cover chunks (2050² texels at 2x) and at zoom 1 four cells (2052²):
+   134,611,264 bytes against the 134,217,728 of the default budget. At 2x
+   that view is degraded under the default, by 0.4 MB, in upstream's
+   arithmetic (`working_set > vram_budget_bytes` in `render_elements`) as
+   here. Seen at integration: on the renderer's 2x layer with the origin at
+   the centre, 86.4 % of pixels differ from the live frame under 128 and 506
+   pixels by one level under 256; and the built app printed upstream's line
+   with `128 MB working set > 128 MB budget` for such a view at zoom 0.5.
+
+### 17.5 The pyramid
+
+`tile_chunks.rs` function by function. The image is centred on canvas (0, 0)
+and repeats with its own size. The canvas span of one TIFF tile doubles from
+page to page, and the pyramid is cut at the first page where it does not;
+tiles are aggregated into chunks of at most 1024 canvas units at LOD 0 and
+2048 above (`compute_aggregations`). The finest level of at most 4096 pixels
+(`FALLBACK_MAX_DIM`), else the coarsest, is decoded whole when the program
+loads and is the **fallback plane**: upstream's `tile_bg.glsl` (`ifbg_tile`)
+over the visible rectangle, under everything, so no pixel is ever blank. The
+levels finer than it are per-chunk: `pick_lod(zoom, levels)` picks the target,
+every chunk the view touches at the target and at each coarser per-chunk level
+is asked of the decoders coarse first, and each visible target cell shows the
+finest cached chunk that covers it. Six decodes run at a time
+(`N_WORKERS`), eight blocks a frame become textures, a block that fails is
+never asked again and the plane shows there. Chunks are `chunk_bg.glsl`
+quads: opaque whatever the file's alpha.
+
+Upstream behaviour kept, each looked at or measured:
+
+- The level follows the zoom alone. On a 2x display at zoom 1 the picture is
+  LOD 0 magnified twice, and at zoom 0.5 it is LOD 1 where LOD 0 would be 1:1.
+- TIFF chunks have no apron: magnified, the row and the column of pixels at
+  each chunk edge clamp instead of blending into the neighbour (at 2x and zoom
+  1: columns 0, 2047 and 2048 and row 0 of a 2400×1600 frame differ from the
+  same picture as a PNG tile, 7187 pixels, and no other pixel does).
+- The chunks follow the rounded camera, the fallback plane the unrounded one.
+- The plane's element is the visible rectangle, two canvas units larger than
+  the output's canvas area, rounded like any element. At zoom 0.8 on a 2x
+  output of 1200 points that is 1502 canvas units over 2403 pixels where a
+  plain PNG tile has 1500 over 2400: a fifth of a pixel of stretch across the
+  output, and on the test picture's hard edges 56 % of the pixels differ from
+  the PNG tile's, by up to 27 levels. At zoom 0.5 the two are byte-identical.
+- A picture of at most 4096 pixels has no per-chunk level at all: it is its
+  fallback plane, the tile shader over one texture, at every zoom.
+
+### 17.6 Reading the file: what ImageIO gives, and what is done instead
+
+Measured on this machine (macOS 27.2) with a 16384×8192 seven-level pyramid
+written by `tiffcp -t -w 256 -l 256 -c zip`, classic and BigTIFF (`-8`):
+
+- `CGImageSourceGetCount` is 7 for both: every page of the chain is an image
+  index, at its own size.
+- The properties are not a validator. The classic file's `{TIFF}` dictionary
+  holds `TileWidth`, `TileLength`, `Compression` and
+  `PhotometricInterpretation`; the BigTIFF's is absent. Neither exposes
+  `PlanarConfiguration`, and BigTIFF is what upstream's documented `vips …
+  --bigtiff` writes.
+- A region is not decoded by itself. `CGImageCreateWithImageInRect` on the
+  level's image and a copy of its pixels took 72 ms for 1024×1024 of the
+  16384-wide level and 28 ms on the 8192-wide one: the cost follows the
+  image's width, so every tile of the rows the region crosses is decoded.
+
+So `background-tiff.m` walks the directories itself (classic and BigTIFF,
+either byte order: `IFBGTiffReadPage`, upstream's `read_lod_metadata` checks in
+its order) and gives ImageIO one tile at a time: the tile's own compressed
+bytes, read with `pread`, wrapped in a one-strip classic TIFF built in memory
+with the page's compression, predictor, fill order and JPEG tables. A TIFF
+tile is encoded exactly like a strip of the tile's size. The fourth sample is
+declared unassociated whatever the file says, so the stored samples pass
+through as upstream's `tiff` crate returns them. Measured: 2.6 to 3.1 ms for a
+block of 4×4 Deflate tiles (16 of the 2048 tiles of that level), 24 blocks in
+13 ms on the six decoders; against the uncompressed source, 0 mismatching
+samples over every level for Deflate with a horizontal predictor (classic and
+BigTIFF), LZW, PackBits and uncompressed, and for RGBA with its alpha; JPEG
+tiles (`tiffcp -c jpeg:r`, RGB with `JPEGTables`) decode within JPEG loss, at
+most 9 levels from the lossless picture. YCbCr JPEG is refused, as upstream.
+
+### 17.7 A capture
+
+`capture_background.rs`: a capture never draws from a chunk cache.
+`-captureProgram` is what `-[DWCanvasRenderer screenshot:snapshot:]` gives its
+frame:
+
+- a baked shader is **rendered live** (upstream `shader_bg`): the capture of
+  `cache_shader = true` is the capture of `cache_shader = false`;
+- a pyramidal TIFF is **one level, the finest of at most 4096 pixels** (else
+  the coarsest), drawn as a plain tile at the full-resolution image's extent
+  (upstream `tiff_tile_bg`). It lands where the chunks do and is softer than
+  the output's picture once the capture's density exceeds that level's:
+  upstream says so itself ("zoomed-out captures look right, extreme-DPI ones
+  go soft"). If any tile of that level cannot be decoded the capture has no
+  background, as upstream's `?` on `read_block`. Its alpha is the file's, as
+  upstream writes it.
+
+This is not what the milestone's brief asked for, which was the output's own
+chunks, complete, "as upstream's capture does"; upstream's capture does the
+above, and upstream was followed.
+
+### 17.8 Differences from upstream
+
+1. **The bake runs inside the frame's encode**, on the module's command
+   queue, and the main thread waits for it. Same order of events as
+   upstream's GL frame; the cost of a bake is paid before the frame is
+   presented in both. Measured for `dark_sea.glsl`, the heaviest static
+   shader bundled, on a 1728×1117 output at 2x (Apple M5 Pro): 11.8 ms for
+   the five chunks of a first frame, 5.6 ms for the two a pan may bake,
+   15.4 ms for the six of a zoom to 0.5; a frame with nothing to bake encodes
+   in 0.03 ms, where the live shader keeps the GPU 4.7 ms a frame.
+2. **Baked textures are BGRA8, upstream's ABGR8888.** Same numbers.
+3. **`v_coords` per fragment** (deviation 1 of section 8) applies to a chunk
+   quad too.
+4. **A coarse cover that does not fit the budget by itself is not baked; the
+   shader is drawn live.** Upstream bakes it for every frame it draws and
+   evicts it when the frame ends: with a budget below one chunk that is a
+   re-bake of a blurred cover per frame, and at the controller's smallest
+   zoom (0.001) the cover of a 1728×1117 output at 2x is 2019 MB of chunks
+   (the figure this port's refusal printed; upstream's bake of it was not
+   run), baked and dropped per frame. Logged once on stderr.
+5. **A bake the GPU rejects** ends that cache: the shader is drawn live from
+   then on. Upstream leaves the chunk uncached and tries again every frame.
+   A cover chunk whose texture cannot be made gives a live frame, where
+   upstream's would have a hole.
+6. **A TIFF view that needs more than the budget keeps the coarser levels
+   that fit and asks for nothing beyond them.** The chunks are counted against
+   the budget in upstream's own order, coarse first, and from the first that
+   does not fit nothing is stamped or requested. Upstream requests all of
+   them: each frame then evicts chunks the next frame requests again,
+   `has_pending_loads` never clears, and the output is redrawn and re-decoded
+   at display rate for as long as the view stands. With a view that fits,
+   which the default budget is for, the two are the same chunks. Logged once
+   per change on stderr, in this port's words (upstream has none).
+7. **The decoders are blocks on a concurrent dispatch queue**, at most six at
+   a time per output, started when there is work and gone when there is none;
+   upstream parks six threads per output. They share one file descriptor
+   (`pread`) and one parsed directory list, where upstream opens the file once
+   per worker because its decoder is not shareable.
+8. **Tiles are decoded by ImageIO**, not the `tiff` crate (17.6). What follows
+   upstream's prefix in a refusal is this port's wording for a file that
+   cannot be parsed, and the colour type is spelled the way Rust's `{:?}`
+   prints the crate's `ColorType`, from knowledge of the crate, which is not
+   on this machine. The compressions accepted are the ones ImageIO reads in a
+   TIFF; a tile in another fails like any undecodable tile.
+9. **A tile whose compressed data is damaged is not detected.** ImageIO
+   decoded three deliberately overwritten Deflate tiles of 128 without any
+   error and with status "complete", the pixels wrong from the damage on:
+   the tile is drawn as it came out, with no message. What upstream draws
+   there is not established: the `tiff` crate is not on this machine and
+   upstream was not run. The streams inflated to a full tile of output, so a
+   decoder that stops once the tile is full yields the same pixels, and only
+   one that reads on to the stream's Adler-32 trailer can refuse the tile
+   (the plane would then show there). Listed as a difference because it may
+   be one. Checking Deflate tiles with zlib before ImageIO decodes them would
+   detect it; that is a second inflate of every tile and a link dependency,
+   and was not added.
+10. **The capture's level is the loaded fallback texture** when it is the
+    same level and decoded without a hole, and otherwise decoded once per
+    load; upstream opens and decodes the file again for every capture. A file
+    replaced on disk without a config reload is captured as loaded.
+11. **`usesCamera` is YES for both kinds**, where upstream clears
+    `background_uses_camera`: there the chunk elements damage what they move
+    over; here that flag is what makes `IFBackgroundLayer` redraw on a pan.
+12. **Limits of this reader**: 64 pages, 4096 entries a directory, 1 GiB a
+    tile, 32768 pixels a block side, 16384 pixels a texture side (the fallback
+    level and each chunk).
+13. **A TIFF cache survives a change of its output's scale**, since nothing in
+    it depends on the scale; upstream drops every cache of such an output and
+    loads it again. The baked cache starts again, as upstream's.
+14. **One parsed file and one fallback texture per load**, shared by the
+    outputs; upstream opens the file and decodes the fallback level once per
+    output.
+15. **The frames of a filling cache come from the shell's one frame timer, and
+    one from each wake-up.** The timer is a display link of the fastest
+    display a canvas panel is on, so on one display the frames come at its
+    refresh, as upstream's do, and the allowances are upstream's per frame,
+    unscaled: two bakes a frame are 240 a second at 120 Hz, as on a 120 Hz
+    output of DriftWM. Beside a faster display a slower one's cache is offered
+    frames at the faster rate, where upstream's come at each output's own
+    (read from the code; no second display was there). A wake-up's redraw is
+    a frame between two ticks, and the tick after it forces none. The caches
+    were built on a 60 Hz `NSTimer`, where this item named it.
+16. **Upstream's log lines** (`tracing`) for a failed tile, a cut pyramid, a
+    plane with holes and a degraded bake go to stderr through `NSLog`.
+
+### 17.9 Verification
+
+Run with throwaway programs kept outside the repository (a generator for a
+synthetic picture and its box-filtered levels, `tiffcp` 4.7.2 to tile and
+compress them, and a harness that links `background.m`,
+`background-tiff.m`, `compositor.m` and `canvas-renderer.m`). Frames were
+compared as raw BGRA; the PNGs named "looked at" were opened.
+
+| Check | Result |
+|---|---|
+| Baked against live, `dot_grid.glsl` and the four `static/` shaders, ten cameras, zooms and scales each | the table in 17.4; baked and live frames at zoom 0.33 2x (`dark_sea`) and zoom 0.7 (`compass_grid`) looked at: same scene, no seam between chunks |
+| Bake allowances | a jump to six new cells: 2 baked and 4 pending, then 2 and 2, then 2 and 0; the same instant encoded twice bakes nothing more; first frame of a view: cover and all four cells at once |
+| Bake budget, pan of 400 frames (37, 11 a frame) at 2x, 1728×1117 | 128 MB: 112.4 MB at most, never above the budget after a frame, 44 chunks baked, 37 evicted, 21 frames degraded (`pink_cloud.glsl`; the same figures for it and for `dark_sea.glsl` when the pan was run again after the review fixes). 512 MB: 497.9 MB at most, never above. `MTLDevice.currentAllocatedSize` after 1500 frames: 123.6 MB and 544.0 MB. Process footprint at 128 MB: 296 MB after 300 frames and after 1500 (164 MB of it is the harness with no chunk at all) |
+| Scale 1 to 2 on one cache; shrink | the cache starts again (16 chunks to 7); shrink leaves the LOD 7 chunk, nothing pending |
+| Which programs are cached | static shader with `cache_shader`: baked. Without it, animated, `u_zoom`, no `u_camera`, default dot grid: live. Broken and missing shader: dot grid, messages of section 6 |
+| TIFF reader | 17.6. Refusals of section 6 for a stripped, a planar, a grey, a 16-bit, a CMYK, a YCbCr, a non-square-tile, a truncated and a non-TIFF file and a missing one; the frames of three of them (grey, stripped, non-TIFF) compared with the dot grid's: byte-identical |
+| TIFF (16384×8192) against the same picture as a PNG tile, zoom 1 at 1x, cameras (0,0), (−8300,−4200) across the wrap seam, (8000,3900) | byte-identical |
+| … zoom 0.5 at 1x, camera (0,0) | one level at most on 92 % of pixels: the generator's rounded box filter against the GPU's average of the same four texels |
+| … fractional camera; 2x; zoom 0.7; zoom 0.25 and 0.1 (plane only) | different, as 17.5 says: camera rounding; chunk-edge clamping; a level resampled; the 4096 level against an unfiltered minification of the full picture. Frames at zoom 1 across the seam, 0.7 and 0.1 looked at: right place, wrap at the image edge, no hole |
+| A 2048×1024 single-level TIFF; a 4096×2048 pyramid at zoom 0.5 2x with a fractional camera; LZW; BigTIFF | byte-identical to the PNG tile (to the classic file for BigTIFF) |
+| RGBA pyramid | an output's frame has alpha 255 everywhere; a capture's has the file's 128 and 255 |
+| TIFF budget, pan of 300 frames at 2x | 128 MB: 128.0 MB at most, never above, 82 uploads, 50 evictions, at most 8 uploads a frame. 32 and 8 MB: 32.0 and 8.0 at most, never above, nothing pending at the end. 3 and 0 MB: no chunk, plane only. Metal's allocation after 1500 frames: 33.2 MB with no chunk (the fallback level), 65.5 MB at 32 MB, 162.2 MB at 128 MB. Process footprint at 32 MB: 306 MB after 300 frames, 313 MB after 1500 |
+| Outputs released while their decoders run, 2000 in a row; a program, its output's program and its capture program released | Metal's allocation stays at the fallback level; `leaks --atExit` on a run of 400: 0 leaks; every program deallocated |
+| `DWCanvasRenderer`, `-render:` and `-flush` on a layer outside any window, then `-animates:draw:` every 1/60 s while it says so | baked shader: one draw, none in 30 further ticks; after a pan to new cells two ticks and three draws, then identical to the live frame. TIFF: three draws (plane, then the chunks as they arrive), none in 30 further ticks, identical to the PNG tile. Two outputs at different cameras and zooms: each identical to the module's frame for it. A fullscreen description: one draw, nothing pending. A snapshot without `cache_budget_mb`: the default. A refused TIFF: its message in `note` |
+| `-[DWCanvasRenderer screenshot:snapshot:]` | `cache_shader` true and false: the PNG files are byte-identical at four regions and scales. TIFF: pixel-identical to its 4096 level drawn as a PNG tile at the matching scale; against the full-resolution PNG 59 % to 95 % of pixels differ (17.7); one capture looked at |
+| After the review: one translucent blurred window over a cached background, through the compositor's offscreen encode. A view, then frames with only `time` advancing until nothing is pending, compared with a renderer that has no frost yet drawing the settled view. Baked `dark_sea.glsl` after a jump (1x, and 2x under 512 MB) and on the frame that leaves a concealed stretch; baked `dot_grid.glsl` leaving one at 2x; the 16384×8192 pyramid after a jump at 1x, 2x and zoom 0.5 and on its first frames | the frost is recomputed on each frame a chunk lands in (one or two frames a case) and on none after; settled against fresh: 0 pixels differ inside the window and outside in all eight, and the two PNG files are byte-identical; bakes and uploads per frame as before the change (5 then 7; 3, 11, 13). Controls, the live shader and the PNG tile: no recompute after the first frame, 0 pixels. Before the change the same sequences left 150,243 to 214,121 of 231,000 window pixels different for the baked shader (the reviewer's run). Three frames looked at: the first frame of a jump with the frost over the coarse cover, the settled one with a fine blur of the sharp field, and a settled pyramid |
+| After the review: a pyramid's output described once, then concealed by a fullscreen description before its decodes were received, and the shell's timer for a second; the decode pool read through its private counters. Twelve runs before the change to the ready handler and twelve after | before: in 3 runs two blocks were still decoding at the concealment, and both were still held a second later (in the other 9 none was); after: in 11 runs one or two were, and none was held a second later. No draw in that second either way |
+
+**At integration,** with the controller's `cache_budget_mb` key: the app was
+built from the tree and launched five times, and the harness was rebuilt from
+the final sources and its matrices run again (the baked-against-live matrix,
+the pyramid against its PNG, the budget pans, and the renderer on a detached
+2x layer); the numbers came out as in the table, and the launches are in
+[README.md](README.md#what-was-run-for-the-background-caches). In the app,
+through `msg screenshot` and the app's stderr: captures with `cache_shader`
+on and off byte-identical, a 4096×2048 pyramid byte-identical to its PNG at
+three zooms, a 16384×8192 one byte-identical to its 4096 level as a PNG tile
+at the matching scale, three refused files with upstream's texts over the dot
+grid, and the caches' budget lines carrying the budgets the configs named.
+Since a capture draws no cache (17.7), none of that shows a baked chunk or a
+decoded one.
+
+**After the review,** with the chunk generation in the frost keys (17.3) and
+the shrink in the renderer's ready handler: the harness was rebuilt from the
+tree and the two rows marked "After the review" were run, with the 400-frame
+bake pan, TIFF pans of 300 frames under 128, 32, 8 and 2 MB (128.0, 32.0 and
+8.0 MB at most, never above; 82, 95 and 26 uploads, 50, 87 and 24 evictions;
+no chunk under 2) and the renderer on a detached 2x layer, whose nine
+comparisons gave the figures of the integration run to the pixel. The app
+was built again and launched three more times (README.md, the same section):
+the captures and stderr lines came out as at integration. No launch shows
+the frost change: a capture draws no cache, and the scene has no blurred
+window.
+
+**At the merge with the display-link frame timer,** the same day. Everything
+above was run on the tree the caches were built in, whose frame timer was a
+60 Hz `NSTimer`; the tree that lands ticks from a display link, 120 Hz on the
+display this was run on. A second throwaway program outside the repository
+linked the landed tree's `frame-driver.m`, `canvas-renderer.m`,
+`compositor.m`, `background.m` and `background-tiff.m` with the release
+controller library, took the controller's own snapshot for a config, and
+drove a layer in no window by the rule `main.m` has (describe and flush;
+start the frame timer when `-animates:draw:NO` says so; each tick ask
+`-animates:draw:YES` and end the timer when it says no). It is that rule
+copied, not `main.m` running. Baked `dark_sea.glsl` on 3000×2000 points at
+1x, budget 128:
+
+| Step | Result |
+|---|---|
+| A first view; the same view again; a change of level | 13 chunks, then none, then 12, each in the description's own draw; no timer started |
+| A jump to cells never shown | 2 baked in the description's draw and 7 pending; the timer started, ticked at 119.8 to 120.1 a second, baked 2 a tick (2, 2, 2, 1) and ended by itself on the tick after the frame that left nothing pending; the first tick after the description forced nothing, that draw having been its frame |
+| Half a second idle after each, and one more description | no tick, no chunk, no timer |
+| A flight of 40 camera frames of (400, 250) units, each described and flushed inside its tick as `-cameraFrame` does | as merged textually: up to 4 chunks between one tick and the next (0 4 2 3 0 3 3 0 3 4 …), 82 in all, 79 ticks a second in three runs. With one forced frame a tick at most: 2 a tick, 81 in all, 119 to 120 ticks a second in three runs |
+| The same on 1728×1117 points at 2x, budget 512 | before, up to 4 a tick at 94 ticks a second; after, at most 2 at 111 |
+
+The flight row is why `-animates:draw:` no longer forces a frame on an output
+that has drawn since the last tick. A flight's tick drew twice, the camera
+frame and then the forced one at a later `time`, so the cache spent its
+allowances twice a tick. The 60 Hz timer the caches were built on ran the
+same two steps in the same order (read in that tree, not measured there);
+nothing above had driven a camera through a filling cache.
+
+The 8192×4096 four-level pyramid of this run (generated blocks, `tiffcp -t -w
+256 -l 256 -c zip`), same program: a first view asked for 12 chunks, the
+timer started, 8 were uploaded by the wake-up's own redraw and 4 by the next
+frame, and the timer ended by itself; the ready handler was called once or
+twice a view and never off the main thread; a flight uploaded at most 3
+between two ticks, a wake-up's frame and a tick's. At zoom 0.5 the picture is
+its always-loaded level and nothing is pending.
+
+The app built from the landed tree was launched four times, twice before
+that change and twice after (README.md, the same section). None of this
+shows a chunk on the app's panel, and the program
+is not the shell: `main.m`'s own block, a real flight ticked by the
+controller, a window's picture arriving while a cache fills and a second
+display were not run.
+
+**Not run:**
+
+- **The caches' pictures in the app.** Nothing on a display was looked at:
+  not a chunk arriving on the panel, not the shell's own timer serving a
+  filling cache, not eviction there. In the app the two caches are known only
+  by their stderr lines and by the app answering and exiting cleanly.
+- Upstream itself, the `tiff` crate, and a file written by `vips` or GDAL
+  (neither is on this machine): the files were `tiffcp`'s.
+- A picture larger than 16384×8192, compressions other than none, PackBits,
+  LZW, Deflate and RGB JPEG, a big-endian file, a pyramid cut by a page that
+  is not half its predecessor.
+- A frosted window over a cached background in the app or on a layer: it was
+  run through the compositor's offscreen encode only (the row above), with
+  one window, default `[effects]` and a jump of the view, not the app's pans
+  and fullscreen exits. Two displays of different scale, a display whose
+  scale changes under a live output, a GPU that rejects a bake.
+
+Upstream files read beyond the ones the brief named, because they decide where
+a chunk lands: `src/render/elements.rs` lines 1 to 372 (`TileShaderElement`,
+`tile_corner_round`, `corner_round_rect`, `PixelSnapRescaleElement`),
+`src/render/mod.rs` lines 1725 to 1772 (the caches' call site),
+`src/canvas.rs` `visible_canvas_rect`, and the lines a search for the caches'
+callers printed from `src/backend/udev.rs`, `src/state/render_cache.rs` and
+`src/state/reload.rs`.

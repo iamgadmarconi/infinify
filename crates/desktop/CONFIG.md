@@ -108,7 +108,7 @@ constants they replaced.
 | `autostart` | `exec` effects of the launch load, see [Autostart](#autostart) |
 | `window_placement` | where a window that appears by itself is placed: `center`, `cursor` or `auto`, see [LIFECYCLE.md](LIFECYCLE.md#2-placement) |
 | `[decorations] title_bar_height` | the diagonal step of the placement cascade; also part of `render.chrome` below |
-| `[background] type`, `path`, `texture`, `mirror_tile`, `transparent_shader`, `animate_fps`, `cache_shader` | reported as the snapshot's `render.background` for the shell's compositor, see [RENDER.md](RENDER.md#render). Reporting is all the controller does: the app's compositor accepts `cache_shader` and ignores it (a shader always renders live) |
+| `[background] type`, `path`, `texture`, `mirror_tile`, `transparent_shader`, `animate_fps`, `cache_shader`, `cache_budget_mb` | reported as the snapshot's `render.background` for the shell's compositor, see [RENDER.md](RENDER.md#render). Reporting is all the controller does: what the app's compositor does with each, `cache_shader` and `cache_budget_mb` included, is `native/desktop/BACKGROUND-NOTES.md` |
 | `[decorations] bg_color`, `fg_color`, `corner_radius`, `title_bar_height`, `font`, `font_size`, `font_weight`, `title_align` | reported as `render.chrome`: what stand-ins and compositor title bars are rasterised from |
 | `[decorations] default_mode`, `border_width`, `border_color`, `border_color_focused`, `corner_radius`, `shadow`, `opacity`, `opacity_focused`, `blur` | each placement's `decoration`, through upstream's `effective_*` helpers, see [RENDER.md](RENDER.md#placements); border, shadow and bar also size a `screenshot window`. `opacity` and `opacity_focused` are also each placement's own `opacity`, the same number, for a window with no opacity of its own from a rule or an IPC `Opacity` write. They reach bound windows only: a stand-in is always 1.0, as upstream's, and a window captured alone by `screenshot window` is opaque unless a rule or an `Opacity` write pins its opacity |
 | `[[window_rules]] decoration`, `border_width`, `border_color`, `border_color_focused`, `corner_radius`, `shadow`, `opacity`, `blur` | the same, for the window the rule matched when it mapped: kept with the window, reported in `snapshot.windows[].rule`, and what its `decoration` and `opacity` are resolved from until it is gone, whatever its title or the config becomes ([RULES.md](RULES.md#matching)); never for a stand-in |
@@ -158,8 +158,7 @@ code, and then unused, because the feature it configures does not exist here:
   `disable_on_external_mouse`, which counts as on; `[input.mouse]`,
   `[input.touch]`, `[input.tablet]`
 - `[cursor] inactive_opacity` (theme and size reach only the `exec` environment)
-- `[background] cache_budget_mb`; `[backend]`; `[output]` other than
-  `[output.outline]`
+- `[backend]`; `[output]` other than `[output.outline]`
 - `[[outputs]] scale`, `transform`, `position` and `mode`: macOS arranges the
   displays, see [Outputs](#outputs)
 - of `[[window_rules]]`, `preserve_aspect_ratio` and `layer_order`, which are

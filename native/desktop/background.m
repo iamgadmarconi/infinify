@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Carried into native/desktop/ unchanged from the standalone compositor port that was built, verified against upstream's shaders and independently reviewed outside this repository; only this line was added.
+// Carried into native/desktop/ from the standalone compositor port that was built, verified against upstream's shaders and independently reviewed outside this repository. Changed here since: the two chunk caches, `cache_shader` and tiled pyramidal TIFF tiles (BACKGROUND-NOTES.md, section 17).
 //
 // Infinify canvas background renderer — see background.h and NOTES.md.
 //
@@ -9,6 +9,7 @@
 // upstream path and SHA-256 of the file it was translated from.
 
 #import "background.h"
+#import "background-tiff.h"
 
 #import <Accelerate/Accelerate.h>
 #import <ImageIO/ImageIO.h>
@@ -16,6 +17,7 @@
 
 #include <errno.h>
 #include <math.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -173,6 +175,52 @@ static NSString *const kIFBGBuiltinMSL =
      "\n"
      "    float4 color = tex.sample(smp, v_coords);\n"
      "    return ifbg_finish(color * alpha, U);\n"
+     "}\n";
+
+// Must match `struct IFBGChunkUniforms` in kIFBGChunkMSL (48 bytes).
+typedef struct {
+    simd_float4 dst;       // the chunk's rectangle in target pixels: x0, y0, x1, y1
+    simd_float4 src;       // the texels it shows: origin, then size
+    simd_float2 target;    // the render target's size in pixels
+    simd_float2 tex_size;  // the texture's size in texels
+} IFBGChunkUniforms;
+
+_Static_assert(sizeof(IFBGChunkUniforms) == 48, "IFBGChunkUniforms layout must match the MSL struct");
+
+// One cached chunk: a quad at its own rectangle of the target, where the other
+// built-ins cover the target with one triangle. Appended to the built-in library.
+static NSString *const kIFBGChunkMSL =
+    @"struct IFBGChunkUniforms {\n"
+     "    float4 dst;\n"
+     "    float4 src;\n"
+     "    float2 target;\n"
+     "    float2 tex_size;\n"
+     "};\n"
+     "vertex IFBGVertexOut ifbg_chunk_vertex(uint vid [[vertex_id]],\n"
+     "                                       constant IFBGChunkUniforms &C [[buffer(0)]]) {\n"
+     "    IFBGVertexOut out;\n"
+     "    float2 p = float2((vid & 1) != 0 ? C.dst.z : C.dst.x, (vid & 2) != 0 ? C.dst.w : C.dst.y);\n"
+     "    out.position = float4(p.x / C.target.x * 2.0 - 1.0, 1.0 - p.y / C.target.y * 2.0, 0.0, 1.0);\n"
+     "    return out;\n"
+     "}\n"
+     "\n"
+     // ------------------------------------------------------------------
+     // Hand translation of upstream src/shaders/chunk_bg.glsl
+     // sha256 ee97fa3361ef758e155bbd440b2672865052073eea2a344bf8882737fa2e29a0
+     // `alpha` is declared there by convention and not multiplied in: a chunk
+     // is opaque whatever its texture holds.
+     // ------------------------------------------------------------------
+     "fragment float4 ifbg_chunk(IFBGVertexOut in [[stage_in]],\n"
+     "                           constant IFBGChunkUniforms &C [[buffer(0)]],\n"
+     "                           texture2d<float> tex [[texture(0)]],\n"
+     "                           sampler smp [[sampler(0)]]) {\n"
+     // smithay's `v_coords` for a textured element: the element's 0..1 extent
+     // mapped onto its `src` rectangle of the texture, per fragment like
+     // ifbg_v_coords above.
+     "    float2 v_coords = (C.src.xy + (in.position.xy - C.dst.xy) / (C.dst.zw - C.dst.xy) * C.src.zw) / C.tex_size;\n"
+     "\n"
+     "    float3 color = tex.sample(smp, v_coords).rgb;\n"
+     "    return float4(color, 1.0);\n"
      "}\n";
 
 // GLSL ES 1.00 names for a translated user shader. Everything here is either a
@@ -974,11 +1022,14 @@ static NSString *IFBGCondenseDiagnostics(NSString *text) {
 + (MTLCompileOptions *)compileOptions;
 - (nullable id<MTLRenderPipelineState>)builtinPipeline:(NSString *)fragmentName;
 - (nullable id<MTLRenderPipelineState>)pipelineWithFragment:(id<MTLFunction>)fragment error:(NSError **)error;
+/// The quad pipeline of a cached chunk (ifbg_chunk_vertex, ifbg_chunk).
+- (nullable id<MTLRenderPipelineState>)chunkPipeline;
 @end
 
 @implementation IFBGDeviceResources {
     id<MTLLibrary> _builtinLibrary;
     NSMutableDictionary<NSString *, id<MTLRenderPipelineState>> *_builtinPipelines;
+    id<MTLRenderPipelineState> _chunkPipeline;
 }
 
 + (instancetype)resourcesForDevice:(id<MTLDevice>)device {
@@ -1017,7 +1068,7 @@ static NSString *IFBGCondenseDiagnostics(NSString *text) {
     _builtinPipelines = [NSMutableDictionary dictionary];
 
     NSError *error = nil;
-    _builtinLibrary = [device newLibraryWithSource:[kIFBGCommonMSL stringByAppendingString:kIFBGBuiltinMSL]
+    _builtinLibrary = [device newLibraryWithSource:[[kIFBGCommonMSL stringByAppendingString:kIFBGBuiltinMSL] stringByAppendingString:kIFBGChunkMSL]
                                            options:[IFBGDeviceResources compileOptions]
                                              error:&error];
     if (!_builtinLibrary) {
@@ -1078,6 +1129,22 @@ static NSString *IFBGCondenseDiagnostics(NSString *text) {
         }
         _builtinPipelines[fragmentName] = p;
         return p;
+    }
+}
+
+- (id<MTLRenderPipelineState>)chunkPipeline {
+    @synchronized(self) {
+        if (_chunkPipeline) return _chunkPipeline;
+        MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
+        pd.vertexFunction = [_builtinLibrary newFunctionWithName:@"ifbg_chunk_vertex"];
+        pd.fragmentFunction = [_builtinLibrary newFunctionWithName:@"ifbg_chunk"];
+        if (!pd.vertexFunction || !pd.fragmentFunction) return nil;
+        pd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+        pd.colorAttachments[0].blendingEnabled = NO;
+        NSError *error = nil;
+        _chunkPipeline = [_device newRenderPipelineStateWithDescriptor:pd error:&error];
+        if (!_chunkPipeline) NSLog(@"background: chunk pipeline failed: %@", error.localizedDescription);
+        return _chunkPipeline;
     }
 }
 @end
@@ -1350,6 +1417,844 @@ static id<MTLTexture> IFBGLoadImage(id<MTLDevice> device, NSString *path, CGSize
 }
 @end
 
+// MARK: - Chunk caches
+//
+// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
+// src/render/shader_chunks.rs (ShaderChunkCache: apron_dims, interior_src,
+// bake_chunk, render_elements, shrink, visible_chunks), src/render/tile_chunks.rs
+// (BgChunkCache: new_from_tiff, ensure_visible_loaded, drain_responses, shrink;
+// pick_lod, derive_chunk_layout, compute_aggregations, compute_k_range,
+// chunks_intersecting, visibility_query, chunk_actual_size, chunk_canvas_origin,
+// evict_lru_to_budget, chunk_render_elements), src/render/elements.rs
+// (tile_corner_round and corner_round_rect: the pixels a chunk covers),
+// src/canvas.rs (visible_canvas_rect) and src/render/mod.rs (the call site: the
+// visible rectangle, and eight uploads a frame). Upstream's names are kept so
+// the two can be read side by side. One cache serves one output.
+
+static const long kIFBGBaseChunkCanvas = 1024;            // shader_chunks.rs BASE_CHUNK_CANVAS
+static const uint32_t kIFBGShaderLODs = 8;                // N_LODS
+static const NSUInteger kIFBGBakeBudget = 2;              // BAKE_BUDGET
+static const NSUInteger kIFBGLODSwitchBakeBudget = 16;    // LOD_SWITCH_BAKE_BUDGET
+static const long kIFBGApronTexels = 1;                   // APRON_TEXELS
+static const uint32_t kIFBGFallbackMaxDim = 4096;         // tile_chunks.rs FALLBACK_MAX_DIM, capture_background.rs TIFF_LOD_CAP
+static const long kIFBGTargetChunkCanvas = 2048;          // TARGET_CHUNK_CANVAS
+static const long kIFBGLOD0TargetChunkCanvas = 1024;      // LOD0_TARGET_CHUNK_CANVAS
+static const NSUInteger kIFBGUploadBudget = 8;            // render/mod.rs: `ensure_visible_loaded(visible_rect, renderer, zoom, 8)`
+enum { kIFBGMaxTileLODs = 64 };
+
+static void IFBGPixelSize(IFBackgroundFrame f, long *logicalW, long *logicalH, NSUInteger *pxW, NSUInteger *pxH);
+
+// Upstream `import_memory` of a decoded block: the bytes as they are.
+static id<MTLTexture> IFBGUploadBlock(id<MTLDevice> device, IFBGTiffBlock *block) {
+    if (!block.width || !block.height || block.width > kIFBGMaxTextureSide || block.height > kIFBGMaxTextureSide) return nil;
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                                                  width:block.width
+                                                                                 height:block.height
+                                                                              mipmapped:NO];
+    td.usage = MTLTextureUsageShaderRead;
+    id<MTLTexture> texture = [device newTextureWithDescriptor:td];
+    [texture replaceRegion:MTLRegionMake2D(0, 0, block.width, block.height) mipmapLevel:0 withBytes:block.rgba.bytes
+               bytesPerRow:(NSUInteger)block.width * 4];
+    return texture;
+}
+
+// Rust's `i32::div_euclid` for a positive divisor.
+static long IFBGDivFloor(long a, long b) {
+    long q = a / b;
+    return (a % b != 0 && a < 0) ? q - 1 : q;
+}
+
+// Rust's `f64::round() as i32`: half away from zero, saturating.
+static long IFBGRoundI32(double v) {
+    return (long)fmin(fmax(round(v), -2147483648.0), 2147483647.0);
+}
+
+// tile_chunks.rs `pick_lod`.
+static uint32_t IFBGPickLOD(double zoom, uint32_t lodCount) {
+    if (lodCount == 0) return 0;
+    uint32_t last = lodCount - 1;
+    if (zoom >= 1.0 || !isfinite(zoom)) return 0;
+    if (zoom <= 0.0) return last;
+    double raw = -log2(zoom);
+    if (!isfinite(raw) || raw < 0.0) return 0;
+    uint32_t targetCeil = (uint32_t)fmin(ceil(raw), 4294967295.0);
+    // If ceil would pick the fallback LOD but we're not yet past the
+    // power-of-two boundary (`raw >= last - 1.0`), stay one step finer.
+    if (targetCeil >= last && raw < (double)last - 1.0) return last ? last - 1 : 0;
+    return MIN(targetCeil, last);
+}
+
+// What one frame shows, in upstream's integers.
+typedef struct {
+    double zoom, scale;
+    long cameraX, cameraY;   // `camera_i`: camera.round() as i32
+    long viewX, viewY;       // canvas.rs `visible_canvas_rect(camera.to_i32_round(), viewport_size, zoom)`
+    long viewW, viewH;       //   ceil(output / zoom) + 2
+    float targetW, targetH;  // the render target in pixels
+} IFBGChunkView;
+
+static IFBGChunkView IFBGChunkViewMake(IFBackgroundFrame f) {
+    IFBGChunkView v;
+    v.zoom = (isfinite(f.zoom) && f.zoom > 0) ? f.zoom : 1.0;
+    v.scale = (isfinite(f.scale) && f.scale > 0) ? f.scale : 1.0;
+    long outW, outH;
+    NSUInteger pxW, pxH;
+    IFBGPixelSize(f, &outW, &outH, &pxW, &pxH);
+    v.cameraX = IFBGRoundI32(isfinite(f.cameraX) ? f.cameraX : 0.0);
+    v.cameraY = IFBGRoundI32(isfinite(f.cameraY) ? f.cameraY : 0.0);
+    v.viewX = v.cameraX;
+    v.viewY = v.cameraY;
+    v.viewW = (long)fmin(ceil((double)outW / v.zoom), 2147483645.0) + 2;
+    v.viewH = (long)fmin(ceil((double)outH / v.zoom), 2147483645.0) + 2;
+    v.targetW = (float)pxW;
+    v.targetH = (float)pxH;
+    return v;
+}
+
+// The pixels an element with this area covers. `x, y` are relative to
+// `camera_i`. elements.rs `tile_corner_round` takes the area to physical
+// pixels and `corner_round_rect` (PixelSnapRescaleElement, anchored at the
+// output's origin) rescales that by zoom; both round the two corners
+// separately, so two chunks that share a canvas edge share the pixel edge.
+static simd_float4 IFBGChunkDst(long x, long y, long w, long h, const IFBGChunkView *v) {
+    double x0 = round((double)x * v->scale), y0 = round((double)y * v->scale);
+    double x1 = fmax(round((double)(x + w) * v->scale), x0), y1 = fmax(round((double)(y + h) * v->scale), y0);
+    double X0 = round(x0 * v->zoom), Y0 = round(y0 * v->zoom);
+    double X1 = fmax(round(x1 * v->zoom), X0), Y1 = fmax(round(y1 * v->zoom), Y0);
+    return simd_make_float4((float)X0, (float)Y0, (float)X1, (float)Y1);
+}
+
+// A chunk texture and upstream's `ChunkMeta`.
+@interface IFBGChunk : NSObject {
+  @public
+    id<MTLTexture> texture;
+    uint64_t bytes;    // `bytes`
+    uint64_t touched;  // `last_touched_frame`
+    uint32_t lod;
+    long cx, cy;
+}
+@end
+@implementation IFBGChunk
+@end
+
+// One quad of a frame. It holds its texture, so a chunk evicted at the end of
+// the frame that chose it is still drawn by that frame.
+@interface IFBGChunkDraw : NSObject {
+  @public
+    id<MTLTexture> texture;
+    IFBGChunkUniforms uniforms;
+    uint32_t lod;
+}
+@end
+@implementation IFBGChunkDraw
+@end
+
+static NSNumber *IFBGChunkKey(uint32_t lod, long cx, long cy) {
+    return @(((uint64_t)lod << 56) | (((uint64_t)cx & 0xFFFFFFFull) << 28) | ((uint64_t)cy & 0xFFFFFFFull));
+}
+
+// tile_chunks.rs `evict_lru_to_budget`: least recently stamped first, until
+// the cache fits. Returns how many were dropped.
+static NSUInteger IFBGEvictLRU(NSMutableDictionary<NSNumber *, IFBGChunk *> *chunks, uint64_t *bytes, uint64_t budget) {
+    if (*bytes <= budget) return 0;
+    NSArray<NSNumber *> *byAge = [chunks keysSortedByValueUsingComparator:^NSComparisonResult(IFBGChunk *a, IFBGChunk *b) {
+        return a->touched < b->touched ? NSOrderedAscending : a->touched > b->touched ? NSOrderedDescending : NSOrderedSame;
+    }];
+    NSUInteger evicted = 0;
+    for (NSNumber *key in byAge) {
+        if (*bytes <= budget) break;
+        uint64_t freed = chunks[key]->bytes;
+        *bytes = *bytes > freed ? *bytes - freed : 0;  // `saturating_sub`
+        [chunks removeObjectForKey:key];
+        evicted++;
+    }
+    return evicted;
+}
+
+// Upstream emits its elements topmost first (ascending LOD); a pass without
+// blending wants them bottom first: the coarsest LOD, then each finer one.
+static NSArray<IFBGChunkDraw *> *IFBGSortDraws(NSArray<IFBGChunkDraw *> *draws) {
+    return [draws sortedArrayUsingComparator:^NSComparisonResult(IFBGChunkDraw *a, IFBGChunkDraw *b) {
+        return a->lod > b->lod ? NSOrderedAscending : a->lod < b->lod ? NSOrderedDescending : NSOrderedSame;
+    }];
+}
+
+// MARK: Baked shader (shader_chunks.rs)
+
+// shader_chunks.rs `apron_dims`: the padded canvas span a chunk's bake renders,
+// the square texture it lands in, and the border's width in canvas units.
+static void IFBGApronDims(long chunkSize, long bakePx, long *areaCanvas, long *fboTexels, long *apronCanvas) {
+    double scale = (double)bakePx / (double)chunkSize;
+    long apron = MAX((long)ceil((double)kIFBGApronTexels / scale), 1L);
+    long area = chunkSize + 2 * apron;
+    *apronCanvas = apron;
+    *areaCanvas = area;
+    *fboTexels = (long)fmax(round((double)area * scale), 1.0);
+}
+
+@interface IFBGShaderChunks : NSObject
+- (instancetype)initWithResources:(IFBGDeviceResources *)resources
+                           shader:(id<MTLRenderPipelineState>)shader
+                            scale:(double)scale
+                           budget:(uint64_t)budget;
+/// The output scale the chunks are baked for (upstream fixes `bake_px` when it
+/// builds the cache and drops the cache when the output's scale changes).
+@property (nonatomic, readonly) double scale;
+/// `render_elements`: bakes what this frame may, and returns its quads bottom
+/// first. nil when the coarse cover could not be baked: the caller draws live.
+- (nullable NSArray<IFBGChunkDraw *> *)drawsForFrame:(IFBackgroundFrame)frame;
+- (void)shrink;
+@property (nonatomic, readonly) NSUInteger pendingCount, count, loadCount, evictionCount;
+@property (nonatomic, readonly) uint64_t bytes;
+@property (nonatomic, readonly) BOOL degraded;
+/// Changes whenever the cached chunks do: a bake or an upload, an eviction, a shrink that dropped something.
+@property (nonatomic, readonly) uint64_t generation;
+@end
+
+@implementation IFBGShaderChunks {
+    IFBGDeviceResources *_resources;
+    id<MTLRenderPipelineState> _shader;
+    long _bakePx;         // `bake_px`
+    uint64_t _budget;     // `vram_budget_bytes`
+    NSMutableDictionary<NSNumber *, IFBGChunk *> *_chunks;
+    uint64_t _frameCounter;
+    BOOL _hasLastTarget;
+    uint32_t _lastTarget;  // `last_target_lod`
+    BOOL _shrunk;
+    BOOL _broken;          // a bake failed on the GPU: this cache draws nothing more
+    BOOL _coverTooLarge;   // the last frame's coarse cover exceeded the budget by itself
+    BOOL _degraded;        // `degraded`
+    BOOL _hasPlan;
+    IFBackgroundFrame _planFrame;
+    NSArray<IFBGChunkDraw *> *_plan;
+}
+
+- (instancetype)initWithResources:(IFBGDeviceResources *)resources
+                           shader:(id<MTLRenderPipelineState>)shader
+                            scale:(double)scale
+                           budget:(uint64_t)budget {
+    if (!(self = [super init])) return nil;
+    _resources = resources;
+    _shader = shader;
+    _scale = scale;
+    // `((BASE_CHUNK_CANVAS as f64) * output_scale).round().max(1.0) as i32`
+    _bakePx = (long)fmin(fmax(round((double)kIFBGBaseChunkCanvas * scale), 1.0), 2147483647.0);
+    _budget = budget;
+    _chunks = [NSMutableDictionary dictionary];
+    return self;
+}
+
+- (NSUInteger)count {
+    return _chunks.count;
+}
+
+- (BOOL)degraded {
+    return _degraded || _coverTooLarge;
+}
+
+- (uint64_t)chunkBytes:(long)chunkSize {
+    long area, fbo, apron;
+    IFBGApronDims(chunkSize, _bakePx, &area, &fbo, &apron);
+    return (uint64_t)fbo * (uint64_t)fbo * 4;
+}
+
+// `shrink`: the sharp bakes go, the coarsest cover stays as the floor the next
+// canvas frame refines from.
+- (void)shrink {
+    if (_shrunk) return;
+    _shrunk = YES;
+    _hasPlan = NO;
+    _plan = nil;
+    uint32_t coarsest = kIFBGShaderLODs - 1;
+    _bytes = 0;
+    for (NSNumber *key in _chunks.allKeys) {
+        IFBGChunk *chunk = _chunks[key];
+        if (chunk->lod == coarsest) {
+            _bytes += chunk->bytes;  // `retain_lod_meta`: recounted, not zeroed
+        } else {
+            [_chunks removeObjectForKey:key];
+            _generation++;
+        }
+    }
+    _pendingCount = 0;
+}
+
+// `bake_chunk`, for every chunk this frame bakes, in one command buffer of the
+// module's own queue that is complete before the frame samples the textures.
+// The shader runs once over the chunk's canvas span plus its apron, with
+// `size` that padded span and `u_camera` its top-left corner, through the
+// same pipeline and uniform block as a live frame. A chunk whose texture
+// cannot be made is left uncached.
+- (void)bake:(NSArray<IFBGChunk *> *)wanted frame:(uint64_t)frame {
+    if (!wanted.count) return;
+    id<MTLCommandBuffer> commandBuffer = [_resources.queue commandBuffer];
+    if (!commandBuffer) return;
+    NSMutableArray<IFBGChunk *> *baked = [NSMutableArray array];
+    for (IFBGChunk *chunk in wanted) {
+        long chunkSize = kIFBGBaseChunkCanvas << chunk->lod, area, fbo, apron;
+        IFBGApronDims(chunkSize, _bakePx, &area, &fbo, &apron);
+        id<MTLTexture> texture = nil;
+        if (fbo <= (long)kIFBGMaxTextureSide) {
+            MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                          width:(NSUInteger)fbo
+                                                                                         height:(NSUInteger)fbo
+                                                                                      mipmapped:NO];
+            td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+            td.storageMode = MTLStorageModePrivate;
+            texture = [_resources.device newTextureWithDescriptor:td];
+        }
+        if (!texture) {
+            NSLog(@"background: shader-bake (LOD %u, %ld,%ld) create_buffer failed", chunk->lod, chunk->cx, chunk->cy);
+            continue;
+        }
+        MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+        pass.colorAttachments[0].texture = texture;
+        pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+        pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
+        pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+        id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:pass];
+        if (!encoder) continue;
+        IFBGUniforms u;
+        memset(&u, 0, sizeof u);
+        // `Uniform::new("u_camera", ((origin.x - apron_canvas) as f32, (origin.y - apron_canvas) as f32))`
+        u.camera = simd_make_float2((float)(chunk->cx * chunkSize - apron), (float)(chunk->cy * chunkSize - apron));
+        // The PixelShaderElement's area is the padded span, and its geometry at
+        // `bake_px / chunk_size` is the whole texture.
+        u.size = simd_make_float2((float)area, (float)area);
+        u.dest_px = simd_make_float2((float)fbo, (float)fbo);
+        u.src_size = simd_make_float2(1, 1);
+        u.time = 0.0f;  // `Uniform::new("u_time", 0.0f32)`
+        u.zoom = 1.0f;  // `Uniform::new("u_zoom", 1.0f32)`
+        u.alpha = 1.0f;
+        u.opaque = 1.0f;  // a baked shader is never `transparent_shader`
+        [encoder setRenderPipelineState:_shader];
+        [encoder setFragmentBytes:&u length:sizeof u atIndex:0];
+        [encoder setFragmentTexture:_resources.placeholderTexture atIndex:0];
+        [encoder setFragmentSamplerState:_resources.sampler atIndex:0];
+        [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+        [encoder endEncoding];
+        chunk->texture = texture;
+        chunk->bytes = (uint64_t)fbo * (uint64_t)fbo * 4;
+        chunk->touched = frame;
+        [baked addObject:chunk];
+    }
+    [commandBuffer commit];
+    [commandBuffer waitUntilCompleted];
+    if (commandBuffer.status != MTLCommandBufferStatusCompleted) {
+        NSLog(@"background: shader-bake render_output failed: %@", commandBuffer.error.localizedDescription);
+        _broken = YES;
+        return;
+    }
+    for (IFBGChunk *chunk in baked) {
+        _chunks[IFBGChunkKey(chunk->lod, chunk->cx, chunk->cy)] = chunk;
+        _bytes += chunk->bytes;
+        _loadCount++;
+        _generation++;
+    }
+}
+
+static IFBGChunk *IFBGChunkMake(uint32_t lod, long cx, long cy) {
+    IFBGChunk *chunk = [IFBGChunk new];
+    chunk->lod = lod;
+    chunk->cx = cx;
+    chunk->cy = cy;
+    return chunk;
+}
+
+- (NSArray<IFBGChunkDraw *> *)drawsForFrame:(IFBackgroundFrame)f {
+    if (_broken) return nil;
+    if (_hasPlan && memcmp(&f, &_planFrame, sizeof f) == 0) return _plan;
+    _hasPlan = NO;
+    _plan = nil;
+    IFBGChunkView v = IFBGChunkViewMake(f);
+    _shrunk = NO;
+    uint64_t frame = ++_frameCounter;
+    uint32_t target = IFBGPickLOD(v.zoom, kIFBGShaderLODs), coarsest = kIFBGShaderLODs - 1;
+    NSMutableArray<IFBGChunk *> *bakes = [NSMutableArray array];
+
+    // Resident coarse cover: baked unbudgeted, once, and stamped every frame.
+    // `visible_chunks(viewport, size)`: the cells the visible rectangle touches.
+    long coverSize = kIFBGBaseChunkCanvas << coarsest;
+    long coverX0 = IFBGDivFloor(v.viewX, coverSize), coverX1 = IFBGDivFloor(v.viewX + v.viewW - 1, coverSize);
+    long coverY0 = IFBGDivFloor(v.viewY, coverSize), coverY1 = IFBGDivFloor(v.viewY + v.viewH - 1, coverSize);
+    // Not upstream: a cover that does not fit the budget by itself is not baked.
+    // Upstream bakes it for every frame it draws and evicts it again when the
+    // frame ends, however many cells a far zoom-out makes it; here such a frame
+    // is the live shader's (BACKGROUND-NOTES.md, section 17).
+    uint64_t coverBytes = (uint64_t)((coverX1 - coverX0 + 1) * (coverY1 - coverY0 + 1)) * [self chunkBytes:coverSize];
+    if (coverBytes > _budget) {
+        if (!_coverTooLarge) {
+            NSLog(@"shader-bake: cache_budget_mb too low for this view's coarse cover (%llu MB > %llu MB budget); rendering the shader live. "
+                   "Raise cache_budget_mb to bake it.", coverBytes / (1024 * 1024), _budget / (1024 * 1024));
+        }
+        _coverTooLarge = YES;
+        _pendingCount = 0;
+        return nil;
+    }
+    _coverTooLarge = NO;
+    for (long cy = coverY0; cy <= coverY1; cy++) {
+        for (long cx = coverX0; cx <= coverX1; cx++) {
+            IFBGChunk *chunk = _chunks[IFBGChunkKey(coarsest, cx, cy)];
+            if (chunk) {
+                chunk->touched = frame;
+            } else {
+                [bakes addObject:IFBGChunkMake(coarsest, cx, cy)];
+            }
+        }
+    }
+
+    long targetSize = kIFBGBaseChunkCanvas << target;
+    long x0 = IFBGDivFloor(v.viewX, targetSize), x1 = IFBGDivFloor(v.viewX + v.viewW - 1, targetSize);
+    long y0 = IFBGDivFloor(v.viewY, targetSize), y1 = IFBGDivFloor(v.viewY + v.viewH - 1, targetSize);
+
+    // Graceful degrade: when cover and sharp working set cannot both fit the
+    // budget, the sharp chunks are not baked and the cover alone is shown.
+    uint64_t workingSet = (uint64_t)((coverX1 - coverX0 + 1) * (coverY1 - coverY0 + 1)) * [self chunkBytes:coverSize] +
+                          (uint64_t)((x1 - x0 + 1) * (y1 - y0 + 1)) * [self chunkBytes:targetSize];
+    BOOL degraded = workingSet > _budget;
+    if (degraded != _degraded) {
+        _degraded = degraded;
+        if (degraded) {
+            NSLog(@"shader-bake: cache_budget_mb too low for this view (%llu MB working set > %llu MB budget); "
+                   "showing coarse cover only. Raise cache_budget_mb for sharp detail.",
+                  workingSet / (1024 * 1024), _budget / (1024 * 1024));
+        }
+    }
+
+    // Budgeted fine refine at the target LOD, with the larger one-shot budget
+    // on the frame the LOD changes.
+    BOOL lodChanged = !_hasLastTarget || _lastTarget != target;
+    NSUInteger budget = lodChanged ? kIFBGLODSwitchBakeBudget : kIFBGBakeBudget, baked = 0;
+    _pendingCount = 0;
+    if (target != coarsest && !degraded) {
+        for (long cy = y0; cy <= y1; cy++) {
+            for (long cx = x0; cx <= x1; cx++) {
+                IFBGChunk *chunk = _chunks[IFBGChunkKey(target, cx, cy)];
+                if (chunk) {
+                    chunk->touched = frame;
+                } else if (baked < budget) {
+                    [bakes addObject:IFBGChunkMake(target, cx, cy)];
+                    baked++;
+                } else {
+                    _pendingCount++;
+                }
+            }
+        }
+    }
+    if (!degraded) {
+        _lastTarget = target;
+        _hasLastTarget = YES;
+    }
+    [self bake:bakes frame:frame];
+    if (_broken) {
+        _pendingCount = 0;
+        return nil;
+    }
+
+    // Resolve coarse-to-fine: for each visible target cell the finest cached
+    // chunk that covers it, stamped so that it survives this frame's eviction.
+    NSMutableDictionary<NSNumber *, IFBGChunk *> *chosen = [NSMutableDictionary dictionary];
+    BOOL covered = YES;
+    for (long cy = y0; cy <= y1; cy++) {
+        for (long cx = x0; cx <= x1; cx++) {
+            long canvasX = cx * targetSize, canvasY = cy * targetSize;
+            BOOL found = NO;
+            for (uint32_t lod = target; lod <= coarsest && !found; lod++) {
+                long size = kIFBGBaseChunkCanvas << lod;
+                NSNumber *key = IFBGChunkKey(lod, IFBGDivFloor(canvasX, size), IFBGDivFloor(canvasY, size));
+                IFBGChunk *chunk = _chunks[key];
+                if (!chunk) continue;
+                chunk->touched = frame;
+                chosen[key] = chunk;
+                found = YES;
+            }
+            covered = covered && found;
+        }
+    }
+    if (!covered) {
+        _pendingCount = 0;
+        return nil;
+    }
+
+    NSMutableArray<IFBGChunkDraw *> *draws = [NSMutableArray arrayWithCapacity:chosen.count];
+    for (IFBGChunk *chunk in chosen.allValues) {
+        long chunkSize = kIFBGBaseChunkCanvas << chunk->lod, area, fbo, apron;
+        IFBGApronDims(chunkSize, _bakePx, &area, &fbo, &apron);
+        // `interior_src`: the chunk's own span inside its apron, in texels.
+        double texelsPerCanvas = (double)fbo / (double)area;
+        IFBGChunkDraw *draw = [IFBGChunkDraw new];
+        draw->texture = chunk->texture;
+        draw->lod = chunk->lod;
+        draw->uniforms.dst = IFBGChunkDst(chunk->cx * chunkSize - v.cameraX, chunk->cy * chunkSize - v.cameraY, chunkSize, chunkSize, &v);
+        draw->uniforms.src = simd_make_float4((float)((double)apron * texelsPerCanvas), (float)((double)apron * texelsPerCanvas),
+                                              (float)((double)chunkSize * texelsPerCanvas), (float)((double)chunkSize * texelsPerCanvas));
+        draw->uniforms.target = simd_make_float2(v.targetW, v.targetH);
+        draw->uniforms.tex_size = simd_make_float2((float)fbo, (float)fbo);
+        [draws addObject:draw];
+    }
+
+    // Evict last, so that the chunks chosen for this frame are protected.
+    NSUInteger evicted = IFBGEvictLRU(_chunks, &_bytes, _budget);
+    _evictionCount += evicted;
+    _generation += evicted;
+    _plan = IFBGSortDraws(draws);
+    _planFrame = f;
+    _hasPlan = YES;
+    return _plan;
+}
+@end
+
+// MARK: Pyramidal TIFF (tile_chunks.rs)
+
+// What `new_from_tiff` derives from the file once: shared by every output.
+@interface IFBGTileLayout : NSObject {
+  @public
+    long imageW, imageH;                      // `image_dims`: LOD 0, the wrap period in canvas units
+    long positionX, positionY;                // `image_position`: the image is centred on canvas (0, 0)
+    uint32_t lodCount;                        // `n_lods()`: the last one is the fallback plane
+    long sizes[kIFBGMaxTileLODs];             // `chunk_canvas_sizes`
+    uint32_t aggregations[kIFBGMaxTileLODs];  // `aggregations`
+    IFBGTiffLevel levels[kIFBGMaxTileLODs];
+}
+@end
+@implementation IFBGTileLayout
+@end
+
+// `derive_chunk_layout`, `compute_aggregations` and the choice of the fallback
+// LOD in `new_from_tiff`. Returns nil and sets `*error` to upstream's message.
+static IFBGTileLayout *IFBGTileLayoutMake(IFBGTiffSource *source, NSString **error) {
+    NSUInteger pages = MIN(source.levelCount, (NSUInteger)kIFBGMaxTileLODs);
+    IFBGTileLayout *layout = [IFBGTileLayout new];
+    for (NSUInteger i = 0; i < pages; i++) {
+        layout->levels[i] = [source levelAtIndex:i];
+        if (layout->levels[i].tileWidth != layout->levels[i].tileHeight) {
+            *error = [NSString stringWithFormat:@"LOD %lu: non-square tile dims (%u, %u) not supported", (unsigned long)i,
+                                                layout->levels[i].tileWidth, layout->levels[i].tileHeight];
+            return nil;
+        }
+    }
+    if (!pages) {
+        *error = @"TIFF has no LOD levels";
+        return nil;
+    }
+    layout->imageW = layout->levels[0].imageWidth;
+    layout->imageH = layout->levels[0].imageHeight;
+    if (layout->imageW > INT32_MAX || layout->imageH > INT32_MAX) {
+        *error = @"dimensions: the image is too large";
+        return nil;
+    }
+    // The canvas span of one TIFF tile at each LOD. The pyramid is cut at the
+    // first step that is not exactly 2x: vips can leave the last page a pixel off.
+    long raw[kIFBGMaxTileLODs];
+    NSUInteger usable = pages;
+    for (NSUInteger i = 0; i < pages; i++) {
+        double scale = (double)layout->imageW / (double)layout->levels[i].imageWidth;
+        double span = round((double)layout->levels[i].tileWidth * scale);
+        if (!(span > 0)) {
+            *error = [NSString stringWithFormat:@"LOD %lu: derived canvas chunk size %ld <= 0", (unsigned long)i, (long)span];
+            return nil;
+        }
+        raw[i] = (long)fmin(span, 2147483647.0);
+    }
+    for (NSUInteger i = 1; i < pages; i++) {
+        if (raw[i] != 2 * raw[i - 1]) {
+            NSLog(@"background: chunked tile-bg: LOD %lu raw canvas chunk size %ld != 2× LOD %lu (%ld); truncating pyramid to %lu usable LOD(s)",
+                  (unsigned long)i, raw[i], (unsigned long)(i - 1), raw[i - 1], (unsigned long)i);
+            usable = i;
+            break;
+        }
+    }
+    for (NSUInteger i = 0; i < usable; i++) {
+        long target = i == 0 ? kIFBGLOD0TargetChunkCanvas : kIFBGTargetChunkCanvas;
+        layout->aggregations[i] = (raw[i] > 0 && raw[i] < target) ? (uint32_t)MAX(target / raw[i], 1L) : 1;
+        layout->sizes[i] = raw[i] * (long)layout->aggregations[i];
+    }
+    // The fallback plane is the finest LOD that fits FALLBACK_MAX_DIM, else the
+    // coarsest; the LODs past it are not used.
+    NSUInteger fallback = usable - 1;
+    for (NSUInteger i = 0; i < usable; i++) {
+        if (MAX(layout->levels[i].imageWidth, layout->levels[i].imageHeight) <= kIFBGFallbackMaxDim) {
+            fallback = i;
+            break;
+        }
+    }
+    layout->lodCount = (uint32_t)fallback + 1;
+    // `Point::from((-(image_dims.0 as i32) / 2, -(image_dims.1 as i32) / 2))`
+    layout->positionX = -layout->imageW / 2;
+    layout->positionY = -layout->imageH / 2;
+    return layout;
+}
+
+// The texels of chunk `(cx, cy)` at `lod`: `read_block`'s cropped block.
+static void IFBGTileChunkTexels(const IFBGTileLayout *l, uint32_t lod, long cx, long cy, long *w, long *h) {
+    IFBGTiffLevel level = l->levels[lod];
+    long n = l->aggregations[lod], tile = level.tileWidth;
+    long across = ((long)level.imageWidth + tile - 1) / tile, down = ((long)level.imageHeight + tile - 1) / tile;
+    long endX = MIN(cx * n + n, across), endY = MIN(cy * n + n, down);
+    *w = MAX(MIN(endX * tile, (long)level.imageWidth) - cx * n * tile, 0L);
+    *h = MAX(MIN(endY * tile, (long)level.imageHeight) - cy * n * tile, 0L);
+}
+
+// `visibility_query`: every chunk `(cx, cy)` of every image instance
+// `(kx, ky)` the visible rectangle touches (`compute_k_range`,
+// `chunks_intersecting`). The image repeats with its own period; a chunk past
+// its right or bottom edge is never listed.
+static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l, long chunkSize,
+                                void (^each)(long cx, long cy, long kx, long ky)) {
+    if (chunkSize <= 0 || v->viewW <= 0 || v->viewH <= 0 || l->imageW <= 0 || l->imageH <= 0) return;
+    long kx0 = IFBGDivFloor(v->viewX - l->positionX, l->imageW), kx1 = IFBGDivFloor(v->viewX + v->viewW - 1 - l->positionX, l->imageW);
+    long ky0 = IFBGDivFloor(v->viewY - l->positionY, l->imageH), ky1 = IFBGDivFloor(v->viewY + v->viewH - 1 - l->positionY, l->imageH);
+    for (long ky = ky0; ky <= ky1; ky++) {
+        for (long kx = kx0; kx <= kx1; kx++) {
+            long relX = v->viewX - (l->positionX + kx * l->imageW), relY = v->viewY - (l->positionY + ky * l->imageH);
+            long minX = MAX(relX, 0L), minY = MAX(relY, 0L);
+            long maxX = MIN(relX + v->viewW, l->imageW), maxY = MIN(relY + v->viewH, l->imageH);
+            if (minX >= maxX || minY >= maxY) continue;
+            for (long cy = minY / chunkSize; cy <= (maxY - 1) / chunkSize; cy++) {
+                for (long cx = minX / chunkSize; cx <= (maxX - 1) / chunkSize; cx++) each(cx, cy, kx, ky);
+            }
+        }
+    }
+}
+
+@interface IFBGTileChunks : NSObject
+- (instancetype)initWithDevice:(id<MTLDevice>)device
+                        source:(IFBGTiffSource *)source
+                        layout:(IFBGTileLayout *)layout
+                        budget:(uint64_t)budget;
+/// Main thread: a decoded chunk waits to be uploaded.
+@property (nonatomic, copy, nullable) dispatch_block_t readyHandler;
+/// `ensure_visible_loaded` and the per-tile part of `chunk_render_elements`:
+/// uploads what this frame may, asks for what is missing, and returns the
+/// quads of the chunks that are ready, bottom first. The fallback plane under
+/// them is the caller's.
+- (NSArray<IFBGChunkDraw *> *)drawsForFrame:(IFBackgroundFrame)frame;
+- (void)shrink;
+@property (nonatomic, readonly) NSUInteger pendingCount, count, loadCount, evictionCount;
+@property (nonatomic, readonly) uint64_t bytes;
+@property (nonatomic, readonly) BOOL degraded;
+/// Changes whenever the cached chunks do: a bake or an upload, an eviction, a shrink that dropped something.
+@property (nonatomic, readonly) uint64_t generation;
+@end
+
+@implementation IFBGTileChunks {
+    id<MTLDevice> _device;
+    IFBGTileLayout *_layout;
+    IFBGTileWorkerPool *_pool;
+    uint64_t _budget;  // `vram_budget_bytes`
+    NSMutableDictionary<NSNumber *, IFBGChunk *> *_chunks;
+    NSMutableSet<NSNumber *> *_inFlight;  // `in_flight`
+    NSMutableSet<NSNumber *> *_failed;    // `failed`
+    uint64_t _frameCounter;
+    BOOL _shrunk;
+    atomic_bool _wakePosted;
+    BOOL _hasPlan;
+    IFBackgroundFrame _planFrame;
+    NSArray<IFBGChunkDraw *> *_plan;
+}
+
+- (instancetype)initWithDevice:(id<MTLDevice>)device
+                        source:(IFBGTiffSource *)source
+                        layout:(IFBGTileLayout *)layout
+                        budget:(uint64_t)budget {
+    if (!(self = [super init])) return nil;
+    _device = device;
+    _layout = layout;
+    _budget = budget;
+    _chunks = [NSMutableDictionary dictionary];
+    _inFlight = [NSMutableSet set];
+    _failed = [NSMutableSet set];
+    atomic_init(&_wakePosted, false);
+    // The pool must not keep its cache alive: the decodes outlive nothing.
+    __weak IFBGTileChunks *weak = self;
+    _pool = [[IFBGTileWorkerPool alloc] initWithSource:source wake:^{ [weak wake]; }];
+    return self;
+}
+
+- (void)dealloc {
+    [_pool shutdown];
+}
+
+// `loop_signal.wakeup()`, from a decoder's thread: one message to the main
+// thread however many chunks finish before it is delivered.
+- (void)wake {
+    if (atomic_exchange(&_wakePosted, true)) return;
+    __weak IFBGTileChunks *weak = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        IFBGTileChunks *cache = weak;
+        if (!cache) return;
+        atomic_store(&cache->_wakePosted, false);
+        // What arrived may change a frame already encoded for this instant.
+        cache->_hasPlan = NO;
+        dispatch_block_t handler = cache.readyHandler;
+        if (handler) handler();
+    });
+}
+
+- (NSUInteger)count {
+    return _chunks.count;
+}
+
+// `has_pending_loads`: decodes asked for and not yet uploaded or failed.
+- (NSUInteger)pendingCount {
+    return _inFlight.count;
+}
+
+// `shrink`: every per-tile chunk goes, every request with it, and what a
+// decoder still delivers is discarded. The failed set stays.
+- (void)shrink {
+    while ([_pool tryReceive]) {
+    }
+    if (_shrunk) return;
+    _shrunk = YES;
+    _hasPlan = NO;
+    _plan = nil;
+    _generation += _chunks.count;
+    [_chunks removeAllObjects];
+    _bytes = 0;
+    [_pool drainPending];
+    [_inFlight removeAllObjects];
+}
+
+// `drain_responses`: at most `budget` decoded blocks become textures.
+- (void)drainResponses:(NSUInteger)budget frame:(uint64_t)frame {
+    NSUInteger uploaded = 0;
+    while (uploaded < budget) {
+        IFBGTileResponse *response = [_pool tryReceive];
+        if (!response) break;
+        NSNumber *key = IFBGChunkKey(response.level, (long)response.cx, (long)response.cy);
+        // A shrink dropped the request this answers.
+        if (![_inFlight containsObject:key]) continue;
+        [_inFlight removeObject:key];
+        IFBGTiffBlock *block = response.block;
+        if (!block) {
+            NSLog(@"background: chunked tile (LOD %u, %u,%u) decode: %@", response.level, response.cx, response.cy, response.error);
+            [_failed addObject:key];
+            continue;
+        }
+        id<MTLTexture> texture = IFBGUploadBlock(_device, block);
+        if (!texture) {
+            NSLog(@"background: chunked tile (LOD %u, %u,%u) import_memory failed", response.level, response.cx, response.cy);
+            [_failed addObject:key];
+            continue;
+        }
+        IFBGChunk *chunk = IFBGChunkMake(response.level, (long)response.cx, (long)response.cy);
+        chunk->texture = texture;
+        chunk->bytes = (uint64_t)block.width * (uint64_t)block.height * 4;
+        chunk->touched = frame;
+        _chunks[key] = chunk;
+        _bytes += chunk->bytes;
+        _loadCount++;
+        _generation++;
+        uploaded++;
+    }
+}
+
+- (NSArray<IFBGChunkDraw *> *)drawsForFrame:(IFBackgroundFrame)f {
+    if (_hasPlan && memcmp(&f, &_planFrame, sizeof f) == 0) return _plan;
+    _hasPlan = NO;
+    _plan = nil;
+    IFBGChunkView view = IFBGChunkViewMake(f);
+    const IFBGChunkView *v = &view;
+    IFBGTileLayout *l = _layout;
+
+    // ensure_visible_loaded
+    _shrunk = NO;
+    uint64_t frame = ++_frameCounter;
+    [self drainResponses:kIFBGUploadBudget frame:frame];
+    uint32_t coarsest = l->lodCount - 1, target = IFBGPickLOD(v->zoom, l->lodCount);
+
+    // Every LOD finer than the fallback plane, coarse first: the chunks the
+    // view touches are stamped when cached, so that eviction cannot take the
+    // coarse cover from under a fine LOD that is still loading, and asked of
+    // the decoders when not. Upstream does the two in separate passes over the
+    // same chunks.
+    //
+    // Not upstream: the chunks are counted against the budget as they are
+    // met, and from the first one that no longer fits nothing is stamped or
+    // asked for. Upstream asks for all of them; when they exceed the budget
+    // every frame evicts chunks the next frame asks for again, and
+    // `has_pending_loads` never clears (BACKGROUND-NOTES.md, section 17).
+    __block uint64_t wanted = 0;
+    __block BOOL over = NO;
+    NSMutableSet<NSNumber *> *seen = [NSMutableSet set];
+    for (uint32_t lod = coarsest; lod-- > target;) {
+        uint32_t aggregation = l->aggregations[lod];
+        IFBGVisibilityQuery(v, l, l->sizes[lod], ^(long cx, long cy, long kx, long ky) {
+            (void)kx;
+            (void)ky;
+            NSNumber *key = IFBGChunkKey(lod, cx, cy);
+            if (over || [seen containsObject:key]) return;
+            [seen addObject:key];
+            long texelsW, texelsH;
+            IFBGTileChunkTexels(l, lod, cx, cy, &texelsW, &texelsH);
+            uint64_t bytes = (uint64_t)texelsW * (uint64_t)texelsH * 4;
+            if (wanted + bytes > self->_budget) {
+                over = YES;
+                return;
+            }
+            wanted += bytes;
+            IFBGChunk *chunk = self->_chunks[key];
+            if (chunk) {
+                chunk->touched = frame;
+                return;
+            }
+            if ([self->_inFlight containsObject:key] || [self->_failed containsObject:key]) return;
+            [self->_inFlight addObject:key];
+            [self->_pool enqueueLevel:lod cx:(uint32_t)cx cy:(uint32_t)cy aggregation:aggregation];
+        });
+    }
+    if (over != _degraded) {
+        _degraded = over;
+        if (over) {
+            NSLog(@"chunked tile-bg: cache_budget_mb too low for this view (%llu MB budget); keeping the coarser levels that fit. "
+                   "Raise cache_budget_mb for sharp detail.", _budget / (1024 * 1024));
+        }
+    }
+    NSUInteger evicted = IFBGEvictLRU(_chunks, &_bytes, _budget);
+    _evictionCount += evicted;
+    _generation += evicted;
+
+    // chunk_render_elements: for each visible target cell of each image
+    // instance, the finest cached chunk that covers it.
+    NSMutableDictionary<NSString *, IFBGChunkDraw *> *chosen = [NSMutableDictionary dictionary];
+    if (target < coarsest) {
+        long targetSize = l->sizes[target];
+        IFBGVisibilityQuery(v, l, targetSize, ^(long cxT, long cyT, long kx, long ky) {
+            // (kx, ky) places the element; the coarser chunk is looked up on
+            // the image's own grid.
+            long canvasX = cxT * targetSize, canvasY = cyT * targetSize;
+            for (uint32_t lod = target; lod < coarsest; lod++) {
+                long size = l->sizes[lod], cx = IFBGDivFloor(canvasX, size), cy = IFBGDivFloor(canvasY, size);
+                IFBGChunk *chunk = self->_chunks[IFBGChunkKey(lod, cx, cy)];
+                if (!chunk) continue;
+                NSString *key = [NSString stringWithFormat:@"%u/%ld/%ld/%ld/%ld", lod, cx, cy, kx, ky];
+                if (chosen[key]) return;
+                // `chunk_actual_size`: a chunk at the image's right or bottom
+                // edge is as wide as what is left of the image.
+                long w = MIN(MAX(l->imageW - cx * size, 0L), size), h = MIN(MAX(l->imageH - cy * size, 0L), size);
+                // `chunk_canvas_origin`
+                long originX = l->positionX + kx * l->imageW + cx * size, originY = l->positionY + ky * l->imageH + cy * size;
+                IFBGChunkDraw *draw = [IFBGChunkDraw new];
+                draw->texture = chunk->texture;
+                draw->lod = lod;
+                draw->uniforms.dst = IFBGChunkDst(originX - v->cameraX, originY - v->cameraY, w, h, v);
+                // The whole texture, whose size in texels is the texture's own.
+                draw->uniforms.src = simd_make_float4(0, 0, (float)chunk->texture.width, (float)chunk->texture.height);
+                draw->uniforms.target = simd_make_float2(v->targetW, v->targetH);
+                draw->uniforms.tex_size = simd_make_float2((float)chunk->texture.width, (float)chunk->texture.height);
+                chosen[key] = draw;
+                return;
+            }
+        });
+    }
+    _plan = IFBGSortDraws(chosen.allValues);
+    _planFrame = f;
+    _hasPlan = YES;
+    return _plan;
+}
+@end
+
 // MARK: - Program
 
 @interface IFBackgroundProgram ()
@@ -1360,6 +2265,16 @@ static id<MTLTexture> IFBGLoadImage(id<MTLDevice> device, NSString *path, CGSize
     IFBGDeviceResources *_resources;
     id<MTLRenderPipelineState> _pipeline;
     id<MTLTexture> _texture;
+    // A pyramidal TIFF, as every program of one load shares it: the open file,
+    // what `new_from_tiff` derived from it, and (in `_texture`) its fallback level.
+    IFBGTiffSource *_tiff;
+    IFBGTileLayout *_layout;
+    NSUInteger _fallbackHoles;   // tiles of the fallback level that could not be decoded
+    BOOL _fallbackTransparency;  // some texel of it is not opaque
+    IFBackgroundProgram *_captureTwin;
+    // This program's own chunk cache, made by its first frame.
+    IFBGShaderChunks *_shaderChunks;
+    IFBGTileChunks *_tileChunks;
 }
 
 + (instancetype)programWithConfig:(IFBackgroundConfig *)config device:(id<MTLDevice>)device {
@@ -1443,11 +2358,18 @@ static id<MTLTexture> IFBGLoadImage(id<MTLDevice> device, NSString *path, CGSize
                 return;
             }
             if (IFBGIsTIFFPath(path)) {
-                [self useDotGrid];
-                _errorText = wallpaper
-                    ? [NSString stringWithFormat:@"wallpaper '%@': TIFF isn't supported in wallpaper mode (PNG/JPEG only) — use [background] type = \"tile\" for TIFF images", path]
-                    // Deviation: upstream streams a tiled pyramidal TIFF in chunks here.
-                    : [NSString stringWithFormat:@"tile bg '%@': tiled pyramidal TIFF (gigapixel) backgrounds are not supported by this port", path];
+                if (wallpaper) {
+                    [self useDotGrid];
+                    _errorText = [NSString stringWithFormat:@"wallpaper '%@': TIFF isn't supported in wallpaper mode (PNG/JPEG only) — use [background] type = \"tile\" for TIFF images", path];
+                    return;
+                }
+                // tile_chunks_or_shader_fallback: a tiled pyramidal TIFF is drawn
+                // from its levels chunk by chunk, or not at all.
+                NSString *pyramidError = [self loadPyramid:path];
+                if (pyramidError) {
+                    [self useDotGrid];
+                    _errorText = [NSString stringWithFormat:@"tile bg '%@': %@", path, pyramidError];
+                }
                 return;
             }
             NSString *imageError = nil;
@@ -1526,18 +2448,27 @@ static id<MTLTexture> IFBGLoadImage(id<MTLDevice> device, NSString *path, CGSize
             @"background shader '%@': samples `tex` but no `texture` is set — add a `texture` path under [background]", path];
         return;
     }
-    // init_shader_bg. (`cache_shader` would bake an eligible shader into
-    // textures first; the live path below draws the same picture.)
+    // init_shader_bg, or with `cache_shader` shader_chunks_or_live first.
     if (!source) {
         [self useDotGrid];
         _errorText = [NSString stringWithFormat:@"background shader '%@': %@", path, readError];
         return;
     }
+    // try_init_shader_chunks: `cache_shader` bakes a shader that is a rigid
+    // function of the canvas, one that reads `u_camera` and neither `u_time`
+    // nor `u_zoom`. A shader without `u_camera` is fixed to the screen, and
+    // baking it into canvas chunks would make it scroll. Every other shader is
+    // drawn live, and so is every shader under `transparent_shader`: a chunk
+    // cannot carry transparency.
+    BOOL bake = _config.cacheShader && !_config.transparentShader && IFBGReferencesUniform(source, @"vec2", @"u_camera") &&
+                !IFBGReferencesUniform(source, @"float", @"u_time") && !IFBGReferencesUniform(source, @"float", @"u_zoom");
     NSString *compileError = nil;
     id<MTLRenderPipelineState> pipeline = [self compileUserShader:source textured:NO error:&compileError];
     if (!pipeline) {
         [self useDotGrid];
-        _errorText = [NSString stringWithFormat:@"background shader: compile error: %@", compileError];
+        // try_init_shader_chunks names the file, init_shader_bg does not.
+        _errorText = bake ? [NSString stringWithFormat:@"background shader '%@': compile error: %@", path, compileError]
+                          : [NSString stringWithFormat:@"background shader: compile error: %@", compileError];
         return;
     }
     NSString *translated = _translatedShaderSource;
@@ -1548,6 +2479,54 @@ static id<MTLTexture> IFBGLoadImage(id<MTLDevice> device, NSString *path, CGSize
     _usesCamera = IFBGReferencesUniform(source, @"vec2", @"u_camera");
     _usesZoom = IFBGReferencesUniform(source, @"float", @"u_zoom");
     _transparent = _config.transparentShader;
+    if (!bake) return;
+    // The shader itself stays compiled: the bake draws through it, and so does
+    // a capture. `usesCamera` stays YES where upstream clears its flag: there
+    // the chunk elements damage what they move over by themselves.
+    if ([_resources chunkPipeline]) {
+        _cache = IFBackgroundCacheShaderBake;
+    } else {
+        _errorText = [NSString stringWithFormat:@"background shader '%@': chunk_bg compile error: the built-in chunk shader could not be built", path];
+    }
+}
+
+// init_tile_chunks_bg and BgChunkCache::new_from_tiff: opens the file, derives
+// the chunk layout and decodes the whole fallback level. Returns upstream's
+// message (what follows its `tile bg '<path>': `), or nil when the program is
+// ready. The decode pool is each output's own and starts with its first frame.
+- (NSString *)loadPyramid:(NSString *)path {
+    NSString *error = nil;
+    IFBGTiffSource *source = [IFBGTiffSource sourceWithPath:path error:&error];
+    if (!source) return error;
+    if (![_resources chunkPipeline]) return @"chunk_bg shader compile: the built-in chunk shader could not be built";
+    // The fallback plane reuses tile_bg.glsl, never its mirrored variant:
+    // `mirror_tile` is a no-op on a pyramidal TIFF.
+    id<MTLRenderPipelineState> plane = [_resources builtinPipeline:@"ifbg_tile"];
+    if (!plane) return @"tile_bg shader compile failed";
+    IFBGTileLayout *layout = IFBGTileLayoutMake(source, &error);
+    if (!layout) return error;
+    IFBGTiffBlock *fallback = [source readWholeLevel:layout->lodCount - 1 error:&error];
+    if (!fallback) return error;
+    id<MTLTexture> texture = IFBGUploadBlock(_device, fallback);
+    if (!texture) {
+        return [NSString stringWithFormat:@"fallback texture upload: a texture of %u×%u pixels could not be made", fallback.width, fallback.height];
+    }
+    _kind = IFBackgroundKindTile;
+    _cache = IFBackgroundCacheTileChunks;
+    _pipeline = plane;
+    _texture = texture;
+    _textureSize = CGSizeMake(layout->imageW, layout->imageH);  // `u_tile_size`: the wrap period, not the fallback level's size
+    _tiff = source;
+    _layout = layout;
+    _fallbackHoles = fallback.failedTileCount;
+    _fallbackTransparency = fallback.hasTransparency;
+    _animated = NO;
+    _usesCamera = YES;
+    _usesZoom = NO;
+    // Opaque whatever the file's alpha: chunk_bg.glsl writes alpha 1, and the
+    // fallback plane claims its whole area opaque.
+    _transparent = NO;
+    return nil;
 }
 
 // Integer output size, as upstream's logical output size is integral.
@@ -1635,6 +2614,7 @@ static void IFBGPixelSize(IFBackgroundFrame f, long *logicalW, long *logicalH, N
 // around it, so the compositor can put the background first in its own pass.
 - (BOOL)encodeFrame:(IFBackgroundFrame)frame inEncoder:(id<MTLRenderCommandEncoder>)encoder {
     if (_kind == IFBackgroundKindNone || !_pipeline) return NO;
+    if (_cache != IFBackgroundCacheNone && [self encodeChunksOfFrame:frame inEncoder:encoder]) return YES;
     IFBGUniforms u = [self uniformsForFrame:frame];
     [encoder setRenderPipelineState:_pipeline];
     [encoder setFragmentBytes:&u length:sizeof u atIndex:0];
@@ -1642,6 +2622,203 @@ static void IFBGPixelSize(IFBackgroundFrame f, long *logicalW, long *logicalH, N
     [encoder setFragmentSamplerState:_resources.sampler atIndex:0];
     [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     return YES;
+}
+
+// MARK: Chunk caches
+
+// The fallback plane of a pyramidal TIFF, tile_chunks.rs
+// `chunk_render_elements`: tile_bg.glsl over the visible rectangle, sampling
+// the fallback level with the full-resolution image as the wrap period. Unlike
+// the chunks above it, it follows the unrounded camera.
+- (IFBGUniforms)planeUniformsForFrame:(IFBackgroundFrame)f {
+    IFBGChunkView v = IFBGChunkViewMake(f);
+    IFBGUniforms u;
+    memset(&u, 0, sizeof u);
+    u.camera = simd_make_float2((float)f.cameraX, (float)f.cameraY);  // `Uniform::new("u_camera", (camera.x as f32, camera.y as f32))`
+    u.texture_size = simd_make_float2((float)_textureSize.width, (float)_textureSize.height);  // `u_tile_size`: image_dims
+    u.size = simd_make_float2((float)MAX(v.viewW, 1L), (float)MAX(v.viewH, 1L));  // `u_output_size`: (canvas_w, canvas_h)
+    // The element's area is the visible rectangle at the output's origin.
+    simd_float4 dst = IFBGChunkDst(0, 0, MAX(v.viewW, 1L), MAX(v.viewH, 1L), &v);
+    u.dest_px = simd_make_float2(fmaxf(dst.z, 1.0f), fmaxf(dst.w, 1.0f));
+    u.src_size = simd_make_float2(1, 1);
+    u.time = (float)f.time;
+    u.zoom = (float)v.zoom;
+    u.alpha = 1.0f;
+    u.opaque = 1.0f;
+    return u;
+}
+
+// The chunk work of one frame and the quads it draws, bottom first: what both
+// the draw below and -chunkGenerationForFrame: ask, and each cache answers once
+// per frame. nil when the live path draws instead.
+- (nullable NSArray<IFBGChunkDraw *> *)chunkDrawsForFrame:(IFBackgroundFrame)frame {
+    NSUInteger pxW, pxH;
+    IFBGPixelSize(frame, NULL, NULL, &pxW, &pxH);
+    if (pxW == 0 || pxH == 0 || ![_resources chunkPipeline]) return nil;
+    // `state.config.background.cache_budget_mb as u64 * 1024 * 1024`
+    uint64_t budget = (uint64_t)_config.cacheBudgetMB * 1024 * 1024;
+    if (_cache == IFBackgroundCacheShaderBake) {
+        // The chunks are baked for one output scale: at another the cache
+        // starts again (upstream drops an output's cache when its scale changes).
+        double scale = (isfinite(frame.scale) && frame.scale > 0) ? frame.scale : 1.0;
+        if (!_shaderChunks || _shaderChunks.scale != scale) {
+            _shaderChunks = [[IFBGShaderChunks alloc] initWithResources:_resources shader:_pipeline scale:scale budget:budget];
+        }
+        return [_shaderChunks drawsForFrame:frame];
+    }
+    if (!_tiff || !_layout) return nil;
+    if (!_tileChunks) {
+        _tileChunks = [[IFBGTileChunks alloc] initWithDevice:_device source:_tiff layout:_layout budget:budget];
+        _tileChunks.readyHandler = _chunkReadyHandler;
+    }
+    return [_tileChunks drawsForFrame:frame] ?: @[];
+}
+
+- (uint64_t)chunkGenerationForFrame:(IFBackgroundFrame)frame {
+    if (_cache == IFBackgroundCacheNone || _kind == IFBackgroundKindNone || !_pipeline) return 0;
+    [self chunkDrawsForFrame:frame];
+    return _shaderChunks.generation + _tileChunks.generation;
+}
+
+// One frame of a cached program: its chunk cache decides what is drawn, after
+// baking or uploading what this frame may. NO when nothing was drawn and the
+// live path below should draw instead (no cache could be made, or a baked
+// shader's coarse cover could not be baked).
+- (BOOL)encodeChunksOfFrame:(IFBackgroundFrame)frame inEncoder:(id<MTLRenderCommandEncoder>)encoder {
+    id<MTLRenderPipelineState> quad = [_resources chunkPipeline];
+    NSArray<IFBGChunkDraw *> *draws = [self chunkDrawsForFrame:frame];
+    if (!draws) return NO;
+    if (_cache == IFBackgroundCacheTileChunks) {
+        // Bottom: the fallback plane, one draw whatever the number of image
+        // instances in view. No region of the output is ever blank.
+        IFBGUniforms u = [self planeUniformsForFrame:frame];
+        [encoder setRenderPipelineState:_pipeline];
+        [encoder setFragmentBytes:&u length:sizeof u atIndex:0];
+        [encoder setFragmentTexture:_texture atIndex:0];
+        [encoder setFragmentSamplerState:_resources.sampler atIndex:0];
+        [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    }
+    if (!draws.count) return YES;
+    [encoder setRenderPipelineState:quad];
+    [encoder setFragmentSamplerState:_resources.sampler atIndex:0];
+    for (IFBGChunkDraw *draw in draws) {
+        [encoder setVertexBytes:&draw->uniforms length:sizeof draw->uniforms atIndex:0];
+        [encoder setFragmentBytes:&draw->uniforms length:sizeof draw->uniforms atIndex:0];
+        [encoder setFragmentTexture:draw->texture atIndex:0];
+        [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+    }
+    return YES;
+}
+
+// Everything `base` loaded, and no chunk cache yet.
+- (instancetype)initSharing:(IFBackgroundProgram *)base {
+    if (!(self = [super init])) return nil;
+    _config = base->_config;
+    _device = base->_device;
+    _resources = base->_resources;
+    _kind = base->_kind;
+    _errorText = base->_errorText;
+    _animated = base->_animated;
+    _usesCamera = base->_usesCamera;
+    _usesZoom = base->_usesZoom;
+    _transparent = base->_transparent;
+    _textureSize = base->_textureSize;
+    _translatedShaderSource = base->_translatedShaderSource;
+    _pipeline = base->_pipeline;
+    _texture = base->_texture;
+    _cache = base->_cache;
+    _tiff = base->_tiff;
+    _layout = base->_layout;
+    _fallbackHoles = base->_fallbackHoles;
+    _fallbackTransparency = base->_fallbackTransparency;
+    return self;
+}
+
+- (IFBackgroundProgram *)programForOutput {
+    if (_cache == IFBackgroundCacheNone) return self;
+    return [[IFBackgroundProgram alloc] initSharing:self];
+}
+
+// capture_background.rs `CaptureBackground::prepare`: a capture is a virtual
+// viewport, so it never draws from an output's chunk cache. `shader_bg` hands
+// it the compiled shader itself, `tiff_tile_bg` one level of the pyramid as a
+// plain tile.
+- (IFBackgroundProgram *)captureProgram {
+    if (_cache == IFBackgroundCacheNone) return self;
+    @synchronized(self) {
+        if (_captureTwin) return _captureTwin;
+        IFBackgroundProgram *twin = [[IFBackgroundProgram alloc] initSharing:self];
+        twin->_cache = IFBackgroundCacheNone;
+        if (_cache == IFBackgroundCacheTileChunks) {
+            // The finest level that fits one bounded texture, else the coarsest,
+            // among every page of the file; stretched over the full-resolution
+            // extent by `_textureSize`, so it lands where the chunks would.
+            NSUInteger count = _tiff.levelCount, lod = count - 1;
+            for (NSUInteger i = 0; i < count; i++) {
+                IFBGTiffLevel level = [_tiff levelAtIndex:i];
+                if (MAX(level.imageWidth, level.imageHeight) <= kIFBGFallbackMaxDim) {
+                    lod = i;
+                    break;
+                }
+            }
+            if (lod == (NSUInteger)_layout->lodCount - 1 && _fallbackHoles == 0) {
+                // The fallback plane's level, whole: the texture already loaded.
+                twin->_transparent = _fallbackTransparency;
+            } else {
+                // `source.read_block(lod_idx, 0, 0, n).ok()?`: any tile that
+                // cannot be decoded leaves the capture without a background.
+                IFBGTiffLevel level = [_tiff levelAtIndex:lod];
+                uint32_t across = (level.imageWidth + level.tileWidth - 1) / level.tileWidth;
+                uint32_t down = (level.imageHeight + level.tileHeight - 1) / level.tileHeight;
+                IFBGTiffBlock *block = [_tiff readBlockAtLevel:lod gx:0 gy:0 aggregation:MAX(across, down) error:NULL];
+                id<MTLTexture> texture = block ? IFBGUploadBlock(_device, block) : nil;
+                if (texture) {
+                    twin->_texture = texture;
+                    twin->_transparent = block.hasTransparency;
+                } else {
+                    twin->_kind = IFBackgroundKindNone;
+                    twin->_pipeline = nil;
+                    twin->_texture = nil;
+                }
+            }
+        }
+        _captureTwin = twin;
+        return twin;
+    }
+}
+
+- (void)setChunkReadyHandler:(dispatch_block_t)handler {
+    _chunkReadyHandler = [handler copy];
+    _tileChunks.readyHandler = _chunkReadyHandler;
+}
+
+- (NSUInteger)pendingChunkCount {
+    return _shaderChunks.pendingCount + _tileChunks.pendingCount;
+}
+
+- (void)shrinkChunkCache {
+    [_shaderChunks shrink];
+    [_tileChunks shrink];
+}
+
+- (NSUInteger)chunkCount {
+    return _shaderChunks.count + _tileChunks.count;
+}
+
+- (uint64_t)chunkBytes {
+    return _shaderChunks.bytes + _tileChunks.bytes;
+}
+
+- (NSUInteger)chunkLoadCount {
+    return _shaderChunks.loadCount + _tileChunks.loadCount;
+}
+
+- (NSUInteger)chunkEvictionCount {
+    return _shaderChunks.evictionCount + _tileChunks.evictionCount;
+}
+
+- (BOOL)isChunkCacheDegraded {
+    return _shaderChunks.degraded || _tileChunks.degraded;
 }
 
 - (id<MTLCommandQueue>)commandQueue {
@@ -1818,6 +2995,9 @@ static CGImageRef IFBGCreateImage(id<MTLTexture> texture, BOOL transparent) CF_R
         animateDue = fps == 0 || !_hasAnimateStamp || frame.time < _lastAnimate ||
                      frame.time - _lastAnimate >= 1.0 / (double)fps;
     }
+    // A chunk cache that is still filling: upstream keeps firing frames until
+    // the visible set resolves.
+    if (!need && program.pendingChunkCount && (!_hasLast || _last.time != frame.time)) need = YES;
     if (!need && !animateDue) return NO;
 
     if (self.contentsScale != frame.scale && frame.scale > 0) self.contentsScale = frame.scale;

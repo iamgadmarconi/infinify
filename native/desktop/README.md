@@ -1427,13 +1427,15 @@ the compositor's frame description. What the snapshot carries is
   fastest screen a canvas panel is on, so 120 Hz on a ProMotion display and
   60 Hz on a 60 Hz one, where it was an `NSTimer` at 60 Hz whatever the
   display. One link serves every panel, so the controller is ticked once a
-  frame however many displays there are. Three things keep it running:
+  frame however many displays there are. Four things keep it running:
   [camera motion](#camera-motion) (a flight, a drift, an edge pan), a shader
   background that reads `u_time`, redrawn at that rate capped by `animate_fps`
-  and only while a panel that shows it is open, and a window that opens or
+  and only while a panel that shows it is open, a background
+  [chunk cache](#background-caches) that is still filling, given one frame a
+  tick until nothing is pending, and a window that opens or
   leaves (an open or close animation, a stand-in's fade,
   [below](#blur-window-animations-and-the-error-bar)), drawn on every tick.
-  It stops when none of the three is left, so the frames of an opening window
+  It stops when none of the four is left, so the frames of an opening window
   end with its animation, and the link is made when frames are first wanted
   and invalidated when they stop being: no display callback is asked for
   while nothing needs one. While a background or an animation alone keeps it
@@ -1643,6 +1645,84 @@ and with the region's centre on no output the footprint is that of the
 effect's output, which for `--from-screen` is the output under the rectangle's
 corner where upstream takes the active one.
 
+### Background caches
+
+Two of DriftWM's backgrounds are drawn from textures made in advance, in every
+normal launch: one cache per output, each bounded by `[background]
+cache_budget_mb` (128 by default), least recently shown chunk out first. Both
+are the background module's ([BACKGROUND-NOTES.md](BACKGROUND-NOTES.md),
+section 17, which lists every difference from upstream). There is no new
+flag, command or control: two config keys that were accepted and ignored now
+act, and a `.tif` tile path that drew the dot grid with a message now draws
+the picture. [What was run](#what-was-run-for-the-background-caches) says
+what was seen of them and what was not; in the app itself neither cache's
+picture has been looked at.
+
+- **`cache_shader = true`** bakes a static shader, one that declares
+  `u_camera` and neither `u_time` nor `u_zoom`, into canvas-space chunks of
+  1024 canvas units and pans those instead of running the shader for every
+  frame. Any other shader, a textured one and any under `transparent_shader`
+  renders live as before, silently. The baked picture is the live one, to
+  within one level on a few pixels, at zoom 1, 0.5, 0.25 … with the camera on
+  the baked level's own grid (whole canvas units at zoom 1); elsewhere it is
+  that level shifted by under a pixel, or between those zooms the next
+  coarser level stretched, softer, and thin features such as the dot grid's
+  dots fade: that is upstream's bake. A shader that moves with the camera at
+  any rate but 1:1 bakes wrong, upstream's too.
+- **On a Retina display the default budget is too small for it.** A chunk is
+  4.2 MB on a 1x display and 16.8 MB on a 2x one. A view that lies across the
+  canvas origin on both axes, which the home view does, needs four chunks of
+  the coarse cover and four of the sharp level at zoom 1: 134.6 MB against
+  the 134.2 MB that `cache_budget_mb = 128` is. Such a view shows the coarse
+  cover alone, one texel for every 64 canvas units, which is a blur, and
+  stderr says `shader-bake: cache_budget_mb too low for this view (128 MB
+  working set > 128 MB budget); showing coarse cover only. Raise
+  cache_budget_mb for sharp detail.` This is upstream's arithmetic at scale
+  2, not a fault of the port, and `cache_budget_mb = 256` or more is the
+  setting to pair `cache_shader` with here. Nothing appears on the error bar
+  or the status line for it, as upstream shows nothing. A budget below one
+  cover chunk draws the shader live instead, with a line of this port's.
+- **`type = "tile"` with a `.tif` / `.tiff` path** is DriftWM's gigapixel
+  wallpaper: a tiled pyramidal TIFF (8-bit RGB or RGBA; `vips tiffsave in.jpg
+  out.tif --tile --pyramid --bigtiff --compression=deflate`, or `tiffcp -t`
+  over one file per level) of any size, centred on the canvas origin and
+  repeating. Only the chunks in view are decoded, off the main thread, from
+  the level the zoom calls for; until a chunk is ready its place shows the
+  coarse level that is always loaded (the finest of at most 4096 pixels,
+  which is not counted against the budget). The level follows the zoom alone,
+  as upstream's: on a Retina display the picture at zoom 1 is the full
+  resolution magnified twice, and at zoom 0.5 the half-size level where the
+  full one would be 1:1. A file that is stripped, planar or not 8-bit RGB, or
+  that cannot be opened, falls back to the dot grid with upstream's reason on
+  stderr, the status line and the error bar. A file with one tiled level and
+  no pyramid is accepted, as upstream's code accepts it. `mirror_tile` does
+  not apply. A budget too small for the view keeps the coarser levels that
+  fit, with one line on stderr.
+- **While a cache fills** its display is redrawn by the
+  [frame timer](#rendering), one frame a tick, and each frame does upstream's
+  share of the work and no more: two bakes, sixteen on the frame the level
+  changes, eight uploads. The shares are per frame and are not scaled to the
+  rate, as upstream's are per frame of its output: on a 120 Hz display a view
+  of cells never shown is sharp in half the time it takes at 60 Hz, as in
+  DriftWM. The timer is started by the description whose draw left chunks
+  pending and ends itself on the tick after a frame that left none; while
+  nothing is pending nothing is drawn. A display that has already drawn since
+  the last tick is not drawn again by it: during a flight the camera's frame
+  is the tick's frame, and a chunk decoded off the main thread redraws its
+  display once when it arrives. One timer follows the fastest display, so
+  beside a faster display a slower one's cache is offered frames at the
+  faster rate, where upstream gives each output its own.
+- **A blurred window over either cache** has its frost recomputed in the
+  frame a chunk is baked or arrives, as upstream refreshes it when the
+  background's elements change, so the frost does not stay a blur of the
+  coarse picture once the background behind it has sharpened.
+- **`msg screenshot`** draws neither cache, as upstream's capture does not: a
+  baked shader is rendered live, and a pyramidal TIFF from its finest level of
+  at most 4096 pixels, tiled at the full picture's extent. For a picture
+  larger than that the capture is softer than the display's, at the default
+  `--scale 1` already: a 16384-pixel picture is captured from a level a
+  quarter its size. No capture therefore shows what either cache draws.
+
 ### What is not drawn, and other limits
 
 - Move and resize animations, and the transitions into and out of
@@ -1651,9 +1731,8 @@ corner where upstream takes the active one.
   open and close animations and the error bar are drawn
   ([above](#blur-window-animations-and-the-error-bar)), on a fullscreen
   display as [its section](#what-a-fullscreen-display-shows) says.
-- `[background] cache_shader` and `cache_budget_mb` are accepted and unused:
-  a shader always renders live. A tile or wallpaper is a PNG or JPEG; a
-  gigapixel pyramidal TIFF falls back to the dot grid with a message.
+- A wallpaper is a PNG or JPEG, and so is a tile unless it is a tiled
+  pyramidal TIFF ([Background caches](#background-caches)).
 - A stand-in's title bar carries no text, as upstream's; its label is the
   application's name, never the window's title. Text is rasterised by CoreText
   in the configured font, or the system font when it is not installed
@@ -1726,7 +1805,8 @@ are pixels read from the files.
 - **`[background]`,** one rewrite of the config file and one capture each, no
   restart: upstream's `extras/wallpapers/static/blue_drift.glsl` (the shader
   behind the windows, the soft shadow visible on it; the same picture with
-  `cache_shader = true`, which this port accepts and ignores);
+  `cache_shader = true`, which the port accepted and ignored when this was
+  run, and which a capture still draws live: [Background caches](#background-caches));
   `animated/fast_smoke.glsl` (two captures a second apart differ);
   `textured/ripple.glsl` with `texture` (the image, rippled);
   a shader path that does not exist and a shader that does not compile (both
@@ -2309,6 +2389,240 @@ transaction ran there: the held opening is known from the tool's hand-written
 snapshots and from the controller scenario that pins down what those
 snapshots hold, never from a window being resized. The app was not launched
 with `--experimental-native-resize` for this join.
+
+### What was run for the background caches
+
+On 2026-10-10 (macOS 27.2, Apple Silicon, a 2x display), with no Screen
+Recording or Accessibility grant, so every window was a placeholder and
+nothing was read from the screen. Nothing was saved as evidence; the tools
+and pictures were throwaway files outside the repository.
+
+**What cannot be seen from here.** `msg screenshot` draws neither cache
+([above](#background-caches)), and no agent session can capture the panel. So
+in the app the caches are known by two things only: that it kept answering
+and exited cleanly with them on, and the lines the caches print on stderr
+when a view exceeds the budget. Their pictures were compared outside the app,
+by a tool that links the same `background.m`, `background-tiff.m`,
+`compositor.m` and `canvas-renderer.m`.
+
+**The app as built here.** `./scripts/build-app.sh` built it from this tree
+(the first build with the controller's `cache_budget_mb` key and the shell's
+caches together; it compiled and linked as written). It was launched five
+times as `--windowed 1100x700` on a private scene of three placeholders,
+config and socket, for 8, 13, 7, 9 and 7 seconds, each ended with SIGTERM:
+exit status 0 and the socket file removed every time. The view was 1100×636
+points. A background was changed by rewriting the config file, which the
+app's own watcher loaded. Every PNG was opened. The first launch's script
+sent a zoom right after each pan, which cancels the pan, so its six pairs
+were all at one camera; the second moved.
+
+- **`cache_shader` on and off, upstream's `static/dark_sea.glsl`.** Viewport
+  captures at cameras `550 -318`, `5000 2000` and `-250000 180000`, each at
+  zoom 1 (1100×636) and 0.5 (2200×1272), once with `cache_shader = true` and
+  once with `false`: the six pairs are byte-identical files, and so were
+  three more under `cache_budget_mb` 1, 40 and 512. That is what a capture
+  that renders the shader live must give; it says the capture is unaffected
+  and nothing about the bake.
+- **The bake's own lines.** With the default budget and the view across the
+  origin at zoom 0.5: `shader-bake: cache_budget_mb too low for this view
+  (128 MB working set > 128 MB budget); showing coarse cover only. Raise
+  cache_budget_mb for sharp detail.` At the other five views under the
+  default budget, and at 512: no line. With `cache_budget_mb = 40` at
+  `-250000 180000`, zoom 0.5: the same line with `(80 MB working set > 40 MB
+  budget)`. With `cache_budget_mb = 1`: `shader-bake: cache_budget_mb too low
+  for this view's coarse cover (16 MB > 1 MB budget); rendering the shader
+  live. Raise cache_budget_mb to bake it.` The numbers are the 2x chunk sizes
+  and the budgets the configs named: the value crossed from the controller's
+  snapshot into the panel's own cache.
+- **A 4096×2048 three-level pyramid** (Deflate, 256-pixel tiles, `tiffcp`)
+  against the same picture as a PNG tile: viewport captures at zoom 1, 0.5
+  and 0.25 (1100×636, 2200×1272, 4400×2544) byte-identical files. A picture
+  this size is its own fallback level, so this is the capture's level drawn
+  where a plain tile is.
+- **A 16384×8192 seven-level pyramid** against the same picture as a
+  16384×8192 PNG tile, the same three views: 38.8 %, 50.4 % and 53.9 % of
+  pixels differ, by up to 196 levels. Looked at, they are the same scene in
+  the same place, the TIFF's softer: the capture is the 4096-pixel level
+  stretched four times, as upstream's is. `--scale 0.25 region 8192 8000 8800
+  5088`, across the picture's wrap seam, against that level as a PNG tile at
+  `--scale 1 region 2048 2000 2200 1272`: byte-identical files, 2200×1272.
+- **Files upstream refuses,** each one rewrite of the config: a stripped
+  TIFF, `tile bg '…/stripped.tif': TIFF is stripped, not tiled — needs a
+  tiled, pyramidal TIFF`; an 8-bit greyscale tiled one, `… unsupported color
+  type Gray(8) (need RGB8 or RGBA8)`; a path that does not exist, `… open
+  …/not-there.tif: No such file or directory (os error 2)`. The captures
+  under the first two are byte-identical to the capture under `type =
+  "default"`. A 2048×1024 TIFF with one tiled level and no pyramid: no
+  message, and the picture in the capture.
+- **The TIFF cache's own lines,** at zoom 1 with the 16384×8192 pyramid:
+  `chunked tile-bg: cache_budget_mb too low for this view (8 MB budget);
+  keeping the coarser levels that fit. Raise cache_budget_mb for sharp
+  detail.` and the same with `(2 MB budget)`; none under the default.
+- **Twelve reloads of a TIFF background in a row** (the budget alternating
+  between 8 and the default): `footprint` gave 350 to 353 MB for the process
+  after every second one and 266 MB a second after the last. Nothing grew
+  with the reloads. No more was measured of memory in the app.
+
+**The caches' pictures, outside the app.** The tool was rebuilt from this
+tree and run again. Frames were compared as raw BGRA.
+
+- **Baked against live,** upstream's `dot_grid.glsl` and its four `static/`
+  shaders at ten cameras, zooms and scales each, 800×600 points. Ten pairs
+  byte-identical: the dot grid in all six cases at zoom 1, 0.5 or 0.25 with
+  the camera on the level's grid, at 1x and 2x, and all five shaders at
+  camera (250000, −180000). The other on-grid pairs differ by one level on 1
+  to 1078 pixels (at most 0.056 %). Off the grid they differ as upstream's
+  bake does: at camera (300.4, −150.3), 0.1 % to 66 % of pixels by up to 173
+  levels; at an odd camera at zoom 0.5, 0.4 % to 85 % by up to 250; at zoom
+  0.7 and 0.33, 0.5 % to 77 % by up to 251.
+- **The shell's renderer on a detached 2x layer of the panel's size,** dark
+  sea. Baked equal to live, byte for byte, at camera (5000, 3000) at zoom 1
+  and at zoom 0.5 (budget 512 for the second). With the origin at the centre
+  of the view at zoom 1: under the default budget 86.4 % of pixels differ
+  from the live frame by up to 129 levels, the coarse cover; under 256, 506
+  pixels by one level; under 1, identical, the live fallback. Each drew once
+  and not again in thirty further timer ticks.
+- **The 16384×8192 pyramid against its PNG tile.** On a 1x target at zoom 1,
+  cameras (0, 0), (−8300, −4200) across the wrap seam and (8000, 3900):
+  byte-identical. At 2x: 7187 of 3.84 million pixels, on chunk edges, where
+  upstream's chunks clamp. At zoom 0.5 on 1x: one level on 92 % (the
+  generator's rounding against the GPU's). On the renderer's 2x layer: 0.2 %
+  at zoom 1 and 51 % at zoom 0.5, where the level follows the zoom; with
+  `cache_budget_mb` 8, 5.6 %, and with 2, 82 %, the fallback level alone.
+  Three draws (the fallback, then the chunks as they arrived), then none.
+- **The budget over a pan,** 1728×1117 points at 2x. Baked shader, 400
+  frames: 112.4 MB at most under 128 (44 chunks baked, 37 evicted, 21 frames
+  on the coarse cover; an earlier text of this line said 26, which the pan
+  did not reproduce when it was run again after the review: with
+  `pink_cloud.glsl` and with `dark_sea.glsl` it gave 21, and the other
+  figures as written) and 497.9 MB under 512, never above the budget after a
+  frame. TIFF, 300 frames: 128.0, 32.0 and 8.0 MB at most under those
+  budgets, never above, and no chunk at all under 3 and 0.
+
+**Not run or not seen:** either cache's picture on the app's panel, and so a
+chunk arriving on screen and the frame timer that serves a filling cache;
+eviction in the app; a real gigapixel file, a file written by `vips` or GDAL,
+BigTIFF or any compression but Deflate in the app or in this run of the tool
+(section 17 of the notes records the module reading BigTIFF, LZW, PackBits,
+uncompressed and RGB JPEG when it was written; that was not repeated); a
+damaged tile, which the notes say is not detected; a window with a picture
+over a cached background, and a frosted one anywhere but in the tool (below);
+a second display, a 1x display in the app, a display whose scale changes;
+memory over a long run.
+
+**After the review, the same day.** Two fixes changed what is drawn or kept:
+a blurred window's frost is recomputed in the frame a chunk lands
+(`compositor.m` asks the background for its chunk generation before it
+prepares the frosts), and a block decoded after a fullscreen window concealed
+its output is discarded when it arrives. The tool was rebuilt from the tree.
+
+- **Frost over a cached background,** one translucent blurred window through
+  the compositor's offscreen encode: a view, then frames with only the time
+  advancing until nothing was pending, against a renderer with no frost yet
+  drawing the settled view. Baked dark sea after a jump of the view at 1x
+  and at 2x, and on the frame after five concealed ones; the baked dot grid
+  the same way at 2x; the 16384×8192 pyramid after a jump at 1x, 2x and zoom
+  0.5, and from its first frame. In all eight the frost was recomputed on
+  the one or two frames a chunk landed in and on none after, no pixel
+  differed inside the window or outside, and the PNG files were
+  byte-identical. With `cache_shader` off and with the PNG tile: no
+  recompute after the first frame, no pixel. Looked at: the first frame of
+  a jump (frost over the coarse cover's blocks), the settled one (a fine
+  blur of the sharp field) and a settled pyramid.
+- **Late blocks under a fullscreen window,** the shell's renderer on a
+  detached layer: a pyramid described once, concealed before its decodes
+  were received, then a second of the timer. Twelve runs each way. Before
+  the fix, the three runs that had two blocks still decoding at the
+  concealment held both a second later; after it, eleven runs had one or
+  two and none was held.
+- **Unchanged by the fixes:** the renderer on the detached 2x layer gave the
+  nine comparisons above to the pixel, and the TIFF pans 128.0, 32.0 and 8.0
+  MB at most under those budgets (82, 95 and 26 uploads; 50, 87 and 24
+  evictions) and no chunk under 2.
+- **The app, built again, three launches** of 13, 8 and 8 seconds on the
+  same private scene, config and socket, each ended with SIGTERM: exit
+  status 0 and the socket file removed. Dark sea with `cache_shader` on and
+  off at the three cameras and two zooms: six pairs of byte-identical files,
+  and three more under `cache_budget_mb` 1, 40 and 512, with the same three
+  bake lines on stderr. The 4096×2048 pyramid against its PNG at zoom 1, 0.5
+  and 0.25: byte-identical files. The 16384×8192 pyramid against its PNG:
+  38.8 %, 50.4 % and 53.9 % of pixels, by up to 196 levels, and against its
+  4096 level as a PNG tile at the matching scale: byte-identical. The
+  stripped, the greyscale and the missing file: upstream's three texts, and
+  captures byte-identical to the dot grid's (the missing one captured this
+  time). The single-level TIFF: no message, its picture. The TIFF cache's
+  lines for budgets 8 and 2. Every distinct PNG was opened. None of this
+  shows either fix: a capture draws no cache, the scene has no blurred
+  window and no fullscreen one.
+
+**At the merge with the display-link frame timer and the tap bindings, the
+same day.** Everything above ran on the tree the caches were built in, whose
+frame timer was a 60 Hz `NSTimer`. The tree that landed has the
+[display link](#rendering) and the [tap tracker](#tap-bindings) beside the
+caches; `./scripts/build-app.sh` compiles `background-tiff.m`,
+`frame-driver.m` and `tap-keys.m` once each and built it as written.
+
+- **A filling cache under the display link, outside the app.** A second
+  throwaway program linked the landed `frame-driver.m`, `canvas-renderer.m`,
+  `compositor.m`, `background.m` and `background-tiff.m` with the release
+  controller library and drove a layer in no window by `main.m`'s rule for
+  the frame timer, copied: it is not the shell running. On a 120 Hz display,
+  baked dark sea on 3000×2000 points at 1x: a jump to cells never shown baked
+  2 in the description's draw and left 7; the timer started, ticked 120 times
+  a second, baked 2 a tick and ended by itself; half a second idle and one
+  more description gave no tick and no chunk. A flight of 40 camera frames,
+  each described inside its tick as the shell does: up to 4 chunks a tick at
+  79 ticks a second as the two sides merged, because the tick drew the
+  camera's frame and then forced a second one; 2 a tick at 119 to 120 ticks
+  a second once a display that has drawn since the last tick is no longer
+  forced ([Background caches](#background-caches)). At 2x on 1728×1117
+  points: 4 a tick at 94 a second before, 2 at 111 after. The 8192×4096
+  pyramid below: its timer started with 9 or 12 decodes outstanding and
+  ended by itself two or three ticks later, and the ready handler was never
+  called off the main thread. The tables are in
+  [BACKGROUND-NOTES.md](BACKGROUND-NOTES.md), 17.9.
+- **The app, four launches** as `--windowed 1100x700` on a private scene of
+  three placeholders, config and socket, for 2.9, 5.5, 7.4 and 5.9 seconds,
+  each ended with SIGTERM: exit status 0 and the socket file removed. The
+  first two were of the build before the change to the forced frame, the
+  last two of the build after it. Every PNG named was opened.
+  - **Dark sea, `cache_shader = true`, default budget.** `msg state` listed
+    the placeholders at camera `550 -318`; `action center-nearest right`
+    settled at `1950 -0` with `#2` focused, `pan-viewport right` at `2050
+    -0`, `zoom-to-fit` at `750 -390`, zoom 0.28484848484848485, and again
+    back at `2050 -0`, zoom 1. A viewport capture showed the Browser
+    placeholder over the shader, which a capture renders live. stderr had
+    the bake's line `(128 MB working set > 128 MB budget)` twice, for the
+    launch view and for the zoom-to-fit one, both across the origin.
+  - **Started with `cache_budget_mb = 1`:** it answered, with `shader-bake:
+    cache_budget_mb too low for this view's coarse cover (16 MB > 1 MB
+    budget); rendering the shader live.` on stderr, and its capture was the
+    same file as one with `cache_shader = false`. Then, each by a rewrite of
+    the config and `reload-config`: a shader path that does not exist,
+    `background shader '…/not-there.glsl': No such file or directory (os
+    error 2)` and a capture byte-identical to `type = "default"`'s; an
+    8192×4096 four-level pyramid (`tiffcp -t -w 256 -l 256 -c zip` over one
+    generated file per level), no message and its picture in the capture;
+    the same under `cache_budget_mb = 2`, the TIFF cache's line, twice, 146
+    ms apart; a stripped TIFF, upstream's text and the dot grid's capture;
+    and `center-nearest right` at `1950 -0` with `#2` focused.
+  - **`cache_budget_mb = 256`, twice, after the change.** Nothing from the
+    caches on stderr. `msg camera 40000 30000` and `-60000 20000`, cells
+    never shown, arrived; the capture there and one of the pyramid, loaded by
+    a rewrite, were as expected. In the second of the two `center-nearest
+    right`, `pan-viewport right` and `zoom-to-fit` gave the numbers above.
+    In the first, `center-nearest right` focused `#2` and the camera came to
+    rest at `1661.93 3682.86`, not `1950 -0`, after 14 reads of it where 5
+    are usual; `pan-viewport right` then moved it by exactly 100 and
+    `zoom-to-fit` went to `750 -390` and back to it. The same binary, config
+    and script gave `1950 -0` in the next launch. A scroll reaching the
+    panel, which is on the owner's display, would leave that trace; nothing
+    recorded says what it was.
+- **Still not seen:** either cache's picture on the app's panel; the shell's
+  own frame block serving a filling cache, a flight over one in the app, or
+  a window's picture arriving while one fills; eviction in the app; a second
+  display, and so the slower display beside a faster one; a tap, since a
+  windowed launch installs no monitor.
 
 ## Configuration
 
@@ -2996,7 +3310,7 @@ Applied now:
 | `[session] suspend_on_close`, `restore_windows`; the same two keys of a `[[window_rules]]` entry, matched by bundle identifier as `app_id` and by `title` | whether a window that closes by itself leaves a stand-in; whether a saved slot whose window is gone stays as one after a discovery pass, at launch or when the canvas reopens. See [Managed windows](#managed-windows) |
 | `[[window_rules]] app_id`, `title`, `position`, `widget`, `pinned_to_screen`, `output`, `focus_on_open`, `opacity` | per-window policy for a window that appears, see [Window rules](#window-rules-widgets-and-pinned-windows) |
 | `[[window_rules]] pass_keys`, `pass_mouse` | the key bindings a focused window takes from Infinify, and the mouse bindings the window under the pointer takes, see [Passing keys and presses](#passing-keys-and-presses-to-an-application) |
-| `[background] type`, `path`, `texture`, `mirror_tile`, `transparent_shader`, `animate_fps` | the canvas behind the windows: DriftWM's dot grid, a GLSL shader (upstream's `extras/wallpapers` work as they are), a tiled image, a wallpaper fixed to the view, or nothing. A leading `~/` in a path is expanded. PNG and JPEG only. `cache_shader` is accepted and changes nothing: a shader always renders live, which draws the same picture. See [Rendering](#rendering) |
+| `[background] type`, `path`, `texture`, `mirror_tile`, `transparent_shader`, `animate_fps`, `cache_shader`, `cache_budget_mb` | the canvas behind the windows: DriftWM's dot grid, a GLSL shader (upstream's `extras/wallpapers` work as they are), a tiled image, a wallpaper fixed to the view, or nothing. A leading `~/` in a path is expanded. PNG and JPEG, and as a tile a tiled pyramidal TIFF of any size. `cache_shader` bakes a static shader into textures, and `cache_budget_mb` bounds each display's cache of those and of TIFF chunks; on a Retina display the default 128 is too small for a baked shader around the canvas origin, and 256 or more is the value to set. See [Rendering](#rendering) and [Background caches](#background-caches) |
 | `[decorations] border_width`, `border_color`, `border_color_focused`, `corner_radius`, `shadow`, `opacity`, `opacity_focused`, `default_mode` | the border, corner clip and shadow of every window and stand-in, and the opacity of every window that has none of its own from a rule or `msg opacity`: `opacity_focused` for the one holding the canvas's logical focus, `opacity` for the others, both 1 by default (a stand-in is always opaque, as upstream's); `default_mode` is `client`, `minimal` or `none` (`server` only through a window rule, as upstream) |
 | `[decorations] bg_color`, `fg_color`, `title_bar_height`, `font`, `font_size`, `font_weight`, `title_align` | the chrome the compositor draws itself: stand-ins, and the title bar of a window a rule made `server`. `title_bar_height` is also the diagonal step of the placement cascade |
 | `[[window_rules]] decoration`, `border_width`, `border_color`, `border_color_focused`, `corner_radius`, `shadow`, `opacity` | the same per window, from the rule the window matched when it reached the canvas (bundle identifier as `app_id`, and `title`), kept until it is gone; never for a stand-in |
@@ -3027,7 +3341,7 @@ and `caps_lock` (macOS owns the input sources and the lock keys), the rest of
 `[input.trackpad]` (macOS owns the device), `[input.mouse]`, `[input.touch]`,
 `[input.tablet]`,
 `[cursor]` (theme and size reach only the environment of a run command),
-`[background] cache_budget_mb`, `[backend]`,
+`[backend]`,
 the rest of `[output]`, `[[outputs]]` `scale`, `transform`, `position` and
 `mode` (macOS owns the display arrangement), the rest of `[[window_rules]]`
 (`preserve_aspect_ratio` and `layer_order` are kept with the window and

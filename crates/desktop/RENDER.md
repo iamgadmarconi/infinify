@@ -41,7 +41,8 @@ every existing command shape and snapshot key are unchanged.
 ```json
 "render": {
   "background": {"type":"default","path":null,"texture":null,"mirror_tile":false,
-                 "transparent_shader":false,"animate_fps":0,"cache_shader":false},
+                 "transparent_shader":false,"animate_fps":0,"cache_shader":false,
+                 "cache_budget_mb":128},
   "chrome": {"background":[r,g,b,a],"foreground":[r,g,b,a],"corner_radius":10,
              "title_bar_height":25,"font":"Adwaita Sans","font_size":11,
              "font_weight":"medium","title_align":"center"},
@@ -63,7 +64,14 @@ config's byte divided by 255.
   image a shader samples, or `null`. Both are upstream's parsed values:
   upstream's parser has already replaced a leading `~/` with `$HOME` where
   that variable is set, and left it as written where it is not. Whether a file
-  exists is not checked here. `cache_budget_mb` is not reported.
+  exists is not checked here. `cache_budget_mb` is upstream's memory ceiling
+  for its background chunk caches, the baked `cache_shader` chunks and a
+  pyramidal TIFF's, in megabytes: core's parsed `u32`, 128 when the file does
+  not say, and reported as parsed, 0 included. What the shell does with it is
+  `native/desktop/BACKGROUND-NOTES.md`. It is a key of the table like
+  the others: a reload that changes it spends the revision every accepted
+  reload spends, and a launch file that changes nothing else drawn spends the
+  first one for it.
 - `chrome` is the part of `[decorations]` that compositor-drawn chrome is
   rasterised from: stand-ins, and the title bar of a `server` window.
   `font` is `null` when the config's is empty. `font_weight` is one of `thin`,
@@ -292,6 +300,15 @@ the rest of the capture stays transparent. The app's shell does this from the
 snapshot's outputs and the effect's `output`; a bare `Viewport` capture is that
 footprint exactly and looks as the screen does.
 
+A background an output draws from a chunk cache is not captured from that
+cache. Upstream's capture is a virtual viewport and builds its own background
+(`CaptureBackground::prepare` in the same file): a shader baked under
+`cache_shader` is rendered live, and a tiled pyramidal TIFF is one level, the
+finest of at most 4096 pixels on its longer side, tiled at the full picture's
+extent. The app's shell does the same. So a capture is the same file with
+`cache_shader` on or off, and for a TIFF larger than 4096 pixels it is softer
+than the screen. Nothing in the effect or the result says which was drawn.
+
 **2. The result.** When the file is written the shell calls
 
 ```json
@@ -420,8 +437,6 @@ every `ipc` request.
 - **A failed capture has no id.** `screenshot_result` with an `error` answers
   the oldest effect waiting. A shell that renders two captures at once and
   fails the newer first would cross their replies.
-- **`[background] cache_budget_mb`** is not reported: the block has no key for
-  it.
 - **Tiling.** Upstream renders a capture above 4096 pixels a side in tiles.
   The effect asks for one image of up to 16384; how it is rendered is the
   shell's.
@@ -442,6 +457,13 @@ throwaway directory:
   does not parse, which changes `errors` and moves it by one, and a scene
   `load`, which moves nothing; a launch file that names a shader, and the same
   file loaded again;
+- `cache_budget_mb`: core's default with no config and under a file that does
+  not name it, a reload that changes it alone, which changes that key and
+  spends one revision, a reload that changes something else, which leaves it,
+  0 and `u32::MAX` as written, a negative value, which is a refused file and
+  leaves the budget in force, and at launch a file that changes it alone,
+  which spends the first revision, and one that writes the default, which
+  spends none;
 - the placement keys for a bound window, a window under each kind of rule, a
   detached placeholder and a suspended stand-in (both at opacity 1.0 under a
   config that dims focused and unfocused windows), a relaunching one and the
@@ -494,7 +516,8 @@ capture) and the opacity of an isolated window in
 mode, border, radius, colours and shadow come from the helpers with no rule
 and that nothing there looks an opacity up; and in
 `src/render/capture_background.rs`, `wallpaper_dest` and the wallpaper arm of
-`tile_elements`; and, for widgets and pinned windows, the `All` arm of
+`tile_elements`, and for the background caches `prepare`, `shader_bg` and
+`tiff_tile_bg`; and, for widgets and pinned windows, the `All` arm of
 `resolve_screenshot_region`, the `widgets` bucket and the
 `window_render_transform` call of `compose_capture_elements`, and in
 `compose_frame` the choice of bucket and the frame coverage is judged on. The
@@ -591,3 +614,24 @@ frames of a flight; and two captures of an animated shader half a second
 apart differing while a subscriber received nothing. Still not seen: the
 panel on a display, and so the frame timer's own redraws of an animated
 background.
+
+With the background caches, the same day, the app built from this tree was
+launched five more times the same way
+([the numbers](../../native/desktop/README.md#what-was-run-for-the-background-caches)).
+Of this contract that showed: `cache_budget_mb` reaching the shell's caches,
+since the lines they print on stderr for a view over the budget carried the
+number each config named (1, 40, 8, 2 and the default 128), adopted from a
+config rewrite without a restart; and the capture rule above, in viewport
+captures that were byte-identical with `cache_shader` on and off, in a
+4096×2048 pyramidal TIFF captured byte for byte as the same picture's PNG
+tile, and in a 16384×8192 one captured as its 4096 level. It did not show
+what either cache draws: no capture can, and the panel was not looked at.
+
+The caches landed on the tree that also holds the display-link frame timer
+and the tap bindings, and the app built from that was launched four more
+times the same way (the same section). Of this contract that showed again:
+`cache_budget_mb` reaching the shell's caches, in their stderr lines for 1,
+for 2 and for the default 128 and in none under 256; a capture with
+`cache_shader = true` that was the same file as one with it off; and a
+missing shader and a stripped TIFF captured as the dot grid, an 8192×4096
+pyramid with its picture. What a cache draws it showed no more than before.

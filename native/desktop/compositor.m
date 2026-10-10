@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Carried into native/desktop/ unchanged from the standalone compositor port that was built, verified against upstream's shaders and independently reviewed outside this repository; only this line was added.
+// Carried into native/desktop/ from the standalone compositor port that was built, verified against upstream's shaders and independently reviewed outside this repository. Changed here since: the chunk generation of a cached background in the two keys a frost is kept by (BACKGROUND-NOTES.md, section 17.3).
 //
 // Infinify compositor — implementation. See compositor.h and NOTES.md.
 //
@@ -1742,6 +1742,7 @@ typedef struct {
     long decorationScale;
     uint64_t styleHash;
     IFCompositorEffects effects;  // sanitized
+    uint64_t backgroundGeneration;  // the chunks a cached background draws this frame from; 0 without a cache
 } IFCFrameCtx;
 
 typedef NS_OPTIONS(NSUInteger, IFCChromePart) {
@@ -3054,6 +3055,7 @@ static BOOL IFCItemMayReach(const IFCItem *item, IFCRectI capture, double s, lon
     IFC_MIX(&h, c->outW);
     IFC_MIX(&h, c->outH);
     IFC_MIX(&h, (uintptr_t)(__bridge void *)frame.background);
+    IFC_MIX(&h, c->backgroundGeneration);
     IFC_MIX(&h, c->styleHash);
     IFC_MIX(&h, c->decorationScale);
     IFCMixColor(&h, frame.placeholderColor);
@@ -3304,6 +3306,9 @@ static BOOL IFCItemMayReach(const IFCItem *item, IFCRectI capture, double s, lon
     IFC_MIX(&view, c->outH);
     IFC_MIX(&view, c->s);
     IFC_MIX(&view, (uintptr_t)(__bridge void *)frame.background);
+    // blur.rs `background_structure_changed`, uncapped as the view is: a chunk
+    // baked, uploaded or evicted is a background element added or removed.
+    IFC_MIX(&view, c->backgroundGeneration);
     BOOL due = !_hasBlurBeat || view != _blurBeatView;
     uint32_t fps = c->effects.animateBlurFPS;
     if (!due && fps > 0 && frame.background.isAnimated && frame.time != _blurBeatTime) {
@@ -3506,6 +3511,13 @@ static BOOL IFCItemMayReach(const IFCItem *item, IFCRectI capture, double s, lon
     // The frost of every blurred window, into textures of its own, before the
     // frame's pass opens. Nothing here runs unless an element asks for it.
     if (_blurRequested && (!_passMask || (_passMask & IFCompositorPassBlur))) {
+        // A background with a chunk cache bakes or uploads inside its encode,
+        // which comes after the frost keys: its chunk work for this frame is
+        // done here instead, so that the frame a chunk lands in is the frame
+        // that refreshes the frost. The same frame, field for field, as the
+        // two encodes below: the cache answers each instant once.
+        IFBackgroundFrame bg = {frame.cameraX, frame.cameraY, frameZoom, frame.size.width, frame.size.height, s, frame.time};
+        ctx.backgroundGeneration = [frame.background chunkGenerationForFrame:bg];
         [self prepareFrosts:frame ctx:&ctx commandBuffer:commandBuffer];
     } else if (_hasBlurBeat || _bgCopy) {
         // No request left on this output: upstream's `remove_blur_caches`.

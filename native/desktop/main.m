@@ -995,13 +995,16 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // Animated backgrounds: is one on an open panel? draw: each such output's next frame is
 // drawn when its animate_fps says it is due. Never in probe, demo and owned-fixture runs.
 // An open or close animation of the compositor's counts the same way and is drawn on every frame.
+// So does a background chunk cache that is still filling (a baked cache_shader, a pyramidal TIFF's chunks): its output is
+// given one frame a tick, each spending upstream's per-frame allowances once, until a frame leaves nothing pending.
 - (BOOL)animate:(BOOL)draw { BOOL any=NO;for(DesktopView *view in self.views)if(view.window.visible&&[self.compositor animates:view.outputs draw:draw])any=YES;return any; }
 // The one frame timer, at the display's refresh rate: a display link (frame-driver.h) of the
 // fastest screen a canvas panel is on, 120 Hz on a ProMotion display, where upstream ticks
 // from its output's frame loop. It runs while tick_navigation reports needs_frames (a
 // flight, a coasting pan, an edge pan under a drag or the cursor) and, in a normal run,
 // while the compositor animates something by itself on an open panel (-animate:): an
-// animated background, or a window that opens or leaves (an open or close animation, a
+// animated background, a background chunk cache that is still filling, or a window that
+// opens or leaves (an open or close animation, a
 // stand-in's fade). It ends itself when none of them is left, so the frames of a window
 // that opened stop with its animation. The link exists only between those two moments:
 // nothing is drawn or ticked, and no display callback is asked for, while nothing needs it.
