@@ -35,6 +35,7 @@
 #include <sys/stat.h>
 #include <libproc.h>
 #include <fcntl.h>
+#include <ctype.h>
 #include "preflight.h"
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -180,8 +181,8 @@ static BOOL wait_for_helper(const char *runtime,const char *nonce,pid_t pid,uid_
     return NO;
 }
 int main(int argc, char **argv) { @autoreleasepool {
-    if(argc!=5 || strcmp(argv[1],"--inject-dock")) {
-        fprintf(stderr,"usage: loader --inject-dock /absolute/payload-arm64e.dylib /absolute/private-runtime nonce64hex\nExplicit opt-in only; run doctor first. No SIP/boot settings are changed.\n");return 2;
+    if((argc!=5 && argc!=7) || strcmp(argv[1],"--inject-dock") || (argc==7 && strcmp(argv[5],"--only-pid"))) {
+        fprintf(stderr,"usage: loader --inject-dock /absolute/payload-arm64e.dylib /absolute/private-runtime nonce64hex [--only-pid PID]\nExplicit opt-in only; run doctor first. No SIP/boot settings are changed.\n--only-pid pins the helper's scope to that one login-user process (a disposable fixture).\n");return 2;
     }
     uint32_t sip;int preview;
     if(dw_preflight(&sip,&preview)!=0){fprintf(stderr,"injection unavailable: current SIP/arm64e boot policy fails preflight\n");return 3;}
@@ -197,13 +198,29 @@ int main(int argc, char **argv) { @autoreleasepool {
     struct stat st;
     if(lstat(payload_path,&st)||!S_ISREG(st.st_mode)||st.st_uid!=dockInfo.pbi_uid||(st.st_mode&0022)){fprintf(stderr,"payload ownership/mode invalid\n");return 1;}
     if(lstat(argv[3],&st)||!S_ISDIR(st.st_mode)||st.st_uid!=dockInfo.pbi_uid||(st.st_mode&0777)!=0700){fprintf(stderr,"create a fresh 0700 runtime directory as Dock login user first\n");return 1;}
+    // Resolve an optional --only-pid into a single {pid,birth} allowlist entry. The
+    // start time is read the same way the payload resolves window identity, so the
+    // helper can pin itself to exactly that process and refuse every other window.
+    NSArray *allowlist=nil;
+    if(argc==7) {
+        // Require a leading digit so strtol cannot accept leading whitespace or a sign.
+        char *end=NULL;long only=strtol(argv[6],&end,10);
+        if(!isdigit((unsigned char)argv[6][0])||*end||only<=0||only>INT_MAX){fprintf(stderr,"--only-pid must be a positive PID\n");return 1;}
+        if((pid_t)only==pid){fprintf(stderr,"--only-pid must not be Dock itself\n");return 1;}
+        struct proc_bsdinfo onlyInfo={0};
+        if(proc_pidinfo((pid_t)only,PROC_PIDTBSDINFO,0,&onlyInfo,sizeof(onlyInfo))!=sizeof(onlyInfo)){fprintf(stderr,"could not resolve --only-pid process\n");return 1;}
+        if(onlyInfo.pbi_uid!=dockInfo.pbi_uid){fprintf(stderr,"--only-pid must be owned by Dock's login user\n");return 1;}
+        allowlist=@[@{@"pid":@((int)only),@"birth_sec":@(onlyInfo.pbi_start_tvsec),@"birth_usec":@(onlyInfo.pbi_start_tvusec)}];
+    }
     char socketPath[sizeof(((struct sockaddr_un *)0)->sun_path)];
     if(snprintf(socketPath,sizeof(socketPath),"%s/helper.sock",argv[3])>=(int)sizeof(socketPath)){fprintf(stderr,"Unix socket path exceeds 103 bytes\n");return 1;}
     if(lstat(socketPath,&st)==0){fprintf(stderr,"runtime socket already exists; refusing ambiguous retry\n");return 1;}
     NSString *recovery=[[NSString stringWithUTF8String:argv[3]] stringByAppendingPathComponent:@"recovery.json"];
     if(lstat(recovery.fileSystemRepresentation,&st)==0){fprintf(stderr,"runtime has a recovery journal; review it and use a fresh directory\n");return 1;}
     NSString *configPath=[[NSString stringWithUTF8String:payload_path] stringByAppendingString:@".json"];
-    NSData *configuration=[NSJSONSerialization dataWithJSONObject:@{@"runtime":[NSString stringWithUTF8String:argv[3]],@"nonce":[NSString stringWithUTF8String:argv[4]]} options:0 error:NULL];
+    NSMutableDictionary *sidecar=[@{@"runtime":[NSString stringWithUTF8String:argv[3]],@"nonce":[NSString stringWithUTF8String:argv[4]]} mutableCopy];
+    if(allowlist)sidecar[@"allowlist"]=allowlist;
+    NSData *configuration=[NSJSONSerialization dataWithJSONObject:sidecar options:0 error:NULL];
     int configFD=open(configPath.fileSystemRepresentation,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600);
     if(configFD<0){perror("create new payload sidecar");return 1;}
     BOOL configOK=(geteuid()==dockInfo.pbi_uid || fchown(configFD,dockInfo.pbi_uid,dockInfo.pbi_gid)==0) && write(configFD,configuration.bytes,configuration.length)==(ssize_t)configuration.length && fsync(configFD)==0;

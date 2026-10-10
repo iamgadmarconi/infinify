@@ -16,8 +16,18 @@ xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werr
   native/privileged/host.m -framework AppKit -o "$out/host"
 xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror \
   native/privileged/client.m -framework Foundation -o "$out/client"
+# Disposable spike fixture: an ordinary regular-activation process the owner can see
+# and click; the Dock helper transforms its one window and then restores it.
+xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror \
+  native/privileged/spike-fixture.m -framework AppKit -o "$out/spike-fixture"
 xcrun clang -arch arm64e -mmacosx-version-min=26.0 -Wall -Wextra \
   native/privileged/loader.m -framework AppKit -o "$out/loader-arm64e"
 xcrun clang -arch arm64 -mmacosx-version-min=26.0 -Wall -Wextra \
   native/privileged/doctor.m -framework Foundation -o "$out/doctor"
-printf '%s\n' 'Built helper, cooperative host, client, read-only doctor and opt-in loader; nothing injected.'
+# Ad-hoc sign the Dock payload and loader, exactly as yabai signs its scripting
+# addition binaries (yabai dd845723416f5fe92af49fad5ebab00369e07edd src/sa.m
+# scripting_addition_prepare_binaries: "codesign -f -s -"). Only the ad-hoc "-"
+# identity is ever used; whether Dock accepts an ad-hoc dylib on 27.2 is unproven.
+codesign --force --sign - "$out/payload-arm64e.dylib"
+codesign --force --sign - "$out/loader-arm64e"
+printf '%s\n' 'Built helper, cooperative host, client, spike fixture, read-only doctor and opt-in loader; payload and loader ad-hoc signed; nothing injected.'

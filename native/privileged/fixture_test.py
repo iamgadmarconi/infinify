@@ -182,6 +182,37 @@ try:
     s.close();receipt('oversize packet')
     assert screen(identity['wid'])==before
 
+    # Spike allowlist refusal: a second disposable host told (by file) to allow only
+    # a different pid refuses to enroll even its own window, with the distinct error,
+    # and leaves it untouched. This is the payload scope the loader's --only-pid sets.
+    run2=Path(tempfile.mkdtemp(prefix='fixture-',dir=BUILD)).resolve().relative_to(Path.cwd())
+    os.chmod(run2,0o700)
+    nonce2=secrets.token_hex(32)
+    allowfile=run2/'allowlist.json'
+    allowfile.write_text(json.dumps([dict(pid=os.getpid(),birth_sec=0,birth_usec=0)]))
+    log2=open(run2/'host.log','w')
+    child2=subprocess.Popen([str(BUILD/'host'),str((BUILD/'payload-arm64.dylib').resolve()),str(run2),nonce2,str(allowfile)],stdout=log2,stderr=log2)
+    try:
+        deadline=time.monotonic()+8
+        while not (run2/'helper.sock').exists():
+            assert child2.poll() is None,(run2/'host.log').read_text()
+            assert time.monotonic()<deadline,'allowlist host socket not ready'
+            time.sleep(.04)
+        a=socket.socket(socket.AF_UNIX);a.settimeout(4);a.connect(str(run2/'helper.sock'))
+        probe2=raw(a,json.dumps(dict(v=1,nonce=nonce2,op='probe')).encode()+b'\n');a.close()
+        assert probe2['ok'],probe2
+        id2=probe2['identity'];before2=screen(id2['wid'])
+        a=socket.socket(socket.AF_UNIX);a.settimeout(4);a.connect(str(run2/'helper.sock'))
+        refused=raw(a,json.dumps(dict(v=1,nonce=nonce2,op='enroll',identity=id2)).encode()+b'\n');a.close()
+        assert not refused['ok'] and refused['error']=='allowlist scope violation',refused
+        assert screen(id2['wid'])==before2
+        results.append(dict(test='spike allowlist refusal',scope=probe2['scope'],refused=refused))
+    finally:
+        child2.terminate()
+        try: child2.wait(timeout=3)
+        except subprocess.TimeoutExpired: child2.kill();child2.wait()
+        log2.close()
+
     # Real companion client traverses exactly the same authenticated socket.
     client=subprocess.run([str(BUILD/'client'),str(run),nonce],input='{"op":"probe"}\n',text=True,capture_output=True,timeout=5)
     assert client.returncode==0,client.stderr

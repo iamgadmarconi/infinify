@@ -22,13 +22,24 @@ macOS 27 is inherently unsupported is made.
   `client PRIVATE_RUNTIME NONCE64HEX`. Reads JSON lines from stdin, adds `v` and
   `nonce`, prints responses, closes on stdin EOF or rejected operation. Holding
   stdin open does **not** send heartbeats automatically.
+- `spike-fixture`: a disposable ordinary (regular-activation) process with one
+  titled window, one large button and a large click-count label, at a fixed place.
+  `spike-fixture ABS_STATUS_JSON SECONDS` writes its pid, process birth, window
+  number, click and key counts, key/active/visible flags and its global top-left
+  frame to the status file atomically four-plus times a second, and exits by itself
+  after `SECONDS` (capped at 600) or on SIGTERM. It owns no other window.
 - `loader-arm64e`: explicit Mach loader adapted from yabai. Merely building it
-  does not execute it. Its only accepted action is:
-  `loader-arm64e --inject-dock ABS_PAYLOAD ABS_PRIVATE_RUNTIME NONCE64HEX`.
-  This is **not exercised** by tests or this implementation task. It requires
-  a separately reviewed, explicitly authorized manual run under compatible
-  SIP/boot/library-validation policy and sufficient task-port authority. It never
-  changes policy, runs sudo, restarts Dock, or modifies windows itself.
+  does not execute it. Its accepted action is:
+  `loader-arm64e --inject-dock ABS_PAYLOAD ABS_PRIVATE_RUNTIME NONCE64HEX [--only-pid PID]`.
+  `--only-pid` resolves that login-user process's start time (refusing a PID not
+  owned by Dock's login user, and Dock itself) and writes a one-entry
+  `{pid,birth_sec,birth_usec}` allowlist into the sidecar, pinning the helper to
+  that one process. It is **not exercised** by tests or by implementation work; the
+  owner-run Dock spike below is its only authorized run. It never changes policy,
+  runs sudo, restarts Dock, or modifies windows itself. After linking,
+  `scripts/build-privileged.sh` ad-hoc signs this binary and `payload-arm64e.dylib`
+  with `codesign --force --sign -`, as yabai signs its scripting addition; whether
+  Dock accepts an ad-hoc dylib on 27.2 is unproven.
 
 Before an authorized loader run, the login user must create a fresh private
 runtime directory and generate a cryptographically random 32-byte nonce encoded
@@ -69,14 +80,22 @@ request. A valid `heartbeat` renews the lease; sessions have no total request ca
   numeric; server independently resolves current owner connection, PID and process
   birth timestamp and verifies process UID equals Dock's login UID. Dirty or
   unresolved recovery blocks changing enrollment. Enrollment snapshots and
-  persists the actual original transform before any mutation.
+  persists the actual original transform before any mutation. When the sidecar
+  carries a spike allowlist, enroll refuses (`allowlist scope violation`) any
+  identity whose `pid`/`birth` are not listed, before resolving or touching
+  anything. Every later mutation re-resolves the enrolled window's identity from the
+  window server (`enrolled window identity changed` otherwise) and restates the
+  allowlist invariant (`enrolled window left allowlist scope`), so a window that left
+  the allowlisted process cannot be mutated.
 - `transform`: adds the exact enrolled `identity` and `matrix:[a,b,c,d,tx,ty]`.
   Matrices must contain six finite numeric values with absolute value <=1e6 and
   absolute determinant >=1e-8. Native identity and process UID are revalidated
   before mutation, even after successful enrollment.
 
 Successful `probe`/`heartbeat` includes `identity` (null until enrollment),
-`dirty`, `lease_ms:2000`, `scope`, and `readback`:
+`dirty`, `lease_ms:2000`, `scope`, and `readback`. `scope` names the restriction:
+`cooperative fixture only`, `spike allowlist: N window(s) only`, or
+`explicit same-UID enrollment` when no allowlist is set.
 
 ```json
 {"readback_ok":true,"matrix":[1,0,0,1,0,0],"bounds":[80,400,480,342],"screen_rect":[80,400,480,342]}
@@ -129,6 +148,94 @@ failure itself is not injected or proven by that persistence regression. They do
 Dock injection, foreign-window authority, cross-UID behavior (enforced in code but
 not tested using another user's session), or usable third-party compositing.
 No loaded helper or temporary window remains after E2E cleanup.
+
+## Dock spike (owner-run)
+
+The spike answers, on this OS build, whether Infinify's helper loads into Dock
+(1a), and whether a transform issued from Dock's connection draws **another
+process's** window scaled at a target rectangle while a real click there reaches it
+(1b) — then puts the window back. It is driven by `native/privileged/spike.py`
+(`--dock`) through `scripts/spike-compositor.sh`.
+
+**What it establishes.** That the helper loaded (loader exit 0 after its own
+authenticated probe of Dock); that the allowlisted scope refused two deliberately
+out-of-scope enrollments before touching anything; that a half-size transform read
+back exactly as requested and a 240-step slide held frame rate; and — resting
+**only** on the owner's own answer plus the fixture's click count rising after a
+real click — whether the scaled window was actually displayed and clickable. A
+status code, a resolved symbol, or the fixture's own self-report is never treated as
+proof of display; the evidence file's `claims` object says what each claim rests on.
+
+**What it does not establish.** Anything about real third-party application windows
+(it touches only one disposable fixture), occlusion, menus, multi-window behaviour,
+latency against a live shell, or protocol v2. Those are later, separately scoped.
+
+**Owner-only preparation.** Each command changes the machine and is run by the owner.
+These are the yabai wiki's commands for Apple Silicon macOS 13+
+(https://github.com/asmvik/yabai/wiki/Disabling-System-Integrity-Protection, read
+2026-10-10); they are **not yet tried on macOS 27.2**.
+
+1. Relax SIP. In Recovery (hold the power button for startup options → Options →
+   Terminal): `csrutil enable --without fs --without debug --without nvram`, then
+   reboot. This downgrades machine-wide SIP (filesystem and task-port protection).
+   Undo: `csrutil enable` in Recovery, reboot.
+2. Allow third-party arm64e code: `sudo nvram boot-args=-arm64e_preview_abi`, then
+   reboot. This changes NVRAM boot-args. Undo: `sudo nvram -d boot-args`, reboot.
+
+`target/privileged/doctor` (read-only) must then report `injection_preflight_passed`
+before the spike will do anything; with SIP on it reports 0 and the driver stops,
+having started and changed nothing.
+
+**The one command.** `./scripts/spike-compositor.sh` (it builds, then runs
+`spike.py --dock`). The script never runs sudo itself; only the driver's own step
+does, letting sudo prompt on your terminal.
+
+**Before running it.** Quit Infinify itself (Control-Option-Escape): its canvas
+covers every window, the test window included, and the driver stops if it finds it
+running.
+
+**What the owner sees and is asked.** A test window titled "DriftWM disposable spike
+fixture" opens at the lower left of the main display. It stays above other windows
+and never takes the keyboard, so the terminal cannot cover it and the password goes
+to the terminal. The driver waits until the window server shows it where AppKit put
+it, prints the fixture's pid and window number, then the exact
+`sudo target/privileged/loader-arm64e --inject-dock … --only-pid PID` line (the nonce
+is never printed) and runs it; sudo prompts for the password on the terminal, and
+whatever the loader says is printed. The driver then enrolls the fixture, draws it at
+half size 120 points down and right, asks the owner to click the big button once
+(waiting up to 90 s for the click count to rise), and asks what they saw: `y` for
+half size at the new place, `n` for unchanged or not visible, or a few words. It
+records the answer verbatim, runs the slide loop, restores, and prints a five-line
+result. A run that stops early prints `STOPPED:` with the reason, and says whether
+anything was loaded into Dock. The driver resolves the foreign fixture's owner connection with
+`SLSMainConnectionID`/`SLSGetWindowOwner` (via ctypes on SkyLight), since a foreign
+window's owner is not otherwise available to it.
+
+**Afterwards.** The helper stays loaded inside Dock — listening, holding nothing —
+until Dock restarts. `killall Dock` relaunches Dock clean and removes it. Left on
+disk afterwards: the 0600 sidecar `target/privileged/payload-arm64e.dylib.json` and
+the fresh runtime directory under `target/privileged/spike-…`; delete both before a
+new run (the loader also fails closed on a stale sidecar, socket or journal). The
+evidence is written to `target/privileged/spike-evidence.json`.
+
+**Safety.** The spike transforms exactly one disposable fixture window that the
+driver spawned, and the `--only-pid` allowlist makes the payload refuse every other
+window whatever a client sends. It restores on every exit path, including Ctrl-C. It
+never changes SIP, boot-args, permissions or any other window.
+
+The loader takes the nonce as a command argument, so for the one sudo run it is
+briefly visible in `ps` and recorded by sudo's command logging. It is bounded by the
+payload's same-UID `getpeereid` peer check, the 0700 runtime directory and the
+allowlist, and the driver never prints it. A stop before injection — SIP preflight
+not passed, or a stale sidecar present — writes `target/privileged/spike-preflight.json`
+and never touches `spike-evidence.json`, so it cannot clobber a real run's evidence.
+
+The cooperative half (`spike.py --cooperative`) exercises the same driver body —
+socket handling, the heartbeat thread, the affine, the readback checks, the 240-step
+loop, restore, the finally path and the evidence file — against the cooperative host
+and its own window, with no Dock, no sudo and no owner; the owner-only steps become
+recorded skips. It is the developer- and reviewer-run check of the driver;
+`tests/e2e/privileged-fixture.sh` runs only the cooperative `fixture_test.py`.
 
 ## Attribution
 

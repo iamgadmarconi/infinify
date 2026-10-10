@@ -22,6 +22,10 @@ static CGError (*getBounds)(int, uint32_t, CGRect *);
 static CGError (*getScreenRect)(int, uint32_t, CGRect *);
 static NSDictionary *enrolled;
 static NSString *secret;
+// Optional spike allowlist of {pid,birth_sec,birth_usec}. When present the payload
+// refuses to enroll or keep any window whose process is not listed, so a loaded
+// Dock helper can be pinned to a single disposable fixture whatever a client sends.
+static NSArray *allowlist;
 static int directoryFD = -1;
 static CGAffineTransform original;
 static BOOL hasSnapshot = NO, dirty = NO, recoveryBlocked = NO;
@@ -126,6 +130,22 @@ static NSDictionary *restore(NSString *reason) {
     return response;
 }
 static BOOL isNumber(id n) { return [n isKindOfClass:NSNumber.class] && CFGetTypeID((__bridge CFTypeRef)n)!=CFBooleanGetTypeID(); }
+// Match on process pid and birth only: a window number is reused across processes,
+// so scope follows the enrolled process, not the numeric window id.
+static BOOL allowlistPermits(NSDictionary *who) {
+    if(!allowlist)return YES;
+    for(NSDictionary *entry in allowlist)
+        if([entry[@"pid"] isEqual:who[@"pid"]] && [entry[@"birth_sec"] isEqual:who[@"birth_sec"]] && [entry[@"birth_usec"] isEqual:who[@"birth_usec"]])return YES;
+    return NO;
+}
+static NSArray *validAllowlist(id raw) {
+    if(![raw isKindOfClass:NSArray.class] || [raw count]==0)return nil;
+    for(id entry in raw) {
+        if(![entry isKindOfClass:NSDictionary.class] || ![[NSSet setWithArray:[entry allKeys]] isEqual:[NSSet setWithArray:@[@"pid",@"birth_sec",@"birth_usec"]]])return nil;
+        for(id key in (NSDictionary *)entry)if(!isNumber(((NSDictionary *)entry)[key]))return nil;
+    }
+    return raw;
+}
 static NSDictionary *handle(NSDictionary *request) {
     if (![request isKindOfClass:NSDictionary.class] || !isNumber(request[@"v"]) || ![request[@"v"] isEqual:@1]) return failure(@"unsupported protocol version");
     if (![request[@"nonce"] isKindOfClass:NSString.class] || ![request[@"nonce"] isEqual:secret]) return failure(@"authentication failed");
@@ -138,6 +158,8 @@ static NSDictionary *handle(NSDictionary *request) {
         NSDictionary *candidate=request[@"identity"];
         if(![candidate isKindOfClass:NSDictionary.class] || ![[NSSet setWithArray:candidate.allKeys] isEqual:[NSSet setWithArray:@[@"pid",@"birth_sec",@"birth_usec",@"wid",@"owner"]]])return failure(@"invalid enrollment identity");
         for(id key in candidate)if(!isNumber(candidate[key]))return failure(@"invalid identity numbers");
+        // Refuse before resolving or touching anything the scope does not cover.
+        if(!allowlistPermits(candidate))return failure(@"allowlist scope violation");
         if(fixtureOnly && ![candidate isEqual:enrolled])return failure(@"fixture scope violation");
         NSDictionary *actual=identity([candidate[@"wid"] unsignedIntValue]);
         struct proc_bsdinfo b={0};
@@ -150,11 +172,19 @@ static NSDictionary *handle(NSDictionary *request) {
         return @{@"v":@1,@"ok":@YES,@"identity":enrolled,@"readback":readback()};
     }
     if(enrolled && !validIdentity())return failure(@"enrolled window identity changed");
-    if([op isEqual:@"probe"] || [op isEqual:@"heartbeat"])return @{@"v":@1,@"ok":@YES,@"identity":enrolled ?: (id)NSNull.null,@"dirty":@(dirty),@"lease_ms":@(DW_LEASE_MS),@"readback":readback(),@"scope":fixtureOnly ? @"cooperative fixture only" : @"explicit same-UID enrollment"};
+    if([op isEqual:@"probe"] || [op isEqual:@"heartbeat"]) {
+        NSString *scope=fixtureOnly ? @"cooperative fixture only" : allowlist ? [NSString stringWithFormat:@"spike allowlist: %lu window(s) only",(unsigned long)allowlist.count] : @"explicit same-UID enrollment";
+        return @{@"v":@1,@"ok":@YES,@"identity":enrolled ?: (id)NSNull.null,@"dirty":@(dirty),@"lease_ms":@(DW_LEASE_MS),@"readback":readback(),@"scope":scope};
+    }
     if([op isEqual:@"restore"])return restore(@"explicit");
     if(![op isEqual:@"transform"])return failure(@"unknown operation");
     if(!enrolled)return failure(@"explicit enrollment required");
     if(recoveryBlocked)return failure(@"recovery unresolved; mutation disabled");
+    // validIdentity() above already re-resolved this window's identity from the window
+    // server and proved it still equals the enrolled process; since the allowlist is
+    // immutable and the enrolled pid/birth are fixed, that keeps the window in scope.
+    // This guard restates the allowlist invariant explicitly before every mutation.
+    if(!allowlistPermits(enrolled))return failure(@"enrolled window left allowlist scope");
     if(![enrolled isEqual:request[@"identity"]])return failure(@"identity mismatch");
     NSArray *m=request[@"matrix"];
     if(![m isKindOfClass:NSArray.class] || m.count!=6)return failure(@"matrix must have six numbers");
@@ -212,14 +242,14 @@ static void serve(int fd) {
     });
     close(fd);
 }
-static int startServer(const char *directory, const char *nonce, uint32_t wid, BOOL fixture) {
+static int startServer(const char *directory, const char *nonce, uint32_t wid, BOOL fixture, NSArray *allow) {
     if(!NSThread.isMainThread || started || !directory || !nonce || strlen(nonce)!=64 || getuid()!=geteuid())return -__LINE__;
     for(const char *p=nonce;*p;p++)if(!((*p>='a'&&*p<='f')||(*p>='0'&&*p<='9')))return -__LINE__;
     // Explicit enrollment is restricted to a real NSWindow owned by this fixture host.
     if(fixture) { NSWindow *window=[NSApp windowWithWindowNumber:wid];
         if(!window || (uint32_t)window.windowNumber!=wid)return -__LINE__; }
     else if(![NSBundle.mainBundle.bundleIdentifier isEqual:@"com.apple.dock"])return -__LINE__;
-    fixtureOnly=fixture;
+    fixtureOnly=fixture;allowlist=allow;
     void *sky=dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight",RTLD_LOCAL|RTLD_NOW);
     if(!sky)return -__LINE__;
     mainConnection=dlsym(sky,"SLSMainConnectionID");getOwner=dlsym(sky,"SLSGetWindowOwner");
@@ -246,7 +276,15 @@ static int startServer(const char *directory, const char *nonce, uint32_t wid, B
     return 0;
 }
 
-int dw_privileged_fixture_start(const char *directory,const char *nonce,uint32_t wid) { return startServer(directory,nonce,wid,YES); }
+int dw_privileged_fixture_start(const char *directory,const char *nonce,uint32_t wid,const char *allowlistJSON) {
+    NSArray *allow=nil;
+    if(allowlistJSON) {
+        id raw=[NSJSONSerialization JSONObjectWithData:[NSData dataWithBytes:allowlistJSON length:strlen(allowlistJSON)] options:0 error:NULL];
+        allow=validAllowlist(raw);
+        if(!allow)return -__LINE__;
+    }
+    return startServer(directory,nonce,wid,YES,allow);
+}
 // Loader writes this explicit opt-in sidecar before dlopen. No sidecar means no
 // listener and no mutation. Production configuration is never inferred from env.
 __attribute__((constructor)) static void productionStart(void) {
@@ -259,8 +297,16 @@ __attribute__((constructor)) static void productionStart(void) {
     ssize_t count=read(fd,buffer,sizeof(buffer));close(fd);if(count!=st.st_size)return;
     id config=[NSJSONSerialization JSONObjectWithData:[NSData dataWithBytes:buffer length:count] options:0 error:NULL];
     if(![config isKindOfClass:NSDictionary.class] || ![config[@"runtime"] isKindOfClass:NSString.class] || ![config[@"nonce"] isKindOfClass:NSString.class])return;
+    // An optional spike allowlist pins the helper to the disposable fixture.
+    NSArray *allow=nil;
+    if(config[@"allowlist"]) {
+        // A present allowlist key must be a valid allowlist. A null or malformed value
+        // fails closed rather than silently granting open same-UID scope.
+        allow=validAllowlist(config[@"allowlist"]);
+        if(!allow){NSLog(@"DriftWM transform helper: sidecar allowlist present but invalid; refusing to start");return;}
+    }
     dispatch_async(dispatch_get_main_queue(),^{
-        int status=startServer([config[@"runtime"] fileSystemRepresentation],[config[@"nonce"] UTF8String],0,NO);
+        int status=startServer([config[@"runtime"] fileSystemRepresentation],[config[@"nonce"] UTF8String],0,NO,allow);
         NSLog(@"DriftWM transform helper start status %d; explicit enrollment required",status);
     });
 }
