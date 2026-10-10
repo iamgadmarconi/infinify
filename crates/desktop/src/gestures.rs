@@ -25,7 +25,7 @@
 //! `gesture_update` and `gesture_end`. The binding is chosen once, at begin, and
 //! holds for the whole gesture, as upstream's `GestureState` does. See
 //! GESTURES.md for the contract.
-use super::actions::{Outcome, action_string, runs_here};
+use super::actions::{Outcome, action_string};
 use super::motion::Pinch;
 use super::*;
 use driftwm_core::config::{
@@ -153,7 +153,7 @@ struct Found {
 }
 impl Found {
     /// The action as a config file spells it, and whether it does anything here.
-    fn describe(&self) -> Value {
+    fn describe(&self, controller: &Controller) -> Value {
         let (action, implemented) = match &self.entry {
             GestureConfigEntry::Continuous(action) => match action {
                 ContinuousAction::PanViewport => ("pan-viewport".to_owned(), true),
@@ -168,10 +168,10 @@ impl Found {
             // The direction comes from the swipe; any one decides `implemented`.
             GestureConfigEntry::Threshold(ThresholdAction::CenterNearest) => (
                 "center-nearest".to_owned(),
-                runs_here(&Action::CenterNearest(Direction::Up)),
+                controller.runs(&Action::CenterNearest(Direction::Up)),
             ),
             GestureConfigEntry::Threshold(ThresholdAction::Fixed(action)) => {
-                (action_string(action), runs_here(action))
+                (action_string(action), controller.runs(action))
             }
         };
         json!({"combo":self.combo,"action":action,"implemented":implemented})
@@ -387,7 +387,7 @@ impl Controller {
                     _ => None,
                 };
                 if let Some(state) = state {
-                    found.push(hit.describe());
+                    found.push(hit.describe(self));
                     return Ok(state);
                 }
             }
@@ -403,7 +403,7 @@ impl Controller {
             return Ok(state);
         };
         self.cancel_animations(output);
-        found.push(hit.describe());
+        found.push(hit.describe(self));
         Ok(match hit.entry {
             GestureConfigEntry::Continuous(action) => match action {
                 // A swipe has no scale, so upstream treats a bound zoom as pan.
@@ -440,7 +440,7 @@ impl Controller {
             let GestureConfigEntry::Threshold(action) = &hit.entry else {
                 return None;
             };
-            found.push(hit.describe());
+            found.push(hit.describe(self));
             Some(action.clone())
         };
         GestureState::SwipeThreshold {
@@ -468,7 +468,7 @@ impl Controller {
             )
         {
             let pinch = self.pinch_begin(output)?;
-            found.push(hit.describe());
+            found.push(hit.describe(self));
             return Ok(GestureState::PinchZoom { pinch });
         }
         let pinch_in = self.gesture_entry(modifiers, GestureTrigger::PinchIn { fingers }, context);
@@ -486,7 +486,7 @@ impl Controller {
                 .iter()
                 .flatten()
                 .filter(|hit| fixed(hit).is_some())
-                .map(Found::describe),
+                .map(|hit| hit.describe(self)),
         );
         self.cancel_animations(output);
         Ok(GestureState::PinchThreshold {
@@ -508,7 +508,7 @@ impl Controller {
         let hit = self.gesture_entry(start.modifiers, trigger, context);
         match hit.as_ref().and_then(fixed) {
             Some(action) => {
-                found.extend(hit.as_ref().map(Found::describe));
+                found.extend(hit.as_ref().map(|hit| hit.describe(self)));
                 GestureState::HoldAction { action }
             }
             None => GestureState::Unbound,
@@ -769,6 +769,9 @@ impl Controller {
                 }
                 report.outcome.effects.extend(outcome.effects);
                 report.outcome.dirty |= outcome.dirty;
+                if outcome.resize.is_some() {
+                    report.outcome.resize = outcome.resize;
+                }
                 None
             }
             Err(error) => Some(error.to_string()),
@@ -776,7 +779,7 @@ impl Controller {
         report.fired = json!({"action":action_string(action),"error":error});
     }
     fn gesture_reply(&self, gesture: Value, report: Report) -> Value {
-        json!({
+        let reply = json!({
             "gesture":gesture,
             "fired":report.fired,
             "note":report.note,
@@ -785,6 +788,7 @@ impl Controller {
             "dirty":report.outcome.dirty,
             "needs_frames":self.needs_frames(),
             "trackpad":self.trackpad_enabled(),
-        })
+        });
+        super::sizes::carry(reply, report.outcome.resize)
     }
 }

@@ -5,8 +5,9 @@ window's camera placement with `keep` or `reset` zoom. The commands in the table
 below are that primitive. Upstream's own window navigation (`center-window`,
 `center-nearest`, `cycle-windows`, `focus-center`, and what a click or an
 activation does) is built on it and described under
-[Window navigation actions](#window-navigation-actions). Fullscreen, fill and
-modal handling are absent throughout. A widget and a screen-pinned window
+[Window navigation actions](#window-navigation-actions). Fullscreen and modal
+handling are absent throughout; the one fill rule, `center-window`'s and
+`focus-center`'s return to a fill view, is described there. A widget and a screen-pinned window
 ([RULES.md](RULES.md#navigation-activation-gestures-and-outputs)) are no
 navigation target anywhere on this page: `navigate_window` raises and focuses
 one where it is and returns a null `navigation`, and no search picks one. No
@@ -140,9 +141,9 @@ same dispatch as a key binding: `center-nearest` takes the direction of the
 swipe, `pointer` is where the gesture began, and `held` is what the event that
 fires the action reports.
 
-- **`center-window`** is upstream's `RestoreFillElseReset`. There is no fill
-  here, so no stored view is ever restored and the policy is always Reset: the
-  flight ends at zoom 1.
+- **`center-window`** is upstream's `RestoreFillElseReset`: a window still
+  [filled](SIZES.md#fill-window) returns to the camera and zoom its fill ran
+  in, and any other is flown to at zoom 1. `focus-center` is the same.
 - **`center-nearest`**. The viewport center is the world point under the usable
   center, `camera + usable_center / zoom`. The origin of the search is the
   focused window's center when the whole frame is on the output (upstream's

@@ -15,9 +15,10 @@
 // placeholder is upstream's stand-in. The candidates of every search here are
 // upstream's canvas windows (`is_canvas_window`, `Controller::on_canvas`): no
 // widget and no screen-pinned window, which are raised and focused where they
-// are and never flown to (RULES.md). Fullscreen, modal and fill handling is
-// absent. Only world rectangles, output poses and the navigation context are
-// read, never native geometry.
+// are and never flown to (RULES.md). Fullscreen and modal handling is absent;
+// a filled window's view restore is sizes.rs's `navigate_restoring_fill`.
+// Only world rectangles, output poses and the navigation context are read,
+// never native geometry.
 use super::view_actions::{pixel, pixel_size};
 use super::*;
 use driftwm_core::canvas::{find_nearest, visible_canvas_rect, visible_fraction};
@@ -120,7 +121,7 @@ impl Controller {
     /// whose viewport shows the frame's center (output_shows_canvas_point: the
     /// camera rounded, two spare pixels, the point truncated), else the active
     /// one. An output whose pose leaves the integer range shows nothing.
-    fn home_output(
+    pub(crate) fn home_output(
         &self,
         window: WindowId,
         active: Option<OutputId>,
@@ -213,8 +214,8 @@ impl Controller {
     /// Upstream CenterWindow: the focused canvas window, else the canvas
     /// window whose center is nearest the viewport center, at zoom 1. With a
     /// widget or a screen-pinned window focused it is the nearest one, as with
-    /// nothing focused. Upstream's policy is RestoreFillElseReset; there is no
-    /// fill here, so it is always Reset.
+    /// nothing focused. Upstream's policy is RestoreFillElseReset: a window
+    /// still filled returns to the camera and zoom it was filled in instead.
     pub(crate) fn center_window(&mut self, output: OutputId) -> Result<Moved, Error> {
         let (viewport, usable) = self.view(output)?;
         let center = Self::viewport_center_canvas(&viewport, usable);
@@ -232,15 +233,15 @@ impl Controller {
                 .map(|window| window.id)
         });
         match target {
-            Some(window) => self.navigate_to_window(window, output, ZoomPolicy::Reset),
+            Some(window) => self.navigate_restoring_fill(window, output),
             None => Ok(Moved::default()),
         }
     }
     /// Upstream FocusCenter: the topmost canvas window under the pointer, at
-    /// zoom 1. A screen-pinned window there is passed over, as upstream's walk
-    /// skips it, and a widget is no candidate. `pointer` is a global screen
-    /// point; with none, or with no canvas window of `output` under it, nothing
-    /// happens.
+    /// zoom 1, with the same fill exception as CenterWindow. A screen-pinned
+    /// window there is passed over, as upstream's walk skips it, and a widget
+    /// is no candidate. `pointer` is a global screen point; with none, or with
+    /// no canvas window of `output` under it, nothing happens.
     pub(crate) fn focus_center(
         &mut self,
         output: OutputId,
@@ -248,7 +249,7 @@ impl Controller {
     ) -> Result<Moved, Error> {
         self.view(output)?;
         match pointer.and_then(|pointer| self.canvas_window_under(output, pointer)) {
-            Some(window) => self.navigate_to_window(window, output, ZoomPolicy::Reset),
+            Some(window) => self.navigate_restoring_fill(window, output),
             None => Ok(Moved::default()),
         }
     }

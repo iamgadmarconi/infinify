@@ -88,6 +88,10 @@ impl NavigationFrame {
     }
 }
 impl NavigationContext {
+    /// Upstream `snap.outer_gap` as this output measures it.
+    pub(crate) fn outer_gap(&self) -> f64 {
+        self.outer_gap
+    }
     /// Upstream align_point_on for a window's world frame: the output-local
     /// point where a navigation landing at `zoom` parks the frame's center.
     pub(crate) fn align_rect(&self, visual_rect_world: Rect, zoom: f64) -> Point {

@@ -81,7 +81,46 @@ Then, once mapped:
 
 An `attach` that names its `logical_id` or its `world_rect` has decided the
 frame itself: the window gets its rule less the placement (no `position`, no
-pin).
+pin, no `size`).
+
+### A rule's `size`
+
+A rule's `size` is a native size, and reaches a window only through the
+[size transaction](SIZES.md#what-a-sizing-action-does) of
+`--experimental-native-resize`. So it follows that gate:
+
+- **Without `native_resize_capability`** nothing is asked. The window keeps
+  its own size, a `position` centers that size, and `rule.not_applied` names
+  `size`. This is what every run without the flag does.
+- **With it**, a new window that step 2, 3 or 4 above placed is asked for the
+  rule's size once it is placed, through `Controller::request_window_size`,
+  IPC `resize`'s own path: the frame keeps its center and the top-left moves
+  by half the difference in whole pixels, so a ruled `position`, a centered
+  placement and the arrival's flight still aim at the same point. Nothing of
+  the frame is written before the window has answered, and the size written
+  is the one it took. The `attach` reply then also carries `transaction`, and
+  the transaction's effect as the one entry of `effects`, for the shell's
+  resize coordinator; `effect` stays the arrival's focus request.
+  `rule.not_applied` no longer names `size`.
+
+Still not asked, with the capability on, and still named in `not_applied`:
+
+- a **widget** and a window the rule **pinned**, whatever size they have: no
+  size transaction begins for either
+  ([Differences](#differences-from-upstream));
+- a window that **takes over a slot**, which keeps the slot's frame as
+  upstream's adopted window does;
+- a window that maps **while a drag, a resize or another size transaction is
+  unresolved**: there is one transaction and nothing is queued
+  ([SIZES.md](SIZES.md#a-second-action-while-a-size-is-owed)), so of several
+  ruled windows that appear at once, the launch pass included, the first is
+  asked and the others keep their size;
+- a window whose application does not accept a size (`resize_disabled`).
+
+A canvas window that maps with the rule's size already is asked nothing, and
+`size` is not listed. The request never fails the `attach`: a size that cannot be
+asked leaves the window mapped exactly as without the capability.
+`preserve_aspect_ratio` and `fullscreen` stay recorded and not applied.
 
 ## Widgets
 
@@ -93,7 +132,8 @@ A widget is fixed to the canvas:
 - **Not moved or resized by hand.** `begin_drag`, `begin_resize` and
   `begin_native_resize` refuse it (`a widget is not moved or resized by
   hand`). `nudge-window`, `move-to-bookmark`, `close-window` and
-  `suspend-window` do nothing with a widget focused, without an error.
+  `suspend-window` do nothing with a widget focused, without an error, and so
+  do the [sizing actions](SIZES.md#widgets-screen-pinned-windows-and-rules).
 - **IPC `Move` alone repositions it**, by id. The move lasts for the session.
 - **Out of cycling.** It can hold the focus, and a click still requests native
   focus, but it never enters the [focus history](FOCUS.md), whoever answers
@@ -133,12 +173,15 @@ drawn above every canvas window of that output and on no other output.
   Unpinning the focused window puts it back at the head when its focus was
   settled: confirmed or observed natively, or answered `focus_logical`. No
   close hands it the focus, as for a widget.
-- **Not moved or resized by hand**, `nudge-window` and `move-to-bookmark` pass
-  it over, IPC `Move` and `Resize` refuse to write it. Reading still works.
+- **Not moved or resized by hand**, `nudge-window`, `move-to-bookmark` and the
+  [sizing actions](SIZES.md#widgets-screen-pinned-windows-and-rules) pass it
+  over, IPC `Move` and `Resize` refuse to write it. Reading still works.
   Upstream does drag and resize one; see
   [Differences](#differences-from-upstream).
 - **Out of snapping, clusters, zoom-to-fit and auto placement**, like a widget,
-  and like a widget it has no spatial neighbour when it closes.
+  and like a widget it has no spatial neighbour when it closes. Neither is an
+  obstacle to `fill-window`, shoved by `fit-window-snapped` or framed by
+  `zoom-to-fit-snapped`.
 - `navigate_window` and IPC `Focus` raise and focus it without a navigation.
 - **Out of canvas screenshots**, as upstream documents: `msg screenshot` of
   the view, of `all` or of a region never shows it, and `screenshot window`
@@ -183,7 +226,8 @@ flies to, grabs or sends "a window" asks it.
 | `activate`, cause `native`; `observe_focus`; `focus_result`; `focus_logical` | focus recorded, history untouched, no flight | the same |
 | `hover` ([POINTER.md](POINTER.md#screen-pinned-windows-and-widgets)) | its motion is forwarded; `focus_follows_mouse` never focuses it, and nothing beneath a pinned widget is focused either | its motion is forwarded; `focus_follows_mouse` focuses it where it stands, before the canvas window beneath it; history untouched, and the native echo of that focus neither raises nor flies |
 | pick mode, below `zoom.interact_min` | never a pick target: `hit` and `input` answer `pick: false`, `input` passes, `pick` does nothing | never a pick target: it stays interactive, also over a canvas window that is one; `pick` does nothing |
-| `begin_drag`, `begin_resize`, `begin_native_resize` | refused | refused |
+| `begin_drag`, `begin_resize`, `begin_native_resize`, a size transaction begun by an action, an IPC `Resize` or a rule | refused | refused |
+| `grow-window`, `shrink-window`, `fit-window`, `fit-window-snapped`, `fill-window` (with the capability), `zoom-to-fit-snapped` ([SIZES.md](SIZES.md#widgets-screen-pinned-windows-and-rules)) | focused: nothing happens, without an error | the same; a fit or fill it had before it was pinned stays with it |
 | a move gesture ([GESTURES.md](GESTURES.md#dispatch)) | grab-proof: the gesture falls back to a pan and nothing is focused | claimed and inert, state `swipe_pinned` with a `note`; nothing pans, moves or is focused |
 | a resize gesture | falls back to a pan | the gated `swipe_resize` of any window |
 | a gesture in progress on a slot whose window maps as a widget | its drag ends at once, with its edge pan; the gesture goes on with nothing to move | (an adopted slot keeps its pin: it was not draggable) |
@@ -225,6 +269,7 @@ What is added to existing replies:
 | | `widget` | bool; drawn below the canvas windows |
 | | `opacity` | what the window is drawn at, upstream's `effective_opacity`: a rule's or an IPC write's value in both focus states, else 1 for a widget, else `[decorations] opacity_focused` or `opacity` by the logical focus. 1 with no rule and a default config, and 1 for every window without a source, as upstream draws a stand-in. The placement's `decoration.opacity` is the same number from the same function |
 | `hit`, `input` | `widget`, `pinned` | bools, so the shell can refuse to start a move or resize on what it hit |
+| `attach` of a new window | `transaction`, `effects` | only when the window's rule names a `size` and a size transaction began for it: the transaction's id, and its effect as the one entry of `effects` ([A rule's `size`](#a-rules-size)) |
 
 `snapshot.placements` stays the single list of what to draw, bottom to top
 within each output: **widgets, canvas windows, the windows pinned to that
@@ -265,8 +310,9 @@ clamped), `no window with id N` for an `Opacity` on anything that is not live,
 `this window has no canvas position to move: it is pinned, fullscreen, or not
 on screen yet`, and `this window has no canvas size to set: it is pinned,
 fullscreen, a widget, or not on screen yet`, which a `Resize` write answers for
-a pinned window or a widget before the gate that still refuses every other
-resize. `size must be positive` comes first.
+a pinned window or a widget whether or not the shell can deliver a size: it
+comes before the [gate](SIZES.md#the-gate) that refuses every other resize
+without the capability. `size must be positive` comes first.
 
 `State`: a pinned window is left out of `windows` and listed under `pinned`
 with its output's stable id and the `position` and `size` a `pinned_to_screen`
@@ -311,15 +357,22 @@ rule takes, sorted by output and position. `is_widget` is filled.
   application outlives the canvas, so a window that is still open gets its
   slot back as it was. A slot that becomes a stand-in is unpinned, as
   upstream's are.
-- **`size` and `fullscreen` are recorded, not applied.** Native resize is
-  gated. A ruled window keeps its own size, a `position` centers that size,
-  and `rule.not_applied` names both. Upstream configures the client to the
-  rule's size first and places it on the follow-up commit.
+- **`size` is gated, and asked after the placement.** Upstream configures the
+  client to the rule's size first and places it on the follow-up commit, a
+  widget and a rule-pinned window included. Here the window is placed at its
+  own size and then asked ([A rule's `size`](#a-rules-size)), so the frame is
+  centered for the size asked and a window that grants less keeps that
+  top-left, as IPC `resize` does, where upstream centers the size it got; an
+  odd difference halves toward zero, which can put the frame one pixel from
+  where upstream's would be. Without `--experimental-native-resize`, for a
+  widget and for a screen-pinned window nothing is asked at all, and
+  `rule.not_applied` names `size`.
+- **`fullscreen` is recorded, not applied**, and named in `not_applied`.
 - **`pass_keys`, `pass_mouse`, `preserve_aspect_ratio` and `layer_order`** are
   recorded and listed in `not_applied`: no key or pointer binding is withheld
   for a window, and there are no layer surfaces.
-- **A pinned window cannot be dragged or resized at all.** Upstream's move and
-  resize bindings act on the pinned window itself, in screen space:
+- **A pinned window cannot be dragged, resized or sized at all.** Upstream's
+  move and resize bindings act on the pinned window itself, in screen space:
   `try_pinned_button` raises and focuses it and starts `start_pinned_move` or
   `start_compositor_resize_with_edge`, and a drag across monitors reassigns
   its output. Its title bar, a client move request and the move and resize
@@ -400,6 +453,9 @@ widget, over a pinned window and over a canvas window, and a move gesture
 whose slot is adopted as a widget; an open cycle and a coast ended by
 `toggle-pin-to-screen` and by `move-to-bookmark`, and both run from a hot
 corner;
+a rule's `size` without the capability and with it (asked, answered, and not
+asked of a second window while the first is owed, of a window that has the
+size already, of a widget, of a rule-pinned window and of an adopted slot);
 a close with only a widget or a pinned window left in view, and the close of
 a pinned window or a widget lying over a canvas window; a detached slot under
 a drag adopted as a widget; output removal with and without a settle, and the
@@ -408,7 +464,11 @@ shell's own order for a screen change (remove both, register both or one,
 two next launches. Expected rectangles are derived by hand from upstream's
 conventions. The `hover` and pick-mode rows of the table above are driven by
 [`tests/pointer_flow.rs`](tests/pointer_flow.rs)
-([POINTER.md](POINTER.md#evidence-and-limits)), the same way.
+([POINTER.md](POINTER.md#evidence-and-limits)), the same way, and the sizing
+rows by [`tests/sizes_flow.rs`](tests/sizes_flow.rs)
+([SIZES.md](SIZES.md#verification-boundary)). In the `size` scenario the test
+plays the shell's part and answers the resize effects itself: no native window
+was resized, by a rule or otherwise.
 
 It is evidence of the controller's arithmetic and ordering only. Nothing here
 shows that a native window is drawn at an opacity, blurred, kept above

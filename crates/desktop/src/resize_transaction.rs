@@ -87,7 +87,128 @@ impl NativeResizeTransaction {
             )
     }
 }
+/// What a sizing action may read of the transaction in the slot. See sizes.rs.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ResizeSlot {
+    pub(crate) transaction: u64,
+    pub(crate) window: WindowId,
+    pub(crate) edges: Edges,
+    /// An effect is outstanding or a mutation is unresolved.
+    pub(crate) live: bool,
+    /// A result is owed and nothing is cancelled or uncertain: a newer target
+    /// size can still take the latest-request slot.
+    pub(crate) accepting: bool,
+}
 impl Controller {
+    pub(crate) fn resize_slot(&self) -> Option<ResizeSlot> {
+        self.native_resize.as_ref().map(|t| ResizeSlot {
+            transaction: t.transaction,
+            window: t.window,
+            edges: t.edges,
+            live: t.live(),
+            accepting: t.pending_effect.is_some()
+                && !t.cancelled
+                && !t.uncertain_mutation
+                && matches!(t.phase, Phase::Preparing | Phase::Settling),
+        })
+    }
+    /// The effect a result is about to answer: whether it is a setter, and
+    /// whether an attempted setter was already unresolved before it.
+    pub(crate) fn resize_answer(&self, transaction: u64, effect_id: u64) -> Option<(bool, bool)> {
+        let t = self.resize_id(transaction).ok()?;
+        let effect = t
+            .pending_effect
+            .as_ref()
+            .filter(|e| e.effect_id == effect_id)?;
+        Some((effect.requested.is_some(), t.uncertain_mutation))
+    }
+    /// A size transaction with no drag behind it. `target` takes the place of
+    /// the motion a release during the baseline read leaves queued, so the
+    /// same phases run: baseline read, one setter, final read. `edges` anchors
+    /// every commit exactly as a drag of those edges does. Nothing here is
+    /// read from a pointer, and no camera flight is cancelled: upstream's
+    /// non-interactive resize cancels none. Capture authority is not required
+    /// either: no pointer is mapped through the picture, and a held key must
+    /// not wait for a frame between two steps.
+    pub(crate) fn begin_sized_resize(
+        &mut self,
+        window: WindowId,
+        output: OutputId,
+        edges: Edges,
+        target: Size,
+    ) -> Result<Value, Error> {
+        self.guard_resize_structure(None)?;
+        if self.gesture.is_some() {
+            return Err(Error::Invalid("native resize during active gesture"));
+        }
+        // A widget and a screen-pinned window are refused as a drag's are.
+        // Every caller has passed one over or refused it in upstream's words
+        // before this; the transaction holds the rule all the same.
+        self.movable(window)?;
+        let source = self
+            .sources
+            .get(&window)
+            .ok_or(Error::Invalid("unbound source"))?;
+        if source.resize_disabled {
+            return Err(Error::Invalid("source resize unsupported"));
+        }
+        let size = self
+            .scene
+            .window(window)
+            .ok_or(Error::Invalid("unknown window"))?
+            .world_rect
+            .size;
+        let snap = self.snap(1.0);
+        let snap_intent = self
+            .scene
+            .begin_resize(window, edges.into(), snap.options, false)?
+            .with_break_force(snap.break_force)?
+            .with_same_edge(snap.corners);
+        self.next_resize = self
+            .next_resize
+            .checked_add(1)
+            .ok_or(Error::Invalid("resize IDs exhausted"))?;
+        self.native_resize = Some(NativeResizeTransaction {
+            transaction: self.next_resize,
+            window,
+            identity: source.identity.clone(),
+            generation: source.generation,
+            output,
+            edges,
+            start_screen: Point::default(),
+            start_zoom: 1.0,
+            initial_size: size,
+            last_committed_size: size,
+            native_constraints: None,
+            latest_requested: Some(target),
+            requested_outline: None,
+            coalesced_latest: Some(target),
+            pending_effect: None,
+            phase: Phase::Preparing,
+            baseline_observed: false,
+            released: true,
+            cancelled: false,
+            uncertain_mutation: false,
+            last_result: None,
+            snap_intent,
+        });
+        self.emit_resize(None)
+    }
+    /// A newer target for the sized transaction in the slot: it takes the one
+    /// latest-request slot, as a later `native_resize_to` takes it from an
+    /// earlier one. Nothing new is dispatched before the owed result arrives.
+    pub(crate) fn retarget_sized_resize(&mut self, target: Size) -> Result<(), Error> {
+        let accepting = self.resize_slot().is_some_and(|slot| slot.accepting);
+        let t = self
+            .native_resize
+            .as_mut()
+            .filter(|_| accepting)
+            .ok_or(Error::Invalid("resize is not accepting a new size"))?;
+        t.latest_requested = Some(target);
+        let sent = t.pending_effect.as_ref().and_then(|e| e.requested);
+        t.coalesced_latest = (sent != Some(target)).then_some(target);
+        Ok(())
+    }
     pub(crate) fn guard_resize_structure(&self, window: Option<WindowId>) -> Result<(), Error> {
         if self
             .native_resize
@@ -185,6 +306,8 @@ impl Controller {
             snap_intent,
         });
         self.cancel_animations_everywhere();
+        // Upstream begin_client_resize: a resize drag ends fit and fill.
+        self.sizes.resize_begun(window);
         self.emit_resize(None)
     }
     fn resize_id(&self, transaction: u64) -> Result<&NativeResizeTransaction, Error> {

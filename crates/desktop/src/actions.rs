@@ -6,8 +6,10 @@
 // driftwm-core's `config::{Action, parse_action}`, upstream's own code. The
 // camera, bookmark, window navigation, nudge, exec, reload, quit, close,
 // suspend, output transfer, layout, toggle-cursor-pan and set-trackpad actions
-// execute here, move-to-bookmark and toggle-pin-to-screen in rules.rs; every
-// other action parses and is then refused by name.
+// execute here, move-to-bookmark and toggle-pin-to-screen in rules.rs and
+// zoom-to-fit-snapped in sizes.rs; grow-window, shrink-window, fit-window,
+// fit-window-snapped and fill-window execute when the shell can deliver a size
+// (sizes.rs); every other action parses and is then refused by name.
 use super::keyboard_layout::switch_effect;
 use super::window_actions::Moved;
 use super::*;
@@ -127,8 +129,9 @@ pub(crate) fn action_string(action: &Action) -> String {
     };
     format!("{name} {argument}")
 }
-/// Does `run_action` execute this action, or refuse it by name?
-pub(crate) fn runs_here(action: &Action) -> bool {
+/// Does `run_action` execute this action whatever the shell can do, or refuse
+/// it by name? `Controller::runs` adds the actions that deliver a size.
+fn runs_here(action: &Action) -> bool {
     matches!(
         action,
         Action::Quit
@@ -150,6 +153,7 @@ pub(crate) fn runs_here(action: &Action) -> bool {
             | Action::ZoomOut
             | Action::ZoomReset
             | Action::ZoomToFit
+            | Action::ZoomToFitSnapped
             | Action::GoToBookmark(_)
             | Action::SetBookmark(_)
             | Action::MoveToBookmark(_)
@@ -179,6 +183,9 @@ pub(crate) struct Outcome {
     pub(crate) effects: Vec<Value>,
     /// Saved state changed, so the shell should save.
     pub(crate) dirty: bool,
+    /// The size transaction a sizing action began: its `transaction` and
+    /// `effect`, which the reply carries under those same keys.
+    pub(crate) resize: Option<Value>,
 }
 impl Outcome {
     /// A window navigation: its flight, its focus request as an effect, and
@@ -193,10 +200,15 @@ impl Outcome {
     }
     /// The reply of `action` and `hot_corner`.
     pub(crate) fn reply(self) -> Value {
-        json!({"navigation":self.navigation,"effects":self.effects,"dirty":self.dirty})
+        let reply = json!({"navigation":self.navigation,"effects":self.effects,"dirty":self.dirty});
+        super::sizes::carry(reply, self.resize)
     }
 }
 impl Controller {
+    /// Does `run_action` execute this action in this run, or refuse it by name?
+    pub(crate) fn runs(&self, action: &Action) -> bool {
+        runs_here(action) || (self.sizes.capability && super::sizes::delivers_a_size(action))
+    }
     pub(crate) fn action(
         &mut self,
         output: Option<OutputId>,
@@ -221,8 +233,9 @@ impl Controller {
     }
     /// Upstream NudgeWindow: the focused window moves by `navigation.nudge_step`
     /// world points, each axis rounded. A logical world move, applied at once:
-    /// upstream animates the frame from its old place, and clears a fill restore
-    /// point that does not exist here. No focused window is no error upstream.
+    /// upstream animates the frame from its old place. Its fill restore point
+    /// ends in `place_window`, as upstream clears it. No focused window is no
+    /// error upstream.
     fn nudge_window(&mut self, direction: &Direction) -> Result<bool, Error> {
         // Upstream nudges a canvas window only: not a widget, not a pinned one.
         let Some(window) = self.scene.focused().filter(|id| self.on_canvas(*id)) else {
@@ -375,6 +388,13 @@ impl Controller {
             Action::ZoomOut => self.zoom_out(active()?)?,
             Action::ZoomReset => self.zoom_reset(active()?)?,
             Action::ZoomToFit => self.zoom_to_fit(active()?)?,
+            Action::ZoomToFitSnapped => self.zoom_to_fit_snapped(active()?)?,
+            // These deliver a size to a native window, which only a shell
+            // started with --experimental-native-resize can do: SIZES.md.
+            action if self.sizes.capability && super::sizes::delivers_a_size(action) => {
+                self.run_sizing(output, action, &mut outcome)?;
+                return Ok(outcome);
+            }
             Action::GoToBookmark(name) => self.go_to_bookmark(active()?, name)?,
             Action::SetBookmark(name) => {
                 outcome.dirty = true;

@@ -64,6 +64,13 @@ static BOOL boundIdentity(NSDictionary *bound,NSDictionary *named) {
     for(NSString *key in @[@"pid",@"birth_sec",@"birth_usec",@"wid"])if(!asNumber(named[key])||![bound[key]isEqual:named[key]])return NO;
     return YES;
 }
+// The effect of a native size transaction in a controller reply, or nil. A sizing action's reply carries it under "effect",
+// the key begin_native_resize answers with; an entry of "effects" is read the same way, which is where the attach of a window
+// whose rule names a size carries it, its "effect" being the focus request.
+static NSDictionary *sizeEffect(NSDictionary *reply) {
+    for(id effect in [@[reply[@"effect"]?:NSNull.null] arrayByAddingObjectsFromArray:asArray(reply[@"effects"])]){NSString *op=asString(asDict(effect)[@"op"]);if([op isEqual:@"observe_resize_source"]||[op isEqual:@"resize_native_window"])return effect;}
+    return nil;
+}
 // An input event's time as upstream's libinput timestamp: milliseconds, wrapping at 32 bits.
 static NSNumber *eventMillis(NSEvent *e) { return @((uint32_t)(uint64_t)(e.timestamp*1000)); }
 // Physical modifiers as the controller reads them: JSON booleans, since a boxed comparison would be sent as 0 or 1.
@@ -213,6 +220,12 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 @property id resizeGlobalKeyMonitor;
 @property NSNumber *resizeSavedTransaction;
 - (void)configureResize;
+// Normal runs under --experimental-native-resize: DriftWM's sizing actions (grow-window, shrink-window, fit-window,
+// fit-window-snapped, fill-window, IPC resize) are size transactions the controller begins and continues by itself.
+@property NSNumber *sizeTransaction; // the transaction a sizing action's effect last named
+- (BOOL)sizing;
+- (void)resizeCapability;
+- (NSDictionary *)consumeSize:(NSDictionary *)reply;
 @property DWNavigationCoordinator *navigation;
 @property NSTimer *frameTimer;
 @property BOOL frameFlying; // the frame timer serves camera motion, not only an animated background
@@ -572,7 +585,8 @@ static BOOL sourceGone(LiveSource *source,NSDictionary *info) { return ![birth(s
     // the focus request still in flight withdrawn and every flight and coast stopped, and a scroll pan still waiting to
     // launch never does, at its delay or at the lift of fingers still down.
     self.clickWindow=nil;[self.desktop.navigation releaseCycle];if(self.desktop.configured)[self.desktop cancelGestures];[self.desktop cancelNavigation];[self.desktop.panLaunch cancel];self.scrollPanTime=0;
-    if(self.desktop.resize&&![self.desktop.resize canRemove:nil]){[self.desktop.resize cancel];return;}
+    // A press is dropped while a native resize is unresolved, and cancels one the pointer began: a sizing action's transaction is not the press's to cancel.
+    if(self.desktop.resize&&![self.desktop.resize canRemove:nil]){if(![self.desktop sizing])[self.desktop.resize cancel];return;}
     CGPoint p=[self screenPoint:e];NSNumber *output=[self outputAt:p];if(!output)return;
     self.startPoint=self.lastPoint=p;self.dragOutput=self.lastOutput=output;self.gestureButton=button;self.lastDragPan=0;
     // Below [zoom] interact_min no handle takes the press: upstream's try_pick_button sits ahead of every resize border.
@@ -780,7 +794,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 - (void)configureResize {
     if(!self.experimentalResize||self.resize)return;
     __weak Desktop *weak=self;dispatch_queue_t queue=dispatch_queue_create("org.infinify.resize",DISPATCH_QUEUE_SERIAL);
-    self.resize=[[DWResizeCoordinator alloc]initWithCommand:^NSDictionary *(NSDictionary *c){return [weak call:c];} driver:self.ownedResizeDriver?:[DWNativeResizeDriver new] clock:^uint64_t{return mach_absolute_time();} worker:^(DWJob job){dispatch_async(queue,job);} main:^(DWJob job){dispatch_async(dispatch_get_main_queue(),job);}];
+    self.resize=[[DWResizeCoordinator alloc]initWithCommand:^NSDictionary *(NSDictionary *c){return [weak resizeCall:c];} driver:self.ownedResizeDriver?:[DWNativeResizeDriver new] clock:^uint64_t{return mach_absolute_time();} worker:^(DWJob job){dispatch_async(queue,job);} main:^(DWJob job){dispatch_async(dispatch_get_main_queue(),job);}];
     self.resize.enabled=YES;self.resize.changed=^{Desktop *d=weak;if(d.resize.failure)d.statusText=d.resize.failure;
         for(NSDictionary *w in [d call:@{@"op":@"snapshot"}][@"windows"]){LiveSource *source=d.sources[w[@"window"]];id state=w[@"source"];if(source&&[state isKindOfClass:NSDictionary.class]&&state[@"capture_revision"]==NSNull.null)[source clearSample];if(!source||![state isKindOfClass:NSDictionary.class]||![state[@"observation_known"]boolValue])continue;
             CGRect observed=jsonRect(state[@"observed_rect"]);source.router.bounds=CFBridgingRelease(CGRectCreateDictionaryRepresentation(observed));
@@ -793,6 +807,35 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     self.resizeKeyMonitor=[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent *(NSEvent *event){if(event.keyCode==53&&weak.resize&&![weak.resize canRemove:nil]){[weak.resize cancel];return nil;}return event;}];
     self.resizeGlobalKeyMonitor=[NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^(NSEvent *event){if(event.keyCode==53)[weak.resize cancel];}];
     }
+    if(self.configured)[self resizeCapability];
+}
+// native_resize_capability: DriftWM's sizing actions and the IPC resize write reach a native window only through the resize
+// coordinator, which a normal run has whenever its canvas is open under --experimental-native-resize and never otherwise.
+// main() says so before the config is read, since the binding table marks the actions that run here and a chord whose action
+// does not is never registered; the coordinator's creation says so again, after the scene load, which rebuilds the controller.
+// Without the flag nothing is sent, and every one of them answers as it always did.
+- (void)resizeCapability {
+    if(!self.experimentalResize)return;
+    NSString *status=self.statusText;
+    if(![self call:@{@"op":@"native_resize_capability",@"enabled":@YES}]){fprintf(stderr,"native_resize_capability: %s\n",self.statusText.UTF8String);self.statusText=status;}
+}
+// Is the resize transaction on record one a sizing action began, and certain? That one is the controller's: an action or an IPC
+// request that arrives while it runs reaches the controller, which continues, coalesces or refuses it as upstream does for a
+// window that still owes a configure. A resize the pointer began holds the canvas until it settles, as does every uncertain one.
+- (BOOL)sizing {
+    if(!self.resize||!self.sizeTransaction)return NO;
+    NSDictionary *transaction=asDict([self call:@{@"op":@"snapshot"}][@"native_resize"]);
+    return [transaction[@"transaction"]isEqual:self.sizeTransaction]&&![transaction[@"uncertain_mutation"]boolValue];
+}
+// The resize coordinator's commands. The native result of a sizing action's transaction is answered with that action's
+// continuation: upstream's placement, camera and restore point for the size the window took, or why it took none. The reply
+// then gets the tail of an action's reply, on a later turn of the main queue, once the coordinator has consumed its next effect.
+- (NSDictionary *)resizeCall:(NSDictionary *)command {
+    NSDictionary *reply=[self call:command];
+    if(!reply||!self.sizeTransaction||![command[@"op"]isEqual:@"native_resize_result"]||![command[@"transaction"]isEqual:self.sizeTransaction])return reply;
+    NSMutableDictionary *tail=[reply mutableCopy];[tail removeObjectForKey:@"effect"];__weak Desktop *weak=self;
+    dispatch_async(dispatch_get_main_queue(),^{Desktop *d=weak;if(!d||d.cleaning)return;NSString *failure=asString(tail[@"failure"]);if(failure)[d flashStatus:[@"Window not resized: " stringByAppendingString:failure]];[d applyReply:tail];});
+    return reply;
 }
 // Every normal run: the coordinator ticks camera flights, performs the controller's focus
 // requests on native windows and follows native focus the user moved. Probe, demo and
@@ -959,10 +1002,23 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(![self call:command]){fprintf(stderr,"layout_changed: %s\n",self.statusText.UTF8String);self.statusText=status;}
     [self publishState];
 }
+// A reply that began a native size transaction carries its effect: a sizing action's, an IPC resize's, or the attach of a
+// window whose rule names a size. It is the resize coordinator's to perform, which exists only under --experimental-native-resize;
+// without one nothing is consumed, and no such reply arrives, because the controller was never told a size can be delivered.
+// The transaction the effect names is the one -sizing knows as the controller's own. Returns the effect, or nil.
+- (NSDictionary *)consumeSize:(NSDictionary *)reply {
+    NSDictionary *sized=sizeEffect(reply);
+    if(sized){self.sizeTransaction=asNumber(sized[@"transaction"]);[self.resize consume:@{@"effect":sized}];}
+    return sized;
+}
 // Shared tail of every bound or scripted command: redraw, fly, persist, and the effects
 // the shell owns: quit, exec, a config reload, a pointer warp, a keyboard layout switch,
 // a window's close button and the launch of a stand-in's application.
 - (void)applyReply:(NSDictionary *)reply {
+    NSDictionary *sized=[self consumeSize:reply];
+    // The navigation coordinator reads "effect" as a focus request. A reply that lists "effects" keeps its focus request there:
+    // its "effect" is a size transaction's, or null without one, and is kept from that reading.
+    if(reply[@"effect"]&&(sized||[reply[@"effects"]isKindOfClass:NSArray.class])){NSMutableDictionary *rest=[reply mutableCopy];[rest removeObjectForKey:@"effect"];reply=rest;}
     // A gesture reply says itself when frames are needed: a camera coasting after a swipe, or the edge pan under a move, is no flight.
     BOOL flight=asDict(reply[@"navigation"])!=nil||[reply[@"needs_frames"]isEqual:@YES];if(flight&&!self.navigation)self.flying=YES;
     // The reply's focus request, if any, is the coordinator's to perform on the native window.
@@ -1078,7 +1134,9 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // A hot corner's action is the controller's to pick and run: `action` is then only what
 // the status line reports and what decides whether a cycle session is held open.
 - (void)action:(NSString *)action output:(NSNumber *)output at:(CGPoint)point held:(BOOL)held corner:(NSString *)corner {
-    [self.resize cancel];if(self.resize&&![self.resize canRemove:nil])return;
+    // An action cancels a resize the pointer began and is dropped while that is unresolved. A sizing action's own transaction is
+    // not cancelled and drops nothing: the next action, a held grow-window's repeat among them, is the controller's to answer.
+    if(![self sizing]){[self.resize cancel];if(self.resize&&![self.resize canRemove:nil])return;}
     if(self.cleaning||!output)return;
     // Upstream's go-to-bookmark is silent on an unset name, so the bookmark table is asked first.
     NSString *name=[action hasPrefix:@"go-to-bookmark "]?[action substringFromIndex:15]:nil;
@@ -1372,7 +1430,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 - (NSData *)ipcLine:(NSData *)line subscribe:(BOOL *)subscribe event:(NSData *__autoreleasing *)event {
     if(self.cleaning)return ipcError(@"the canvas is closed");
     if(self.startupError)return ipcError(self.startupError);
-    if(self.resize&&![self.resize canRemove:nil])return ipcError(@"a native resize is pending");
+    // A request that arrives during a sizing action's transaction is the controller's to answer, as an action is.
+    if(self.resize&&![self.resize canRemove:nil]&&![self sizing])return ipcError(@"a native resize is pending");
     id request=[NSJSONSerialization JSONObjectWithData:line options:NSJSONReadingFragmentsAllowed error:nil];
     NSDictionary *command=request?@{@"op":@"ipc",@"output":[self viewOutput]?:NSNull.null,@"request":request,@"pointer":pointJSON(pointer())}:nil;
     if(!command||![NSJSONSerialization isValidJSONObject:command])return ipcError(@"invalid request");
@@ -1580,6 +1639,9 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     source.window=window;source.title=asString(info[(id)kCGWindowName])?:command[@"title"];source.resize=self.resize;
     // A new frame redraws only the outputs that show this window.
     if(source.composited){__weak Desktop *weak=self;NSNumber *logical=source.logical;source.presented=^{[weak.compositor contentChanged:logical];};}
+    // A window rule's size: the controller began its size transaction with the attach, and the coordinator performs it as it
+    // performs a sizing action's. Its result reaches the controller on a later turn of the main queue, after this method.
+    if(placed)[self consumeSize:reply];
     // A managed run captures on demand: -captureDemand starts the stream once the window has a placement.
     if(self.manager&&!self.resize)source.keepSample=YES;
     else if(![self startCapture:source size:source.buffer]){[self detach:source];return NO;}
@@ -1624,7 +1686,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // Its focus request, for a new window or for the one that follows a close, is the
 // coordinator's to perform on the native window or to answer focus_logical, like the
 // request of any other reply; a reply without one withdraws only work in flight for a
-// request the controller has dropped. Such a reply carries no other effect.
+// request the controller has dropped. Such a reply carries no other effect, but for the size transaction of a window whose
+// rule names a size, which -attach:logical:world:placed: hands to the resize coordinator itself.
 - (void)follow:(NSDictionary *)reply {
     NSDictionary *effect=asDict(reply[@"effect"]);[self.navigation perform:effect?@{@"effect":effect}:@{}];
     if(asDict(reply[@"navigation"])){if(!self.navigation)self.flying=YES;[self ensureFrames];}
@@ -1926,7 +1989,7 @@ int main(int argc,const char **argv) { @autoreleasepool {
         if(i>0&&!strcmp(argv[i],"--windowed")){if(windowed)return 64;windowed=YES;if(i+1<argc&&isdigit((unsigned char)argv[i+1][0])&&!parseWindowSize(argv[++i],&windowSize))return 64;continue;}
         filtered[count++]=argv[i];}filtered[count]=NULL;argc=count;argv=filtered;
 
-    if(argc==2&&!strcmp(argv[1],"--help")){puts("Infinify.app — macOS 26+ Apple Silicon native window canvas\nDefault: with Screen Recording access the canvas opens and every ordinary application window on screen lives on it: existing windows are adopted, a new one is placed by window_placement, a closed one leaves (or leaves a stand-in under session.suspend_on_close). Without that access the chooser is shown and nothing is captured.\n--manual: show the chooser first and capture only explicitly selected windows; no window is adopted automatically. Open canvas shows the saved world without adding one.\n--owned-resize-probe EMPTY_DIRECTORY [SCENARIO]: explicit noninteractive owned-fixture resize probe (live)\n--demo EMPTY_DIRECTORY: disposable interactive fixture, bounded to 60 seconds\n--demo-probe EMPTY_DIRECTORY: automated own-fixture E2E, no permission prompts\n--demo-probe-guard EMPTY_DIRECTORY: own-fixture interruption regression (expected exit 2)\n--experimental-native-resize: experimental eight-handle size-only native resize\n--experimental-native-navigation: accepted and ignored; window navigation and native focus are part of every normal run\n--no-native-focus: window focus stays logical; no native window is activated or raised\n--no-hover-forwarding: pointer motion over a window is not delivered to its application; focus_follows_mouse and pick mode still follow the pointer\n--state ABSOLUTE_PATH: explicit persistent scene file (default Application Support/Infinify/scene.json)\n--socket ABSOLUTE_PATH: IPC socket of a normal run (default Application Support/Infinify/infinify.sock)\n--windowed [WIDTHxHEIGHT]: open the canvas at launch in one ordinary window (default 1200x800, at least 960x480) with no global shortcuts\n--config ABSOLUTE_PATH: DriftWM config file of a normal run (default $XDG_CONFIG_HOME/infinify/config.toml, else ~/.config/infinify/config.toml; DriftWM's built-in defaults when it is missing); read again whenever it changes\n--super CHORD: the physical keys of DriftWM's super/mod, a +-joined subset of ctrl|alt|cmd (default ctrl+alt)\nmsg [--json] [--socket PATH] COMMAND ...: DriftWM-style IPC client for the running app; opens no window\n--source DIR SECONDS NONCE: internal disposable child only\nKeys and pointer gestures are DriftWM's bindings from the config file: ctrl is Control, alt is Option, super (mod) is the --super chord. The status line shows the pointer, view, pan and bookmark chords registered, and each toolbar tooltip its own action's. With no config file and --super ctrl+alt the registered chords are:\n  Drag or two-finger scroll on empty canvas, Control-Option-drag or -scroll anywhere, three-finger swipe: pan; a released pan coasts (navigation.drift). Wheel or two-finger pinch on empty canvas, Control-Option-wheel or -pinch anywhere, three-finger pinch: anchored zoom (max 1x).\n  Option-drag on a window: world move/snap; add Shift: cluster. Held at the view's edge, a move pans the canvas under the window (navigation.edge_pan).\n  Trackpad gestures are DriftWM's [gestures] bindings: four-finger swipe: the nearest window that way. Four-finger hold: center the focused window. Four-finger pinch in / out: zoom-to-fit / home toggle. Three-finger tap, then three-finger swipe on a window: move it.\n  macOS takes three- and four-finger touches for its own gestures first: turn off Mission Control, App Expose, the full-screen swipe, Launchpad, Show Desktop and three-finger drag in System Settings for the canvas to receive them. Infinify changes no setting.\n  View actions animate one view's camera only (toolbar Home, Fit, -, 1:1, + or global shortcuts while the canvas is open; held zoom, pan and nudge keys repeat):\n  Control-Option-A: home toggle (origin at 1:1, again to return). Control-Option-W: zoom-to-fit toggle.\n  Control-Option-Equals / Control-Option-Minus: zoom in / out. Control-Option-0 or Control-Option-Z: zoom 1:1.\n  Control-Option-Command-arrows: pan the view under the pointer. Control-Option-Shift-arrows: nudge the focused window.\n  Control-Option-1 to 4: fly to bookmark 1 to 4. Control-Option-Shift-1 to 4: set it.\n  Window navigation flies the camera and focuses the window, natively when Infinify has Accessibility access (toolbar Center, Previous, Next):\n  Option-Tab / Option-Shift-Tab: cycle windows, most recently focused first; letting go of Option commits the choice.\n  Control-Option-arrows: the nearest window in that direction. Control-Option-C: center the focused window. Control-Option-X: center the window under the pointer.\n  A click on a window gives it canvas focus and starts its native focus, then the click is forwarded; a click on empty canvas unfocuses. Focusing a canvas window in its own application is followed.\n  Pointer motion over a window is delivered to its application; with focus_follows_mouse = true it also focuses that window without raising it, a screen-pinned one before the canvas beneath it and never a widget.\n  Below [zoom] interact_min (off by default) a window on the canvas is one target: a click flies to it, a drag moves it, and no click, scroll or motion reaches its application. A screen-pinned window and a widget are not picked and keep their pointer.\n  Control-Option-Command-drag: center-nearest by pointer, DriftWM's swipe; the direction is taken 16 points from the press.\n  Control-Option-Return: exec-terminal ($TERMINAL, else a new Terminal window). Control-Option-D: exec-launcher ($LAUNCHER, else Apps).\n  Control-Option-Command-Shift-arrows: send-to-output, the focused window to the display on that side (a world move; nothing with one display).\n  Control-Option-L: DriftWM's lock binding. Its swaylock is a Linux program: where that is not installed the displays are put to sleep instead, and macOS asks for the password as its Lock Screen setting says.\n  DriftWM's volume, brightness and media key defaults run Linux programs too: without those installed the keys stay with macOS.\n  Control-Option-Q: close-window. The focused window's own close button is pressed through Accessibility; a focused placeholder is dismissed.\nThe fixture modes (--demo*, --owned-resize-*) read no config and keep Option-drag pan, Command-wheel and pinch zoom and Control-Option-drag move; they take no trackpad touches.\nAn unbound click, drag or scroll on a window (left, right or middle button) is forwarded only to its selected, freshly validated source.\nNative keyboard/IME remain with the real app. Control-Option-Escape (until a binding takes that chord), Control-Option-Command-Shift-Q or Quit exits.\nResize status explains unavailable native layout resizing. No SIP/settings changes.");return 0;}
+    if(argc==2&&!strcmp(argv[1],"--help")){puts("Infinify.app — macOS 26+ Apple Silicon native window canvas\nDefault: with Screen Recording access the canvas opens and every ordinary application window on screen lives on it: existing windows are adopted, a new one is placed by window_placement, a closed one leaves (or leaves a stand-in under session.suspend_on_close). Without that access the chooser is shown and nothing is captured.\n--manual: show the chooser first and capture only explicitly selected windows; no window is adopted automatically. Open canvas shows the saved world without adding one.\n--owned-resize-probe EMPTY_DIRECTORY [SCENARIO]: explicit noninteractive owned-fixture resize probe (live)\n--demo EMPTY_DIRECTORY: disposable interactive fixture, bounded to 60 seconds\n--demo-probe EMPTY_DIRECTORY: automated own-fixture E2E, no permission prompts\n--demo-probe-guard EMPTY_DIRECTORY: own-fixture interruption regression (expected exit 2)\n--experimental-native-resize: experimental size-only native resize: eight handles on the focused window, and DriftWM's grow-window, shrink-window, fit-window, fit-window-snapped, fill-window and msg resize WIDTH HEIGHT on a canvas window, which without it answer not implemented; a window rule's size is then asked of a new window too\n--experimental-native-navigation: accepted and ignored; window navigation and native focus are part of every normal run\n--no-native-focus: window focus stays logical; no native window is activated or raised\n--no-hover-forwarding: pointer motion over a window is not delivered to its application; focus_follows_mouse and pick mode still follow the pointer\n--state ABSOLUTE_PATH: explicit persistent scene file (default Application Support/Infinify/scene.json)\n--socket ABSOLUTE_PATH: IPC socket of a normal run (default Application Support/Infinify/infinify.sock)\n--windowed [WIDTHxHEIGHT]: open the canvas at launch in one ordinary window (default 1200x800, at least 960x480) with no global shortcuts\n--config ABSOLUTE_PATH: DriftWM config file of a normal run (default $XDG_CONFIG_HOME/infinify/config.toml, else ~/.config/infinify/config.toml; DriftWM's built-in defaults when it is missing); read again whenever it changes\n--super CHORD: the physical keys of DriftWM's super/mod, a +-joined subset of ctrl|alt|cmd (default ctrl+alt)\nmsg [--json] [--socket PATH] COMMAND ...: DriftWM-style IPC client for the running app; opens no window\n--source DIR SECONDS NONCE: internal disposable child only\nKeys and pointer gestures are DriftWM's bindings from the config file: ctrl is Control, alt is Option, super (mod) is the --super chord. The status line shows the pointer, view, pan and bookmark chords registered, and each toolbar tooltip its own action's. With no config file and --super ctrl+alt the registered chords are:\n  Drag or two-finger scroll on empty canvas, Control-Option-drag or -scroll anywhere, three-finger swipe: pan; a released pan coasts (navigation.drift). Wheel or two-finger pinch on empty canvas, Control-Option-wheel or -pinch anywhere, three-finger pinch: anchored zoom (max 1x).\n  Option-drag on a window: world move/snap; add Shift: cluster. Held at the view's edge, a move pans the canvas under the window (navigation.edge_pan).\n  Trackpad gestures are DriftWM's [gestures] bindings: four-finger swipe: the nearest window that way. Four-finger hold: center the focused window. Four-finger pinch in / out: zoom-to-fit / home toggle. Three-finger tap, then three-finger swipe on a window: move it.\n  macOS takes three- and four-finger touches for its own gestures first: turn off Mission Control, App Expose, the full-screen swipe, Launchpad, Show Desktop and three-finger drag in System Settings for the canvas to receive them. Infinify changes no setting.\n  View actions animate one view's camera only (toolbar Home, Fit, -, 1:1, + or global shortcuts while the canvas is open; held zoom, pan and nudge keys repeat):\n  Control-Option-A: home toggle (origin at 1:1, again to return). Control-Option-W: zoom-to-fit toggle. Control-Option-Shift-W: the same over the focused window's snap cluster.\n  Control-Option-Equals / Control-Option-Minus: zoom in / out. Control-Option-0 or Control-Option-Z: zoom 1:1.\n  Control-Option-Command-arrows: pan the view under the pointer. Control-Option-Shift-arrows: nudge the focused window.\n  Control-Option-1 to 4: fly to bookmark 1 to 4. Control-Option-Shift-1 to 4: set it.\n  Window navigation flies the camera and focuses the window, natively when Infinify has Accessibility access (toolbar Center, Previous, Next):\n  Option-Tab / Option-Shift-Tab: cycle windows, most recently focused first; letting go of Option commits the choice.\n  Control-Option-arrows: the nearest window in that direction. Control-Option-C: center the focused window. Control-Option-X: center the window under the pointer.\n  A click on a window gives it canvas focus and starts its native focus, then the click is forwarded; a click on empty canvas unfocuses. Focusing a canvas window in its own application is followed.\n  Pointer motion over a window is delivered to its application; with focus_follows_mouse = true it also focuses that window without raising it, a screen-pinned one before the canvas beneath it and never a widget.\n  Below [zoom] interact_min (off by default) a window on the canvas is one target: a click flies to it, a drag moves it, and no click, scroll or motion reaches its application. A screen-pinned window and a widget are not picked and keep their pointer.\n  Control-Option-Command-drag: center-nearest by pointer, DriftWM's swipe; the direction is taken 16 points from the press.\n  Control-Option-Return: exec-terminal ($TERMINAL, else a new Terminal window). Control-Option-D: exec-launcher ($LAUNCHER, else Apps).\n  Control-Option-Command-Shift-arrows: send-to-output, the focused window to the display on that side (a world move; nothing with one display).\n  Control-Option-L: DriftWM's lock binding. Its swaylock is a Linux program: where that is not installed the displays are put to sleep instead, and macOS asks for the password as its Lock Screen setting says.\n  DriftWM's volume, brightness and media key defaults run Linux programs too: without those installed the keys stay with macOS.\n  Control-Option-Q: close-window. The focused window's own close button is pressed through Accessibility; a focused placeholder is dismissed.\nThe fixture modes (--demo*, --owned-resize-*) read no config and keep Option-drag pan, Command-wheel and pinch zoom and Control-Option-drag move; they take no trackpad touches.\nAn unbound click, drag or scroll on a window (left, right or middle button) is forwarded only to its selected, freshly validated source.\nNative keyboard/IME remain with the real app. Control-Option-Escape (until a binding takes that chord), Control-Option-Command-Shift-Q or Quit exits.\nResize status explains unavailable native layout resizing. No SIP/settings changes.");return 0;}
     BOOL child=argc==5&&!strcmp(argv[1],"--source"),demo=argc==3&&!strcmp(argv[1],"--demo"),guard=argc==3&&!strcmp(argv[1],"--demo-probe-guard"),probe=argc==3&&!strcmp(argv[1],"--demo-probe"),state=argc==3&&!strcmp(argv[1],"--state");
     if(argc!=1&&!child&&!demo&&!probe&&!guard&&!state)return 64;
     if((experimental||resize)&&(child||probe||guard))return 64;
@@ -1941,6 +2004,8 @@ int main(int argc,const char **argv) { @autoreleasepool {
     NSString *dir=[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/Infinify"];
     if(state){desktop.statePath=@(argv[2]);if(!desktop.statePath.isAbsolutePath)return 64;if(!socket)[NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:nil];}
     else {if(![NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:nil])return 2;desktop.statePath=[dir stringByAppendingPathComponent:@"scene.json"];}
+    // Before the config: with --experimental-native-resize its binding table counts DriftWM's sizing actions among those that run here.
+    [desktop resizeCapability];
     // Before the scene: the config decides what a load restores.
     desktop.configured=YES;desktop.configPath=config?@(config):nil;desktop.superChord=chord?@(chord):nil;[desktop loadConfig:YES];
     [desktop loadScene:desktop.statePath];

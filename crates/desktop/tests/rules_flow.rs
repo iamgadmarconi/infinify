@@ -1397,7 +1397,10 @@ fullscreen = true
 "#,
     );
     // The frame keeps the window's own size, centered where the rule says.
-    appear(&mut h, 1, "app.sized", "S", (400.0, 300.0));
+    // This shell never said it can deliver a size, so none is asked.
+    let reply = appear(&mut h, 1, "app.sized", "S", (400.0, 300.0));
+    assert!(reply.get("transaction").is_none() && reply.get("effects").is_none());
+    assert_eq!(h.snapshot()["native_resize"], Value::Null);
     assert_eq!(h.world(1), rect(-200.0, -150.0, 400.0, 300.0));
     let rule = h.rule(1);
     assert_eq!(rule["size"], json!([800, 600]));
@@ -1408,6 +1411,176 @@ fullscreen = true
         h.read(json!({"Resize":{}})),
         json!({"Size":{"width":400,"height":300}})
     );
+    // Nor of a shell that says it cannot.
+    assert_eq!(
+        h.ok(json!({"op":"native_resize_capability","enabled":false})),
+        json!({})
+    );
+    let reply = appear(&mut h, 2, "app.sized", "S", (400.0, 300.0));
+    assert!(reply.get("transaction").is_none() && reply.get("effects").is_none());
+    assert_eq!(h.snapshot()["native_resize"], Value::Null);
+    assert_eq!(h.world(2), rect(-200.0, -150.0, 400.0, 300.0));
+    assert_eq!(h.rule(2)["not_applied"], json!(["size", "fullscreen"]));
+}
+
+/// Answer one resize effect as the adapter would: the window is found with
+/// `size`, at a native origin no world frame may read.
+fn resized(
+    h: &mut Host,
+    effect: &Value,
+    outcome: &str,
+    attempted: bool,
+    size: (f64, f64),
+) -> Value {
+    let frame = rect(NATIVE.0, NATIVE.1, size.0, size.1);
+    let requested = if effect["requested"].is_null() {
+        json!({"width":0.0,"height":0.0})
+    } else {
+        effect["requested"].clone()
+    };
+    h.ok(json!({"op":"native_resize_result","transaction":effect["transaction"],"effect_id":effect["effect_id"],"identity":effect["identity"],"generation":effect["generation"],"result":{"outcome":outcome,"ax_error":0,"mutation_attempted":attempted,"observed":true,"requested":requested,"actual_ax":frame,"actual_cg":frame}}))
+}
+/// The size transaction an `attach` reply began: `transaction`, and its effect
+/// as the one entry of `effects`, which is also the slot's pending effect.
+fn sized_by_rule(h: &mut Host, reply: &Value) -> Value {
+    let effects = reply["effects"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{reply}"));
+    assert_eq!(effects.len(), 1, "{reply}");
+    assert_eq!(effects[0]["op"], "observe_resize_source", "{reply}");
+    assert_eq!(reply["transaction"], effects[0]["transaction"], "{reply}");
+    assert_eq!(h.snapshot()["native_resize"]["pending_effect"], effects[0]);
+    effects[0].clone()
+}
+
+// Upstream's size arm of a new toplevel's first commit, under a shell that can
+// deliver a size. The 400 x 300 window is placed with its center on the rule's
+// `position`, (0, 0), and is then asked for 800 x 600 around that center: the
+// top-left moves by half the difference, to (-400, -300).
+#[test]
+fn a_size_rule_is_asked_of_a_new_window_when_the_shell_can_deliver_a_size() {
+    let scratch = Scratch::new();
+    let mut h = running(
+        &scratch,
+        r#"
+[[window_rules]]
+app_id = "app.sized"
+size = [800, 600]
+position = [0, 0]
+fullscreen = true
+preserve_aspect_ratio = true
+
+[[window_rules]]
+app_id = "app.sized-widget"
+size = [800, 600]
+position = [3000, 0]
+widget = true
+
+[[window_rules]]
+app_id = "app.sized-pin"
+size = [800, 600]
+pinned_to_screen = true
+"#,
+    );
+    assert_eq!(
+        h.ok(json!({"op":"native_resize_capability","enabled":true})),
+        json!({})
+    );
+    let reply = appear(&mut h, 1, "app.sized", "S", (400.0, 300.0));
+    // The arrival is what it was: placed, focused, flown to.
+    assert_eq!(reply["window"], 1);
+    assert_eq!(reply["adopted"], false);
+    assert_eq!(reply["effect"]["op"], "focus_native_window");
+    assert_eq!(reply["effect"]["window"], 1);
+    assert_eq!(reply["navigation"]["animating"], true);
+    assert_eq!(reply["dirty"], true);
+    // And one size transaction began. Nothing is written before the window
+    // has answered.
+    let read = sized_by_rule(&mut h, &reply);
+    assert_eq!(read["window"], 1);
+    assert_eq!(h.world(1), rect(-200.0, -150.0, 400.0, 300.0));
+    // `size` was asked; the two fields nothing applies are still named.
+    assert_eq!(
+        h.rule(1)["not_applied"],
+        json!(["fullscreen", "preserve_aspect_ratio"])
+    );
+
+    // A second ruled window while that size is owed: one transaction at a
+    // time and nothing queued, so it maps at its own size and says so.
+    let second = appear(&mut h, 2, "app.sized", "S", (400.0, 300.0));
+    assert!(second.get("transaction").is_none() && second.get("effects").is_none());
+    assert_eq!(second["effect"]["window"], 2);
+    assert_eq!(h.world(2), rect(-200.0, -150.0, 400.0, 300.0));
+    assert_eq!(
+        h.rule(2)["not_applied"],
+        json!(["size", "fullscreen", "preserve_aspect_ratio"])
+    );
+    assert_eq!(h.snapshot()["native_resize"]["window"], 1);
+
+    // The shell's part: the baseline read, the setter, the final read.
+    let setter = resized(&mut h, &read, "observed", false, (400.0, 300.0))["effect"].clone();
+    assert_eq!(setter["op"], "resize_native_window");
+    assert_eq!(setter["requested"], json!({"width":800.0,"height":600.0}));
+    let last = resized(&mut h, &setter, "applied", true, (800.0, 600.0))["effect"].clone();
+    assert_eq!(last["op"], "observe_resize_source");
+    assert_eq!(
+        resized(&mut h, &last, "observed", false, (800.0, 600.0))["effect"],
+        Value::Null
+    );
+    assert_eq!(h.snapshot()["native_resize"]["phase"], "complete");
+    assert_eq!(h.world(1), rect(-400.0, -300.0, 800.0, 600.0));
+    assert_eq!(
+        h.read(json!({"Resize":{"window":1}})),
+        json!({"Size":{"width":800,"height":600}})
+    );
+    assert_eq!(h.world(2), rect(-200.0, -150.0, 400.0, 300.0));
+
+    // A window that maps with the rule's size already needs nothing delivered.
+    let reply = appear(&mut h, 3, "app.sized", "S", (800.0, 600.0));
+    assert!(reply.get("transaction").is_none() && reply.get("effects").is_none());
+    assert_eq!(h.world(3), rect(-400.0, -300.0, 800.0, 600.0));
+    assert_eq!(
+        h.rule(3)["not_applied"],
+        json!(["fullscreen", "preserve_aspect_ratio"])
+    );
+
+    // A widget and a screen-pinned window are never asked, by rule as by
+    // hand, whether or not they have the rule's size already: `size` stays
+    // under `not_applied` for both.
+    for (wid, app, size) in [
+        (4, "app.sized-widget", (400.0, 300.0)),
+        (5, "app.sized-pin", (400.0, 300.0)),
+        (6, "app.sized-widget", (800.0, 600.0)),
+        (7, "app.sized-pin", (800.0, 600.0)),
+    ] {
+        let reply = appear(&mut h, wid, app, "S", size);
+        assert!(
+            reply.get("transaction").is_none() && reply.get("effects").is_none(),
+            "{app}: {reply}"
+        );
+        assert_eq!(
+            h.window(wid)["world_rect"]["size"],
+            rect(0.0, 0.0, size.0, size.1)["size"]
+        );
+        assert_eq!(h.rule(wid)["not_applied"], json!(["size"]), "{app}");
+    }
+    assert_eq!(h.window(4)["widget"], true);
+    assert!(h.pinned(5).is_object());
+    assert_eq!(h.snapshot()["native_resize"]["phase"], "complete");
+
+    // A window that takes over a slot keeps the slot's frame whatever its rule
+    // says of `size`, as upstream's adopted window does: nothing is asked.
+    h.ok(json!({"op":"remove_source","window":2,"identity":identity(2),"keep_placeholder":true}));
+    let reply = appear(&mut h, 9, "app.sized", "S", (400.0, 300.0));
+    assert_eq!(reply["window"], 2);
+    assert_eq!(reply["adopted"], true);
+    assert!(reply.get("transaction").is_none() && reply.get("effects").is_none());
+    assert_eq!(h.world(2), rect(-200.0, -150.0, 400.0, 300.0));
+    assert_eq!(
+        h.rule(2)["not_applied"],
+        json!(["size", "fullscreen", "preserve_aspect_ratio"])
+    );
+    assert_eq!(h.snapshot()["native_resize"]["phase"], "complete");
 }
 
 #[test]

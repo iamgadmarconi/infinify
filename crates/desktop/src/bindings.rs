@@ -26,7 +26,7 @@
 //!
 //! A default binding that runs a program this Mac does not have is replaced by
 //! its macOS equivalent or left out; see `default_commands`.
-use super::actions::{action_string, runs_here};
+use super::actions::action_string;
 use super::default_commands::{Equivalent, SearchPath, equivalent, program};
 use super::*;
 use driftwm_core::config::{
@@ -558,7 +558,7 @@ impl Controller {
                 "combo":bound.combo,
                 "chord":format!("{}{}", chord.symbols(), key_label(bound.sym)),
                 "repeat":action.is_repeatable() && stalled.is_none(),
-                "implemented":runs_here(action),
+                "implemented":self.runs(action),
             });
             if substitute.is_some() {
                 entry["upstream"] = json!(action_string(bound.action));
@@ -688,7 +688,7 @@ impl Controller {
                 "kind":kind,
                 "action":action.map(action_string),
                 "combo":combo,
-                "implemented":action.map(runs_here),
+                "implemented":action.map(|action| self.runs(action)),
             });
             // The speeds the bound gesture scales by ride along with it.
             if let (Some(binding), Value::Object(settings)) =

@@ -91,7 +91,7 @@ All three reply alike:
 - `fired` is `null`, or `{"action","error"}` when this event fired a threshold
   action: `action` is the exact action string dispatched, such as
   `center-nearest down-left`, and `error` is `null` or the action command's own
-  refusal, such as `action not implemented on macOS yet: zoom-to-fit-snapped`. A
+  refusal, such as `action not implemented on macOS yet: toggle-fullscreen`. A
   refused action is reported here and is not a controller error, because an
   error would undo the gesture's own state and the action would fire again on
   the next update.
@@ -226,8 +226,10 @@ Control+Option) and `mod_key = "super"`. "Runs" means the action executes in
 this build; the others are dispatched and refused by name until their actions
 exist. The `implemented` flag of each binding in the begin reply is the live
 answer, and `gesture_flow`'s `the_default_table_on_a_mac` reads it for every
-row: upstream binds 22 gestures, of which 13 run here, 7 are refused by name
-and the 2 resizes are claimed and inert.
+row: upstream binds 22 gestures, of which 14 run here, 6 are refused by name
+and the 2 resizes are claimed and inert. Four of the six, the two `fit-window`
+and the two `fit-window-snapped` pinches, run once the shell has sent
+`native_resize_capability`, which leaves the two `toggle-fullscreen` pinches.
 
 | Input | Upstream binding | Context | Action | Here |
 | --- | --- | --- | --- | --- |
@@ -244,9 +246,9 @@ and the 2 resizes are claimed and inert.
 | 4-finger pinch out | `4-finger-pinch-out` | anywhere | `home-toggle` | runs |
 | ⌃⌥ 3-finger pinch in | `mod+3-finger-pinch-in` | anywhere | `zoom-to-fit` | runs |
 | ⌃⌥ 3-finger pinch out | `mod+3-finger-pinch-out` | anywhere | `home-toggle` | runs |
-| ⌃⌥ 4-finger pinch in | `mod+4-finger-pinch-in` | anywhere | `zoom-to-fit-snapped` | refused: not implemented |
-| ⌥ 2-finger pinch in or out | `alt+2-finger-pinch-in`, `-out` | on-window | `fit-window` | refused: not implemented |
-| ⌥⇧ 2-finger pinch in or out | `alt+shift+2-finger-pinch-in`, `-out` | on-window | `fit-window-snapped` | refused: not implemented |
+| ⌃⌥ 4-finger pinch in | `mod+4-finger-pinch-in` | anywhere | `zoom-to-fit-snapped` | runs |
+| ⌥ 2-finger pinch in or out | `alt+2-finger-pinch-in`, `-out` | on-window | `fit-window` | runs with `--experimental-native-resize`, else refused: [SIZES.md](SIZES.md#the-gate) |
+| ⌥⇧ 2-finger pinch in or out | `alt+shift+2-finger-pinch-in`, `-out` | on-window | `fit-window-snapped` | the same |
 | ⌥ 3-finger pinch in or out | `alt+3-finger-pinch-in`, `-out` | on-window | `toggle-fullscreen` | refused: not implemented |
 | 4-finger hold | `4-finger-hold` | anywhere | `center-window` | runs, on release |
 | ⌃⌥ 3-finger hold | `mod+3-finger-hold` | anywhere | `center-window` | the same |

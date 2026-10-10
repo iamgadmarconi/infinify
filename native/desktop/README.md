@@ -165,6 +165,19 @@ the one window it focuses, and nothing else.
   swipe on a window moves it the same way, edge pan included. Control-Option-Shift with an arrow key
   (`nudge-window <direction>`) moves the focused logical window by
   `navigation.nudge_step` world points. None of this moves a native window.
+- Window sizing. Control-Option-Shift-W (`zoom-to-fit-snapped`; also
+  Control-Option with a four-finger pinch in) frames the focused window's snap
+  cluster and nothing else, and a second press returns, as Fit does for every
+  window. It moves a camera only and runs in every normal run. DriftWM's
+  actions that give a window a new size are a different matter: `fit-window`
+  (Control-Option-M, Option-middle-click, Option with a two-finger pinch on a
+  window), `fit-window-snapped` (the same with Shift), and `fill-window`,
+  `grow-window <direction>` and `shrink-window <direction>` (no default
+  binding), with `Infinify msg resize WIDTH HEIGHT`, run only when the app is
+  started with `--experimental-native-resize`. Without the flag they answer
+  not implemented, as before, and their keys are not registered.
+  [Window sizing actions](#window-sizing-actions) has what each does and the
+  plain fact that none of them has resized a real window yet.
 - Cursor edge pan, off by default: Control-Option-E (`toggle-cursor-pan`)
   turns it on or off for the run, and `navigation.edge_pan.cursor_pan = true`
   starts with it on. While it is on, a bare pointer resting within
@@ -595,7 +608,8 @@ slot's frame and pin whatever its rule says of `position` and
 | `opacity` | the window is drawn at that opacity, focused or not, and `msg screenshot window` captures it alone at it |
 | `decoration`, `border_width`, `border_color`, `border_color_focused`, `corner_radius`, `shadow` | what the window is drawn with in place of the `[decorations]` values, see [Rendering](#rendering) |
 | `suspend_on_close`, `restore_windows` | see [Managed windows](#managed-windows) |
-| `size`, `fullscreen` | kept with the window and not applied: native resize is gated and there is no fullscreen. The window keeps its own size, and a `position` centres that size |
+| `size` | in a default launch kept with the window and not applied: the window keeps its own size, and a `position` centres that size. In an app started with `--experimental-native-resize` a new canvas window is asked for that size once it is placed, around the same centre ([Window sizing actions](#window-sizing-actions)); a widget, a pinned window and a window that takes over a saved slot are never asked. No rule has resized a real window |
+| `fullscreen` | kept with the window and not applied: there is no fullscreen |
 | `blur`, `preserve_aspect_ratio`, `pass_keys`, `pass_mouse`, `layer_order` | kept with the window; nothing is drawn or withheld for them |
 
 A file with a key the grammar does not know inside a rule is refused whole with
@@ -741,7 +755,11 @@ covered by its scenarios and not run in the app with a live window:
   again until it has left the screen and come back.
 - With `--experimental-native-resize` no handle is drawn or hit on a widget or
   a pinned window, and a handle of the focused window that lies under a pinned
-  window is neither drawn nor hit.
+  window is neither drawn nor hit. The [sizing actions](#window-sizing-actions)
+  that flag turns on leave both alone as well: with a widget or a pinned
+  window focused they do nothing, `msg resize WIDTH HEIGHT` answers
+  `this window has no canvas size to set: …`, and a rule's `size` is not asked
+  of either.
 
 ### What was run for rules, widgets and pins
 
@@ -1513,6 +1531,7 @@ only while a canvas panel is open; `--windowed` registers none.
 | --- | --- | --- |
 | ⌃⌥A | `mod+a` | `home-toggle` |
 | ⌃⌥W | `mod+w` | `zoom-to-fit` |
+| ⌃⌥⇧W | `mod+shift+w` | `zoom-to-fit-snapped` |
 | ⌃⌥= / ⌃⌥- | `mod+equal` / `mod+minus` | `zoom-in` / `zoom-out` (repeat) |
 | ⌃⌥0, ⌃⌥Z | `mod+0`, `mod+z` | `zoom-reset` |
 | ⌃⌥⌘ arrows | `mod+ctrl+<arrow>` | `pan-viewport <direction>` (repeat) |
@@ -1533,24 +1552,29 @@ only while a canvas panel is open; `--windowed` registers none.
 | ⌃⌥⇧⌘Q | `mod+ctrl+shift+q` | `quit` |
 | ⌃⌥Esc | none (the shell's own) | exit, until a binding takes the chord |
 
-Those are 41 of upstream's 57 default key bindings. ⌥Tab and ⌥⇧Tab are taken
+Those are 42 of upstream's 57 default key bindings. ⌥Tab and ⌥⇧Tab are taken
 from every application while a canvas panel is open; rebind or unbind
-`cycle-windows` in the config file to give them back. The rest are not
-registered, so their chords stay with the applications:
+`cycle-windows` in the config file to give them back. ⌃⌥⇧W is newly taken the
+same way: `zoom-to-fit-snapped` used not to run, so its chord used to stay with
+the applications. The rest are not registered, so their chords stay with the
+applications:
 
-- 4 whose action does not run on macOS yet: ⌃⌥F
-  (`toggle-fullscreen`), ⌃⌥M and ⌃⌥⇧M (`fit-window`,
-  `fit-window-snapped`) and ⌃⌥⇧W (`zoom-to-fit-snapped`). Bound in a config
-  file they are skipped the same
+- 3 whose action does not run in a default launch: ⌃⌥F
+  (`toggle-fullscreen`), and ⌃⌥M and ⌃⌥⇧M (`fit-window`,
+  `fit-window-snapped`). Bound in a config file they are skipped the same
   way, without a message; `Infinify msg action` answers the not-implemented
-  error for each.
+  error for each. With `--experimental-native-resize` the two fits do run, so
+  ⌃⌥M and ⌃⌥⇧M are registered as well (44 of 57), and so is any key a config
+  binds to `fill-window`, `grow-window` or `shrink-window`; see
+  [Window sizing actions](#window-sizing-actions).
 - 8 on media keys (volume, mute, brightness, play, next, previous), which macOS
   handles itself, and 4 on keys a Mac keyboard lacks (`Print`, `shift+Print`,
   `XF86AudioPause`, `XF86AudioStop`).
 
 **Key repeat.** A held hot key whose action upstream marks repeatable
 (`zoom-in`, `zoom-out`, `pan-viewport`, `nudge-window`, `cycle-windows` and
-`spawn` among those that run) fires again after `[input.keyboard] repeat_delay` (200 ms) and then
+`spawn` among those that run, and `grow-window` and `shrink-window` with
+`--experimental-native-resize`) fires again after `[input.keyboard] repeat_delay` (200 ms) and then
 `repeat_rate` (25) times a second. It stops when the key is released, when
 another hot key is pressed, when the chord's modifiers are let go, and on Return
 to desktop or quit. A held `spawn` binding therefore starts its command again
@@ -1693,7 +1717,8 @@ context before `anywhere`.
 | ⌥ left drag | move the logical window (`alt+left`) | nothing |
 | ⌥⇧ left drag | move its cluster (`alt+shift+left`) | nothing |
 | ⌥ / ⌥⇧ right drag | `resize-window` / `resize-window-snapped`: only with `--experimental-native-resize`, else a status note | nothing |
-| ⌥ / ⌥⇧ / ⌃⌥ middle | `fit-window` / `fit-window-snapped` / `toggle-fullscreen`: not implemented, the status line says so | nothing |
+| ⌥ / ⌥⇧ middle | `fit-window` / `fit-window-snapped`: only with `--experimental-native-resize`, else not implemented and the status line says so | nothing |
+| ⌃⌥ middle | `toggle-fullscreen`: not implemented, the status line says so | nothing |
 | ⌃⌥ left drag | pan (`mod+left`) | pan |
 | ⌃⌥ two-finger scroll / wheel | pan / zoom (`mod+trackpad-scroll`, `mod+wheel-scroll`) | pan / zoom |
 | ⌃⌥⌘ left drag | `center-nearest` by pointer swipe (`mod+ctrl+left`): one step to the nearest window the way the drag pulls the canvas, taken 16 points from the press | the same |
@@ -1958,11 +1983,12 @@ Applied now:
 | `[navigation.edge_pan] cursor_pan`, `cursor_zone` | cursor edge pan: on or off at launch (off), and its zone (20) |
 | `[gestures.*]`, `[gestures] swipe_threshold`, `pinch_in_threshold`, `pinch_out_threshold` | what a trackpad gesture does, see [Trackpad gestures](#trackpad-gestures) |
 | `[input.trackpad] enable` | whether gestures are dispatched at all, until `set-trackpad` says otherwise |
-| `[zoom] step`, `fit_padding` | `zoom-in` / `zoom-out`, `zoom-to-fit` and the zoom-out limit |
+| `[zoom] step`, `fit_padding` | `zoom-in` / `zoom-out`, `zoom-to-fit`, `zoom-to-fit-snapped` and the zoom-out limit |
+| `[navigation] resize_step` | the step of `grow-window` and `shrink-window` (20), which run only with `--experimental-native-resize`; see [Window sizing actions](#window-sizing-actions) |
 | `[zoom] step`, `mouse_speed` | a bound wheel zooms by `step ^ (lines / 2 × mouse_speed)`, animated |
 | `[zoom] trackpad_speed` | scales a pinch that zooms, of two fingers or more (1.0 by default) |
 | `[snap] enabled`, `gap`, `distance`, `break_force`, `corners`, `centers` | the logical window drag and its cluster |
-| `[snap] outer_gap`, `focus_placement`, `[[outputs]] focus_placement` | where window navigation and `send-to-output` park a window; an `[[outputs]]` entry is matched by display UUID, `windowed`, or `*` |
+| `[snap] outer_gap`, `focus_placement`, `[[outputs]] focus_placement` | where window navigation and `send-to-output` park a window; an `[[outputs]]` entry is matched by display UUID, `windowed`, or `*`. With `--experimental-native-resize`, `outer_gap` is also the inset of `fit-window` and `fill-window`, and `[snap] gap` the clearance `fill-window` keeps from other windows |
 | `[[outputs]] hot_corners` (`top_left`, `top_right`, `bottom_left`, `bottom_right`, `threshold`, `disable_while_dragging`) | [hot corners](#displays-hot-corners-layouts-and-autostart) |
 | `autostart` | commands run once at launch |
 | `[session] restore_camera`, `restore_bookmarks` | what a restart restores, see [Persistence](#persistence-and-lifecycle) |
@@ -1991,8 +2017,9 @@ without IPC: a command it starts reaches this instance with a plain
 `Infinify msg …`, whichever `--socket` the app was given.
 
 Read and validated by upstream's parser, then unused because the feature does
-not exist here: `[navigation] resize_step` and `touch_speed`, `[zoom]
-touch_speed`, `[input.keyboard]
+not exist here: `[navigation] touch_speed` (and `resize_step` in a launch
+without `--experimental-native-resize`), `[zoom] touch_speed`,
+`[input.keyboard]
 layout`, `variant`, `options`, `model`, `remember_layout_per_window`, `num_lock`
 and `caps_lock` (macOS owns the input sources and the lock keys), the rest of
 `[input.trackpad]` (macOS owns the device), `[input.mouse]`, `[input.touch]`,
@@ -2495,18 +2522,21 @@ answers as it always does: `state`, `bookmark`, `move`, `debug-counters`, readin
 `focus` or `resize`, `action quit`, and the unknown and not-implemented replies.
 After Return to desktop every request answers `the
 canvas is closed`, after a failed scene load the load error, and while an
-experimental native resize is unresolved `a native resize is pending`.
+experimental native resize is unresolved `a native resize is pending`. That
+last refusal is for a resize the pointer began and for any resize left
+uncertain; while the size a [sizing action](#window-sizing-actions) asked for
+is on its way, requests are answered as usual.
 
 | Command | What it does now |
 | --- | --- |
-| `state` | Camera, zoom, the keyboard layout (the selected input source's name and short code), windows (id, bundle id as `app_id`, title, centre position, size, `is_widget`, `suspended` for a detached placeholder), `pinned` (each screen-pinned window with its display and its `position` and `size` in `pinned_to_screen` rule coordinates; such a window is not under `windows`), outputs (stable id as `name`, `active`) and the active bookmark. `fullscreen` and the layer lists are always empty. |
+| `state` | Camera, zoom, the keyboard layout (the selected input source's name and short code), windows (id, bundle id as `app_id`, title, centre position, size, `is_widget`, `suspended` for a detached placeholder, and `mode`: `Normal`, or `Fit` or `Fill` while a [fit or fill](#window-sizing-actions) can still be undone; the readable form prints neither of those two, `--json` both), `pinned` (each screen-pinned window with its display and its `position` and `size` in `pinned_to_screen` rule coordinates; such a window is not under `windows` and has no `mode`), outputs (stable id as `name`, `active`) and the active bookmark. `fullscreen` and the layer lists are always empty. |
 | `subscribe` | Keep the connection and print the state now and again after every change, until the app exits. See [Event stream](#event-stream). |
 | `layout [--short]` | The selected keyboard input source: its name, or with `--short` its first language code. Empty until the app has reported one, which it does at launch. |
 | `camera [X Y]` | Read the view centre, or fly the camera there at the current zoom. |
 | `zoom [LEVEL]` | Read the zoom, or animate to a level about the view centre. The level is clamped to the range the zoom shortcuts use and the reply is the level applied. |
 | `focus [APP_ID] [--id N]` | Read the focused window. Setting makes a window the logical focus and, unless it is already wholly in view, flies the camera to it as upstream does: at 1:1 for a window with a bound source (at the current zoom with `[zoom] reset_on_activation = false`), at the current zoom for a detached placeholder. A pinned window is focused and raised with no flight; a widget, which only `--id` reaches, answers `window #N is a widget and cannot be focused`. For a window with a bound source the app also performs the controller's focus request on the native window when native focus is allowed (see [Window navigation and native focus](#window-navigation-and-native-focus)); that has not been run. |
 | `move [X Y] [--id N]` | Read a window's centre, or move the logical window there (whole points). The native window is not touched. A move is refused while a gesture is active, when it would put the frame outside the 32-bit integer range every other request reads positions in, and for a pinned window (`this window has no canvas position to move: …`); a pinned window reads as the canvas point its pin shows. It is the one way to move a widget. |
-| `resize [WIDTH HEIGHT] [--id N]` | Read the size only. Setting one answers an error: native layout resize is not available yet, or, for a pinned window or a widget, upstream's `this window has no canvas size to set: …`. |
+| `resize [WIDTH HEIGHT] [--id N]` | Read the size. Setting one answers an error (`resize is not implemented on macOS yet: native layout resize is not available`) unless the app was started with `--experimental-native-resize`; a pinned window and a widget answer upstream's `this window has no canvas size to set: …` either way. With the flag it asks the native window for that size, keeps the window's centre where it is and answers with the size asked for, not the size the window ends up with; a detached placeholder is refused. See [Window sizing actions](#window-sizing-actions); no real window has been resized this way yet. |
 | `pin [on\|off] [--id N]` | Read whether a window is pinned to the screen, or pin or unpin it without moving it on screen. A live window only: a placeholder answers `stand-ins can't be pinned`. |
 | `opacity [VALUE] [--id N]` | Read the opacity a window is drawn at, or set it (0 to 1; outside that is refused, not clamped) until the window is gone. A live window only. |
 | `action SPEC...` | Run an upstream action string, below. |
@@ -2526,14 +2556,18 @@ and `relaunch` with no selector act on the focused window;
 `action` parses the full upstream action grammar with upstream's spelling: it
 is the grammar the config file's bindings use. These run:
 `pan-viewport <direction>`, `home-toggle`, `zoom-in`, `zoom-out`, `zoom-reset`,
-`zoom-to-fit`, `center-window`, `center-nearest <direction>`,
+`zoom-to-fit`, `zoom-to-fit-snapped`, `center-window`, `center-nearest <direction>`,
 `cycle-windows forward|backward`, `focus-center`, `go-to-bookmark NAME`,
 `set-bookmark NAME`, `move-to-bookmark NAME`, `toggle-pin-to-screen`,
 `nudge-window <direction>`, `close-window`,
 `suspend-window`, `send-to-output <direction>`,
 `send-cursor-to-output <direction>`, `switch-layout next|prev|INDEX`,
 `toggle-cursor-pan`, `set-trackpad on|off|toggle`, `exec COMMAND`,
-`spawn COMMAND`, `exec-terminal`, `exec-launcher`, `reload-config` and `quit`. Over the socket `cycle-windows` is always one
+`spawn COMMAND`, `exec-terminal`, `exec-launcher`, `reload-config` and `quit`.
+`fit-window`, `fit-window-snapped`, `fill-window`, `grow-window <direction>`
+and `shrink-window <direction>` run only in an app started with
+`--experimental-native-resize` ([Window sizing actions](#window-sizing-actions));
+otherwise they are among the not-implemented ones below. Over the socket `cycle-windows` is always one
 committed step, where upstream keeps the cycle open if a modifier happens to be
 down, and `focus-center` uses the real pointer's position at that moment.
 Every action but `cycle-windows` first ends a cycle in progress, and every
@@ -2752,16 +2786,21 @@ thresholds feel under a hand, and what macOS does with the same fingers at the
 same time are all unverified, as is the two-finger pinch now that it goes
 through the gesture table. macOS's own three- and four-finger gestures must be
 turned off in System Settings by the user for the canvas to receive those
-finger counts cleanly; Infinify changes no setting. Seven of upstream's default
-gesture bindings name four actions that do not run here yet
-(`zoom-to-fit-snapped`, `fit-window`, `fit-window-snapped`,
-`toggle-fullscreen`), its two resize gestures are gated, and an unbound gesture
+finger counts cleanly; Infinify changes no setting. Six of upstream's default
+gesture bindings name three actions that do not run in a default launch
+(`fit-window` and `fit-window-snapped`, which run with
+`--experimental-native-resize`, and `toggle-fullscreen`, which does not run at
+all), its two resize gestures are gated, and an unbound gesture
 is not forwarded to the application under it. The gestures that reach window
 navigation (the four-finger swipe and hold, and any `cycle-windows` a config
 binds) have run only as synthetic event streams against the controller.
-Four of upstream's default key bindings and three of its default mouse
-bindings (window actions) do not
-run here yet, and its two resize bindings need the experimental flag. Window
+Three of upstream's default key bindings and three of its default mouse
+bindings (window actions: `toggle-fullscreen`, `fit-window` and
+`fit-window-snapped`) do not run in a default launch, and its two resize
+bindings need the experimental flag. That flag also turns on `fit-window` and
+`fit-window-snapped`, two of those three keys and two of those three mouse
+bindings, with the other sizing actions; none of them has resized a real
+window yet, see [Window sizing actions](#window-sizing-actions). Window
 navigation and native focus have their own list of limits under
 [Window navigation and native focus](#window-navigation-and-native-focus):
 above all, native focus has never been exercised live, and a click reaches
@@ -2789,10 +2828,11 @@ layers and a window's opacity have been drawn only offscreen, by a throwaway
 tool that read frames back from the shell's renderer, never seen in the app's
 own panel
 ([Window rules](#window-rules-widgets-and-pinned-windows) lists their limits).
-The IPC surface is a subset of DriftWM's. Seven upstream actions parse but are
-not implemented (`grow-window`, `shrink-window`, `zoom-to-fit-snapped`,
-`toggle-fullscreen`, `fit-window`, `fit-window-snapped`, `fill-window`);
-`resize` is read-only. An IPC
+The IPC surface is a subset of DriftWM's. Six upstream actions parse but are
+not implemented in a default launch (`grow-window`, `shrink-window`,
+`toggle-fullscreen`, `fit-window`, `fit-window-snapped`, `fill-window`), and
+with `--experimental-native-resize` only `toggle-fullscreen` is left;
+`resize` is read-only unless the app runs with that flag. An IPC
 focus is logical focus and camera navigation, plus a native focus request for a
 window with a bound source that no run has yet performed, and
 an IPC move is a logical world move that never moves the native window. Nested
@@ -2873,9 +2913,13 @@ bound to one of these actions runs it through the same dispatch: the pointer is
 where the gesture began, and whether a modifier is down is read as the gesture
 fires.
 
-`center-window` is upstream's `RestoreFillElseReset`. Infinify has no fill
-yet, so there is never a stored view to restore and the action always resets
-the zoom to 1.
+`center-window` is upstream's `RestoreFillElseReset`, and `focus-center` the
+same: a window still filled by `fill-window` is flown to at the camera and
+zoom its fill ran in, and any other at zoom 1. A pick-mode click does the same
+for a filled window whose fill view is at or above `[zoom] interact_min`. A window can only be filled in
+an app started with `--experimental-native-resize`
+([Window sizing actions](#window-sizing-actions)); in a default launch there
+is never a stored view to restore and both actions always reset the zoom to 1.
 
 ### Cycling and hold-to-commit
 
@@ -3016,7 +3060,10 @@ send none. The shell then does what the reply says:
   It is a press like any other first: it ends an open cycle and a trackpad
   gesture in progress and stops every flight and drift. A
   left click released on the same display flies to the window at 1:1 (`pick`),
-  which leaves pick mode; dragged more than 5 points it moves the window instead,
+  which leaves pick mode (a window filled by `fill-window`, which needs
+  `--experimental-native-resize`, goes back to the view it was filled in
+  instead, when that view is itself above the threshold); dragged more than 5
+  points it moves the window instead,
   from where the drag crossed that distance and without its cluster. That move
   is a window drag like any other: held at the display's edge it pans the
   canvas under the window ([Camera motion](#camera-motion)). A scroll
@@ -3292,10 +3339,15 @@ committing it; logical focus stays.
   at the hover; a held Option-Tab cycle stops sloppy focus instead of being
   ended by it; a trackpad gesture in progress, and a scroll for the 50 ms
   before its drift launches, keep focus and motion from following the pointer,
-  where upstream's hover runs on; a pick always lands at 1:1, because there is
-  no fill view to return to; pick mode is per display.
-- Fullscreen, fit-window and modal windows do not exist here, so none of
-  upstream's special cases for them apply. A widget or a screen-pinned window
+  where upstream's hover runs on; a pick lands at 1:1 in every default launch,
+  where no fill view exists to return to (behind
+  `--experimental-native-resize` a filled window returns to its fill view, if
+  that view is at or above the threshold); pick mode is per display.
+- Fullscreen and modal windows do not exist here, so none of upstream's
+  special cases for them apply; a fitted or filled window exists only behind
+  `--experimental-native-resize`, and the filled window's view restore above
+  is the one navigation case for them that was brought over, for
+  `center-window`, `focus-center` and a pick. A widget or a screen-pinned window
   is focused where it is and never flown to, by a completed click or by a
   followed native focus; a hover focuses a pinned window where it is and
   passes over a widget, and neither is a pick target
@@ -3398,10 +3450,412 @@ logical focus alone; the status note for missing Accessibility;
 `auto_navigate_on_click` and `reset_on_activation` in the app; anything drawn;
 more than one display.
 
+## Window sizing actions
+
+DriftWM's sizing actions are controller policy here: which size, which place,
+which camera and what a second press gives back are upstream's rules, set out
+in the [sizing contract](../../crates/desktop/SIZES.md). One of them,
+`zoom-to-fit-snapped`, moves a camera and nothing else, and runs in every
+normal run. The others end by giving a real window a new size. That goes
+through the [experimental native resize](#experimental-native-resizing) below
+and nothing else, so they exist only in an app started with
+`--experimental-native-resize`.
+
+**No real window has been resized by any of this.** The policy has run in
+controller scenarios in which the test plays the native side, and the built app
+has been driven over its socket only as far as the answers a detached
+placeholder gets. [What has been run for sizing](#what-has-been-run-for-sizing)
+has the detail.
+
+### The flag
+
+| Launch | What runs |
+| --- | --- |
+| default | `zoom-to-fit-snapped`. Everything else in this section answers exactly as it did before this work: `action not implemented on macOS yet: <name>`, and for `msg resize WIDTH HEIGHT` `resize is not implemented on macOS yet: native layout resize is not available`. Keys bound to those actions are not registered. |
+| `--experimental-native-resize` | also `fit-window`, `fit-window-snapped`, `fill-window`, `grow-window`, `shrink-window` and `msg resize WIDTH HEIGHT`, beside the orange handles the flag already turned on; and a [window rule](#window-rules-widgets-and-pinned-windows)'s `size` is asked of a new window that matches it. |
+
+All of them act on canvas windows. With a widget or a screen-pinned window
+focused the five sizing actions and `zoom-to-fit-snapped` do nothing, as
+upstream's do; `msg resize WIDTH HEIGHT` on one answers
+`this window has no canvas size to set: it is pinned, fullscreen, a widget, or not on screen yet`
+in either launch; and neither is in the way of a fill, pushed by
+`fit-window-snapped` or framed by `zoom-to-fit-snapped`.
+
+There is no other switch, no config key for it, and the flag is not the
+default. The fixture modes (`--demo*`, `--owned-resize-*`) get none of it, with
+or without the flag.
+
+### What each one does
+
+| Control | Action | Runs | What it does |
+| --- | --- | --- | --- |
+| ⌃⌥⇧W; ⌃⌥ with a four-finger pinch in | `zoom-to-fit-snapped` | always | Frames the focused window's snap cluster: the windows joined to it edge to edge at `[snap] gap`, placeholders included, with `[zoom] fit_padding` around them. A second press returns to the view left, as Fit does. With no window focused, nothing. |
+| ⌃⌥M; ⌥ middle click on a window; ⌥ with a two-finger pinch on a window | `fit-window` | flag | Asks the focused window for the size of the display's view less `[snap] outer_gap` on every side, keeps its centre where it is, flies that display's camera to it at 1:1 and focuses it. A second press gives back the size it had before it was fitted or filled, around the centre of the frame the fit asked for, wherever the window has been moved by then; no camera moves. |
+| ⌃⌥⇧M; ⌥⇧ middle click; ⌥⇧ with a two-finger pinch | `fit-window-snapped` | flag | The same, and the windows snapped to it are pushed outward by the distance each of its edges travels, then brought back by the second press. |
+| none (upstream suggests `mod+g`) | `fill-window` | flag | Grows the focused window in place into the free space of the display that shows it: up to `outer_gap` from the edge of the view and `[snap] gap` from every other canvas window, pulling back an edge that sticks out. No camera moves. A second press puts it back where it was, at the size it had before it was filled or fitted. |
+| none | `grow-window <direction>`, `shrink-window <direction>` | flag | Moves the named edge of the focused window outward, or inward, by `[navigation] resize_step` (20) points; the opposite edge stays where it is. A diagonal moves two edges. Held, the key repeats. |
+| `Infinify msg resize WIDTH HEIGHT [--id N]` | IPC resize | flag | Asks one window for that size and keeps its centre. The reply echoes the size asked for. |
+
+A config file binds any of them to a key, a mouse button, a trackpad gesture
+or a hot corner in DriftWM's grammar, and all of those arrive through the same
+action dispatch as `Infinify msg action`. None of them, `zoom-to-fit-snapped`
+included, writes anything on the status line when it runs; a refusal is shown
+there.
+
+With the flag, by the code:
+
+- The action's reply starts a size transaction on the window, the same one a
+  handle drag runs: a read of the window's size, one Accessibility size change,
+  a read of what the window then is. The canvas keeps the old frame until that
+  answer arrives. The frame, the place, the neighbours' shift and the fit or
+  fill mode are then written for the size the window **actually** took: a
+  window that clamps the request, or refuses it, is committed at what it
+  became. Only the size is ever asked of the native window; its position on
+  the desktop is not touched.
+- `fit-window` flies the camera and asks for native focus at once, before the
+  window has answered. If the resize then fails, the camera has still gone to
+  the window.
+- A fitted window is measured by the frame the fit asked for, not by the size
+  the window took. So a window that accepts less than the fit asked, or
+  refuses it, still goes back to where it was at the second press, and the
+  windows `fit-window-snapped` pushed come back with it.
+- The size a second press gives back is the one the window had before a fit or
+  a fill last changed it. A fit pressed on a filled window, or a fill after a
+  filled window was moved, still comes back to the size from before the fill.
+  A resize by handle, by step or by `msg resize` starts that over.
+- While a size is on its way, further actions and `msg` requests are answered.
+  A held `grow-window` key keeps stepping: each repeat walks on from the size
+  already asked for, and the window is asked for the latest one when it
+  answers. Anything that cannot share the one transaction (a step on other
+  edges, a fit, a fill, sizing another window) answers
+  `a native resize of window N is still pending`. So does the controller for
+  a drag of that window, which the shell does not send: the press is dropped,
+  as the next item says. A step walked back to the size the window already has
+  sends nothing, and ends fit and fill at once.
+- A pointer press on the canvas, a scroll, a pinch and the start of a trackpad
+  gesture are dropped until the size has settled, and no input is forwarded to
+  an application meanwhile, pointer motion included, and sloppy focus stands
+  still, as during a handle drag; unlike there, the press does not cancel it. Escape asks to cancel it, as it does a handle drag: a size not yet sent
+  is dropped, one already sent is still read back and committed.
+- A window whose size no longer matches what the canvas holds (it was resized
+  in its own application during this run) fails the first read, and the status
+  line says `Window not resized: baseline size differs from committed logical
+  size`. A window the resize driver will not touch is left alone without a
+  message, and later attempts on it answer `source resize unsupported`.
+- On a detached placeholder `fit-window`, `fit-window-snapped` and
+  `fill-window` do nothing and answer `ok`, as upstream's do for a stand-in;
+  `grow-window` and `shrink-window` answer `<name> needs a live window: a
+  stand-in has no native size to change`, and `msg resize W H` answers `this
+  window has no native size to set: it is a stand-in or has no live window`.
+  Upstream resizes the stand-in's own frame for those two; here nothing could
+  deliver that size when the window comes back.
+- During a pointer drag of a window every sizing action is refused (`a window
+  is under an interactive move or resize`).
+- `Infinify msg --json state` reports each window's `mode`: `Normal`, `Fit` or
+  `Fill`. Moving a filled window (a drag, `nudge-window`, `msg move`,
+  `send-to-output`) ends its fill, so the next `fill-window` fills again
+  instead of restoring; a fitted window stays fitted when moved, as upstream's
+  does. A resize by handle, by step or by `msg resize` ends both. Neither is
+  saved: after a restart a fitted window is an ordinary window of that size.
+- `center-window` and `focus-center` on a window still filled return to the
+  camera and zoom the fill ran in, instead of 1:1, and so does a pick-mode
+  click when that zoom is at or above `[zoom] interact_min`.
+- A window pinned to the screen after it was fitted or filled keeps that mode,
+  as upstream's does: nothing sizes it while it is pinned, `state` lists it
+  under `pinned` without a mode, and once unpinned the second press still
+  gives its size back. `send-to-output` ends the fill of a canvas window and
+  leaves a pinned one's alone.
+- A window rule's `size`: a window that appears by itself and matches such a
+  rule is placed at its own size, and its attach reply then starts the same
+  size transaction for the rule's size, around the centre it was placed at.
+  The first of several such windows that appear while a size is on its way is
+  asked and the others keep their size (`rule.not_applied` in the snapshot
+  still names `size` for them), at launch too; so does a window that maps
+  during a drag. A widget, a pinned window, a window that takes over a saved
+  slot and a window attached from the chooser are never asked.
+
+### What changes for someone who used the previous build
+
+In a default launch:
+
+- ⌃⌥⇧W is now a registered global hot key while a canvas panel is open
+  (`zoom-to-fit-snapped`), where the chord used to stay with the applications.
+  Unbind it in the config file (`"mod+shift+w" = "none"`) to give it back.
+- Control-Option with a four-finger pinch in now frames the focused window's
+  cluster, where it showed a not-implemented note.
+- Nothing else: the five sizing actions and the `msg resize` write answer
+  byte for byte as before, which a controller test compares against the
+  replies captured from the previous tree, and which the built app showed over
+  its socket.
+
+With `--experimental-native-resize`:
+
+- ⌃⌥M and ⌃⌥⇧M are registered global hot keys, and Option-middle-click or
+  Option with a two-finger pinch on a window now asks that real window to
+  change size.
+- An action or a `msg` request that arrives while a sizing action's size is on
+  its way reaches the controller. For a resize the pointer began they are
+  still dropped, or answered `a native resize is pending`, and an action still
+  cancels it, as before.
+- A press on the canvas during a sizing action's transaction is dropped
+  without cancelling it.
+- A config whose window rule names a `size` now asks a matching new window to
+  take that size; before, and still without the flag, the size was only
+  recorded.
+
+### Limits of sizing
+
+- **Unproven on a real window.** Everything in "With the flag, by the code"
+  above is controller scenarios and compiled, read shell code. No Accessibility
+  size change has been made by a sizing action, and none of the native resize
+  path's own open questions (below) is answered by this work.
+- One window at a time. Upstream sizes any number of windows at once; here
+  there is one transaction, and a second sizing action is continued, replaced
+  or refused as described, never queued.
+- A native window's minimum and maximum size are unknown before asking. The
+  request is sent as computed and the window clamps it; for a fit that leaves
+  the window at the fit's top-left with the size it accepted.
+- A sizing action's transaction skips the check a handle drag makes before it
+  begins, that the window's own extent still equals the observed one. The
+  driver's root-only guard before the size change, and the controller's
+  comparison of the first read with the committed size, stand in for it.
+- A window resized in its own application keeps its old size on the canvas in
+  a flagged run, as before, so a sizing action on it fails as described.
+  Nothing in this work brings the canvas frame back in line with such a
+  window.
+- Escape cancels a sizing action's transaction from any application, since the
+  monitor is global; whether that monitor fires at all is as unproved as it is
+  for a handle drag.
+- Quitting while a size is owed waits for the window's answer (`Quit pending:
+  waiting for native resize result`), as for a handle drag.
+- A window that appears by itself begins a size transaction from its own
+  attach reply only for a window rule's `size`; the shell hands that reply to
+  the same hook as an action's, before it starts the window's capture. No
+  rule has matched a window in the app, so this is compiled and read only. A
+  window attached from the chooser is never asked.
+- A widget and a screen-pinned window are never sized: not by an action, not
+  by `msg resize`, not by a rule. Upstream sizes a pinned window in screen
+  space and applies a rule's `size` to both.
+- The shell tells the controller it can resize on the flag alone, before the
+  canvas, and so the resize coordinator, exists. No window has a live source
+  until the canvas is open, so no transaction can begin in between.
+- Fullscreen is not here: `toggle-fullscreen` still answers not implemented.
+
+### What has been run for sizing
+
+On 2026-10-10, macOS 27.2, Apple Silicon, in this tree:
+
+- `./scripts/build-app.sh`: built and ad-hoc signed; nothing launched.
+- `cargo fmt -p driftwm-desktop -- --check` and
+  `cargo clippy -p driftwm-desktop --all-targets -- -D warnings`: clean.
+- `cargo test -p driftwm-desktop --test sizes_flow --test native_resize_flow
+  --test view_actions_flow --test navigation_actions_flow --test ipc_flow
+  --test controller_flow --test lifecycle_flow --test gesture_flow --test
+  motion_flow --test config_flow`: all passed, `sizes_flow` with 21 scenarios.
+  They cross the exported C ABI and JSON; the test answers every resize effect
+  with a made-up native result. Read from the controller library by a
+  throwaway program, the default key table lists 45 bindings, of which 41 run
+  without the capability and 43 with it. (That was the sizing work by itself,
+  before it was built together with window rules, rendering and the pointer
+  policy; [below](#what-has-been-run-for-sizing-with-everything-else-built-in)
+  are the numbers of the combined build.)
+- `./tests/e2e/desktop-navigation.sh`: PASS. It runs the navigation
+  coordinator headless against the Rust library; that coordinator is
+  unchanged, and the script does not go through the shell's reply hook.
+- Two launches of the built app as `--windowed 1100x700` on a private scene
+  (three seeded detached placeholders, 640x420 at (200, 150), 900x600 at
+  (1500, -300) and 560x380 at (-900, 700)), a private config (`resize_step =
+  40`, `[snap] gap = 12`, `outer_gap = 12`, `[zoom] fit_padding = 80`) and a
+  private socket, driven by a script through `Infinify msg`. Neither had
+  Screen Recording access, so no real window was on the canvas, and a guard in
+  the script would have ended the run before any action had one been. Nothing
+  from them is saved as evidence.
+
+  Without the flag, after `msg focus --id 1`:
+
+  ```
+  $ msg action fit-window
+  error: action not implemented on macOS yet: fit-window
+  $ msg action fit-window-snapped
+  error: action not implemented on macOS yet: fit-window-snapped
+  $ msg action fill-window
+  error: action not implemented on macOS yet: fill-window
+  $ msg action grow-window right
+  error: action not implemented on macOS yet: grow-window
+  $ msg action shrink-window right
+  error: action not implemented on macOS yet: shrink-window
+  $ msg resize --id 1 800 600
+  error: resize is not implemented on macOS yet: native layout resize is not available
+  ```
+
+  With `--experimental-native-resize`, the same requests on the same
+  placeholders:
+
+  ```
+  $ msg action fit-window
+  ok
+  $ msg action fit-window-snapped
+  ok
+  $ msg action fill-window
+  ok
+  $ msg action grow-window right
+  error: grow-window needs a live window: a stand-in has no native size to change
+  $ msg action shrink-window right
+  error: shrink-window needs a live window: a stand-in has no native size to change
+  $ msg resize --id 1 800 600
+  error: this window has no native size to set: it is a stand-in or has no live window
+  ```
+
+  The three `ok` answers changed nothing: `msg --json state` afterwards showed
+  window 1 at its seeded position and size with `"mode": "Normal"`. That the
+  answers differ from the unflagged run shows the app told the controller it
+  can resize, and that this survived the scene load.
+
+  In both launches, with window 2 moved beside window 1 at the snap gap (`msg
+  move --id 2 1302 -450`) and window 1 focused, `msg action
+  zoom-to-fit-snapped` took the view from camera `550 -318` at zoom 1 to
+  camera `976 -450` at zoom `0.6056701030927835`: the centre of the two
+  windows' bounding box, and (1100 - 160) / 1552, the third window left out. A
+  second one returned to `550 -318` at zoom 1. Both apps exited with status 0
+  on SIGTERM and removed their socket.
+
+Not run: any size transaction in the app. No window on those canvases had a
+live source, so no sizing action began one, the shell's hook handed nothing to
+the resize coordinator, and no native window was read or resized. Also unrun:
+`tests/e2e/desktop-resize.sh` (the resize coordinator's own headless
+regression; that file is unchanged), every hot key, mouse binding, trackpad
+gesture and hot corner that fires a sizing action, key repeat on
+`grow-window`, Escape during a transaction, the status notes, anything drawn,
+and more than one display.
+
+### What has been run for sizing with everything else built in
+
+The same day and machine (macOS 27.2, Apple Silicon), in one tree with window
+rules, widgets and pins, the Metal renderer and the pointer policy:
+
+- `./scripts/build-app.sh`: built and ad-hoc signed; nothing launched.
+- `cargo fmt -p driftwm-desktop -- --check` and
+  `cargo clippy -p driftwm-desktop --all-targets -- -D warnings`: clean.
+- `cargo test -p driftwm-desktop` for `sizes_flow`, `native_resize_flow`,
+  `pointer_flow`, `rules_flow`, `render_flow`, `gesture_flow`, `motion_flow`,
+  `navigation_actions_flow`, `platform_actions_flow`, `lifecycle_flow`,
+  `config_flow`, `ipc_flow`, `view_actions_flow`, `controller_flow`,
+  `navigation_flow` and `focus_cycle_flow`: all 214 scenarios passed,
+  `sizes_flow` with 30 and `rules_flow` with 22. The nine added to
+  `sizes_flow` and the one added to `rules_flow` are the joins: every sizing
+  action passing over a widget and a pinned window, a pin keeping a fit, fills,
+  snapped fits and `zoom-to-fit-snapped` seeing only the windows that snap,
+  the three refusals of a drag, a size still owed holding the pointer, a
+  pick's return to a fill view, centring past a pinned window, `send-to-output`
+  on a filled and on a pinned window, a resize drag elsewhere, and a rule's
+  `size` with the capability on. As before, the test answers every resize
+  effect with a made-up native result.
+- `./tests/e2e/desktop-navigation.sh`: PASS.
+- Two throwaway programs against the controller library, outside the
+  repository. One read the default tables: 45 key bindings, of which 42 run
+  without the capability and 44 with it; of the 35 action names of upstream's
+  grammar six are refused by name without it (`grow-window`, `shrink-window`,
+  `fit-window`, `fit-window-snapped`, `fill-window`, `toggle-fullscreen`) and
+  one with it (`toggle-fullscreen`). The other sent the same requests to the
+  tree as it was before the sizing work was merged into it and to the merged
+  one, and compared 168 replies and the saved scene file, with the capability never sent and again with it sent as
+  `false`, on a scene with a canvas window, a widget, a rule-pinned window
+  and a window whose rule names a `size`: the five sizing actions by
+  `action`, by IPC and with no output, the hot corner and the pinch bound to
+  `fit-window`, IPC `Resize` on each window, `begin_drag`, `begin_resize` and
+  `begin_native_resize` on each, `bindings`, `mouse_binding`, `State`,
+  `hover` and the snapshot. The raw replies were identical but for two
+  things: every `snapshot.windows[]` entry has `"mode": null`, and
+  `bindings` reports `zoom-to-fit-snapped` implemented. Neither program is in
+  the repository.
+- Five launches of the built app as `--windowed 1100x700` on the same seeded
+  scene (three detached placeholders), a private config (`resize_step = 40`,
+  `[snap] gap = 12`, `outer_gap = 12`, `[zoom] fit_padding = 80`) and a
+  private socket, driven by a script through `Infinify msg`. The first was
+  ended after a second by the script's own guard, which misread the state
+  reply; nothing had been asked of the app. The two below were then run, and
+  run once more after a last change to the rule-size path, with the same
+  answers line for line and the same screenshot byte for byte. None had
+  Screen Recording access,
+  so no real window was on the canvas, and the guard checked before any
+  sizing action that every window was one of the three placeholders. Nothing
+  from them is saved as evidence.
+
+  Without the flag (3 seconds each time): `state` listed the three placeholders;
+  `action center-nearest right` flew to the Browser placeholder (camera
+  `1950 -0`, focus `#2`); `action pan-viewport right` moved the camera to
+  `2050 -0`; `action zoom-to-fit` went to camera `750 -390` at zoom
+  `0.28484848484848485` and a second one back to `2050 -0` at zoom 1;
+  `pin --id 1 on` answered `stand-ins can't be pinned`, `opacity --id 1 0.5`
+  answered `no window with id 1` and `action toggle-pin-to-screen` answered
+  `ok`; and then
+
+  ```
+  $ msg action fit-window
+  error: action not implemented on macOS yet: fit-window
+  $ msg action fit-window-snapped
+  error: action not implemented on macOS yet: fit-window-snapped
+  $ msg action fill-window
+  error: action not implemented on macOS yet: fill-window
+  $ msg action grow-window right
+  error: action not implemented on macOS yet: grow-window
+  $ msg action shrink-window right
+  error: action not implemented on macOS yet: shrink-window
+  $ msg resize --id 1 800 600
+  error: resize is not implemented on macOS yet: native layout resize is not available
+  ```
+
+  With the Terminal placeholder moved one snap gap right of the Browser one
+  (`msg move --id 3 2692 110`) and the Browser one focused, `action
+  zoom-to-fit-snapped` took the view to camera `2236 -0` at zoom
+  `0.6385869565217391`: the centre of the two frames' bounding box and
+  (1100 - 160) / 1472, the third window left out. `msg screenshot` of that
+  view wrote a 1723 x 996 PNG, opened and looked at: the dot grid and the two
+  placeholders side by side, each a dark rounded tile with its bundle
+  identifier and a close mark, inside the padding. A second
+  `zoom-to-fit-snapped` returned to `2050 -0` at zoom 1.
+
+  With `--experimental-native-resize` (1 and 2 seconds), after `focus --id 1`:
+
+  ```
+  $ msg action fit-window
+  ok
+  $ msg action fit-window-snapped
+  ok
+  $ msg action fill-window
+  ok
+  $ msg action grow-window right
+  error: grow-window needs a live window: a stand-in has no native size to change
+  $ msg action shrink-window right
+  error: shrink-window needs a live window: a stand-in has no native size to change
+  $ msg resize --id 1 800 600
+  error: this window has no native size to set: it is a stand-in or has no live window
+  ```
+
+  The three `ok` answers changed nothing: `--json state` afterwards had every
+  window at its seeded position and size with `"mode": "Normal"`.
+  `zoom-to-fit-snapped` on the lone focused placeholder centred it (camera
+  `520 -360`, zoom 1) and returned, `center-nearest right` flew to the
+  Browser placeholder and `pin --id 1 on` answered `stand-ins can't be
+  pinned`. All four full launches exited with status 0 on SIGTERM and removed
+  their socket.
+
+**No live window existed in any of these launches, so no size transaction ran
+in the app**: no sizing action and no rule began one, the hook handed nothing
+to the resize coordinator, and no native window was read or resized. No rule
+was resolved there either (the config had none), no widget or pinned window
+existed, and no pointer event was sent, so everything in this section that
+joins sizing to rules, pins, the pointer and pick mode ran only in the
+controller scenarios. Still unrun as well: `tests/e2e/desktop-resize.sh`,
+every hot key, mouse binding, gesture and hot corner that fires a sizing
+action, key repeat, Escape during a transaction, and more than one display.
+
 ## Experimental native resizing
 
 `--experimental-native-resize` independently enables eight orange handles on the
-selected ordinary source. Handles use true projected world edges; viewport clipping
+selected ordinary source, and since the sizing milestone also DriftWM's
+[sizing actions](#window-sizing-actions), which run the same transaction
+without a drag. Handles use true projected world edges; viewport clipping
 does not invent resize edges. Shift/group resize is rejected. Default controls stay
 unchanged. Escape requests cancellation (the global observer does not suppress the
 native app's Escape); release ends the gesture. The OS must already permit event

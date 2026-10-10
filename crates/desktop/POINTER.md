@@ -98,7 +98,10 @@ while any of these holds the pointer, on any output:
   [edge pan](MOTION.md#edge-pan-while-a-window-is-dragged) it arms: a bound
   press's, a pick-mode press's, or the one a
   [move gesture](GESTURES.md#dispatch) installed;
-- a native resize transaction that has not drained;
+- a native resize transaction that has not drained, whoever began it: a
+  pointer's `begin_native_resize`, or the size a
+  [sizing action](SIZES.md#widgets-screen-pinned-windows-and-rules), an IPC
+  `Resize` or a window rule's `size` is still owed;
 - a drag pan whose button is down, upstream's `PanGrab`: a timed `pan` with
   `source: "drag"` until its `pan_end`, or until `cancel_navigation`, however
   long the pointer rests in between;
@@ -229,8 +232,10 @@ stand-in's `pinned` and `widget` from its placement.
 - **Drag anywhere moves it.** `begin_drag` needs no binding and never did; send
   it without `group` once the pointer is past the 5 point click slop, then
   `gesture_to` and `end_gesture` as for a bound move. A stand-in moves the same
-  way. It is a window drag like any other: installing it stops every flight
-  and coast, a `pointer` on `gesture_to` arms its
+  way. It is a window drag like any other: it is refused for a window whose
+  [sizing action](SIZES.md#other-interactions) is still owed its size
+  (`a native resize of window N is still pending`), installing it stops every
+  flight and coast, a `pointer` on `gesture_to` arms its
   [edge pan](MOTION.md#edge-pan-while-a-window-is-dragged), it has a serial
   of its own, so a trackpad move gesture never drives it, and it ends with
   its window if that closes.
@@ -242,6 +247,17 @@ stand-in's `pinned` and `widget` from its placement.
   no longer in pick mode at the release (zoomed in while the button was down)
   nothing happens and the reply is `{"navigation":null,"dirty":false}`. An
   unknown window or output is refused.
+- **A filled window returns to its fill view.** A window still
+  [filled](SIZES.md#fill-window) is not centered: the pick flies back to the
+  camera and zoom its fill ran in, as `center-window` does for it, provided
+  that zoom is itself at or above the threshold. `fill-window` also runs below
+  the threshold, and restoring such a view would leave the output in pick
+  mode with the click never reaching the window, a mode and not a navigation:
+  upstream's `resolve_pick` asks `fill_restore_view` first and centers at
+  zoom 1 when the stored zoom is below `zoom.interact_min`, and so does this.
+  A stored view that no longer applies (another output, a moved window, a
+  usable area of another shape) is the plain pick too. A fill needs
+  `--experimental-native-resize`, so without it every pick is the plain one.
 - **Bindings.** Pass `"pick":true` to `mouse_binding` when the pointer is over
   a pick target. A press is then the pick's unless a held-modifier binding
   claims it: a bare button bound in `[mouse.on-window]` answers
@@ -344,9 +360,6 @@ does nothing, where upstream had already fired.
   compositor's own and nothing reports it back. Until an echo or an answer
   arrives, logical focus and the native keyboard can differ, as after any
   focus request here.
-- **`pick` cannot return a filled window to its fill view**: `fill-window` is
-  not implemented, so that branch of `resolve_pick` is not applied and a pick
-  always lands at zoom 1.
 - **The whole frame is the target.** Upstream keeps layer surfaces and a
   fullscreen window apart from hover focus and from pick targets, redirects
   hover focus to a modal child, and rejects a client's invisible resize
@@ -421,6 +434,15 @@ rectangle is asymmetric:
   a widget beside it, both `pick: false` with `input` passing and `forward`
   true, `pick` doing nothing with either, `begin_drag` refusing both, and the
   canvas window still dragged and picked;
+- in [`tests/sizes_flow.rs`](tests/sizes_flow.rs), where a fill can be made
+  (the test answers the resize effects itself; no native window is resized):
+  a pick of a window filled at zoom 1, from zoom 0.4 under a threshold of
+  0.5, flying back to the fill's camera and zoom where the plain pick would
+  park the camera 212 points away; a window filled at zoom 0.4 picked to
+  zoom 1 while `center-window` on it restores the 0.4 view; `hover` holding
+  the pointer, forwarding nothing and moving no focus, while a sizing action
+  is owed its size; and `begin_drag` refusing a widget, a pinned window and a
+  window owed its size, each in its own words, above and below the threshold;
 - `pointer_nearest` in five directions, at the 16 point threshold, on both
   sides of the diagonal ratio, and inside the dead zone, each reply compared
   with the `center-nearest` action's on an identical scene; and with a cycle

@@ -19,7 +19,9 @@
 // `AppliedWindowRule` and `effective_opacity`, upstream's own code. The
 // stacking rule is `Stage::enforce_stacking`, replayed on the scene. Native
 // frames already include their title bar, so chrome is zero. A rule's `size`
-// and `fullscreen` are recorded and never applied: native resize is gated.
+// is asked of a newly placed window through sizes.rs's `request_window_size`
+// when the shell can deliver one (`native_resize_capability`), and is recorded
+// and not applied otherwise; `fullscreen` is recorded and never applied.
 use super::actions::Outcome;
 use super::ipc::{
     OutputPinned, Reply, Response, WindowSelector, frame, internal_to_rule, readable,
@@ -31,6 +33,7 @@ use super::*;
 use driftwm_canvas::Placement;
 use driftwm_canvas::policy::PixelSize;
 use driftwm_core::config::{AppliedWindowRule, DecorationMode, PassList, effective_opacity};
+use std::collections::BTreeSet;
 
 /// Upstream pin_window's only refusal: a keybinding ignores it.
 const NO_OUTPUT: &str = "no output to pin to";
@@ -53,6 +56,9 @@ pub(crate) struct Policy {
     pub(crate) applied: BTreeMap<WindowId, AppliedWindowRule>,
     /// The screen-pinned windows. Saved with their slots.
     pub(crate) pins: BTreeMap<WindowId, Pin>,
+    /// The windows whose rule's `size` was asked of them as they mapped, or
+    /// who had it already. Never saved.
+    pub(crate) sized: BTreeSet<WindowId>,
 }
 
 /// A decoration mode under upstream's config spelling: the snapshot's
@@ -73,10 +79,11 @@ fn pass_name<C>(list: &PassList<C>) -> &'static str {
     }
 }
 /// The applied rule under upstream's field names. `not_applied` names the set
-/// fields that change nothing here.
-fn rule_json(rule: &AppliedWindowRule) -> Value {
+/// fields that change nothing here. `sized` says the rule's `size` was asked
+/// of the window when it mapped.
+fn rule_json(rule: &AppliedWindowRule, sized: bool) -> Value {
     let not_applied: Vec<&str> = [
-        (rule.size.is_some(), "size"),
+        (rule.size.is_some() && !sized, "size"),
         (rule.fullscreen.is_some(), "fullscreen"),
         (rule.preserve_aspect_ratio, "preserve_aspect_ratio"),
         (!matches!(rule.pass_keys, PassList::None), "pass_keys"),
@@ -275,9 +282,64 @@ impl Controller {
             Some(rule) => self.policy.applied.insert(window, rule),
             None => self.policy.applied.remove(&window),
         };
+        self.policy.sized.remove(&window);
         if let Some(Arrival::Pin { pin, .. }) = arrival {
             self.policy.pins.insert(window, pin);
         }
+    }
+    /// Upstream's size arm of a new toplevel's first commit: a rule's `size`
+    /// is asked of the window as it maps. Upstream configures the client
+    /// first and places it on the follow-up commit; here the window is placed
+    /// at its own size and the rule's is then asked through
+    /// `request_window_size`, which keeps the frame's center, so a ruled
+    /// `position`, the placement policy and the arrival's flight aim at the
+    /// same point either way. `reply` is `settle_arrival`'s and gains the
+    /// size transaction when one began: `transaction`, and its effect as the
+    /// one entry of `effects`, because `effect` is the focus request there.
+    ///
+    /// Only a shell that can deliver a size is asked. A window that takes
+    /// over a slot keeps the slot's frame, as upstream's adopted window does.
+    /// A widget and a window the rule pinned are not canvas windows and are
+    /// never asked, whatever size they have, which is a gap: upstream's size
+    /// arm runs before its pin and widget arms. A size that cannot be asked
+    /// right now leaves the window mapped at its own size too: a drag or
+    /// another size transaction in progress (there is one slot, and nothing
+    /// is queued), or a window whose native resize is unsupported. In each of
+    /// those cases `rule.not_applied` keeps `size`; a canvas window that maps
+    /// with the rule's size already needs nothing.
+    pub(crate) fn size_by_rule(
+        &mut self,
+        window: WindowId,
+        output: Option<OutputId>,
+        arrival: Arrival,
+        mut reply: Value,
+    ) -> Value {
+        let size = self.policy.applied.get(&window).and_then(|r| r.size);
+        let (Some((width, height)), Arrival::Place { .. }, true) =
+            (size, arrival, self.sizes.capability)
+        else {
+            return reply;
+        };
+        if !self.on_canvas(window) {
+            return reply;
+        }
+        // A refusal must leave nothing half written, and never fails the map.
+        let mut next = self.clone();
+        let mut outcome = Outcome::default();
+        let size = [width.into(), height.into()];
+        if next
+            .request_window_size(window, output, size, &mut outcome)
+            .is_err()
+        {
+            return reply;
+        }
+        next.policy.sized.insert(window);
+        *self = next;
+        if let Some(mut began) = outcome.resize.filter(|r| r["effect"].is_object()) {
+            reply["transaction"] = began["transaction"].take();
+            reply["effects"] = json!([began["effect"].take()]);
+        }
+        reply
     }
     /// A pin changes which space a frame lives in, so it waits for a drag or
     /// resize to end, as `place_window` does.
@@ -615,6 +677,8 @@ impl Controller {
         let live = |id: &WindowId| !standins.contains(id) || sources.contains_key(id);
         self.policy.pins.retain(|id, _| live(id));
         self.policy.applied.retain(|id, _| live(id));
+        let applied = &self.policy.applied;
+        self.policy.sized.retain(|id| applied.contains_key(id));
         let order: Vec<WindowId> = self.scene.windows().iter().map(|w| w.id).collect();
         for id in &order {
             let snaps = self.on_canvas(*id);
@@ -736,7 +800,12 @@ impl Controller {
             let screen_rect = self.pinned_rect(window).map(|(_, rect)| rect);
             json!({"output":pin.output,"screen_rect":screen_rect})
         });
-        let rule = self.policy.applied.get(&window).map(rule_json);
+        let sized = self.policy.sized.contains(&window);
+        let rule = self
+            .policy
+            .applied
+            .get(&window)
+            .map(|rule| rule_json(rule, sized));
         (self.is_widget(window), json!(pinned), json!(rule))
     }
 }

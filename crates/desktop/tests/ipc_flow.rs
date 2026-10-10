@@ -877,7 +877,9 @@ fn action_strings_follow_upstream_grammar() {
     // those. toggle-cursor-pan runs too: tests/motion_flow.rs covers it. So
     // does set-trackpad: tests/gesture_flow.rs covers it. tests/rules_flow.rs
     // covers move-to-bookmark, toggle-pin-to-screen and the Opacity and Pin
-    // requests, tests/render_flow.rs the Screenshot request.
+    // requests, tests/render_flow.rs the Screenshot request. zoom-to-fit-snapped
+    // runs too, and the five actions that deliver a size run once the shell
+    // says it can: tests/sizes_flow.rs covers those. This shell has not.
     for (name, sample) in [
         ("fill-window", "fill-window"),
         ("fit-window", "fit-window"),
@@ -885,7 +887,6 @@ fn action_strings_follow_upstream_grammar() {
         ("grow-window", "grow-window up"),
         ("shrink-window", "shrink-window up"),
         ("toggle-fullscreen", "toggle-fullscreen"),
-        ("zoom-to-fit-snapped", "zoom-to-fit-snapped"),
     ] {
         let expected = format!("action not implemented on macOS yet: {name}");
         assert_eq!(refuse(json!(1), sample), expected);

@@ -19,6 +19,7 @@ mod render;
 mod resize_transaction;
 mod rules;
 mod settings;
+mod sizes;
 mod storage;
 mod view_actions;
 mod window_actions;
@@ -38,6 +39,7 @@ use resize_transaction::NativeResizeTransaction;
 pub use resize_transaction::{NativeResizeResult, ResizeOutcome};
 use rules::Policy;
 use settings::{CameraSeed, Settings};
+use sizes::Sizes;
 pub use view_actions::ViewDirection;
 use view_actions::{ViewReturn, pixel_size};
 pub use window_actions::ActivationCause;
@@ -248,6 +250,9 @@ pub struct Controller {
     /// The paths of the screenshot effects the shell has yet to answer,
     /// oldest first. Not saved.
     pending_screenshots: Vec<String>,
+    /// Fit and fill restore points, the sizing action in flight and whether
+    /// the shell can deliver a size at all. Ephemeral. See SIZES.md.
+    sizes: Sizes,
 }
 
 #[derive(Debug, Deserialize)]
@@ -298,6 +303,11 @@ pub enum Command {
         identity: SourceIdentity,
         generation: u64,
         lifetime_ended: bool,
+    },
+    /// Whether the shell can perform resize effects in this run. Sent once at
+    /// startup; false until then and never saved. See SIZES.md.
+    NativeResizeCapability {
+        enabled: bool,
     },
     InvalidateNativeCapture {
         window: WindowId,
@@ -669,7 +679,7 @@ pub enum Command {
         path: String,
     },
 }
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Edges {
     Left,
@@ -741,6 +751,7 @@ impl Controller {
         next.refresh_active_bookmarks();
         next.lifecycle
             .prune(&next.scene, &next.sources, next.navigation_clock);
+        next.prune_sizes();
         *self = next;
         Ok(result)
     }
@@ -793,13 +804,7 @@ impl Controller {
                 generation,
                 result,
             } => {
-                return self.native_resize_result(
-                    transaction,
-                    effect_id,
-                    identity,
-                    generation,
-                    result,
-                );
+                return self.sizing_result(transaction, effect_id, identity, generation, result);
             }
             Command::RetireNativeResizeSource {
                 transaction,
@@ -814,6 +819,7 @@ impl Controller {
                     lifetime_ended,
                 );
             }
+            Command::NativeResizeCapability { enabled } => self.sizes.capability = enabled,
             Command::InvalidateNativeCapture {
                 window,
                 identity,
@@ -1157,7 +1163,11 @@ impl Controller {
                     self.release_gesture(id);
                 }
                 return match arrival {
-                    Some(arrival) => self.settle_arrival(id, output, arrival),
+                    Some(arrival) => {
+                        let reply = self.settle_arrival(id, output, arrival)?;
+                        // Upstream's size arm: a rule's `size`, once placed.
+                        Ok(self.size_by_rule(id, output, arrival, reply))
+                    }
                     None => Ok(json!({"window": id})),
                 };
             }
@@ -1417,6 +1427,8 @@ impl Controller {
                     output,
                     delta: Point::default(),
                 });
+                // Upstream begin_client_resize: a resize drag ends fit and fill.
+                self.sizes.resize_begun(window);
             }
             Command::GestureTo {
                 screen_delta,
@@ -1488,6 +1500,7 @@ impl Controller {
                 loaded.last_event = self.last_event;
                 loaded.motion.cursor_pan = self.motion.cursor_pan;
                 loaded.trackpad_override = self.trackpad_override;
+                loaded.sizes.capability = self.sizes.capability;
                 if loaded.configured {
                     loaded.seed_bookmarks();
                 }
@@ -1516,6 +1529,8 @@ impl Controller {
             .ok_or(Error::Invalid("unknown output"))?
             .zoom;
         let snap = self.snap(zoom);
+        // A sizing action still owed its size places this window itself.
+        self.guard_sizing_drag(window, group, snap.options)?;
         self.cancel_animations_everywhere();
         self.drags += 1;
         self.gesture = Some(Gesture::Drag {
@@ -1529,6 +1544,9 @@ impl Controller {
             carried: Point::default(),
             serial: self.drags,
         });
+        // Upstream's move grabs: re-anchoring ends a fill restore point, the
+        // dragged window's and that of every member dragged along.
+        self.drag_begun(window, group, snap.options)?;
         Ok(())
     }
     /// Move the installed drag or resize to a total screen displacement from
@@ -1702,6 +1720,8 @@ impl Controller {
             } => {
                 state.set_snap_distances(snap.options.threshold, snap.break_force)?;
                 self.scene.resize_to(state, *delta / *zoom)?;
+                // Upstream apply_member_shifts: a shifted member is re-anchored.
+                self.sizes.drop_moved_fills(&self.scene);
             }
         }
         Ok(())
@@ -1788,7 +1808,7 @@ impl Controller {
         }).collect();
         let windows: Vec<_> = self.scene.windows().iter().map(|w| {
             let (widget, pinned, rule) = self.policy_json(w.id);
-            describe(json!({"window": w.id, "world_rect": w.world_rect, "metadata": self.metadata.get(&w.id), "source": self.sources.get(&w.id), "widget": widget, "pinned": pinned, "rule": rule}), w.id)
+            describe(json!({"window": w.id, "world_rect": w.world_rect, "metadata": self.metadata.get(&w.id), "source": self.sources.get(&w.id), "widget": widget, "pinned": pinned, "rule": rule, "mode": self.sizes.mode_name(w.id)}), w.id)
         }).collect();
         let mut navigation = json!({"flights": self.flights, "clock_ns": self.navigation_clock, "contexts": self.navigation_contexts, "home_returns": self.home_returns, "overview_returns": self.overview_returns, "active_bookmarks": self.active_bookmarks});
         for (key, value) in self.motion.snapshot() {

@@ -304,10 +304,13 @@ impl Controller {
     /// the output back above the threshold: a pick is one navigation, not a
     /// mode. Zoomed back above the threshold while the button was down, the
     /// deliberate zoom stands and nothing happens; the reply then has no
-    /// `effect`, as `activate`'s `click_release` has none. Upstream returns a
-    /// window still in `fill` to its fill view; `fill-window` does not exist
-    /// here. A widget and a screen-pinned window are no pick target: the
-    /// command does nothing with one, whatever the zoom.
+    /// `effect`, as `activate`'s `click_release` has none. A window still in
+    /// `fill` returns to the camera and zoom its fill ran in instead
+    /// (`navigate_restoring_fill`), provided that zoom is itself at or above
+    /// the threshold: a view that left the output in pick mode would make the
+    /// pick a mode, so such a window is centered at zoom 1 like any other. A
+    /// stand-in has no fill. A widget and a screen-pinned window are no pick
+    /// target: the command does nothing with one, whatever the zoom.
     pub(crate) fn pick(&mut self, window: WindowId, output: OutputId) -> Result<Value, Error> {
         if self.scene.window(window).is_none() {
             return Err(Error::Invalid("unknown window"));
@@ -316,9 +319,16 @@ impl Controller {
         if !self.pick_target(output, Some(window)) {
             return Ok(json!({"navigation":null,"dirty":false}));
         }
-        Ok(self
-            .navigate_to_window(window, output, ZoomPolicy::Reset)?
-            .reply_with_dirty())
+        let threshold = self.config().zoom_interact_min;
+        let restores = self
+            .fill_restore_view(window, output)
+            .is_some_and(|(_, zoom)| zoom >= threshold);
+        let moved = if restores {
+            self.navigate_restoring_fill(window, output)?
+        } else {
+            self.navigate_to_window(window, output, ZoomPolicy::Reset)?
+        };
+        Ok(moved.reply_with_dirty())
     }
     /// Upstream's MouseAction::CenterNearest press, a NavigateGrab: the drag
     /// pulls the canvas, so the vector is the press minus the pointer, and

@@ -340,7 +340,8 @@ impl Controller {
                 json!(Reply::Err(error))
             }
         };
-        json!({"reply":reply,"effects":outcome.effects,"dirty":outcome.dirty,"navigation":outcome.navigation})
+        let data = json!({"reply":reply,"effects":outcome.effects,"dirty":outcome.dirty,"navigation":outcome.navigation});
+        super::sizes::carry(data, outcome.resize)
     }
     fn dispatch(
         &mut self,
@@ -369,7 +370,7 @@ impl Controller {
             )),
             Request::Focus(Some(selector)) => self.cmd_focus(active()?, &selector, outcome),
             Request::Move { window, to } => self.cmd_move(window.as_ref(), to, outcome),
-            Request::Resize { window, to } => self.cmd_resize(window.as_ref(), to),
+            Request::Resize { window, to } => self.cmd_resize(output, window.as_ref(), to, outcome),
             Request::Opacity { window, value } => self.cmd_opacity(window.as_ref(), value),
             Request::Pin { window, value } => self.cmd_pin(output, window.as_ref(), value, outcome),
             Request::Action(spec) => {
@@ -530,7 +531,7 @@ impl Controller {
                 is_widget: self.is_widget(window.id),
                 // A detached placeholder is Infinify's stand-in.
                 suspended: !self.sources.contains_key(&window.id),
-                mode: WindowMode::Normal,
+                mode: self.sizes.mode(window.id),
             };
             // Focused window first, the rest in stage order.
             if info.is_focused {
@@ -754,9 +755,19 @@ impl Controller {
         readable(moved)?;
         self.scene
             .set_window_rect(window, moved)
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        // Upstream NudgeWindow, SendToOutput and map_window_to_rule_point:
+        // re-anchoring the window ends a fill restore point. A fit survives.
+        self.sizes.clear_fill(window);
+        Ok(())
     }
-    fn cmd_resize(&self, selector: Option<&WindowSelector>, to: Option<(i32, i32)>) -> Reply {
+    fn cmd_resize(
+        &mut self,
+        output: Option<OutputId>,
+        selector: Option<&WindowSelector>,
+        to: Option<(i32, i32)>,
+        outcome: &mut Outcome,
+    ) -> Reply {
         let window = self.select(selector)?;
         let Some((width, height)) = to else {
             let rect = self
@@ -773,7 +784,8 @@ impl Controller {
         if width <= 0 || height <= 0 {
             return Err("size must be positive".to_string());
         }
-        // Upstream refuses these whatever else it can resize.
+        // Upstream refuses these whatever else it can resize, and before it
+        // asks whether a grab holds the window.
         if !self.on_canvas(window) {
             return Err(
                 "this window has no canvas size to set: it is pinned, fullscreen, a widget, or \
@@ -781,9 +793,13 @@ impl Controller {
                     .to_string(),
             );
         }
-        Err(
-            "resize is not implemented on macOS yet: native layout resize is not available"
-                .to_string(),
-        )
+        if !self.sizes.capability {
+            return Err(
+                "resize is not implemented on macOS yet: native layout resize is not available"
+                    .to_string(),
+            );
+        }
+        self.request_window_size(window, output, [width.into(), height.into()], outcome)?;
+        Ok(Response::Size { width, height })
     }
 }

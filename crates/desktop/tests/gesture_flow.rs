@@ -716,7 +716,7 @@ fn four_finger_pinch_in_and_out_fire_zoom_to_fit_and_home_toggle_once_each() {
     }
     assert_eq!(h.end(false, 1060)["fired"], Value::Null);
 
-    // The mod+ variants on three fingers, and the one that is not implemented.
+    // The mod+ variants on three fingers, and the cluster's own fit.
     let reply = h.begin("pinch", 3, "⌃⌥", "window", ON_WINDOW);
     assert_eq!(
         bindings(&reply),
@@ -732,12 +732,17 @@ fn four_finger_pinch_in_and_out_fire_zoom_to_fit_and_home_toggle_once_each() {
         bindings(&reply),
         ["mod+4-finger-pinch-in = zoom-to-fit-snapped"]
     );
-    assert_eq!(reply["gesture"]["bindings"][0]["implemented"], false);
+    assert_eq!(reply["gesture"]["bindings"][0]["implemented"], true);
     // Unbound in this direction: the threshold is spent, nothing fires.
     assert_eq!(h.pinch(1.2, 1010)["fired"], Value::Null);
-    assert_refused(&h.pinch(0.8, 1020), "zoom-to-fit-snapped");
+    // It runs: tests/sizes_flow.rs covers what it does. No window is focused
+    // here, so there is no cluster to frame.
+    let reply = h.pinch(0.8, 1020);
+    assert_ran(&reply, "zoom-to-fit-snapped");
+    assert_eq!(reply["navigation"], Value::Null);
     h.end(false, 1030);
-    // Option over a window: upstream's fit-window and toggle-fullscreen.
+    // Option over a window: upstream's fit-window and toggle-fullscreen. The
+    // first delivers a size, which this shell has not said it can do.
     for (fingers, action) in [(2, "fit-window"), (3, "toggle-fullscreen")] {
         let reply = h.begin("pinch", fingers, "⌥", "window", ON_WINDOW);
         assert_eq!(reply["gesture"]["state"], "pinch_threshold", "{reply}");
@@ -1806,7 +1811,7 @@ fn the_default_table_on_a_mac() {
             "4-finger-pinch-out = home-toggle: runs",
             "mod+3-finger-pinch-in = zoom-to-fit: runs",
             "mod+3-finger-pinch-out = home-toggle: runs",
-            "mod+4-finger-pinch-in = zoom-to-fit-snapped: refused",
+            "mod+4-finger-pinch-in = zoom-to-fit-snapped: runs",
             "alt+2-finger-pinch-in = fit-window: refused",
             "alt+2-finger-pinch-out = fit-window: refused",
             "alt+shift+2-finger-pinch-in = fit-window-snapped: refused",

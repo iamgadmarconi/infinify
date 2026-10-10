@@ -40,8 +40,8 @@ impl From<ViewDirection> for policy::Direction {
 /// The pose a toggle flies back to. Ephemeral: never saved, dropped with its output.
 #[derive(Clone, Copy, Debug, Serialize)]
 pub(crate) struct ViewReturn {
-    camera: Point,
-    zoom: f64,
+    pub(crate) camera: Point,
+    pub(crate) zoom: f64,
 }
 
 /// Upstream policy works in i32 logical pixels; reject rather than saturate.
@@ -113,7 +113,7 @@ impl Controller {
     }
     /// Replace the output's flight. An anchored flight animates zoom around the
     /// anchor; without one only the camera travels and `zoom` is the current zoom.
-    fn arm_view(
+    pub(crate) fn arm_view(
         &mut self,
         output: OutputId,
         target: Point,
@@ -150,7 +150,7 @@ impl Controller {
             json!({"navigation":{"output":output,"generation":self.next_navigation,"target_camera":target,"target_zoom":zoom,"animating":true}}),
         )
     }
-    fn restore_view(
+    pub(crate) fn restore_view(
         &mut self,
         output: OutputId,
         ret: ViewReturn,

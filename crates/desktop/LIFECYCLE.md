@@ -23,7 +23,7 @@ performs no native operation: `close_window`, `launch` and
 
 | `command.op` | Fields | Result data |
 | --- | --- | --- |
-| `attach`, a new window | as before, with neither `logical_id` nor `world_rect`; optional `output`, optional `pointer` | `{window, adopted, effect, navigation, dirty}` |
+| `attach`, a new window | as before, with neither `logical_id` nor `world_rect`; optional `output`, optional `pointer` | `{window, adopted, effect, navigation, dirty}`, and `transaction` with a one-entry `effects` when the window's rule names a `size` and a size transaction began ([RULES.md](RULES.md#a-rules-size)) |
 | `window_closed` | `window`, `identity`, optional `output` | `{standin, effect, navigation, dirty}` |
 | `retitle` | `window`, `identity`, `title` | `{dirty}` |
 | `adoption_complete` | optional `present`, an array of `{bundle_id, title}` | `{dropped, standins, dirty}` |

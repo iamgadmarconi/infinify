@@ -32,7 +32,7 @@ Preserve them as integers in native code.
 | `register_output` | `stable_id` string, `screen_bounds` rect | `output` logical ID |
 | `remove_output` | `output` | `{}`; camera retained by stable identity |
 | `outputs_settled` | none | `{dirty}`; sent once every display is registered: a screen-pinned window whose output is missing moves to one that is connected ([RULES.md](RULES.md#wire-contract)) |
-| `attach` | `identity`, `bundle_id`, `title`, `buffer:{width,height}`, `source_rect`, optional `logical_id`, optional `world_rect`, optional `output`, optional `pointer` | `window` logical ID; for a new window also `adopted`, `effect`, `navigation`, `dirty` |
+| `attach` | `identity`, `bundle_id`, `title`, `buffer:{width,height}`, `source_rect`, optional `logical_id`, optional `world_rect`, optional `output`, optional `pointer` | `window` logical ID; for a new window also `adopted`, `effect`, `navigation`, `dirty`, and `transaction` with a one-entry `effects` when its rule's `size` began a size transaction ([RULES.md](RULES.md#a-rules-size)) |
 | `window_closed` | `window`, `identity`, optional `output` | `{standin, effect, navigation, dirty}` |
 | `retitle` | `window`, `identity`, `title` | `{dirty}` |
 | `adoption_complete` | optional `present`, an array of `{bundle_id, title}` | `{dropped, standins, dirty}` |
@@ -59,7 +59,7 @@ Preserve them as integers in native code.
 | `gesture_begin` | `kind`, `fingers`, `modifiers`, `context`, `output`, global `pointer` point, optional `doubletap`, `time_ms` | `{gesture, fired, note, navigation, effects, dirty, needs_frames, trackpad}` |
 | `gesture_update` | optional `dx`, `dy`, `scale`, `rotation`, `held`; `time_ms` | the same |
 | `gesture_end` | optional `cancelled`, `held`; `time_ms` | the same |
-| `snapshot` | none | `outputs`, `windows`, `focused`, `placements`, `lifecycle`, `render`, `evidence`; each output with `pick` ([POINTER.md](POINTER.md#pick-mode)), each window with its `widget`, `pinned` and `rule`, each placement with `pinned`, `widget` and `opacity`, and both with what the window is drawn with (`kind`, `decoration` and the rest of [RENDER.md](RENDER.md#placements)) |
+| `snapshot` | none | `outputs`, `windows`, `focused`, `placements`, `lifecycle`, `render`, `evidence`; each output with `pick` ([POINTER.md](POINTER.md#pick-mode)), each window with its `widget`, `pinned`, `rule` and `mode` ([SIZES.md](SIZES.md#mode)), each placement with `pinned`, `widget` and `opacity`, and both with what the window is drawn with (`kind`, `decoration` and the rest of [RENDER.md](RENDER.md#placements)) |
 | `screenshot_result` | `path`, `width`, `height`; or `error` | `{reply}`: upstream's reply to the client that asked for the screenshot |
 | `save` / `load` | explicit caller `path` string | `{}` |
 | `load_config` | `path` string or null | `{path, exists, errors, warnings, dirty, effects, focus_follows_mouse}` |
@@ -67,6 +67,7 @@ Preserve them as integers in native code.
 | `bindings` | none | key bindings as macOS chords, the `cycle_hold` modifiers, and each output's hot corners |
 | `mouse_binding` | `trigger`, `source`, `modifiers`, `context`, optional `pick` boolean | `{binding}` or `{binding: null}` |
 | `hot_corner` | `output`, `corner`, optional `pointer`, `held` | `{navigation, effects, dirty}` |
+| `native_resize_capability` | `enabled` boolean | `{}`; the shell can perform resize effects in this run, see [SIZES.md](SIZES.md#the-gate) |
 | `layout_changed` | `name`, `short`, `index`, `count` | `{}` |
 | `state_event` | `output` or null | `{line}`: the State event line, or null when unchanged |
 
@@ -136,6 +137,13 @@ For observed native resizing, the separate
 [native resize transaction](NATIVE_RESIZE.md) keeps proposals apart from committed
 geometry, coalesces effects, handles late results and gates stale capture/input.
 Its native shell connection and actual frame-freshness proof remain unfinished.
+[Window sizing actions](SIZES.md) covers `grow-window`, `shrink-window`, IPC
+`resize`, `fit-window`, `fit-window-snapped`, `fill-window` and
+`zoom-to-fit-snapped`: an `action`, `hot_corner`, `ipc` or `gesture_*` reply
+that begins a size transaction also carries its `transaction` and `effect`, and
+every `snapshot` window has a `mode`. They act on canvas windows: what each
+does beside a widget, a screen-pinned window, a window rule's `size` and pick
+mode is [there](SIZES.md#widgets-screen-pinned-windows-and-rules) too.
 
 A source identity is `{pid,birth_sec,birth_usec,wid,owner?}`; `owner` optionally
 records the WindowServer connection and is compared exactly, including presence.
@@ -184,7 +192,7 @@ already exist. Loads are bounded at 32 MiB and never modify the input file.
 Verification:
 
 ```sh
-cargo test -p driftwm-desktop --test navigation_flow --test navigation_actions_flow --test focus_cycle_flow --test controller_flow --test config_flow --test lifecycle_flow --test motion_flow --test gesture_flow --test rules_flow --test render_flow --locked
+cargo test -p driftwm-desktop --test navigation_flow --test navigation_actions_flow --test focus_cycle_flow --test controller_flow --test config_flow --test lifecycle_flow --test motion_flow --test gesture_flow --test rules_flow --test render_flow --test pointer_flow --test sizes_flow --locked
 cargo clippy -p driftwm-desktop --all-targets -- -D warnings
 cargo fmt -p driftwm-desktop --check
 cargo build -p driftwm-desktop

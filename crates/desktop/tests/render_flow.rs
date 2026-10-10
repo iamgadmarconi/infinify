@@ -665,6 +665,7 @@ fn placements_say_what_is_drawn_for_windows_placeholders_and_stand_ins() {
             "kind",
             "launching",
             "metadata",
+            "mode",
             "pinned",
             "rule",
             "source",
