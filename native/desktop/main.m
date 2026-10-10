@@ -11,6 +11,7 @@
 #import "resize-capture-policy.h"
 #import "ipc-server.h"
 #import "hotkeys.h"
+#import "tap-keys.h"
 #import "config-watcher.h"
 #import "cycle-hold.h"
 #import "hot-corners.h"
@@ -280,6 +281,7 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 @property NSString *configPath; // --config; nil is the controller's default path
 @property NSString *superChord; // --super; nil is ctrl+alt
 @property DWHotKeys *hotKeys;
+@property DWTapKeys *tapKeys; // DriftWM's tap bindings, watched while the hot keys are registered
 @property DWConfigWatcher *configWatcher;
 @property NSString *configNote; // what a config load left for the status line and the error bar does not show: a --super chord or a load the controller refused
 @property NSString *help; // the chords registered, for the status line
@@ -727,6 +729,8 @@ static NSNumber *liveHit(NSDictionary *hit) { return [hit[@"placeholder"]isEqual
 // stays open until its modifiers are let go, as upstream's does.
 - (void)scroll:(NSEvent *)e {
     BOOL coast=e.momentumPhase!=NSEventPhaseNone,lifted=(e.phase&(NSEventPhaseEnded|NSEventPhaseCancelled))!=0;
+    // Upstream: an axis event on top of a held modifier chord makes it a binding prefix, not a tap. libinput has no momentum of its own, so macOS's is none.
+    if(!coast)[self.desktop.tapKeys taint];
     // Upstream computes momentum itself from the finger's deltas. Once a trackpad scroll has
     // panned the canvas its lift launches the coast, and the momentum events macOS adds
     // after it are dropped whole, wherever the pointer is by then. A lift that follows a
@@ -928,7 +932,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // Native focus needs Accessibility, which can be granted while the app runs, and
 // --no-native-focus turns it off. Without it focus is logical and navigation still works.
 - (void)refreshFocusAccess {
-    BOOL trusted=AXIsProcessTrusted();self.navigation.focusAllowed=trusted&&!self.logicalFocus;
+    BOOL trusted=AXIsProcessTrusted();self.navigation.focusAllowed=trusted&&!self.logicalFocus;[self.tapKeys trusted:trusted];
     if(trusted||self.logicalFocus||self.focusNoted||!self.navigation)return;
     self.focusNoted=YES;NSString *note=focusAccessNote;
     // Said once, ahead of a notice already up; what a config load left for the status line returns as the resting status.
@@ -1223,7 +1227,10 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // modifiers are let go, and commits a modifier-less step at once.
 // A hot corner's action is the controller's to pick and run: `action` is then only what
 // the status line reports and what decides whether a cycle session is held open.
-- (void)action:(NSString *)action output:(NSNumber *)output at:(CGPoint)point held:(BOOL)held corner:(NSString *)corner {
+- (void)action:(NSString *)action output:(NSNumber *)output at:(CGPoint)point held:(BOOL)held corner:(NSString *)corner { [self action:action output:output at:point held:held corner:corner tap:nil]; }
+// So is a tap binding's, which the controller looks up by the chord: `tap` is the physical modifiers of the chord just completed, as the
+// bindings reply gave them. Upstream runs a tap's action as it runs a key's (keyboard.rs: pending_tap_action through execute_action).
+- (void)action:(NSString *)action output:(NSNumber *)output at:(CGPoint)point held:(BOOL)held corner:(NSString *)corner tap:(NSDictionary *)tap {
     // An action cancels a resize the pointer began and is dropped while that is unresolved. A sizing action's own transaction is
     // not cancelled and drops nothing: the next action, a held grow-window's repeat among them, is the controller's to answer.
     if(![self sizing]){[self.resize cancel];if(self.resize&&![self.resize canRemove:nil])return;}
@@ -1233,7 +1240,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     // The question is an ipc reply like any other: a size transaction the controller began with it, the size a fullscreen exit still owed its window, is performed.
     NSDictionary *known=name?[self call:@{@"op":@"ipc",@"output":output,@"request":@{@"Bookmark":@{@"name":name}}}]:nil;[self consumeSize:known];
     BOOL unset=name&&!asDict(known[@"reply"])[@"Ok"];
-    NSMutableDictionary *command=[(corner?@{@"op":@"hot_corner",@"output":output,@"corner":corner}:@{@"op":@"action",@"output":output,@"action":action})mutableCopy];
+    NSMutableDictionary *command=[(tap?@{@"op":@"tap",@"modifiers":tap,@"output":output}:corner?@{@"op":@"hot_corner",@"output":output,@"corner":corner}:@{@"op":@"action",@"output":output,@"action":action})mutableCopy];
     if(self.configured){command[@"pointer"]=pointJSON(point);command[@"held"]=held?@YES:@NO;}
     NSDictionary *reply=[self call:command];
     if(reply)[self holdCycle:action held:held];
@@ -1252,6 +1259,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 - (void)gesture:(NSDictionary *)event owner:(NSInteger)owner {
     NSString *op=event[@"op"];BOOL begin=[op isEqual:@"gesture_begin"],end=[op isEqual:@"gesture_end"],held=[DWCycleHold modifiersDown]!=0;NSMutableDictionary *command=[event mutableCopy];
     if(begin){
+        // Upstream: a gesture that begins on top of a held modifier chord makes it a binding prefix, not a tap, whatever becomes of the gesture.
+        [self.tapKeys taint];
         // The controller holds one gesture: a pinch that gains a third finger ends before the swipe it became begins.
         if(self.gestureOwner)[self gesture:@{@"op":@"gesture_end",@"cancelled":@YES,@"time_ms":event[@"time_ms"]} owner:self.gestureOwner];
         if(self.cleaning||(self.resize&&![self.resize canRemove:nil]))return;
@@ -1419,12 +1428,14 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 - (void)stopExitKey { if(self.exitHotkey){UnregisterEventHotKey(self.exitHotkey);self.exitHotkey=NULL;}if(self.hotkeyHandler){RemoveEventHandler(self.hotkeyHandler);self.hotkeyHandler=NULL;} }
 // A normal run's global hot keys: the config's bindings, then the exit chord unless one
 // of them claimed it. Windowed mode registers none. Returns the chords macOS refused.
+// The config's tap bindings are watched for exactly as long as its keys are registered.
 - (NSArray<NSString *> *)startKeys {
     if(self.windowed)return @[];
     NSArray<NSString *> *refused=[self.hotKeys start];if(![self.hotKeys holds:exitChord()])[self configureExitKey];
+    [self.tapKeys start];
     return refused;
 }
-- (void)stopKeys { [self.hotKeys stop];[self stopExitKey]; }
+- (void)stopKeys { [self.hotKeys stop];[self.tapKeys stop];[self stopExitKey]; }
 // Upstream's binding lookup for one press or scroll: physical modifiers, trigger and
 // context in; the bound gesture, or nil for none, out. The binding carries the config's
 // pointer speeds.
@@ -1522,9 +1533,13 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     NSString *status=self.statusText,*help=self.help;NSMutableArray<NSString *> *notes=[NSMutableArray array];
     NSDictionary *bindings=[self call:@{@"op":@"bindings"}];if(!bindings)[notes addObject:self.statusText?:@"bindings unavailable"];
     for(id warning in asArray(bindings[@"warnings"]))if(asString(warning))[notes addObject:warning];
-    if(!self.hotKeys){__weak Desktop *weak=self;self.hotKeys=[[DWHotKeys alloc]initWithFire:^(NSString *action){[weak action:action output:[weak viewOutput]];}];self.hotKeys.kept=exitChord();self.hotKeys.changed=^{Desktop *d=weak;NSArray<NSString *> *left=[d refreshBindings];for(NSString *line in left)fprintf(stderr,"%s\n",line.UTF8String);if(left.count){d.statusText=summary(@"Bindings",left);[d render];}};}
+    // A key that fires as a binding is a key on top of whatever modifier chord is held: that chord is no tap.
+    if(!self.hotKeys){__weak Desktop *weak=self;self.hotKeys=[[DWHotKeys alloc]initWithFire:^(NSString *action){[weak.tapKeys taint];[weak action:action output:[weak viewOutput]];}];self.hotKeys.kept=exitChord();self.hotKeys.changed=^{Desktop *d=weak;NSArray<NSString *> *left=[d refreshBindings];for(NSString *line in left)fprintf(stderr,"%s\n",line.UTF8String);if(left.count){d.statusText=summary(@"Bindings",left);[d render];}};}
+    // A tap binding's chord, completed, goes back to the controller as it came, to be looked up and run there. The output, the pointer and the modifiers
+    // still down are those of the moment, as a hot key's: the release that completes a chord of two leaves one of them held.
+    if(!self.tapKeys){__weak Desktop *weak=self;self.tapKeys=[[DWTapKeys alloc]initWithFire:^(NSDictionary *tap){NSDictionary *chord=asDict(tap[@"modifiers"]);if(chord)[weak action:asString(tap[@"action"]) output:[weak viewOutput] at:pointer() held:[DWCycleHold modifiersDown]!=0 corner:nil tap:chord];}];}
     BOOL open=self.panels.count!=0;if(open)[self stopKeys];
-    [self.hotKeys setBindings:bindings];
+    [self.hotKeys setBindings:bindings];[self.tapKeys setBindings:bindings];
     [notes addObjectsFromArray:self.hotKeys.notes];
     // Upstream's cycle_hold as the controller reports it, else as upstream derives it: the modifiers of the cycle-windows forward binding, Option when it has none.
     NSDictionary *hold=asDict(bindings[@"cycle_hold"]);UInt32 mask=([hold[@"control"]isEqual:@YES]?controlKey:0)|([hold[@"option"]isEqual:@YES]?optionKey:0)|([hold[@"shift"]isEqual:@YES]?shiftKey:0)|([hold[@"command"]isEqual:@YES]?cmdKey:0);
@@ -2034,8 +2049,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(self.cleaning)return;self.cleaning=YES;
     // No window is discovered and no read answers from here on; a reopened canvas gets a new manager, which ends a pass of its own.
     [self.manager stop];self.manager=nil;self.adopted=NO;
-    // Inert from here until the canvas reopens: no config hot key, key repeat, input-source observer, config watch, hot corner, pending event, pan launch or pointer report outlives this line.
-    [self.hotKeys invalidate];self.hotKeys=nil;[self.configWatcher stop];self.configWatcher=nil;self.corners=nil;[self.statePush invalidate];self.statePush=nil;[self.panLaunch cancel];self.pointerOutputs=nil;self.pointerWanted=NO;
+    // Inert from here until the canvas reopens: no config hot key, tap watch, key repeat, input-source observer, config watch, hot corner, pending event, pan launch or pointer report outlives this line.
+    [self.hotKeys invalidate];self.hotKeys=nil;[self.tapKeys stop];self.tapKeys=nil;[self.configWatcher stop];self.configWatcher=nil;self.corners=nil;[self.statePush invalidate];self.statePush=nil;[self.panLaunch cancel];self.pointerOutputs=nil;self.pointerWanted=NO;
     // A trackpad gesture in progress ends cancelled while its output still exists; no touch or hold timer outlives this line either.
     [self cancelGestures];self.trackpad=nil;
     // Nor a tracking area or a pending hover: cleanup keeps handling events while it waits for streams.
@@ -2065,7 +2080,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(!self.sources.count)self.resize=nil;
 
 }
-- (void)dealloc { [_ipc stop];[_manager stop];[self stopNavigation];[self stopViewKeys];[_hotKeys invalidate];[_configWatcher stop];[_statePush invalidate];[_panLaunch cancel];[_trackpadTimer invalidate];if(_controller)driftwm_desktop_destroy(_controller); }
+- (void)dealloc { [_ipc stop];[_manager stop];[self stopNavigation];[self stopViewKeys];[_hotKeys invalidate];[_tapKeys stop];[_configWatcher stop];[_statePush invalidate];[_panLaunch cancel];[_trackpadTimer invalidate];if(_controller)driftwm_desktop_destroy(_controller); }
 @end
 static CGPoint projected(Desktop *desktop,NSNumber *window,NSNumber *output,CGPoint sourcePoint) {
     for(NSDictionary *p in [desktop call:@{@"op":@"snapshot"}][@"placements"])if([p[@"window"]isEqual:window]&&[p[@"output"]isEqual:output]){

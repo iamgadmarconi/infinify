@@ -20,6 +20,7 @@ native operation is performed.
 | `tick_navigation` | `timestamp_ns` unsigned monotonic nanoseconds | `changed_outputs`, `needs_frames`, `needs_pointer` |
 | `cancel_navigation` | `output` | `{}`; also stops that output's scroll momentum |
 | `set_navigation_context` | `output`, `usable_rect_local`, `focus_placement`, `camera_speed`, `outer_gap` | `{}`; cancels that output's flight |
+| `set_usable_area` | `output`, `usable_rect_local` | `{dirty}`; only the rectangle changes, see [The usable area](#the-usable-area) |
 
 Navigation returns `{output,generation,target_camera,target_zoom,animating}`.
 The generation is a controller-lifetime monotonic counter; load does not rewind it.
@@ -40,7 +41,9 @@ whole order and the snapshot keys they add.
 The whole output, center placement, camera speed 0.3 and outer gap 0 are defaults.
 Once a [config](CONFIG.md) is loaded, placement, camera speed and outer gap are
 the config's (`focus_placement`, `navigation.camera_speed`, `snap.outer_gap`)
-and only `usable_rect_local` is taken from this command.
+and only `usable_rect_local` is taken from this command. The shell does not
+send this command, and sends a usable rectangle by no other either: see
+[The usable area](#the-usable-area).
 Usable rectangles use output-local coordinates, including their nonzero origin,
 and must fit inside the output. Placement accepts center, top, bottom, left,
 right, top_left, top_right, bottom_left, bottom_right. Speed must be finite in
@@ -73,12 +76,132 @@ pinch included, and `cancel_navigation` cancel only their output; installing a
 drag/resize, by pointer or by move gesture, cancels all outputs. A cancel takes
 the output's momentum with its flight, see
 [what stops momentum](MOTION.md#what-stops-momentum). Navigation during an active gesture rejects. Output re-registration
-or disconnect cancels its runtime flight/context. Reconnect uses its current or
-saved camera and never resumes a flight.
+or disconnect cancels its runtime flight/context: a registration leaves the
+output with the usable rectangle it carries, the whole output without one.
+Reconnect uses its current or saved camera and never resumes a flight.
 
 Save schema 1 is unchanged: saves contain current cameras, not destinations,
 and no flight, clock, navigation generation, or context. Load clears all of these
 runtime states (retaining generation monotonicity on the same handle).
+
+## The usable area
+
+Upstream's usable area of an output is the output less the exclusive zones of
+its layer-shell panels and bars (`usable_area_on`, smithay's
+`non_exclusive_zone`). A Mac has no layer shell. What stands over the canvas
+there is the menu bar and the Dock, which macOS draws above the shell's panels.
+
+**The shell sends no usable area.** That is the owner's decision of 2026-10-10:
+the canvas covers each display edge to edge and reserves nothing for the menu
+bar or the Dock. Windows may sit beneath them, and both stay visible on top.
+Every output the shell registers is therefore usable whole, and each reader in
+the list below measures the whole output. Upstream keeps a panel's exclusive
+zone clear; this is a deliberate difference from it, not a gap that waits for
+work.
+
+The controller keeps upstream's rule all the same, for a caller that does send
+a rectangle, and it is inert while none is sent. The rectangle is in
+output-local points with the origin at the output's own top left:
+
+| Command | Fields | Result |
+| --- | --- | --- |
+| `register_output` | `stable_id`, `screen_bounds`, optional `usable_rect_local` | `{output}`; the output starts with that rectangle, or with the whole output |
+| `set_usable_area` | `output`, `usable_rect_local` | `{dirty}`; the rectangle is replaced in place |
+
+The rectangle must have an extent and lie inside its output, edges inclusive;
+anything else is refused with `invalid usable area`, and a registration refused
+for it registers nothing. A registration always replaces what the output had,
+so one without a rectangle is the whole output again, as every registration
+was before the field existed. `set_usable_area` on an output that is not
+registered is `unknown output`. Before any config is loaded it keeps the
+placement, speed and gap `set_navigation_context` supplied. The rectangle is
+runtime state like the rest of the context: in the snapshot under
+`navigation.contexts`, never saved, gone with its output.
+
+**A change moves nothing.** When a panel's exclusive zone changes, upstream
+arranges its layer surfaces again and owes the output a frame
+(`src/handlers/compositor.rs` `handle_layer_commit`,
+`src/handlers/layer_shell.rs` `layer_destroyed`), and that is all: no camera,
+window or pin is moved or clamped, and no animation is cancelled. Every reader
+measures the area of the moment it reads. `set_usable_area` does the same: it
+writes the rectangle, a flight keeps the anchor it was armed with and lands
+where it was heading, and `dirty` is always `false`, because nothing a save
+holds has changed. What does follow at once is what upstream derives once per
+frame, the [active bookmark](IPC.md#bookmarks), which every accepted command
+refreshes. Unlike `set_navigation_context`, it does not cancel the flight.
+
+What measures the usable area, as upstream's callers of `get_usable_area`,
+`usable_area_on` and `usable_center_screen` do:
+
+| Reader | Upstream |
+| --- | --- |
+| a new window's place: the `focus_placement` point, the cursor clamp, the `auto` anchor nearest the usable center ([LIFECYCLE.md](LIFECYCLE.md#2-placement)) | `align_point_on`, `cursor_placement_pos`, `viewport_center_canvas` |
+| where a window navigation parks a frame: `navigate_window`, `center-window`, `center-nearest`, `cycle-windows`, `focus-center`, `activate`, and where `send-to-output` lands one | `align_point_on` |
+| the view anchor: `home-toggle`, `zoom-in`, `zoom-out`, `zoom-reset`, IPC `Zoom`, `go-to-bookmark`, `set-bookmark`, a `center-nearest` anchor point and its search origin, `center-window`'s nearest window | `usable_center_screen`, `viewport_center_canvas` |
+| `zoom-to-fit`, `zoom-to-fit-snapped` and the dynamic minimum zoom | `fit_to_bbox`, `min_zoom` |
+| `fit-window`, `fill-window` and the view a filled window returns to ([SIZES.md](SIZES.md)) | `compute_fit_geometry`, `compute_fill_geometry`, `fill_restore_view` |
+| `send-cursor-to-output`'s point | `usable_center_for_output` |
+| wholly or partly in view: a click's navigation, IPC `Focus`, the navigation after a close | `window_fully_in_viewport`, `window_intersects_viewport_on` |
+| [cursor edge pan](MOTION.md#cursor-edge-pan) | `cursor_edge_pan_velocity` over the non-exclusive zone |
+| the active bookmark | `refresh_ext_workspaces` |
+
+And what measures the whole output, here as upstream: the clamp of a
+[screen-pinned window](RULES.md#screen-pinned-windows) (`clamp_pin_frame` is
+handed `output_logical_size` by every caller, so a pin may sit under a panel,
+whatever rectangle the output holds), [fullscreen](FULLSCREEN.md) and the centring of a window that
+keeps its own size, the at-home test of `home-toggle`, the share of a frame in
+view (`center-nearest`'s anchor, `auto` placement's cluster test), the output
+that shows a canvas point, a window drag's edge pan, IPC `Camera`, and the
+picture a screenshot takes. Read again for this list: every upstream caller of
+those three functions in `src/state` and `src/input`, and `clamp_pin_frame`
+with its callers; the rest stand as their own pages document them.
+
+On the Mac the counterpart of that rectangle would be the part of
+`NSScreen.visibleFrame` inside the output. A shell file that read it, sent it
+with every registration and sent `set_usable_area` when the Dock or the menu
+bar changed it was written with these two commands and removed before it
+landed, on the decision above. So the shell's `register_output` carries no
+`usable_rect_local`, the shell never sends `set_usable_area`, in a normal run
+as in a windowed one, and the renderer's coverage rule tests the whole output
+([shell notes](../../native/desktop/README.md#the-usable-area)).
+
+`usable_tap_flow` drives this through the exported C ABI on two outputs,
+neither at the global origin, the first registered with what a Dock on the left
+and a menu bar on top would leave of it: the refusals and the replacement rules; a new
+window under `center`, `cursor` and `auto` placement with the cascade;
+`center-window` on each of the nine `focus_placement` points of both outputs
+with `snap.outer_gap`, a landing at another zoom, a frame too wide for the
+area and a `center-nearest` anchor point; an IPC `Focus` of a frame that is all
+on the output and partly under the Dock; `zoom-to-fit`, `zoom-to-fit-snapped`
+and the minimum an IPC `Zoom` stops at; rule pins and a hand pin, which stay on the whole output; with the resize
+capability the fit and fill frames, a filled window's view across a change of
+the area, and a fullscreen window centred on the output; a change in mid-flight
+compared snapshot to snapshot, the flight's landing, and the next action's; and
+the numbers of two existing scenarios for an output with no rectangle. Expected
+values are derived by hand from upstream's rules. Each rule was also changed in
+the source once to see the tests fail, and restored: a registration that drops
+the rectangle, an update that cancels the flight, one that validates nothing,
+one that resets the context, a rule pin clamped to the usable area, a
+fullscreen centred on it, and a usable area that is always the whole output.
+That is controller evidence only: no screen's visible frame was read here.
+
+The built app sends no rectangle, so what a launch can show is that an output
+without one measures as it did. Launched on 2026-10-10 as `--windowed
+1100x700` on a private scene, config and socket, first the build that still
+held the shell's usable-area file and then the build that landed without it
+gave the same: `msg state` the seeded placeholders and the output `windowed` of
+1100x636 at camera `550 -318`, `action center-nearest right` settled on camera
+`1950 -0`, and `action zoom-to-fit` on zoom `0.28484848484848485` at camera
+`750 -390`, the numbers recorded for earlier builds on the same seed
+([IPC.md](IPC.md#live-run-2026-10-09)), as in the last scenario above. No
+normal run was made with either build. While the shell file existed, the two
+commands were sent once in its own JSON by a throwaway program that linked the
+release library with it: the display's output registered with the rectangle
+read from `NSScreen` (the whole output on that display), and a rectangle 80
+points shorter, made by hand, was taken by `set_usable_area`, after which
+`set-bookmark` at camera `0 0` stored the centre of the shorter rectangle.
+Neither the program nor the file is in the tree, and nothing from that run is
+saved as evidence: the controller's side stands on `usable_tap_flow`.
 
 ## Evidence and limits
 

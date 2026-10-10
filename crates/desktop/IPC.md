@@ -133,6 +133,7 @@ its selection, unless the action is itself `cycle-windows`, and stops the active
 output's scroll momentum. So does `action`, for every action that parses, `quit`
 and `exec` included, and so do [`hot_corner`](CONFIG.md#hot-corners), which runs
 its corner's action through the same handler with the same `pointer` and `held`,
+[`tap`](CONFIG.md#tap-bindings), which runs its chord's the same way,
 and a [gesture](GESTURES.md) whose threshold or hold fires one. A selection
 whose request was answered (confirmed, or `focus_logical`) moves to the head of
 the focus history, and one still waiting for its answer is promoted by that

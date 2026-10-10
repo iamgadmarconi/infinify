@@ -29,7 +29,8 @@ Preserve them as integers in native code.
 
 | `command.op` | Remaining command fields | Result data |
 | --- | --- | --- |
-| `register_output` | `stable_id` string, `screen_bounds` rect | `output` logical ID |
+| `register_output` | `stable_id` string, `screen_bounds` rect, optional `usable_rect_local` rect | `output` logical ID; the rectangle is the output's [usable area](NAVIGATION.md#the-usable-area), the whole output without one |
+| `set_usable_area` | `output`, `usable_rect_local` rect | `{dirty}`; the output's usable area changed, and nothing else does. The shell sends no usable area, here or with `register_output` ([NAVIGATION.md](NAVIGATION.md#the-usable-area)) |
 | `remove_output` | `output` | `{}`; camera retained by stable identity |
 | `outputs_settled` | none | `{dirty}`; sent once every display is registered: a screen-pinned window whose output is missing moves to one that is connected ([RULES.md](RULES.md#wire-contract)) |
 | `attach` | `identity`, `bundle_id`, `title`, `buffer:{width,height}`, `source_rect`, optional `logical_id`, optional `world_rect`, optional `output`, optional `pointer` | `window` logical ID; for a new window also `adopted`, `effect`, `navigation`, `dirty`, and `transaction` with a one-entry `effects` when its rule's `size` began a size transaction ([RULES.md](RULES.md#a-rules-size)) |
@@ -64,9 +65,10 @@ Preserve them as integers in native code.
 | `save` / `load` | explicit caller `path` string | `{}` |
 | `load_config` | `path` string or null | `{path, exists, errors, warnings, dirty, effects, focus_follows_mouse}` |
 | `set_platform` | `super` chord | `{super}` |
-| `bindings` | none | key bindings as macOS chords, the `cycle_hold` modifiers, and each output's hot corners |
+| `bindings` | none | key bindings as macOS chords, the tap bindings as the modifiers to watch (`taps`), the `cycle_hold` modifiers, and each output's hot corners |
 | `mouse_binding` | `trigger` (a button, `scroll`, or the wheel notch `wheel_up` / `wheel_down`), `source`, `modifiers`, `context`, optional `window`, optional `pick` boolean | `{binding}` or `{binding: null}`; `{binding: null, passed: true}` when the window's `pass_mouse` claims the trigger, which a pick target never does ([RULES.md](RULES.md#pass_mouse)) |
 | `hot_corner` | `output`, `corner`, optional `pointer`, `held` | `{navigation, effects, dirty}` |
+| `tap` | `modifiers`, `output` or null, optional `pointer`, `held` | `{navigation, effects, dirty}`, an `action` reply: the [tap binding](CONFIG.md#tap-bindings) on a bare modifier chord that was pressed and released alone |
 | `native_resize_capability` | `enabled` boolean | `{}`; the shell can perform resize effects in this run, see [SIZES.md](SIZES.md#the-gate) |
 | `layout_changed` | `name`, `short`, `index`, `count` | `{}` |
 | `state_event` | `output` or null | `{line}`: the State event line, or null when unchanged |
@@ -78,10 +80,10 @@ pans and momentum, edge pan, cursor edge pan and `zoom_by`.
 [Actions, bookmarks and IPC](IPC.md)
 covers the `action`, `ipc` and `state_event` commands, the saved bookmark map,
 the event stream, and the exported `driftwm_desktop_msg` client.
-[Configuration](CONFIG.md) covers the six commands from `load_config` to
+[Configuration](CONFIG.md) covers the seven commands from `load_config` to
 `layout_changed`: DriftWM's TOML file, what of it is applied, the binding map,
-outputs, hot corners, keyboard layouts, autostart, and what stands for
-upstream's Linux commands. [Window lifecycle](LIFECYCLE.md) covers a window
+tap bindings, outputs, hot corners, keyboard layouts, autostart, and what
+stands for upstream's Linux commands. [Window lifecycle](LIFECYCLE.md) covers a window
 that appears or closes by itself: adoption, placement, stand-ins,
 `window_closed`, `retitle`, `adoption_complete` and the close, suspend and
 relaunch actions.
@@ -123,6 +125,9 @@ Bindings are written in upstream's modifiers and mapped to a Mac keyboard:
 - Two bindings on one physical chord: the first by upstream combo text keeps
   it, the other is reported. Control+Option+Escape is the shell's exit chord
   unless a binding claims it.
+- A bare modifier chord (`"alt+shift" = "switch-layout next"`) is upstream's
+  tap binding: it takes the same mapping, is listed under `taps`, and runs
+  through `tap` when the shell sees the chord pressed and released alone.
 
 [CONFIG.md](CONFIG.md) has the key identity rules and upstream's default table
 as it lands on a Mac.
@@ -143,7 +148,7 @@ geometry, coalesces effects, handles late results and gates stale capture/input.
 Its native shell connection and actual frame-freshness proof remain unfinished.
 [Window sizing actions](SIZES.md) covers `grow-window`, `shrink-window`, IPC
 `resize`, `fit-window`, `fit-window-snapped`, `fill-window` and
-`zoom-to-fit-snapped`: an `action`, `hot_corner`, `ipc` or `gesture_*` reply
+`zoom-to-fit-snapped`: an `action`, `hot_corner`, `tap`, `ipc` or `gesture_*` reply
 that begins a size transaction also carries its `transaction` and `effect`, and
 every `snapshot` window has a `mode`. They act on canvas windows: what each
 does beside a widget, a screen-pinned window, a window rule's `size` and pick
@@ -202,7 +207,7 @@ already exist. Loads are bounded at 32 MiB and never modify the input file.
 Verification:
 
 ```sh
-cargo test -p driftwm-desktop --test navigation_flow --test navigation_actions_flow --test focus_cycle_flow --test controller_flow --test config_flow --test lifecycle_flow --test motion_flow --test gesture_flow --test rules_flow --test render_flow --test pointer_flow --test sizes_flow --test effects_flow --test fullscreen_flow --locked
+cargo test -p driftwm-desktop --test navigation_flow --test navigation_actions_flow --test focus_cycle_flow --test controller_flow --test config_flow --test lifecycle_flow --test motion_flow --test gesture_flow --test rules_flow --test render_flow --test pointer_flow --test sizes_flow --test effects_flow --test fullscreen_flow --test usable_tap_flow --locked
 cargo clippy -p driftwm-desktop --all-targets -- -D warnings
 cargo fmt -p driftwm-desktop --check
 cargo build -p driftwm-desktop

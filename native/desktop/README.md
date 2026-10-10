@@ -57,6 +57,16 @@ the one window it focuses, and nothing else.
   action's;
   it does not list every bound key (the default table under
   [Configuration](#configuration) has the rest, three of which start a program).
+- Tap bindings: a `[keybindings]` entry that is a bare modifier chord, such as
+  `"alt+shift" = "switch-layout next"`, runs when the chord is pressed and let
+  go with nothing else pressed in between. DriftWM's defaults bind none, so
+  there is none until the config file writes one, and a normal run only.
+  [Tap bindings](#tap-bindings) has the rule, what it needs of macOS, and that
+  no chord has yet been pressed against it.
+- The Dock and the menu bar: nothing is reserved for them. The canvas covers
+  each display edge to edge, a window may sit beneath either, and both stay
+  visible on top, drawn by macOS. That is the owner's decision, where DriftWM
+  keeps its panels clear: [The usable area](#the-usable-area).
 - Pan a display's camera: drag or two-finger scroll on empty canvas,
   Control-Option-drag / Control-Option-scroll anywhere, or a three-finger swipe
   anywhere. A pan that is still moving when the fingers lift or the button is
@@ -2445,6 +2455,73 @@ is not found when the config is loaded does not repeat at all, and a command
 that `sh` reports it could not find or run (exit status 127 or 126) ends the
 repeat in progress and says `sh could not run: <command>` on the status line.
 
+### Tap bindings
+
+A `[keybindings]` entry that is a bare modifier chord is DriftWM's tap binding:
+`"alt+shift" = "switch-layout next"` runs when the chord is pressed and let go
+with nothing else on top. DriftWM's defaults bind none. The chord maps to the
+Mac keyboard as a key binding's does (the table above); the controller lists
+the chords, and the shell watches the modifiers and tells it when one completes
+([contract](../../crates/desktop/CONFIG.md#tap-bindings)).
+
+- **The rule is upstream's** (`TapTracker`). The chord is every modifier held
+  since the first went down. A key, a mouse button going down or up, a scroll,
+  or a trackpad gesture that begins while it is held makes it an ordinary
+  binding prefix, and nothing fires. Otherwise the action runs at the first
+  release, once: holding Option and tapping Shift again does nothing until
+  every modifier has been let go. Pointer motion does not count. A hot key
+  under the same modifiers is unaffected: `alt+shift+k` runs its own action,
+  and the tap does not follow it.
+- **Modifiers** are Control, Option, Shift and Command. Caps Lock is an
+  ordinary key, as upstream's lock keys are, and cancels a tap. Fn is ignored.
+- **Nothing is intercepted.** The modifiers still reach the application, and a
+  window rule's `pass_keys` withholds no tap, as upstream's does not. The
+  action is given the pointer and whether a modifier is still down, as a hot
+  key's is: after `alt+shift` one of the two is still held, so a tap bound to
+  `cycle-windows` keeps its cycle open until that one is let go.
+- **How the shell knows.** Modifier changes are observed system-wide
+  (`flagsChanged`, through one NSEvent global and one local monitor). No key
+  press is listened for: whether a key or a button landed on top is read from
+  the login session's event counters when the chord begins and again at its
+  release, which needs no permission and observes no event. A volume,
+  brightness or media key is no key event on a Mac; it arrives as a
+  system-defined event, as a copy of every mouse button change does, and that
+  kind is counted with the keys and the buttons. The shell hears of a modifier
+  after it went down, later still when its main thread is busy, so the session
+  is also asked how long ago it last saw each counted kind: one seen since the
+  timestamp of the change that begins the chord cancels it, though the first
+  reading of the counters already holds it. A scroll and a trackpad gesture
+  are the canvas's own events. The momentum macOS adds after a scroll does not
+  count: libinput has none.
+- **Accessibility.** Apple documents that a global monitor is sent key-related
+  events only while the app is trusted for Accessibility, and names no
+  exception for modifier changes. Whether an untrusted Infinify is sent them
+  has not been observed. If it is not, a tap fires only while Infinify itself
+  is the active application, and nothing says so; hot keys are unaffected.
+  When Accessibility is granted while the app runs, the monitors are installed
+  again within half a second.
+- **When.** Taps are watched exactly while the config's hot keys are
+  registered: from the moment the canvas opens until Return to desktop or quit,
+  again after every config load, and never in a windowed run or a fixture mode.
+  A chord already held when watching starts never fires. The tracker holds no
+  timer and nothing ticks it: neither the frame timer nor the check for lost
+  input ([Camera motion](#camera-motion)) calls it.
+- **Differences from DriftWM.** Two keys of one modifier (both Shifts) count as
+  one, so such a chord fires when the last of them is let go, not the first. A
+  key that was already down when the chord began cancels it only by being let
+  go while the chord is held; held throughout, it is not seen and the tap
+  fires, where DriftWM's first tap over a held key does not. The release is
+  heard of late too, and a key or a button that lands after it, before the
+  shell is told, cancels a tap DriftWM would have fired. Whatever else macOS
+  sends as a system-defined event cancels a tap as a media key does: Sticky
+  Keys and Slow Keys announce a key with one (`IOLLEvent.h`), so with either
+  on no tap is expected to fire, which was not observed. A scroll or a gesture
+  that is not over the canvas (over the menu bar or the Dock) is not seen.
+  Upstream forgets a chord when its session locks; here a chord whose events
+  were missed (secure input, the lock screen) is dropped when the next change
+  both adds and removes a modifier, or by the counters if anything was typed
+  or clicked meanwhile, and otherwise is not noticed.
+
 ### Linux-only default commands
 
 Upstream's default bindings run `swaylock`, `wpctl`, `brightnessctl`,
@@ -2568,6 +2645,41 @@ runs again: not on a reload, not when the list changes, not when the canvas is
 reopened. If the file cannot be read or parsed at launch nothing starts, then or
 later. `--windowed` runs them too, as upstream's nested backend does; the
 fixture modes read no config and start nothing.
+
+### The usable area
+
+DriftWM places and measures against an output's usable area: the output less
+its panels and bars. On a Mac those would be the menu bar and the Dock, which
+macOS draws above the canvas panels.
+
+**The shell sends no usable area.** By the owner's decision of 2026-10-10 the
+canvas covers each display edge to edge and reserves nothing for the menu bar
+or the Dock: windows may sit beneath them, and both stay visible on top. Every
+output is registered by its screen bounds alone and is usable whole, in a
+normal run, a windowed one and the fixture modes alike. This is a deliberate
+difference from DriftWM, not something that waits to be built.
+
+- **What follows.** Everything DriftWM measures in the usable area measures
+  the whole output here: a new window's place, `focus_placement`, centring,
+  Fit, fit and fill, Home and a bookmark's point, the pointer's target on
+  another display
+  ([the controller's list](../../crates/desktop/NAVIGATION.md#the-usable-area)).
+  With a Dock that stays on screen, a new or a centred window is centred on
+  the display and not on what the Dock leaves of it, Fit pads from the
+  display's edge and not from the Dock's, and a window that reaches that edge
+  continues beneath the Dock. An output begins 64 points below the top of
+  its display, under the toolbar strip, so a menu bar no taller than the
+  strip covers the strip and none of the output.
+- **Drawing.** The coverage rule of [Rendering](#rendering) tests a window's
+  frame against the whole output.
+- **The controller can hold one.** `register_output` takes an optional
+  `usable_rect_local` and `set_usable_area` replaces it, and the controller
+  measures the rectangle wherever upstream measures an output less its
+  panels, with scenarios of its own. The shell sends neither, so that side is
+  inert. A shell file that read `NSScreen.visibleFrame` and sent both was
+  written with those commands and removed before it landed, on that decision;
+  it never ran in the app
+  ([what was run](#what-has-been-run-for-tap-bindings)).
 
 ### Default mouse bindings as dispatched
 
@@ -2921,8 +3033,7 @@ the rest of `[output]`, `[[outputs]]` `scale`, `transform`, `position` and
 (`preserve_aspect_ratio` and `layer_order` are kept with the window and
 change nothing, and so are `size` and `fullscreen` in a default launch;
 `hot_corners.disable_when_fullscreen` has nothing to suppress there either),
-`[touch.*]`, `[mouse] resize_on_border` and the decoration settings, and
-tap-modifier bindings (a bare `alt+shift`), which are reported and skipped.
+`[touch.*]`, and `[mouse] resize_on_border` and the decoration settings.
 
 ### Removed fixed gestures
 
@@ -3069,6 +3180,172 @@ Dvorak and Russian layout tables, registering nothing),
 `--super` with any value, `exec-terminal` and `exec-launcher`, the status line,
 tooltips and anything else drawn, the default config path, and every one of
 these with a bound source or more than one display.
+
+### What has been run for tap bindings
+
+On 2026-10-10, macOS 27.2, Apple Silicon, one display (2056 × 1329 points, a
+menu bar of 39, the Dock hidden), from agent sessions with neither privacy
+grant. Nothing from any of it is saved as evidence.
+
+Tap bindings were built together with a second shell file, `usable-area.m`,
+which read `NSScreen.visibleFrame` and sent it as each output's usable
+rectangle. That file was removed before the work landed, on the owner's
+decision that the canvas reserves nothing
+([The usable area](#the-usable-area)). The first build below still held it;
+what was run of it is at the end of this section.
+
+**The first build.** `scripts/build-app.sh` built and ad-hoc signed the app
+with the controller and both shell files in it, with no warning under
+`-Wall -Wextra -Werror`. It was launched once, for four seconds, as
+`--windowed 1100x700` with its own `--state`, `--config` and `--socket` on a
+seeded scene of three detached placeholders, and driven through `Infinify msg`.
+A windowed run watches no tap, and in that build it sent no usable rectangle
+either, so this launch shows that the rest is as it was and that the
+controller's tap table is reached, and nothing more:
+
+- The config was `[keybindings]` with `"alt+shift" = "switch-layout next"`.
+  The app's stderr at launch held one line, the one about Screen Recording
+  access: the warning the controller used to give that entry,
+  `tap-modifier bindings are not supported on macOS`, was not printed (the
+  build before this one was not launched beside it to see it printed).
+  `msg action reload-config` answered `ok` and added no line.
+- The file was then rewritten in place with two more taps, `"mod" =
+  "home-toggle"` and `"ctrl+alt" = "zoom-reset"`, which land on one chord under
+  the default super chord. stderr gained `binding 'mod' = 'home-toggle'
+  skipped: 'ctrl+alt' already holds this macOS chord`, once from the file
+  watch and once from `reload-config`. That line comes from the controller's
+  tap table through the shell's binding refresh, so both ran in the app. The
+  `bindings` reply itself is not reachable over `msg`: which taps the shell
+  was handed was not read back.
+- `msg state` reported the three placeholders at `[520, -360]`, `[1950, 0]`
+  and `[-620, -890]` and one output `windowed` of 1100x636 at camera
+  `550 -318`, zoom 1. `action center-nearest right` settled on camera
+  `1950 -0`, the Browser placeholder's centre, and `action zoom-to-fit` on
+  zoom `0.28484848484848485`, camera `750 -390`: the numbers recorded for
+  earlier builds on the same seed.
+- A viewport screenshot (`msg screenshot -o`) was written and looked at: the
+  three placeholders on the dot grid at that zoom.
+- SIGTERM ended the app with status 0 and its socket file was gone.
+
+**The build that landed.** The tap tracker beside the display-link frame
+timer and the lost-input check ([Camera motion](#camera-motion)), and no
+`usable-area.m`: `scripts/build-app.sh` compiled it with no warning under
+`-Wall -Wextra -Werror`, and it was launched once, for three seconds, the same
+way on the same seed, with the `alt+shift` config:
+
+- stderr held the one line about Screen Recording access, before and after
+  `msg action reload-config`, which answered `ok`. The two-tap collision file
+  was not tried again.
+- `msg state` reported the same three placeholders and the output `windowed`
+  of 1100x636 at camera `550 -318`, zoom 1; `focus` answered `(none)`.
+- `action center-nearest right` settled on camera `1950 -0` with `focus`
+  naming window 2; `action zoom-to-fit` on zoom `0.28484848484848485`, camera
+  `750 -390`, and a second one back on zoom 1, camera `1950 -0`;
+  `action pan-viewport right` on camera `2050 -0`. Each was read back until
+  two reads agreed: the flights arrived, ticked by the frame timer or by the
+  poll that stands in for it, which a socket does not tell apart.
+- A viewport screenshot (`msg screenshot -o`), 1100x636, was written and
+  looked at: the Browser placeholder, 900x600 and 100 points left of centre,
+  on the dot grid.
+- SIGTERM ended the app with status 0 and its socket file was gone.
+
+No key was tapped in either launch, and a windowed run installs no monitor:
+neither shows a tap.
+
+**The two sides joined outside the app.** Since a windowed launch does not
+reach the tracker, a throwaway program outside the repository linked the
+release controller library with `tap-keys.m` as it is in the tree (and with
+`usable-area.m`, then still there), and did in one process what `main.m` does
+with it. It opened no window, installed no monitor and posted no event:
+
+- With the `alt+shift` config loaded, the controller's `bindings.taps` (one
+  entry, Option-Shift, `switch-layout next`) was handed to `DWTapKeys`, and
+  its tracker was given `flagsChanged` events built in memory, each stamped
+  with the moment it was built: Option down, Shift down, Shift up fired once, the `tap` command went to the controller
+  with the entry's own `modifiers`, a `pointer` and `held: true`, and the
+  reply carried the `switch_layout` effect; Option up fired nothing more.
+  Control alone, which nothing is bound to, fired nothing, and neither did
+  the same chord with `-taint` called before the release. A `tap` on Control
+  sent by hand was refused with `no tap binding on ⌃`. No input source was
+  switched: nothing performed the effect.
+
+**Before the app was built**, by the session that wrote the shell side, in
+throwaway programs that are not in the tree and were not run again against the
+built app:
+
+- `tap-keys.m` as it then was, linked alone into a throwaway program that
+  installs no monitor and posts nothing: its tracker was handed `flagsChanged`
+  events built in memory. Upstream's own test cases (a clean chord, a taint, a
+  single modifier, the peak chord), no second fire while a modifier stays
+  down, Caps Lock, Fn, two Shifts, an unbound chord, an entry marked not
+  implemented, and a change that adds one modifier and removes another each
+  fired what they should and nothing else.
+- The event counters were read, twice, 1.5 seconds apart, and nothing else was
+  done to them: none moved between the two reads, and key down and key up
+  stood within two of each other out of 206 thousand, which is what they would
+  show if a held key's repeats are not counted as presses. No key was held to
+  see that.
+
+**The tracker as it is now.** `tap-keys.m` has since come to count the
+system-defined events and to ask the session, as a chord begins, when it last
+saw each counted kind. As it is in the tree it was linked alone into the same
+kind of throwaway program, which installs no monitor and posts nothing, and
+handed the same events, each stamped with the moment it was built, as a real
+one is with the moment it happened:
+
+- Every case in the list above fired what it should and nothing else.
+- A chord whose first change was stamped five seconds in the past, the session
+  having seen no key, button or system-defined event for eleven, fired. One
+  stamped a second before the last of those events fired nothing, twice
+  running, and the clean chord after it fired. A change stamped 0 fired
+  nothing.
+- The session was only read for this, and nothing was pressed for it.
+  System-defined events stood at 167,921 against 158,143 mouse button changes,
+  9,778 more, with 28,497 modifier changes. Through two watches, of 12 and of
+  240 seconds, in which no key or button was pressed, the system-defined count
+  did not move. The owner then worked for seven minutes under a third, which
+  read the counts about every five milliseconds: of 244 reads in which a
+  modifier had changed and no key or button had, none saw the system-defined
+  count move; in 236 it moved with the buttons and by as much; in four it
+  moved alone and in four a button moved without it, which is what a copy and
+  its button on either side of a read would show. Over the quarter of an hour
+  around that, nine system-defined events beyond the buttons' were counted,
+  and what they were was not seen. Apple's headers (`IOLLEvent.h`,
+  `ev_keymap.h`) give one to the volume, brightness and media keys and to no
+  modifier but Caps Lock, outside Sticky Keys and Slow Keys. The last
+  system-defined event stood about 20 microseconds before the last button
+  release. A kind never seen (the other mouse buttons, at 0) reads as last
+  seen 124 seconds after startup, long ago and not just now, and two reads in
+  a row agreed to two microseconds.
+
+Not run: a normal, full-screen run with these changes, which is the only kind
+that watches a tap. No modifier was
+pressed for any of this: no monitor has delivered an event, the counters were
+seen to move only between two reads, under the owner's own work, the app has
+sent no `tap` and no tap has run an action in it; nor a tap under a hot key, a
+scroll, a gesture or Caps Lock on a keyboard; whether a hot key's own key
+press moves the key-down counter (the shell cancels the tap itself when one
+fires); what an untrusted process is sent beside a trusted one. No volume,
+brightness or media key was pressed, so that one moves the system-defined
+count is read from Apple's headers and not seen. No real event's timestamp
+was set beside `systemUptime`, which Apple documents as the same seconds
+since startup: if an event's ever reads older than it is, the chord it begins
+is taken for one with a key on top, no tap fires and nothing says so. No
+chord was begun under a busy main thread. Nor was a chord held while the
+lost-input check ended a press whose release never arrived: what that does to
+the session's button counts was not looked at.
+
+**The removed usable-area file.** `usable-area.m` never ran in the app: the
+one launch of the build that held it was windowed, where it sent nothing. In
+the throwaway programs above, linked alone, it gave the whole output for the
+display here ({0, 0, 2056, 1265}: the strip is taller than the menu bar and
+the hidden Dock takes nothing) and the rectangles worked out by hand for
+stand-in screens; joined to the controller, the display's output registered
+with that rectangle, and a hand-made one 80 points shorter was taken by
+`set_usable_area`, after which `set-bookmark` at camera `0 0` stored the point
+`1028 -592.5`, the centre of the shorter rectangle. That is the controller's
+side answering, which stays in the tree and is inert while the shell sends no
+rectangle; none of it describes the app as it is.
 
 ## Camera motion
 
@@ -3432,7 +3709,8 @@ Coordinates follow DriftWM, not the scene file: camera, window and bookmark
 positions are canvas points with Y up (larger Y is higher). A camera position is
 the centre of the view (the output below the toolbar strip), a window position the
 centre of its frame in whole points, and a bookmark the point under the centre of
-the view's usable area. The app registers no usable area yet, so that is the whole
+the view's usable area. The app registers no usable area
+([The usable area](#the-usable-area)), so that is the whole
 view and a bookmark set at a view equals its camera position. The controller's own
 world is top-left, Y-down, and the controller converts. A window is selected by
 `--id N`, the Infinify window id that `state` prints, or by a case-insensitive
@@ -3614,7 +3892,8 @@ the default scene file, takes the default socket and reads the default config
 file unless `--state`, `--socket` and `--config` say otherwise, so give a
 development window its own when you also use Infinify normally. Pointer
 bindings and settings from the config apply; key bindings are read but not
-registered. `autostart` commands run, as they do under upstream's nested
+registered, and tap bindings are read but not watched.
+`autostart` commands run, as they do under upstream's nested
 backend, and hot corners bound for `windowed` or `*` are the corners of this
 window while it is the window under the pointer. A size must be at least 960x480 (the width that keeps the toolbar and
 status line visible) and at most 16384 in each direction, or the app exits 64; the
@@ -3698,8 +3977,17 @@ the toggle, a reload of their settings and the flights around them: no real
 scroll, drag, swipe or pinch has been made against them, so how any of it moves
 or feels under a hand is unverified, and that section lists where it knowingly
 differs from DriftWM.
-Media keys, tap-modifier bindings, touch-screen
+Media keys, touch-screen
 gestures (`[touch.*]`), and every setting whose feature is absent are read and unused.
+[Tap bindings](#tap-bindings) are built into the app and have run in it only
+where a windowed launch reaches them, which is the controller's tap table at a
+config load; the shell's tracker met the controller once more, in a throwaway
+program with events built in memory. No chord has been pressed against it
+([what was run](#what-has-been-run-for-tap-bindings)).
+Whether macOS sends modifier changes to an app without Accessibility is not
+known here; if it does not, a tap fires only while Infinify is the active
+application. No [usable area](#the-usable-area) is sent, by the owner's
+decision: nothing is reserved for the menu bar and the Dock.
 Trackpad gestures have not been exercised on a trackpad: no physical gesture
 has been performed. The controller's dispatch has exported-C-ABI/JSON coverage
 with synthetic event streams, and the recogniser has been fed scripted touch

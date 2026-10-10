@@ -88,7 +88,7 @@ written **when the native result arrives**.
    again, unless something else has moved the window since.
 
 Every action reply path carries the two keys the same way: `action`,
-`hot_corner`, `ipc` (beside `reply`) and the three `gesture_*` commands. The
+`hot_corner`, `tap`, `ipc` (beside `reply`) and the three `gesture_*` commands. The
 `native_resize_result` reply itself is unchanged.
 
 ### The transaction is the existing one

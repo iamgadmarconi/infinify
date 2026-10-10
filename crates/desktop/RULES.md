@@ -417,6 +417,11 @@ otherwise, so `mod+q` and `ctrl+alt+q` are one chord); the one that holds the
 chord is the `combo` of the entry in `bindings`, and that is the spelling a
 list must use.
 
+A [tap binding](CONFIG.md#tap-bindings) is not a key binding and no
+`pass_keys` takes it, `true` included: upstream decides a tap on a key release,
+ahead of this test, which asks presses only. The entries of `bindings.taps`
+have no `passable`.
+
 ### `pass_mouse`
 
 `mouse_binding` takes an optional `window`: the window under the pointer, as

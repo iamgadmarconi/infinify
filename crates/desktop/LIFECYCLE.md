@@ -103,7 +103,12 @@ includes its title bar.
 
 - `center`, the default: under the active output's `focus_placement` point, the
   usable center unless the config moves it. The point is taken at the zoom the
-  navigation lands at and converted through the current camera and zoom.
+  navigation lands at and converted through the current camera and zoom. The
+  [usable area](NAVIGATION.md#the-usable-area) is the rectangle the output's
+  registration or `set_usable_area` last gave it, and the whole output when
+  neither did. The shell gives none, by the owner's decision: nothing is
+  reserved for the menu bar and the Dock, and a new window may open beneath
+  them.
 - `cursor`: centered on the pointer, read through the active output's own
   bounds and camera, and held inside the usable area; an oversized frame keeps
   its top-left on the usable edge. Without a `pointer` this is `center`.
@@ -431,6 +436,11 @@ they did.
 and the JSON decoder, on an output whose bounds do not start at the global
 origin and whose usable area is not the whole output, with synthetic
 identities. Its expected positions are derived by hand from upstream's rules.
+`tests/usable_tap_flow.rs` places new windows under `center`, `cursor` and
+`auto` on an output whose usable area is cut down as a Dock on the left and a
+menu bar on top would cut it, given with its registration, beside one that has
+none; the shell registers every output like the second
+([NAVIGATION.md](NAVIGATION.md#the-usable-area)).
 
 ```sh
 cargo test -p driftwm-desktop --test lifecycle_flow

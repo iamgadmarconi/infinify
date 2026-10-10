@@ -130,7 +130,12 @@ constants they replaced.
 
 Once a config is loaded, `focus_placement`, `navigation.camera_speed` and
 `snap.outer_gap` supersede the `focus_placement`, `camera_speed` and `outer_gap`
-of `set_navigation_context`; only its `usable_rect_local` is still taken. An
+of `set_navigation_context`; only its `usable_rect_local` is still taken, the
+rectangle `register_output` and `set_usable_area` also carry. The shell sends
+it with none of the three, by the owner's decision: nothing is reserved for
+the menu bar and the Dock, so the
+[usable area](NAVIGATION.md#the-usable-area) those three keys are measured in
+is the whole output. An
 `[[outputs]]` entry is matched by the output's `stable_id` (or `name = "*"`),
 where upstream matches a connector name.
 
@@ -171,7 +176,6 @@ code, and then unused, because the feature it configures does not exist here:
 - `[touch.*]` and its thresholds: upstream's touchscreen gestures, see
   [GESTURES.md](GESTURES.md#why-this-path-and-not-the-touch-recogniser)
 - `[mouse] resize_on_border`, `decoration_resize_snapped`, `decoration_fit_snapped`
-- tap-modifier bindings (a bare `alt+shift`): reported and skipped, see below
 
 ## macOS modifiers
 
@@ -253,6 +257,7 @@ which the user did not ask for.
 {"keys":[{"key_code":0,"character":"a","modifiers":{"control":true,"option":true,"shift":false,"command":false},
           "action":"home-toggle","combo":"mod+a","chord":"⌃⌥A","repeat":false,"implemented":true,"passable":true}],
  "media_keys":[{"nx_key_type":16,"modifiers":{…},"action":"spawn …","combo":"XF86AudioPlay","chord":"…","repeat":true,"implemented":true,"passable":true}],
+ "taps":[{"combo":"alt+shift","modifiers":{"control":false,"option":true,"shift":true,"command":false},"action":"switch-layout next","implemented":true}],
  "skipped":[{"combo":"Print","action":"spawn grim - | wl-copy","reason":"the key has no macOS equivalent"}],
  "hot_corners":[{"output":1,"stable_id":"…","threshold":4.0,"disable_while_dragging":true,"disable_when_fullscreen":true,"corners":{}}],
  "reserved":[{"purpose":"exit","key_code":53,"modifiers":{…},"claimed_by":null}],
@@ -272,6 +277,7 @@ which the user did not ask for.
   does not, see [Upstream's Linux commands](#upstreams-linux-commands).
 - `upstream` is present only on a default binding that was replaced by its
   macOS equivalent, and holds the action upstream binds there.
+- `taps` lists the tap bindings, see [Tap bindings](#tap-bindings).
 - `hot_corners` lists every registered output, see [Hot corners](#hot-corners).
 - `implemented` is false when the `action` command would refuse the action with
   `action not implemented on macOS yet: <name>`. The binding is listed all the
@@ -385,6 +391,92 @@ machine where those programs are installed the table is upstream's own:
 `mod+l` runs `spawn swaylock -f -c 000000 -kl` and repeats, and the eight media
 keys are listed under `media_keys` with their `nx_key_type`. A media key is not
 a virtual key code, so nothing registers it as a hot key in either case.
+
+## Tap bindings
+
+Upstream: a `[keybindings]` entry that is a bare modifier combo is a tap
+binding. It fires when the chord is pressed and released with no other key or
+button on top.
+
+```toml
+[keybindings]
+"alt+shift" = "switch-layout next"
+```
+
+Upstream's defaults bind none (its reference config has this one as a
+commented example), so `taps` is empty and nothing is warned of until a file
+writes one.
+
+`bindings.taps` lists each tap binding that has a macOS chord, sorted by
+`combo`:
+
+```json
+{"combo":"alt+shift","modifiers":{"control":false,"option":true,"shift":true,"command":false},
+ "action":"switch-layout next","implemented":true}
+```
+
+- `modifiers` is the chord in physical modifiers, by the mapping a key binding
+  takes ([macOS modifiers](#macos-modifiers)): `mod` is the super chord, and a
+  `ctrl` or `alt` the super chord already holds is displaced. Under the default
+  chord `mod` is ⌃⌥, `mod+ctrl` is ⌃⌥⌘ and `mod+alt` is ⌃⌥⇧⌘.
+- A tap whose modifier set has no chord (`mod3`, or a displacement the super
+  chord leaves no room for) is listed under `skipped` with the reason a key
+  binding gets, and named in `warnings`.
+- Two taps can land on one chord: under ⌃⌥, `mod` and `ctrl+alt`. Sorted by
+  combo text the first keeps it and the other is skipped, naming the winner, as
+  for keys. A tap and a key binding never collide: `alt+shift` and
+  `alt+shift+k` are two bindings, the second a hot key under the first's
+  modifiers, and each resolves.
+- `action` and `implemented` are as a key binding's. There is no `repeat` and
+  no `passable`.
+
+```json
+{"op":"tap","modifiers":{"control":false,"option":true,"shift":true,"command":false},"output":1}
+```
+
+`tap` runs the binding on a chord, once per command, and answers as
+[`action`](IPC.md#action) does: `{navigation, effects, dirty}`, with the
+`transaction` and `effect` of a size transaction when the action began one or
+a fullscreen exit still owed one. `modifiers` is the chord at its fullest, the
+entry's own four booleans. `output` is the active output or `null`. The action
+goes through the one action prelude: an Alt-Tab cycle in progress is ended, the
+output's scroll momentum stops, and the fullscreen guard runs. A chord no tap
+is bound to is refused with `no tap binding on ⌥⇧` (the chord as glyphs), an
+empty one with `a tap needs a modifier`, an action that does not run here with
+`action not implemented on macOS yet: <name>`; a refused tap changes nothing.
+The loser of a collision is not reachable: its chord runs the winner.
+
+`pointer` and `held` are optional and are what `action` takes: the pointer's
+global screen point, for a tap bound to `focus-center`, and whether a real
+modifier is still down as the tap fires, for one bound to `cycle-windows`.
+Upstream fires a tap on the first release of the chord, so with `alt+shift` one
+modifier is still down and a cycle step stays open until it is let go; without
+`held` the step is committed at once, which is where that ends.
+
+**`pass_keys` takes no tap.** Upstream tracks the chord and looks up its tap
+binding first in its key handler, and the chord completes on a key release,
+which returns before the `pass_keys` test: that test asks key presses only. So
+a tap fires over a window whose rule says `pass_keys = true`, and over one
+whose list names a chord that begins with the tap's modifiers. `tap` never
+reads `snapshot.pass_keys`, and the shell does not withhold a tap for it. What
+upstream withholds a tap for is a locked session, which is not this program's
+to see.
+
+**The tracker is the shell's.** Upstream's `TapTracker` keeps the high-water
+mark of the modifiers held since the chord began, is tainted by any other key
+or pointer input while they are held, fires once on the release that completes
+an untainted chord, and does not fire again until every modifier is up. The
+controller sees no modifier event and keeps no such state: it trusts each `tap`
+it is sent. How the shell watches the modifiers, what it cannot see, and what
+that needs of macOS is in the
+[shell notes](../../native/desktop/README.md#tap-bindings).
+
+One of upstream's warnings does not hold here. With `[input.keyboard] options`
+naming a group switch on the same pair (`grp:alt_shift_toggle`), upstream's
+loader warns that the tap `will never fire`, because XKB turns the second
+modifier into a layout switch. Those options are read and not applied on a Mac
+([Keyboard layouts](#keyboard-layouts)), so the tap does fire; the warning is
+upstream's own text and is reported unchanged.
 
 ## Mouse bindings
 
@@ -525,7 +617,11 @@ output with no exact entry, and an exact entry replaces it whole, so an exact
 entry without a `hot_corners` table has no hot corners. `focus_placement` and
 `hot_corners` are applied. `scale`, `transform`, `position` and `mode` are read
 and unused: macOS owns the display arrangement, and `screen_bounds` is its
-result.
+result. An output's [usable area](NAVIGATION.md#the-usable-area), upstream's
+output less its panels, is the optional `usable_rect_local` of
+`register_output`, replaced by `set_usable_area`, and the whole output when
+neither gave one. The shell gives none, by the owner's decision: the canvas
+reserves nothing for the menu bar and the Dock, which draw over it.
 
 **Adjacency** is upstream's `output_in_direction` with `screen_bounds` standing
 in for the output's layout position and size. From the center of the source
@@ -887,6 +983,48 @@ context table first; the new actions' effects; and both session flags in both or
 five Linux programs present as executables on the config's own `PATH`, so it is
 upstream's table on any machine. The motion settings (`drift`, the pan and zoom
 speeds and `[navigation.edge_pan]`) are exercised by `tests/motion_flow.rs`.
+
+`tests/usable_tap_flow.rs` covers [tap bindings](#tap-bindings): no tap and no
+warning under the defaults and an empty file; a file's taps with their mapped
+modifiers under the default super chord, `cmd` and `ctrl+cmd`, the collision's
+winner, the Mod3 tap and the undisplaceable one skipped with their reasons, and
+`implemented` following the resize capability; a tap and a key chord that
+begins with it both resolving; `tap` against `action` on two controllers in the
+same state, mid-cycle and coasting, reply for reply and snapshot for snapshot;
+`pointer` and `held`; the refusals, each leaving the snapshot as it was; a tap
+over a window with `pass_keys = true` and over one whose list names the chord
+that begins with it; and a tap reply carrying the size a fullscreen exit owed.
+Each rule was changed in the source once to see a test fail, and restored: the
+last tap on a chord keeping it, literal modifiers, a tap run without its
+output, one that drops `pointer` and `held`, an unbound chord answered idle,
+`pass_keys = true` taking the tap, and a reply that carries no owed size. No
+modifier key was pressed for any of it: the controller is sent `tap` by the
+test, and whether the shell sends one is the shell's to show.
+
+In the built app, launched once on 2026-10-10 as `--windowed 1100x700` with a
+private scene, config and socket, a file whose `[keybindings]` held
+`"alt+shift" = "switch-layout next"` loaded with no line on stderr but the one
+about Screen Recording access, and `msg action reload-config` answered `ok` and
+added none. Rewritten with `"mod" = "home-toggle"` and `"ctrl+alt" =
+"zoom-reset"` beside it, the file brought `binding 'mod' = 'home-toggle'
+skipped: 'ctrl+alt' already holds this macOS chord` to stderr at the file watch
+and again at `reload-config`: the collision rule above, read from this table
+by the shell. That is all a socket reaches. `bindings` is not an IPC request,
+so `taps` was not read back from the app; a windowed run watches no modifier;
+and no key was tapped, so the app has sent no `tap` command. The build this
+landed in, which also holds the display-link frame timer, was launched the
+same way later that day with the first file only: the same one line on stderr,
+`reload-config` answered `ok` and added none, and again no key was tapped.
+
+The join itself ran once outside the app, in a throwaway program that linked
+the release library with the shell's `tap-keys.m`: `bindings.taps` for that
+file went into the shell's tracker, modifier events built in memory (Option
+down, Shift down, Shift up) completed the chord, and the `tap` it produced,
+with the entry's own `modifiers`, a `pointer` and `held: true`, was answered
+with the `switch_layout` effect; an unbound chord and a tainted one produced
+nothing, and a `tap` on Control alone was refused with `no tap binding on ⌃`.
+No monitor was installed and no key was pressed for it
+([shell notes](../../native/desktop/README.md#what-has-been-run-for-tap-bindings)).
 
 `tests/gesture_flow.rs` covers what the file does to gestures: the `[gestures]`
 tables and thresholds, the two trackpad speeds, `drift`, the edge pan under a

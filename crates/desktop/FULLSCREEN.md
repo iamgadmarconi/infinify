@@ -59,7 +59,7 @@ Additions only; `ABI_VERSION` is unchanged and no command was added.
 | `snapshot.outputs[]` | `"fullscreen"`: `null`, or `{"window": ID, "backdrop": "black" \| "canvas"}` |
 | `snapshot.windows[]` | `"mode"` gains the value `"fullscreen"`, which stands over the `fit` or `fill` that survives beneath it. `pinned` is `null` while the window is fullscreen: its pin is put away |
 | `snapshot.placements[]` | a fullscreen output has exactly one placement, its fullscreen window's, with `"fullscreen": true`. No other placement has the key |
-| `action`, `hot_corner`, `ipc`, `gesture_*` replies | an enter, and an exit, carry the size transaction under `transaction` and `effect`, as a sizing action does |
+| `action`, `hot_corner`, `tap`, `ipc`, `gesture_*` replies | an enter, and an exit, carry the size transaction under `transaction` and `effect`, as a sizing action does |
 | `activate`, `pick`, `clear_focus` replies | may gain `transaction` and an `effects` list: see [A size that is owed](#a-size-that-is-owed). A `hover` reply never does |
 | `attach` reply | a rule's `fullscreen` carries its transaction as a rule's `size` does: `transaction`, and its effect as the one entry of `effects`. `navigation` is `null` |
 | `home_toggle` reply | the direct command's return into fullscreen carries its size transaction under `transaction` and `effect`, as the action's reply does, and its focus request in an `effects` list. Every other `home_toggle` reply is unchanged |
@@ -292,7 +292,7 @@ There is one size transaction ([SIZES.md](SIZES.md#a-second-action-while-a-size-
 
 The replies that can are the ones the shell passes to its size hook
 (`-consumeSize:`, the first step of `-applyReply:`): `action`, `hot_corner`,
-`ipc`, `gesture_begin`, `gesture_update`, `gesture_end`, `activate`,
+`tap`, `ipc`, `gesture_begin`, `gesture_update`, `gesture_end`, `activate`,
 `clear_focus`, `pick` and `pointer_nearest`. A reply that lists `effects`
 carries the transaction under `transaction` and `effect`. One whose `effect`
 is its focus request (`activate`, `pick`), or that has neither key

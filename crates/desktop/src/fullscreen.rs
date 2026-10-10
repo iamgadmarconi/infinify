@@ -180,6 +180,7 @@ pub(crate) fn carries(command: &Command) -> bool {
         command,
         Command::Action { .. }
             | Command::HotCorner { .. }
+            | Command::Tap { .. }
             | Command::Ipc { .. }
             | Command::Activate { .. }
             | Command::ClearFocus {}

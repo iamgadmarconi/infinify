@@ -1571,6 +1571,109 @@ device-specific behavior also need the corresponding hardware.
   resize pass exists. See the
   [fullscreen contract](../../crates/desktop/FULLSCREEN.md) and the
   [desktop shell notes](../../native/desktop/README.md#fullscreen).
+- This milestone (commit pending), tap bindings, closes one gap of a default
+  launch, with no flag. A `[keybindings]` entry that is a bare modifier chord
+  (`"alt+shift" = "switch-layout next"`) is no longer skipped: the `bindings`
+  reply lists it under `taps` with the macOS chord a key binding's modifiers
+  map to, and a new `tap {modifiers, output}` command runs the bound action
+  through the one action prelude and refuses a chord nothing is bound to. No
+  window's `pass_keys` takes a tap: upstream decides a tap on a key release,
+  ahead of that test, which asks presses only. The tracker is the shell's
+  (`tap-keys.m`), upstream's `TapTracker` over `flagsChanged` from one
+  NSEvent global and one local monitor, set up and torn down with the hot
+  keys: the peak chord, tainted by anything else on top, fired once on the
+  first release, and not again until every modifier is up. It holds no timer,
+  and neither the display-link frame timer nor the lost-input check calls it.
+  A key or a button on top is not listened for; the login session's event
+  counters (keys, mouse buttons, and the system-defined events a volume,
+  brightness or media key arrives as) are compared at the chord's start and
+  at its release, the session's own last-seen times are asked at the start
+  for what landed before the shell heard of the chord, and a hot key that
+  fired, a scroll and a gesture that begins taint directly. **The usable area
+  was built with it, and the shell sends none.** Upstream measures an output
+  less the exclusive zones of its layer-shell panels (`usable_area_on`); on a
+  Mac the counterpart would be what the menu bar and the Dock leave of a
+  display. The controller's side landed and is kept: `register_output` takes
+  an optional `usable_rect_local`, a new
+  `set_usable_area {output, usable_rect_local}` replaces it in place, a
+  change moves nothing and saves nothing, as upstream arranges its layers
+  again and owes the output a frame and no more (`handle_layer_commit`,
+  `layer_destroyed`), and a screen-pinned window's clamp and fullscreen still
+  measure the whole output, as upstream's `clamp_pin_frame` and fullscreen
+  do. The shell's side, a file that read `NSScreen.visibleFrame` and sent it,
+  was removed before landing by the owner's decision of 2026-10-10: the
+  canvas covers each display edge to edge with nothing reserved for the menu
+  bar or the Dock, windows may sit beneath them, and both stay visible on
+  top. So no output is registered with a rectangle and `set_usable_area` is
+  never sent, every output is usable whole, the renderer's `DrawnChrome`
+  coverage rule tests the whole output as it did, and the controller's
+  rectangle is inert. That is a deliberate difference from upstream, not a
+  gap that waits for work. The wire contract only grew (`usable_rect_local`,
+  `set_usable_area`, `taps`, `tap` with the optional `pointer` and `held` an
+  `action` takes); the ABI version is unchanged. Evidence boundary:
+  `crates/desktop/tests/usable_tap_flow.rs` (15 scenarios through the
+  exported C ABI, on two outputs off the origin, one with what a Dock on the
+  left and a menu bar on top would leave of it, expected values derived by
+  hand from upstream's rules, upstream not executed as an oracle) and eleven
+  more controller test modules (175 scenarios) passed on 2026-10-10 on the
+  tree that landed (macOS 27.2, Apple Silicon). The app was launched twice,
+  windowed, on three detached placeholders with a private scene, config and
+  socket and no privacy grant: once from the tree the milestone was built
+  in, and once from the tree that landed, with the display-link frame timer
+  and the lost-input check beside the tracker and no usable-area file. In
+  both a config holding the `alt+shift` tap loaded with no warning on stderr
+  and `reload-config` was acknowledged; `center-nearest right` settled on
+  camera `1950 -0` and `zoom-to-fit` on zoom `0.28484848484848485`, the
+  numbers recorded for earlier builds; a viewport screenshot was written and
+  looked at; and SIGTERM ended it with status 0 and its socket removed. In
+  the first, the config rewritten with two taps that land on one chord
+  brought the controller's collision warning to stderr, so the tap table is
+  reached in the app. That is all a windowed launch reaches: it installs no
+  monitor, and no key was tapped in either. The tracker and the controller
+  also met once outside the app, in a throwaway program outside the
+  repository that linked the release controller library with `tap-keys.m`
+  and installed no monitor: `bindings.taps` fed to the tracker with modifier
+  events built in memory produced one `tap`, answered with the
+  `switch_layout` effect, and none for an unbound or a tainted chord. (With
+  the shell file since removed, the same program registered the display's
+  output with a rectangle and had a hand-made one, 80 points shorter, taken
+  by `set_usable_area`, which moved the point `set-bookmark` stored to its
+  centre: the controller's side answering, and nothing the app does.) The
+  tracker alone, fed the same way, fired for a chord handed to it five
+  seconds late with nothing seen by the session since, and not for one that
+  began before the session's last key or button event. No normal run was
+  made, so the app has sent no `tap`; no modifier and no media key was
+  pressed for any of it and no monitor has delivered an event: that a media
+  key moves the system-defined count is read from Apple's headers, and that
+  a modifier does not from the session's counts, watched through seven
+  minutes of the owner's own work (244 reads in which a modifier alone had
+  changed, the system-defined count still in every one); no real event's
+  timestamp was set beside `systemUptime`, and if one ever reads older than
+  it is no tap fires. Whether macOS sends modifier changes to a process
+  without Accessibility trust is not known here: Apple's documentation gates
+  key-related events on it and names no exception, and if it holds a tap
+  fires only while Infinify is the active application, with nothing said.
+  Known mismatches of the tracker: two keys of one modifier count as one, so
+  such a chord fires on the last release and not the first; a key held from
+  before the chord until after it is not seen; a scroll or gesture that
+  reaches no canvas panel does not cancel a tap; a key or button that lands
+  after the release, before the shell hears of it, does; whatever else macOS
+  sends as a system-defined event cancels a tap as a media key does, so
+  Sticky Keys and Slow Keys, which announce a key with one, are expected to
+  stop every tap (not observed); nothing resets the tracker at the lock
+  screen; and upstream's warning that the tap never fires beside
+  `grp:alt_shift_toggle` is reported unchanged although XKB options are not
+  applied on a Mac. Inventory: `config.keybindings.alt+shift` became
+  `implemented_unverified`; `protocol.layer_shell` stays `missing`, its note
+  now saying that nothing is reserved for the menu bar and the Dock by the
+  owner's decision, a deliberate difference and not a gap awaiting work, and
+  that panel and overlay policy is still missing; and the 21 rows whose
+  notes say the app registers no usable area keep that clause, which is
+  still true. See the
+  [navigation contract](../../crates/desktop/NAVIGATION.md#the-usable-area),
+  the [configuration contract](../../crates/desktop/CONFIG.md#tap-bindings)
+  and the
+  [desktop shell notes](../../native/desktop/README.md#what-has-been-run-for-tap-bindings).
 
 These milestones add evidence to partial rows. None satisfies an entire native
 behavior row or changes the completion requirement.
@@ -1628,15 +1731,21 @@ tree at `ed34eec`. 24 of them described behaviour a default launch already has
 and became `implemented_unverified`; the other 190 stay `missing`, each with a
 note that says why. No row is `verified` or `blocked`, and the sweep moved none
 to `out_of_scope`: that is the owner's decision, which a note only recommends.
+The tap-bindings milestone has since moved one more row,
+`config.keybindings.alt+shift`, to `implemented_unverified`; the table is
+counted from the file as it stands after that. `protocol.layer_shell` stays
+`missing` and stays counted as a gap for the panel and overlay policy it still
+lacks; its other clause, a reserved area, is not one: by the owner's decision
+of 2026-10-10 nothing is reserved for the menu bar and the Dock.
 
 | Rows | Count |
 | --- | --- |
-| `implemented_unverified` | 395 |
-| `missing` | 190 |
+| `implemented_unverified` | 396 |
+| `missing` | 189 |
 | of which gated behind `--experimental-native-resize` | 29 |
 | of which provided or owned by macOS | 68 |
 | of which with no Mac counterpart | 67 |
-| of which real gaps | 26 |
+| of which real gaps | 25 |
 | `out_of_scope` | 3 |
 | all rows | 588 |
 
@@ -1666,7 +1775,7 @@ The `missing` rows, by group:
   opacity on inactive outputs; Num Lock and the XKB keyboard model; the primary
   selection; shortcut inhibition by a client; the media stop key; the reference
   config's tablet `map_to_output`.
-- **Real gaps (26).** Nothing but the work is waited for here:
+- **Real gaps (25).** Nothing but the work is waited for here:
   - a resize carried to the snapped neighbours, by pointer
     (`resize_window_snapped`) or from a window's own edge or zoom button
     (`decoration_resize_snapped`, `decoration_fit_snapped`): the controller
@@ -1679,9 +1788,10 @@ The `missing` rows, by group:
   - pointer lock, confinement and relative motion for the application under
     the pointer (2);
   - tablet tools (1);
-  - reserved areas and any policy for panel or overlay windows (1);
+  - any policy for panel or overlay windows; the row's other clause, the
+    area a panel reserves, is no gap but the owner's decision: nothing is
+    reserved for the menu bar and the Dock (1);
   - the background shader cache and its budget (4);
-  - tap-modifier bindings (1);
   - the two brightness swipe examples, whose command is a Linux program with
     no Mac substitute (2);
   - the acceptance pass itself, on the M5 and macOS 26 target (1).

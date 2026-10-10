@@ -2,6 +2,10 @@
 // Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
 // src/state/{navigation,viewport,viewport_animation}.rs. Native frame geometry
 // includes the titlebar; there is no additional compositor border.
+// `set_usable_area` follows src/state/viewport.rs (usable_area_on) and what
+// src/handlers/layer_shell.rs (layer_destroyed) and src/handlers/compositor.rs
+// (handle_layer_commit) do when a panel's exclusive zone changes: the layers
+// are arranged again and the output owes a frame, nothing is moved or clamped.
 use super::*;
 use driftwm_core::config::FocusPlacement as ConfigFocusPlacement;
 
@@ -148,6 +152,15 @@ impl NavigationContext {
     }
 }
 
+/// A usable rectangle is output-local and lies inside its output.
+fn usable_fits(usable: Rect, output: Size) -> bool {
+    rect_valid(usable)
+        && usable.origin.x >= 0.0
+        && usable.origin.y >= 0.0
+        && usable.right() <= output.width
+        && usable.bottom() <= output.height
+}
+
 impl Controller {
     /// The output's usable rectangle, and how navigation places and animates.
     /// Once a config is loaded the placement, camera speed and outer gap are
@@ -201,11 +214,7 @@ impl Controller {
             .scene
             .output(output)
             .ok_or(Error::Invalid("unknown output"))?;
-        if !rect_valid(usable_rect_local)
-            || usable_rect_local.origin.x < 0.0
-            || usable_rect_local.origin.y < 0.0
-            || usable_rect_local.right() > viewport.screen_bounds.size.width
-            || usable_rect_local.bottom() > viewport.screen_bounds.size.height
+        if !usable_fits(usable_rect_local, viewport.screen_bounds.size)
             || !camera_speed.is_finite()
             || camera_speed <= 0.0
             || camera_speed > 1.0
@@ -224,6 +233,36 @@ impl Controller {
                 outer_gap,
             },
         );
+        Ok(())
+    }
+    /// Upstream's non_exclusive_zone of one output: what its panels leave,
+    /// here what the menu bar and the Dock leave. Only the rectangle is
+    /// written. Upstream re-arranges its layer surfaces when a panel's
+    /// exclusive zone changes and owes the output a frame, and nothing else:
+    /// no camera, window or pin moves, and a flight keeps the anchor it was
+    /// armed with. Every reader measures the new rectangle from its next
+    /// request on, and the active bookmark as this command ends.
+    pub(crate) fn set_usable_area(
+        &mut self,
+        output: OutputId,
+        usable_rect_local: Rect,
+    ) -> Result<(), Error> {
+        let viewport = self
+            .scene
+            .output(output)
+            .ok_or(Error::Invalid("unknown output"))?;
+        if !usable_fits(usable_rect_local, viewport.screen_bounds.size) {
+            return Err(Error::Invalid("invalid usable area"));
+        }
+        self.navigation_contexts
+            .entry(output)
+            .or_insert(NavigationContext {
+                usable_rect_local,
+                focus_placement: FocusPlacement::Center,
+                camera_speed: 0.3,
+                outer_gap: 0.0,
+            })
+            .usable_rect_local = usable_rect_local;
         Ok(())
     }
     pub(crate) fn arm_navigation(

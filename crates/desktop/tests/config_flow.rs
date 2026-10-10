@@ -859,15 +859,20 @@ fn colliding_and_unreachable_bindings_are_reported_with_a_deterministic_winner()
             "binding 'mod+XF86Calculator' = 'zoom-reset' skipped: the key has no macOS equivalent",
             "binding 'mod+a' = 'home-toggle' skipped: 'ctrl+alt+a' already holds this macOS chord",
             "binding 'mod+ctrl+shift+Right' = 'zoom-out' skipped: 'mod+alt+Right' already holds this macOS chord",
-            "binding 'mod3+x' = 'zoom-in' skipped: macOS has no Mod3 modifier",
-            "binding 'alt+shift' = 'switch-layout next' skipped: tap-modifier bindings are not supported on macOS"
+            "binding 'mod3+x' = 'zoom-in' skipped: macOS has no Mod3 modifier"
         ]),
         "{table}"
+    );
+    // A bare modifier chord is a tap binding: listed apart, and not skipped.
+    assert_eq!(
+        reply["taps"],
+        json!([{"combo":"alt+shift","modifiers":{"control":false,"option":true,"shift":true,"command":false},"action":"switch-layout next","implemented":true}])
     );
     // `none` removed upstream's shift+Print, so it is not even listed.
     let skipped = by_combo(&reply["skipped"]);
     assert!(!skipped.contains_key("shift+Print"), "{table}");
-    assert_eq!(skipped.len(), 8, "{table}");
+    assert!(!skipped.contains_key("alt+shift"), "{table}");
+    assert_eq!(skipped.len(), 7, "{table}");
     // And the exit chord then belongs to that binding.
     assert_eq!(reply["reserved"][0]["claimed_by"], "mod+Escape");
     assert_eq!(h.ok(json!({"op":"bindings"})), reply);

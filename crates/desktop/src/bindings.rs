@@ -22,6 +22,7 @@
 //!
 //! The mapping is not one to one, so two bindings can land on one chord. Sorted
 //! by upstream combo text, the first keeps the chord and the rest are reported.
+//! A tap binding, a bare modifier chord, takes the same mapping (taps.rs).
 //! Control+Option+Escape is the shell's exit chord unless a binding claims it.
 //!
 //! A default binding that runs a program this Mac does not have is replaced by
@@ -59,7 +60,7 @@ pub struct MacModifiers {
 }
 impl MacModifiers {
     /// The chord as macOS menus write it.
-    fn symbols(self) -> String {
+    pub(crate) fn symbols(self) -> String {
         [
             (self.control, '⌃'),
             (self.option, '⌥'),
@@ -145,7 +146,7 @@ impl Platform {
         .join("+")
     }
     /// The macOS chord of an upstream modifier set, or why it has none.
-    fn physical(self, modifiers: &Modifiers) -> Result<MacModifiers, String> {
+    pub(crate) fn physical(self, modifiers: &Modifiers) -> Result<MacModifiers, String> {
         if modifiers.mod3 {
             return Err("macOS has no Mod3 modifier".to_owned());
         }
@@ -368,7 +369,7 @@ pub(crate) fn key_name(keysym: u32) -> Option<&'static str> {
 }
 
 /// The 32 modifier sets a binding can hold.
-fn modifier_sets() -> impl Iterator<Item = Modifiers> {
+pub(crate) fn modifier_sets() -> impl Iterator<Item = Modifiers> {
     (0..32u8).map(|bits| Modifiers {
         ctrl: bits & 1 != 0,
         alt: bits & 2 != 0,
@@ -482,8 +483,9 @@ impl Controller {
             "zoom_trackpad_speed":finite(config.zoom_trackpad_speed),
         })
     }
-    /// The key bindings as macOS chords, for the shell to register, and each
-    /// registered output's hot corners, for it to watch.
+    /// The key bindings as macOS chords, for the shell to register, the tap
+    /// bindings as the modifiers it watches, and each registered output's hot
+    /// corners, for it to watch.
     pub(crate) fn bindings(&self) -> Value {
         let config = self.config();
         let defaults = defaults(config.mod_key);
@@ -587,17 +589,9 @@ impl Controller {
                 keys.push(entry);
             }
         }
-        // A bare modifier chord cannot be a hot key.
-        for modifiers in modifier_sets() {
-            if let Some(action) = config.tap_lookup(&modifiers) {
-                skip(
-                    &combo_text(&modifiers, config.mod_key, None),
-                    action,
-                    "tap-modifier bindings are not supported on macOS".to_owned(),
-                    true,
-                );
-            }
-        }
+        // A bare modifier chord cannot be a hot key: the shell watches the
+        // modifiers for it and sends `tap` (taps.rs).
+        let taps = self.taps(&mut skip);
         let exit = MacModifiers {
             control: true,
             option: true,
@@ -607,6 +601,7 @@ impl Controller {
         json!({
             "keys":keys,
             "media_keys":media_keys,
+            "taps":taps,
             "skipped":skipped,
             "hot_corners":self.hot_corners(),
             "reserved":[{"purpose":"exit","key_code":EXIT_KEY_CODE,"modifiers":exit,"claimed_by":claimed.get(&(false, EXIT_KEY_CODE, exit))}],

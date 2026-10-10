@@ -96,7 +96,8 @@ the same result in one call.
 runs for one output on:
 
 - the prelude of every `action` that names an output, of an `ipc` `Action`,
-  of the action a [`hot_corner`](CONFIG.md#hot-corners) runs, of an action
+  of the action a [`hot_corner`](CONFIG.md#hot-corners) or a
+  [`tap`](CONFIG.md#tap-bindings) runs, of an action
   a gesture's threshold or hold fires and of the `center-nearest` a
   [`pointer_nearest`](POINTER.md#pointer_nearest) fires past its dead zone,
   whatever the action then does

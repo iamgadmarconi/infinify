@@ -24,6 +24,7 @@ mod rules;
 mod settings;
 mod sizes;
 mod storage;
+mod taps;
 mod view_actions;
 mod window_actions;
 use bindings::Platform;
@@ -362,6 +363,12 @@ pub enum Command {
         camera_speed: f64,
         outer_gap: f64,
     },
+    /// What the menu bar and the Dock leave of an output, in output-local
+    /// points: upstream's usable area. Only the rectangle changes.
+    SetUsableArea {
+        output: OutputId,
+        usable_rect_local: Rect,
+    },
     PanViewport {
         output: OutputId,
         direction: ViewDirection,
@@ -448,6 +455,17 @@ pub enum Command {
         #[serde(default)]
         held: bool,
     },
+    /// A bare modifier chord was pressed and released with nothing on top:
+    /// run the tap binding on it. `modifiers` is the chord at its fullest.
+    /// `pointer` and `held` are as `action` takes them.
+    Tap {
+        modifiers: MacModifiers,
+        output: Option<OutputId>,
+        #[serde(default)]
+        pointer: Option<Point>,
+        #[serde(default)]
+        held: bool,
+    },
     /// The keyboard layout now in force, as the shell observed it.
     LayoutChanged {
         name: String,
@@ -502,6 +520,9 @@ pub enum Command {
     RegisterOutput {
         stable_id: String,
         screen_bounds: Rect,
+        /// The output's usable area, output-local. None is the whole output.
+        #[serde(default)]
+        usable_rect_local: Option<Rect>,
     },
     RemoveOutput {
         output: OutputId,
@@ -950,6 +971,14 @@ impl Controller {
                     outer_gap,
                 )?;
             }
+            Command::SetUsableArea {
+                output,
+                usable_rect_local,
+            } => {
+                self.set_usable_area(output, usable_rect_local)?;
+                // Upstream re-clamps nothing: no saved state changes.
+                return Ok(json!({"dirty": false}));
+            }
             Command::PanViewport { output, direction } => {
                 return self.pan_viewport(output, direction);
             }
@@ -992,6 +1021,12 @@ impl Controller {
                 pointer,
                 held,
             } => return self.hot_corner(output, corner, valid_pointer(pointer)?, held),
+            Command::Tap {
+                modifiers,
+                output,
+                pointer,
+                held,
+            } => return self.tap(modifiers, output, valid_pointer(pointer)?, held),
             Command::LayoutChanged {
                 name,
                 short,
@@ -1024,6 +1059,7 @@ impl Controller {
             Command::RegisterOutput {
                 stable_id,
                 screen_bounds,
+                usable_rect_local,
             } => {
                 if stable_id.trim().is_empty() || !text_valid(&stable_id, 1024) {
                     return Err(Error::Invalid("invalid stable output identity"));
@@ -1081,6 +1117,9 @@ impl Controller {
                 }
                 self.flights.remove(&id);
                 self.navigation_contexts.remove(&id);
+                if let Some(usable) = usable_rect_local {
+                    self.set_usable_area(id, usable)?;
+                }
                 self.motion.forget(id);
                 self.outputs.insert(
                     id,
