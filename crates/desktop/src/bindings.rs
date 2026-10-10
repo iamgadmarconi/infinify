@@ -609,6 +609,21 @@ impl Controller {
             "warnings":warnings,
         })
     }
+    /// The upstream modifier sets a physical chord can stand for, each with its
+    /// combo text ending in `last`, in combo order.
+    pub(crate) fn chord_candidates(
+        &self,
+        modifiers: MacModifiers,
+        last: &str,
+    ) -> Vec<(String, Modifiers)> {
+        let mod_key = self.config().mod_key;
+        let mut candidates: Vec<_> = modifier_sets()
+            .filter(|set| self.platform.physical(set) == Ok(modifiers))
+            .map(|set| (combo_text(&set, mod_key, Some(last)), set))
+            .collect();
+        candidates.sort_by(|a, b| a.0.cmp(&b.0));
+        candidates
+    }
     /// Upstream's pointer binding lookup for a physical macOS chord. The chord
     /// may stand for more than one upstream modifier set. As
     /// `ContextBindings::lookup` prefers the pointer's own context over
@@ -648,11 +663,7 @@ impl Controller {
             PointerContext::Window => &config.mouse.on_window,
             PointerContext::Canvas => &config.mouse.on_canvas,
         };
-        let mut candidates: Vec<_> = modifier_sets()
-            .filter(|set| self.platform.physical(set) == Ok(modifiers))
-            .map(|set| (combo_text(&set, config.mod_key, Some(name)), set))
-            .collect();
-        candidates.sort_by(|a, b| a.0.cmp(&b.0));
+        let candidates = self.chord_candidates(modifiers, name);
         let found = [own, &config.mouse.anywhere].into_iter().find_map(|table| {
             candidates.iter().find_map(|(combo, set)| {
                 let key = MouseBinding {

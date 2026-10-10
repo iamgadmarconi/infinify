@@ -8,7 +8,9 @@
 // (load_session and saved_camera_state: what restore_bookmarks and
 // restore_camera let a saved session bring back) and src/main.rs (the
 // autostart commands, spawned once after startup). The configuration itself is
-// driftwm-core's `Config`, upstream's own code.
+// driftwm-core's `Config`, upstream's own code. When a reload drops a runtime
+// set-trackpad is upstream's documented rule (docs/config.md, [input.trackpad]
+// enable), not its reload code, which this port did not read.
 use super::bindings::{Platform, key_known};
 use super::*;
 use driftwm_core::config::{
@@ -222,6 +224,14 @@ impl Controller {
         let (errors, warnings) = match parsed {
             Ok((settings, warnings)) => {
                 let old = std::mem::replace(&mut self.settings, std::sync::Arc::new(settings));
+                // Upstream reload: a coast in progress takes the new drift.
+                self.motion.set_drift(self.settings.config.drift);
+                // Upstream docs/config.md: a set-trackpad press holds until a
+                // saved config changes the resulting on/off state.
+                if old.config.trackpad.send_events != self.settings.config.trackpad.send_events {
+                    self.trackpad_override = None;
+                }
+                dirty |= self.settle_trackpad()?;
                 if !launch {
                     // Upstream reload: config is a seed. A name added or changed
                     // in config re-asserts into the registry, a name removed from
@@ -260,6 +270,9 @@ impl Controller {
         if launch {
             self.seed_bookmarks();
             self.settle_shown_cameras()?;
+            // Upstream reads `edge_pan.cursor_pan` once, at startup: from then
+            // on the flag is toggle-cursor-pan's and a reload leaves it alone.
+            self.motion.cursor_pan = self.config().edge_pan_cursor;
             // Upstream main: the launch config's autostart commands, spawned
             // as an `exec` is. A reload never runs them, a changed list included.
             let config = self.config();

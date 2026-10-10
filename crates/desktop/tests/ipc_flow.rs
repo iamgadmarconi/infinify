@@ -878,17 +878,15 @@ fn action_strings_follow_upstream_grammar() {
     // tests/navigation_actions_flow.rs covers those. So do send-to-output,
     // send-cursor-to-output and switch-layout: tests/platform_actions_flow.rs.
     // close-window and suspend-window run too: tests/lifecycle_flow.rs covers
-    // those.
+    // those. toggle-cursor-pan runs too: tests/motion_flow.rs covers it. So
+    // does set-trackpad: tests/gesture_flow.rs covers it.
     for (name, sample) in [
         ("fill-window", "fill-window"),
         ("fit-window", "fit-window"),
         ("fit-window-snapped", "fit-window-snapped"),
         ("grow-window", "grow-window up"),
         ("move-to-bookmark", "move-to-bookmark 1"),
-        ("set-trackpad", "set-trackpad toggle"),
-        ("set-trackpad", "set-trackpad OFF"),
         ("shrink-window", "shrink-window up"),
-        ("toggle-cursor-pan", "toggle-cursor-pan"),
         ("toggle-fullscreen", "toggle-fullscreen"),
         ("toggle-pin-to-screen", "toggle-pin-to-screen"),
         ("zoom-to-fit-snapped", "zoom-to-fit-snapped"),

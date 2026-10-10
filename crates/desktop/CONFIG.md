@@ -50,8 +50,9 @@ code and wins over both.
   own value warnings, verbatim and in upstream's order (rejected values before
   corrected ones), for example
   `config: navigation.camera_speed 0 must be in (0, 1] (0 freezes the camera), using 0.3`.
-- `dirty` is true when the reload changed the bookmark registry and the shell
-  should save.
+- `dirty` is true when the shell should save: the reload changed the bookmark
+  registry, or it turned the trackpad off under a
+  [gesture](GESTURES.md#set-trackpad) that had moved a camera or a window.
 - `effects` holds the [autostart](#autostart) commands on the launch load and is
   empty on every later one.
 
@@ -80,8 +81,15 @@ constants they replaced.
 | `[navigation] auto_navigate_on_click` | `activate` with cause `click_release` flies to a still-focused window that is not wholly in view |
 | `[zoom] reset_on_activation` | whether `activate` with cause `native` and the IPC `Focus` fly to a clipped window at zoom 1 or at the current zoom |
 | `[navigation.bookmarks]` | seeds of the bookmark registry, see [Session](#session) |
-| `[navigation] trackpad_speed`; `[zoom] mouse_speed` | reported with each pointer binding and by `bindings`; the shell scales a bound scroll pan and a bound wheel zoom by them |
-| `[zoom] step` | `zoom-in`, `zoom-out`; reported to the shell for wheel zoom |
+| `[navigation] trackpad_speed`, `mouse_speed` | a timed `pan` from a scroll and from a drag, and `trackpad_speed` a gesture's swipe pan, see [camera motion](MOTION.md) |
+| `[navigation] drift` | how far a released pan coasts, a swipe pan included |
+| `[navigation.edge_pan] zone`, `speed_min`, `speed_max`, `latency_ms` | the edge pan under a dragged window, by pointer or by move gesture, and the wait at an edge that borders another output |
+| `[navigation.edge_pan] cursor_pan`, `cursor_zone` | cursor edge pan: its state at launch and its zone |
+| `[zoom] step` | `zoom-in`, `zoom-out`, and a wheel `zoom_by` |
+| `[zoom] mouse_speed`, `trackpad_speed` | a wheel `zoom_by`; a gesture's pinch zoom and a pinch `zoom_by` |
+| `[gestures.on-window]`, `[gestures.on-canvas]`, `[gestures.anywhere]`, `disable_defaults = ["gestures"]` | the bindings a `gesture_begin` resolves, see [GESTURES.md](GESTURES.md) |
+| `[gestures] swipe_threshold`, `pinch_in_threshold`, `pinch_out_threshold` | when a threshold gesture fires |
+| `[input.trackpad] enable` | whether gestures are dispatched, until `set-trackpad` overrides it |
 | `[zoom] fit_padding` | `zoom-to-fit`, and the dynamic minimum zoom |
 | `[snap] enabled`, `gap`, `distance`, `break_force`, `corners`, `centers` | `begin_drag`, `begin_resize`, `gesture_to` and the native resize transaction's snap intent |
 | `[snap] outer_gap` | the inset of a placed window in window navigation |
@@ -114,15 +122,14 @@ Everything else in the file is parsed, validated and warned about by upstream's
 code, and then unused, because the feature it configures does not exist here:
 
 - `focus_follows_mouse`, `[xwayland]`
-- `[navigation] mouse_speed` and `[zoom] trackpad_speed`: reported with each
-  pointer binding and by `bindings`, but the shell's drag pan follows the
-  pointer 1:1 and its pinch is unscaled
-- `[navigation] resize_step`, `drift`, `touch_speed`, `[navigation.edge_pan]`
+- `[navigation] resize_step`, `touch_speed`
 - `[zoom] touch_speed`, `interact_min`
 - `[input.keyboard] layout`, `variant`, `options`, `model`,
   `remember_layout_per_window`, `num_lock`, `caps_lock`: these have no macOS
   meaning, see [Keyboard layouts](#keyboard-layouts)
-- `[input.trackpad]`, `[input.mouse]`, `[input.touch]`, `[input.tablet]`
+- `[input.trackpad]` other than `enable`, including
+  `disable_on_external_mouse`, which counts as on; `[input.mouse]`,
+  `[input.touch]`, `[input.tablet]`
 - `[cursor] inactive_opacity` (theme and size reach only the `exec` environment)
 - `[background]`, `[decorations]` other than `title_bar_height`, `[effects]`,
   `[backend]`, `[output]`
@@ -132,7 +139,8 @@ code, and then unused, because the feature it configures does not exist here:
 - `[[window_rules]]` other than `suspend_on_close` and `restore_windows`, so
   `position`, `size`, `focus_on_open`, `widget`, `pass_keys` and `pass_mouse`
   included
-- `[gestures.*]`, `[touch.*]`, and their thresholds
+- `[touch.*]` and its thresholds: upstream's touchscreen gestures, see
+  [GESTURES.md](GESTURES.md#why-this-path-and-not-the-touch-recogniser)
 - `[mouse] resize_on_border`, `decoration_resize_snapped`, `decoration_fit_snapped`
 - the mouse triggers `wheel-up` and `wheel-down`: `mouse_binding` has no notch
   direction, so a binding on one is never returned
@@ -295,7 +303,7 @@ no Mac key.
 | `mod+ctrl+Up` | ⌃⌥⌘Up | 126 | `pan-viewport up` | yes | yes |
 | `mod+ctrl+shift+q` | ⌃⌥⇧⌘Q | 12 | `quit` |  | yes |
 | `mod+d` | ⌃⌥D | 2 | `exec-launcher` |  | yes |
-| `mod+e` | ⌃⌥E | 14 | `toggle-cursor-pan` |  | no |
+| `mod+e` | ⌃⌥E | 14 | `toggle-cursor-pan` |  | yes |
 | `mod+equal` | ⌃⌥= | 24 | `zoom-in` | yes | yes |
 | `mod+f` | ⌃⌥F | 3 | `toggle-fullscreen` |  | no |
 | `mod+l` | ⌃⌥L | 37 | `exec /usr/bin/pmset displaysleepnow`, for upstream's `spawn swaylock -f -c 000000 -kl` |  | yes |
@@ -384,9 +392,11 @@ table.
 The five speeds are upstream `Config` fields by name. Upstream pans a scroll by
 `trackpad_speed / zoom` and a drag by `mouse_speed`, zooms a wheel by
 `zoom_step ^ (-v / 30 · zoom_mouse_speed)` clamped to the dynamic minimum, and
-scales a pinch by `zoom_trackpad_speed`. Applying them is the shell's, which
-uses `trackpad_speed`, `zoom_step` and `zoom_mouse_speed` and not yet
-`mouse_speed` or `zoom_trackpad_speed`.
+scales a pinch by `zoom_trackpad_speed`. The reply still carries them, but
+applying them is the controller's: a timed `pan` and `zoom_by` read the config
+themselves, so a shell that uses those commands must not scale again, and a
+[gesture](GESTURES.md)'s pan and pinch go through the same code. See
+[camera motion](MOTION.md).
 
 Upstream's defaults under the default super chord:
 
@@ -419,6 +429,11 @@ logical world move, refused during a gesture or a live native resize and for a
 destination outside the integer range, exactly as the IPC `Move` is. With no
 focused window nothing happens and nothing is dirty, as upstream.
 
+`set-trackpad on|off|toggle` turns the dispatch of trackpad gestures on or off
+for the rest of the run, over `[input.trackpad] enable`. It needs no output and
+changes nothing that is saved. [GESTURES.md](GESTURES.md#set-trackpad) has what
+off means here and when a config reload drops the override.
+
 `exec <cmd>` and `spawn <cmd>` return the effect
 `{"op":"exec","command":"<cmd>","env":{…}}`. Upstream's `spawn_command` runs
 `sh -c <cmd>` with `Config::child_env`; the shell does the same, detached.
@@ -431,6 +446,11 @@ window) and `open -a Apps` (the macOS 26 application launcher).
 
 `reload-config` returns the effect `{"op":"reload_config"}`: the shell sends
 `load_config` again and re-reads `bindings`.
+
+`toggle-cursor-pan` flips the runtime cursor edge pan flag, which the first
+config of a run set from `navigation.edge_pan.cursor_pan`. It needs no output
+and has no effect for the shell beyond the snapshot's
+`navigation.cursor_pan`: see [camera motion](MOTION.md#cursor-edge-pan).
 
 `close-window` and `suspend-window` act on the focused window. For a window with
 a bound source they return the effect
@@ -552,8 +572,10 @@ as `action`, with that output as the active one, and answers
 `focus-center` reads, and whether a real modifier is down, which keeps a
 `cycle-windows` step open. Upstream runs a corner's action through
 `execute_action` like any other, so a corner bound to a non-cycle action ends a
-cycle in progress first. A corner with no binding, and
-any corner while a controller gesture (a drag or resize) is installed on an
+cycle in progress first, and any corner's action stops its output's
+[scroll momentum](MOTION.md). A corner with no binding, and
+any corner while a controller gesture (a drag or resize, the drag of a
+[trackpad move](GESTURES.md) included) is installed on an
 output whose `disable_while_dragging` is on, answers
 `{"navigation":null,"effects":[],"dirty":false}`. An unregistered output is a
 controller error, and so is an action that does not run here.
@@ -793,7 +815,13 @@ source, and two bindings on one physical chord answered from the pointer's own
 context table first; the new actions' effects; and both session flags in both orders of
 `load` and `load_config`. The default key table there is read with upstream's
 five Linux programs present as executables on the config's own `PATH`, so it is
-upstream's table on any machine.
+upstream's table on any machine. The motion settings (`drift`, the pan and zoom
+speeds and `[navigation.edge_pan]`) are exercised by `tests/motion_flow.rs`.
+
+`tests/gesture_flow.rs` covers what the file does to gestures: the `[gestures]`
+tables and thresholds, the two trackpad speeds, `drift`, the edge pan under a
+move gesture, and `[input.trackpad] enable` with `set-trackpad`. See
+[GESTURES.md](GESTURES.md#evidence-and-limits).
 
 `tests/platform_actions_flow.rs` drives the same ABI for what this page adds:
 

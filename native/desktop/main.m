@@ -16,6 +16,8 @@
 #import "hot-corners.h"
 #import "input-sources.h"
 #import "window-manager.h"
+#import "pan-launch.h"
+#import "trackpad-gestures.h"
 #include <mach/mach_time.h>
 #include <spawn.h>
 
@@ -60,6 +62,10 @@ static BOOL boundIdentity(NSDictionary *bound,NSDictionary *named) {
     for(NSString *key in @[@"pid",@"birth_sec",@"birth_usec",@"wid"])if(!asNumber(named[key])||![bound[key]isEqual:named[key]])return NO;
     return YES;
 }
+// An input event's time as upstream's libinput timestamp: milliseconds, wrapping at 32 bits.
+static NSNumber *eventMillis(NSEvent *e) { return @((uint32_t)(uint64_t)(e.timestamp*1000)); }
+// Physical modifiers as the controller reads them: JSON booleans, since a boxed comparison would be sent as 0 or 1.
+static NSDictionary *modifiersJSON(NSEventModifierFlags flags) { return @{@"control":flags&NSEventModifierFlagControl?@YES:@NO,@"option":flags&NSEventModifierFlagOption?@YES:@NO,@"shift":flags&NSEventModifierFlagShift?@YES:@NO,@"command":flags&NSEventModifierFlagCommand?@YES:@NO}; }
 // The first line and how many follow: the status line has room for one.
 static NSString *summary(NSString *subject,NSArray<NSString *> *lines) { return [NSString stringWithFormat:@"%@: %@%@",subject,lines[0],lines.count>1?[NSString stringWithFormat:@" (+%lu more)",(unsigned long)lines.count-1]:@""]; }
 // The exec effect, as upstream's exec_command: /bin/sh -c in a session of its own on
@@ -169,6 +175,9 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
 @property CFTimeInterval lastScrollPan; // last finger scroll that panned, 0 for none
 @property BOOL clearsFocus; // a pan begun on empty canvas that has not moved 5 points yet: released so, it unfocuses
 @property NSNumber *clickWindow; // the window an unbound press focused: released within 5 points, it is a completed click
+@property NSNumber *scrollPan; // the output the trackpad scroll under way, or just lifted, panned; nil for none
+@property NSTimeInterval scrollPanTime; // event time of that scroll's last pan, 0 once a press has ended it
+@property NSTimeInterval lastDragPan; // event time of the last timed pan under this drag pan's button, its own or a scroll's; 0 for none
 - (void)render:(NSDictionary *)snapshot;
 - (NSNumber *)outputAt:(CGPoint)p;
 - (NSNumber *)actionOutput;
@@ -203,6 +212,11 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
 - (void)ensureFrames;
 - (BOOL)cameraFrame;
 @property BOOL flying;
+// Normal runs only: camera motion as DriftWM's. A released pan coasts in the controller;
+// the shell says when a pan ends, and where the pointer is while cursor edge pan wants it.
+@property DWPanLaunch *panLaunch;
+@property NSArray<NSDictionary *> *pointerOutputs; // the latest snapshot's outputs while it asks for the pointer, else nil
+- (void)panEnd:(NSNumber *)output;
 @property EventHandlerRef viewHandler;
 @property BOOL viewKeysWarned;
 @property NSUInteger statusToken;
@@ -224,6 +238,22 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
 @property BOOL dismissFree; // no binding claims ⌃⌥-click on a window
 - (void)loadConfig:(BOOL)platform;
 - (NSDictionary *)mouseBinding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window;
+// Normal runs only: trackpad gestures by DriftWM's [gestures] tables. Three or more
+// fingers arrive as raw touches, and DWTrackpadGestures makes libinput's swipe, pinch
+// and hold of them; a two-finger pinch is AppKit's magnify stream. The controller
+// holds one gesture at a time and decides what it does.
+@property DWTrackpadGestures *trackpad;
+@property NSTimer *trackpadTimer; // armed for trackpadDeadline, the recogniser's next: hold delay, finger-count debounce
+@property NSTimeInterval trackpadDeadline;
+@property NSInteger gestureOwner; // whose gesture the controller holds: 0 none, 1 the recogniser's, 2 magnify's
+@property NSNumber *gestureOutput; // the output that gesture began on
+@property BOOL magnifying; // a magnify stream is running, whether or not the controller took it
+@property double magnifyScale; // its scale since it began
+@property NSTimeInterval lastTouches; // when the last frame of touches came
+- (void)touches:(NSEvent *)event;
+- (void)magnify:(NSEvent *)event;
+- (BOOL)padBusy:(NSEvent *)event;
+- (void)cancelGestures;
 @property BOOL windowed;
 @property NSSize windowSize;
 @property DWIPCServer *ipc;
@@ -406,12 +436,15 @@ static BOOL sourceGone(LiveSource *source,NSDictionary *info) { return ![birth(s
     if(self.desktop.probe&&!self.desktop.probeDrivingGesture){self.desktop.probeHumanInput=YES;return;}
     // One gesture at a time: another button waits until the first is released.
     NSInteger button=self.desktop.configured?e.buttonNumber:0;if(self.gesture&&button!=self.gestureButton)return;
-    // A press ends an open cycle as letting go of its modifiers does, committing a settled selection as upstream's
-    // focus_changed commits it; only then is the request still in flight withdrawn and every flight stopped.
-    self.clickWindow=nil;[self.desktop.navigation releaseCycle];[self.desktop cancelNavigation];
+    // A press is a fresh interaction, as upstream. It ends an open cycle as letting go of its modifiers does, committing a
+    // settled selection as upstream's focus_changed commits it. The pad is one device: in a normal run the press then ends
+    // a trackpad gesture in progress, cancelled, so that the coast a pan's end launches stops with the rest. Only then is
+    // the focus request still in flight withdrawn and every flight and coast stopped, and a scroll pan still waiting to
+    // launch never does, at its delay or at the lift of fingers still down.
+    self.clickWindow=nil;[self.desktop.navigation releaseCycle];if(self.desktop.configured)[self.desktop cancelGestures];[self.desktop cancelNavigation];[self.desktop.panLaunch cancel];self.scrollPanTime=0;
     if(self.desktop.resize&&![self.desktop.resize canRemove:nil]){[self.desktop.resize cancel];return;}
     CGPoint p=[self screenPoint:e];NSNumber *output=[self outputAt:p];if(!output)return;
-    self.startPoint=self.lastPoint=p;self.dragOutput=self.lastOutput=output;self.gestureButton=button;
+    self.startPoint=self.lastPoint=p;self.dragOutput=self.lastOutput=output;self.gestureButton=button;self.lastDragPan=0;
     if(!button&&self.desktop.experimentalResize&&!(e.modifierFlags&(NSEventModifierFlagControl|NSEventModifierFlagOption))){NSDictionary *snapshot=[self.desktop call:@{@"op":@"snapshot"}];
         for(NSDictionary *placement in [snapshot[@"placements"]reverseObjectEnumerator])if([placement[@"output"]isEqual:output]&&[placement[@"window"]isEqual:snapshot[@"focused"]]&&[placement[@"presentation_settled"]boolValue]){
             BOOL occluded=NO;for(NSDictionary *front in [snapshot[@"placements"]reverseObjectEnumerator]){if(front==placement)break;if([front[@"output"]isEqual:output]&&CGRectContainsPoint(jsonRect(front[@"clip_rect"]),p)){occluded=YES;break;}}if(occluded)continue;
@@ -445,7 +478,15 @@ static BOOL sourceGone(LiveSource *source,NSDictionary *info) { return ![birth(s
     if(self.desktop.configured&&e.buttonNumber!=self.gestureButton)return;
     CGPoint p=[self screenPoint:e];
     if(self.gesture==4)[self.desktop.resize request:@{@"op":@"native_resize_to",@"transaction":self.resizeTransaction,@"screen":pointJSON(p)}];
-    else if(self.gesture==1){if(hypot(p.x-self.startPoint.x,p.y-self.startPoint.y)>=5)self.clearsFocus=NO;[self.desktop call:@{@"op":@"pan",@"output":self.dragOutput,@"screen_delta":pointJSON(CGPointMake(self.lastPoint.x-p.x,self.lastPoint.y-p.y))}];}
+    else if(self.gesture==1){
+        if(hypot(p.x-self.startPoint.x,p.y-self.startPoint.y)>=5)self.clearsFocus=NO;
+        // A normal run's drag pan is timed, for the coast its release launches.
+        if(self.desktop.configured){[self pan:CGPointMake(self.lastPoint.x-p.x,self.lastPoint.y-p.y) output:self.dragOutput event:e source:@"drag"];self.lastDragPan=e.timestamp;}
+        else [self.desktop call:@{@"op":@"pan",@"output":self.dragOutput,@"screen_delta":pointJSON(CGPointMake(self.lastPoint.x-p.x,self.lastPoint.y-p.y))}];
+    }
+    // A normal run's window drag says where the pointer is: inside navigation.edge_pan's zone
+    // the controller pans under the window frame by frame, also while the pointer rests there.
+    else if(self.gesture==2&&self.desktop.configured){if([[self.desktop call:@{@"op":@"gesture_to",@"screen_delta":pointJSON(CGPointMake(p.x-self.startPoint.x,p.y-self.startPoint.y)),@"pointer":pointJSON(p)}][@"needs_frames"]boolValue])[self.desktop ensureFrames];}
     else if(self.gesture==2)[self.desktop call:@{@"op":@"gesture_to",@"screen_delta":pointJSON(CGPointMake(p.x-self.startPoint.x,p.y-self.startPoint.y))}];
     else if(self.gesture==3){CGEventRef cg=CGEventCreateCopy(e.CGEvent);[self forward:cg at:p output:self.dragOutput activate:NO];CFRelease(cg);}
     self.lastPoint=p;[self.desktop render];
@@ -465,36 +506,75 @@ static BOOL sourceGone(LiveSource *source,NSDictionary *info) { return ![birth(s
     // Upstream resolve_click_navigate, after the release is forwarded: the button lifted within 5 points of its press, on the same output.
     NSNumber *clicked=self.clickWindow;self.clickWindow=nil;CGPoint p=[self screenPoint:e];
     if(self.gesture==3&&clicked&&hypot(p.x-self.startPoint.x,p.y-self.startPoint.y)<=5&&[[self outputAt:p]isEqual:self.dragOutput])[self.desktop clickReleased:clicked output:self.dragOutput];
-    if(self.gesture==2)[self.desktop call:@{@"op":@"end_gesture"}];if(self.gesture==1&&self.clearsFocus)[self.desktop clearFocus];self.clearsFocus=NO;self.gesture=0;[self.desktop saveScene]; }
-- (void)zoom:(double)factor at:(CGPoint)p output:(NSNumber *)output { [self zoom:factor at:p output:output moving:NO]; }
-// moving: a zoom the limit swallows sends nothing, and only one that changes the view ends a flight.
-- (void)zoom:(double)factor at:(CGPoint)p output:(NSNumber *)output moving:(BOOL)moving {
-    for(NSDictionary *o in [self.desktop call:@{@"op":@"snapshot"}][@"outputs"])if([o[@"id"] isEqual:output]){
-        double zoom=[o[@"zoom"] doubleValue],target=MAX(.001,MIN(1,zoom*factor));
-        if(moving){if(target==zoom)return;[self.desktop cancelNavigation];}
-        [self.desktop call:@{@"op":@"zoom",@"output":output,@"zoom":@(target),@"anchor":pointJSON(p)}];break;}
+    if(self.gesture==2)[self.desktop call:@{@"op":@"end_gesture"}];
+    // A normal run's drag pan coasts from its release, as upstream's pan grab launches momentum.
+    // A drag that rested first does not: upstream's 50 ms delay has by then launched it into
+    // the held grab, where nothing coasts, and the release finds no velocity left. The
+    // second launch here is that one.
+    if(self.gesture==1&&self.desktop.configured&&self.lastDragPan){[self.desktop panEnd:self.dragOutput];if(e.timestamp-self.lastDragPan>=.05)[self.desktop panEnd:self.dragOutput];}
+    if(self.gesture==1&&self.clearsFocus)[self.desktop clearFocus];self.clearsFocus=NO;self.gesture=0;[self.desktop saveScene]; }
+- (void)zoom:(double)factor at:(CGPoint)p output:(NSNumber *)output {
+    for(NSDictionary *o in [self.desktop call:@{@"op":@"snapshot"}][@"outputs"])if([o[@"id"] isEqual:output]){[self.desktop call:@{@"op":@"zoom",@"output":output,@"zoom":@(MAX(.001,MIN(1,[o[@"zoom"] doubleValue]*factor))),@"anchor":pointJSON(p)}];break;}
     [self.desktop render];[self.desktop saveScene];
+}
+// A normal run's pan, timed: the controller scales it by the config speed of its source
+// (navigation.trackpad_speed for a scroll, navigation.mouse_speed for a drag), clears the
+// output's flight as every pan does, and tracks its velocity for the coast that follows.
+- (void)pan:(CGPoint)delta output:(NSNumber *)output event:(NSEvent *)e source:(NSString *)source {
+    [self.desktop call:@{@"op":@"pan",@"output":output,@"screen_delta":pointJSON(delta),@"time_ms":eventMillis(e),@"source":source}];
+}
+// A normal run's wheel zoom: zoom.step, zoom.mouse_speed and the zoom limits are the
+// controller's, as upstream's. delta is upstream's vertical axis amount (positive scrolls
+// down and zooms out). A wheel zoom is a flight that later notches extend, so no flight is
+// cancelled first. A pinch is not sent here: it is a gesture, see -magnifyWithEvent:.
+- (void)wheelZoom:(double)delta at:(CGPoint)p output:(NSNumber *)output {
+    // The controller refuses a pointer zoom while it holds a window drag; the input is dropped, not sent to fail.
+    if(!isfinite(delta)||!delta||self.gesture==2)return;
+    NSDictionary *reply=[self.desktop call:@{@"op":@"zoom_by",@"output":output,@"anchor":pointJSON(p),@"delta":@(delta),@"source":@"wheel"}];BOOL frames=[reply[@"needs_frames"]boolValue];
+    // A zoom the limit swallows is no input for a focus request in flight either.
+    if(asDict(reply[@"navigation"]))[self.desktop.navigation interrupt];
+    [self.desktop render];if(frames)[self.desktop ensureFrames];[self.desktop saveScene];
 }
 // A normal run's scroll, dispatched as upstream's on_pointer_axis does: a bound scroll
 // pans or zooms the canvas and never reaches a window, an unbound one goes to the
-// native window under it. Only a scroll that moves the camera ends a flight.
+// native window under it. A pan or zoom ends its output's flight in the controller, which
+// keeps the pan's velocity for the coast; the shell only withdraws a native focus request
+// still in flight, as for any unrelated input. An open cycle whose selection has settled
+// stays open until its modifiers are let go, as upstream's does.
 - (void)scroll:(NSEvent *)e {
+    BOOL coast=e.momentumPhase!=NSEventPhaseNone,lifted=(e.phase&(NSEventPhaseEnded|NSEventPhaseCancelled))!=0;
+    // Upstream computes momentum itself from the finger's deltas. Once a trackpad scroll has
+    // panned the canvas its lift launches the coast, and the momentum events macOS adds
+    // after it are dropped whole, wherever the pointer is by then. A lift that follows a
+    // rest comes after the 50 ms delay has launched, and upstream's stop then launches the
+    // emptied tracker: what was left of the coast ends. The second launch here is that one.
+    // Under a held drag pan neither is sent: see where the scroll pans.
+    if(self.scrollPan&&(coast||lifted)){
+        if(lifted){[self.desktop.panLaunch end];if(self.scrollPanTime&&e.timestamp-self.scrollPanTime>=.05&&!(self.gesture==1&&[self.scrollPan isEqual:self.dragOutput]))[self.desktop panEnd:self.scrollPan];}
+        else if(e.momentumPhase&(NSEventPhaseEnded|NSEventPhaseCancelled))self.scrollPan=nil;
+        return;
+    }
+    if(e.phase&(NSEventPhaseBegan|NSEventPhaseMayBegin))self.scrollPan=nil;
     CGPoint p=[self screenPoint:e];NSNumber *output=[self outputAt:p];if(!output)return;
-    self.lastOutput=output;BOOL precise=e.hasPreciseScrollingDeltas;
+    self.lastOutput=output;BOOL precise=e.hasPreciseScrollingDeltas;NSString *source=precise?@"finger":@"wheel";
+    // A swipe or pinch of three or more fingers is the recogniser's: a scroll macOS makes of the same fingers pans nothing.
+    if(precise&&[self.desktop padBusy:e])return;
     // Upstream keeps a finger pan on the canvas for 150 ms, so a window sliding under the pointer cannot take the gesture.
     BOOL panning=self.lastScrollPan&&CACurrentMediaTime()-self.lastScrollPan<.15,window=!panning&&[[self hit:p output:output]isKindOfClass:NSDictionary.class];
-    NSDictionary *binding=[self.desktop mouseBinding:@"scroll" source:precise?@"finger":@"wheel" flags:e.modifierFlags window:window];NSString *kind=asString(binding[@"kind"]);
-    if(!binding){if(window){CGEventRef cg=CGEventCreateCopy(e.CGEvent);[self forward:cg at:p output:output activate:NO];CFRelease(cg);}return;}
-    // Upstream's axis units: finger points as they are, one wheel line as one notch of 15.
-    double sx=e.scrollingDeltaX,sy=e.scrollingDeltaY,dx=sx,dy=sy;
-    if(!precise&&e.CGEvent){dx=15.0*CGEventGetIntegerValueField(e.CGEvent,kCGScrollWheelEventDeltaAxis2);dy=15.0*CGEventGetIntegerValueField(e.CGEvent,kCGScrollWheelEventDeltaAxis1);}
-    // Speeds are the config's when the lookup reports them: upstream zooms by zoom.step^(notches/2 × zoom.mouse_speed) and pans by navigation.trackpad_speed.
-    NSNumber *step=asNumber(binding[@"zoom_step"]),*zoomSpeed=asNumber(binding[@"zoom_mouse_speed"]),*panSpeed=asNumber(binding[@"trackpad_speed"]);
-    if([kind isEqual:@"zoom"]){double factor=step&&zoomSpeed?pow(step.doubleValue,dy/30*zoomSpeed.doubleValue):exp(sy*.01);if(isfinite(factor)&&factor>0)[self zoom:factor at:p output:output moving:YES];}
-    else if([kind isEqual:@"pan_viewport"]){
-        CGPoint delta=panSpeed?CGPointMake(-dx*panSpeed.doubleValue,-dy*panSpeed.doubleValue):CGPointMake(-sx,-sy);if(!delta.x&&!delta.y)return;
+    NSDictionary *binding=[self.desktop mouseBinding:@"scroll" source:source flags:e.modifierFlags window:window];NSString *kind=asString(binding[@"kind"]);
+    // A window that takes over a trackpad scroll which panned first takes the rest of it: its end and macOS's inertia are forwarded too.
+    if(!binding){if(window){if(e.phase!=NSEventPhaseNone){self.scrollPan=nil;self.scrollPanTime=0;}CGEventRef cg=CGEventCreateCopy(e.CGEvent);[self forward:cg at:p output:output activate:NO];CFRelease(cg);}return;}
+    // Upstream's axis amounts: positive scrolls right and down, finger points as they are, one wheel line as one notch of 15.
+    double h=-e.scrollingDeltaX,v=-e.scrollingDeltaY;
+    if(!precise&&e.CGEvent){h=-15.0*CGEventGetIntegerValueField(e.CGEvent,kCGScrollWheelEventDeltaAxis2);v=-15.0*CGEventGetIntegerValueField(e.CGEvent,kCGScrollWheelEventDeltaAxis1);}
+    if([kind isEqual:@"zoom"])[self wheelZoom:v at:p output:output];
+    // A momentum event of macOS never pans the canvas: not the tail of a scroll that began in a window either.
+    else if([kind isEqual:@"pan_viewport"]&&!coast&&(h||v)){
         if(precise)self.lastScrollPan=CACurrentMediaTime();
-        [self.desktop cancelNavigation];[self.desktop call:@{@"op":@"pan",@"output":output,@"screen_delta":pointJSON(delta)}];[self.desktop render];[self.desktop saveScene];
+        if(e.phase!=NSEventPhaseNone){self.scrollPan=output;self.scrollPanTime=e.timestamp;}
+        // A scroll under a held drag pan launches nothing of its own: upstream's pan grab holds the coast
+        // until its release, so the pan counts as the drag's last and the release's pan_end is the launch.
+        [self.desktop.navigation interrupt];[self pan:CGPointMake(h,v) output:output event:e source:source];if(self.gesture==1&&[output isEqual:self.dragOutput])self.lastDragPan=e.timestamp;else [self.desktop.panLaunch panned:output];[self.desktop render];[self.desktop saveScene];
     }
 }
 - (void)scrollWheel:(NSEvent *)e {
@@ -509,7 +589,18 @@ static BOOL sourceGone(LiveSource *source,NSDictionary *info) { return ![birth(s
     else if((e.modifierFlags&NSEventModifierFlagOption)||![[self hit:p output:output]isKindOfClass:NSDictionary.class]){[self.desktop call:@{@"op":@"pan",@"output":output,@"screen_delta":pointJSON(CGPointMake(-e.scrollingDeltaX,-e.scrollingDeltaY))}];[self.desktop render];[self.desktop saveScene];}
     else {CGEventRef cg=CGEventCreateCopy(e.CGEvent);[self forward:cg at:p output:output activate:NO];CFRelease(cg);}
 }
-- (void)magnifyWithEvent:(NSEvent *)e { if(self.desktop.resize&&![self.desktop.resize canRemove:nil])return; [self.desktop cancelNavigation]; if(self.desktop.probe){self.desktop.probeHumanInput=YES;return;} CGPoint p=[self screenPoint:e];NSNumber *output=[self outputAt:p];if(output){self.lastOutput=output;[self zoom:1+e.magnification at:p output:output];} }
+- (void)magnifyWithEvent:(NSEvent *)e {
+    // A normal run's pinch is a gesture binding: the [gestures] table decides what it does.
+    if(self.desktop.configured){[self.desktop magnify:e];return;}
+    // Fixed gesture of probe, demo and owned-fixture runs.
+    if(self.desktop.resize&&![self.desktop.resize canRemove:nil])return; [self.desktop cancelNavigation]; if(self.desktop.probe){self.desktop.probeHumanInput=YES;return;} CGPoint p=[self screenPoint:e];NSNumber *output=[self outputAt:p];if(output){self.lastOutput=output;[self zoom:1+e.magnification at:p output:output];}
+}
+// Raw trackpad touches reach a view only in a normal run, which alone asks for them.
+- (void)touchesBeganWithEvent:(NSEvent *)e { if(self.desktop.configured)[self.desktop touches:e];else [super touchesBeganWithEvent:e]; }
+- (void)touchesMovedWithEvent:(NSEvent *)e { if(self.desktop.configured)[self.desktop touches:e];else [super touchesMovedWithEvent:e]; }
+- (void)touchesEndedWithEvent:(NSEvent *)e { if(self.desktop.configured)[self.desktop touches:e];else [super touchesEndedWithEvent:e]; }
+// macOS took the touches for a gesture of its own: each arrives cancelled, which ends ours cancelled.
+- (void)touchesCancelledWithEvent:(NSEvent *)e { if(self.desktop.configured)[self.desktop touches:e];else [super touchesCancelledWithEvent:e]; }
 @end
 // Optional, and only where Input Monitoring is already granted: a press or scroll outside
 // the canvas while a native focus request is in flight withdraws that request. Listen-only,
@@ -540,7 +631,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 }
 @implementation Desktop { EventHotKeyRef _viewHotkeys[sizeof(viewKeys)/sizeof(*viewKeys)]; }
 - (instancetype)init {
-    if((self=[super init])){_controller=driftwm_desktop_create();_panels=[NSMutableArray array];_views=[NSMutableArray array];_sources=[NSMutableDictionary dictionary];_choices=[NSMutableArray array];_pendingStops=[NSMutableArray array];_statusText=helpText;}
+    if((self=[super init])){_controller=driftwm_desktop_create();_panels=[NSMutableArray array];_views=[NSMutableArray array];_sources=[NSMutableDictionary dictionary];_choices=[NSMutableArray array];_pendingStops=[NSMutableArray array];_statusText=helpText;
+        __weak Desktop *weak=self;_panLaunch=[[DWPanLaunch alloc]initWithLaunch:^(NSNumber *output){[weak panEnd:output];}];}
     return self;
 }
 - (void)configureResize {
@@ -599,20 +691,45 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(self.navigationTapSource){CFRunLoopRemoveSource(CFRunLoopGetMain(),self.navigationTapSource,kCFRunLoopCommonModes);CFRelease(self.navigationTapSource);self.navigationTapSource=NULL;}
     if(self.navigationTap){CFMachPortInvalidate(self.navigationTap);CFRelease(self.navigationTap);self.navigationTap=NULL;}
 }
-// One camera frame for every armed flight. A normal run's coordinator owns the tick;
-// probe, demo and owned-fixture runs tick the controller themselves on the same clock.
+// Cursor edge pan: while the controller's snapshot asks for it, where the pointer is and
+// which output it is on, before each tick. It is on an output only where a press would
+// reach that output's panel, so a canvas behind another window does not pan. The answer
+// is the controller's to use; a refusal leaves the status line alone. Nothing is reported
+// while a panel holds a button gesture: upstream's refresh stands down under any pointer
+// grab, and the controller knows only its own, not a press forwarded to a native window.
+- (void)reportPointer {
+    if(!self.pointerOutputs)return;
+    for(DesktopView *view in self.views)if(view.gesture)return;
+    CGPoint p=pointer();id output=NSNull.null;NSString *status=self.statusText;
+    NSInteger top=[NSWindow windowNumberAtPoint:NSEvent.mouseLocation belowWindowWithWindowNumber:0];
+    for(DesktopView *view in self.views)if(view.window.windowNumber==top)for(NSDictionary *o in self.pointerOutputs)if([view.outputs containsObject:o[@"id"]]&&CGRectContainsPoint(jsonRect(o[@"screen_bounds"]),p))output=o[@"id"];
+    [self call:@{@"op":@"pointer",@"output":output,@"screen":pointJSON(p)}];self.statusText=status;
+}
+// One frame of camera motion: every armed flight, a coasting pan, an edge pan. A normal
+// run's coordinator owns the tick; probe, demo and owned-fixture runs tick the controller
+// themselves on the same clock.
 - (BOOL)cameraFrame {
     if(self.cleaning)return NO;
+    [self reportPointer];
     if(self.navigation)return [self.navigation frame];
     NSDictionary *result=[self call:@{@"op":@"tick_navigation",@"timestamp_ns":@((uint64_t)(CACurrentMediaTime()*1e9))}];
     if([result[@"changed_outputs"]count])[self render];
     BOOL active=[result[@"needs_frames"]boolValue];if(!active&&self.flying)[self saveScene];self.flying=active;return active;
 }
+// 60 Hz from the next frame on, for as long as tick_navigation reports needs_frames. Only
+// the controller knows what is in motion, so the first frame asks it and stops the timer
+// when nothing is.
 - (void)ensureFrames {
     if(self.frameTimer||self.cleaning)return;
-    if(![[self call:@{@"op":@"snapshot"}][@"navigation"][@"flights"]count])return;
     __weak Desktop *weak=self;self.frameTimer=[NSTimer timerWithTimeInterval:1.0/60 repeats:YES block:^(NSTimer *timer){Desktop *desktop=weak;[desktop watchCorners];if(!desktop||![desktop cameraFrame]){[timer invalidate];desktop.frameTimer=nil;}}];
     [[NSRunLoop mainRunLoop]addTimer:self.frameTimer forMode:NSRunLoopCommonModes];
+}
+// The end of a burst of timed pans: upstream's launch_momentum_on. The clock is brought
+// up to now first, so the coast's first frame spans one frame and not the idle poll's gap.
+- (void)panEnd:(NSNumber *)output {
+    if(self.cleaning||!output)return;
+    if(!self.frameTimer)[self cameraFrame];
+    [self call:@{@"op":@"pan_end",@"output":output}];[self ensureFrames];
 }
 // Hot key target and the IPC active output: the output under the pointer, else the panel
 // under it (a panel's toolbar strip lies outside its output), else the first registered output.
@@ -669,7 +786,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // the shell owns: quit, exec, a config reload, a pointer warp, a keyboard layout switch,
 // a window's close button and the launch of a stand-in's application.
 - (void)applyReply:(NSDictionary *)reply {
-    BOOL flight=asDict(reply[@"navigation"])!=nil;if(flight&&!self.navigation)self.flying=YES;
+    // A gesture reply says itself when frames are needed: a camera coasting after a swipe, or the edge pan under a move, is no flight.
+    BOOL flight=asDict(reply[@"navigation"])!=nil||[reply[@"needs_frames"]isEqual:@YES];if(flight&&!self.navigation)self.flying=YES;
     // The reply's focus request, if any, is the coordinator's to perform on the native window.
     [self.navigation perform:reply];
     [self render];if(flight)[self ensureFrames];
@@ -765,6 +883,13 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         for(id effect in effects){NSDictionary *e=asDict(effect);if([e[@"op"]isEqual:@"exec"]&&asString(e[@"command"]))[d exec:e];}
     });
 }
+// Hold-to-commit, after an action ran, whatever fired it: a held cycle-windows step keeps the session open
+// until the hold modifiers are let go; any other action has ended it.
+- (void)holdCycle:(NSString *)action held:(BOOL)held {
+    BOOL cycle=[action hasPrefix:@"cycle-windows "];
+    if(cycle&&held&&self.navigation){__weak Desktop *weak=self;[self.navigation hold:self.cycleModifiers?:optionKey];[self.cycleHold start:^BOOL(uint32_t down){return [weak.navigation poll:down];}];}
+    else if(!cycle){[self.navigation hold:0];[self.cycleHold stop];}
+}
 // A hot key's pointer and modifiers are the physical ones at the moment it fires.
 - (void)action:(NSString *)action output:(NSNumber *)output { [self action:action output:output at:pointer() held:[DWCycleHold modifiersDown]!=0]; }
 - (void)action:(NSString *)action output:(NSNumber *)output at:(CGPoint)point held:(BOOL)held { [self action:action output:output at:point held:held corner:nil]; }
@@ -784,15 +909,102 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     NSMutableDictionary *command=[(corner?@{@"op":@"hot_corner",@"output":output,@"corner":corner}:@{@"op":@"action",@"output":output,@"action":action})mutableCopy];
     if(self.configured){command[@"pointer"]=pointJSON(point);command[@"held"]=held?@YES:@NO;}
     NSDictionary *reply=[self call:command];
-    // Hold-to-commit: a held step keeps the session open until the hold modifiers are let go; any other action that ran has ended it.
-    BOOL cycle=[action hasPrefix:@"cycle-windows "];
-    if(reply&&cycle&&held&&self.navigation){__weak Desktop *weak=self;[self.navigation hold:self.cycleModifiers?:optionKey];[self.cycleHold start:^BOOL(uint32_t down){return [weak.navigation poll:down];}];}
-    else if(reply&&!cycle){[self.navigation hold:0];[self.cycleHold stop];}
+    if(reply)[self holdCycle:action held:held];
     NSString *sets=self.configured?[self.hotKeys chords:[@"set-bookmark " stringByAppendingString:name?:@""]].firstObject:[@"⌃⌥⇧" stringByAppendingString:name?:@""];
     NSString *missing=[NSString stringWithFormat:@"No bookmark %@ yet%@",name,sets?[NSString stringWithFormat:@" — %@ sets it",sets]:@""];
     NSString *text=unset?missing:reply?[self actionFeedback:action flight:asDict(reply[@"navigation"]) output:output]:self.statusText;
     if(text)[self flashStatus:text];
     [self applyReply:reply];
+}
+// One libinput-shaped event, from the recogniser or the magnify stream, to the
+// controller. gesture_begin gains what only the shell knows: the modifiers held, the
+// output and the window-or-canvas context under the pointer, and the pointer itself.
+// An update or an end, which may fire an action, says whether a real modifier is down
+// as it does, as a hot key's action does. The reply is an action's, with what the
+// gesture fired and a note when it is gated.
+- (void)gesture:(NSDictionary *)event owner:(NSInteger)owner {
+    NSString *op=event[@"op"];BOOL begin=[op isEqual:@"gesture_begin"],end=[op isEqual:@"gesture_end"],held=[DWCycleHold modifiersDown]!=0;NSMutableDictionary *command=[event mutableCopy];
+    if(begin){
+        // The controller holds one gesture: a pinch that gains a third finger ends before the swipe it became begins.
+        if(self.gestureOwner)[self gesture:@{@"op":@"gesture_end",@"cancelled":@YES,@"time_ms":event[@"time_ms"]} owner:self.gestureOwner];
+        if(self.cleaning||(self.resize&&![self.resize canRemove:nil]))return;
+        // Where a press or a scroll would land: over an output, and not during a button drag.
+        CGPoint p=pointer();DesktopView *under=nil;NSNumber *output=nil;
+        for(DesktopView *view in self.views){if(view.gesture)return;if(!output&&(output=[view outputAt:p]))under=view;}
+        if(!output)return;
+        // New input withdraws a native focus request still in flight, as a scroll does. An open cycle whose selection has settled
+        // stays open, for a swipe bound to cycle-windows to step. Flights are the controller's to stop: upstream cancels them only for a bound gesture.
+        under.lastOutput=output;[self.navigation interrupt];
+        // A swipe or pinch of the recogniser's takes the fingers from a scroll they were making. Its later pans are held
+        // back (-padBusy:); the rest of it goes here, as at a press: the 50 ms launch still pending, and the pan_end its
+        // lift would send. Either launches the momentum the swipe pans with and empties its tracker, and the swipe's own
+        // end, or whichever of the two comes second, would then launch nothing. scrollPan stays: macOS's inertia is still
+        // swallowed. A two-finger pinch and a hold hold no scroll back, and end none.
+        if(owner==1&&self.trackpad.engaged){[self.panLaunch cancel];for(DesktopView *view in self.views)view.scrollPanTime=0;}
+        command[@"modifiers"]=modifiersJSON(NSEvent.modifierFlags);command[@"context"]=[[under hit:p output:output]isKindOfClass:NSDictionary.class]?@"window":@"canvas";command[@"output"]=output;command[@"pointer"]=pointJSON(p);
+        self.gestureOwner=owner;self.gestureOutput=output;
+    }else if(owner!=self.gestureOwner)return;
+    else command[@"held"]=held?@YES:@NO;
+    if(end)self.gestureOwner=0;
+    NSDictionary *reply=[self call:command];
+    // A refusal is said once and ends the gesture on both sides.
+    if(!reply){
+        NSString *error=self.statusText;if(!begin&&!end)[self call:@{@"op":@"gesture_end",@"cancelled":@YES,@"time_ms":event[@"time_ms"]}];
+        self.gestureOwner=0;[self flashStatus:error];[self render];return;
+    }
+    // A pan that ends cancelled while still moving lost its touches: macOS took them, a button was pressed, the panels went away. (A finger lifting ahead of the others waits out the recogniser's count debounce, too long to launch.) The canvas stops there instead of coasting on as upstream's cancelled swipe does.
+    if(end&&[command[@"cancelled"]isEqual:@YES]&&self.gestureOutput&&[asString(asDict(reply[@"gesture"])[@"state"])isEqual:@"swipe_pan"])[self call:@{@"op":@"cancel_navigation",@"output":self.gestureOutput}];
+    // No gesture in the reply: trackpad gestures are off (set-trackpad), and the rest of this one has nowhere to go.
+    if(begin&&!asDict(reply[@"gesture"]))self.gestureOwner=0;
+    NSDictionary *fired=asDict(reply[@"fired"]);NSString *action=asString(fired[@"action"]);
+    // An action the gesture fired and the controller ran holds a cycle open, or ends one, as a hot key's does.
+    if(action&&!asString(fired[@"error"]))[self holdCycle:action held:held];
+    NSString *text=asString(reply[@"note"])?:asString(fired[@"error"])?:action?[self actionFeedback:action flight:asDict(reply[@"navigation"]) output:self.gestureOutput]:nil;
+    if(text)[self flashStatus:text];
+    [self applyReply:reply];
+}
+// Resting fingers send no events, so the recogniser's hold delay and finger-count debounce are met by a timer.
+- (void)armTrackpad {
+    NSTimeInterval deadline=self.cleaning?0:self.trackpad.deadline;if(deadline==self.trackpadDeadline)return;
+    [self.trackpadTimer invalidate];self.trackpadTimer=nil;self.trackpadDeadline=deadline;if(!deadline)return;
+    __weak Desktop *weak=self;
+    self.trackpadTimer=[NSTimer timerWithTimeInterval:MAX(0,deadline-CACurrentMediaTime()) repeats:NO block:^(NSTimer *timer){(void)timer;Desktop *d=weak;d.trackpadTimer=nil;d.trackpadDeadline=0;[d.trackpad advance:CACurrentMediaTime()];[d armTrackpad];}];
+    [[NSRunLoop mainRunLoop]addTimer:self.trackpadTimer forMode:NSRunLoopCommonModes];
+}
+// One frame of raw touches for the recogniser: every touch of the event, in
+// millimetres from the pad's top left (a touch is normalised over a pad sized in
+// points). A resting touch is left out, which the recogniser reads as a finger gone.
+- (void)touches:(NSEvent *)e {
+    if(!self.trackpad||self.cleaning)return;
+    for(NSTouch *touch in [e touchesMatchingPhase:NSTouchPhaseAny inView:nil]){
+        if(touch.type!=NSTouchTypeIndirect||touch.resting)continue;
+        NSPoint p=touch.normalizedPosition;NSSize pad=touch.deviceSize;NSTouchPhase phase=touch.phase;
+        [self.trackpad touch:touch.identity x:p.x*pad.width*25.4/72 y:(1-p.y)*pad.height*25.4/72 phase:phase&NSTouchPhaseCancelled?DWTouchCancelled:phase&NSTouchPhaseEnded?DWTouchEnded:phase&NSTouchPhaseBegan?DWTouchBegan:DWTouchMoved time:e.timestamp];
+    }
+    [self.trackpad frame:e.timestamp];self.lastTouches=e.timestamp;[self armTrackpad];
+}
+// A swipe or pinch of three or more fingers is the recogniser's: a scroll or a
+// magnify macOS makes of the same fingers would be that gesture twice. Moving fingers
+// keep sending touches, so an event long after the last of them is not theirs, and
+// is never held back.
+- (BOOL)padBusy:(NSEvent *)e { return self.trackpad.engaged&&e.timestamp-self.lastTouches<.25; }
+// AppKit's two-finger pinch as libinput's: the scale is absolute from the gesture's
+// start, the running product of each event's 1 + magnification. No rotation, no delta.
+- (void)magnify:(NSEvent *)e {
+    NSEventPhase phase=e.phase;NSNumber *time=DWGestureTime(e.timestamp);BOOL over=(phase&(NSEventPhaseEnded|NSEventPhaseCancelled))!=0;
+    if([self padBusy:e]){if(self.magnifying){self.magnifying=NO;[self gesture:@{@"op":@"gesture_end",@"cancelled":@YES,@"time_ms":time} owner:2];}return;}
+    if(phase&NSEventPhaseMayBegin)return;
+    if(!self.magnifying){if(over)return;self.magnifying=YES;self.magnifyScale=1;[self gesture:@{@"op":@"gesture_begin",@"kind":@"pinch",@"fingers":@2,@"time_ms":time} owner:2];}
+    if(e.magnification){self.magnifyScale*=MAX(.01,1+e.magnification);[self gesture:@{@"op":@"gesture_update",@"dx":@0,@"dy":@0,@"scale":@(self.magnifyScale),@"rotation":@0,@"time_ms":time} owner:2];}
+    // An event with no phase is a whole gesture.
+    if(over||phase==NSEventPhaseNone){self.magnifying=NO;[self gesture:@{@"op":@"gesture_end",@"cancelled":phase&NSEventPhaseCancelled?@YES:@NO,@"time_ms":time} owner:2];}
+}
+// The touches stop being a gesture's: a press on the pad, or the panels going away.
+// The recogniser forgets its fingers, and a gesture the controller holds ends cancelled.
+- (void)cancelGestures {
+    NSTimeInterval now=CACurrentMediaTime();
+    [self.trackpadTimer invalidate];self.trackpadTimer=nil;self.trackpadDeadline=0;self.magnifying=NO;[self.trackpad cancel:now];
+    if(self.gestureOwner)[self gesture:@{@"op":@"gesture_end",@"cancelled":@YES,@"time_ms":DWGestureTime(now)} owner:self.gestureOwner];
 }
 - (void)viewButton:(NSButton *)sender {
     if(self.probe&&sender){self.probeHumanInput=YES;return;}
@@ -841,10 +1053,9 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 - (void)stopKeys { [self.hotKeys stop];[self stopExitKey]; }
 // Upstream's binding lookup for one press or scroll: physical modifiers, trigger and
 // context in; the bound gesture, or nil for none, out. The binding carries the config's
-// pointer speeds. Modifiers are JSON booleans: a boxed comparison would be sent as 0 or 1.
+// pointer speeds.
 - (NSDictionary *)mouseBinding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window {
-    NSDictionary *modifiers=@{@"control":flags&NSEventModifierFlagControl?@YES:@NO,@"option":flags&NSEventModifierFlagOption?@YES:@NO,@"shift":flags&NSEventModifierFlagShift?@YES:@NO,@"command":flags&NSEventModifierFlagCommand?@YES:@NO};
-    NSDictionary *reply=[self call:@{@"op":@"mouse_binding",@"trigger":trigger,@"source":source?:NSNull.null,@"modifiers":modifiers,@"context":window?@"window":@"canvas"}],*binding=asDict(reply[@"binding"]);
+    NSDictionary *reply=[self call:@{@"op":@"mouse_binding",@"trigger":trigger,@"source":source?:NSNull.null,@"modifiers":modifiersJSON(flags),@"context":window?@"window":@"canvas"}],*binding=asDict(reply[@"binding"]);
     return binding;
 }
 // The pointer half of the help line, read from the lookup itself: every modifier set is
@@ -1013,7 +1224,13 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     self.statePath=nil;return NO;
 }
 - (void)saveScene { if(self.statePath)[self call:@{@"op":@"save",@"path":self.statePath}]; }
-- (void)render { NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}];for(DesktopView *view in self.views)[view render:snapshot];[self publishState]; }
+- (void)render {
+    NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}];
+    // Cursor edge pan is on while the snapshot's navigation.cursor_pan.needs_pointer says so; see -reportPointer.
+    self.pointerOutputs=self.configured&&[asDict(asDict(snapshot[@"navigation"])[@"cursor_pan"])[@"needs_pointer"]isEqual:@YES]?asArray(snapshot[@"outputs"]):nil;
+    for(DesktopView *view in self.views)[view render:snapshot];
+    [self publishState];
+}
 - (void)quit:(id)sender { (void)sender;[self.resize shutdown];[self stopNavigation];stopped=1; }
 - (void)resizeUnavailable:(id)sender { if(self.probe&&sender){self.probeHumanInput=YES;return;} (void)sender;if(self.experimentalResize){self.statusText=@"Experimental: select one source, then drag an orange edge handle. Unknown family or capture mapping stays inert; Escape cancels shell input.";[self render];return;}self.statusText=@"Native layout resize is unavailable. Resize the original app on the desktop, then return; capture reconciles without changing world geometry.";[self render]; }
 - (void)returnDesktop:(id)sender { [self.resize cancel];if(self.resize&&![self.resize canRemove:nil]){self.statusText=@"Resize is pending or unresolved; source retained";[self render];return;} if(self.probe&&sender){self.probeHumanInput=YES;return;} (void)sender;[self cleanup];[self showChooser:nil]; }
@@ -1021,6 +1238,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     NSPanel *panel=[[(self.ownedResizeProbe?RPIsolatedPanel.class:CanvasPanel.class) alloc]initWithContentRect:frame styleMask:NSWindowStyleMaskBorderless|NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO];
     panel.releasedWhenClosed=NO;panel.level=self.windowed?NSNormalWindowLevel:NSFloatingWindowLevel;panel.animationBehavior=NSWindowAnimationBehaviorNone;panel.collectionBehavior=NSWindowCollectionBehaviorMoveToActiveSpace|NSWindowCollectionBehaviorFullScreenAuxiliary;
     DesktopView *view=[[DesktopView alloc]initWithFrame:NSMakeRect(0,0,frame.size.width,frame.size.height)];view.desktop=self;view.globalBounds=topRect(frame);view.outputs=[NSMutableArray array];view.tiles=[NSMutableDictionary dictionary];view.surfaces=[NSMutableDictionary dictionary];view.wantsLayer=YES;view.layer.backgroundColor=[NSColor colorWithSRGBRed:.045 green:.065 blue:.10 alpha:1].CGColor;panel.contentView=view;
+    // Normal runs only: the trackpad's raw touches, for gestures of three or more fingers.
+    if(self.configured)view.allowedTouchTypes=NSTouchTypeMaskIndirect;
     for(NSUInteger i=0;i<rects.count;i++){NSNumber *output=[self call:@{@"op":@"register_output",@"stable_id":identities[i],@"screen_bounds":rects[i]}][@"output"];if(output)[view.outputs addObject:output];}
     NSArray *names=self.ownedResizeProbe?@[]:@[@"Choose windows",@"Return to desktop",@"Resize status",[self quitTitle]];
     if(self.ownedResizeProbe)[view addSubview:label(@"Noninteractive owned resize probe — supervisor signal or deadline exits",NSMakeRect(15,8,720,26))];
@@ -1037,6 +1256,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(self.panels.count)return;self.cleaning=NO;
     // Return to desktop stopped the config watcher and dropped the key table: read the config again.
     if(self.configured&&!self.configWatcher)[self loadConfig:NO];
+    if(self.configured&&!self.trackpad){__weak Desktop *weak=self;self.trackpad=[[DWTrackpadGestures alloc]initWithEmit:^(NSDictionary *event){[weak gesture:event owner:1];}];}
     if(self.demo){NSRect frame=NSMakeRect(100,120,1040,600);CGRect global=topRect(frame);NSMutableArray *rects=[NSMutableArray array];for(int i=0;i<2;i++)[rects addObject:rectJSON(CGRectOffset(ports[i],global.origin.x,global.origin.y))];[self panel:frame outputRects:rects identities:@[@"fixture-view-a",@"fixture-view-b"]];}
     // The analogue of upstream's nested winit backend: one ordinary window, one output.
     else if(self.windowed){NSScreen *screen=NSScreen.mainScreen?:NSScreen.screens.firstObject;NSRect area=screen.visibleFrame;CGFloat width=MIN(self.windowSize.width,area.size.width),height=MIN(self.windowSize.height,area.size.height);
@@ -1242,7 +1462,9 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // Did close-window or suspend-window ask this window to close? The controller's mark.
 - (BOOL)marked:(LiveSource *)source { return asDict([self call:@{@"op":@"snapshot"}][@"lifecycle"][@"marks"])[source.logical.stringValue]!=nil; }
 - (void)screensChanged:(NSNotification *)notification {
-    (void)notification;if(self.demo||!self.panels.count)return;[self stopNavigation];
+    (void)notification;if(self.demo||!self.panels.count)return;[self cancelGestures];[self stopNavigation];
+    // A pan waiting to launch belongs to an output about to be removed.
+    [self.panLaunch cancel];self.pointerOutputs=nil;
     for(DesktopView *view in self.views){[view releasePressed];for(NSNumber *output in view.outputs){NSDictionary *reply=[self call:@{@"op":@"remove_output",@"output":output}];[self.resize consume:reply];}}
     for(NSPanel *panel in self.panels){[panel orderOut:nil];[panel close];}
     [self.panels removeAllObjects];[self.views removeAllObjects];for(LiveSource *source in self.sources.allValues)[source.surfaces removeAllObjects];
@@ -1253,7 +1475,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(self.cleaning)return;
     if(self.resize&&CACurrentMediaTime()-self.lastResizeObservation>=.5){self.lastResizeObservation=CACurrentMediaTime();[self.resize observeBindings];}
     [self watchCorners];
-    // Idle polling keeps the clock current; a flight found without its timer regains 60 Hz.
+    // Idle polling keeps the clock current and, while cursor edge pan wants it, the pointer reported; motion found without its timer regains 60 Hz.
     if(!self.frameTimer&&[self cameraFrame])[self ensureFrames];
     if(self.navigation&&CACurrentMediaTime()-self.lastObservation>=.5){self.lastObservation=CACurrentMediaTime();[self refreshFocusAccess];[self.navigation observe];}
     // Discovery first: a window that appeared is attached before this tick observes and draws.
@@ -1288,8 +1510,10 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(self.cleaning)return;self.cleaning=YES;
     // No window is discovered and no read answers from here on; a reopened canvas gets a new manager, which ends a pass of its own.
     [self.manager stop];self.manager=nil;self.adopted=NO;
-    // Inert from here until the canvas reopens: no config hot key, key repeat, input-source observer, config watch, hot corner or pending event outlives this line.
-    [self.hotKeys invalidate];self.hotKeys=nil;[self.configWatcher stop];self.configWatcher=nil;self.corners=nil;[self.statePush invalidate];self.statePush=nil;
+    // Inert from here until the canvas reopens: no config hot key, key repeat, input-source observer, config watch, hot corner, pending event, pan launch or pointer report outlives this line.
+    [self.hotKeys invalidate];self.hotKeys=nil;[self.configWatcher stop];self.configWatcher=nil;self.corners=nil;[self.statePush invalidate];self.statePush=nil;[self.panLaunch cancel];self.pointerOutputs=nil;
+    // A trackpad gesture in progress ends cancelled while its output still exists; no touch or hold timer outlives this line either.
+    [self cancelGestures];self.trackpad=nil;
     [self.resize shutdown];[self stopNavigation];
     while(self.resize.obligations){self.statusText=@"Quit pending: waiting for native resize result";[self render];pump(.01);}
     if(self.resize&&![self.resize canRemove:nil]){self.statusText=@"Resize uncertainty remains unresolved at shutdown";fprintf(stderr,"%s\n",self.statusText.UTF8String);}
@@ -1312,7 +1536,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(!self.sources.count)self.resize=nil;
 
 }
-- (void)dealloc { [_ipc stop];[_manager stop];[self stopNavigation];[self stopViewKeys];[_hotKeys invalidate];[_configWatcher stop];[_statePush invalidate];if(_controller)driftwm_desktop_destroy(_controller); }
+- (void)dealloc { [_ipc stop];[_manager stop];[self stopNavigation];[self stopViewKeys];[_hotKeys invalidate];[_configWatcher stop];[_statePush invalidate];[_panLaunch cancel];[_trackpadTimer invalidate];if(_controller)driftwm_desktop_destroy(_controller); }
 @end
 static CGPoint projected(Desktop *desktop,NSNumber *window,NSNumber *output,CGPoint sourcePoint) {
     for(NSDictionary *p in [desktop call:@{@"op":@"snapshot"}][@"placements"])if([p[@"window"]isEqual:window]&&[p[@"output"]isEqual:output]){
@@ -1462,7 +1686,7 @@ int main(int argc,const char **argv) { @autoreleasepool {
         if(i>0&&!strcmp(argv[i],"--windowed")){if(windowed)return 64;windowed=YES;if(i+1<argc&&isdigit((unsigned char)argv[i+1][0])&&!parseWindowSize(argv[++i],&windowSize))return 64;continue;}
         filtered[count++]=argv[i];}filtered[count]=NULL;argc=count;argv=filtered;
 
-    if(argc==2&&!strcmp(argv[1],"--help")){puts("Infinify.app — macOS 26+ Apple Silicon native window canvas\nDefault: with Screen Recording access the canvas opens and every ordinary application window on screen lives on it: existing windows are adopted, a new one is placed by window_placement, a closed one leaves (or leaves a stand-in under session.suspend_on_close). Without that access the chooser is shown and nothing is captured.\n--manual: show the chooser first and capture only explicitly selected windows; no window is adopted automatically. Open canvas shows the saved world without adding one.\n--owned-resize-probe EMPTY_DIRECTORY [SCENARIO]: explicit noninteractive owned-fixture resize probe (live)\n--demo EMPTY_DIRECTORY: disposable interactive fixture, bounded to 60 seconds\n--demo-probe EMPTY_DIRECTORY: automated own-fixture E2E, no permission prompts\n--demo-probe-guard EMPTY_DIRECTORY: own-fixture interruption regression (expected exit 2)\n--experimental-native-resize: experimental eight-handle size-only native resize\n--experimental-native-navigation: accepted and ignored; window navigation and native focus are part of every normal run\n--no-native-focus: window focus stays logical; no native window is activated or raised\n--state ABSOLUTE_PATH: explicit persistent scene file (default Application Support/Infinify/scene.json)\n--socket ABSOLUTE_PATH: IPC socket of a normal run (default Application Support/Infinify/infinify.sock)\n--windowed [WIDTHxHEIGHT]: open the canvas at launch in one ordinary window (default 1200x800, at least 960x480) with no global shortcuts\n--config ABSOLUTE_PATH: DriftWM config file of a normal run (default $XDG_CONFIG_HOME/infinify/config.toml, else ~/.config/infinify/config.toml; DriftWM's built-in defaults when it is missing); read again whenever it changes\n--super CHORD: the physical keys of DriftWM's super/mod, a +-joined subset of ctrl|alt|cmd (default ctrl+alt)\nmsg [--json] [--socket PATH] COMMAND ...: DriftWM-style IPC client for the running app; opens no window\n--source DIR SECONDS NONCE: internal disposable child only\nKeys and pointer gestures are DriftWM's bindings from the config file: ctrl is Control, alt is Option, super (mod) is the --super chord. The status line shows the pointer, view, pan and bookmark chords registered, and each toolbar tooltip its own action's. With no config file and --super ctrl+alt the registered chords are:\n  Drag or two-finger scroll on empty canvas, Control-Option-drag or -scroll anywhere: pan. Wheel on empty canvas, Control-Option-wheel anywhere, pinch: anchored zoom (max 1x).\n  Option-drag on a window: world move/snap; add Shift: cluster.\n  View actions animate one view's camera only (toolbar Home, Fit, -, 1:1, + or global shortcuts while the canvas is open; held zoom, pan and nudge keys repeat):\n  Control-Option-A: home toggle (origin at 1:1, again to return). Control-Option-W: zoom-to-fit toggle.\n  Control-Option-Equals / Control-Option-Minus: zoom in / out. Control-Option-0 or Control-Option-Z: zoom 1:1.\n  Control-Option-Command-arrows: pan the view under the pointer. Control-Option-Shift-arrows: nudge the focused window.\n  Control-Option-1 to 4: fly to bookmark 1 to 4. Control-Option-Shift-1 to 4: set it.\n  Window navigation flies the camera and focuses the window, natively when Infinify has Accessibility access (toolbar Center, Previous, Next):\n  Option-Tab / Option-Shift-Tab: cycle windows, most recently focused first; letting go of Option commits the choice.\n  Control-Option-arrows: the nearest window in that direction. Control-Option-C: center the focused window. Control-Option-X: center the window under the pointer.\n  A click on a window gives it canvas focus and starts its native focus, then the click is forwarded; a click on empty canvas unfocuses. Focusing a canvas window in its own application is followed.\n  Control-Option-Return: exec-terminal ($TERMINAL, else a new Terminal window). Control-Option-D: exec-launcher ($LAUNCHER, else Apps).\n  Control-Option-Command-Shift-arrows: send-to-output, the focused window to the display on that side (a world move; nothing with one display).\n  Control-Option-L: DriftWM's lock binding. Its swaylock is a Linux program: where that is not installed the displays are put to sleep instead, and macOS asks for the password as its Lock Screen setting says.\n  DriftWM's volume, brightness and media key defaults run Linux programs too: without those installed the keys stay with macOS.\n  Control-Option-Q: close-window. The focused window's own close button is pressed through Accessibility; a focused placeholder is dismissed.\nThe fixture modes (--demo*, --owned-resize-*) read no config and keep Option-drag pan, Command-wheel zoom and Control-Option-drag move.\nAn unbound click, drag or scroll on a window (left, right or middle button) is forwarded only to its selected, freshly validated source.\nNative keyboard/IME remain with the real app. Control-Option-Escape (until a binding takes that chord), Control-Option-Command-Shift-Q or Quit exits.\nResize status explains unavailable native layout resizing. No SIP/settings changes.");return 0;}
+    if(argc==2&&!strcmp(argv[1],"--help")){puts("Infinify.app — macOS 26+ Apple Silicon native window canvas\nDefault: with Screen Recording access the canvas opens and every ordinary application window on screen lives on it: existing windows are adopted, a new one is placed by window_placement, a closed one leaves (or leaves a stand-in under session.suspend_on_close). Without that access the chooser is shown and nothing is captured.\n--manual: show the chooser first and capture only explicitly selected windows; no window is adopted automatically. Open canvas shows the saved world without adding one.\n--owned-resize-probe EMPTY_DIRECTORY [SCENARIO]: explicit noninteractive owned-fixture resize probe (live)\n--demo EMPTY_DIRECTORY: disposable interactive fixture, bounded to 60 seconds\n--demo-probe EMPTY_DIRECTORY: automated own-fixture E2E, no permission prompts\n--demo-probe-guard EMPTY_DIRECTORY: own-fixture interruption regression (expected exit 2)\n--experimental-native-resize: experimental eight-handle size-only native resize\n--experimental-native-navigation: accepted and ignored; window navigation and native focus are part of every normal run\n--no-native-focus: window focus stays logical; no native window is activated or raised\n--state ABSOLUTE_PATH: explicit persistent scene file (default Application Support/Infinify/scene.json)\n--socket ABSOLUTE_PATH: IPC socket of a normal run (default Application Support/Infinify/infinify.sock)\n--windowed [WIDTHxHEIGHT]: open the canvas at launch in one ordinary window (default 1200x800, at least 960x480) with no global shortcuts\n--config ABSOLUTE_PATH: DriftWM config file of a normal run (default $XDG_CONFIG_HOME/infinify/config.toml, else ~/.config/infinify/config.toml; DriftWM's built-in defaults when it is missing); read again whenever it changes\n--super CHORD: the physical keys of DriftWM's super/mod, a +-joined subset of ctrl|alt|cmd (default ctrl+alt)\nmsg [--json] [--socket PATH] COMMAND ...: DriftWM-style IPC client for the running app; opens no window\n--source DIR SECONDS NONCE: internal disposable child only\nKeys and pointer gestures are DriftWM's bindings from the config file: ctrl is Control, alt is Option, super (mod) is the --super chord. The status line shows the pointer, view, pan and bookmark chords registered, and each toolbar tooltip its own action's. With no config file and --super ctrl+alt the registered chords are:\n  Drag or two-finger scroll on empty canvas, Control-Option-drag or -scroll anywhere, three-finger swipe: pan; a released pan coasts (navigation.drift). Wheel or two-finger pinch on empty canvas, Control-Option-wheel or -pinch anywhere, three-finger pinch: anchored zoom (max 1x).\n  Option-drag on a window: world move/snap; add Shift: cluster. Held at the view's edge, a move pans the canvas under the window (navigation.edge_pan).\n  Trackpad gestures are DriftWM's [gestures] bindings: four-finger swipe: the nearest window that way. Four-finger hold: center the focused window. Four-finger pinch in / out: zoom-to-fit / home toggle. Three-finger tap, then three-finger swipe on a window: move it.\n  macOS takes three- and four-finger touches for its own gestures first: turn off Mission Control, App Expose, the full-screen swipe, Launchpad, Show Desktop and three-finger drag in System Settings for the canvas to receive them. Infinify changes no setting.\n  View actions animate one view's camera only (toolbar Home, Fit, -, 1:1, + or global shortcuts while the canvas is open; held zoom, pan and nudge keys repeat):\n  Control-Option-A: home toggle (origin at 1:1, again to return). Control-Option-W: zoom-to-fit toggle.\n  Control-Option-Equals / Control-Option-Minus: zoom in / out. Control-Option-0 or Control-Option-Z: zoom 1:1.\n  Control-Option-Command-arrows: pan the view under the pointer. Control-Option-Shift-arrows: nudge the focused window.\n  Control-Option-1 to 4: fly to bookmark 1 to 4. Control-Option-Shift-1 to 4: set it.\n  Window navigation flies the camera and focuses the window, natively when Infinify has Accessibility access (toolbar Center, Previous, Next):\n  Option-Tab / Option-Shift-Tab: cycle windows, most recently focused first; letting go of Option commits the choice.\n  Control-Option-arrows: the nearest window in that direction. Control-Option-C: center the focused window. Control-Option-X: center the window under the pointer.\n  A click on a window gives it canvas focus and starts its native focus, then the click is forwarded; a click on empty canvas unfocuses. Focusing a canvas window in its own application is followed.\n  Control-Option-Return: exec-terminal ($TERMINAL, else a new Terminal window). Control-Option-D: exec-launcher ($LAUNCHER, else Apps).\n  Control-Option-Command-Shift-arrows: send-to-output, the focused window to the display on that side (a world move; nothing with one display).\n  Control-Option-L: DriftWM's lock binding. Its swaylock is a Linux program: where that is not installed the displays are put to sleep instead, and macOS asks for the password as its Lock Screen setting says.\n  DriftWM's volume, brightness and media key defaults run Linux programs too: without those installed the keys stay with macOS.\n  Control-Option-Q: close-window. The focused window's own close button is pressed through Accessibility; a focused placeholder is dismissed.\nThe fixture modes (--demo*, --owned-resize-*) read no config and keep Option-drag pan, Command-wheel and pinch zoom and Control-Option-drag move; they take no trackpad touches.\nAn unbound click, drag or scroll on a window (left, right or middle button) is forwarded only to its selected, freshly validated source.\nNative keyboard/IME remain with the real app. Control-Option-Escape (until a binding takes that chord), Control-Option-Command-Shift-Q or Quit exits.\nResize status explains unavailable native layout resizing. No SIP/settings changes.");return 0;}
     BOOL child=argc==5&&!strcmp(argv[1],"--source"),demo=argc==3&&!strcmp(argv[1],"--demo"),guard=argc==3&&!strcmp(argv[1],"--demo-probe-guard"),probe=argc==3&&!strcmp(argv[1],"--demo-probe"),state=argc==3&&!strcmp(argv[1],"--state");
     if(argc!=1&&!child&&!demo&&!probe&&!guard&&!state)return 64;
     if((experimental||resize)&&(child||probe||guard))return 64;

@@ -289,7 +289,7 @@ device-specific behavior also need the corresponding hardware.
   [desktop shell notes](../../native/desktop/README.md#displays-hot-corners-layouts-and-autostart),
   the [configuration contract](../../crates/desktop/CONFIG.md#outputs) and the
   [event stream contract](../../crates/desktop/IPC.md#event-stream).
-- This milestone (commit pending), window lifecycle: every ordinary application
+- `1f44d0f`, window lifecycle: every ordinary application
   window is meant to live on the canvas by itself, as every toplevel is managed
   in DriftWM. The controller adopts a window that appears into a waiting slot of
   its application or places it with upstream's `window_placement` policy
@@ -373,6 +373,148 @@ device-specific behavior also need the corresponding hardware.
   slot has that exact title. See the
   [lifecycle contract](../../crates/desktop/LIFECYCLE.md) and the
   [desktop shell notes](../../native/desktop/README.md#managed-windows).
+- This milestone (commit pending), camera motion, makes the camera move as
+  DriftWM's does. The
+  controller keeps upstream's own `MomentumState` (`driftwm-core`) per output and
+  gains additive commands and fields: a timed `pan` scaled by
+  `navigation.trackpad_speed` or `mouse_speed`, `pan_end`, a `pointer` report,
+  `zoom_by` for wheel and pinch at the config's zoom speeds, and a pointer on
+  `gesture_to`. Its frame tick runs scroll momentum, edge pan, zoom and camera in
+  upstream's order. A released pan drifts by `navigation.drift`; a window dragged
+  into the `[navigation.edge_pan]` zone pans the canvas beneath it with upstream's
+  ramp and its wait at an edge that borders another output; `toggle-cursor-pan`
+  runs, switching a cursor edge pan that `edge_pan.cursor_pan` seeds at launch.
+  The shell stamps pans with their event time, ends them at the scroll phase's
+  end, on release or 50 ms after the last pan (a scroll under a held drag pan
+  ends with the release), drops macOS's own inertia events for canvas pans,
+  passes the pointer with window drags, reports it while cursor pan is on and
+  no button is held, and no longer computes zoom factors. The trackpad gestures
+  of the next bullet pan, pinch and drag through these same paths, and the
+  shell's pinch reaches the controller as a gesture, not as `zoom_by`. Coverage is nine controller
+  scenarios through the exported C ABI (`crates/desktop/tests/motion_flow.rs`),
+  in which momentum is compared bit for bit with upstream's `MomentumState` and
+  edge pan, cursor pan and both zooms with values derived by hand from upstream's
+  formulas; the headless coordinator regression; and one scripted session on
+  2026-10-09 against the built app in `--windowed` mode on a private scene,
+  config and socket (macOS 27.2, Apple Silicon, three seeded detached
+  placeholders), which left no saved evidence. Exercised there through the
+  socket: `toggle-cursor-pan` accepted twice; a config file setting `drift`, the
+  pan and zoom speeds and every `[navigation.edge_pan]` key loaded, then replaced
+  and reloaded, with nothing on stderr; `pan-viewport`, `zoom-in`, `zoom-reset`,
+  `home-toggle`, `zoom-to-fit`, `go-to-bookmark` and a camera write each landing
+  exactly through the reordered tick; `debug-counters`; exit on SIGTERM. The
+  app built with the next bullet's gestures on top was driven once more the
+  same way: the toggle accepted twice, a motion config loaded and reloaded with
+  nothing on stderr, and the same actions landing exactly. Both were built on
+  `4dd642b`. Merged onto `c11fece`, `5812d6f` and `1f44d0f`, the frame is the
+  navigation coordinator's tick in every normal run, the action prelude ends
+  an open cycle and stops momentum in one place for keys, IPC, hot corners and
+  gestures, and the flights those commits arm (window navigation, a completed
+  click's reveal, a new window, the follower after a close) stop a coast as
+  every flight does; that build passed the motion, gesture, navigation,
+  lifecycle, platform, config and IPC controller scenarios and the coordinator
+  regression, and was driven once on 2026-10-10 in the same way (6.9 seconds,
+  no Screen Recording access): the toggle accepted twice with the camera
+  unmoved in between, a file with `drift`, the pan speeds, two edge-pan keys
+  and `zoom.trackpad_speed` loaded with no config line on stderr,
+  `center-nearest`, `center-window`, `pan-viewport`, `zoom-to-fit` and
+  `home-toggle` landing exactly on that tick, and a `subscribe` client
+  receiving 46 State lines, none repeated, over the 1.6 seconds of two of
+  those flights.
+  Evidence boundary: momentum, edge pan and cursor edge pan need real scroll and
+  drag input, which cannot be injected, and were not exercised in the running
+  app. Neither were wheel or pinch zoom, the config speeds on a real gesture, the
+  dropping of macOS inertia events, the rule that tells a rest from a flick by
+  event times, or the 50 ms launch delay inside the app (it was run alone in a
+  throwaway harness). The cursor-pan flag cannot be read over the socket, so the
+  toggle's acceptance was observed and its effect was not. Nothing drawn was
+  observed, no hot key was registered, no window had a bound source, and there
+  was one output, so the wait at a shared edge ran only in the controller
+  scenarios. Known mismatches: a drag stays on the output it began on, zoom is
+  refused during a window drag, only edge pan carries a dragged window, a resize
+  gesture and touch arm no edge pan, the pointer is never warped, and edge pan
+  speed is that of the shell's 60 Hz timer. See the
+  [desktop shell notes](../../native/desktop/README.md#camera-motion) and the
+  [motion contract](../../crates/desktop/MOTION.md).
+- This milestone (commit pending), trackpad gestures, brings upstream's dispatch
+  of libinput's swipe, pinch and hold gestures (`src/input/gestures/`) to the
+  controller behind three additive commands, `gesture_begin`, `gesture_update`
+  and `gesture_end`, resolved against the `[gestures]` tables with upstream's
+  precedence: three-finger swipe pans and coasts, pinches zoom around the
+  pointer or fire `zoom-to-fit` and `home-toggle` at the configured thresholds,
+  a hold fires on release, a three-finger tap followed by a swipe moves the
+  window under the pointer, and `set-trackpad` turns the dispatch off and on.
+  It is built on the camera-motion milestone above and adds no camera
+  machinery of its own: a swipe that pans is that milestone's timed pan and
+  `pan_end`, on its one momentum per output; a pinch that zooms is its pinch,
+  with the dynamic minimum and the end snap; and a swipe that moves a window
+  drives the pointer's drag, edge pan included. macOS hands no such gestures to an
+  application, so the shell stands where libinput stands: canvas views accept
+  raw indirect touches, a new recogniser (`native/desktop/trackpad-gestures.m`)
+  turns three or more fingers into those event streams by rules written out
+  beside the libinput behaviour each imitates, and AppKit's two-finger magnify
+  is routed through the same commands and no longer through `zoom_by`. Coverage is controller scenarios with
+  synthetic event streams through the exported C ABI
+  (`crates/desktop/tests/gesture_flow.rs`), in which a swipe's coast is compared
+  bit for bit with the same deltas sent as that milestone's timed pans; the recogniser fed scripted touch
+  sequences in throwaway command-line programs, once with its events passed on
+  to the real controller library, which accepted every one; and scripted
+  sessions on 2026-10-09 against the built app in `--windowed` mode on a private
+  scene, config and socket (macOS 27.2, Apple Silicon, three seeded detached
+  placeholders), the last of them on the build that holds both pending
+  milestones. None of it left saved evidence. Exercised through the socket:
+  a config with a `[gestures]` override loading cleanly, malformed gesture
+  entries reported in upstream's words and skipped while the rest of the file
+  applied, a `[gestures]` value of the wrong type refused whole with its
+  predecessor kept, `set-trackpad on`, `off` and `toggle` and their argument
+  errors, the view actions landing as before, and exit on SIGTERM; on the
+  build with both milestones, a file holding motion settings and a `[gestures]`
+  override loading and reloading cleanly, `set-trackpad` and
+  `toggle-cursor-pan` answering, and the view actions landing as before. Those
+  builds stood on `4dd642b`, where `center-nearest`, `center-window` and
+  `cycle-windows` were still refused. Merged onto `c11fece`, `5812d6f` and
+  `1f44d0f`, a gesture's threshold or hold action runs through the one action
+  dispatch with the gesture's pointer and the modifier state of the event that
+  fires it (a new optional `held` on `gesture_update` and `gesture_end`), so
+  the four-finger swipe, the `mod` three-finger swipe and the two default
+  holds run window navigation and a swipe bound to `cycle-windows` holds its
+  cycle open or commits it as a key binding does; a move's drag ends, with its
+  edge pan, when its window closes by itself; and in the shell a gesture
+  reply's focus request goes to the navigation coordinator and a press ends an
+  open cycle, then the gesture, then every flight and coast. `gesture_flow`
+  covers these with synthetic streams, and reads upstream's 22 default gesture
+  bindings one by one: 13 run, 7 are refused by name and the 2 resizes are
+  gated. On 2026-10-10 that build was driven once over its socket (6.9
+  seconds, private scene, config and socket): a `[gestures]` override with a
+  named swipe bound to `cycle-windows forward` and a hold bound to
+  `focus-center` loaded with no config line on stderr, `set-trackpad off`,
+  `on` and `toggle` answered `ok` and `set-trackpad maybe` upstream's message,
+  and `center-nearest right`, which the earlier sessions saw refused, flew to
+  the seeded window and focused it. Evidence
+  boundary: **no physical trackpad gesture was performed**, which an automated
+  session cannot do. No gesture event has reached the merged app either: a
+  gesture firing window navigation, `held`, hold-to-commit from a gesture and
+  the merged press path are controller scenarios and compiled shell code. The recogniser's events were passed to the controller
+  library before it was joined to camera motion, and not again since. The shell's touch forwarding, timers, magnify routing and
+  gesture sink have only been compiled; whether macOS delivers three- and
+  four-finger touches to the canvas panel, real-finger behaviour, how the
+  recogniser's thresholds feel, and coexistence with macOS's own gestures
+  (Mission Control, App Exposé, the full-screen swipe, Launchpad, Show Desktop,
+  three-finger drag, which the user must turn off in System Settings; nothing
+  here changes a setting) are untested; the recogniser's constants are from
+  memory of libinput and were not checked against its source; expected values
+  are derived by reading upstream's handlers, which were not executed as an
+  oracle; nothing drawn was observed. Seven of upstream's default gesture
+  bindings name four actions that still do not run (`zoom-to-fit-snapped`,
+  `fit-window`, `fit-window-snapped`, `toggle-fullscreen`), gesture resize is
+  gated with native resize, an unbound
+  gesture is not forwarded to the application under it, a move gesture stays
+  inside its output, three fingers resting
+  mid-swipe do not start the drift that upstream's 50 ms timer starts,
+  `set-trackpad off` cannot
+  silence the pointer or two-finger scrolling, and `[touch.*]` stays unused. See
+  the [gesture contract](../../crates/desktop/GESTURES.md) and the
+  [desktop shell notes](../../native/desktop/README.md#trackpad-gestures).
 
 These milestones add evidence to partial rows. None satisfies an entire native
 behavior row or changes the completion requirement.

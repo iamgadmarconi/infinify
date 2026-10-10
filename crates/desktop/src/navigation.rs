@@ -257,8 +257,10 @@ impl Controller {
             .next_navigation
             .checked_add(1)
             .ok_or(Error::Invalid("navigation generations exhausted"))?;
-        // Upstream set_camera_anchor: window navigation disarms a zoom-to-fit return.
+        // Upstream set_camera_anchor: window navigation disarms a zoom-to-fit
+        // return and stops scroll momentum.
         self.overview_returns.remove(&output);
+        self.stop_momentum(output);
         self.flights.insert(
             output,
             ViewFlight {
@@ -280,61 +282,80 @@ impl Controller {
             None => 0,
         };
         self.navigation_clock = Some(timestamp_ns);
-        let dt = std::time::Duration::from_nanos(elapsed.min(33_000_000)).as_secs_f64();
+        let dt = std::time::Duration::from_nanos(elapsed.min(33_000_000));
+        // Upstream tick_all_animations: the cursor's edge pan is armed again
+        // from where the pointer is, then every output runs scroll momentum,
+        // edge pan, zoom and camera, in that order.
+        self.refresh_cursor_edge_pan();
+        let mut outputs: Vec<OutputId> = self.scene.outputs().iter().map(|o| o.id).collect();
+        outputs.sort();
         let mut changed = Vec::new();
-        for output in self.flights.keys().copied().collect::<Vec<_>>() {
-            let context = self.navigation_context(output)?;
-            let factor = 1.0 - (1.0 - context.camera_speed).powf(dt * 60.0);
-            let mut viewport = self
-                .scene
-                .output(output)
-                .ok_or(Error::Invalid("unknown output"))?
-                .clone();
-            let old = viewport.clone();
-            let flight = self.flights.get_mut(&output).expect("flight exists");
-            // Upstream multi-output order: zoom tick, then camera tick.
-            if let Some(target) = flight.zoom_target {
-                let dz = target - old.zoom;
-                let zoom_close = dz.abs() < 0.001;
-                viewport.zoom = if zoom_close {
-                    target
-                } else {
-                    old.zoom + dz * factor
-                };
-                if let Some(anchor) = flight.zoom_animation_anchor {
-                    let current_anchor = old.camera + anchor.screen / old.zoom;
-                    let delta = anchor.canvas - current_anchor;
-                    let center = current_anchor + delta * factor;
-                    viewport.camera = center - anchor.screen / viewport.zoom;
-                    flight.camera_target = None;
-                    if zoom_close && delta.x * delta.x + delta.y * delta.y < 0.25 {
-                        viewport.camera = anchor.canvas - anchor.screen / viewport.zoom;
-                        flight.zoom_target = None;
-                        flight.zoom_animation_anchor = None;
-                    }
-                } else if zoom_close {
-                    flight.zoom_target = None;
-                }
-            }
-            if let Some(target) = flight.camera_target {
-                let delta = target - viewport.camera;
-                viewport.camera = if delta.x * delta.x + delta.y * delta.y < 0.25 {
-                    flight.camera_target = None;
-                    target
-                } else {
-                    viewport.camera + delta * factor
-                };
-            }
-            if viewport.camera != old.camera || viewport.zoom != old.zoom {
+        for output in outputs {
+            let pose = |scene: &Scene| scene.output(output).map(|o| (o.camera, o.zoom));
+            let before = pose(&self.scene);
+            self.tick_momentum(output, dt)?;
+            self.tick_edge_pan(output, timestamp_ns)?;
+            self.tick_flight(output, dt.as_secs_f64())?;
+            if pose(&self.scene) != before {
                 changed.push(output);
             }
-            if flight.camera_target.is_none() && flight.zoom_target.is_none() {
-                self.flights.remove(&output);
-            }
-            self.scene.update_output(viewport)?;
-            self.sync_output(output)?;
         }
-        Ok(json!({"changed_outputs":changed,"needs_frames":!self.flights.is_empty()}))
+        Ok(
+            json!({"changed_outputs":changed,"needs_frames":self.needs_frames(),"needs_pointer":self.motion.cursor_pan}),
+        )
+    }
+    /// One frame of the output's flight, if it has one.
+    fn tick_flight(&mut self, output: OutputId, dt: f64) -> Result<(), Error> {
+        if !self.flights.contains_key(&output) {
+            return Ok(());
+        }
+        let context = self.navigation_context(output)?;
+        let factor = 1.0 - (1.0 - context.camera_speed).powf(dt * 60.0);
+        let mut viewport = self
+            .scene
+            .output(output)
+            .ok_or(Error::Invalid("unknown output"))?
+            .clone();
+        let old = viewport.clone();
+        let flight = self.flights.get_mut(&output).expect("flight exists");
+        // Upstream multi-output order: zoom tick, then camera tick.
+        if let Some(target) = flight.zoom_target {
+            let dz = target - old.zoom;
+            let zoom_close = dz.abs() < 0.001;
+            viewport.zoom = if zoom_close {
+                target
+            } else {
+                old.zoom + dz * factor
+            };
+            if let Some(anchor) = flight.zoom_animation_anchor {
+                let current_anchor = old.camera + anchor.screen / old.zoom;
+                let delta = anchor.canvas - current_anchor;
+                let center = current_anchor + delta * factor;
+                viewport.camera = center - anchor.screen / viewport.zoom;
+                flight.camera_target = None;
+                if zoom_close && delta.x * delta.x + delta.y * delta.y < 0.25 {
+                    viewport.camera = anchor.canvas - anchor.screen / viewport.zoom;
+                    flight.zoom_target = None;
+                    flight.zoom_animation_anchor = None;
+                }
+            } else if zoom_close {
+                flight.zoom_target = None;
+            }
+        }
+        if let Some(target) = flight.camera_target {
+            let delta = target - viewport.camera;
+            viewport.camera = if delta.x * delta.x + delta.y * delta.y < 0.25 {
+                flight.camera_target = None;
+                target
+            } else {
+                viewport.camera + delta * factor
+            };
+        }
+        if flight.camera_target.is_none() && flight.zoom_target.is_none() {
+            self.flights.remove(&output);
+        }
+        self.scene.update_output(viewport)?;
+        self.sync_output(output)
     }
 }
 

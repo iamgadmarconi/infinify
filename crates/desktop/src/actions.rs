@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
-// src/input/actions.rs (execute_action's cycle prelude and dispatch,
-// exec_command, NudgeWindow, detect_terminal, detect_launcher). The grammar
-// itself is not adapted: it is driftwm-core's `config::{Action, parse_action}`,
-// upstream's own code. The camera, bookmark, window navigation, nudge, exec,
-// reload, quit, close, suspend, output transfer and layout actions execute;
-// every other action parses and is then refused by name.
+// src/input/actions.rs (execute_action's prelude, which ends an Alt-Tab cycle
+// and stops scroll momentum, and its dispatch, exec_command, NudgeWindow,
+// detect_terminal, detect_launcher). The grammar itself is not adapted: it is
+// driftwm-core's `config::{Action, parse_action}`, upstream's own code. The
+// camera, bookmark, window navigation, nudge, exec, reload, quit, close,
+// suspend, output transfer, layout, toggle-cursor-pan and set-trackpad actions
+// execute; every other action parses and is then refused by name.
 use super::keyboard_layout::switch_effect;
 use super::window_actions::Moved;
 use super::*;
@@ -153,6 +154,8 @@ pub(crate) fn runs_here(action: &Action) -> bool {
             | Action::SendToOutput(_)
             | Action::SendCursorToOutput(_)
             | Action::SwitchLayout(_)
+            | Action::ToggleCursorPan
+            | Action::SetTrackpad(_)
     )
 }
 /// Upstream detect_terminal / detect_launcher, less their probe of installed
@@ -250,8 +253,9 @@ impl Controller {
         let action = parse_action(spec).map_err(Error::Refused)?;
         self.run(output, &action, pointer, held)
     }
-    /// Execute one parsed action: a key binding's, an IPC request's or a hot
-    /// corner's. `pointer` and `held` are as `run_action` takes them.
+    /// Execute one parsed action: a key binding's, an IPC request's, a hot
+    /// corner's or a trackpad gesture's. `pointer` and `held` are as
+    /// `run_action` takes them.
     pub(crate) fn run(
         &mut self,
         output: Option<OutputId>,
@@ -259,12 +263,17 @@ impl Controller {
         pointer: Option<Point>,
         held: bool,
     ) -> Result<Outcome, Error> {
-        // Upstream execute_action: a non-cycle action ends an Alt-Tab cycle in
-        // progress before it runs. A refused action is rolled back with it.
+        // Upstream's execute_action prelude. A non-cycle action ends an
+        // Alt-Tab cycle in progress before it runs, and every action stops the
+        // active output's scroll momentum first. A refused action is rolled
+        // back with both.
         if !matches!(action, Action::CycleWindows { .. })
             && self.scene.stage().cycle_state().is_some()
         {
             self.finish_cycle();
+        }
+        if let Some(output) = output {
+            self.stop_momentum(output);
         }
         let mut outcome = Outcome::default();
         let active = || output.ok_or(Error::Invalid("no active output"));
@@ -334,6 +343,17 @@ impl Controller {
             // The enabled input sources are the shell's to list and select.
             Action::SwitchLayout(target) => {
                 outcome.effects.push(switch_effect(target));
+                return Ok(outcome);
+            }
+            // Upstream reports nothing: the flag is the snapshot's `cursor_pan`.
+            Action::ToggleCursorPan => {
+                self.toggle_cursor_pan();
+                return Ok(outcome);
+            }
+            // Upstream turns every trackpad's events off or on. Here that is
+            // the gesture dispatch: see GESTURES.md.
+            Action::SetTrackpad(state) => {
+                outcome.dirty = self.set_trackpad(state)?;
                 return Ok(outcome);
             }
             Action::PanViewport(direction) => self.pan_viewport(active()?, direction.into())?,

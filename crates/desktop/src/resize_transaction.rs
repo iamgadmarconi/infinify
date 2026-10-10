@@ -183,7 +183,7 @@ impl Controller {
             last_result: None,
             snap_intent,
         });
-        self.flights.clear();
+        self.cancel_animations_everywhere();
         self.emit_resize(None)
     }
     fn resize_id(&self, transaction: u64) -> Result<&NativeResizeTransaction, Error> {

@@ -288,7 +288,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "center-nearest <direction> runs through the action command in every normal launch, with driftwm-core's find_nearest and upstream's closest-point rule: candidates are every window (detached placeholders included) and the navigation.anchors points; the search starts at the focused window while all of it is on the output (upstream's threshold 1.0) and at the viewport centre otherwise; a window is focused and flown to at the current zoom (NavZoom::Keep), and an anchor clears focus and flies the camera there. Default shell: the config file's bindings (upstream's default mod+arrows, Control-Option-arrows under the default super chord). Known mismatches: representative points come from the world rectangle, which has no separate title-bar strip; a fractional frame's visibility is measured by the largest whole-pixel rectangle inside it; there is no just-exited-fullscreen anchor; an anchor outside the ±1e12 world is not a candidate; the pointer and gesture forms (MouseAction.CenterNearest, ThresholdAction.CenterNearest) are not implemented; the native focus request is performed only with Accessibility access and has never been exercised live. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/navigation_actions_flow.rs, expected targets derived by hand, not from an executed upstream oracle) and scripted msg sessions against the built app in --windowed mode on 2026-10-09 with detached placeholders only (right, left, up, down and up-right, a kept zoom, the viewport-centre origin, an anchor), which left no saved evidence. Hot-key delivery and native focus are unrun on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "center-nearest <direction> runs through the action command in every normal launch, with driftwm-core's find_nearest and upstream's closest-point rule: candidates are every window (detached placeholders included) and the navigation.anchors points; the search starts at the focused window while all of it is on the output (upstream's threshold 1.0) and at the viewport centre otherwise; a window is focused and flown to at the current zoom (NavZoom::Keep), and an anchor clears focus and flies the camera there. Default shell: the config file's bindings (upstream's default mod+arrows, Control-Option-arrows under the default super chord). Known mismatches: representative points come from the world rectangle, which has no separate title-bar strip; a fractional frame's visibility is measured by the largest whole-pixel rectangle inside it; there is no just-exited-fullscreen anchor; an anchor outside the ±1e12 world is not a candidate; the pointer form (MouseAction.CenterNearest) is not implemented, and the gesture form (ThresholdAction.CenterNearest) has run only as a synthetic event stream; the native focus request is performed only with Accessibility access and has never been exercised live. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/navigation_actions_flow.rs, expected targets derived by hand, not from an executed upstream oracle) and scripted msg sessions against the built app in --windowed mode on 2026-10-09 with detached placeholders only (right, left, up, down and up-right, a kept zoom, the viewport-centre origin, an anchor), which left no saved evidence. Hot-key delivery and native focus are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.CycleWindows",
@@ -442,7 +442,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Camera-only controller zoom_out animates a usable-centre-anchored zoom to snap(max(zoom / zoom.step, dynamic minimum)), the minimum being half the zoom that fits every window with zoom.fit_padding, and clears the output's Fit return. Default shell: toolbar - and the config file's binding of zoom-out (upstream's default mod+minus, Control-Option-- under the default super chord); a held chord repeats through the shell's timer (repeat_delay, repeat_rate). Known mismatches: key repeat is compiled and reviewed only, unrun on a live run; no fullscreen interaction (Infinify has no fullscreen yet); documented deviation: interactive pinch/scroll zoom still uses the static 0.001 floor, so when the current zoom is already below the dynamic minimum ZoomOut is a no-op, where upstream would zoom in to the minimum. No evidence entry is recorded yet: coverage is an exported-C-ABI controller scenario only, and rendered animation and global-shortcut delivery are unverified on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Camera-only controller zoom_out animates a usable-centre-anchored zoom to snap(max(zoom / zoom.step, dynamic minimum)), the minimum being half the zoom that fits every window with zoom.fit_padding, and clears the output's Fit return. Default shell: toolbar - and the config file's binding of zoom-out (upstream's default mod+minus, Control-Option-- under the default super chord); a held chord repeats through the shell's timer (repeat_delay, repeat_rate). Known mismatches: key repeat is compiled and reviewed only, unrun on a live run; no fullscreen interaction (Infinify has no fullscreen yet); documented deviation: wheel and pinch zoom now clamp to the dynamic minimum, but the direct zoom command keeps the static 0.001 floor and windows that move can raise the minimum, so the current zoom can still sit below it; ZoomOut is then a no-op, where upstream would zoom in to the minimum. No evidence entry is recorded yet: coverage is an exported-C-ABI controller scenario only, and rendered animation and global-shortcut delivery are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.ZoomReset",
@@ -721,7 +721,7 @@
       },
       "contract": "Match Action::ToggleCursorPan dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -729,7 +729,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "The controller action toggle-cursor-pan flips a runtime cursor-edge-pan flag that the first config load of a run seeds from navigation.edge_pan.cursor_pan (a reload leaves it alone, as upstream reads the key once at startup), and turning it off disarms every edge pan at once. It reports nothing beyond Ok, as upstream's arm reports nothing; the flag is the controller snapshot's navigation.cursor_pan. While it is on the shell reports the pointer before each frame and at its idle poll, and the controller pans the output whose usable area holds the pointer, within edge_pan.cursor_zone of an edge, at edge_pan.speed_max screen points per frame, with upstream's wait at an edge that borders another output. Default shell: upstream's default mod+e (Control-Option-E under the default super chord) and msg action toggle-cursor-pan. Known mismatches: the pointer is a reported global point and is never warped; a view's edge is its output's, which starts under the 64-point toolbar strip, so the top of the screen pans nothing; while nothing moves the pointer is sampled about every 80 ms; upstream's stand-downs over a bar or dock surface, on a fullscreen output and under a session lock have no counterpart; the toggle gives no status feedback and the flag cannot be read over the IPC socket. No evidence entry is recorded yet: coverage is an exported-C-ABI/JSON controller scenario (crates/desktop/tests/motion_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence and in which the action answered Ok twice; the flag was not read back there, and cursor edge pan itself needs a real pointer in the zone and was not exercised on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.SetTrackpad",
@@ -741,7 +742,7 @@
       },
       "contract": "Match Action::SetTrackpad dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -749,7 +750,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "The controller action set-trackpad on|off|toggle keeps a per-run override over [input.trackpad] enable, as upstream's effective_send_events does: while off, gesture_begin starts nothing, a gesture in progress ends cancelled, and the shell's two-finger pinch, which travels the same commands, is off too. Reachable from a key binding in the config file (upstream binds none by default) and as msg action set-trackpad over the IPC socket. Known mismatches: upstream sets libinput's send-events mode and silences the whole device, while here the pointer, clicks and two-finger scrolling are macOS's and stay on; disable_on_external_mouse counts as on; toggle, and the rule that a config reload drops the override, are taken from upstream's documentation and device_config.rs, not from the action's own arm, which was not read. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/gesture_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence and could not read the resulting state back over the socket. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.Quit",
@@ -862,7 +864,7 @@
       },
       "contract": "Match MouseAction::PanViewport dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -870,7 +872,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "A press or scroll whose binding answers pan_viewport pans the output's camera through the controller's timed pan, upstream's drift_pan_on: the screen delta is scaled by navigation.trackpad_speed for a scroll (two-finger or wheel) and by navigation.mouse_speed for a drag, divided by the zoom, fed to upstream's own MomentumState (driftwm-core) and added to the camera, ending the output's flight, zoom anchor and Fit return. The end of the scroll phase, the button's release, or 50 ms without a pan (upstream's MOMENTUM_LAUNCH_DELAY, timed by the shell) launches the coast, which the frame tick decays by navigation.drift. macOS's own inertia events are dropped for a scroll that panned, unless a window took the scroll over part-way: the rest of it, end and inertia included, is then forwarded. Known mismatches: the launch delay and the rest-before-release rule are the shell's, decided from event times; a scroll under a held drag pan launches only at the release, where upstream's lift launches into the held grab; a scroll with precise deltas is reported as a finger and any other as a wheel, never as continuous; the drag pan's pointer is not clamped to its output as upstream's pan grab clamps it; the pointer is never warped with the camera; upstream's fullscreen refusal is absent, and its focus clearing on a click that did not drag is the shell's own rule (a pan press that began on empty canvas and is released within 5 points sends clear_focus); there is no touch pan. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/motion_flow.rs, momentum compared bit for bit with upstream's MomentumState); the shell side is compiled and reviewed only, because it needs real scroll and drag input, and no pan or coast was produced on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "MouseAction.Zoom",
@@ -882,7 +885,7 @@
       },
       "contract": "Match MouseAction::Zoom dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -890,7 +893,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "A scroll whose binding answers zoom goes through the controller's zoom_by, upstream's on_pointer_axis Zoom arm: zoom.step ^ (-v / 30 x zoom.mouse_speed) applied to the zoom the output is already heading for, held between the dynamic minimum (half the zoom that fits every window with zoom.fit_padding) and 1, and animated around the world point under the pointer; it drops the camera target, disarms the Fit return and stops momentum, and nothing snaps to 1. One wheel line is counted as one notch of 15 axis units. Known mismatches: zoom_by is refused during a window drag or resize gesture, where upstream zooms under a grab; with a two-finger scroll bound to zoom, macOS's inertia events still zoom; upstream's wheel-up and wheel-down notch bindings never fire. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/motion_flow.rs, against values derived by hand from upstream's formula, not by executing upstream); the shell side is compiled and reviewed only, and no wheel or scroll zoom was made on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "MouseAction.CenterNearest",
@@ -942,12 +946,13 @@
       },
       "contract": "Match GestureTrigger::Swipe dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "N-finger-swipe is resolved at gesture_begin for a swipe, in the pointer's own context table and then anywhere, with the physical modifiers mapped back to upstream's: pan-viewport (and zoom, which a swipe treats as pan) follows the fingers and coasts, move-window and move-snapped-windows drag the window under the pointer, and a threshold action fires once at gestures.swipe_threshold: a bare center-nearest in the direction the canvas would follow the fingers, run as Action.CenterNearest runs it (see ThresholdAction.CenterNearest). The shell makes the swipe from three or more raw trackpad touches moving together. Known mismatches: the event stream is the shell recogniser's imitation of libinput, with a constant 10.5 units per millimetre in place of pointer acceleration; an unbound swipe is not forwarded to the application; resize-window is gated; a two-finger swipe never arrives, since macOS scrolling stays a mouse binding. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "GestureTrigger.SwipeUp",
@@ -959,12 +964,13 @@
       },
       "contract": "Match GestureTrigger::SwipeUp dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "N-finger-swipe-up overrides the N-finger-swipe action when the accumulated physical finger vector points mostly up as it reaches gestures.swipe_threshold, and stands without a base swipe entry; upstream's parser accepts only threshold actions on it. Known mismatches: as GestureTrigger.Swipe. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "GestureTrigger.SwipeDown",
@@ -976,12 +982,13 @@
       },
       "contract": "Match GestureTrigger::SwipeDown dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "N-finger-swipe-down overrides the N-finger-swipe action when the accumulated physical finger vector points mostly down as it reaches gestures.swipe_threshold, and stands without a base swipe entry; upstream's parser accepts only threshold actions on it. Known mismatches: as GestureTrigger.Swipe. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "GestureTrigger.SwipeLeft",
@@ -993,12 +1000,13 @@
       },
       "contract": "Match GestureTrigger::SwipeLeft dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "N-finger-swipe-left overrides the N-finger-swipe action when the accumulated physical finger vector points mostly left as it reaches gestures.swipe_threshold, and stands without a base swipe entry; upstream's parser accepts only threshold actions on it. Known mismatches: as GestureTrigger.Swipe. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "GestureTrigger.SwipeRight",
@@ -1010,12 +1018,13 @@
       },
       "contract": "Match GestureTrigger::SwipeRight dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "N-finger-swipe-right overrides the N-finger-swipe action when the accumulated physical finger vector points mostly right as it reaches gestures.swipe_threshold, and stands without a base swipe entry; upstream's parser accepts only threshold actions on it. Known mismatches: as GestureTrigger.Swipe. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "GestureTrigger.DoubletapSwipe",
@@ -1027,12 +1036,13 @@
       },
       "contract": "Match GestureTrigger::DoubletapSwipe dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "A swipe that begins within 300 ms (upstream's DOUBLE_TAP_WINDOW_MS) of a three-finger tap is sent with doubletap set and resolves N-finger-doubletap-swipe first: bound to move-window or move-snapped-windows over a window it focuses, raises and drags that window, and otherwise it is a plain swipe. Known mismatches: upstream arms the window with tap-to-click's middle click and delivers that click when the swipe does not consume it, while here the shell's recogniser finds the tap itself and there is no click to deliver; only a three-finger tap arms it; the drag stays inside the gesture's output; the native focus request of the grabbed window goes to the shell's navigation coordinator like every other and has never been performed on a real window; the resize variants are gated. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "GestureTrigger.Pinch",
@@ -1044,12 +1054,13 @@
       },
       "contract": "Match GestureTrigger::Pinch dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "N-finger-pinch, which upstream's parser only lets be zoom, zooms the output around the pointer by the gesture's scale and zoom.trackpad_speed, between the dynamic minimum and 1.0, and snaps to 1.0 near it when the pinch ends, through the one pinch implementation the zoom_by command also uses (config.zoom.trackpad_speed). Three or more fingers come from the shell's recogniser; two fingers come from AppKit's magnify events, sent as the same commands. Known mismatches: the pointer is not warped, so the anchor is the pointer at begin; the two-finger scale is the running product of AppKit's magnifications, with no rotation or centre movement; an unbound pinch (two fingers over a window by default) is not forwarded to the application. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery and magnify routing are compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "GestureTrigger.PinchIn",
@@ -1061,12 +1072,13 @@
       },
       "contract": "Match GestureTrigger::PinchIn dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "N-finger-pinch-in fires its action once when the gesture's scale drops below gestures.pinch_in_threshold, when no continuous pinch is bound for that finger count; one gesture can fire both in and out. Known mismatches: an action that does not run here yet (fit-window, fit-window-snapped, toggle-fullscreen and zoom-to-fit-snapped among upstream's defaults) is dispatched and refused by name; the scale is the shell recogniser's, between the farthest and the nearest touch, or AppKit's for two fingers. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery and magnify routing are compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "GestureTrigger.PinchOut",
@@ -1078,12 +1090,13 @@
       },
       "contract": "Match GestureTrigger::PinchOut dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "N-finger-pinch-out fires its action once when the gesture's scale rises above gestures.pinch_out_threshold, when no continuous pinch is bound for that finger count; one gesture can fire both in and out. Known mismatches: an action that does not run here yet (fit-window, fit-window-snapped and toggle-fullscreen among upstream's defaults) is dispatched and refused by name; the scale is the shell recogniser's, between the farthest and the nearest touch, or AppKit's for two fingers. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery and magnify routing are compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "GestureTrigger.Hold",
@@ -1095,12 +1108,13 @@
       },
       "contract": "Match GestureTrigger::Hold dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "N-finger-hold fires its action when the hold ends, and not when it is cancelled; upstream's two default hold bindings name center-window, which runs as Action.CenterWindow runs it. The shell reports a hold once three or more fingers have rested within 1 mm for 180 ms, and cancels it when they move. Known mismatches: both numbers are the recogniser's own, chosen from memory of libinput and not checked against it; a resting thumb counts as a finger. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery and hold timer are compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "GestureTrigger.Tap",
@@ -1180,12 +1194,13 @@
       },
       "contract": "Match ContinuousAction::PanViewport dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "As a gesture action: each swipe update moves the output's camera by the negated finger delta times navigation.trackpad_speed over the zoom, so the canvas follows the fingers, and when the swipe ends the camera coasts on upstream's momentum physics (navigation.drift). Both go through the controller's timed pan and pan_end, the path of a two-finger scroll (MouseAction.PanViewport), so each output has one momentum, stopped where upstream stops it. Known mismatches: upstream's drift_pan_on also launches the coast itself 50 ms after the last delta with the fingers still down, and the launch at the swipe's end then stops it; here nothing coasts under resting fingers, because the shell arms that delay for scroll pans only, and a swipe that ends 50 ms or more after its last update launches an emptied tracker, which is where upstream's camera also ends up; a swipe update that moves nothing is not a sample, where upstream's swipe records it; the default shell stops the coast of a pan that ended cancelled, where upstream's cancelled swipe coasts; the pointer is not warped. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ContinuousAction.Zoom",
@@ -1197,12 +1212,13 @@
       },
       "contract": "Match ContinuousAction::Zoom dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "As a gesture action: a pinch zooms the output around the pointer by its scale and zoom.trackpad_speed, between the dynamic minimum and 1.0, and snaps to 1.0 near it on end; bound to a swipe, which has no scale, it pans, as upstream treats it. Known mismatches: as GestureTrigger.Pinch. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery and magnify routing are compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ContinuousAction.MoveWindow",
@@ -1214,12 +1230,13 @@
       },
       "contract": "Match ContinuousAction::MoveWindow dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "As a gesture action: a swipe or doubletap-swipe over a window focuses and raises it and installs the drag a bound button press installs; each update moves a virtual pointer by the raw delta and the window follows with the usual snapping, and the drag is released when the gesture ends. Within navigation.edge_pan.zone of an edge of the gesture's output the virtual pointer arms the drag's edge pan, which pans the canvas under the window (canvas.edge_pan). With no window under the pointer the swipe pans. Known mismatches: the virtual pointer is held inside the gesture's output, without upstream's cross-output move; it is a logical world move that never moves the native window; the focus request it returns goes to the shell's navigation coordinator like every other and has never been performed on a real window; pinned windows do not exist here. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ContinuousAction.MoveSnappedWindows",
@@ -1231,12 +1248,13 @@
       },
       "contract": "Match ContinuousAction::MoveSnappedWindows dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "As a gesture action: as ContinuousAction.MoveWindow, with the drag installed for the window's snapped cluster, the one a bound button press with the cluster installs. Known mismatches: as ContinuousAction.MoveWindow; the cluster leg has no gesture scenario of its own, only its fall back to a pan when nothing is under the pointer. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs), which do not move a cluster by gesture; the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ContinuousAction.ResizeWindow",
@@ -1282,12 +1300,13 @@
       },
       "contract": "Match ThresholdAction::CenterNearest dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "A swipe bound to a bare center-nearest accumulates the physical finger vector and, when it reaches gestures.swipe_threshold, fires center-nearest once in the opposite of that vector, in eight directions (driftwm-core's direction_from_vector): fingers left look right, as the canvas would follow them. The action runs through the action dispatch exactly as Action.CenterNearest does, on the gesture's output, after the same prelude (an open cycle ended, the output's scroll momentum stopped), and its flight, focus request and dirty flag come back in the gesture reply. Known mismatches: see Action.CenterNearest and GestureTrigger.Swipe; the pointer form (MouseAction.CenterNearest) is not implemented; macOS's own four-finger gestures must be turned off in System Settings by the user for the touches to arrive, which is untested. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ThresholdAction.Fixed",
@@ -1299,12 +1318,13 @@
       },
       "contract": "Match ThresholdAction::Fixed dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "A threshold gesture's fixed action runs through the same dispatch as an action string, on the gesture's output, once per threshold crossing, or on release for a hold; its flight, effects and dirty flag come back in the gesture reply. Known mismatches: an action that does not run here yet is reported in the reply's fired.error, and by the shell in the status line, instead of running, where upstream has no refused actions. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "TrackpadState.Toggle",
@@ -1316,12 +1336,13 @@
       },
       "contract": "Match TrackpadState::Toggle dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "set-trackpad toggle turns gesture dispatch to the other of on and off, from the effective state (a set-trackpad of this run, else [input.trackpad] enable), for the rest of the run. Known mismatches: as Action.SetTrackpad, where on and off are defined; that toggle is the other of the two is read from upstream's documentation, not from the action's own arm. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/gesture_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence and could not read the resulting state back over the socket. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "TrackpadState.On",
@@ -1333,12 +1354,13 @@
       },
       "contract": "Match TrackpadState::On dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "set-trackpad on turns gesture dispatch on for the rest of the run, over [input.trackpad] enable. Known mismatches: as Action.SetTrackpad: on restores gesture dispatch only, since the pointer, clicks and two-finger scrolling never went off. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/gesture_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence and could not read the resulting state back over the socket. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "TrackpadState.Off",
@@ -1350,12 +1372,13 @@
       },
       "contract": "Match TrackpadState::Off dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "set-trackpad off turns gesture dispatch off for the rest of the run: gesture_begin starts nothing and a gesture in progress ends cancelled, its changes kept and saved. Known mismatches: as Action.SetTrackpad: upstream's off silences the whole device, and here the pointer, clicks and two-finger scrolling stay with macOS. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/gesture_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence and could not read the resulting state back over the socket. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "WindowPlacement.Center",
@@ -2032,7 +2055,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Runs the request's action string through the full upstream action grammar and the same handlers that the default shell's shortcuts and toolbar buttons use. Implemented: pan-viewport, home-toggle, zoom-in, zoom-out, zoom-reset, zoom-to-fit, center-window, center-nearest, cycle-windows (always a single committed step over IPC), focus-center, go-to-bookmark, set-bookmark, nudge-window, close-window, suspend-window, send-to-output, send-cursor-to-output, switch-layout, exec, spawn, exec-terminal, exec-launcher, reload-config and quit (see the Action rows); every other upstream action parses but is answered with an Err starting action not implemented on macOS yet, and a string upstream does not parse with an Err starting unknown action. Reached as msg action followed by the action string. Known mismatches: upstream replies Ok whenever a spec parses, even when it had no effect, where Infinify answers Err for a parsed action it does not implement; eleven upstream actions are unimplemented; quit, exec, a config reload, a pointer warp, a layout switch, a window's close and an application launch reach the shell as effects. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and the Unix-socket server, the msg client against a running app and rendered motion are unverified on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Runs the request's action string through the full upstream action grammar and the same handlers that the default shell's shortcuts and toolbar buttons use. Implemented: pan-viewport, home-toggle, zoom-in, zoom-out, zoom-reset, zoom-to-fit, center-window, center-nearest, cycle-windows (always a single committed step over IPC), focus-center, go-to-bookmark, set-bookmark, nudge-window, close-window, suspend-window, send-to-output, send-cursor-to-output, switch-layout, toggle-cursor-pan, set-trackpad, exec, spawn, exec-terminal, exec-launcher, reload-config and quit (see the Action rows); every other upstream action parses but is answered with an Err starting action not implemented on macOS yet, and a string upstream does not parse with an Err starting unknown action. Reached as msg action followed by the action string. Known mismatches: upstream replies Ok whenever a spec parses, even when it had no effect, where Infinify answers Err for a parsed action it does not implement; nine upstream actions are unimplemented; quit, exec, a config reload, a pointer warp, a layout switch, a window's close and an application launch reach the shell as effects. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios, and the Unix-socket server, the msg client against a running app and rendered motion are unverified on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ipc.Request.Bookmark",
@@ -3390,13 +3413,14 @@
       },
       "contract": "Match TrackpadSettings.send_events type, validation, default and live effect.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "SendEvents",
-      "required": true
+      "required": true,
+      "implementation_note": "Read as on or off: Disabled starts and keeps gesture dispatch off, any other mode leaves it on, and a set-trackpad action overrides it for the run until a loaded config changes the mode. Known mismatches: DisabledOnExternalMouse counts as on, since no device is watched; off stops gesture dispatch only, the two-finger pinch included, and not the pointer, clicks or two-finger scrolling, which upstream's off also silences. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios with synthetic event streams only (crates/desktop/tests/gesture_flow.rs), and no physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.MouseDeviceSettings.accel_speed",
@@ -3516,13 +3540,14 @@
       },
       "contract": "Match GestureThresholds.swipe_distance type, validation, default and live effect.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "f64",
-      "required": true
+      "required": true,
+      "implementation_note": "Parsed by driftwm-core from [gestures] swipe_threshold (12 by default); a threshold swipe fires once when the accumulated finger vector reaches it, and a config reload applies to the next update. Known mismatches: the unit is the shell recogniser's stand-in for libinput's pointer units, a constant 10.5 for each millimetre of finger travel, so the default is a little over a millimetre after the swipe is recognised. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios with synthetic event streams only (crates/desktop/tests/gesture_flow.rs), and no physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.GestureThresholds.pinch_in_scale",
@@ -3534,13 +3559,14 @@
       },
       "contract": "Match GestureThresholds.pinch_in_scale type, validation, default and live effect.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "f64",
-      "required": true
+      "required": true,
+      "implementation_note": "Parsed by driftwm-core from [gestures] pinch_in_threshold (0.85 by default); a pinch-in binding fires once when the gesture's scale drops below it. Known mismatches: the scale is the shell recogniser's for three or more fingers and AppKit's accumulated magnification for two, not libinput's. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios with synthetic event streams only (crates/desktop/tests/gesture_flow.rs), and no physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.GestureThresholds.pinch_out_scale",
@@ -3552,13 +3578,14 @@
       },
       "contract": "Match GestureThresholds.pinch_out_scale type, validation, default and live effect.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "f64",
-      "required": true
+      "required": true,
+      "implementation_note": "Parsed by driftwm-core from [gestures] pinch_out_threshold (1.15 by default); a pinch-out binding fires once when the gesture's scale rises above it. Known mismatches: the scale is the shell recogniser's for three or more fingers and AppKit's accumulated magnification for two, not libinput's. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios with synthetic event streams only (crates/desktop/tests/gesture_flow.rs), and no physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.TouchThresholds.swipe_distance_mm",
@@ -4245,12 +4272,13 @@
       },
       "contract": "Every configured physical gesture and context, cancellation and source-app focus coexistence.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "native",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Default shell, normal runs only: canvas views accept indirect trackpad touches, and a recogniser (native/desktop/trackpad-gestures.m) turns three or more fingers into libinput-shaped swipe, pinch and hold streams, a three-finger tap marking the next swipe as a doubletap; a two-finger pinch is AppKit's magnify stream sent the same way. The controller dispatches them against the [gestures] tables as upstream's src/input/gestures does, by trigger, finger count, modifiers and window-or-canvas context, and a gesture ends cancelled when the finger count changes, the system takes the touches, a button is pressed or the trackpad is turned off. Known mismatches: this path has never received a touch. The recogniser's rules and constants imitate libinput from its documentation and from memory, were not checked against its source and were not tuned; whether macOS delivers three- and four-finger touches to the non-activating canvas panel, and every finger in every event, is unknown; macOS's own three- and four-finger gestures must be turned off by the user in System Settings (nothing here changes a setting), and coexistence with them is untested; seven default bindings name actions that do not run yet (zoom-to-fit-snapped, fit-window, fit-window-snapped, toggle-fullscreen) and the resize gestures are gated; an unbound gesture is not forwarded to the application under the pointer, so source-app gesture and focus coexistence is absent; two-finger scrolling stays a mouse binding. No evidence entry is recorded yet: the dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs) and the recogniser by scripted touch sequences in throwaway programs, while the app's touch, timer and magnify glue is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "canvas.projection",
@@ -4294,7 +4322,7 @@
         }
       ],
       "required": true,
-      "implementation_note": "Existing partial behavior remains; the source-equivalent helper module is a foundation for future integration, not complete action or native behavior parity."
+      "implementation_note": "Existing partial behavior remains; the source-equivalent helper module is a foundation for future integration, not complete action or native behavior parity. Pointer zoom in a normal run now goes through the controller: a wheel through zoom_by, animated around the pointer, and a pinch through the gesture commands, where the [gestures] tables bind it to zoom, applied at once, both held to the layout-dependent minimum, and a pinch's end snaps a zoom within 0.05 of 1 to 1. The direct zoom command, which only the fixture modes still send, keeps the static 0.001 floor. That is covered by controller scenarios only (crates/desktop/tests/motion_flow.rs, crates/desktop/tests/gesture_flow.rs); no wheel or pinch was made on a live run."
     },
     {
       "id": "canvas.motion",
@@ -4335,7 +4363,7 @@
         }
       ],
       "required": true,
-      "implementation_note": "Normal-window anchor/zoom animation is integrated through one controller frame clock at21b454d. Input velocity/coasting helpers, broader camera actions and native frame scheduling remain unintegrated or unverified."
+      "implementation_note": "Normal-window anchor/zoom animation is integrated through one controller frame clock at21b454d. Scroll momentum now runs on the same clock: a timed pan feeds upstream's own MomentumState (driftwm-core) per output, pan_end launches it, a trackpad gesture's swipe pan and its end are that pan and that pan_end, and each tick runs scroll momentum, edge pan, zoom and camera in upstream's order, with momentum stopped where upstream stops it (a flight target or anchor, the action prelude, a press, a grab install, a bound swipe or pinch). The shell times pans from their events, sends pan_end at the scroll phase's end, on release and 50 ms after the last pan, and drops macOS's own inertia for canvas pans. A scroll under a held drag pan leaves its launch to the release, and a scroll that a window takes over part-way is forwarded from there with its end and inertia. Momentum is covered by exported-C-ABI/JSON controller scenarios (crates/desktop/tests/motion_flow.rs, bit for bit against MomentumState, and crates/desktop/tests/gesture_flow.rs, a swipe's coast bit for bit against the same deltas sent as timed pans); no scroll, drag or swipe was made on a live run, so coasting, its timing against real events and native frame scheduling remain unverified, and broader camera actions remain unintegrated."
     },
     {
       "id": "canvas.edge_pan",
@@ -4347,12 +4375,13 @@
       },
       "contract": "Edge zones/speeds, monitor-edge dwell and continuous move/resize behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Controller edge pan adapted from edge_pan.rs and the move grab's hook: during a window drag whose gesture_to carries the pointer, or one a move gesture drives with its virtual pointer, a pointer within navigation.edge_pan.zone of an edge of the drag's output arms a per-output request with upstream's ramp (speed_min at the zone's boundary to speed_max at the edge by squared depth, a corner cut back to the same length), and every frame pans the camera by that many screen points over the zoom and carries the dragged window or cluster by the same world delta, so it stays under the held pointer. A component that pushes at an edge shared with another output, found from the outputs' screen_bounds, waits edge_pan.latency_ms; an outer edge is immediate. Cursor edge pan arms the same request (see Action.ToggleCursorPan). The shell passes the pointer with every drag event and keeps its frame timer running while the controller reports the pan. Known mismatches: a drag stays on the output it began on, so nothing crosses to another output and there is no inhibited entry edge; the pointer is never warped; a resize gesture and touch drags arm no edge pan; only edge pan carries a dragged window, where upstream's grab follows every camera move; the velocity is per frame, so the speed is that of the shell's 60 Hz timer; fullscreen and lock stand-downs are absent. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/motion_flow.rs, and crates/desktop/tests/gesture_flow.rs for the move gesture, against values derived by hand from upstream's formulas, not by executing upstream); the shell side is compiled and reviewed only, because it needs a real window drag or move gesture, and no edge pan was produced on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "layout.snap",
@@ -5353,7 +5382,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for input.trackpad.enable.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -5366,7 +5395,8 @@
           "source_assignment": "enable = true               # false turns the trackpad off entirely. A set-trackpad press",
           "value": true
         }
-      ]
+      ],
+      "implementation_note": "Parsed by driftwm-core, upstream's own config code; false starts the run with gesture dispatch off, as set-trackpad off does, until a set-trackpad action overrides it, and a reload that changes the trackpad's resolved mode drops that override, as upstream documents. Known mismatches: upstream turns the device off entirely, while here the pointer, clicks and two-finger scrolling are macOS's and stay on, and only the two-finger pinch and the gestures of three or more fingers stop; disable_on_external_mouse counts as on; the override rule is read from upstream's documentation, not from its reload code. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios with synthetic event streams only (crates/desktop/tests/gesture_flow.rs), and no physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.input.trackpad.disable_on_external_mouse",
@@ -5673,7 +5703,7 @@
           "value": 1.5
         }
       ],
-      "implementation_note": "Carried with every pointer binding the controller reports; the shell multiplies a bound two-finger scroll pan by it (1.5 by default). Known mismatches: navigation.mouse_speed is reported alongside it but a drag pan stays 1:1. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "The controller multiplies a timed pan from a scroll, two-finger or wheel, and a trackpad gesture's swipe pan by it (1.5 by default), as upstream's on_pointer_axis does whatever the axis source and as its SwipePan does; the shell sends the delta unscaled with its event time and source. The value is still carried with every pointer binding the controller reports, and nothing scales a second time. Known mismatches: those of MouseAction.PanViewport and ContinuousAction.PanViewport. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs, crates/desktop/tests/motion_flow.rs, crates/desktop/tests/gesture_flow.rs); one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence, loaded and reloaded a file that sets it with nothing on stderr and could not show its effect; the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.navigation.mouse_speed",
@@ -5685,7 +5715,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for navigation.mouse_speed.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -5698,7 +5728,8 @@
           "source_assignment": "mouse_speed = 1.0           # mouse (drag) pan multiplier (1.0 = direct, 0 = off)",
           "value": 1.0
         }
-      ]
+      ],
+      "implementation_note": "The controller multiplies a timed pan from a drag, a press whose binding answers pan_viewport, by it (1.0 by default), as upstream's PanGrab multiplies its motion; the shell sends the pointer's displacement unscaled with its event time. Known mismatches: those of MouseAction.PanViewport. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/motion_flow.rs); one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence, loaded and reloaded a file that sets it with nothing on stderr and could not show its effect, which needs real scroll or drag input and is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.navigation.touch_speed",
@@ -5735,7 +5766,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for navigation.drift.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -5748,7 +5779,8 @@
           "source_assignment": "drift = 0.5                 # momentum coast: 0 = off, 0.5 = default, 1 = floatiest",
           "value": 0.5
         }
-      ]
+      ],
+      "implementation_note": "Each output's scroll momentum is upstream's own MomentumState (driftwm-core), created with navigation.drift (0.5 by default, 0 off, 1 floatiest, with upstream's own range handling), and a reload gives a coast in progress the new value, as upstream's reload does. A scroll pan, a drag pan and a trackpad gesture's swipe pan all feed that one momentum. Known mismatches: those of MouseAction.PanViewport and ContinuousAction.PanViewport, whose ends launch the coast. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/motion_flow.rs, and crates/desktop/tests/gesture_flow.rs for the swipe pan, with synthetic event streams); one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence, loaded and reloaded a file that sets it with nothing on stderr and could not show its effect, which needs real scroll, drag or swipe input and is unrun on a live run; no physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.navigation.camera_speed",
@@ -6109,7 +6141,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for navigation.edge_pan.zone.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -6122,7 +6154,8 @@
           "source_assignment": "zone = 100.0                # activation zone width (px from viewport edge)",
           "value": 100.0
         }
-      ]
+      ],
+      "implementation_note": "The width, in screen points from an edge of the drag's output, of the zone inside which a window drag arms the controller's edge pan (100 by default). See canvas.edge_pan for the behaviour and its known mismatches. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/motion_flow.rs); one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence, loaded and reloaded a file that sets it with nothing on stderr and could not show its effect, which needs a real window drag and is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.navigation.edge_pan.speed_min",
@@ -6134,7 +6167,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for navigation.edge_pan.speed_min.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -6147,7 +6180,8 @@
           "source_assignment": "speed_min = 4.0             # px/frame at zone boundary",
           "value": 4.0
         }
-      ]
+      ],
+      "implementation_note": "The edge pan's speed at the zone's boundary, in screen points per frame (4 by default): the low end of upstream's ramp under a dragged window, and unused by cursor edge pan, as upstream. See canvas.edge_pan for the behaviour and its known mismatches. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/motion_flow.rs); one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence, loaded and reloaded a file that sets it with nothing on stderr and could not show its effect, which needs a real window drag and is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.navigation.edge_pan.speed_max",
@@ -6159,7 +6193,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for navigation.edge_pan.speed_max.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -6172,7 +6206,8 @@
           "source_assignment": "speed_max = 10.0            # px/frame at viewport edge",
           "value": 10.0
         }
-      ]
+      ],
+      "implementation_note": "The edge pan's speed at the output's edge, in screen points per frame (10 by default): the high end of upstream's ramp under a dragged window, and the constant speed of cursor edge pan. See canvas.edge_pan and Action.ToggleCursorPan for the behaviour and its known mismatches. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/motion_flow.rs); one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence, loaded and reloaded a file that sets it with nothing on stderr and could not show its effect, which needs a real window drag or a pointer in the cursor zone and is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.navigation.edge_pan.cursor_pan",
@@ -6184,7 +6219,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for navigation.edge_pan.cursor_pan.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -6197,7 +6232,8 @@
           "source_assignment": "cursor_pan = false          # pan when the bare cursor touches a screen edge",
           "value": false
         }
-      ]
+      ],
+      "implementation_note": "The first config load of a run sets the runtime cursor-edge-pan flag from it (false by default); after that only toggle-cursor-pan changes the flag and a reload leaves it alone, as upstream reads the key once at startup. See Action.ToggleCursorPan for the behaviour and its known mismatches. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/motion_flow.rs); one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence, loaded and reloaded a file that sets it to false with nothing on stderr; a launch with it true, and any cursor edge pan, are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.navigation.edge_pan.cursor_zone",
@@ -6209,7 +6245,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for navigation.edge_pan.cursor_zone.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -6222,7 +6258,8 @@
           "source_assignment": "cursor_zone = 20.0          # cursor edge-pan activation zone (px).",
           "value": 20.0
         }
-      ]
+      ],
+      "implementation_note": "The width, in screen points from an edge of the output's usable area, of the zone inside which the bare pointer pans the view while cursor edge pan is on (20 by default). See Action.ToggleCursorPan for the behaviour and its known mismatches. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/motion_flow.rs); one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence, loaded and reloaded a file that sets it with nothing on stderr and could not show its effect, which needs a real pointer in the zone and is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.navigation.edge_pan.latency_ms",
@@ -6234,7 +6271,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for navigation.edge_pan.latency_ms.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -6247,7 +6284,8 @@
           "source_assignment": "latency_ms = 120            # delay before pan starts at an edge bordering",
           "value": 120
         }
-      ]
+      ],
+      "implementation_note": "How long, in milliseconds on the frame clock, the part of an edge pan that pushes at an edge shared with another output waits before it pans (120 by default, 0 for none); an outer edge is immediate. Shared edges are found from the outputs' screen_bounds, and the wait applies to the pan under a dragged window and to cursor edge pan alike. See canvas.edge_pan for the behaviour and its known mismatches. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/motion_flow.rs); one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence, loaded and reloaded a file that sets it with nothing on stderr, on a single output, where no edge is shared; its effect needs two displays and real pointer input and is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.zoom.step",
@@ -6273,7 +6311,7 @@
           "value": 1.1
         }
       ],
-      "implementation_note": "zoom-in and zoom-out step by zoom.step in place of the former constant 1.1, and the value is carried with each pointer binding for the shell's wheel zoom; see Action.ZoomIn and Action.ZoomOut for the actions' own mismatches. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "zoom-in and zoom-out step by zoom.step in place of the former constant 1.1, and a wheel zoom reads it in the controller's zoom_by, which no longer leaves the factor to the shell; see Action.ZoomIn, Action.ZoomOut and MouseAction.Zoom for their own mismatches. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.zoom.trackpad_speed",
@@ -6285,7 +6323,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for zoom.trackpad_speed.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -6298,7 +6336,8 @@
           "source_assignment": "trackpad_speed = 1.0        # trackpad pinch-zoom multiplier (1.0 = direct, 0 = off)",
           "value": 1.0
         }
-      ]
+      ],
+      "implementation_note": "A pinch that the [gestures] tables bind to zoom, the recogniser's or AppKit's two-finger pinch alike, is upstream's pinch gesture in the controller: the zoom is the zoom the pinch began at times 1 + (scale - 1) x zoom.trackpad_speed (1.0 by default), held between the dynamic minimum of that moment and 1 and applied at once around the pointer, and the end of the pinch snaps a zoom within 0.05 of 1 to 1. The gesture commands and the zoom_by command (source pinch, which the shell no longer sends) share that one implementation. Known mismatches: see GestureTrigger.Pinch: the scale itself is the shell's, not libinput's; zoom_by is refused during a window drag or resize gesture, where upstream zooms under a grab, and the shell begins no gesture during a button drag. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/motion_flow.rs for zoom_by and crates/desktop/tests/gesture_flow.rs for the gesture, against values derived by hand from upstream's formula); one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence, loaded a file that sets it with nothing on stderr and could not show its effect, which needs a real pinch and is unrun on a live run; no physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.zoom.mouse_speed",
@@ -6324,7 +6363,7 @@
           "value": 1.0
         }
       ],
-      "implementation_note": "Carried with every pointer binding the controller reports; the shell zooms a bound wheel scroll about the pointer by zoom.step ^ (lines / 2 x zoom.mouse_speed), one wheel line counted as one notch of 15 axis units. Known mismatches: the pointer zoom clamps to the static 0.001 floor and 1.0 rather than upstream's dynamic minimum; zoom.trackpad_speed is reported alongside it but pinch is not scaled by it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "A bound wheel scroll zooms through the controller's zoom_by by zoom.step ^ (lines / 2 x zoom.mouse_speed), one wheel line counted as one notch of 15 axis units, animated around the pointer and held between upstream's dynamic minimum and 1.0; the shell no longer computes the factor. The value is still carried with every pointer binding the controller reports. Known mismatches: those of MouseAction.Zoom. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs, crates/desktop/tests/motion_flow.rs); one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence, loaded a file that sets it with nothing on stderr and could not show its effect; the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.zoom.touch_speed",
@@ -7453,7 +7492,7 @@
           ]
         }
       ],
-      "implementation_note": "Parsed by driftwm-core: \"keys\" drops upstream's default key bindings and \"mouse\" its default mouse bindings before the file's own are read, and the bindings and mouse_binding commands report the result. Known mismatches: \"gestures\" and \"touch\" are accepted and change nothing, because trackpad and touch gesture bindings are not dispatched here. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and pointer dispatch are unrun on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Parsed by driftwm-core: \"keys\" drops upstream's default key bindings, \"mouse\" its default mouse bindings and \"gestures\" its default trackpad gesture bindings before the file's own are read; the bindings and mouse_binding commands report the first two, and gesture_begin resolves what is left of the third (crates/desktop/tests/gesture_flow.rs). Known mismatches: \"touch\" is accepted and changes nothing, because touch gesture bindings are not dispatched here. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and hot-key registration and pointer dispatch are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+return",
@@ -7542,7 +7581,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+e.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -7555,7 +7594,8 @@
           "source_assignment": "\"mod+e\" = \"toggle-cursor-pan\"     # toggle cursor edge-pan (see [navigation.edge_pan])",
           "value": "toggle-cursor-pan"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default binding, read by driftwm-core and reported by the bindings command as the macOS chord Control-Option-E under the default super chord Control+Option. The shell registers it as a global Carbon hot key while a canvas panel is open (never in --windowed) and runs toggle-cursor-pan through the action command; see Action.ToggleCursorPan for the action's own mismatches. A [keybindings] entry for the same combo replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs for the binding map, crates/desktop/tests/motion_flow.rs for the action); the shell side is compiled and reviewed only, and hot-key registration and delivery are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.keybindings.mod+f",
@@ -9390,7 +9430,7 @@
           "value": "pan-viewport"
         }
       ],
-      "implementation_note": "Upstream's default mouse binding, read by driftwm-core. The shell asks the mouse_binding command on every press and scroll with the physical modifiers held and the window or canvas context, and upstream's ContextBindings lookup (the pointer's own context before anywhere) answers pan_viewport for an unmodified left button on empty canvas; the shell then starts its pan gesture. An entry for the same combo in the same [mouse.*] table replaces it, and \"none\" removes it. Known mismatches: navigation.mouse_speed is not applied to the drag. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Upstream's default mouse binding, read by driftwm-core. The shell asks the mouse_binding command on every press and scroll with the physical modifiers held and the window or canvas context, and upstream's ContextBindings lookup (the pointer's own context before anywhere) answers pan_viewport for an unmodified left button on empty canvas; the shell then starts its pan gesture. An entry for the same combo in the same [mouse.*] table replaces it, and \"none\" removes it. The drag is a timed pan that the controller scales by navigation.mouse_speed, and its release launches a coast. Known mismatches: those of MouseAction.PanViewport. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.mouse.on-canvas.trackpad-scroll",
@@ -9416,7 +9456,7 @@
           "value": "pan-viewport"
         }
       ],
-      "implementation_note": "Upstream's default mouse binding, read by driftwm-core. The shell asks the mouse_binding command on every press and scroll with the physical modifiers held and the window or canvas context, and upstream's ContextBindings lookup (the pointer's own context before anywhere) answers pan_viewport for an unmodified two-finger scroll on empty canvas; the shell then pans by the scroll delta times navigation.trackpad_speed. An entry for the same combo in the same [mouse.*] table replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Upstream's default mouse binding, read by driftwm-core. The shell asks the mouse_binding command on every press and scroll with the physical modifiers held and the window or canvas context, and upstream's ContextBindings lookup (the pointer's own context before anywhere) answers pan_viewport for an unmodified two-finger scroll on empty canvas; the shell then sends a timed pan, which the controller scales by navigation.trackpad_speed and lets coast once the fingers lift; see MouseAction.PanViewport for its mismatches. An entry for the same combo in the same [mouse.*] table replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.mouse.on-canvas.wheel-scroll",
@@ -9442,7 +9482,7 @@
           "value": "zoom"
         }
       ],
-      "implementation_note": "Upstream's default mouse binding, read by driftwm-core. The shell asks the mouse_binding command on every press and scroll with the physical modifiers held and the window or canvas context, and upstream's ContextBindings lookup (the pointer's own context before anywhere) answers zoom for an unmodified mouse wheel on empty canvas; the shell then zooms about the pointer by zoom.step ^ (lines / 2 x zoom.mouse_speed). An entry for the same combo in the same [mouse.*] table replaces it, and \"none\" removes it. Known mismatches: the pointer zoom clamps to the static 0.001 floor and 1.0 rather than upstream's dynamic minimum. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Upstream's default mouse binding, read by driftwm-core. The shell asks the mouse_binding command on every press and scroll with the physical modifiers held and the window or canvas context, and upstream's ContextBindings lookup (the pointer's own context before anywhere) answers zoom for an unmodified mouse wheel on empty canvas; the shell then sends zoom_by, and the controller zooms about the pointer by zoom.step ^ (lines / 2 x zoom.mouse_speed), animated. An entry for the same combo in the same [mouse.*] table replaces it, and \"none\" removes it. Known mismatches: those of MouseAction.Zoom. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.mouse.anywhere.mod+left",
@@ -9468,7 +9508,7 @@
           "value": "pan-viewport"
         }
       ],
-      "implementation_note": "Upstream's default mouse binding, read by driftwm-core. The shell asks the mouse_binding command on every press and scroll with the physical modifiers held and the window or canvas context, and upstream's ContextBindings lookup (the pointer's own context before anywhere) answers pan_viewport for Control-Option + left button, over a window or empty canvas; the shell then starts its pan gesture. An entry for the same combo in the same [mouse.*] table replaces it, and \"none\" removes it. Known mismatches: navigation.mouse_speed is not applied to the drag; the binding also claims the Control-Option-click that used to dismiss a detached placeholder. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Upstream's default mouse binding, read by driftwm-core. The shell asks the mouse_binding command on every press and scroll with the physical modifiers held and the window or canvas context, and upstream's ContextBindings lookup (the pointer's own context before anywhere) answers pan_viewport for Control-Option + left button, over a window or empty canvas; the shell then starts its pan gesture. An entry for the same combo in the same [mouse.*] table replaces it, and \"none\" removes it. The drag is a timed pan that the controller scales by navigation.mouse_speed, and its release launches a coast. Known mismatches: those of MouseAction.PanViewport; the binding also claims the Control-Option-click that used to dismiss a detached placeholder. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.mouse.anywhere.mod+ctrl+left",
@@ -9519,7 +9559,7 @@
           "value": "pan-viewport"
         }
       ],
-      "implementation_note": "Upstream's default mouse binding, read by driftwm-core. The shell asks the mouse_binding command on every press and scroll with the physical modifiers held and the window or canvas context, and upstream's ContextBindings lookup (the pointer's own context before anywhere) answers pan_viewport for Control-Option + two-finger scroll, over a window or empty canvas; the shell then pans by the scroll delta times navigation.trackpad_speed. An entry for the same combo in the same [mouse.*] table replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Upstream's default mouse binding, read by driftwm-core. The shell asks the mouse_binding command on every press and scroll with the physical modifiers held and the window or canvas context, and upstream's ContextBindings lookup (the pointer's own context before anywhere) answers pan_viewport for Control-Option + two-finger scroll, over a window or empty canvas; the shell then sends a timed pan, which the controller scales by navigation.trackpad_speed and lets coast once the fingers lift; see MouseAction.PanViewport for its mismatches. An entry for the same combo in the same [mouse.*] table replaces it, and \"none\" removes it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.mouse.anywhere.mod+wheel-scroll",
@@ -9545,7 +9585,7 @@
           "value": "zoom"
         }
       ],
-      "implementation_note": "Upstream's default mouse binding, read by driftwm-core. The shell asks the mouse_binding command on every press and scroll with the physical modifiers held and the window or canvas context, and upstream's ContextBindings lookup (the pointer's own context before anywhere) answers zoom for Control-Option + mouse wheel, over a window or empty canvas; the shell then zooms about the pointer by zoom.step ^ (lines / 2 x zoom.mouse_speed). An entry for the same combo in the same [mouse.*] table replaces it, and \"none\" removes it. Known mismatches: the pointer zoom clamps to the static 0.001 floor and 1.0 rather than upstream's dynamic minimum. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Upstream's default mouse binding, read by driftwm-core. The shell asks the mouse_binding command on every press and scroll with the physical modifiers held and the window or canvas context, and upstream's ContextBindings lookup (the pointer's own context before anywhere) answers zoom for Control-Option + mouse wheel, over a window or empty canvas; the shell then sends zoom_by, and the controller zooms about the pointer by zoom.step ^ (lines / 2 x zoom.mouse_speed), animated. An entry for the same combo in the same [mouse.*] table replaces it, and \"none\" removes it. Known mismatches: those of MouseAction.Zoom. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.gestures.swipe_threshold",
@@ -9557,7 +9597,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for gestures.swipe_threshold.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -9570,7 +9610,8 @@
           "source_assignment": "swipe_threshold = 12.0        # px cumulative distance before directional swipe fires",
           "value": 12.0
         }
-      ]
+      ],
+      "implementation_note": "Parsed by driftwm-core, upstream's own config code; a threshold swipe fires once when the accumulated finger vector reaches it, and a reload applies to the next update. A value of the wrong type is refused by the TOML parser with the whole file, and the previous configuration stays. Known mismatches: the unit is the shell recogniser's stand-in for libinput's pointer units, a constant 10.5 for each millimetre of finger travel, so the default of 12 is a little over a millimetre after the swipe is recognised. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs), and one scripted msg session against the built app on 2026-10-09 that loaded a file setting it and saw a wrong-typed value refused, leaving no saved evidence. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.gestures.pinch_in_threshold",
@@ -9582,7 +9623,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for gestures.pinch_in_threshold.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -9595,7 +9636,8 @@
           "source_assignment": "pinch_in_threshold = 0.85     # scale below which pinch-in fires (1.0 = no pinch)",
           "value": 0.85
         }
-      ]
+      ],
+      "implementation_note": "Parsed by driftwm-core, upstream's own config code; a pinch-in binding fires once when the gesture's scale drops below it. Known mismatches: the scale is the shell recogniser's for three or more fingers and AppKit's accumulated magnification for two, not libinput's. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios with synthetic event streams only (crates/desktop/tests/gesture_flow.rs), and no physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.gestures.pinch_out_threshold",
@@ -9607,7 +9649,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for gestures.pinch_out_threshold.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -9620,7 +9662,8 @@
           "source_assignment": "pinch_out_threshold = 1.15    # scale above which pinch-out fires (1.0 = no pinch)",
           "value": 1.15
         }
-      ]
+      ],
+      "implementation_note": "Parsed by driftwm-core, upstream's own config code; a pinch-out binding fires once when the gesture's scale rises above it. Known mismatches: the scale is the shell recogniser's for three or more fingers and AppKit's accumulated magnification for two, not libinput's. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios with synthetic event streams only (crates/desktop/tests/gesture_flow.rs), and no physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.gestures.on-window.alt+3-finger-swipe",
@@ -9682,7 +9725,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for gestures.on-window.3-finger-doubletap-swipe.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -9695,7 +9738,8 @@
           "source_assignment": "\"3-finger-doubletap-swipe\" = \"move-window\"",
           "value": "move-window"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default, from driftwm-core: a three-finger tap followed within 300 ms by a three-finger swipe over a window moves that window; anywhere else, or without the tap, the swipe is the plain three-finger pan. Known mismatches: see GestureTrigger.DoubletapSwipe and ContinuousAction.MoveWindow; the window after the tap is tight, since the fingers must land, wait out the recogniser's 50 ms settle and move about 2 mm inside it. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.gestures.on-window.alt+2-finger-pinch-in",
@@ -9857,7 +9901,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for gestures.on-canvas.2-finger-pinch.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -9870,7 +9914,8 @@
           "source_assignment": "\"2-finger-pinch\" = \"zoom\"",
           "value": "zoom"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default, from driftwm-core: a bare two-finger pinch zooms on empty canvas and is unbound over a window. The stream is AppKit's magnify events, sent through gesture_begin, gesture_update and gesture_end as a pinch of two fingers. Known mismatches: over a window the pinch is dropped, not forwarded to the application as upstream forwards it to the client; see GestureTrigger.Pinch for the scale and the anchor. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's magnify routing is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.gestures.anywhere.3-finger-swipe",
@@ -9882,7 +9927,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for gestures.anywhere.3-finger-swipe.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -9895,7 +9940,8 @@
           "source_assignment": "\"3-finger-swipe\" = \"pan-viewport\"         # continuous (per-frame dx/dy)",
           "value": "pan-viewport"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default, from driftwm-core: a bare three-finger swipe anywhere pans the camera under the fingers and coasts; none or disable_defaults removes it and another entry rebinds it. Known mismatches: see GestureTrigger.Swipe and ContinuousAction.PanViewport; macOS's own three-finger gestures must be turned off in System Settings by the user for the touches to arrive, which is untested. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.gestures.anywhere.4-finger-swipe",
@@ -9907,7 +9953,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for gestures.anywhere.4-finger-swipe.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -9920,7 +9966,8 @@
           "source_assignment": "\"4-finger-swipe\" = \"center-nearest\"       # threshold (accumulate, detect direction, fire once)",
           "value": "center-nearest"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default, from driftwm-core: a four-finger swipe fires center-nearest once at gestures.swipe_threshold, in the direction the canvas would follow the fingers, and the nearest window that way is focused and flown to at the current zoom. Known mismatches: see ThresholdAction.CenterNearest and Action.CenterNearest; macOS's own four-finger gestures must be turned off in System Settings by the user for the touches to arrive, which is untested. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.gestures.anywhere.mod+3-finger-swipe",
@@ -9932,7 +9979,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for gestures.anywhere.mod+3-finger-swipe.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -9945,7 +9992,8 @@
           "source_assignment": "\"mod+3-finger-swipe\" = \"center-nearest\"   # mod makes 3-finger swipe navigate too",
           "value": "center-nearest"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default, from driftwm-core: with mod held (Control-Option under the default super chord) a three-finger swipe fires center-nearest once at gestures.swipe_threshold, as the four-finger swipe does. Known mismatches: see ThresholdAction.CenterNearest and Action.CenterNearest; macOS's own three-finger gestures must be turned off in System Settings by the user for the touches to arrive, which is untested. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.gestures.anywhere.4-finger-swipe-up",
@@ -10057,7 +10105,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for gestures.anywhere.mod+2-finger-pinch.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -10070,7 +10118,8 @@
           "source_assignment": "\"mod+2-finger-pinch\" = \"zoom\"             # mod overrides app forwarding",
           "value": "zoom"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default, from driftwm-core: with mod held (Control-Option under the default super chord) a two-finger pinch zooms anywhere, over a window too. The stream is AppKit's magnify events, with the modifiers read when the pinch begins. Known mismatches: see config.gestures.on-canvas.2-finger-pinch and GestureTrigger.Pinch. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's magnify routing is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.gestures.anywhere.3-finger-pinch",
@@ -10082,7 +10131,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for gestures.anywhere.3-finger-pinch.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -10095,7 +10144,8 @@
           "source_assignment": "\"3-finger-pinch\" = \"zoom\"                 # continuous",
           "value": "zoom"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default, from driftwm-core: a three-finger pinch zooms anywhere, around the pointer. Known mismatches: see GestureTrigger.Pinch; the shell's recogniser tells a pinch from a swipe by rules of its own, written at the top of native/desktop/trackpad-gestures.m. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.gestures.anywhere.4-finger-pinch-in",
@@ -10107,7 +10157,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for gestures.anywhere.4-finger-pinch-in.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -10120,7 +10170,8 @@
           "source_assignment": "\"4-finger-pinch-in\" = \"zoom-to-fit\"       # threshold",
           "value": "zoom-to-fit"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default, from driftwm-core: a four-finger pinch in fires zoom-to-fit once when the scale drops below gestures.pinch_in_threshold, with the flight zoom-to-fit arms. Known mismatches: see GestureTrigger.PinchIn and Action.ZoomToFit; macOS's own four-finger gestures must be turned off in System Settings by the user for the touches to arrive, which is untested. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.gestures.anywhere.mod+4-finger-pinch-in",
@@ -10157,7 +10208,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for gestures.anywhere.4-finger-pinch-out.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -10170,7 +10221,8 @@
           "source_assignment": "\"4-finger-pinch-out\" = \"home-toggle\"      # threshold",
           "value": "home-toggle"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default, from driftwm-core: a four-finger pinch out fires home-toggle once when the scale rises above gestures.pinch_out_threshold, with the flight home-toggle arms. Known mismatches: see GestureTrigger.PinchOut and Action.HomeToggle; macOS's own four-finger gestures must be turned off in System Settings by the user for the touches to arrive, which is untested. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.gestures.anywhere.mod+3-finger-pinch-in",
@@ -10182,7 +10234,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for gestures.anywhere.mod+3-finger-pinch-in.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -10195,7 +10247,8 @@
           "source_assignment": "\"mod+3-finger-pinch-in\" = \"zoom-to-fit\"",
           "value": "zoom-to-fit"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default, from driftwm-core: with mod held (Control-Option under the default super chord) a three-finger pinch in fires zoom-to-fit once at gestures.pinch_in_threshold. The bare three-finger pinch, a continuous zoom, is a different binding and does not shadow it, since modifiers must match exactly. Known mismatches: see GestureTrigger.PinchIn and Action.ZoomToFit. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.gestures.anywhere.mod+3-finger-pinch-out",
@@ -10207,7 +10260,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for gestures.anywhere.mod+3-finger-pinch-out.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -10220,7 +10273,8 @@
           "source_assignment": "\"mod+3-finger-pinch-out\" = \"home-toggle\"",
           "value": "home-toggle"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default, from driftwm-core: with mod held (Control-Option under the default super chord) a three-finger pinch out fires home-toggle once at gestures.pinch_out_threshold. Known mismatches: see GestureTrigger.PinchOut and Action.HomeToggle. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.gestures.anywhere.4-finger-hold",
@@ -10232,7 +10286,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for gestures.anywhere.4-finger-hold.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -10245,7 +10299,8 @@
           "source_assignment": "\"4-finger-hold\" = \"center-window\"         # fires on release",
           "value": "center-window"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default, from driftwm-core: a four-finger hold fires center-window when the fingers lift, and not when the hold is cancelled: the focused window, or with none the one nearest the middle of the view, is focused and flown to at zoom 1. Known mismatches: see GestureTrigger.Hold and Action.CenterWindow; macOS's own four-finger gestures must be turned off in System Settings by the user for the touches to arrive, which is untested. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.gestures.anywhere.mod+3-finger-hold",
@@ -10257,7 +10312,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for gestures.anywhere.mod+3-finger-hold.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -10270,7 +10325,8 @@
           "source_assignment": "\"mod+3-finger-hold\" = \"center-window\"",
           "value": "center-window"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default, from driftwm-core: with mod held (Control-Option under the default super chord) a three-finger hold fires center-window when the fingers lift, as the four-finger hold does. Known mismatches: see GestureTrigger.Hold and Action.CenterWindow; macOS's own three-finger gestures must be turned off in System Settings by the user for the touches to arrive, which is untested. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.touch.swipe_threshold",
@@ -11721,7 +11777,7 @@
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
       "source_type": "f64",
-      "implementation_note": "Carried with every pointer binding the controller reports; the shell multiplies a bound two-finger scroll pan by it (1.5 by default). Known mismatches: navigation.mouse_speed is reported alongside it but a drag pan stays 1:1. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "The controller multiplies a timed pan from a scroll, two-finger or wheel, and a trackpad gesture's swipe pan by it (1.5 by default), as upstream's on_pointer_axis does whatever the axis source and as its SwipePan does; the shell sends the delta unscaled with its event time and source. The value is still carried with every pointer binding the controller reports, and nothing scales a second time. Known mismatches: those of MouseAction.PanViewport and ContinuousAction.PanViewport. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs, crates/desktop/tests/motion_flow.rs, crates/desktop/tests/gesture_flow.rs); one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence, loaded and reloaded a file that sets it with nothing on stderr and could not show its effect; the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.mouse_speed",
@@ -11733,13 +11789,14 @@
       },
       "contract": "Match Config.mouse_speed type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "f64"
+      "source_type": "f64",
+      "implementation_note": "The controller multiplies a timed pan from a drag, a press whose binding answers pan_viewport, by it (1.0 by default), as upstream's PanGrab multiplies its motion; the shell sends the pointer's displacement unscaled with its event time. Known mismatches: those of MouseAction.PanViewport. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/motion_flow.rs); one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence, loaded and reloaded a file that sets it with nothing on stderr and could not show its effect, which needs real scroll or drag input and is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.touch_speed",
@@ -11769,13 +11826,14 @@
       },
       "contract": "Match Config.drift type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "f64"
+      "source_type": "f64",
+      "implementation_note": "Each output's scroll momentum is upstream's own MomentumState (driftwm-core), created with navigation.drift (0.5 by default, 0 off, 1 floatiest, with upstream's own range handling), and a reload gives a coast in progress the new value, as upstream's reload does. A scroll pan, a drag pan and a trackpad gesture's swipe pan all feed that one momentum. Known mismatches: those of MouseAction.PanViewport and ContinuousAction.PanViewport, whose ends launch the coast. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/motion_flow.rs, and crates/desktop/tests/gesture_flow.rs for the swipe pan, with synthetic event streams); one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence, loaded and reloaded a file that sets it with nothing on stderr and could not show its effect, which needs real scroll, drag or swipe input and is unrun on a live run; no physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.nudge_step",
@@ -11881,13 +11939,14 @@
       },
       "contract": "Match Config.edge_zone type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "f64"
+      "source_type": "f64",
+      "implementation_note": "The width, in screen points from an edge of the drag's output, of the zone inside which a window drag arms the controller's edge pan (100 by default). See canvas.edge_pan for the behaviour and its known mismatches. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/motion_flow.rs); one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence, loaded and reloaded a file that sets it with nothing on stderr and could not show its effect, which needs a real window drag and is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.edge_pan_min",
@@ -11899,13 +11958,14 @@
       },
       "contract": "Match Config.edge_pan_min type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "f64"
+      "source_type": "f64",
+      "implementation_note": "The edge pan's speed at the zone's boundary, in screen points per frame (4 by default): the low end of upstream's ramp under a dragged window, and unused by cursor edge pan, as upstream. See canvas.edge_pan for the behaviour and its known mismatches. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/motion_flow.rs); one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence, loaded and reloaded a file that sets it with nothing on stderr and could not show its effect, which needs a real window drag and is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.edge_pan_max",
@@ -11917,13 +11977,14 @@
       },
       "contract": "Match Config.edge_pan_max type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "f64"
+      "source_type": "f64",
+      "implementation_note": "The edge pan's speed at the output's edge, in screen points per frame (10 by default): the high end of upstream's ramp under a dragged window, and the constant speed of cursor edge pan. See canvas.edge_pan and Action.ToggleCursorPan for the behaviour and its known mismatches. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/motion_flow.rs); one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence, loaded and reloaded a file that sets it with nothing on stderr and could not show its effect, which needs a real window drag or a pointer in the cursor zone and is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.edge_pan_cursor",
@@ -11935,13 +11996,14 @@
       },
       "contract": "Match Config.edge_pan_cursor type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "bool"
+      "source_type": "bool",
+      "implementation_note": "The first config load of a run sets the runtime cursor-edge-pan flag from it (false by default); after that only toggle-cursor-pan changes the flag and a reload leaves it alone, as upstream reads the key once at startup. See Action.ToggleCursorPan for the behaviour and its known mismatches. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/motion_flow.rs); one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence, loaded and reloaded a file that sets it to false with nothing on stderr; a launch with it true, and any cursor edge pan, are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.edge_pan_cursor_zone",
@@ -11953,13 +12015,14 @@
       },
       "contract": "Match Config.edge_pan_cursor_zone type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "f64"
+      "source_type": "f64",
+      "implementation_note": "The width, in screen points from an edge of the output's usable area, of the zone inside which the bare pointer pans the view while cursor edge pan is on (20 by default). See Action.ToggleCursorPan for the behaviour and its known mismatches. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/motion_flow.rs); one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence, loaded and reloaded a file that sets it with nothing on stderr and could not show its effect, which needs a real pointer in the zone and is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.edge_pan_latency_ms",
@@ -11971,13 +12034,14 @@
       },
       "contract": "Match Config.edge_pan_latency_ms type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "u64"
+      "source_type": "u64",
+      "implementation_note": "How long, in milliseconds on the frame clock, the part of an edge pan that pushes at an edge shared with another output waits before it pans (120 by default, 0 for none); an outer edge is immediate. Shared edges are found from the outputs' screen_bounds, and the wait applies to the pan under a dragged window and to cursor edge pan alike. See canvas.edge_pan for the behaviour and its known mismatches. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/motion_flow.rs); one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence, loaded and reloaded a file that sets it with nothing on stderr, on a single output, where no edge is shared; its effect needs two displays and real pointer input and is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.camera_speed",
@@ -12072,7 +12136,7 @@
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
       "source_type": "f64",
-      "implementation_note": "zoom-in and zoom-out step by zoom.step in place of the former constant 1.1, and the value is carried with each pointer binding for the shell's wheel zoom; see Action.ZoomIn and Action.ZoomOut for the actions' own mismatches. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "zoom-in and zoom-out step by zoom.step in place of the former constant 1.1, and a wheel zoom reads it in the controller's zoom_by, which no longer leaves the factor to the shell; see Action.ZoomIn, Action.ZoomOut and MouseAction.Zoom for their own mismatches. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs) and one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.zoom_touch_speed",
@@ -12102,13 +12166,14 @@
       },
       "contract": "Match Config.zoom_trackpad_speed type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "f64"
+      "source_type": "f64",
+      "implementation_note": "A pinch that the [gestures] tables bind to zoom, the recogniser's or AppKit's two-finger pinch alike, is upstream's pinch gesture in the controller: the zoom is the zoom the pinch began at times 1 + (scale - 1) x zoom.trackpad_speed (1.0 by default), held between the dynamic minimum of that moment and 1 and applied at once around the pointer, and the end of the pinch snaps a zoom within 0.05 of 1 to 1. The gesture commands and the zoom_by command (source pinch, which the shell no longer sends) share that one implementation. Known mismatches: see GestureTrigger.Pinch: the scale itself is the shell's, not libinput's; zoom_by is refused during a window drag or resize gesture, where upstream zooms under a grab, and the shell begins no gesture during a button drag. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/motion_flow.rs for zoom_by and crates/desktop/tests/gesture_flow.rs for the gesture, against values derived by hand from upstream's formula); one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence, loaded a file that sets it with nothing on stderr and could not show its effect, which needs a real pinch and is unrun on a live run; no physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.zoom_mouse_speed",
@@ -12127,7 +12192,7 @@
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
       "source_type": "f64",
-      "implementation_note": "Carried with every pointer binding the controller reports; the shell zooms a bound wheel scroll about the pointer by zoom.step ^ (lines / 2 x zoom.mouse_speed), one wheel line counted as one notch of 15 axis units. Known mismatches: the pointer zoom clamps to the static 0.001 floor and 1.0 rather than upstream's dynamic minimum; zoom.trackpad_speed is reported alongside it but pinch is not scaled by it. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "A bound wheel scroll zooms through the controller's zoom_by by zoom.step ^ (lines / 2 x zoom.mouse_speed), one wheel line counted as one notch of 15 axis units, animated around the pointer and held between upstream's dynamic minimum and 1.0; the shell no longer computes the factor. The value is still carried with every pointer binding the controller reports. Known mismatches: those of MouseAction.Zoom. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs, crates/desktop/tests/motion_flow.rs); one scripted msg session against the built app in --windowed mode on 2026-10-09, which left no saved evidence, loaded a file that sets it with nothing on stderr and could not show its effect; the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.zoom_fit_padding",
@@ -12437,13 +12502,14 @@
       },
       "contract": "Match Config.gesture_thresholds type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "GestureThresholds"
+      "source_type": "GestureThresholds",
+      "implementation_note": "Held in the controller's Config and read on every threshold gesture update: swipe_distance, pinch_in_scale and pinch_out_scale decide when a threshold swipe and a threshold pinch fire, and a config reload applies to the next update. Known mismatches: see the three field.GestureThresholds rows: the swipe unit and the pinch scale are the shell's stand-ins for libinput's. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios with synthetic event streams only (crates/desktop/tests/gesture_flow.rs), and no physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.touch_thresholds",
@@ -12932,13 +12998,14 @@
       },
       "contract": "Match Config.gestures type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "ContextBindings<GestureBinding, GestureConfigEntry>"
+      "source_type": "ContextBindings<GestureBinding, GestureConfigEntry>",
+      "implementation_note": "Held in the controller's Config: the three context tables a gesture_begin resolves, upstream's defaults included, with none removing a binding and disable_defaults removing them all; the pointer's own context is tried before anywhere, and a malformed entry is upstream's warning and is skipped. Known mismatches: a physical macOS chord can stand for more than one upstream modifier set, and every such set is tried in combo order; a binding whose action does not run yet resolves and is refused when it fires; the resize bindings are gated; an unbound gesture is not forwarded to the application. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs), and one scripted msg session against the built app on 2026-10-09 loaded a [gestures] override and saw upstream's warnings for malformed entries, leaving no saved evidence; the shell's recogniser has only been fed scripted touch sequences in throwaway programs. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.touch_gestures",

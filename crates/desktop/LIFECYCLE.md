@@ -188,7 +188,11 @@ answered. A detached placeholder is never in it, and it is not saved.
 
 A drag or resize gesture in progress ends only when the window that closes, or
 is replaced by a stand-in, is one the gesture captured: the dragged or resized
-window, or a member of its group. Upstream ends no other window's grab. While a
+window, or a member of its group. Upstream ends no other window's grab. A drag
+that ends this way ends as a release ends it: the
+[edge pan](MOTION.md#edge-pan-while-a-window-is-dragged) it had armed is
+disarmed, and a [trackpad move](GESTURES.md#dispatch) that had installed it
+goes on with nothing to move. While a
 gesture goes on no flight is armed for the follower; it is focused all the
 same.
 

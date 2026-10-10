@@ -83,13 +83,17 @@ Names are case-sensitive kebab-case; directions (`up`, `down`, `left`, `right`,
 | `switch-layout next`, `prev`, `<index>` | yes | `effects` is one `switch_layout`; needs no output |
 | `close-window` | yes | a focused live window: `effects` is one `close_window`, marked a real close for the next ten seconds; a focused placeholder is dismissed and `dirty` is true; needs no output |
 | `suspend-window` | yes | a focused live window: `effects` is one `close_window`, and a stand-in takes its place if it closes within ten seconds; a focused placeholder is dismissed; needs no output |
-| `grow-window`, `shrink-window`, `move-to-bookmark`, `zoom-to-fit-snapped`, `toggle-fullscreen`, `fit-window`, `fit-window-snapped`, `fill-window`, `toggle-pin-to-screen`, `toggle-cursor-pan`, `set-trackpad` | no | parsed with upstream's argument rules, then refused |
+| `toggle-cursor-pan` | yes | flips [cursor edge pan](MOTION.md#cursor-edge-pan); `navigation` is `null`; needs no output |
+| `set-trackpad on\|off\|toggle` | yes | turns [gesture](GESTURES.md#set-trackpad) dispatch on or off; needs no output |
+| `grow-window`, `shrink-window`, `move-to-bookmark`, `zoom-to-fit-snapped`, `toggle-fullscreen`, `fit-window`, `fit-window-snapped`, `fill-window`, `toggle-pin-to-screen` | no | parsed with upstream's argument rules, then refused |
 
 [NAVIGATION.md](NAVIGATION.md#window-navigation-actions) describes the four
 window navigation actions, [CONFIG.md](CONFIG.md#actions-that-run-now) the
 nudge, exec and reload actions, [Outputs](CONFIG.md#outputs) the two output
-actions, [Keyboard layouts](CONFIG.md#keyboard-layouts) `switch-layout`, and
-[LIFECYCLE.md](LIFECYCLE.md#actions-and-ipc) the close and suspend actions.
+actions, [Keyboard layouts](CONFIG.md#keyboard-layouts) `switch-layout`,
+[LIFECYCLE.md](LIFECYCLE.md#actions-and-ipc) the close and suspend actions,
+[MOTION.md](MOTION.md#cursor-edge-pan) `toggle-cursor-pan` and
+[GESTURES.md](GESTURES.md#set-trackpad) `set-trackpad`.
 An `exec` effect is not run by the controller. Because `ipc`
 accepts `{"Action":…}`, whoever can write to the shell's socket can have the
 shell run a command, as with upstream's `driftwm msg action exec`.
@@ -117,16 +121,19 @@ not one here: the reply is `{"navigation":null,"effects":[],"dirty":false}`. For
 this action `navigation` is `null` only in that case.
 
 Upstream's `execute_action` first ends an Alt-Tab cycle in progress, committing
-its selection, unless the action is itself `cycle-windows`. So does `action`,
-for every action that parses, `quit` and `exec` included, and so does
-[`hot_corner`](CONFIG.md#hot-corners), which runs its corner's action through
-the same handler with the same `pointer` and `held`: a selection whose
-request was answered (confirmed, or `focus_logical`) moves to the head of the
-focus history, and one still waiting for its answer is promoted by that answer
-instead (see [FOCUS.md](FOCUS.md#upstream-entry-points)). A refused action
-rolls the cycle back with everything else. The direct commands (`pan_viewport`, `zoom_in`, …)
-are not actions and leave a cycle alone. Upstream also stops scroll momentum,
-which does not exist here.
+its selection, unless the action is itself `cycle-windows`, and stops the active
+output's scroll momentum. So does `action`, for every action that parses, `quit`
+and `exec` included, and so do [`hot_corner`](CONFIG.md#hot-corners), which runs
+its corner's action through the same handler with the same `pointer` and `held`,
+and a [gesture](GESTURES.md) whose threshold or hold fires one. A selection
+whose request was answered (confirmed, or `focus_logical`) moves to the head of
+the focus history, and one still waiting for its answer is promoted by that
+answer instead (see [FOCUS.md](FOCUS.md#upstream-entry-points)). The momentum
+that stops is that of the output the action runs on, so an action sent with no
+output stops none: see [camera motion](MOTION.md#what-stops-momentum). A refused
+action rolls the cycle and the momentum back with everything else. The direct
+commands (`pan_viewport`, `zoom_in`, …) are not actions and leave a cycle alone;
+they stop their own output's momentum.
 
 ## Bookmarks
 
@@ -338,7 +345,8 @@ registered is a controller error, `unknown output`, and moves nothing.
 The shell calls `state_event` while it has subscribers, after every redraw and
 every `layout_changed` (so after any request, gesture or tick that may have
 changed what `State` reports), and at most once per frame while a flight
-animates. It also calls it once while answering a `Subscribe`, before the new
+animates, a camera [coasts](MOTION.md) or an edge pan runs. It also calls it
+once while answering a `Subscribe`, before the new
 connection joins: earlier subscribers then get a change not yet sent to them,
 and the newcomer, whose snapshot is that same state, is not sent it twice. The
 active output is part of the state: it decides the top-level `camera`, `zoom`,

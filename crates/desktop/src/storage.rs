@@ -202,6 +202,10 @@ impl Controller {
                 standins: saved.standins,
                 ..Lifecycle::default()
             },
+            motion: Motion::default(),
+            trackpad_gesture: None,
+            trackpad_override: None,
+            drags: 0,
         })
     }
 }

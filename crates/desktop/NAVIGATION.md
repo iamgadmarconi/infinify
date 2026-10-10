@@ -12,8 +12,8 @@ fill and modal handling are absent throughout. No native operation is performed.
 | --- | --- | --- |
 | `navigate_window` | `window`, `output`, `zoom_policy: keep / reset` | focus `effect` plus `navigation` |
 | `cycle_navigate` | `output`, `backward`, `held` | existing frozen focus cycle plus Keep navigation; `{}` for empty cycle |
-| `tick_navigation` | `timestamp_ns` unsigned monotonic nanoseconds | `changed_outputs`, `needs_frames` |
-| `cancel_navigation` | `output` | `{}` |
+| `tick_navigation` | `timestamp_ns` unsigned monotonic nanoseconds | `changed_outputs`, `needs_frames`, `needs_pointer` |
+| `cancel_navigation` | `output` | `{}`; also stops that output's scroll momentum |
 | `set_navigation_context` | `output`, `usable_rect_local`, `focus_placement`, `camera_speed`, `outer_gap` | `{}`; cancels that output's flight |
 
 Navigation returns `{output,generation,target_camera,target_zoom,animating}`.
@@ -28,6 +28,9 @@ pose; `navigation.flights` separately shows optional camera/zoom targets, anchor
 and generation. The target camera is cleared by the anchored zoom tick, because
 that tick performs the camera movement itself. Flight entries disappear together
 on arrival or cancellation. Context and clock are inspectable runtime state.
+Scroll momentum, edge pans, cursor edge pan and the pointer zooms are the other
+ways the camera moves; [camera motion](MOTION.md) covers them, the frame's
+whole order and the snapshot keys they add.
 
 The whole output, center placement, camera speed 0.3 and outer gap 0 are defaults.
 Once a [config](CONFIG.md) is loaded, placement, camera speed and outer gap are
@@ -51,12 +54,20 @@ atomically. Arrival checks still run on zero-time ticks, as upstream does. A
 native integration must schedule frames while `needs_frames` is true and apply
 the resulting Scene placements; there is no native scheduling/input loop here.
 
-The source multi-output order is zoom tick then camera tick, with factor
-`1-(1-speed)^(dt*60)`. Arrival uses pre-tick displacement and strict thresholds:
+The source multi-output order is scroll momentum, edge pan, zoom tick, then
+camera tick; a flight is the last two, with factor `1-(1-speed)^(dt*60)`.
+The first two are [camera motion](MOTION.md)'s. A camera coasting after a
+scroll, a drag pan or a [swipe pan](GESTURES.md#momentum) is one momentum, and
+it and an armed edge pan are advanced by the same tick: their outputs are listed
+in `changed_outputs`, and `needs_frames` stays true until every flight has
+landed, every coast has stopped and no edge pan is armed. Arrival uses pre-tick displacement and strict thresholds:
 zoom delta below 0.001 and anchor distance squared below 0.25. Keep also arms an
 anchor and zoom target at the current zoom. Retargeting starts at the current
-animated pose. Pan/zoom cancel only their output; installing a drag/resize cancels
-all outputs. Navigation during an active gesture rejects. Output re-registration
+animated pose. Pan/zoom, timed pans, `zoom_by` and a bound trackpad swipe or
+pinch included, and `cancel_navigation` cancel only their output; installing a
+drag/resize, by pointer or by move gesture, cancels all outputs. A cancel takes
+the output's momentum with its flight, see
+[what stops momentum](MOTION.md#what-stops-momentum). Navigation during an active gesture rejects. Output re-registration
 or disconnect cancels its runtime flight/context. Reconnect uses its current or
 saved camera and never resumes a flight.
 
@@ -119,6 +130,11 @@ empty focus history, no `pointer`, or nothing under it reply
 `{"navigation":null,"effects":[],"dirty":false}`. Every one of these needs an
 output (`no active output` otherwise), rejects an unknown output, and rejects
 with `navigation during active gesture` while a drag or resize is installed.
+
+A [trackpad gesture](GESTURES.md) bound to one of these runs it through the
+same dispatch as a key binding: `center-nearest` takes the direction of the
+swipe, `pointer` is where the gesture began, and `held` is what the event that
+fires the action reports.
 
 - **`center-window`** is upstream's `RestoreFillElseReset`. There is no fill
   here, so no stored view is ever restored and the policy is always Reset: the
@@ -366,7 +382,8 @@ rejects the command instead of saturating.
 
 Return poses are runtime state per output, visible as `navigation.home_returns`
 and `navigation.overview_returns` in the snapshot. A pending fit return is
-disarmed by `pan`, `zoom`, `navigate_window`, an armed `cycle_navigate`,
+disarmed by `pan`, `zoom`, a `zoom_by` that changes or retargets the zoom,
+`navigate_window`, an armed `cycle_navigate`,
 `pan_viewport`, `zoom_in`, `zoom_out`, `zoom_reset`, and leaving for home; only
 `home_toggle` consumes a home return. Cancelling a flight, starting a gesture,
 changing the navigation context, or re-registering a connected output leaves
@@ -375,17 +392,19 @@ is unchanged and load starts with none.
 
 Differences from upstream:
 
-- Upstream's pinch and pointer zoom clamp to the dynamic minimum. The `zoom`
-  command here still accepts the static 0.001 floor, so a pose can already sit
-  below the minimum. `zoom_out` is then a complete no-op (`{"navigation":null}`,
+- Upstream's pinch and pointer zoom clamp to the dynamic minimum, and so does
+  `zoom_by`. The direct `zoom` command still accepts the static 0.001 floor,
+  and windows that move can raise the minimum, so a pose can already sit below
+  it. `zoom_out` is then a complete no-op (`{"navigation":null}`,
   fit return untouched) rather than a flight that zooms in.
 - `HomeToggle`'s fullscreen legs (instant snap, fullscreen restore, pointer
-  warp), `ZoomToFitSnapped`, and momentum are absent. Every Scene window counts
+  warp) and `ZoomToFitSnapped` are absent. Every Scene window counts
   as a canvas window.
 - Upstream's `execute_action` prelude commits an in-progress focus cycle before
-  any non-cycle action. The six commands, sent directly, leave logical focus
-  and a held cycle exactly as they were; the same handlers reached through
-  [`action`](IPC.md#action) run that prelude first.
+  any non-cycle action and stops scroll momentum. The six commands, sent
+  directly, stop their output's momentum and leave logical focus and a held
+  cycle exactly as they were; the same handlers reached through
+  [`action`](IPC.md#action) run the whole prelude first.
 
 ### Evidence and limits
 

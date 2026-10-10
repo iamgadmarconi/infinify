@@ -55,11 +55,18 @@ the one window it focuses, and nothing else.
   action's;
   it does not list every bound key (the default table under
   [Configuration](#configuration) has the rest, three of which start a program).
-- Pan a display's camera: drag or two-finger scroll on empty canvas, or
-  Control-Option-drag / Control-Option-scroll anywhere. Zoom, pointer-anchored,
-  from 0.001 to 1.0: mouse wheel on empty canvas, Control-Option-wheel anywhere,
-  or pinch. The view actions below are the animated toolbar and keyboard
-  equivalents.
+- Pan a display's camera: drag or two-finger scroll on empty canvas,
+  Control-Option-drag / Control-Option-scroll anywhere, or a three-finger swipe
+  anywhere. A pan that is still moving when the fingers lift or the button is
+  released keeps drifting until friction stops it (`navigation.drift`; 0 turns
+  that off). Zoom, pointer-anchored, up to 1.0 and down to half the zoom that
+  fits every window: mouse wheel on empty canvas, Control-Option-wheel
+  anywhere, a two-finger pinch on empty canvas (Control-Option-pinch anywhere),
+  or a three-finger pinch anywhere. The view actions below are the animated
+  toolbar and keyboard equivalents; [Camera motion](#camera-motion) has the
+  details of drift, edge pan and the pointer speeds, and
+  [Trackpad gestures](#trackpad-gestures) the rest of the gesture table and
+  what macOS must be told first.
 - View actions: toolbar buttons Home, Fit, −, 1:1 and + on every canvas panel,
   and while panels are open the global hot keys bound to `home-toggle`
   (Control-Option-A), `zoom-to-fit` (Control-Option-W; press again to return),
@@ -73,10 +80,16 @@ the one window it focuses, and nothing else.
   placeholders included, together with any `navigation.anchors`; a second press
   returns to the view left, and any other pan or zoom forgets the Fit return.
   Zoom in stops at 1:1. Zoom out stops at half the zoom that fits all windows
-  and does nothing if a gesture already zoomed past that. A pointer press, a
-  pinch, or a scroll that actually pans or zooms the canvas stops a flight where
-  it is. A scroll that is forwarded to a window, has no delta, or is already at
-  the zoom limit leaves the flight alone.
+  and does nothing if the view is already further out than that. A pointer
+  press stops every display's flight, and its drift, where it is. A scroll that
+  pans, or a trackpad swipe or pinch that is bound, stops the flight and the
+  drift of the display it is on, and a wheel zoom replaces that display's
+  flight with its own animated zoom. A scroll that is forwarded to a window,
+  has no delta, or is already at the zoom limit leaves the flight alone, and so
+  do a hold and an unbound gesture. One unbound gesture does stop it, as
+  upstream's does: a swipe right after a three-finger tap, once a
+  `doubletap-swipe` binding is found for it, even with no window under the
+  pointer to grab and no plain swipe bound.
 - Window navigation, in every normal run (toolbar buttons Center, Previous and
   Next; the hot keys only while panels are open and not with `--windowed`):
   Control-Option with an arrow key (`center-nearest <direction>`) focuses the
@@ -86,7 +99,10 @@ the one window it focuses, and nothing else.
   does the same for the window under the pointer; Option-Tab and
   Option-Shift-Tab (`cycle-windows forward` / `backward`) step through the
   windows most recently focused first, and letting go of Option commits the
-  choice. A click on a window gives it canvas focus and starts its native
+  choice. On a trackpad a four-finger swipe is `center-nearest` in the direction
+  the canvas would follow the fingers (fingers left look right) and a
+  four-finger hold is `center-window`, see
+  [Trackpad gestures](#trackpad-gestures). A click on a window gives it canvas focus and starts its native
   focus, then the click is forwarded; a click on empty canvas unfocuses, and
   focusing a canvas window in its own application (Command-Tab, the Dock) is
   followed by the canvas. Focusing means logical focus, raising in the canvas,
@@ -126,9 +142,17 @@ the one window it focuses, and nothing else.
   their own gate.
 - Option-drag on a window: move the logical world window, using Rust snapping
   and hysteresis with the `[snap]` settings. Add Shift to move its connected
-  cluster. Control-Option-Shift with an arrow key (`nudge-window <direction>`)
-  moves the focused logical window by `navigation.nudge_step` world points.
-  Neither moves a native window.
+  cluster. Held within `navigation.edge_pan.zone` (100 points) of the edge of
+  the display the drag began on, the drag pans the canvas under the window,
+  faster the nearer the edge. A three-finger tap followed by a three-finger
+  swipe on a window moves it the same way, edge pan included. Control-Option-Shift with an arrow key
+  (`nudge-window <direction>`) moves the focused logical window by
+  `navigation.nudge_step` world points. None of this moves a native window.
+- Cursor edge pan, off by default: Control-Option-E (`toggle-cursor-pan`)
+  turns it on or off for the run, and `navigation.edge_pan.cursor_pan = true`
+  starts with it on. While it is on, a bare pointer resting within
+  `cursor_zone` (20 points) of a display's edge pans that display's view. The
+  toggle shows no status message.
 - Control-Option-Command-Shift with an arrow key (`send-to-output <direction>`)
   moves the focused logical window into the view of the display on that side,
   where a navigation on that display would park it. `send-cursor-to-output
@@ -581,16 +605,17 @@ only while a canvas panel is open; `--windowed` registers none.
 | ⌃⌥D | `mod+d` | `exec-launcher`: `$LAUNCHER`, else `open -a Apps` |
 | ⌃⌥L | `mod+l` | `exec /usr/bin/pmset displaysleepnow`, standing in for upstream's `spawn swaylock -f -c 000000 -kl` (see [Linux-only default commands](#linux-only-default-commands)) |
 | ⌃⌥Q | `mod+q` | `close-window`: close the focused window, or dismiss a focused placeholder |
+| ⌃⌥E | `mod+e` | `toggle-cursor-pan` |
 | ⌃⌥⇧⌘Q | `mod+ctrl+shift+q` | `quit` |
 | ⌃⌥Esc | none (the shell's own) | exit, until a binding takes the chord |
 
-Those are 39 of upstream's 57 default key bindings. ⌥Tab and ⌥⇧Tab are taken
+Those are 40 of upstream's 57 default key bindings. ⌥Tab and ⌥⇧Tab are taken
 from every application while a canvas panel is open; rebind or unbind
 `cycle-windows` in the config file to give them back. The rest are not
 registered, so their chords stay with the applications:
 
-- 6 whose action does not run on macOS yet: ⌃⌥E
-  (`toggle-cursor-pan`), ⌃⌥F (`toggle-fullscreen`), ⌃⌥M and ⌃⌥⇧M (`fit-window`,
+- 5 whose action does not run on macOS yet: ⌃⌥F
+  (`toggle-fullscreen`), ⌃⌥M and ⌃⌥⇧M (`fit-window`,
   `fit-window-snapped`), ⌃⌥⇧W (`zoom-to-fit-snapped`) and ⌃⌥T
   (`toggle-pin-to-screen`). Bound in a config file they are skipped the same
   way, without a message; `Infinify msg action` answers the not-implemented
@@ -754,12 +779,235 @@ A resize binding picks its edges from the pointer's place in the window, a 3×3 
 bottom right, as upstream's resize grab does. A mouse binding that names an
 action first focuses the window under the pointer, a placeholder included, then
 runs the action. A press bound to move or resize a window does not focus it,
-where upstream's does. After a
+where upstream's does; a move by [trackpad gesture](#trackpad-gestures) does
+focus and raise its window, as upstream's. After a
 two-finger scroll has panned, scrolls stay with the canvas for 150 ms even if a
 window slides under the pointer, as upstream. One gesture runs at a time: a
 second button pressed during a gesture is ignored. Upstream's `wheel-up` and
 `wheel-down` triggers are parsed but never fire, and the grammar has no name for
-the back and forward buttons. Pinch is not a mouse binding and is unchanged.
+the back and forward buttons. Pinch is not a mouse binding: it is a gesture,
+below. A pan or zoom from this table is timed, scaled and limited by the
+controller, see [Camera motion](#camera-motion).
+
+### Trackpad gestures
+
+Normal runs only; the fixture modes take no touches and keep their fixed pinch
+zoom. DriftWM is handed swipe, pinch and hold gestures by libinput and binds
+them in the `[gestures]` tables. macOS has no such stream, so the shell makes
+one and the controller dispatches it exactly as upstream dispatches libinput's:
+[GESTURES.md](../../crates/desktop/GESTURES.md) has the three commands
+(`gesture_begin`, `gesture_update`, `gesture_end`), the dispatch and the default
+table as it runs on a Mac. What a gesture then moves is
+[Camera motion](#camera-motion)'s, the same as for the pointer: a swipe that
+pans is the timed pan of a two-finger scroll and drifts on the same momentum, a
+pinch that zooms is scaled, limited and snapped by the controller, and a swipe
+that moves a window is the drag of a bound button press, edge pan included.
+
+| Fingers | Where the stream comes from |
+| --- | --- |
+| 3 or more | raw trackpad touches, recognised by `trackpad-gestures.m` |
+| 2, pinching | AppKit's magnify events, sent as a `pinch` of 2 fingers: its scale is the running product of each event's `1 + magnification`, with no rotation and no delta |
+| 2, scrolling | not a gesture: the `trackpad-scroll` mouse binding above |
+
+Every canvas view accepts indirect touches and hands each event's touches to one
+recogniser, `DWTrackpadGestures`, a state machine with no AppKit in it, fed
+`(identity, x, y, phase, time)` in millimetres and emitting the begin, update
+and end events. Its rules and every constant are written out at the top of
+`trackpad-gestures.m` beside the libinput behaviour each imitates. In short:
+
+- The finger count is fixed once a gesture has begun. Before that each landing
+  or lift restarts recognition, and motion is not read for 50 ms after it. After
+  it, a different count must last 100 ms, then the gesture ends cancelled and
+  recognition starts over; all fingers lifting ends it at once, not cancelled.
+- Fingers that move the same way are a swipe: `dx`, `dy` are the mean movement
+  of all fingers, 10.5 units for each millimetre of travel, a constant standing
+  in for libinput's accelerated pointer units. Upstream's `swipe_threshold` of
+  12 is therefore a little over a millimetre.
+- Fingers that close, open or turn against each other are a pinch: `scale` is
+  the distance between the farthest and the nearest touch over what it was when
+  the pinch was recognised, `rotation` the change of their angle in degrees.
+- Fingers that have not moved more than 1 mm for 180 ms are a hold. Moving ends
+  it cancelled; lifting ends it, which is when a hold binding fires.
+- Three fingers that land and lift within 180 ms a step, without moving, are a
+  tap. A swipe beginning within 300 ms of it carries `doubletap`, which is how
+  upstream's `3-finger-doubletap-swipe` (move a window) is reached.
+- A touch the system cancels, or one a frame no longer reports, ends the gesture
+  cancelled.
+
+Two misreads of these rules are known from scripted touch sequences and are
+left in:
+
+- Fingers closing on a thumb that stays still are not a pinch. Nothing is
+  recognised while they move, and when they stop the touches become a hold. The
+  same touches are two fingers scrolling above a resting thumb, which a pinch
+  would zoom, so only the other half is a pinch: a thumb closing on fingers that
+  stay still. Otherwise both must move.
+- Three fingers side by side that slide more than a millimetre as they land and
+  then lie still become a swipe at the next touch event after 150 ms, with
+  almost no motion in it, and never the hold they were resting into.
+
+`gesture_begin` carries the modifiers held, the output under the pointer and
+whether a window or empty canvas is under it (a placeholder is a window), as a
+press does. Each update and the end say whether a modifier is physically down
+at that moment, which is what a hot key's action is told: a `cycle-windows` the
+gesture fires then keeps its cycle open until the hold modifiers are let go
+([Cycling and hold-to-commit](#cycling-and-hold-to-commit)), and any other
+action it fires ends one. A gesture begins only with the pointer over an
+output and no button drag in progress; its begin withdraws a native focus
+request still in flight and leaves a settled open cycle alone. A press on the
+pad first ends an open cycle as every canvas press does, then ends the gesture
+cancelled before it stops
+camera motion, so a pan the press interrupts does not coast. While a swipe or
+pinch of three or more fingers is running, scroll and magnify events are
+dropped, in case macOS derives them from the same fingers. For the same case,
+its begin ends a scroll those fingers had started: the drift that scroll was
+about to launch is not launched, at its 50 ms delay or at its lift, so the
+swipe's own end is the only launch. A magnify event is
+sent to the controller once, as a gesture event and never as a `zoom_by` too.
+The reply is an action's: a flight, a coasting camera or the edge pan under a
+moved window keeps the 60 Hz frame timer running
+(`needs_frames`), `dirty` saves the scene, a focus request (a move's, or that
+of a window navigation action the gesture fired) goes to the navigation
+coordinator like the request of any other reply
+([What focusing does natively](#what-focusing-does-natively)), and the status
+line shows what a
+threshold gesture fired (`Home`, `Zoom to fit`), the refusal of an action that
+does not run here yet, and the note of a gated resize.
+
+**macOS takes three- and four-finger touches for itself first.** Infinify
+changes no system setting. For the canvas to receive those finger counts
+cleanly, turn these off yourself in System Settings (the names recent macOS
+releases use; they were not checked against this release's panes):
+
+- Trackpad > More Gestures: Mission Control, App Exposé, Swipe between
+  full-screen applications, Launchpad, Show Desktop, and Swipe between pages if
+  it is set to three fingers.
+- Trackpad > Point & Click: Look up & data detectors, if it is set to "Tap with
+  Three Fingers" (it would take the tap of a doubletap-swipe).
+- Accessibility > Pointer Control > Trackpad Options: three-finger drag, which
+  turns three fingers into a mouse drag.
+
+Left on, a system gesture and the canvas both see the fingers until macOS takes
+the touches, at which point they arrive cancelled and the gesture in progress
+ends cancelled: a pan keeps what it moved and stops there, and a hold fires
+nothing. Upstream's cancelled swipe coasts, because libinput cancels a swipe
+when one finger lifts ahead of the others. Here such a swipe ends uncancelled
+when the other fingers follow within 100 ms, and cancelled only after those
+100 ms, too late to launch anything. So a pan that ends cancelled while still
+moving has lost its touches, and the shell follows the end of every cancelled
+pan with `cancel_navigation` on that display.
+
+Not done: an unbound gesture is not forwarded to the application under it
+(upstream forwards it to the client), so with the default table a bare
+two-finger pinch over a window now does nothing where it used to zoom the
+canvas. `resize-window` by gesture is gated and says so.
+
+What changes for someone who used the previous build:
+
+- Three fingers now pan and pinch, four fingers pinch to `zoom-to-fit` and
+  `home-toggle`, and a three-finger tap followed by a three-finger swipe moves
+  the window under the pointer, panning the canvas under it at the display's
+  edge. After a three-finger pan the camera drifts as after a two-finger
+  scroll (`[navigation] drift`, 0 turns it off), with one difference: three
+  fingers that stop and stay down hold the view still, where two start the
+  drift under them after 50 ms.
+- A two-finger pinch over a window does nothing unless Control-Option is held.
+  On empty canvas it still zooms, now scaled by `[zoom] trackpad_speed`,
+  stopping at the zoom-out limit of the view actions (half the zoom that fits
+  all windows) instead of 0.001, and settling on 1:1 when it ends within 0.05
+  of it.
+- A four-finger swipe, and Control-Option with a three-finger swipe, are
+  `center-nearest`: the nearest window in the direction the canvas would follow
+  the fingers (fingers left look right) is focused and the camera flies to it
+  at the current zoom, as Control-Option with an arrow key does. A four-finger
+  hold, and Control-Option with a three-finger hold, are `center-window` when
+  the fingers lift. Both are
+  [window navigation](#window-navigation-and-native-focus), native focus
+  request included. Option with a three-finger swipe on a window is
+  upstream's resize and shows the gated note.
+- `set-trackpad off` (no default key; bind it, or `Infinify msg action
+  set-trackpad off`) stops all of the above, the two-finger pinch included,
+  until `on`, `toggle`, a config change of `[input.trackpad] enable`, or a
+  restart. The pointer, clicks and two-finger scrolling stay on: they are
+  macOS's.
+- A malformed entry in a `[gestures]` table is reported in upstream's words,
+  as every config problem is, and skipped; the rest of the file applies.
+
+What has been run, on 2026-10-09 and 2026-10-10 (macOS 27.2, Apple Silicon,
+ad-hoc signed builds), with nothing saved as evidence. **No trackpad gesture
+was performed**: these were automated sessions, and touch input cannot be
+injected. The first
+five items were run on the gestures change by itself, before it was put together
+with [Camera motion](#camera-motion); the sixth is the run of the two together,
+on a tree that had neither window navigation nor managed windows, so
+`center-nearest` was still refused there; the last is the run of this tree.
+
+- Built and linked: `scripts/build-app.sh` with `trackpad-gestures.m`, no
+  warnings under `-Wall -Wextra -Werror`.
+- The controller's dispatch: `crates/desktop/tests/gesture_flow.rs`, synthetic
+  event streams through the exported C ABI.
+- The built app, one launch as `--windowed 1100x700` on a private scene, config
+  and socket, driven through `Infinify msg`: a config with a `[gestures]`
+  override loading with nothing on stderr; `set-trackpad off`, `on` and `toggle`
+  answering `ok`, and a wrong or missing argument answering upstream's message
+  with exit status 1; four malformed gesture entries each reported in
+  upstream's words while the rest of that file took effect; a `[gestures]`
+  value of the wrong type refused whole with upstream's TOML message while the
+  previous file stayed in force; `camera`, `zoom`, `home-toggle`, `zoom-to-fit`
+  and `pan-viewport` landing exactly where they did before; SIGTERM exiting 0
+  with the socket removed. The trackpad's on/off state cannot be read over the
+  socket, so only the answers were seen.
+- The recogniser, outside the app: the scripted touch sequences of a throwaway
+  command-line harness (23 sequences and a random run of 392,363 frames whose
+  output stayed well formed), and a second throwaway program that fed the
+  recogniser's events through the real controller library, which accepted all
+  95 of them. [GESTURES.md](../../crates/desktop/GESTURES.md#integration-run-2026-10-09)
+  lists what each sequence became.
+- After the review's fixes (the controller's launch delay and drag identity,
+  and in the shell the press ending a gesture before navigation is cancelled
+  and the `cancel_navigation` after a cancelled pan): the build,
+  `gesture_flow`, the socket run and the second throwaway program again, with
+  the same results.
+- The two together: the build, `gesture_flow` and `motion_flow` on the merged
+  controller, and one more launch of about six seconds, `--windowed 1100x700`
+  on a private seeded scene, config and socket. A file holding camera-motion
+  settings and a `[gestures]` override loaded with nothing on stderr and its
+  bookmark was read back; `set-trackpad off`, `on` and `toggle` twice and
+  `toggle-cursor-pan` twice answered `ok`; `set-trackpad maybe` answered
+  upstream's message with exit status 1; a second file with another override
+  was reloaded with nothing on stderr; `pan-viewport`, `zoom-to-fit`, `camera`,
+  `zoom` and `home-toggle` landed where they did before; `center-nearest right`
+  was refused by name; SIGTERM exited 0 with the socket removed. The second
+  throwaway program was not run again on the merged library.
+- This tree, on 2026-10-10: the build, `gesture_flow` with the scenarios the
+  merge added (a four-finger swipe and a hold running `center-nearest` and
+  `center-window`, a gesture's pointer and modifier state reaching
+  `focus-center` and `cycle-windows`, a window closing under a move) and the
+  other controller scenarios, the headless coordinator regression, and one
+  launch of 6.9 seconds, `--windowed 1100x700` on a private freshly seeded
+  scene, config and socket, without Screen Recording access. A file with
+  motion settings and a `[gestures]` override (a threshold, a named swipe
+  bound to `cycle-windows forward`, a five-finger swipe and a three-finger
+  hold) loaded with no config line on stderr and its bookmark was read back;
+  `set-trackpad off`, `on` and `toggle` twice and `toggle-cursor-pan` twice
+  answered `ok`; `set-trackpad maybe` answered upstream's message with exit
+  status 1; `center-nearest right` flew to the seeded window at 1950 0 and
+  focused it; [Camera motion](#what-has-been-run-of-camera-motion) has the
+  flights of that run. No gesture event reached the app.
+
+Only compiled, never executed: everything between a finger and the recogniser,
+and between the recogniser and the controller, inside the app. That is the
+views' touch forwarding, the conversion of a touch to millimetres, the hold and
+finger-count timer, the magnify routing of a two-finger pinch, the modifiers,
+context, output and pointer added to `gesture_begin`, the status line feedback,
+the frame timer started by a coast or by the edge pan under a moved window,
+what a press or a cancelled pan does to that coast, and everything the merge
+with window navigation added behind a touch: the modifier state sent with an
+update or an end, the focus request of a gesture reply handed to the
+coordinator, hold-to-commit armed by a gesture that fires `cycle-windows`, and
+the press that ends an open cycle before the gesture. Untested in any form: real fingers, how
+the thresholds feel, and what macOS does with the same fingers while its own
+gestures are on or off.
 
 ### Settings
 
@@ -775,9 +1023,15 @@ Applied now:
 | `[zoom] reset_on_activation` | on by default: a canvas window focused in its own application, or by `msg focus`, is flown to at 1:1 when it is clipped; off keeps the zoom |
 | the `cycle-windows forward` binding's modifiers | the modifiers that hold a cycle open (upstream's `cycle_hold`): Option by default |
 | `[navigation.bookmarks]` | the bookmarks every launch starts from |
-| `[navigation] trackpad_speed` | multiplies a bound two-finger scroll pan (1.5 by default) |
+| `[navigation] trackpad_speed`, `mouse_speed` | multiply a bound scroll pan, two-finger or wheel, and a swipe pan (1.5 by default), and a bound drag pan (1.0) |
+| `[navigation] drift` | how long a released pan coasts, a swipe pan included: 0 off, 0.5 the default, 1 floatiest |
+| `[navigation.edge_pan] zone`, `speed_min`, `speed_max`, `latency_ms` | the pan under a window dragged to a display's edge, by button or by gesture: the zone's width (100), points per frame at its boundary and at the edge (4 and 10), and the wait at an edge that borders another display (120 ms) |
+| `[navigation.edge_pan] cursor_pan`, `cursor_zone` | cursor edge pan: on or off at launch (off), and its zone (20) |
+| `[gestures.*]`, `[gestures] swipe_threshold`, `pinch_in_threshold`, `pinch_out_threshold` | what a trackpad gesture does, see [Trackpad gestures](#trackpad-gestures) |
+| `[input.trackpad] enable` | whether gestures are dispatched at all, until `set-trackpad` says otherwise |
 | `[zoom] step`, `fit_padding` | `zoom-in` / `zoom-out`, `zoom-to-fit` and the zoom-out limit |
-| `[zoom] step`, `mouse_speed` | a bound wheel zooms by `step ^ (lines / 2 × mouse_speed)` |
+| `[zoom] step`, `mouse_speed` | a bound wheel zooms by `step ^ (lines / 2 × mouse_speed)`, animated |
+| `[zoom] trackpad_speed` | scales a pinch that zooms, of two fingers or more (1.0 by default) |
 | `[snap] enabled`, `gap`, `distance`, `break_force`, `corners`, `centers` | the logical window drag and its cluster |
 | `[snap] outer_gap`, `focus_placement`, `[[outputs]] focus_placement` | where window navigation and `send-to-output` park a window; an `[[outputs]]` entry is matched by display UUID, `windowed`, or `*` |
 | `[[outputs]] hot_corners` (`top_left`, `top_right`, `bottom_left`, `bottom_right`, `threshold`, `disable_while_dragging`) | [hot corners](#displays-hot-corners-layouts-and-autostart) |
@@ -800,19 +1054,18 @@ without IPC: a command it starts reaches this instance with a plain
 `Infinify msg …`, whichever `--socket` the app was given.
 
 Read and validated by upstream's parser, then unused because the feature does
-not exist here: `[navigation] mouse_speed` (a drag pans 1:1), `[zoom]
-trackpad_speed` (pinch is unscaled), `focus_follows_mouse`, `[navigation]
-resize_step`, `drift`, `touch_speed` and `edge_pan`, `[zoom] touch_speed` and
-`interact_min`, `[input.keyboard]
+not exist here: `focus_follows_mouse`, `[navigation] resize_step` and
+`touch_speed`, `[zoom] touch_speed` and `interact_min`, `[input.keyboard]
 layout`, `variant`, `options`, `model`, `remember_layout_per_window`, `num_lock`
-and `caps_lock` (macOS owns the input sources and the lock keys),
-`[input.trackpad]`, `[input.mouse]`, `[input.touch]`, `[input.tablet]`,
+and `caps_lock` (macOS owns the input sources and the lock keys), the rest of
+`[input.trackpad]` (macOS owns the device), `[input.mouse]`, `[input.touch]`,
+`[input.tablet]`,
 `[cursor]` (theme and size reach only the environment of a run command),
 `[background]`, the rest of `[decorations]`, `[effects]`, `[backend]`,
 `[output]`, `[[outputs]]` `scale`, `transform`, `position` and `mode` (macOS
 owns the display arrangement) and `hot_corners.disable_when_fullscreen`,
 the rest of `[[window_rules]]` (`position`, `size`, `focus_on_open`, `widget`
-and the others shape no window), `[gestures.*]`,
+and the others shape no window),
 `[touch.*]`, `[mouse] resize_on_border` and the decoration settings, and
 tap-modifier bindings (a bare `alt+shift`), which are reported and skipped.
 
@@ -826,6 +1079,10 @@ with them: a mouse wheel on empty canvas now zooms where every scroll there
 used to pan, and a two-finger scroll pans 1.5 times the finger's travel
 (`navigation.trackpad_speed`) where it used to pan 1:1. Control-Option-click on
 a detached placeholder survives only while no binding claims it (see Controls).
+The fixed pinch zoom is gone from normal runs as well: a two-finger pinch is the
+`2-finger-pinch` gesture binding, which zooms on empty canvas and, over a
+window, only with Control-Option held (see
+[Trackpad gestures](#trackpad-gestures)).
 
 ### What has been run
 
@@ -957,6 +1214,222 @@ Dvorak and Russian layout tables, registering nothing),
 `--super` with any value, `exec-terminal` and `exec-launcher`, the status line,
 tooltips and anything else drawn, the default config path, and every one of
 these with a bound source or more than one display.
+
+## Camera motion
+
+A normal run moves the camera the way DriftWM does: a flick drifts, a window
+dragged to the edge pans the canvas under it, a pointer pushed against an edge
+can pan the view, and the pointer's pan and zoom speeds come from the config.
+The physics and the numbers are the controller's
+([MOTION.md](../../crates/desktop/MOTION.md)): momentum is upstream's own
+`MomentumState` from `driftwm-core`, and edge pan, cursor edge pan and the
+pointer zooms are adapted from the pinned upstream source. The shell only says
+when and where. It stamps each pan with its event's time and source, tells the
+controller when a pan ends, passes the pointer along with a window drag,
+reports the pointer while cursor edge pan asks for it, and keeps its 60 Hz
+frame timer running for as long as the controller reports motion: a flight, a
+drift, an edge pan or a cursor pan alike. Each frame is the navigation
+coordinator's tick, the one that flies
+[window navigation](#window-navigation-and-native-focus), watches the hot
+corners and, while a `msg subscribe` client is connected, is followed by at
+most one [State event](#event-stream). A
+[trackpad gesture](#trackpad-gestures) needs none of that from the shell: its
+events carry their own times, and the controller makes the same pans, launch,
+pinch and drag of them itself, so a swipe drifts and a moved window edge-pans
+by the rules below. There is no
+new flag. `--demo`, the probes and the owned-resize modes read no config and
+move exactly as before.
+
+What you will notice:
+
+- **A released pan drifts.** Lift the fingers from a two-finger scroll or a
+  three-finger swipe, or release a drag pan, while the canvas is moving and the view keeps going,
+  slowing until it stops. `navigation.drift` sets how far (0.5 by default, 1
+  floatiest, 0 off); a reload reaches a drift already under way. The launch
+  speed is that of the last 80 ms of movement. A drag pan that rested for
+  50 ms or more before its release flings nothing, and one that rested that
+  long and then moved again flings only the movement after the rest. Two fingers that stop on the
+  trackpad and stay down are treated as upstream treats them: 50 ms after
+  their last movement the drift starts under them, and lifting them ends it.
+  Three fingers that stop mid-swipe hold the view still instead, and lifting
+  them 50 ms or more after their last movement flings nothing.
+  A press on the canvas, a bound pinch or swipe, a new pan, a wheel zoom, or
+  any hot key, toolbar button, hot corner, gesture-fired action or `Infinify
+  msg action` aimed at that display stops the drift, and so does any flight
+  that starts there: a click that brings a clipped window into view, a new
+  window, the window that takes the focus after a close.
+- **macOS's inertial scrolling no longer pans the canvas.** The events macOS
+  adds after the fingers lift are dropped for a scroll that panned, because the
+  drift is computed from the fingers' own movement, as upstream does it. Until
+  now those events were the only coasting there was, so what follows a flick is
+  DriftWM's curve instead of the system's. A scroll forwarded to an application
+  is passed on whole, inertia included. When a window comes under the pointer
+  during a scroll that began by panning and takes it over, the rest of that
+  scroll is the window's too, its end and its inertia with it.
+- **Pan and zoom speeds are the config's.** A scroll pan and a swipe pan are multiplied by
+  `navigation.trackpad_speed` (1.5, as before) and a drag pan by
+  `navigation.mouse_speed` (1.0, so unchanged unless you set it). A wheel zooms
+  by `zoom.step ^ (lines / 2 × zoom.mouse_speed)` as before, but now glides to
+  its target the way the zoom keys do, and notches that arrive mid-glide add
+  up. A pinch that zooms (which the `[gestures]` tables decide, see
+  [Trackpad gestures](#trackpad-gestures)) is scaled by `zoom.trackpad_speed`
+  (1.0) from the zoom it began at, and one that ends within 0.05 of 1:1 snaps
+  to 1:1.
+- **Pointer zoom stops where zoom-out stops.** Wheel and pinch no longer go
+  down to 0.001: their lower limit is half the zoom that fits every window, and
+  a view already further out is pulled up to that limit by the next notch or
+  pinch.
+- **A window dragged to the edge pans the canvas.** While a window, or with
+  Shift its cluster, is being moved and the pointer is within
+  `navigation.edge_pan.zone` (100 points) of an edge of the display the drag
+  began on, the view pans toward that edge and the window stays under the
+  pointer: `speed_min` (4) points per frame at the zone's boundary rising to
+  `speed_max` (10) at the edge. It keeps panning while the pointer rests there
+  and stops when the pointer leaves the zone or the button is released. At an
+  edge that borders another display the pan first waits `latency_ms` (120). A
+  window moved by gesture (three-finger tap, then three-finger swipe) pans the
+  same way once the swipe has carried it to the edge: the gesture has a pointer
+  of its own that stops there, one point short of the edge.
+- **Cursor edge pan.** Off unless `navigation.edge_pan.cursor_pan = true` when
+  the app starts. Control-Option-E (`toggle-cursor-pan`, or `Infinify msg
+  action toggle-cursor-pan`) flips it for the run; a config reload does not, as
+  upstream reads the key once at startup. While it is on, a bare pointer within
+  `cursor_zone` (20 points) of an edge of a display's view pans that view at
+  `speed_max` points per frame. The pointer counts only where a press would
+  reach the canvas panel, so a panel behind another window does not pan. While
+  a button is held in a canvas panel, for a drag in a captured window as much
+  as for a canvas gesture, nothing new starts: a pan already running when the
+  button went down keeps going, as upstream's does under a grab, and one that
+  was not running waits for the release.
+- **⌃⌥E is taken** while a canvas panel is open, like the other registered
+  chords. Bind `"mod+e" = "none"` to give it back.
+
+Where this differs from DriftWM, or is rough:
+
+- The toggle shows nothing: no status message, and its state cannot be read
+  over the socket.
+- A view's edge is the edge of its output, which begins 64 points below the top
+  of the screen, under the toolbar strip. Pushing the pointer against the top
+  of the screen therefore pans nothing; the top zone is the 20 points below the
+  strip.
+- While nothing moves the pointer is looked at about every 80 ms, so a cursor
+  pan can start that late. Once it runs it is checked every frame.
+- Edge pan speeds are per frame, as upstream's are, and the frame timer is
+  60 Hz whatever the display's refresh rate.
+- A drag stays on the display it began on: a pointer that has left it pans
+  nothing, and the window does not cross into another display's view.
+- A wheel or pinch zoom during a window drag does nothing: the controller
+  refuses a wheel zoom, so the shell drops the input, and no trackpad gesture
+  begins while a button is held. It used to zoom, and upstream
+  zooms under a grab. Only the edge pan carries a dragged window: a scroll pan
+  during a drag moves the view and leaves the window where it is in the world.
+- A scroll during a held drag pan pans, but only the release launches the
+  drift. If the fingers lift first and the button comes up within 50 ms of
+  their last movement, that scroll is part of the fling; upstream's lift would
+  already have spent it.
+- Resting two fingers on the trackpad does not stop a drift the way it stops
+  macOS's own inertia. Moving them, or a press, does.
+- A lift counts as a rest when macOS stamps it 50 ms or more after the last
+  movement of that scroll. Whether a real flick's lift always arrives sooner
+  has not been tried; if it does not, flicks would not drift.
+- With two-finger scroll bound to zoom (not the default), macOS's inertia
+  events still zoom: they are dropped for pans only.
+- A drag pan is not held inside its display as upstream's pan grab is, and
+  upstream's `continuous` scroll source is never reported: a scroll with
+  precise deltas counts as a finger, anything else as a wheel.
+
+### What has been run of camera motion
+
+`crates/desktop/tests/motion_flow.rs` drives the controller side through the
+exported C ABI in nine scenarios: a flick's drift compared step by step with
+upstream's `MomentumState`, the drift setting, everything that stops a drift,
+an untimed pan never drifting, the pan under a dragged window and its cluster,
+the wait at an edge that borders another output, cursor edge pan with the
+toggle, the wheel zoom and the pinch; `gesture_flow.rs` drives a swipe, a pinch
+and a move gesture into the same code. `tests/e2e/desktop-navigation.sh`, the
+headless coordinator regression, still passes on the new frame tick. The 50 ms
+launch delay (`pan-launch.m`) was run by itself in a throwaway harness: one
+launch 54 ms after a lone pan, none during a burst of pans 10 ms apart and one
+about 50 ms after its last, an immediate launch on an explicit end, and none
+after a cancel.
+
+On 2026-10-09 the app built from these sources (ad-hoc signed, macOS 27.2,
+Apple Silicon) was launched once, for 7.7 seconds, as `--windowed 1100x700`
+with its own `--state`, `--config` and `--socket` on a seeded scene of three
+detached placeholders and driven through `Infinify msg`; nothing from the run
+is saved as evidence. An earlier build of this change had been run the same
+way; what follows is the run of these sources. Observed there:
+
+- a config file setting `drift`, both pan speeds, all six
+  `[navigation.edge_pan]` keys and the three `[zoom]` keys accepted at launch
+  with nothing on stderr;
+- `action toggle-cursor-pan` answering `ok` with exit status 0, twice (until
+  now the action was refused as not implemented). In the half second between
+  the two, while cursor edge pan was on, the camera did not move and the app
+  kept answering. That shows the toggle was accepted and nothing more: the flag
+  was not read back, since nothing on the socket carries it, and whether the
+  shell's pointer reports reached the controller in that time was not
+  observed;
+- the frame tick, which now runs momentum and edge pan before each flight,
+  leaving flights exact: `pan-viewport right` moved the camera from 550 to 690
+  (`pan_step = 140`), `zoom 0.5` then `zoom-in` landed on 0.6 (`step = 1.2`)
+  and `zoom-reset` on 1, `home-toggle` went to the origin and back to
+  690 -318, `zoom-to-fit` to 0.2848… and back, `go-to-bookmark 1` from the
+  origin to the 690 -318 that `set-bookmark 1` had stored, and `camera 0 0` to
+  the origin;
+- the file replaced by rename with another drift, other speeds and edge pan
+  values and `pan_step = 260`: the next `pan-viewport right` moved 260 with no
+  restart, `reload-config` answered `ok`, and stderr stayed empty;
+- `debug-counters` answering, and SIGTERM exiting 0 with the socket removed.
+
+That run was of this change by itself. After
+[trackpad gestures](#trackpad-gestures) were put on the same controller code
+the merged app was launched once more, for about six seconds, in the same way:
+`toggle-cursor-pan` answered `ok` twice again, a file with motion settings and
+a `[gestures]` override loaded and was replaced and reloaded with nothing on
+stderr, and `pan-viewport right` (100 points, then 200 canvas points at zoom
+0.5), `zoom-to-fit` (to 0.2848… and back), `camera 400 -250`, `zoom 0.5` and
+`home-toggle` landed exactly; SIGTERM exited 0 with the socket removed.
+
+Those runs were of a tree without window navigation, hot corners, the event
+stream or managed windows. On this tree the frame is the navigation
+coordinator's tick, and on 2026-10-10 its build was launched once, for 6.9
+seconds, in the same way (private seeded scene of three detached placeholders,
+config and socket, `--windowed 1100x700`, no Screen Recording access, so
+stderr held the not-managed line and nothing else). Observed through
+`Infinify msg`: `state` listing the three windows with the camera at 550 -318;
+`center-nearest right` landing on 1950 0 with the Browser placeholder focused;
+`pan-viewport right` on 2050 0; `zoom-to-fit` on 750 -390 at 0.2848… and back
+on 2050 0 at 1; `home-toggle` on the origin and back on 2050 0; a config file
+with `drift`, both pan speeds, two `[navigation.edge_pan]` keys,
+`zoom.trackpad_speed` and a `[gestures]` override accepted at launch;
+`toggle-cursor-pan` answering `ok` twice with the camera unmoved in the 0.4
+seconds between; `set-trackpad` answering as before; then `pan-viewport left`
+on 1950 0, `center-nearest left` on the Notes placeholder at 520 -360,
+`center-window` staying there at zoom 1, `zoom-in` and `zoom-reset` leaving 1,
+`cycle-windows forward` answering `ok` and changing nothing, and `fit-window`
+refused by name. A `msg --json subscribe` client joined before the two
+`home-toggle` flights and received 46 State lines in the 1.6 seconds they and
+their polling took, no two alike in a row, and 83 by the time the app exited
+on SIGTERM with status 0 and the socket removed. So the flights of both
+milestones land exactly on the one tick and the event stream keeps to a frame's
+pace during them; a drift, an edge pan or a cursor pan was not produced, and
+the stream's pace during one is the controller scenarios' and the shell's
+once-a-frame throttle as read.
+
+Not run at all, because each needs a real scroll, drag or pinch and none can
+be injected: any drift after a flick or a drag, the pan under a dragged window,
+cursor edge pan actually panning, a wheel zoom through the new command or a
+pinch through the gesture commands, any of the config speeds applied to a real gesture, the dropping of
+macOS inertia events, the lift-after-rest rule against real event times, the
+50 ms delay inside the app, and frames being scheduled for a drift. The same
+holds for the rules that only a held button or a second device reaches: the
+pointer not being reported under a held press, a scroll handed over to a
+window with its end and inertia, a scroll under a held drag pan leaving the
+launch to the release, and zoom input dropped during a window drag. Also not
+run: ⌃⌥E as a hot key (`--windowed` registers none), more than one display and
+so the wait at a shared edge, a bound source, and anything drawn. These paths
+are compiled and reviewed only.
 
 ## Persistence and lifecycle
 
@@ -1099,14 +1572,16 @@ is the grammar the config file's bindings use. These run:
 `set-bookmark NAME`, `nudge-window <direction>`, `close-window`,
 `suspend-window`, `send-to-output <direction>`,
 `send-cursor-to-output <direction>`, `switch-layout next|prev|INDEX`,
-`exec COMMAND`, `spawn COMMAND`, `exec-terminal`, `exec-launcher`,
-`reload-config` and `quit`. Over the socket `cycle-windows` is always one
+`toggle-cursor-pan`, `set-trackpad on|off|toggle`, `exec COMMAND`,
+`spawn COMMAND`, `exec-terminal`, `exec-launcher`, `reload-config` and `quit`. Over the socket `cycle-windows` is always one
 committed step, where upstream keeps the cycle open if a modifier happens to be
 down, and `focus-center` uses the real pointer's position at that moment.
-Every action but `cycle-windows` first ends a cycle in progress, as upstream's
-does. `send-cursor-to-output` moves the real pointer and `switch-layout`
+Every action but `cycle-windows` first ends a cycle in progress, and every
+action stops the drift of the display it runs on, as upstream's does. `send-cursor-to-output` moves the real pointer and `switch-layout`
 changes the selected input source, for whoever sends them. `close-window` and
-`suspend-window` press the focused window's own close button. `exec` and `spawn`
+`suspend-window` press the focused window's own close button.
+`toggle-cursor-pan` and `set-trackpad` answer Ok and nothing else, as upstream's
+do: the socket has no request that reads either state back. `exec` and `spawn`
 make the app run
 the command through `/bin/sh -c`, so the socket lets any process of yours that
 can write to it run a command, as upstream's does. Every other upstream action
@@ -1124,8 +1599,9 @@ can send a whole-valued float where upstream requires an integer (`100.0` for
 `100` in `move`) and have it accepted, and a line holding a number such as `1e999`
 answers a bare `invalid request`. `msg` sends neither. Requests
 that move a camera start a flight and answer at once: poll `camera` or `zoom` to
-see it land. A pointer press or pinch on the canvas, or a scroll that pans or
-zooms it, stops a scripted flight where it is, like any other. A client must wait for its reply: a
+see it land. A pointer press on the canvas, a scroll that pans it, or a bound
+trackpad swipe or pinch stops a scripted flight where it is, like any other,
+and a wheel zoom replaces it with its own. A client must wait for its reply: a
 connection whose peer has already closed when the server accepts it is dropped
 unread, where upstream would still run the request.
 
@@ -1292,9 +1768,36 @@ leg or pointer warp). Configuration covers key bindings, mouse bindings and the
 settings listed under [Configuration](#configuration); hot key registration,
 key repeat and every pointer binding are compiled and reviewed but have not
 been exercised in a running app, and neither has a non-US keyboard layout.
-Media keys, tap-modifier bindings, `wheel-up` / `wheel-down`, trackpad and
-touch gestures, and every setting whose feature is absent are read and unused.
-Six of upstream's default key bindings and four of its default mouse
+Drift after a pan, the pan under a dragged window, cursor edge pan and the
+config's pointer pan and zoom speeds ([Camera motion](#camera-motion)) have
+controller test coverage and scripted `msg` sessions that could only reach
+the toggle, a reload of their settings and the flights around them: no real
+scroll, drag, swipe or pinch has been made against them, so how any of it moves
+or feels under a hand is unverified, and that section lists where it knowingly
+differs from DriftWM.
+Media keys, tap-modifier bindings, `wheel-up` / `wheel-down`, touch-screen
+gestures (`[touch.*]`), and every setting whose feature is absent are read and unused.
+Trackpad gestures have not been exercised on a trackpad: no physical gesture
+has been performed. The controller's dispatch has exported-C-ABI/JSON coverage
+with synthetic event streams, and the recogniser has been fed scripted touch
+sequences in throwaway command-line programs (swipes, pinches, holds, taps,
+finger-count changes and cancellations), once with its events passed on to the
+real controller library; none of that left saved evidence, and the app's own
+touch, timer and magnify glue has only been compiled (see
+[Trackpad gestures](#trackpad-gestures)). Whether macOS delivers three- and
+four-finger touches to the non-activating canvas panel, how the recogniser's
+thresholds feel under a hand, and what macOS does with the same fingers at the
+same time are all unverified, as is the two-finger pinch now that it goes
+through the gesture table. macOS's own three- and four-finger gestures must be
+turned off in System Settings by the user for the canvas to receive those
+finger counts cleanly; Infinify changes no setting. Seven of upstream's default
+gesture bindings name four actions that do not run here yet
+(`zoom-to-fit-snapped`, `fit-window`, `fit-window-snapped`,
+`toggle-fullscreen`), its two resize gestures are gated, and an unbound gesture
+is not forwarded to the application under it. The gestures that reach window
+navigation (the four-finger swipe and hold, and any `cycle-windows` a config
+binds) have run only as synthetic event streams against the controller.
+Five of upstream's default key bindings and four of its default mouse
 bindings (three window actions and the pointer `center-nearest` swipe) do not
 run here yet, and its two resize bindings need the experimental flag. Window
 navigation and native focus have their own list of limits under
@@ -1307,7 +1810,7 @@ With the default bindings a detached placeholder
 cannot be dismissed with the pointer alone: a click focuses it, and
 `close-window` (⌃⌥Q, or `msg`) then dismisses it.
 Hot corners are watched by polling the pointer (every 80 ms, 60 times a second
-during a flight), so a pointer that crosses a corner without resting there can
+while a flight, a drift or an edge pan runs), so a pointer that crosses a corner without resting there can
 be missed, and none has been fired on a live run, so the `--windowed` rule that
 a covered window's corners do not fire is unrun as well. `send-to-output` and
 `send-cursor-to-output` have run live only with a single display, where they do
@@ -1377,7 +1880,10 @@ every normal run, `--windowed` included, and not in the fixture modes. Hot keys
 act on the display under the pointer, toolbar buttons on their own display, and
 every one of them goes through the same `action` command as
 `Infinify msg action`, with the pointer's position and whether a modifier is
-physically down added by the shell.
+physically down added by the shell. A [trackpad gesture](#trackpad-gestures)
+bound to one of these actions runs it through the same dispatch: the pointer is
+where the gesture began, and whether a modifier is down is read as the gesture
+fires.
 
 `center-window` is upstream's `RestoreFillElseReset`. Infinify has no fill
 yet, so there is never a stored view to restore and the action always resets
@@ -1385,9 +1891,10 @@ the zoom to 1.
 
 ### Cycling and hold-to-commit
 
-A `cycle-windows` hot key (or hot corner) that fires while any of Control,
+A `cycle-windows` hot key (or hot corner, or a trackpad gesture a config binds
+to it) that fires while any of Control,
 Option, Shift or Command is physically down opens a cycle that stays open: each further press
-steps deeper into the order as it was when the cycle began. While it is open the
+or swipe steps deeper into the order as it was when the cycle began. While it is open the
 shell reads the session's modifier state 60 times a second
 (`CGEventSourceFlagsState`, which needs no event tap and no Input Monitoring
 grant), and at the first reading where the hold modifiers are no longer all
@@ -1443,9 +1950,16 @@ holds focus, all inside 1.5 seconds. Only that window is acted on; no other
 application's window is raised, moved or resized. The result goes back to the
 controller, and only a confirmed focus enters the most-recently-focused order;
 a request the driver tried and failed cancels an open cycle.
-A newer request, a canvas press, a scroll that pans or zooms the canvas, a
-pinch, opening the chooser, adding, rebinding or losing a source, Return to
+A newer request, a canvas press, a scroll that pans or zooms the canvas, the
+begin of a trackpad swipe, pinch or hold over a display, opening the chooser,
+adding, rebinding or losing a source, Return to
 desktop and a display change all withdraw a request that is still in flight.
+Of these only the press also ends an open cycle whose selection has settled: a
+scroll or a trackpad gesture leaves it open until the hold modifiers are let
+go, as upstream does, so a swipe bound to `cycle-windows` can step it. Camera
+flights and drift are another matter: a press stops every display's, and a pan,
+a wheel zoom and a bound swipe or pinch stop or replace only their own
+display's, in the controller ([Camera motion](#camera-motion)).
 
 Native focus is allowed when Infinify has Accessibility access and
 `--no-native-focus` was not given. Access is re-read twice a second, so a grant
@@ -1508,8 +2022,9 @@ committing it; logical focus stays.
 - `auto_navigate_on_click` has no double-click deferral and no title-bar case:
   every completed click on a clipped window pans at once.
 - A press bound to move or resize a window does not focus it, where upstream's
-  does. The pointer form of `center-nearest` (upstream's ⌃⌥⌘-drag swipe) is not
-  implemented; the status line says so.
+  does (a trackpad move gesture does). The pointer form of `center-nearest`
+  (upstream's ⌃⌥⌘-drag swipe) is not implemented; the status line says so. The
+  trackpad form, a four-finger swipe, runs.
 - `focus_follows_mouse` is read from the config and does nothing. Fullscreen,
   fit-window, pinned and modal windows do not exist here, so none of upstream's
   special cases for them apply.
@@ -1591,11 +2106,21 @@ nor the logical-only answer was reached, and no window on the canvas could be
 found frontmost; nothing in the output shows any of those paths doing
 anything.
 
+On 2026-10-10 the build that adds [camera motion](#camera-motion) and
+[trackpad gestures](#trackpad-gestures) to this was launched once in the same
+way: `center-nearest right` and `left`, `center-window` and
+`cycle-windows forward` answered and landed as above
+([the run](#what-has-been-run-of-camera-motion)). A read-only check made in
+that session reported Accessibility access and no Screen Recording access for
+processes it starts, which fits the notes printed and not printed.
+
 Not run at all: native focus of a real window by any route; a window with a
 bound source; any hot key, Option-Tab and the release that commits it; the
 toolbar's Center, Previous and Next; any click, click-to-focus, the reveal at
 a completed click's release, a press that ends a cycle, and the empty-canvas
-unfocus; native focus being followed; the observer withdrawing a request; a
+unfocus; a trackpad gesture that fires one of these actions, or a scroll or
+gesture during a focus request or an open cycle; native focus being followed;
+the observer withdrawing a request; a
 cycle that changes the order in the running app, with native focus or on
 logical focus alone; the status note for missing Accessibility;
 `auto_navigate_on_click` and `reset_on_activation` in the app; anything drawn;

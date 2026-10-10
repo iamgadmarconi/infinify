@@ -505,8 +505,10 @@ impl Controller {
                     .is_err(),
                 None => false,
             };
+        // The drag ends as a release ends it: its edge pan goes with it. A
+        // trackpad move that installed it finds its drag gone and moves nothing.
         if holds {
-            self.gesture = None;
+            self.drop_gesture();
         }
     }
     /// Take a window off the canvas and move the focus as upstream's

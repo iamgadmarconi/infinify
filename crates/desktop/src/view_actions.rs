@@ -131,6 +131,7 @@ impl Controller {
             .next_navigation
             .checked_add(1)
             .ok_or(Error::Invalid("navigation generations exhausted"))?;
+        self.stop_momentum(output);
         self.flights.insert(
             output,
             ViewFlight {
@@ -240,8 +241,9 @@ impl Controller {
         let (viewport, usable) = self.view(output)?;
         let step = self.config().zoom_step;
         let target = policy::snap_zoom((viewport.zoom / step).max(self.min_zoom(usable)?));
-        // Deviation: pinch and scroll zoom keep the static 0.001 floor, so the
-        // pose may already sit below the dynamic minimum. Never zoom in from there.
+        // Deviation: the direct `zoom` command keeps the static 0.001 floor and
+        // moving windows can raise the dynamic minimum, so the pose may already
+        // sit below it. Never zoom in from there.
         if target > viewport.zoom {
             return idle();
         }
@@ -303,6 +305,7 @@ impl Controller {
             .checked_add(1)
             .ok_or(Error::Invalid("navigation generations exhausted"))?;
         let generation = self.next_navigation;
+        self.stop_momentum(output);
         let flight = self.flights.entry(output).or_insert(ViewFlight {
             camera_target: None,
             zoom_target: None,

@@ -6,10 +6,12 @@ mod actions;
 mod bindings;
 mod default_commands;
 mod ffi;
+mod gestures;
 mod ipc;
 mod ipc_client;
 mod keyboard_layout;
 mod lifecycle;
+mod motion;
 mod navigation;
 mod output_actions;
 mod resize_transaction;
@@ -20,8 +22,12 @@ mod window_actions;
 use bindings::Platform;
 pub use bindings::{MacModifiers, PointerContext, PointerTrigger, ScrollSource};
 pub use ffi::*;
+pub use gestures::GestureKind;
+use gestures::{GestureStart, TrackpadGesture};
 use keyboard_layout::KeyboardLayout;
 use lifecycle::{Arrival, Lifecycle};
+use motion::Motion;
+pub use motion::{PanSource, PinchPhase, ZoomSource};
 pub use navigation::{FocusPlacement, ZoomPolicy};
 use navigation::{NavigationContext, ViewFlight};
 pub use output_actions::Corner;
@@ -137,11 +143,18 @@ enum Gesture {
         state: DragGesture,
         zoom: f64,
         output: OutputId,
+        /// The pointer's total displacement, in screen points.
+        delta: Point,
+        /// World distance the camera has edge-panned under the held pointer.
+        carried: Point,
+        /// Which install this is: a move gesture drives only its own.
+        serial: u64,
     },
     Resize {
         state: ResizeGesture,
         zoom: f64,
         output: OutputId,
+        delta: Point,
     },
 }
 /// A request to the native adapter, never evidence that focus changed.
@@ -207,6 +220,16 @@ pub struct Controller {
     last_event: Option<u64>,
     /// Stand-ins, close marks, pending relaunches and the launch adoption pass.
     lifecycle: Lifecycle,
+    /// Momentum, edge pans, cursor edge pan and a `zoom_by` pinch in progress.
+    motion: Motion,
+    /// The trackpad gesture in progress. Ephemeral, and apart from `gesture`,
+    /// the pointer drag or resize a move gesture drives.
+    trackpad_gesture: Option<TrackpadGesture>,
+    /// Upstream's `trackpad_send_events`: a `set-trackpad` of this run, which
+    /// outranks `[input.trackpad] enable`. Never saved.
+    trackpad_override: Option<bool>,
+    /// How many pointer drags have been installed: the serial of the latest.
+    drags: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -448,9 +471,36 @@ pub enum Command {
     Forget {
         window: WindowId,
     },
+    /// With `time_ms` the pan is upstream's drift_pan: scaled as its `source`
+    /// is, and fed to momentum. Without it the camera moves by exactly
+    /// `screen_delta / zoom` and nothing coasts.
     Pan {
         output: OutputId,
         screen_delta: Point,
+        #[serde(default, deserialize_with = "motion::time_ms")]
+        time_ms: Option<u32>,
+        #[serde(default)]
+        source: Option<PanSource>,
+    },
+    /// The fingers lifted or the button was released: launch momentum.
+    PanEnd {
+        output: OutputId,
+        #[serde(default, deserialize_with = "motion::time_ms")]
+        time_ms: Option<u32>,
+    },
+    /// Where the pointer is, for cursor edge pan. No `output` is no output.
+    Pointer {
+        output: Option<OutputId>,
+        screen: Point,
+    },
+    /// Upstream's wheel or pinch zoom around the global screen point `anchor`.
+    ZoomBy {
+        output: OutputId,
+        anchor: Point,
+        delta: f64,
+        source: ZoomSource,
+        #[serde(default)]
+        phase: Option<PinchPhase>,
     },
     Zoom {
         output: OutputId,
@@ -512,8 +562,47 @@ pub enum Command {
     },
     GestureTo {
         screen_delta: Point,
+        /// The pointer's global screen point: a window drag edge-pans by it.
+        #[serde(default)]
+        pointer: Option<Point>,
     },
     EndGesture {},
+    /// A trackpad gesture as libinput reports one: it begins with a finger
+    /// count, where the pointer is and what is held. See GESTURES.md.
+    GestureBegin {
+        kind: GestureKind,
+        fingers: u32,
+        modifiers: MacModifiers,
+        context: PointerContext,
+        output: OutputId,
+        pointer: Point,
+        /// A three-finger tap ended just before this swipe began.
+        #[serde(default)]
+        doubletap: bool,
+        time_ms: f64,
+    },
+    /// A swipe's `dx` and `dy`; a pinch's `scale` since it began. `held` is
+    /// as `action` takes it, for the action this event may fire.
+    GestureUpdate {
+        #[serde(default)]
+        dx: f64,
+        #[serde(default)]
+        dy: f64,
+        #[serde(default = "gestures::unit_scale")]
+        scale: f64,
+        #[serde(default)]
+        rotation: f64,
+        time_ms: f64,
+        #[serde(default)]
+        held: bool,
+    },
+    GestureEnd {
+        #[serde(default)]
+        cancelled: bool,
+        time_ms: f64,
+        #[serde(default)]
+        held: bool,
+    },
     Save {
         path: String,
     },
@@ -607,6 +696,17 @@ impl Controller {
         Ok(source)
     }
     fn apply(&mut self, command: Command) -> Result<Value, Error> {
+        // Upstream's execute_action prelude: a view action stops its output's
+        // scroll momentum whether or not it then arms a flight.
+        if let Command::PanViewport { output, .. }
+        | Command::HomeToggle { output }
+        | Command::ZoomIn { output }
+        | Command::ZoomOut { output }
+        | Command::ZoomReset { output }
+        | Command::ZoomToFit { output } = &command
+        {
+            self.stop_momentum(*output);
+        }
         match command {
             Command::Snapshot {} => return self.snapshot(),
             Command::BeginNativeResize {
@@ -707,7 +807,7 @@ impl Controller {
             Command::TickNavigation { timestamp_ns } => return self.tick_navigation(timestamp_ns),
             Command::CancelNavigation { output } => {
                 self.navigation_context(output)?;
-                self.flights.remove(&output);
+                self.cancel_navigation(output);
             }
             Command::SetNavigationContext {
                 output,
@@ -825,6 +925,7 @@ impl Controller {
                 }
                 self.flights.remove(&id);
                 self.navigation_contexts.remove(&id);
+                self.motion.forget(id);
                 self.outputs.insert(
                     id,
                     SavedOutput {
@@ -846,7 +947,9 @@ impl Controller {
                     .get_mut(&output)
                     .ok_or(Error::Invalid("missing output metadata"))?
                     .viewport = viewport;
-                self.gesture = None;
+                self.drop_gesture();
+                self.motion.forget(output);
+                self.drop_output_gesture(output);
                 if let Some(result) = resize {
                     return Ok(result);
                 }
@@ -1011,7 +1114,7 @@ impl Controller {
                     self.scene.remove_window(window)?;
                     self.metadata.remove(&window);
                 }
-                self.gesture = None;
+                self.drop_gesture();
             }
             Command::Forget { window } => {
                 self.guard_resize_structure(Some(window))?;
@@ -1019,23 +1122,41 @@ impl Controller {
                 self.metadata.remove(&window);
                 self.invalidate_focus(window);
                 self.sources.remove(&window);
-                self.gesture = None;
+                self.drop_gesture();
             }
             Command::Pan {
                 output,
                 screen_delta,
+                time_ms: Some(time_ms),
+                source,
+            } => self.drift_pan(output, screen_delta, time_ms, source)?,
+            // A direct move of the camera: it ends a coast and banks none.
+            Command::Pan {
+                output,
+                screen_delta,
+                time_ms: None,
+                ..
             } => {
-                self.flights.remove(&output);
+                self.cancel_animations(output);
                 self.overview_returns.remove(&output);
                 self.scene.pan(output, screen_delta)?;
                 self.sync_output(output)?;
             }
+            Command::PanEnd { output, time_ms } => return self.pan_end(output, time_ms),
+            Command::Pointer { output, screen } => return self.report_pointer(output, screen),
+            Command::ZoomBy {
+                output,
+                anchor,
+                delta,
+                source,
+                phase,
+            } => return self.zoom_by(output, anchor, delta, source, phase),
             Command::Zoom {
                 output,
                 zoom,
                 anchor,
             } => {
-                self.flights.remove(&output);
+                self.cancel_animations(output);
                 self.overview_returns.remove(&output);
                 self.scene.zoom_at(output, zoom, anchor)?;
                 self.sync_output(output)?;
@@ -1159,26 +1280,7 @@ impl Controller {
                 window,
                 output,
                 group,
-            } => {
-                if self.gesture.is_some() {
-                    return Err(Error::Invalid("gesture already active"));
-                }
-                let zoom = self
-                    .scene
-                    .output(output)
-                    .ok_or(Error::Invalid("unknown output"))?
-                    .zoom;
-                let snap = self.snap(zoom);
-                self.flights.clear();
-                self.gesture = Some(Gesture::Drag {
-                    state: self
-                        .scene
-                        .begin_drag(window, snap.options, snap.break_force, group)?
-                        .with_alignment(snap.corners, snap.centers),
-                    zoom,
-                    output,
-                });
-            }
+            } => self.install_drag(window, output, group)?,
             Command::BeginResize {
                 window,
                 output,
@@ -1195,7 +1297,7 @@ impl Controller {
                     .ok_or(Error::Invalid("unknown output"))?
                     .zoom;
                 let snap = self.snap(zoom);
-                self.flights.clear();
+                self.cancel_animations_everywhere();
                 self.gesture = Some(Gesture::Resize {
                     state: self
                         .scene
@@ -1204,34 +1306,53 @@ impl Controller {
                         .with_same_edge(snap.corners),
                     zoom,
                     output,
+                    delta: Point::default(),
                 });
             }
-            Command::GestureTo { screen_delta } => {
-                if !point_valid(screen_delta) {
-                    return Err(Error::Invalid("invalid gesture delta"));
-                }
-                let output = match self.gesture.as_ref() {
-                    Some(Gesture::Drag { output, .. } | Gesture::Resize { output, .. }) => *output,
-                    None => return Err(Error::Invalid("no active gesture")),
-                };
-                let current_zoom = self
-                    .scene
-                    .output(output)
-                    .ok_or(Error::Invalid("unknown gesture output"))?
-                    .zoom;
-                let snap = self.snap(current_zoom);
-                match self.gesture.as_mut().expect("gesture checked above") {
-                    Gesture::Drag { state, zoom, .. } => {
-                        state.set_snap_distances(snap.options.threshold, snap.break_force)?;
-                        self.scene.drag_to(state, screen_delta / *zoom)?;
-                    }
-                    Gesture::Resize { state, zoom, .. } => {
-                        state.set_snap_distances(snap.options.threshold, snap.break_force)?;
-                        self.scene.resize_to(state, screen_delta / *zoom)?;
-                    }
-                }
+            Command::GestureTo {
+                screen_delta,
+                pointer,
+            } => {
+                self.pointer_gesture_to(screen_delta, pointer)?;
+                return Ok(json!({"needs_frames":self.needs_frames()}));
             }
-            Command::EndGesture {} => self.gesture = None,
+            Command::EndGesture {} => self.drop_gesture(),
+            Command::GestureBegin {
+                kind,
+                fingers,
+                modifiers,
+                context,
+                output,
+                pointer,
+                doubletap,
+                time_ms,
+            } => {
+                return self.gesture_begin(GestureStart {
+                    kind,
+                    fingers,
+                    modifiers,
+                    context,
+                    output,
+                    pointer,
+                    doubletap,
+                    time_ms,
+                });
+            }
+            Command::GestureUpdate {
+                dx,
+                dy,
+                scale,
+                rotation,
+                time_ms,
+                held,
+            } => {
+                return self.gesture_update(Point::new(dx, dy), scale, rotation, time_ms, held);
+            }
+            Command::GestureEnd {
+                cancelled,
+                time_ms,
+                held,
+            } => return self.gesture_end(cancelled, time_ms, held),
             Command::Save { path } => {
                 self.save(&path)?;
             }
@@ -1254,6 +1375,8 @@ impl Controller {
                 loaded.configured = self.configured;
                 loaded.layout = self.layout.clone();
                 loaded.last_event = self.last_event;
+                loaded.motion.cursor_pan = self.motion.cursor_pan;
+                loaded.trackpad_override = self.trackpad_override;
                 if loaded.configured {
                     loaded.seed_bookmarks();
                 }
@@ -1261,6 +1384,73 @@ impl Controller {
             }
         }
         Ok(json!({}))
+    }
+    /// Install the pointer drag of one window, for a bound button press and
+    /// for a move gesture alike. Upstream's grab install cancels every
+    /// output's flight and momentum.
+    fn install_drag(
+        &mut self,
+        window: WindowId,
+        output: OutputId,
+        group: bool,
+    ) -> Result<(), Error> {
+        if self.gesture.is_some() {
+            return Err(Error::Invalid("gesture already active"));
+        }
+        let zoom = self
+            .scene
+            .output(output)
+            .ok_or(Error::Invalid("unknown output"))?
+            .zoom;
+        let snap = self.snap(zoom);
+        self.cancel_animations_everywhere();
+        self.drags += 1;
+        self.gesture = Some(Gesture::Drag {
+            state: self
+                .scene
+                .begin_drag(window, snap.options, snap.break_force, group)?
+                .with_alignment(snap.corners, snap.centers),
+            zoom,
+            output,
+            delta: Point::default(),
+            carried: Point::default(),
+            serial: self.drags,
+        });
+        Ok(())
+    }
+    /// Move the installed drag or resize to a total screen displacement from
+    /// where it began. With `pointer`, the pointer's global screen point, a
+    /// window drag then arms its edge pan, as upstream's move grab does for a
+    /// held button and for a move gesture's warped cursor alike.
+    fn pointer_gesture_to(
+        &mut self,
+        screen_delta: Point,
+        pointer: Option<Point>,
+    ) -> Result<(), Error> {
+        if !point_valid(screen_delta) || pointer.is_some_and(|p| !point_valid(p)) {
+            return Err(Error::Invalid("invalid gesture delta"));
+        }
+        match self.gesture.as_mut() {
+            Some(Gesture::Drag { delta, .. } | Gesture::Resize { delta, .. }) => {
+                *delta = screen_delta;
+            }
+            None => return Err(Error::Invalid("no active gesture")),
+        }
+        self.drive_gesture()?;
+        // Upstream's move grab: place the window, then arm the edge pan.
+        if let (Some(Gesture::Drag { output, .. }), Some(pointer)) =
+            (self.gesture.as_ref(), pointer)
+        {
+            let output = *output;
+            let origin = self
+                .scene
+                .output(output)
+                .ok_or(Error::Invalid("unknown gesture output"))?
+                .screen_bounds
+                .origin;
+            self.arm_drag_edge_pan(output, pointer - origin)?;
+        }
+        Ok(())
     }
     fn check_generation(
         &self,
@@ -1359,6 +1549,40 @@ impl Controller {
             self.focus.logical = None;
         }
     }
+    /// Place the gesture's windows for its last pointer displacement, at the
+    /// zoom the gesture began at. A drag adds the world distance its output
+    /// has edge-panned under the held pointer.
+    fn drive_gesture(&mut self) -> Result<(), Error> {
+        let output = match self.gesture.as_ref() {
+            Some(Gesture::Drag { output, .. } | Gesture::Resize { output, .. }) => *output,
+            None => return Err(Error::Invalid("no active gesture")),
+        };
+        let current_zoom = self
+            .scene
+            .output(output)
+            .ok_or(Error::Invalid("unknown gesture output"))?
+            .zoom;
+        let snap = self.snap(current_zoom);
+        match self.gesture.as_mut().expect("gesture checked above") {
+            Gesture::Drag {
+                state,
+                zoom,
+                delta,
+                carried,
+                ..
+            } => {
+                state.set_snap_distances(snap.options.threshold, snap.break_force)?;
+                self.scene.drag_to(state, *delta / *zoom + *carried)?;
+            }
+            Gesture::Resize {
+                state, zoom, delta, ..
+            } => {
+                state.set_snap_distances(snap.options.threshold, snap.break_force)?;
+                self.scene.resize_to(state, *delta / *zoom)?;
+            }
+        }
+        Ok(())
+    }
     fn sync_output(&mut self, id: OutputId) -> Result<(), Error> {
         self.outputs
             .get_mut(&id)
@@ -1420,8 +1644,12 @@ impl Controller {
             json!({"window": p.window, "output": p.output, "screen_rect": p.screen_rect, "clip_rect": p.clip_rect, "world_local_crop": p.source_rect, "buffer_crop": buffer_crop, "presentation_settled": settled, "source": source})
         }).collect();
         let windows: Vec<_> = self.scene.windows().iter().map(|w| json!({"window": w.id, "world_rect": w.world_rect, "metadata": self.metadata.get(&w.id), "source": self.sources.get(&w.id)})).collect();
+        let mut navigation = json!({"flights": self.flights, "clock_ns": self.navigation_clock, "contexts": self.navigation_contexts, "home_returns": self.home_returns, "overview_returns": self.overview_returns, "active_bookmarks": self.active_bookmarks});
+        for (key, value) in self.motion.snapshot() {
+            navigation[key] = value;
+        }
         Ok(
-            json!({"evidence": "logical_controller_only", "capabilities": ["normal_window_navigation", "native_resize_controller_contract"], "native_resize": self.native_resize, "lifecycle": self.lifecycle, "navigation": {"flights": self.flights, "clock_ns": self.navigation_clock, "contexts": self.navigation_contexts, "home_returns": self.home_returns, "overview_returns": self.overview_returns, "active_bookmarks": self.active_bookmarks}, "bookmarks": self.bookmarks, "keyboard_layout": self.layout, "outputs": self.scene.outputs(), "windows": windows, "focused": self.scene.focused(), "focus": {"intent": self.scene.focused(), "observed_native": self.focus.observed_native, "pending_effect": self.focus.pending_effect, "last_result": self.focus.last_result, "history": self.scene.stage().focus_history(), "cycle": self.scene.stage().cycle_state(), "release_pending": self.focus.release_pending}, "placements": placements}),
+            json!({"evidence": "logical_controller_only", "capabilities": ["normal_window_navigation", "native_resize_controller_contract"], "native_resize": self.native_resize, "lifecycle": self.lifecycle, "navigation": navigation, "bookmarks": self.bookmarks, "keyboard_layout": self.layout, "trackpad": self.trackpad_snapshot(), "outputs": self.scene.outputs(), "windows": windows, "focused": self.scene.focused(), "focus": {"intent": self.scene.focused(), "observed_native": self.focus.observed_native, "pending_effect": self.focus.pending_effect, "last_result": self.focus.last_result, "history": self.scene.stage().focus_history(), "cycle": self.scene.stage().cycle_state(), "release_pending": self.focus.release_pending}, "placements": placements}),
         )
     }
 }

@@ -38,7 +38,10 @@ Preserve them as integers in native code.
 | `observe` | `window`, `identity`, `source_rect`, `buffer` | `{}`; never changes world geometry |
 | `remove_source` | `window`, `identity`, `keep_placeholder` boolean | `{}` |
 | `forget` | `window` | `{}`; removes source and world placeholder |
-| `pan` | `output`, `screen_delta` point | `{}`; positive X reveals world to right |
+| `pan` | `output`, `screen_delta` point, optional `time_ms` and `source` | `{}`; positive X reveals world to right; with `time_ms` it feeds momentum |
+| `pan_end` | `output`, optional `time_ms` | `{needs_frames}`; launches momentum |
+| `pointer` | `output` or null, global `screen` point | `{needs_pointer, needs_frames}`; for cursor edge pan |
+| `zoom_by` | `output`, global `anchor` point, `delta`, `source`, optional `phase` | `{navigation, needs_frames}`; wheel or pinch zoom at the config's speeds |
 | `zoom` | `output`, `zoom` in `[0.001,1]`, global `anchor` point | `{}`; anchor world point stays fixed |
 | `focus` | `window` | `effect` or null; raises logical world z-order |
 | `activate` | `window`, `output` or null, `cause: click / click_release / native`, optional `identity`, `generation` | `effect` or null (absent for `click_release`), `navigation` or null, `dirty`; see [NAVIGATION.md](NAVIGATION.md#activate) |
@@ -47,8 +50,11 @@ Preserve them as integers in native code.
 | `input` | `output`, global `screen` point, expected `identity` | same hit object; rejects absent/unbound/stale target |
 | `begin_drag` | `window`, `output`, optional `group` boolean (default false) | `{}` |
 | `begin_resize` | `window`, `output`, `edges`, optional `group` boolean | `{}` |
-| `gesture_to` | total `screen_delta` from gesture start | `{}` |
+| `gesture_to` | total `screen_delta` from gesture start, optional global `pointer` point | `{needs_frames}`; a drag's `pointer` arms edge pan |
 | `end_gesture` | none | `{}` |
+| `gesture_begin` | `kind`, `fingers`, `modifiers`, `context`, `output`, global `pointer` point, optional `doubletap`, `time_ms` | `{gesture, fired, note, navigation, effects, dirty, needs_frames, trackpad}` |
+| `gesture_update` | optional `dx`, `dy`, `scale`, `rotation`, `held`; `time_ms` | the same |
+| `gesture_end` | optional `cancelled`, `held`; `time_ms` | the same |
 | `snapshot` | none | `outputs`, `windows`, `focused`, `placements`, `lifecycle`, `evidence` |
 | `save` / `load` | explicit caller `path` string | `{}` |
 | `load_config` | `path` string or null | `{path, exists, errors, warnings, dirty, effects}` |
@@ -61,7 +67,9 @@ Preserve them as integers in native code.
 
 See [focus/cycle commands](FOCUS.md) for the additive focus ABI and
 [normal-window navigation](NAVIGATION.md) for camera commands, runtime snapshots,
-and the native frame-clock contract. [Actions, bookmarks and IPC](IPC.md)
+and the native frame-clock contract. [Camera motion](MOTION.md) covers timed
+pans and momentum, edge pan, cursor edge pan and `zoom_by`.
+[Actions, bookmarks and IPC](IPC.md)
 covers the `action`, `ipc` and `state_event` commands, the saved bookmark map,
 the event stream, and the exported `driftwm_desktop_msg` client.
 [Configuration](CONFIG.md) covers the six commands from `load_config` to
@@ -71,6 +79,10 @@ upstream's Linux commands. [Window lifecycle](LIFECYCLE.md) covers a window
 that appears or closes by itself: adoption, placement, stand-ins,
 `window_closed`, `retitle`, `adoption_complete` and the close, suspend and
 relaunch actions.
+[Trackpad gestures](GESTURES.md) covers `gesture_begin`, `gesture_update` and
+`gesture_end`: a libinput-shaped swipe, pinch or hold dispatched against the
+`[gestures]` tables. They are apart from `begin_drag`, `begin_resize`,
+`gesture_to` and `end_gesture`, the pointer's drag and resize below.
 
 ## macOS modifiers
 
@@ -152,7 +164,7 @@ already exist. Loads are bounded at 32 MiB and never modify the input file.
 Verification:
 
 ```sh
-cargo test -p driftwm-desktop --test navigation_flow --test navigation_actions_flow --test focus_cycle_flow --test controller_flow --test config_flow --test lifecycle_flow --locked
+cargo test -p driftwm-desktop --test navigation_flow --test navigation_actions_flow --test focus_cycle_flow --test controller_flow --test config_flow --test lifecycle_flow --test motion_flow --test gesture_flow --locked
 cargo clippy -p driftwm-desktop --all-targets -- -D warnings
 cargo fmt -p driftwm-desktop --check
 cargo build -p driftwm-desktop
