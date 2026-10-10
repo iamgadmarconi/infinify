@@ -287,11 +287,16 @@ window that is neither a widget nor pinned to a screen (`RULES.md`).
   restore point. The pinned leg binds the pin to the other output and clears
   nothing, as upstream's `send_pinned_to_output` clears nothing.
 - **A drag.** `begin_drag`, for a bound press, a pick-mode press and a move
-  gesture alike, refuses in one place and in this order: a widget
-  (`a widget is not moved or resized by hand`), a screen-pinned window
-  (`a screen-pinned window is not moved or resized by hand`), and a window
-  whose sizing action is still owed its size, alone or carried along by a
-  cluster drag (`a native resize of window N is still pending`).
+  gesture alike, decides in one place and in this order: a widget is refused
+  (`a widget is not moved or resized by hand`), a pinned one included; a
+  window whose sizing action is still owed its size is refused, alone or
+  carried along by a cluster drag
+  (`a native resize of window N is still pending`); a screen-pinned window is
+  then dragged [in screen space](RULES.md#dragging-a-pinned-window), and any
+  other window on the canvas. The owed-size guard stands ahead of the pinned
+  drag too and has nothing to refuse there: a pin waits for the transaction
+  (`Pin` answers `resize must drain before structural change; …`), and no
+  size is asked of a pinned window, so a pinned window never owes one.
 - **The pointer.** A size still owed holds the pointer exactly as a resize the
   pointer began: [`hover`](POINTER.md#what-holds-the-pointer) forwards no
   motion and moves no focus until the transaction has drained.
@@ -463,9 +468,10 @@ origin, with `outer_gap`, `resize_step` and `focus_placement` set away from
 their defaults. Nine of its thirty scenarios are the joins of
 [Widgets, screen-pinned windows and rules](#widgets-screen-pinned-windows-and-rules):
 the pass-over of a widget and a pinned window, a pin keeping a fit, what a
-fill, a snapped fit and `zoom-to-fit-snapped` see, the three refusals of a
-drag above and below `zoom.interact_min`, a size still owed holding the
-pointer, a pick's return to a fill view, centring past a pinned window,
+fill, a snapped fit and `zoom-to-fit-snapped` see, a drag above and below
+`zoom.interact_min` (a widget and a window owed its size refused, a pinned
+window dragged in screen space, the pin of a window owed its size refused),
+a size still owed holding the pointer, a pick's return to a fill view, centring past a pinned window,
 `send-to-output`, and a resize drag elsewhere. A rule's `size` is in
 [`tests/rules_flow.rs`](tests/rules_flow.rs).
 

@@ -595,15 +595,16 @@ device-specific behavior also need the corresponding hardware.
   every default launch, and is asked of a new canvas window only behind
   `--experimental-native-resize` (the window sizing milestone below), never
   of a widget or a pinned window; `fullscreen` is recorded and not applied;
-  and `preserve_aspect_ratio`, `pass_keys`,
-  `pass_mouse` and `layer_order` are recorded with no effect (`decoration`
-  and the border, corner and shadow fields are drawn, see the rendering
-  milestone below, and `blur` is frosted, see the effects milestone below);
-  a pinned window
-  cannot be dragged or resized at all, where upstream's move and resize
-  bindings, gestures and title bar move and resize it in screen space and
-  reassign its output when it is dragged across monitors (unimplemented
-  here); a pin leaves a display that is gone only when the shell reports its
+  `preserve_aspect_ratio` is recorded with no effect, and so is
+  `layer_order`, which upstream itself ignores for a regular window
+  (`decoration` and the border, corner and shadow fields are drawn, see the
+  rendering milestone below, `blur` is frosted, see the effects milestone
+  below, and `pass_keys` and `pass_mouse` act, see the pass-through
+  milestone below); a pinned window
+  cannot be resized, and is moved only by the move binding's pointer drag
+  and the move gesture (the pass-through milestone below), where upstream's
+  resize binding, its resize gesture and its title bar also move and resize
+  it in screen space (unimplemented here); a pin leaves a display that is gone only when the shell reports its
   displays settled (`outputs_settled`), where upstream rehomes it at the
   unplug, because the shell removes and re-registers every display on any
   screen change; a window pinned by toggle that closes has no spatial
@@ -623,8 +624,9 @@ device-specific behavior also need the corresponding hardware.
   `cycle-windows` are the canvas windows, `center-nearest` does not anchor on a
   pinned window and `focus-center` passes over one; no completed click and no
   followed native focus flies to either; a move gesture over a widget falls
-  back to a pan and over a pinned window is claimed and inert, and a gesture's
-  drag is released when its slot maps as a widget; `send-to-output` leaves a
+  back to a pan and over a pinned window moves it in screen space (the
+  pass-through milestone below; it was claimed and inert before that), and a
+  gesture's drag is released when its slot maps as a widget; `send-to-output` leaves a
   widget and rebinds a pin to the adjacent display; `toggle-pin-to-screen` and
   `move-to-bookmark` run through the one action dispatch, whose prelude ends
   an open cycle and stops momentum, from keys, IPC, hot corners and gestures;
@@ -934,9 +936,11 @@ device-specific behavior also need the corresponding hardware.
   not the active output's; `pointer_nearest` decides from two points, so it is
   upstream's only because the shell sends it once at the first drag event 16
   points from the press; upstream's exclusions for layer surfaces, fullscreen
-  and modal windows and client resize margins have nothing to apply to, and
-  `pass_mouse` is recorded and never applied; a pinned window is not dragged
-  in screen space, below the threshold or above it; a widget below the
+  and modal windows and client resize margins have nothing to apply to;
+  `pass_mouse` and the screen-space drag of a pinned window, which this
+  milestone by itself did not have, are the pass-through milestone's below,
+  with upstream's pick-mode gate on a claim and a pinned drag that is the
+  same below the threshold as above it; a widget below the
   threshold keeps its pointer input, which follows from `input` refusing pick
   targets only and was not compared with upstream's pointer focus for a
   widget there. See the
@@ -1007,8 +1011,10 @@ device-specific behavior also need the corresponding hardware.
   `zoom.interact_min` returns a filled window to its fill view when that view
   is at or above the threshold (upstream's `resolve_pick`); `center-window`
   and `focus-center` restore a fill view for canvas windows only; a drag is
-  refused in one place for a widget, a pinned window and a window owed its
-  size, each in its own words; a size still owed holds the pointer for
+  decided in one place, refused for a widget and for a window owed its size,
+  each in its own words, and installed in screen space for a pinned window
+  (the pass-through milestone below), which never owes a size; a size still
+  owed holds the pointer for
   `hover` as a resize drag does; the snapshot's `mode` sits beside `widget`,
   `pinned` and `rule`; and the shell hands a reply's size transaction to the
   resize coordinator from one method, for every action, IPC, gesture and
@@ -1198,6 +1204,101 @@ device-specific behavior also need the corresponding hardware.
   [desktop shell notes](../../native/desktop/README.md#blur-window-animations-and-the-error-bar)
   and the [compositor notes](../../native/desktop/COMPOSITOR-NOTES.md),
   Part II.
+- This milestone (commit pending), pass-through and the pinned drag: the rest
+  of upstream's per-window rules, merged with the pointer policy, window
+  sizing and effects above. `pass_keys`: the controller reports in every
+  snapshot what the window that holds the keyboard passes (`null`, `true` or
+  a list of combos, resolved against the config and the title of the moment
+  as upstream's `live_rule_for` does, `null` for a stand-in as upstream skips
+  a suspended window), and marks each key binding `passable`; the shell
+  compares it at every redraw, which every applied reply ends in, a hover's
+  that moved the focus and a pointer command's included, and, when it
+  changed, unregisters the Carbon hot keys of the passed, passable bindings
+  so that macOS delivers the chord to the frontmost application, registering
+  them again when the focus leaves. Nothing is posted or injected, and
+  nothing polls. A window focused by hover (`focus_follows_mouse`) passes
+  once its request is answered or its echo arrives, and the window the
+  pointer left stops passing with the hover itself. `pass_mouse`: the shell
+  names the window under the pointer, and whether it is a pick target, in its
+  binding lookup for a press, a scroll and a wheel notch, and a binding that
+  window's rule claims (upstream's `pass_mouse_claims` through
+  `PassList::allows`, asked only once a binding matched and only in the
+  window context) answers `passed`, which the shell treats as unbound: the
+  press or scroll goes to the application by the existing forward path. Below
+  `[zoom] interact_min` upstream's gate applies: a canvas window, a pick
+  target there, claims nothing, and a screen-pinned window keeps its button
+  claims and loses its scroll and notch claims. Wheel notches: for each event
+  of a discrete wheel the shell now asks `wheel_up` or `wheel_down` first,
+  where upstream's notch site sits, runs an action binding once per line (ten
+  at most) and consumes the event, and otherwise, a passed notch included,
+  goes on to the continuous lookup. The move binding pressed on a
+  screen-pinned window drags it in screen space as upstream's
+  `MoveGrab::new_pinned` and `apply_pinned_move` do: by the pointer's screen
+  displacement whatever the zoom, pick mode included, the frame unclamped,
+  without snapping, cluster or edge pan, the pointer's output taking the pin;
+  a pointer on no output (the shell's is not confined, and its outputs leave
+  out the toolbar strip) is held at the edge of the output the drag is on, as
+  upstream's cursor is, so the frame can leave its output in part and never
+  wholly. The trackpad move gesture over a pinned window installs the same
+  drag and raises and focuses the window, as upstream's
+  `try_start_gesture_move` does for `GestureTarget::Pinned`; the state
+  `swipe_pinned` is gone. `layer_order` is read, shown with the window's rule
+  and listed in `rule.not_applied`: upstream applies it to layer-shell
+  surfaces only and documents it as ignored for regular windows, so the port
+  ignores it as upstream does (an earlier build of this milestone ranked
+  windows by it; that was reverted in the merge). Evidence boundary:
+  `pass_keys`, `pass_mouse`, the notch lookup and the pinned drag by press
+  and by gesture ran only as controller scenarios through the exported C ABI
+  (`crates/desktop/tests/passthrough_flow.rs`, 19, with `rules_flow` 22,
+  `pointer_flow` 16, `sizes_flow` 30 and the neighbouring modules), with
+  synthetic observations. No key was pressed, no hot key was seen being
+  unregistered or registered again, no real window received a passed key,
+  press or scroll, no wheel was turned, and no pointer or swipe dragged a
+  pinned window; the shell's hot key code, its notch site and its hooks were
+  compiled and read only. Two launches of the merged build
+  (`--windowed`, private scene, config and socket, no Screen Recording
+  access, placeholders only, each under 30 seconds) observed a config
+  carrying `pass_keys = true`, `pass_mouse = ["alt+left"]` and
+  `layer_order = 2` in one rule and `"mod+wheel-up" = "zoom-in"` in
+  `[mouse.anywhere]` loading and reloading without a warning, upstream's
+  `invalid key combo` and `invalid mouse combo` warnings for combos the
+  grammar lacks, a pin that the merged controller had dragged in process
+  listed under `State.pinned` at the dragged place before and after a pan,
+  the earlier milestones' navigation, pan, `zoom-to-fit` and
+  `zoom-to-fit-snapped` answering as before, a viewport and a window
+  screenshot, and a clean exit; a windowed run registers no hot keys, no
+  placeholder has a rule, and `msg` has no verb for a press, a scroll, a
+  notch, a hover or a gesture, so the launches reached none of the new
+  behaviour, and a throwaway program reading the same scene and config
+  through the controller in process found `pass_keys` null, no lookup
+  passed and the `mod+wheel-up` notch answered as an action, as the rules
+  for a window without a client and for a bound notch say.
+  Known mismatches: `pass_keys`
+  follows the window whose native focus is settled, not the logical focus
+  alone, and is decided per focus change where upstream decides per key
+  press, so nothing is passed while a request for another window is in
+  flight, failed or unanswered; the exit chord and `quit` are never passed,
+  in the place of upstream's VT switch, where upstream passes its `quit`
+  binding; a pass list matches a binding by its combo text, so of two
+  upstream combos on one physical chord only the one holding the chord
+  passes; with `--no-native-focus` or without Accessibility the released
+  chords go to whatever application is in front; a widget that is not pinned
+  keeps its `pass_mouse` claims below `interact_min`, where upstream's code
+  drops them, because the lookup is not told the pointer's output; a wheel
+  line counts as a notch, with no accumulator for a high-resolution wheel;
+  under Shift, where AppKit hands a wheel's vertical lines over as horizontal
+  ones, the notch is read back from the horizontal axis, so a sideways wheel
+  turned under Shift counts as a notch too, and the continuous lookup is left
+  with the horizontal lines (a shift-qualified wheel zoom does nothing, a pan
+  goes sideways), read off events built in memory and not off a wheel; a
+  pinned window is still not resized, a gesture does not carry one to another
+  output, and a bound press's drag neither raises nor focuses it; a pinned
+  drag's pointer off every output is held in the controller's arithmetic
+  only, the macOS cursor itself going on, so it has to come back to the
+  output's edge before the frame leaves that edge again, where upstream's
+  held cursor moves it at once; media keys are not registered at all.
+  See the [rules contract](../../crates/desktop/RULES.md#pass-rules) and the
+  [desktop shell notes](../../native/desktop/README.md#passing-keys-and-presses-to-an-application).
 
 These milestones add evidence to partial rows. None satisfies an entire native
 behavior row or changes the completion requirement.

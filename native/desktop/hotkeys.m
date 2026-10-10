@@ -59,6 +59,10 @@ static OSStatus hotKeyEvent(EventHandlerCallRef next,EventRef event,void *contex
     NSTimer *_timer;
     UInt32 _repeating; // hot key id whose repeat timer is armed, 0 for none
     NSUInteger _generation;
+    BOOL _passAll; // pass_keys = true
+    NSSet<NSString *> *_passed; // pass_keys' combos
+    NSMutableIndexSet *_withheld; // keys of _keys left unregistered because they are passed
+    UInt32 _down; // hot key id Carbon reported pressed and not yet released, 0 for none
 }
 - (instancetype)initWithFire:(void (^)(NSString *))fire {
     if((self=[super init])){_fire=[fire copy];_keys=@[];_notes=@[];
@@ -87,7 +91,7 @@ static OSStatus hotKeyEvent(EventHandlerCallRef next,EventRef event,void *contex
         NSNumber *chord=DWChord(c,modifiers);NSString *label=[DWModifierGlyphs(modifiers) stringByAppendingString:name];
         if(inert)continue;
         if([taken containsObject:chord]){[notes addObject:[NSString stringWithFormat:@"%@ (%@) is already bound",label,action]];continue;}
-        [taken addObject:chord];[keys addObject:@{@"action":action,@"combo":combo,@"chord":chord,@"modifiers":DWModifierGlyphs(modifiers),@"key":name,@"repeat":@([typed(key[@"repeat"],NSNumber.class)boolValue])}];
+        [taken addObject:chord];[keys addObject:@{@"action":action,@"combo":combo,@"chord":chord,@"modifiers":DWModifierGlyphs(modifiers),@"key":name,@"repeat":@([typed(key[@"repeat"],NSNumber.class)boolValue]),@"passable":@([typed(key[@"passable"],NSNumber.class)boolValue])}];
     }
     _keys=keys;_notes=notes;
 }
@@ -99,22 +103,71 @@ static OSStatus hotKeyEvent(EventHandlerCallRef next,EventRef event,void *contex
     if(_handler)return @[];
     EventTypeSpec types[]={{kEventClassKeyboard,kEventHotKeyPressed},{kEventClassKeyboard,kEventHotKeyReleased}};
     if(InstallApplicationEventHandler(hotKeyEvent,2,types,(__bridge void *)self,&_handler)!=noErr){_handler=NULL;return _keys.count?@[@"every key binding (no hot key handler)"]:@[];}
-    NSMutableArray *refused=[NSMutableArray array];_generation++;_registered=[NSMutableArray array];
+    NSMutableArray *refused=[NSMutableArray array];_generation++;_registered=[NSMutableArray array];_withheld=[NSMutableIndexSet indexSet];
     for(NSUInteger i=0;i<_keys.count;i++){
-        NSDictionary *key=_keys[i];UInt32 chord=[key[@"chord"]unsignedIntValue];EventHotKeyID identifier={'InfB',(UInt32)i+1};EventHotKeyRef reference=NULL;
-        if(RegisterEventHotKey(chord>>16,chord&chordModifiers,identifier,GetApplicationEventTarget(),0,&reference)!=noErr){reference=NULL;[refused addObject:[NSString stringWithFormat:@"%@%@ (%@)",key[@"modifiers"],key[@"key"],key[@"action"]]];}
-        [_registered addObject:[NSValue valueWithPointer:reference]];
+        // A key the focused window is passed is not registered at all: see -pass:.
+        BOOL passed=[self passes:_keys[i]];if(passed)[_withheld addIndex:i];
+        [_registered addObject:[NSValue valueWithPointer:passed?NULL:[self hotKey:i refused:refused]]];
+    }
+    return refused;
+}
+// One key's Carbon hot key, its id the key's place in _keys + 1; NULL, and a line in `refused`, when macOS will not have the chord.
+- (EventHotKeyRef)hotKey:(NSUInteger)i refused:(NSMutableArray<NSString *> *)refused {
+    NSDictionary *key=_keys[i];UInt32 chord=[key[@"chord"]unsignedIntValue];EventHotKeyID identifier={'InfB',(UInt32)i+1};EventHotKeyRef reference=NULL;
+    if(RegisterEventHotKey(chord>>16,chord&chordModifiers,identifier,GetApplicationEventTarget(),0,&reference)!=noErr){reference=NULL;[refused addObject:[NSString stringWithFormat:@"%@%@ (%@)",key[@"modifiers"],key[@"key"],key[@"action"]]];}
+    return reference;
+}
+// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d, src/input/keyboard.rs (the pass_keys
+// arm of the key filter: a combo the focused window's rule allows is forwarded to its client before any binding is
+// looked up). Upstream handles its VT switch ahead of that arm, so that pass_keys = true can never lock the user out
+// of the TTYs. The ways out of this canvas are the exit chord and quit: neither is ever passed, whatever the
+// controller's "passable" says of it, and a key the reply does not mark passable is not passed either.
+- (BOOL)passes:(NSDictionary *)key {
+    if(![key[@"passable"]boolValue]||[key[@"chord"]isEqual:self.kept]||[key[@"action"]isEqual:@"quit"])return NO;
+    return _passAll||[_passed containsObject:key[@"combo"]];
+}
+// A passed key stops being a hot key.
+- (void)withhold:(NSUInteger)i {
+    EventHotKeyRef reference=_registered[i].pointerValue;if(!reference)return;
+    UnregisterEventHotKey(reference);_registered[i]=[NSValue valueWithPointer:NULL];[_withheld addIndex:i];
+}
+// The key Carbon reported down is up, or its chord is over: if it became the window's while it was held, it stops being a hot key now.
+- (void)lift {
+    NSUInteger identifier=_down;_down=0;
+    if(!identifier||!_handler||identifier>_keys.count||![self passes:_keys[identifier-1]])return;
+    if(_repeating==identifier)[self endRepeat];
+    [self withhold:identifier-1];
+}
+- (NSArray<NSString *> *)pass:(id)passKeys {
+    BOOL all=[typed(passKeys,NSNumber.class)isEqual:@YES];NSMutableSet<NSString *> *combos=[NSMutableSet set];
+    if(!all)for(id combo in typed(passKeys,NSArray.class))if(typed(combo,NSString.class))[combos addObject:combo];
+    // Carbon reports the held key's release; a chord whose modifiers are gone is over even if that report never came.
+    if(_down&&_down<=_keys.count){UInt32 modifiers=[_keys[_down-1][@"chord"]unsignedIntValue]&chordModifiers;if((heldModifiers()&modifiers)!=modifiers)[self lift];}
+    if(all==_passAll&&[combos isEqual:_passed?:[NSSet set]])return @[];
+    _passAll=all;_passed=combos;NSMutableArray<NSString *> *refused=[NSMutableArray array];
+    // Not started: -start registers by what is passed then.
+    if(!_handler)return refused;
+    for(NSUInteger i=0;i<_keys.count;i++){
+        // Upstream decides press by press, and a key whose press it intercepted is the compositor's until its release
+        // (keyboard.rs, suppressed_keys). The key that is down now was pressed as a binding: it stays a hot key, and
+        // goes on repeating, until it is let go (-lift), so none of that hold reaches the window.
+        if([self passes:_keys[i]]){if(_down!=i+1)[self withhold:i];}
+        // Only a key this left out comes back: one macOS refused at -start stays refused until the next -start.
+        else if([_withheld containsIndex:i]){[_withheld removeIndex:i];_registered[i]=[NSValue valueWithPointer:[self hotKey:i refused:refused]];}
     }
     return refused;
 }
 - (void)endRepeat { [_timer invalidate];_timer=nil;_repeating=0; }
 - (void)pressed:(UInt32)identifier {
-    [self endRepeat];if(identifier<1||identifier>_keys.count)return;
-    NSDictionary *key=_keys[identifier-1];NSString *action=key[@"action"];NSUInteger generation=_generation;
+    // Another press ends the one before it, whether or not Carbon reported that release.
+    [self endRepeat];[self lift];if(identifier<1||identifier>_keys.count)return;
+    // A press already on its way when its key was passed to the window runs nothing.
+    if(!_registered[identifier-1].pointerValue)return;
+    NSDictionary *key=_keys[identifier-1];NSString *action=key[@"action"];NSUInteger generation=_generation;_down=identifier;
     _fire(action);
     double delay=[typed(_bindings[@"repeat_delay_ms"],NSNumber.class)doubleValue]/1000,rate=[typed(_bindings[@"repeat_rate_hz"],NSNumber.class)doubleValue];
-    // The action may have stopped or replaced the registration it was fired from.
-    if(generation!=_generation||!_handler||![key[@"repeat"]boolValue]||!(rate>0)||!(delay>=0))return;
+    // The action may have stopped or replaced the registration it was fired from, or the key may have been passed and let go meanwhile.
+    if(generation!=_generation||!_handler||!_registered[identifier-1].pointerValue||![key[@"repeat"]boolValue]||!(rate>0)||!(delay>=0))return;
     UInt32 modifiers=[key[@"chord"]unsignedIntValue]&chordModifiers;__weak DWHotKeys *weak=self;_repeating=identifier;
     _timer=[[NSTimer alloc]initWithFireDate:[NSDate dateWithTimeIntervalSinceNow:delay] interval:1/rate repeats:YES block:^(NSTimer *timer){
         DWHotKeys *keys=weak;if(!keys||keys->_timer!=timer){[timer invalidate];return;}
@@ -124,11 +177,11 @@ static OSStatus hotKeyEvent(EventHandlerCallRef next,EventRef event,void *contex
     }];
     [NSRunLoop.mainRunLoop addTimer:_timer forMode:NSRunLoopCommonModes];
 }
-- (void)released:(UInt32)identifier { if(identifier==_repeating)[self endRepeat]; }
+- (void)released:(UInt32)identifier { if(identifier==_repeating)[self endRepeat];if(identifier==_down)[self lift]; }
 - (void)stop {
-    [self endRepeat];_generation++;
+    [self endRepeat];_generation++;_down=0;
     for(NSValue *reference in _registered)if(reference.pointerValue)UnregisterEventHotKey(reference.pointerValue);
-    _registered=nil;if(_handler){RemoveEventHandler(_handler);_handler=NULL;}
+    _registered=nil;_withheld=nil;if(_handler){RemoveEventHandler(_handler);_handler=NULL;}
 }
 - (void)invalidate { [self stop];self.changed=nil;[NSDistributedNotificationCenter.defaultCenter removeObserver:self]; }
 - (void)dealloc { [self stop];[NSDistributedNotificationCenter.defaultCenter removeObserver:self]; }

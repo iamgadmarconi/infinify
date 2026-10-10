@@ -18,15 +18,28 @@
 - (void)setBindings:(NSDictionary *)bindings;
 // Resolved keys, first of a physical chord only, in the reply's order: those the
 // layout resolves, then those that fell back to "key_code". Each has "action",
-// "combo", "chord" (DWChord), "modifiers" (⌃⌥⇧⌘), "key" (A, ←, F5) and "repeat".
+// "combo", "chord" (DWChord), "modifiers" (⌃⌥⇧⌘), "key" (A, ←, F5), "repeat" and
+// "passable" (the reply's; NO when it leaves it out).
 @property (readonly) NSArray<NSDictionary *> *keys;
 // Keys left out by -setBindings:, one line each.
 @property (readonly) NSArray<NSString *> *notes;
 - (BOOL)holds:(NSNumber *)chord;
 // Display chords bound to one action, as "⌃⌥A".
 - (NSArray<NSString *> *)chords:(NSString *)action;
-// Registers every key; returns one line per chord macOS refused. No-op while started.
+// Registers every key that is not passed; returns one line per chord macOS refused. No-op while started.
 - (NSArray<NSString *> *)start;
+// DriftWM's pass_keys: what the focused window's rule passes, as the controller's
+// snapshot says it: true for every key, an array of "combo" strings for those keys,
+// anything else for none. A passed key is not a hot key while it is passed, so macOS
+// delivers the chord to the focused application itself: nothing is posted. Only a key
+// the reply marks "passable" is ever passed, never one on `kept`, and never quit.
+// Takes effect at once while started, except for a key that is down: it was pressed
+// as a binding and stays one, repeat included, until it is released. Holds across
+// -stop, -start and -setBindings: until the next call; the same value again does
+// nothing. Returns one line per chord macOS refused to give back.
+- (NSArray<NSString *> *)pass:(id)passKeys;
+// A chord that stays a hot key whatever is passed: the shell's exit chord.
+@property NSNumber *kept;
 // Ends a running repeat: for the shell, when the command a held key runs cannot be started.
 - (void)endRepeat;
 // Unregisters every key and ends any repeat; the keys stay resolved for -start.

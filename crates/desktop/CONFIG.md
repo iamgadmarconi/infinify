@@ -13,7 +13,7 @@ shapes, `ABI_VERSION` and `SAVE_VERSION` are unchanged.
 | `load_config` | `path` string or `null` | `{path, exists, errors, warnings, dirty, effects, focus_follows_mouse}` |
 | `set_platform` | `super`: a `+`-joined subset of `ctrl`, `alt`, `cmd` | `{super}` in canonical order |
 | `bindings` | none | key bindings as macOS chords, see [Key bindings](#key-bindings) |
-| `mouse_binding` | `trigger`, `source`, `modifiers`, `context`, optional `pick` | `{binding}`, see [Mouse bindings](#mouse-bindings) |
+| `mouse_binding` | `trigger`, `source`, `modifiers`, `context`, optional `window`, optional `pick` | `{binding}`, or `{binding: null, passed: true}`, see [Mouse bindings](#mouse-bindings) |
 | `hot_corner` | `output`, `corner`, optional `pointer`, `held` | `{navigation, effects, dirty}`, see [Hot corners](#hot-corners) |
 | `layout_changed` | `name`, `short`, `index`, `count` | `{}`, see [Keyboard layouts](#keyboard-layouts) |
 
@@ -157,15 +157,16 @@ code, and then unused, because the feature it configures does not exist here:
 - `[[outputs]] scale`, `transform`, `position`, `mode`, and
   `[outputs.hot_corners] disable_when_fullscreen`: macOS arranges the displays
   and there is no fullscreen, see [Outputs](#outputs)
-- of `[[window_rules]]`, `fullscreen`, `pass_keys`, `pass_mouse`,
-  `preserve_aspect_ratio` and `layer_order`, which are recorded with the window
-  and named in its `rule.not_applied`; `size` joins them without the
-  capability, and for a widget or a screen-pinned window with it
+- of `[[window_rules]]`, `fullscreen`, `preserve_aspect_ratio` and
+  `layer_order`, which are recorded with the window and named in its
+  `rule.not_applied`; `size` joins them without the capability, and for a
+  widget or a screen-pinned window with it. `layer_order` is there by
+  upstream's own rule, which ignores it for a regular window
+  ([RULES.md](RULES.md#layer_order)). `pass_keys` and `pass_mouse` are applied
+  ([RULES.md](RULES.md#pass-rules))
 - `[touch.*]` and its thresholds: upstream's touchscreen gestures, see
   [GESTURES.md](GESTURES.md#why-this-path-and-not-the-touch-recogniser)
 - `[mouse] resize_on_border`, `decoration_resize_snapped`, `decoration_fit_snapped`
-- the mouse triggers `wheel-up` and `wheel-down`: `mouse_binding` has no notch
-  direction, so a binding on one is never returned
 - tap-modifier bindings (a bare `alt+shift`): reported and skipped, see below
 
 ## macOS modifiers
@@ -246,8 +247,8 @@ which the user did not ask for.
 
 ```json
 {"keys":[{"key_code":0,"character":"a","modifiers":{"control":true,"option":true,"shift":false,"command":false},
-          "action":"home-toggle","combo":"mod+a","chord":"⌃⌥A","repeat":false,"implemented":true}],
- "media_keys":[{"nx_key_type":16,"modifiers":{…},"action":"spawn …","combo":"XF86AudioPlay","chord":"…","repeat":true,"implemented":true}],
+          "action":"home-toggle","combo":"mod+a","chord":"⌃⌥A","repeat":false,"implemented":true,"passable":true}],
+ "media_keys":[{"nx_key_type":16,"modifiers":{…},"action":"spawn …","combo":"XF86AudioPlay","chord":"…","repeat":true,"implemented":true,"passable":true}],
  "skipped":[{"combo":"Print","action":"spawn grim - | wl-copy","reason":"the key has no macOS equivalent"}],
  "hot_corners":[{"output":1,"stable_id":"…","threshold":4.0,"disable_while_dragging":true,"disable_when_fullscreen":true,"corners":{}}],
  "reserved":[{"purpose":"exit","key_code":53,"modifiers":{…},"claimed_by":null}],
@@ -273,6 +274,10 @@ which the user did not ask for.
   same; registering its chord takes the chord from every app for nothing. The
   five [sizing actions](SIZES.md#the-gate) are implemented only once the shell
   has sent `native_resize_capability`, so the table must be read after it.
+- `passable` is false for the binding on the exit chord and for every `quit`:
+  no window's `pass_keys` takes those. `snapshot.pass_keys` says what the
+  window that holds the keyboard passes, by `combo`
+  ([RULES.md](RULES.md#pass_keys)).
 - `chord` is a display string: the modifiers as glyphs and the US key label.
 - `cycle_hold` is upstream's `Config::cycle_hold` as physical modifiers: the
   modifiers of the `cycle-windows forward` binding, Option when it has none or
@@ -383,16 +388,30 @@ a virtual key code, so nothing registers it as a hot key in either case.
  "modifiers":{"control":true,"option":true,"shift":false,"command":false},"context":"window"}
 ```
 
-- `trigger`: `left`, `right`, `middle`, `back`, `forward` or `scroll`.
-  Upstream's grammar names only the first three buttons, so `back` and
-  `forward` never have a binding.
+- `trigger`: `left`, `right`, `middle`, `back`, `forward`, `scroll`,
+  `wheel_up` or `wheel_down`. Upstream's grammar names only the first three
+  buttons, so `back` and `forward` never have a binding. `wheel_up` and
+  `wheel_down` are upstream's discrete wheel notch (`wheel-up`, `wheel-down`),
+  a lookup apart from `scroll` that answers only a notch bound to an action;
+  a wheel event with no notch binding, or a passed one, is then a `scroll`.
+  The shell asks the notch first for every event of a discrete wheel, in
+  upstream's order, and never for a trackpad's precise scroll
+  ([RULES.md](RULES.md#pass_mouse)).
 - `source`, for `scroll`: `finger` is upstream's `trackpad-scroll`; `wheel`,
   `continuous` and `null` are `wheel-scroll`, as upstream treats every source
   that is not a finger.
 - `modifiers`: the physical modifiers held. A missing member is not held.
 - `context`: `window` when the pointer is over a window, else `canvas`.
+- `window`, optional: the window under the pointer, as `hit` reports it. A
+  binding that window's `pass_mouse` rule claims is discarded and the reply
+  is `{"binding":null,"passed":true}`: the press or scroll is the
+  application's, exactly as an unbound one
+  ([RULES.md](RULES.md#pass_mouse)). Without it, and whenever nothing is
+  claimed, the reply is the one below.
 - `pick`, optional: true when that window is a pick target, as `hit` reports
-  it. The lookup then follows upstream's [pick mode](POINTER.md#pick-mode).
+  it. The lookup then follows upstream's [pick mode](POINTER.md#pick-mode),
+  and the window claims nothing by `pass_mouse`: below `[zoom] interact_min`
+  only a screen-pinned window, never a pick target, keeps its button claims.
 
 The reply is `{"binding":null}` or
 

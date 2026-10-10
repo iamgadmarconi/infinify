@@ -314,15 +314,15 @@ fn without_the_capability_every_sizing_request_answers_as_it_did_before() {
         };
         assert_eq!(
             key("fill-window"),
-            r#"{"action":"fill-window","character":"g","chord":"⌃⌥G","combo":"mod+g","implemented":false,"key_code":5,"modifiers":{"command":false,"control":true,"option":true,"shift":false},"repeat":false}"#
+            r#"{"action":"fill-window","character":"g","chord":"⌃⌥G","combo":"mod+g","implemented":false,"key_code":5,"modifiers":{"command":false,"control":true,"option":true,"shift":false},"passable":true,"repeat":false}"#
         );
         assert_eq!(
             key("fit-window"),
-            r#"{"action":"fit-window","character":"m","chord":"⌃⌥M","combo":"mod+m","implemented":false,"key_code":46,"modifiers":{"command":false,"control":true,"option":true,"shift":false},"repeat":false}"#
+            r#"{"action":"fit-window","character":"m","chord":"⌃⌥M","combo":"mod+m","implemented":false,"key_code":46,"modifiers":{"command":false,"control":true,"option":true,"shift":false},"passable":true,"repeat":false}"#
         );
         assert_eq!(
             key("fit-window-snapped"),
-            r#"{"action":"fit-window-snapped","character":"m","chord":"⌃⌥⇧M","combo":"mod+shift+m","implemented":false,"key_code":46,"modifiers":{"command":false,"control":true,"option":true,"shift":true},"repeat":false}"#
+            r#"{"action":"fit-window-snapped","character":"m","chord":"⌃⌥⇧M","combo":"mod+shift+m","implemented":false,"key_code":46,"modifiers":{"command":false,"control":true,"option":true,"shift":true},"passable":true,"repeat":false}"#
         );
         // A trackpad gesture bound to fit-window fires into the same refusal.
         h.ok(json!({"op":"gesture_begin","kind":"pinch","fingers":2,"modifiers":{"control":false,"option":true,"shift":false,"command":false},"context":"window","output":1,"pointer":{"x":ORIGIN.0+300.0,"y":ORIGIN.1+250.0},"doubletap":false,"time_ms":1000}));
@@ -1726,7 +1726,6 @@ fn the_capability_survives_a_load_and_nothing_of_it_is_saved() {
 const WIDGET_RULE: &str = "[[window_rules]]\napp_id = \"app.widget\"\nwidget = true\n";
 const NO_CANVAS_SIZE: &str = "this window has no canvas size to set: it is pinned, fullscreen, a widget, or not on screen yet";
 const NOT_A_WIDGET: &str = "a widget is not moved or resized by hand";
-const NOT_A_PIN: &str = "a screen-pinned window is not moved or resized by hand";
 fn layered() -> String {
     format!("{CONFIG}{WIDGET_RULE}")
 }
@@ -1936,13 +1935,16 @@ fn a_fill_a_shove_and_a_snapped_zoom_see_only_the_windows_that_snap() {
     assert_eq!(reply["navigation"]["target_zoom"], fit);
 }
 
-// install_drag holds three rules in one place, each with its own refusal: a
-// widget and a screen-pinned window are not dragged, a window whose sizing
-// action is still owed its size is placed by that action's plan, and below
-// `zoom.interact_min` the same install serves a pick-mode press, under the
-// same two rules.
+// install_drag holds four rules in one place, each with its own behaviour: a
+// widget is not dragged; a screen-pinned window is, in screen space and so by
+// the pointer's own displacement whatever the zoom; a window whose sizing
+// action is still owed its size is placed by that action's plan, and no drag
+// of it is installed; and below `zoom.interact_min` the same install serves a
+// pick-mode press, under the same rules. The plan's guard stands ahead of the
+// pinned drag as of any other, and has nothing to refuse there: a pin waits
+// for the transaction, so a pinned window never owes a size.
 #[test]
-fn a_drag_is_refused_for_a_layer_and_for_a_pending_plan_in_pick_mode_too() {
+fn a_drag_is_refused_for_a_widget_and_for_a_pending_plan_in_pick_mode_too() {
     let config = format!("{}[zoom]\ninteract_min = 0.5\n", layered());
     let mut h = capable(one(&config));
     attach(&mut h, 2, (512.0, 100.0, 200.0, 300.0));
@@ -1958,7 +1960,7 @@ fn a_drag_is_refused_for_a_layer_and_for_a_pending_plan_in_pick_mode_too() {
         }
         assert_eq!(h.snapshot()["outputs"][0]["pick"], pick);
         assert_eq!(h.error(drag(widget, false)), NOT_A_WIDGET);
-        assert_eq!(h.error(drag(4, false)), NOT_A_PIN);
+        pinned_drag(&mut h, false);
         // A sizing plan still owed its size: the window, and the cluster
         // drag that would carry it along, are refused in the plan's words.
         let size = world(&mut h, 1)["size"].clone();
@@ -1970,7 +1972,15 @@ fn a_drag_is_refused_for_a_layer_and_for_a_pending_plan_in_pick_mode_too() {
         assert_eq!(h.error(drag(1, false)), BUSY);
         assert_eq!(h.error(drag(2, true)), BUSY);
         assert_eq!(h.error(drag(widget, false)), NOT_A_WIDGET);
-        assert_eq!(h.error(drag(4, false)), NOT_A_PIN);
+        // The pinned window is not the plan's, alone or as a cluster drag: it
+        // has no cluster. And the plan's own window cannot become a pinned one
+        // while its size is owed, so no pinned drag ever meets the guard.
+        pinned_drag(&mut h, true);
+        assert_eq!(
+            ipc(&mut h, json!({"Pin":{"window":1,"value":true}}))["reply"],
+            json!({"Err":DRAINING})
+        );
+        assert_eq!(window(&mut h, 1)["pinned"], Value::Null);
         // The neighbour alone is not the plan's to place.
         h.ok(drag(2, false));
         h.ok(json!({"op":"end_gesture"}));
@@ -1980,6 +1990,31 @@ fn a_drag_is_refused_for_a_layer_and_for_a_pending_plan_in_pick_mode_too() {
         h.ok(drag(1, false));
         h.ok(json!({"op":"end_gesture"}));
     }
+}
+
+const DRAINING: &str =
+    "resize must drain before structural change; cancel and reconcile pending effects";
+/// Window 4, pinned, dragged by (12, -8) screen points and back: its pin
+/// moves by exactly that, at any zoom.
+fn pinned_drag(h: &mut Host, group: bool) {
+    let rect_of = |h: &mut Host| window(h, 4)["pinned"]["screen_rect"].clone();
+    let before = rect_of(h);
+    let (x, y) = (
+        before["origin"]["x"].as_f64().unwrap(),
+        before["origin"]["y"].as_f64().unwrap(),
+    );
+    h.ok(json!({"op":"begin_drag","window":4,"output":1,"group":group}));
+    h.ok(json!({"op":"gesture_to","screen_delta":{"x":12.0,"y":-8.0}}));
+    let moved = rect_of(h);
+    assert_eq!(
+        moved["origin"],
+        json!({"x":x + 12.0,"y":y - 8.0}),
+        "{moved}"
+    );
+    assert_eq!(moved["size"], before["size"]);
+    h.ok(json!({"op":"gesture_to","screen_delta":{"x":0.0,"y":0.0}}));
+    h.ok(json!({"op":"end_gesture"}));
+    assert_eq!(rect_of(h), before);
 }
 
 // Pointer policy's grab guard reads the resize slot, whoever filled it: while a

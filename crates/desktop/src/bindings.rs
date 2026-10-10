@@ -28,6 +28,7 @@
 //! its macOS equivalent or left out; see `default_commands`.
 use super::actions::action_string;
 use super::default_commands::{Equivalent, SearchPath, equivalent, program};
+use super::passthrough::passable;
 use super::*;
 use driftwm_core::config::{
     Action, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, Config, ModKey, Modifiers, MouseAction, MouseBinding,
@@ -41,7 +42,7 @@ use driftwm_core::platform::input::keyboard::{Keysym, ModifiersState, keysyms as
 const BTN_SIDE: u32 = 0x113;
 const BTN_EXTRA: u32 = 0x114;
 /// `kVK_Escape`, the key of the shell's exit chord.
-const EXIT_KEY_CODE: u16 = 0x35;
+pub(crate) const EXIT_KEY_CODE: u16 = 0x35;
 
 /// The physical modifiers of a macOS chord.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -79,6 +80,10 @@ pub enum PointerTrigger {
     Back,
     Forward,
     Scroll,
+    /// One wheel notch away from the user, and one toward: upstream's
+    /// discrete `wheel-up` and `wheel-down`, a lookup of their own.
+    WheelUp,
+    WheelDown,
 }
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -355,6 +360,12 @@ const KEYS: &[Key] = &[
 pub(crate) fn key_known(keysym: u32) -> bool {
     KEYS.iter().any(|key| key.sym == keysym)
 }
+/// Upstream's name of a keysym of the key table, as a combo spells it.
+pub(crate) fn key_name(keysym: u32) -> Option<&'static str> {
+    KEYS.iter()
+        .find(|key| key.sym == keysym)
+        .map(|key| key.name)
+}
 
 /// The 32 modifier sets a binding can hold.
 fn modifier_sets() -> impl Iterator<Item = Modifiers> {
@@ -366,7 +377,7 @@ fn modifier_sets() -> impl Iterator<Item = Modifiers> {
         mod3: bits & 16 != 0,
     })
 }
-fn state(modifiers: &Modifiers) -> ModifiersState {
+pub(crate) fn state(modifiers: &Modifiers) -> ModifiersState {
     ModifiersState {
         ctrl: modifiers.ctrl,
         alt: modifiers.alt,
@@ -378,7 +389,7 @@ fn state(modifiers: &Modifiers) -> ModifiersState {
 }
 /// A modifier set followed by a key or trigger name, as a config file spells
 /// it: the mod key's own modifier is `mod`, the others keep their names.
-fn combo_text(modifiers: &Modifiers, mod_key: ModKey, last: Option<&str>) -> String {
+pub(crate) fn combo_text(modifiers: &Modifiers, mod_key: ModKey, last: Option<&str>) -> String {
     let base = |key: ModKey| mod_key == key;
     [
         (
@@ -560,6 +571,7 @@ impl Controller {
                 "repeat":action.is_repeatable() && stalled.is_none(),
                 "implemented":self.runs(action),
             });
+            entry["passable"] = json!(passable(action, is_media, key, chord));
             if substitute.is_some() {
                 entry["upstream"] = json!(action_string(bound.action));
             }
@@ -635,8 +647,10 @@ impl Controller {
         source: Option<ScrollSource>,
         modifiers: MacModifiers,
         context: PointerContext,
+        window: Option<WindowId>,
     ) -> Value {
         let config = self.config();
+        let notch = matches!(trigger, PointerTrigger::WheelUp | PointerTrigger::WheelDown);
         let (trigger, name) = match trigger {
             PointerTrigger::Left => (MouseTrigger::Button(BTN_LEFT), "left"),
             PointerTrigger::Right => (MouseTrigger::Button(BTN_RIGHT), "right"),
@@ -658,6 +672,8 @@ impl Controller {
                     "wheel-scroll",
                 ),
             },
+            PointerTrigger::WheelUp => (MouseTrigger::for_wheel_step(true), "wheel-up"),
+            PointerTrigger::WheelDown => (MouseTrigger::for_wheel_step(false), "wheel-down"),
         };
         let own = match context {
             PointerContext::Window => &config.mouse.on_window,
@@ -670,10 +686,20 @@ impl Controller {
                     modifiers: set.clone(),
                     trigger: trigger.clone(),
                 };
-                Some((combo, table.get(&key)?))
+                Some((combo, set, table.get(&key)?))
             })
         });
-        let binding = found.map(|(combo, bound)| {
+        // Upstream's notch site takes an action and nothing else: any other
+        // binding on a notch is left to the continuous scroll lookup.
+        let found = found.filter(|(_, _, bound)| !notch || matches!(bound, MouseAction::Action(_)));
+        // Upstream `pass_mouse`: a binding the window under the pointer claims
+        // is discarded, and the press or scroll is the application's.
+        if let Some((_, set, _)) = found
+            && self.pass_mouse_claims(window, context, set, trigger.clone())
+        {
+            return json!({"binding":null,"passed":true});
+        }
+        let binding = found.map(|(combo, _, bound)| {
             let (kind, action) = match bound {
                 MouseAction::MoveWindow => ("move_window", None),
                 MouseAction::MoveSnappedWindows => ("move_snapped_windows", None),

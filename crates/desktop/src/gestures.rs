@@ -9,13 +9,14 @@
 // (effective_send_events). The gesture table, the thresholds and
 // `direction_from_vector` are driftwm-core's, upstream's own code. Not
 // adapted: forwarding an unbound gesture to a client, the fullscreen legs, the
-// pointer warps, the pinned and cross-output legs of a move, and the resize
-// grab, which is gated here. gesture_target_under is adapted as far as that
-// goes: a widget is grab-proof and a screen-pinned window is claimed and left
-// where it is (RULES.md). What a continuous gesture drives is motion.rs's:
-// a swipe pan is its timed pan (upstream's drift_pan_on) and its end is its
-// pan_end (launch_momentum_on), a pinch zoom is its pinch, and a move is the
-// pointer's own drag with its edge pan. The pending middle click and the
+// pointer warps, the cross-output leg of a move, and the resize grab, which
+// is gated here. gesture_target_under is adapted: a widget is grab-proof and
+// a screen-pinned window is a target of its own, moved in screen space by the
+// pinned drag a bound press installs (passthrough.rs). What a continuous
+// gesture drives is motion.rs's: a swipe pan is its timed pan (upstream's
+// drift_pan_on) and its end is its pan_end (launch_momentum_on), a pinch zoom
+// is its pinch, and a move is the pointer's own drag, a canvas window's with
+// its edge pan. The pending middle click and the
 // set-trackpad action arm live in upstream files this port did not read:
 // set-trackpad is taken from device_config.rs and docs/config.md.
 //! Upstream's trackpad gesture dispatch, driven by libinput-shaped events.
@@ -36,8 +37,6 @@ use driftwm_core::input::gestures::direction_from_vector;
 
 const RESIZE_NOTE: &str =
     "resize by gesture is not implemented on macOS yet: native layout resize is not available";
-const PINNED_NOTE: &str =
-    "a screen-pinned window is not moved by gesture: unpin it first (toggle-pin-to-screen)";
 
 /// The gesture libinput would have reported.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -69,7 +68,8 @@ enum GestureState {
     /// Continuous swipe: the camera follows through the output's timed pan,
     /// and its momentum launches when the swipe ends.
     SwipePan,
-    /// The swipe drives the pointer drag it installed, `drag`. `at` is the
+    /// The swipe drives the pointer drag it installed, `drag`: a canvas
+    /// window's, or a screen-pinned window's in screen space. `at` is the
     /// virtual pointer, a global screen point, where upstream warps its cursor.
     SwipeMove {
         window: WindowId,
@@ -78,9 +78,6 @@ enum GestureState {
     },
     /// Upstream's resize grab. Native layout resize is gated, so it is inert.
     SwipeResize { window: WindowId },
-    /// Upstream's screen-space move of a pinned window, which is not adapted:
-    /// the gesture is claimed, pans nothing and moves nothing.
-    SwipePinned { window: WindowId },
     /// Accumulate the physical finger vector, pick a direction, fire once.
     SwipeThreshold {
         cumulative: Point,
@@ -113,7 +110,6 @@ impl GestureState {
             Self::SwipePan => "swipe_pan",
             Self::SwipeMove { .. } => "swipe_move",
             Self::SwipeResize { .. } => "swipe_resize",
-            Self::SwipePinned { .. } => "swipe_pinned",
             Self::SwipeThreshold { .. } => "swipe_threshold",
             Self::PinchZoom { .. } => "pinch_zoom",
             Self::PinchThreshold { .. } => "pinch_threshold",
@@ -123,9 +119,7 @@ impl GestureState {
     }
     fn window(&self) -> Option<WindowId> {
         match self {
-            Self::SwipeMove { window, .. }
-            | Self::SwipeResize { window }
-            | Self::SwipePinned { window } => Some(*window),
+            Self::SwipeMove { window, .. } | Self::SwipeResize { window } => Some(*window),
             _ => None,
         }
     }
@@ -302,17 +296,19 @@ impl Controller {
     /// in the order a press resolves (`hit_window`): the windows pinned to the
     /// output, the canvas windows, the widgets. A widget is grab-proof and
     /// ends the search: `None`, as for empty canvas, and nothing beneath it is
-    /// reached. The flag says the window is screen-pinned.
-    fn gesture_target(&self, output: OutputId, pointer: Point) -> Option<(WindowId, bool)> {
+    /// reached.
+    fn gesture_target(&self, output: OutputId, pointer: Point) -> Option<WindowId> {
         let (window, _) = self.hit_window(output, pointer)?;
-        (!self.is_widget(window)).then(|| (window, self.is_pinned(window)))
+        (!self.is_widget(window)).then_some(window)
     }
-    /// Upstream try_start_gesture_move: focus and raise the window under the
-    /// pointer and install the drag a bound button press installs. `None` when
-    /// nothing draggable is there, a widget included, so the caller can fall
-    /// back to pan. A screen-pinned window is refused as `begin_drag` refuses
-    /// it: upstream moves it in screen space, which is not adapted, so the
-    /// gesture is claimed and left inert, and nothing is raised or focused.
+    /// Upstream try_start_gesture_move: install the drag a bound button press
+    /// installs on the window under the pointer, then focus and raise it.
+    /// `None` when nothing draggable is there, a widget included, so the
+    /// caller can fall back to pan. A screen-pinned window gets the pinned
+    /// drag, in screen space (upstream's GestureTarget::Pinned arm:
+    /// start_pinned_move, then raise_and_focus, then the same SwipeMove
+    /// state); `cluster` means nothing to it. The drag comes first, as
+    /// upstream's does: a move that is refused raises and focuses nothing.
     fn try_start_move(
         &mut self,
         output: OutputId,
@@ -323,13 +319,9 @@ impl Controller {
         if self.gesture.is_some() {
             return Ok(None);
         }
-        let Some((window, pinned)) = self.gesture_target(output, pointer) else {
+        let Some(window) = self.gesture_target(output, pointer) else {
             return Ok(None);
         };
-        if pinned {
-            report.note = Some(PINNED_NOTE);
-            return Ok(Some(GestureState::SwipePinned { window }));
-        }
         self.install_drag(window, output, cluster)?;
         let effect = self.raise_and_focus(window)?.effect;
         if !effect.is_null() {
@@ -344,7 +336,11 @@ impl Controller {
     /// Is the installed pointer drag still the one a move gesture installed?
     /// The pointer path may have ended it and begun a drag of its own.
     fn drives(&self, drag: u64) -> bool {
-        matches!(self.gesture, Some(Gesture::Drag { serial, .. }) if serial == drag)
+        match &self.gesture {
+            Some(Gesture::Drag { serial, .. }) => *serial == drag,
+            Some(Gesture::Pinned(pinned)) => pinned.serial == drag,
+            _ => false,
+        }
     }
     /// Upstream try_start_gesture_resize, gated: over a window, screen-pinned
     /// or not, the gesture is claimed and does nothing, and elsewhere, over a
@@ -355,7 +351,7 @@ impl Controller {
         pointer: Point,
         report: &mut Report,
     ) -> Option<GestureState> {
-        let (window, _) = self.gesture_target(output, pointer)?;
+        let window = self.gesture_target(output, pointer)?;
         report.note = Some(RESIZE_NOTE);
         Some(GestureState::SwipeResize { window })
     }
@@ -668,7 +664,6 @@ impl Controller {
                 }
             }
             GestureState::SwipeResize { .. }
-            | GestureState::SwipePinned { .. }
             | GestureState::HoldAction { .. }
             | GestureState::Unbound => {}
         }
@@ -739,7 +734,6 @@ impl Controller {
                 }
             }
             GestureState::SwipeResize { .. }
-            | GestureState::SwipePinned { .. }
             | GestureState::SwipeThreshold { .. }
             | GestureState::PinchThreshold { .. }
             | GestureState::Unbound => {}

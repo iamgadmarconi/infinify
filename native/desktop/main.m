@@ -277,6 +277,7 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 @property BOOL dismissFree; // no binding claims ⌃⌥-click on a window
 - (void)loadConfig:(BOOL)platform;
 - (NSDictionary *)mouseBinding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window;
+- (NSDictionary *)mouseBinding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window under:(NSNumber *)under pick:(BOOL)pick;
 // Normal runs only: trackpad gestures by DriftWM's [gestures] tables. Three or more
 // fingers arrive as raw touches, and DWTrackpadGestures makes libinput's swipe, pinch
 // and hold of them; a two-finger pinch is AppKit's magnify stream. The controller
@@ -372,7 +373,6 @@ static const NSInteger DWPolicyPress=9;
 @end
 @interface Desktop ()
 @property BOOL hoverUndelivered; // --no-hover-forwarding: pointer motion never reaches an application
-- (NSDictionary *)mouseBinding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window pick:(BOOL)pick;
 @end
 @implementation DesktopView (Pointer)
 // Hover asks once a frame, and what the controller refuses it is not news for the status line.
@@ -499,6 +499,9 @@ static BOOL sourceGone(LiveSource *source,NSDictionary *info) { return ![birth(s
     }
     [CATransaction commit];self.status.stringValue=self.desktop.statusText?:@"";for(NSNumber *window in invalidate)[self.desktop.resize invalidate:window];
 }
+// The window of a hit the controller reported, for the binding lookup of a press or scroll over it. A stand-in's hit is
+// built in -hit:output: and names none: upstream's pass_mouse_target_under answers only a client's content.
+static NSNumber *liveHit(NSDictionary *hit) { return [hit[@"placeholder"]isEqual:@YES]?nil:asNumber(hit[@"window"]); }
 - (NSDictionary *)hit:(CGPoint)p output:(NSNumber *)output {
     // Controller input intentionally rejects placeholders. Find their geometry only
     // for the explicit dismiss action; this result never authorizes native delivery.
@@ -551,7 +554,10 @@ static BOOL sourceGone(LiveSource *source,NSDictionary *info) { return ![birth(s
 // under the pointer. An unbound press on empty canvas means nothing to upstream either.
 - (void)press:(NSEvent *)e button:(NSInteger)button hit:(NSDictionary *)hit at:(CGPoint)p output:(NSNumber *)output {
     NSArray<NSString *> *triggers=@[@"left",@"right",@"middle",@"back",@"forward"];LiveSource *source=hit?self.desktop.sources[hit[@"window"]]:nil;self.lastScrollPan=0;self.clearsFocus=NO;
-    NSDictionary *binding=button<(NSInteger)triggers.count?[self.desktop mouseBinding:triggers[button] source:nil flags:e.modifierFlags window:hit!=nil pick:[hit[@"pick"]isEqual:@YES]]:nil;NSString *kind=asString(binding[@"kind"]),*action=asString(binding[@"action"]);
+    // One lookup says all of it: the binding, or nil for none, for one the window under the pointer claims by its pass_mouse rule, and
+    // over a pick target for a button whose modifiers are not held. A pick target claims nothing; a pinned window is never one, and keeps
+    // its button claims below [zoom] interact_min (upstream's try_pinned_button, which stands ahead of try_pick_button).
+    NSDictionary *binding=button<(NSInteger)triggers.count?[self.desktop mouseBinding:triggers[button] source:nil flags:e.modifierFlags window:hit!=nil under:liveHit(hit) pick:[hit[@"pick"]isEqual:@YES]]:nil;NSString *kind=asString(binding[@"kind"]),*action=asString(binding[@"action"]);
     BOOL move=[kind isEqual:@"move_window"]||[kind isEqual:@"move_snapped_windows"],resize=[kind isEqual:@"resize_window"]||[kind isEqual:@"resize_window_snapped"];
     // Upstream try_pick_button, ahead of everything but a binding whose modifiers are held, which is the only kind the
     // lookup answers over a pick target: below [zoom] interact_min a window or placeholder is one target, whatever the
@@ -561,9 +567,9 @@ static BOOL sourceGone(LiveSource *source,NSDictionary *info) { return ![birth(s
     if(!binding&&!button&&hit&&!source&&(e.modifierFlags&NSEventModifierFlagControl)&&(e.modifierFlags&NSEventModifierFlagOption)){[self.desktop call:@{@"op":@"forget",@"window":hit[@"window"]}];[self.desktop render];[self.desktop saveScene];return;}
     // A widget ignores drags and resizes, as upstream's does: the bound press starts no gesture and goes to the widget as a plain click (upstream's move and resize arms fall through to click-to-focus and forward it).
     if((move||resize)&&[asNumber(hit[@"widget"])boolValue]){[self.desktop flashStatus:@"A widget stays where its rule puts it: drags and resizes are ignored"];move=resize=NO;}
-    // Upstream drags and resizes a pinned window in screen space; that is not implemented, and the controller refuses both: it stays where it is until it is unpinned, and the press is swallowed.
-    if((move||resize)&&[asNumber(hit[@"pinned"])boolValue])[self.desktop flashStatus:@"A screen-pinned window is not moved or resized: unpin it first (toggle-pin-to-screen)"];
-    else if(move&&hit){if([self.desktop call:@{@"op":@"begin_drag",@"window":hit[@"window"],@"output":output,@"group":@([kind isEqual:@"move_snapped_windows"])}])self.gesture=2;}
+    // Upstream drags and resizes a pinned window in screen space. The move is the controller's begin_drag like any window's, which moves the pin by the pointer's screen delta; the resize is not implemented and the controller refuses it: the press is swallowed.
+    if(resize&&[asNumber(hit[@"pinned"])boolValue])[self.desktop flashStatus:@"A screen-pinned window is not resized: unpin it first (toggle-pin-to-screen)"];
+    else if(move&&hit){if([self.desktop call:@{@"op":@"begin_drag",@"window":hit[@"window"],@"output":output,@"group":[kind isEqual:@"move_snapped_windows"]?@YES:@NO}])self.gesture=2;}
     else if(resize&&hit)[self beginResize:hit[@"window"] snapped:[kind isEqual:@"resize_window_snapped"] at:p output:output];
     // Upstream's pan grab remembers that it began on empty canvas: released without a drag, it unfocuses.
     else if([kind isEqual:@"pan_viewport"]){self.gesture=1;self.clearsFocus=!hit;}
@@ -711,12 +717,29 @@ static BOOL sourceGone(LiveSource *source,NSDictionary *info) { return ![birth(s
     // A swipe or pinch of three or more fingers is the recogniser's: a scroll macOS makes of the same fingers pans nothing.
     if(precise&&[self.desktop padBusy:e])return;
     // Upstream keeps a finger pan on the canvas for 150 ms, so a window sliding under the pointer cannot take the gesture.
-    BOOL panning=self.lastScrollPan&&CACurrentMediaTime()-self.lastScrollPan<.15;NSDictionary *under=panning?nil:asDict([self hit:p output:output]);BOOL window=under!=nil,pick=[under[@"pick"]isEqual:@YES];
-    NSDictionary *binding=[self.desktop mouseBinding:@"scroll" source:source flags:e.modifierFlags window:window pick:pick];NSString *kind=asString(binding[@"kind"]);
+    BOOL panning=self.lastScrollPan&&CACurrentMediaTime()-self.lastScrollPan<.15;NSDictionary *here=precise&&panning?nil:asDict([self hit:p output:output]);
+    // Upstream's wheel-notch site (on_pointer_axis), ahead of the continuous lookup and for a wheel only: a finger has no notches. Its
+    // context is the pointer's own, without the 150 ms canvas lock below. A notch bound to an action runs it once per notch, ten at most
+    // for one event, and the event is consumed: it reaches no window and neither pans nor zooms. Any other answer (no notch binding, one
+    // that is no action, one the window under the pointer claims by pass_mouse, which the lookup returns as none) leaves the event to the
+    // continuous lookup, as upstream falls through. A wheel line is a notch here, as it is for the zoom: macOS reports whole lines.
+    // While Shift is held AppKit hands a wheel's vertical lines over as horizontal ones (axis 1 is 0, axis 2 has them, sign kept), where
+    // upstream's wheel stays vertical under any modifier: the notch is read back from axis 2 then, so a shift-qualified notch binding and
+    // its claim are asked. A sideways wheel turned under Shift arrives as the same event and counts as a notch too, which upstream's does not.
+    if(!precise&&e.CGEvent){
+        int64_t lines=CGEventGetIntegerValueField(e.CGEvent,kCGScrollWheelEventDeltaAxis1);
+        if(!lines&&(e.modifierFlags&NSEventModifierFlagShift))lines=CGEventGetIntegerValueField(e.CGEvent,kCGScrollWheelEventDeltaAxis2);
+        if(lines){
+            NSDictionary *notch=[self.desktop mouseBinding:lines>0?@"wheel_up":@"wheel_down" source:nil flags:e.modifierFlags window:here!=nil under:liveHit(here) pick:[here[@"pick"]isEqual:@YES]];NSString *run=[asString(notch[@"kind"])isEqual:@"action"]?asString(notch[@"action"]):nil;
+            if(run){int64_t notches=MIN(llabs(lines),10);BOOL held=[DWCycleHold modifiersDown]!=0;for(int64_t i=0;i<notches;i++)[self.desktop action:run output:output at:p held:held];return;}
+        }
+    }
+    NSDictionary *under=panning?nil:here;BOOL window=under!=nil,pick=[under[@"pick"]isEqual:@YES];
+    NSDictionary *binding=[self.desktop mouseBinding:@"scroll" source:source flags:e.modifierFlags window:window under:liveHit(under) pick:pick];NSString *kind=asString(binding[@"kind"]);
     // Upstream on_pointer_axis below [zoom] interact_min: the controller looks a scroll that finds no binding over a
     // pick target up again as one on empty canvas, so that it pans or zooms through the same paths as any bound
     // scroll, coast and all; with none there either it goes nowhere. It is never the application's: not its
-    // end, and not macOS's inertia after it.
+    // end, and not macOS's inertia after it. A pick target claims no scroll either: pass_mouse is off for it.
     if(!binding&&pick)return;
     // A window that takes over a trackpad scroll which panned first takes the rest of it: its end and macOS's inertia are forwarded too.
     if(!binding){if(window){if(e.phase!=NSEventPhaseNone){self.scrollPan=nil;self.scrollPanTime=0;}CGEventRef cg=CGEventCreateCopy(e.CGEvent);[self forward:cg at:p output:output activate:NO];CFRelease(cg);}return;}
@@ -1294,10 +1317,16 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // Upstream's binding lookup for one press or scroll: physical modifiers, trigger and
 // context in; the bound gesture, or nil for none, out. The binding carries the config's
 // pointer speeds.
-- (NSDictionary *)mouseBinding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window { return [self mouseBinding:trigger source:source flags:flags window:window pick:NO]; }
-// pick: that window is a pick target, as its hit says, and the lookup is upstream's below [zoom] interact_min (POINTER.md).
-- (NSDictionary *)mouseBinding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window pick:(BOOL)pick {
-    NSDictionary *reply=[self call:@{@"op":@"mouse_binding",@"trigger":trigger,@"source":source?:NSNull.null,@"modifiers":modifiersJSON(flags),@"context":window?@"window":@"canvas",@"pick":pick?@YES:@NO}],*binding=asDict(reply[@"binding"]);
+- (NSDictionary *)mouseBinding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window { return [self mouseBinding:trigger source:source flags:flags window:window under:nil pick:NO]; }
+// The lookup of a real press or scroll also names the window it is over, and says whether that window is a pick target.
+// under: upstream's pass_mouse (src/input/pointer.rs: pass_mouse_claims, pass_mouse_claims_notch). Where that window's rule claims the
+// trigger the controller answers {"binding": null, "passed": true}, and the trigger is unbound here exactly as it is there: nil, and the
+// press or scroll goes on to the window. nil for a placeholder, which has no application to pass anything to.
+// pick: that window is a pick target, as its hit says, and the lookup is upstream's below [zoom] interact_min (POINTER.md); it then
+// claims nothing.
+- (NSDictionary *)mouseBinding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window under:(NSNumber *)under pick:(BOOL)pick {
+    NSMutableDictionary *command=[@{@"op":@"mouse_binding",@"trigger":trigger,@"source":source?:NSNull.null,@"modifiers":modifiersJSON(flags),@"context":window?@"window":@"canvas",@"pick":pick?@YES:@NO}mutableCopy];if(under)command[@"window"]=under;
+    NSDictionary *reply=[self call:command],*binding=asDict(reply[@"binding"]);
     return binding;
 }
 // The pointer half of the help line, read from the lookup itself: every modifier set is
@@ -1382,7 +1411,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     NSString *status=self.statusText,*help=self.help;NSMutableArray<NSString *> *notes=[NSMutableArray array];
     NSDictionary *bindings=[self call:@{@"op":@"bindings"}];if(!bindings)[notes addObject:self.statusText?:@"bindings unavailable"];
     for(id warning in asArray(bindings[@"warnings"]))if(asString(warning))[notes addObject:warning];
-    if(!self.hotKeys){__weak Desktop *weak=self;self.hotKeys=[[DWHotKeys alloc]initWithFire:^(NSString *action){[weak action:action output:[weak viewOutput]];}];self.hotKeys.changed=^{Desktop *d=weak;NSArray<NSString *> *left=[d refreshBindings];for(NSString *line in left)fprintf(stderr,"%s\n",line.UTF8String);if(left.count){d.statusText=summary(@"Bindings",left);[d render];}};}
+    if(!self.hotKeys){__weak Desktop *weak=self;self.hotKeys=[[DWHotKeys alloc]initWithFire:^(NSString *action){[weak action:action output:[weak viewOutput]];}];self.hotKeys.kept=exitChord();self.hotKeys.changed=^{Desktop *d=weak;NSArray<NSString *> *left=[d refreshBindings];for(NSString *line in left)fprintf(stderr,"%s\n",line.UTF8String);if(left.count){d.statusText=summary(@"Bindings",left);[d render];}};}
     BOOL open=self.panels.count!=0;if(open)[self stopKeys];
     [self.hotKeys setBindings:bindings];
     [notes addObjectsFromArray:self.hotKeys.notes];
@@ -1483,6 +1512,11 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     // The outputs the pointer is looked up on, and whether cursor edge pan wants it reported: on while the snapshot's navigation.cursor_pan.needs_pointer says so. See -pointerFrame.
     self.pointerOutputs=self.configured&&self.panels.count?asArray(snapshot[@"outputs"]):nil;
     self.pointerWanted=self.pointerOutputs&&[asDict(asDict(snapshot[@"navigation"])[@"cursor_pan"])[@"needs_pointer"]isEqual:@YES];
+    // pass_keys: every reply the shell applies is drawn from this snapshot, so what the focused window's rule passes is read here and nowhere else:
+    // a bound or scripted command's (-applyReply:), a pointer policy press's and a hover's that moved the focus (-pointerApply:, -pointerFocused:),
+    // a focus request's answer and a native focus report (the coordinator's `changed`), a size transaction's tail, each frame of a flight.
+    // The hot keys act only when it changed: the passed chords stop being hot keys and reach the focused application from macOS itself.
+    if(self.configured){NSArray<NSString *> *refused=[self.hotKeys pass:snapshot[@"pass_keys"]];if(refused.count)[self flashStatus:summary(@"Shortcut unavailable",refused)];}
     [self adoptRender:snapshot];for(DesktopView *view in self.views)[view render:snapshot];
     // An animated background keeps the frame timer alive by itself, and so does an animation this description began: a window that opened with
     // its picture already there or closed, a stand-in that left. Neither is camera motion, so the timer is started without frameFlying.

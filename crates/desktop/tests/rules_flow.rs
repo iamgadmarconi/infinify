@@ -617,11 +617,19 @@ fn widgets_and_pinned_windows_take_no_part_in_snapping_or_clusters() {
     drag(&mut h, 5, true, 50.0);
     assert_eq!(h.world(5), rect(1050.0, 1000.0, 400.0, 300.0));
     assert_eq!(h.world(6), rect(1412.0, 1000.0, 400.0, 300.0));
-    // Neither is dragged itself.
+    // The pinned window itself is dragged in screen space, and docks to
+    // nothing: 5 to the right its edge is 17 from D's, where a canvas window
+    // would dock at the gap of 12. It is not resized.
     assert_eq!(
-        h.error(json!({"op":"begin_drag","window":3,"output":1})),
-        "a screen-pinned window is not moved or resized by hand"
+        h.pinned(3),
+        json!({"output":1,"screen_rect":rect(200.0,500.0,400.0,300.0)})
     );
+    drag(&mut h, 3, false, 5.0);
+    assert_eq!(
+        h.pinned(3),
+        json!({"output":1,"screen_rect":rect(205.0,500.0,400.0,300.0)})
+    );
+    assert_eq!(h.world(4), rect(422.0, 400.0, 400.0, 300.0));
     assert_eq!(
         h.error(json!({"op":"begin_resize","window":3,"output":1,"edges":"bottom_right"})),
         "a screen-pinned window is not moved or resized by hand"
@@ -2329,7 +2337,7 @@ fn send_to_output_rebinds_a_pin_and_leaves_a_widget() {
 }
 
 #[test]
-fn trackpad_gestures_grab_no_widget_and_no_pinned_window() {
+fn trackpad_gestures_grab_no_widget_and_move_a_pinned_window_in_screen_space() {
     let scratch = Scratch::new();
     let mut h = mixed_layers(
         &scratch,
@@ -2359,26 +2367,48 @@ fn trackpad_gestures_grab_no_widget_and_no_pinned_window() {
     assert_eq!(h.snapshot()["windows"], before["windows"]);
     assert_eq!(h.focused(), 1);
 
-    // A move over a pinned window is claimed and inert: upstream's
-    // screen-space move is not adapted. Nothing pans, moves or is focused.
+    // A move over a pinned window is upstream's GestureTarget::Pinned: the
+    // pinned drag a bound press installs, then the window raised and
+    // focused. It moves by the fingers' screen displacement, on its output,
+    // and no camera pans.
+    let camera = h.snapshot()["outputs"][0].clone();
     let reply = begin(&mut h, ON_PIN, false, true);
-    assert_eq!(reply["gesture"]["state"], "swipe_pinned", "{reply}");
+    assert_eq!(reply["gesture"]["state"], "swipe_move", "{reply}");
     assert_eq!(reply["gesture"]["window"], 4);
-    assert_eq!(
-        reply["note"],
-        "a screen-pinned window is not moved by gesture: unpin it first (toggle-pin-to-screen)"
-    );
-    assert_eq!(reply["effects"], json!([]), "{reply}");
+    assert_eq!(reply["note"], Value::Null);
+    assert_eq!(reply["effects"][0]["op"], "focus_native_window", "{reply}");
+    assert_eq!(reply["effects"][0]["window"], 4, "{reply}");
+    assert_eq!(h.focused(), 4);
+    assert_eq!(h.stack().last(), Some(&4));
+    // It takes the focus without entering the history, as a click on it does.
+    h.settle_focus();
+    assert_eq!(h.history(), json!([1, 2]));
     assert_eq!(swipe(&mut h, 40.0)["needs_frames"], false);
+    assert_eq!(
+        h.pinned(4),
+        json!({"output":1,"screen_rect":rect(840.0,500.0,150.0,100.0)})
+    );
+    // The pointer path cannot begin a drag of its own under it.
+    assert_eq!(
+        h.error(json!({"op":"begin_drag","window":1,"output":1})),
+        "gesture already active"
+    );
     let reply = end(&mut h);
-    assert_eq!(reply["dirty"], false, "{reply}");
-    assert_eq!(h.snapshot(), before);
+    assert_eq!(reply["dirty"], true, "{reply}");
+    assert_eq!(
+        h.error(json!({"op":"gesture_to","screen_delta":point(50.0, 0.0)})),
+        "no active gesture"
+    );
+    assert_eq!(h.pinned(4)["screen_rect"], rect(840.0, 500.0, 150.0, 100.0));
+    assert_eq!(h.snapshot()["outputs"][0], camera);
+    let before = h.snapshot();
     // A resize over it is the gated resize of any window.
     let reply = begin(&mut h, ON_PIN, true, false);
     assert_eq!(reply["gesture"]["state"], "swipe_resize", "{reply}");
     assert_eq!(reply["gesture"]["window"], 4);
     end(&mut h);
     assert_eq!(h.snapshot(), before);
+    h.observe_focus(1);
     // Control: the same move over a canvas window grabs it.
     let reply = begin(&mut h, ON_A, false, true);
     assert_eq!(reply["gesture"]["state"], "swipe_move", "{reply}");

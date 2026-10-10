@@ -341,9 +341,11 @@ impl Controller {
         }
     }
     /// The gesture is over, however it ended. Upstream's move grab clears its
-    /// output's edge pan on release and on unset.
+    /// output's edge pan on release and on unset, a pinned window's included.
     pub(crate) fn drop_gesture(&mut self) {
-        if let Some(Gesture::Drag { output, .. }) = self.gesture.take() {
+        if let Some(Gesture::Drag { output, .. } | Gesture::Pinned(PinnedDrag { output, .. })) =
+            self.gesture.take()
+        {
             self.motion.clear_edge_pan(output);
         }
     }

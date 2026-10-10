@@ -117,12 +117,20 @@ impl Controller {
         reply["focus_follows_mouse"] = json!(self.config().focus_follows_mouse);
         Ok(reply)
     }
-    /// `mouse_binding`, and with `pick` what upstream does with that lookup
-    /// over a pick target. A press is the pick's unless a held-modifier binding
+    /// `mouse_binding`. `window` is the window under the pointer, whose
+    /// `pass_mouse` may claim what the lookup found (passthrough.rs), and
+    /// `pick` says it is a pick target, with which the lookup is what upstream
+    /// does over one. A pick target claims nothing: upstream's gate, by which
+    /// a screen-pinned window, never a pick target, keeps its button claims
+    /// below the threshold (`claimant`).
+    ///
+    /// Over a pick target a press is the pick's unless a held-modifier binding
     /// claims it (try_pick_button: a bare button bound on a window does not).
     /// A scroll that finds no binding is looked up again in the canvas context,
     /// so that it pans or zooms instead of dying on a window that cannot
-    /// receive it (on_pointer_axis).
+    /// receive it (on_pointer_axis). A wheel notch is neither: upstream's notch
+    /// site sits ahead of both, with no modifier gate and no retry, so its
+    /// lookup is the plain one.
     pub(crate) fn pointer_binding(
         &self,
         trigger: PointerTrigger,
@@ -130,16 +138,18 @@ impl Controller {
         modifiers: MacModifiers,
         context: PointerContext,
         pick: bool,
+        window: Option<WindowId>,
     ) -> Value {
-        let found = self.mouse_binding(trigger, source, modifiers, context);
+        let claimant = self.claimant(window, trigger, pick);
+        let found = self.mouse_binding(trigger, source, modifiers, context, claimant);
         if !pick || !matches!(context, PointerContext::Window) {
             return found;
         }
         match trigger {
             PointerTrigger::Scroll if found["binding"].is_null() => {
-                self.mouse_binding(trigger, source, modifiers, PointerContext::Canvas)
+                self.mouse_binding(trigger, source, modifiers, PointerContext::Canvas, None)
             }
-            PointerTrigger::Scroll => found,
+            PointerTrigger::Scroll | PointerTrigger::WheelUp | PointerTrigger::WheelDown => found,
             _ if modifiers == MacModifiers::default() => json!({"binding":null}),
             _ => found,
         }

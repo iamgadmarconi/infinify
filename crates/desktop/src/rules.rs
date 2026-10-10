@@ -9,7 +9,8 @@
 // src/state/persistence.rs (screen_space_inventory), src/input/actions.rs
 // (toggle_pin_to_screen, MoveToBookmark), src/input/pointer.rs (the move and
 // resize bindings pass over widgets; upstream drags and resizes a pinned
-// window in screen space through try_pinned_button, which is not adapted),
+// window in screen space through try_pinned_button: the drag is
+// passthrough.rs's, the resize is not adapted),
 // src/ipc/mod.rs (cmd_pin, cmd_opacity) and src/canvas.rs
 // (rule_to_screen_top_left, screen_top_left_to_rule). reassign_orphaned_pinned
 // runs when the shell reports its outputs settled, not at each removal: the
@@ -80,14 +81,14 @@ fn pass_name<C>(list: &PassList<C>) -> &'static str {
 }
 /// The applied rule under upstream's field names. `not_applied` names the set
 /// fields that change nothing here. `sized` says the rule's `size` was asked
-/// of the window when it mapped.
+/// of the window when it mapped. `layer_order` is among them by upstream's
+/// own rule: it orders layer-shell surfaces and is "Ignored for regular
+/// windows" (docs/config.md), and every window here is a regular one.
 fn rule_json(rule: &AppliedWindowRule, sized: bool) -> Value {
     let not_applied: Vec<&str> = [
         (rule.size.is_some() && !sized, "size"),
         (rule.fullscreen.is_some(), "fullscreen"),
         (rule.preserve_aspect_ratio, "preserve_aspect_ratio"),
-        (!matches!(rule.pass_keys, PassList::None), "pass_keys"),
-        (!matches!(rule.pass_mouse, PassList::None), "pass_mouse"),
         (rule.layer_order.is_some(), "layer_order"),
     ]
     .into_iter()
@@ -150,9 +151,10 @@ impl Controller {
         !self.is_widget(window) && !self.is_pinned(window)
     }
     /// Upstream's move and resize bindings pass over a widget. A
-    /// screen-pinned window is refused here too, which is a gap: upstream
-    /// moves and resizes it in screen space (start_pinned_move,
-    /// start_compositor_resize_with_edge).
+    /// screen-pinned window is refused here too: this is the guard of a
+    /// resize, which upstream does in screen space
+    /// (start_compositor_resize_with_edge) and which needs native resize. A
+    /// move of one never asks: `install_drag` drags it in screen space instead.
     pub(crate) fn movable(&self, window: WindowId) -> Result<(), Error> {
         if self.is_widget(window) {
             return Err(Error::Invalid("a widget is not moved or resized by hand"));
@@ -679,6 +681,7 @@ impl Controller {
         self.policy.applied.retain(|id, _| live(id));
         let applied = &self.policy.applied;
         self.policy.sized.retain(|id| applied.contains_key(id));
+        self.settle_pinned_drag();
         let order: Vec<WindowId> = self.scene.windows().iter().map(|w| w.id).collect();
         for id in &order {
             let snaps = self.on_canvas(*id);

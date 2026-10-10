@@ -52,20 +52,20 @@ Preserve them as integers in native code.
 | `hover` | `output`, global `screen` point, optional `time_ms` | `{dirty, pick, hit, forward}`, and `effect` when sloppy focus moved the focus; see [POINTER.md](POINTER.md#hover) |
 | `pick` | `window`, `output` | `{effect, navigation, dirty}`; a left click in pick mode |
 | `pointer_nearest` | `output`, global `screen` and `start` points, optional `held` | `{navigation, effects, dirty}`; a press bound to the mouse action `center-nearest` |
-| `begin_drag` | `window`, `output`, optional `group` boolean (default false) | `{}` |
+| `begin_drag` | `window`, `output`, optional `group` boolean (default false) | `{}`; a screen-pinned window is dragged in screen space ([RULES.md](RULES.md#dragging-a-pinned-window)) |
 | `begin_resize` | `window`, `output`, `edges`, optional `group` boolean | `{}` |
 | `gesture_to` | total `screen_delta` from gesture start, optional global `pointer` point | `{needs_frames}`; a drag's `pointer` arms edge pan |
 | `end_gesture` | none | `{}` |
 | `gesture_begin` | `kind`, `fingers`, `modifiers`, `context`, `output`, global `pointer` point, optional `doubletap`, `time_ms` | `{gesture, fired, note, navigation, effects, dirty, needs_frames, trackpad}` |
 | `gesture_update` | optional `dx`, `dy`, `scale`, `rotation`, `held`; `time_ms` | the same |
 | `gesture_end` | optional `cancelled`, `held`; `time_ms` | the same |
-| `snapshot` | none | `outputs`, `windows`, `focused`, `placements`, `lifecycle`, `lifecycle_events` ([EFFECTS.md](EFFECTS.md#lifecycle-events)), `render`, `evidence`; each output with `pick` ([POINTER.md](POINTER.md#pick-mode)), each window with its `widget`, `pinned`, `rule` and `mode` ([SIZES.md](SIZES.md#mode)), each placement with `pinned`, `widget` and `opacity`, and both with what the window is drawn with (`kind`, `decoration` and the rest of [RENDER.md](RENDER.md#placements)) |
+| `snapshot` | none | `outputs`, `windows`, `focused`, `pass_keys` ([RULES.md](RULES.md#pass_keys)), `placements`, `lifecycle`, `lifecycle_events` ([EFFECTS.md](EFFECTS.md#lifecycle-events)), `render`, `evidence`; each output with `pick` ([POINTER.md](POINTER.md#pick-mode)), each window with its `widget`, `pinned`, `rule` and `mode` ([SIZES.md](SIZES.md#mode)), each placement with `pinned`, `widget` and `opacity`, and both with what the window is drawn with (`kind`, `decoration` and the rest of [RENDER.md](RENDER.md#placements)) |
 | `screenshot_result` | `path`, `width`, `height`; or `error` | `{reply}`: upstream's reply to the client that asked for the screenshot |
 | `save` / `load` | explicit caller `path` string | `{}` |
 | `load_config` | `path` string or null | `{path, exists, errors, warnings, dirty, effects, focus_follows_mouse}` |
 | `set_platform` | `super` chord | `{super}` |
 | `bindings` | none | key bindings as macOS chords, the `cycle_hold` modifiers, and each output's hot corners |
-| `mouse_binding` | `trigger`, `source`, `modifiers`, `context`, optional `pick` boolean | `{binding}` or `{binding: null}` |
+| `mouse_binding` | `trigger` (a button, `scroll`, or the wheel notch `wheel_up` / `wheel_down`), `source`, `modifiers`, `context`, optional `window`, optional `pick` boolean | `{binding}` or `{binding: null}`; `{binding: null, passed: true}` when the window's `pass_mouse` claims the trigger, which a pick target never does ([RULES.md](RULES.md#pass_mouse)) |
 | `hot_corner` | `output`, `corner`, optional `pointer`, `held` | `{navigation, effects, dirty}` |
 | `native_resize_capability` | `enabled` boolean | `{}`; the shell can perform resize effects in this run, see [SIZES.md](SIZES.md#the-gate) |
 | `layout_changed` | `name`, `short`, `index`, `count` | `{}` |
@@ -88,8 +88,9 @@ relaunch actions.
 [Window rules](RULES.md) covers `[[window_rules]]`, widgets and screen-pinned
 windows: what a rule does to a new window, the order `placements` and `hit`
 follow, what every navigation, gesture and output action does with a widget or
-a pinned window, `toggle-pin-to-screen`, `move-to-bookmark`, and IPC `Pin` and
-`Opacity`.
+a pinned window, `toggle-pin-to-screen`, `move-to-bookmark`, IPC `Pin` and
+`Opacity`, the `pass_keys` and `pass_mouse` rules, and the drag of a pinned
+window by the move binding and the move gesture.
 [Rendering](RENDER.md) covers what the shell's compositor draws from: the
 snapshot's `render` block, what each placement is drawn with (the rule its
 window mapped with, the layer and the space it is drawn in), and the

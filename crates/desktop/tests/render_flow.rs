@@ -281,6 +281,7 @@ fn the_default_render_block_is_upstreams_defaults() {
             "native_resize",
             "navigation",
             "outputs",
+            "pass_keys",
             "placements",
             "render",
             "trackpad",

@@ -28,7 +28,7 @@ collected in one place below.
 | `pick` | `window`, `output` | `{effect, navigation, dirty}`, or `{navigation: null, dirty: false}` when the output is no longer in pick mode |
 | `pointer_nearest` | `output`, global `screen` and `start` points, optional `held` boolean (default false) | `{navigation, effects, dirty}`, the reply of the `center-nearest` action |
 | `hit`, `input` | unchanged | gain `pick` on the reply and on the hit object |
-| `mouse_binding` | gains optional `pick` boolean (default false) | unchanged |
+| `mouse_binding` | gains optional `pick` boolean (default false), beside its optional `window` ([RULES.md](RULES.md#pass_mouse)) | unchanged; a pick target never answers `passed` |
 | `snapshot` | unchanged | each entry of `outputs` gains `pick` |
 | `load_config` | unchanged | gains `focus_follows_mouse`, the value now in force |
 
@@ -264,7 +264,12 @@ stand-in's `pinned` and `widget` from its placement.
   `{"binding":null}`, and any chord with a modifier answers as usual. A scroll
   that finds no binding in the window context is looked up again in the canvas
   context, so a bare scroll over a pick target pans or zooms the canvas instead
-  of dying on a window that cannot receive it. Without the flag the lookup is
+  of dying on a window that cannot receive it. A wheel notch (`wheel_up`,
+  `wheel_down`) is neither: upstream's notch site stands ahead of its pick
+  handling, so the lookup is the plain one, a bare notch bound to an action
+  included, and nothing is retried on the canvas. A pick target claims
+  nothing by [`pass_mouse`](RULES.md#pass_mouse), whatever its rule and
+  whatever `window` names. Without the flag the lookup is
   what it was. What the binding found then does is
   [camera motion](MOTION.md)'s like any bound scroll's: a timed `pan` that
   coasts from its `pan_end`, or a wheel `zoom_by`. A scroll that finds no
@@ -290,9 +295,9 @@ the pointer:
 | `hover`, `forward` | forwarded like any live window's motion | the same |
 | `hover` with `focus_follows_mouse` | takes the focus, where it stands, before the canvas window beneath it; the request is answered like any other and the window stays out of the focus history | passed over: the focus stays where it is. Under a pinned widget nothing takes it |
 | the echo of that hover | recorded where the window stands: no raise, no flight, no history entry | there is none: no hover asks for a widget's focus, so a native report for it is an [activation](RULES.md#navigation-activation-gestures-and-outputs) |
-| below `interact_min` | not a pick target: `pick` is false on `hit`, `input` and `hover`, `input` passes, `forward` is true. It is drawn at its own size whatever the zoom and stays interactive, as upstream documents (`docs/window-rules.md`: a pinned window's button claims still apply there) | not a pick target either, with the same answers |
+| below `interact_min` | not a pick target: `pick` is false on `hit`, `input` and `hover`, `input` passes, `forward` is true. It is drawn at its own size whatever the zoom and stays interactive, as upstream documents (`docs/window-rules.md`: a pinned window's button claims still apply there, and they do: its [`pass_mouse`](RULES.md#pass_mouse) claims a press as at any zoom, and no scroll or notch while its output is below the threshold) | not a pick target either, with the same answers |
 | `pick` | does nothing: `{"navigation":null,"dirty":false}` | the same |
-| drag anywhere | `begin_drag` refuses it at every zoom ([RULES.md](RULES.md#screen-pinned-windows)) | refused as well |
+| drag anywhere | not pick mode's: no pick-mode press is ever on it. `begin_drag`, which the move binding sends, is its [screen-space drag](RULES.md#dragging-a-pinned-window) at every zoom, below the threshold too | `begin_drag` refuses it at every zoom |
 | `pointer_nearest` | a press bound to `center-nearest` over it swipes as anywhere; the action's own rules for a focused pinned window apply | the same, with a focused widget's rules |
 
 A pinned window lying over a canvas window keeps the press below the
@@ -371,15 +376,21 @@ does nothing, where upstream had already fired.
   presses and motion there follows from that here, because `input` refuses
   pick targets and nothing else. Upstream's own pointer focus for a widget
   below the threshold (`pointer_focus_under_pick`) was not compared for this.
-- **A pinned window is not dragged from a pick-mode press.** Upstream moves a
-  pinned window in screen space through its own button path; that path is not
-  implemented at any zoom ([RULES.md](RULES.md#differences-from-upstream)).
+- **A pinned window is not dragged from a pick-mode press**, here or
+  upstream: it is no pick target, so no such press exists. Upstream moves it
+  in screen space through its own button path (`try_pinned_button`, ahead of
+  `try_pick_button`), and so does the move binding here, at any zoom
+  ([RULES.md](RULES.md#dragging-a-pinned-window)).
 - **`pointer_nearest` is one decision from two points**, see above.
 - **Per output.** Upstream's pick mode reads the active output's zoom; here
   each command names its output.
 - Upstream's `pass_mouse` window rule, which lets a client claim a bound
-  trigger, is recorded and never applied ([RULES.md](RULES.md)): no binding
-  lookup here asks it, above the threshold or below.
+  trigger, is asked by the same lookup ([RULES.md](RULES.md#pass_mouse)),
+  with upstream's pick-mode gate: a pick target claims nothing, a
+  screen-pinned window keeps its button claims below the threshold and loses
+  its scroll and notch claims there. A widget that is not pinned keeps its
+  claims below the threshold, where upstream's code drops them: the lookup
+  is not told the pointer's output.
 
 ## Evidence and limits
 
@@ -432,7 +443,8 @@ rectangle is asymmetric:
   (the canvas window takes the focus) and pinned over one (nothing does); and
   at zoom 0.4 under a threshold of 0.5 a pinned window over a pick target and
   a widget beside it, both `pick: false` with `input` passing and `forward`
-  true, `pick` doing nothing with either, `begin_drag` refusing both, and the
+  true, `pick` doing nothing with either, `begin_drag` refusing the widget
+  and dragging the pinned window by the pointer's own displacement, and the
   canvas window still dragged and picked;
 - in [`tests/sizes_flow.rs`](tests/sizes_flow.rs), where a fill can be made
   (the test answers the resize effects itself; no native window is resized):
@@ -441,8 +453,9 @@ rectangle is asymmetric:
   park the camera 212 points away; a window filled at zoom 0.4 picked to
   zoom 1 while `center-window` on it restores the 0.4 view; `hover` holding
   the pointer, forwarding nothing and moving no focus, while a sizing action
-  is owed its size; and `begin_drag` refusing a widget, a pinned window and a
-  window owed its size, each in its own words, above and below the threshold;
+  is owed its size; and `begin_drag` refusing a widget and a window owed its
+  size, each in its own words, and dragging a pinned window in screen space,
+  above and below the threshold;
 - `pointer_nearest` in five directions, at the 16 point threshold, on both
   sides of the diagonal ratio, and inside the dead zone, each reply compared
   with the `center-nearest` action's on an identical scene; and with a cycle
@@ -473,7 +486,8 @@ The shell as built sends every command and reads every field named here:
 `hover` on pointer motion with `time_ms`, `activate` with cause `click` at a
 pick-mode press, `begin_drag` past the slop, `pick` at the release,
 `pointer_nearest` with `held` once at the first drag event 16 points from the
-press, `"pick"` on each `mouse_binding` lookup, `hit.pick` and
+press, `"pick"` on each `mouse_binding` lookup, a button's, a scroll's and a
+wheel notch's, `hit.pick` and
 `snapshot.outputs[].pick`, and for a stand-in it finds by itself the
 `pinned` and `widget` of its placement, which keep it from being a pick
 target. It does not read `load_config.focus_follows_mouse`. That agreement is

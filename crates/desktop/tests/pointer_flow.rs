@@ -1579,8 +1579,10 @@ fn below_interact_min_a_pinned_window_stays_interactive_and_a_widget_is_not_pick
     let over = hover_screen(&mut h, 850.0, 620.0);
     assert_eq!(json!([over["pick"], over["forward"]]), json!([false, true]));
 
-    // Neither is picked: the command does nothing with one, and drag-anywhere
-    // is refused as every drag of a widget or a pinned window is.
+    // Neither is picked: the command does nothing with one. A widget is
+    // dragged by nothing. The pinned window is dragged as above the
+    // threshold, in screen space: by the pointer's own displacement, where
+    // the canvas window below moves by that over the zoom.
     let settled = h.snapshot();
     for window in [2, 3] {
         assert_eq!(
@@ -1590,13 +1592,19 @@ fn below_interact_min_a_pinned_window_stays_interactive_and_a_widget_is_not_pick
     }
     assert_eq!(h.snapshot(), settled);
     assert_eq!(
-        h.error(json!({"op":"begin_drag","window":2,"output":1})),
-        "a screen-pinned window is not moved or resized by hand"
-    );
-    assert_eq!(
         h.error(json!({"op":"begin_drag","window":3,"output":1})),
         "a widget is not moved or resized by hand"
     );
+    h.ok(json!({"op":"begin_drag","window":2,"output":1}));
+    h.ok(json!({"op":"gesture_to","screen_delta":point(-20.0, 10.0)}));
+    assert_eq!(
+        h.snapshot()["windows"][1]["pinned"]["screen_rect"],
+        rect(PIN.0 - 20.0, PIN.1 + 10.0, PIN.2, PIN.3)
+    );
+    assert_eq!(h.snapshot()["outputs"][0]["pick"], true);
+    h.ok(json!({"op":"gesture_to","screen_delta":point(0.0, 0.0)}));
+    h.ok(json!({"op":"end_gesture"}));
+    assert_eq!(h.snapshot(), settled);
     // LA still is: drag anywhere moves it, 20 screen points for 50 world
     // points, and its pick flies to it at zoom 1 with the pin where it was.
     h.ok(json!({"op":"begin_drag","window":1,"output":1}));

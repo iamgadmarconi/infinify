@@ -842,7 +842,7 @@ fn default_bindings_on_missing_linux_programs_become_their_macos_equivalents() {
             "modifiers":{"control":true,"option":true,"shift":false,"command":false},
             "action":"exec /usr/bin/pmset displaysleepnow",
             "upstream":"spawn swaylock -f -c 000000 -kl",
-            "repeat":false,"implemented":true
+            "repeat":false,"implemented":true,"passable":true
         })
     );
     // Every other default is untouched, and carries no `upstream`.

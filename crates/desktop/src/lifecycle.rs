@@ -553,6 +553,7 @@ impl Controller {
                 Some(Gesture::Resize { state, .. }) => scene
                     .resize_to(&mut state.clone(), Point::default())
                     .is_err(),
+                Some(Gesture::Pinned(drag)) => drag.window == window,
                 None => false,
             };
         // The drag ends as a release ends it: its edge pan goes with it. A

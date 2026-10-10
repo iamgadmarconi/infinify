@@ -15,6 +15,7 @@ mod lifecycle;
 mod motion;
 mod navigation;
 mod output_actions;
+mod passthrough;
 mod pointer_policy;
 mod render;
 mod resize_transaction;
@@ -37,6 +38,7 @@ pub use motion::{PanSource, PinchPhase, ZoomSource};
 pub use navigation::{FocusPlacement, ZoomPolicy};
 use navigation::{NavigationContext, ViewFlight};
 pub use output_actions::Corner;
+use passthrough::PinnedDrag;
 use resize_transaction::NativeResizeTransaction;
 pub use resize_transaction::{NativeResizeResult, ResizeOutcome};
 use rules::Policy;
@@ -164,6 +166,9 @@ enum Gesture {
         output: OutputId,
         delta: Point,
     },
+    /// The drag of a screen-pinned window, in screen space: the move
+    /// binding's, and the move gesture's.
+    Pinned(PinnedDrag),
 }
 /// A request to the native adapter, never evidence that focus changed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -461,6 +466,10 @@ pub enum Command {
         /// The pointer is over a pick target in pick mode, as `hit` reported.
         #[serde(default)]
         pick: bool,
+        /// The window under the pointer, as `hit` reports it: its
+        /// `pass_mouse` may claim the trigger.
+        #[serde(default)]
+        window: Option<WindowId>,
     },
     /// The pointer moved over `output` with no button down, to the global
     /// point `screen`. `time_ms` is when, on the clock a timed `pan` carries:
@@ -951,7 +960,10 @@ impl Controller {
                 modifiers,
                 context,
                 pick,
-            } => return Ok(self.pointer_binding(trigger, source, modifiers, context, pick)),
+                window,
+            } => {
+                return Ok(self.pointer_binding(trigger, source, modifiers, context, pick, window));
+            }
             Command::Hover {
                 output,
                 screen,
@@ -1164,8 +1176,9 @@ impl Controller {
                 );
                 self.map_rule(id, rule, arrival);
                 // A slot under a drag or resize that its window's rule has
-                // just made a widget lets go of the gesture.
-                if !self.on_canvas(id) {
+                // just made a widget lets go of the gesture. A pinned slot
+                // keeps its pin, and with it the drag that is moving it.
+                if self.is_widget(id) {
                     self.release_gesture(id);
                 }
                 return match arrival {
@@ -1535,16 +1548,29 @@ impl Controller {
         if self.gesture.is_some() {
             return Err(Error::Invalid("gesture already active"));
         }
-        // A widget and a screen-pinned window are refused on every path.
-        self.movable(window)?;
+        // A screen-pinned window is dragged in screen space, unless it is a
+        // widget too: a widget is refused on every path. `movable` is the
+        // guard of everything else.
+        let pinned = self.is_pinned(window) && !self.is_widget(window);
+        if !pinned {
+            self.movable(window)?;
+        }
         let zoom = self
             .scene
             .output(output)
             .ok_or(Error::Invalid("unknown output"))?
             .zoom;
         let snap = self.snap(zoom);
-        // A sizing action still owed its size places this window itself.
-        self.guard_sizing_drag(window, group, snap.options)?;
+        // A sizing action still owed its size places this window itself: no
+        // drag of it is installed meanwhile, a pinned one included. A pinned
+        // window has no cluster to ask about.
+        self.guard_sizing_drag(window, group && !pinned, snap.options)?;
+        // Pick mode's drag-anywhere is this command too, sent without a
+        // binding. A pinned window is never a pick target, and its drag is
+        // the same below `zoom.interact_min` as above: it reads no zoom.
+        if pinned {
+            return self.install_pinned_drag(window, output);
+        }
         self.cancel_animations_everywhere();
         self.drags += 1;
         self.gesture = Some(Gesture::Drag {
@@ -1579,6 +1605,7 @@ impl Controller {
             Some(Gesture::Drag { delta, .. } | Gesture::Resize { delta, .. }) => {
                 *delta = screen_delta;
             }
+            Some(Gesture::Pinned(_)) => return self.drag_pinned(screen_delta, pointer),
             None => return Err(Error::Invalid("no active gesture")),
         }
         self.drive_gesture()?;
@@ -1710,6 +1737,8 @@ impl Controller {
     fn drive_gesture(&mut self) -> Result<(), Error> {
         let output = match self.gesture.as_ref() {
             Some(Gesture::Drag { output, .. } | Gesture::Resize { output, .. }) => *output,
+            // A pinned drag is placed by its own pointer reports alone.
+            Some(Gesture::Pinned(_)) => return Ok(()),
             None => return Err(Error::Invalid("no active gesture")),
         };
         let current_zoom = self
@@ -1737,6 +1766,7 @@ impl Controller {
                 // Upstream apply_member_shifts: a shifted member is re-anchored.
                 self.sizes.drop_moved_fills(&self.scene);
             }
+            Gesture::Pinned(_) => {}
         }
         Ok(())
     }
@@ -1829,7 +1859,7 @@ impl Controller {
             navigation[key] = value;
         }
         Ok(
-            json!({"evidence": "logical_controller_only", "capabilities": ["normal_window_navigation", "native_resize_controller_contract"], "render": self.render_block(), "native_resize": self.native_resize, "lifecycle": self.lifecycle, "lifecycle_events": self.lifecycle_events(), "navigation": navigation, "bookmarks": self.bookmarks, "keyboard_layout": self.layout, "trackpad": self.trackpad_snapshot(), "outputs": self.scene.outputs(), "windows": windows, "focused": self.scene.focused(), "focus": {"intent": self.scene.focused(), "observed_native": self.focus.observed_native, "pending_effect": self.focus.pending_effect, "last_result": self.focus.last_result, "history": self.scene.stage().focus_history(), "cycle": self.scene.stage().cycle_state(), "release_pending": self.focus.release_pending}, "placements": placements}),
+            json!({"evidence": "logical_controller_only", "capabilities": ["normal_window_navigation", "native_resize_controller_contract"], "render": self.render_block(), "native_resize": self.native_resize, "lifecycle": self.lifecycle, "lifecycle_events": self.lifecycle_events(), "navigation": navigation, "bookmarks": self.bookmarks, "keyboard_layout": self.layout, "trackpad": self.trackpad_snapshot(), "outputs": self.scene.outputs(), "windows": windows, "focused": self.scene.focused(), "pass_keys": self.pass_keys(), "focus": {"intent": self.scene.focused(), "observed_native": self.focus.observed_native, "pending_effect": self.focus.pending_effect, "last_result": self.focus.last_result, "history": self.scene.stage().focus_history(), "cycle": self.scene.stage().cycle_state(), "release_pending": self.focus.release_pending}, "placements": placements}),
         )
     }
 }
