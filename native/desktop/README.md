@@ -84,7 +84,8 @@ status line and chooser unchanged.
   it says which is missing, has an Allow… button for each (the request to
   macOS, then the matching pane of System Settings, from that click only),
   Relaunch and Quit, looks again once a second, and opens the canvas by itself
-  as soon as both are there. macOS gives Screen Recording only to a process
+  as soon as both are there. Stage Manager on holds the launch at the same
+  window ([Limits of desktop mode](#limits-of-desktop-mode)). macOS gives Screen Recording only to a process
   started after the grant, so the window says so and Relaunch starts the run
   again: the same executable with the same arguments, in the same process,
   after the usual cleanup, so a run started by the login item stays the login
@@ -211,6 +212,20 @@ changes for the config path, `exec-terminal`, `PATH` and relative paths.
 
 ### Limits of desktop mode
 
+- **Stage Manager has to be off.** With it on, macOS keeps only the current
+  stage's windows at their size and scales every other window into a
+  thumbnail in its strip. The window's bounds, its picture and the place a
+  click has to go are then the thumbnail's, and every application switch
+  swaps which windows that is. This was seen on the first runs on real
+  windows (2026-10-10): tiles blurred and still, clicks that did nothing, a
+  capture size that swung between about 150 by 170 and the window's own. A
+  normal launch therefore reads `com.apple.WindowManager` `GloballyEnabled`
+  and, while it is on, shows the small window with that said and a button
+  that opens Desktop & Dock; it never writes the setting, and it opens the
+  canvas as soon as it is off. Switched on under a running canvas it is named
+  once on stderr and the run goes on. `--windowed` and `--manual` launches
+  are not held. That the canvas works on real windows with it off has not
+  been observed yet.
 - **Capture after sleep or lock is not restarted.** If macOS stops a window's
   capture stream with an error, the window becomes a stand-in and is not
   offered again until its native window has left the screen and come back.
