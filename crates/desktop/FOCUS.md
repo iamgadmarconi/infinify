@@ -51,9 +51,10 @@ Additive ABI 1 commands:
 
 ## Upstream entry points
 
-Upstream changes focus from four places, and each has a command here. Every
+Upstream changes focus from five places, and each has a command here. Every
 focus change that is not itself a cycle step ends a cycle in progress first, as
-upstream's `focus_changed` and `execute_action` do.
+upstream's `focus_changed` and `execute_action` do; the hover below is held
+back by an open cycle instead.
 
 - The four window navigation actions (`center-window`, `center-nearest`,
   `cycle-windows`, `focus-center`) through [`action`](IPC.md#action); their
@@ -75,6 +76,13 @@ upstream's `focus_changed` and `execute_action` do.
   asked of the adapter, because there is no native "focus nothing" to ask for,
   and `observed_native` keeps saying what was last observed. `center-nearest`
   landing on an anchor clears focus the same way.
+- [`hover`](POINTER.md#sloppy-focus): with `focus_follows_mouse`, the window
+  under the pointer takes logical focus without being raised, the one focus
+  here that does not restack: a screen-pinned window before the canvas
+  beneath it, and never a widget
+  ([POINTER.md](POINTER.md#screen-pinned-windows-and-widgets)). Its reply has
+  an `effect` only when the focus moved. `pick`, the left click of pick mode,
+  is a window navigation like the four above.
 - `end_focus_cycle`: upstream ends a held cycle when the `cycle_hold` modifiers
   are no longer all down (`src/input/keyboard.rs`). The controller sees no
   keys, so the shell watches them and sends this. [`bindings`](CONFIG.md#key-bindings)

@@ -231,7 +231,7 @@ fn no_file_is_upstreams_defaults_and_a_file_changes_what_commands_do() {
     assert_eq!(h.bookmarks(), json!({}));
     assert_eq!(
         h.load_config(&absent),
-        json!({"path":absent,"exists":false,"errors":[],"warnings":[],"dirty":false,"effects":[]})
+        json!({"path":absent,"exists":false,"errors":[],"warnings":[],"dirty":false,"effects":[],"focus_follows_mouse":false})
     );
     // Upstream seeds the four corner bookmarks when the section is absent.
     assert_eq!(h.bookmarks(), seeds());
@@ -492,7 +492,7 @@ fn a_broken_file_keeps_the_previous_config_and_reports_upstreams_message() {
         assert!(upstream.contains(piece), "{upstream}");
         assert_eq!(
             h.load_config(&path),
-            json!({"path":path,"exists":true,"errors":[upstream],"warnings":[],"dirty":false,"effects":[]})
+            json!({"path":path,"exists":true,"errors":[upstream],"warnings":[],"dirty":false,"effects":[],"focus_follows_mouse":false})
         );
         assert_eq!(pan(&mut h), 250.0, "{broken}");
         assert_eq!(h.bookmarks(), before);
@@ -555,7 +555,7 @@ fn a_broken_file_keeps_the_previous_config_and_reports_upstreams_message() {
         );
         assert_eq!(
             reply,
-            json!({"path":path,"exists":false,"errors":[error],"warnings":[],"dirty":false,"effects":[]})
+            json!({"path":path,"exists":false,"errors":[error],"warnings":[],"dirty":false,"effects":[],"focus_follows_mouse":false})
         );
         assert_eq!(pan(&mut h), 250.0);
         assert_eq!(h.bookmarks(), kept);
@@ -564,7 +564,7 @@ fn a_broken_file_keeps_the_previous_config_and_reports_upstreams_message() {
     scratch.write("config.toml", toml);
     assert_eq!(
         h.load_config(&path),
-        json!({"path":path,"exists":true,"errors":[],"warnings":[],"dirty":false,"effects":[]})
+        json!({"path":path,"exists":true,"errors":[],"warnings":[],"dirty":false,"effects":[],"focus_follows_mouse":false})
     );
     assert_eq!(pan(&mut h), 250.0);
     assert_eq!(h.bookmarks(), kept);
@@ -576,7 +576,7 @@ fn a_broken_file_keeps_the_previous_config_and_reports_upstreams_message() {
     for _ in 0..2 {
         assert_eq!(
             fresh.load_config(&absent),
-            json!({"path":absent,"exists":false,"errors":[],"warnings":[],"dirty":false,"effects":[]})
+            json!({"path":absent,"exists":false,"errors":[],"warnings":[],"dirty":false,"effects":[],"focus_follows_mouse":false})
         );
         assert_eq!(pan(&mut fresh), 100.0);
         assert_eq!(fresh.bookmarks(), seeds());

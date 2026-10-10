@@ -288,7 +288,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "center-nearest <direction> runs through the action command in every normal launch, with driftwm-core's find_nearest and upstream's closest-point rule: candidates are every canvas window (detached placeholders included; no widget and no screen-pinned window) and the navigation.anchors points; the search starts at the focused window while all of it is on the output (upstream's threshold 1.0) and it is not screen-pinned, and at the viewport centre otherwise; a window is focused and flown to at the current zoom (NavZoom::Keep), and an anchor clears focus and flies the camera there. Default shell: the config file's bindings (upstream's default mod+arrows, Control-Option-arrows under the default super chord). Known mismatches: representative points come from the world rectangle, which has no separate title-bar strip; a fractional frame's visibility is measured by the largest whole-pixel rectangle inside it; there is no just-exited-fullscreen anchor; an anchor outside the ±1e12 world is not a candidate; the pointer form (MouseAction.CenterNearest) is not implemented, and the gesture form (ThresholdAction.CenterNearest) has run only as a synthetic event stream; the native focus request is performed only with Accessibility access and has never been exercised live. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/navigation_actions_flow.rs, expected targets derived by hand, not from an executed upstream oracle) and scripted msg sessions against the built app in --windowed mode on 2026-10-09 with detached placeholders only (right, left, up, down and up-right, a kept zoom, the viewport-centre origin, an anchor), which left no saved evidence. Hot-key delivery and native focus are unrun on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "center-nearest <direction> runs through the action command in every normal launch, with driftwm-core's find_nearest and upstream's closest-point rule: candidates are every canvas window (detached placeholders included; no widget and no screen-pinned window) and the navigation.anchors points; the search starts at the focused window while all of it is on the output (upstream's threshold 1.0) and it is not screen-pinned, and at the viewport centre otherwise; a window is focused and flown to at the current zoom (NavZoom::Keep), and an anchor clears focus and flies the camera there. Default shell: the config file's bindings (upstream's default mod+arrows, Control-Option-arrows under the default super chord). Known mismatches: representative points come from the world rectangle, which has no separate title-bar strip; a fractional frame's visibility is measured by the largest whole-pixel rectangle inside it; there is no just-exited-fullscreen anchor; an anchor outside the ±1e12 world is not a candidate; the gesture form (ThresholdAction.CenterNearest) has run only as a synthetic event stream, and the pointer form has its own row (MouseAction.CenterNearest); the native focus request is performed only with Accessibility access and has never been exercised live. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/navigation_actions_flow.rs, expected targets derived by hand, not from an executed upstream oracle) and scripted msg sessions against the built app in --windowed mode on 2026-10-09 with detached placeholders only (right, left, up, down and up-right, a kept zoom, the viewport-centre origin, an anchor), which left no saved evidence. Hot-key delivery and native focus are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.CycleWindows",
@@ -908,7 +908,7 @@
       },
       "contract": "Match MouseAction::CenterNearest dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -916,7 +916,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "A press whose mouse binding is center-nearest (upstream's default mod+ctrl+left, Control-Option-Command + left button under the default super chord) is upstream's NavigateGrab: nothing happens at the press, and at the first drag event 16 screen points or more from it the shell sends the pointer_nearest command once with the press point and the pointer. The controller takes the octant of press minus pointer with driftwm-core's direction_from_vector (the drag pulls the canvas, so dragging left goes to the nearest window on the right, which is what upstream's code does) and runs the center-nearest action in that direction on that output once, through the one action dispatch, whose prelude ends an open cycle and stops that output's scroll momentum; the rest of the drag is ignored, and a press released inside the 16 point dead zone, a plain click included, does nothing. Known mismatches: the controller decides from the two points it is given instead of accumulating motion, so it is upstream's only because the shell sends it once at that first event; upstream's pass_mouse window rule cannot claim the press; see Action.CenterNearest for the action's own mismatches. No evidence entry is recorded yet: the controller side is covered by an exported-C-ABI/JSON scenario (crates/desktop/tests/pointer_flow.rs: five directions, the 16 point threshold, both sides of the diagonal ratio and the dead zone, each reply compared with the center-nearest action's on an identical scene, and a cycle held open over a coasting camera that the swipe ends and stops exactly as the action does; expected values derived by hand, not from an executed upstream oracle); the shell side is compiled and reviewed only, the IPC socket has no pointer, and no press, drag or swipe has been made on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "MouseAction.Action",
@@ -1308,7 +1309,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "A swipe bound to a bare center-nearest accumulates the physical finger vector and, when it reaches gestures.swipe_threshold, fires center-nearest once in the opposite of that vector, in eight directions (driftwm-core's direction_from_vector): fingers left look right, as the canvas would follow them. The action runs through the action dispatch exactly as Action.CenterNearest does, on the gesture's output, after the same prelude (an open cycle ended, the output's scroll momentum stopped), and its flight, focus request and dirty flag come back in the gesture reply. Known mismatches: see Action.CenterNearest and GestureTrigger.Swipe; the pointer form (MouseAction.CenterNearest) is not implemented; macOS's own four-finger gestures must be turned off in System Settings by the user for the touches to arrive, which is untested. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "A swipe bound to a bare center-nearest accumulates the physical finger vector and, when it reaches gestures.swipe_threshold, fires center-nearest once in the opposite of that vector, in eight directions (driftwm-core's direction_from_vector): fingers left look right, as the canvas would follow them. The action runs through the action dispatch exactly as Action.CenterNearest does, on the gesture's output, after the same prelude (an open cycle ended, the output's scroll momentum stopped), and its flight, focus request and dirty flag come back in the gesture reply. Known mismatches: see Action.CenterNearest and GestureTrigger.Swipe; the pointer form has its own row (MouseAction.CenterNearest); macOS's own four-finger gestures must be turned off in System Settings by the user for the touches to arrive, which is untested. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ThresholdAction.Fixed",
@@ -1446,12 +1447,13 @@
       },
       "contract": "Match FocusPlacement::Center dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "focus_placement = \"center\" (the default) parks a navigated window on the centre of the usable area. The value is read by driftwm-core, an [[outputs]] entry's focus_placement overrides it for its display, and the controller's port of upstream's align_point_on applies it wherever a camera is flown to a window (navigate_window, the four window navigation actions, activate, pick, the close follow, the IPC focus request), to a new window's spawn point and to send-to-output's landing: snap.outer_gap in from the usable area on a pulled axis, and centred on an axis where the frame does not fit between its two gutters. Known mismatches: the app registers no usable area, so placement is relative to the whole view below the toolbar strip; a frame has no separate title bar or compositor border; the fullscreen, fit and fill windows upstream exempts do not exist here, and a screen-pinned window is never flown to. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/navigation_flow.rs runs all nine placements under Keep and Reset against an oracle compiled from upstream's hash-pinned function bodies, set through set_navigation_context; from a config file only top-left, bottom, left and bottom-right are read in a scenario), and the only landings observed in the running app, in scripted msg sessions on 2026-10-09 in --windowed mode with detached placeholders, were under this default and left no saved evidence. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "FocusPlacement.Top",
@@ -1463,12 +1465,13 @@
       },
       "contract": "Match FocusPlacement::Top dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "focus_placement = \"top\" parks a navigated window against the top edge of the usable area, centred horizontally. The value is read by driftwm-core, an [[outputs]] entry's focus_placement overrides it for its display, and the controller's port of upstream's align_point_on applies it wherever a camera is flown to a window (navigate_window, the four window navigation actions, activate, pick, the close follow, the IPC focus request), to a new window's spawn point and to send-to-output's landing: snap.outer_gap in from the usable area on a pulled axis, and centred on an axis where the frame does not fit between its two gutters. Known mismatches: the app registers no usable area, so placement is relative to the whole view below the toolbar strip; a frame has no separate title bar or compositor border; the fullscreen, fit and fill windows upstream exempts do not exist here, and a screen-pinned window is never flown to. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/navigation_flow.rs runs all nine placements under Keep and Reset against an oracle compiled from upstream's hash-pinned function bodies, set through set_navigation_context; from a config file only top-left, bottom, left and bottom-right are read in a scenario), and no landing under this value has been observed in the running app. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "FocusPlacement.Bottom",
@@ -1480,12 +1483,13 @@
       },
       "contract": "Match FocusPlacement::Bottom dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "focus_placement = \"bottom\" parks a navigated window against the bottom edge of the usable area, centred horizontally. The value is read by driftwm-core, an [[outputs]] entry's focus_placement overrides it for its display, and the controller's port of upstream's align_point_on applies it wherever a camera is flown to a window (navigate_window, the four window navigation actions, activate, pick, the close follow, the IPC focus request), to a new window's spawn point and to send-to-output's landing: snap.outer_gap in from the usable area on a pulled axis, and centred on an axis where the frame does not fit between its two gutters. Known mismatches: the app registers no usable area, so placement is relative to the whole view below the toolbar strip; a frame has no separate title bar or compositor border; the fullscreen, fit and fill windows upstream exempts do not exist here, and a screen-pinned window is never flown to. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/navigation_flow.rs runs all nine placements under Keep and Reset against an oracle compiled from upstream's hash-pinned function bodies, set through set_navigation_context; from a config file only top-left, bottom, left and bottom-right are read in a scenario), and no landing under this value has been observed in the running app. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "FocusPlacement.Left",
@@ -1497,12 +1501,13 @@
       },
       "contract": "Match FocusPlacement::Left dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "focus_placement = \"left\" parks a navigated window against the left edge of the usable area, centred vertically. The value is read by driftwm-core, an [[outputs]] entry's focus_placement overrides it for its display, and the controller's port of upstream's align_point_on applies it wherever a camera is flown to a window (navigate_window, the four window navigation actions, activate, pick, the close follow, the IPC focus request), to a new window's spawn point and to send-to-output's landing: snap.outer_gap in from the usable area on a pulled axis, and centred on an axis where the frame does not fit between its two gutters. Known mismatches: the app registers no usable area, so placement is relative to the whole view below the toolbar strip; a frame has no separate title bar or compositor border; the fullscreen, fit and fill windows upstream exempts do not exist here, and a screen-pinned window is never flown to. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/navigation_flow.rs runs all nine placements under Keep and Reset against an oracle compiled from upstream's hash-pinned function bodies, set through set_navigation_context; from a config file only top-left, bottom, left and bottom-right are read in a scenario), and no landing under this value has been observed in the running app. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "FocusPlacement.Right",
@@ -1514,12 +1519,13 @@
       },
       "contract": "Match FocusPlacement::Right dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "focus_placement = \"right\" parks a navigated window against the right edge of the usable area, centred vertically. The value is read by driftwm-core, an [[outputs]] entry's focus_placement overrides it for its display, and the controller's port of upstream's align_point_on applies it wherever a camera is flown to a window (navigate_window, the four window navigation actions, activate, pick, the close follow, the IPC focus request), to a new window's spawn point and to send-to-output's landing: snap.outer_gap in from the usable area on a pulled axis, and centred on an axis where the frame does not fit between its two gutters. Known mismatches: the app registers no usable area, so placement is relative to the whole view below the toolbar strip; a frame has no separate title bar or compositor border; the fullscreen, fit and fill windows upstream exempts do not exist here, and a screen-pinned window is never flown to. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/navigation_flow.rs runs all nine placements under Keep and Reset against an oracle compiled from upstream's hash-pinned function bodies, set through set_navigation_context; from a config file only top-left, bottom, left and bottom-right are read in a scenario), and no landing under this value has been observed in the running app. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "FocusPlacement.TopLeft",
@@ -1531,12 +1537,13 @@
       },
       "contract": "Match FocusPlacement::TopLeft dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "focus_placement = \"top-left\" parks a navigated window in the top-left corner of the usable area. The value is read by driftwm-core, an [[outputs]] entry's focus_placement overrides it for its display, and the controller's port of upstream's align_point_on applies it wherever a camera is flown to a window (navigate_window, the four window navigation actions, activate, pick, the close follow, the IPC focus request), to a new window's spawn point and to send-to-output's landing: snap.outer_gap in from the usable area on a pulled axis, and centred on an axis where the frame does not fit between its two gutters. Known mismatches: the app registers no usable area, so placement is relative to the whole view below the toolbar strip; a frame has no separate title bar or compositor border; the fullscreen, fit and fill windows upstream exempts do not exist here, and a screen-pinned window is never flown to. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/navigation_flow.rs runs all nine placements under Keep and Reset against an oracle compiled from upstream's hash-pinned function bodies, set through set_navigation_context; from a config file only top-left, bottom, left and bottom-right are read in a scenario), and no landing under this value has been observed in the running app. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "FocusPlacement.TopRight",
@@ -1548,12 +1555,13 @@
       },
       "contract": "Match FocusPlacement::TopRight dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "focus_placement = \"top-right\" parks a navigated window in the top-right corner of the usable area. The value is read by driftwm-core, an [[outputs]] entry's focus_placement overrides it for its display, and the controller's port of upstream's align_point_on applies it wherever a camera is flown to a window (navigate_window, the four window navigation actions, activate, pick, the close follow, the IPC focus request), to a new window's spawn point and to send-to-output's landing: snap.outer_gap in from the usable area on a pulled axis, and centred on an axis where the frame does not fit between its two gutters. Known mismatches: the app registers no usable area, so placement is relative to the whole view below the toolbar strip; a frame has no separate title bar or compositor border; the fullscreen, fit and fill windows upstream exempts do not exist here, and a screen-pinned window is never flown to. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/navigation_flow.rs runs all nine placements under Keep and Reset against an oracle compiled from upstream's hash-pinned function bodies, set through set_navigation_context; from a config file only top-left, bottom, left and bottom-right are read in a scenario), and no landing under this value has been observed in the running app. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "FocusPlacement.BottomLeft",
@@ -1565,12 +1573,13 @@
       },
       "contract": "Match FocusPlacement::BottomLeft dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "focus_placement = \"bottom-left\" parks a navigated window in the bottom-left corner of the usable area. The value is read by driftwm-core, an [[outputs]] entry's focus_placement overrides it for its display, and the controller's port of upstream's align_point_on applies it wherever a camera is flown to a window (navigate_window, the four window navigation actions, activate, pick, the close follow, the IPC focus request), to a new window's spawn point and to send-to-output's landing: snap.outer_gap in from the usable area on a pulled axis, and centred on an axis where the frame does not fit between its two gutters. Known mismatches: the app registers no usable area, so placement is relative to the whole view below the toolbar strip; a frame has no separate title bar or compositor border; the fullscreen, fit and fill windows upstream exempts do not exist here, and a screen-pinned window is never flown to. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/navigation_flow.rs runs all nine placements under Keep and Reset against an oracle compiled from upstream's hash-pinned function bodies, set through set_navigation_context; from a config file only top-left, bottom, left and bottom-right are read in a scenario), and no landing under this value has been observed in the running app. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "FocusPlacement.BottomRight",
@@ -1582,12 +1591,13 @@
       },
       "contract": "Match FocusPlacement::BottomRight dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "focus_placement = \"bottom-right\" parks a navigated window in the bottom-right corner of the usable area. The value is read by driftwm-core, an [[outputs]] entry's focus_placement overrides it for its display, and the controller's port of upstream's align_point_on applies it wherever a camera is flown to a window (navigate_window, the four window navigation actions, activate, pick, the close follow, the IPC focus request), to a new window's spawn point and to send-to-output's landing: snap.outer_gap in from the usable area on a pulled axis, and centred on an axis where the frame does not fit between its two gutters. Known mismatches: the app registers no usable area, so placement is relative to the whole view below the toolbar strip; a frame has no separate title bar or compositor border; the fullscreen, fit and fill windows upstream exempts do not exist here, and a screen-pinned window is never flown to. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/navigation_flow.rs runs all nine placements under Keep and Reset against an oracle compiled from upstream's hash-pinned function bodies, set through set_navigation_context; from a config file only top-left, bottom, left and bottom-right are read in a scenario), and no landing under this value has been observed in the running app. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "HotCorner.TopLeft",
@@ -4740,7 +4750,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for focus_follows_mouse.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -4753,7 +4763,8 @@
           "source_assignment": "focus_follows_mouse = false",
           "value": false
         }
-      ]
+      ],
+      "implementation_note": "With focus_follows_mouse = true the controller's hover command, which the shell sends for pointer motion over a canvas panel while no button is down (at most once per 60 Hz frame), is upstream's maybe_hover_focus: the window under the pointer in the layered hit order (the windows pinned to the output, then the canvas windows, then the widgets), a detached placeholder (upstream's stand-in) included, takes logical focus without being raised and with no camera motion, a screen-pinned window before the canvas beneath it and outside the focus history; a widget is passed over, pinned or not, and its application still gets the motion; empty canvas keeps the focus; a window that already holds the focus intent is left alone; a drag or resize gesture (a move gesture's drag and a pick-mode press's included), a drag pan whose button is down and a native resize that has not drained stand for upstream's pointer grab, and a trackpad gesture between its begin and its end and a scroll pan whose momentum is yet to launch hold the pointer as well; a hover stops no flight and no coast. The focus request goes to the navigation coordinator like a click's (performed natively with Accessibility access, otherwise answered focus_logical), and a native focus report that only echoes it is recorded without a raise or a flight; a request that failed or was withdrawn unanswered stops counting as echoed 3 seconds after its hover, on the controller's tick clock. With false (the default) hover reports the hit and moves no focus. A config reload applies at the next hover. Known mismatches: an open focus cycle also blocks hover focus, where upstream's hover would end the cycle; a trackpad gesture and a scroll about to launch block it too, which are no pointer grab upstream; the focus history is promoted when the request is answered, not at the hover; the native request activates and raises the real window although the canvas does not restack; the echo rule has no upstream counterpart; there are no fullscreen or modal windows, layer surfaces or client resize margins for upstream's exclusions and redirections to apply to; the cursor does not change. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/pointer_flow.rs, a pinned window and a widget under the pointer among them, synthetic identities and focus results, expected values derived by hand, not from an executed upstream oracle) and one scripted launch of the built app on 2026-10-10 in --windowed mode with detached placeholders only, where the setting loaded as true and was reloaded as false with nothing on stderr; msg exposes neither the setting nor hover, so no pointer motion, no hover in the app, no native focus change and no echo has been observed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.window_placement",
@@ -6530,7 +6541,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for zoom.interact_min.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -6543,7 +6554,8 @@
           "source_assignment": "interact_min = 0.0          # zoom (1.0 = 100%) below which a window is too",
           "value": 0.0
         }
-      ]
+      ],
+      "implementation_note": "zoom.interact_min is the zoom below which an output is in upstream's pick mode: a pure function of that output's live zoom (strictly below; 0, the default, is off; driftwm-core clamps the value to 0..1 with upstream's warning). hit, input and hover report a canvas window or placeholder under the pointer there as a pick target and snapshot.outputs[].pick the mode; a screen-pinned window and a widget are never one and keep their pointer input, a pinned window also where it lies over a target; input refuses a pick target and hover answers forward false, so no press, drag, scroll or motion can be forwarded to its application. The shell focuses and raises a target at a press with any button and swallows the press, unless a held-modifier binding claims it (upstream's try_pick_button rule, answered by mouse_binding with pick), starts a single-window move once a left press drags past the 5 point click slop, and at a left release within the slop on the same display sends pick: upstream's resolve_pick, a navigation to the window at zoom 1 that lands per focus_placement. A scroll with no window binding over a target is looked up again in the canvas context, and what is found there pans, with momentum, or zooms like any bound scroll; one with no binding there either goes nowhere. A window drag begun from a pick-mode press is a drag like any other, edge pan included. Trackpad gestures do not read pick mode, as upstream's gesture handlers do not: a move gesture over a target moves it. A config reload applies at once. Known mismatches: pick mode is per output, not the active output's; a filled window is not returned to its fill view (fill-window is gated), so a pick always lands at zoom 1; there is no pointing-hand cursor over a target; there is no fullscreen window to exclude, a pinned window is not dragged in screen space from a press there (it is not dragged at any zoom), a widget's pointer input below the threshold was not compared with upstream's pointer focus for a widget, and the pass_mouse rule is recorded and never applied; a placeholder has no chrome to bypass, and the shell's Control-Option-click dismissal of a placeholder becomes a pick in pick mode. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/pointer_flow.rs: zoom 0.4 under a threshold of 0.5, at 0.5 and 0.6, the threshold off, a second output, a live reload, drags of a window and of a stand-in, picks landing under focus_placement top-left with an outer gap, and a pinned window over a target and a widget beside it, neither picked; expected values derived by hand, not from an executed upstream oracle) and one scripted launch of the built app on 2026-10-10 in --windowed mode with detached placeholders only, where interact_min = 0.5 loaded with nothing on stderr, eight zoom-out actions took msg zoom from 1 to 0.467 and zoom-reset back to 1, and -1 and 5 written to the file were reported with upstream's below-minimum and above-maximum warnings; msg does not expose pick mode, so the mode itself, a pick-mode press, drag, pick or scroll and the refusal of forwarded input have not been observed in the app. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.snap.enabled",
@@ -9593,7 +9605,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for mouse.anywhere.mod+ctrl+left.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -9606,7 +9618,8 @@
           "source_assignment": "\"mod+ctrl+left\" = \"center-nearest\" # direction from drag delta",
           "value": "center-nearest"
         }
-      ]
+      ],
+      "implementation_note": "Upstream's default mouse binding, read by driftwm-core. The shell asks the mouse_binding command on every press with the physical modifiers held and the window or canvas context, and upstream's ContextBindings lookup (the pointer's own context before anywhere) answers center_nearest for Control-Option-Command + left button (ctrl displaced to Command under the default super chord), over a window or empty canvas; the shell then holds the press as upstream's NavigateGrab and sends pointer_nearest once, at the first drag event 16 points from the press (see MouseAction.CenterNearest). An entry for the same combo in the same [mouse.*] table replaces it, and \"none\" removes it. Known mismatches: those of MouseAction.CenterNearest. No evidence entry is recorded yet: the lookup and pointer_nearest are covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/config_flow.rs, pointer_flow.rs); the shell side is compiled and reviewed only, and every pointer press, drag and scroll is unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.mouse.anywhere.mod+trackpad-scroll",
@@ -11815,13 +11828,14 @@
       },
       "contract": "Match Config.focus_follows_mouse type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "bool"
+      "source_type": "bool",
+      "implementation_note": "With focus_follows_mouse = true the controller's hover command, which the shell sends for pointer motion over a canvas panel while no button is down (at most once per 60 Hz frame), is upstream's maybe_hover_focus: the window under the pointer in the layered hit order (the windows pinned to the output, then the canvas windows, then the widgets), a detached placeholder (upstream's stand-in) included, takes logical focus without being raised and with no camera motion, a screen-pinned window before the canvas beneath it and outside the focus history; a widget is passed over, pinned or not, and its application still gets the motion; empty canvas keeps the focus; a window that already holds the focus intent is left alone; a drag or resize gesture (a move gesture's drag and a pick-mode press's included), a drag pan whose button is down and a native resize that has not drained stand for upstream's pointer grab, and a trackpad gesture between its begin and its end and a scroll pan whose momentum is yet to launch hold the pointer as well; a hover stops no flight and no coast. The focus request goes to the navigation coordinator like a click's (performed natively with Accessibility access, otherwise answered focus_logical), and a native focus report that only echoes it is recorded without a raise or a flight; a request that failed or was withdrawn unanswered stops counting as echoed 3 seconds after its hover, on the controller's tick clock. With false (the default) hover reports the hit and moves no focus. A config reload applies at the next hover. Known mismatches: an open focus cycle also blocks hover focus, where upstream's hover would end the cycle; a trackpad gesture and a scroll about to launch block it too, which are no pointer grab upstream; the focus history is promoted when the request is answered, not at the hover; the native request activates and raises the real window although the canvas does not restack; the echo rule has no upstream counterpart; there are no fullscreen or modal windows, layer surfaces or client resize margins for upstream's exclusions and redirections to apply to; the cursor does not change. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/pointer_flow.rs, a pinned window and a widget under the pointer among them, synthetic identities and focus results, expected values derived by hand, not from an executed upstream oracle) and one scripted launch of the built app on 2026-10-10 in --windowed mode with detached placeholders only, where the setting loaded as true and was reloaded as false with nothing on stderr; msg exposes neither the setting nor hover, so no pointer motion, no hover in the app, no native focus change and no echo has been observed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.session",
@@ -12342,13 +12356,14 @@
       },
       "contract": "Match Config.zoom_interact_min type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "f64"
+      "source_type": "f64",
+      "implementation_note": "zoom.interact_min is the zoom below which an output is in upstream's pick mode: a pure function of that output's live zoom (strictly below; 0, the default, is off; driftwm-core clamps the value to 0..1 with upstream's warning). hit, input and hover report a canvas window or placeholder under the pointer there as a pick target and snapshot.outputs[].pick the mode; a screen-pinned window and a widget are never one and keep their pointer input, a pinned window also where it lies over a target; input refuses a pick target and hover answers forward false, so no press, drag, scroll or motion can be forwarded to its application. The shell focuses and raises a target at a press with any button and swallows the press, unless a held-modifier binding claims it (upstream's try_pick_button rule, answered by mouse_binding with pick), starts a single-window move once a left press drags past the 5 point click slop, and at a left release within the slop on the same display sends pick: upstream's resolve_pick, a navigation to the window at zoom 1 that lands per focus_placement. A scroll with no window binding over a target is looked up again in the canvas context, and what is found there pans, with momentum, or zooms like any bound scroll; one with no binding there either goes nowhere. A window drag begun from a pick-mode press is a drag like any other, edge pan included. Trackpad gestures do not read pick mode, as upstream's gesture handlers do not: a move gesture over a target moves it. A config reload applies at once. Known mismatches: pick mode is per output, not the active output's; a filled window is not returned to its fill view (fill-window is gated), so a pick always lands at zoom 1; there is no pointing-hand cursor over a target; there is no fullscreen window to exclude, a pinned window is not dragged in screen space from a press there (it is not dragged at any zoom), a widget's pointer input below the threshold was not compared with upstream's pointer focus for a widget, and the pass_mouse rule is recorded and never applied; a placeholder has no chrome to bypass, and the shell's Control-Option-click dismissal of a placeholder becomes a pick in pick mode. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/pointer_flow.rs: zoom 0.4 under a threshold of 0.5, at 0.5 and 0.6, the threshold off, a second output, a live reload, drags of a window and of a stand-in, picks landing under focus_placement top-left with an outer gap, and a pinned window over a target and a widget beside it, neither picked; expected values derived by hand, not from an executed upstream oracle) and one scripted launch of the built app on 2026-10-10 in --windowed mode with detached placeholders only, where interact_min = 0.5 loaded with nothing on stderr, eight zoom-out actions took msg zoom from 1 to 0.467 and zoom-reset back to 1, and -1 and 5 written to the file were reported with upstream's below-minimum and above-maximum warnings; msg does not expose pick mode, so the mode itself, a pick-mode press, drag, pick or scroll and the refusal of forwarded input have not been observed in the app. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.snap_enabled",

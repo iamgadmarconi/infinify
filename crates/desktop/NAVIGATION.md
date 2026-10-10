@@ -272,9 +272,9 @@ Two different tests are upstream's and both are kept:
   waits out the double-click window before panning after a click on a
   server-side title bar; there is no separate title bar here, so
   `click_release` always pans at once.
-- `focus_follows_mouse` and `zoom.interact_min`'s pick mode are not
-  implemented. `auto_navigate_on_close` belongs to the
-  [window lifecycle](LIFECYCLE.md#a-window-closes).
+- `focus_follows_mouse`, `zoom.interact_min`'s pick mode and the pointer's
+  `center-nearest` are the [pointer policy](POINTER.md). `auto_navigate_on_close`
+  belongs to the [window lifecycle](LIFECYCLE.md#a-window-closes).
 - The focus history is promoted when a focus request is answered, not when
   logical focus is set: see [FOCUS.md](FOCUS.md#upstream-entry-points). A shell
   that performs no native focus answers `focus_logical`, and cycling then

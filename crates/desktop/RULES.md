@@ -181,6 +181,8 @@ flies to, grabs or sends "a window" asks it.
 | `activate`, cause `click` | focused, and a focus request returned; the answer enters no history | the same |
 | `activate`, cause `click_release` | no flight, whatever `auto_navigate_on_click` says | the same |
 | `activate`, cause `native`; `observe_focus`; `focus_result`; `focus_logical` | focus recorded, history untouched, no flight | the same |
+| `hover` ([POINTER.md](POINTER.md#screen-pinned-windows-and-widgets)) | its motion is forwarded; `focus_follows_mouse` never focuses it, and nothing beneath a pinned widget is focused either | its motion is forwarded; `focus_follows_mouse` focuses it where it stands, before the canvas window beneath it; history untouched, and the native echo of that focus neither raises nor flies |
+| pick mode, below `zoom.interact_min` | never a pick target: `hit` and `input` answer `pick: false`, `input` passes, `pick` does nothing | never a pick target: it stays interactive, also over a canvas window that is one; `pick` does nothing |
 | `begin_drag`, `begin_resize`, `begin_native_resize` | refused | refused |
 | a move gesture ([GESTURES.md](GESTURES.md#dispatch)) | grab-proof: the gesture falls back to a pan and nothing is focused | claimed and inert, state `swipe_pinned` with a `note`; nothing pans, moves or is focused |
 | a resize gesture | falls back to a pan | the gated `swipe_resize` of any window |
@@ -193,9 +195,9 @@ flies to, grabs or sends "a window" asks it.
 fires them (a key, IPC, a hot corner, a gesture), upstream's action prelude
 runs first, so an open cycle ends and the output's scroll momentum stops.
 
-The hit order every one of these reads is that of `hit` and `input`: the
-windows pinned to the output, the canvas windows, the widgets. `focus-center`
-alone reads the canvas windows only.
+The hit order every one of these reads is that of `hit`, `input` and `hover`:
+the windows pinned to the output, the canvas windows, the widgets.
+`focus-center` alone reads the canvas windows only.
 
 ## Wire contract
 
@@ -404,7 +406,9 @@ a drag adopted as a widget; output removal with and without a settle, and the
 shell's own order for a screen change (remove both, register both or one,
 `outputs_settled`), with a display that returns smaller; the save file and
 two next launches. Expected rectangles are derived by hand from upstream's
-conventions.
+conventions. The `hover` and pick-mode rows of the table above are driven by
+[`tests/pointer_flow.rs`](tests/pointer_flow.rs)
+([POINTER.md](POINTER.md#evidence-and-limits)), the same way.
 
 It is evidence of the controller's arithmetic and ordering only. Nothing here
 shows that a native window is drawn at an opacity, blurred, kept above

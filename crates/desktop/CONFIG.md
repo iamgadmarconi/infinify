@@ -10,10 +10,10 @@ shapes, `ABI_VERSION` and `SAVE_VERSION` are unchanged.
 
 | `command.op` | Fields | Result data |
 | --- | --- | --- |
-| `load_config` | `path` string or `null` | `{path, exists, errors, warnings, dirty, effects}` |
+| `load_config` | `path` string or `null` | `{path, exists, errors, warnings, dirty, effects, focus_follows_mouse}` |
 | `set_platform` | `super`: a `+`-joined subset of `ctrl`, `alt`, `cmd` | `{super}` in canonical order |
 | `bindings` | none | key bindings as macOS chords, see [Key bindings](#key-bindings) |
-| `mouse_binding` | `trigger`, `source`, `modifiers`, `context` | `{binding}`, see [Mouse bindings](#mouse-bindings) |
+| `mouse_binding` | `trigger`, `source`, `modifiers`, `context`, optional `pick` | `{binding}`, see [Mouse bindings](#mouse-bindings) |
 | `hot_corner` | `output`, `corner`, optional `pointer`, `held` | `{navigation, effects, dirty}`, see [Hot corners](#hot-corners) |
 | `layout_changed` | `name`, `short`, `index`, `count` | `{}`, see [Keyboard layouts](#keyboard-layouts) |
 
@@ -55,6 +55,10 @@ code and wins over both.
   [gesture](GESTURES.md#set-trackpad) that had moved a camera or a window.
 - `effects` holds the [autostart](#autostart) commands on the launch load and is
   empty on every later one.
+- `focus_follows_mouse` is that setting in the configuration now in force, the
+  previous one's when the file was refused. It is there for a shell to show,
+  and the native shell does not read it: [`hover`](POINTER.md#hover) is sent
+  either way and the controller decides.
 
 Files larger than 4 MiB are refused as unreadable. That bound is not upstream's.
 
@@ -113,6 +117,8 @@ constants they replaced.
 | `[[window_rules]] app_id`, `title` | matched against the bundle identifier and the source title when a window maps, see [RULES.md](RULES.md) |
 | `[[window_rules]] position`, `pinned_to_screen`, `output`, `widget`, `focus_on_open` | where a new window is placed, whether it is pinned to an output's screen or a widget, and whether it is focused |
 | `[env]`, `[cursor] theme`, `size` | the environment of an `exec` effect |
+| `focus_follows_mouse` | whether `hover` moves the focus to the window under the pointer, without raising it; see [POINTER.md](POINTER.md#sloppy-focus) |
+| `[zoom] interact_min` | the zoom below which an output is in [pick mode](POINTER.md#pick-mode): `hit`, `input`, `hover`, `pick` and the `pick` flag of `mouse_binding` |
 
 Once a config is loaded, `focus_placement`, `navigation.camera_speed` and
 `snap.outer_gap` supersede the `focus_placement`, `camera_speed` and `outer_gap`
@@ -129,9 +135,9 @@ edges and divided by the current zoom on each update, as before.
 Everything else in the file is parsed, validated and warned about by upstream's
 code, and then unused, because the feature it configures does not exist here:
 
-- `focus_follows_mouse`, `[xwayland]`
+- `[xwayland]`
 - `[navigation] resize_step`, `touch_speed`
-- `[zoom] touch_speed`, `interact_min`
+- `[zoom] touch_speed`
 - `[input.keyboard] layout`, `variant`, `options`, `model`,
   `remember_layout_per_window`, `num_lock`, `caps_lock`: these have no macOS
   meaning, see [Keyboard layouts](#keyboard-layouts)
@@ -375,6 +381,8 @@ a virtual key code, so nothing registers it as a hot key in either case.
   that is not a finger.
 - `modifiers`: the physical modifiers held. A missing member is not held.
 - `context`: `window` when the pointer is over a window, else `canvas`.
+- `pick`, optional: true when that window is a pick target, as `hit` reports
+  it. The lookup then follows upstream's [pick mode](POINTER.md#pick-mode).
 
 The reply is `{"binding":null}` or
 

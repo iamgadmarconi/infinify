@@ -140,6 +140,22 @@ impl Motion {
     pub(crate) fn clear_edge_pan(&mut self, output: OutputId) {
         self.edge_pans.remove(&output);
     }
+    /// A pan has the pointer, for `hover`. A drag pan whose button is still
+    /// down is upstream's PanGrab. A timed pan whose momentum is yet to launch
+    /// is a scroll still under the fingers, or just let go: upstream's own
+    /// timer launches it MOMENTUM_LAUNCH_DELAY after the last pan event, so at
+    /// `now_ms`, a time on the pans' own event clock, a launch that late has
+    /// happened there whether or not a `pan_end` reached this controller.
+    /// Without a time it is pending until `pan_end` or a stop. A coast, an
+    /// edge pan and a `zoom_by` pinch hold nothing.
+    pub(crate) fn holds_pointer(&self, now_ms: Option<u32>) -> bool {
+        self.momentum.values().any(|coast| {
+            coast.panning
+                || coast.pending_ms.is_some_and(|last| {
+                    now_ms.is_none_or(|now| now.wrapping_sub(last) < MOMENTUM_LAUNCH_DELAY_MS)
+                })
+        })
+    }
     /// The outputs whose cameras are coasting.
     pub(crate) fn coasting(&self) -> Vec<OutputId> {
         self.momentum

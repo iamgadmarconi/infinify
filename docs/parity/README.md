@@ -220,8 +220,9 @@ device-specific behavior also need the corresponding hardware.
   click's release as upstream does, without upstream's title-bar double-click
   deferral; every canvas press ends an open cycle at the press; an IPC
   `cycle-windows` is always one committed step; the pointer `center-nearest`
-  swipe and `focus_follows_mouse` are absent, and so was
-  `auto_navigate_on_close` until the window lifecycle milestone below. See the
+  swipe and `focus_follows_mouse` were absent until the pointer policy
+  milestone below, and so was `auto_navigate_on_close` until the window
+  lifecycle milestone below. See the
   [desktop shell notes](../../native/desktop/README.md#window-navigation-and-native-focus)
   and the [navigation](../../crates/desktop/NAVIGATION.md#window-navigation-actions)
   and [focus](../../crates/desktop/FOCUS.md) contracts.
@@ -373,8 +374,7 @@ device-specific behavior also need the corresponding hardware.
   slot has that exact title. See the
   [lifecycle contract](../../crates/desktop/LIFECYCLE.md) and the
   [desktop shell notes](../../native/desktop/README.md#managed-windows).
-- `f083155`, camera motion, makes the camera move as
-  DriftWM's does. The
+- `f083155`, camera motion, makes the camera move as DriftWM's does. The
   controller keeps upstream's own `MomentumState` (`driftwm-core`) per output and
   gains additive commands and fields: a timed `pan` scaled by
   `navigation.trackpad_speed` or `mouse_speed`, `pan_end`, a `pointer` report,
@@ -778,6 +778,153 @@ device-specific behavior also need the corresponding hardware.
   [rendering contract](../../crates/desktop/RENDER.md), the
   [desktop shell notes](../../native/desktop/README.md#rendering) and the
   [compositor notes](../../native/desktop/COMPOSITOR-NOTES.md).
+- This milestone (commit pending), pointer policy: what DriftWM does with a
+  pointer that moves. Until now the shell handled no mouse-moved event, so an
+  application under the canvas never saw the pointer move,
+  `focus_follows_mouse` and `[zoom] interact_min` were read and ignored, and a
+  press bound to the mouse action `center-nearest` only said it was not
+  implemented. The controller gains `hover` (upstream's `maybe_hover_focus`:
+  with `focus_follows_mouse` the topmost window under the pointer, a stand-in
+  included, takes logical focus without being raised and without a flight;
+  empty canvas keeps the focus; a drag or resize gesture, a native resize that
+  has not drained and an open focus cycle hold it back; the reply also says
+  whether the motion is the window's to receive), upstream's `pick_mode` per
+  output from the live zoom and `zoom.interact_min` (reported by `hit`,
+  `input`, `hover` and `snapshot.outputs[].pick`; `input` refuses a pick
+  target, so nothing can be forwarded to it; `mouse_binding` takes a `pick`
+  flag for upstream's held-modifier rule and its canvas-context retry of an
+  unbound scroll), `pick` (upstream's `resolve_pick`: navigate to the window at
+  zoom 1, landing per `focus_placement`) and `pointer_nearest` (upstream's
+  `NavigateGrab`: the 16 point dead zone, the octant of press minus pointer by
+  `driftwm-core`'s `direction_from_vector`, then the `center-nearest` action).
+  A native focus report that is only the echo of a hover's own request is
+  recorded without a raise or a flight; a request that failed or was withdrawn
+  unanswered stops counting as echoed 3 seconds after its hover, on the
+  controller's tick clock. All of it is in one new module,
+  `crates/desktop/src/pointer_policy.rs`; `ABI_VERSION` and every existing
+  command shape are unchanged. The shell gains `native/desktop/pointer-hover.{h,m}`:
+  a tracking area that is always active on each canvas panel of a normal run,
+  one `hover` per 60 Hz frame while no button is down and no gesture runs,
+  the reply's focus request handed to the navigation coordinator like a
+  click's, the motion re-addressed to the window under the pointer through the
+  route and validation a click takes, the pick-mode press, drag and release,
+  and the swipe; `--no-hover-forwarding` turns off only the delivery of motion
+  to applications.
+  It was built on `1f44d0f`. Merged onto `f083155`, the pointer has one
+  reading in the shell: while camera motion's frame timer runs, each frame
+  carries the waiting hover, ahead of cursor edge pan's pointer report and the
+  tick, and the hover's own timer runs only while that one does not. What
+  holds the pointer now includes a drag pan whose button is down, a trackpad
+  gesture between its begin and its end and a scroll pan whose momentum is
+  yet to launch, which an optional `time_ms` on `hover` times on the pans' own
+  event clock; a coast, a flight and cursor edge pan hold nothing, and no
+  hover stops any of them. Below `interact_min` a scroll that finds a canvas
+  binding is that milestone's timed pan or wheel `zoom_by`, a drag is a window
+  drag with its edge pan, and a trackpad gesture is not changed, as upstream's
+  gesture handlers never read pick mode. `pointer_nearest` runs its action
+  once through the one action dispatch, with the pointer and a new optional
+  `held`, so that dispatch's prelude ends an open cycle and stops the
+  output's momentum.
+  Merged onto the per-window policy and the rendering milestone above, both
+  staged and not committed, the window under the pointer is the layered hit
+  (the windows pinned to the output, the canvas windows, the widgets). With
+  `focus_follows_mouse` a pinned window under the pointer has the priority and
+  takes the focus where it stands, as upstream asks `pinned_window_under`
+  first, and stays out of the focus history like every focus of a pinned
+  window; a widget is passed over, pinned or not, and keeps the focus where it
+  is (`hover_focus_window`); the motion is forwarded to either. The echo of a
+  hover on a pinned window is recorded without a raise or a flight. A pick
+  target is a canvas window or a stand-in: a pinned window stays interactive
+  below `interact_min`, also over a target, a widget is never picked, `pick`
+  does nothing with either, and `begin_drag` refuses both as at any zoom. The
+  no-raise focus is now `Scene::focus_in_place` in `crates/canvas`, `focus`
+  without its raise, in place of a rebuild of the scene through its saved
+  form. In the shell the one frame timer carries the waiting hover and the
+  pointer report on every frame, also while only an animated background keeps
+  it running, a stand-in's hit carries `pick` only when its placement is
+  neither pinned nor a widget, and the experimental resize handles are not
+  drawn on an output in pick mode.
+  Coverage is controller scenarios through the exported C ABI
+  (`crates/desktop/tests/pointer_flow.rs`, sixteen scenarios with synthetic
+  identities and focus results on an output whose origin is not the global
+  origin, two of them for the rules merged from `f083155` and three for a
+  pinned window and a widget under the pointer; expected values derived by
+  hand from upstream's rules, not from an executed upstream oracle), one build
+  that links both sides with
+  `-Wall -Wextra -Werror`, and two short scripted launches on 2026-10-10 of the
+  built app (`--windowed 1100x700 --manual`, private scene of three detached
+  placeholders, config and socket; macOS 27.2, Apple Silicon), which left no
+  saved evidence. Exercised there through the socket: a config with
+  `focus_follows_mouse = true` and `[zoom] interact_min = 0.5` loading with
+  nothing on stderr; eight `zoom-out` actions taking `msg zoom` from 1 to
+  0.467, below the threshold, and `zoom-reset` back to 1; a reload with
+  `focus_follows_mouse` flipped answering `ok` with nothing on stderr; the file
+  watcher reporting upstream's `config: zoom.interact_min -1 below minimum 0,
+  using 0` and `config: zoom.interact_min 5 above maximum 1, using 1`; a launch
+  with `--no-hover-forwarding` starting and answering `state`, the flag given
+  twice exiting 64; exit 0 on SIGTERM with the socket removed. The build
+  merged onto `f083155` passed `pointer_flow` with the gesture, motion,
+  navigation, lifecycle, platform, config, IPC and view scenarios and the
+  coordinator regression, and was launched twice more the same day without
+  `--manual` (9 seconds and 1 second, no Screen Recording access): the same
+  config loaded with no config line on stderr, `center-nearest right` landed
+  on the seeded window at 1950 0 and focused it, `pan-viewport right` moved
+  the camera 100 points, `zoom-to-fit` went out and came back, eight
+  `zoom-out` actions ended at 0.467 and `zoom-reset` at 1,
+  `toggle-cursor-pan` twice and `set-trackpad off` and `on` answered `ok`, the
+  reload and the two range warnings came as before, and a launch with
+  `--no-hover-forwarding` answered `state`; both exited 0 with the socket
+  removed. The build merged onto the per-window policy and rendering passed
+  `pointer_flow` with the rules, render, gesture, motion, navigation,
+  lifecycle, platform, config, IPC, view and controller scenarios and the
+  coordinator regression, and was launched twice the same day (6 seconds and
+  under a second, the same three detached placeholders, no Screen Recording
+  access): the same config loaded with no config line on stderr,
+  `center-nearest right` landed at 1950 0 with the seeded window focused,
+  `pan-viewport right` moved the camera 100 points, `zoom-to-fit` went to
+  0.2848 and came back, eight `zoom-out` actions ended at 0.4665, where a
+  `msg screenshot` of the view showed the focused stand-in on the dot grid,
+  `zoom-reset` returned to 1, the reload with `focus_follows_mouse` flipped
+  answered `ok`, a `window` screenshot wrote the 900×600 stand-in,
+  `toggle-cursor-pan` twice answered `ok`, `msg pin` on a stand-in was refused
+  in upstream's words with and without `on`, and a launch with
+  `--no-hover-forwarding` answered `state`; both exited 0 with the socket
+  removed.
+  Evidence boundary: the socket has no pointer and `msg` exposes neither pick
+  mode nor `focus_follows_mouse`, so `hover`, sloppy focus, `pick` and
+  `pointer_nearest` were exercised only through the controller's C ABI tests;
+  in the app only the settings' loading and the zoom crossing the threshold
+  were seen. No real pointer motion, no mouse-moved event at a canvas panel, no
+  native focus change, no forwarded mouse-moved event, no pick-mode press and
+  no swipe was observed in this session, and no window with a bound source was
+  on the canvas. What the merges added in the shell (the hover carried by the
+  frame timer, also while it serves an animated background alone, the pointer
+  reading shared with cursor edge pan's report, the hover standing down for a
+  trackpad gesture, a pick-mode scroll that drifts, the handles left off in
+  pick mode, a stand-in's pick flag) is compiled and read only, and no pinned
+  window and no widget was on the canvas of any launch: a stand-in cannot be
+  pinned. Known mismatches: a trackpad gesture in progress
+  and a scroll about to launch its momentum hold the pointer from hover,
+  which are no pointer grab upstream; the cursor stays the canvas's own (no
+  pointing hand over a pick target, no application cursor); no leave is
+  delivered when the pointer moves off a window; the native request of a hover
+  focus is a click's, so the real window is activated and raised natively
+  although the canvas does not restack; the focus history is promoted when the
+  request is answered, not at the hover; an open focus cycle blocks hover focus
+  where upstream's hover would end the cycle; the echo rule has no upstream
+  counterpart; `pick` never returns a filled window to its fill view
+  (`fill-window` is gated) and always lands at zoom 1; pick mode is per output,
+  not the active output's; `pointer_nearest` decides from two points, so it is
+  upstream's only because the shell sends it once at the first drag event 16
+  points from the press; upstream's exclusions for layer surfaces, fullscreen
+  and modal windows and client resize margins have nothing to apply to, and
+  `pass_mouse` is recorded and never applied; a pinned window is not dragged
+  in screen space, below the threshold or above it; a widget below the
+  threshold keeps its pointer input, which follows from `input` refusing pick
+  targets only and was not compared with upstream's pointer focus for a
+  widget there. See the
+  [pointer contract](../../crates/desktop/POINTER.md) and the
+  [desktop shell notes](../../native/desktop/README.md#pointer-motion-sloppy-focus-and-pick-mode).
 
 These milestones add evidence to partial rows. None satisfies an entire native
 behavior row or changes the completion requirement.

@@ -14,6 +14,7 @@ mod lifecycle;
 mod motion;
 mod navigation;
 mod output_actions;
+mod pointer_policy;
 mod render;
 mod resize_transaction;
 mod rules;
@@ -178,6 +179,11 @@ struct FocusRuntime {
     /// The focused window whose request the adapter answered `focus_logical`:
     /// logical focus stands in for a native confirmation that cannot come.
     logical: Option<WindowId>,
+    /// The requests hover focus made, oldest first, whose native answer may
+    /// still arrive as an observation, each with the navigation clock it was
+    /// made at. See `pointer_policy`.
+    #[serde(skip)]
+    hover: Vec<(FocusEffect, Option<u64>)>,
 }
 #[derive(Clone, Debug, Default)]
 pub struct Controller {
@@ -436,6 +442,32 @@ pub enum Command {
         source: Option<ScrollSource>,
         modifiers: MacModifiers,
         context: PointerContext,
+        /// The pointer is over a pick target in pick mode, as `hit` reported.
+        #[serde(default)]
+        pick: bool,
+    },
+    /// The pointer moved over `output` with no button down, to the global
+    /// point `screen`. `time_ms` is when, on the clock a timed `pan` carries:
+    /// with it a scroll pan stops holding the pointer once its launch is due.
+    Hover {
+        output: OutputId,
+        screen: Point,
+        #[serde(default, deserialize_with = "motion::time_ms")]
+        time_ms: Option<u32>,
+    },
+    /// A left click in pick mode, released without a drag.
+    Pick {
+        window: WindowId,
+        output: OutputId,
+    },
+    /// A press bound to `center-nearest`, dragged from the global point
+    /// `start` to `screen`. `held` is as `action` takes it.
+    PointerNearest {
+        output: OutputId,
+        screen: Point,
+        start: Point,
+        #[serde(default)]
+        held: bool,
     },
     RegisterOutput {
         stable_id: String,
@@ -736,7 +768,7 @@ impl Controller {
             self.stop_momentum(*output);
         }
         match command {
-            Command::Snapshot {} => return self.snapshot(),
+            Command::Snapshot {} => return self.pointer_snapshot(),
             Command::BeginNativeResize {
                 window,
                 output,
@@ -885,7 +917,7 @@ impl Controller {
                 height,
                 error,
             } => return self.screenshot_result(path, width, height, error),
-            Command::LoadConfig { path } => return self.load_config(path),
+            Command::LoadConfig { path } => return self.pointer_config(path),
             Command::SetPlatform { super_chord } => return self.set_platform(&super_chord),
             Command::Bindings {} => return Ok(self.bindings()),
             Command::HotCorner {
@@ -906,7 +938,20 @@ impl Controller {
                 source,
                 modifiers,
                 context,
-            } => return Ok(self.mouse_binding(trigger, source, modifiers, context)),
+                pick,
+            } => return Ok(self.pointer_binding(trigger, source, modifiers, context, pick)),
+            Command::Hover {
+                output,
+                screen,
+                time_ms,
+            } => return self.hover(output, screen, time_ms),
+            Command::Pick { window, output } => return self.pick(window, output),
+            Command::PointerNearest {
+                output,
+                screen,
+                start,
+                held,
+            } => return self.pointer_nearest(output, screen, start, held),
             Command::RegisterOutput {
                 stable_id,
                 screen_bounds,
@@ -1333,12 +1378,12 @@ impl Controller {
                     generation,
                 });
             }
-            Command::Hit { output, screen } => return self.hit(output, screen, None),
+            Command::Hit { output, screen } => return self.pointer_hit(output, screen, None),
             Command::Input {
                 output,
                 screen,
                 identity,
-            } => return self.hit(output, screen, Some(&identity)),
+            } => return self.pointer_hit(output, screen, Some(&identity)),
             Command::BeginDrag {
                 window,
                 output,

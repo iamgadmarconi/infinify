@@ -423,6 +423,10 @@ impl Controller {
                 {
                     return Ok(Moved::default().reply_with_dirty());
                 }
+                // A hover focus's own echo: recorded where the window stands.
+                if let Some(echo) = self.hover_echo(&observed)? {
+                    return Ok(echo);
+                }
                 // The observation is the focus: nothing is asked of the adapter.
                 self.finish_cycle();
                 self.focus.pending_effect = None;

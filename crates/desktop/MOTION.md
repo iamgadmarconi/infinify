@@ -96,13 +96,16 @@ the same result in one call.
 runs for one output on:
 
 - the prelude of every `action` that names an output, of an `ipc` `Action`,
-  of the action a [`hot_corner`](CONFIG.md#hot-corners) runs and of an action
-  a gesture's threshold or hold fires, whatever the action then does
+  of the action a [`hot_corner`](CONFIG.md#hot-corners) runs, of an action
+  a gesture's threshold or hold fires and of the `center-nearest` a
+  [`pointer_nearest`](POINTER.md#pointer_nearest) fires past its dead zone,
+  whatever the action then does
   (upstream's `execute_action`, which there also
   [ends an open cycle](IPC.md#action)); the
   direct `pan_viewport`, `home_toggle`, `zoom_in`, `zoom_out`, `zoom_reset` and
   `zoom_to_fit` commands stop it the same way, also when they arm nothing
-- every command that arms a flight: `navigate_window` and an armed
+- every command that arms a flight: `navigate_window`, a
+  [`pick`](POINTER.md#pick-mode) and an armed
   `cycle_navigate` (upstream's `set_camera_anchor`), the `ipc` `Camera`, `Zoom`
   and `Focus` requests, `go-to-bookmark`, a wheel `zoom_by`, and the flights of
   the windows themselves: an [`activate`](NAVIGATION.md#activate) that brings
@@ -127,7 +130,8 @@ with none.
 
 An `action` aimed at no output (`"output": null`) stops nothing, as upstream's
 prelude does nothing without an active output. A refused action changes
-nothing.
+nothing. A [`hover`](POINTER.md#hover) stops nothing either, whether it moves
+the focus or not.
 
 ## Frames
 
@@ -251,6 +255,13 @@ one forwarded to a native window, is the shell's to hold back: see
 the `pointer` and `tick_navigation` replies, say whether the shell has to keep
 reporting: true exactly while the flag is on.
 
+`pointer` is read for cursor edge pan and nothing else. What a moving pointer
+focuses and whose its motion is are [`hover`](POINTER.md#hover)'s, a command of
+its own, and the two do not depend on each other: an armed cursor edge pan
+holds no pointer from a hover, where a drag pan that has not had its `pan_end`
+and a scroll pan yet to launch do
+([POINTER.md](POINTER.md#what-holds-the-pointer)).
+
 ## Pointer zoom
 
 `zoom_by` replaces the zoom factors the shell used to compute. Both sources
@@ -363,8 +374,14 @@ is never sent. A window drag sends `pointer` with every `gesture_to`, the frame
 timer starts when a reply's `needs_frames` says so, and while the snapshot's
 `needs_pointer` is true the pointer is reported before each frame and at the
 idle poll, except while a canvas panel holds a button gesture of any kind: a
-drag pan, a window drag, a press forwarded to a native window or a native
-resize. Wheel input during a window drag is dropped instead of being sent as a
+drag pan, a window drag, a press forwarded to a native window, a pick-mode or
+`center-nearest` press, or a native resize. That report and the
+[`hover`](POINTER.md#hover) of a moving pointer use one reading of the
+pointer: while the frame timer runs, a frame reads it once and sends the
+waiting hover, then the report, then the tick. A frame of that timer that
+serves an animated background alone ([RENDER.md](RENDER.md)) sends the
+hover and the report the same way and leaves the tick to the idle poll.
+Wheel input during a window drag is dropped instead of being sent as a
 `zoom_by` that would be refused. No pinch is sent as `zoom_by`: AppKit's
 magnify events and the recogniser's pinches go through the gesture commands,
 where the `[gestures]` tables decide what a pinch does, so one magnify event

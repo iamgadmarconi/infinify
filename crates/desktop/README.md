@@ -47,8 +47,11 @@ Preserve them as integers in native code.
 | `focus` | `window` | `effect` or null; raises logical world z-order |
 | `activate` | `window`, `output` or null, `cause: click / click_release / native`, optional `identity`, `generation` | `effect` or null (absent for `click_release`), `navigation` or null, `dirty`; see [NAVIGATION.md](NAVIGATION.md#activate) |
 | `clear_focus` | none | `{dirty}`; no window holds logical focus |
-| `hit` | `output`, global `screen` point | `hit` object or null; it says whether the window is a `widget` or `pinned` |
-| `input` | `output`, global `screen` point, expected `identity` | same hit object; rejects absent/unbound/stale target |
+| `hit` | `output`, global `screen` point | `hit` object or null, and `pick`; the hit says whether the window is a `widget` or `pinned`, and whether it is a `pick` target |
+| `input` | `output`, global `screen` point, expected `identity` | same hit object; rejects absent/unbound/stale target, and a pick target (never a widget or a pinned window) |
+| `hover` | `output`, global `screen` point, optional `time_ms` | `{dirty, pick, hit, forward}`, and `effect` when sloppy focus moved the focus; see [POINTER.md](POINTER.md#hover) |
+| `pick` | `window`, `output` | `{effect, navigation, dirty}`; a left click in pick mode |
+| `pointer_nearest` | `output`, global `screen` and `start` points, optional `held` | `{navigation, effects, dirty}`; a press bound to the mouse action `center-nearest` |
 | `begin_drag` | `window`, `output`, optional `group` boolean (default false) | `{}` |
 | `begin_resize` | `window`, `output`, `edges`, optional `group` boolean | `{}` |
 | `gesture_to` | total `screen_delta` from gesture start, optional global `pointer` point | `{needs_frames}`; a drag's `pointer` arms edge pan |
@@ -56,13 +59,13 @@ Preserve them as integers in native code.
 | `gesture_begin` | `kind`, `fingers`, `modifiers`, `context`, `output`, global `pointer` point, optional `doubletap`, `time_ms` | `{gesture, fired, note, navigation, effects, dirty, needs_frames, trackpad}` |
 | `gesture_update` | optional `dx`, `dy`, `scale`, `rotation`, `held`; `time_ms` | the same |
 | `gesture_end` | optional `cancelled`, `held`; `time_ms` | the same |
-| `snapshot` | none | `outputs`, `windows`, `focused`, `placements`, `lifecycle`, `render`, `evidence`; each window with its `widget`, `pinned` and `rule`, each placement with `pinned`, `widget` and `opacity`, and both with what the window is drawn with (`kind`, `decoration` and the rest of [RENDER.md](RENDER.md#placements)) |
+| `snapshot` | none | `outputs`, `windows`, `focused`, `placements`, `lifecycle`, `render`, `evidence`; each output with `pick` ([POINTER.md](POINTER.md#pick-mode)), each window with its `widget`, `pinned` and `rule`, each placement with `pinned`, `widget` and `opacity`, and both with what the window is drawn with (`kind`, `decoration` and the rest of [RENDER.md](RENDER.md#placements)) |
 | `screenshot_result` | `path`, `width`, `height`; or `error` | `{reply}`: upstream's reply to the client that asked for the screenshot |
 | `save` / `load` | explicit caller `path` string | `{}` |
-| `load_config` | `path` string or null | `{path, exists, errors, warnings, dirty, effects}` |
+| `load_config` | `path` string or null | `{path, exists, errors, warnings, dirty, effects, focus_follows_mouse}` |
 | `set_platform` | `super` chord | `{super}` |
 | `bindings` | none | key bindings as macOS chords, the `cycle_hold` modifiers, and each output's hot corners |
-| `mouse_binding` | `trigger`, `source`, `modifiers`, `context` | `{binding}` or `{binding: null}` |
+| `mouse_binding` | `trigger`, `source`, `modifiers`, `context`, optional `pick` boolean | `{binding}` or `{binding: null}` |
 | `hot_corner` | `output`, `corner`, optional `pointer`, `held` | `{navigation, effects, dirty}` |
 | `layout_changed` | `name`, `short`, `index`, `count` | `{}` |
 | `state_event` | `output` or null | `{line}`: the State event line, or null when unchanged |
@@ -94,6 +97,9 @@ window mapped with, the layer and the space it is drawn in), and the
 `gesture_end`: a libinput-shaped swipe, pinch or hold dispatched against the
 `[gestures]` tables. They are apart from `begin_drag`, `begin_resize`,
 `gesture_to` and `end_gesture`, the pointer's drag and resize below.
+[Pointer policy](POINTER.md) covers `hover`, `pick` and
+`pointer_nearest`: pointer motion, `focus_follows_mouse`, the pick mode of
+`zoom.interact_min` and the pointer's `center-nearest`.
 
 ## macOS modifiers
 

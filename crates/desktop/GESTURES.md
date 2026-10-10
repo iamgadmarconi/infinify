@@ -163,6 +163,13 @@ a swipe that carries `doubletap` cancels them as soon as an
 then resolves to. With no window under the pointer to grab and no
 `N-finger-swipe` bound, that is an `unbound` gesture that stopped a flight.
 
+Neither the lookup nor a move reads [pick mode](POINTER.md#pick-mode):
+upstream's gesture handlers never ask for it, so below `zoom.interact_min` a
+gesture resolves and acts exactly as above, and a move over a pick target
+moves it. From `gesture_begin` to `gesture_end`, whatever the gesture resolved
+to, it [holds the pointer](POINTER.md#what-holds-the-pointer): a
+[`hover`](POINTER.md#hover) moves no focus and answers `forward: false`.
+
 Threshold and hold actions run through the [action dispatch](IPC.md#action),
 so each does exactly what its key binding, `msg action` or hot corner does. The
 gesture supplies what that command takes:

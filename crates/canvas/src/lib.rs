@@ -460,6 +460,16 @@ impl Scene {
         self.focused = Some(id);
         Ok(())
     }
+    /// Focus a window where it stands: `focus` without the raise. Stacking
+    /// order, focus history and an open cycle are untouched. DriftWM's hover
+    /// focus, which moves the focus and restacks nothing.
+    pub fn focus_in_place(&mut self, id: WindowId) -> Result<(), Error> {
+        if self.window(id).is_none() {
+            return Err(Error::UnknownWindow(id));
+        }
+        self.focused = Some(id);
+        Ok(())
+    }
     /// Leave no window focused. Stacking order and focus history are untouched.
     pub fn clear_focus(&mut self) {
         self.focused = None;
