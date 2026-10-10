@@ -342,6 +342,161 @@ A shell that never sends `adoption_complete` and never attaches without a world
 rectangle sees none of this: the chooser's explicit attach and rebind behave as
 they did.
 
+## Event delivery
+
+A shell that follows native windows by their events, with a slower poll behind
+them to reconcile, reports what a poll alone never did: one change twice (its
+event, then the poll), a change after the window it is about has gone or before
+that window is bound, and many changes at once. No command changes shape for
+that and no reply described above changes. This is what holds, and the one
+rule that is new.
+
+**A refused report changes nothing.** Every command is a transaction: one that
+is refused leaves the scene, the focus and its pending request, the focus
+history, the flights, `lifecycle_events` and the render revision as they were,
+and nothing of it is kept for later. A shell drops a refused report. If what it
+said is still true, the next report made from the native state says it again.
+
+**A report speaks for one binding.** `window_closed`, `retitle` and `observe`
+name a logical id and the native identity bound to it; a native `activate`
+names the binding's generation too. Each is taken only while that binding is
+the window's current one.
+
+| Report | The window it names | Answer |
+| --- | --- | --- |
+| `window_closed` | bound | as [A window closes](#a-window-closes) says, once |
+| `window_closed` | already closed, whether it left or a stand-in stayed; never bound; a waiting slot | refused, `unbound source` |
+| `window_closed`, `retitle`, `observe` | a slot another native window has taken since | refused, `stale source identity` |
+| `retitle`, `observe` | not bound: before its attach, after its close | refused, `unbound source` |
+| `retitle` | bound, with the title it already has | `{"dirty":false}` |
+| `observe` | bound, with the frame and buffer it already has | `{}`; nothing changes and no observation revision is spent |
+| new-window `attach` | a process and window number that are bound | refused, `source already attached` |
+| native `activate` | not in the scene: before its attach, or closed and gone | refused, `unknown window` |
+| native `activate` | a placeholder: a slot whose window is not back, or a stand-in | refused, `unbound source` |
+| native `activate` | an earlier binding of the window | refused, `stale source identity` or `stale binding generation` |
+| native `activate` | focused and observed already, and at least partly on its home output | `{"effect":null,"navigation":null,"dirty":false}`; nothing changes |
+| native `activate` | focused and observed already, wholly off its home output, and that output still on the flight the first report armed | the same |
+| `adoption_complete` | with nothing waiting | `{"dropped":[],"standins":[],"dirty":false}` |
+| `focus_result`, `focus_logical` | for a request since dropped or replaced | refused, `stale or superseded focus result` |
+
+So a change reported by its event and again by the poll closes a window once,
+logs one lifecycle event, moves the focus once and asks for one save.
+
+The second "focused and observed already" row is the new rule.
+[Upstream's "already active"](NAVIGATION.md#activate) needs the window on
+screen: one that is wholly off its home output is flown to, and the same report
+again used to arm that flight again, to the same place under a new generation
+and with `dirty`. While the home output is still on the flight that report
+armed, the repeat now changes nothing, as upstream's repeat sets the camera
+target it already has. The flight is known by the anchor and the zoom it was
+armed with, so one that anything has retargeted since is not it, and neither
+is a flight to the same window that lands at another zoom, as a close's flight
+to its follower does while `zoom.reset_on_activation` is on and the output is
+zoomed: the report then arms its own. Once it has landed the window is on
+screen and the row above holds. Once the user has stopped it (a pan, another
+navigation, `cancel_navigation`) with the window still out of view, the report
+is again an activation of a window off screen, and flies.
+
+The anchor is measured in the output's
+[usable area](NAVIGATION.md#the-usable-area) as it is when the report arrives.
+A flight armed on an output that has one is known all the same, and
+`lifecycle_flow`'s output has one. A usable area replaced in mid-flight moves
+no flight, which keeps the anchor it was armed with, but it moves the place
+the report would land at: the repeat then has somewhere new to go and arms
+its own flight. What upstream does with a repeat after a panel's exclusive
+zone changed was not read. No scenario in the tree replaces the area between
+two reports; one that did was run once when the two were merged, and not
+kept. The shell sends no usable area at all.
+
+**Where two reports can arrive either way round.**
+
+- *A close, and the same native identity again.* An application that keeps its
+  window object shows the same window number when the window is opened again.
+  Nothing remembers an identity that closed, so the attach is a new window by
+  [the rules every new window follows](#a-window-appears), under a new binding
+  generation: placed, focused, revealed, and logged as `open`. A stand-in its
+  close left is dormant and stays where it is, the window cascading off its
+  corner, unless a relaunch is pending for it: then the window takes the slot
+  back as any window of that app would. What was asked of the earlier binding,
+  or is still reported for it, is stale by its generation. The one identity
+  that is remembered is one a native resize transaction retired
+  ([NATIVE_RESIZE.md](NATIVE_RESIZE.md)): its attach answers
+  `source lifetime was retired`, as before.
+- *A report before the attach.* A title, a frame or native focus for a window
+  whose attach has not arrived is refused. The attach brings the title and the
+  size the window has by then, and after the launch pass it asks for the focus
+  itself. Native focus reported again once the window is bound is the focus:
+  the attach's request is dropped, and the adapter's own answer to it is then
+  refused as superseded.
+- *A report after the close.* Refused. A stand-in keeps the title its window
+  had when its close was reported.
+- *A close and the native focus that follows it.* macOS activates another
+  window when one closes, and that report comes before the close or after it.
+  After: the follower the [tiers](#a-window-closes) picked has been raised and
+  asked to take the focus, and the report replaces it with what macOS chose.
+  Before: the report moves the focus, the close is then one in the background,
+  and no follower is picked. Both end with logical and observed focus on the
+  window macOS chose, the same focus history and one `close` logged. They
+  differ in the stack, where the first has also raised its follower, and in a
+  flight the first may have armed to a follower out of view: the report arms
+  one of its own only for a window that is clipped, so for one in view the
+  camera goes on to the follower while the other window holds the focus.
+- *The end of a pass and a window still arriving.* `adoption_complete` decides
+  the slots that are waiting when it arrives. A window that was open all along
+  and is offered after it finds its slot only if `present` named it, by its
+  exact title: it then takes the held slot back and ends exactly where it would
+  have ended had it been offered in time, with one difference: a slot that
+  holds the saved focus asks for it, as every adopted slot that holds the
+  focus does after the launch pass, where within the launch pass the focus is
+  only recorded. A window `present` did not name finds its slot dropped, or a
+  dormant stand-in under `restore_windows`, and is a new window: placed,
+  focused, revealed and logged as `open`. Reports still on their way for a
+  slot the pass dropped are refused like any for a window that is gone.
+- *A size transaction in progress.* `window_closed` and `observe` are refused
+  for a window with a live native resize transaction
+  (`resize must drain before structural change; cancel and reconcile pending
+  effects`), and a native `activate` that would have to fly is refused during a
+  drag or resize gesture (`navigation during active gesture`). Unlike every
+  refusal above these are not about a binding that is no longer current: the
+  report is true and nothing has recorded it. The close must be reported again
+  once the transaction has drained, and the focus recorded with
+  [`observe_focus`](FOCUS.md), which arms no flight.
+
+**What the controller cannot tell.** These are the sender's to get right:
+
+- *A late report for the current binding.* `window_closed` carries no
+  generation. For a slot the same native identity has taken back, through a
+  relaunch of its stand-in or after a lost source, a close reported late for
+  the earlier binding is the close of the new one. A shell reports a close
+  once for each binding it holds, and lets go of the binding with that report.
+- *A window that is already gone.* An attach is taken on the sender's word that
+  the window exists. A shell reads the window afresh (its owner, its process's
+  birth) before every attach; a window that goes the moment after is closed by
+  its own report.
+- *Which of two reports is the newer.* Two reports that both name the current
+  binding are applied in the order they arrive: a frame, a title or a focus
+  that was current when its event was raised and is not when it is sent
+  overwrites a newer one. A shell reads the native state when it handles an
+  event and reports that, not what the event carried.
+- *When the launch pass is over.* Every window reported before the first
+  `adoption_complete` is one that was already open, and none reported after it
+  is, unless `present` named it and a slot was waiting for it.
+
+`lifecycle_flow` has a scenario for each: a close reported twice, for a window
+that was never bound, for a waiting slot and for a slot taken by another
+window; a title and a frame before the attach, twice while bound and after the
+close; a native identity that closes and returns, with and without a stand-in
+and through a relaunch; native focus reported early, twice on screen, twice
+off screen before and during its flight, after the flight was stopped, and
+late; an application that quits, whose windows close in a burst with the
+answers for the first arriving after the second; a close and the native focus
+that follows it in both orders; and a pass that ends before a window arrives,
+named and not named. `effects_flow` checks the event log across a repeated
+close. The two refusals of a transaction or a gesture in progress are the
+existing guards, covered where they were (`effects_flow`,
+`navigation_actions_flow`); the fallback to `observe_focus` after the second
+is the shell's and no scenario here sends it.
+
 ## Differences from upstream
 
 - **Expiry runs on the navigation clock.** Upstream's suspend and real-close
@@ -449,30 +604,34 @@ cargo test -p driftwm-desktop --test lifecycle_flow
 Two of its scenarios cross into the neighbouring contracts: a held
 `cycle-windows` followed by a close, for the one focus history, and
 `state_event` across a window that appears, is renamed, becomes a stand-in and
-is dismissed, for the [event stream](IPC.md#event-stream).
+is dismissed, for the [event stream](IPC.md#event-stream). Seven more are
+[event delivery](#event-delivery): the reports there are sent twice, late,
+early and in both orders by the test itself, never by a shell.
 
 That establishes the controller contract and nothing more. It is no evidence
 that the shell discovers a window, that a capture stream starts or stops, that
 an identity is validated, that a close button is pressed, that an application
-is launched, or that anything is drawn. Every effect in those scenarios is a
-request nobody performs, and every "window" is a JSON object. Expiry is driven
-there by `tick_navigation` timestamps the test picks, not by a clock. The
-interplay with a live native resize transaction is covered only by
-the existing guard: `window_closed` is refused while one is live on that window,
-as `remove_source` is.
+is launched, that any event of a native window reaches the shell or is
+reported once, twice or in any order, or that anything is drawn. Every effect
+in those scenarios is a request nobody performs, and every "window" is a JSON
+object. Expiry is driven there by `tick_navigation` timestamps the test picks,
+not by a clock. The interplay with a live native resize transaction is covered
+only by the existing guard: `window_closed` is refused while one is live on
+that window, as `remove_source` is.
 
 ## The app's shell
 
 [native/desktop/README.md](../../native/desktop/README.md#managed-windows) is
 the user's account of it. In this contract's terms the shell
-(`native/desktop/window-manager.m` and `main.m`):
+(`native/desktop/window-manager.m`, `window-events.m` and `main.m`):
 
 - decides which native windows are windows at all. Upstream manages
   toplevels and their dialogs (`new_toplevel`) and never a popup, a tooltip or
   a helper surface, which Wayland tells apart by role; the Mac window list has
   no role, and a normal-layer window of a regular application may be a
   browser's status bubble. A candidate (normal layer, a regular application's,
-  on screen, at least 40x40, still for one poll) is offered only when it is a
+  on screen, at least 40x40, still for 50 ms from one look at the window list
+  to a later one) is offered only when it is a
   real window: with Accessibility access, when its application reports it
   with the subrole `AXStandardWindow`, `AXDialog` or `AXSystemDialog`,
   whatever its size or title; one the application reports with another
@@ -499,10 +658,42 @@ the user's account of it. In this contract's terms the shell
   reopened after Return to desktop, with `present` built from the titled
   candidate windows of that read that exist but were not offered;
   `window_closed`, with `output`, when a managed window's number has left the
-  window list or its process is gone; `retitle` when the title changes; and
+  window list or its process is gone, or when its application has reported it
+  destroyed and the window list no longer shows it on screen; `retitle` when
+  the title changes; and
   `remove_source` with `keep_placeholder`, as before, when a capture stream
   fails while the window is still there, and for every source on Return to
   desktop and quit;
+- makes those reports from what it reads, never from what it was told
+  ([event delivery](#event-delivery)). In a managed run it is told of changes
+  by `NSWorkspace` (an application launched, terminated, activated, hidden,
+  shown, the active Space changed) and, with Accessibility access, by one
+  observer per regular application (a window created, moved, resized,
+  retitled, the focused window changed) and by each window that observer
+  knows (destroyed, miniaturized, deminiaturized). An event only chooses when
+  and where the shell looks: at one application's candidates, at one managed
+  window, or at native focus. The look is the poll's own code, which reads
+  the window list or the focused window afresh and compares it with what the
+  shell last reported. So an event that is repeated, or followed by the poll,
+  finds the window offered, bound, retitled or gone already and sends
+  nothing; a binding is let go with the one `window_closed` that reported it;
+  every `attach` re-reads the window's owner and its process's birth first;
+  and until the first pass has ended an event starts the whole pass, not one
+  application's, so every window offered before `adoption_complete` is
+  offered by that pass. The
+  poll remains, at 80 ms without Accessibility access or while an application
+  is not observed in full, and as a reconciliation once a second otherwise.
+  Native focus is read by the navigation coordinator when an application is
+  activated or changes its focused window, at the first poll after a
+  discovered window is attached (a focus event that came before the attach
+  found the window unbound, and no other follows), and by the focus poll
+  (once a second with the observers in place, twice without): a native
+  `activate` is
+  sent only when what was read differs from `focus.observed_native`. A
+  `window_closed` or `observe` refused for a live resize transaction is said
+  again by the next look, which for such a window is every poll, and a native
+  `activate` refused for a gesture is recorded with `observe_focus`, as
+  before;
 - ticks the navigation clock on every poll (80 ms), except between Return to
   desktop and the canvas reopening: a relaunch that was pending when the canvas
   closed lapses at the first tick after it reopens if that long has passed.
@@ -600,3 +791,37 @@ dismissed window. No window had a bound source, so no focus request and no
 focus history entry was produced there. The
 [shell notes](../../native/desktop/README.md#what-was-run-for-managed-windows)
 list what was read.
+
+### The event-driven shell, 2026-10-10
+
+The build that follows native windows by their events
+([event delivery](#event-delivery); the
+[shell notes](../../native/desktop/README.md#event-driven-tracking) say what
+it observes) was built, and launched four times, the fourth on the final
+build: `--windowed 1100x700` for three seconds on a private scene of the same
+three seeded slots, a config that sets nothing and a private socket, without
+Screen Recording access. Each time `state` listed the three windows on one
+output `windowed` of 1100x636, `action center-nearest right` settled the
+camera at `1950 -0` on window 2, and the app exited 0 on SIGTERM with its
+socket removed and one line on stderr, the not-managed line.
+
+Those launches are no evidence of event delivery. Without Screen Recording access
+the shell creates no window manager, and the observers belong to it: none was
+created, no window was bound, and no `attach`, `window_closed`, `retitle`,
+`observe`, `adoption_complete` or native `activate` was sent. The observers
+were run only outside the app, in a throwaway program that registers and
+counts ([what was run](../../native/desktop/README.md#what-was-run-for-event-driven-tracking)),
+which sends nothing to a controller. That a native event leads to exactly one
+report, in the order and with the answers the table above gives, rests on
+`lifecycle_flow`, where the test plays the shell, and on a reading of the
+shell's code.
+
+The build that landed has the tap bindings and the background caches beside
+the events. It was launched once more the same day, the same way but with a
+config holding one `alt+shift` tap, for four seconds: the same `state`,
+`center-nearest right` at `1950 -0` on window 2, `pan-viewport right` at
+`2050 -0`, `zoom-to-fit` at zoom `0.28484848484848485` and back, a viewport
+capture written and opened, and exit 0 on SIGTERM with its socket removed and
+the one not-managed line on stderr. It had no window manager either, so the
+paragraph above holds for it unchanged: no observer was created and no event
+of a native window was driven.

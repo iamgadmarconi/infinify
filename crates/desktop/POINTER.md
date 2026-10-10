@@ -196,7 +196,9 @@ A request answered `focus_result` without `success`, or withdrawn unanswered
 (`cancel_focus_cycle`, which a shell sends at every press), stays open until
 then: the native window may take the keyboard after the adapter gave up, and
 the shell's driver gives up after 1.5 seconds and reads native focus every
-half second. Nothing else closes it, so neither `clear_focus`, `focus_lost`, a
+half second, or at a focus event and once a second where its observers are in
+place ([LIFECYCLE.md](LIFECYCLE.md#the-apps-shell)). Nothing else closes it,
+so neither `clear_focus`, `focus_lost`, a
 reload that turns `focus_follows_mouse` off nor a native report for a window
 no hover asked for does: inside those 3 seconds a deliberate activation of the
 hovered window is still taken for the echo and neither raises nor flies, once.

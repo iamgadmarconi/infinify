@@ -20,6 +20,7 @@ static NSDictionary *focusEffect(NSDictionary *reply) {
 @property NSLock *lock;
 @property uint64_t epoch;
 @property BOOL closed, observing, flying;
+@property BOOL again; // native focus was reported to have moved while a read of it was under way
 @property NSDictionary *work; // the request handed to the driver and not yet answered
 @property NSUInteger held; // modifiers keeping a cycle session open, 0 for none
 @end
@@ -80,10 +81,15 @@ static NSDictionary *focusEffect(NSDictionary *reply) {
 }
 - (void)releaseCycle { if(self.enabled&&!self.closed)self.command(@{@"op":@"end_focus_cycle"}); }
 - (void)observe {
-    if(!self.enabled||self.closed||self.observing)return;self.observing=YES;
+    if(!self.enabled||self.closed)return;
+    // A focus event may arrive while a read is under way, and that read may have looked before the change: one more follows it.
+    if(self.observing){self.again=YES;return;}
+    self.observing=YES;
     uint64_t epoch=self.epoch;
     self.worker(^{NSDictionary *identity=[self.driver observe];self.main(^{
-        self.observing=NO;if(!identity||![self current:epoch])return;
+        // After this turn: what this read reports is followed first, so the next read is judged against the focus that leaves.
+        self.observing=NO;if(self.again){self.again=NO;self.main(^{[self observe];});}
+        if(!identity||![self current:epoch])return;
         NSDictionary *snapshot=self.command(@{@"op":@"snapshot"}),*match=nil;
         for(NSDictionary *w in snapshot[@"windows"]){id s=w[@"source"];if([s isKindOfClass:NSDictionary.class]&&sameIdentity(s[@"identity"],identity)){match=@{@"window":w[@"window"],@"identity":s[@"identity"],@"generation":s[@"generation"]};break;}}
         if(!match){for(NSDictionary *w in snapshot[@"windows"]){id source=w[@"source"];if(![source isKindOfClass:NSDictionary.class])continue;NSMutableDictionary *plain=[source[@"identity"]mutableCopy];[plain removeObjectForKey:@"owner"];if(sameIdentity(plain,identity))return;}}

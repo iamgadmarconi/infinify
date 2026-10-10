@@ -66,7 +66,7 @@ pub(crate) struct NavigationContext {
     camera_speed: f64,
     outer_gap: f64,
 }
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub(crate) struct Anchor {
     pub(crate) canvas: Point,
     pub(crate) screen: Point,
@@ -265,15 +265,14 @@ impl Controller {
             .usable_rect_local = usable_rect_local;
         Ok(())
     }
-    pub(crate) fn arm_navigation(
-        &mut self,
+    /// Where a navigation to `window` on `output` lands: the camera, the zoom
+    /// and the anchor the zoom animates around.
+    fn navigation_target(
+        &self,
         window: WindowId,
         output: OutputId,
         policy: ZoomPolicy,
-    ) -> Result<Value, Error> {
-        if self.gesture.is_some() {
-            return Err(Error::Invalid("navigation during active gesture"));
-        }
+    ) -> Result<(Point, f64, Anchor), Error> {
         let context = self.navigation_context(output)?;
         let viewport = self
             .scene
@@ -296,6 +295,31 @@ impl Controller {
         if !point_valid(target) {
             return Err(Error::Invalid("navigation target out of bounds"));
         }
+        Ok((target, zoom, anchor))
+    }
+    /// Whether `output` is already flying where a navigation to `window`
+    /// under `policy` would send it: the flight that navigation armed, still
+    /// in the air and not retargeted since. The anchor and the zoom say so:
+    /// a flight keeps both until it lands, and gives up its camera target at
+    /// its first frame.
+    pub(crate) fn flying_to(&self, window: WindowId, output: OutputId, policy: ZoomPolicy) -> bool {
+        let Ok((_, zoom, anchor)) = self.navigation_target(window, output, policy) else {
+            return false;
+        };
+        self.flights.get(&output).is_some_and(|flight| {
+            flight.zoom_target == Some(zoom) && flight.zoom_animation_anchor == Some(anchor)
+        })
+    }
+    pub(crate) fn arm_navigation(
+        &mut self,
+        window: WindowId,
+        output: OutputId,
+        policy: ZoomPolicy,
+    ) -> Result<Value, Error> {
+        if self.gesture.is_some() {
+            return Err(Error::Invalid("navigation during active gesture"));
+        }
+        let (target, zoom, anchor) = self.navigation_target(window, output, policy)?;
         // Upstream set_camera_on: a fullscreen output's camera does not move.
         if self.fullscreen_on(output).is_some() {
             return Ok(Value::Null);

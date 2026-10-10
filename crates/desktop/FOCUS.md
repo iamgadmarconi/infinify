@@ -67,7 +67,9 @@ back by an open cycle instead.
   `{"navigation":…,"dirty":false}` with no `effect` key. A native activation
   records the shell's observation instead of asking for anything: `effect` is
   always null. All three are specified in
-  [NAVIGATION.md](NAVIGATION.md#activate). A press that a binding turns into
+  [NAVIGATION.md](NAVIGATION.md#activate); what a native activation that is
+  repeated, or names a window that is not bound, is answered is in
+  [LIFECYCLE.md](LIFECYCLE.md#event-delivery). A press that a binding turns into
   a window move or resize is the same raise and focus, made by `begin_drag`,
   `begin_resize` and `begin_native_resize` themselves ahead of their grab, as
   upstream's `on_pointer_button` and `try_pinned_button` do: the request is

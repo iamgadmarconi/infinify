@@ -599,10 +599,17 @@ fn lifecycle_events_are_logged_for_what_upstream_animates_and_nothing_else() {
     expected.push(event(7, far, "close", Value::Null));
     expected.push(event(8, clock, "close", json!(1)));
     assert_eq!(h.events(), json!(expected));
+    // The poll behind an event reports a close again (LIFECYCLE.md, Event
+    // delivery): it is refused, and a refusal logs nothing.
+    h.error(json!({"op":"window_closed","window":editor,"identity":identity(19),"output":1}));
+    assert_eq!(h.events(), json!(expected));
 
     // A close that leaves a stand-in, under its rule's suspend_on_close.
     assert_eq!(h.closed(mail, json!(1))["standin"], true);
     expected.push(event(9, mail, "close_to_standin", json!(1)));
+    assert_eq!(h.events(), json!(expected));
+    // Reported again, the stand-in is not closed a second time.
+    h.error(json!({"op":"window_closed","window":mail,"identity":identity(12),"output":1}));
     assert_eq!(h.events(), json!(expected));
     // A relaunch logs nothing by itself; the window that takes the stand-in's
     // slot is the adoption upstream crossfades, and it does not open.

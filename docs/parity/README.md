@@ -1675,8 +1675,8 @@ device-specific behavior also need the corresponding hardware.
   the [configuration contract](../../crates/desktop/CONFIG.md#tap-bindings)
   and the
   [desktop shell notes](../../native/desktop/README.md#what-has-been-run-for-tap-bindings).
-- This milestone (commit pending), the background caches: the two things the
-  Metal background port had left out, both in a default launch.
+- `a47217e`, the background caches: the two things the Metal background
+  port had left out, both in a default launch.
   `[background] cache_shader = true` bakes a static shader into canvas-space
   chunk textures and pans those: upstream's rule for which shader qualifies
   (it declares `u_camera` and neither `u_time` nor `u_zoom`, has no `texture`
@@ -1802,6 +1802,89 @@ device-specific behavior also need the corresponding hardware.
   run. See the
   [render contract](../../crates/desktop/RENDER.md) and the
   [desktop shell notes](../../native/desktop/README.md#background-caches).
+- This milestone (commit pending), event-driven window tracking: the shell
+  is told of native windows instead of asking for them, the way yabai is
+  (koekeishiya/yabai `dd845723416f5fe92af49fad5ebab00369e07edd`, MIT; `NOTICE`
+  records what was adapted). A managed run observes `NSWorkspace` (an
+  application launched, terminated, activated, hidden, shown; the active
+  Space changed) and, with Accessibility access, one observer per regular
+  application on the main run loop (a window created, moved, resized,
+  retitled; the focused window changed) and each window that observer knows
+  (destroyed, miniaturized, deminiaturized), in the new
+  `native/desktop/window-events.{h,m}`. An event is only a hint to look now:
+  it runs the pass or the per-window look the poll runs, for the application
+  or window concerned, which reads the window list or native focus afresh,
+  so a new window is offered through the unchanged rules (the Accessibility
+  subrole test; still for 50 ms of wall time, where it was one poll), a
+  close sends `window_closed`, a title `retitle`, a frame `observe`, and a
+  focus change the coordinator's native `activate`. The poll stays: every
+  80 ms as before without Accessibility access or while an application is
+  not observed in full, and once a second as a reconciliation otherwise, the
+  focus poll likewise at one second. Accessibility messages go off the main
+  thread with a quarter-second timeout, and an application that does not
+  answer is asked again, five times a tenth of a second apart and then once
+  a second. No controller command changed shape. The controller already
+  refused every duplicate, late and early report by its binding check, each
+  command being a transaction; one rule is new: a native activation repeated
+  for a window still wholly off its home output, while that output is on the
+  flight the first report armed, changes nothing where it re-armed the
+  flight. Seven scenarios added to `lifecycle_flow` (32 now) pin a close
+  reported twice, a title and a frame for an unbound window, a native
+  identity that closes and returns, native focus early, twice and late, an
+  application quitting in a burst, a close and the focus that follows it in
+  both orders, and a pass that ends before a window arrives. Evidence
+  boundary: those scenarios, with the test playing the shell; the seven
+  named controller test modules and the headless navigation coordinator
+  script passing; the app built; four three-second `--windowed` launches on
+  three detached placeholders (private scene, config and socket) in which
+  `center-nearest right` settled at camera `1950 -0` and the app exited 0 on
+  SIGTERM with its socket removed; and a throwaway observe-only program
+  around the real `window-events.m` in which all 7 regular applications
+  running were observed for all six notifications within half a second and
+  the observers were removed cleanly (run before that file's last two
+  changes, to a window lookup that is not answered and to a window watched
+  twice, which are compiled and read only). The launches had no Screen Recording
+  access, so no window manager and no observer existed in the app: no native
+  event has reached the app, and no real window was adopted, closed,
+  retitled, moved or followed through an event. All of that was on the tree
+  the events were built in, before the tap bindings (`72be7ea`) and the
+  background caches (`a47217e`); they land on the tree that has both. Nothing
+  in the shell changed at that join: the poll keeps the lost-input check, the
+  display link's fallback and the capture report beside the reconciliation,
+  the Accessibility subrole test stands before the one call that offers a
+  window whether an event or the poll started the pass, and the build script
+  compiles each of the four new files once. Two things hold there that
+  neither side had said. The tap tracker is handed Accessibility trust at
+  each read of native focus, so where the observers are in place a grant
+  reaches it within a second, not half of one. And a native activation
+  repeated on an output whose
+  usable rectangle was replaced in mid-flight arms a flight of its own to the
+  new place, the first having kept its anchor: run once at the merge by a
+  scenario that was not kept, and nothing the app does, since the shell sends
+  no rectangle. On the landed tree nine controller test modules (115
+  scenarios, `usable_tap_flow` and `motion_flow` beside the seven) and the
+  headless navigation coordinator script passed, and the app built from it
+  was launched once on the three placeholders (private scene, a config
+  holding an `alt+shift` tap, private socket, 4.1 seconds, no Screen
+  Recording access): `center-nearest right` settled on camera `1950 -0`,
+  `pan-viewport right` on `2050 -0` and `zoom-to-fit` on zoom
+  `0.28484848484848485` and back, a viewport screenshot was written and
+  looked at, and it exited 0 on SIGTERM with its socket removed and the
+  not-managed line alone on stderr. It had no window manager, so no observer
+  existed there either and no real window event was driven. Known mismatches
+  and limits:
+  one behaviour is new and unobserved, a window its application reports
+  destroyed is closed once it is off screen even if the window list keeps
+  its number, which would also close the tile of a native tab if an
+  application reports a deselected tab as destroyed; what no event announces
+  is now found within a second, where the poll found it within 80 ms; one
+  application that does not answer keeps the whole poll at its old pace;
+  minimized windows, hidden applications and windows on another Space behave
+  as before (kept, not captured afresh, not offered while off screen). No
+  inventory row changes status: the rows this touches (window lifecycle,
+  followed native focus) were `implemented_unverified` already and stay so.
+  See the [event delivery rules](../../crates/desktop/LIFECYCLE.md#event-delivery)
+  and the [desktop shell notes](../../native/desktop/README.md#event-driven-tracking).
 
 These milestones add evidence to partial rows. None satisfies an entire native
 behavior row or changes the completion requirement.

@@ -110,6 +110,15 @@ impl Host {
         let identity = self.window(id)["source"]["identity"].clone();
         self.ok(json!({"op":"window_closed","window":id,"identity":identity}))
     }
+    fn events(&mut self) -> Value {
+        self.snapshot()["lifecycle_events"].clone()
+    }
+    /// Native focus the shell saw move to a bound window, named by the
+    /// window's current binding as the shell's coordinator names it.
+    fn native(&mut self, id: u64) -> Value {
+        let source = self.window(id)["source"].clone();
+        self.ok(native(id, &source["identity"], &source["generation"]))
+    }
 }
 impl Drop for Host {
     fn drop(&mut self) {
@@ -215,6 +224,14 @@ fn armed(reply: &Value) -> Value {
     assert_eq!(navigation["output"], 1, "{reply}");
     assert_eq!(navigation["animating"], true, "{reply}");
     json!({"target_camera":navigation["target_camera"],"target_zoom":navigation["target_zoom"]})
+}
+/// A native focus report for `window`, naming one binding of it.
+fn native(window: u64, identity: &Value, generation: &Value) -> Value {
+    json!({"op":"activate","window":window,"output":1,"cause":"native","identity":identity,"generation":generation})
+}
+/// One entry of the snapshot's `lifecycle_events`.
+fn logged(serial: u64, window: u64, event: &str, output: Value) -> Value {
+    json!({"serial":serial,"window":window,"event":event,"output":output})
 }
 fn focus_effect(reply: &Value, window: u64, wid: u64) {
     let effect = &reply["effect"];
@@ -1952,4 +1969,621 @@ fn retitle_follows_the_window_and_is_saved_for_the_next_launch() {
         appear(&mut h, 21, "app.term", "build log", (300.0, 200.0)),
         ADOPTED(2)
     );
+}
+
+// Event delivery (LIFECYCLE.md). A shell that follows native windows by their
+// events, with a slower poll behind them, reports one change twice (the event,
+// then the poll), late (after the window it is about has gone) and early
+// (before the window is bound), and in bursts. `Host::error` asserts that a
+// refused report left the whole snapshot as it was: the scene, the focus and
+// its pending request, the focus history, the flights, `lifecycle_events` and
+// the render revision.
+
+/// A close reported by its event and again by the poll behind it, for a window
+/// that was never bound, and for a slot whose window is not back: only the
+/// first report of a bound window does anything.
+#[test]
+fn a_close_reported_twice_or_for_no_bound_window_changes_nothing() {
+    let scratch = Scratch::new();
+    let report = |window: u64, output: Value| json!({"op":"window_closed","window":window,"identity":identity(window),"output":output});
+    for (toml, standin) in [("", false), ("[session]\nsuspend_on_close = true\n", true)] {
+        let mut h = running(&scratch, toml);
+        // B, and A docked beside it; A holds the focus, B held it before.
+        put(&mut h, 1, "app.a", "A", rect(100.0, 100.0, 300.0, 200.0));
+        put(&mut h, 2, "app.b", "B", rect(412.0, 100.0, 300.0, 200.0));
+        h.observe_focus(2);
+        h.observe_focus(1);
+        let revision = h.snapshot()["render"]["revision"].clone();
+        let reply = h.ok(report(1, json!(1)));
+        // What the one close did: a stand-in that keeps the focus, or the
+        // window gone and its docked neighbor asked to take the focus.
+        if standin {
+            assert_eq!(
+                reply,
+                json!({"standin":true,"effect":null,"navigation":null,"dirty":true})
+            );
+            assert_eq!(
+                h.events(),
+                json!([logged(1, 1, "close_to_standin", json!(1))])
+            );
+            assert_eq!((h.focused(), h.stack()), (json!(1), vec![2, 1]));
+        } else {
+            assert_eq!(reply["standin"], false);
+            focus_effect(&reply, 2, 2);
+            assert_eq!(h.events(), json!([logged(1, 1, "close", json!(1))]));
+            assert_eq!((h.focused(), h.stack()), (json!(2), vec![2]));
+        }
+        // The same close again, with the active output and without.
+        for again in [report(1, json!(1)), report(1, Value::Null)] {
+            assert_eq!(h.error(again), "unbound source", "{toml}");
+        }
+        // The follower was asked once, and that request is still the one to
+        // answer: the second report neither moved the focus nor dropped it.
+        if !standin {
+            assert_eq!(h.snapshot()["focus"]["pending_effect"], reply["effect"]);
+            h.logical(&reply["effect"]);
+            assert_eq!(h.snapshot()["focus"]["history"], json!([2]));
+        }
+        // A close for a window that was never bound,
+        assert_eq!(h.error(report(9, json!(1))), "unbound source");
+        // and for a slot whose source was lost while its window is still
+        // there: the slot keeps waiting.
+        h.ok(
+            json!({"op":"remove_source","window":2,"identity":identity(2),"keep_placeholder":true}),
+        );
+        assert_eq!(h.error(report(2, json!(1))), "unbound source");
+        assert!(h.stack().contains(&2));
+        assert_eq!(h.snapshot()["render"]["revision"], revision);
+        assert_eq!(h.events().as_array().unwrap().len(), 1);
+    }
+
+    // A close reported late for a slot that another native window has taken
+    // since names a binding that is no longer the slot's.
+    let mut h = running(&scratch, "[session]\nsuspend_on_close = true\n");
+    appear(&mut h, 1, "app.mail", "Inbox", (300.0, 200.0));
+    assert_eq!(h.closed(1)["standin"], true);
+    h.ipc(json!({"Relaunch":1}));
+    assert_eq!(
+        appear(&mut h, 21, "app.mail", "Inbox", (300.0, 200.0))["window"],
+        1
+    );
+    assert_eq!(h.error(report(1, json!(1))), "stale source identity");
+    // So does a title or a frame still on its way for the window that closed.
+    for late in [
+        json!({"op":"retitle","window":1,"identity":identity(1),"title":"late"}),
+        json!({"op":"observe","window":1,"identity":identity(1),"source_rect":rect(0.0,0.0,300.0,200.0),"buffer":{"width":200,"height":100}}),
+    ] {
+        assert_eq!(h.error(late), "stale source identity");
+    }
+    assert_eq!(h.window(1)["source"]["identity"], identity(21));
+}
+
+/// A title or a frame reported for a window that is not bound, before its
+/// attach or just after its close, is refused and nothing of it is kept. For
+/// a bound window the same title or frame twice changes nothing the second
+/// time.
+#[test]
+fn a_title_or_a_frame_for_a_window_that_is_not_bound_is_refused() {
+    let scratch = Scratch::new();
+    let retitle =
+        |title: &str| json!({"op":"retitle","window":1,"identity":identity(1),"title":title});
+    let observe = |width: f64| json!({"op":"observe","window":1,"identity":identity(1),"source_rect":rect(10.0,20.0,width,240.0),"buffer":{"width":640,"height":480}});
+    for (toml, standin) in [("", false), ("[session]\nsuspend_on_close = true\n", true)] {
+        let mut h = running(&scratch, toml);
+        // Early: the report outran the attach, and there is no window 1 yet.
+        for early in [retitle("early"), observe(500.0)] {
+            assert_eq!(h.error(early), "unbound source", "{toml}");
+        }
+        // The attach brings the title and the frame the window has by then.
+        assert_eq!(
+            appear(&mut h, 1, "app.term", "alpha", (300.0, 200.0))["window"],
+            1
+        );
+        let window = h.window(1);
+        assert_eq!(window["metadata"]["title"], "alpha");
+        assert_eq!(
+            window["source"]["observed_rect"],
+            rect(NATIVE.0, NATIVE.1, 300.0, 200.0)
+        );
+        // Bound: each report is taken once, and the same again, by the poll
+        // behind the event, changes nothing and asks for no save.
+        assert_eq!(h.ok(retitle("build")), json!({"dirty":true}));
+        assert_eq!(h.ok(observe(320.0)), json!({}));
+        let once = h.snapshot();
+        assert_eq!(h.ok(retitle("build")), json!({"dirty":false}));
+        assert_eq!(h.ok(observe(320.0)), json!({}));
+        assert_eq!(h.snapshot(), once);
+        assert_eq!(
+            h.window(1)["source"]["observed_rect"],
+            rect(10.0, 20.0, 320.0, 240.0)
+        );
+        // Late: the window has just closed.
+        assert_eq!(h.closed(1)["standin"], standin);
+        for late in [retitle("gone"), observe(400.0)] {
+            assert_eq!(h.error(late), "unbound source", "{toml}");
+        }
+        // A stand-in keeps the title its window had when it closed.
+        match standin {
+            true => assert_eq!(h.window(1)["metadata"]["title"], "build"),
+            false => assert_eq!(h.stack(), Vec::<u64>::new()),
+        }
+    }
+}
+
+/// One native identity closes and is reported again: an application that
+/// keeps its window object shows the same window number when the window is
+/// opened again. Nothing remembers the identity that closed, so the window
+/// is a new one by the rules every new window follows, under a new binding.
+#[test]
+fn a_native_identity_that_closed_and_returns_is_a_new_window() {
+    let scratch = Scratch::new();
+    let offer = json!({"op":"attach","identity":identity(1),"bundle_id":"app.mail","title":"Inbox","buffer":{"width":200,"height":100},"source_rect":rect(NATIVE.0,NATIVE.1,300.0,200.0),"output":1,"pointer":point(POINTER.0,POINTER.1)});
+    let again = |h: &mut Host| h.ok(offer.clone());
+
+    // No stand-in: the window left, and it comes back as a new window.
+    let mut h = running(&scratch, "");
+    let first = again(&mut h);
+    assert_eq!(
+        (&first["window"], &first["adopted"]),
+        (&json!(1), &json!(false))
+    );
+    assert_eq!(h.world(1), rect(350.0, 325.0, 300.0, 200.0));
+    // While it is bound, the same window offered again, by an event and by
+    // the poll behind it, is refused.
+    assert_eq!(h.error(offer.clone()), "source already attached");
+    assert_eq!(
+        h.closed(1),
+        json!({"standin":false,"effect":null,"navigation":null,"dirty":true})
+    );
+    let second = again(&mut h);
+    assert_eq!(
+        (&second["window"], &second["adopted"]),
+        (&json!(2), &json!(false))
+    );
+    // Placed where the policy puts a new window, focused and flown to.
+    assert_eq!(h.world(2), rect(350.0, 325.0, 300.0, 200.0));
+    focus_effect(&second, 2, 1);
+    assert_eq!(armed(&second), flight((0.0, 0.0), 1.0));
+    assert_eq!(
+        h.events(),
+        json!([
+            logged(1, 1, "open", json!(1)),
+            logged(2, 1, "close", Value::Null),
+            logged(3, 2, "open", json!(1)),
+        ])
+    );
+    // The binding is a new one, so what the first one was asked, and what is
+    // still reported for it, is stale.
+    assert_eq!(
+        (
+            &first["effect"]["generation"],
+            &second["effect"]["generation"]
+        ),
+        (&json!(1), &json!(2))
+    );
+    assert_eq!(
+        h.error(json!({"op":"focus_result","effect_id":first["effect"]["effect_id"],"window":1,"identity":identity(1),"generation":1,"success":true})),
+        "stale or superseded focus result"
+    );
+    assert_eq!(
+        h.error(native(2, &identity(1), &json!(1))),
+        "stale binding generation"
+    );
+
+    // A stand-in stayed, and the user opened the window again themselves: a
+    // dormant stand-in is never taken, so the window is placed beside it,
+    // cascading off the corner the stand-in keeps.
+    let on = "[session]\nsuspend_on_close = true\n";
+    let mut h = running(&scratch, on);
+    again(&mut h);
+    assert_eq!(h.closed(1)["standin"], true);
+    let second = again(&mut h);
+    assert_eq!(
+        (&second["window"], &second["adopted"]),
+        (&json!(2), &json!(false))
+    );
+    assert_eq!(h.world(2), rect(375.0, 350.0, 300.0, 200.0));
+    focus_effect(&second, 2, 1);
+    assert_eq!(h.world(1), rect(350.0, 325.0, 300.0, 200.0));
+    assert_eq!(h.window(1)["source"], Value::Null);
+    assert_eq!(h.lifecycle()["standins"], json!([1]));
+    assert_eq!(h.stack(), vec![1, 2]);
+
+    // Relaunched through its stand-in, the same identity takes the slot back
+    // as any window of that app would: upstream's adoption, and its crossfade.
+    let mut h = running(&scratch, on);
+    again(&mut h);
+    assert_eq!(h.closed(1)["standin"], true);
+    assert_eq!(
+        h.ipc(json!({"Relaunch":1}))["effects"],
+        json!([{"op":"launch","bundle_id":"app.mail","window":1}])
+    );
+    let back = again(&mut h);
+    assert_eq!(
+        (&back["window"], &back["adopted"]),
+        (&json!(1), &json!(true))
+    );
+    // The stand-in held the focus, so the window asks for it.
+    focus_effect(&back, 1, 1);
+    assert_eq!(back["navigation"], Value::Null);
+    assert_eq!(h.window(1)["source"]["generation"], 2);
+    assert_eq!(
+        h.lifecycle(),
+        json!({"settled":true,"standins":[],"relaunching":[],"marks":{}})
+    );
+    assert_eq!(
+        h.events(),
+        json!([
+            logged(1, 1, "open", json!(1)),
+            logged(2, 1, "close_to_standin", Value::Null),
+            logged(3, 1, "standin_adopted", json!(1)),
+        ])
+    );
+}
+
+/// Native focus reported for a window that is not bound yet, twice for one
+/// change, and for a window that has closed. The early and the late report
+/// are refused; the repeated one is upstream's "already active", while the
+/// window is on screen and while the flight the first report armed is still
+/// bringing it there.
+#[test]
+fn native_focus_reported_early_twice_or_late_is_recorded_once() {
+    let scratch = Scratch::new();
+    let already = json!({"effect":null,"navigation":null,"dirty":false});
+    let mut h = running(&scratch, "");
+    // Early: the report outran the attach. There is no window 1 to name.
+    assert_eq!(
+        h.error(native(1, &identity(1), &json!(1))),
+        "unknown window"
+    );
+    // The attach asks for the focus itself. The report, made again now that
+    // the window is bound, is the focus: the request is dropped, the window
+    // enters the focus history, and nothing moves, the window being in view.
+    let mapped = appear(&mut h, 1, "app.a", "A", (300.0, 200.0));
+    focus_effect(&mapped, 1, 1);
+    assert_eq!(
+        h.native(1),
+        json!({"effect":null,"navigation":null,"dirty":true})
+    );
+    let focus = h.snapshot()["focus"].clone();
+    assert_eq!(focus["pending_effect"], Value::Null);
+    assert_eq!(focus["observed_native"]["window"], 1);
+    assert_eq!(focus["history"], json!([1]));
+    // The adapter's answer to the request the report superseded comes late.
+    let asked = &mapped["effect"];
+    assert_eq!(
+        h.error(json!({"op":"focus_result","effect_id":asked["effect_id"],"window":1,"identity":identity(1),"generation":asked["generation"],"success":true})),
+        "stale or superseded focus result"
+    );
+    // Twice, the window on screen: the second report asks for what holds.
+    let once = h.snapshot();
+    assert_eq!(h.native(1), already);
+    assert_eq!(h.snapshot(), once);
+
+    // B is far out of view: the report flies the camera until B's center
+    // (5150, 5100) is at the usable center.
+    h.ok(json!({"op":"cancel_navigation","output":1}));
+    put(&mut h, 2, "app.b", "B", rect(5000.0, 5000.0, 300.0, 200.0));
+    let reply = h.native(2);
+    assert_eq!(reply["effect"], Value::Null);
+    assert_eq!(armed(&reply), flight((4650.0, 4675.0), 1.0));
+    assert_eq!(h.focused(), 2);
+    assert_eq!(h.snapshot()["focus"]["history"], json!([2, 1]));
+    // Twice, B still out of view and that flight in the air: before its
+    // first frame,
+    let once = h.snapshot();
+    assert_eq!(h.native(2), already);
+    assert_eq!(h.snapshot(), once);
+    // and after two, the camera on its way and B not yet in view.
+    h.ok(json!({"op":"tick_navigation","timestamp_ns":1_000_000_000u64}));
+    h.ok(json!({"op":"tick_navigation","timestamp_ns":1_016_000_000u64}));
+    let flying = h.snapshot();
+    assert_ne!(flying["outputs"][0]["camera"], point(0.0, 0.0));
+    assert!(flying["outputs"][0]["camera"]["x"].as_f64().unwrap() < 4000.0);
+    assert_eq!(h.native(2), already);
+    assert_eq!(h.snapshot(), flying);
+    // Once the user has stopped the flight, the report is upstream's
+    // activation of a window that is off screen: there is somewhere to go.
+    h.ok(json!({"op":"cancel_navigation","output":1}));
+    let reply = h.native(2);
+    assert_eq!(armed(&reply), flight((4650.0, 4675.0), 1.0));
+    assert_eq!(h.snapshot()["focus"]["history"], json!([2, 1]));
+
+    // Late: B has closed and left the canvas.
+    let binding = h.window(2)["source"].clone();
+    assert_eq!(h.closed(2)["standin"], false);
+    assert_eq!(
+        h.error(native(2, &binding["identity"], &binding["generation"])),
+        "unknown window"
+    );
+    // Late for a window whose stand-in kept the focus: a stand-in cannot
+    // hold native focus, and the logical focus stays where it is.
+    let mut h = running(&scratch, "[session]\nsuspend_on_close = true\n");
+    put(&mut h, 1, "app.a", "A", rect(100.0, 100.0, 300.0, 200.0));
+    h.native(1);
+    let binding = h.window(1)["source"].clone();
+    assert_eq!(h.closed(1)["standin"], true);
+    assert_eq!(
+        h.error(native(1, &binding["identity"], &binding["generation"])),
+        "unbound source"
+    );
+    assert_eq!(h.focused(), 1);
+    assert_eq!(h.snapshot()["focus"]["observed_native"], Value::Null);
+}
+
+/// An application quits: its windows close in a burst, and what was asked of
+/// one of them in between is answered after it has gone. Each close is taken
+/// once, the focus ends on the window that is left, and the late answers are
+/// refused.
+#[test]
+fn an_application_that_quits_closes_its_windows_in_a_burst() {
+    let scratch = Scratch::new();
+    let mut h = running(&scratch, "");
+    // Two windows of one app docked side by side, and another app's below.
+    put(
+        &mut h,
+        1,
+        "app.mail",
+        "Inbox",
+        rect(100.0, 100.0, 300.0, 200.0),
+    );
+    put(
+        &mut h,
+        2,
+        "app.mail",
+        "Draft",
+        rect(412.0, 100.0, 300.0, 200.0),
+    );
+    put(
+        &mut h,
+        3,
+        "app.term",
+        "zsh",
+        rect(100.0, 500.0, 200.0, 200.0),
+    );
+    for id in [3, 2, 1] {
+        h.observe_focus(id);
+    }
+    // The first close hands the focus to the docked sibling, which is dying.
+    let first = h.closed(1);
+    focus_effect(&first, 2, 2);
+    let binding = h.window(2)["source"].clone();
+    // The sibling closes before that request is answered: the request goes
+    // with it, and the focus moves on to the window still in view.
+    let second = h.closed(2);
+    focus_effect(&second, 3, 3);
+    assert_eq!(h.snapshot()["focus"]["pending_effect"], second["effect"]);
+    // What was in flight for the sibling arrives now: the adapter's failure,
+    // a native focus report, a title, a frame and its close once more.
+    let asked = &first["effect"];
+    for (late, error) in [
+        (
+            json!({"op":"focus_result","effect_id":asked["effect_id"],"window":2,"identity":identity(2),"generation":asked["generation"],"success":false}),
+            "stale or superseded focus result",
+        ),
+        (
+            native(2, &binding["identity"], &binding["generation"]),
+            "unknown window",
+        ),
+        (
+            json!({"op":"retitle","window":2,"identity":identity(2),"title":""}),
+            "unbound source",
+        ),
+        (
+            json!({"op":"observe","window":2,"identity":identity(2),"source_rect":rect(0.0,0.0,300.0,200.0),"buffer":{"width":200,"height":100}}),
+            "unbound source",
+        ),
+        (
+            json!({"op":"window_closed","window":2,"identity":identity(2)}),
+            "unbound source",
+        ),
+    ] {
+        assert_eq!(h.error(late), error);
+    }
+    // The survivor's request is still the one to answer.
+    h.logical(&second["effect"]);
+    let snapshot = h.snapshot();
+    assert_eq!(snapshot["focused"], 3);
+    assert_eq!(snapshot["focus"]["history"], json!([3]));
+    assert_eq!(h.stack(), vec![3]);
+    assert_eq!(
+        h.events(),
+        json!([
+            logged(1, 1, "close", Value::Null),
+            logged(2, 2, "close", Value::Null),
+        ])
+    );
+}
+
+/// macOS activates another window when one closes, and the report of that
+/// focus arrives before the close or after it. Either way the focus ends on
+/// the window macOS chose, one close is logged and the history is the same;
+/// only in the order that reports the close first has the controller already
+/// picked and raised a follower of its own.
+#[test]
+fn a_close_and_the_native_focus_that_follows_it_agree_in_either_order() {
+    let scratch = Scratch::new();
+    // W with X docked beside it, Y and F apart; F was focused first, then X,
+    // then Y, then W: bottom to top the stack is F, X, Y, W.
+    let desk = |h: &mut Host| {
+        put(h, 1, "app.w", "W", rect(100.0, 100.0, 300.0, 200.0));
+        put(h, 2, "app.x", "X", rect(412.0, 100.0, 300.0, 200.0));
+        put(h, 3, "app.y", "Y", rect(100.0, 500.0, 200.0, 200.0));
+        put(h, 4, "app.f", "F", rect(600.0, 500.0, 200.0, 200.0));
+        for id in [4, 2, 3, 1] {
+            h.observe_focus(id);
+        }
+        assert_eq!(h.stack(), vec![4, 2, 3, 1]);
+        assert_eq!(h.snapshot()["focus"]["history"], json!([1, 3, 2, 4]));
+    };
+    let settled = |h: &mut Host| {
+        let snapshot = h.snapshot();
+        let focus = &snapshot["focus"];
+        json!([
+            snapshot["focused"],
+            focus["observed_native"]["window"],
+            focus["pending_effect"],
+            focus["history"],
+            snapshot["lifecycle_events"],
+            snapshot["navigation"]["flights"]
+        ])
+    };
+    let chosen = json!([
+        4,
+        4,
+        null,
+        [4, 3, 2],
+        [logged(1, 1, "close", Value::Null)],
+        {}
+    ]);
+    // The close first: X, docked to W, is raised and asked to take the focus;
+    // then macOS's choice replaces it, and the request for X is dropped.
+    let mut h = running(&scratch, "");
+    desk(&mut h);
+    let reply = h.closed(1);
+    focus_effect(&reply, 2, 2);
+    assert_eq!(h.stack(), vec![4, 3, 2]);
+    assert_eq!(
+        h.native(4),
+        json!({"effect":null,"navigation":null,"dirty":true})
+    );
+    assert_eq!(settled(&mut h), chosen);
+    assert_eq!(h.stack(), vec![3, 2, 4]);
+    let asked = &reply["effect"];
+    assert_eq!(
+        h.error(json!({"op":"focus_result","effect_id":asked["effect_id"],"window":2,"identity":identity(2),"generation":asked["generation"],"success":true})),
+        "stale or superseded focus result"
+    );
+    // The focus first: the close is then one in the background, and no
+    // follower is picked or raised.
+    let mut h = running(&scratch, "");
+    desk(&mut h);
+    h.native(4);
+    assert_eq!(
+        h.closed(1),
+        json!({"standin":false,"effect":null,"navigation":null,"dirty":true})
+    );
+    assert_eq!(settled(&mut h), chosen);
+    assert_eq!(h.stack(), vec![2, 3, 4]);
+
+    // The close first, with its follower out of view: X is flown to, until
+    // its center (1150, 200) is at the usable center. The report that then
+    // moves the focus to F, in view, arms no flight of its own, so the camera
+    // goes on to X while F holds the focus.
+    let mut h = running(&scratch, "");
+    put(&mut h, 1, "app.w", "W", rect(700.0, 100.0, 288.0, 200.0));
+    put(&mut h, 2, "app.x", "X", rect(1000.0, 100.0, 300.0, 200.0));
+    put(&mut h, 3, "app.f", "F", rect(100.0, 500.0, 200.0, 150.0));
+    for id in [3, 2, 1] {
+        h.observe_focus(id);
+    }
+    let reply = h.closed(1);
+    focus_effect(&reply, 2, 2);
+    assert_eq!(armed(&reply), flight((650.0, -225.0), 1.0));
+    let flights = h.snapshot()["navigation"]["flights"].clone();
+    assert_eq!(
+        h.native(3),
+        json!({"effect":null,"navigation":null,"dirty":true})
+    );
+    let snapshot = h.snapshot();
+    assert_eq!(snapshot["focused"], 3);
+    assert_eq!(snapshot["focus"]["pending_effect"], Value::Null);
+    assert_eq!(snapshot["navigation"]["flights"], flights);
+    assert_eq!(
+        flights["1"]["zoom_animation_anchor"]["canvas"],
+        point(1150.0, 200.0)
+    );
+}
+
+/// The discovery pass ends while a window that was open all along is still on
+/// its way. Named in `present`, it finds its slot waiting and ends where it
+/// would have ended had it arrived in time. Not named, it finds its slot
+/// decided, and is a new window.
+#[test]
+fn a_pass_that_ends_before_a_window_arrives_decides_only_what_it_did_not_name() {
+    let scratch = Scratch::new();
+    let scene = saved_session(&scratch);
+    let beta = |h: &mut Host| appear(h, 21, "app.term", "beta", (640.0, 480.0));
+    let docs = |h: &mut Host| appear(h, 22, "app.web", "docs", (640.0, 480.0));
+    let ended = json!({"dropped":[1,4],"standins":[],"dirty":true});
+    // In time: both windows are offered, then the pass ends.
+    let mut timely = relaunched(&scratch, &scene, "");
+    assert_eq!(beta(&mut timely), ADOPTED(2));
+    assert_eq!(docs(&mut timely), ADOPTED(3));
+    assert_eq!(timely.ok(json!({"op":"adoption_complete"})), ended);
+    // Late: the pass ends first and names the window that is still arriving.
+    let mut h = relaunched(&scratch, &scene, "");
+    assert_eq!(beta(&mut h), ADOPTED(2));
+    assert_eq!(
+        h.ok(json!({"op":"adoption_complete","present":[{"bundle_id":"app.web","title":"docs"}]})),
+        ended
+    );
+    assert_eq!(h.lifecycle()["held"], json!([3]));
+    assert_eq!(docs(&mut h), ADOPTED(3));
+    assert_eq!(h.snapshot(), timely.snapshot());
+
+    // Reports still in flight for a slot the pass dropped are refused.
+    for late in [
+        json!({"op":"window_closed","window":1,"identity":identity(31)}),
+        json!({"op":"retitle","window":1,"identity":identity(31),"title":"alpha"}),
+        json!({"op":"observe","window":1,"identity":identity(31),"source_rect":rect(0.0,0.0,300.0,200.0),"buffer":{"width":200,"height":100}}),
+    ] {
+        assert_eq!(h.error(late), "unbound source");
+    }
+    assert_eq!(
+        h.error(native(1, &identity(31), &json!(1))),
+        "unknown window"
+    );
+    // The end of the pass reported again, with nothing waiting, decides
+    // nothing and asks for no save.
+    let once = h.snapshot();
+    assert_eq!(
+        h.ok(json!({"op":"adoption_complete"})),
+        json!({"dropped":[],"standins":[],"dirty":false})
+    );
+    assert_eq!(h.snapshot(), once);
+    // A window the pass did not name finds its slot gone: it is a new window,
+    // placed, focused, flown to and opened.
+    let reply = appear(&mut h, 23, "app.term", "alpha", (300.0, 200.0));
+    assert_eq!(
+        (&reply["window"], &reply["adopted"]),
+        (&json!(5), &json!(false))
+    );
+    focus_effect(&reply, 5, 23);
+    assert_eq!(armed(&reply), flight((0.0, 0.0), 1.0));
+    assert_eq!(h.events(), json!([logged(1, 5, "open", json!(1))]));
+
+    // With restore_windows the slot it did not name is a dormant stand-in by
+    // then, which no window takes by itself: the window is new all the same.
+    let mut h = relaunched(&scratch, &scene, "[session]\nrestore_windows = true\n");
+    assert_eq!(beta(&mut h), ADOPTED(2));
+    assert_eq!(
+        h.ok(json!({"op":"adoption_complete"})),
+        json!({"dropped":[],"standins":[1,3,4],"dirty":true})
+    );
+    let reply = docs(&mut h);
+    assert_eq!(
+        (&reply["window"], &reply["adopted"]),
+        (&json!(5), &json!(false))
+    );
+    assert_eq!(h.lifecycle()["standins"], json!([1, 3, 4]));
+
+    // The one thing the order shows. A slot that holds the saved focus asks
+    // for it when its window arrives after the pass, as every adopted slot
+    // that holds the focus does then; within the launch pass nothing is
+    // asked and the focus is only recorded.
+    let mut h = relaunched(&scratch, &scene, "");
+    assert_eq!(
+        h.ok(json!({"op":"adoption_complete","present":[{"bundle_id":"app.term","title":"beta"}]})),
+        json!({"dropped":[1,3,4],"standins":[],"dirty":true})
+    );
+    let reply = beta(&mut h);
+    assert_eq!(
+        (&reply["window"], &reply["adopted"]),
+        (&json!(2), &json!(true))
+    );
+    focus_effect(&reply, 2, 21);
+    assert_eq!(reply["navigation"], Value::Null);
+    assert_eq!(h.snapshot()["focus"]["history"], json!([]));
+    assert_eq!(h.events(), json!([]));
 }

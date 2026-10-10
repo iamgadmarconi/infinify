@@ -7,12 +7,20 @@
 // resolve the app afresh, report one that no longer resolves). New implementation
 // over the macOS window list, ScreenCaptureKit, Accessibility and NSWorkspace; the
 // placement, matching and focus rules stay in the controller.
+// Event-driven tracking is adapted from koekeishiya/yabai dd845723416f5fe92af49fad5ebab00369e07edd (MIT), src/event_loop.c:
+// WINDOW_CREATED, WINDOW_DEMINIMIZED and APPLICATION_VISIBLE look for the window at once, APPLICATION_LAUNCHED for all of an
+// application's. window-events.h has the observers and the rest of the provenance. Here an event runs the pass the poll runs.
 #import "window-manager.h"
+#import "window-events.h"
 #import "../focus/focus.h"
 #import <AppKit/AppKit.h>
 #include <dlfcn.h>
-@interface DWWindowManager ()
+// A candidate is offered once its bounds have held this long. The idle poll comes every 80 ms, so from one poll to the
+// next is long enough, as it always was; a pass an event made counts as the first look, so the next poll may offer.
+static const NSTimeInterval still=.05;
+@interface DWWindowManager () <DWWindowEventSink>
 @property (weak) id<DWWindowHost> host;
+@property DWWindowEvents *events;
 // On-screen candidates already offered, found bound, or given up on.
 @property NSMutableSet<NSNumber *> *offered;
 // Candidates one read did not list: a second miss ends the asking.
@@ -20,14 +28,16 @@
 // Candidates their application answered for without listing them among its windows: each is asked about once more.
 // Its own count, not `missed`: a window the shareable windows missed first is still owed that second look.
 @property NSMutableSet<NSNumber *> *unlisted;
-// The previous poll's candidate bounds, by window number.
+// The previous pass's candidate bounds, by window number, and when each window was first seen with them.
 @property NSDictionary<NSNumber *,NSDictionary *> *bounds;
+@property NSDictionary<NSNumber *,NSNumber *> *since;
 // The candidates of the last read, until it succeeds.
 @property NSSet<NSNumber *> *requested;
 // When each world window last had a placement.
 @property NSMutableDictionary<NSNumber *,NSNumber *> *placed;
-// The poll at which a read that failed is tried again; 0 when none is owed.
-@property NSUInteger polls,retry;
+// When the first pass began; when a read that failed is tried again, 0 when none is owed; when the next reconciliation is
+// due; and until when the poll keeps its own pace although the observers are in place.
+@property NSTimeInterval began,retry,next,eager;
 @property BOOL reading, completed, stopped;
 @end
 // Upstream manages toplevels and their dialogs (src/handlers/xdg_shell.rs: new_toplevel), never a popup, a tooltip or a helper
@@ -65,33 +75,53 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
 @implementation DWWindowManager
 + (instancetype)managerWithHost:(id<DWWindowHost>)host {
     if(!CGPreflightScreenCaptureAccess())return nil;
-    DWWindowManager *manager=[self new];manager.host=host;manager.offered=[NSMutableSet set];manager.missed=[NSMutableSet set];manager.unlisted=[NSMutableSet set];manager.placed=[NSMutableDictionary dictionary];return manager;
+    DWWindowManager *manager=[self new];manager.host=host;manager.offered=[NSMutableSet set];manager.missed=[NSMutableSet set];manager.unlisted=[NSMutableSet set];manager.placed=[NSMutableDictionary dictionary];
+    manager.events=[[DWWindowEvents alloc]initWithSink:manager];return manager;
 }
-- (void)poll {
-    if(self.stopped)return;self.polls++;id<DWWindowHost> host=self.host;
+- (BOOL)live { return self.events.live; }
+- (BOOL)poll {
+    if(self.stopped)return NO;NSTimeInterval now=NSProcessInfo.processInfo.systemUptime;BOOL live=self.events.live,due=now>=self.next;
+    // With the observers in place the poll is a reconciliation, one pass a second. It keeps its own pace until the first pass
+    // has ended, and for a second after an event that may bring a window on screen or a pass that left a candidate owed
+    // another look: the window list can show a window a moment after its application reports it.
+    if(live&&!due&&self.completed&&now>=self.eager)return NO;
+    if(due){self.next=now+1;[self.events reconcile];}
+    [self pass:0];return due||!live;
+}
+// One pass over the on-screen window list. `only`: the application an event concerns, whose candidates alone are looked at;
+// 0 for every application, the poll's pass.
+- (void)pass:(pid_t)only {
+    if(self.stopped)return;NSTimeInterval now=NSProcessInfo.processInfo.systemUptime;id<DWWindowHost> host=self.host;if(!self.began)self.began=now;
+    // One read must offer every window of the first pass: until it has ended every pass is whole.
+    if(!self.completed)only=0;
     NSArray<NSDictionary *> *list=CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly|kCGWindowListExcludeDesktopElements,kCGNullWindowID));if(!list)return;
-    NSMutableDictionary<NSNumber *,NSDictionary *> *bounds=[NSMutableDictionary dictionary];NSMutableDictionary<NSNumber *,NSNumber *> *wanted=[NSMutableDictionary dictionary],*regular=[NSMutableDictionary dictionary];NSMutableArray<NSNumber *> *front=[NSMutableArray array];BOOL moving=NO;
+    NSMutableDictionary<NSNumber *,NSDictionary *> *bounds=[NSMutableDictionary dictionary];NSMutableDictionary<NSNumber *,NSNumber *> *wanted=[NSMutableDictionary dictionary],*regular=[NSMutableDictionary dictionary],*since=[NSMutableDictionary dictionary];NSMutableArray<NSNumber *> *front=[NSMutableArray array];BOOL moving=NO;
     for(NSDictionary *w in list){
         NSNumber *wid=w[(id)kCGWindowNumber],*pid=w[(id)kCGWindowOwnerPID];NSDictionary *b=w[(id)kCGWindowBounds];CGRect r=CGRectZero;
         if(![wid isKindOfClass:NSNumber.class]||![pid isKindOfClass:NSNumber.class]||[w[(id)kCGWindowLayer]intValue]!=0||pid.intValue==getpid())continue;
         if(![b isKindOfClass:NSDictionary.class]||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)b,&r)||r.size.width<40||r.size.height<40)continue;
-        bounds[wid]=b;if([self.offered containsObject:wid])continue;
+        NSNumber *held=[self.bounds[wid]isEqual:b]?self.since[wid]:nil;bounds[wid]=b;since[wid]=held?:@(now);
+        if([self.offered containsObject:wid]||(only&&pid.intValue!=only))continue;
         NSNumber *policy=regular[pid];
         if(!policy)policy=regular[pid]=[NSRunningApplication runningApplicationWithProcessIdentifier:pid.intValue].activationPolicy==NSApplicationActivationPolicyRegular?@YES:@NO;
         if(!policy.boolValue)continue;
         if([host managesWindow:wid.unsignedIntValue pid:pid.intValue]){[self.offered addObject:wid];continue;}
         // Upstream places a window on its first sized commit. A window still being
         // sized is not offered: its world size is the source rectangle it is offered with.
-        if(![self.bounds[wid]isEqual:b]){moving=YES;continue;}
+        if(!held||now-held.doubleValue<still){moving=YES;continue;}
         wanted[wid]=pid;[front addObject:wid];
     }
     // Leaving the screen ends a window's turn; coming back is a new appearance.
-    NSSet<NSNumber *> *present=[NSSet setWithArray:bounds.allKeys];self.bounds=bounds;[self.offered intersectSet:present];[self.missed intersectSet:present];[self.unlisted intersectSet:present];
+    NSSet<NSNumber *> *present=[NSSet setWithArray:bounds.allKeys];self.bounds=bounds;self.since=since;[self.offered intersectSet:present];[self.missed intersectSet:present];[self.unlisted intersectSet:present];
+    // A candidate that has not held still yet is looked at again at the poll's own pace, not a reconciliation later.
+    if(moving)self.eager=now+1;
     // The first pass waits, two seconds at most, until every window holds still, so that one read offers them all.
-    if(!self.completed&&moving&&self.polls<25)return;
-    if(self.reading)return;
+    if(!self.completed&&moving&&now-self.began<2)return;
+    if(self.reading){if(wanted.count)self.eager=now+1;return;}
     // A read that failed is tried again after about two seconds, while access still stands: this never asks for it.
-    if(self.retry&&self.polls>=self.retry){self.retry=0;if(CGPreflightScreenCaptureAccess())self.requested=nil;}
+    if(self.retry&&now>=self.retry){self.retry=0;if(CGPreflightScreenCaptureAccess())self.requested=nil;}
+    // While a failed read is owed its retry an event reads nothing: only the poll's pass decides when to read again.
+    if(only&&self.requested)return;
     // The first pass reads the shareable windows even with nothing to offer: it must name the windows that are not on screen.
     if(!wanted.count&&(self.completed||self.requested))return;
     NSSet<NSNumber *> *ids=[NSSet setWithArray:wanted.allKeys];if(self.requested&&[ids isEqualToSet:self.requested])return;
@@ -102,7 +132,7 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
 - (void)read:(SCShareableContent *)content error:(NSError *)error asked:(NSDictionary<NSNumber *,NSNumber *> *)asked front:(NSArray<NSNumber *> *)front subroles:(NSDictionary<NSNumber *,id> *)subroles {
     if(self.stopped)return;self.reading=NO;id<DWWindowHost> host=self.host;
     // `requested` stays: the same candidates are not read again at once, so a failure cannot loop.
-    if(!content){self.retry=self.polls+25;[host discoveryFailed:error.localizedDescription?:@"the shareable windows are unavailable"];return;}
+    if(!content){self.retry=NSProcessInfo.processInfo.systemUptime+2;[host discoveryFailed:error.localizedDescription?:@"the shareable windows are unavailable"];return;}
     self.requested=nil;self.retry=0;NSMutableDictionary<NSNumber *,SCWindow *> *found=[NSMutableDictionary dictionary];BOOL again=NO;
     for(SCWindow *window in content.windows){NSNumber *wid=@(window.windowID);if(asked[wid]&&asked[wid].intValue==window.owningApplication.processID&&!found[wid])found[wid]=window;}
     // Back to front: the controller raises each window as it maps, so the canvas stacks them as the desktop does.
@@ -130,6 +160,8 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
         if(![host managesWindow:window.windowID pid:window.owningApplication.processID])[host windowAppeared:window];
         if(self.stopped)return;
     }
+    // A candidate owed its second read is read at the poll's own pace, not a reconciliation later.
+    if(again)self.eager=NSProcessInfo.processInfo.systemUptime+1;
     // The first pass ends once no candidate is owed its second read.
     if(!self.completed&&!again)[self complete:content];
 }
@@ -152,7 +184,24 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
     NSNumber *last=self.placed[window];return last&&now-last.doubleValue<2;
 }
 - (void)forget:(NSNumber *)window { if(window)[self.placed removeObjectForKey:window]; }
-- (void)stop { self.stopped=YES;self.host=nil; }
+- (void)stop { self.stopped=YES;self.host=nil;[self.events stop];self.events=nil; }
+// DWWindowEventSink. An event runs the pass the poll runs, at once and for its application, and the poll then keeps its
+// own pace for a second. The pass reads the window list itself, so an event repeated, or followed by the poll, finds the
+// window offered, read or bound already and does nothing.
+- (void)windowsChanged:(pid_t)pid { if(self.stopped)return;self.eager=NSProcessInfo.processInfo.systemUptime+1;[self pass:pid]; }
+- (void)windowChanged:(CGWindowID)window pid:(pid_t)pid {
+    if(self.stopped)return;
+    // A candidate not offered yet: its stillness counts from this change. A bound window is the host's to look at.
+    if(window&&![self.offered containsObject:@(window)])[self pass:pid];
+    [self.host windowChanged:window pid:pid];
+}
+// The window number may come back on screen, when its application kept the window object and shows it again. That is
+// then a new appearance, whenever the next pass comes.
+- (void)windowDestroyed:(CGWindowID)window pid:(pid_t)pid {
+    if(self.stopped)return;NSNumber *wid=@(window);[self.offered removeObject:wid];[self.missed removeObject:wid];[self.unlisted removeObject:wid];
+    [self.host windowDestroyed:window pid:pid];
+}
+- (void)focusChanged { if(!self.stopped)[self.host focusChanged]; }
 @end
 // The Accessibility element of exactly one window: the lookup of resolve() in
 // native/focus/focus.m, which is private to that file. Every window of the process

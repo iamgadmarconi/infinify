@@ -40,6 +40,10 @@ typedef BOOL (^DWGuard)(void);
 - (void)cancelFocus; // pending focus work and the held cycle; camera flights keep flying
 - (void)invalidate; // cancelFocus, and stops every camera flight
 - (void)shutdown;
+// Reads native focus on the worker and follows it: an activation with cause native when the user focused a window of the
+// canvas natively, focus_lost when focus left them. Called by the focus poll and at once by a focus event (window-events.h);
+// what it reads is compared with what the controller already has, so a repeated call sends nothing. One read at a time: a
+// call during a read makes one more read follow it.
 - (void)observe;
 - (BOOL)frame;
 @end

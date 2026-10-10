@@ -331,8 +331,11 @@ macOS's to give. A window that opens without it, its application not being
 frontmost, stays in the background and the fullscreen stands, as upstream's
 does. A window that macOS makes key as it opens, the usual case for a window
 the user has just asked for, is reported by the shell's focus follow like any
-native activation (`activate` with `native`; by reading the shell, within
-half a second and only with Accessibility access). That ends the fullscreen
+native activation (`activate` with `native`; by reading the shell, at the
+first poll after a managed run has bound a window it discovered, the polls
+being 80 ms apart, at the next focus poll for a window bound from the
+chooser, half a second away at most, or a second where the shell's observers
+are in place, and only with Accessibility access). That ends the fullscreen
 as any activation on that output does: the new window is focused beside the
 restored frame, and flown to if it is clipped. `spawn` itself ends nothing,
 but the window it opens can. Upstream never activates a window it placed in

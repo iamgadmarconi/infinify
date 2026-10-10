@@ -354,8 +354,11 @@ slot per window and the running windows return to theirs.
 That is the adoption alone. With Accessibility access
 [native focus is followed](#native-focus-is-followed) in every normal run, and
 an adopted window is on the canvas like any other: when it is the window the
-frontmost application has focused, the next read, at most about half a second
-later, takes it as an activation. It then replaces the saved focus, is raised
+frontmost application has focused, the next read of native focus takes it as an
+activation. A read is made at the first poll after a window is adopted (the
+polls are 80 ms apart), whenever a focus event is reported, and once a second
+besides, or twice where the events are not in place
+([Event-driven tracking](#event-driven-tracking)). It then replaces the saved focus, is raised
 and heads the most-recently-focused order, and if it is clipped on the display
 that shows its centre that display's camera flies to it, at 1:1 unless `[zoom]
 reset_on_activation = false`, a camera that `[session] restore_camera` restored
@@ -366,8 +369,12 @@ The same pass runs again whenever the canvas is reopened after Return to
 desktop: the windows return to their slots, and the slot of a window that
 closed in between is dropped, or kept as a stand-in with `restore_windows`.
 
-**A window that appears later** is offered once its frame has held still from
-one poll to the next (about 80 ms). Its size is the native window's. Its place
+**A window that appears later** is offered once its frame has held still for
+50 ms, from one look at the window list to a later one. The first look is made
+when its application reports the window created, where
+[the events are in place](#event-driven-tracking), and by the poll otherwise;
+the later ones by the poll, which looks every 80 ms while a window is waiting.
+Its size is the native window's. Its place
 on the canvas is never where the native window sits on the desktop: it comes
 from `window_placement`, `center` (the default: under the `focus_placement`
 point, the centre of the view, of the display under the pointer), `cursor` or
@@ -393,7 +400,9 @@ a click in the canvas, a new window, `msg focus` or a followed native focus
 enters it once the real window's focus is confirmed, or at once when the app
 performs no native focus (no Accessibility access, or `--no-native-focus`). A
 drag in progress on another window goes on, and then no camera flies. A window counts as closed when its
-window number is gone from the system's window list or its process is gone; a
+window number is gone from the system's window list or its process is gone,
+and, where [the events are in place](#event-driven-tracking), also when its
+application has reported it destroyed and it is no longer on screen; a
 capture stream that fails while the window is still there keeps the old
 behaviour, a detached placeholder to rebind from the chooser.
 
@@ -467,11 +476,15 @@ identifier "…" is installed`).
   its title can find its slot taken by a retitled sibling reported before it:
   the two then sit in each other's frames.
 - An application that hides a window on close instead of destroying it keeps
-  its window number, so that window stays on the canvas.
+  its window number, so that window stays on the canvas, unless the
+  application also reports the window destroyed through Accessibility, which
+  [the events](#event-driven-tracking) now take as a close once the window is
+  off screen. Whether such applications report that has not been seen.
 - ⌃⌥Q acts on the canvas's logical focus: the window last clicked in the
   canvas, the newest window, the one `msg focus` named or a navigation chose,
   or, with Accessibility access, the canvas window last focused in its own
-  application (Command-Tab, the Dock), which the canvas follows twice a second.
+  application (Command-Tab, the Dock), which the canvas follows
+  ([Native focus is followed](#native-focus-is-followed)).
   Without that access, or with `--no-native-focus`, a focus change outside the
   canvas is not followed. Look at which window the canvas has focused before
   pressing it. With `--windowed` no hot key exists; use `msg`.
@@ -512,7 +525,9 @@ identifier "…" is installed`).
   Until then another window of that application with a different title can
   take its waiting slot.
 - If a read of the shareable windows fails it is tried again about every two
-  seconds while Screen Recording access stands, and the status line says so
+  seconds while Screen Recording access stands (two to three once the first
+  pass has ended and [the events are in place](#event-driven-tracking), because
+  the pass that retries then runs once a second), and the status line says so
   each time (stderr once per reason).
   Until one succeeds the first pass does not complete: nothing is dropped and
   later windows are neither focused nor flown to as new windows are (followed
@@ -520,8 +535,11 @@ identifier "…" is installed`).
 - With a config file that was refused at launch, no slot is dropped or made a
   stand-in until a discovery pass runs with an accepted config: fix the file
   and reopen the canvas, or relaunch.
-- Every poll makes one window-list query and one controller call per managed
-  window; with very many windows this has not been measured.
+- Every look at a managed window makes one window-list query and one
+  controller call. Without the events every window is looked at on every poll
+  (80 ms), as before; with them, all of them once a second and each when an
+  event names it or its application ([Event-driven tracking](#event-driven-tracking)).
+  With very many windows neither has been measured.
 - A press that Accessibility does not answer in time is treated as sent, so an
   application that does not respond gives no status note.
 
@@ -610,6 +628,260 @@ on the controller scenarios (`lifecycle_flow`, `navigation_actions_flow`), the
 headless coordinator regression and a reading of the shell. The status line was
 not read, so neither was the not-managed note sharing it with the
 Accessibility note.
+
+### Event-driven tracking
+
+Until this build the shell learned everything about native windows by asking:
+the window list every 80 ms for new windows, closes, frames and titles, and
+the frontmost application's focused window twice a second. A managed run with
+Accessibility access is now told instead, the way the yabai window manager is,
+and keeps the asking as a slower safety net. There is no flag, no new control
+and no new permission: it is on whenever the app manages windows (Screen
+Recording access, no `--manual`), the per-application observers need
+Accessibility access, and it uses
+public Accessibility and `NSWorkspace` API plus the one private call the
+window test already used (`_AXUIElementGetWindow`). **None of it has run in
+the app on a real window**; [what was run](#what-was-run-for-event-driven-tracking)
+says what has.
+
+What is observed (`native/desktop/window-events.m`):
+
+- from `NSWorkspace`: an application launched, terminated, activated, hidden
+  or shown again, and the active Space changed;
+- from one Accessibility observer per regular (Dock) application, created when
+  the application launches or at startup and removed when it ends: a window
+  created, the focused window changed, a window moved, resized or retitled;
+- from each window that observer knows: destroyed, miniaturized,
+  deminiaturized.
+
+An event is never taken as the change itself. It only says where to look now,
+and the looking is the code the poll runs: the window list is read again, and
+what it shows is reported to the controller as before. So an event that is
+repeated, late, or followed by the poll finds nothing new and sends nothing
+twice.
+
+| Event | What happens at once |
+| --- | --- |
+| application launched | it is observed; its windows are looked for |
+| window created; window deminiaturized; application shown again | that application's windows are looked for: a new one is offered by the rules above (the Accessibility subrole test; still for 50 ms) |
+| active Space changed | every application's windows are looked for |
+| window moved, resized, retitled or miniaturized; application hidden | that window is looked at, or every managed window of the application when the event names none: a new title or frame is reported (`retitle`, `observe`) |
+| window destroyed | that window is looked at: it leaves the canvas if the window list has dropped it or it is off screen, and is otherwise looked at on every poll for a second |
+| application terminated | its observer is removed and its windows are looked at, which finds their process gone |
+| application activated; focused window changed | native focus is read through the same path as the focus poll ([Native focus is followed](#native-focus-is-followed)) |
+
+Each look is made when the event arrives and once more 80 ms later, because
+the window list can show a change a moment after the application reports it;
+a storm of events (a live resize reports every step) is one look at once and
+one per 80 ms after it. After an event that may bring a window on screen the
+poll also looks for new windows every 80 ms for a second.
+
+**The poll stays.** The app's 80 ms timer still ticks the clock, the camera
+and the hot corners and redraws. What changes is how often it looks at
+windows: while every regular application is observed in full, new windows are
+looked for and every managed window is looked at once a second, and native
+focus is read once a second, as a reconciliation that finds whatever no event
+announced. A window whose capture failed, one reported destroyed and still on
+screen, and every window of a run with `--experimental-native-resize` are
+still looked at on every poll. Without Accessibility access, and while some
+application is not observed in full (it has not answered yet, or refused a
+notification), the poll runs exactly as before, every 80 ms and focus twice a
+second; without that access the `NSWorkspace` events are all that arrives
+besides. Accessibility access is read again once a second, so a grant
+made while the app runs starts the observers and one withdrawn removes them
+(not tried). A run that manages no windows (`--manual`, no Screen Recording
+access, the probe, demo and owned modes) has no observers at all.
+
+**A slow application does not hold the canvas.** Every Accessibility message
+the observers send is sent off the main thread with a quarter-second timeout;
+on the main thread an event only looks its window up in a table. An
+application that does not answer is asked again five times a tenth of a second
+apart and then once a second. A window whose application did not answer when
+an event first named it, or gave no window number for it yet, is asked about
+again by the next event that names it, and that application's windows are
+listed again once a second until it does.
+
+**Minimized windows, hidden applications, other Spaces.** What each does is
+unchanged:
+
+- A managed window that is minimized, whose application is hidden or that is
+  on another Space is not closed: its window number is still in the window
+  list. Its tile stays where it is with its last picture, and its title is
+  still followed.
+- A window in one of those states that is not managed yet is not offered: only
+  windows on screen are. The first pass names it, if it has a title, so its
+  saved slot waits for it; it is offered when it comes on screen.
+
+What is new is when: miniaturizing a window or hiding its application is
+looked at as it happens (and changes nothing); a window coming back from the
+Dock, an application shown again and a change of Space look for windows at
+once instead of at the next poll.
+
+**What the owner will notice.**
+
+- Command-Tab, the Dock, or an application raising its own window is followed
+  when it happens, where the canvas used to catch up within half a second.
+- A native move or resize, a new title and a close reach the canvas with the
+  event instead of at the next 80 ms poll, and a new window is looked for when
+  its application reports it. Against an 80 ms poll that is a small gain; the
+  larger one is that an idle canvas reads the window list once a second
+  instead of twelve times.
+- One rule is new, and it is the only change to which windows count as
+  closed: a window its application reported destroyed is closed once it is
+  also off screen, even if the window list keeps its number. The poll alone
+  never did that. It is meant for an application that keeps a closed window's
+  object, whose tile used to stay for good.
+- The safety net is slower than the poll it replaces: a change no event
+  announces is found within a second, where it was found within 80 ms.
+
+**Known limits**, from reading the code:
+
+- The new close rule has not been seen on a real window. Which applications
+  report a window they keep as destroyed is not known. If an application
+  reports a native tab as destroyed when another tab is selected, that tab's
+  tile leaves the canvas on every tab switch and is placed afresh when the tab
+  is selected again, where it used to stay with its last picture. Minimizing
+  and hiding are not expected to do this. The rule is one line
+  (`-destroyed:info:` in `main.m`, the `kCGWindowIsOnscreen` test); without it
+  a destroyed report only makes the window list be read at once.
+- One application that does not answer, or refuses one of the six
+  notifications for good, keeps the whole poll at its old pace for every
+  application: nothing is lost against the previous build, and nothing gained
+  either while it runs.
+- An application lists only the windows of the active Space, so a window on
+  another Space is watched for destroyed, miniaturized and deminiaturized only
+  after its Space was shown or its application activated. Until then its close
+  is found by the reconciliation, within a second.
+- A window is watched for those three only once its application has said
+  which window it is. While an application does not answer that within the
+  quarter second (a document opened while it is busy), or answers with no
+  window number yet, the poll does not return to its old pace: the window's
+  close is found by the reconciliation, within a second, until a later event
+  or the once-a-second listing has it answered. An application that keeps
+  listing a window without a number is listed once a second for as long as it
+  does. Whether any application announces a window before it has a number is
+  not known; yabai drops such an element.
+- A destroyed report that is missed while the window list keeps the window's
+  number leaves the tile on the canvas, as before.
+- An application that becomes a regular one after it launched is observed at
+  the next reconciliation, within a second.
+- An application's first window can appear after the second of 80 ms looks
+  that followed its launch. It is then found by its created event, or by the
+  reconciliation up to a second later.
+- Title changes are reported for elements that are no window. Each is taken as
+  "some window of this application may have changed" and looks at that
+  application's managed windows, at most once per 80 ms.
+- Registering for a notification may not honour the quarter-second timeout.
+  It runs off the main thread, so an application that stalls it delays only
+  the observation of other applications, not the canvas.
+- A close the controller refuses, with the release of the source refused too,
+  is reported again at every look, as before this build.
+
+### What was run for event-driven tracking
+
+On 2026-10-10 (macOS 27.2, Apple Silicon), from a session with **no Screen
+Recording access**; Accessibility access was read as granted by the throwaway
+program below, and the app did not print its missing-access note:
+
+- `./scripts/build-app.sh`: built and ad-hoc signed, with `window-events.m`
+  compiled under `-Wall -Wextra -Werror` and linked.
+- The controller scenarios through the exported C ABI: `lifecycle_flow` (32,
+  seven of them for reports that are repeated, late, early or out of order),
+  `controller_flow`, `navigation_actions_flow`, `focus_cycle_flow`,
+  `navigation_flow`, `effects_flow` and `rules_flow`, all passing.
+- `./tests/e2e/desktop-navigation.sh`, the headless coordinator regression,
+  passing with the coordinator's one change (a read of native focus asked for
+  while one is under way is followed by one more). None of its scenarios asks
+  during a read, so that change is compiled and read, not exercised by it.
+- Four launches of the built app, the fourth on the final build,
+  `--windowed 1100x700`, on a private scene (three seeded slots), config and
+  socket, for three seconds each, driven through `Infinify msg`, with the
+  same result: `state` listed the three windows on one output `windowed`
+  of 1100x636 at camera `550 -318`; `action center-nearest right` answered
+  `ok` and `camera` settled at `1950 -0` with window 2 focused; SIGTERM, exit
+  status 0, socket removed. stderr held one line, the not-managed line.
+  **Those launches had no window manager, so no observer was created in
+  them**: they show that the build starts, serves IPC and exits cleanly, and
+  nothing about events. The observers also print nothing, so an empty stderr
+  would say nothing about them either.
+- A throwaway program outside the repository, observe-only, built with the
+  address and undefined-behaviour sanitizers around the real
+  `window-events.m` with a sink that only counts: of 7 regular applications
+  running, none was observed at start and all 7 had their observer on the run
+  loop with all six notifications registered half a second later, 2 windows
+  watched; four "some window of the application changed" reports arrived
+  across its two instances and no other kind; after `-stop` no application was
+  observed and the object was released; a second instance released without
+  `-stop` was clean; exit 0 and no sanitizer report. It registered for
+  notifications and read window numbers and roles; it posted nothing and
+  moved, focused or closed nothing. It ran `window-events.m` as it was before
+  its last two changes (a window its application did not answer for, or gave
+  no number for, is asked about again and its windows listed again; a window
+  watched twice, by a
+  listing and by an event at once, keeps one record), and was not run again:
+  those two are compiled and read, nothing more. Earlier runs of the same
+  kind that day, not repeated for this entry, drove the real
+  `window-manager.m` under a host that binds nothing and counted its passes,
+  and the real coordinator with a canned controller and job queues.
+
+Not run, because it needs Screen Recording access and a real window, and no
+test may move, focus or close one: any event reaching the app; a window
+created, destroyed, moved, resized, retitled, miniaturized or deminiaturized
+there; an `attach`, `window_closed`, `retitle`, `observe` or native `activate`
+sent because of an event; the destroyed-and-off-screen close; Command-Tab
+followed without the wait; the once-a-second reconciliation in the app; a
+grant made or withdrawn while it runs; an application that does not answer.
+Those paths are compiled, type-checked and read, nothing more.
+
+**At the merge with the tap bindings and the background caches, the same
+day.** Everything above ran on the tree the events were built in, which had
+neither. The tree that landed has the [tap tracker](#tap-bindings), the
+[usable rectangle](#the-usable-area) the controller keeps and the shell never
+sends, and the [background caches](#background-caches) beside the events;
+`./scripts/build-app.sh` compiles `window-events.m`, `tap-keys.m`,
+`frame-driver.m` and `background-tiff.m` once each and built it as written.
+
+- **Read at the join**, in the code, not run:
+  - The app's poll does what it did on both sides: the lost-input check, the
+    display link's fallback for a frame timer that has stalled and the
+    capture report of a resize run stand beside the reconciliation. The tap
+    tracker is still no part of it; it is only told the Accessibility trust
+    the shell reads with each read of native focus, which a focus event now
+    makes too and which the poll makes once a second, not twice, where the
+    observers are in place ([Tap bindings](#tap-bindings) says so now).
+  - Which windows are adopted is decided in one place, for a pass an event
+    started as for the poll's: an event only runs the pass, the pass's one
+    read of the shareable windows asks Accessibility for the subroles in its
+    completion handler, off the main thread, and the test on that answer
+    stands before the only call that offers a window. A window the poll
+    would refuse is refused when an event announces it, and one of a
+    window's size is named on stderr once per appearance, as before.
+  - Quit and Return to desktop stop the window manager with its observers,
+    the tap monitors and the frame timer once each (the later stop of the
+    keys finds no tracker left). A screen change stops the frame timer and
+    the tap monitors once, starts the taps again with the hot keys, and
+    keeps the window manager and its observers, as it kept the manager
+    before there were observers.
+- **The controller**, nine test modules through the exported C ABI, all
+  passing: `lifecycle_flow` (32), `controller_flow`,
+  `navigation_actions_flow`, `focus_cycle_flow`, `navigation_flow`,
+  `effects_flow`, `rules_flow`, `usable_tap_flow` (15) and `motion_flow`,
+  115 scenarios, and `./tests/e2e/desktop-navigation.sh`. The repeated native
+  activation and the usable rectangle meet in the controller
+  ([contract](../../crates/desktop/LIFECYCLE.md#event-delivery)).
+- **The app, one launch** of the landed build, `--windowed 1100x700`, on a
+  private scene of three seeded slots, a config holding an `alt+shift` tap
+  and a private socket, for 4.1 seconds: `state` listed the three windows on
+  one output `windowed` of 1100x636 at camera `550 -318`; `action
+  center-nearest right` settled at `1950 -0` with `#2` focused,
+  `pan-viewport right` at `2050 -0`, `zoom-to-fit` at `750 -390`, zoom
+  0.28484848484848485, and again back at `2050 -0`, zoom 1; a viewport
+  capture of 1100×636, opened, showed the Browser placeholder over the dot
+  grid; `reload-config` answered `ok`; SIGTERM, exit status 0, socket
+  removed. stderr held one line, the not-managed line. **That launch had no
+  window manager either, so no observer was created and no window event was
+  driven**: everything listed above as not run is still not run, and no tap
+  was made, a windowed launch installing no monitor.
 
 ## Window rules, widgets and pinned windows
 
@@ -2813,7 +3085,9 @@ the chords, and the shell watches the modifiers and tells it when one completes
   has not been observed. If it is not, a tap fires only while Infinify itself
   is the active application, and nothing says so; hot keys are unaffected.
   When Accessibility is granted while the app runs, the monitors are installed
-  again within half a second.
+  again when the shell next reads that access, which it does with every read
+  of native focus, at least once a second
+  ([Native focus is followed](#native-focus-is-followed)). Not tried.
 - **When.** Taps are watched exactly while the config's hot keys are
   registered: from the moment the canvas opens until Return to desktop or quit,
   again after every config load, and never in a windowed run or a fixture mode.
@@ -3967,8 +4241,9 @@ Recording access, nothing is matched and nothing is dropped: a chooser selection
 is required to rebind. A failed load blocks
 source selection and disables every save path, preserving the original bytes until
 an explicit different state path or repaired file is provided. Display changes
-recreate panels while retaining cameras by stable display UUID. Source lifecycle and normal bounds are polled on the
-main event loop; ScreenCaptureKit buffers independently report pixel dimensions.
+recreate panels while retaining cameras by stable display UUID. Source lifecycle and normal bounds are read on the
+main event loop, by the poll and, in a managed run with Accessibility access, when an event names the window
+([Event-driven tracking](#event-driven-tracking)); ScreenCaptureKit buffers independently report pixel dimensions.
 
 ## Scripting (IPC)
 
@@ -4820,7 +5095,8 @@ a wheel zoom and a bound swipe or pinch stop or replace only their own
 display's, in the controller ([Camera motion](#camera-motion)).
 
 Native focus is allowed when Infinify has Accessibility access and
-`--no-native-focus` was not given. Access is re-read twice a second, so a grant
+`--no-native-focus` was not given. Access is re-read at every read of native
+focus, at least once a second, so a grant
 made while the app runs should take effect without a restart (not tried).
 Without it focus stays logical, all of the navigation above still works,
 cycling included, and the status line and stderr say so once:
@@ -4843,8 +5119,16 @@ no keys and nothing else depends on it.
 
 ### Native focus is followed
 
-Twice a second, when Accessibility access exists, the shell reads which window
-the frontmost application has focused. If that is a window on the canvas and
+When Accessibility access exists, the shell reads which window the frontmost
+application has focused. In a managed run it reads when an application is
+activated or changes its focused window
+([Event-driven tracking](#event-driven-tracking)), at the first poll after a
+window is adopted (its focus event may have come before the canvas had the
+window), and once a second besides, so Command-Tab is followed as it happens. Twice a second, as before, in a run
+that manages no windows (`--manual`, no Screen Recording access) and while
+some application is not observed in full. What a read finds is compared with
+what the canvas already has, so reading more often reports nothing twice. If
+that is a window on the canvas and
 the canvas did not ask for it (Command-Tab, the Dock, an application raising
 its own window), the canvas follows as upstream follows an activation request:
 the window becomes the logical focus, is raised and moves to the front of the
@@ -5693,7 +5977,8 @@ its old size. A fit or a fill survives a fullscreen.
   and moves no camera. It stays there only if macOS did not give it the
   keyboard. A window that opens with the keyboard, as one the user just asked
   for usually does, is followed like any other native focus change (with
-  Accessibility access, within the half second of the focus poll): that ends
+  Accessibility access, at the first poll after the window is adopted): that
+  ends
   the fullscreen, and the new window is focused beside the restored one.
   Upstream keeps the fullscreen in both cases.
 

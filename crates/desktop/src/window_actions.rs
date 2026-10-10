@@ -367,6 +367,13 @@ impl Controller {
         self.scene.clear_focus();
         focused
     }
+    /// The zoom an activation's reveal lands at: `zoom.reset_on_activation`.
+    fn activation_zoom(&self) -> ZoomPolicy {
+        match self.config().zoom_reset_on_activation {
+            true => ZoomPolicy::Reset,
+            false => ZoomPolicy::Keep,
+        }
+    }
     /// What upstream does when a window is clicked or asks to be activated:
     /// the command's reply.
     pub(crate) fn activate(
@@ -452,9 +459,16 @@ impl Controller {
                         && held.identity == observed.identity
                         && held.generation == observed.generation
                 });
+                // Event delivery (LIFECYCLE.md): the same report again while
+                // the window is still off screen and the flight the first one
+                // armed is in the air asks for what is already under way.
+                // Upstream's repeat sets the camera target it already has.
+                let revealing = home.is_some_and(|home| {
+                    self.on_canvas(window) && self.flying_to(window, home, self.activation_zoom())
+                });
                 if self.scene.focused() == Some(window)
                     && holds_keyboard
-                    && share >= ACTIVATION_ONSCREEN_THRESHOLD
+                    && (share >= ACTIVATION_ONSCREEN_THRESHOLD || revealing)
                 {
                     return Ok(Moved::default().reply_with_dirty());
                 }
@@ -487,12 +501,7 @@ impl Controller {
                     Some(home)
                         if share < ACTIVATION_VISIBLE_THRESHOLD && self.on_canvas(window) =>
                     {
-                        let policy = if self.config().zoom_reset_on_activation {
-                            ZoomPolicy::Reset
-                        } else {
-                            ZoomPolicy::Keep
-                        };
-                        self.arm_navigation(window, home, policy)?
+                        self.arm_navigation(window, home, self.activation_zoom())?
                     }
                     _ => Value::Null,
                 };

@@ -86,7 +86,8 @@ tap bindings, outputs, hot corners, keyboard layouts, autostart, and what
 stands for upstream's Linux commands. [Window lifecycle](LIFECYCLE.md) covers a window
 that appears or closes by itself: adoption, placement, stand-ins,
 `window_closed`, `retitle`, `adoption_complete` and the close, suspend and
-relaunch actions.
+relaunch actions, and what a report that is repeated, late or early is
+answered ([event delivery](LIFECYCLE.md#event-delivery)).
 [Window rules](RULES.md) covers `[[window_rules]]`, widgets and screen-pinned
 windows: what a rule does to a new window, the order `placements` and `hit`
 follow, what every navigation, gesture and output action does with a widget or

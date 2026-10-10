@@ -15,6 +15,14 @@ new. The optional native/privileged/loader.m is adapted from yabai at commit
 dd845723416f5fe92af49fad5ebab00369e07edd and retains its MIT license, copyright,
 and Jeremy Legendre arm64e attribution. The exact upstream license is retained
 in native/privileged/YABAI-LICENSE.txt.
+native/desktop/window-events.m and the event handling of
+native/desktop/window-manager.m are adapted from yabai at the same commit
+(src/workspace.m, src/application.c, src/application.h, src/window.c,
+src/window.h, src/event_loop.c, src/window_manager.c: which notifications an
+application and a window are observed with, and what each one means), MIT,
+Copyright (c) 2019 Åsmund Vikane. Its license text is retained in
+native/families/YABAI-NOTICE.txt, which the app bundle carries beside this
+file, and each adapted file names what it took.
 crates/core carries DriftWM's pure modules (canvas, config, layout, session,
 stage and the touch gesture recogniser) from the source baseline with their
 tests; each file records its upstream path, and crates/core/PORT.md lists every

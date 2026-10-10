@@ -351,7 +351,10 @@ true when focus or stacking was written and the shell should save.
   not after it: a window that already holds both logical and observed native
   focus and is at least partly on its home output is upstream's "already
   active", and the command then changes nothing and replies
-  `{"effect":null,"navigation":null,"dirty":false}`.
+  `{"effect":null,"navigation":null,"dirty":false}`. So does the same report
+  again for a window still wholly off its home output while that output is on
+  the flight the first report armed: a repeat arms nothing
+  ([LIFECYCLE.md](LIFECYCLE.md#event-delivery)).
 
 For a widget or a screen-pinned window all three causes focus and none flies:
 a `click` raises and focuses it and returns its focus effect, a

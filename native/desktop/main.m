@@ -143,6 +143,8 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
 @property SCWindow *window;
 @property NSString *title;
 @property BOOL keepSample;
+// When its application reported the window destroyed (window-events.h), until the window list agrees or shows it is still there; 0 for none.
+@property CFTimeInterval destroyed;
 // A normal run: the compositor draws the stream's latest pixel buffer, kept here until
 // the next one, and no display layer is fed. `presented` runs when a new one was kept.
 @property BOOL composited;
@@ -1942,7 +1944,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 }
 - (void)windowAppeared:(SCWindow *)window {
     if(self.cleaning||!self.panels.count)return;
-    if([self attach:window logical:nil world:nil placed:YES])return;
+    // Its focus event may have come before it was bound, and no other follows: native focus is read again at the next poll, not a reconciliation later.
+    if([self attach:window logical:nil world:nil placed:YES]){self.lastObservation=0;return;}
     // Nobody chose this window: a refusal is a passing note.
     NSString *note=[NSString stringWithFormat:@"%@ window not adopted: %@",window.owningApplication.applicationName?:@"A",self.statusText?:@"refused"];
     fprintf(stderr,"%s\n",note.UTF8String);[self flashStatus:note];[self render];
@@ -1994,11 +1997,22 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     // is ticked here instead, at the poll's pace, so a flight still arrives and a frame timer that never fires cannot hold the canvas still.
     BOOL stalled=self.frameFlying&&CACurrentMediaTime()-self.frameDriver.lastFrame>.25;
     if(!self.frameFlying||stalled){if([self cameraFrame])[self ensureFrames];else if(stalled)self.frameFlying=NO;}
-    if(self.navigation&&CACurrentMediaTime()-self.lastObservation>=.5){self.lastObservation=CACurrentMediaTime();[self refreshFocusAccess];[self.navigation observe];}
+    // Where the observers report native focus (-focusChanged) the focus poll is a reconciliation, once a second.
+    if(self.navigation&&CACurrentMediaTime()-self.lastObservation>=(self.manager.live?1:.5)){self.lastObservation=CACurrentMediaTime();[self refreshFocusAccess];[self.navigation observe];}
     // Discovery first: a window that appeared is attached before this tick observes and draws.
-    [self.manager poll];
-    for(LiveSource *source in self.sources.allValues){
-        NSDictionary *w=windowInfo(source.router.wid);BOOL gone=sourceGone(source,w);
+    // Where the observers report window changes (-windowChanged:pid:) the windows are all looked at once a second, as a reconciliation;
+    // a source whose capture failed, and one under native resize, are looked at on every poll as before, and so is a window reported
+    // destroyed until the window list has said the same.
+    BOOL reconcile=!self.manager||[self.manager poll];
+    for(LiveSource *source in self.sources.allValues)if(reconcile||source.error||source.resize||source.destroyed)[self track:source];
+    [self captureDemand];
+    if(self.sceneDirty){self.sceneDirty=NO;[self saveScene];}
+    if(!self.frameFlying)[self render];
+}
+// One look at one bound window: is it gone, was it retitled, where and how large is it now. The poll's look and an event's are this one
+// method, and each reads the window list afresh, so a second look that finds nothing new sends no window_closed and no retitle.
+- (void)track:(LiveSource *)source {
+        NSDictionary *w=windowInfo(source.router.wid);BOOL gone=sourceGone(source,w)||[self destroyed:source info:w];
         // Titles follow in a managed run, under native resize too. A refused title is not offered again.
         NSString *title=self.manager&&!gone?asString(w[(id)kCGWindowName]):nil;
         if(title&&![title isEqual:source.title]){source.title=title;NSString *status=self.statusText;NSDictionary *reply=[self call:@{@"op":@"retitle",@"window":source.logical,@"identity":source.identity,@"title":title}];if(reply)[self follow:reply];else self.statusText=status;}
@@ -2007,12 +2021,12 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
             if(gone&&[self.resize canRemove:source.logical]&&(self.manager||[self marked:source]))[self closed:source];
             // The trim at the end of this loop is not reached from here, and hover delivery posts to this source at frame rate.
             if(!self.probe&&source.router.sent.count>128)[source.router.sent removeAllObjects];
-            continue;}
+            return;}
         // A managed run tells a window that closed from a capture that failed: only the second keeps today's placeholder.
         // A manual run does so for a window close-window or suspend-window asked to close: the controller's mark decides what is left.
-        if(gone&&(self.manager||[self marked:source])){[self closed:source];continue;}
-        if(source.error||gone){self.statusText=source.error?:@"A source closed. Its world placeholder is retained for explicit rebind.";[self detach:source];continue;}
-        CGRect bounds=CGRectZero;if(!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)w[(id)kCGWindowBounds],&bounds))continue;
+        if(gone&&(self.manager||[self marked:source])){[self closed:source];return;}
+        if(source.error||gone){self.statusText=source.error?:@"A source closed. Its world placeholder is retained for explicit rebind.";[self detach:source];return;}
+        CGRect bounds=CGRectZero;if(!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)w[(id)kCGWindowBounds],&bounds))return;
         if(![source.router.bounds isEqual:w[(id)kCGWindowBounds]]){
             CGRect old=CGRectZero;CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)source.router.bounds,&old);source.router.bounds=w[(id)kCGWindowBounds];
             if(!CGSizeEqualToSize(old.size,bounds.size)){SCStreamConfiguration *config=[SCStreamConfiguration new];config.width=(size_t)ceil(bounds.size.width*2);config.height=(size_t)ceil(bounds.size.height*2);config.pixelFormat=kCVPixelFormatType_32BGRA;config.minimumFrameInterval=[self captureInterval:source];config.queueDepth=3;config.showsCursor=NO;config.ignoreShadowsSingleWindow=YES;compositedStream(config,source);[source.stream updateConfiguration:config completionHandler:^(NSError *e){if(e)dispatch_async(dispatch_get_main_queue(),^{source.error=e.localizedDescription;});}];}
@@ -2020,11 +2034,31 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         [self call:@{@"op":@"observe",@"window":source.logical,@"identity":source.identity,@"source_rect":rectJSON(bounds),@"buffer":@{@"width":@(source.buffer.width),@"height":@(source.buffer.height)}}];
         // Event history is probe evidence, not an unbounded production log.
         if(!self.probe&&source.router.sent.count>128)[source.router.sent removeAllObjects];
-    }
-    [self captureDemand];
-    if(self.sceneDirty){self.sceneDirty=NO;[self saveScene];}
-    if(!self.frameFlying)[self render];
 }
+// A window its application reported destroyed is gone once it is also off screen, whether or not the window list still has its number: the
+// list may drop it a moment after the report, and may keep it when the application keeps the window object to show again. Until then it
+// is looked at on every poll. While the window is still on screen nothing is concluded, and a report still contradicted a second later is
+// forgotten. Not observed on a real window: which applications report a window they keep as destroyed is not known.
+- (BOOL)destroyed:(LiveSource *)source info:(NSDictionary *)info {
+    if(!source.destroyed)return NO;
+    if(![info[(id)kCGWindowIsOnscreen]boolValue])return YES;
+    if(CACurrentMediaTime()-source.destroyed>1)source.destroyed=0;
+    return NO;
+}
+// DWWindowHost, from the observers: the look the poll takes, taken now and at the windows concerned only.
+- (void)windowChanged:(CGWindowID)window pid:(pid_t)pid {
+    if(self.cleaning)return;BOOL changed=NO;
+    for(LiveSource *source in self.sources.allValues)if(source.router.pid==pid&&(!window||source.router.wid==window)){
+        NSString *title=source.title;NSDictionary *bounds=source.router.bounds;[self track:source];if(source.title!=title||source.router.bounds!=bounds)changed=YES;}
+    // A window that closed was drawn by -closed:. A look that found nothing new draws nothing: the reports of one busy application come 12 times a second.
+    if(changed&&!self.frameFlying)[self render];
+}
+- (void)windowDestroyed:(CGWindowID)window pid:(pid_t)pid {
+    if(self.cleaning)return;
+    for(LiveSource *source in self.sources.allValues)if(source.router.pid==pid&&source.router.wid==window){source.destroyed=CACurrentMediaTime();[self track:source];}
+}
+// Native focus may have moved (Command-Tab, a click on another window): read now, through the coordinator's own path.
+- (void)focusChanged { if(self.cleaning||!self.navigation)return;self.lastObservation=CACurrentMediaTime();[self refreshFocusAccess];[self.navigation observe]; }
 // macOS platform rule: applications outlive Infinify, where upstream's clients end with the compositor. A window still fullscreen, or
 // still owed its size by a fullscreen that has ended, would keep the display's size after the canvas is gone, so each fullscreen is
 // ended and its size transaction performed to its end before anything is shut down, one at a time, the slot being one. Upstream's
