@@ -5,8 +5,12 @@ window's camera placement with `keep` or `reset` zoom. The commands in the table
 below are that primitive. Upstream's own window navigation (`center-window`,
 `center-nearest`, `cycle-windows`, `focus-center`, and what a click or an
 activation does) is built on it and described under
-[Window navigation actions](#window-navigation-actions). Fullscreen, pinned,
-fill and modal handling are absent throughout. No native operation is performed.
+[Window navigation actions](#window-navigation-actions). Fullscreen, fill and
+modal handling are absent throughout. A widget and a screen-pinned window
+([RULES.md](RULES.md#navigation-activation-gestures-and-outputs)) are no
+navigation target anywhere on this page: `navigate_window` raises and focuses
+one where it is and returns a null `navigation`, and no search picks one. No
+native operation is performed.
 
 | Command | Fields | Result |
 | --- | --- | --- |
@@ -120,10 +124,10 @@ everywhere below, it is focused and flown to, and it adds no effect.
 
 | Action | Target | Zoom |
 | --- | --- | --- |
-| `center-window` | the focused window; with none, the window whose center is nearest the viewport center (the first in stacking order on a tie) | 1 |
+| `center-window` | the focused canvas window; with none, or with a widget or a pinned window focused, the canvas window whose center is nearest the viewport center (the first in stacking order on a tie) | 1 |
 | `center-nearest <dir>` | the best candidate in a 90° cone, see below | kept |
 | `cycle-windows forward` / `backward` | the next step of the frozen focus history | kept |
-| `focus-center` | the topmost window under `pointer` on the active output | 1 |
+| `focus-center` | the topmost canvas window under `pointer` on the active output | 1 |
 
 "Nothing to do" is not an error: no window at all, no candidate in the cone, an
 empty focus history, no `pointer`, or nothing under it reply
@@ -144,7 +148,9 @@ fires the action reports.
   focused window's center when the whole frame is on the output (upstream's
   threshold 1.0, measured against the whole output, not the usable area), and
   the viewport center otherwise; in the first case the focused window is not a
-  candidate. Candidates are every Scene window, represented by the point of its
+  candidate. A focused screen-pinned window is never the origin, as upstream's
+  is not. Candidates are every canvas window (no widget, no pinned window:
+  upstream's `is_canvas_window`), represented by the point of its
   frame closest to the origin, or by its center when the frame contains the
   origin, and every `navigation.anchors` point inside the ±1e12 world. A
   candidate at offset `d` from the origin is in the cone of unit direction `u`
@@ -164,8 +170,11 @@ fires the action reports.
   at once. Either way the history changes only when the selection's focus
   request is answered: confirmed by the adapter, or `focus_logical` from a shell
   that performs no native focus. See [FOCUS.md](FOCUS.md#upstream-entry-points).
-- **`focus-center`** hit-tests `pointer` against world rectangles on `output`
-  only. Upstream reads the seat's pointer; here the shell supplies it.
+- **`focus-center`** hit-tests `pointer` against the world rectangles of the
+  canvas windows on `output` only. A screen-pinned window under the pointer is
+  passed over, as upstream's walk skips it, so the canvas window beneath is
+  taken; a widget is not taken. Upstream reads the seat's pointer; here the
+  shell supplies it.
 
 ### `activate`
 
@@ -220,6 +229,13 @@ true when focus or stacking was written and the shell should save.
   active", and the command then changes nothing and replies
   `{"effect":null,"navigation":null,"dirty":false}`.
 
+For a widget or a screen-pinned window all three causes focus and none flies:
+a `click` raises and focuses it and returns its focus effect, a
+`click_release` answers a null `navigation` whatever the config says (upstream
+arms no click navigation for a widget, and a pinned window has no canvas
+position to bring into view), and `native` records the observed focus without
+promoting it in the focus history and without a reveal.
+
 `{"op":"clear_focus"}` is upstream's click on empty canvas; see
 [FOCUS.md](FOCUS.md#upstream-entry-points).
 
@@ -244,9 +260,12 @@ Two different tests are upstream's and both are kept:
 
 - A window's representative points are taken from its world rectangle, which
   already includes the title bar: there is no separate chrome strip.
-- Fullscreen, pinned, widget and modal windows do not exist here, so none of
-  upstream's special cases for them apply, and `center-nearest` has no
-  just-exited-fullscreen anchor.
+- Fullscreen and modal windows do not exist here, so none of upstream's
+  special cases for them apply, and `center-nearest` has no
+  just-exited-fullscreen anchor. Widgets and screen-pinned windows follow
+  upstream's rules, with the differences
+  [RULES.md](RULES.md#differences-from-upstream) lists: `focus-center` takes no
+  widget, where upstream's would fly to one.
 - Whether a release completes a click is the sender's to decide (upstream's
   5 px slop on the same output): the controller sees no pointer and checks only
   that the window still holds logical focus and is still clipped. Upstream also
@@ -362,7 +381,8 @@ destination, with one exception below.
   center. Step targets pass through upstream's `snap_zoom` (±0.05 around 1).
   `zoom_in` at zoom 1 still arms a flight to the same zoom, as upstream does.
 - `zoom_to_fit` flies back to a remembered pose if one is pending. Otherwise it
-  fits the bounding box of every Scene window, detached placeholders included,
+  fits the bounding box of every canvas window, detached placeholders included
+  and widgets and screen-pinned windows left out,
   centers the box on the usable center, and remembers the pose it left. With no
   windows it is a no-op.
 
@@ -398,8 +418,8 @@ Differences from upstream:
   it. `zoom_out` is then a complete no-op (`{"navigation":null}`,
   fit return untouched) rather than a flight that zooms in.
 - `HomeToggle`'s fullscreen legs (instant snap, fullscreen restore, pointer
-  warp) and `ZoomToFitSnapped` are absent. Every Scene window counts
-  as a canvas window.
+  warp) and `ZoomToFitSnapped` are absent. Every Scene window that is
+  neither a widget nor screen-pinned counts as a canvas window.
 - Upstream's `execute_action` prelude commits an in-progress focus cycle before
   any non-cycle action and stops scroll momentum. The six commands, sent
   directly, stop their output's momentum and leave logical focus and a held

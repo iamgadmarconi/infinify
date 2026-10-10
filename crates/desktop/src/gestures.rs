@@ -10,7 +10,9 @@
 // `direction_from_vector` are driftwm-core's, upstream's own code. Not
 // adapted: forwarding an unbound gesture to a client, the fullscreen legs, the
 // pointer warps, the pinned and cross-output legs of a move, and the resize
-// grab, which is gated here. What a continuous gesture drives is motion.rs's:
+// grab, which is gated here. gesture_target_under is adapted as far as that
+// goes: a widget is grab-proof and a screen-pinned window is claimed and left
+// where it is (RULES.md). What a continuous gesture drives is motion.rs's:
 // a swipe pan is its timed pan (upstream's drift_pan_on) and its end is its
 // pan_end (launch_momentum_on), a pinch zoom is its pinch, and a move is the
 // pointer's own drag with its edge pan. The pending middle click and the
@@ -34,6 +36,8 @@ use driftwm_core::input::gestures::direction_from_vector;
 
 const RESIZE_NOTE: &str =
     "resize by gesture is not implemented on macOS yet: native layout resize is not available";
+const PINNED_NOTE: &str =
+    "a screen-pinned window is not moved by gesture: unpin it first (toggle-pin-to-screen)";
 
 /// The gesture libinput would have reported.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -74,6 +78,9 @@ enum GestureState {
     },
     /// Upstream's resize grab. Native layout resize is gated, so it is inert.
     SwipeResize { window: WindowId },
+    /// Upstream's screen-space move of a pinned window, which is not adapted:
+    /// the gesture is claimed, pans nothing and moves nothing.
+    SwipePinned { window: WindowId },
     /// Accumulate the physical finger vector, pick a direction, fire once.
     SwipeThreshold {
         cumulative: Point,
@@ -106,6 +113,7 @@ impl GestureState {
             Self::SwipePan => "swipe_pan",
             Self::SwipeMove { .. } => "swipe_move",
             Self::SwipeResize { .. } => "swipe_resize",
+            Self::SwipePinned { .. } => "swipe_pinned",
             Self::SwipeThreshold { .. } => "swipe_threshold",
             Self::PinchZoom { .. } => "pinch_zoom",
             Self::PinchThreshold { .. } => "pinch_threshold",
@@ -115,7 +123,9 @@ impl GestureState {
     }
     fn window(&self) -> Option<WindowId> {
         match self {
-            Self::SwipeMove { window, .. } | Self::SwipeResize { window } => Some(*window),
+            Self::SwipeMove { window, .. }
+            | Self::SwipeResize { window }
+            | Self::SwipePinned { window } => Some(*window),
             _ => None,
         }
     }
@@ -288,9 +298,21 @@ impl Controller {
             })
         })
     }
+    /// Upstream gesture_target_under: what a move or resize gesture landed on,
+    /// in the order a press resolves (`hit_window`): the windows pinned to the
+    /// output, the canvas windows, the widgets. A widget is grab-proof and
+    /// ends the search: `None`, as for empty canvas, and nothing beneath it is
+    /// reached. The flag says the window is screen-pinned.
+    fn gesture_target(&self, output: OutputId, pointer: Point) -> Option<(WindowId, bool)> {
+        let (window, _) = self.hit_window(output, pointer)?;
+        (!self.is_widget(window)).then(|| (window, self.is_pinned(window)))
+    }
     /// Upstream try_start_gesture_move: focus and raise the window under the
     /// pointer and install the drag a bound button press installs. `None` when
-    /// nothing draggable is there, so the caller can fall back to pan.
+    /// nothing draggable is there, a widget included, so the caller can fall
+    /// back to pan. A screen-pinned window is refused as `begin_drag` refuses
+    /// it: upstream moves it in screen space, which is not adapted, so the
+    /// gesture is claimed and left inert, and nothing is raised or focused.
     fn try_start_move(
         &mut self,
         output: OutputId,
@@ -301,16 +323,20 @@ impl Controller {
         if self.gesture.is_some() {
             return Ok(None);
         }
-        let Some(hit) = self.scene.hit_test(output, pointer) else {
+        let Some((window, pinned)) = self.gesture_target(output, pointer) else {
             return Ok(None);
         };
-        self.install_drag(hit.window, output, cluster)?;
-        let effect = self.raise_and_focus(hit.window)?.effect;
+        if pinned {
+            report.note = Some(PINNED_NOTE);
+            return Ok(Some(GestureState::SwipePinned { window }));
+        }
+        self.install_drag(window, output, cluster)?;
+        let effect = self.raise_and_focus(window)?.effect;
         if !effect.is_null() {
             report.outcome.effects.push(effect);
         }
         Ok(Some(GestureState::SwipeMove {
-            window: hit.window,
+            window,
             at: pointer,
             drag: self.drags,
         }))
@@ -320,17 +346,18 @@ impl Controller {
     fn drives(&self, drag: u64) -> bool {
         matches!(self.gesture, Some(Gesture::Drag { serial, .. }) if serial == drag)
     }
-    /// Upstream try_start_gesture_resize, gated: over a window the gesture is
-    /// claimed and does nothing, and elsewhere the caller falls back to pan.
+    /// Upstream try_start_gesture_resize, gated: over a window, screen-pinned
+    /// or not, the gesture is claimed and does nothing, and elsewhere, over a
+    /// widget included, the caller falls back to pan.
     fn refuse_resize(
         &self,
         output: OutputId,
         pointer: Point,
         report: &mut Report,
     ) -> Option<GestureState> {
-        let hit = self.scene.hit_test(output, pointer)?;
+        let (window, _) = self.gesture_target(output, pointer)?;
         report.note = Some(RESIZE_NOTE);
-        Some(GestureState::SwipeResize { window: hit.window })
+        Some(GestureState::SwipeResize { window })
     }
     fn begin_swipe(
         &mut self,
@@ -641,6 +668,7 @@ impl Controller {
                 }
             }
             GestureState::SwipeResize { .. }
+            | GestureState::SwipePinned { .. }
             | GestureState::HoldAction { .. }
             | GestureState::Unbound => {}
         }
@@ -711,6 +739,7 @@ impl Controller {
                 }
             }
             GestureState::SwipeResize { .. }
+            | GestureState::SwipePinned { .. }
             | GestureState::SwipeThreshold { .. }
             | GestureState::PinchThreshold { .. }
             | GestureState::Unbound => {}

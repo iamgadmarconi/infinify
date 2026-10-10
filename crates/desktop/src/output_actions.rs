@@ -154,11 +154,14 @@ impl Controller {
             .output(output)
             .ok_or(Error::Invalid("unknown output"))
     }
-    /// Upstream SendToOutput for a canvas window: the focused window lands
-    /// where a navigation on the adjacent output would park it, on that
-    /// output's `focus_placement` point at the zoom it is already at, and is
-    /// raised. A logical world move, applied at once. Returns whether anything
-    /// moved: no focused window and no adjacent output are no error upstream.
+    /// Upstream SendToOutput: the focused canvas window lands where a
+    /// navigation on the adjacent output would park it, on that output's
+    /// `focus_placement` point at the zoom it is already at, and is raised. A
+    /// logical world move, applied at once. A focused widget stays where it
+    /// is. A screen-pinned window has its pin bound to the output adjacent to
+    /// its own instead (send_pinned_to_output), keeping its place on the
+    /// screen. Returns whether anything moved: no focused window and no
+    /// adjacent output are no error upstream.
     pub(crate) fn send_to_output(
         &mut self,
         active: Option<OutputId>,
@@ -167,9 +170,17 @@ impl Controller {
         if let Some(active) = active {
             self.known_output(active)?;
         }
-        let Some(window) = self.scene.focused() else {
+        let Some(window) = self.scene.focused().filter(|id| !self.is_widget(*id)) else {
             return Ok(false);
         };
+        if let Some(from) = self.pin_output(window) {
+            return match self.output_in_direction(from, direction) {
+                Some(target) => self
+                    .send_pinned_to_output(window, target)
+                    .map_err(Error::Refused),
+                None => Ok(false),
+            };
+        }
         let rect = self
             .scene
             .window(window)

@@ -734,12 +734,8 @@ fn move_resize_and_focus_address_logical_windows() {
 
 /// One refusal per line: an upstream request | its `Err` reply.
 const REFUSED: &str = r#"
-{"Opacity":{}} | opacity is not implemented on macOS yet
-{"Opacity":{"window":3,"value":0.5}} | opacity is not implemented on macOS yet
-{"Pin":{}} | pin is not implemented on macOS yet
-{"Pin":{"window":"terminal","value":true}} | pin is not implemented on macOS yet
-{"Screenshot":{"target":"Viewport","scale":1.0,"path":"/nonexistent/shot.png"}} | screenshot is not implemented on macOS yet
-{"Screenshot":{"target":{"Window":{}},"scale":2.0,"path":"/nonexistent/shot.png"}} | screenshot is not implemented on macOS yet
+{"Screenshot":{"target":"Viewport","scale":1.0,"path":"shot.png"}} | screenshot path must be absolute
+{"Screenshot":{"target":{"Window":{"window":99}},"scale":2.0,"path":"/nonexistent/shot.png"}} | no window with id 99
 {"Action":"frobnicate"} | unknown action: frobnicate
 {"Action":"fill-window"} | action not implemented on macOS yet: fill-window
 {"Action":"pan-viewport"} | pan-viewport requires a direction
@@ -879,16 +875,16 @@ fn action_strings_follow_upstream_grammar() {
     // send-cursor-to-output and switch-layout: tests/platform_actions_flow.rs.
     // close-window and suspend-window run too: tests/lifecycle_flow.rs covers
     // those. toggle-cursor-pan runs too: tests/motion_flow.rs covers it. So
-    // does set-trackpad: tests/gesture_flow.rs covers it.
+    // does set-trackpad: tests/gesture_flow.rs covers it. tests/rules_flow.rs
+    // covers move-to-bookmark, toggle-pin-to-screen and the Opacity and Pin
+    // requests, tests/render_flow.rs the Screenshot request.
     for (name, sample) in [
         ("fill-window", "fill-window"),
         ("fit-window", "fit-window"),
         ("fit-window-snapped", "fit-window-snapped"),
         ("grow-window", "grow-window up"),
-        ("move-to-bookmark", "move-to-bookmark 1"),
         ("shrink-window", "shrink-window up"),
         ("toggle-fullscreen", "toggle-fullscreen"),
-        ("toggle-pin-to-screen", "toggle-pin-to-screen"),
         ("zoom-to-fit-snapped", "zoom-to-fit-snapped"),
     ] {
         let expected = format!("action not implemented on macOS yet: {name}");
@@ -1058,8 +1054,8 @@ bookmark inbox --delete | {"Bookmark":{"name":"inbox","to":null,"delete":true}} 
 layout --short | {"Layout":{"short":true}} | {"Ok":{"Layout":"us"}} | 0
 action go-to-bookmark my desk | {"Action":"go-to-bookmark my desk"} | {"Ok":"Ok"} | 0
 action exec say --json -1 | {"Action":"exec say --json -1"} | {"Err":"action not implemented on macOS yet: exec"} | 1
-screenshot region 1,2 30x40 --from-screen -o /nonexistent/shot.png --scale 2 | {"Screenshot":{"target":{"Region":{"x":1,"y":2,"w":30,"h":40,"from_screen":true}},"scale":2.0,"path":"/nonexistent/shot.png"}} | {"Err":"screenshot is not implemented on macOS yet"} | 1
-screenshot window --id 2 --output=/nonexistent/w.png | {"Screenshot":{"target":{"Window":{"window":2}},"scale":1.0,"path":"/nonexistent/w.png"}} | {"Err":"screenshot is not implemented on macOS yet"} | 1
+screenshot region 1,2 30x40 --from-screen -o /nonexistent/shot.png --scale 2 | {"Screenshot":{"target":{"Region":{"x":1,"y":2,"w":30,"h":40,"from_screen":true}},"scale":2.0,"path":"/nonexistent/shot.png"}} | {"Err":"no output for the screen region"} | 1
+screenshot window --id 2 --output=/nonexistent/w.png | {"Screenshot":{"target":{"Window":{"window":2}},"scale":1.0,"path":"/nonexistent/w.png"}} | {"Ok":{"Screenshot":{"path":"/nonexistent/w.png","width":628,"height":428}}} | 0
 subscribe | "Subscribe" | {"Err":"cannot subscribe: too many subscribers"} | 1
 --json subscribe | "Subscribe" | {"Err":"cannot subscribe: too many subscribers"} | 1
 zoom | {"Zoom":null} | not json | 1

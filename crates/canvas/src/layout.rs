@@ -37,20 +37,22 @@ impl SnapOptions {
 }
 impl Scene {
     /// Find the connected edge-adjacent component containing a window.
-    /// Corner-only contact does not form a bond, even within tolerance.
+    /// Corner-only contact does not form a bond, even within tolerance. A
+    /// window excluded from snapping is alone, and joins no other's component.
     pub fn cluster(&self, id: WindowId, options: SnapOptions) -> Result<Vec<WindowId>, Error> {
         options.validate()?;
         if self.window(id).is_none() {
             return Err(Error::UnknownWindow(id));
         }
         let mut visited = BTreeSet::from([id]);
-        let mut pending = vec![id];
+        let mut pending = if self.snaps(id) { vec![id] } else { Vec::new() };
         while let Some(next) = pending.pop() {
             let Some(current) = self.window(next) else {
                 continue;
             };
             for window in self.windows() {
                 if !visited.contains(&window.id)
+                    && self.snaps(window.id)
                     && adjacent(current.world_rect, window.world_rect, options)
                 {
                     visited.insert(window.id);
@@ -100,7 +102,11 @@ impl Scene {
             let mut correction: Option<(f64, f64)> = None;
             for moving in self.windows().iter().filter(|w| w.id == id) {
                 let rect = moving.world_rect.translated(actual);
-                for fixed in self.windows().iter().filter(|w| !members.contains(&w.id)) {
+                for fixed in self
+                    .windows()
+                    .iter()
+                    .filter(|w| !members.contains(&w.id) && self.snaps(w.id))
+                {
                     for candidate in
                         candidates(rect, fixed.world_rect, options, horizontal, false, false)
                             .into_iter()

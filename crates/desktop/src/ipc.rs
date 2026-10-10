@@ -6,8 +6,9 @@
 // camera_center, subscribe, broadcast_state_event) and src/canvas.rs
 // (internal_to_rule, rule_to_internal). Close, Suspend and Relaunch are
 // answered in lifecycle.rs, which also holds upstream's
-// window_fully_in_viewport. The transport lives in
-// the shell. Native frames already include their title bar, so chrome is zero.
+// window_fully_in_viewport, Pin and Opacity in rules.rs, Screenshot in
+// render.rs. The transport lives in the shell. Native frames already include
+// their title bar, so chrome is zero.
 use super::actions::Outcome;
 use super::view_actions::pixel_size;
 use super::*;
@@ -143,6 +144,13 @@ pub(crate) enum Response {
 
 /// The result of a request: `Ok(Response)` or a human-readable error string.
 pub(crate) type Reply = Result<Response, String>;
+/// How a request that was not refused is answered.
+enum Answer {
+    /// Upstream's reply, now.
+    Reply(Response),
+    /// Not yet: the shell performs the effect and brings the reply's content.
+    Pending,
+}
 
 /// The focused window in a [`Response::Focused`] reply.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -265,7 +273,7 @@ pub(crate) fn frame(rect: Rect) -> Result<([i64; 2], [i64; 2]), String> {
 }
 /// Upstream internal_to_rule: the frame's center, Y-up, with its truncating
 /// integer halving.
-fn internal_to_rule(loc: [i64; 2], size: [i64; 2]) -> Result<[i32; 2], String> {
+pub(crate) fn internal_to_rule(loc: [i64; 2], size: [i64; 2]) -> Result<[i32; 2], String> {
     let narrow = |value: i64| {
         i32::try_from(value).map_err(|_| "window geometry exceeds integer range".to_string())
     };
@@ -276,7 +284,7 @@ fn internal_to_rule(loc: [i64; 2], size: [i64; 2]) -> Result<[i32; 2], String> {
 }
 /// Upstream rule_to_internal, the inverse: the top-left that centers a frame of
 /// `size` on the Y-up point `(x, y)`.
-fn rule_to_internal(x: i32, y: i32, size: [i64; 2]) -> Point {
+pub(crate) fn rule_to_internal(x: i32, y: i32, size: [i64; 2]) -> Point {
     Point::new(
         (i64::from(x) - size[0] / 2) as f64,
         (-i64::from(y) - size[1] / 2) as f64,
@@ -291,9 +299,6 @@ pub(crate) fn readable(rect: Rect) -> Result<(), String> {
         return Err("window geometry exceeds integer range".to_string());
     }
     Ok(())
-}
-fn not_implemented(name: &str) -> Reply {
-    Err(format!("{name} is not implemented on macOS yet"))
 }
 fn text(error: Error) -> String {
     error.to_string()
@@ -311,20 +316,30 @@ impl Controller {
     ) -> Value {
         let mut next = self.clone();
         let mut outcome = Outcome::default();
-        let reply: Reply = serde_json::from_value::<Request>(request)
+        let answer = serde_json::from_value::<Request>(request)
             .map_err(|e| format!("invalid request: {e}"))
             .and_then(|request| next.dispatch(output, request, pointer, &mut outcome))
-            .and_then(|response| {
+            .and_then(|answer| {
                 next.scene
                     .validate()
-                    .map(|()| response)
+                    .map(|()| answer)
                     .map_err(|e| e.to_string())
             });
-        if reply.is_ok() {
-            *self = next;
-        } else {
-            outcome = Outcome::default();
-        }
+        // A pending answer is `null`: the shell replies to its client only
+        // after the effect, with what `screenshot_result` returns.
+        let reply = match answer {
+            Ok(answer) => {
+                *self = next;
+                match answer {
+                    Answer::Reply(response) => json!(Reply::Ok(response)),
+                    Answer::Pending => Value::Null,
+                }
+            }
+            Err(error) => {
+                outcome = Outcome::default();
+                json!(Reply::Err(error))
+            }
+        };
         json!({"reply":reply,"effects":outcome.effects,"dirty":outcome.dirty,"navigation":outcome.navigation})
     }
     fn dispatch(
@@ -333,9 +348,18 @@ impl Controller {
         request: Request,
         pointer: Option<Point>,
         outcome: &mut Outcome,
-    ) -> Reply {
+    ) -> Result<Answer, String> {
         let active = || output.ok_or_else(|| "no active output".to_string());
-        match request {
+        let reply: Reply = match request {
+            Request::Screenshot {
+                target,
+                scale,
+                path,
+            } => {
+                return self
+                    .cmd_screenshot(output, &target, scale, &path, outcome)
+                    .map(|()| Answer::Pending);
+            }
             Request::Camera(arg) => self.cmd_camera(active()?, arg, outcome),
             Request::Zoom(arg) => self.cmd_zoom(active()?, arg, outcome),
             Request::State => Ok(Response::State(Box::new(self.state_info(output)?))),
@@ -346,6 +370,8 @@ impl Controller {
             Request::Focus(Some(selector)) => self.cmd_focus(active()?, &selector, outcome),
             Request::Move { window, to } => self.cmd_move(window.as_ref(), to, outcome),
             Request::Resize { window, to } => self.cmd_resize(window.as_ref(), to),
+            Request::Opacity { window, value } => self.cmd_opacity(window.as_ref(), value),
+            Request::Pin { window, value } => self.cmd_pin(output, window.as_ref(), value, outcome),
             Request::Action(spec) => {
                 // A request has no key held under it: a cycle step commits.
                 *outcome = self
@@ -372,10 +398,8 @@ impl Controller {
                 outcome.effects.push(json!({"op":"subscribe","line":line}));
                 Ok(Response::Ok)
             }
-            Request::Opacity { .. } => not_implemented("opacity"),
-            Request::Pin { .. } => not_implemented("pin"),
-            Request::Screenshot { .. } => not_implemented("screenshot"),
-        }
+        };
+        reply.map(Answer::Reply)
     }
     /// One pushed line: upstream's `Event::State` serialized from the typed
     /// value, so its members keep upstream's order and its floats their form.
@@ -463,6 +487,7 @@ impl Controller {
             ("navigation_contexts", self.navigation_contexts.len()),
             ("outputs", self.scene.outputs().len()),
             ("overview_returns", self.overview_returns.len()),
+            ("pending_screenshots", self.pending_screenshots.len()),
             (
                 "retired_resize_identities",
                 self.retired_resize_identities.len(),
@@ -488,6 +513,11 @@ impl Controller {
         let focused = self.scene.focused();
         let mut windows = Vec::with_capacity(self.scene.windows().len());
         for window in self.scene.windows() {
+            // Upstream: a pinned window lives in screen space and is reported
+            // under `pinned` instead.
+            if self.is_pinned(window.id) {
+                continue;
+            }
             let metadata = self.metadata.get(&window.id);
             let (loc, size) = frame(window.world_rect)?;
             let info = WindowInfo {
@@ -497,7 +527,7 @@ impl Controller {
                 position: internal_to_rule(loc, size)?,
                 size: [size[0] as i32, size[1] as i32],
                 is_focused: focused == Some(window.id),
-                is_widget: false,
+                is_widget: self.is_widget(window.id),
                 // A detached placeholder is Infinify's stand-in.
                 suspended: !self.sources.contains_key(&window.id),
                 mode: WindowMode::Normal,
@@ -532,17 +562,18 @@ impl Controller {
             layout_short: self.layout_short(),
             windows,
             fullscreen: Vec::new(),
-            pinned: Vec::new(),
+            pinned: self.pinned_inventory()?,
             layers: Vec::new(),
             canvas_layers: Vec::new(),
             outputs,
             active_bookmark: output.and_then(|id| self.active_bookmarks.get(&id).cloned()),
         })
     }
-    /// `None` is the focused window. An id is exact. An app id is a
-    /// case-insensitive bundle-id substring, and a window with a bound source
-    /// wins over a detached placeholder: upstream's live client over stand-in.
-    fn select(&self, selector: Option<&WindowSelector>) -> Result<WindowId, String> {
+    /// `None` is the focused window. An id is exact, and reaches a widget. An
+    /// app id is a case-insensitive bundle-id substring that passes over
+    /// widgets, and a window with a bound source wins over a detached
+    /// placeholder: upstream's live client over stand-in.
+    pub(crate) fn select(&self, selector: Option<&WindowSelector>) -> Result<WindowId, String> {
         match selector {
             None => self
                 .scene
@@ -558,6 +589,7 @@ impl Controller {
                 let matching = |live: bool| {
                     self.scene.windows().iter().map(|w| w.id).find(|id| {
                         self.sources.contains_key(id) == live
+                            && !self.is_widget(*id)
                             && self
                                 .metadata
                                 .get(id)
@@ -603,8 +635,16 @@ impl Controller {
         outcome: &mut Outcome,
     ) -> Reply {
         let window = self.select(Some(selector))?;
+        // Only an id reaches a widget, and a widget cannot take the focus.
+        if self.is_widget(window) {
+            return Err(format!(
+                "window #{} is a widget and cannot be focused",
+                window.0
+            ));
+        }
         let info = self.focused_info(window);
-        if !self.fully_in_viewport(window, output)? {
+        // A pinned window is always on screen and has no canvas position.
+        if !self.is_pinned(window) && !self.fully_in_viewport(window, output)? {
             let reset = self.config().zoom_reset_on_activation;
             let policy = if reset && self.sources.contains_key(&window) {
                 ZoomPolicy::Reset
@@ -666,6 +706,7 @@ impl Controller {
     /// A logical world move: the frame's top-left lands on whole pixels and its
     /// size is kept. Stacking is untouched, unlike upstream's raising map. A
     /// destination outside the `i32` range is refused, as an unreadable frame is.
+    /// A pinned window reads and is not moved; a widget is moved by nothing else.
     fn cmd_move(
         &mut self,
         selector: Option<&WindowSelector>,
@@ -683,6 +724,15 @@ impl Controller {
             let [x, y] = internal_to_rule(loc, size)?;
             return Ok(Response::Position { x, y });
         };
+        // A pinned window is drawn at its pin: a canvas position written
+        // under it would silently do nothing.
+        if self.is_pinned(window) {
+            return Err(
+                "this window has no canvas position to move: it is pinned, fullscreen, or \
+                 not on screen yet"
+                    .to_string(),
+            );
+        }
         let moved = Rect {
             origin: rule_to_internal(x, y, size),
             size: rect.size,
@@ -722,6 +772,14 @@ impl Controller {
         };
         if width <= 0 || height <= 0 {
             return Err("size must be positive".to_string());
+        }
+        // Upstream refuses these whatever else it can resize.
+        if !self.on_canvas(window) {
+            return Err(
+                "this window has no canvas size to set: it is pinned, fullscreen, a widget, or \
+                 not on screen yet"
+                    .to_string(),
+            );
         }
         Err(
             "resize is not implemented on macOS yet: native layout resize is not available"

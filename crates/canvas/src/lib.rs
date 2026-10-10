@@ -177,6 +177,9 @@ pub struct Scene {
     outputs: Vec<Viewport>,
     focused: Option<WindowId>,
     bookmarks: BTreeMap<String, Bookmark>,
+    /// Windows that take no part in snapping or clusters: DriftWM's widgets
+    /// and screen-pinned windows, which its snap rectangles leave out.
+    unsnapped: BTreeSet<WindowId>,
 }
 impl Scene {
     /// Empty scene.
@@ -296,6 +299,7 @@ impl Scene {
             .position(|w| w.id == id)
             .ok_or(Error::UnknownWindow(id))?;
         let removed = self.stage.remove(index);
+        self.unsnapped.remove(&id);
         if self.focused == Some(id) {
             self.focused = self.stage.windows().last().map(|w| w.id);
         }
@@ -420,6 +424,33 @@ impl Scene {
                 local: world - w.world_rect.origin,
             })
     }
+    /// Raise a window to the top of the global stack without focusing it.
+    pub fn raise(&mut self, id: WindowId) -> Result<(), Error> {
+        if self.window(id).is_none() {
+            return Err(Error::UnknownWindow(id));
+        }
+        self.stage.raise(id);
+        Ok(())
+    }
+    /// Whether a window takes part in snapping and clusters. Every window does
+    /// until it is told otherwise.
+    pub fn snaps(&self, id: WindowId) -> bool {
+        !self.unsnapped.contains(&id)
+    }
+    /// Take a window out of snapping and clusters, or put it back. An excluded
+    /// window attracts no dragged or resized edge, joins no cluster, and moved
+    /// or resized as a group it is alone.
+    pub fn set_snapping(&mut self, id: WindowId, snaps: bool) -> Result<(), Error> {
+        if self.window(id).is_none() {
+            return Err(Error::UnknownWindow(id));
+        }
+        if snaps {
+            self.unsnapped.remove(&id);
+        } else {
+            self.unsnapped.insert(id);
+        }
+        Ok(())
+    }
     /// Focus and raise a window to the top of the global stack.
     pub fn focus(&mut self, id: WindowId) -> Result<(), Error> {
         if self.window(id).is_none() {
@@ -535,6 +566,9 @@ impl Scene {
         if self.focused.is_some_and(|id| !windows.contains(&id)) {
             return Err(Error::Invalid("dangling focus"));
         }
+        if self.unsnapped.iter().any(|id| !windows.contains(id)) {
+            return Err(Error::Invalid("dangling snapping exclusion"));
+        }
         for (name, bookmark) in &self.bookmarks {
             if name.trim().is_empty()
                 || name.len() > 256
@@ -578,6 +612,10 @@ struct SceneData {
     outputs: Vec<Viewport>,
     focused: Option<WindowId>,
     bookmarks: BTreeMap<String, Bookmark>,
+    /// Additive: absent from sessions written before it existed, and omitted
+    /// while empty.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    unsnapped: BTreeSet<WindowId>,
 }
 impl TryFrom<SceneData> for Scene {
     type Error = Error;
@@ -587,6 +625,7 @@ impl TryFrom<SceneData> for Scene {
             outputs: data.outputs,
             focused: data.focused,
             bookmarks: data.bookmarks,
+            unsnapped: data.unsnapped,
         };
         scene.validate()?;
         Ok(scene)
@@ -600,6 +639,7 @@ impl From<Scene> for SceneData {
             outputs: scene.outputs,
             focused: scene.focused,
             bookmarks: scene.bookmarks,
+            unsnapped: scene.unsnapped,
         }
     }
 }

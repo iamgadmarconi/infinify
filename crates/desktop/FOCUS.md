@@ -141,9 +141,15 @@ counters so delayed pre-load reports cannot collide after identical rebinding.
 New controller handles have independent request namespaces; reports must never
 be routed to a different handle.
 
-Modal parent relationships, widget/pin eligibility and fullscreen exclusion are
-not represented by this slice. It deliberately neither infers relationships from
-titles/PIDs nor claims those modes are supported. A future verified relationship
+Widget and pin eligibility is upstream's since [RULES.md](RULES.md): a widget
+and a screen-pinned window can hold the focus by every entry point above,
+`activate` and the answers to its requests included, and never enter
+`history`; a window leaves it when it is pinned, and a cycle step taken from
+one starts at the head. Neither is a candidate of `center-window`,
+`center-nearest` or `focus-center`, and neither is flown to. Modal parent
+relationships and fullscreen exclusion are not represented by this slice. It
+deliberately neither infers relationships from titles/PIDs nor claims those
+modes are supported. A future verified relationship
 surface must apply upstream modal redirection and its ten-hop limit before native
 focus and history selection. Camera navigation has a separate
 [controller contract](NAVIGATION.md). Tests here (`focus_cycle_flow`, and

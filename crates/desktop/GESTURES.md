@@ -95,7 +95,8 @@ All three reply alike:
   refused action is reported here and is not a controller error, because an
   error would undo the gesture's own state and the action would fire again on
   the next update.
-- `note` is `null`, or why a claimed gesture does nothing. Only a resize has one.
+- `note` is `null`, or why a claimed gesture does nothing. A resize has one,
+  and so has a move over a screen-pinned window.
 - `navigation`, `effects` and `dirty` are the [action command](IPC.md)'s: the
   flight a fired action armed, requests to the shell (a fired `exec`, and the
   `focus_native_window` request of a move or of a fired
@@ -146,6 +147,7 @@ unbound, never the unmodified binding.
 | `swipe_pan` | `N-finger-swipe` is `pan-viewport`; or `zoom` (a swipe has no scale); or a move or resize with no window under the pointer | each update is the [timed `pan`](MOTION.md#timed-pans-and-momentum) of a finger scroll: the camera moves by `-(dx, dy) · navigation.trackpad_speed / zoom` canvas points, so the canvas follows the fingers, and the output's momentum hears the delta at the event's `time_ms`. The end is that pan's `pan_end`, see [Momentum](#momentum) |
 | `swipe_move` | `N-finger-swipe` or `N-finger-doubletap-swipe` is `move-window` or `move-snapped-windows`, and a window is under the pointer | focuses and raises the window, then installs the drag a bound button press installs, with the cluster for `move-snapped-windows`. Each update moves a virtual pointer by the raw `(dx, dy)`, held inside the gesture's output, and the window follows it with the usual snapping, as under `gesture_to` with that `pointer`: inside `navigation.edge_pan.zone` of an edge the drag's [edge pan](MOTION.md#edge-pan-while-a-window-is-dragged) is armed and the canvas pans under the window frame by frame. On end the drag is released and its edge pan with it |
 | `swipe_resize` | the same triggers bound to `resize-window` or `resize-window-snapped`, over a window | nothing: native layout resize is gated. The begin reply's `note` says so |
+| `swipe_pinned` | a move trigger, as for `swipe_move`, over a [screen-pinned window](RULES.md#screen-pinned-windows) | nothing: upstream moves a pinned window in screen space, which is not adapted. The gesture is claimed, so nothing pans, and nothing is focused or raised. The begin reply's `note` says so |
 | `swipe_threshold` | `N-finger-swipe` is a threshold action, or only named directions are bound | accumulates the physical vector; when its length reaches `gestures.swipe_threshold` (12) it fires once. `N-finger-swipe-up/down/left/right` win in the physical direction the fingers moved, the larger axis deciding; otherwise the `N-finger-swipe` action fires. A bare `center-nearest` takes the opposite of the vector, in eight directions: fingers left look right |
 | `pinch_zoom` | `N-finger-pinch` is bound (it can only be `zoom`) | the [pinch](MOTION.md#pointer-zoom) a `zoom_by` makes, given the scale itself: zoom = start zoom · `(1 + (scale − 1) · zoom.trackpad_speed)`, held between the dynamic minimum of the begin and 1.0, around the pointer. On end, cancelled or not, a zoom within 0.05 of 1.0 snaps to it |
 | `pinch_threshold` | no continuous pinch, and `N-finger-pinch-in` or `-out` is bound | fires the in action once when `scale` drops below `gestures.pinch_in_threshold` (0.85) and the out action once when it rises above `gestures.pinch_out_threshold` (1.15). One gesture can fire both |
@@ -196,6 +198,13 @@ three-finger tap is a middle click, holds that click back for 300 ms
 - if `N-finger-doubletap-swipe` is bound to a move and a window is under the
   pointer, the gesture is `swipe_move`; bound to a resize over a window, it is
   the inert `swipe_resize`;
+- "a window under the pointer" is upstream's `gesture_target_under`, in the
+  order a press resolves: the windows pinned to the output, then the canvas
+  windows, then the widgets. A [widget](RULES.md#widgets) is grab-proof and
+  counts as nothing there, so the gesture is an ordinary swipe and no window
+  beneath is reached; a pinned window makes a move `swipe_pinned` and a
+  resize `swipe_resize`. The same holds for a plain `N-finger-swipe` bound to
+  a move or a resize;
 - otherwise (no such binding, a binding in the other context, nothing under the
   pointer, or the pointer already dragging something) it is an ordinary swipe.
 
@@ -333,7 +342,9 @@ The [shell notes](../../native/desktop/README.md#trackpad-gestures) say why.
   layout resize is gated. Upstream resizes through its pointer grab.
 - A move's virtual pointer is held inside the gesture's output, where upstream's
   cursor also crosses to a neighbouring output and takes the window with it.
-  Pinned windows and widgets do not exist here.
+  A screen-pinned window is not moved at all (`swipe_pinned`), where upstream
+  moves it in screen space with the same gesture and raises and focuses it; a
+  widget is grab-proof, as upstream's is.
 - Fullscreen does not exist here, so none of the gesture handlers' fullscreen
   legs do.
 - No pointer warp: upstream moves its cursor with a pan, a zoom and a move. The

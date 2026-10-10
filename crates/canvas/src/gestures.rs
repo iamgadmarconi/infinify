@@ -466,6 +466,7 @@ impl Scene {
                 .iter()
                 .filter(|w| {
                     w.id != gesture.primary.0
+                        && self.snaps(w.id)
                         && !gesture
                             .members
                             .iter()
@@ -511,7 +512,7 @@ impl Scene {
         closest(
             self.windows()
                 .iter()
-                .filter(|w| !gesture.initial.iter().any(|(id, _)| *id == w.id))
+                .filter(|w| self.snaps(w.id) && !gesture.initial.iter().any(|(id, _)| *id == w.id))
                 .flat_map(|w| {
                     candidates(
                         rect,

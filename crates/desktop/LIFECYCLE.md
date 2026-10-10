@@ -90,7 +90,9 @@ neither.
 
 ### 2. Placement
 
-Otherwise `window_placement` places it. All arithmetic is upstream's: the
+Otherwise a window rule's `pinned_to_screen` or `position` places it, as
+[RULES.md](RULES.md#a-new-window) describes, and nothing below applies.
+Without either, `window_placement` places it. All arithmetic is upstream's: the
 frame's size is rounded to whole points for the policy, positions are rounded,
 and halving a size truncates. Chrome is zero, because a native frame already
 includes its title bar.
@@ -129,7 +131,9 @@ No flight is armed during a drag or resize gesture. Without an `output` there
 is no view to reveal it in: the window is placed at the origin, on top, and is
 neither focused nor navigated to. During the
 [launch pass](#slots-and-re-adoption-the-macos-rule) a placed window is neither
-focused nor navigated to.
+focused nor navigated to. Nor is a widget, or a window whose rule says
+`focus_on_open = false`; a window pinned by its rule is focused and not
+navigated to.
 
 ## A window closes
 
@@ -162,12 +166,19 @@ included, keeps the focus through the close. The follower is, in order:
    frame's snap cluster or overlaps it. Wholly inside the usable area it is
    raised and focused. Otherwise, with `navigation.auto_navigate_on_close`
    (the default) the camera flies to it at the current zoom; without, it is
-   not a candidate;
+   not a candidate. A widget or a screen-pinned window that closes has no
+   snap rectangle, so nothing is spatially related to it: its follower is
+   looked for from step 2;
 2. the most recent window of that history that is at least partly visible on
    the home output;
-3. the live window nearest the closed frame's center among those partly
-   visible there;
+3. the live canvas window nearest the closed frame's center among those partly
+   visible there (never a widget or a screen-pinned window);
 4. nobody: nothing is focused, rather than a window nobody can see.
+
+A widget and a screen-pinned window are never in the focus history, so
+neither is ever the follower: closing the last canvas window in view leaves
+nothing focused even with a widget or a pinned window on screen
+([RULES.md](RULES.md)).
 
 The **focus history** is the one the [focus cycle](FOCUS.md) walks:
 `snapshot.focus.history`, live windows in the order their focus was last
@@ -184,7 +195,10 @@ the tiers need no report of native focus, only an answer: a request nobody
 answers enters nothing, and a host that answers none leaves the first two tiers
 empty. A window adopted during the launch pass into the slot that held the
 focus enters at once, because no request is made for it and so none can be
-answered. A detached placeholder is never in it, and it is not saved.
+answered. A detached placeholder is never in it, and it is not saved. A widget
+and a screen-pinned window take the focus in every one of these ways and enter
+by none of them; a window leaves the history when it is pinned, and a focused
+one whose focus was settled returns to its head when it is unpinned.
 
 A drag or resize gesture in progress ends only when the window that closes, or
 is replaced by a stand-in, is one the gesture captured: the dragged or resized
@@ -204,7 +218,8 @@ slot, not a stand-in.
 
 `retitle` replaces the saved title of a bound window. `dirty` is false when the
 title was already that. Titles matter beyond display: a waiting slot is matched
-to its window by title.
+to its window by title. A new title does not re-apply window rules: upstream
+resolves them once, when the window maps.
 
 ## Actions and IPC
 
@@ -351,13 +366,14 @@ they did.
   slot back, and the slot is decided at the next pass.
 - **`restore_windows` is read at every `adoption_complete`**, not at save
   time, and it decides whether a slot stays, not whether it was written.
-- **Window rules**: only `suspend_on_close` and `restore_windows` are read from
-  `[[window_rules]]`. A rule's `position`, `size`, `focus_on_open`, `widget`,
-  `pinned_to_screen`, `fullscreen` and `output` do not shape a new window.
-- **No parents, modals, widgets, pins or fullscreen.** The tiers of upstream
-  that depend on them are absent: a child window centered on its parent, the
-  parent as the first follower after a close, placement behind a fullscreen
-  window, and the dialog and widget exclusions of suspend. A dialog or a sheet
+- **Window rules** shape a new window since [RULES.md](RULES.md): `position`,
+  `pinned_to_screen`, `output`, `widget` and `focus_on_open` are applied where
+  step 2 places it, and a widget is never a stand-in. A rule's `size` and
+  `fullscreen` are recorded and not applied.
+- **No parents, modals or fullscreen.** The tiers of upstream that depend on
+  them are absent: a child window centered on its parent, the parent as the
+  first follower after a close, placement behind a fullscreen window, and the
+  dialog exclusion of suspend. A dialog or a sheet
   the shell reports is a window like any other.
 - **No blank slate.** Upstream skips auto placement's nearest-element anchor
   after a click on empty canvas cleared the focus (`suppress_auto_anchor`).

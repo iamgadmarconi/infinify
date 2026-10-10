@@ -11,11 +11,13 @@
 // click-to-focus fallback) and src/handlers/mod.rs (focus_changed's cycle rule
 // and the activation request's already-active rule). The directional search and the
 // visibility measures are driftwm-core's `canvas::{find_nearest,
-// visible_fraction, visible_canvas_rect}`, upstream's own code. Every Scene
-// window is a canvas window and a detached placeholder is upstream's stand-in:
-// fullscreen, pinned, widget, modal and fill handling is absent. Only world
-// rectangles, output poses and the navigation context are read, never native
-// geometry.
+// visible_fraction, visible_canvas_rect}`, upstream's own code. A detached
+// placeholder is upstream's stand-in. The candidates of every search here are
+// upstream's canvas windows (`is_canvas_window`, `Controller::on_canvas`): no
+// widget and no screen-pinned window, which are raised and focused where they
+// are and never flown to (RULES.md). Fullscreen, modal and fill handling is
+// absent. Only world rectangles, output poses and the navigation context are
+// read, never native geometry.
 use super::view_actions::{pixel, pixel_size};
 use super::*;
 use driftwm_core::canvas::{find_nearest, visible_canvas_rect, visible_fraction};
@@ -162,13 +164,19 @@ impl Controller {
         })
     }
     /// Upstream navigate_to_window_on: raise, focus, and fly `output`'s camera
-    /// until the frame sits on the focus placement point.
+    /// until the frame sits on the focus placement point. A screen-pinned
+    /// window lives in screen space and a widget is no navigation target:
+    /// either is raised and focused where it is, and no camera moves.
     pub(crate) fn navigate_to_window(
         &mut self,
         window: WindowId,
         output: OutputId,
         policy: ZoomPolicy,
     ) -> Result<Moved, Error> {
+        if !self.on_canvas(window) {
+            self.navigation_context(output)?;
+            return self.raise_and_focus(window);
+        }
         let navigation = self.arm_navigation(window, output, policy)?;
         Ok(Moved {
             navigation,
@@ -202,9 +210,11 @@ impl Controller {
             refocused: true,
         }))
     }
-    /// Upstream CenterWindow: the focused window, else the window whose center
-    /// is nearest the viewport center, at zoom 1. Upstream's policy is
-    /// RestoreFillElseReset; there is no fill here, so it is always Reset.
+    /// Upstream CenterWindow: the focused canvas window, else the canvas
+    /// window whose center is nearest the viewport center, at zoom 1. With a
+    /// widget or a screen-pinned window focused it is the nearest one, as with
+    /// nothing focused. Upstream's policy is RestoreFillElseReset; there is no
+    /// fill here, so it is always Reset.
     pub(crate) fn center_window(&mut self, output: OutputId) -> Result<Moved, Error> {
         let (viewport, usable) = self.view(output)?;
         let center = Self::viewport_center_canvas(&viewport, usable);
@@ -212,10 +222,12 @@ impl Controller {
             let offset = window.world_rect.center() - center;
             offset.x * offset.x + offset.y * offset.y
         };
-        let target = self.scene.focused().or_else(|| {
+        let focused = self.scene.focused().filter(|id| self.on_canvas(*id));
+        let target = focused.or_else(|| {
             self.scene
                 .windows()
                 .iter()
+                .filter(|window| self.on_canvas(window.id))
                 .min_by(|a, b| distance(a).total_cmp(&distance(b)))
                 .map(|window| window.id)
         });
@@ -224,23 +236,26 @@ impl Controller {
             None => Ok(Moved::default()),
         }
     }
-    /// Upstream FocusCenter: the topmost window under the pointer, at zoom 1.
-    /// `pointer` is a global screen point; with none, or with nothing of
-    /// `output` under it, nothing happens.
+    /// Upstream FocusCenter: the topmost canvas window under the pointer, at
+    /// zoom 1. A screen-pinned window there is passed over, as upstream's walk
+    /// skips it, and a widget is no candidate. `pointer` is a global screen
+    /// point; with none, or with no canvas window of `output` under it, nothing
+    /// happens.
     pub(crate) fn focus_center(
         &mut self,
         output: OutputId,
         pointer: Option<Point>,
     ) -> Result<Moved, Error> {
         self.view(output)?;
-        match pointer.and_then(|pointer| self.scene.hit_test(output, pointer)) {
-            Some(hit) => self.navigate_to_window(hit.window, output, ZoomPolicy::Reset),
+        match pointer.and_then(|pointer| self.canvas_window_under(output, pointer)) {
+            Some(window) => self.navigate_to_window(window, output, ZoomPolicy::Reset),
             None => Ok(Moved::default()),
         }
     }
-    /// Upstream CenterNearest: the nearest window or `navigation.anchors` point
-    /// in a 90° cone. The search starts at the focused window while all of it
-    /// is on the output, and at the viewport center otherwise. A window is
+    /// Upstream CenterNearest: the nearest canvas window or
+    /// `navigation.anchors` point in a 90° cone. The search starts at the
+    /// focused window while all of it is on the output and it is not
+    /// screen-pinned, and at the viewport center otherwise. A window is
     /// flown to at the current zoom; an anchor clears focus, so that the next
     /// search starts from the viewport center, which is then that anchor.
     pub(crate) fn center_nearest(
@@ -249,7 +264,7 @@ impl Controller {
         direction: &Direction,
     ) -> Result<Moved, Error> {
         let (viewport, usable) = self.view(output)?;
-        let anchor = match self.scene.focused() {
+        let anchor = match self.scene.focused().filter(|id| !self.is_pinned(*id)) {
             Some(window)
                 if self.visible_share(window, output)? >= CENTER_NEAREST_ANCHOR_THRESHOLD =>
             {
@@ -264,7 +279,8 @@ impl Controller {
             ),
             None => (Self::viewport_center_canvas(&viewport, usable), None),
         };
-        let windows = self.scene.windows().iter().map(|window| {
+        let canvas = |window: &&Window| self.on_canvas(window.id);
+        let windows = self.scene.windows().iter().filter(canvas).map(|window| {
             // Upstream element_closest_point. A point on the origin has no
             // direction, so a frame that holds the origin is found by its center.
             let rect = window.world_rect;
@@ -360,8 +376,11 @@ impl Controller {
             // so the reply has no `effect`: the press's request stays as it is.
             ActivationCause::ClickRelease => {
                 let navigation = match output {
+                    // Upstream arms no click navigation for a widget, and a
+                    // pinned window has no canvas position to bring into view.
                     Some(output)
                         if self.config().auto_navigate_on_click
+                            && self.on_canvas(window)
                             && self.scene.focused() == Some(window)
                             && !self
                                 .fully_in_viewport(window, output)
@@ -409,12 +428,15 @@ impl Controller {
                 self.focus.pending_effect = None;
                 self.focus.logical = None;
                 self.scene.focus(window)?;
-                self.scene.confirm_focus(window)?;
+                self.confirm_focus(window)?;
                 self.focus.observed_native = Some(observed);
                 // Upstream activate_window_output_local: wholly visible on its
-                // home output is focus only; any clipping pans that output.
+                // home output is focus only; any clipping pans that output. A
+                // widget or a screen-pinned window is focused where it is.
                 let navigation = match home {
-                    Some(home) if share < ACTIVATION_VISIBLE_THRESHOLD => {
+                    Some(home)
+                        if share < ACTIVATION_VISIBLE_THRESHOLD && self.on_canvas(window) =>
+                    {
                         let policy = if self.config().zoom_reset_on_activation {
                             ZoomPolicy::Reset
                         } else {

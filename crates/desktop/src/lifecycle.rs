@@ -22,10 +22,11 @@
 // `tick_navigation` brings.
 use super::actions::Outcome;
 use super::ipc::{WindowSelector, readable};
+use super::rules::Pin;
 use super::view_actions::pixel_size;
 use super::*;
 use driftwm_canvas::policy::{self, PixelPoint, PixelSize};
-use driftwm_core::config::WindowPlacement;
+use driftwm_core::config::{AppliedWindowRule, WindowPlacement};
 use driftwm_core::layout::auto_placement::{self, place_auto};
 use driftwm_core::layout::cluster::cluster_of;
 use driftwm_core::layout::snap::SnapRect;
@@ -116,8 +117,11 @@ impl Lifecycle {
 pub(crate) enum Arrival {
     /// It takes over a detached slot: the slot's id, frame and stacking.
     Adopt(WindowId),
-    /// It is placed by `window_placement`.
+    /// It is placed by `window_placement`, or by a rule's `position`.
     Place { rect: Rect, at_cursor: bool },
+    /// A `pinned_to_screen` rule fixes it to an output's screen. `rect` is the
+    /// canvas frame the pin shows right now.
+    Pin { rect: Rect, pin: Pin },
 }
 /// Who takes the focus when the window that held it leaves.
 enum Follow {
@@ -210,10 +214,12 @@ impl Controller {
     /// Upstream auto_placement_pos and place_adjacent_to: a slot beside the
     /// cluster of the focused window while enough of it is in view, else of the
     /// element nearest the usable center, stand-ins included. Every window is an
-    /// obstacle. `None` is upstream's fall back to the center. Upstream's
-    /// blank-slate rule (suppress_auto_anchor: after a click on empty canvas a
-    /// new window is centered, not docked) is not carried over: `clear_focus`
-    /// leaves the nearest element in view to anchor like any unfocused state.
+    /// obstacle, widgets and screen-pinned windows excepted: they anchor and
+    /// obstruct nothing. `None` is upstream's fall back to the center.
+    /// Upstream's blank-slate rule (suppress_auto_anchor: after a click on
+    /// empty canvas a new window is centered, not docked) is not carried over:
+    /// `clear_focus` leaves the nearest element in view to anchor like any
+    /// unfocused state.
     fn auto_spawn(
         &self,
         viewport: &Viewport,
@@ -221,7 +227,14 @@ impl Controller {
         (w, h): (f64, f64),
     ) -> Result<Option<(f64, f64)>, Error> {
         let view = pixel_size(viewport.screen_bounds.size)?;
-        let windows = self.scene.windows();
+        // Upstream anchors to canvas elements only, and place_adjacent_to
+        // leaves widgets and pinned windows out of its obstacles.
+        let windows: Vec<&Window> = self
+            .scene
+            .windows()
+            .iter()
+            .filter(|w| self.on_canvas(w.id))
+            .collect();
         let frames: Vec<_> = windows.iter().map(|w| pixel_frame(w.world_rect)).collect();
         let in_view = |index: &usize| {
             frames[*index].is_some_and(|(loc, size)| {
@@ -336,7 +349,9 @@ impl Controller {
         readable(rect).map_err(Error::Refused)?;
         Ok(Arrival::Place { rect, at_cursor })
     }
-    /// A window has appeared: the slot it adopts, or where it is placed.
+    /// A window has appeared: the slot it adopts, or where it is placed. `rule`
+    /// is what its window rules merge to. An adopted window keeps its slot
+    /// whatever the rule says of position or pinning, as upstream's does.
     pub(crate) fn arrival(
         &self,
         output: Option<OutputId>,
@@ -344,6 +359,7 @@ impl Controller {
         bundle_id: &str,
         title: &str,
         size: Size,
+        rule: Option<&AppliedWindowRule>,
     ) -> Result<Arrival, Error> {
         if output.is_some_and(|output| self.scene.output(output).is_none()) {
             return Err(Error::Invalid("unknown output"));
@@ -351,8 +367,12 @@ impl Controller {
         if pointer.is_some_and(|pointer| !point_valid(pointer)) {
             return Err(Error::Invalid("invalid screen point"));
         }
-        match self.adoption_target(bundle_id, title) {
-            Some(slot) => Ok(Arrival::Adopt(slot)),
+        if let Some(slot) = self.adoption_target(bundle_id, title) {
+            return Ok(Arrival::Adopt(slot));
+        }
+        // Upstream: a rule's pin or position comes before the placement policy.
+        match self.rule_arrival(output, size, rule)? {
+            Some(arrival) => Ok(arrival),
             None => self.spawn(output, pointer, size),
         }
     }
@@ -361,8 +381,11 @@ impl Controller {
     /// focus only when its stand-in held it. A placed window is raised, focused
     /// and navigated to, resetting the zoom with `zoom.reset_on_new_window`;
     /// cursor placement stays put unless that reset has a zoomed-out view to
-    /// rescue. During the launch pass neither asks for native focus or moves a
-    /// camera: those windows were already open, and nobody opened them here.
+    /// rescue. A window pinned by its rule is raised and focused without a
+    /// navigation; a widget, and a window whose rule says `focus_on_open =
+    /// false`, is neither focused nor navigated to. During the launch pass
+    /// nothing asks for native focus or moves a camera: those windows were
+    /// already open, and nobody opened them here.
     pub(crate) fn settle_arrival(
         &mut self,
         window: WindowId,
@@ -370,18 +393,32 @@ impl Controller {
         arrival: Arrival,
     ) -> Result<Value, Error> {
         let (mut effect, mut navigation) = (Value::Null, Value::Null);
-        let reveal = self.lifecycle.settled;
+        // Upstream: a widget and a `focus_on_open = false` window map without
+        // taking the focus or moving the camera.
+        let rule = self.policy.applied.get(&window);
+        let quiet = rule.is_some_and(|r| r.widget || r.focus_on_open == Some(false));
+        let reveal = self.lifecycle.settled && !quiet;
         match arrival {
             Arrival::Adopt(_) => {
                 if self.scene.focused() == Some(window) {
                     if reveal {
                         effect = self.request_focus(window)?["effect"].take();
-                    } else {
+                    } else if !quiet {
                         // Nothing is asked during the launch pass, so no answer
                         // can come: the focus the slot kept enters the history
-                        // as a request answered `focus_logical` does.
-                        self.scene.confirm_focus(window)?;
+                        // as a request answered `focus_logical` does, unless
+                        // the slot is screen-pinned. A widget, and a window
+                        // whose rule says `focus_on_open = false`, asks for
+                        // nothing and records nothing at any time.
+                        self.confirm_focus(window)?;
                     }
+                }
+            }
+            // A pinned window has no canvas position to navigate to: it is
+            // raised and focused where it is.
+            Arrival::Pin { .. } => {
+                if reveal {
+                    effect = self.raise_and_focus(window)?.effect;
                 }
             }
             Arrival::Place { at_cursor, .. } => {
@@ -451,10 +488,17 @@ impl Controller {
     /// the adapter confirmed or observed, or answered `focus_logical` when it
     /// performs no native focus. A request nobody answered is not in it.
     fn spatially_related(&self, window: WindowId, rect: Rect) -> Option<WindowId> {
+        // Upstream: a widget or a screen-pinned window has no snap rectangle,
+        // so nothing is spatially related to one that departs.
+        if !self.on_canvas(window) {
+            return None;
+        }
+        // Upstream's snap rectangles leave widgets and pinned windows out.
         let rects: Vec<(WindowId, SnapRect)> = self
             .scene
             .windows()
             .iter()
+            .filter(|w| self.on_canvas(w.id))
             .map(|w| (w.id, snap_rect(w.world_rect)))
             .collect();
         let cluster = cluster_of(&window, &rects, self.config().snap_gap);
@@ -473,7 +517,9 @@ impl Controller {
             })
     }
     /// Upstream nearest_visible_window_on: the live window nearest `from` by
-    /// its center among those at least partly on `output`.
+    /// its center among those at least partly on `output`. Widgets and
+    /// screen-pinned windows are left out: upstream's have no snap rectangle,
+    /// so its viewport test passes them over.
     fn nearest_visible(&self, from: Point, output: OutputId, except: WindowId) -> Option<WindowId> {
         let distance = |window: &Window| {
             let center = window.world_rect.center();
@@ -483,7 +529,10 @@ impl Controller {
             .windows()
             .iter()
             .filter(|w| {
-                w.id != except && self.sources.contains_key(&w.id) && self.partly_on(w.id, output)
+                w.id != except
+                    && self.sources.contains_key(&w.id)
+                    && self.on_canvas(w.id)
+                    && self.partly_on(w.id, output)
             })
             .min_by(|a, b| distance(a).total_cmp(&distance(b)))
             .map(|w| w.id)
@@ -493,7 +542,7 @@ impl Controller {
     /// canvas keeps a gesture's members to itself, so the gesture is tried,
     /// unmoved, on a copy of the scene without the window: it fails exactly
     /// when a captured window is missing.
-    fn release_gesture(&mut self, window: WindowId) {
+    pub(crate) fn release_gesture(&mut self, window: WindowId) {
         let mut scene = self.scene.clone();
         let holds = scene.remove_window(window).is_ok()
             && match &self.gesture {
@@ -520,7 +569,9 @@ impl Controller {
     /// follower is a spatially related window from the focus history,
     /// flown to when it is off screen and `navigation.auto_navigate_on_close`
     /// is on; else the most recent window still visible on the home output,
-    /// else the nearest visible one, else nobody. `output` is the active
+    /// else the nearest visible one, else nobody. A widget or a screen-pinned
+    /// window is never the follower, and one that departs has no spatially
+    /// related window. `output` is the active
     /// output; when the caller names none it is the home output: the one
     /// showing the departing frame's center, else the first. A drag or resize
     /// the departing window takes no part in goes on, and no navigation is
@@ -622,7 +673,9 @@ impl Controller {
             Some(CloseMark::Suspend) => true,
             None => {
                 let default = self.config().session.suspend_on_close;
+                // Upstream: a widget is never eligible.
                 !self.bundle(window).is_empty()
+                    && !self.is_widget(window)
                     && self.session_flag(window, self.title(window), default, |rule| {
                         rule.suspend_on_close
                     })
@@ -674,6 +727,9 @@ impl Controller {
     /// pass, after which a window that appears is focused and revealed.
     pub(crate) fn adoption_complete(&mut self, present: &[PresentWindow]) -> Result<Value, Error> {
         self.lifecycle.settled = true;
+        // Every output that exists has been registered by now: a saved pin
+        // whose output did not come back moves to one that did.
+        let rehomed = self.rehome_pins();
         let mut waiting: Vec<WindowId> = self
             .scene
             .windows()
@@ -697,7 +753,7 @@ impl Controller {
         // and they do not speak for the user's restore_windows: every slot
         // keeps waiting, and the next pass that has a config decides.
         if self.settings.refused {
-            return Ok(json!({"dropped":[],"standins":[],"dirty":false}));
+            return Ok(json!({"dropped":[],"standins":[],"dirty":rehomed}));
         }
         let default = self.config().session.restore_windows;
         let focused = self.scene.focused();
@@ -705,7 +761,10 @@ impl Controller {
         // open window is recorded, by app alone when it restores one.
         let restores = |id: &WindowId| {
             let flag = |title| self.session_flag(*id, title, default, |rule| rule.restore_windows);
-            !self.bundle(*id).is_empty() && flag(self.title(*id)) && flag("")
+            !self.bundle(*id).is_empty()
+                && !self.is_widget(*id)
+                && flag(self.title(*id))
+                && flag("")
         };
         let (kept, dropped): (Vec<WindowId>, Vec<WindowId>) =
             waiting.into_iter().partition(restores);
@@ -719,7 +778,7 @@ impl Controller {
         if focused.is_some_and(|id| dropped.contains(&id)) {
             self.clear_focus();
         }
-        let dirty = !dropped.is_empty() || !kept.is_empty();
+        let dirty = rehomed || !dropped.is_empty() || !kept.is_empty();
         Ok(json!({"dropped":dropped,"standins":kept,"dirty":dirty}))
     }
 
@@ -802,8 +861,12 @@ impl Controller {
         Ok(())
     }
 
-    /// Upstream window_by_selector: live windows only.
-    fn select_live(&self, selector: Option<&WindowSelector>) -> Result<WindowId, String> {
+    /// Upstream window_by_selector: live windows only. An id reaches a widget;
+    /// an app id passes over one.
+    pub(crate) fn select_live(
+        &self,
+        selector: Option<&WindowSelector>,
+    ) -> Result<WindowId, String> {
         let live = |id: &WindowId| self.sources.contains_key(id);
         match selector {
             None => self.scene.focused().filter(live),
@@ -832,7 +895,7 @@ impl Controller {
         }
     }
     /// The first window, bottom to top, whose bundle identifier contains the
-    /// selector's text, among the bound or among the detached.
+    /// selector's text, among the bound or among the detached. No widget.
     fn select_app(&self, selector: Option<&WindowSelector>, live: bool) -> Option<WindowId> {
         let Some(WindowSelector::AppId(text)) = selector else {
             return None;
@@ -840,6 +903,7 @@ impl Controller {
         let needle = text.to_lowercase();
         self.scene.windows().iter().map(|w| w.id).find(|id| {
             self.sources.contains_key(id) == live
+                && !self.is_widget(*id)
                 && self.bundle(*id).to_lowercase().contains(&needle)
         })
     }
@@ -875,6 +939,9 @@ impl Controller {
                 });
             }
         };
+        if self.is_widget(window) {
+            return Err("widgets cannot be suspended".to_string());
+        }
         let text = |e: Error| e.to_string();
         if self.scene.focused() != Some(window) {
             let effect = self.raise_and_focus(window).map_err(text)?.effect;

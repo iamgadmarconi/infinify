@@ -17,6 +17,13 @@ order. Only the primary window attracts during a group drag. The legacy
 `snap_move` API is stateless and supports opposite-edge docking; the gesture API
 adds latches, cooldown and optional alignment.
 
+`Scene::set_snapping(id, false)` takes a window out of all of it, as upstream's
+snap rectangles leave out widgets and screen-pinned windows: it is no snap
+target for a dragged or resized edge, joins no cluster, and `cluster` of it is
+itself alone. The exclusion is session data (`unsnapped`, omitted while empty);
+every window snaps until told otherwise. `Scene::raise(id)` raises without
+focusing.
+
 `DragGesture::with_alignment(corners, centers)` enables parallel-edge and midpoint
 alignment; both default off, as in upstream. Alignment requires no perpendicular
 overlap and a perpendicular gap strictly less than `gap + distance`.

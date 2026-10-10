@@ -18,6 +18,7 @@
 #import "window-manager.h"
 #import "pan-launch.h"
 #import "trackpad-gestures.h"
+#import "canvas-renderer.h"
 #include <mach/mach_time.h>
 #include <spawn.h>
 
@@ -129,6 +130,11 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
 @property SCWindow *window;
 @property NSString *title;
 @property BOOL keepSample;
+// A normal run: the compositor draws the stream's latest pixel buffer, kept here until
+// the next one, and no display layer is fed. `presented` runs when a new one was kept.
+@property BOOL composited;
+@property CVPixelBufferRef pixels;
+@property (copy) void (^presented)(void);
 - (void)clearSample;
 @end
 @implementation LiveSource
@@ -144,6 +150,13 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
     [self installSample:sample];
 }
 - (BOOL)installSample:(CMSampleBufferRef)sample {
+    if(self.composited){
+        CVImageBufferRef pixels=CMSampleBufferGetImageBuffer(sample);self.buffer=CGSizeMake(CVPixelBufferGetWidth(pixels),CVPixelBufferGetHeight(pixels));
+        CVPixelBufferRetain(pixels);if(self.pixels)CVPixelBufferRelease(self.pixels);self.pixels=pixels;
+        // Native resize: the frame belongs to the observation the controller just acknowledged.
+        if(self.resize)self.latestRevision=[self.resize captureState:self.logical][@"observation_revision"];
+        self.frames++;if(self.presented)self.presented();return YES;
+    }
     if(self.resize){for(AVSampleBufferDisplayLayer *surface in self.surfaces)if(surface.hidden||surface.sampleBufferRenderer.status==AVQueuedSampleBufferRenderingStatusFailed||!surface.sampleBufferRenderer.readyForMoreMediaData)return NO;}
     CFArrayRef attachments=CMSampleBufferGetSampleAttachmentsArray(sample,YES);if(attachments&&CFArrayGetCount(attachments))CFDictionarySetValue((CFMutableDictionaryRef)CFArrayGetValueAtIndex(attachments,0),kCMSampleAttachmentKey_DisplayImmediately,kCFBooleanTrue);
     CVImageBufferRef buffer=CMSampleBufferGetImageBuffer(sample);self.buffer=CGSizeMake(CVPixelBufferGetWidth(buffer),CVPixelBufferGetHeight(buffer));
@@ -152,14 +165,20 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
     else if(self.keepSample){[self clearSample];self.latestSample=(CMSampleBufferRef)CFRetain(sample);}
     self.frames++;return YES;
 }
-- (void)clearSample {if(self.latestSample){CFRelease(self.latestSample);self.latestSample=NULL;}self.latestRevision=nil;}
-- (void)dealloc { if(_latestSample)CFRelease(_latestSample);if(_router.eventSource)CFRelease(_router.eventSource); }
+- (void)clearSample {if(self.latestSample){CFRelease(self.latestSample);self.latestSample=NULL;}if(self.pixels){CVPixelBufferRelease(self.pixels);self.pixels=NULL;}self.latestRevision=nil;}
+- (void)dealloc { if(_latestSample)CFRelease(_latestSample);if(_pixels)CVPixelBufferRelease(_pixels);if(_router.eventSource)CFRelease(_router.eventSource); }
 @end
+// The compositor reads a stream's buffers as sRGB values, and holds the current one and
+// the one before it until the frame that sampled it has completed: its stream says sRGB
+// and has buffers to spare. The layer tiles of probe, demo and owned-fixture runs keep
+// the configuration their evidence was recorded with.
+static void compositedStream(SCStreamConfiguration *config,LiveSource *source) { if(source.composited){config.colorSpaceName=kCGColorSpaceSRGB;config.queueDepth=5;} }
 @interface DesktopView : FlippedView
 @property (weak) Desktop *desktop;
 @property NSMutableArray<NSNumber *> *outputs;
 @property NSMutableDictionary<NSString *,CALayer *> *tiles;
 @property NSMutableDictionary<NSString *,AVSampleBufferDisplayLayer *> *surfaces;
+@property NSMutableArray<CALayer *> *overlays; // a normal run's resize handles, above the compositor layers
 @property NSTextField *status;
 @property CGRect globalBounds;
 @property CGPoint startPoint;
@@ -195,6 +214,7 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
 - (void)configureResize;
 @property DWNavigationCoordinator *navigation;
 @property NSTimer *frameTimer;
+@property BOOL frameFlying; // the frame timer serves camera motion, not only an animated background
 @property CFTimeInterval lastObservation;
 @property CFTimeInterval lastResizeObservation;
 @property CFMachPortRef navigationTap;
@@ -276,6 +296,12 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
 @property BOOL adopted; // adoption_complete was sent for the manager in place
 @property NSString *discoveryNote; // the failed-read note last written to stderr
 @property BOOL sceneDirty; // a window came, went or was renamed: saved on the next poll
+// Normal runs only: the canvas is drawn the way DriftWM draws it, one compositor layer
+// per output. Probe, demo and owned-fixture runs keep the layer tiles their recorded
+// evidence depends on and never create it.
+@property DWCanvasRenderer *compositor;
+- (DWCanvasRenderer *)canvasRenderer;
+@property NSString *backgroundNote; // why the background is not the configured one, upstream's error bar
 
 @property NSMutableArray<NSPanel *> *panels;
 @property NSMutableArray<DesktopView *> *views;
@@ -327,13 +353,54 @@ static BOOL sourceGone(LiveSource *source,NSDictionary *info) { return ![birth(s
     return nil;
 }
 - (NSNumber *)actionOutput { return [self.outputs containsObject:self.lastOutput]?self.lastOutput:self.outputs.firstObject; }
+// A normal run: one compositor layer per output draws the background, the outlines of
+// the other outputs, the windows and the stand-ins from the snapshot: widgets below,
+// screen-pinned windows above at their own size, each at the controller's opacity (a
+// rule's, msg opacity's, or [decorations]'). Only the experimental resize handles stay
+// Core Animation layers, above it.
+- (void)compose:(NSDictionary *)snapshot {
+    NSMutableSet *invalidate=[NSMutableSet set];DWCanvasRenderer *canvas=[self.desktop canvasRenderer];CGPoint origin=self.globalBounds.origin;[CATransaction begin];[CATransaction setDisableActions:YES];
+    CGFloat scale=self.window.backingScaleFactor,largest=scale;for(DesktopView *view in self.desktop.views)largest=MAX(largest,view.window.backingScaleFactor);
+    [canvas render:snapshot outputs:self.outputs host:self.layer origin:origin scale:scale decorationScale:(NSInteger)ceil(largest)];
+    for(CALayer *overlay in self.overlays)[overlay removeFromSuperlayer];[self.overlays removeAllObjects];
+    for(NSDictionary *p in snapshot[@"placements"]){
+        if(![self.outputs containsObject:p[@"output"]])continue;
+        LiveSource *source=self.desktop.sources[p[@"window"]];BOOL settled=[p[@"presentation_settled"]boolValue];
+        // Native resize presentation, as the layer tiles had it: an unsettled placement lets go
+        // of its stale frame and is drawn without content, and a settled one whose kept frame
+        // is not of the settled observation asks for a new one.
+        if(source.resize&&!source.detached){
+            if(!settled)[source clearSample];
+            else if(![source.resize.installingWindow isEqual:source.logical]&&!(source.pixels&&[source.latestRevision isEqual:p[@"source"][@"observation_revision"]]))[invalidate addObject:source.logical];
+        }
+        // A widget and a pinned window offer no handle: the controller refuses to resize either.
+        if(!self.desktop.experimentalResize||![snapshot[@"focused"]isEqual:p[@"window"]]||!settled||[asNumber(p[@"widget"])boolValue]||[asNumber(p[@"pinned"])boolValue])continue;
+        // Clipped to the placement's visible rectangle, as inside its tile.
+        CGRect full=jsonRect(p[@"screen_rect"]),clip=jsonRect(p[@"clip_rect"]);CALayer *overlay=[CALayer layer],*below=[canvas layerForOutput:p[@"output"]];overlay.masksToBounds=YES;overlay.frame=CGRectOffset(clip,-origin.x,-origin.y);
+        for(NSDictionary *handle in DWResizeHandles(full,clip)){
+            // The overlay lies above everything the output's layer draws, so a handle under a placement drawn over this
+            // one (a pinned window, a window stacked above) is left off: its tile was covered there, and mouseDown: refuses the press.
+            CGPoint at=CGPointMake([handle[@"x"]doubleValue],[handle[@"y"]doubleValue]);BOOL covered=NO;
+            for(NSDictionary *front in [snapshot[@"placements"]reverseObjectEnumerator]){if(front==p)break;if([front[@"output"]isEqual:p[@"output"]]&&CGRectContainsPoint(jsonRect(front[@"clip_rect"]),at)){covered=YES;break;}}
+            if(covered)continue;
+            CALayer *h=[CALayer layer];h.name=@"resize-handle";h.backgroundColor=NSColor.systemOrangeColor.CGColor;h.frame=CGRectMake([handle[@"x"]doubleValue]-clip.origin.x-4,[handle[@"y"]doubleValue]-clip.origin.y-4,8,8);[overlay addSublayer:h];
+        }
+        if(below)[self.layer insertSublayer:overlay above:below];else [self.layer insertSublayer:overlay atIndex:0];[self.overlays addObject:overlay];
+    }
+    // Drawn inside this transaction, so the frame lands in the same commit as the handles and the layers' geometry.
+    [canvas flush];
+    [CATransaction commit];self.status.stringValue=self.desktop.statusText?:@"";for(NSNumber *window in invalidate)[self.desktop.resize invalidate:window];
+}
 - (void)render:(NSDictionary *)snapshot {
+    if(self.desktop.configured){[self compose:snapshot];return;}
     NSMutableSet *keys=[NSMutableSet set],*invalidate=[NSMutableSet set]; [CATransaction begin];[CATransaction setDisableActions:YES];
     for(NSDictionary *p in snapshot[@"placements"]){
         if(![self.outputs containsObject:p[@"output"]])continue;
         NSString *key=[NSString stringWithFormat:@"%@:%@",p[@"window"],p[@"output"]];[keys addObject:key];
         CALayer *tile=self.tiles[key];if(!tile){tile=[CALayer layer];tile.masksToBounds=YES;tile.backgroundColor=[NSColor colorWithWhite:.16 alpha:1].CGColor;[self.layer insertSublayer:tile atIndex:0];self.tiles[key]=tile;}
         CGRect full=jsonRect(p[@"screen_rect"]),clip=jsonRect(p[@"clip_rect"]);tile.frame=CGRectOffset(clip,-self.globalBounds.origin.x,-self.globalBounds.origin.y);
+        // The controller's opacity for the window, a rule's or msg opacity's, 1 without one: the tile and its picture fade as one.
+        NSNumber *opacity=asNumber(p[@"opacity"]);tile.opacity=opacity?(float)MAX(0.0,MIN(1.0,opacity.doubleValue)):1;if(tile.opacity<1)tile.allowsGroupOpacity=YES;
         LiveSource *source=self.desktop.sources[p[@"window"]];
         AVSampleBufferDisplayLayer *surface=self.surfaces[key];BOOL newSurface=surface==nil;
         if(source&&!source.detached){
@@ -355,7 +422,8 @@ static BOOL sourceGone(LiveSource *source,NSDictionary *info) { return ![birth(s
             if(!tile.sublayers.count){CATextLayer *text=[CATextLayer layer];text.string=[NSString stringWithFormat:@"Detached window %@\nChoose a source to rebind%@",p[@"window"],self.desktop.configured&&!self.desktop.dismissFree?@"":@"\n⌃⌥ click to dismiss"];text.fontSize=17;text.foregroundColor=NSColor.whiteColor.CGColor;text.wrapped=YES;text.frame=CGRectMake(12,12,MAX(40,clip.size.width-24),100);text.contentsScale=NSScreen.mainScreen.backingScaleFactor;[tile addSublayer:text];}
         }
         for(CALayer *child in tile.sublayers.copy)if([child.name isEqual:@"resize-handle"])[child removeFromSuperlayer];
-        if(self.desktop.experimentalResize&&[snapshot[@"focused"]isEqual:p[@"window"]]&&[p[@"presentation_settled"]boolValue])for(NSDictionary *handle in DWResizeHandles(full,clip)){
+        // A widget and a pinned window offer no handle: the controller refuses to resize either.
+        if(self.desktop.experimentalResize&&[snapshot[@"focused"]isEqual:p[@"window"]]&&[p[@"presentation_settled"]boolValue]&&![asNumber(p[@"widget"])boolValue]&&![asNumber(p[@"pinned"])boolValue])for(NSDictionary *handle in DWResizeHandles(full,clip)){
             CALayer *h=[CALayer layer];h.name=@"resize-handle";h.backgroundColor=NSColor.systemOrangeColor.CGColor;h.frame=CGRectMake([handle[@"x"]doubleValue]-clip.origin.x-4,[handle[@"y"]doubleValue]-clip.origin.y-4,8,8);[tile addSublayer:h];
         }
         // Placement order is the controller's bottom-to-top world z order.
@@ -371,7 +439,8 @@ static BOOL sourceGone(LiveSource *source,NSDictionary *info) { return ![birth(s
     // Controller input intentionally rejects placeholders. Find their geometry only
     // for the explicit dismiss action; this result never authorizes native delivery.
     NSDictionary *snapshot=[self.desktop call:@{@"op":@"snapshot"}];
-    for(NSDictionary *placement in [snapshot[@"placements"] reverseObjectEnumerator])if([placement[@"output"]isEqual:output]&&CGRectContainsPoint(jsonRect(placement[@"clip_rect"]),p)){if(!self.desktop.sources[placement[@"window"]])return @{@"window":placement[@"window"],@"placeholder":@YES};break;}
+    // A placeholder's hit is built here, so the widget and pinned flags a controller hit reports are read from its placement.
+    for(NSDictionary *placement in [snapshot[@"placements"] reverseObjectEnumerator])if([placement[@"output"]isEqual:output]&&CGRectContainsPoint(jsonRect(placement[@"clip_rect"]),p)){if(!self.desktop.sources[placement[@"window"]]){NSMutableDictionary *held=[@{@"window":placement[@"window"],@"placeholder":@YES} mutableCopy];for(NSString *flag in @[@"widget",@"pinned"])if([asNumber(placement[flag])boolValue])held[flag]=@YES;return held;}break;}
     return [self.desktop call:@{@"op":@"hit",@"output":output,@"screen":pointJSON(p)}][@"hit"];
 }
 - (BOOL)forward:(CGEventRef)e at:(CGPoint)p output:(NSNumber *)output activate:(BOOL)activate {
@@ -421,7 +490,11 @@ static BOOL sourceGone(LiveSource *source,NSDictionary *info) { return ![birth(s
     BOOL move=[kind isEqual:@"move_window"]||[kind isEqual:@"move_snapped_windows"],resize=[kind isEqual:@"resize_window"]||[kind isEqual:@"resize_window_snapped"];
     // ⌃⌥-click still dismisses a detached placeholder while no binding claims that press.
     if(!binding&&!button&&hit&&!source&&(e.modifierFlags&NSEventModifierFlagControl)&&(e.modifierFlags&NSEventModifierFlagOption)){[self.desktop call:@{@"op":@"forget",@"window":hit[@"window"]}];[self.desktop render];[self.desktop saveScene];return;}
-    if(move&&hit){if([self.desktop call:@{@"op":@"begin_drag",@"window":hit[@"window"],@"output":output,@"group":@([kind isEqual:@"move_snapped_windows"])}])self.gesture=2;}
+    // A widget ignores drags and resizes, as upstream's does: the bound press starts no gesture and goes to the widget as a plain click (upstream's move and resize arms fall through to click-to-focus and forward it).
+    if((move||resize)&&[asNumber(hit[@"widget"])boolValue]){[self.desktop flashStatus:@"A widget stays where its rule puts it: drags and resizes are ignored"];move=resize=NO;}
+    // Upstream drags and resizes a pinned window in screen space; that is not implemented, and the controller refuses both: it stays where it is until it is unpinned, and the press is swallowed.
+    if((move||resize)&&[asNumber(hit[@"pinned"])boolValue])[self.desktop flashStatus:@"A screen-pinned window is not moved or resized: unpin it first (toggle-pin-to-screen)"];
+    else if(move&&hit){if([self.desktop call:@{@"op":@"begin_drag",@"window":hit[@"window"],@"output":output,@"group":@([kind isEqual:@"move_snapped_windows"])}])self.gesture=2;}
     else if(resize&&hit)[self beginResize:hit[@"window"] snapped:[kind isEqual:@"resize_window_snapped"] at:p output:output];
     // Upstream's pan grab remembers that it began on empty canvas: released without a drag, it unfocuses.
     else if([kind isEqual:@"pan_viewport"]){self.gesture=1;self.clearsFocus=!hit;}
@@ -446,7 +519,7 @@ static BOOL sourceGone(LiveSource *source,NSDictionary *info) { return ![birth(s
     CGPoint p=[self screenPoint:e];NSNumber *output=[self outputAt:p];if(!output)return;
     self.startPoint=self.lastPoint=p;self.dragOutput=self.lastOutput=output;self.gestureButton=button;self.lastDragPan=0;
     if(!button&&self.desktop.experimentalResize&&!(e.modifierFlags&(NSEventModifierFlagControl|NSEventModifierFlagOption))){NSDictionary *snapshot=[self.desktop call:@{@"op":@"snapshot"}];
-        for(NSDictionary *placement in [snapshot[@"placements"]reverseObjectEnumerator])if([placement[@"output"]isEqual:output]&&[placement[@"window"]isEqual:snapshot[@"focused"]]&&[placement[@"presentation_settled"]boolValue]){
+        for(NSDictionary *placement in [snapshot[@"placements"]reverseObjectEnumerator])if([placement[@"output"]isEqual:output]&&[placement[@"window"]isEqual:snapshot[@"focused"]]&&[placement[@"presentation_settled"]boolValue]&&![asNumber(placement[@"widget"])boolValue]&&![asNumber(placement[@"pinned"])boolValue]){
             BOOL occluded=NO;for(NSDictionary *front in [snapshot[@"placements"]reverseObjectEnumerator]){if(front==placement)break;if([front[@"output"]isEqual:output]&&CGRectContainsPoint(jsonRect(front[@"clip_rect"]),p)){occluded=YES;break;}}if(occluded)continue;
             for(NSDictionary *h in DWResizeHandles(jsonRect(placement[@"screen_rect"]),jsonRect(placement[@"clip_rect"])))if(hypot(p.x-[h[@"x"]doubleValue],p.y-[h[@"y"]doubleValue])<=7){
                 NSDictionary *reply=[self.desktop.resize request:@{@"op":@"begin_native_resize",@"window":placement[@"window"],@"output":output,@"edges":h[@"edge"],@"start_screen":pointJSON(p),@"group":(e.modifierFlags&NSEventModifierFlagShift)?@YES:@NO}];
@@ -643,7 +716,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         for(NSDictionary *w in [d call:@{@"op":@"snapshot"}][@"windows"]){LiveSource *source=d.sources[w[@"window"]];id state=w[@"source"];if(source&&[state isKindOfClass:NSDictionary.class]&&state[@"capture_revision"]==NSNull.null)[source clearSample];if(!source||![state isKindOfClass:NSDictionary.class]||![state[@"observation_known"]boolValue])continue;
             CGRect observed=jsonRect(state[@"observed_rect"]);source.router.bounds=CFBridgingRelease(CGRectCreateDictionaryRepresentation(observed));
             if(source.stream&&!source.error&&![source.configuredRevision isEqual:state[@"observation_revision"]]){source.configuredRevision=state[@"observation_revision"];
-                SCStreamConfiguration *config=[SCStreamConfiguration new];config.width=(size_t)ceil(observed.size.width*2);config.height=(size_t)ceil(observed.size.height*2);config.pixelFormat=kCVPixelFormatType_32BGRA;config.minimumFrameInterval=CMTimeMake(1,30);config.queueDepth=3;config.showsCursor=NO;config.ignoreShadowsSingleWindow=YES;
+                SCStreamConfiguration *config=[SCStreamConfiguration new];config.width=(size_t)ceil(observed.size.width*2);config.height=(size_t)ceil(observed.size.height*2);config.pixelFormat=kCVPixelFormatType_32BGRA;config.minimumFrameInterval=CMTimeMake(1,30);config.queueDepth=3;config.showsCursor=NO;config.ignoreShadowsSingleWindow=YES;compositedStream(config,source);
                 SCStream *stream=source.stream;NSNumber *revision=source.configuredRevision;[stream updateConfiguration:config completionHandler:^(NSError *error){if(error)dispatch_async(dispatch_get_main_queue(),^{if(DWResizeConfigurationCurrent(stream,source.stream,revision,source.configuredRevision,source.detached)){source.error=error.localizedDescription;source.resizeFailureHandled=YES;[source.resize invalidate:source.logical];[source.resize cancel];}});}];
             }
         }id transaction=[d call:@{@"op":@"snapshot"}][@"native_resize"];if([transaction isKindOfClass:NSDictionary.class]&&[transaction[@"phase"]isEqual:@"needs_observation"])d.statusText=@"Native resize remains uncertain; source retained and input disabled.";if([transaction isKindOfClass:NSDictionary.class]&&[d.resize canRemove:nil]&&!d.resize.obligations&&![d.resizeSavedTransaction isEqual:transaction[@"transaction"]]){d.resizeSavedTransaction=transaction[@"transaction"];[d saveScene];}[d render];};
@@ -687,7 +760,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(!self.navigation)for(DesktopView *view in self.views)for(NSNumber *output in view.outputs)[self call:@{@"op":@"cancel_navigation",@"output":output}];
 }
 - (void)stopNavigation {
-    [self.cycleHold stop];self.cycleHold=nil;[self.navigation shutdown];self.navigation=nil;[self.frameTimer invalidate];self.frameTimer=nil;self.flying=NO;
+    [self.cycleHold stop];self.cycleHold=nil;[self.navigation shutdown];self.navigation=nil;[self.frameTimer invalidate];self.frameTimer=nil;self.frameFlying=NO;self.flying=NO;
     if(self.navigationTapSource){CFRunLoopRemoveSource(CFRunLoopGetMain(),self.navigationTapSource,kCFRunLoopCommonModes);CFRelease(self.navigationTapSource);self.navigationTapSource=NULL;}
     if(self.navigationTap){CFMachPortInvalidate(self.navigationTap);CFRelease(self.navigationTap);self.navigationTap=NULL;}
 }
@@ -716,19 +789,30 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if([result[@"changed_outputs"]count])[self render];
     BOOL active=[result[@"needs_frames"]boolValue];if(!active&&self.flying)[self saveScene];self.flying=active;return active;
 }
-// 60 Hz from the next frame on, for as long as tick_navigation reports needs_frames. Only
-// the controller knows what is in motion, so the first frame asks it and stops the timer
-// when nothing is.
-- (void)ensureFrames {
+// Animated backgrounds: is one on an open panel? draw: each such output's next frame is
+// drawn when its animate_fps says it is due. Never in probe, demo and owned-fixture runs.
+- (BOOL)animate:(BOOL)draw { BOOL any=NO;for(DesktopView *view in self.views)if(view.window.visible&&[self.compositor animates:view.outputs draw:draw])any=YES;return any; }
+// The one frame timer, 60 Hz. It runs while tick_navigation reports needs_frames (a
+// flight, a coasting pan, an edge pan under a drag or the cursor) and, in a normal run,
+// while a panel shows an animated background; it ends itself when neither is left.
+// frameFlying says it is serving camera motion: each of its frames then watches the hot
+// corners and ticks the controller, and the idle poll neither ticks nor draws. While it
+// serves a background only, the poll goes on exactly as if there were no timer.
+- (void)startFrames {
     if(self.frameTimer||self.cleaning)return;
-    __weak Desktop *weak=self;self.frameTimer=[NSTimer timerWithTimeInterval:1.0/60 repeats:YES block:^(NSTimer *timer){Desktop *desktop=weak;[desktop watchCorners];if(!desktop||![desktop cameraFrame]){[timer invalidate];desktop.frameTimer=nil;}}];
+    __weak Desktop *weak=self;self.frameTimer=[NSTimer timerWithTimeInterval:1.0/60 repeats:YES block:^(NSTimer *timer){Desktop *desktop=weak;
+        if(desktop.frameFlying){[desktop watchCorners];desktop.frameFlying=[desktop cameraFrame];}
+        if(!desktop||(![desktop animate:YES]&&!desktop.frameFlying)){[timer invalidate];desktop.frameTimer=nil;}}];
     [[NSRunLoop mainRunLoop]addTimer:self.frameTimer forMode:NSRunLoopCommonModes];
 }
+// Something may be in motion: 60 Hz from the next frame on. Only the controller knows
+// what is, so that frame asks it, and the timer stops serving motion when nothing is.
+- (void)ensureFrames { if(self.cleaning)return;self.frameFlying=YES;[self startFrames]; }
 // The end of a burst of timed pans: upstream's launch_momentum_on. The clock is brought
 // up to now first, so the coast's first frame spans one frame and not the idle poll's gap.
 - (void)panEnd:(NSNumber *)output {
     if(self.cleaning||!output)return;
-    if(!self.frameTimer)[self cameraFrame];
+    if(!self.frameFlying)[self cameraFrame];
     [self call:@{@"op":@"pan_end",@"output":output}];[self ensureFrames];
 }
 // Hot key target and the IPC active output: the output under the pointer, else the panel
@@ -745,7 +829,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(2*NSEC_PER_SEC)),dispatch_get_main_queue(),^{Desktop *d=weak;if(d.statusToken!=token||d.cleaning||![d.statusText isEqual:text])return;d.statusText=[d restingStatus];[d render];});
 }
 // What the status line returns to: a problem in the config file stays up like upstream's error bar, else the help.
-- (NSString *)restingStatus { return self.configured?self.configNote?:self.help?:@"":helpText; }
+- (NSString *)restingStatus { return self.configured?self.configNote?:self.backgroundNote?:self.help?:@"":helpText; }
 - (NSString *)actionFeedback:(NSString *)action flight:(NSDictionary *)flight output:(NSNumber *)output {
     BOOL home=[action isEqual:@"home-toggle"];
     if(home||[action isEqual:@"zoom-to-fit"]){
@@ -1198,6 +1282,17 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     NSDictionary *command=request?@{@"op":@"ipc",@"output":[self viewOutput]?:NSNull.null,@"request":request,@"pointer":pointJSON(pointer())}:nil;
     if(!command||![NSJSONSerialization isValidJSONObject:command])return ipcError(@"invalid request");
     NSString *status=self.statusText;NSData *raw=nil;NSDictionary *data=[self call:command raw:&raw];
+    // Screenshot is answered in two steps: the controller's reply is null and names the
+    // capture as an effect, the compositor renders it offscreen and writes the PNG, and
+    // what screenshot_result returns for the outcome is the client's reply.
+    NSDictionary *capture=nil;if(data&&!asDict(data[@"reply"]))for(id effect in asArray(data[@"effects"]))if([asString(asDict(effect)[@"op"])isEqual:@"screenshot"])capture=effect;
+    if(capture){
+        NSMutableDictionary *result=[[[self canvasRenderer]screenshot:capture snapshot:[self call:@{@"op":@"snapshot"}]]?:@{@"error":@"no renderer available for capture"} mutableCopy];result[@"op"]=@"screenshot_result";
+        raw=nil;NSDictionary *answered=[self call:result raw:&raw];
+        if(!asDict(answered[@"reply"])){NSString *error=answered?@"invalid controller reply":self.statusText?:@"controller error";self.statusText=status;return ipcError(error);}
+        [self applyReply:data];
+        return jsonMember(jsonMember(raw,"data"),"reply")?:[NSJSONSerialization dataWithJSONObject:answered[@"reply"] options:NSJSONWritingWithoutEscapingSlashes error:nil];
+    }
     // A controller-level refusal still answers the client and leaves the status line alone.
     if(!asDict(data[@"reply"])){NSString *error=data?@"invalid controller reply":self.statusText?:@"controller error";self.statusText=status;return ipcError(error);}
     [self applyReply:data];
@@ -1228,8 +1323,36 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}];
     // Cursor edge pan is on while the snapshot's navigation.cursor_pan.needs_pointer says so; see -reportPointer.
     self.pointerOutputs=self.configured&&[asDict(asDict(snapshot[@"navigation"])[@"cursor_pan"])[@"needs_pointer"]isEqual:@YES]?asArray(snapshot[@"outputs"]):nil;
-    for(DesktopView *view in self.views)[view render:snapshot];
+    [self adoptRender:snapshot];for(DesktopView *view in self.views)[view render:snapshot];
+    // An animated background keeps the frame timer alive by itself.
+    if(!self.frameTimer&&[self animate:NO])[self startFrames];
     [self publishState];
+}
+// A normal run's compositor, made when the canvas first draws or is first captured.
+- (DWCanvasRenderer *)canvasRenderer {
+    if(self.compositor||!self.configured||self.cleaning)return self.compositor;
+    __weak Desktop *weak=self;
+    self.compositor=[[DWCanvasRenderer alloc]initWithSource:^DWCanvasContent(NSNumber *window,NSDictionary *placement){
+        LiveSource *source=weak.sources[window];DWCanvasContent none={NULL,0,CGRectNull};
+        if(!source||source.detached||!source.pixels)return none;
+        if(!source.resize)return (DWCanvasContent){source.pixels,source.frames,CGRectNull};
+        // Native resize: only the frame of the observation the controller settled on, placed by
+        // the content rectangle it acknowledged. buffer_crop is that rectangle cut to the part
+        // of the window an output shows; the compositor draws the whole window and clips it.
+        NSDictionary *state=asDict(placement[@"source"]);
+        if(![placement[@"presentation_settled"]boolValue]||![source.latestRevision isEqual:state[@"observation_revision"]]||!asDict(state[@"content_rect"]))return none;
+        return (DWCanvasContent){source.pixels,source.frames,jsonRect(state[@"content_rect"])};
+    }];
+    return self.compositor;
+}
+// What a config load changed in the background, the chrome or the outlines is adopted
+// before any output is described, and a background that fell back says why, as
+// upstream's error bar does. A problem in the config file itself keeps the status line.
+- (void)adoptRender:(NSDictionary *)snapshot {
+    if(!self.views.count)return;[[self canvasRenderer]configure:snapshot];
+    NSString *note=self.compositor.note,*old=self.backgroundNote;if(note==old||[note isEqual:old])return;self.backgroundNote=note;
+    if(note){fprintf(stderr,"%s\n",note.UTF8String);if(!self.configNote)self.statusText=note;}
+    else if([self.statusText isEqual:old])self.statusText=[self restingStatus];
 }
 - (void)quit:(id)sender { (void)sender;[self.resize shutdown];[self stopNavigation];stopped=1; }
 - (void)resizeUnavailable:(id)sender { if(self.probe&&sender){self.probeHumanInput=YES;return;} (void)sender;if(self.experimentalResize){self.statusText=@"Experimental: select one source, then drag an orange edge handle. Unknown family or capture mapping stays inert; Escape cancels shell input.";[self render];return;}self.statusText=@"Native layout resize is unavailable. Resize the original app on the desktop, then return; capture reconciles without changing world geometry.";[self render]; }
@@ -1237,7 +1360,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 - (DesktopView *)panel:(NSRect)frame outputRects:(NSArray *)rects identities:(NSArray *)identities {
     NSPanel *panel=[[(self.ownedResizeProbe?RPIsolatedPanel.class:CanvasPanel.class) alloc]initWithContentRect:frame styleMask:NSWindowStyleMaskBorderless|NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO];
     panel.releasedWhenClosed=NO;panel.level=self.windowed?NSNormalWindowLevel:NSFloatingWindowLevel;panel.animationBehavior=NSWindowAnimationBehaviorNone;panel.collectionBehavior=NSWindowCollectionBehaviorMoveToActiveSpace|NSWindowCollectionBehaviorFullScreenAuxiliary;
-    DesktopView *view=[[DesktopView alloc]initWithFrame:NSMakeRect(0,0,frame.size.width,frame.size.height)];view.desktop=self;view.globalBounds=topRect(frame);view.outputs=[NSMutableArray array];view.tiles=[NSMutableDictionary dictionary];view.surfaces=[NSMutableDictionary dictionary];view.wantsLayer=YES;view.layer.backgroundColor=[NSColor colorWithSRGBRed:.045 green:.065 blue:.10 alpha:1].CGColor;panel.contentView=view;
+    DesktopView *view=[[DesktopView alloc]initWithFrame:NSMakeRect(0,0,frame.size.width,frame.size.height)];view.desktop=self;view.globalBounds=topRect(frame);view.outputs=[NSMutableArray array];view.tiles=[NSMutableDictionary dictionary];view.surfaces=[NSMutableDictionary dictionary];view.overlays=[NSMutableArray array];view.wantsLayer=YES;view.layer.backgroundColor=[NSColor colorWithSRGBRed:.045 green:.065 blue:.10 alpha:1].CGColor;panel.contentView=view;
     // Normal runs only: the trackpad's raw touches, for gestures of three or more fingers.
     if(self.configured)view.allowedTouchTypes=NSTouchTypeMaskIndirect;
     for(NSUInteger i=0;i<rects.count;i++){NSNumber *output=[self call:@{@"op":@"register_output",@"stable_id":identities[i],@"screen_bounds":rects[i]}][@"output"];if(output)[view.outputs addObject:output];}
@@ -1263,6 +1386,9 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         NSRect frame=NSMakeRect(floor(NSMidX(area)-width/2),floor(NSMidY(area)-height/2),width,height);CGRect output=topRect(frame);output.origin.y+=64;output.size.height-=64;
         if(screen)[self panel:frame outputRects:@[rectJSON(output)] identities:@[@"windowed"]];}
     else for(NSScreen *screen in NSScreen.screens){NSNumber *display=screen.deviceDescription[@"NSScreenNumber"];CFUUIDRef uuid=CGDisplayCreateUUIDFromDisplayID(display.unsignedIntValue);NSString *name=uuid?CFBridgingRelease(CFUUIDCreateString(NULL,uuid)):nil;if(uuid)CFRelease(uuid);if(!name)continue;CGRect output=topRect(screen.frame);output.origin.y+=64;output.size.height-=64;[self panel:screen.frame outputRects:@[rectJSON(output)] identities:@[name]];}
+    // Every display that exists is registered now. A screen change and Return to desktop remove them all first, so only here can the controller
+    // tell a display that is gone from one that came straight back: a pin whose own display is missing moves to one that is there.
+    if([asNumber([self call:@{@"op":@"outputs_settled"}][@"dirty"])boolValue])self.sceneDirty=YES;
     // Windowed mode registers no global hot key: toolbar, pointer and IPC only.
     if(self.configured){NSArray<NSString *> *refused=[self startKeys];if(refused.count)self.statusText=summary(@"Shortcut unavailable",refused);[self armCorners:[self call:@{@"op":@"bindings"}]];}
     else {
@@ -1348,12 +1474,14 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     for(LiveSource *existing in self.sources.allValues)if(existing.router.pid==pid&&existing.router.wid==wid){self.statusText=@"This source is already attached; every display can view the same world window.";return NO;}
     LiveSource *source=[LiveSource new];source.router=[Router new];source.router.pid=pid;source.router.wid=wid;source.router.processBirth=processBirth;source.router.bounds=info[(id)kCGWindowBounds];source.router.deadline=NSDate.distantFuture;source.router.sent=[NSMutableArray array];source.router.tag=(int64_t)(arc4random_uniform(0x7fffff)+1)*100;source.router.eventSource=CGEventSourceCreate(kCGEventSourceStatePrivate);source.router.usePrivate=YES;
     BOOL privateAvailable=[source.router loadPrivate];source.identity=@{@"pid":@(pid),@"birth_sec":processBirth[0],@"birth_usec":processBirth[1],@"wid":@(wid)};
-    source.buffer=CGSizeMake(ceil(bounds.size.width*2),ceil(bounds.size.height*2));source.surfaces=[NSMutableArray array];
+    source.buffer=CGSizeMake(ceil(bounds.size.width*2),ceil(bounds.size.height*2));source.surfaces=[NSMutableArray array];source.composited=self.configured;
     NSMutableDictionary *command=[@{@"op":@"attach",@"identity":source.identity,@"bundle_id":window.owningApplication.bundleIdentifier?:@"",@"title":window.title?:@"Untitled",@"buffer":@{@"width":@(source.buffer.width),@"height":@(source.buffer.height)},@"source_rect":rectJSON(bounds)} mutableCopy];
     if(placed){NSNumber *output=[self viewOutput];if(output)command[@"output"]=output;command[@"pointer"]=pointJSON(pointer());}
     else if(logical)command[@"logical_id"]=logical;else {if(!world){NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}];NSDictionary *o=[snapshot[@"outputs"]firstObject];double zoom=[o[@"zoom"]doubleValue];CGPoint camera=jsonPoint(o[@"camera"]);world=rectJSON(CGRectMake(camera.x+30/MAX(.001,zoom),camera.y+30/MAX(.001,zoom),bounds.size.width,bounds.size.height));}command[@"world_rect"]=world;}
     NSDictionary *reply=[self call:command];source.logical=reply[@"window"];if(!source.logical)return NO;self.sources[source.logical]=source;
     source.window=window;source.title=asString(info[(id)kCGWindowName])?:command[@"title"];source.resize=self.resize;
+    // A new frame redraws only the outputs that show this window.
+    if(source.composited){__weak Desktop *weak=self;NSNumber *logical=source.logical;source.presented=^{[weak.compositor contentChanged:logical];};}
     // A managed run captures on demand: -captureDemand starts the stream once the window has a placement.
     if(self.manager&&!self.resize)source.keepSample=YES;
     else if(![self startCapture:source size:source.buffer]){[self detach:source];return NO;}
@@ -1363,16 +1491,18 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 }
 // One stream for a source at a pixel size. NO leaves the reason in source.error.
 - (BOOL)startCapture:(LiveSource *)source size:(CGSize)pixels {
-    SCStreamConfiguration *config=[SCStreamConfiguration new];config.width=(size_t)pixels.width;config.height=(size_t)pixels.height;config.pixelFormat=kCVPixelFormatType_32BGRA;config.minimumFrameInterval=CMTimeMake(1,30);config.queueDepth=3;config.showsCursor=NO;config.ignoreShadowsSingleWindow=YES;
+    SCStreamConfiguration *config=[SCStreamConfiguration new];config.width=(size_t)pixels.width;config.height=(size_t)pixels.height;config.pixelFormat=kCVPixelFormatType_32BGRA;config.minimumFrameInterval=CMTimeMake(1,30);config.queueDepth=3;config.showsCursor=NO;config.ignoreShadowsSingleWindow=YES;compositedStream(config,source);
     source.stream=[[SCStream alloc]initWithFilter:[[SCContentFilter alloc]initWithDesktopIndependentWindow:source.window] configuration:config delegate:source];[self.resize bind:source.logical stream:source.stream];NSError *error=nil;
     if(![source.stream addStreamOutput:source type:SCStreamOutputTypeScreen sampleHandlerQueue:dispatch_get_main_queue() error:&error]){source.error=error.localizedDescription;return NO;}
     SCStream *starting=source.stream;[starting startCaptureWithCompletionHandler:^(NSError *e){if(e)dispatch_async(dispatch_get_main_queue(),^{if(source.stream==starting&&!source.detached)source.error=e.localizedDescription;});}];
     return YES;
 }
 // An intentional stop is no error: the stream is forgotten first, so nothing it still
-// reports is read, and cleanup waits for the stop like any other.
+// reports is read, and cleanup waits for the stop like any other. The compositor keeps
+// the last picture, so a window whose placement returns is not blank until its stream
+// delivers again.
 - (void)stopCapture:(LiveSource *)source {
-    SCStream *stream=source.stream;if(!stream)return;source.stream=nil;[source clearSample];
+    SCStream *stream=source.stream;if(!stream)return;source.stream=nil;if(!source.composited)[source clearSample];
     [self.pendingStops addObject:stream];[stream stopCaptureWithCompletionHandler:^(NSError *error){(void)error;dispatch_async(dispatch_get_main_queue(),^{[self.pendingStops removeObject:stream];});}];
 }
 // Capture on demand, in a managed run: a stream runs while its window has a placement
@@ -1468,6 +1598,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     for(DesktopView *view in self.views){[view releasePressed];for(NSNumber *output in view.outputs){NSDictionary *reply=[self call:@{@"op":@"remove_output",@"output":output}];[self.resize consume:reply];}}
     for(NSPanel *panel in self.panels){[panel orderOut:nil];[panel close];}
     [self.panels removeAllObjects];[self.views removeAllObjects];for(LiveSource *source in self.sources.allValues)[source.surfaces removeAllObjects];
+    // The outputs' compositor layers went with the panels; the rebuilt ones get new layers.
+    [self.compositor reset];
     [self stopKeys];[self stopViewKeys];
     [self openPanels];[self saveScene];
 }
@@ -1475,8 +1607,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(self.cleaning)return;
     if(self.resize&&CACurrentMediaTime()-self.lastResizeObservation>=.5){self.lastResizeObservation=CACurrentMediaTime();[self.resize observeBindings];}
     [self watchCorners];
-    // Idle polling keeps the clock current and, while cursor edge pan wants it, the pointer reported; motion found without its timer regains 60 Hz.
-    if(!self.frameTimer&&[self cameraFrame])[self ensureFrames];
+    // Idle polling keeps the clock current and, while cursor edge pan wants it, the pointer reported; motion found while the timer does not serve it regains 60 Hz.
+    if(!self.frameFlying&&[self cameraFrame])[self ensureFrames];
     if(self.navigation&&CACurrentMediaTime()-self.lastObservation>=.5){self.lastObservation=CACurrentMediaTime();[self refreshFocusAccess];[self.navigation observe];}
     // Discovery first: a window that appeared is attached before this tick observes and draws.
     [self.manager poll];
@@ -1496,7 +1628,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         CGRect bounds=CGRectZero;if(!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)w[(id)kCGWindowBounds],&bounds))continue;
         if(![source.router.bounds isEqual:w[(id)kCGWindowBounds]]){
             CGRect old=CGRectZero;CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)source.router.bounds,&old);source.router.bounds=w[(id)kCGWindowBounds];
-            if(!CGSizeEqualToSize(old.size,bounds.size)){SCStreamConfiguration *config=[SCStreamConfiguration new];config.width=(size_t)ceil(bounds.size.width*2);config.height=(size_t)ceil(bounds.size.height*2);config.pixelFormat=kCVPixelFormatType_32BGRA;config.minimumFrameInterval=CMTimeMake(1,30);config.queueDepth=3;config.showsCursor=NO;config.ignoreShadowsSingleWindow=YES;[source.stream updateConfiguration:config completionHandler:^(NSError *e){if(e)dispatch_async(dispatch_get_main_queue(),^{source.error=e.localizedDescription;});}];}
+            if(!CGSizeEqualToSize(old.size,bounds.size)){SCStreamConfiguration *config=[SCStreamConfiguration new];config.width=(size_t)ceil(bounds.size.width*2);config.height=(size_t)ceil(bounds.size.height*2);config.pixelFormat=kCVPixelFormatType_32BGRA;config.minimumFrameInterval=CMTimeMake(1,30);config.queueDepth=3;config.showsCursor=NO;config.ignoreShadowsSingleWindow=YES;compositedStream(config,source);[source.stream updateConfiguration:config completionHandler:^(NSError *e){if(e)dispatch_async(dispatch_get_main_queue(),^{source.error=e.localizedDescription;});}];}
         }
         [self call:@{@"op":@"observe",@"window":source.logical,@"identity":source.identity,@"source_rect":rectJSON(bounds),@"buffer":@{@"width":@(source.buffer.width),@"height":@(source.buffer.height)}}];
         // Event history is probe evidence, not an unbounded production log.
@@ -1504,7 +1636,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     }
     [self captureDemand];
     if(self.sceneDirty){self.sceneDirty=NO;[self saveScene];}
-    if(!self.frameTimer)[self render];
+    if(!self.frameFlying)[self render];
 }
 - (void)cleanup {
     if(self.cleaning)return;self.cleaning=YES;
@@ -1530,6 +1662,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     while(self.pendingStops.count){self.statusText=@"Shutdown pending: waiting for capture streams";pump(.01);}
     for(DesktopView *view in self.views)for(NSNumber *output in view.outputs){NSDictionary *reply=[self call:@{@"op":@"remove_output",@"output":output}];[self.resize consume:reply];}
     for(NSPanel *panel in self.panels){[panel orderOut:nil];[panel close];}[self.panels removeAllObjects];[self.views removeAllObjects];
+    // Every compositor layer, kept pixel buffer and background program goes with the panels.
+    [self.compositor reset];self.compositor=nil;self.backgroundNote=nil;
     [self stopKeys];[self stopViewKeys];
     if(self.resizeKeyMonitor){[NSEvent removeMonitor:self.resizeKeyMonitor];self.resizeKeyMonitor=nil;}
     if(self.resizeGlobalKeyMonitor){[NSEvent removeMonitor:self.resizeGlobalKeyMonitor];self.resizeGlobalKeyMonitor=nil;}
@@ -1713,7 +1847,8 @@ int main(int argc,const char **argv) { @autoreleasepool {
     if(!desktop.startupError&&(windowed||(desktop.managing&&CGPreflightScreenCaptureAccess())))[desktop openCanvas:nil];else [desktop showChooser:nil];
     // Upstream runs autostart on every backend, its nested one included: a managed, a windowed and a chooser-first launch all do.
     [desktop runAutostart];
-    while(!stopped){[desktop poll];pump(.08);}
+    // A pool per turn: what a poll, its controller calls and the events it pumps autorelease ends with the turn.
+    while(!stopped){@autoreleasepool{[desktop poll];pump(.08);}}
     // Stopped first: the pending quit reply is written, and no request can arrive during cleanup.
     [desktop.ipc stop];desktop.ipc=nil;[desktop cleanup];[desktop.chooser close];return 0;
 } }

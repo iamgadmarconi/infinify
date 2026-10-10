@@ -19,9 +19,10 @@ keep them.
 
 The app links the actual Rust desktop static library. Every connected display
 gets a nonactivating panel and an independently persisted camera on the shared
-world. Each visible `(logical window, display)` has its own
-`AVSampleBufferDisplayLayer`; one ScreenCaptureKit stream feeds all placements of
-a source. This is continuous live capture of native application content.
+world. One ScreenCaptureKit stream per source feeds every display that shows
+it, and one compositor layer per display draws the canvas the way DriftWM does
+([Rendering](#rendering)). This is continuous live capture of native
+application content.
 Ordinary native windows remain where their owners put them. Cameras and world
 movement do not move, transform, park, or resize native windows.
 [Window navigation](#window-navigation-and-native-focus) activates and raises
@@ -179,12 +180,24 @@ the one window it focuses, and nothing else.
   that is bound to pan (the default left button) and is released within 5
   points of where it went down leaves no window focused, as upstream's pan
   grab does.
+- Pin to screen: Control-Option-T (`toggle-pin-to-screen`) fixes the focused
+  window to its display, where it ignores pan and zoom and is drawn above the
+  canvas windows; pressed again it returns the window to the canvas at the same
+  place. A config file's `[[window_rules]]` can pin a window as it appears,
+  make it a widget that stays put below the others, place it, or set its
+  opacity. See
+  [Window rules, widgets and pinned windows](#window-rules-widgets-and-pinned-windows).
 - Control-Option-click a detached placeholder dismisses it only while no mouse
-  binding claims that press, and the placeholder shows the hint only then.
+  binding claims that press. A placeholder is drawn as DriftWM's stand-in and
+  no longer carries a hint for this.
   DriftWM's defaults do claim it under the default super chord (`mod+left` pans
   anywhere), so out of the box there is no pointer way to dismiss a placeholder.
   `[mouse.anywhere]` with `"mod+left" = "none"`, or a `--super` chord other than
   `ctrl+alt`, frees the press.
+- Screenshots: `Infinify msg screenshot` writes a PNG of the canvas as the
+  compositor draws it, off-screen content included: the active view, one
+  window, every window, or a rectangle, at any scale. No key is bound to it.
+  See [Screenshots](#screenshots).
 - Return to desktop: stop capture, close panels, and show the chooser.
 - Quit, the registered Control-Option-Escape hot key, or a key bound to `quit`:
   save and exit. The visible Quit button remains available if hot key
@@ -299,7 +312,10 @@ place in the stack. The focus moves as upstream's does, to the window that
 last had the canvas's focus among those docked to or overlapping the closed
 one, else the last one still in view, else the nearest in view, else to none;
 with `[navigation] auto_navigate_on_close` (on by default) the camera flies to
-a docked or overlapping follower that is not wholly in view. "Had the focus"
+a docked or overlapping follower that is not wholly in view. A widget or a
+screen-pinned window is never the follower, and one that closes has no docked
+or overlapping follower
+([Window rules](#window-rules-widgets-and-pinned-windows)). "Had the focus"
 is the one most-recently-focused order of the canvas, the order Option-Tab
 walks ([Window navigation and native focus](#window-navigation-and-native-focus)):
 a click in the canvas, a new window, `msg focus` or a followed native focus
@@ -316,8 +332,9 @@ title at the next launch.
 **Capture on demand.** A ScreenCaptureKit stream runs only while its window is
 in view on some display. It stops about two seconds after the window left every
 view and starts again when it returns; a window that returns within those two
-seconds shows its last frame at once, one that returns later shows an empty
-tile until the restarted stream delivers. With `--experimental-native-resize`
+seconds shows its last frame at once, and one that returns later shows its
+last picture, which the compositor keeps ([Rendering](#rendering)), until the
+restarted stream delivers. With `--experimental-native-resize`
 every stream runs continuously, as before.
 
 **Closing, suspending and relaunching** are explicit actions only; nothing
@@ -381,10 +398,12 @@ identifier "…" is installed`).
   request failed or was overtaken before it was confirmed is not in that order,
   so it is not preferred as the follower, where upstream would have gone back
   to it.
-- A stand-in looks like every detached placeholder ("Detached window N"): no
-  name label, and neither a click nor Return relaunches it as upstream's do. A
-  click focuses it like any window, and ⌃⌥Q then dismisses it; it is relaunched
-  through `msg relaunch`; there is no toolbar button for close.
+- A stand-in is drawn as upstream draws one, bar, body and name label
+  ([Rendering](#rendering)), and so is every other detached placeholder; the
+  two cannot be told apart by eye. Neither a click nor Return relaunches it as
+  upstream's do. A click focuses it like any window, and ⌃⌥Q then dismisses
+  it; it is relaunched through `msg relaunch`; there is no toolbar button for
+  close.
 - A close or suspend request is forgotten after 10 seconds and a relaunch after
   30, as upstream forgets them, measured on the clock the app ticks every
   80 ms while the canvas is open. Within its 30 seconds a pending relaunch
@@ -504,6 +523,888 @@ headless coordinator regression and a reading of the shell. The status line was
 not read, so neither was the not-managed note sharing it with the
 Accessibility note.
 
+## Window rules, widgets and pinned windows
+
+DriftWM's per-window policy for the windows on the canvas: `[[window_rules]]`
+in the config file, widgets fixed to the canvas, and windows pinned to a
+display's screen. The user contract is upstream's `docs/window-rules.md`; the
+decisions are the controller's, and
+[RULES.md](../../crates/desktop/RULES.md) is their contract with every
+difference from upstream. **None of what this section says about a real window
+has been run, and the app's own panel was never looked at**:
+[What was run](#what-was-run-for-rules-widgets-and-pins) says what was, and
+[What was run for rules and rendering together](#what-was-run-for-rules-and-rendering-together)
+what has been drawn since, offscreen.
+
+**What changes for an existing setup.**
+
+- ⌃⌥T (`mod+t`, `toggle-pin-to-screen`) is now a registered global hot key in
+  a normal run, taken from every application while a canvas is open.
+  `"mod+t" = "none"` under `[keybindings]` gives it back.
+- `[[window_rules]]` entries a config file already had now act on each window
+  as it appears: `position`, `widget`, `pinned_to_screen`, `output`,
+  `focus_on_open` and `opacity`, and its `decoration`, border, corner and
+  shadow keys change how the window is drawn ([Rendering](#rendering)).
+  `[decorations] opacity` and `opacity_focused` now dim windows too.
+- `Infinify msg pin`, `msg opacity`, `msg action toggle-pin-to-screen` and
+  `msg action move-to-bookmark NAME` run instead of answering not implemented.
+  `msg move` and `msg resize` refuse a pinned window, `msg focus` refuses a
+  widget, and `msg state` lists a pinned window under `pinned`, no longer under
+  `windows`.
+- The scene file gains a `pins` field while a window is pinned
+  ([Persistence](#persistence-and-lifecycle)).
+
+**Matching.** A rule's `app_id` is matched against the window's bundle
+identifier and its `title` against the window's title, each as an exact string,
+a `*` glob or a `/regex/`, case-sensitive; a rule with both needs both.
+`Infinify msg state` prints both for every window. Every matching rule applies,
+merged in file order as upstream merges them: the last rule that sets a value
+wins, and `widget`, `pinned_to_screen` and `blur` stay on once any rule sets
+them.
+
+**When.** Rules are resolved once, when a window first reaches the canvas, and
+stay with it until it is gone. Reloading the config changes no window that is
+already there, and a window that changes its title is not checked again, as
+upstream documents. A window that takes a saved slot back at launch keeps the
+slot's frame and pin whatever its rule says of `position` and
+`pinned_to_screen`; it still gets the rest of its rule. `suspend_on_close` and
+`restore_windows` alone are asked afresh each time, as before.
+
+| Rule field | Effect |
+| --- | --- |
+| `position = [x, y]` | the centre of the window's frame on the canvas, Y up, instead of `window_placement`; for a pinned window, measured from the centre of its display |
+| `widget = true` | the window is a widget, below |
+| `pinned_to_screen = true` | the window starts pinned, below: on the display `output` names (a display UUID, or `windowed`) when that one is connected, else on the active display; centred there without a `position`, and moved until the whole frame is on that display |
+| `focus_on_open = false` | the window appears without taking the canvas's focus or moving a camera |
+| `opacity` | the window is drawn at that opacity, focused or not, and `msg screenshot window` captures it alone at it |
+| `decoration`, `border_width`, `border_color`, `border_color_focused`, `corner_radius`, `shadow` | what the window is drawn with in place of the `[decorations]` values, see [Rendering](#rendering) |
+| `suspend_on_close`, `restore_windows` | see [Managed windows](#managed-windows) |
+| `size`, `fullscreen` | kept with the window and not applied: native resize is gated and there is no fullscreen. The window keeps its own size, and a `position` centres that size |
+| `blur`, `preserve_aspect_ratio`, `pass_keys`, `pass_mouse`, `layer_order` | kept with the window; nothing is drawn or withheld for them |
+
+A file with a key the grammar does not know inside a rule is refused whole with
+upstream's TOML error (`unknown field …`), and the previous configuration stays
+in force. A rule with neither `app_id` nor `title`, an unknown `decoration`
+mode or a non-positive `size` is a warning on stderr and in the status line,
+and the rest of the file applies.
+
+**A widget** is fixed to the canvas.
+
+- It is drawn below every other window, whatever was clicked last, on the
+  canvas and in a `msg screenshot`; `screenshot all` does not count it when
+  it frames the windows.
+- A move or resize binding pressed on it starts no gesture, and the status
+  line says "A widget stays where its rule puts it: drags and resizes are
+  ignored". The press then goes to the widget's application as a plain
+  click, as upstream's falls through to click-to-focus.
+  `nudge-window`, `move-to-bookmark`, `close-window` and `suspend-window` do
+  nothing while a widget holds the focus. `Infinify msg move X Y --id N` is the
+  one way to reposition it, and that lasts for the session.
+- An unmodified click goes to its application too.
+- Closing a window never moves the focus onto a widget: when the last
+  ordinary window in view closes, nothing is focused.
+- It takes no part in `zoom-to-fit`, the zoom-out limit, snapping, cluster
+  moves or `auto` placement, and it is left out of the focus history.
+  `msg focus --id N` answers `window #N is a widget and cannot be focused`,
+  `msg suspend` answers `widgets cannot be suspended`, and a bundle-identifier
+  selector passes over it.
+- It is never saved and never becomes a stand-in. At the next launch the window
+  is found as a new one and its rule places it again.
+
+**A pinned window** is fixed to one display's screen.
+
+- ⌃⌥T (`toggle-pin-to-screen`) pins the focused window where it is drawn, on
+  the display showing its centre; pressed again it returns the window to the
+  canvas at the point under its top-left corner. `Infinify msg pin [on|off]
+  [--id N]` reads or sets the same thing for any live window. Neither gives a
+  status note, and at 1:1 with a still camera nothing visibly changes: `msg
+  pin` or `msg state` tells.
+- It ignores that display's pan and zoom, is drawn at the window's own size
+  above every canvas window, and is drawn on no other display. At a zoom other
+  than 1 its picture therefore changes size when it is pinned or unpinned; its
+  top-left corner stays where it was.
+- It is not on the canvas, so it is in no canvas screenshot, as upstream
+  documents: `msg screenshot` of the view, of `all` or of a region never shows
+  it, whatever is on the screen. `msg screenshot window --id N` captures it
+  alone.
+- It is not moved or resized: a move or resize binding pressed on it gives the
+  note "A screen-pinned window is not moved or resized: unpin it first
+  (toggle-pin-to-screen)", `nudge-window` and `move-to-bookmark` pass it over,
+  and `msg move X Y` and `msg resize W H` answer upstream's refusals (reading
+  either still works). To reposition one, unpin it, move it and pin it again.
+- It takes no part in `zoom-to-fit`, snapping, cluster moves or `auto`
+  placement, and leaves the focus history while pinned. A click still goes to
+  its application. Closing a window never moves the focus onto a pinned
+  window, and closing a pinned window gives the focus to the most recent
+  ordinary window in view without moving the camera.
+- `msg state` lists it under `pinned` with its display and the `position` and
+  `size` a `pinned_to_screen` rule would take, so the numbers paste into a
+  rule.
+- The pin is saved with the window's slot. A window that takes its slot back
+  at the next launch is pinned where it was, moved inward if the display is
+  now too small for that place. A slot whose window is gone is dropped or
+  becomes a stand-in as before, and a stand-in is back on the canvas where the
+  pin showed it.
+- A screen change (a display connected, disconnected or resized) and Return
+  to desktop followed by Open canvas both rebuild every panel. A pin whose
+  display is still there afterwards, at the size it had, stays exactly where
+  it was. If the display came back at another size the pin is moved inward
+  until the whole frame is on it. If the display is gone the pin moves to the
+  first display left, keeping its place as far as the frame fits, and it
+  stays there when the old display returns. The shell tells the controller
+  that every display is registered (`outputs_settled`) at the end of
+  `openPanels`; the controller moves a pin off a missing display only then.
+
+`move-to-bookmark NAME` (no default key) centres the focused window's frame on
+that bookmark and raises it; a focused placeholder moves in place. An unset
+name, a widget and a pinned window are passed over without an error.
+
+**Navigation, clicks, gestures and displays.** Everything else that acts on
+"the window" treats a widget and a pinned window as upstream does. All of it
+is the controller's rule
+([RULES.md](../../crates/desktop/RULES.md#navigation-activation-gestures-and-outputs)),
+covered by its scenarios and not run in the app with a live window:
+
+- `center-window`, `center-nearest`, `focus-center` and Option-Tab pick canvas
+  windows only. With a widget or a pinned window focused, `center-window`
+  centres the canvas window nearest the middle of the view; `center-nearest`
+  does not start its search from a focused pinned window; `focus-center` over
+  a pinned window takes the canvas window beneath it, and over a widget alone
+  does nothing.
+- A click focuses a widget or a pinned window and asks for its native focus
+  like any click. Neither enters the most-recently-focused order, also when
+  that focus is confirmed, or followed from outside the canvas. No completed
+  click (`auto_navigate_on_click`) and no followed native focus flies a camera
+  to one.
+- `send-to-output <direction>` leaves a focused widget where it is, and moves
+  a focused pinned window's pin to the display on that side: the same place
+  on that screen, moved inward until the whole frame is on it.
+- A three-finger move swipe (a tap, then the swipe) over a widget pans the
+  canvas, as upstream's falls back to a pan. Over a pinned window it is
+  claimed and does nothing, and the status line says "a screen-pinned window
+  is not moved by gesture: unpin it first (toggle-pin-to-screen)". The resize
+  swipe is gated for every window; over a widget it pans. A window that
+  becomes a widget while a move swipe holds it is let go.
+- A hot corner or a gesture bound to `toggle-pin-to-screen` or
+  `move-to-bookmark` runs it as the key does: an open Option-Tab cycle ends
+  first and a drifting view stops.
+- `msg subscribe` carries `pinned` and `is_widget` in every State it prints.
+
+**Known limits**, from reading the code:
+
+- `toggle-pin-to-screen`, `msg pin` and `msg opacity` act on a window with a
+  live source only. A placeholder answers `stand-ins can't be pinned` (and
+  `no window with id N` for `opacity`), a saved pin that is still waiting for
+  its window included, which `msg state` nevertheless lists under `pinned`. In
+  a run that manages no window (no Screen Recording access, or `--manual`) such
+  a pin stays on its placeholder until a window is bound to it from the
+  chooser.
+- A pinned window cannot be dragged or resized at all. Upstream's move and
+  resize bindings (and its title bar) drag and resize the pinned window
+  itself in screen space, across displays too; here the press is swallowed
+  with a note, so a pin is repositioned by unpinning it.
+- Nothing marks a widget on screen. Upstream's dot marks a pinned window in a
+  title bar the compositor draws, which a Mac window has only under a
+  `decoration = "server"` rule: a pinned window under its own title bar shows
+  none.
+- A rule's opacity fades the window's picture on the canvas, not the
+  application's own window on the desktop. The compositor multiplies the
+  content, the border and the shadow by it, each by itself, as upstream does.
+  Probe, demo and owned-fixture runs fade a layer tile instead.
+- A window that already has a saved slot ignores a `position` or
+  `pinned_to_screen` rule written since: pin it once by hand and the pin is
+  saved.
+- A pin made by hand may leave part of the window off its display, as
+  upstream's may; at the next launch, or when that display changes size, it
+  is moved until the whole frame is on.
+- An opacity set with `msg opacity` lasts until the window is gone and is not
+  saved. A widget moved with `msg move` is back at its rule's `position` at
+  the next launch.
+- A rule that places a frame outside the 32-bit integer range refuses the
+  window (`window geometry exceeds integer range`), and it is not offered
+  again until it has left the screen and come back.
+- With `--experimental-native-resize` no handle is drawn or hit on a widget or
+  a pinned window, and a handle of the focused window that lies under a pinned
+  window is neither drawn nor hit.
+
+### What was run for rules, widgets and pins
+
+On 2026-10-10 (macOS 27.2, Apple Silicon), on the build with the review fixes:
+`./scripts/build-app.sh`; the controller scenarios in
+`crates/desktop/tests/rules_flow.rs` (16, on two outputs) with the lifecycle,
+config, IPC, view-action, controller, navigation and focus-cycle modules,
+through the exported C ABI with synthetic observations; and one launch of the
+built, ad-hoc signed app as `--windowed 1100x700` on a private scene, config
+and socket, driven through `Infinify msg` for six seconds. It repeats a first
+launch of 2026-10-09. Nothing from it is saved as evidence. The launch had **no
+Screen Recording and no Accessibility grant, so no window was captured**: the
+scene held three seeded placeholders with a bundle identifier
+(`org.example.seed`) that belongs to no application.
+
+The scene came from a throwaway program that drove this build's controller in
+process, not the app: it attached three synthetic sources on two outputs named
+`windowed` and `away`, pinned "Terminal" on `away` at the point (100, 100)
+there, pinned "Browser" on `windowed` (first with `toggle-pin-to-screen`, last
+with a `Pin` write, which is the pin that was saved) and saved. In that
+program, on a window with a (synthetic) live source: the pin read `[60, 10]`
+from the output's centre before and after `pan-viewport right`; unpinned after
+the pan the window's canvas centre was 2110 10 where it had been 2010 10
+before the pin, the camera having moved 100; `Pin` set to true and false
+answered each value; `Opacity` read 1, answered 0.5 to a write and read 0.5
+back, and 1.5 was refused with `opacity must be between 0.0 and 1.0`.
+
+Observed in the app, each read back over the socket:
+
+- Both saved pins were read back, and the one whose display never appeared
+  had moved: the app opened one panel, `windowed`, and its first `msg state`
+  listed placeholder 1 under `windows` and, under `pinned`, `windowed #3
+  org.example.seed [-170, 28] 560x380 "Terminal"` and `windowed #2
+  org.example.seed [60, 10] 900x600 "Browser"`. `[-170, 28]` is the point
+  (100, 100) on a 1100x636 output. No discovery pass ran in that launch, so
+  the move is the `outputs_settled` call at the end of `openPanels`. The file
+  saved at exit held that pin on the `windowed` output at `[100, 100]`.
+- Both entries were the same after `pan-viewport right` (camera 550 to 650),
+  after `toggle-pin-to-screen` and after `move-to-bookmark` with placeholder
+  2 focused. `msg move --id 2` and `msg move --id 3`, the canvas points under
+  the pins, followed the camera meanwhile: 610 -308 and 380 -290, then
+  710 -308 and 480 -290. `msg move --id 1`, a canvas slot, read 520 -360 both
+  times.
+- `msg move --id 2 10 10`: `this window has no canvas position to move: it is
+  pinned, fullscreen, or not on screen yet`. `msg resize --id 2 800 600`: `this
+  window has no canvas size to set: it is pinned, fullscreen, a widget, or not
+  on screen yet`. Both exit 1; `msg resize --id 2` read 900 600.
+- On the placeholders: `msg pin --id N`, with and without a value, answered
+  `stand-ins can't be pinned`, for the pinned ones too; `msg opacity --id N`,
+  with and without a value, answered `no window with id N`; `msg action
+  toggle-pin-to-screen` with a placeholder focused answered `ok` and changed
+  nothing.
+- The config named two rules that match the placeholders' titles (`widget` for
+  "Notes", `pinned_to_screen` with a `position` for "Term*"). Neither changed
+  anything: no window reached the canvas in that run, `state` kept `is_widget`
+  false, and "Terminal" stayed where its saved pin put it.
+- `msg bookmark 1 300 200`, then `msg action move-to-bookmark 1` with
+  placeholder 1 focused: `msg move --id 1` read 300 200. With an unset name,
+  and with a pinned placeholder focused: `ok`, nothing moved.
+- `decoration = "fancy"` in a rule printed upstream's `config: unknown
+  decoration mode 'fancy', falling through to default_mode` on stderr at
+  launch. A rule key the grammar lacks (`sticky = true`), appended while the
+  app ran and followed by `msg action reload-config`, printed upstream's TOML
+  error (``unknown field `sticky`, expected one of …``) twice, the file watch
+  and the action each loading the file, and the app went on answering.
+- SIGTERM: exit status 0, socket removed.
+
+Not run, because it needs a captured window: a rule matching a real
+application and placing, pinning or making a widget of its window; a pin or an
+unpin of a live window in the app, by ⌃⌥T or by `msg`; `msg opacity` on a live
+window; a widget of any kind; the close of a window beside a widget or a
+pinned window, and of a pinned window or a widget itself; a pinned window that
+returns to its slot at launch, or one whose slot becomes a stand-in. Not run,
+because it needs a second display or a click in the panel: a screen change,
+and Return to desktop followed by Open canvas, with a pin in place; those two
+paths are covered by the controller scenario that replays the shell's command
+order, and by reading `main.m`. No zoom was run this time; the first launch
+read the pinned entry unchanged at zoom 0.5.
+Not looked at: anything drawn, so neither the order of the tiles that build
+drew (widgets below, pinned windows on top) nor a tile's opacity, nor the two
+status notes. The compositor has drawn the canvas since:
+[What was run for rules and rendering together](#what-was-run-for-rules-and-rendering-together)
+has what was seen of the layers, the pinned space and an opacity, and where.
+No pointer press was made, so the refusal of a move or resize binding on a
+widget or a pinned window, the bound press that now reaches a widget's
+application as a click, and a plain click reaching either one's application,
+are compiled and read only, like ⌃⌥T itself.
+
+## Rendering
+
+In a normal run, `--windowed` included, the canvas is drawn the way DriftWM
+draws it. Each output is one Metal layer that draws its whole frame: the
+`[background]` (the default dot grid, a shader, a tile, a wallpaper or none),
+the outlines of the other outputs' viewports from `[output.outline]`, and every
+window bottom to top with upstream's shadow, border, corner clip and opacity
+from `[decorations]` and the rule it reached the canvas with, the focused one
+with `border_color_focused`: widgets first, then the canvas windows, then the
+windows pinned to that display's screen
+([Window rules](#window-rules-widgets-and-pinned-windows)). A window without a live source is a compositor-drawn
+stand-in: title bar with its close glyph, body, and the application's name,
+followed by ` launching…` while a relaunch is pending.
+
+What changes on screen against earlier builds: the canvas is DriftWM's dot grid
+on black (or whatever `[background]` names) where it was a flat dark blue; a
+captured window has a soft shadow and its corners are clipped to
+`[decorations] corner_radius`, 10 by default; a placeholder is a dark rounded
+panel with a close glyph and the application's name where it was a grey tile
+reading "Detached window N"; and `[decorations]`, `[background]`,
+`[output.outline]` and the decoration keys of `[[window_rules]]` are applied
+([Settings](#settings)): the three tables on the next reload of the config
+file, a rule to the windows that reach the canvas after it, since a window
+keeps the rule it arrived with. Keys, pointer
+gestures, hit testing, input forwarding and every command are as they were.
+All of this is what the code draws and what `msg screenshot` showed for
+stand-ins; [what was run](#what-was-run-for-rendering) says what has not been
+seen, a captured window and the panel on a display among it.
+
+The drawing code is the compositor port in `compositor.{h,m}` and
+`background.{h,m}`: upstream's shaders and frame composition translated to
+Metal, built and checked outside this repository and carried in unchanged
+apart from one provenance line each. Its headers name the upstream files it
+derives from, and its own notes came with it: where those four files say
+`NOTES.md`, the compositor's is [COMPOSITOR-NOTES.md](COMPOSITOR-NOTES.md)
+(upstream file hashes, the host protocol, every deviation, what was verified
+and how) and the background's is [BACKGROUND-NOTES.md](BACKGROUND-NOTES.md).
+`canvas-renderer.{h,m}` is the host: it turns the controller's snapshot into
+the compositor's frame description. What the snapshot carries is
+[`crates/desktop/RENDER.md`](../../crates/desktop/RENDER.md).
+
+- **Frame.** Camera, zoom and size are the output's `camera`, `zoom` and
+  `screen_bounds`; the scale is the panel's backing scale. Every element is
+  given at its canvas rectangle (`world_rect`), and the compositor subtracts
+  the camera itself, as upstream does. No native window geometry is read.
+- **Layers.** The controller lists a display's placements bottom to top:
+  widgets, canvas windows, pinned windows. A placement that says `widget` goes
+  into the compositor's widget layer and one that says `pinned` into its
+  pinned layer, a pinned widget with the pinned ones as upstream; the
+  compositor draws the three layers in that order and keeps the controller's
+  order inside each. A pinned window is the one element not given at a canvas
+  rectangle: it is given at the placement's `screen_rect`, less the display's
+  origin, in the compositor's pinned space, which draws it at zoom 1 with no
+  camera, so it keeps its place and its own size while the canvas pans and
+  zooms beneath it. Its canvas rectangle is never projected. Upstream's dot at
+  the left of a pinned window's title bar is drawn where the compositor draws
+  the bar, that is under a `server` rule only.
+- **Opacity.** What the controller reports for a window, a rule's value, one
+  set with `msg opacity` or the `[decorations]` default for its focus, is part
+  of its decoration and multiplies every pass of the element.
+- **Decoration mode.** A captured Mac window already draws its own title bar,
+  so it is decorated as upstream decorates a client-side-decorated window: no
+  compositor title bar; border, shadow, corner clip and opacity around the
+  whole captured frame. A window rule can still ask for `server` (a second,
+  compositor-drawn bar above the frame), `minimal` or `none`.
+- **Coverage.** Upstream's `DrawnChrome` rule is applied per output: a window
+  whose frame exactly covers the output is drawn square and without shadow,
+  one that overhangs it without border as well. The usable area is the whole
+  output; the 64-point toolbar strip is not part of an output. A pinned
+  window is judged where it is drawn, at its screen rectangle.
+- **Stand-ins.** A stand-in's bar and body together take the window's
+  rectangle (upstream's `standin_body_rect` for a client-decorated window). It
+  wears the global `[decorations]` table alone, no window rule, and it is
+  always opaque, as upstream's: `opacity` and `opacity_focused` dim windows,
+  not stand-ins. Its label is
+  the application's name as the Finder shows it, looked up once from the
+  bundle identifier; an application that is not installed shows the
+  identifier. The old "Detached window" hint text is gone; ⌃⌥-click still
+  dismisses a placeholder while no binding claims that press. A placeholder
+  whose slot still holds a saved pin is drawn as a stand-in at the pin's
+  rectangle, in the pinned layer.
+- **Streams.** A source keeps the latest pixel buffer of its stream and the
+  compositor samples it; nothing is enqueued into a display layer. A new frame
+  redraws only the outputs that show that window, a burst of frames in one
+  turn of the run loop once, and nothing is drawn while nothing changes.
+  Streams are configured with `colorSpaceName = sRGB`, which the compositor's
+  colour handling requires, and a queue depth of 5 instead of 3, because the
+  compositor holds the current buffer and briefly the one before it. When
+  capture on demand stops a stream, the last picture stays, so a window whose
+  placement returns is not blank until its stream delivers again. A window
+  that has never delivered a frame is the chrome background colour inside its
+  border and shadow.
+- **Config reload.** The background program, the chrome style and the outline
+  settings are rebuilt when the snapshot's `render.revision` changes and at no
+  other time. The controller moves it on every config reload it accepts, also
+  one that changed nothing, so a shader, tile, wallpaper or texture file
+  edited on disk is read again after `msg action reload-config`, the
+  `reload-config` binding or a `touch` of the config file, as upstream reads
+  it again on every reload. A file that fails to parse rebuilds nothing. A
+  shader that does not compile or a file that is missing falls back as
+  upstream does, to the dot grid; the reason is written to stderr and stays in
+  the status line like upstream's error bar, behind a problem in the config
+  file itself, until a reload builds a program without one.
+- **Autorelease pools.** Metal hands out autoreleased drawables and encoder
+  contexts. Each layer update is drawn inside a pool of its own, and the main
+  loop of a normal run has one per turn, so a redraw issued from a poll, the
+  launch's first frame or the quit-pending loop frees what it made.
+- **Animated backgrounds.** A shader that reads `u_time` is redrawn from the
+  one frame timer, the one that also serves [camera motion](#camera-motion)
+  (a flight, a drift, an edge pan), at 60 Hz capped by `animate_fps`, and only
+  while a panel that shows it is open. The timer stops when neither motion nor
+  such a background is left. While a background alone keeps it running it
+  ticks no camera and watches no hot corner: the idle poll goes on doing both
+  every 80 ms, exactly as when the timer is stopped, and regains 60 Hz for the
+  camera when it finds motion.
+- **Experimental native resize.** A placement that is not settled is drawn
+  without content (the placeholder fill), never with a stale frame, and a
+  settled one whose kept frame belongs to another observation asks for a new
+  frame. The orange handles are Core Animation layers above the compositor
+  layer, clipped to the window's visible rectangle as before; a widget and a
+  pinned window get none. Because that overlay is above everything the
+  compositor draws for the output, a handle whose point lies under a later
+  placement on the same output (a pinned window, or a window stacked above the
+  focused one) is not drawn, by the test the press already uses to refuse it;
+  the layer tiles hid such a handle by their order.
+- **Probe, demo and owned-fixture runs** (`--demo*`, `--owned-resize-*`) keep
+  the earlier drawing, a clipped `AVSampleBufferDisplayLayer` per placement on
+  a flat colour, and their earlier stream configuration, because their recorded
+  evidence was made with it. A placement's opacity is the opacity of its tile
+  there. They never create a compositor.
+
+### Screenshots
+
+`Infinify msg screenshot` renders the canvas offscreen with the same compositor
+and writes a PNG, upstream's `screenshot`: the active output's view by default,
+`window` for one window alone on transparency with its shadow, `all` for every
+window framed by `[zoom] fit_padding`, `region` for a canvas rectangle or, with
+`--from-screen`, a rectangle in screen points. `--scale` is pixels per canvas
+unit, whatever the zoom is. The controller resolves the region and refuses what
+upstream refuses; the shell renders it at zoom 1 into a transparent target,
+without output outlines and, for `window`, without the background, and reports
+the size of the image it wrote. A window that is on no output is drawn from the
+last picture its stream delivered, or as the placeholder fill. A `window`
+capture of a live window is framed with room for its shadow, as upstream's is,
+and drawn at its rule's `opacity`, else opaque, whatever `[decorations]
+opacity` makes of it on screen: upstream captures an isolated window as
+itself. One of a stand-in is framed at its border, as upstream frames a
+stand-in, so only the shadow behind its rounded corners is in the picture.
+A capture is of the canvas, as upstream's is. A window pinned to the screen is
+not on it, so the view, `all` and `region` never show one, also when it covers
+half the panel; `window` captures a pinned window alone, at the canvas frame
+its pin shows. A widget is drawn below the other windows, and `all` frames the
+canvas windows and stand-ins without counting widgets.
+A `wallpaper` background is fixed to the screen, so in a capture it lies over
+the canvas footprint of the output the region's centre is on, else of the
+active output, cropped by the region, and the rest of the picture is
+transparent, as upstream's `wallpaper_dest` places it; the bare viewport
+capture is that footprint and looks as the screen does. `-o -` relays the PNG
+to stdout through a temporary file, as upstream's client does; with no `-o`
+the file is `infinify-screenshot-<time>.png` in the client's directory.
+
+```sh
+Infinify msg screenshot -o ~/canvas.png                 # what the active view shows
+Infinify msg screenshot all --scale 0.5 -o ~/all.png    # every window, half size
+Infinify msg screenshot window Safari -o ~/safari.png   # one window on transparency
+Infinify msg screenshot region -1000 -500 2000 1000     # a canvas rectangle, centre and Y up
+```
+
+Differences from upstream: the file is the only thing written, so a path whose
+directory does not exist is refused (`cannot write …: No such file or
+directory (os error 2)`) where upstream creates the directories; one image is
+rendered in one pass, up to upstream's 16384 pixels a side, where upstream
+tiles; blur is not drawn anywhere; a wallpaper is cover-cropped to its output's
+footprint as on screen, where upstream's capture element samples the whole
+image across it (the two differ when the image's aspect is not the output's),
+and with the region's centre on no output the footprint is that of the
+effect's output, which for `--from-screen` is the output under the rectangle's
+corner where upstream takes the active one.
+
+### What is not drawn, and other limits
+
+- Blur (`[decorations] blur`, a rule's `blur`, `[effects]`), open, close, move
+  and resize animations, and upstream's fullscreen handling.
+- `[background] cache_shader` and `cache_budget_mb` are accepted and unused:
+  a shader always renders live. A tile or wallpaper is a PNG or JPEG; a
+  gigapixel pyramidal TIFF falls back to the dot grid with a message.
+- A stand-in's title bar carries no text, as upstream's; its label is the
+  application's name, never the window's title. Text is rasterised by CoreText
+  in the configured font, or the system font when it is not installed
+  (`Adwaita Sans` usually is not).
+- An output draws a window only while the window's own rectangle reaches it.
+  The shadow or border of a window lying just outside an output is missing
+  there, where upstream would still draw it.
+- A window rule asking for `decoration = "server"` gets a compositor title bar
+  above the captured frame, which already has the application's own.
+- The application name of a stand-in is looked up once per run: an application
+  installed while Infinify runs shows its bundle identifier until a restart.
+- Every managed window that was ever shown keeps one window-sized buffer, its
+  last picture, until it closes or the canvas closes.
+- An animated background keeps the 60 Hz timer running while its panel is
+  open, also when other windows cover the panel completely.
+- A shader's compile error is several lines long. All of it goes to stderr;
+  the status line is one line high.
+
+### What was run for rendering
+
+On 2026-10-09 (macOS 27.2, Apple Silicon), none of it with a Screen Recording
+or Accessibility grant, so **no ScreenCaptureKit buffer was ever composited**
+and every window in every run was a stand-in.
+
+**The app as built here.** `./scripts/build-app.sh` built the app from this
+tree, controller and shell together, and that app was launched three times as
+`--windowed 1100x700` on a private scene, config and socket, for about 3, 7
+and 3 seconds, each ended with SIGTERM: exit status 0 and the socket file
+removed every time. Each printed the not-managed note on stderr and adopted
+nothing. The scene held three seeded placeholders: 640×420 at (200,150), 900×600 at
+(1500,−300) and 560×380 at (−900,700), with the bundle identifiers of Notes,
+of Safari and of an application that is not installed. Everything was driven
+and read through `Infinify msg`; every PNG was opened, and the numbers below
+are pixels read from the files.
+
+- **Viewport, defaults:** 1100×636, opaque. A light dot every 80 canvas units
+  on black. The first placeholder at x 200 to 839 and y 150 to 569, `#303030`,
+  corners rounded, close glyph top right, the label `Notes` centred; the other
+  two outside the view. The same view at `--scale 2`, over a shader
+  background: 2200×1272.
+- **After `msg action zoom-to-fit`** (zoom 0.2848): 3862×2233, which is
+  `round(size / zoom)`, and all three stand-ins with their left edges at
+  x 1381, 2681 and 281: `world − round(camera)` for each. Labels `Notes`,
+  `Safari`, and the bare identifier for the application that is not installed.
+- **Border and focus.** The config file rewritten while the app ran (3 px
+  border, two colours) and `msg focus --id 1`: a 3 px ring of `#e5a50a` on the
+  focused stand-in and of `#5a5a5a` on the other two.
+- **Targets.** `window --id 1 --scale 2`: 1292×852, (640+6)×2 by (420+6)×2,
+  alone on transparency. `window` with no selector and `window Safari`: 646×426
+  and 906×606. `all --scale 0.5`: 1733×773, the union of the three frames plus
+  80 units of `fit_padding` a side, halved. `region 520 -360 800 500`: 800×500
+  with the window's corner at (80,40). `region … --from-screen` for a
+  400×300-point rectangle whose corner is 100,50 inside the output: 400×300
+  with the window's corner at (100,100). `window --id 1 -o -`: exit status 0
+  and no file left behind, but the bytes on stdout stopped at the image's last
+  newline (8044 bytes, no `IEND`), which this run did not check; see the
+  2026-10-10 run below.
+- **Refusals**, each an `error:` line and exit status 1 from the client: a
+  path in a directory that does not exist (`cannot write …: No such file or
+  directory (os error 2)`, and the directory was not created), a path in a
+  read-only directory (`… Permission denied (os error 13)`), `--scale 0`
+  (`scale must be a positive number`), a region of width 0, `window --id 99`
+  (`no window with id 99`), `all --scale 40` (`capture 138640x61840px exceeds
+  the 16384px per-side limit — lower --scale or shrink the region`).
+- **Relaunch pending.** `msg relaunch --id 3` for the application that is not
+  installed (the failure on stderr), then `window --id 3`: the label ends in
+  ` launching…`.
+- **`[background]`,** one rewrite of the config file and one capture each, no
+  restart: upstream's `extras/wallpapers/static/blue_drift.glsl` (the shader
+  behind the windows, the soft shadow visible on it; the same picture with
+  `cache_shader = true`, which this port accepts and ignores);
+  `animated/fast_smoke.glsl` (two captures a second apart differ);
+  `textured/ripple.glsl` with `texture` (the image, rippled);
+  a shader path that does not exist and a shader that does not compile (both
+  captures byte-identical to the default dot grid, and on stderr `background
+  shader '…': No such file or directory (os error 2)` and `background shader:
+  compile error: …`); `type = "tile"` with a 64×64 image (repeats every 64
+  units; with `mirror_tile` every 128, mirrored); `type = "wallpaper"`;
+  `type = "none"` (background alpha 0, the shadow's alpha falling from 47 to 1
+  over 12 pixels); an empty file (the defaults again).
+- **`[decorations]`,** the same way: `border_width = 6` in two colours with
+  `corner_radius = 24` and `opacity = 0.7` (6 px rings, rounder corners; the
+  unfocused stand-in's pixels came out at alpha 178 in a `window` capture,
+  which was a defect, since upstream never dims a stand-in: see the 2026-10-10
+  run below); `bg_color`, `fg_color`, `title_bar_height = 40`, `font =
+  "Menlo"`, `font_size = 18`, `font_weight = "bold"`, `shadow = false` and
+  `corner_radius = 0` (body `#203040`, glyph and label `#ffcc00`, the glyph
+  centred in a bar 40 high, the label in bold Menlo, square corners, no
+  shadow).
+
+**After the review fixes,** on 2026-10-10, the app was rebuilt from this tree
+and launched twice more the same way, for 4 and 12 seconds, on the same seeded
+scene: exit status 0 on SIGTERM and the socket file removed both times, the
+not-managed note on stderr, nothing adopted. Every PNG was opened and the
+numbers are pixels read from the files.
+
+- **The earlier list, again:** the viewport at the defaults (1100×636, the
+  first placeholder at x 200 to 839 and y 150 to 569, the label `Notes`);
+  after `zoom-to-fit` 3862×2233 with all three stand-ins and their labels;
+  a 3 px border in two colours with `corner_radius = 16`, `msg focus --id 2`
+  putting the `#e5a50a` ring on that stand-in and `#5a5a5a` on the other two;
+  `window --id 2 --scale 2` (1812×1212), `window --id 1` (646×426), `all
+  --scale 0.25` (867×387) and `region 520 -360 800 500` (800×500); the two
+  unwritable paths (`No such file or directory (os error 2)`, `Permission
+  denied (os error 13)`) and `--scale 0`, each an `error:` line and status 1.
+- **Stand-ins are opaque.** With `[decorations] opacity = 0.5`: the unfocused
+  stand-in's body at `(48,48,48,255)` in a `window` capture, its border at
+  `(90,90,90,255)`, and all three bodies `(48,48,48)` in `all`. The review
+  that found the defect had read alpha 128 and `(24,24,24)` for the unfocused
+  ones from the build before the fix.
+- **`-o -`.** `window --id 1 -o -` redirected to a file: 9720 bytes ending in
+  `IEND`, equal byte for byte (`cmp`) to `window --id 1 -o FILE` taken just
+  before, and no temporary file left.
+- **A shader file edited behind an unchanged config.** `[background] type =
+  "shader"` naming a copy of upstream's `static/blue_drift.glsl`, with a 4 px
+  border and `corner_radius = 20`: the blue shader behind a rounded,
+  blue-ringed stand-in. The file replaced with `static/dark_sea.glsl` and
+  `msg action reload-config`, the config untouched: the capture shows
+  dark_sea. The file replaced with one that does not compile and the config
+  only `touch`ed: the dot grid, and `background shader: compile error: …` on
+  stderr. The file repaired and `reload-config` again: byte for byte the first
+  capture. A path that does not exist: the dot grid and `background shader
+  '…': No such file or directory (os error 2)`.
+- **Wallpaper in captures.** A 1100×636 image of four plain quadrants (red,
+  green / blue, yellow) as `type = "wallpaper"`, camera at the origin, zoom 1.
+  The bare viewport capture: the quadrants meeting at (550,318) behind the
+  stand-in, identical outside the label to the capture the build before the
+  fix wrote. `region 110 -75 100 50`, inside the red quadrant: 5000 pixels of
+  `(255,0,0,255)`, where the earlier build squeezed all four quadrants in. `all
+  --scale 0.25` (865×385): the image only over x 245 to 519 and y 95 to 253,
+  the view's footprint, and alpha 0 everywhere else outside the stand-ins.
+  `region 1300 -318 800 636`: green and yellow for x 0 to 199, then
+  transparency and the next stand-in with its shadow. A 100×50
+  `--from-screen` rectangle: plain red.
+- **Drawables.** With upstream's `animated/fast_smoke.glsl` at the default
+  `animate_fps`, `heap` on the running app counted 1 `CAMetalDrawable` and 171
+  `_NSJSONReader` objects, and the same 1 and 171 six seconds later. The
+  review had counted 11 and then 84 drawables seven seconds apart in the build
+  before the fix.
+
+`msg screenshot` renders offscreen with the renderer the panels use. **What
+the app's own panel showed on the display was not seen**: the session that ran
+this can neither capture the screen nor drive the GUI. Nor were a live window,
+a window rule, `default_mode`, `title_align` (a stand-in's bar has no text), a
+second output and its outline, or `transparent_shader` in any of these runs.
+
+**Before the two halves were built together,** the same day, outside the
+repository, by the author of the shell half and not repeated on the built
+app:
+
+- `canvas-renderer.m` and the compositor, linked into a throwaway tool with a
+  hand-written snapshot in the contract's shape and generated pixel buffers:
+  two outputs with different cameras and zooms rendered through their layers
+  and read back, and every screenshot target written to a PNG. The pictures
+  were opened: windows at the expected pixels, the right way up, the focused
+  border, an 0.8 opacity, a `server` title bar, a content rectangle inside a
+  larger buffer, two stand-ins with application names and ` launching…`, the
+  other output's outline, a window on no output in `all`. Identical snapshots
+  drew nothing more, two frames for one window in one turn drew each output
+  once, `animate_fps = 30` drew 14 frames in 30 ticks at 60 Hz, a missing
+  shader gave the fallback note, and a reset left no layer behind.
+- The same shell sources linked against a debug build of the controller as it
+  then stood and launched as `--windowed 1000x700 --manual`, twice: the
+  screenshot targets, two refusals and two config rewrites as above, and
+  `msg action quit` exiting 0 and removing the socket.
+- A compositor layer hosted like the canvas's (a sublayer of a flipped,
+  layer-backed view in a borderless panel, below a button) in a throwaway
+  process, read back from that process's own window: upright, under the
+  button, at the output's rectangle. Twelve changed frames drawn in one turn
+  of the run loop took 6 ms.
+
+Not run by anyone: a real captured window through the compositor (colour,
+alpha, the sRGB stream setting, the queue depth, the kept picture after a
+stream stops, a frame redrawing only its outputs), the panels of the app
+itself as seen on a display, more than one display and so the outlines in the
+app, an animated background on screen and its timer's rate, the fallback note
+in the status line (only its stderr copy was read), a display change while
+the canvas is open, Return to desktop and reopening, the full-screen panels of
+a run that is not `--windowed`, the experimental native-resize path with the
+compositor, and every probe, demo and owned-fixture mode after this change
+(their code path is unchanged by construction, not by a run).
+
+### What was run for rules and rendering together
+
+On 2026-10-10 (macOS 27.2, Apple Silicon), after the window rules and the
+renderer became one build: `./scripts/build-app.sh`; the controller scenarios,
+with one in `crates/desktop/tests/rules_flow.rs` that describes a widget, a
+rule-pinned window and a canvas window for one frame; two throwaway tools; and
+three launches of the built app. None had a Screen Recording or Accessibility
+grant, nothing is saved as evidence, and every number below is a pixel read
+from a file, or where it says so the centre of a layer.
+
+**The drawing path, offscreen, outside the repository.** `canvas-renderer.m`,
+the compositor and the background module were linked with this controller's
+library into a throwaway tool. It registered one output of 1100×636 whose
+top-left is the global point (300, 200), loaded a config (`[background] type =
+"none"`, no border, radius or shadow, a `widget` rule with a `position`, a
+`pinned_to_screen` rule with a `position`), attached three synthetic sources
+whose buffers are plain red (400×300, placed at the canvas point (100, 100)),
+green (the widget, 300×200, placed by its rule at (250, 200)) and blue (the
+pinned window, 200×150, placed by its rule at the output-local point
+(700, 343)), handed each snapshot to `-render:…` exactly as the app's view
+does, and read the frame back from the output's compositor layer.
+
+- **Zoom 0.5, camera (0, 0):** red at x 50 to 249, y 50 to 199; green only at
+  x 250 to 274, where the canvas window does not cover the widget; blue at
+  x 700 to 899, y 343 to 492, full size.
+- **After a pan to camera (200, 80):** red at x 0 to 149, green at x 150 to
+  174; blue unchanged.
+- **Zoom 1, same camera:** red at x 0 to 299, y 20 to 319; green at x 300 to
+  349, y 120 to 319; blue unchanged.
+- **Camera (−500, −200), the canvas window under the pin:** along y 420, red
+  from x 600, blue from 700 to 899, red again to 999, green from 1000 to 1049:
+  the pinned window over the canvas window, the widget under it.
+- **`Opacity` 0.5 written to the canvas window and to the pinned one** (the
+  request `msg opacity` sends): (128, 0, 0) where the canvas window lies on
+  black, (128, 128, 0) where it lies on the widget, (64, 0, 128) where the
+  pinned window lies on it, (64, 64, 128) where all three overlap, and the
+  widget alone still (0, 255, 0).
+- **The pinned window's source removed, its slot kept:** an opaque stand-in,
+  body (48, 48, 48), bar and label, at x 700 to 899, y 343 to 492, the same at
+  zoom 1 and at zoom 0.5.
+- **The controller's screenshot effects, performed by the same renderer:**
+  the view (1100×636), `all` (560×460, the canvas window's frame and
+  `fit_padding`, the widget drawn where it reaches into it) and a region, none
+  with the pinned window; the pinned window alone, 200×150 at alpha 128, the
+  opacity written to it; the widget alone, 300×200 and opaque.
+
+**The resize handles under a pinned window, offscreen, outside the
+repository.** A second throwaway tool compiled `main.m` itself (its `main`
+renamed) with the same controller set-up, put a `DesktopView` in a window that
+was never shown, set the flag `--experimental-native-resize` turns on, focused
+the canvas window and called the view's `-render:`. These are the centres of the
+handle layers it built, in global points, not pixels; the pinned window's
+rectangle is (1000, 543) 200×150.
+
+- **As attached, the canvas window at (400, 300) 400×300:** eight handles
+  offered, eight built.
+- **Its top edge's midpoint under the pinned window, the window at (900, 618)
+  and cut by the output's bottom edge:** five offered, four built; the one at
+  (1100, 618) is missing, and the one at (1300, 768), inside the widget's
+  rectangle, is built, the widget being below.
+- **Its right edge's midpoint under the pinned window, the window at
+  (700, 468):** eight offered, seven built; the one at (1100, 618) is missing.
+- **The same tool on `main.m` as it was before that test was added:** all five
+  and all eight built.
+
+**The app.** Two launches as `--windowed 1100x700` on a private scene, config
+and socket, 3 seconds and 1 second, each ended with SIGTERM: exit status 0 and
+the socket file removed both times, the not-managed note on stderr, nothing
+adopted. Every PNG was opened.
+
+- **First launch, the three seeded placeholders, an empty config.** `msg
+  state` listed them with camera `550 -318`, zoom 1. The viewport capture:
+  1100×636, the first placeholder's body at x 200 to 839, y 150 to 569 over
+  the dot grid. After `msg action zoom-to-fit` (zoom 0.2848): 3862×2233 with
+  the three bodies at x 1381 to 2020, 2681 to 3580 and 281 to 840, and the
+  second `zoom-to-fit` back at `550 -318`, zoom 1. `msg focus --id 2` flew the
+  camera to that placeholder's centre (`msg camera` printed `1950 -0`), `msg
+  action "pan-viewport right"` on to `2050 -0`. `window
+  --id 1`: 640×420; `region 520 -360 800 500`: 800×500 with the body's corner
+  at (80, 40); `window --id 1 -o -` redirected to a file: equal byte for byte
+  (`cmp`) to the file capture, ending in `IEND`, and no `infinify-screenshot-*`
+  file left in the temporary directory. The
+  config rewritten to name a shader file that does not exist, then `msg action
+  reload-config`: the dot grid in the next capture and `background shader
+  '…/missing.glsl': No such file or directory (os error 2)` on stderr. `msg
+  pin --id 1`: `stand-ins can't be pinned`; `msg opacity --id 1`: `no window
+  with id 1`.
+- **Second launch, one placeholder pinned in the scene file.** The scene came
+  from a throwaway program driving this controller in process: it moved
+  "Terminal" to the canvas point under the output-local point (500, 200),
+  pinned it with a `Pin` write and saved; there, with its synthetic source,
+  the placement read `pinned` true, `opacity` and `decoration.opacity` both
+  0.5 after an `Opacity` write of 0.5. In the app `msg state` listed the two
+  others under `windows` and `windowed #3 org.example.seed [230, -72] 560x380
+  "Terminal"` under `pinned`, the same after `pan-viewport right` and at zoom
+  0.5, while `msg move --id 3` read `780 -390`, then `880 -390`, then
+  `830 -272`. Three viewport captures, at launch, after the pan and at zoom
+  0.5 (2200×1272): the first placeholder's body at x 200, then x 100, then
+  x 650 to 1289 and y 468 to 887, and **no pinned placeholder in any of
+  them**, where the panel draws it from (500, 200) to (1059, 579) over the
+  first one: pixels (900, 400) and (1000, 500) of the first capture are the
+  black of the background. `window --id 3`: the pinned placeholder alone,
+  560×380. `all`: 2360×1030, the two canvas placeholders with 80 units
+  around them, no third. `msg pin --id 3` with and without `on` or `off`:
+  `stand-ins can't be pinned`; `msg opacity --id 3` with and without a value:
+  `no window with id 3`; `msg move --id 3 10 10` and `msg resize --id 3 800
+  600`: upstream's two refusals. The scene file saved at exit held the pin at
+  `[500, 200]`.
+
+After the handle test was added the app was rebuilt and launched once more on
+the pinned scene (2 seconds, SIGTERM, exit status 0, socket removed): the same
+`msg state`, a viewport capture of 1100×636 with the first placeholder's body
+at x 200 to 839, y 150 to 569 and black at (900, 400) and (1000, 500),
+`pan-viewport right` (`msg move --id 3` from `780 -390` to `880 -390`),
+`zoom-to-fit` (zoom 0.4273, the two canvas placeholders), `zoom-reset`, `msg
+focus --id 2` (camera `1950 -0`), `window --id 3` 560×380, `all` 2360×1030,
+and the same refusals of `pin` and `opacity`.
+
+Not run: the app's own panel as seen on a display, so the widget and pinned
+layers, the pinned space and an opacity as the app presents them were drawn
+only by the offscreen tool; a rule resolved in the app, a widget there, a
+window with a real source in any layer; a pinned window under a `server` rule
+and its dot; a second display; the resize handles left off a widget or a
+pinned window as the app presents them, a handle under a pinned window being
+checked only as the layers above; a handle under a window stacked above the
+focused one that is not pinned; any pointer press.
+
+### What was run with every other milestone built in
+
+Rules and rendering were built on a tree that had the config file and managed
+windows and nothing later. Joined to window navigation and native focus, hot
+corners, the event stream and autostart, camera motion and trackpad gestures
+(`c11fece`, `5812d6f`, `1f44d0f`, `f083155`), the points where the two sides
+meet are these: one most-recently-focused order, which a widget and a pinned
+window never enter however their focus is settled; the navigation actions,
+clicks, followed native focus, trackpad moves and `send-to-output` treating
+both as [above](#window-rules-widgets-and-pinned-windows); one frame timer
+for camera motion and animated backgrounds; one `render` path that adopts the
+config's drawing settings, draws through the compositor, reports the pointer
+for cursor edge pan and publishes the State; a screenshot answered on its own
+connection beside subscribers; and `outputs_settled` sent from `openPanels`,
+which every way of opening the canvas goes through.
+
+On 2026-10-10 (macOS 27.2, Apple Silicon) that build passed
+`./scripts/build-app.sh`, the controller scenarios of every module
+(`rules_flow` with four scenarios added for the joined paths, `render_flow`,
+`gesture_flow`, `motion_flow`, `lifecycle_flow`, `platform_actions_flow`,
+`navigation_actions_flow`, `config_flow`, `ipc_flow`, `view_actions_flow`,
+`controller_flow`, `navigation_flow`, `focus_cycle_flow`) and the headless
+coordinator regression, and was launched three times as `--windowed 1100x700`
+on a private scene, config and socket, for 6, 16 and 8 seconds, driven through
+`Infinify msg`. No launch had Screen Recording access (each printed the
+not-managed line), so every window was one of three seeded placeholders, and
+nothing from them is saved as evidence. Observed, each read back over the
+socket or in a PNG `msg screenshot` wrote:
+
+- **Empty config.** `state`: the three placeholders at `[520, -360]`,
+  `[1950, 0]` and `[-620, -890]`, `layout British (en)`, `pinned 0`, one
+  output `windowed` of 1100x636 at camera `550 -318`. The viewport capture
+  held the first placeholder's stand-in at x 200 to 839, y 150 to 569 on the
+  dot grid. `action center-nearest right`: `focus` answered `#2` and `camera`
+  `1950 -0`, and the capture there held its 900x600 stand-in from (100, 18);
+  `pan-viewport right`: `2050 -0`; `zoom-to-fit`: camera `750 -390`, zoom
+  0.28484848484848485, a 3862x2233 capture with the three stand-ins at their
+  seeded places, and a second one back at `2050 -0`, zoom 1. `screenshot
+  window --id 1` wrote 640x420, `region 520 -360 800 500` 800x500, and `-o -`
+  piped to a file gave the same bytes as the file capture, ending in `IEND`,
+  with no temporary file left. `cycle-windows forward` answered `ok` and
+  changed nothing (placeholders are never in the order it walks);
+  `center-nearest left` focused `#1` at `520 -360`. `toggle-pin-to-screen`
+  answered `ok` and left the focused placeholder alone; `move-to-bookmark 1`
+  moved it to `[-1750, 1750]`; `pin --id 1`: `stand-ins can't be pinned`;
+  `opacity --id 1`: `no window with id 1`; `layout`: `British`; `set-trackpad
+  toggle` twice: `ok`. A `[background]` shader path that names no file, then
+  `reload-config`: `background shader '…/missing.glsl': No such file or
+  directory (os error 2)` on stderr and the dot grid in the capture.
+- **A scene with one placeholder pinned** (made by a throwaway program driving
+  this controller in process, at the output-local point (500, 200)), a 3 px
+  border in two colours and `camera_speed = 0.05`. `state` listed `windowed #3
+  org.example.seed [230, -72] 560x380 "Terminal"` under `pinned` and the other
+  two under `windows`, the same after `pan-viewport right` and at zoom 0.5,
+  while `msg move --id 3` read `780 -390`, `880 -390` and `830 -272`. The three
+  viewport captures held the first placeholder alone, in the unfocused border
+  colour, and nothing at the pin's rectangle; `screenshot window --id 3` held
+  the pinned one alone, 566x386 with its border. `pin --id 1` and `pin on
+  --id 3`: `stand-ins can't be pinned`; `opacity`: `no window with id N`;
+  `move --id 3 10 10` and `resize --id 3 800 600`: upstream's two refusals.
+  With a `--json subscribe` client connected, `center-nearest right` flew for
+  about two seconds: three viewport screenshots were answered on other
+  connections during the flight, the subscriber holding 12, 24 and 35 lines
+  after each and 148 once it landed at `1950 -0` with `#2` focused, where the
+  capture showed its stand-in from (100, 18) in the focused border colour.
+  Every one of the 463 lines of that stream listed window 3 alone under
+  `pinned`, and no two consecutive lines were equal. `toggle-pin-to-screen`,
+  `move-to-bookmark 1`, `cycle-windows forward` and `center-nearest left`
+  answered `ok`; `focus --id 3` focused the pinned placeholder without a
+  flight, and `center-nearest left` then `center-window` from there left `#2`
+  focused with the camera on its centre, the pinned one still under `pinned`.
+  The scene saved at exit held the pin at `[500, 200]`.
+- **An animated shader background** (upstream's `fast_smoke.glsl`). Two
+  viewport captures half a second apart differed. With only the background
+  animating, a subscriber received no line beyond its first in one second.
+  `center-nearest right`, `pan-viewport right`, `zoom-to-fit` and back and
+  `home-toggle` and back each landed exactly (`1950 -0`, `2050 -0`, `750 -390`
+  at 0.28484848484848485, `0 -0`), the subscriber held 123 lines after the
+  last flight and 123 a second later, and with the background back to the
+  default a `pan-viewport left` landed at `1950 -0`.
+- Every launch exited 0 on SIGTERM and removed its socket; each subscriber
+  exited 0.
+
+Not run in that build, beyond everything the sections above list as never run:
+the app's own panel on a display, so neither the compositor layer in it nor
+the frame timer's redraws of an animated background were seen (the captures
+are offscreen renders, and the stream's silence at rest shows only that the
+timer publishes nothing by itself); a hot corner, a trackpad gesture, a key or
+a pointer press, so `watchCorners` on the joined timer, a move swipe over a
+widget or a pinned window and a click on either are compiled and read only; a
+live window of any kind, so native focus on a widget or a pinned window, a
+rule, a widget, and `send-to-output` of a pin (there was one display); a
+screen change or Return to desktop and Open canvas, so `outputs_settled` was
+sent only by the launch's `openPanels`; cursor edge pan under the joined
+`render`.
+
 ## Configuration
 
 A normal run is configured exactly like DriftWM: one TOML file in upstream's
@@ -606,18 +1507,19 @@ only while a canvas panel is open; `--windowed` registers none.
 | ⌃⌥L | `mod+l` | `exec /usr/bin/pmset displaysleepnow`, standing in for upstream's `spawn swaylock -f -c 000000 -kl` (see [Linux-only default commands](#linux-only-default-commands)) |
 | ⌃⌥Q | `mod+q` | `close-window`: close the focused window, or dismiss a focused placeholder |
 | ⌃⌥E | `mod+e` | `toggle-cursor-pan` |
+| ⌃⌥T | `mod+t` | `toggle-pin-to-screen`: pin the focused window to the screen, or return it to the canvas |
 | ⌃⌥⇧⌘Q | `mod+ctrl+shift+q` | `quit` |
 | ⌃⌥Esc | none (the shell's own) | exit, until a binding takes the chord |
 
-Those are 40 of upstream's 57 default key bindings. ⌥Tab and ⌥⇧Tab are taken
+Those are 41 of upstream's 57 default key bindings. ⌥Tab and ⌥⇧Tab are taken
 from every application while a canvas panel is open; rebind or unbind
 `cycle-windows` in the config file to give them back. The rest are not
 registered, so their chords stay with the applications:
 
-- 5 whose action does not run on macOS yet: ⌃⌥F
+- 4 whose action does not run on macOS yet: ⌃⌥F
   (`toggle-fullscreen`), ⌃⌥M and ⌃⌥⇧M (`fit-window`,
-  `fit-window-snapped`), ⌃⌥⇧W (`zoom-to-fit-snapped`) and ⌃⌥T
-  (`toggle-pin-to-screen`). Bound in a config file they are skipped the same
+  `fit-window-snapped`) and ⌃⌥⇧W (`zoom-to-fit-snapped`). Bound in a config
+  file they are skipped the same
   way, without a message; `Infinify msg action` answers the not-implemented
   error for each.
 - 8 on media keys (volume, mute, brightness, play, next, previous), which macOS
@@ -775,6 +1677,11 @@ context before `anywhere`.
 | ⌃⌥⌘ left drag | `center-nearest` by pointer swipe: not implemented, a status note (the keyboard action runs) | the same |
 | anything else | the application's; a press focuses the window first | nothing |
 
+A move or resize binding pressed on a widget or on a screen-pinned window starts
+no gesture, and the status line says why for two seconds. A widget then gets
+the press as a plain click, as upstream's does; a screen-pinned window's press
+is not passed to the application
+([Window rules](#window-rules-widgets-and-pinned-windows)).
 A resize binding picks its edges from the pointer's place in the window, a 3×3 grid whose centre resizes from the
 bottom right, as upstream's resize grab does. A mouse binding that names an
 action first focuses the window under the pointer, a placeholder included, then
@@ -1041,7 +1948,13 @@ Applied now:
 | `[zoom] reset_on_new_window` | whether the camera's flight to a new window lands at 1:1 |
 | `[navigation] auto_navigate_on_close` | whether the camera flies to the window that takes the focus after a close, when that window is docked to the closed one or overlaps it and is not wholly in view |
 | `[session] suspend_on_close`, `restore_windows`; the same two keys of a `[[window_rules]]` entry, matched by bundle identifier as `app_id` and by `title` | whether a window that closes by itself leaves a stand-in; whether a saved slot whose window is gone stays as one after a discovery pass, at launch or when the canvas reopens. See [Managed windows](#managed-windows) |
-| `[decorations] title_bar_height` | the diagonal step of the placement cascade, and nothing else |
+| `[[window_rules]] app_id`, `title`, `position`, `widget`, `pinned_to_screen`, `output`, `focus_on_open`, `opacity` | per-window policy for a window that appears, see [Window rules](#window-rules-widgets-and-pinned-windows) |
+| `[background] type`, `path`, `texture`, `mirror_tile`, `transparent_shader`, `animate_fps` | the canvas behind the windows: DriftWM's dot grid, a GLSL shader (upstream's `extras/wallpapers` work as they are), a tiled image, a wallpaper fixed to the view, or nothing. A leading `~/` in a path is expanded. PNG and JPEG only. `cache_shader` is accepted and changes nothing: a shader always renders live, which draws the same picture. See [Rendering](#rendering) |
+| `[decorations] border_width`, `border_color`, `border_color_focused`, `corner_radius`, `shadow`, `opacity`, `opacity_focused`, `default_mode` | the border, corner clip and shadow of every window and stand-in, and the opacity of every window that has none of its own from a rule or `msg opacity`: `opacity_focused` for the one holding the canvas's logical focus, `opacity` for the others, both 1 by default (a stand-in is always opaque, as upstream's); `default_mode` is `client`, `minimal` or `none` (`server` only through a window rule, as upstream) |
+| `[decorations] bg_color`, `fg_color`, `title_bar_height`, `font`, `font_size`, `font_weight`, `title_align` | the chrome the compositor draws itself: stand-ins, and the title bar of a window a rule made `server`. `title_bar_height` is also the diagonal step of the placement cascade |
+| `[[window_rules]] decoration`, `border_width`, `border_color`, `border_color_focused`, `corner_radius`, `shadow`, `opacity` | the same per window, from the rule the window matched when it reached the canvas (bundle identifier as `app_id`, and `title`), kept until it is gone; never for a stand-in |
+| `[output.outline] color`, `thickness`, `opacity` | the outline of every other display's view of the canvas; thickness 0 draws none |
+| `[zoom] fit_padding` | also the margin of `msg screenshot all` |
 | `[env]` | the environment of commands run by `exec`, `spawn`, `exec-terminal`, `exec-launcher` and `autostart`; its `PATH`, when set, is also where a default binding's program is looked for, and its `INFINIFY_SOCKET`, when set, replaces the one the app adds |
 
 `exec` and `spawn` run their command as `/bin/sh -c`, detached in a session of
@@ -1061,11 +1974,12 @@ and `caps_lock` (macOS owns the input sources and the lock keys), the rest of
 `[input.trackpad]` (macOS owns the device), `[input.mouse]`, `[input.touch]`,
 `[input.tablet]`,
 `[cursor]` (theme and size reach only the environment of a run command),
-`[background]`, the rest of `[decorations]`, `[effects]`, `[backend]`,
-`[output]`, `[[outputs]]` `scale`, `transform`, `position` and `mode` (macOS
-owns the display arrangement) and `hot_corners.disable_when_fullscreen`,
-the rest of `[[window_rules]]` (`position`, `size`, `focus_on_open`, `widget`
-and the others shape no window),
+`[background] cache_budget_mb`, `[decorations] blur`, `[effects]`, `[backend]`,
+the rest of `[output]`, `[[outputs]]` `scale`, `transform`, `position` and
+`mode` (macOS owns the display arrangement) and
+`hot_corners.disable_when_fullscreen`, the rest of `[[window_rules]]`
+(`size`, `fullscreen`, `blur`, `preserve_aspect_ratio`, `pass_keys`,
+`pass_mouse` and `layer_order` are kept with the window and change nothing),
 `[touch.*]`, `[mouse] resize_on_border` and the decoration settings, and
 tap-modifier bindings (a bare `alt+shift`), which are reported and skipped.
 
@@ -1232,7 +2146,9 @@ drift, an edge pan or a cursor pan alike. Each frame is the navigation
 coordinator's tick, the one that flies
 [window navigation](#window-navigation-and-native-focus), watches the hot
 corners and, while a `msg subscribe` client is connected, is followed by at
-most one [State event](#event-stream). A
+most one [State event](#event-stream). The same timer redraws an animated
+`[background]` ([Rendering](#rendering)); kept running by that alone it ticks
+nothing, and the camera and the hot corners are the idle poll's as before. A
 [trackpad gesture](#trackpad-gestures) needs none of that from the shell: its
 events carry their own times, and the controller makes the same pans, launch,
 pinch and drag of them itself, so a swipe drifts and a moved window edge-pans
@@ -1439,12 +2355,17 @@ selects another file whose parent directory already exists. Saves use the Rust
 controller's private temporary file, fsync, atomic rename, and directory sync.
 Only world geometry, display UUID cameras, bookmarks, app/title metadata and
 which placeholders are stand-ins (by logical id) are
-persisted; PIDs, window IDs, process births, and captures are not saved. Bookmarks
-and the stand-in list (`standins`, written only while there is one) are additive
+persisted; PIDs, window IDs, process births, and captures are not saved. Bookmarks,
+the stand-in list (`standins`, written only while there is one) and the pinned
+windows (`pins`, written only while there is one: the display and the place on
+it, by logical id) are additive
 fields of the same file and the format version is unchanged: scene
-files written by older builds still load, with no bookmarks and no stand-ins. Older builds reject
+files written by older builds still load, with no bookmarks, no stand-ins and no pins. Older builds reject
 fields they do not know, so an older build cannot read a scene file that contains
-either; keep a copy of a scene file before opening it with an older build.
+any of them; keep a copy of a scene file before opening it with an older build.
+A widget is not saved at all, and neither is a window's rule or an opacity set
+over the socket
+([Window rules](#window-rules-widgets-and-pinned-windows)).
 A bookmark change or window move made over the IPC socket below is saved the same
 way. What a restart brings back follows DriftWM's `[session]` settings, whose
 defaults are both off. With `restore_camera = false` every display starts as a
@@ -1485,6 +2406,7 @@ $APP msg state
 $APP msg --json camera 500 300
 $APP msg action zoom-to-fit
 $APP msg bookmark inbox 500 300
+$APP msg screenshot all -o ~/canvas.png
 ```
 
 `msg` runs before AppKit starts, so it opens no window and asks for no permission.
@@ -1544,14 +2466,16 @@ experimental native resize is unresolved `a native resize is pending`.
 
 | Command | What it does now |
 | --- | --- |
-| `state` | Camera, zoom, the keyboard layout (the selected input source's name and short code), windows (id, bundle id as `app_id`, title, centre position, size, `suspended` for a detached placeholder), outputs (stable id as `name`, `active`) and the active bookmark. `fullscreen`, `pinned` and the layer lists are always empty. |
+| `state` | Camera, zoom, the keyboard layout (the selected input source's name and short code), windows (id, bundle id as `app_id`, title, centre position, size, `is_widget`, `suspended` for a detached placeholder), `pinned` (each screen-pinned window with its display and its `position` and `size` in `pinned_to_screen` rule coordinates; such a window is not under `windows`), outputs (stable id as `name`, `active`) and the active bookmark. `fullscreen` and the layer lists are always empty. |
 | `subscribe` | Keep the connection and print the state now and again after every change, until the app exits. See [Event stream](#event-stream). |
 | `layout [--short]` | The selected keyboard input source: its name, or with `--short` its first language code. Empty until the app has reported one, which it does at launch. |
 | `camera [X Y]` | Read the view centre, or fly the camera there at the current zoom. |
 | `zoom [LEVEL]` | Read the zoom, or animate to a level about the view centre. The level is clamped to the range the zoom shortcuts use and the reply is the level applied. |
-| `focus [APP_ID] [--id N]` | Read the focused window. Setting makes a window the logical focus and, unless it is already wholly in view, flies the camera to it as upstream does: at 1:1 for a window with a bound source (at the current zoom with `[zoom] reset_on_activation = false`), at the current zoom for a detached placeholder. For a window with a bound source the app also performs the controller's focus request on the native window when native focus is allowed (see [Window navigation and native focus](#window-navigation-and-native-focus)); that has not been run. |
-| `move [X Y] [--id N]` | Read a window's centre, or move the logical window there (whole points). The native window is not touched. A move is refused while a gesture is active, and when it would put the frame outside the 32-bit integer range every other request reads positions in. |
-| `resize [WIDTH HEIGHT] [--id N]` | Read the size only. Setting one answers an error: native layout resize is not available yet. |
+| `focus [APP_ID] [--id N]` | Read the focused window. Setting makes a window the logical focus and, unless it is already wholly in view, flies the camera to it as upstream does: at 1:1 for a window with a bound source (at the current zoom with `[zoom] reset_on_activation = false`), at the current zoom for a detached placeholder. A pinned window is focused and raised with no flight; a widget, which only `--id` reaches, answers `window #N is a widget and cannot be focused`. For a window with a bound source the app also performs the controller's focus request on the native window when native focus is allowed (see [Window navigation and native focus](#window-navigation-and-native-focus)); that has not been run. |
+| `move [X Y] [--id N]` | Read a window's centre, or move the logical window there (whole points). The native window is not touched. A move is refused while a gesture is active, when it would put the frame outside the 32-bit integer range every other request reads positions in, and for a pinned window (`this window has no canvas position to move: …`); a pinned window reads as the canvas point its pin shows. It is the one way to move a widget. |
+| `resize [WIDTH HEIGHT] [--id N]` | Read the size only. Setting one answers an error: native layout resize is not available yet, or, for a pinned window or a widget, upstream's `this window has no canvas size to set: …`. |
+| `pin [on\|off] [--id N]` | Read whether a window is pinned to the screen, or pin or unpin it without moving it on screen. A live window only: a placeholder answers `stand-ins can't be pinned`. |
+| `opacity [VALUE] [--id N]` | Read the opacity a window is drawn at, or set it (0 to 1; outside that is refused, not clamped) until the window is gone. A live window only. |
 | `action SPEC...` | Run an upstream action string, below. |
 | `bookmark [NAME] [X Y] [--delete]` | List bookmarks, get or set one, or delete it. |
 | `close [APP_ID] [--id N]` | A window with a bound source: ask its application to close it (its close button, through Accessibility); it leaves no stand-in. A placeholder: dismiss it. |
@@ -1559,8 +2483,10 @@ experimental native resize is unresolved `a native resize is pending`.
 | `relaunch [APP_ID] [--id N]` | A placeholder: open its application by bundle identifier; the next window of that application takes the slot. Answers `ok` once the request is made, also for an application that is not installed (status line and stderr then say so). |
 | `debug-counters` | A small map of controller collection sizes; the keys are Infinify's own and not stable. |
 
-`opacity`, `pin` and `screenshot` answer
-`<name> is not implemented on macOS yet`. `close`, `suspend`
+`screenshot [--scale S] [-o PATH] [window [APP_ID] [--id N] | all | region X Y W H [--from-screen]]`
+writes a canvas PNG; [Rendering](#rendering) has what it draws and where it
+differs from upstream. Every request of upstream's protocol is answered: none
+replies `<name> is not implemented on macOS yet` any more. `close`, `suspend`
 and `relaunch` with no selector act on the focused window;
 [Managed windows](#managed-windows) has their rules and limits.
 
@@ -1569,7 +2495,8 @@ is the grammar the config file's bindings use. These run:
 `pan-viewport <direction>`, `home-toggle`, `zoom-in`, `zoom-out`, `zoom-reset`,
 `zoom-to-fit`, `center-window`, `center-nearest <direction>`,
 `cycle-windows forward|backward`, `focus-center`, `go-to-bookmark NAME`,
-`set-bookmark NAME`, `nudge-window <direction>`, `close-window`,
+`set-bookmark NAME`, `move-to-bookmark NAME`, `toggle-pin-to-screen`,
+`nudge-window <direction>`, `close-window`,
 `suspend-window`, `send-to-output <direction>`,
 `send-cursor-to-output <direction>`, `switch-layout next|prev|INDEX`,
 `toggle-cursor-pan`, `set-trackpad on|off|toggle`, `exec COMMAND`,
@@ -1797,7 +2724,7 @@ gesture bindings name four actions that do not run here yet
 is not forwarded to the application under it. The gestures that reach window
 navigation (the four-finger swipe and hold, and any `cycle-windows` a config
 binds) have run only as synthetic event streams against the controller.
-Five of upstream's default key bindings and four of its default mouse
+Four of upstream's default key bindings and four of its default mouse
 bindings (three window actions and the pointer `center-nearest` swipe) do not
 run here yet, and its two resize bindings need the experimental flag. Window
 navigation and native focus have their own list of limits under
@@ -1820,13 +2747,26 @@ it selects nothing; selecting an input method (as opposed to a plain keyboard
 layout) from this accessory app is untried. The event stream reporting the
 output under the pointer becoming active, within one idle poll, is unrun: it
 needs a second display.
-The IPC surface is a subset of DriftWM's. Several upstream actions parse but are
-not implemented; `opacity`, `pin` and
-`screenshot` are not implemented; `resize` is read-only. An IPC
+Window rules, widgets and screen-pinned windows have controller test coverage
+and scripted `msg` sessions on placeholders; no rule has matched a real
+window, no live window has been pinned in the app, and the widget and pinned
+layers and a window's opacity have been drawn only offscreen, by a throwaway
+tool that read frames back from the shell's renderer, never seen in the app's
+own panel
+([Window rules](#window-rules-widgets-and-pinned-windows) lists their limits).
+The IPC surface is a subset of DriftWM's. Seven upstream actions parse but are
+not implemented (`grow-window`, `shrink-window`, `zoom-to-fit-snapped`,
+`toggle-fullscreen`, `fit-window`, `fit-window-snapped`, `fill-window`);
+`resize` is read-only. An IPC
 focus is logical focus and camera navigation, plus a native focus request for a
 window with a bound source that no run has yet performed, and
 an IPC move is a logical world move that never moves the native window. Nested
 `--windowed` mode registers no global shortcuts and has one output.
+The compositor that now draws the canvas has been seen only through
+`msg screenshot`, with stand-ins: the picture in the app's own panels, a
+captured window drawn through it and its colour, and the outline of a second
+display are compiled and read only; blur and window animations are not drawn.
+[Rendering](#rendering) has the list.
 Cluster behavior uses the controller contract; fixture evidence currently has a
 single source. Production chooser/managing of existing user windows has not been
 run during development: automatic adoption, placement of a real window,
@@ -1873,6 +2813,10 @@ exact boundary.
 | ⌃⌥C, toolbar Center | `center-window` | Flies to the focused window, or with none to the window nearest the middle of the view, and focuses it, at 1:1. |
 | ⌃⌥X | `focus-center` | The same for the topmost window under the pointer; over empty canvas, nothing. |
 | ⌥Tab / ⌥⇧Tab, toolbar Next / Previous | `cycle-windows forward` / `backward` | One step through the windows in most-recently-focused order, flown to at the current zoom. |
+
+"Window" in all four means a window on the canvas: a
+[widget or a screen-pinned window](#window-rules-widgets-and-pinned-windows)
+is never picked, as upstream picks neither.
 
 The chords are DriftWM's defaults under the default super chord; a config file
 rebinds them like any other key. Center, Previous and Next are on the toolbar of
@@ -2026,8 +2970,10 @@ committing it; logical focus stays.
   (upstream's ⌃⌥⌘-drag swipe) is not implemented; the status line says so. The
   trackpad form, a four-finger swipe, runs.
 - `focus_follows_mouse` is read from the config and does nothing. Fullscreen,
-  fit-window, pinned and modal windows do not exist here, so none of upstream's
-  special cases for them apply.
+  fit-window and modal windows do not exist here, so none of upstream's
+  special cases for them apply. A widget or a screen-pinned window is focused
+  where it is and never flown to, by a completed click or by a followed native
+  focus ([Window rules](#window-rules-widgets-and-pinned-windows)).
 - Following native focus moves the camera by itself when an application on the
   canvas takes focus while its window is clipped.
 - If the controller refuses to follow a native focus change (a drag or resize

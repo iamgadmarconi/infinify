@@ -373,7 +373,7 @@ device-specific behavior also need the corresponding hardware.
   slot has that exact title. See the
   [lifecycle contract](../../crates/desktop/LIFECYCLE.md) and the
   [desktop shell notes](../../native/desktop/README.md#managed-windows).
-- This milestone (commit pending), camera motion, makes the camera move as
+- `f083155`, camera motion, makes the camera move as
   DriftWM's does. The
   controller keeps upstream's own `MomentumState` (`driftwm-core`) per output and
   gains additive commands and fields: a timed `pan` scaled by
@@ -436,7 +436,7 @@ device-specific behavior also need the corresponding hardware.
   speed is that of the shell's 60 Hz timer. See the
   [desktop shell notes](../../native/desktop/README.md#camera-motion) and the
   [motion contract](../../crates/desktop/MOTION.md).
-- This milestone (commit pending), trackpad gestures, brings upstream's dispatch
+- `f083155`, trackpad gestures, brings upstream's dispatch
   of libinput's swipe, pinch and hold gestures (`src/input/gestures/`) to the
   controller behind three additive commands, `gesture_begin`, `gesture_update`
   and `gesture_end`, resolved against the `[gestures]` tables with upstream's
@@ -461,7 +461,7 @@ device-specific behavior also need the corresponding hardware.
   to the real controller library, which accepted every one; and scripted
   sessions on 2026-10-09 against the built app in `--windowed` mode on a private
   scene, config and socket (macOS 27.2, Apple Silicon, three seeded detached
-  placeholders), the last of them on the build that holds both pending
+  placeholders), the last of them on the build that holds both of these
   milestones. None of it left saved evidence. Exercised through the socket:
   a config with a `[gestures]` override loading cleanly, malformed gesture
   entries reported in upstream's words and skipped while the rest of the file
@@ -515,6 +515,269 @@ device-specific behavior also need the corresponding hardware.
   silence the pointer or two-finger scrolling, and `[touch.*]` stays unused. See
   the [gesture contract](../../crates/desktop/GESTURES.md) and the
   [desktop shell notes](../../native/desktop/README.md#trackpad-gestures).
+- This milestone (commit pending), per-window policy: `[[window_rules]]`,
+  widgets and screen-pinned windows. The controller resolves a window's rules
+  once, when it maps, with `driftwm-core`'s own matcher and merge (the bundle
+  identifier as `app_id`, the source title as `title`), and applies `position`
+  (frame center, Y up, ahead of `window_placement`), `widget`,
+  `pinned_to_screen` with `output` and its output-relative `position`,
+  `focus_on_open` and `opacity`; a retitle and a config reload re-resolve
+  nothing, as upstream documents. A widget stays below every window and out of
+  the focus history, snapping, clusters, fitting and auto placement, and is
+  refused by drags, resizes, nudges and IPC `Focus` and `Suspend`; a pinned
+  window keeps a place and its own size on one output whatever the camera and
+  zoom, above that output's canvas windows. `toggle-pin-to-screen` and
+  `move-to-bookmark` run, IPC `Pin` and `Opacity` answer with upstream's shapes
+  and refusals, `Move` and `Resize` refuse a pinned window, and `State` fills
+  `pinned` and `is_widget`. `snapshot.placements` and `hit` follow upstream's
+  layer order (widgets, canvas windows, pinned windows) and carry `widget`,
+  `pinned` and `opacity`; the shell's compositor draws a widget below and a
+  pinned window above the canvas windows, the pinned one from its screen
+  rectangle at its own size, each at that opacity (the rendering milestone
+  below; probe, demo and owned-fixture runs fade their layer tiles instead),
+  and the shell starts
+  no move or resize gesture on a widget or a pinned window (a widget still
+  gets the press as a click), and after registering its displays it sends the
+  one new command, `outputs_settled`, on which a pin whose display is gone
+  moves to one that is there. A close never hands the focus to a widget or a
+  pinned window. Widgets are never saved; a pin is saved with its slot in an
+  additive `pins` key. Coverage is
+  controller scenarios through the exported C ABI
+  (`crates/desktop/tests/rules_flow.rs`, synthetic observations on two outputs,
+  expected rectangles derived by hand from upstream's conventions) plus one
+  scripted launch of the built app in `--windowed` mode on a private scene,
+  config and socket (macOS 27.2, Apple Silicon), first on 2026-10-09 and
+  repeated on 2026-10-10 on the build with the review fixes, which left no
+  saved evidence; what follows is the repeat. That launch had no Screen
+  Recording access, so no window was captured and every window was a
+  placeholder; the two pins in it were made beforehand by a throwaway program
+  driving the same controller in process with synthetic sources, one of them
+  on an output the app never registers, and read from the scene file by the
+  app. Exercised in the app through the socket: the pin saved on the missing
+  output listed under `State.pinned` on the app's one output from the first
+  read on, which with no discovery pass in that run is the shell's
+  `outputs_settled`; both pins unchanged by a pan and a `move-to-bookmark`
+  while the canvas points under them followed the camera (a zoom was run only
+  on 2026-10-09); upstream's `Move` and `Resize` refusals for a pinned
+  window; `Pin` and `Opacity` refusing placeholders (`stand-ins can't be
+  pinned`, `no window with id N`) and `toggle-pin-to-screen` leaving a focused
+  placeholder alone; `move-to-bookmark` centering a focused placeholder and
+  passing over an unset name and the pinned one; rules in the config changing
+  no window that did not map; upstream's unknown-decoration warning and its
+  TOML error for an unknown rule key; the moved pin in the file saved at exit;
+  exit on SIGTERM. After the renderer below was built in with it, one more
+  one-second launch the same day read a scene with one pinned placeholder:
+  listed under `State.pinned` unchanged by a pan and at zoom 0.5 while its
+  canvas point followed the camera, absent from three viewport screenshots as
+  upstream excludes a pinned window from canvas captures, alone in a `window`
+  screenshot and outside the frame of `all`, with the same `Pin`, `Opacity`,
+  `Move` and `Resize` refusals. Evidence boundary: rules, pinning and widgets were exercised
+  live only on placeholders through the socket, and no captured window was
+  involved. No rule was resolved in the app, no widget existed there, no live
+  window was pinned, unpinned or given an opacity there (those ran only in the
+  controller tests and the seeding program), no window closed there (the
+  focus-follow rules ran only in the controller tests), and what the app's
+  own panel draws was not observed: the layer order, the pinned space and a
+  written opacity were seen only in frames an offscreen tool read back from
+  the shell's renderer driven by this controller (the rendering milestone
+  below); no pointer press was
+  made, so the shell's refusal notes and click routing to a widget or a pinned
+  window are compiled and read only; ⌃⌥T is now registered and was not
+  pressed; one output only, so a screen change and Return to desktop with a
+  pin in place were replayed only as controller commands in the shell's
+  order. Known mismatches: a rule's `size` and `fullscreen` are recorded
+  and not applied (native resize is gated), and `blur`,
+  `preserve_aspect_ratio`, `pass_keys`,
+  `pass_mouse` and `layer_order` are recorded with no effect (`decoration`
+  and the border, corner and shadow fields are drawn, see the rendering
+  milestone below); a pinned window
+  cannot be dragged or resized at all, where upstream's move and resize
+  bindings, gestures and title bar move and resize it in screen space and
+  reassign its output when it is dragged across monitors (unimplemented
+  here); a pin leaves a display that is gone only when the shell reports its
+  displays settled (`outputs_settled`), where upstream rehomes it at the
+  unplug, because the shell removes and re-registers every display on any
+  screen change; a window pinned by toggle that closes has no spatial
+  follower, where upstream tests the snap rectangle it had before the pin; the
+  pin is saved with the slot, where upstream's session file holds none, and a
+  saved pin is clamped onto its output at launch; a pin waiting on a slot no
+  window has taken reads `stand-ins can't be pinned` while `State` lists it;
+  upstream's pin dot is drawn only in a compositor title bar, which a Mac
+  window has only under a `server` rule; a widget that maps does not hand the focus back to
+  the head of the history; `[decorations] opacity` and `opacity_focused` follow
+  the canvas's logical focus, not native keyboard focus. All of the above was
+  built on `4dd642b` with the window lifecycle. Merged onto `c11fece`,
+  `5812d6f`, `1f44d0f` and `f083155`, there is one focus history, which a
+  widget and a pinned window never enter whoever answers their focus request
+  (`focus_result`, `focus_logical`, `observe_focus`, a native activation); the
+  candidates of `center-window`, `center-nearest`, `focus-center` and
+  `cycle-windows` are the canvas windows, `center-nearest` does not anchor on a
+  pinned window and `focus-center` passes over one; no completed click and no
+  followed native focus flies to either; a move gesture over a widget falls
+  back to a pan and over a pinned window is claimed and inert, and a gesture's
+  drag is released when its slot maps as a widget; `send-to-output` leaves a
+  widget and rebinds a pin to the adjacent display; `toggle-pin-to-screen` and
+  `move-to-bookmark` run through the one action dispatch, whose prelude ends
+  an open cycle and stops momentum, from keys, IPC, hot corners and gestures;
+  the event stream carries `pinned` and `is_widget`; and `outputs_settled` is
+  sent from the `openPanels` every launch, Open canvas, chooser attach and
+  screen change goes through. Four scenarios added to `rules_flow` cover
+  those joins against a layout with a widget and a pinned window in the way,
+  each beside a control showing what an unfiltered search or grab would have
+  taken; the earlier scenarios were restated for the one history. Asked with
+  upstream's built-in defaults, the merged controller's `bindings` reply lists
+  45 key bindings of which 41 run, leaving four on actions that do not
+  (`toggle-fullscreen`, `fit-window`, `fit-window-snapped`,
+  `zoom-to-fit-snapped`), and of the 35 action names of upstream's grammar it
+  refuses seven by name (those four, `grow-window`, `shrink-window` and
+  `fill-window`). The merged
+  app was launched three times on 2026-10-10 as before (6, 16 and 8 seconds,
+  three placeholders, no Screen Recording access, nothing saved): a
+  placeholder pinned in the scene file stayed under `State.pinned` through a
+  pan and a zoom and in all 463 lines of a `subscribe` stream, out of the
+  viewport captures and alone in a `window` capture; `Pin`, `Opacity`, `Move`
+  and `Resize` gave the same refusals; `toggle-pin-to-screen` left a focused
+  placeholder alone and `move-to-bookmark` moved one; with the pinned
+  placeholder focused, `center-nearest` and `center-window` chose a canvas
+  placeholder. That adds nothing to the evidence boundary above but the event
+  stream: the joined navigation, activation, gesture, hot-corner and
+  `send-to-output` rules ran only as controller scenarios, with no live
+  window, widget, second display, key, pointer press or gesture in the app.
+  Further mismatches from the join: `focus-center` takes no widget, where
+  upstream's walk reaches one and flies to it; a click raises a widget among
+  the widgets, where upstream only focuses it; a move gesture does not move a
+  pinned window, where upstream's does in screen space; `send-to-output` takes
+  a pin's own output as its source, where upstream takes the output showing
+  the pin's canvas frame. See the
+  [rules contract](../../crates/desktop/RULES.md) and the
+  [desktop shell notes](../../native/desktop/README.md#window-rules-widgets-and-pinned-windows).
+- This milestone (commit pending), rendering: the canvas of a normal run is
+  drawn the way DriftWM draws it. A Metal port of upstream's frame composition
+  and canvas background (`native/desktop/compositor.{h,m}`,
+  `background.{h,m}`; upstream's border, shadow and corner-clip shaders and its
+  dot grid, tile and wallpaper shaders hand-translated, user GLSL shaders
+  translated at load; built, checked against the unmodified upstream GLSL and
+  independently reviewed outside the repository, then carried in with its
+  notes) replaces the per-placement display layers on a flat colour: one layer
+  per output draws the `[background]` in its five types, the outlines of the
+  other outputs' viewports from `[output.outline]`, every window bottom to top
+  with upstream's shadow, border, corner clip and opacity resolved by
+  `driftwm-core`'s own `effective_*` helpers from `[decorations]` and the
+  rule each window mapped with (the per-window policy above, an IPC `Opacity`
+  write included: nothing is matched again when a frame is described),
+  widgets in upstream's bucket below the canvas windows and screen-pinned
+  windows in the one above, drawn from their screen rectangle at zoom 1
+  whatever the camera, and upstream's stand-in (bar, close glyph, body, application
+  name, `launching…`, always opaque) for a window without a source. The
+  controller describes the frame in an additive `render` block and
+  per-placement keys and bumps a revision on every accepted reload, so that
+  the shell reads the background's shader and image files again as upstream
+  does; `msg screenshot` runs with
+  upstream's four targets, scale rule and refusals as a deferred effect the
+  shell renders offscreen with the same compositor; a canvas capture holds no
+  screen-pinned window and draws widgets below the other windows, `all`
+  frames the canvas windows and stand-ins only, and a `window` capture takes
+  a pinned window or a widget alone, all as upstream's does. macOS rule: a captured
+  native window already draws its own title bar, so it is decorated as
+  upstream decorates a client-side-decorated window unless a rule says
+  otherwise. Probe, demo and owned-fixture modes keep the earlier drawing.
+  Coverage is controller scenarios through the exported C ABI
+  (`crates/desktop/tests/render_flow.rs`, regions and pixel sizes derived by
+  hand from upstream's functions) plus three short scripted launches on
+  2026-10-09 of the built app in `--windowed` mode on a private scene, config
+  and socket (macOS 27.2, Apple Silicon, three seeded placeholders) and two
+  more on 2026-10-10 after the review fixes, none of which left saved
+  evidence; and, once built together with the per-window policy above, one
+  scenario across both contracts in `crates/desktop/tests/rules_flow.rs`, an
+  offscreen tool and two further launches the same day, described at the end
+  of what was seen. Seen there, in the PNGs `msg screenshot` wrote, each
+  opened and its pixels read: the stand-ins at their seeded canvas positions
+  to the pixel at zoom 1 and after `zoom-to-fit`; application-name labels and
+  the `launching…` label; the default dot grid, a static, an animated and
+  a textured upstream shader, a tile with and without
+  `mirror_tile`, a wallpaper and `none`, each adopted from a config rewrite
+  without a restart; a missing and a non-compiling shader falling back to the
+  dot grid with the reason on stderr; border width and both border colours
+  with the focus following `msg focus`, corner radius, shadow on and off,
+  chrome colours, bar height and font; all four
+  targets, `--from-screen`, `--scale`, and the refusals including two
+  unwritable paths; exit on SIGTERM. Seen in the two later launches, after a
+  review had found each as a defect in the earlier build: stand-ins opaque
+  under `[decorations] opacity = 0.5` (alpha 255 in a `window` capture, one
+  body colour in `all`); `-o -` relaying bytes equal to a file capture of the
+  same target; a shader file replaced behind an unchanged config picked up by
+  `reload-config` alone, a broken one falling back after a `touch` of the
+  config and the repaired one drawn again; a wallpaper lying only over the
+  view's footprint in `region`, `all` and `--from-screen` captures and
+  transparent elsewhere; and the count of Metal drawables in the running app
+  staying at 1 over six seconds of an animated background. Seen with the
+  per-window policy built in: in frames read back from the shell's renderer,
+  linked with the compositor and this controller into a throwaway tool
+  outside the repository (synthetic sources with plain-coloured buffers, one
+  output off the global origin), a rule-pinned window at one output-local
+  rectangle and size at zoom 0.5, after a pan and at zoom 1 while a canvas
+  window and a widget moved and scaled, the widget under the canvas window
+  and the pinned window over it, a written opacity of 0.5 as the blend it
+  should give, and a pinned detached slot as an opaque stand-in; the
+  controller's own capture effects performed by that renderer without the
+  pinned window in `viewport`, `all` and `region` and with it alone in
+  `window`; and in two more launches of the built app (3 and 1 seconds, three
+  placeholders), the viewport, `zoom-to-fit`, `window`, `region`, `-o -` and
+  missing-shader results as before, and a placeholder pinned in the scene
+  file absent from viewport captures before and after a pan and at zoom 0.5,
+  alone in a `window` capture and outside `all`'s frame. Evidence boundary:
+  no launch had Screen Recording access, so every window was a stand-in and
+  no captured window was ever drawn through the compositor: its colour,
+  alpha, the sRGB stream setting, the kept last frame, frame-driven redraw
+  and the opacity a live window is captured alone with are compiled and read
+  only. A screenshot is an offscreen render: the layer in the app's
+  own panels was not seen on a display (orientation and stacking were checked
+  only on a throwaway panel built the same way, before integration), so the
+  widget and pinned layers were never seen there either, nor were
+  the status-line copy of a fallback, an animated background on screen, a
+  second output and its outline, a window rule, `default_mode` or a `server`
+  title bar in the app, the experimental native-resize presentation through
+  the compositor, or any probe, demo or owned mode after the change. No pixel
+  was compared with a pixel from DriftWM itself. Known mismatches: blur,
+  `[effects]` and every window animation are not drawn; `cache_shader` is
+  accepted and ignored (a shader always renders live) and gigapixel TIFF tiles
+  are not supported; text is CoreText's,
+  not cosmic-text's; a window whose rectangle lies just outside an output
+  casts no shadow into it; a screenshot path's missing directories are not
+  created; captures are not tiled; in a capture a wallpaper is cover-cropped
+  to its output's footprint as on screen, where upstream's capture element
+  samples the whole image across it; a stand-in's label needs the application
+  installed to be a name rather than a bundle identifier; a `server` rule
+  draws a second title bar above a Mac window's own; a detached slot that
+  still holds a pin is drawn pinned and left out of canvas captures, a state
+  upstream never has; no fullscreen, layer surfaces or popups. All of the
+  above was built on `4dd642b` with the window lifecycle. Merged onto
+  `c11fece`, `5812d6f`, `1f44d0f` and `f083155`, the shell has one drawing
+  path and one frame timer: each redraw adopts the `render` settings, draws
+  through the compositor, notes whether cursor edge pan wants the pointer and
+  schedules the State event for subscribers; the timer runs while the
+  controller reports camera motion (a flight, a coast, an edge pan) or a panel
+  shows an animated background and stops when neither is left, ticking the
+  camera and watching the hot corners only while it serves motion; the
+  autorelease pool per turn of the main loop and per layer flush is kept; and
+  a `Screenshot` is rendered and answered inside its own request, beside the
+  long-lived `subscribe` connections. `render_flow` passes with the
+  snapshot's `keyboard_layout` and `trackpad` keys beside `render`. Seen in
+  the three launches of 2026-10-10 named under the per-window policy above:
+  the viewport, `zoom-to-fit`, `window`, `region` and `-o -` captures and the
+  missing-shader fallback as before; the focused border colour on the
+  stand-in `center-nearest` had just flown to; three screenshots answered
+  on other connections while a `subscribe` client went on receiving the
+  frames of that flight (12, 24, 35 and at last 148 lines), with no
+  consecutive line repeated in any stream; and, under an animated shader
+  background, two captures half a second apart differing, a subscriber
+  receiving nothing while only the background animated, and every flight
+  landing exactly. Not seen: the panel on a display, so neither the layer
+  there nor the timer's redraws of an animated background; a hot corner,
+  cursor edge pan or a coast on the joined timer. See the
+  [rendering contract](../../crates/desktop/RENDER.md), the
+  [desktop shell notes](../../native/desktop/README.md#rendering) and the
+  [compositor notes](../../native/desktop/COMPOSITOR-NOTES.md).
 
 These milestones add evidence to partial rows. None satisfies an entire native
 behavior row or changes the completion requirement.

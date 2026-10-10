@@ -73,7 +73,8 @@ impl Controller {
             .ok_or(Error::Invalid("unknown output"))?;
         Ok((viewport.clone(), usable))
     }
-    /// Every scene frame, detached placeholders included, at the integer boundary
+    /// Every canvas frame, detached placeholders included and widgets and
+    /// screen-pinned windows left out, at the integer boundary
     /// crates/canvas/POLICY.md leaves to the caller: floor the origin and ceil
     /// the far edge, so a fit never clips a fractional frame. With `anchors`,
     /// upstream ZoomToFit's `navigation.anchors` follow as zero-size points,
@@ -81,6 +82,10 @@ impl Controller {
     fn pixel_windows(&self, anchors: bool) -> Result<Vec<(PixelPoint, PixelSize)>, Error> {
         let mut frames = Vec::with_capacity(self.scene.windows().len());
         for window in self.scene.windows() {
+            // Upstream fits and bounds the zoom by canvas windows only.
+            if !self.on_canvas(window.id) {
+                continue;
+            }
             let rect = window.world_rect;
             frames.push((
                 (pixel(rect.origin.x.floor())?, pixel(rect.origin.y.floor())?),

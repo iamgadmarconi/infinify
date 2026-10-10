@@ -31,6 +31,7 @@ Preserve them as integers in native code.
 | --- | --- | --- |
 | `register_output` | `stable_id` string, `screen_bounds` rect | `output` logical ID |
 | `remove_output` | `output` | `{}`; camera retained by stable identity |
+| `outputs_settled` | none | `{dirty}`; sent once every display is registered: a screen-pinned window whose output is missing moves to one that is connected ([RULES.md](RULES.md#wire-contract)) |
 | `attach` | `identity`, `bundle_id`, `title`, `buffer:{width,height}`, `source_rect`, optional `logical_id`, optional `world_rect`, optional `output`, optional `pointer` | `window` logical ID; for a new window also `adopted`, `effect`, `navigation`, `dirty` |
 | `window_closed` | `window`, `identity`, optional `output` | `{standin, effect, navigation, dirty}` |
 | `retitle` | `window`, `identity`, `title` | `{dirty}` |
@@ -46,7 +47,7 @@ Preserve them as integers in native code.
 | `focus` | `window` | `effect` or null; raises logical world z-order |
 | `activate` | `window`, `output` or null, `cause: click / click_release / native`, optional `identity`, `generation` | `effect` or null (absent for `click_release`), `navigation` or null, `dirty`; see [NAVIGATION.md](NAVIGATION.md#activate) |
 | `clear_focus` | none | `{dirty}`; no window holds logical focus |
-| `hit` | `output`, global `screen` point | `hit` object or null |
+| `hit` | `output`, global `screen` point | `hit` object or null; it says whether the window is a `widget` or `pinned` |
 | `input` | `output`, global `screen` point, expected `identity` | same hit object; rejects absent/unbound/stale target |
 | `begin_drag` | `window`, `output`, optional `group` boolean (default false) | `{}` |
 | `begin_resize` | `window`, `output`, `edges`, optional `group` boolean | `{}` |
@@ -55,7 +56,8 @@ Preserve them as integers in native code.
 | `gesture_begin` | `kind`, `fingers`, `modifiers`, `context`, `output`, global `pointer` point, optional `doubletap`, `time_ms` | `{gesture, fired, note, navigation, effects, dirty, needs_frames, trackpad}` |
 | `gesture_update` | optional `dx`, `dy`, `scale`, `rotation`, `held`; `time_ms` | the same |
 | `gesture_end` | optional `cancelled`, `held`; `time_ms` | the same |
-| `snapshot` | none | `outputs`, `windows`, `focused`, `placements`, `lifecycle`, `evidence` |
+| `snapshot` | none | `outputs`, `windows`, `focused`, `placements`, `lifecycle`, `render`, `evidence`; each window with its `widget`, `pinned` and `rule`, each placement with `pinned`, `widget` and `opacity`, and both with what the window is drawn with (`kind`, `decoration` and the rest of [RENDER.md](RENDER.md#placements)) |
+| `screenshot_result` | `path`, `width`, `height`; or `error` | `{reply}`: upstream's reply to the client that asked for the screenshot |
 | `save` / `load` | explicit caller `path` string | `{}` |
 | `load_config` | `path` string or null | `{path, exists, errors, warnings, dirty, effects}` |
 | `set_platform` | `super` chord | `{super}` |
@@ -79,6 +81,15 @@ upstream's Linux commands. [Window lifecycle](LIFECYCLE.md) covers a window
 that appears or closes by itself: adoption, placement, stand-ins,
 `window_closed`, `retitle`, `adoption_complete` and the close, suspend and
 relaunch actions.
+[Window rules](RULES.md) covers `[[window_rules]]`, widgets and screen-pinned
+windows: what a rule does to a new window, the order `placements` and `hit`
+follow, what every navigation, gesture and output action does with a widget or
+a pinned window, `toggle-pin-to-screen`, `move-to-bookmark`, and IPC `Pin` and
+`Opacity`.
+[Rendering](RENDER.md) covers what the shell's compositor draws from: the
+snapshot's `render` block, what each placement is drawn with (the rule its
+window mapped with, the layer and the space it is drawn in), and the
+`msg screenshot` flow that ends in `screenshot_result`.
 [Trackpad gestures](GESTURES.md) covers `gesture_begin`, `gesture_update` and
 `gesture_end`: a libinput-shaped swipe, pinch or hold dispatched against the
 `[gestures]` tables. They are apart from `begin_drag`, `begin_resize`,
@@ -141,7 +152,10 @@ Existing live bindings must first be detached before replacing their identity.
 Each placement is a separate `(window,output)` instance, ordered bottom-to-top
 within each output. Fields: `screen_rect` (full projection), `clip_rect` (visible
 screen bounds), `world_local_crop`, `buffer_crop` (pixel crop, null for detached
-placeholders), and `source` (null or fresh ephemeral observation). Source includes
+placeholders), `source` (null or fresh ephemeral observation), and what it is
+drawn with (`kind`, `focused`, `title`, `app_name`, `launching`, `world_rect`,
+`decoration`, see [RENDER.md](RENDER.md#placements)), which each `windows`
+entry carries as well. Source includes
 `identity`, `buffer`, `original_rect`, and `observed_rect`. Native moves update only
 `observed_rect`; world resizing scales the entire observed source into the world
 rectangle. Crops and input therefore scale proportionally between these spaces.
@@ -164,7 +178,7 @@ already exist. Loads are bounded at 32 MiB and never modify the input file.
 Verification:
 
 ```sh
-cargo test -p driftwm-desktop --test navigation_flow --test navigation_actions_flow --test focus_cycle_flow --test controller_flow --test config_flow --test lifecycle_flow --test motion_flow --test gesture_flow --locked
+cargo test -p driftwm-desktop --test navigation_flow --test navigation_actions_flow --test focus_cycle_flow --test controller_flow --test config_flow --test lifecycle_flow --test motion_flow --test gesture_flow --test rules_flow --test render_flow --locked
 cargo clippy -p driftwm-desktop --all-targets -- -D warnings
 cargo fmt -p driftwm-desktop --check
 cargo build -p driftwm-desktop
@@ -175,4 +189,5 @@ cc -Wall -Wextra -Werror -mmacosx-version-min=26.0 \
 ```
 
 These scenarios prove controller behavior through JSON and the exported C ABI.
-They do not prove captured pixels, usable compositing or native input delivery.
+They do not prove captured pixels, drawn frames, written screenshots, usable
+compositing or native input delivery.

@@ -6,7 +6,8 @@
 // driftwm-core's `config::{Action, parse_action}`, upstream's own code. The
 // camera, bookmark, window navigation, nudge, exec, reload, quit, close,
 // suspend, output transfer, layout, toggle-cursor-pan and set-trackpad actions
-// execute; every other action parses and is then refused by name.
+// execute here, move-to-bookmark and toggle-pin-to-screen in rules.rs; every
+// other action parses and is then refused by name.
 use super::keyboard_layout::switch_effect;
 use super::window_actions::Moved;
 use super::*;
@@ -151,8 +152,10 @@ pub(crate) fn runs_here(action: &Action) -> bool {
             | Action::ZoomToFit
             | Action::GoToBookmark(_)
             | Action::SetBookmark(_)
+            | Action::MoveToBookmark(_)
             | Action::SendToOutput(_)
             | Action::SendCursorToOutput(_)
+            | Action::TogglePinToScreen
             | Action::SwitchLayout(_)
             | Action::ToggleCursorPan
             | Action::SetTrackpad(_)
@@ -221,7 +224,8 @@ impl Controller {
     /// upstream animates the frame from its old place, and clears a fill restore
     /// point that does not exist here. No focused window is no error upstream.
     fn nudge_window(&mut self, direction: &Direction) -> Result<bool, Error> {
-        let Some(window) = self.scene.focused() else {
+        // Upstream nudges a canvas window only: not a widget, not a pinned one.
+        let Some(window) = self.scene.focused().filter(|id| self.on_canvas(*id)) else {
             return Ok(false);
         };
         let rect = self
@@ -303,21 +307,30 @@ impl Controller {
                 outcome.effects.push(self.exec_effect(&command));
                 return Ok(outcome);
             }
-            // Upstream acts on the focused element and does nothing without one.
+            // Upstream acts on the focused element and does nothing without
+            // one, or on a widget.
             Action::CloseWindow => {
-                if let Some(window) = self.scene.focused() {
+                if let Some(window) = self.scene.focused().filter(|id| !self.is_widget(*id)) {
                     self.close_window(window, output, &mut outcome)?;
                 }
                 return Ok(outcome);
             }
             Action::SuspendWindow => {
-                if let Some(window) = self.scene.focused() {
+                if let Some(window) = self.scene.focused().filter(|id| !self.is_widget(*id)) {
                     self.suspend_window(window, output, &mut outcome)?;
                 }
                 return Ok(outcome);
             }
             Action::NudgeWindow(direction) => {
                 outcome.dirty = self.nudge_window(direction)?;
+                return Ok(outcome);
+            }
+            Action::MoveToBookmark(name) => {
+                outcome.dirty = self.move_to_bookmark(name)?;
+                return Ok(outcome);
+            }
+            Action::TogglePinToScreen => {
+                outcome.dirty = self.toggle_pin(output)?;
                 return Ok(outcome);
             }
             Action::CenterWindow => return Ok(outcome.moved(self.center_window(active()?)?)),

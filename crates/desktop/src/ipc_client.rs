@@ -539,7 +539,13 @@ fn invoke(args: &[String]) -> Result<(), Stop> {
         let bytes = std::fs::read(path);
         let _ = std::fs::remove_file(path);
         let bytes = bytes.map_err(|e| failed(format!("cannot read capture {path}: {e}")))?;
-        return std::io::stdout().write_all(&bytes).map_err(failed);
+        // Flushed here: this client is entered from C `main`, so no Rust
+        // runtime flushes the line-buffered stdout when the process exits.
+        let mut out = std::io::stdout().lock();
+        return out
+            .write_all(&bytes)
+            .and_then(|()| out.flush())
+            .map_err(failed);
     }
     // Subscribe switches to push mode: the first reply is just the ack, then the
     // server streams `Event` lines on the same connection until it closes.

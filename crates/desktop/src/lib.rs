@@ -14,7 +14,9 @@ mod lifecycle;
 mod motion;
 mod navigation;
 mod output_actions;
+mod render;
 mod resize_transaction;
+mod rules;
 mod settings;
 mod storage;
 mod view_actions;
@@ -33,9 +35,10 @@ use navigation::{NavigationContext, ViewFlight};
 pub use output_actions::Corner;
 use resize_transaction::NativeResizeTransaction;
 pub use resize_transaction::{NativeResizeResult, ResizeOutcome};
+use rules::Policy;
 use settings::{CameraSeed, Settings};
 pub use view_actions::ViewDirection;
-use view_actions::ViewReturn;
+use view_actions::{ViewReturn, pixel_size};
 pub use window_actions::ActivationCause;
 
 use driftwm_canvas::{
@@ -230,6 +233,15 @@ pub struct Controller {
     trackpad_override: Option<bool>,
     /// How many pointer drags have been installed: the serial of the latest.
     drags: u64,
+    /// The window rules each window mapped with, and the screen-pinned windows.
+    policy: Policy,
+    /// Counts the accepted config reloads, and the launch load when its file
+    /// changed what the shell draws with. Not saved: it only tells the shell
+    /// when to rebuild what it derived, the files it read included.
+    render_revision: u64,
+    /// The paths of the screenshot effects the shell has yet to answer,
+    /// oldest first. Not saved.
+    pending_screenshots: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -371,6 +383,18 @@ pub enum Command {
     },
     /// A click on empty canvas: no window holds logical focus.
     ClearFocus {},
+    /// The shell's answer to a `screenshot` effect: the file it wrote and its
+    /// pixel size, or why it wrote none.
+    ScreenshotResult {
+        #[serde(default)]
+        path: Option<String>,
+        #[serde(default)]
+        width: Option<u32>,
+        #[serde(default)]
+        height: Option<u32>,
+        #[serde(default)]
+        error: Option<String>,
+    },
     /// Read upstream's config file. No `path` is upstream's own default path.
     LoadConfig {
         path: Option<String>,
@@ -420,6 +444,9 @@ pub enum Command {
     RemoveOutput {
         output: OutputId,
     },
+    /// The shell has registered every display that exists: a pin whose own
+    /// output is not among them moves to one that is.
+    OutputsSettled {},
     Attach {
         identity: SourceIdentity,
         bundle_id: String,
@@ -677,6 +704,7 @@ impl Controller {
         }
         let mut next = self.clone();
         let result = next.apply(request.command)?;
+        next.settle_policy()?;
         next.scene.validate()?;
         next.refresh_active_bookmarks();
         next.lifecycle
@@ -851,6 +879,12 @@ impl Controller {
                 generation,
             } => return self.activate(window, output, cause, identity, generation),
             Command::ClearFocus {} => return Ok(json!({"dirty":self.clear_focus()})),
+            Command::ScreenshotResult {
+                path,
+                width,
+                height,
+                error,
+            } => return self.screenshot_result(path, width, height, error),
             Command::LoadConfig { path } => return self.load_config(path),
             Command::SetPlatform { super_chord } => return self.set_platform(&super_chord),
             Command::Bindings {} => return Ok(self.bindings()),
@@ -896,6 +930,13 @@ impl Controller {
                 // on. A camera of this session always survives a reconnect.
                 let saved = self.outputs.get(&id);
                 let previous = saved.map(|o| o.seed);
+                // A display that comes back as it was keeps its pins where
+                // they are. One first seen in this run, or back at another
+                // size, has them moved inward.
+                let resized = saved.is_some_and(|o| {
+                    pixel_size(o.viewport.screen_bounds.size).ok()
+                        != pixel_size(screen_bounds.size).ok()
+                });
                 let withheld = previous == Some(CameraSeed::File)
                     && self.configured
                     && !self.config().session.restore_camera;
@@ -918,10 +959,11 @@ impl Controller {
                     }
                     _ => CameraSeed::Live,
                 };
-                if self.scene.output(id).is_some() {
-                    self.scene.update_output(viewport.clone())?;
-                } else {
+                let connected = self.scene.output(id).is_none();
+                if connected {
                     self.scene.add_output(viewport.clone())?;
+                } else {
+                    self.scene.update_output(viewport.clone())?;
                 }
                 self.flights.remove(&id);
                 self.navigation_contexts.remove(&id);
@@ -934,8 +976,12 @@ impl Controller {
                         seed,
                     },
                 );
+                if connected && (previous == Some(CameraSeed::File) || resized) {
+                    self.output_connected(id);
+                }
                 return Ok(json!({"output": id}));
             }
+            Command::OutputsSettled {} => return Ok(json!({"dirty": self.rehome_pins()})),
             Command::RemoveOutput { output } => {
                 let resize = self.resize_output_removed(output)?;
                 let viewport = self.scene.remove_output(output)?;
@@ -950,6 +996,9 @@ impl Controller {
                 self.drop_gesture();
                 self.motion.forget(output);
                 self.drop_output_gesture(output);
+                // Its pins stay bound to it, drawn nowhere: the shell removes
+                // every output on any reconfiguration, so only
+                // `outputs_settled` knows which displays are really gone.
                 if let Some(result) = resize {
                     return Ok(result);
                 }
@@ -991,10 +1040,18 @@ impl Controller {
                 }
                 // A caller that names the slot or the world frame decides both
                 // itself. Otherwise a new window has appeared.
+                // Upstream resolves a window's rules once, when it maps: the
+                // bundle identifier is the rule's `app_id`.
+                let rule = self.config().resolve_window_rules(&bundle_id, &title);
                 let arrival = match (logical_id, world_rect) {
-                    (None, None) => {
-                        Some(self.arrival(output, pointer, &bundle_id, &title, source_rect.size)?)
-                    }
+                    (None, None) => Some(self.arrival(
+                        output,
+                        pointer,
+                        &bundle_id,
+                        &title,
+                        source_rect.size,
+                        rule.as_ref(),
+                    )?),
                     _ => None,
                 };
                 let id = if let Some(id) = logical_id {
@@ -1017,7 +1074,7 @@ impl Controller {
                         .ok_or(Error::Invalid("window IDs exhausted"))?;
                     let id = WindowId(self.next_window);
                     let world_rect = match arrival {
-                        Some(Arrival::Place { rect, .. }) => rect,
+                        Some(Arrival::Place { rect, .. } | Arrival::Pin { rect, .. }) => rect,
                         _ => world_rect.unwrap_or(source_rect),
                     };
                     self.scene.add_window(Window {
@@ -1048,6 +1105,12 @@ impl Controller {
                         resize_disabled: false,
                     },
                 );
+                self.map_rule(id, rule, arrival);
+                // A slot under a drag or resize that its window's rule has
+                // just made a widget lets go of the gesture.
+                if !self.on_canvas(id) {
+                    self.release_gesture(id);
+                }
                 return match arrival {
                     Some(arrival) => self.settle_arrival(id, output, arrival),
                     None => Ok(json!({"window": id})),
@@ -1212,7 +1275,7 @@ impl Controller {
                 self.focus.last_result = Some(json!({"effect": expected, "success": success}));
                 if success {
                     self.focus.observed_native = Some(expected);
-                    self.scene.confirm_focus(window)?;
+                    self.confirm_focus(window)?;
                     if self.focus.release_pending {
                         self.finish_cycle();
                     }
@@ -1246,7 +1309,7 @@ impl Controller {
                 // which a cycle in progress keeps frozen. `observed_native` is
                 // left as it was.
                 self.focus.logical = Some(window);
-                self.scene.confirm_focus(window)?;
+                self.confirm_focus(window)?;
                 if self.focus.release_pending {
                     self.finish_cycle();
                 }
@@ -1261,7 +1324,7 @@ impl Controller {
                 self.focus.pending_effect = None;
                 self.focus.logical = None;
                 self.scene.focus(window)?;
-                self.scene.confirm_focus(window)?;
+                self.confirm_focus(window)?;
                 self.focus.observed_native = Some(FocusEffect {
                     op: "observed_native_focus",
                     effect_id: 0,
@@ -1291,6 +1354,7 @@ impl Controller {
                 if self.gesture.is_some() {
                     return Err(Error::Invalid("gesture already active"));
                 }
+                self.movable(window)?;
                 let zoom = self
                     .scene
                     .output(output)
@@ -1371,6 +1435,8 @@ impl Controller {
                 // that appear are still focused and revealed.
                 loaded.lifecycle.settled = self.lifecycle.settled;
                 loaded.settings = self.settings.clone();
+                loaded.render_revision = self.render_revision;
+                loaded.pending_screenshots = std::mem::take(&mut self.pending_screenshots);
                 loaded.platform = self.platform;
                 loaded.configured = self.configured;
                 loaded.layout = self.layout.clone();
@@ -1397,6 +1463,8 @@ impl Controller {
         if self.gesture.is_some() {
             return Err(Error::Invalid("gesture already active"));
         }
+        // A widget and a screen-pinned window are refused on every path.
+        self.movable(window)?;
         let zoom = self
             .scene
             .output(output)
@@ -1460,6 +1528,16 @@ impl Controller {
     ) -> Result<(), Error> {
         if self.fresh(window, identity)?.generation != generation {
             return Err(Error::Invalid("stale binding generation"));
+        }
+        Ok(())
+    }
+    /// Upstream update_focus_history's eligibility: a focus the adapter
+    /// confirmed or observed, or answered `focus_logical`, enters the focus
+    /// history, the one `cycle-windows` walks and a close follows. A widget
+    /// and a screen-pinned window take the focus without entering it.
+    pub(crate) fn confirm_focus(&mut self, window: WindowId) -> Result<(), Error> {
+        if self.on_canvas(window) {
+            self.scene.confirm_focus(window)?;
         }
         Ok(())
     }
@@ -1606,7 +1684,7 @@ impl Controller {
         if self.scene.output(output).is_none() {
             return Err(Error::Invalid("unknown output"));
         }
-        let Some(hit) = self.scene.hit_test(output, screen) else {
+        let Some((window, at)) = self.hit_window(output, screen) else {
             if expected.is_some() {
                 return Err(Error::Invalid("input does not hit a source"));
             }
@@ -1614,42 +1692,65 @@ impl Controller {
         };
         let source = self
             .sources
-            .get(&hit.window)
+            .get(&window)
             .ok_or(Error::Invalid("unbound source"))?;
         if !source.observation_known || source.capture_revision != Some(source.observation_revision)
         {
             return Err(Error::Invalid("source presentation unsettled"));
         }
         if let Some(identity) = expected {
-            self.fresh(hit.window, identity)?;
+            self.fresh(window, identity)?;
         }
         let world = self
             .scene
-            .window(hit.window)
+            .window(window)
             .ok_or(Error::Invalid("unknown window"))?
             .world_rect;
-        let local = scale_point(hit.local, world.size, source.observed_rect.size);
-        let buffer_local = source.content_rect.origin
-            + scale_point(hit.local, world.size, source.content_rect.size);
+        let local = scale_point(at, world.size, source.observed_rect.size);
+        let buffer_local =
+            source.content_rect.origin + scale_point(at, world.size, source.content_rect.size);
         Ok(
-            json!({"hit": {"window": hit.window, "output": output, "identity": source.identity, "local": local, "buffer_local": buffer_local, "native_screen": source.observed_rect.origin + local, "requires_native_revalidation": true}}),
+            json!({"hit": {"window": window, "output": output, "identity": source.identity, "local": local, "buffer_local": buffer_local, "native_screen": source.observed_rect.origin + local, "requires_native_revalidation": true, "widget": self.is_widget(window), "pinned": self.is_pinned(window)}}),
         )
     }
     fn snapshot(&self) -> Result<Value, Error> {
-        let placements: Vec<_> = self.scene.placements().iter().map(|p| {
+        // What each window is drawn with: additive keys of its entry, repeated
+        // on each of its placements. A window on no output has no placement
+        // and can still be captured, so the entry carries them too.
+        let drawn: BTreeMap<WindowId, Value> = self
+            .scene
+            .windows()
+            .iter()
+            .map(|w| (w.id, self.drawn(w.id)))
+            .collect();
+        let describe = |mut entry: Value, window: WindowId| {
+            if let (Some(entry), Some(Value::Object(drawn))) =
+                (entry.as_object_mut(), drawn.get(&window))
+            {
+                entry.extend(drawn.clone());
+            }
+            entry
+        };
+        // Bottom to top within each output: widgets, canvas windows, the
+        // windows pinned to it. `opacity` and `decoration.opacity` are one
+        // function's answer.
+        let placements: Vec<_> = self.layered_placements().iter().map(|(p, pinned)| {
             let source = self.sources.get(&p.window);
             let world_size = self.scene.window(p.window).expect("placement references scene window").world_rect.size;
             let settled = source.is_some_and(|s| s.observation_known && s.capture_revision == Some(s.observation_revision));
             let buffer_crop = source.filter(|_| settled).map(|s| { let mut crop = scale_rect(p.source_rect, world_size, s.content_rect.size); crop.origin = crop.origin + s.content_rect.origin; crop });
-            json!({"window": p.window, "output": p.output, "screen_rect": p.screen_rect, "clip_rect": p.clip_rect, "world_local_crop": p.source_rect, "buffer_crop": buffer_crop, "presentation_settled": settled, "source": source})
+            describe(json!({"window": p.window, "output": p.output, "screen_rect": p.screen_rect, "clip_rect": p.clip_rect, "world_local_crop": p.source_rect, "buffer_crop": buffer_crop, "presentation_settled": settled, "source": source, "pinned": pinned, "widget": self.is_widget(p.window), "opacity": self.opacity_of(p.window)}), p.window)
         }).collect();
-        let windows: Vec<_> = self.scene.windows().iter().map(|w| json!({"window": w.id, "world_rect": w.world_rect, "metadata": self.metadata.get(&w.id), "source": self.sources.get(&w.id)})).collect();
+        let windows: Vec<_> = self.scene.windows().iter().map(|w| {
+            let (widget, pinned, rule) = self.policy_json(w.id);
+            describe(json!({"window": w.id, "world_rect": w.world_rect, "metadata": self.metadata.get(&w.id), "source": self.sources.get(&w.id), "widget": widget, "pinned": pinned, "rule": rule}), w.id)
+        }).collect();
         let mut navigation = json!({"flights": self.flights, "clock_ns": self.navigation_clock, "contexts": self.navigation_contexts, "home_returns": self.home_returns, "overview_returns": self.overview_returns, "active_bookmarks": self.active_bookmarks});
         for (key, value) in self.motion.snapshot() {
             navigation[key] = value;
         }
         Ok(
-            json!({"evidence": "logical_controller_only", "capabilities": ["normal_window_navigation", "native_resize_controller_contract"], "native_resize": self.native_resize, "lifecycle": self.lifecycle, "navigation": navigation, "bookmarks": self.bookmarks, "keyboard_layout": self.layout, "trackpad": self.trackpad_snapshot(), "outputs": self.scene.outputs(), "windows": windows, "focused": self.scene.focused(), "focus": {"intent": self.scene.focused(), "observed_native": self.focus.observed_native, "pending_effect": self.focus.pending_effect, "last_result": self.focus.last_result, "history": self.scene.stage().focus_history(), "cycle": self.scene.stage().cycle_state(), "release_pending": self.focus.release_pending}, "placements": placements}),
+            json!({"evidence": "logical_controller_only", "capabilities": ["normal_window_navigation", "native_resize_controller_contract"], "render": self.render_block(), "native_resize": self.native_resize, "lifecycle": self.lifecycle, "navigation": navigation, "bookmarks": self.bookmarks, "keyboard_layout": self.layout, "trackpad": self.trackpad_snapshot(), "outputs": self.scene.outputs(), "windows": windows, "focused": self.scene.focused(), "focus": {"intent": self.scene.focused(), "observed_native": self.focus.observed_native, "pending_effect": self.focus.pending_effect, "last_result": self.focus.last_result, "history": self.scene.stage().focus_history(), "cycle": self.scene.stage().cycle_state(), "release_pending": self.focus.release_pending}, "placements": placements}),
         )
     }
 }

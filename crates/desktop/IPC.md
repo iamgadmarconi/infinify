@@ -1,10 +1,12 @@
 # Actions, bookmarks and IPC, ABI 1
 
-Three additive ABI 1 commands make the controller scriptable in DriftWM's own
+Four additive ABI 1 commands make the controller scriptable in DriftWM's own
 words: `action` runs one upstream action string, `ipc` answers one upstream IPC
-request, and `state_event` produces the lines of upstream's
-[event stream](#event-stream). The exported `driftwm_desktop_msg` is the
-matching `msg` client. All four are adapted from malbiruk/driftwm at
+request, `state_event` produces the lines of upstream's
+[event stream](#event-stream), and `screenshot_result` completes the one
+request the controller cannot answer by itself
+([RENDER.md](RENDER.md#screenshots)). The exported `driftwm_desktop_msg` is the
+matching `msg` client. All five are adapted from malbiruk/driftwm at
 `352333a8fa1b22171492d4b71a54102045c9a19d` (`src/config/{types,parse}.rs`,
 `src/input/actions.rs`, `src/ipc/{protocol,mod,client}.rs`). Existing commands,
 their shapes, `ABI_VERSION` and `SAVE_VERSION` are unchanged.
@@ -66,10 +68,10 @@ Names are case-sensitive kebab-case; directions (`up`, `down`, `left`, `right`,
 | Action | Runs here | Effect |
 | --- | --- | --- |
 | `pan-viewport <dir>` | yes | the `pan_viewport` command |
-| `center-window` | yes | focuses and flies to the focused window, else the window nearest the viewport center, at zoom 1 |
-| `center-nearest <dir>` | yes | focuses and flies to the nearest window in that direction at the current zoom, or flies to a `navigation.anchors` point and clears focus |
-| `cycle-windows forward`, `cycle-windows backward` | yes | one step through the focus history, flown to at the current zoom; reads `held` |
-| `focus-center` | yes | focuses and flies to the window under `pointer`, at zoom 1 |
+| `center-window` | yes | focuses and flies to the focused canvas window, else the canvas window nearest the viewport center, at zoom 1 |
+| `center-nearest <dir>` | yes | focuses and flies to the nearest canvas window in that direction at the current zoom, or flies to a `navigation.anchors` point and clears focus |
+| `cycle-windows forward`, `cycle-windows backward` | yes | one step through the focus history, which holds canvas windows only, flown to at the current zoom; reads `held` |
+| `focus-center` | yes | focuses and flies to the canvas window under `pointer`, at zoom 1; a pinned window there is passed over and a widget is not taken |
 | `home-toggle` | yes | the `home_toggle` command |
 | `zoom-in`, `zoom-out`, `zoom-reset`, `zoom-to-fit` | yes | the command of the same name |
 | `go-to-bookmark <name>` | yes | flies to the bookmark; `navigation` is `null` when there is none |
@@ -78,22 +80,26 @@ Names are case-sensitive kebab-case; directions (`up`, `down`, `left`, `right`,
 | `nudge-window <dir>` | yes | moves the focused window by `navigation.nudge_step`; `dirty` is true; needs no output |
 | `exec <cmd>`, `spawn <cmd>`, `exec-terminal`, `exec-launcher` | yes | `effects` is one `exec` for the shell to run; needs no output |
 | `reload-config` | yes | `effects` is `[{"op":"reload_config"}]`; needs no output |
-| `send-to-output <dir>` | yes | moves the focused window to the adjacent output; `dirty` is true when it moved; needs an output only when no output shows the window |
+| `send-to-output <dir>` | yes | moves the focused window to the adjacent output, a pinned one by its pin; a widget stays; `dirty` is true when it moved; needs an output only when no output shows the window |
 | `send-cursor-to-output <dir>` | yes | `effects` is one `warp_pointer`, or empty with no adjacent output |
 | `switch-layout next`, `prev`, `<index>` | yes | `effects` is one `switch_layout`; needs no output |
 | `close-window` | yes | a focused live window: `effects` is one `close_window`, marked a real close for the next ten seconds; a focused placeholder is dismissed and `dirty` is true; needs no output |
 | `suspend-window` | yes | a focused live window: `effects` is one `close_window`, and a stand-in takes its place if it closes within ten seconds; a focused placeholder is dismissed; needs no output |
 | `toggle-cursor-pan` | yes | flips [cursor edge pan](MOTION.md#cursor-edge-pan); `navigation` is `null`; needs no output |
 | `set-trackpad on\|off\|toggle` | yes | turns [gesture](GESTURES.md#set-trackpad) dispatch on or off; needs no output |
-| `grow-window`, `shrink-window`, `move-to-bookmark`, `zoom-to-fit-snapped`, `toggle-fullscreen`, `fit-window`, `fit-window-snapped`, `fill-window`, `toggle-pin-to-screen` | no | parsed with upstream's argument rules, then refused |
+| `move-to-bookmark <name>` | yes | centers the focused canvas window on the bookmark and raises it; `dirty` when it moved; a missing bookmark, a widget and a pinned window are passed over; needs no output |
+| `toggle-pin-to-screen` | yes | pins the focused live window to the screen where it shows, or returns it to the canvas there; `dirty` when the pin changed; see [RULES.md](RULES.md#screen-pinned-windows) |
+| `grow-window`, `shrink-window`, `zoom-to-fit-snapped`, `toggle-fullscreen`, `fit-window`, `fit-window-snapped`, `fill-window` | no | parsed with upstream's argument rules, then refused |
 
 [NAVIGATION.md](NAVIGATION.md#window-navigation-actions) describes the four
 window navigation actions, [CONFIG.md](CONFIG.md#actions-that-run-now) the
 nudge, exec and reload actions, [Outputs](CONFIG.md#outputs) the two output
 actions, [Keyboard layouts](CONFIG.md#keyboard-layouts) `switch-layout`,
 [LIFECYCLE.md](LIFECYCLE.md#actions-and-ipc) the close and suspend actions,
-[MOTION.md](MOTION.md#cursor-edge-pan) `toggle-cursor-pan` and
-[GESTURES.md](GESTURES.md#set-trackpad) `set-trackpad`.
+[MOTION.md](MOTION.md#cursor-edge-pan) `toggle-cursor-pan`,
+[GESTURES.md](GESTURES.md#set-trackpad) `set-trackpad` and
+[RULES.md](RULES.md#actions) the bookmark move and the pin toggle, with what
+every action here does when the focused window is a widget or screen-pinned.
 An `exec` effect is not run by the controller. Because `ipc`
 accepts `{"Action":…}`, whoever can write to the shell's socket can have the
 shell run a command, as with upstream's `driftwm msg action exec`.
@@ -202,7 +208,12 @@ committed step, as upstream's modifier-less fire is. The reply is
 {"reply":{"Ok":{"Camera":{"x":500.0,"y":300.0}}},"effects":[],"dirty":false,"navigation":{…}}
 ```
 
-`reply` is upstream's `Reply`: `{"Ok":<Response>}` or `{"Err":"message"}`.
+`reply` is upstream's `Reply`: `{"Ok":<Response>}` or `{"Err":"message"}`. One
+request has no reply yet when `ipc` returns: an accepted `Screenshot` answers
+`"reply": null` with a `{"op":"screenshot",…}` effect, and its reply is what
+`screenshot_result` returns once the shell has rendered
+([RENDER.md](RENDER.md#screenshots)). The shell must write nothing to the
+client for a `null`.
 `effects`, `dirty` and `navigation` mean what they mean for `action`. A request
 that does not decode (`invalid request: …`) or is refused becomes an `Err` reply
 with empty `effects`, `dirty` false and `navigation` null. It is never a
@@ -236,9 +247,10 @@ with Y down. Two centers are in play and they are not interchangeable:
 
 Only `screen_bounds`, the navigation context and world rectangles are read, and
 of `screen_bounds` only the size enters any camera or window position. Its
-origin is read in two places: the adjacency of outputs, and the screen point of
-a `warp_pointer` effect. Observed and original native rectangles never enter
-the math.
+origin is read in three places: the adjacency of outputs, the screen point of
+a `warp_pointer` effect, and a `from_screen` screenshot region, which is given
+in global screen points and is read through the `screen_bounds` of the output
+under it. Observed and original native rectangles never enter the math.
 
 Window positions and sizes cross upstream's integer boundary: a world
 rectangle's top-left and size are each rounded to the nearest whole point, and
@@ -259,9 +271,11 @@ into `i32` or its far edge would pass `i32::MAX`.
 | `{"Zoom":null}` | yes | `Zoom(z)`: the current zoom. |
 | `{"Zoom":z}` | yes | Clamps to `[dynamic minimum, 1]` (the minimum `zoom_out` uses), flies there anchored on the usable center and replies with the clamped value. Refuses non-positive numbers. No snap to 1 and no "never zoom in" rule: the value is explicit. |
 | `{"Focus":null}` | no | `Focused({id,app_id})` for the logical focus, or `Focused(null)`. |
-| `{"Focus":<selector>}` | yes | Logical focus and raise, plus upstream's camera rule: a frame already wholly inside the usable area is only focused; a window with a bound source is navigated to at zoom 1, or at the current zoom when `zoom.reset_on_activation` is off, exactly as `navigate_window` does; a detached placeholder is panned to at the current zoom, as upstream's `reveal_suspended` does for a stand-in. `effects` holds the focus effect when the window has a bound source; `dirty` is true because focus and stacking are saved. |
-| `{"Move":{window?,to?}}` | no | Without `to`: `Position{x,y}`, the frame's center. With `to`: a logical world move that puts the frame's top-left on whole points and keeps its size; `dirty` is true. Refused while a drag or resize gesture is installed, while a native resize transaction on that window is live, and when the destination frame would leave the `i32` range (`window geometry exceeds integer range`). |
-| `{"Resize":{window?,to?}}` | no | Without `to`: `Size{width,height}`. With `to`: `Err`, `resize is not implemented on macOS yet: native layout resize is not available` (a non-positive size gets upstream's `size must be positive`). |
+| `{"Focus":<selector>}` | yes | Logical focus and raise, plus upstream's camera rule: a frame already wholly inside the usable area is only focused; a window with a bound source is navigated to at zoom 1, or at the current zoom when `zoom.reset_on_activation` is off, exactly as `navigate_window` does; a detached placeholder is panned to at the current zoom, as upstream's `reveal_suspended` does for a stand-in. `effects` holds the focus effect when the window has a bound source; `dirty` is true because focus and stacking are saved. A pinned window is raised and focused without a navigation; a widget is refused, `window #N is a widget and cannot be focused`. |
+| `{"Move":{window?,to?}}` | no | Without `to`: `Position{x,y}`, the frame's center. With `to`: a logical world move that puts the frame's top-left on whole points and keeps its size; `dirty` is true. Refused while a drag or resize gesture is installed, while a native resize transaction on that window is live, and when the destination frame would leave the `i32` range (`window geometry exceeds integer range`). A pinned window reads and refuses the write: `this window has no canvas position to move: it is pinned, fullscreen, or not on screen yet`. A widget is moved by nothing else. |
+| `{"Resize":{window?,to?}}` | no | Without `to`: `Size{width,height}`. With `to`: `Err`, `resize is not implemented on macOS yet: native layout resize is not available` (a non-positive size gets upstream's `size must be positive`; a pinned window and a widget get upstream's `this window has no canvas size to set: it is pinned, fullscreen, a widget, or not on screen yet`). |
+| `{"Opacity":{window?,value?}}` | no | Without `value`: `Opacity(n)`, what the window is drawn at. With one in `[0, 1]`: pins it until the window is gone, never `dirty`. Live windows only. [RULES.md](RULES.md#ipc). |
+| `{"Pin":{window?,value?}}` | for a pin, when no output shows the window | Without `value`: `Pin(bool)`. With one: `toggle-pin-to-screen` as a bool, for any live window; `dirty` when it changed. [RULES.md](RULES.md#ipc). |
 | `{"Action":"…"}` | per action | Runs the `action` command's handler. `Ok` whenever it runs, even with no effect; every refusal above is an `Err` reply. |
 | `{"Bookmark":{name?,to?,delete?}}` | no | Upstream's four forms: list (`Bookmarks{…}`, sorted by name), get and set (`Bookmark{x,y}`), delete (`Ok`). Set and delete report `dirty`. Errors are upstream's: `no bookmark named '…'`, `bookmark delete requires a name`, `bookmark delete does not take coordinates`, `bookmark coordinates require a name`, `bookmark coordinates must be finite`. |
 | `"DebugCounters"` | no | Sizes of the controller's own collections, keyed by field name. Unstable. |
@@ -271,14 +285,15 @@ into `i32` or its far edge would pass `i32::MAX`.
 | `{"Layout":{"short":false}}` | no | `Layout(name)`: the display name of the keyboard layout the shell last reported with [`layout_changed`](CONFIG.md#keyboard-layouts), or `""` before any report. |
 | `{"Layout":{"short":true}}` | no | `Layout(short)`: its short code, or the display name when the code is empty, as upstream falls back. |
 | `"Subscribe"` | no | `Ok`, and the effect `{"op":"subscribe","line":…}` carrying the current snapshot. See [Event stream](#event-stream). With an `output` that is not registered: `Err("unknown output")`, as `State`. |
-| `{"Opacity":…}`, `{"Pin":…}`, `{"Screenshot":…}` | no | Decoded, then `Err`: `<name> is not implemented on macOS yet`, with the `msg` command's name. |
+| `{"Screenshot":{target,scale,path}}` | per target | Upstream's `cmd_screenshot` up to the render. Refused with upstream's texts in upstream's order; otherwise `"reply": null` and `effects` is one `screenshot` request carrying the resolved canvas region and pixel size. The shell renders, calls `screenshot_result`, and writes what that returns as the reply line. See [RENDER.md](RENDER.md#screenshots). |
 
 A missing output where one is needed is `Err("no active output")`; an id that is
 not registered is `Err("unknown output")`. Camera and zoom writes reject with
 `navigation during active gesture` while a gesture is installed.
 
 A selector is upstream's: a JSON number is an Infinify logical window id, exact;
-a JSON string is a case-insensitive substring of the bundle id. Among several
+a JSON string is a case-insensitive substring of the bundle id, which passes
+over widgets as upstream's does: only an id reaches one. Among several
 matches a window with a bound source wins over a detached placeholder
 (upstream's live client over stand-in); within each group stage order decides.
 No selector means the focused window, or `no focused window`. `Close`,
@@ -293,14 +308,19 @@ by focus alike. [LIFECYCLE.md](LIFECYCLE.md) has what each then does.
 the active output's; with no active output they read `[0.0, 0.0]` and `1.0` and
 no output is marked active. `layout` and `layout_short` are what the `Layout`
 request answers, long and short.
-`fullscreen`, `pinned`, `layers` and `canvas_layers` are always empty: none of
-those exist here.
+`fullscreen`, `layers` and `canvas_layers` are always empty: none of those
+exist here.
 
-- `windows`: every Scene window, the focused one first and the rest in stage
-  order (bottom to top). `id` is the logical window id, `app_id` the bundle id,
+- `pinned`: the screen-pinned windows of the connected outputs, as upstream
+  lists them: `id`, `output` (the stable id), `app_id`, `title`, and the
+  `position` and `size` a `pinned_to_screen` rule takes, sorted by output and
+  position.
+- `windows`: every Scene window that is not pinned, the focused one first and
+  the rest in stage order (bottom to top, so widgets come first). `id` is the logical window id, `app_id` the bundle id,
   `title` the last attached title, `position` and `size` the frame as above.
   `suspended` is true for a window with no bound source: a detached placeholder
-  is Infinify's stand-in. `is_widget` is false and `mode` is `"Normal"`.
+  is Infinify's stand-in. `is_widget` is the window's rule's; `mode` is
+  `"Normal"`.
 - `outputs`: connected outputs in registration order. `name` is the output's
   stable id, `camera` its viewport center, `size` its logical size, `active`
   whether it is the request's output, `active_bookmark` its incumbent.
@@ -411,7 +431,9 @@ is its spec, joined by single spaces. Parsing is by hand; there is no clap.
   blank line. Without `--json` a line that is not an event ends the client with
   status 1. An `Err` ack is reported like any other `Err` reply.
 - `screenshot` builds upstream's request (an absolute path, a temporary file
-  for `-o -`) and prints the server's refusal.
+  for `-o -`) and prints the path of the reply, or relays and deletes the file
+  it names for `-o -`, as upstream's client does. A refusal is printed like
+  any other `Err` reply.
 
 ## Differences from upstream
 
@@ -453,9 +475,8 @@ camera and zoom round trips on outputs whose `screen_bounds` origin is not the
 global origin and whose usable center differs from the output center, bookmark
 set / go-to / list / delete and the save file with and without the `bookmarks`
 key, `Move` with its range refusal, `Focus` of a bound window (zoom 1) and of a
-placeholder (current zoom), every refused, unknown and unimplemented request
-against an unchanged `snapshot`, and an accept / reject table for the action
-grammar. The window navigation actions, `pointer`, `held` and the cycle prelude
+placeholder (current zoom), every refused and unknown request against an
+unchanged `snapshot`, and an accept / reject table for the action grammar. The window navigation actions, `pointer`, `held` and the cycle prelude
 are covered by `tests/navigation_actions_flow.rs`, described under
 [Window navigation actions](NAVIGATION.md#window-navigation-actions). The client is driven through `driftwm_desktop_msg` against a throwaway
 `UnixListener` in the temporary directory: the request line it sends, its exit
@@ -474,11 +495,15 @@ event.
 Not covered by tests: the client's printed output (only its exit status and
 request line are asserted; for `subscribe` without `--json`, status 0 also says
 every line decoded as upstream's typed event), the `$INFINIFY_SOCKET` and
-default-path resolution, and the `screenshot -o -` relay, which needs a server
-that answers `Ok`. The shell's side of the stream is not covered by these tests
-at all: its socket writes, its subscriber limit, how it drops a peer that stops
-reading, and when it calls `state_event`. Two launches of the built app on
-2026-10-09, described in the
+default-path resolution, and the `screenshot -o -` relay (it needs a server
+that writes the file; it was run against the built app, see
+[RENDER.md](RENDER.md#verification-boundary), where the bytes on stdout
+equalled a file capture of the same target and no temporary file was left; the
+relay flushes stdout itself, because this client is entered from C `main` and
+no Rust runtime flushes it at exit). The shell's side of the stream is not
+covered by these tests at all: its socket writes, its subscriber limit, how it
+drops a peer that stops reading, and when it calls `state_event`. Two launches
+of the built app on 2026-10-09, described in the
 [shell notes](../../native/desktop/README.md#what-has-been-run), observed the
 stream over the real socket (the ack and first line, one line per frame of a
 flight and none while idle, no repeated line, the limit of eight, requests on a
@@ -543,9 +568,12 @@ saved as evidence. Observed, each read back through the socket:
 - `unknown action: frobnicate`, `action not implemented on macOS yet:
   toggle-fullscreen`, `unknown direction: sideways`, the `go-to` removal
   message, the `resize` write refusal and the eight `<name> is not implemented
-  on macOS yet` replies (three since: `layout` and `subscribe` are answered
-  now, and `close`, `suspend` and `relaunch` since the
-  [lifecycle](LIFECYCLE.md) work), each
+  on macOS yet` replies (none since: `close`, `suspend` and `relaunch` are
+  answered since the [lifecycle](LIFECYCLE.md) work, `layout` and `subscribe`
+  since the platform actions, and `Opacity`, `Pin` and `Screenshot` run:
+  [RULES.md](RULES.md#live-run-2026-10-10) and
+  [RENDER.md](RENDER.md#verification-boundary) have what later launches
+  observed of those three), each
   with exit status 1; `{"Err":"invalid request"}`
   for a line that is not JSON.
 - The reply's alphabetical member order on the raw socket; the client's output

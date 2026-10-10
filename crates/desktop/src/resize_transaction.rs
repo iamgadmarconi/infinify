@@ -126,6 +126,7 @@ impl Controller {
                 "native resize requires one ordinary window and valid screen point",
             ));
         }
+        self.movable(window)?;
         let source = self
             .sources
             .get(&window)

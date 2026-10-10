@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+use super::rules::{Pin, Policy};
 use super::*;
 use std::{
     collections::BTreeSet,
@@ -28,20 +29,52 @@ struct Saved {
     /// may come back to. A file written before stand-ins existed has only those.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     standins: BTreeSet<WindowId>,
+    /// Additive in the same way: the screen-pinned windows, each with the
+    /// output it is fixed to and its place there. Upstream's session file
+    /// holds none, because its windows die with the compositor; here the
+    /// window lives on, and its slot keeps the pin it had.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pins: BTreeMap<WindowId, Pin>,
 }
 impl Controller {
     /// Save world geometry and output cameras, never live bindings or gestures.
     /// Which windows are stand-ins is saved; marks and relaunches are not.
+    /// Upstream's widgets never enter the session store: a widget is left out
+    /// with everything about it, and so is every window's applied rule, which
+    /// is resolved again when the window maps. A pinned window is saved with
+    /// its pin, and with the canvas frame that pin shows.
     /// Rename commits atomically; directory sync errors may occur after commit.
     pub fn save(&self, path: impl AsRef<Path>) -> Result<(), Error> {
         let mut scene = self.scene.clone();
         for output in self.scene.outputs() {
             scene.remove_output(output.id)?;
         }
+        // The pins say which windows stay out of snapping: one source, not two.
+        for window in self.scene.windows() {
+            scene.set_snapping(window.id, true)?;
+        }
+        let widget = |id: &WindowId| self.is_widget(*id);
+        if self.scene.windows().iter().any(|w| widget(&w.id)) {
+            // `Scene` cannot drop a window without moving the focus onto
+            // another, so the widgets leave through its own validated form.
+            let mut data = serde_json::to_value(&scene)?;
+            if scene.focused().is_some_and(|id| widget(&id)) {
+                data["focused"] = Value::Null;
+            }
+            if let Some(windows) = data["windows"].as_array_mut() {
+                windows.retain(|w| !w["id"].as_u64().is_some_and(|id| widget(&WindowId(id))));
+            }
+            scene = serde_json::from_value(data)?;
+        }
+        let kept = |id: &WindowId| scene.window(*id).is_some();
         let saved = Saved {
             version: SAVE_VERSION,
-            scene,
-            metadata: self.metadata.clone(),
+            metadata: self
+                .metadata
+                .iter()
+                .filter(|(id, _)| kept(id))
+                .map(|(id, metadata)| (*id, metadata.clone()))
+                .collect(),
             outputs: self.outputs.clone(),
             next_window: self.next_window,
             next_output: self.next_output,
@@ -60,6 +93,14 @@ impl Controller {
                 .copied()
                 .filter(|id| self.scene.window(*id).is_some() && !self.sources.contains_key(id))
                 .collect(),
+            pins: self
+                .policy
+                .pins
+                .iter()
+                .filter(|(id, _)| kept(id) && !self.lifecycle.standins.contains(id))
+                .map(|(id, pin)| (*id, *pin))
+                .collect(),
+            scene,
         };
         let bytes = serde_json::to_vec_pretty(&saved)?;
         if bytes.len() as u64 > MAX_SAVE_BYTES {
@@ -166,6 +207,14 @@ impl Controller {
         {
             return Err(Error::Invalid("invalid saved stand-in"));
         }
+        // A pin belongs to a window that is no stand-in, on a saved output.
+        if saved.pins.iter().any(|(id, pin)| {
+            saved.scene.window(*id).is_none()
+                || saved.standins.contains(id)
+                || !saved.outputs.contains_key(&pin.output)
+        }) {
+            return Err(Error::Invalid("invalid saved pin"));
+        }
         let mut outputs = saved.outputs;
         for output in outputs.values_mut() {
             output.seed = CameraSeed::File;
@@ -206,6 +255,12 @@ impl Controller {
             trackpad_gesture: None,
             trackpad_override: None,
             drags: 0,
+            policy: Policy {
+                pins: saved.pins,
+                ..Policy::default()
+            },
+            render_revision: 0,
+            pending_screenshots: Vec::new(),
         })
     }
 }

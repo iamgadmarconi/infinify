@@ -97,13 +97,21 @@ constants they replaced.
 | `[[outputs]] name`, `[outputs.hot_corners]` | which output an entry governs and its [hot corners](#hot-corners) |
 | `autostart` | `exec` effects of the launch load, see [Autostart](#autostart) |
 | `window_placement` | where a window that appears by itself is placed: `center`, `cursor` or `auto`, see [LIFECYCLE.md](LIFECYCLE.md#2-placement) |
-| `[decorations] title_bar_height` | the diagonal step of the placement cascade, and nothing else |
+| `[decorations] title_bar_height` | the diagonal step of the placement cascade; also part of `render.chrome` below |
+| `[background] type`, `path`, `texture`, `mirror_tile`, `transparent_shader`, `animate_fps`, `cache_shader` | reported as the snapshot's `render.background` for the shell's compositor, see [RENDER.md](RENDER.md#render). Reporting is all the controller does: the app's compositor accepts `cache_shader` and ignores it (a shader always renders live) |
+| `[decorations] bg_color`, `fg_color`, `corner_radius`, `title_bar_height`, `font`, `font_size`, `font_weight`, `title_align` | reported as `render.chrome`: what stand-ins and compositor title bars are rasterised from |
+| `[decorations] default_mode`, `border_width`, `border_color`, `border_color_focused`, `corner_radius`, `shadow`, `opacity`, `opacity_focused`, `blur` | each placement's `decoration`, through upstream's `effective_*` helpers, see [RENDER.md](RENDER.md#placements); border, shadow and bar also size a `screenshot window`. `opacity` and `opacity_focused` are also each placement's own `opacity`, the same number, for a window with no opacity of its own from a rule or an IPC `Opacity` write. They reach bound windows only: a stand-in is always 1.0, as upstream's, and a window captured alone by `screenshot window` is opaque unless a rule or an `Opacity` write pins its opacity |
+| `[[window_rules]] decoration`, `border_width`, `border_color`, `border_color_focused`, `corner_radius`, `shadow`, `opacity`, `blur` | the same, for the window the rule matched when it mapped: kept with the window, reported in `snapshot.windows[].rule`, and what its `decoration` and `opacity` are resolved from until it is gone, whatever its title or the config becomes ([RULES.md](RULES.md#matching)); never for a stand-in |
+| `[output.outline] color`, `thickness`, `opacity` | reported as `render.outline` |
+| `[zoom] fit_padding` | also the margin around a `screenshot all` |
 | `[snap] gap` | also the spacing of an `auto` placement, and the cluster test for who takes the focus after a close |
 | `[zoom] reset_on_new_window` | whether the navigation to a new window lands at zoom 1 |
 | `[navigation] auto_navigate_on_close` | whether the camera flies to the window that takes the focus after a close, when that window is in the closed one's snap cluster or overlaps it and is not wholly in view |
 | `[session] suspend_on_close`; `[[window_rules]] suspend_on_close` | whether a window that closes by itself leaves a stand-in; the rule's `app_id` is matched against the bundle identifier |
 | `[session] restore_windows`; `[[window_rules]] restore_windows` | whether a saved slot whose window is gone stays as a stand-in at `adoption_complete`; not decided while the launch config file is refused |
 | `[session] restore_camera`, `restore_bookmarks` | what `load` restores, see [Session](#session) |
+| `[[window_rules]] app_id`, `title` | matched against the bundle identifier and the source title when a window maps, see [RULES.md](RULES.md) |
+| `[[window_rules]] position`, `pinned_to_screen`, `output`, `widget`, `focus_on_open` | where a new window is placed, whether it is pinned to an output's screen or a widget, and whether it is focused |
 | `[env]`, `[cursor] theme`, `size` | the environment of an `exec` effect |
 
 Once a config is loaded, `focus_placement`, `navigation.camera_speed` and
@@ -131,14 +139,14 @@ code, and then unused, because the feature it configures does not exist here:
   `disable_on_external_mouse`, which counts as on; `[input.mouse]`,
   `[input.touch]`, `[input.tablet]`
 - `[cursor] inactive_opacity` (theme and size reach only the `exec` environment)
-- `[background]`, `[decorations]` other than `title_bar_height`, `[effects]`,
-  `[backend]`, `[output]`
+- `[background] cache_budget_mb`; `[effects]`; `[backend]`; `[output]` other
+  than `[output.outline]`
 - `[[outputs]] scale`, `transform`, `position`, `mode`, and
   `[outputs.hot_corners] disable_when_fullscreen`: macOS arranges the displays
   and there is no fullscreen, see [Outputs](#outputs)
-- `[[window_rules]]` other than `suspend_on_close` and `restore_windows`, so
-  `position`, `size`, `focus_on_open`, `widget`, `pass_keys` and `pass_mouse`
-  included
+- of `[[window_rules]]`, `size`, `fullscreen`, `pass_keys`, `pass_mouse`,
+  `preserve_aspect_ratio` and `layer_order`, which are recorded with the window
+  and named in its `rule.not_applied`
 - `[touch.*]` and its thresholds: upstream's touchscreen gestures, see
   [GESTURES.md](GESTURES.md#why-this-path-and-not-the-touch-recogniser)
 - `[mouse] resize_on_border`, `decoration_resize_snapped`, `decoration_fit_snapped`
@@ -320,7 +328,7 @@ no Mac key.
 | `mod+shift+Up` | ⌃⌥⇧Up | 126 | `nudge-window up` | yes | yes |
 | `mod+shift+m` | ⌃⌥⇧M | 46 | `fit-window-snapped` |  | no |
 | `mod+shift+w` | ⌃⌥⇧W | 13 | `zoom-to-fit-snapped` |  | no |
-| `mod+t` | ⌃⌥T | 17 | `toggle-pin-to-screen` |  | no |
+| `mod+t` | ⌃⌥T | 17 | `toggle-pin-to-screen` |  | yes |
 | `mod+w` | ⌃⌥W | 13 | `zoom-to-fit` |  | yes |
 | `mod+x` | ⌃⌥X | 7 | `focus-center` |  | yes |
 | `mod+z` | ⌃⌥Z | 6 | `zoom-reset` |  | yes |
@@ -459,6 +467,9 @@ what the close will mean; a focused placeholder is dismissed. Nothing happens
 with no focused window. [LIFECYCLE.md](LIFECYCLE.md#actions-and-ipc) has the
 whole contract.
 
+`move-to-bookmark <name>` and `toggle-pin-to-screen` act on the focused window
+too: [RULES.md](RULES.md#actions).
+
 `send-to-output <dir>`, `send-cursor-to-output <dir>` and `switch-layout` are
 described under [Outputs](#outputs) and [Keyboard layouts](#keyboard-layouts).
 
@@ -483,15 +494,22 @@ earliest registered. `up` is the smaller y.
 
 `send-to-output <dir>` moves the focused window to the adjacent output:
 
-1. No focused window: nothing happens, as upstream.
-2. The source output is the first registered output whose viewport shows the
+1. No focused window, or a focused [widget](RULES.md#widgets): nothing
+   happens, as upstream.
+2. A focused [screen-pinned window](RULES.md#screen-pinned-windows) is not
+   moved on the canvas. Its pin is bound to the output adjacent to the pin's
+   own output and keeps its place on the screen, moved inward until the whole
+   frame is on that output (upstream's `send_pinned_to_output`). Nothing is
+   raised or focused, `dirty` is true when the pin changed, and with no
+   adjacent output nothing happens. The steps below are for a canvas window.
+3. The source output is the first registered output whose viewport shows the
    window's center (upstream's `output_for_window`: the visible canvas rectangle
    is `policy::visible_canvas_rect` at the camera rounded to whole points, and
    the center is truncated), else the command's `output`. With neither the
    action is refused with `no active output`.
-3. No adjacent output in that direction, a single output included: nothing
+4. No adjacent output in that direction, a single output included: nothing
    happens, as upstream.
-4. The window lands where a navigation on the target output would park it:
+5. The window lands where a navigation on the target output would park it:
    with the target's camera `c`, zoom `z` and placement point `a` (the
    [focus placement](#applied-now) of the target output for this window at `z`),
    its center goes to `c + a / z` and its top-left to that minus half its size,
@@ -765,14 +783,21 @@ was restored too early back to a new output's pose.
   shell ends a held cycle.
 - A reload re-applies only what the table above lists. Upstream also rebuilds
   its keyboard layout, cursor theme, device settings, output rules and render
-  caches, none of which exist here.
+  caches. Of those only the last has a counterpart: every accepted reload
+  moves `render.revision`, which tells the shell to rebuild what it derived
+  from the config and to read the background's shader and image files again,
+  as upstream's reload drops its background caches whatever the file changed
+  ([RENDER.md](RENDER.md#render)).
 - `send-to-output` asks nothing of native focus: the window already holds the
   logical focus, and is only raised. Upstream activates it and sets keyboard
   focus again. A focused window that no output shows needs the command's
   `output`, where upstream falls back to its first output.
-  Fullscreen and pinned windows, which upstream moves in screen space, do not
-  exist here. A frame with a fractional origin or size is read at upstream's
-  integer boundary for the source output and the half size, and keeps its size.
+  Fullscreen windows, which upstream moves in screen space, do not exist here.
+  A pinned window's source output is the one its pin is bound to, where
+  upstream takes the output showing the pin's canvas frame, and a pin whose
+  own output is disconnected goes nowhere. A frame with a fractional origin or
+  size is read at upstream's integer boundary for the source output and the
+  half size, and keeps its size.
 - `send-cursor-to-output` with no `output` is refused, where upstream falls
   back to its first output. The pointer is the shell's, so the warp is an
   effect, and the next action's active output is whatever the shell then
@@ -858,6 +883,10 @@ rules, with no oracle build of upstream. Each of the output rules was also
 changed in the source once (rounding in place of truncation, a narrower cone,
 the camera floored or rounded up, the center floored, a closed view edge, the
 active output preferred) to see the tests fail, and restored.
+
+`tests/render_flow.rs` covers the tables the compositor draws from; see
+[RENDER.md](RENDER.md#verification-boundary). `tests/rules_flow.rs` covers
+`[[window_rules]]`; see [RULES.md](RULES.md#verification-boundary).
 
 Those are controller scenarios. They are not evidence that a chord is registered
 with macOS, that a key press, button or scroll reaches the shell, that a

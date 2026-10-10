@@ -232,6 +232,18 @@ impl Controller {
                     self.trackpad_override = None;
                 }
                 dirty |= self.settle_trackpad()?;
+                // The shell rebuilds what it derived from the config only when
+                // the revision moves. Upstream's reload drops its background
+                // caches whatever the file changed, so that a shader or image
+                // edited on disk is read again (src/state/reload.rs): every
+                // accepted reload spends a revision. The launch load spends
+                // one only for a file whose drawn tables are not the defaults.
+                if !launch || render::sections_differ(&old.config, &self.settings.config) {
+                    self.render_revision = self
+                        .render_revision
+                        .checked_add(1)
+                        .ok_or(Error::Invalid("render revisions exhausted"))?;
+                }
                 if !launch {
                     // Upstream reload: config is a seed. A name added or changed
                     // in config re-asserts into the registry, a name removed from
