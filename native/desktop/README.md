@@ -1,22 +1,26 @@
 # Infinify native desktop shell
 
 `./scripts/build-app.sh` builds and ad-hoc signs `target/app/Infinify.app` for
-Apple Silicon / macOS 26+. The build does not launch anything. As in DriftWM,
-where every toplevel is managed, the app puts every real application window
-(a standard window or a dialog, not a popup or a helper window) on the canvas
-by itself once it has Screen Recording access; without that
-access, or with `--manual`, it opens on the chooser and captures only the
-windows picked there. [Managed windows](#managed-windows) has the rules.
+Apple Silicon / macOS 26+, and `./scripts/install-app.sh` puts a signed copy in
+`~/Applications`. Neither launches anything. A normal run is the desktop, as
+DriftWM is the session: one canvas panel covers each display whole, on every
+Space, under the menu bar and the Dock, with no toolbar, no status line and no
+chooser, and every real application window (a standard window or a dialog, not
+a popup or a helper window) is on the canvas by itself.
+[Desktop mode](#desktop-mode) says what that means, how the app is installed
+and started at login, and how little of it has been run.
+[Managed windows](#managed-windows) has the adoption rules; `--manual` keeps
+the chooser and captures only the windows picked there.
 Screen Recording permission is required for capture; Accessibility permission
 is required for native input, for focusing a native window from the canvas and
-for closing one. The chooser explains a missing grant and offers an
-Allow… button: the app asks macOS for access only from that click, then opens
-the matching System Settings pane. Screen Recording takes effect after a
-relaunch. Automated probes and tests never request permissions or change privacy
+for closing one. While either is missing a normal run shows one small window in
+place of its canvas. It names what is missing and offers an Allow… button for
+each: the app asks macOS for access only from that click, then opens the
+matching System Settings pane. Screen Recording takes effect after a relaunch,
+which the window offers. Automated probes and tests never request permissions or change privacy
 settings or SIP. An ad-hoc signature changes with every build, so macOS drops
-both grants on each rebuild; build with
-`INFINIFY_SIGN_IDENTITY="<stable signing identity>" ./scripts/build-app.sh` to
-keep them.
+both grants on each rebuild and each reinstall; build and install with
+`INFINIFY_SIGN_IDENTITY="<stable signing identity>"` to keep them.
 
 The app links the actual Rust desktop static library. Every connected display
 gets a nonactivating panel and an independently persisted camera on the shared
@@ -29,19 +33,416 @@ movement do not move, transform, park, or resize native windows.
 [Window navigation](#window-navigation-and-native-focus) activates and raises
 the one window it focuses, and nothing else.
 
+## Desktop mode
+
+DriftWM is a compositor: it is the session, not an app one launches. Since
+2026-10-10 a normal run of Infinify is that for macOS, as far as public API
+goes: it replaces the desktop instead of sitting on it in a panel with a
+toolbar. **None of it has been seen on a real display**: every launch made for
+this section was `--windowed` and had no Screen Recording access, so its canvas
+held detached placeholders only.
+[What was run for desktop mode](#what-was-run-for-desktop-mode) has the
+boundary.
+
+**Reading the rest of this file.** The sections below were written while every
+canvas panel carried a 64-point strip with toolbar buttons and a status line,
+and a chooser window came first. A normal run has none of the four now. Where a
+later section says the status line shows something, a normal run writes that
+text as one line on stderr and draws nothing; where it names a toolbar button,
+the same action is on its key and on `Infinify msg action`; "Choose windows"
+and "Open canvas" exist with `--manual` only; "Return to desktop" is gone, and
+quitting is what returns the native desktop. An output is the whole panel, not
+"the panel less its strip". The dated run records are left as they were
+observed, with the numbers of that build: a `--windowed 1100x700` launch
+reported an output of 1100x636 and the view centre `550 -318` then, and reports
+1100x700 and `550 -350` now. The probe, demo and owned-fixture modes
+(`--demo*`, `--owned-resize-*`, `--source`) keep their panel, strip, toolbar,
+status line and chooser unchanged.
+
+### What a normal run is
+
+- **Edge to edge.** One borderless, nonactivating panel per display covers the
+  display's whole frame (`NSScreen.frame`, not the visible frame), and that
+  same rectangle is registered as the display's output. Nothing is kept free
+  for the menu bar or the Dock: a window may come to rest beneath either, and
+  centering, placement, fit and a new window's place are measured on the whole
+  display ([The usable area](#the-usable-area) has what follows from that).
+  Both stay: the panel's level is the floating level (3 on this Mac),
+  above every ordinary window and below the Dock (20) and the menu bar (24),
+  so both go on drawing over the canvas and taking their own clicks. Neither
+  is hidden, and no presentation option or system setting is touched. Hot
+  corners are the display's true corners, the two top ones under the menu bar
+  ([Displays, hot corners, layouts and autostart](#displays-hot-corners-layouts-and-autostart)).
+- **Every Space.** The panels are on all Spaces, a fullscreen application's
+  included, and stay put through a Space switch: collection behaviour
+  `CanJoinAllSpaces | Stationary | IgnoresCycle | FullScreenAuxiliary`. That is
+  public API only. No private window tag is set, and whether Mission Control
+  leaves the panel out of its window thumbnails was not observed.
+- **No chooser.** With both grants the launch goes straight to the canvas and
+  adopts the windows that exist ([Managed windows](#managed-windows)). With
+  Screen Recording or Accessibility missing, one small window comes instead:
+  it says which is missing, has an Allow… button for each (the request to
+  macOS, then the matching pane of System Settings, from that click only),
+  Relaunch and Quit, looks again once a second, and opens the canvas by itself
+  as soon as both are there. macOS gives Screen Recording only to a process
+  started after the grant, so the window says so and Relaunch starts the run
+  again: the same executable with the same arguments, in the same process,
+  after the usual cleanup, so a run started by the login item stays the login
+  item's. A saved scene that could not be loaded is shown in the same window
+  with Quit alone. Autostart commands run when the canvas opens, not while this
+  window is up, so a relaunch does not start them twice.
+- **Status notes go to stderr.** What the status line used to flash ("Bookmark
+  2 saved", "Zoom limit reached", a refused shortcut, a window that was not
+  adopted, `Windows are not managed: …`) is written to stderr, one line each,
+  and nothing is drawn for it. A note is not written again while it stays up:
+  a flashed one for two seconds, counted again from each renewal, so one that
+  is renewed before it expired is one line. Once it has expired the same text
+  is a line again: two identical refusals a minute apart are two events. A
+  failed read of the window list, which is tried again about every two
+  seconds, is one line per distinct reason. The summary of registered chords
+  the status line rested on is not written at all. What a config file has
+  wrong is drawn in the error bar, as before
+  ([Blur, window animations and the error bar](#blur-window-animations-and-the-error-bar)).
+- **Quitting returns the native desktop.** Control-Option-Escape (until a
+  binding takes that chord), a key bound to `quit` (DriftWM's default is
+  Control-Option-Command-Shift-Q), `Infinify msg action quit`, SIGTERM and a
+  log out all end the same way: fullscreens ended, the scene saved, panels
+  closed, capture stopped, hot keys released, exit status 0. There is no Quit
+  button and no Return to desktop. `msg quit` is not a command: the action is
+  `msg action quit`.
+- **It stays up.** When the Mac or its displays wake, when the login session
+  becomes active again (the lock screen was left, a user switched back) and
+  when the active Space changes, each panel is put back on its display's
+  rectangle and in front of ordinary windows; nothing is closed and no output,
+  hot key, stream or gesture is touched. Only when the displays are no longer
+  the ones the panels were made for are they rebuilt, the way a display change
+  rebuilds them. A moment with no display at all leaves the desktop open with
+  no panel, and it is rebuilt when a display is there again. Discovery goes on
+  by itself, driven by the poll and by the window events, which observe the
+  change of Space on their own account and look for windows at once
+  ([Event-driven tracking](#event-driven-tracking)). A rebuild keeps the window
+  manager and its observers; the hot keys and the tap monitors stop and start
+  again with the panels, and the frame timer is made again by the next frame
+  that is wanted.
+
+### Flags that change it
+
+- `--windowed [WIDTHxHEIGHT]`: the canvas in one ordinary window instead, all
+  of it canvas: the output is the whole content area, with no strip. It opens
+  at launch with whatever access there is and never shows the permission
+  window, registers no global shortcut, and ends by `Infinify msg action quit`
+  or a signal (Control-C in its terminal). See
+  [Nested development window](#nested-development-window).
+- `--manual`: the chooser first, as it always was, and nothing is adopted. The
+  chooser now stays open above the canvas, the one place a window is added or
+  rebound from; closed there, it is gone for the run. Its Rebind list is made
+  again by Refresh and after every Add: a placeholder that arose during the
+  run (a source that closed) is offered after a Refresh, and a slot that was
+  just rebound is not offered again. `--manual --windowed` opens the canvas at
+  launch and the chooser above it.
+- `login-item on | off | status`: see below. Handled before AppKit starts, like
+  `msg`: no window, no privacy grant.
+- `--demo*`, `--owned-resize-*`, `--source`: unchanged.
+
+### Installed, signed, started at login
+
+These are for the owner to run. No agent, script or test installs the app,
+registers the login item or signs with a real identity, and none of the three
+steps below was run for this document.
+
+1. `./scripts/install-app.sh` builds the bundle (`--built` takes the one
+   already in `target/app`), copies it to `~/Applications/Infinify.app` and
+   signs the copy: with `$INFINIFY_SIGN_IDENTITY` when that names a
+   code-signing identity (`security find-identity -v -p codesigning`), else
+   (unset, empty or `-`, which is how `codesign` spells ad hoc) ad hoc with a
+   loud warning, because macOS ties both privacy grants to the signature and
+   an ad hoc one is new at every install. The bundle in place is moved aside
+   whole and then removed, never overwritten file by file; an install that
+   fails or is interrupted before the new copy is in place puts it back. It
+   starts nothing and registers nothing.
+2. `~/Applications/Infinify.app/Contents/MacOS/Infinify login-item on`
+   registers the LaunchAgent the bundle carries at
+   `Contents/Library/LaunchAgents/com.marengox.infinify.agent.plist`, through
+   `SMAppService`, and launchd starts it at once. macOS may ask for approval
+   under System Settings > General > Login Items & Extensions. The agent runs
+   the bundle's own executable with `RunAtLoad`, `KeepAlive` with
+   `SuccessfulExit = false`, `LimitLoadToSessionType = Aqua` and
+   `ProcessType = Interactive`: started at login, started again after an end
+   that is not exit status 0, and left alone after a quit.
+3. `login-item status` prints `login item: on`, `off` (with `never registered
+   from this bundle` before the first `on`) or that approval is waited for,
+   and registers nothing; `login-item off` unregisters, which ends
+   the instance launchd started, and where nothing is registered (never, or
+   not any more) it only says `off` and exits 0. Anything else exits 64 with
+   the usage line.
+
+Because `login-item on` starts an instance at once, quit one that was started
+by hand first (`Infinify msg action quit`): nothing stops two from running, and
+the second has no socket and its own set of panels. After a quit the login item
+stays registered and starts again at the next login, or at once with
+`launchctl kickstart gui/$(id -u)/com.marengox.infinify.agent`.
+
+Exit status: 0 for the quit action, `msg action quit`, the exit chord, a
+signal, a log out, and Quit in the permission window. An abnormal end is not 0,
+so launchd starts the app again: a crash, a relaunch whose `exec` failed (1),
+and the Application Support directory that could not be created (2), which
+therefore loops at launchd's restart interval until the directory can be made.
+A run started by launchd has launchd's environment and no terminal:
+[CONFIG.md](../../crates/desktop/CONFIG.md#started-at-login) says what that
+changes for the config path, `exec-terminal`, `PATH` and relative paths.
+
+### What changes for someone who used the previous build
+
+- No toolbar: Home, Fit, the zoom buttons, Center, Previous and Next are their
+  keys or `Infinify msg action …`. No status line: confirmations and refusals
+  are stderr lines, which a run started at login does not show anywhere.
+- No Return to desktop and no Quit button: quit as above.
+- The canvas reaches the top of the display and the bottom, under the menu bar
+  and the Dock. A window centred by `center-window` is centred on the display,
+  not on the area below a strip, and `fill-window`, `fit-window` and
+  fullscreen (with `--experimental-native-resize`) ask for the display's whole
+  size.
+- The canvas no longer opens with Screen Recording alone: both grants are
+  asked for first, since a panel that covers every window would otherwise
+  leave nothing clickable. `--windowed` still opens with whatever there is.
+- In scripts, a `--windowed 1100x700` output is 1100x700 with its view centre
+  at `550 -350` where it was 1100x636 and `550 -318`.
+- The chooser appears only with `--manual`, and then stays open.
+
+### Limits of desktop mode
+
+- **Capture after sleep or lock is not restarted.** If macOS stops a window's
+  capture stream with an error, the window becomes a stand-in and is not
+  offered again until its native window has left the screen and come back.
+  Whether streams stop across sleep, lock or a user switch was not observed.
+  The panels and discovery do come back.
+- **Status notes are lost at login.** The LaunchAgent names no file for
+  stderr (a bundled property list cannot name one under the home directory),
+  so launchd discards it. Start the app from a terminal to read the notes.
+- **Two instances are possible**, as said above.
+- **Cursor edge pan does not pan upward under the menu bar.** The top
+  `cursor_zone` (20 points by default) lies under the menu bar, where a press
+  would not reach the panel, so no output is reported there and nothing pans;
+  the same holds over the Dock. A `cursor_zone` taller than the menu bar
+  leaves a band that does. Read from the code, not run
+  ([MOTION.md](../../crates/desktop/MOTION.md)).
+- **macOS's own "Quit & Reopen"**, which System Settings offers after Screen
+  Recording is switched on, reopens the app through LaunchServices, outside
+  the login item's job: it is then not restarted after a crash until the next
+  login. The permission window's Relaunch stays inside the job.
+- **A moment with no display** ends every DriftWM fullscreen (only with
+  `--experimental-native-resize`): the controller is told that every output is
+  gone ([FULLSCREEN.md](../../crates/desktop/FULLSCREEN.md)).
+- **Other applications' floating palettes.** The panels are put in front again
+  at every Space change, which also puts them above another application's
+  floating-level palette until that application orders it front again.
+- **macOS keeps its own gestures and corners.** Mission Control, the system's
+  hot corners and the Dock still answer where they did; Infinify changes no
+  setting.
+- **A status text made of several notes is one line more.** Where the status
+  line would have shown a summary (`Shortcut unavailable: X (+1 more)`) or two
+  notes joined by ` · `, that text is written after its parts: a launch with
+  two refused chords, or a `--windowed` launch with neither grant, writes one
+  line more than it has notes. Read from the code, not run.
+- **Stale wording in one stderr line.** A window of 200x150 or more that is
+  left out is still reported as `… not adopted: …. Choose windows adds it by
+  hand.`, which holds with `--manual` only.
+- **Unverified system behaviour:** `SMAppService` with an ad hoc signature and
+  after a reinstall, the `launchctl kickstart` hint, `exec` of a process that
+  has already started AppKit (Relaunch), and the quit at log out.
+
+### What was run for desktop mode
+
+2026-10-10, this build, on a Mac with one built-in display (macOS 27.2, Apple
+Silicon).
+
+- `./scripts/build-app.sh`: built and ad hoc signed, with the LaunchAgent at
+  `Contents/Library/LaunchAgents`; `codesign --verify --strict` passed.
+- The controller's `cargo fmt --check`, `clippy -D warnings` and its
+  `controller_flow`, `lifecycle_flow`, `navigation_actions_flow`,
+  `platform_actions_flow`, `render_flow`, `pointer_flow`, `ipc_flow` and
+  `config_flow` modules: 95 scenarios, none failed. None of them is about
+  desktop mode: no command changed shape.
+- Five launches as `--windowed 1100x700` with a private `--state` (three
+  detached placeholders), `--config` and `--socket`, each under 30 seconds and
+  without Screen Recording access. Accessibility was evidently trusted for the
+  session that started them: a canvas opened without it writes `Native window
+  focus needs Accessibility access: …` to stderr, and no launch did. With
+  detached placeholders only, no native focus and no input was attempted. All
+  five were of the sources as they stood before the `login-item status`
+  wording below was shortened; the config of the last two also held an
+  `autostart` command:
+  - `msg state`: `outputs 1`, `* windowed camera 550 -350 zoom 1 1100x700`,
+    and the three placeholders. The saved scene holds the output's
+    `screen_bounds` as 1100x700.
+  - `msg screenshot -o FILE`: a PNG of 1100 x 700 pixels, looked at: the dot
+    grid edge to edge and the Notes placeholder with its top-left corner at
+    (200, 150), no strip. After `msg action "center-nearest right"`, `msg
+    camera` read `1950 -0`, `msg focus` named the Browser placeholder, and a
+    second capture shows it from (100, 50) to (1000, 650): centred in the
+    whole 1100x700.
+  - stderr of each run held one line, `Windows are not managed: Infinify has
+    no Screen Recording access. A run without --windowed asks for it.` In one
+    run `msg relaunch --id 1`, for a placeholder whose bundle
+    identifier no application has, added `Relaunch failed: no application with
+    bundle identifier "org.example.seed" is installed`, once, and nothing when
+    the note expired two seconds later.
+  - In the last two launches an `autostart` command that appends a line to a
+    scratch file ran once per launch, with `INFINIFY_SOCKET` set to the served
+    socket.
+  - `msg action quit` answered `ok` and the app exited with status 0 (read in
+    two launches; a third was ended the same way but its status was lost to a
+    mistake in the driving script); `kill -TERM` ended the other two, also
+    with status 0. The socket file was gone each time. `msg quit` exits 2,
+    `unrecognized subcommand`.
+- `Infinify login-item status` from the built bundle printed `login item: off
+  (never registered from this bundle)` and exited 0: macOS answers "not found"
+  for an agent it was never told of, although the bundle carries the property
+  list. `launchctl print` afterwards found no such service. `login-item` with
+  no argument, with `maybe` and with `status extra` printed the usage line and
+  exited 64. The app was built once more for that one string and not launched
+  again.
+- The window levels were read with a five-line C program: normal 0, floating
+  3, Dock 20, main menu 24.
+- After the review fixes of the same day (the `--manual` chooser's Rebind
+  list, when a status note is written again, `login-item off` where nothing is
+  registered, the install script's interrupt handling and `-`, the chooser of
+  `--manual --windowed`): the same eight modules again (95 scenarios, none
+  failed), a rebuild, and two more `--windowed 1100x700` launches on the same
+  private paths with the scene seeded afresh, again without Screen Recording
+  access and with no missing-Accessibility note:
+  - The first repeated the checks above with the same results: `msg state`
+    (`* windowed camera 550 -350 zoom 1 1100x700`), two captures of 1100 x 700
+    pixels, looked at (the Notes placeholder from (200, 150), then the Browser
+    placeholder from (100, 50) to (1000, 650), the dot grid to every edge),
+    `center-nearest right` to `1950 -0`, and `msg action quit`: exit status 0,
+    socket gone. Its stderr held the one `Windows are not managed: …` line.
+  - The second asked `msg relaunch` for three placeholders of one bundle
+    identifier that no application has: `--id 1`, 3.2 seconds later `--id 3`,
+    half a second later `--id 2`. All three answered `ok`. stderr held two
+    `Relaunch failed: …` lines: one for the first, one for the second, which
+    came after the first note had expired, and none for the third, which came
+    while the second was still up. A review launch of the build before the
+    fix had written one line for the first two. `kill -TERM` ended it with
+    exit status 0 and the socket gone.
+  - `login-item status` printed `login item: off (never registered from this
+    bundle)` again and exited 0.
+  - `scripts/install-app.sh` was not run. Its cleanup function and signal
+    traps were lifted into a stand-in script over scratch directories and run
+    under `/bin/sh` and `/bin/dash`: interrupted before the first rename and
+    between the two, the stand-in for the installed bundle was the old one
+    again; interrupted after the second, the new one; nothing was left beside
+    it in any case.
+
+**At the merge with the tap bindings, the background caches and event-driven
+tracking, the same day.** Everything above ran on the tree desktop mode was
+built in, which had none of the three. The tree that landed has the
+[tap tracker](#tap-bindings), the [background caches](#background-caches) and
+the [window events](#event-driven-tracking) beside it.
+`./scripts/build-app.sh` compiles each shell file once (`login-item.m`,
+`onboarding.m` and `session-watch.m` beside `window-events.m`, `tap-keys.m`,
+`frame-driver.m` and `background-tiff.m`), copies the LaunchAgent into the
+bundle and built it as written, ad hoc signed; `codesign --verify --strict`
+passed.
+
+- **Read at the join**, in the code, not run:
+  - One start. With both grants the launch opens the canvas, and opening it
+    starts the hot keys with the tap monitors, then the navigation
+    coordinator, then the window manager with its observers, as before
+    desktop mode. With a grant missing the permission window is all there is:
+    the config is loaded and its tap table kept, but no key is registered, no
+    monitor is installed and no window manager or observer exists. When the
+    window hands over, which it does once, the same start runs, once.
+  - One end. The quit action, `msg action quit`, the exit chord, SIGTERM and
+    a quit AppKit asks for (log out) all reach `-cleanup`, which runs once:
+    the window manager with its observers, the session watch, the hot keys
+    and the tap monitors stop first, then the frame timer with the
+    coordinator, then every capture stream, and the exit status is 0. The
+    two changes the join made to the shell's code are there: `-cleanup` and
+    `-dealloc` stop the session watch and the tap monitors both.
+  - The active Space. Two objects observe its change, each registered once:
+    the session watch, which puts the panels back in front, and the window
+    events, which have every application list its windows again and run a
+    discovery pass. Both happen at every change, in no fixed order.
+  - A rebuild of the panels (a display change, or a wake that finds other
+    displays) stops the frame timer and the coordinator and stops and starts
+    the tap monitors with the hot keys; the frame timer is made again, on the
+    new panels' screens, by the first frame that is wanted; the window
+    manager with its observers and the session watch are kept.
+  - Notes. The three milestones added no stderr line to `main.m`: theirs are
+    written where they arise (a cache over its budget, by the background
+    module) and are no status note, so nothing is written both directly and
+    by the rule above that writes a status note once. A window the adoption
+    test leaves out is still named by the window manager's own line, with
+    its stale last sentence ([limits](#limits-of-desktop-mode)).
+  - Geometry. Nothing the three added converts between a panel and its
+    output: hover, the lost-input release and the looks an event starts read
+    the output's `screen_bounds`, which is the whole panel now. The fixture
+    modes' panels, strip and view code are byte for byte what they were.
+- **The controller**, thirteen test modules through the exported C ABI, all
+  passing: the eight above and `usable_tap_flow` (15), `motion_flow` (11),
+  `effects_flow` (5), `passthrough_flow` (19) and `rules_flow` (26), 179
+  scenarios with `lifecycle_flow` at 32; `cargo fmt --check`,
+  `clippy -D warnings` and `./tests/e2e/desktop-navigation.sh`.
+- **The app, two launches** of the landed build, `--windowed 1100x700`, on a
+  private scene of three seeded slots, a config holding an `alt+shift` tap
+  and a private socket, four seconds and one, without Screen Recording
+  access and with no missing-Accessibility note:
+  - `msg state`: `* windowed camera 550 -350 zoom 1 1100x700` and the three
+    placeholders; `focus` answered `(none)`.
+  - Two viewport captures of 1100 x 700 pixels, looked at: the dot grid to
+    every edge with no strip, the Notes placeholder from (200, 150), and
+    after `action "center-nearest right"` (camera `1950 -0`, `#2` focused)
+    the Browser placeholder from (100, 50) to (1000, 650).
+  - `action "pan-viewport right"` settled on `2050 -0`; `action zoom-to-fit`
+    on zoom `0.28484848484848485` at camera `750 -390`, and again back on
+    zoom 1 at `2050 -0`; `action reload-config` answered `ok`.
+  - stderr of each held one line, the `Windows are not managed: … A run
+    without --windowed asks for it.` note: no warning for the tap binding
+    and no note twice.
+  - `msg action quit` ended the first with exit status 0, `kill -TERM` the
+    second with exit status 0; the socket file was gone each time.
+- `login-item status` from that bundle printed `login item: off (never
+  registered from this bundle)` and exited 0, and `launchctl print` found no
+  such service afterwards. `sh -n scripts/install-app.sh` passed; the script
+  was not run.
+
+Those two launches were windowed and had no Screen Recording access: no hot
+key, tap monitor, session watch, window manager or observer existed in them,
+so nothing read at the join was run, no tap was made and no window event
+arrived. Everything below is as unrun on the landed tree as it was before.
+
+Not run, and so known only from the code: a normal run on a display (the
+whole-display panel, the menu bar and the Dock over it, real windows under
+them), any second Space, a fullscreen application's Space and Mission Control,
+sleep and wake, lock and unlock, a display added or removed, the permission
+window (its layout, its Allow buttons, the re-check, Relaunch and its `exec`),
+a launch with real grants, `--manual` with its chooser above the canvas (its
+Rebind list after a Refresh, a rebind and a source that closed, and the
+chooser of `--manual --windowed`), hot
+corners at the display's corners, the quit at log out,
+`scripts/install-app.sh`, `login-item on` and `off`, the LaunchAgent under
+launchd, a restart after a crash, and signing with a real identity.
+
 ## Controls
 
-- Choose windows: add a selected native source, or explicitly rebind a saved
-  placeholder using the chooser's drop-down. Same-source duplicate attachments
-  are rejected; the existing world window is visible through every display camera.
-  While the app manages windows by itself this is the manual tool: for a window
-  it did not take, or to rebind one whose capture failed.
-- Open canvas (chooser): show the saved world without adding a window, at its
-  saved cameras only with `[session] restore_camera = true` (see
-  [Persistence](#persistence-and-lifecycle)). Placeholders, panning, zooming and the view actions need no capture,
-  so this works before any source is chosen and without Screen Recording access.
-  Without that access a canvas opened this way manages no window and its status
-  line says so.
+A normal run has no toolbar, no status line and no button: everything below
+is a key, a pointer gesture or `Infinify msg`. What the status line used to say
+is a line on stderr ([Desktop mode](#desktop-mode)).
+
+- The chooser, with `--manual` only. Add selected window: add a selected native
+  source, or explicitly rebind a saved placeholder using the chooser's
+  drop-down, which lists the world windows that have no source and is made
+  again by Refresh and after every Add. Same-source duplicate attachments are
+  rejected; the existing world
+  window is visible through every display camera. Open canvas: show the saved
+  world without adding a window, at its saved cameras only with `[session]
+  restore_camera = true` (see [Persistence](#persistence-and-lifecycle)).
+  Placeholders, panning, zooming and the view actions need no capture, so this
+  works before any source is chosen and without Screen Recording access; a
+  canvas opened this way manages no window. The chooser stays open above the
+  canvas. A run that manages windows by itself has no chooser: a window it did
+  not take, or one whose capture failed, cannot be added by hand there.
 - Close and suspend: Control-Option-Q (`close-window`) asks the focused window's
   application to close it, by pressing that window's own close button through
   Accessibility; on a focused placeholder it dismisses the placeholder.
@@ -52,21 +453,16 @@ the one window it focuses, and nothing else.
   grammar; [Configuration](#configuration) has the file, the modifier mapping
   and the default tables. With no file, DriftWM's default bindings apply. The
   chords named in this list are those defaults under the default super chord
-  (Control-Option). The status line shows the pointer, window, view, pan and
-  bookmark chords the running app resolved, and each toolbar tooltip its own
-  action's;
-  it does not list every bound key (the default table under
-  [Configuration](#configuration) has the rest, three of which start a program).
+  (Control-Option). Nothing on screen lists the chords the running app
+  resolved, now that the status line and the toolbar's tooltips are gone:
+  `Infinify --help` and the default table under
+  [Configuration](#configuration) have them, three of which start a program.
 - Tap bindings: a `[keybindings]` entry that is a bare modifier chord, such as
   `"alt+shift" = "switch-layout next"`, runs when the chord is pressed and let
   go with nothing else pressed in between. DriftWM's defaults bind none, so
   there is none until the config file writes one, and a normal run only.
   [Tap bindings](#tap-bindings) has the rule, what it needs of macOS, and that
   no chord has yet been pressed against it.
-- The Dock and the menu bar: nothing is reserved for them. The canvas covers
-  each display edge to edge, a window may sit beneath either, and both stay
-  visible on top, drawn by macOS. That is the owner's decision, where DriftWM
-  keeps its panels clear: [The usable area](#the-usable-area).
 - Pan a display's camera: drag or two-finger scroll on empty canvas,
   Control-Option-drag / Control-Option-scroll anywhere, or a three-finger swipe
   anywhere. A pan that is still moving when the fingers lift or the button is
@@ -75,19 +471,19 @@ the one window it focuses, and nothing else.
   fits every window: mouse wheel on empty canvas, Control-Option-wheel
   anywhere, a two-finger pinch on empty canvas (Control-Option-pinch anywhere),
   or a three-finger pinch anywhere. The view actions below are the animated
-  toolbar and keyboard equivalents; [Camera motion](#camera-motion) has the
+  keyboard equivalents; [Camera motion](#camera-motion) has the
   details of drift, edge pan and the pointer speeds, and
   [Trackpad gestures](#trackpad-gestures) the rest of the gesture table and
   what macOS must be told first.
-- View actions: toolbar buttons Home, Fit, −, 1:1 and + on every canvas panel,
-  and while panels are open the global hot keys bound to `home-toggle`
-  (Control-Option-A), `zoom-to-fit` (Control-Option-W; press again to return),
-  `zoom-in` (Control-Option-=), `zoom-out` (Control-Option--), `zoom-reset`
-  (Control-Option-0 or Control-Option-Z) and `pan-viewport <direction>`
-  (Control-Option-Command with an arrow key, one `navigation.pan_step`). Buttons
-  act on their own display (in the two-viewport demo panel, the viewport last
-  clicked, scrolled or pinched, else the first); hot keys act on the display
-  under the pointer, or the first display when the pointer is over no panel.
+- View actions: while panels are open, the global hot keys bound to
+  `home-toggle` (Control-Option-A), `zoom-to-fit` (Control-Option-W; press
+  again to return), `zoom-in` (Control-Option-=), `zoom-out`
+  (Control-Option--), `zoom-reset` (Control-Option-0 or Control-Option-Z) and
+  `pan-viewport <direction>` (Control-Option-Command with an arrow key, one
+  `navigation.pan_step`). Hot keys act on the display under the pointer, or
+  the first display when the pointer is over no panel. The toolbar buttons
+  Home, Fit, −, 1:1 and + exist in the demo panel only, where they act on the
+  viewport last clicked, scrolled or pinched, else the first.
   Home goes to the origin at 1:1 and Fit frames every window, detached
   placeholders included, together with any `navigation.anchors`; a second press
   returns to the view left, and any other pan or zoom forgets the Fit return.
@@ -102,8 +498,9 @@ the one window it focuses, and nothing else.
   upstream's does: a swipe right after a three-finger tap, once a
   `doubletap-swipe` binding is found for it, even with no window under the
   pointer to grab and no plain swipe bound.
-- Window navigation, in every normal run (toolbar buttons Center, Previous and
-  Next; the hot keys only while panels are open and not with `--windowed`):
+- Window navigation, in every normal run (the hot keys only while panels are
+  open and not with `--windowed`, where `Infinify msg action` runs the same
+  actions):
   Control-Option with an arrow key (`center-nearest <direction>`) focuses the
   nearest window in that direction and flies the camera to it at the current
   zoom; Control-Option-C (`center-window`) centres the focused window, or the
@@ -145,7 +542,7 @@ the one window it focuses, and nothing else.
   step or a bookmark jump is still flying, they save where it is heading. During
   a Home, Fit or zoom flight the saved point is not reliably the destination,
   here as upstream (mid-flight it is whatever point is passing under the
-  centre), so let those land first. The status line confirms ("Bookmark 2
+  centre), so let those land first. A line on stderr confirms ("Bookmark 2
   saved") or says the bookmark is missing ("No bookmark 2 yet", with the chord
   that sets it when one is bound). A bookmark holds a canvas position only,
   never a zoom. There is one registry of bookmarks for every display. It starts
@@ -154,15 +551,15 @@ the one window it focuses, and nothing else.
   [Persistence](#persistence-and-lifecycle) says what a restart keeps. These are
   global hot keys only: with `--windowed`, use `Infinify msg bookmark` or
   `Infinify msg action` below.
-- Every hot key, every mouse binding that names an action, and every view button
-  on the toolbar runs an upstream action string through the same controller
+- Every hot key and every mouse binding that names an action runs an upstream
+  action string through the same controller
   command as `Infinify msg action`. Camera motion is animated with the
   controller's upstream-derived lerp at `navigation.camera_speed`. The view
   and bookmark actions move cameras only; they never move, resize, focus or
   otherwise touch native windows. The window navigation actions also focus a
-  window. If macOS refuses a hot key the status line names the first and
-  stderr names every one (`Shortcut unavailable: ⌃⌥A (home-toggle)`), at
-  launch as at a reload, and the toolbar still works. The Quit button and Control-Option-Escape call the
+  window. If macOS refuses a hot key stderr names every one (`Shortcut
+  unavailable: ⌃⌥A (home-toggle)`), at launch as at a reload, and `Infinify
+  msg action` still runs the action. Control-Option-Escape calls the
   shell's quit directly instead of sending the `quit` action, so exit never
   depends on the controller or on an active output. Control-Option-Escape stays
   the exit chord unless a config binding resolves to that chord, which then
@@ -204,8 +601,9 @@ the one window it focuses, and nothing else.
 - Cursor edge pan, off by default: Control-Option-E (`toggle-cursor-pan`)
   turns it on or off for the run, and `navigation.edge_pan.cursor_pan = true`
   starts with it on. While it is on, a bare pointer resting within
-  `cursor_zone` (20 points) of a display's edge pans that display's view. The
-  toggle shows no status message.
+  `cursor_zone` (20 points) of a display's edge pans that display's view,
+  except under the menu bar and the Dock ([Desktop mode](#limits-of-desktop-mode)).
+  The toggle writes no status note.
 - Control-Option-Command-Shift with an arrow key (`send-to-output <direction>`)
   moves the focused logical window into the view of the display on that side,
   where a navigation on that display would park it. `send-cursor-to-output
@@ -253,11 +651,14 @@ the one window it focuses, and nothing else.
   compositor draws it, off-screen content included: the active view, one
   window, every window, or a rectangle, at any scale. No key is bound to it.
   See [Screenshots](#screenshots).
-- Return to desktop: stop capture, close panels, and show the chooser.
-- Quit, the registered Control-Option-Escape hot key, or a key bound to `quit`:
-  save and exit. The visible Quit button remains available if hot key
-  registration fails.
-- Resize status: explains that native layout resizing is currently unavailable.
+- Quit: the registered Control-Option-Escape hot key, a key bound to `quit`,
+  `Infinify msg action quit` or SIGTERM. Each ends fullscreens, saves, closes
+  the panels, stops capture and releases the hot keys, which returns the native
+  desktop, and exits with status 0. If the exit chord cannot be registered a
+  line on stderr says so and the other three remain. Return to desktop, the
+  Quit button and Resize status went with the toolbar; the fixture modes keep
+  them.
+- Native layout resizing is unavailable without `--experimental-native-resize`.
   Resize the original application on the desktop; observation reconciles native
   bounds and capture dimensions without replacing persistent world geometry.
 
@@ -291,21 +692,25 @@ about real windows has been run**: no test launch had Screen Recording access.
 
 **At launch.**
 
-- With Screen Recording access: no chooser. The canvas opens at once on every
-  display (in its one panel with `--windowed`) and the app starts managing.
-- Without it: the chooser, as before, with its Allow screen recording… button
-  and Open canvas. A canvas opened from there, and a `--windowed` canvas (which
-  opens at launch either way), manages nothing and says why in the status line
-  and on stderr: `Windows are not managed: Infinify has no Screen Recording
-  access. …`. The app still never asks macOS for the grant by itself. Access is
-  read when the canvas opens and macOS applies a new grant at the next launch:
-  quit and reopen.
-- `--manual`: the previous behaviour whatever the grants are. The chooser comes
-  first, only windows picked there are captured, nothing is adopted and no saved
-  placeholder is dropped. A source that closes leaves a placeholder to rebind,
-  except one that `close-window` or `suspend-window` asked to close: when it
-  goes within ten seconds of the command it leaves nothing, or a stand-in, as
-  in a managed run. It combines with `--windowed`.
+- With Screen Recording and Accessibility access: no chooser. The canvas opens
+  at once on every display and the app starts managing.
+- With either missing: the permission window of [Desktop mode](#desktop-mode),
+  with an Allow… button for each, Relaunch and Quit; the canvas opens from it
+  once both are there. The app still never asks macOS for a grant by itself.
+  (Until 2026-10-10 the chooser came here, and Screen Recording alone opened
+  the canvas.)
+- `--windowed`: the canvas opens at launch in its one window, whatever is
+  granted. With Screen Recording it manages windows; without, it manages
+  nothing and says why on stderr: `Windows are not managed: Infinify has no
+  Screen Recording access. A run without --windowed asks for it.` Access is
+  read when the canvas opens and macOS applies a new grant at the next launch.
+- `--manual`: the chooser comes first whatever the grants are, with its own
+  Allow… button; only windows picked there are captured, nothing is adopted
+  and no saved placeholder is dropped. A source that closes leaves a
+  placeholder to rebind, except one that `close-window` or `suspend-window`
+  asked to close: when it goes within ten seconds of the command it leaves
+  nothing, or a stand-in, as in a managed run. With `--windowed` the canvas
+  opens at launch and the chooser comes up above it.
 - Never in `--source`, `--demo`, `--demo-probe`, `--demo-probe-guard` or the
   owned-resize modes, which also reject `--manual` (exit 64). A saved scene that
   failed to load suppresses it too.
@@ -327,8 +732,9 @@ canvas. The test is made when a window comes on screen and never again: a
 window already on the canvas stays for the session whatever it turns into. A
 window of 200x150 or more that the test leaves out is named once on stderr
 (`… not adopted: Accessibility reports it as AXUnknown, …`), since a borderless
-application window can be one of them: Choose windows lists it as before and
-adds it by hand. **Every adopted window is captured** while it is in view on
+application window can be one of them: only a `--manual` run's chooser can add
+it by hand, though the line still ends "Choose windows adds it by hand".
+**Every adopted window is captured** while it is in view on
 some display, with no further question: a managed canvas shows whatever those
 windows show. Use `--manual` to keep choosing window by window.
 
@@ -404,7 +810,8 @@ window number is gone from the system's window list or its process is gone,
 and, where [the events are in place](#event-driven-tracking), also when its
 application has reported it destroyed and it is no longer on screen; a
 capture stream that fails while the window is still there keeps the old
-behaviour, a detached placeholder to rebind from the chooser.
+behaviour, a detached placeholder, which only a `--manual` run's chooser can
+rebind ([Desktop mode](#limits-of-desktop-mode)).
 
 **Titles** follow the native window and are saved, because slots are matched by
 title at the next launch.
@@ -503,8 +910,7 @@ identifier "…" is installed`).
   ([Rendering](#rendering)), and so is every other detached placeholder; the
   two cannot be told apart by eye. Neither a click nor Return relaunches it as
   upstream's do. A click focuses it like any window, and ⌃⌥Q then dismisses
-  it; it is relaunched through `msg relaunch`; there is no toolbar button for
-  close.
+  it; it is relaunched through `msg relaunch`.
 - A close or suspend request is forgotten after 10 seconds and a relaunch after
   30, as upstream forgets them, measured on the clock the app ticks every
   80 ms while the canvas is open. Within its 30 seconds a pending relaunch
@@ -514,12 +920,12 @@ identifier "…" is installed`).
   window, so such a relaunch simply lapses. `msg relaunch` answers `ok` for an
   application that is not installed, where upstream answers `<name> is no
   longer installed`.
-- After Return to desktop and Open canvas the windows return to their slots,
-  but one opened in between is treated as new: each is focused and flown to in
-  turn, the last one winning. The limits of the first pass apply to every
-  reopening: a window that is off screen without a matching title, still being
-  moved after the two-second wait, or missing from both reads of the shareable
-  windows loses its slot and is placed afresh when it is next offered.
+- The limits of the first pass: a window that is off screen without a matching
+  title, still being moved after the two-second wait, or missing from both
+  reads of the shareable windows loses its slot and is placed afresh when it is
+  next offered. (Until 2026-10-10 a canvas could be closed by Return to desktop
+  and reopened, and a window opened in between was then treated as new. A
+  normal run opens its canvas once now.)
 - A window whose capture failed, or that the controller refused, is not offered
   again until it has left the screen and come back, or the canvas is reopened.
   Until then another window of that application with a different title can
@@ -1025,8 +1431,8 @@ and the rest of the file applies.
   pan when the pointer reaches an edge, and the frame is not held on the
   display: it can be dragged partly off it, never wholly, because the point
   it was taken by stays on a display, as upstream's confined cursor keeps it.
-  A pointer over the toolbar strip, or outside the panel of a `--windowed`
-  run, counts as at the nearest point of the display's edge. Upstream holds
+  A pointer outside the panel of a `--windowed`
+  run counts as at the nearest point of the display's edge. Upstream holds
   the cursor itself there; macOS's cursor goes on, so it has to come back to
   the edge before the window leaves it again. Dragged onto another display
   it becomes that display's pinned window. The new place is saved at the
@@ -1648,7 +2054,7 @@ the compositor's frame description. What the snapshot carries is
 - **Coverage.** Upstream's `DrawnChrome` rule is applied per output: a window
   whose frame exactly covers the output is drawn square and without shadow,
   one that overhangs it without border as well. The usable area is the whole
-  output; the 64-point toolbar strip is not part of an output. A pinned
+  output, which in a normal run is the whole display. A pinned
   window is judged where it is drawn, at its screen rectangle. A window's
   blur is not subject to it.
 - **Stand-ins.** A stand-in's bar and body together take the window's
@@ -3089,8 +3495,10 @@ the chords, and the shell watches the modifiers and tells it when one completes
   of native focus, at least once a second
   ([Native focus is followed](#native-focus-is-followed)). Not tried.
 - **When.** Taps are watched exactly while the config's hot keys are
-  registered: from the moment the canvas opens until Return to desktop or quit,
-  again after every config load, and never in a windowed run or a fixture mode.
+  registered: from the moment the canvas opens (at launch, or when the
+  permission window hands over: nothing is watched while that window is up)
+  until quit, again after every config load and every rebuild of the panels,
+  and never in a windowed run or a fixture mode.
   A chord already held when watching starts never fires. The tracker holds no
   timer and nothing ticks it: neither the frame timer nor the check for lost
   input ([Camera motion](#camera-motion)) calls it.
@@ -3168,9 +3576,10 @@ held or a canvas gesture is in progress, and a drag that ends inside the corner
 does not fire it either: the pointer has to leave and return. The rule is
 upstream's `check_hot_corners`, with these differences:
 
-- A display's corners are the corners of its panel, that is of the whole
-  display including the toolbar strip, so a pointer flicked into a physical
-  screen corner counts. With `--windowed` they are the corners of that window,
+- A display's corners are the corners of its panel, which is the whole
+  display and is also its output, so a pointer flicked into a physical
+  screen corner counts, the top two under the menu bar. A hot corner macOS
+  itself has set fires there as well. With `--windowed` they are the corners of that window,
   and count only while it is the window under the pointer: covered there by
   another window, or left on another Space, it has no pointer in its corner, as
   upstream's nested window is sent no motion then.
@@ -3228,11 +3637,15 @@ macOS owns all of them.
 command once, 100 ms after the app has started and its socket answers, exactly
 as an `exec` binding would (`/bin/sh -c`, the `[env]` environment, and
 `INFINIFY_SOCKET` naming this instance's socket, so `Infinify msg …` in a
-command talks to the app that started it). It never
-runs again: not on a reload, not when the list changes, not when the canvas is
-reopened. If the file cannot be read or parsed at launch nothing starts, then or
-later. `--windowed` runs them too, as upstream's nested backend does; the
-fixture modes read no config and start nothing.
+command talks to the app that started it). A launch that shows the permission
+window instead of its canvas holds them until the canvas opens: the window's
+Relaunch starts the run again, and they would otherwise start twice. A launch
+whose saved scene could not be loaded starts none. It never
+runs again: not on a reload, not when the list changes, not after a display
+change. A restart by launchd after a crash is a new launch and runs them
+again. If the file cannot be read or parsed at launch nothing starts, then or
+later. `--windowed` and `--manual` run them at launch, as upstream's nested
+backend does; the fixture modes read no config and start nothing.
 
 ### The usable area
 
@@ -3242,7 +3655,8 @@ macOS draws above the canvas panels.
 
 **The shell sends no usable area.** By the owner's decision of 2026-10-10 the
 canvas covers each display edge to edge and reserves nothing for the menu bar
-or the Dock: windows may sit beneath them, and both stay visible on top. Every
+or the Dock: windows may sit beneath them, and both stay visible on top
+([Desktop mode](#what-a-normal-run-is) has the panel that does it). Every
 output is registered by its screen bounds alone and is usable whole, in a
 normal run, a windowed one and the fixture modes alike. This is a deliberate
 difference from DriftWM, not something that waits to be built.
@@ -3255,9 +3669,12 @@ difference from DriftWM, not something that waits to be built.
   With a Dock that stays on screen, a new or a centred window is centred on
   the display and not on what the Dock leaves of it, Fit pads from the
   display's edge and not from the Dock's, and a window that reaches that edge
-  continues beneath the Dock. An output begins 64 points below the top of
-  its display, under the toolbar strip, so a menu bar no taller than the
-  strip covers the strip and none of the output.
+  continues beneath the Dock. A normal run's output is its display whole, so
+  the menu bar lies over the top of the output as the Dock lies over an edge
+  of it: a window placed or centred high comes to rest partly beneath the menu
+  bar. (When this section was written an output began 64 points below the top
+  of its display, under the toolbar strip of that build, and a menu bar no
+  taller than the strip covered none of it. The strip went the same day.)
 - **Drawing.** The coverage rule of [Rendering](#rendering) tests a window's
   frame against the whole output.
 - **The controller can hold one.** `register_output` takes an optional
@@ -3926,7 +4343,8 @@ the session's button counts was not looked at.
 **The removed usable-area file.** `usable-area.m` never ran in the app: the
 one launch of the build that held it was windowed, where it sent nothing. In
 the throwaway programs above, linked alone, it gave the whole output for the
-display here ({0, 0, 2056, 1265}: the strip is taller than the menu bar and
+display here ({0, 0, 2056, 1265}, an output then being its display less the
+64-point strip: the strip is taller than the menu bar and
 the hidden Dock takes nothing) and the rectangles worked out by hand for
 stand-in screens; joined to the controller, the display's output registered
 with that rectangle, and a hand-made one 80 points shorter was taken by
@@ -3984,7 +4402,7 @@ What you will notice:
   Three fingers that stop mid-swipe hold the view still instead, and lifting
   them 50 ms or more after their last movement flings nothing.
   A press on the canvas, a bound pinch or swipe, a new pan, a wheel zoom, or
-  any hot key, toolbar button, hot corner, gesture-fired action or `Infinify
+  any hot key, hot corner, gesture-fired action or `Infinify
   msg action` aimed at that display stops the drift, and so does any flight
   that starts there: a click that brings a clipped window into view, a new
   window, the window that takes the focus after a close.
@@ -4041,10 +4459,14 @@ Where this differs from DriftWM, or is rough:
 
 - The toggle shows nothing: no status message, and its state cannot be read
   over the socket.
-- A view's edge is the edge of its output, which begins 64 points below the top
-  of the screen, under the toolbar strip. Pushing the pointer against the top
-  of the screen therefore pans nothing; the top zone is the 20 points below the
-  strip.
+- A view's edge is the edge of its output, which is the display's own edge.
+  The top zone therefore lies under the menu bar, and a zone the Dock covers
+  under the Dock: no output is reported for a pointer there, because a press
+  would not reach the panel, so pushing the pointer against the top of the
+  screen pans nothing. A `cursor_zone` taller than the menu bar leaves a band
+  below it that does. Read from the code, not run. (Until 2026-10-10 the output
+  began 64 points down, under the toolbar strip, and the top zone was the 20
+  points below that.)
 - While nothing moves the pointer is looked at about every 80 ms, so a cursor
   pan can start that late. Once it runs it is checked every frame.
 - The frame timer follows the display, and what that changes is upstream's
@@ -4228,7 +4650,7 @@ bookmarks forward untouched; set it to `true` to have runtime bookmarks saved
 and laid over the seeds at launch. On a config reload a bookmark the file adds
 or changes is re-asserted, one it removes is dropped, and the others keep their
 runtime value. Home and Fit return positions are per display, in memory only: not saved, and
-dropped on reload, on Return to desktop, and whenever a display change recreates
+dropped on reload and whenever a display change recreates
 the panels. Reloaded windows are unbound placeholders: one slot for every window
 that was on the canvas at the save. While the app manages windows, a running
 window takes its slot back by bundle identifier and title, never by PID or
@@ -4236,12 +4658,16 @@ window number, and the slots left over are dropped after each discovery pass
 unless `[session] restore_windows = true` keeps them as stand-ins; a slot
 whose titled window still exists off screen is kept, and nothing is decided
 while the config file is refused
-([Managed windows](#managed-windows)). With `--manual`, or without Screen
-Recording access, nothing is matched and nothing is dropped: a chooser selection
-is required to rebind. A failed load blocks
+([Managed windows](#managed-windows)). With `--manual` nothing is matched and
+nothing is dropped: a selection in its chooser is required to rebind. Without
+Screen Recording access nothing is matched or dropped either: a normal run
+shows the permission window instead of the canvas, and a `--windowed` run
+shows the placeholders with no way to rebind them. A failed load blocks
 source selection and disables every save path, preserving the original bytes until
 an explicit different state path or repaired file is provided. Display changes
-recreate panels while retaining cameras by stable display UUID. Source lifecycle and normal bounds are read on the
+recreate panels while retaining cameras by stable display UUID; a wake, an
+unlock and a Space change only put the existing panels back in front
+([Desktop mode](#desktop-mode)). Source lifecycle and normal bounds are read on the
 main event loop, by the poll and, in a managed run with Accessibility access, when an event names the window
 ([Event-driven tracking](#event-driven-tracking)); ScreenCaptureKit buffers independently report pixel dimensions.
 
@@ -4296,7 +4722,7 @@ app), guarded only by those checks.
 
 Coordinates follow DriftWM, not the scene file: camera, window and bookmark
 positions are canvas points with Y up (larger Y is higher). A camera position is
-the centre of the view (the output below the toolbar strip), a window position the
+the centre of the view (the output: the whole display, or the whole window with `--windowed`), a window position the
 centre of its frame in whole points, and a bookmark the point under the centre of
 the view's usable area. The app registers no usable area
 ([The usable area](#the-usable-area)), so that is the whole
@@ -4312,8 +4738,9 @@ window and bookmark actions (`pan-viewport`, `home-toggle`, the zoom actions,
 `go-to-bookmark`, `set-bookmark`) answer `no active output`, and everything else
 answers as it always does: `state`, `bookmark`, `move`, `debug-counters`, reading
 `focus` or `resize`, `action quit`, and the unknown and not-implemented replies.
-After Return to desktop every request answers `the
-canvas is closed`, after a failed scene load the load error, and while an
+After a failed scene load every request answers the load error (`the
+canvas is closed` was the answer after Return to desktop, which a normal run
+no longer has), and while an
 experimental native resize is unresolved `a native resize is pending`. That
 last refusal is for a resize the pointer began and for any resize left
 uncertain; while the size a [sizing action](#window-sizing-actions) asked for
@@ -4424,10 +4851,9 @@ quits and the stream ends.
   every 80 ms, so a change nothing else announces is still found: with several
   displays, the pointer moving to another one changes which output is `active`,
   and that is reported by itself within one poll.
-- After Return to desktop subscribers stay connected and receive nothing until
-  the canvas is open again; a new `subscribe` is then refused like every other
-  request. Before the canvas first opens a `subscribe` is accepted and its
-  first line has no active output.
+- Before the canvas first opens (the permission window is up, or the chooser
+  of a `--manual` run) a `subscribe` is accepted and its first line has no
+  active output.
 
 Status: automated coverage is controller scenarios through the exported C ABI/JSON
 path. On 2026-10-09 the built app was also driven by a script over a private
@@ -4468,13 +4894,15 @@ later launches the same day, listed under
 ## Nested development window
 
 `--windowed [WIDTHxHEIGHT]` (default 1200x800) is the macOS analogue of upstream's
-nested winit backend. Instead of one full-screen floating panel per display it
+nested winit backend. Instead of one whole-display floating panel per display it
 opens the canvas immediately in one ordinary-level, non-activating panel with a
-single output whose stable id is `windowed`. No global hot keys are registered, so
-use the toolbar, the pointer and `Infinify msg`; the chooser is not shown at
-launch but stays reachable from the toolbar. With Screen Recording access it
+single output whose stable id is `windowed` and whose rectangle is the whole
+panel: there is no strip, toolbar or status line. No global hot keys are
+registered, so use the pointer and `Infinify msg`; the permission window is
+never shown, and the chooser only with `--manual`, above the canvas. With
+Screen Recording access it
 manages windows like a normal run unless `--manual` is given; without, the
-canvas still opens and says that it manages nothing
+canvas still opens and says on stderr that it manages nothing
 ([Managed windows](#managed-windows)). It is rejected in `--source`,
 `--demo`, `--demo-probe`, `--demo-probe-guard` and owned-resize modes. It saves to
 the default scene file, takes the default socket and reads the default config
@@ -4484,13 +4912,14 @@ bindings and settings from the config apply; key bindings are read but not
 registered, and tap bindings are read but not watched.
 `autostart` commands run, as they do under upstream's nested
 backend, and hot corners bound for `windowed` or `*` are the corners of this
-window while it is the window under the pointer. A size must be at least 960x480 (the width that keeps the toolbar and
-status line visible) and at most 16384 in each direction, or the app exits 64; the
+window while it is the window under the pointer. A size must be at least 960x480 (the
+least it was when the window carried a toolbar) and at most 16384 in each direction, or the app exits 64; the
 panel is then clamped to the main display's visible area and centred on it. It is
-the same borderless panel as the full-screen ones: it cannot be dragged, it closes
-only through Return to desktop or Quit, and a display change rebuilds it. Window
+a borderless panel like the whole-display ones: it cannot be dragged, it has no
+button, it closes only when the app quits (`Infinify msg action quit`, or
+Control-C in its terminal), and a display change rebuilds it. Window
 navigation and native focus run here as in any normal run; with no hot keys,
-cycling is the toolbar's Previous and Next or `msg action cycle-windows …`, one
+cycling is `msg action cycle-windows …`, one
 committed step each.
 
 Launched on 2026-10-09 as `--windowed 1100x700` with `--state`, `--config` and
@@ -4500,6 +4929,12 @@ name. The next launch, with no config file, did not restore it
 (`session.restore_camera` is off by default) and started at a new output's
 pose. The panel itself, its window level, the toolbar and the absence
 of global hot keys were not inspected.
+
+Launched again on 2026-10-10, in desktop mode, the same way: `msg state`
+reported the output `windowed` as 1100x700 with its view centre at `550 -350`,
+and a viewport screenshot was 1100 x 700 pixels of canvas with no strip
+([What was run for desktop mode](#what-was-run-for-desktop-mode)). The panel on
+screen was again not inspected.
 
 ## Safe disposable demo and verification
 
@@ -4545,13 +4980,17 @@ choosing among multiple native windows of one application and app-specific
 focus rules needs broader validation.
 A held pointer drag cannot retarget another source. Only the last validated
 in-window point receives a synthetic button-up if a pointer leaves its source; arbitrary outside-source drag delivery is not claimed.
+Desktop mode itself, the whole-display panels on every Space, the permission
+window, the login item and what happens across sleep, lock and a display
+change, has not been run on a display at all: [Desktop mode](#desktop-mode)
+lists its own limits and what was run.
 Minimized/hidden/Space transitions, display hotplug, IME composition, the
 registered exit hotkey and the view-action and bookmark shortcuts require manual
 validation on the intended workstation. The view actions, bookmarks and IPC
 requests have exported-C-ABI/JSON controller test coverage, and scripted `msg`
 sessions against a running `--windowed` app (see Scripting above) that left no
-saved evidence. Their rendered animation, toolbar buttons, global-shortcut
-delivery and status feedback have not been verified on a live run, and neither
+saved evidence. Their rendered animation, global-shortcut
+delivery and stderr notes have not been verified on a live run, and neither
 has IPC with bound sources or more than one display. In a default launch the view actions have no
 fullscreen to interact with; behind `--experimental-native-resize` they end
 one first and Home has upstream's fullscreen-return leg, without its pointer
@@ -4709,18 +5148,18 @@ exact boundary.
 | Control | Action | What it does |
 | --- | --- | --- |
 | ⌃⌥ arrow | `center-nearest <direction>` | Focuses the nearest window in a 90° cone and flies the camera to it at the current zoom. The search starts at the focused window while all of it is on the display, otherwise at the middle of the view. Detached placeholders are candidates, and so are `[navigation] anchors`: landing on an anchor flies the camera there and leaves no window focused. Nothing in the cone: nothing happens. |
-| ⌃⌥C, toolbar Center | `center-window` | Flies to the focused window, or with none to the window nearest the middle of the view, and focuses it, at 1:1. |
+| ⌃⌥C | `center-window` | Flies to the focused window, or with none to the window nearest the middle of the view, and focuses it, at 1:1. |
 | ⌃⌥X | `focus-center` | The same for the topmost window under the pointer; over empty canvas, nothing. |
-| ⌥Tab / ⌥⇧Tab, toolbar Next / Previous | `cycle-windows forward` / `backward` | One step through the windows in most-recently-focused order, flown to at the current zoom. |
+| ⌥Tab / ⌥⇧Tab | `cycle-windows forward` / `backward` | One step through the windows in most-recently-focused order, flown to at the current zoom. |
 
 "Window" in all four means a window on the canvas: a
 [widget or a screen-pinned window](#window-rules-widgets-and-pinned-windows)
 is never picked, as upstream picks neither.
 
 The chords are DriftWM's defaults under the default super chord; a config file
-rebinds them like any other key. Center, Previous and Next are on the toolbar of
-every normal run, `--windowed` included, and not in the fixture modes. Hot keys
-act on the display under the pointer, toolbar buttons on their own display, and
+rebinds them like any other key. The toolbar buttons Center, Previous and Next
+went with the toolbar on 2026-10-10. Hot keys
+act on the display under the pointer, and
 every one of them goes through the same `action` command as
 `Infinify msg action`, with the pointer's position and whether a modifier is
 physically down added by the shell. A [trackpad gesture](#trackpad-gestures)
@@ -4751,8 +5190,8 @@ The hold modifiers are upstream's `cycle_hold`: those of the
 the key event of the release; sampling ends it up to 17 ms later.
 
 A hot key step with no modifier down is committed at once, and so is every step
-from the toolbar's Previous and Next and from `msg action cycle-windows …`,
-which are never held. Any other action ends an open cycle first, committing it,
+from `msg action cycle-windows …`,
+which is never held. Any other action ends an open cycle first, committing it,
 as upstream's does.
 
 ### Clicks
@@ -4809,9 +5248,9 @@ timer runs, a timer of the hover's own
 sends it, a sixtieth of a second after the last one at the earliest. Where the
 pointer is has one reading for both, taken when the hover is sent and not from
 the event: the pointer's position, and the output it is on, which is an output
-only where a click at that point would land on that panel, so not on the
-toolbar strip and not under the chooser, a menu or, in a windowed run, another
-application's window.
+only where a click at that point would land on that panel, so not under the
+menu bar or the Dock, the chooser of a `--manual` run, a menu or, in a windowed
+run, another application's window.
 
 No hover is sent while the pointer or the pad is taken: a button is down, any
 panel is handling a press, a drag or a pan, a
@@ -6042,8 +6481,10 @@ With `--experimental-native-resize`:
   display or back, and nothing has been seen in the app's own panel. None of
   the native resize path's own open questions (below) is answered by this
   work.
-- The size asked for is the display's canvas view, the panel less the toolbar
-  strip, not the physical display. The real window is only resized: where it
+- The size asked for is the display's whole rectangle, the area under the menu
+  bar and the Dock included, since the output is the whole display. Whether an
+  application grants that height was not tried; a size it clamps is a case the
+  size transaction handles. The real window is only resized: where it
   sits on the real desktop is still its application's business.
 - No transition. Upstream grows the window in and holds the picture on the
   way out; here the display shows the window alone from the moment it is
@@ -6070,7 +6511,7 @@ With `--experimental-native-resize`:
   and a rule's `fullscreen` that finds one pending is not applied. Leaving is
   never refused, and leaving while the enter is still on its way turns that
   same request around.
-- Quit and Return to desktop while a window is fullscreen: applications
+- Quit while a window is fullscreen: applications
   outlive Infinify, so before anything is shut down the shell ends each
   fullscreen (`-endFullscreens`: `toggle-fullscreen` on a display the
   snapshot reports fullscreen, one at a time, then one `msg state`-like

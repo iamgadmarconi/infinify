@@ -42,8 +42,9 @@ The whole output, center placement, camera speed 0.3 and outer gap 0 are default
 Once a [config](CONFIG.md) is loaded, placement, camera speed and outer gap are
 the config's (`focus_placement`, `navigation.camera_speed`, `snap.outer_gap`)
 and only `usable_rect_local` is taken from this command. The shell does not
-send this command, and sends a usable rectangle by no other either: see
-[The usable area](#the-usable-area).
+send this command, and sends a usable rectangle by no other either, so every
+output is usable whole, and in a normal run an output is the whole display:
+see [The usable area](#the-usable-area).
 Usable rectangles use output-local coordinates, including their nonzero origin,
 and must fit inside the output. Placement accepts center, top, bottom, left,
 right, top_left, top_right, bottom_left, bottom_right. Speed must be finite in
@@ -194,7 +195,11 @@ gave the same: `msg state` the seeded placeholders and the output `windowed` of
 `1950 -0`, and `action zoom-to-fit` on zoom `0.28484848484848485` at camera
 `750 -390`, the numbers recorded for earlier builds on the same seed
 ([IPC.md](IPC.md#live-run-2026-10-09)), as in the last scenario above. No
-normal run was made with either build. While the shell file existed, the two
+normal run was made with either build. (Since desktop mode landed, later the
+same day, that launch reads an output of 1100x700 at camera `550 -350`, the
+whole window being the output; it settles on the same two poses, `1950 -0`
+and zoom `0.28484848484848485` at `750 -390`:
+[README.md](README.md#outputs-since-desktop-mode).) While the shell file existed, the two
 commands were sent once in its own JSON by a throwaway program that linked the
 release library with it: the display's output registered with the rectangle
 read from `NSScreen` (the whole output on that display), and a rectangle 80
@@ -598,7 +603,8 @@ call are covered by the canvas crate's `policy_flow`.
 
 This is controller ABI evidence only. It shows no key binding, shell dispatch,
 frame scheduling, native rendering, capture, or input delivery. The default
-shell binds these commands to toolbar buttons and global shortcuts and ticks
-their flights once per frame of the display (a display link; 60 Hz until
-2026-10-10); the toolbar and shortcut path is built but
-unrun. See the [shell README](../../native/desktop/README.md).
+shell binds these commands to global shortcuts and ticks their flights once per
+frame of the display (a display link; 60 Hz until 2026-10-10); the toolbar
+buttons a normal run also had until 2026-10-10 went with its toolbar strip,
+and the shortcut path is built but unrun. See the
+[shell README](../../native/desktop/README.md).

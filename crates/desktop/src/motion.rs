@@ -233,7 +233,9 @@ fn edge_pan_velocity(
 }
 /// Upstream cursor_edge_pan_velocity: a constant speed while the bare pointer
 /// sits within `zone` of an edge of the usable area, and nothing outside that
-/// area, so a reserved strip such as the menu bar never pans.
+/// area, so a strip a navigation context reserves, as upstream's bar does,
+/// never pans. The macOS shell reserves none, not even for the menu bar: its
+/// usable area is the whole output.
 fn cursor_edge_pan_velocity(screen: Point, usable: Rect, zone: f64, speed: f64) -> Option<Point> {
     let (left, top, right, bottom) = (
         usable.origin.x,

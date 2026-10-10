@@ -705,15 +705,20 @@ and leaving the corner or the output clears the latch. The entry is latched even
 when the action is then suppressed: with `disable_while_dragging`, while any
 mouse button is held or a pointer gesture is running.
 
-Upstream's rectangle is the output. The shell's is the output's panel: the
-whole display, which is `screen_bounds` plus the 64-point toolbar strip the
-shell keeps above it (with `--windowed`, the window). `screen_bounds` alone
-would put the top corners 64 points below the physical screen corners, where a
-flicked pointer never rests. That rectangle is the shell's own panel frame; it
-reaches the controller only as the `output` of `hot_corner` and enters no camera
-or world math. The shell reads the pointer at its poll and frame cadence, and
-only while some output has a bound corner, where upstream checks every motion
-event.
+Upstream's rectangle is the output, and so is the shell's. A normal run is the
+desktop: each display's panel covers the whole display, menu bar and Dock
+included, and the shell registers that same rectangle as the output's
+`screen_bounds` (with `--windowed`, the whole window). The corners are
+therefore the display's true corners, where a flicked pointer comes to rest,
+the two top ones under the menu bar. Until 2026-10-10 the shell kept a 64-point
+toolbar strip above every output and measured the corners on the panel instead,
+`screen_bounds` plus that strip; nothing of that is left in a normal run. The
+probe, demo and owned-fixture runs keep their strip and never send
+`load_config`, so no corner is ever bound in them. The trigger rectangle is the
+shell's own panel frame; it reaches the controller only as the `output` of
+`hot_corner` and enters no camera or world math. The shell reads the pointer at
+its poll and frame cadence, and only while some output has a bound corner,
+where upstream checks every motion event.
 
 ```json
 {"op":"hot_corner","output":1,"corner":"top_left"}
@@ -791,10 +796,16 @@ and nothing starts, then or after a later successful reload, as upstream.
 
 Upstream starts them from `main` for every backend, the nested winit one
 included, 100 ms after its event loop starts. The shell keeps the effects of its
-launch `load_config` and runs them once, 100 ms after its socket is up and the
-chooser or canvas is shown, `--windowed` included; it never looks at the
-`effects` of a later load. Probe, demo and owned-fixture runs never send
-`load_config`, so they never start anything.
+launch `load_config` and runs them once, 100 ms after its socket is up and its
+canvas is shown (with `--manual`, its chooser), `--windowed` included; it never
+looks at the `effects` of a later load. A launch that shows its permission
+window because a grant is missing holds them until the canvas opens from that
+window: its Relaunch starts the same run again in the same process, whose
+controller is new and returns the effects once more, so they must not have run
+already. A launch whose saved scene could not be loaded runs none. A restart by
+launchd after a crash is a launch like any other and runs them again. Probe,
+demo and owned-fixture runs never send `load_config`, so they never start
+anything.
 
 Upstream inserts `WAYLAND_DISPLAY` into `child_env` for these commands, and its
 `msg` client derives the socket from that variable, so a child always talks to
@@ -808,6 +819,49 @@ added when the app runs without IPC. One difference: upstream's insert
 overwrites a `WAYLAND_DISPLAY` the file's `[env]` sets, and here an `[env]`
 `INFINIFY_SOCKET` wins, because that variable is also the client's explicit
 override, upstream's `DRIFTWM_SOCKET`.
+
+## Started at login
+
+Installed as the desktop, the app is started by launchd at login, or from
+Finder, and not from a terminal. The controller needs none: it reads no
+standard input and writes to standard output and standard error only in the
+`msg` client. What it does read is the process environment, and a launchd job
+has launchd's (`HOME`, `USER`, `TMPDIR`, `PATH=/usr/bin:/bin:/usr/sbin:/sbin`,
+the working directory `/`) and nothing a shell profile exports:
+
+- **The config path.** `load_config` with `path: null` reads `DRIFTWM_CONFIG`,
+  `XDG_CONFIG_HOME` and `HOME`. An `XDG_CONFIG_HOME` that only a shell profile
+  exports is unset at login, so the file is `~/.config/infinify/config.toml`;
+  `--config` names another.
+- **`exec-terminal` and `exec-launcher`.** `$TERMINAL` and `$LAUNCHER` are
+  unset at login, so the macOS fallbacks run: a new Terminal window and Apps.
+  The file's `[env]` reaches the commands an `exec` effect runs, not the
+  controller's own environment, so it does not change these two; bind
+  `exec <cmd>` on their combos for another terminal or launcher.
+- **`PATH`.** A default binding's program is looked for on it
+  ([Upstream's Linux commands](#upstreams-linux-commands)) and an `exec`
+  effect's `sh` inherits it, so a program in `/opt/homebrew/bin` or
+  `~/.local/bin` is found by neither. Set `PATH` in the file's `[env]`, which
+  both then use, or name the program by its absolute path.
+- **The working directory.** The controller resolves nothing against it
+  except a relative path it is handed, and the shell hands it none (`--state`,
+  `--config` and `--socket` are refused unless absolute). A relative
+  `[background]` `path` or `texture` is passed on as written, only a leading
+  `~/` expanded, and an `exec` effect's `sh` starts where the app did: at login
+  both mean `/`. Write such a path absolute or with `~/`.
+
+`quit` (a binding, a hot corner, a gesture or `msg action quit`) answers the one
+effect `{"op":"quit"}` in every state: it needs no output, no window and no
+loaded file, and nothing the controller holds refuses it. Ending the process is
+the shell's, with exit status 0, the one end launchd does not restart. The
+`save` the shell sends on the way out writes its temporary file beside the
+scene file it names, not in `TMPDIR`, and replaces the scene by one rename: a
+process killed part-way through a logout leaves the previous scene whole, and
+at worst a stray `scene.json.<pid>.<n>.tmp` beside it, which nothing reads.
+
+None of this was run under launchd: only the owner registers the login item.
+The environment is launchd's documented default, and the rest is read from
+the code.
 
 ## Upstream's Linux commands
 
@@ -947,9 +1001,10 @@ was restored too early back to a new output's pose.
 - The hot-corner latch and the held-button half of `disable_while_dragging` are
   the shell's. The controller suppresses a corner only for its own drag or
   resize gesture; a native resize is driven with a button held, which is the
-  shell's to see. The shell measures a corner on the display's panel, not on
-  `screen_bounds`, and samples the pointer instead of seeing every motion, so a
-  pointer that crosses a corner between two samples fires nothing.
+  shell's to see. The shell measures a corner on the display's panel, which in
+  a normal run is `screen_bounds` exactly, and samples the pointer instead of
+  seeing every motion, so a pointer that crosses a corner between two samples
+  fires nothing.
 - `switch-layout` selects among macOS's enabled input sources instead of xkb
   groups. Upstream's `layout_short` is the `[input.keyboard] layout` token of
   the active group; here it is the short code the shell reports, a language

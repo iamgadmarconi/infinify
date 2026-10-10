@@ -498,7 +498,8 @@ coordinator and driver are unchanged.
   pending`, and a pointer press is dropped without cancelling. That is what
   lets a held `grow-window` key, and the refusals above, reach the controller.
   Every other gate of an unresolved transaction stands (scroll, the start of a
-  trackpad gesture, input forwarding, load, Return to desktop, quit), Escape
+  trackpad gesture, input forwarding, load, quit, and Return to desktop in the
+  fixture runs, which alone still have that button), Escape
   cancels as it does a drag, and a transaction the pointer began or an
   uncertain one keeps all of its gates.
 - **Failure.** A `native_resize_result` reply of a sizing action's transaction

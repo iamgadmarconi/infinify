@@ -628,12 +628,16 @@ One command is new, and the shell must send it:
 | --- | --- | --- |
 | `outputs_settled` | none | `{dirty}`: true when a pin moved to another output |
 
-The shell answers every screen change, and Return to desktop followed by Open
-canvas, by removing all its outputs and registering the current ones again.
-`outputs_settled` after the last `register_output` is the first moment the
-controller can tell a display that is gone from one that came straight back.
-Without it a pin whose display is gone stays undrawn until a discovery pass
-ends.
+The shell answers every screen change by removing all its outputs and
+registering the current ones again. `outputs_settled` after the last
+`register_output` is the first moment the controller can tell a display that
+is gone from one that came straight back. Without it a pin whose display is
+gone stays undrawn until a discovery pass ends. Until 2026-10-10 a normal run
+did the same at Return to desktop followed by Open canvas; its canvas now
+stays open until quit, and only the fixture runs have that button. A wake, an
+unlock or a change of Space is no screen change: while the displays are the
+ones its panels were made for the shell puts the panels back in front and
+sends nothing.
 
 What is added to existing replies:
 
@@ -827,7 +831,8 @@ rule takes, sorted by output and position. `is_widget` is filled.
   the move binding's drag and the move gesture's are adapted
   ([Dragging a pinned window](#dragging-a-pinned-window)). The resize is
   refused: the shell reads `pinned` from the hit, starts no gesture,
-  withholds the press and says why in its status line, and a resize gesture
+  withholds the press and says why on stderr (a normal run draws no status
+  line since 2026-10-10), and a resize gesture
   over one is the gated `swipe_resize` of any window. There is no compositor
   title bar to drag. So of upstream's way to find a
   rule's numbers (pin, drag and resize into place, copy `position` and
@@ -837,18 +842,20 @@ rule takes, sorted by output and position. `is_widget` is filled.
   and resize arms fall through to click-to-focus.
 - **A pinned drag's pointer is held in arithmetic, not on the screen.**
   Upstream confines the cursor itself to an output, and that is all that
-  bounds its pinned move. macOS owns the cursor here: it goes into the
-  toolbar strip and out of a windowed panel, and the controller takes it as
-  held at the edge of the drag's output. After an overshoot the cursor has to
-  travel back to that edge before the frame leaves it, where upstream's moves
+  bounds its pinned move. macOS owns the cursor here: it goes out of a
+  `--windowed` panel (and, until 2026-10-10, into the toolbar strip the
+  shell kept above every output; a display's output is now the whole
+  display), and the controller takes it as held at the edge of the drag's
+  output. After an overshoot the cursor has to travel back to that edge
+  before the frame leaves it, where upstream's moves
   at once: upstream clamps each relative motion, so its cursor never
   accumulates an overshoot, and a report here is an absolute position. A move
   gesture's pointer is the controller's own and is held as upstream's is.
 - **Pins leave a removed output only at `outputs_settled`.** Upstream rehomes
   a pin the moment its output is unplugged. The macOS shell learns of a
-  screen change as one notification and answers it, like Return to desktop,
-  by removing every output and registering the current ones, so a removal by
-  itself says nothing about which display is gone. The controller therefore
+  screen change as one notification and answers it by removing every output
+  and registering the current ones, so a removal by itself says nothing about
+  which display is gone. The controller therefore
   waits for the shell's `outputs_settled` (or the end of a discovery pass);
   until then the pin is bound to its removed output and drawn nowhere.
 - **A window pinned by toggle that closes has no spatial follower.** Upstream
@@ -972,8 +979,10 @@ displacement and not by twice it, a half rounded, unclamped past two
 corners, with the pointer in the edge-pan zone against a canvas window's
 control, saved and loaded, and unpinned; across to the other output and
 back; with the pointer on no output, above the output and past its far
-corner, and in the 64-point strip above an output laid out as the shell's
-is, where the frame stays drawn and hit; against every other gesture, a
+corner, and in the 64 points above an output that starts that far down the
+screen (every output did while the shell kept its toolbar strip; a
+`--windowed` panel's still starts inside its display), where the frame stays
+drawn and hit; against every other gesture, a
 trackpad move's serial included; by the move gesture, to the same numbers,
 raised and focused, its pointer held at the gesture output's last column,
 as a cluster move, with the pointer's own drag taking over, and over a
@@ -1032,10 +1041,11 @@ Observed in the app, over the socket:
 - Both pins loaded from `pins`. The app registered `windowed` and never
   `away`, and its first `state` listed window 3 under `pinned` on `windowed`
   at `[-170, 28]`, 560x380, which is the point (100, 100) on a 1100x636
-  output. No discovery pass ran, so it was the shell's `outputs_settled` that
-  moved it. Window 2 was listed on `windowed` at `[60, 10]`, 900x600, and
-  window 1 under `windows`. The file saved at exit held window 3's pin on
-  output 1 at `[100, 100]`.
+  output (the window less the 64-point strip that build kept; the whole
+  1100x700 since 2026-10-10). No discovery pass ran, so it was the shell's
+  `outputs_settled` that moved it. Window 2 was listed on `windowed` at
+  `[60, 10]`, 900x600, and window 1 under `windows`. The file saved at exit
+  held window 3's pin on output 1 at `[100, 100]`.
 - Neither entry changed with `pan-viewport right`, nor with a
   `toggle-pin-to-screen` or a `move-to-bookmark` while window 2 held the
   focus. A `Move` read of each, the canvas frame re-anchored after each

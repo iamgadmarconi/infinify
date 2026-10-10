@@ -11,6 +11,6 @@
 <key>LSMinimumSystemVersion</key><string>26.0</string>
 <key>LSUIElement</key><true/>
 <key>NSHighResolutionCapable</key><true/>
-<key>NSScreenCaptureUsageDescription</key><string>Show the live native windows you explicitly select on your persistent canvas.</string>
+<key>NSScreenCaptureUsageDescription</key><string>Show your application windows live on the Infinify canvas, which replaces the desktop.</string>
 <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict></plist>

@@ -1291,10 +1291,12 @@ fn a_pinned_drag_follows_the_pointer_to_another_output() {
     );
 }
 
-/// The shell's output is its display less the 64-point strip at the top, and
-/// its pointer goes wherever macOS lets it, the strip included. Upstream's
-/// cursor is confined to an output, so the point a frame was taken by never
-/// leaves one, and the frame can always be reached again.
+/// The shell's pointer goes wherever macOS lets it: out of a `--windowed`
+/// panel, whose output is the window, and, until a display's output became the
+/// whole display, into the 64-point strip the shell kept above it, which is the
+/// layout here. Upstream's cursor is confined to an output, so the point a
+/// frame was taken by never leaves one, and the frame can always be reached
+/// again.
 #[test]
 fn a_pinned_drag_whose_pointer_leaves_every_output_keeps_the_grabbed_point_on_one() {
     let scratch = Scratch::new();
@@ -1309,7 +1311,7 @@ fn a_pinned_drag_whose_pointer_leaves_every_output_keeps_the_grabbed_point_on_on
         json!({"output":1,"screen_rect":rect(300.0,264.0,400.0,300.0)})
     );
     // Pressed at (500, 554), ten points above the frame's bottom edge, and
-    // taken up into the strip: the pointer counts as held at the output's top
+    // taken up past the output: the pointer counts as held at the output's top
     // edge, y = 64, and the frame's row 290 is there.
     begin_drag(&mut h, 1);
     assert_eq!(h.drag_to((0.0, -534.0), Some((500.0, 20.0))), STILL());
@@ -1323,7 +1325,7 @@ fn a_pinned_drag_whose_pointer_leaves_every_output_keeps_the_grabbed_point_on_on
         rect(300.0, 64.0, 400.0, 10.0)
     );
     assert_eq!(h.hit(1, 500.0, 64.0), 1);
-    // A frame shorter than the strip, pressed at (750, 394), its row 30.
+    // A frame shorter than those 64 points, pressed at (750, 394), its row 30.
     put(&mut h, 2, "app.q", "Q", rect(500.0, 300.0, 300.0, 60.0));
     pin(&mut h, 2);
     assert_eq!(

@@ -649,21 +649,23 @@ the user's account of it. In this contract's terms the shell
   later stops being a standard window stays for the session, and a window
   that failed it is asked again when it next comes on screen. A window left
   out is not named in `present` either, so a slot an earlier run saved for it
-  is dropped by the pass like any slot nothing matched. The chooser
-  (`--manual`, or Choose windows) lists as it did and adds any of them by
-  hand;
+  is dropped by the pass like any slot nothing matched. The chooser, which
+  since 2026-10-10 only a `--manual` run has, lists as it did and adds any of
+  them by hand;
 - sends the new-window `attach`, with `output` and `pointer`, for every
-  candidate window it discovers that passes that test; `adoption_complete` after the first read of
-  each window manager, so once at launch and once whenever the canvas is
-  reopened after Return to desktop, with `present` built from the titled
-  candidate windows of that read that exist but were not offered;
+  candidate window it discovers that passes that test; `adoption_complete`
+  after the first read of each window manager, with `present` built from the
+  titled candidate windows of that read that exist but were not offered. A
+  run has one window manager since 2026-10-10, made when its canvas opens (at
+  launch, or when the onboarding window hands over) and kept until quit, so
+  that is once in a run; before, a canvas reopened after Return to desktop
+  made another and ended a pass of its own;
   `window_closed`, with `output`, when a managed window's number has left the
   window list or its process is gone, or when its application has reported it
   destroyed and the window list no longer shows it on screen; `retitle` when
   the title changes; and
   `remove_source` with `keep_placeholder`, as before, when a capture stream
-  fails while the window is still there, and for every source on Return to
-  desktop and quit;
+  fails while the window is still there, and for every source at quit;
 - makes those reports from what it reads, never from what it was told
   ([event delivery](#event-delivery)). In a managed run it is told of changes
   by `NSWorkspace` (an application launched, terminated, activated, hidden,
@@ -694,11 +696,10 @@ the user's account of it. In this contract's terms the shell
   again by the next look, which for such a window is every poll, and a native
   `activate` refused for a gesture is recorded with `observe_focus`, as
   before;
-- ticks the navigation clock on every poll (80 ms), except between Return to
-  desktop and the canvas reopening: a relaunch that was pending when the canvas
-  closed lapses at the first tick after it reopens if that long has passed.
-  IPC is refused in that interval, so none is asked for with a clock that
-  stands still;
+- ticks the navigation clock on every poll (80 ms) from launch to quit, the
+  time an onboarding window or a `--manual` chooser is all it shows included.
+  While a normal run had Return to desktop the clock stood still from there
+  until the canvas reopened, and IPC was refused in that interval;
 - in a run without a window manager (`--manual`, or no Screen Recording
   access) sends `window_closed` instead of `remove_source` for a closed source
   that `snapshot.lifecycle.marks` names: a window that `close-window` or
@@ -718,10 +719,10 @@ the user's account of it. In this contract's terms the shell
   Accessibility after a fresh identity check; `launch` through `NSWorkspace` by
   bundle identifier. A press that was skipped (no Accessibility access, a
   binding that changed) leaves the mark to lapse by itself. A bundle identifier
-  with no installed application is reported in the status line and on stderr
-  after the IPC reply has already answered `Ok`, and the relaunch stays pending
-  until it lapses; upstream answers `<name> is no longer installed` and records
-  nothing;
+  with no installed application is reported on stderr (a normal run draws no
+  status line since 2026-10-10) after the IPC reply has already answered `Ok`,
+  and the relaunch stays pending until it lapses; upstream answers
+  `<name> is no longer installed` and records nothing;
 - sends no new-window `attach` and no `adoption_complete` without Screen
   Recording access or with `--manual`: `settled` stays false for the whole run,
   no slot is dropped and `session.restore_windows` is never read.
@@ -743,8 +744,10 @@ three waiting slots; none is a stand-in.
 - `--windowed 1100x700`, empty config: the app owned one on-screen window of
   1100x700 at layer 0, stderr carried `Windows are not managed: Infinify has no
   Screen Recording access. …`, and `state` listed the three windows, all
-  `suspended`, on one output `windowed` of 1100x636. Three seconds later
-  `state` was the same: without a discovery pass nothing is dropped.
+  `suspended`, on one output `windowed` of 1100x636 (the window less the
+  64-point strip that build kept; the whole 1100x700 since 2026-10-10). Three
+  seconds later `state` was the same: without a discovery pass nothing is
+  dropped.
 - In that launch: `focus --id 1` then `action close-window`: window 1 gone.
   `close --id 2`: gone. `suspend --id 3`: `window is already suspended`;
   `suspend --id 99`: `no window with id 99`; `relaunch --id 99`:

@@ -221,3 +221,54 @@ cc -Wall -Wextra -Werror -mmacosx-version-min=26.0 \
 These scenarios prove controller behavior through JSON and the exported C ABI.
 They do not prove captured pixels, drawn frames, written screenshots, usable
 compositing or native input delivery.
+
+## Outputs since desktop mode
+
+Since 2026-10-10 a normal run of the shell is the desktop, not an app in a
+window: `register_output` carries each display's whole rectangle, menu bar and
+Dock included, and with `--windowed` the whole window. No command changed
+shape, and the controller needed no change: `screen_bounds` is whatever
+rectangle the shell names, and the usable area is the whole of it unless the
+registration, a `set_usable_area` or a `set_navigation_context` names a
+smaller one, which the shell never sends
+([NAVIGATION.md](NAVIGATION.md#the-usable-area)). What follows from the larger rectangle is
+described where it applies: [hot corners](CONFIG.md#hot-corners),
+[cursor edge pan](MOTION.md) and the environment of a run
+[started at login](CONFIG.md#started-at-login).
+
+Before that the shell kept a 64-point toolbar strip at the top of every panel
+and registered the rest. The live runs these documents record up to that date
+were made with that build and are left as observed: a `--windowed 1100x700`
+launch reported an output of 1100x636 with its view center at `550 -318`,
+where the same launch now registers 1100x700. Their status-line, toolbar,
+Choose windows and Return to desktop remarks describe that build too; a normal
+run has none of the four now.
+
+What was run of this, on 2026-10-10: the scenario modules `controller_flow`,
+`lifecycle_flow`, `navigation_actions_flow`, `platform_actions_flow`,
+`render_flow`, `pointer_flow`, `ipc_flow` and `config_flow` (95 scenarios, none
+failed, none of them about desktop mode), and five `--windowed 1100x700`
+launches of the built app on a private scene, config and socket, without
+Screen Recording access (Accessibility was evidently trusted for the session
+that started them: no launch printed the missing-Accessibility note, and with
+detached placeholders only no native focus or input was attempted). There
+`msg state` read `windowed camera 550 -350 zoom 1 1100x700`, a viewport
+screenshot was 1100 x 700 pixels
+of canvas with no strip, `action "center-nearest right"` moved the camera to
+`1950 -0` with the 900x600 placeholder centered in the whole 1100x700, and
+`action quit` and SIGTERM each ended the app with exit status 0 and the socket
+file gone. No run was made on a whole display, under launchd, across a sleep,
+a lock or a Space change, or with real windows: the
+[shell notes](../../native/desktop/README.md#what-was-run-for-desktop-mode)
+have the list.
+
+Desktop mode was built on the tree before tap bindings (`72be7ea`), the
+background caches (`a47217e`) and event-driven tracking (`532a67d`), and
+landed on the tree that has all three. No controller code changed at that
+join either. On the landed tree, the same day, thirteen scenario modules
+passed (179 scenarios: the eight above with `lifecycle_flow` at 32, and
+`usable_tap_flow`, `motion_flow`, `effects_flow`, `passthrough_flow` and
+`rules_flow`), and two more `--windowed 1100x700` launches on the private
+paths, with a config holding an `alt+shift` tap, read the same output,
+captures, camera and exits; what was read in the shell at the join and not
+run is in the same shell notes.

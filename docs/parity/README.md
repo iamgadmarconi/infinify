@@ -1802,8 +1802,8 @@ device-specific behavior also need the corresponding hardware.
   run. See the
   [render contract](../../crates/desktop/RENDER.md) and the
   [desktop shell notes](../../native/desktop/README.md#background-caches).
-- This milestone (commit pending), event-driven window tracking: the shell
-  is told of native windows instead of asking for them, the way yabai is
+- `532a67d`, event-driven window tracking: the shell is told of native
+  windows instead of asking for them, the way yabai is
   (koekeishiya/yabai `dd845723416f5fe92af49fad5ebab00369e07edd`, MIT; `NOTICE`
   records what was adapted). A managed run observes `NSWorkspace` (an
   application launched, terminated, activated, hidden, shown; the active
@@ -1885,6 +1885,107 @@ device-specific behavior also need the corresponding hardware.
   followed native focus) were `implemented_unverified` already and stay so.
   See the [event delivery rules](../../crates/desktop/LIFECYCLE.md#event-delivery)
   and the [desktop shell notes](../../native/desktop/README.md#event-driven-tracking).
+- This milestone (commit pending), desktop mode, makes a normal run the
+  desktop, as DriftWM is the session and not an app one launches (the
+  owner's decision of 2026-10-10). Each display's panel covers the whole
+  display, `NSScreen.frame`, and that rectangle is the output the shell
+  registers: the 64-point strip with its toolbar buttons and status line is
+  gone from normal runs, `--windowed` included, nothing is kept free for the
+  menu bar or the Dock, and the panel stays at the floating window level,
+  below both, so both go on drawing over the canvas. The panels are on every
+  Space (`CanJoinAllSpaces | Stationary | IgnoresCycle |
+  FullScreenAuxiliary`, public API only). A launch goes straight to the
+  canvas; with Screen Recording or Accessibility missing one small window
+  names what is missing, offers an Allow button for each, Relaunch and Quit,
+  and opens the canvas when both are there. `--manual` keeps the chooser.
+  What the status line flashed is one stderr line per note. The bundle
+  carries a LaunchAgent (`RunAtLoad`, `KeepAlive` with `SuccessfulExit`
+  false, Aqua, Interactive), `Infinify login-item on | off | status`
+  registers it through `SMAppService`, and `scripts/install-app.sh` puts a
+  signed copy in `~/Applications`; the quit action, `msg action quit`,
+  SIGTERM and a log out end with status 0 after the usual cleanup, which is
+  what returns the native desktop, and any other end is not 0. After a
+  wake, an unlock or a Space change the panels are put back in front, and
+  rebuilt only when the displays changed. No controller command changed
+  shape and the controller's code did not change: `screen_bounds` was always
+  whatever rectangle the shell named, and the shell sends no usable area, so
+  hot corners are now the display's true corners and centering, placement
+  and fit are measured on the whole display. The probe, demo and
+  owned-fixture modes keep their strip, toolbar, status line and chooser
+  unchanged. Evidence boundary: eight controller test modules passed (95
+  scenarios, none about this milestone), the app was built and ad hoc
+  signed with the LaunchAgent inside, and it was launched five times on
+  2026-10-10 as `--windowed 1100x700` on three detached placeholders
+  (private scene, config and socket, no Screen Recording access, nothing
+  saved; Accessibility was evidently trusted, since no launch printed the
+  missing-Accessibility note, and with placeholders only no native focus or
+  input was attempted): `state` read the output as 1100x700 at camera
+  `550 -350` where the strip left 1100x636 at `550 -318`, a viewport
+  screenshot of 1100 x 700 pixels was looked at and shows canvas to every
+  edge, `center-nearest right` settled on the Browser placeholder at
+  `1950 -0`, centred in the whole view, each status note was one stderr
+  line, and `action quit` and SIGTERM each ended the app with status 0 and
+  the socket removed; `login-item status` from that bundle printed `off` and
+  registered nothing. After the review fixes of the same day the eight
+  modules passed again and two more such launches repeated those readings;
+  in one, a failure note that arose twice 3.2 seconds apart was two stderr
+  lines, and a third half a second later was none. That proves the windowed
+  output and the clean exit
+  and nothing else of desktop mode: no run was made on a whole display, so
+  the panel under the menu bar and the Dock, every Space and Mission
+  Control, wake, lock and a display change, the permission window with real
+  grants and its relaunch, the quit at log out, the install script, the
+  login item under launchd and a restart after a crash are compiled and
+  read only, and no real window was on the canvas. All of that was on the
+  tree desktop mode was built in, before the tap bindings (`72be7ea`), the
+  background caches (`a47217e`) and event-driven tracking (`532a67d`); it
+  lands on the tree that has all three. Two places in the shell changed at
+  that join: its shutdown and its release stop the session watch and the tap
+  monitors both; and the build script names each shell file once, desktop
+  mode's `login-item.m`, `onboarding.m` and `session-watch.m` beside
+  `window-events.m`, `tap-keys.m`, `frame-driver.m` and `background-tiff.m`.
+  The rest was read, not run. A launch
+  starts once: with both grants the canvas opens and starts the hot keys
+  with the tap monitors, the coordinator and the window manager with its
+  observers; with one missing the permission window is all there is, with no
+  key registered, no monitor and no observer, until it hands over to that
+  same start. The change of Space has two observers, each registered once:
+  the session watch puts the panels back in front and the window events run
+  a discovery pass. A rebuild of the panels stops and starts the tap
+  monitors with the hot keys, lets the frame timer be made again by the next
+  frame that is wanted, and keeps the window manager and its observers.
+  Every way out ends in the one cleanup, which stops the observers, the
+  session watch, the tap monitors, the frame timer and the capture streams
+  once each. The three milestones added no stderr line to the shell's main
+  file, so no note is written both directly and by the rule that writes a
+  status note once; and nothing they added converts between a panel and its
+  output, so the hover, the lost-input release and an event's look measure
+  the whole panel as everything else does. On the landed tree thirteen
+  controller test modules (179 scenarios, `usable_tap_flow`, `motion_flow`,
+  `effects_flow`, `passthrough_flow` and `rules_flow` beside the eight) and
+  the headless navigation coordinator script passed, and the app built from
+  it was launched twice on the three placeholders (private scene, a config
+  holding an `alt+shift` tap, private socket, four seconds and one, no
+  Screen Recording access): `state` read the output as 1100x700 at camera
+  `550 -350`, two viewport screenshots of 1100 x 700 pixels were looked at
+  and show canvas to every edge, `center-nearest right` settled on the
+  Browser placeholder at `1950 -0`, `pan-viewport right` on `2050 -0` and
+  `zoom-to-fit` on zoom `0.28484848484848485` and back, stderr held the
+  not-managed line alone, with no warning for the tap, and `action quit`
+  ended one launch and SIGTERM the other with status 0 and the socket
+  removed; `login-item status` from that bundle printed `off` and registered
+  nothing. Being windowed and without Screen Recording access, those
+  launches had no hot key, tap monitor, session watch, window manager or
+  observer: nothing read at the join was run there, no tap was made and no
+  window event arrived. Known mismatches and
+  limits: a capture stream macOS stops across sleep or lock is not started
+  again; a run started by launchd has no stderr, so its status notes are
+  lost; nothing stops a second instance; cursor edge pan does not pan
+  upward under the menu bar, where the shell reports no output; and no
+  private window tag keeps the panel out of Mission Control, which was not
+  observed either way. No inventory row changes status. See the
+  [desktop shell notes](../../native/desktop/README.md#desktop-mode) and
+  [started at login](../../crates/desktop/CONFIG.md#started-at-login).
 
 These milestones add evidence to partial rows. None satisfies an entire native
 behavior row or changes the completion requirement.
@@ -1943,7 +2044,8 @@ and became `implemented_unverified`; the other 190 stay `missing`, each with a
 note that says why. No row is `verified` or `blocked`, and the sweep moved none
 to `out_of_scope`: that is the owner's decision, which a note only recommends.
 Two milestones have moved rows since, and the table is counted from the file
-as it stands after both. The tap-bindings milestone moved one,
+as it stands after both, and was counted again from it after event-driven
+tracking and desktop mode, which moved none. The tap-bindings milestone moved one,
 `config.keybindings.alt+shift`, to `implemented_unverified`. The background
 caches milestone above took four more out of the real gaps, the field and
 reference rows of `cache_shader` and `cache_budget_mb`. `protocol.layer_shell`

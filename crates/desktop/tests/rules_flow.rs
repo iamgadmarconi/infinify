@@ -2147,9 +2147,9 @@ fn a_pin_follows_its_output_away_and_stays_on_screen() {
     assert_eq!(h.drawn(3), vec![(1, true, false)]);
 }
 
-/// The shell answers any screen change, and Return to desktop followed by
-/// Open canvas, by removing every output and registering the current ones
-/// again in its own order, then `outputs_settled`.
+/// The shell answers any screen change by removing every output and
+/// registering the current ones again in its own order, then
+/// `outputs_settled`.
 #[test]
 fn pins_keep_their_outputs_through_a_screen_reconfiguration() {
     let scratch = Scratch::new();

@@ -334,8 +334,9 @@ the user has just asked for, is reported by the shell's focus follow like any
 native activation (`activate` with `native`; by reading the shell, at the
 first poll after a managed run has bound a window it discovered, the polls
 being 80 ms apart, at the next focus poll for a window bound from the
-chooser, half a second away at most, or a second where the shell's observers
-are in place, and only with Accessibility access). That ends the fullscreen
+chooser of a `--manual` run, half a second away at most (such a run has no
+window manager and so no observers to make it a second), and only with
+Accessibility access). That ends the fullscreen
 as any activation on that output does: the new window is focused beside the
 restored frame, and flown to if it is clipped. `spawn` itself ends nothing,
 but the window it opens can. Upstream never activates a window it placed in
@@ -432,6 +433,13 @@ gone, as for a pin ([RULES.md](RULES.md#wire-contract)):
   clamped for the size the window comes back to, as upstream's
   `reassign_orphaned_pinned` rebinds it. `dirty` is true. Without that the
   exit would pin the window to an output that is gone.
+- `outputs_settled` with no output registered at all says every display is
+  gone: every fullscreen ends, and no pin moves, there being nowhere to move
+  it. The desktop stays up while its displays are away and the shell sends
+  the command then too, so wherever macOS reports no display for a moment (a
+  sleep, a cable) a fullscreen window is back on the canvas afterwards. This
+  is read from `fullscreen_outputs_settled` and `rehome_pins`, and from the
+  shell's `-openPanels`; no scenario registers no output, and none was run.
 
 ## Saving
 
@@ -447,13 +455,15 @@ before, with the pin it had, and at the **size it has**: the only size a
 native observation committed, and the one the next size transaction's first
 read is measured against. A window still owed its size is saved as it stands,
 where its exit put it. A fullscreen window that loses its source (a detach,
-as Return to desktop does) leaves its slot the same way. A slot written with
-the old size instead would be adopted by a window of the output's size, and
-every later size transaction on it would fail its first read with `baseline
-size differs from committed logical size`.
+as a failed capture stream is answered with) leaves its slot the same way. A
+slot written with the old size instead would be adopted by a window of the
+output's size, and every later size transaction on it would fail its first
+read with `baseline size differs from committed logical size`.
 
 So that this is the exception, the shell ends every fullscreen before it
-saves and detaches at Quit and Return to desktop, and performs the size
+saves and detaches at Quit (a `quit` binding, `msg action quit`, SIGTERM or a
+log out: the one way a normal run's canvas closes since its Return to desktop
+button went with the toolbar strip on 2026-10-10), and performs the size
 transactions to their end first, bounded at three seconds
 ([shell notes](../../native/desktop/README.md#limits-of-fullscreen)); the
 `quit` action's own guard ends the active output's, as upstream's does. The
@@ -577,7 +587,7 @@ establish that:
   backdrop, leaves out the outline of a fullscreen neighbour, or draws
   anything;
 - input forwarded to a fullscreen window lands where it is drawn;
-- the shell ends a fullscreen at Quit or Return to desktop. Its
+- the shell ends a fullscreen at Quit. Its
   `-endFullscreens` sends commands this test covers one by one (a
   `toggle-fullscreen` on a fullscreen output, an `ipc` `State` that carries
   an owed size), but the method itself is compiled and has run in the app
@@ -711,7 +721,7 @@ met, upstream decided:
 | who sizes a widget or a pinned window | two requests, neither by hand: the rule's `size` at the map and an exit's restore. Every other size transaction refuses them | upstream sizes them freely |
 | a new window in the background | placed against the frame each window still owed its rule's size is becoming | `fullscreen_background_pos` over the stage's frames |
 | the shell's renderer | its one fullscreen function runs on the frame the effects build; the error bar stays; no closing snapshot and no stand-in fade on a fullscreen output; a fullscreen window's own snapshot is baked bare; a window that opens fullscreen is not held for its size | `compose_frame`: the bar for every output, "no dying-window flash over a fullscreen app" |
-| the shell's shutdown | `-endFullscreens` once in `-cleanup`, after the hot keys, gestures and hover are stopped and before the resize coordinator is shut down; Quit, SIGTERM and Return to desktop all end there. A screen change re-registers the outputs and ends no fullscreen: [Outputs](#outputs) | quit ends fullscreen first |
+| the shell's shutdown | `-endFullscreens` once in `-cleanup`, after the hot keys, gestures and hover are stopped and before the resize coordinator is shut down; Quit, SIGTERM and a log out all end there (Return to desktop did too, while a normal run had that button). A screen change re-registers the outputs and ends no fullscreen: [Outputs](#outputs) | quit ends fullscreen first |
 
 Two of those were defects of the join and not of either side: a fit or a fill
 pressed out of fullscreen would have centered on the output's size, the last

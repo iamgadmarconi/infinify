@@ -1673,7 +1673,9 @@ fn a_reopened_canvas_ends_its_own_pass() {
             "zsh",
             rect(500.0, 100.0, 300.0, 200.0),
         );
-        // Return to desktop: every source is detached, every slot kept.
+        // The canvas closes without a quit, as Return to desktop closed it
+        // while a normal run had that button: every source is detached,
+        // every slot kept.
         for id in [1, 2, 3] {
             h.ok(json!({"op":"remove_source","window":id,"identity":identity(id),"keep_placeholder":true}));
         }

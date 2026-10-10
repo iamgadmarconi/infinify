@@ -76,7 +76,7 @@ Names are case-sensitive kebab-case; directions (`up`, `down`, `left`, `right`,
 | `zoom-in`, `zoom-out`, `zoom-reset`, `zoom-to-fit` | yes | the command of the same name |
 | `go-to-bookmark <name>` | yes | flies to the bookmark; `navigation` is `null` when there is none |
 | `set-bookmark <name>` | yes | stores the bookmark; `dirty` is true, `navigation` is `null` |
-| `quit` | yes | `effects` is `[{"op":"quit"}]`; needs no output |
+| `quit` | yes | `effects` is `[{"op":"quit"}]`; needs no output, and the controller refuses it in no state. The shell performs it by ending cleanly, with exit status 0: the one end launchd does not restart ([CONFIG.md](CONFIG.md#started-at-login)). What the shell holds back before the controller is asked is the shell's: an unresolved native resize gates it ([SIZES.md](SIZES.md)), and its socket answers no request, this one included, while a saved scene could not be loaded |
 | `nudge-window <dir>` | yes | moves the focused window by `navigation.nudge_step`; `dirty` is true; needs no output |
 | `exec <cmd>`, `spawn <cmd>`, `exec-terminal`, `exec-launcher` | yes | `effects` is one `exec` for the shell to run; needs no output |
 | `reload-config` | yes | `effects` is `[{"op":"reload_config"}]`; needs no output |
@@ -550,6 +550,11 @@ saved as evidence. Observed, each read back through the socket:
 
 - `state`: three windows at `[520, -360]`, `[1950, 0]` and `[-620, -890]`, all
   `suspended`, and one output `windowed` of 1100x636, camera `550 -318`, zoom 1.
+  (The window less the 64-point strip that build kept. Since 2026-10-10 the
+  same launch registers the whole 1100x700: `state` then read `windowed camera
+  550 -350 zoom 1 1100x700`, and `camera` read `550 -350` and, after `action
+  "center-nearest right"`, `1950 -0`. The other figures below that come from
+  636 would follow it and were not read again.)
 - `camera 400 -250` and `zoom 0.5` landing on those values, and `camera 0 0`
   landing in the first full run and five of six short launches (see below);
   `zoom 0.01` answering and landing on 0.14242424242424243 and `zoom 5` on 1.

@@ -17,8 +17,7 @@
 // Where the pointer is now, by the shell's one reading of it, which is also what cursor
 // edge pan is told: its global point in the coordinates of screen_bounds through
 // `screen`, and the output of this view it is on. nil when a press there would not reach
-// one: another window covers the panel, or the point is on the toolbar strip or on
-// another panel.
+// one: another window covers the panel, or the point is on another panel.
 - (NSNumber *)pointerSample:(CGPoint *)screen;
 // The shell's frame timer is running. It then carries the hover (-frame:output:), and
 // no timer of this object's is armed beside it.

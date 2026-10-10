@@ -201,8 +201,9 @@ picture that was not acknowledged against its observed geometry):
   the reason has stood for two readings half a second apart:
   `capture of #7 (com.google.Chrome) not acknowledged: family — no root-only
   extent: 3 native windows in its family (the window and 2 attached to it)`.
-  A press on such a window shows the short reason in the status line
-  instead of `source presentation unsettled`.
+  A press on such a window says the short reason instead of `source
+  presentation unsettled`: on stderr, since a normal run draws no status line
+  (until 2026-10-10 it was shown there).
 
 What reading suggests, without deciding it: `-rootExtent:` answers only for a
 window that is alone in its native family, and an application window with any

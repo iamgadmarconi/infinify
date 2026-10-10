@@ -70,7 +70,7 @@ typedef NS_ENUM(NSInteger,DWPress) {
 - (void)frame:(CGPoint)screen output:(NSNumber *)output { [_flush invalidate];_flush=nil;if(_motion)[self hover:screen output:output]; }
 // `p` and `output` are the shell's reading of the pointer, not the event's: the motion is only what is delivered.
 // A tracking area reports the pointer inside its view also under a window that covers the panel there (the
-// chooser, a menu, in a windowed run another application) and over the toolbar strip; neither is on an output.
+// chooser, a menu, in a windowed run another application), which is not on an output.
 - (void)hover:(CGPoint)p output:(NSNumber *)output {
     NSEvent *motion=_motion;NSView<DWPointerHost> *host=_host;_motion=nil;_sent=CACurrentMediaTime();
     if(!motion||!host||!_area||!output||[host pointerBusy])return;

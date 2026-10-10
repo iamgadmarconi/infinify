@@ -22,6 +22,9 @@
 #import "pointer-hover.h"
 #import "canvas-renderer.h"
 #import "frame-driver.h"
+#import "login-item.h"
+#import "onboarding.h"
+#import "session-watch.h"
 #include <mach/mach_time.h>
 #include <spawn.h>
 
@@ -368,6 +371,7 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 - (NSDictionary *)call:(NSDictionary *)command;
 - (void)render;
 - (void)showChooser:(id)sender;
+- (void)fillRebind:(BOOL)keep;
 - (void)quit:(id)sender;
 - (void)attachChoice:(id)sender;
 - (void)openCanvas:(id)sender;
@@ -390,6 +394,25 @@ static const NSInteger DWPolicyPress=9;
 @end
 @interface Desktop ()
 @property BOOL hoverUndelivered; // --no-hover-forwarding: pointer motion never reaches an application
+@end
+// A normal run is the desktop, as DriftWM is the session: one panel per display covering all of it, on every Space, with
+// no strip, toolbar, status line or chooser. Probe, demo and owned-fixture runs keep all four as their evidence recorded them.
+@interface Desktop () <NSApplicationDelegate>
+@property NSString *said; // the status note last written to stderr (-say:)
+@property DWOnboarding *onboarding; // the one window of a launch that cannot open its canvas yet
+@property BOOL relaunch; // that window's Relaunch: main() starts this run again once it has ended
+@property DWSessionWatch *session; // while the panels are open: wake, the session and the Space coming back (-returned)
+@property BOOL desktopUp; // the desktop's canvas is open, on however many displays there are: with none there it has no panel and is still open
+- (void)say:(NSString *)note;
+- (void)onboard;
+@end
+// A normal run's panel covers its display whole, the part under the menu bar and the Dock included: AppKit is not to
+// move it into the area those leave free. Its level stays NSFloatingWindowLevel (3), above every ordinary window and
+// below the Dock (20) and the menu bar (24), which both keep drawing over the canvas.
+@interface DesktopPanel : CanvasPanel
+@end
+@implementation DesktopPanel
+- (NSRect)constrainFrameRect:(NSRect)frame toScreen:(NSScreen *)screen { (void)screen;return frame; }
 @end
 @implementation DesktopView (Pointer)
 // Hover asks once a frame, and what the controller refuses it is not news for the status line.
@@ -938,7 +961,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(trusted||self.logicalFocus||self.focusNoted||!self.navigation)return;
     self.focusNoted=YES;NSString *note=focusAccessNote;
     // Said once, ahead of a notice already up; what a config load left for the status line returns as the resting status.
-    fprintf(stderr,"%s\n",note.UTF8String);self.statusText=!self.statusText.length||[self.statusText isEqual:self.help]?note:[NSString stringWithFormat:@"%@ · %@",note,self.statusText];
+    [self say:note];self.statusText=!self.statusText.length||[self.statusText isEqual:self.help]?note:[NSString stringWithFormat:@"%@ · %@",note,self.statusText];
 }
 - (void)cancelNavigation {
     [self.navigation invalidate];
@@ -1042,7 +1065,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     [self call:@{@"op":@"pan_end",@"output":output}];[self ensureFrames];
 }
 // Hot key target and the IPC active output: the output under the pointer, else the panel
-// under it (a panel's toolbar strip lies outside its output), else the first registered output.
+// under it (a fixture panel's toolbar strip lies outside its output), else the first registered output.
 - (NSNumber *)viewOutput {
     CGPoint point=pointer();
     for(DesktopView *view in self.views){NSNumber *output=[view outputAt:point];if(output)return output;}
@@ -1057,6 +1080,10 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // What the status line returns to: a config load the controller refused, or its --super chord, stays up, else why the background fell back, else the help.
 // A problem in the config file itself is the error bar's alone (-loadConfig:).
 - (NSString *)restingStatus { return self.configured?self.configNote?:self.backgroundNote?:self.help?:@"":helpText; }
+// A normal run draws no status line. A note that would have been shown there is one line on stderr instead, and is not
+// written again while it stays up: one renewed before it expired is one line. Once the status is back at rest the same
+// note is news again (-render forgets it there), so two refusals a minute apart are two lines.
+- (void)say:(NSString *)note { if(!note.length||[note isEqual:self.said])return;self.said=note;fprintf(stderr,"%s\n",note.UTF8String); }
 - (NSString *)actionFeedback:(NSString *)action flight:(NSDictionary *)flight output:(NSNumber *)output {
     BOOL home=[action isEqual:@"home-toggle"];
     if(home||[action isEqual:@"zoom-to-fit"]){
@@ -1154,7 +1181,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // other and adopted into the stand-in's slot by the controller.
 - (void)launch:(NSString *)bundle {
     __weak Desktop *weak=self;
-    DWLaunchApplication(bundle,^(NSString *reason){Desktop *d=weak;if(!d||d.cleaning)return;NSString *note=[@"Relaunch failed: " stringByAppendingString:reason];fprintf(stderr,"%s\n",note.UTF8String);[d flashStatus:note];[d render];});
+    DWLaunchApplication(bundle,^(NSString *reason){Desktop *d=weak;if(!d||d.cleaning)return;NSString *note=[@"Relaunch failed: " stringByAppendingString:reason];[d say:note];[d flashStatus:note];[d render];});
 }
 // Which corners are bound depends on the outputs registered: read from the bindings
 // after every config load, and again whenever panels open.
@@ -1163,8 +1190,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 - (BOOL)fullscreenOn:(NSNumber *)output { for(NSDictionary *o in self.pointerOutputs)if([o[@"id"]isEqual:output])return asDict(o[@"fullscreen"])!=nil;return NO; }
 // Upstream checks hot corners on every pointer motion. Here the pointer is read at
 // the poll and frame cadence, and only while some corner is bound. A display's
-// corners are its panel's: the output and the shell's own toolbar strip above it,
-// which is where the pointer comes to rest. The controller picks and runs the action.
+// corners are its panel's, which are the output's and the display's own: the true
+// corners, where the pointer comes to rest. The controller picks and runs the action.
 // An entry upstream suppresses is not sent at all, under a held button as on an output
 // that is fullscreen with disable_when_fullscreen: the status line then reports no
 // action that did not run. The controller's hot_corner applies the fullscreen rule too.
@@ -1428,7 +1455,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 - (void)configureExitKey {
     if(self.hotkeyHandler)return;
     EventTypeSpec type={kEventClassKeyboard,kEventHotKeyPressed};OSStatus handler=InstallApplicationEventHandler(exitKey,1,&type,(__bridge void *)self,&_hotkeyHandler);EventHotKeyID key={'Infi',1};
-    if(handler!=noErr||RegisterEventHotKey(53,controlKey|optionKey,key,GetApplicationEventTarget(),0,&_exitHotkey)!=noErr)self.statusText=@"Exit shortcut unavailable; use the visible Quit button.";
+    if(handler!=noErr||RegisterEventHotKey(53,controlKey|optionKey,key,GetApplicationEventTarget(),0,&_exitHotkey)!=noErr)self.statusText=self.configured?@"Exit shortcut unavailable; quit with a key bound to quit or with Infinify msg action quit.":@"Exit shortcut unavailable; use the visible Quit button.";
 }
 - (void)stopExitKey { if(self.exitHotkey){UnregisterEventHotKey(self.exitHotkey);self.exitHotkey=NULL;}if(self.hotkeyHandler){RemoveEventHandler(self.hotkeyHandler);self.hotkeyHandler=NULL;} }
 // A normal run's global hot keys: the config's bindings, then the exit chord unless one
@@ -1491,7 +1518,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // The status line's help: the chords this run answers to.
 - (NSString *)helpLine {
     NSMutableArray<NSString *> *parts=[[self pointerHelp]mutableCopy];
-    if(self.windowed){[parts insertObject:@"Windowed, no global shortcuts" atIndex:0];[parts addObject:@"toolbar or Infinify msg: view, window and bookmark actions"];return [parts componentsJoinedByString:@" · "];}
+    if(self.windowed){[parts insertObject:@"Windowed, no global shortcuts" atIndex:0];[parts addObject:@"Infinify msg: view, window and bookmark actions"];return [parts componentsJoinedByString:@" · "];}
     NSString *(^chord)(NSString *)=^NSString *(NSString *action){return [self.hotKeys chords:action].firstObject;};
     // Four arrows or digits on one modifier set read as a single entry.
     NSString *(^family)(NSString *,NSArray<NSString *> *,NSArray<NSString *> *,NSString *)=^NSString *(NSString *action,NSArray<NSString *> *arguments,NSArray<NSString *> *names,NSString *range){
@@ -1632,7 +1659,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 - (void)startIPC:(NSString *)path {
     __weak Desktop *weak=self;NSString *error=nil;
     self.ipc=[DWIPCServer serverAtPath:path handler:^NSData *(NSData *line,BOOL *subscribe,NSData *__autoreleasing *event){return [weak ipcLine:line subscribe:subscribe event:event];} error:&error];
-    if(!self.ipc){self.statusText=[NSString stringWithFormat:@"Running without IPC: %@ (%@)",error,path];fprintf(stderr,"%s\n",self.statusText.UTF8String);}
+    if(!self.ipc){self.statusText=[NSString stringWithFormat:@"Running without IPC: %@ (%@)",error,path];[self say:self.statusText];}
     else self.socketPath=path;
 }
 - (BOOL)loadScene:(NSString *)path {
@@ -1654,8 +1681,12 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     // a bound or scripted command's (-applyReply:), a pointer policy press's and a hover's that moved the focus (-pointerApply:, -pointerFocused:),
     // a focus request's answer and a native focus report (the coordinator's `changed`), a size transaction's tail, each frame of a flight.
     // The hot keys act only when it changed: the passed chords stop being hot keys and reach the focused application from macOS itself.
-    if(self.configured){NSArray<NSString *> *refused=[self.hotKeys pass:snapshot[@"pass_keys"]];if(refused.count)[self flashStatus:summary(@"Shortcut unavailable",refused)];for(NSString *line in refused)fprintf(stderr,"Shortcut unavailable: %s\n",line.UTF8String);}
+    if(self.configured){NSArray<NSString *> *refused=[self.hotKeys pass:snapshot[@"pass_keys"]];if(refused.count)[self flashStatus:summary(@"Shortcut unavailable",refused)];for(NSString *line in refused)[self say:[@"Shortcut unavailable: " stringByAppendingString:line]];}
     [self adoptRender:snapshot];for(DesktopView *view in self.views)[view render:snapshot];
+    // What the status line would show now, said once while it stays up. What it rests on is not news: the chords registered, and a config or background note that was written when it arose.
+    // Back at rest, the note last said is forgotten: the next one like it is another event. A failed read of the windows is renewed every two
+    // seconds or so, after its note expired, and keeps its own count of what was written (-discoveryFailed:).
+    if(self.configured){if([self.statusText isEqual:[self restingStatus]])self.said=nil;else if(![self.statusText isEqual:self.discoveryNote])[self say:self.statusText];}
     // An animated background keeps the frame timer alive by itself, and so does an animation this description began: a window that opened with
     // its picture already there or closed, a stand-in that left. Neither is camera motion, so the timer is started without frameFlying.
     if(!self.frameDriver&&[self animate:NO])[self startFrames];
@@ -1693,7 +1724,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 - (void)resizeUnavailable:(id)sender { if(self.probe&&sender){self.probeHumanInput=YES;return;} (void)sender;if(self.experimentalResize){self.statusText=@"Experimental: select one source, then drag an orange edge handle. Unknown family or capture mapping stays inert; Escape cancels shell input.";[self render];return;}self.statusText=@"Native layout resize is unavailable. Resize the original app on the desktop, then return; capture reconciles without changing world geometry.";[self render]; }
 - (void)returnDesktop:(id)sender { [self.resize cancel];if(self.resize&&![self.resize canRemove:nil]){self.statusText=@"Resize is pending or unresolved; source retained";[self render];return;} if(self.probe&&sender){self.probeHumanInput=YES;return;} (void)sender;[self cleanup];[self showChooser:nil]; }
 - (DesktopView *)panel:(NSRect)frame outputRects:(NSArray *)rects identities:(NSArray *)identities {
-    NSPanel *panel=[[(self.ownedResizeProbe?RPIsolatedPanel.class:CanvasPanel.class) alloc]initWithContentRect:frame styleMask:NSWindowStyleMaskBorderless|NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO];
+    BOOL desktop=self.configured&&!self.windowed; // a normal run's panel on a display: the display, whole
+    NSPanel *panel=[[(self.ownedResizeProbe?RPIsolatedPanel.class:desktop?DesktopPanel.class:CanvasPanel.class) alloc]initWithContentRect:frame styleMask:NSWindowStyleMaskBorderless|NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO];
     panel.releasedWhenClosed=NO;panel.level=self.windowed?NSNormalWindowLevel:NSFloatingWindowLevel;panel.animationBehavior=NSWindowAnimationBehaviorNone;panel.collectionBehavior=NSWindowCollectionBehaviorMoveToActiveSpace|NSWindowCollectionBehaviorFullScreenAuxiliary;
     DesktopView *view=[[DesktopView alloc]initWithFrame:NSMakeRect(0,0,frame.size.width,frame.size.height)];view.desktop=self;view.globalBounds=topRect(frame);view.outputs=[NSMutableArray array];view.tiles=[NSMutableDictionary dictionary];view.surfaces=[NSMutableDictionary dictionary];view.overlays=[NSMutableArray array];view.wantsLayer=YES;view.layer.backgroundColor=[NSColor colorWithSRGBRed:.045 green:.065 blue:.10 alpha:1].CGColor;panel.contentView=view;
     // Normal runs only: the trackpad's raw touches, for gestures of three or more fingers.
@@ -1701,6 +1733,10 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     for(NSUInteger i=0;i<rects.count;i++){NSNumber *output=[self call:@{@"op":@"register_output",@"stable_id":identities[i],@"screen_bounds":rects[i]}][@"output"];if(output)[view.outputs addObject:output];}
     // Pointer motion over the canvas: hover, sloppy focus, pick mode. The fixture modes have none of it.
     if(self.configured){view.hover=[[DWPointerHover alloc]initWithHost:view];view.hover.forwarding=!self.hoverUndelivered;}
+    // A normal run ends here: its view is the canvas alone, and the strip, toolbar and status line below are the fixture modes'. The desktop's
+    // panels are on every Space, a fullscreen application's included, and stay where they are through Mission Control, like the desktop they replace.
+    if(desktop)panel.collectionBehavior=NSWindowCollectionBehaviorCanJoinAllSpaces|NSWindowCollectionBehaviorStationary|NSWindowCollectionBehaviorIgnoresCycle|NSWindowCollectionBehaviorFullScreenAuxiliary;
+    if(self.configured){[self.panels addObject:panel];[self.views addObject:view];[panel orderFrontRegardless];return view;}
     NSArray *names=self.ownedResizeProbe?@[]:@[@"Choose windows",@"Return to desktop",@"Resize status",[self quitTitle]];
     if(self.ownedResizeProbe)[view addSubview:label(@"Noninteractive owned resize probe — supervisor signal or deadline exits",NSMakeRect(15,8,720,26))];
     SEL actions[]={@selector(showChooser:),@selector(returnDesktop:),@selector(resizeUnavailable:),@selector(quit:)};
@@ -1717,37 +1753,41 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     // Return to desktop stopped the config watcher and dropped the key table: read the config again.
     if(self.configured&&!self.configWatcher)[self loadConfig:NO];
     if(self.configured&&!self.trackpad){__weak Desktop *weak=self;self.trackpad=[[DWTrackpadGestures alloc]initWithEmit:^(NSDictionary *event){[weak gesture:event owner:1];}];}
+    // The desktop only: a windowed run is an ordinary window, which macOS orders like any other.
+    if(self.configured&&!self.windowed){self.desktopUp=YES;if(!self.session){__weak Desktop *weak=self;self.session=[[DWSessionWatch alloc]initWithReturned:^{[weak returned];}];}}
     if(self.demo){NSRect frame=NSMakeRect(100,120,1040,600);CGRect global=topRect(frame);NSMutableArray *rects=[NSMutableArray array];for(int i=0;i<2;i++)[rects addObject:rectJSON(CGRectOffset(ports[i],global.origin.x,global.origin.y))];[self panel:frame outputRects:rects identities:@[@"fixture-view-a",@"fixture-view-b"]];}
     // The analogue of upstream's nested winit backend: one ordinary window, one output.
     else if(self.windowed){NSScreen *screen=NSScreen.mainScreen?:NSScreen.screens.firstObject;NSRect area=screen.visibleFrame;CGFloat width=MIN(self.windowSize.width,area.size.width),height=MIN(self.windowSize.height,area.size.height);
-        NSRect frame=NSMakeRect(floor(NSMidX(area)-width/2),floor(NSMidY(area)-height/2),width,height);CGRect output=topRect(frame);output.origin.y+=64;output.size.height-=64;
-        if(screen)[self panel:frame outputRects:@[rectJSON(output)] identities:@[@"windowed"]];}
-    else for(NSScreen *screen in NSScreen.screens){NSNumber *display=screen.deviceDescription[@"NSScreenNumber"];CFUUIDRef uuid=CGDisplayCreateUUIDFromDisplayID(display.unsignedIntValue);NSString *name=uuid?CFBridgingRelease(CFUUIDCreateString(NULL,uuid)):nil;if(uuid)CFRelease(uuid);if(!name)continue;CGRect output=topRect(screen.frame);output.origin.y+=64;output.size.height-=64;[self panel:screen.frame outputRects:@[rectJSON(output)] identities:@[name]];}
+        NSRect frame=NSMakeRect(floor(NSMidX(area)-width/2),floor(NSMidY(area)-height/2),width,height);
+        if(screen)[self panel:frame outputRects:@[rectJSON(topRect(frame))] identities:@[@"windowed"]];}
+    // The desktop: an output is its display's whole rectangle, NSScreen.frame. Nothing is kept free for the menu bar or the Dock, which draw over the panel (DesktopPanel).
+    else for(NSScreen *screen in NSScreen.screens){NSNumber *display=screen.deviceDescription[@"NSScreenNumber"];CFUUIDRef uuid=CGDisplayCreateUUIDFromDisplayID(display.unsignedIntValue);NSString *name=uuid?CFBridgingRelease(CFUUIDCreateString(NULL,uuid)):nil;if(uuid)CFRelease(uuid);if(!name)continue;[self panel:screen.frame outputRects:@[rectJSON(topRect(screen.frame))] identities:@[name]];}
     // Every display that exists is registered now. A screen change and Return to desktop remove them all first, so only here can the controller
     // tell a display that is gone from one that came straight back: a pin whose own display is missing moves to one that is there.
     if([asNumber([self call:@{@"op":@"outputs_settled"}][@"dirty"])boolValue])self.sceneDirty=YES;
-    // Windowed mode registers no global hot key: toolbar, pointer and IPC only.
+    // Windowed mode registers no global hot key: pointer and IPC only.
     if(self.configured){NSArray<NSString *> *refused=[self startKeys];if(refused.count)self.statusText=summary(@"Shortcut unavailable",refused);[self armCorners:[self call:@{@"op":@"bindings"}]];
-        // The status line has room for one and is soon overwritten: every chord macOS refused is named on stderr, as a reload names them.
-        for(NSString *line in refused)fprintf(stderr,"Shortcut unavailable: %s\n",line.UTF8String);}
+        // The status note names one: every chord macOS refused is named on stderr, as a reload names them.
+        for(NSString *line in refused)[self say:[@"Shortcut unavailable: " stringByAppendingString:line]];}
     else {
     if(!self.probe&&!self.ownedResizeProbe&&!self.windowed)[self configureViewKeys];
     if(!self.ownedResizeProbe&&!self.windowed)[self configureExitKey];
     }
     [self configureResize];[self configureNavigation];
-    // Inert without Screen Recording access: no manager, no prompt, and this run is the manual one.
+    // Inert without Screen Recording access: no manager, no prompt, and this run is the manual one. Only a windowed run
+    // comes here without it: the desktop opens its canvas once both grants are there (main(), -onboard).
     // It says why; a more specific problem already in the status line keeps its place there.
     // The Accessibility note of the same launch is not one: it follows this note.
     if(self.managing&&!self.manager&&!self.startupError&&!(self.manager=[DWWindowManager managerWithHost:self])){
-        NSString *note=@"Windows are not managed: Infinify has no Screen Recording access. Choose windows offers Allow screen recording…; then quit and reopen.";
-        fprintf(stderr,"%s\n",note.UTF8String);
+        NSString *note=@"Windows are not managed: Infinify has no Screen Recording access. A run without --windowed asks for it.";
+        [self say:note];
         if([self.statusText isEqual:[self restingStatus]])self.statusText=note;
         else if([self.statusText isEqual:focusAccessNote])self.statusText=[NSString stringWithFormat:@"%@ · %@",note,focusAccessNote];}
     [self render];
 }
 - (void)refreshChoices:(id)sender {
     if(self.probe&&sender){self.probeHumanInput=YES;return;}
-    (void)sender;[self.choices removeAllObjects];[self.table reloadData];
+    (void)sender;if(self.configured&&self.chooser)[self fillRebind:YES];[self.choices removeAllObjects];[self.table reloadData];
     if(self.startupError){self.chooserStatus.stringValue=self.startupError;return;}
     // The app asks macOS for a grant only from the user's own click on this button.
     BOOL capture=CGPreflightScreenCaptureAccess();self.grant.hidden=self.demo||(capture&&AXIsProcessTrusted());self.grant.title=capture?@"Allow input…":@"Allow screen recording…";
@@ -1759,6 +1799,14 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
             [self.choices addObject:@{@"window":w,@"label":[NSString stringWithFormat:@"%@ — %@",w.owningApplication.applicationName,w.title.length?w.title:@"Untitled window"]}];}
         [self.table reloadData];self.chooserStatus.stringValue=error?error.localizedDescription:AXIsProcessTrusted()?@"Select a window explicitly. Native keyboard and IME stay with the selected application.":@"Viewing is available. Native input requires Accessibility access in System Settings.";
     });}];
+}
+// The Rebind drop-down: a new world window, or one of the world windows that has no source now. A --manual run's chooser stays open
+// above the canvas, so there the list is made again by Refresh and after every Add (keep: what is chosen stays chosen while it can still be rebound).
+- (void)fillRebind:(BOOL)keep {
+    NSNumber *chosen=keep?self.rebind.selectedItem.representedObject:nil;
+    [self.rebind removeAllItems];[self.rebind addItemWithTitle:@"Create a new world window"];
+    for(NSDictionary *w in [self call:@{@"op":@"snapshot"}][@"windows"])if(!self.sources[w[@"window"]]){[self.rebind addItemWithTitle:[NSString stringWithFormat:@"Rebind %@: %@",w[@"window"],w[@"metadata"][@"title"]?:@"window"]];self.rebind.lastItem.representedObject=w[@"window"];}
+    NSInteger kept=chosen?[self.rebind indexOfItemWithRepresentedObject:chosen]:-1;if(kept>=0)[self.rebind selectItemAtIndex:kept];
 }
 - (void)showChooser:(id)sender {
     [self.resize cancel];if(self.resize&&![self.resize canRemove:nil]){self.statusText=@"Resize is pending or unresolved; source retained";[self render];return;}
@@ -1775,8 +1823,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         NSButton *canvas=[NSButton buttonWithTitle:@"Open canvas" target:self action:@selector(openCanvas:)];canvas.frame=NSMakeRect(405,15,120,30);canvas.toolTip=@"Show the saved world without adding a window";[v addSubview:canvas];
         NSButton *refresh=[NSButton buttonWithTitle:@"Refresh" target:self action:@selector(refreshChoices:)];refresh.frame=NSMakeRect(531,15,85,30);[v addSubview:refresh];
         NSButton *quit=[NSButton buttonWithTitle:@"Quit" target:self action:@selector(quit:)];quit.frame=NSMakeRect(622,15,80,30);[v addSubview:quit];}
-    [self.rebind removeAllItems];[self.rebind addItemWithTitle:@"Create a new world window"];
-    for(NSDictionary *w in [self call:@{@"op":@"snapshot"}][@"windows"])if(!self.sources[w[@"window"]]){[self.rebind addItemWithTitle:[NSString stringWithFormat:@"Rebind %@: %@",w[@"window"],w[@"metadata"][@"title"]?:@"window"]];self.rebind.lastItem.representedObject=w[@"window"];}
+    [self fillRebind:NO];
     if(self.ownedResizeProbe){if(!rpBeforeOrder(self.chooser)){self.probeHumanInput=YES;return;}[self.chooser orderFrontRegardless];}else {[self.chooser makeKeyAndOrderFront:nil];[NSApp activate];}[self refreshChoices:nil];
 }
 - (BOOL)windowShouldClose:(NSWindow *)window { (void)window;if(!self.panels.count)stopped=1;return YES; }
@@ -1787,7 +1834,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 - (void)openCanvas:(id)sender {
     if(self.probe&&sender){self.probeHumanInput=YES;return;}
     (void)sender;if(self.startupError){self.chooserStatus.stringValue=self.startupError;return;}
-    [self openPanels];[self.chooser orderOut:nil];[self render];
+    // A --manual run has no strip to bring the chooser back from: it stays open above the canvas, the one place a window is added or rebound from.
+    [self openPanels];if(!self.configured)[self.chooser orderOut:nil];[self render];
 }
 - (void)grantAccess:(id)sender {
     if(self.probe&&sender){self.probeHumanInput=YES;return;}
@@ -1800,7 +1848,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(self.probe&&sender){self.probeHumanInput=YES;return;}
     (void)sender;NSInteger row=self.table.selectedRow;if(row<0||row>=(NSInteger)self.choices.count){if(CGPreflightScreenCaptureAccess())self.chooserStatus.stringValue=@"Select a source window first.";else [self refreshChoices:nil];return;}
     [self openPanels];NSNumber *logical=self.rebind.selectedItem.representedObject;
-    if([self attach:self.choices[row][@"window"] logical:logical world:nil]){[self.chooser orderOut:nil];[self saveScene];[self render];}else self.chooserStatus.stringValue=self.statusText;
+    BOOL added=[self attach:self.choices[row][@"window"] logical:logical world:nil];if(self.configured)[self fillRebind:YES];
+    if(added){if(!self.configured)[self.chooser orderOut:nil];[self saveScene];[self render];}else self.chooserStatus.stringValue=self.statusText;
 }
 - (BOOL)attach:(SCWindow *)window logical:(NSNumber *)logical world:(NSDictionary *)world { return [self attach:window logical:logical world:world placed:NO]; }
 // placed: a window that appeared by itself. It is sent with neither a logical id nor a
@@ -1948,7 +1997,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if([self attach:window logical:nil world:nil placed:YES]){self.lastObservation=0;return;}
     // Nobody chose this window: a refusal is a passing note.
     NSString *note=[NSString stringWithFormat:@"%@ window not adopted: %@",window.owningApplication.applicationName?:@"A",self.statusText?:@"refused"];
-    fprintf(stderr,"%s\n",note.UTF8String);[self flashStatus:note];[self render];
+    [self say:note];[self flashStatus:note];[self render];
 }
 // macOS platform rule: on Wayland quitting the compositor ends its clients, here
 // applications outlive Infinify. The saved scene keeps one slot per window, the windows
@@ -1969,13 +2018,48 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // time, stderr gets each distinct reason once.
 - (void)discoveryFailed:(NSString *)reason {
     NSString *note=[@"Windows could not be listed: " stringByAppendingString:reason];
-    if(![note isEqual:self.discoveryNote]){self.discoveryNote=note;fprintf(stderr,"%s\n",note.UTF8String);}
+    if(![note isEqual:self.discoveryNote]){self.discoveryNote=note;[self say:note];}
     [self flashStatus:note];[self render];
 }
 // Did close-window or suspend-window ask this window to close? The controller's mark.
 - (BOOL)marked:(LiveSource *)source { return asDict([self call:@{@"op":@"snapshot"}][@"lifecycle"][@"marks"])[source.logical.stringValue]!=nil; }
+// The desktop stays up. After sleep and wake, the lock screen, a switch of user and a change of Space (a fullscreen
+// application's among them) each panel is put back on the rectangle it was made for and in front again, as it is: nothing
+// is closed, no output is removed and no hot key, stream or gesture is touched. Only when the displays are no longer the
+// ones the panels were made for are they rebuilt, the way a display change rebuilds them (-screensChanged:, which macOS's
+// own notice of that change reaches as well). Discovery and capture are driven by -poll and go on by themselves.
+- (void)returned {
+    if(self.cleaning||!self.desktopUp)return;
+    NSMutableSet<NSString *> *made=[NSMutableSet set],*present=[NSMutableSet set];
+    for(DesktopView *view in self.views)[made addObject:NSStringFromRect(view.globalBounds)];
+    // As -openPanels counts them: a display without an identity has no panel.
+    for(NSScreen *screen in NSScreen.screens){CFUUIDRef uuid=CGDisplayCreateUUIDFromDisplayID([screen.deviceDescription[@"NSScreenNumber"]unsignedIntValue]);if(!uuid)continue;CFRelease(uuid);[present addObject:NSStringFromRect(topRect(screen.frame))];}
+    if(![made isEqual:present]){[self screensChanged:nil];return;}
+    for(NSUInteger i=0;i<self.panels.count&&i<self.views.count;i++){NSPanel *panel=self.panels[i];NSRect frame=topRect(self.views[i].globalBounds);if(!NSEqualRects(panel.frame,frame))[panel setFrame:frame display:YES];[panel orderFrontRegardless];}
+    [self render];
+}
+// A launch that cannot open its canvas: a grant is missing, or the saved scene could not be loaded (the window then
+// says that and offers Quit alone). The canvas opens from the window itself once both grants are there, and autostart
+// runs then: a Relaunch from the window is this run started again, whose config load hands the autostart commands over
+// once more, so they must not have run here already.
+- (void)onboard {
+    __weak Desktop *weak=self;
+    if(!self.onboarding)self.onboarding=[[DWOnboarding alloc]initWithProceed:^{[weak openCanvas:nil];[weak runAutostart];} relaunch:^{weak.relaunch=YES;[weak quit:nil];} quit:^{[weak quit:nil];}];
+    [self.onboarding show:self.startupError];
+}
+// Log out, restart and shut down ask an application to quit through AppKit, whose terminate: ends the process where it
+// stands: no fullscreen ended, nothing saved. The quit is performed here to its end, as main() performs any other, and
+// AppKit then exits with status 0. A quit already under way (SIGTERM came first: launchd sends it at log out as well)
+// is waiting further down this very stack, since -cleanup handles events while it waits, and cannot go on until this
+// returns: what it had left is given up but for the save, and the process ends here.
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {
+    (void)sender;if(self.cleaning){[self saveScene];return NSTerminateNow;}
+    [self quit:nil];[self.ipc stop];self.ipc=nil;[self cleanup];[self.chooser close];[self.onboarding close];return NSTerminateNow;
+}
 - (void)screensChanged:(NSNotification *)notification {
-    (void)notification;if(self.demo||!self.panels.count)return;[self cancelGestures];[self stopNavigation];
+    // The desktop is rebuilt from no panel as well: its displays may all have gone for a moment (asleep, unplugged), and it is there again when one is.
+    // Never while it is being closed: -cleanup handles events while it waits, and a display change then must not reopen what it is closing.
+    (void)notification;if(self.demo||self.cleaning||!(self.panels.count||self.desktopUp))return;[self cancelGestures];[self stopNavigation];
     // A pan waiting to launch belongs to an output about to be removed, and so do a hover waiting to be sent and a policy press.
     [self.panLaunch cancel];self.pointerOutputs=nil;self.pointerWanted=NO;
     for(DesktopView *view in self.views)[view.hover stop];
@@ -2086,6 +2170,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(self.cleaning)return;self.cleaning=YES;
     // No window is discovered and no read answers from here on; a reopened canvas gets a new manager, which ends a pass of its own.
     [self.manager stop];self.manager=nil;self.adopted=NO;
+    // Nor is a panel put back in front or rebuilt: the session watch ends with the canvas, and a reopened one makes its own.
+    [self.session stop];self.session=nil;self.desktopUp=NO;
     // Inert from here until the canvas reopens: no config hot key, tap watch, key repeat, input-source observer, config watch, hot corner, pending event, pan launch or pointer report outlives this line.
     [self.hotKeys invalidate];self.hotKeys=nil;[self.tapKeys stop];self.tapKeys=nil;[self.configWatcher stop];self.configWatcher=nil;self.corners=nil;[self.statePush invalidate];self.statePush=nil;[self.panLaunch cancel];self.pointerOutputs=nil;self.pointerWanted=NO;
     // A trackpad gesture in progress ends cancelled while its output still exists; no touch or hold timer outlives this line either.
@@ -2117,7 +2203,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(!self.sources.count)self.resize=nil;
 
 }
-- (void)dealloc { [_ipc stop];[_manager stop];[self stopNavigation];[self stopViewKeys];[_hotKeys invalidate];[_tapKeys stop];[_configWatcher stop];[_statePush invalidate];[_panLaunch cancel];[_trackpadTimer invalidate];if(_controller)driftwm_desktop_destroy(_controller); }
+- (void)dealloc { [_ipc stop];[_manager stop];[_session stop];[_onboarding close];[self stopNavigation];[self stopViewKeys];[_hotKeys invalidate];[_tapKeys stop];[_configWatcher stop];[_statePush invalidate];[_panLaunch cancel];[_trackpadTimer invalidate];if(_controller)driftwm_desktop_destroy(_controller); }
 @end
 static CGPoint projected(Desktop *desktop,NSNumber *window,NSNumber *output,CGPoint sourcePoint) {
     for(NSDictionary *p in [desktop call:@{@"op":@"snapshot"}][@"placements"])if([p[@"window"]isEqual:window]&&[p[@"output"]isEqual:output]){
@@ -2243,7 +2329,7 @@ static int runDemo(Desktop *desktop,NSString *directory,BOOL probe) {
 #include "resize-fixture.inc.m"
 #include "resize-probe.inc.m"
 
-// WIDTHxHEIGHT in points, digits only. 960 wide keeps every toolbar button and the status line visible.
+// WIDTHxHEIGHT in points, digits only. The least is 960x480, as it was when the window carried a toolbar.
 static BOOL parseWindowSize(const char *text,NSSize *size) {
     char *end=NULL;unsigned long width=strtoul(text,&end,10);if(*end!='x'||!isdigit((unsigned char)end[1]))return NO;
     unsigned long height=strtoul(end+1,&end,10);if(*end||width<960||width>16384||height<480||height>16384)return NO;
@@ -2252,6 +2338,9 @@ static BOOL parseWindowSize(const char *text,NSSize *size) {
 int main(int argc,const char **argv) { @autoreleasepool {
     // The IPC client runs before any AppKit initialisation: no window, no privacy grant.
     if(argc>=2&&!strcmp(argv[1],"msg"))return driftwm_desktop_msg(argc-2,argv+2);
+    // So does the login item: registered, unregistered or read, and nothing else of the app starts.
+    if(argc>=2&&!strcmp(argv[1],"login-item"))return DWLoginItemCommand(argc-2,argv+2);
+    const char **launched=argv; // as given, for the onboarding window's Relaunch
     if(argc>=2&&!strncmp(argv[1],"--owned-resize-",15))for(int i=2;i<argc;i++)if(!strcmp(argv[i],"--windowed")||!strcmp(argv[i],"--socket")||!strcmp(argv[i],"--config")||!strcmp(argv[i],"--super")||!strcmp(argv[i],"--no-native-focus")||!strcmp(argv[i],"--manual"))return 64;
     if(argc>=2&&!strncmp(argv[1],"--owned-resize-",15))for(int i=2;i<argc;i++)if(!strcmp(argv[i],"--no-hover-forwarding"))return 64;
     if(argc==3&&!strcmp(argv[1],"--owned-resize-check-restoration"))return ownedResizeCheckRestoration(@(argv[2]));
@@ -2270,7 +2359,7 @@ int main(int argc,const char **argv) { @autoreleasepool {
         if(i>0&&!strcmp(argv[i],"--windowed")){if(windowed)return 64;windowed=YES;if(i+1<argc&&isdigit((unsigned char)argv[i+1][0])&&!parseWindowSize(argv[++i],&windowSize))return 64;continue;}
         filtered[count++]=argv[i];}filtered[count]=NULL;argc=count;argv=filtered;
 
-    if(argc==2&&!strcmp(argv[1],"--help")){puts("Infinify.app — macOS 26+ Apple Silicon native window canvas\nDefault: with Screen Recording access the canvas opens and every real application window on screen (by Accessibility a standard window or a dialog, never a popup or a helper window; without Accessibility every window but an untitled one under 200x150) lives on it: existing windows are adopted, a new one is placed by window_placement, a closed one leaves (or leaves a stand-in under session.suspend_on_close). Without that access the chooser is shown and nothing is captured.\n--manual: show the chooser first and capture only explicitly selected windows; no window is adopted automatically. Open canvas shows the saved world without adding one.\n--owned-resize-probe EMPTY_DIRECTORY [SCENARIO]: explicit noninteractive owned-fixture resize probe (live)\n--demo EMPTY_DIRECTORY: disposable interactive fixture, bounded to 60 seconds\n--demo-probe EMPTY_DIRECTORY: automated own-fixture E2E, no permission prompts\n--demo-probe-guard EMPTY_DIRECTORY: own-fixture interruption regression (expected exit 2)\n--experimental-native-resize: experimental size-only native resize: eight handles on the focused window, and DriftWM's grow-window, shrink-window, fit-window, fit-window-snapped, fill-window and msg resize WIDTH HEIGHT on a canvas window, which without it answer not implemented; a window rule's size is then asked of a new window too\n--experimental-native-navigation: accepted and ignored; window navigation and native focus are part of every normal run\n--no-native-focus: window focus stays logical; no native window is activated or raised\n--no-hover-forwarding: pointer motion over a window is not delivered to its application; focus_follows_mouse and pick mode still follow the pointer\n--state ABSOLUTE_PATH: explicit persistent scene file (default Application Support/Infinify/scene.json)\n--socket ABSOLUTE_PATH: IPC socket of a normal run (default Application Support/Infinify/infinify.sock)\n--windowed [WIDTHxHEIGHT]: open the canvas at launch in one ordinary window (default 1200x800, at least 960x480) with no global shortcuts\n--config ABSOLUTE_PATH: DriftWM config file of a normal run (default $XDG_CONFIG_HOME/infinify/config.toml, else ~/.config/infinify/config.toml; DriftWM's built-in defaults when it is missing); read again whenever it changes\n--super CHORD: the physical keys of DriftWM's super/mod, a +-joined subset of ctrl|alt|cmd (default ctrl+alt)\nmsg [--json] [--socket PATH] COMMAND ...: DriftWM-style IPC client for the running app; opens no window\n--source DIR SECONDS NONCE: internal disposable child only\nKeys and pointer gestures are DriftWM's bindings from the config file: ctrl is Control, alt is Option, super (mod) is the --super chord. The status line shows the pointer, view, pan and bookmark chords registered, and each toolbar tooltip its own action's. With no config file and --super ctrl+alt the registered chords are:\n  Drag or two-finger scroll on empty canvas, Control-Option-drag or -scroll anywhere, three-finger swipe: pan; a released pan coasts (navigation.drift). Wheel or two-finger pinch on empty canvas, Control-Option-wheel or -pinch anywhere, three-finger pinch: anchored zoom (max 1x).\n  Option-drag on a window: world move/snap; add Shift: cluster. Held at the view's edge, a move pans the canvas under the window (navigation.edge_pan).\n  Trackpad gestures are DriftWM's [gestures] bindings: four-finger swipe: the nearest window that way. Four-finger hold: center the focused window. Four-finger pinch in / out: zoom-to-fit / home toggle. Three-finger tap, then three-finger swipe on a window: move it.\n  macOS takes three- and four-finger touches for its own gestures first: turn off Mission Control, App Expose, the full-screen swipe, Launchpad, Show Desktop and three-finger drag in System Settings for the canvas to receive them. Infinify changes no setting.\n  View actions animate one view's camera only (toolbar Home, Fit, -, 1:1, + or global shortcuts while the canvas is open; held zoom, pan and nudge keys repeat):\n  Control-Option-A: home toggle (origin at 1:1, again to return). Control-Option-W: zoom-to-fit toggle. Control-Option-Shift-W: the same over the focused window's snap cluster.\n  Control-Option-Equals / Control-Option-Minus: zoom in / out. Control-Option-0 or Control-Option-Z: zoom 1:1.\n  Control-Option-Command-arrows: pan the view under the pointer. Control-Option-Shift-arrows: nudge the focused window.\n  Control-Option-1 to 4: fly to bookmark 1 to 4. Control-Option-Shift-1 to 4: set it.\n  Window navigation flies the camera and focuses the window, natively when Infinify has Accessibility access (toolbar Center, Previous, Next):\n  Option-Tab / Option-Shift-Tab: cycle windows, most recently focused first; letting go of Option commits the choice.\n  Control-Option-arrows: the nearest window in that direction. Control-Option-C: center the focused window. Control-Option-X: center the window under the pointer.\n  A click on a window gives it canvas focus and starts its native focus, then the click is forwarded; a click on empty canvas unfocuses. Focusing a canvas window in its own application is followed.\n  Pointer motion over a window is delivered to its application; with focus_follows_mouse = true it also focuses that window without raising it, a screen-pinned one before the canvas beneath it and never a widget.\n  Below [zoom] interact_min (off by default) a window on the canvas is one target: a click flies to it, a drag moves it, and no click, scroll or motion reaches its application. A screen-pinned window and a widget are not picked and keep their pointer.\n  Control-Option-Command-drag: center-nearest by pointer, DriftWM's swipe; the direction is taken 16 points from the press.\n  Control-Option-Return: exec-terminal ($TERMINAL, else a new Terminal window). Control-Option-D: exec-launcher ($LAUNCHER, else Apps).\n  Control-Option-Command-Shift-arrows: send-to-output, the focused window to the display on that side (a world move; nothing with one display).\n  Control-Option-L: DriftWM's lock binding. Its swaylock is a Linux program: where that is not installed the displays are put to sleep instead, and macOS asks for the password as its Lock Screen setting says.\n  DriftWM's volume, brightness and media key defaults run Linux programs too: without those installed the keys stay with macOS.\n  Control-Option-Q: close-window. The focused window's own close button is pressed through Accessibility; a focused placeholder is dismissed.\nThe fixture modes (--demo*, --owned-resize-*) read no config and keep Option-drag pan, Command-wheel and pinch zoom and Control-Option-drag move; they take no trackpad touches.\nAn unbound click, drag or scroll on a window (left, right or middle button) is forwarded only to its selected, freshly validated source.\nNative keyboard/IME remain with the real app. Control-Option-Escape (until a binding takes that chord), Control-Option-Command-Shift-Q or Quit exits.\nResize status explains unavailable native layout resizing. No SIP/settings changes.");return 0;}
+    if(argc==2&&!strcmp(argv[1],"--help")){puts("Infinify.app — macOS 26+ Apple Silicon: DriftWM's canvas as the desktop of native Mac windows\nDefault: the desktop. One canvas panel per display covers the whole display on every Space, under the menu bar and the Dock, which both stay; there is no toolbar, no status line and no chooser. Every real application window on screen (by Accessibility a standard window or a dialog, never a popup or a helper window; without Accessibility every window but an untitled one under 200x150) lives on the canvas: existing windows are adopted, a new one is placed by window_placement, a closed one leaves (or leaves a stand-in under session.suspend_on_close). This needs Screen Recording and Accessibility access: while one is missing a small window names it and offers its Allow button, Relaunch (Screen Recording reaches only a newly started app) and Quit, and the canvas opens once both are there.\nStatus notes go to stderr, one line each; what a config file has wrong is drawn in the error bar.\n--manual: show the chooser first and capture only explicitly selected windows; no window is adopted automatically. Open canvas shows the saved world without adding one. The chooser stays open above the canvas; closed there, it is gone for the run.\n--owned-resize-probe EMPTY_DIRECTORY [SCENARIO]: explicit noninteractive owned-fixture resize probe (live)\n--demo EMPTY_DIRECTORY: disposable interactive fixture, bounded to 60 seconds\n--demo-probe EMPTY_DIRECTORY: automated own-fixture E2E, no permission prompts\n--demo-probe-guard EMPTY_DIRECTORY: own-fixture interruption regression (expected exit 2)\n--experimental-native-resize: experimental size-only native resize: eight handles on the focused window, and DriftWM's grow-window, shrink-window, fit-window, fit-window-snapped, fill-window and msg resize WIDTH HEIGHT on a canvas window, which without it answer not implemented; a window rule's size is then asked of a new window too\n--experimental-native-navigation: accepted and ignored; window navigation and native focus are part of every normal run\n--no-native-focus: window focus stays logical; no native window is activated or raised\n--no-hover-forwarding: pointer motion over a window is not delivered to its application; focus_follows_mouse and pick mode still follow the pointer\n--state ABSOLUTE_PATH: explicit persistent scene file (default Application Support/Infinify/scene.json)\n--socket ABSOLUTE_PATH: IPC socket of a normal run (default Application Support/Infinify/infinify.sock)\n--windowed [WIDTHxHEIGHT]: open the canvas at launch in one ordinary window instead, all of it canvas (default 1200x800, at least 960x480), with no global shortcuts and whatever access there is; with --manual the chooser comes up above it; msg action quit or Control-C in its terminal ends it\n--config ABSOLUTE_PATH: DriftWM config file of a normal run (default $XDG_CONFIG_HOME/infinify/config.toml, else ~/.config/infinify/config.toml; DriftWM's built-in defaults when it is missing); read again whenever it changes\n--super CHORD: the physical keys of DriftWM's super/mod, a +-joined subset of ctrl|alt|cmd (default ctrl+alt)\nmsg [--json] [--socket PATH] COMMAND ...: DriftWM-style IPC client for the running app; opens no window\nlogin-item on | off | status: register, unregister or report the login item, a LaunchAgent inside the bundle that starts Infinify at login and again after a crash, never after a quit. on starts it at once, off ends the instance it started, status only reads; opens no window. For the installed copy: scripts/install-app.sh puts a signed bundle in ~/Applications\n--source DIR SECONDS NONCE: internal disposable child only\nKeys and pointer gestures are DriftWM's bindings from the config file: ctrl is Control, alt is Option, super (mod) is the --super chord. With no config file and --super ctrl+alt the registered chords are:\n  Drag or two-finger scroll on empty canvas, Control-Option-drag or -scroll anywhere, three-finger swipe: pan; a released pan coasts (navigation.drift). Wheel or two-finger pinch on empty canvas, Control-Option-wheel or -pinch anywhere, three-finger pinch: anchored zoom (max 1x).\n  Option-drag on a window: world move/snap; add Shift: cluster. Held at the view's edge, a move pans the canvas under the window (navigation.edge_pan).\n  Trackpad gestures are DriftWM's [gestures] bindings: four-finger swipe: the nearest window that way. Four-finger hold: center the focused window. Four-finger pinch in / out: zoom-to-fit / home toggle. Three-finger tap, then three-finger swipe on a window: move it.\n  macOS takes three- and four-finger touches for its own gestures first: turn off Mission Control, App Expose, the full-screen swipe, Launchpad, Show Desktop and three-finger drag in System Settings for the canvas to receive them. Infinify changes no setting.\n  View actions animate one view's camera only (global shortcuts while the canvas is open, or msg action; held zoom, pan and nudge keys repeat):\n  Control-Option-A: home toggle (origin at 1:1, again to return). Control-Option-W: zoom-to-fit toggle. Control-Option-Shift-W: the same over the focused window's snap cluster.\n  Control-Option-Equals / Control-Option-Minus: zoom in / out. Control-Option-0 or Control-Option-Z: zoom 1:1.\n  Control-Option-Command-arrows: pan the view under the pointer. Control-Option-Shift-arrows: nudge the focused window.\n  Control-Option-1 to 4: fly to bookmark 1 to 4. Control-Option-Shift-1 to 4: set it.\n  Window navigation flies the camera and focuses the window, natively when Infinify has Accessibility access:\n  Option-Tab / Option-Shift-Tab: cycle windows, most recently focused first; letting go of Option commits the choice.\n  Control-Option-arrows: the nearest window in that direction. Control-Option-C: center the focused window. Control-Option-X: center the window under the pointer.\n  A click on a window gives it canvas focus and starts its native focus, then the click is forwarded; a click on empty canvas unfocuses. Focusing a canvas window in its own application is followed.\n  Pointer motion over a window is delivered to its application; with focus_follows_mouse = true it also focuses that window without raising it, a screen-pinned one before the canvas beneath it and never a widget.\n  Below [zoom] interact_min (off by default) a window on the canvas is one target: a click flies to it, a drag moves it, and no click, scroll or motion reaches its application. A screen-pinned window and a widget are not picked and keep their pointer.\n  Control-Option-Command-drag: center-nearest by pointer, DriftWM's swipe; the direction is taken 16 points from the press.\n  Control-Option-Return: exec-terminal ($TERMINAL, else a new Terminal window). Control-Option-D: exec-launcher ($LAUNCHER, else Apps).\n  Control-Option-Command-Shift-arrows: send-to-output, the focused window to the display on that side (a world move; nothing with one display).\n  Control-Option-L: DriftWM's lock binding. Its swaylock is a Linux program: where that is not installed the displays are put to sleep instead, and macOS asks for the password as its Lock Screen setting says.\n  DriftWM's volume, brightness and media key defaults run Linux programs too: without those installed the keys stay with macOS.\n  Control-Option-Q: close-window. The focused window's own close button is pressed through Accessibility; a focused placeholder is dismissed.\nThe fixture modes (--demo*, --owned-resize-*) read no config and keep Option-drag pan, Command-wheel and pinch zoom and Control-Option-drag move; they take no trackpad touches. They keep their toolbar strip, status line and chooser, and their Resize status button explains unavailable native layout resizing.\nAn unbound click, drag or scroll on a window (left, right or middle button) is forwarded only to its selected, freshly validated source.\nNative keyboard/IME remain with the real app. Control-Option-Escape (until a binding takes that chord), Control-Option-Command-Shift-Q (quit), msg action quit or SIGTERM ends the run with exit status 0 and returns the native desktop: fullscreens ended, scene saved, panels closed, capture stopped, hot keys released.\nNo SIP/settings changes.");return 0;}
     BOOL child=argc==5&&!strcmp(argv[1],"--source"),demo=argc==3&&!strcmp(argv[1],"--demo"),guard=argc==3&&!strcmp(argv[1],"--demo-probe-guard"),probe=argc==3&&!strcmp(argv[1],"--demo-probe"),state=argc==3&&!strcmp(argv[1],"--state");
     if(argc!=1&&!child&&!demo&&!probe&&!guard&&!state)return 64;
     if((experimental||resize)&&(child||probe||guard))return 64;
@@ -2294,15 +2383,29 @@ int main(int argc,const char **argv) { @autoreleasepool {
     // never reads it, and sets it to the served path for the commands it starts.
     [desktop startIPC:socket?@(socket):[dir stringByAppendingPathComponent:@"infinify.sock"]];
     [[NSNotificationCenter defaultCenter]addObserver:desktop selector:@selector(screensChanged:) name:NSApplicationDidChangeScreenParametersNotification object:nil];
-    // As DriftWM manages every toplevel: with Screen Recording access the canvas opens at
-    // once and adopts the windows that exist. Without it, or with --manual, the chooser
-    // comes first as it always did, and a windowed run still opens its canvas.
+    // A quit that AppKit is asked for (log out, restart, shut down) ends like every other: -applicationShouldTerminate:.
+    NSApp.delegate=desktop;
+    // As DriftWM is the session and manages every toplevel: the launch goes straight to the canvas, which adopts the
+    // windows that exist. It needs both grants for that: the panels cover every ordinary window, and without Accessibility
+    // nothing under them could be clicked. With one missing, or a saved scene that could not be loaded, the one onboarding
+    // window comes instead and opens the canvas itself once it can. --manual keeps the chooser first as it always was, and
+    // a windowed run still opens its canvas at once, whatever is granted: with --manual its chooser comes up above that
+    // window, which has no strip to reach it from any more.
     desktop.managing=!manual;
-    if(!desktop.startupError&&(windowed||(desktop.managing&&CGPreflightScreenCaptureAccess())))[desktop openCanvas:nil];else [desktop showChooser:nil];
+    if(!desktop.startupError&&(windowed||(desktop.managing&&CGPreflightScreenCaptureAccess()&&AXIsProcessTrusted()))){[desktop openCanvas:nil];if(manual)[desktop showChooser:nil];}
+    else if(manual)[desktop showChooser:nil];
+    else [desktop onboard];
     // Upstream runs autostart on every backend, its nested one included: a managed, a windowed and a chooser-first launch all do.
-    [desktop runAutostart];
+    // A launch held at the onboarding window runs it when its canvas opens (-onboard).
+    if(!desktop.onboarding)[desktop runAutostart];
     // A pool per turn: what a poll, its controller calls and the events it pumps autorelease ends with the turn.
     while(!stopped){@autoreleasepool{[desktop poll];pump(.08);}}
     // Stopped first: the pending quit reply is written, and no request can arrive during cleanup.
-    [desktop.ipc stop];desktop.ipc=nil;[desktop cleanup];[desktop.chooser close];return 0;
+    [desktop.ipc stop];desktop.ipc=nil;[desktop cleanup];[desktop.chooser close];[desktop.onboarding close];
+    // Relaunch: the same executable with the same arguments in this very process, once everything above has ended and the socket is free again.
+    // The process keeps its place: under launchd it is still the login item's job, in a terminal still that terminal's. Not after a signal, which
+    // asked for an end. The lines after execv are reached only if it failed.
+    if(desktop.relaunch&&stopped==1){execv(NSBundle.mainBundle.executablePath.fileSystemRepresentation,(char *const *)launched);perror("Infinify: relaunch");return 1;}
+    // The quit action, msg action quit, the exit chord and SIGTERM all end here, with status 0: launchd starts the login item again only after an end that is not this one.
+    return 0;
 } }

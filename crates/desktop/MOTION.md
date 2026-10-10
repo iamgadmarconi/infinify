@@ -254,10 +254,26 @@ output is disarmed, and the pointer's output is armed with
 however deep the pointer sits, while it is inside the output's usable area
 (the navigation context's `usable_rect_local`) and within
 `navigation.edge_pan.cursor_zone` of one of that area's edges. A corner pans
-diagonally at the same speed. Outside the usable area, in a reserved strip such
-as the menu bar, nothing pans; `speed_min` is not used. A report with no output
-disarms. While the flag is off a report is ignored and answers
-`needs_pointer: false`.
+diagonally at the same speed. Outside the usable area, in a strip an output's
+registration, `set_usable_area` or `set_navigation_context` reserved, nothing
+pans; `speed_min` is not used. A report with no output disarms. While the flag is off a report is ignored and
+answers `needs_pointer: false`.
+
+The macOS shell reserves nothing: it sends a usable rectangle with none of
+the three ([NAVIGATION.md](NAVIGATION.md#the-usable-area)), so
+the usable area is the whole output, and since 2026-10-10 a normal run's output
+is the whole display, with the menu bar and the Dock drawn over it. The zones
+are therefore at the display's own edges, and the top one lies under the menu
+bar. What pans there is decided by the shell's report, not here: it names an
+output only where a press would reach that output's panel
+(`-outputUnderPointer:`), so over the menu bar or the Dock it reports none and
+the request is disarmed, which is also what upstream does over a bar or dock
+surface that reserves no area. With the default `cursor_zone` of 20 points the
+whole top zone of a display that shows the menu bar is under it, so on that
+display the bare pointer does not pan upward; a `cursor_zone` taller than the
+menu bar leaves a band below it that does. That was read from the shell and
+not run. A window drag's edge pan is not affected: it reads the drag's own
+pointer against the output's size.
 
 A grab owns the request, as upstream's does. While a drag or resize gesture is
 installed, or a `drag` pan has not had its `pan_end`, reports and frames leave
@@ -475,9 +491,13 @@ alone.
 - `zoom_by` is refused during a drag or resize gesture. Upstream zooms under a
   grab, and so does a gesture's pinch here.
 - Cursor edge pan measures the usable area only. Upstream also stands down
-  while the pointer is over a bar or dock surface that reserves no area and
-  under a session lock, which do not exist here, and on a fullscreen output,
-  which it does here too ([FULLSCREEN.md](FULLSCREEN.md#the-parked-camera)). The
+  while the pointer is over a bar or dock surface that reserves no area, under
+  a session lock, and on a fullscreen output. The last it does here too
+  ([FULLSCREEN.md](FULLSCREEN.md#the-parked-camera)). The first is the shell's
+  since 2026-10-10, when the menu bar and the Dock became exactly such
+  surfaces: the controller has no notion of them and stands down only because
+  the shell reports no output there ([Cursor edge pan](#cursor-edge-pan)). A
+  session lock is macOS's own and nothing here knows of it. The
   experimental native resize transaction does not hold the request, and
   neither does a held button the controller has no gesture for: holding the
   reports back for those is left to the shell.
