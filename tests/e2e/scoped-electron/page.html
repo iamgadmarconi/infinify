@@ -1,0 +1,11 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<title>Scope Electron</title>
+<style>html,body{margin:0;height:100%}button{width:100%;height:100%;font:16px system-ui}</style>
+<button id="b">Electron button</button>
+<script>
+const { ipcRenderer } = require('electron');
+for (const [e, t] of [['mousedown', 'down'], ['mouseup', 'up'], ['click', 'click']])
+  document.getElementById('b').addEventListener(e, v => ipcRenderer.send('s', { t, x: v.clientX, y: v.clientY }));
+let n = 0; const f = () => { ipcRenderer.send('s', { t: 'raf', n: ++n }); requestAnimationFrame(f); }; requestAnimationFrame(f);
+</script>

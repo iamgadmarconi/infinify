@@ -43,8 +43,10 @@
 // Main thread only.
 @interface DWWindowEvents : NSObject
 // The NSWorkspace observers are in place from here on. The Accessibility observers are too when access is granted, and
-// follow a grant made later at the next -reconcile.
-- (instancetype)initWithSink:(id<DWWindowEventSink>)sink;
+// follow a grant made later at the next -reconcile. `scope`, when not nil, is `--only-pid`'s (DWInScope below): no
+// Accessibility observer is then created on any other application, and "every regular application" below reads "every
+// regular application in scope".
+- (instancetype)initWithSink:(id<DWWindowEventSink>)sink scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope;
 // YES while Accessibility access stood at the last -reconcile and every regular application known is observed for every
 // notification: the observers then report what a poll would find, so a poll is a reconciliation and can be slow. NO while
 // one application is still being asked, does not answer, or refused a notification for good: its windows would otherwise
@@ -58,3 +60,7 @@
 // Removes every observer, run-loop source and timer; no report follows. Required before release.
 - (void)stop;
 @end
+// `--only-pid`: is this process one the run was told to manage? `scope` is pid → its start time [seconds, microseconds] as
+// read when the run began, so a process that ended and whose pid another took since is not. YES for every process when there is
+// no scope. Read-only, any thread.
+BOOL DWInScope(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope,pid_t pid);

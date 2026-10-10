@@ -1,5 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
+// One window the manager offers: what the shell binds it by and names it with. Read from the shareable windows where the
+// run can capture; in an `--only-pid` run without Screen Recording access from the window list (pid, number, frame),
+// Accessibility (title) and the running application (bundle identifier, name), and `shareable` is then nil: such a window
+// is bound, focused and clicked like any other and has no picture.
+@interface DWWindowCandidate : NSObject
+@property pid_t pid;
+@property CGWindowID window;
+@property (copy) NSString *bundleIdentifier, *applicationName, *title;
+@property CGRect frame;
+@property SCWindow *shareable;
++ (instancetype)candidateWithShareable:(SCWindow *)shareable;
+@end
 // What the manager asks of the shell. Every call arrives on the main thread.
 @protocol DWWindowHost <NSObject>
 // Is this native window already bound to a world window?
@@ -7,7 +19,7 @@
 // An ordinary application window on screen that nothing manages yet, once per
 // appearance: whatever the host does with it, it is not offered again until it
 // has left the screen and come back.
-- (void)windowAppeared:(SCWindow *)window;
+- (void)windowAppeared:(DWWindowCandidate *)window;
 // The first pass is over: every candidate on screen that held still within its two
 // seconds, and that the shareable windows listed in one of two reads, has been offered.
 // Once. `present` names, as {bundle_id,title}, the titled candidates that exist but
@@ -38,7 +50,7 @@
 // one smaller than 200x150. Tested once per appearance, before adoption only.
 // Read-only: it lists windows and never moves, focuses, resizes or closes one. It owns
 // no timer or dispatch source: -poll drives it, and so do the observers it owns
-// (window-events.h), which exist from +managerWithHost: until -stop. Main thread only.
+// (window-events.h), which exist from +managerWithHost:scope: until -stop. Main thread only.
 //
 // Tracking is event-driven where Accessibility access allows. NSWorkspace and one
 // AXObserver per regular application say when an application launched or was shown and
@@ -50,9 +62,19 @@
 // pass a second, that finds whatever no event announced. Without Accessibility access,
 // and while an application is not observed in full (it does not answer yet, or refused a
 // notification), every -poll is a pass, as it always was.
+//
+// `--only-pid` gives it a scope: pid → that process's start time as read at launch (DWInScope, window-events.h). A window of
+// any other process is then no candidate at all: it is not timed, not asked about through Accessibility, not read, not
+// offered and not named as present, and no observer is put on its application. With a scope the manager also exists
+// without Screen Recording access (`capturing` NO): the shareable windows are then never read, so nothing can prompt, and
+// its candidates come from the window list and Accessibility alone. Such a run names no window that is off screen
+// (-discoveryCompleted: is given none), so a saved slot is not kept waiting for one.
 @interface DWWindowManager : NSObject
-// nil without Screen Recording access, which it never asks for.
-+ (instancetype)managerWithHost:(id<DWWindowHost>)host;
+// With no scope (nil): nil without Screen Recording access. It never asks for that access, scope or none.
++ (instancetype)managerWithHost:(id<DWWindowHost>)host scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope;
+// Whether this manager reads the shareable windows: Screen Recording access as it stood when the manager was made.
+// Always YES with no scope.
+@property (readonly) BOOL capturing;
 // Called at the idle poll's pace. One cheap pass over the on-screen window list, unless
 // the observers are in place and the reconciliation is not due. The shareable windows are
 // read only when the set of candidates not yet offered changed, once for the first pass

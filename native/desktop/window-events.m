@@ -4,6 +4,7 @@
 // (window_observe, window_unobserve), src/event_loop.c and src/window_manager.c, as window-events.h says of each. Where this
 // differs from yabai is said where it does.
 #import "window-events.h"
+#import "../focus/focus.h"
 #include <dlfcn.h>
 // Signature provenance: yabai, same commit, src/misc/extern.h:8, as in window-manager.m.
 typedef AXError (*GetWindow)(AXUIElementRef,uint32_t *);
@@ -70,6 +71,7 @@ static dispatch_queue_t worker(void) { static dispatch_queue_t queue;static disp
 @end
 @interface DWWindowEvents ()
 @property (weak) id<DWWindowEventSink> sink;
+@property NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope;
 @property NSMutableDictionary<NSNumber *,DWObservedApplication *> *applications;
 // Coalescing, by pid<<32|window (`appeared` for an application's set of windows, 0 for native focus): when each was last
 // reported, and which are owed one more report.
@@ -104,9 +106,14 @@ static DWObservedWindow *watch(AXObserverRef observer,AXUIElementRef element,DWO
     for(int i=0;i<windowCount;i++)if(AXObserverAddNotification(observer,element,windowNotifications[i],(__bridge void *)watched)==kAXErrorSuccess)mask|=(uint8_t)(1<<i);
     watched.registered=mask;return watched;
 }
+BOOL DWInScope(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope,pid_t pid) {
+    if(!scope)return YES;
+    NSArray<NSNumber *> *born=scope[@(pid)];uint64_t seconds=0,microseconds=0;
+    return born.count==2&&dw_focus_birth(pid,&seconds,&microseconds)&&born[0].unsignedLongLongValue==seconds&&born[1].unsignedLongLongValue==microseconds;
+}
 @implementation DWWindowEvents
-- (instancetype)initWithSink:(id<DWWindowEventSink>)sink {
-    if((self=[super init])){_sink=sink;_applications=[NSMutableDictionary dictionary];_sent=[NSMutableDictionary dictionary];_owed=[NSMutableSet set];
+- (instancetype)initWithSink:(id<DWWindowEventSink>)sink scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope {
+    if((self=[super init])){_sink=sink;_scope=[scope copy];_applications=[NSMutableDictionary dictionary];_sent=[NSMutableDictionary dictionary];_owed=[NSMutableSet set];
         // yabai's workspace_context, less what a tiling window manager needs of the Dock, the menu bar and the displays, and with
         // launch, end and activation from NSWorkspace where yabai has them from its process manager's Carbon events.
         NSNotificationCenter *center=NSWorkspace.sharedWorkspace.notificationCenter;
@@ -144,6 +151,8 @@ static DWObservedWindow *watch(AXObserverRef observer,AXUIElementRef element,DWO
 - (void)add:(NSRunningApplication *)running {
     pid_t pid=running.processIdentifier;
     if(self.stopped||!self.trusted||pid<=0||pid==getpid()||running.terminated||running.activationPolicy!=NSApplicationActivationPolicyRegular||self.applications[@(pid)])return;
+    // Under --only-pid no other application is sent an Accessibility message from here: this is the only place an observer begins.
+    if(!DWInScope(self.scope,pid))return;
     DWObservedApplication *application=[DWObservedApplication new];application.pid=pid;application.running=running;application.events=self;application.contexts=[NSMutableArray array];
     application.windows=CFDictionaryCreateMutable(NULL,0,&kCFTypeDictionaryKeyCallBacks,&kCFTypeDictionaryValueCallBacks);application.asked=CFSetCreateMutable(NULL,0,&kCFTypeSetCallBacks);
     self.applications[@(pid)]=application;[self observe:application];

@@ -141,6 +141,9 @@ status line and chooser unchanged.
   run (a source that closed) is offered after a Refresh, and a slot that was
   just rebound is not offered again. `--manual --windowed` opens the canvas at
   launch and the chooser above it.
+- `--only-pid PID[,PID…]` with `--windowed`: only the windows of the named
+  processes are managed, with or without Screen Recording access. See
+  [Managing only named processes](#managing-only-named-processes).
 - `login-item on | off | status`: see below. Handled before AppKit starts, like
   `msg`: no window, no privacy grant.
 - `--demo*`, `--owned-resize-*`, `--source`: unchanged.
@@ -219,9 +222,13 @@ changes for the config path, `exec-terminal`, `PATH` and relative paths.
   its tile showed none of it until the canvas was gone. The panel now has
   an alpha value of 0.999. On a fixture window under a floating panel that
   kept the window reported as visible, where declaring the panel and its
-  layers non-opaque had not. Whether real applications redraw under it has
-  not been observed yet. The intended design is the other way round, the
-  window server placing the real windows with nothing over them
+  layers non-opaque had not. Under an opaque floating panel a WKWebView page
+  and an Electron page stopped drawing altogether (no animation frame in two
+  seconds, `document.visibilityState` hidden); under the canvas window of a
+  windowed run they drew at their full rate, and `tests/e2e/scoped-windows.sh`
+  asserts that on every run. On the owner's own applications in a desktop
+  run it has not been observed yet. The intended design is the other way
+  round, the window server placing the real windows with nothing over them
   (`native/privileged`, needs System Integrity Protection relaxed by the
   owner); this panel is what runs until that exists.
 - **A click reaches a window only once its application is in front.** An
@@ -983,6 +990,185 @@ identifier "…" is installed`).
   With very many windows neither has been measured.
 - A press that Accessibility does not answer in time is treated as sent, so an
   application that does not respond gives no status note.
+
+### Managing only named processes
+
+`--only-pid PID[,PID…]` (the flag may repeat) gives a windowed run a scope:
+the windows of those processes are managed and no others. It exists so that
+the managed product (adoption, native focus, click forwarding, the window's
+end) can be run on disposable windows by a test, also from a shell that has
+Accessibility but no Screen Recording access, without the run ever touching a
+window that is not the test's. With no `--only-pid` nothing differs: in
+particular a run without Screen Recording access still manages nothing.
+
+- A process is in scope by its pid and its start time, read once at launch.
+  A process that ended and whose pid another took since is not in scope.
+- Refused with exit status 64 and one line on stderr, before anything opens:
+  a value that is not a list of process ids, a process that is not running or
+  is not this user's, Infinify itself, a process named twice, a launch without
+  `--windowed` or without `--state`, and `--manual`,
+  `--experimental-native-resize` or a demo mode beside it. Without
+  `--windowed` a launch that lacks a grant goes to the onboarding window; the
+  chooser attaches whatever is picked in it; native resize needs every
+  window's capture. Without `--state` the run would settle adoption on the
+  default scene with only its own windows present, and every saved slot of a
+  real window would be dropped or made a stand-in and saved so.
+- The window manager considers a window of any other process no candidate at
+  all: it is not timed, not asked about through Accessibility, not read, not
+  offered, not named as present, and no Accessibility observer is put on its
+  application (`window-manager.m` `-pass:`, `window-events.m` `-add:`).
+- The one place a native window is bound, `-attach:logical:world:placed:` in
+  `main.m`, refuses a process outside the scope before a source, a router or a
+  controller source exists. Native focus, a forwarded press or motion, close
+  and the resize paths all act on a bound source or on the identity the
+  controller was given with it, so none of them has a window outside the
+  scope to act on. No check was added at those actors.
+- With Screen Recording access the scope's windows are captured as in any
+  managed run. Without it the shareable windows are never asked for, so
+  nothing can prompt: a candidate's frame comes from the window list, its
+  title from Accessibility, its application's name and bundle identifier from
+  the running application. The window is bound, focused and clicked like any
+  other; no stream is started for it and its tile has no picture (the frame
+  and what the renderer draws for a window that has not delivered one). Its
+  title follows only where the window list gives one, which without Screen
+  Recording access it did not for the one window looked at.
+- A scoped run without Screen Recording access names no window that is off
+  screen, so a saved slot is not kept waiting for a minimized or hidden window
+  of a scoped process: it is dropped or made a stand-in as for a closed one.
+- What the scope does not contain: the `launch`, `exec` and `warp_pointer`
+  effects and `autostart` act on no bound window, and `msg relaunch` or a
+  click on a stand-in launches the stand-in's application whatever the scope.
+  A test keeps them off with its own empty `--config` and a `--state` that
+  holds no stand-in. Read-only Accessibility is still
+  sent to the frontmost application, whichever it is, to read which window
+  has native focus, as in any windowed run.
+- A scoped window that is on screen when Infinify starts is adopted as one
+  that was already open, neither focused nor revealed. One that appears later
+  is a new window and gets the focus, natively too: start the fixtures first.
+
+`--debug-pointer`, which is refused without `--only-pid`, serves one more
+request on the IPC socket, for a test that may not move the pointer:
+
+```json
+{"DebugPointer":{"phase":"probe","window":1,"at":[0.5,0.5]}}
+```
+
+`phase` is `probe`, `down` or `up`, `window` the id `msg state` gives, and
+`at` the point as a fraction of the window's placement on its output. The
+reply is `{"Ok":{"DebugPointer":{"screen":[x,y],"screen_rect":…,"clip_rect":…,"hit":ID}}}`
+or `{"Err":"…"}`: a point that is clipped, off the panel or under another
+window is refused, never moved. `down` and `up` make a left mouse event and
+hand it to the canvas view's own `-mouseDown:` and `-mouseUp:`, so the
+binding lookup, the controller's focus request, the hold for native focus,
+the forward to the window and the release run as for a person's click.
+Nothing is posted to the session and the pointer stays where it is. What it
+does not exercise is the window server delivering a click to the panel. A
+press that is not released within five seconds is released where it went
+down. Without the flag the line reaches the controller, which refuses it as
+an invalid request.
+
+`tests/e2e/scoped-windows.sh` is the test. It builds
+`native/fixture/scope-fixture.m` (a regular application with one titled
+window holding an `NSButton`, a plain view that takes no first click and a
+`WKWebView`, which reports to a file what reached it), starts three, names two
+to `--only-pid`, and presses and releases on their tiles. With
+`INFINIFY_E2E_ELECTRON` naming a generic Electron binary it adds the window
+of `tests/e2e/scoped-electron`. It takes the foreground from the application
+that has it and holds it until the fixtures exit, when macOS returns it.
+
+- A click is judged by what the fixture was as it handled each event (active,
+  key, main), which the fixture records with the event. A fixture that is no
+  longer active when read afterwards lost the foreground to another
+  application: the test prints `DISTURBED` with the frontmost pid and does not
+  fail the click for it.
+- Each native fixture is asked to put its window directly under the canvas
+  panel, and the Electron one directly over the first of them, before
+  "visible to the window server" and the animation frames are measured, so
+  that a window of another application that had come between them and the
+  canvas is no longer over them. While one still lies over a fixture (it is
+  over the canvas too), those two assertions are skipped for that fixture and
+  `SKIPPED` is printed.
+- Exit status: 0 with `PASS` only when nothing was skipped or disturbed; 3
+  with `INCOMPLETE … NOT CHECKED: …` when nothing failed but something was; 1
+  on a failure.
+- The usage errors are run before any fixture exists, each bounded to two
+  seconds and killed and failed if it has not exited, with a home directory
+  of the test's own.
+- Infinify is started only once every fixture reports its window shown.
+
+Run on 2026-10-11 (macOS 27.2, Apple Silicon) from a shell with Accessibility
+and without Screen Recording access, with the Electron window (Electron 33):
+twice, each time 78 `ok` lines, nothing skipped or disturbed, `PASS` and exit
+status 0. The figures are the first run's; the second's were 36, 1, 43, 24
+and 40 (Electron) ms, 60 and 116 frames.
+
+- The seven usage errors each exit 64 with their line and no socket, the one
+  without `--state` among them (`Infinify: --only-pid needs --state`).
+- `msg state` lists exactly the scope's windows, still there and not
+  suspended three seconds later; stderr has `Managing only the windows of
+  --only-pid … No Screen Recording access: their tiles have no picture.`
+- Before any click no native focus was requested, each scoped fixture lay
+  whole under the canvas panel, before and after it was put directly under
+  it, was visible to the window server and ran 60 animation frames a second
+  (the Electron page 122), and none was active.
+- A click on the web view of an inactive fixture: the press was held
+  (`focus_pending=1`), native focus was answered `focused`, the press went 49
+  ms after it was made, and the page counted one `mousedown`, one `mouseup`
+  and one `click` at the point aimed at, the fixture active, key and main as
+  it handled each. The same click again, with nothing waited for in between
+  but the 0.3 s in which a second copy of the first would show, went after 1
+  ms (`focus_pending=0`) and the counts were two.
+- A click on the plain view of the other, inactive fixture, released at once:
+  the release was held behind the press (`released=1`), both arrived once, at
+  the point aimed at, and the first fixture took nothing.
+- A click on the `NSButton` of the fixture that was inactive again ran its
+  action once.
+- A press on the plain view that the test never released: no release in its
+  first three seconds, one release where it went down 5.03 s after the press,
+  and a `DebugPointer` release after that refused (`no DebugPointer press is
+  down`).
+- A click on the Electron page, inactive: held, focused, sent after 31 ms,
+  one of each event at the point aimed at, the application active and its
+  window focused as it handled each.
+- The fixture left out of the scope, a regular application's window on
+  screen under the canvas, took no event and was never activated; every pid
+  in the `debug:` lines was one of the scope's.
+- An unscoped run afterwards printed `Windows are not managed: Infinify has
+  no Screen Recording access. A run without --windowed asks for it.`, had no
+  windows, answered `DebugPointer` with an error and left every fixture's
+  counts as they were.
+
+Earlier the same day, before the fixtures recorded their state with each
+event and before they were put directly under the canvas: one run failed at
+the `NSButton` click because the fixture, active when its action ran (the
+trace had `outcome=focused` and `delivered after 32 ms`), was no longer
+active 0.3 s later, no fixture of the test having been activated since; and
+several runs skipped "visible and drawing" for all three scoped fixtures under
+a 1835x1290 window of another application. Whether the placing under the
+canvas removes that skip was not seen: in the runs since, no such window lay
+over the fixtures when they were measured.
+
+An Electron window that another opaque window covers whole stops its
+animation frames; under the canvas alone it does not.
+
+Open, found while the test was written, not traced and not changed: **a
+scoped window that appears after Infinify has started.** When two did, each
+got the focus a new window gets, and both requests came back
+`outcome=guard_denied`; the first application was left frontmost and neither
+was reported focused. The reading at the time, not checked in code, was that
+the second request withdrew the first after the first had already activated
+its application and was then refused because the foreground had changed. The
+test starts its fixtures first and so never has a new window: the arrival of
+a window under a scope, alone or two at once, has no test.
+
+Not run: a scoped run with Screen Recording access (capture, the retitle,
+and the scope filter on the windows named as present), which this shell
+cannot have; a pid taken over by another process during a run; hover
+forwarding, close and suspend under a scope (the test runs with
+`--no-hover-forwarding`); a person's own click on a scoped tile; `msg
+relaunch` under a scope. The refusal of `--only-pid` without `--windowed`
+was run once by hand (exit 64, `Infinify: --only-pid needs --windowed`) and
+is not in the test, which never starts Infinify without `--windowed`.
 
 ### What was run for managed windows
 
@@ -4938,7 +5124,10 @@ never shown, and the chooser only with `--manual`, above the canvas. With
 Screen Recording access it
 manages windows like a normal run unless `--manual` is given; without, the
 canvas still opens and says on stderr that it manages nothing
-([Managed windows](#managed-windows)). It is rejected in `--source`,
+([Managed windows](#managed-windows)), unless `--only-pid` names the processes
+whose windows it is to manage, which it then does with or without that access;
+`--debug-pointer` beside it serves the `DebugPointer` request a test presses
+with ([Managing only named processes](#managing-only-named-processes)). It is rejected in `--source`,
 `--demo`, `--demo-probe`, `--demo-probe-guard` and owned-resize modes. It saves to
 the default scene file, takes the default socket and reads the default config
 file unless `--state`, `--socket` and `--config` say otherwise, so give a

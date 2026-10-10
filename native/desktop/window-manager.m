@@ -21,6 +21,8 @@ static const NSTimeInterval still=.05;
 @interface DWWindowManager () <DWWindowEventSink>
 @property (weak) id<DWWindowHost> host;
 @property DWWindowEvents *events;
+@property NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope;
+@property (readwrite) BOOL capturing;
 // On-screen candidates already offered, found bound, or given up on.
 @property NSMutableSet<NSNumber *> *offered;
 // Candidates one read did not list: a second miss ends the asking.
@@ -47,7 +49,9 @@ static const NSTimeInterval still=.05;
 // and does not count it among its windows; nothing when Accessibility could not say (no access, an application that did not answer in
 // time, a window that gave no subrole). Read-only. Any thread: the lookup talks to every candidate's application, so it runs off the
 // main thread. The window number of an Accessibility element is copyWindow's lookup below, with its provenance.
-static NSDictionary<NSNumber *,id> *windowSubroles(NSDictionary<NSNumber *,NSNumber *> *asked) {
+// `titles`, when given, takes each listed window's Accessibility title as well: a run that cannot read the shareable windows has
+// no other. nil in every run that can, whose Accessibility traffic is then what it was.
+static NSDictionary<NSNumber *,id> *windowSubroles(NSDictionary<NSNumber *,NSNumber *> *asked,NSMutableDictionary<NSNumber *,NSString *> *titles) {
     NSMutableDictionary<NSNumber *,id> *subroles=[NSMutableDictionary dictionary];
     AXError (*get)(AXUIElementRef,uint32_t *)=(AXError (*)(AXUIElementRef,uint32_t *))dlsym(RTLD_DEFAULT,"_AXUIElementGetWindow");
     if(!AXIsProcessTrusted()||!get)return subroles;
@@ -64,6 +68,9 @@ static NSDictionary<NSNumber *,id> *windowSubroles(NSDictionary<NSNumber *,NSNum
             [listed addObject:@(wid)];CFTypeRef subrole=NULL;
             if(!AXUIElementCopyAttributeValue(w,kAXSubroleAttribute,&subrole)&&subrole&&CFGetTypeID(subrole)==CFStringGetTypeID())subroles[@(wid)]=[(__bridge NSString *)subrole copy];
             if(subrole)CFRelease(subrole);
+            if(!titles)continue;
+            CFTypeRef title=NULL;if(!AXUIElementCopyAttributeValue(w,kAXTitleAttribute,&title)&&title&&CFGetTypeID(title)==CFStringGetTypeID())titles[@(wid)]=[(__bridge NSString *)title copy];
+            if(title)CFRelease(title);
         }
         CFRelease(list);
         if(complete)for(NSNumber *wid in asked)if([asked[wid]isEqual:pid]&&![listed containsObject:wid])subroles[wid]=NSNull.null;
@@ -72,11 +79,18 @@ static NSDictionary<NSNumber *,id> *windowSubroles(NSDictionary<NSNumber *,NSNum
 }
 // A real window by that reading: a standard window or a dialog.
 static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)kAXStandardWindowSubrole,(__bridge NSString *)kAXDialogSubrole,(__bridge NSString *)kAXSystemDialogSubrole]containsObject:subrole]; }
+@implementation DWWindowCandidate
++ (instancetype)candidateWithShareable:(SCWindow *)shareable {
+    DWWindowCandidate *candidate=[self new];candidate.pid=shareable.owningApplication.processID;candidate.window=shareable.windowID;candidate.bundleIdentifier=shareable.owningApplication.bundleIdentifier;
+    candidate.applicationName=shareable.owningApplication.applicationName;candidate.title=shareable.title;candidate.frame=shareable.frame;candidate.shareable=shareable;return candidate;
+}
+@end
 @implementation DWWindowManager
-+ (instancetype)managerWithHost:(id<DWWindowHost>)host {
-    if(!CGPreflightScreenCaptureAccess())return nil;
-    DWWindowManager *manager=[self new];manager.host=host;manager.offered=[NSMutableSet set];manager.missed=[NSMutableSet set];manager.unlisted=[NSMutableSet set];manager.placed=[NSMutableDictionary dictionary];
-    manager.events=[[DWWindowEvents alloc]initWithSink:manager];return manager;
++ (instancetype)managerWithHost:(id<DWWindowHost>)host scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope {
+    // Only a scope lets windows be managed without their pictures: without one this is the gate it always was.
+    BOOL capturing=CGPreflightScreenCaptureAccess();if(!scope&&!capturing)return nil;
+    DWWindowManager *manager=[self new];manager.scope=[scope copy];manager.capturing=capturing;manager.host=host;manager.offered=[NSMutableSet set];manager.missed=[NSMutableSet set];manager.unlisted=[NSMutableSet set];manager.placed=[NSMutableDictionary dictionary];
+    manager.events=[[DWWindowEvents alloc]initWithSink:manager scope:manager.scope];return manager;
 }
 - (BOOL)live { return self.events.live; }
 - (BOOL)poll {
@@ -95,10 +109,12 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
     // One read must offer every window of the first pass: until it has ended every pass is whole.
     if(!self.completed)only=0;
     NSArray<NSDictionary *> *list=CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly|kCGWindowListExcludeDesktopElements,kCGNullWindowID));if(!list)return;
-    NSMutableDictionary<NSNumber *,NSDictionary *> *bounds=[NSMutableDictionary dictionary];NSMutableDictionary<NSNumber *,NSNumber *> *wanted=[NSMutableDictionary dictionary],*regular=[NSMutableDictionary dictionary],*since=[NSMutableDictionary dictionary];NSMutableArray<NSNumber *> *front=[NSMutableArray array];BOOL moving=NO;
+    NSMutableDictionary<NSNumber *,NSDictionary *> *bounds=[NSMutableDictionary dictionary];NSMutableDictionary<NSNumber *,NSNumber *> *wanted=[NSMutableDictionary dictionary],*regular=[NSMutableDictionary dictionary],*since=[NSMutableDictionary dictionary],*scoped=[NSMutableDictionary dictionary];NSMutableArray<NSNumber *> *front=[NSMutableArray array];BOOL moving=NO;
     for(NSDictionary *w in list){
         NSNumber *wid=w[(id)kCGWindowNumber],*pid=w[(id)kCGWindowOwnerPID];NSDictionary *b=w[(id)kCGWindowBounds];CGRect r=CGRectZero;
         if(![wid isKindOfClass:NSNumber.class]||![pid isKindOfClass:NSNumber.class]||[w[(id)kCGWindowLayer]intValue]!=0||pid.intValue==getpid())continue;
+        // --only-pid: a window of any other process leaves no trace here. It is neither timed nor wanted, so nothing below asks about it.
+        if(self.scope){NSNumber *within=scoped[pid];if(!within)within=scoped[pid]=@(DWInScope(self.scope,pid.intValue));if(!within.boolValue)continue;}
         if(![b isKindOfClass:NSDictionary.class]||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)b,&r)||r.size.width<40||r.size.height<40)continue;
         NSNumber *held=[self.bounds[wid]isEqual:b]?self.since[wid]:nil;bounds[wid]=b;since[wid]=held?:@(now);
         if([self.offered containsObject:wid]||(only&&pid.intValue!=only))continue;
@@ -126,18 +142,29 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
     if(!wanted.count&&(self.completed||self.requested))return;
     NSSet<NSNumber *> *ids=[NSSet setWithArray:wanted.allKeys];if(self.requested&&[ids isEqualToSet:self.requested])return;
     self.reading=YES;self.requested=ids;__weak DWWindowManager *weak=self;NSDictionary<NSNumber *,NSNumber *> *asked=[wanted copy];
-    [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO completionHandler:^(SCShareableContent *content,NSError *error){NSDictionary<NSNumber *,id> *subroles=content?windowSubroles(asked):nil;dispatch_async(dispatch_get_main_queue(),^{[weak read:content error:error asked:asked front:front subroles:subroles];});}];
+    if(self.capturing){[SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO completionHandler:^(SCShareableContent *content,NSError *error){NSDictionary<NSNumber *,id> *subroles=content?windowSubroles(asked,nil):nil;dispatch_async(dispatch_get_main_queue(),^{[weak read:content error:error asked:asked front:front subroles:subroles titles:nil frames:nil];});}];return;}
+    // A scoped run without Screen Recording access: the shareable windows are not asked for at all, so nothing can prompt. What they
+    // would have said of a candidate is read from the window list (this pass's bounds) and from Accessibility, off the main thread like the subroles.
+    NSMutableDictionary<NSNumber *,NSDictionary *> *frames=[NSMutableDictionary dictionary];for(NSNumber *wid in asked)frames[wid]=bounds[wid];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{NSMutableDictionary<NSNumber *,NSString *> *titles=[NSMutableDictionary dictionary];NSDictionary<NSNumber *,id> *subroles=windowSubroles(asked,titles);dispatch_async(dispatch_get_main_queue(),^{[weak read:nil error:nil asked:asked front:front subroles:subroles titles:titles frames:frames];});});
 }
 // `front` is the window list's own order, front to back. `subroles` is windowSubroles' answer for `asked`, read before this turn of the main queue.
-- (void)read:(SCShareableContent *)content error:(NSError *)error asked:(NSDictionary<NSNumber *,NSNumber *> *)asked front:(NSArray<NSNumber *> *)front subroles:(NSDictionary<NSNumber *,id> *)subroles {
+// `titles` and `frames` stand in for the shareable windows in a run that does not read them (`capturing` NO): `content` is then nil and no failure.
+- (void)read:(SCShareableContent *)content error:(NSError *)error asked:(NSDictionary<NSNumber *,NSNumber *> *)asked front:(NSArray<NSNumber *> *)front subroles:(NSDictionary<NSNumber *,id> *)subroles titles:(NSDictionary<NSNumber *,NSString *> *)titles frames:(NSDictionary<NSNumber *,NSDictionary *> *)frames {
     if(self.stopped)return;self.reading=NO;id<DWWindowHost> host=self.host;
     // `requested` stays: the same candidates are not read again at once, so a failure cannot loop.
-    if(!content){self.retry=NSProcessInfo.processInfo.systemUptime+2;[host discoveryFailed:error.localizedDescription?:@"the shareable windows are unavailable"];return;}
-    self.requested=nil;self.retry=0;NSMutableDictionary<NSNumber *,SCWindow *> *found=[NSMutableDictionary dictionary];BOOL again=NO;
-    for(SCWindow *window in content.windows){NSNumber *wid=@(window.windowID);if(asked[wid]&&asked[wid].intValue==window.owningApplication.processID&&!found[wid])found[wid]=window;}
+    if(!content&&self.capturing){self.retry=NSProcessInfo.processInfo.systemUptime+2;[host discoveryFailed:error.localizedDescription?:@"the shareable windows are unavailable"];return;}
+    self.requested=nil;self.retry=0;NSMutableDictionary<NSNumber *,DWWindowCandidate *> *found=[NSMutableDictionary dictionary];BOOL again=NO;
+    for(SCWindow *window in content.windows){NSNumber *wid=@(window.windowID);if(asked[wid]&&asked[wid].intValue==window.owningApplication.processID&&!found[wid])found[wid]=[DWWindowCandidate candidateWithShareable:window];}
+    // Without the shareable windows every candidate asked about is found: the window list had it on screen a moment ago.
+    if(!self.capturing)for(NSNumber *wid in asked){
+        DWWindowCandidate *candidate=[DWWindowCandidate new];NSRunningApplication *running=[NSRunningApplication runningApplicationWithProcessIdentifier:asked[wid].intValue];CGRect frame=CGRectZero;
+        if(!frames[wid]||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)frames[wid],&frame))continue;
+        candidate.pid=asked[wid].intValue;candidate.window=wid.unsignedIntValue;candidate.bundleIdentifier=running.bundleIdentifier;candidate.applicationName=running.localizedName;candidate.title=titles[wid];candidate.frame=frame;found[wid]=candidate;
+    }
     // Back to front: the controller raises each window as it maps, so the canvas stacks them as the desktop does.
     for(NSNumber *wid in front.reverseObjectEnumerator){
-        SCWindow *window=found[wid];
+        DWWindowCandidate *window=found[wid];
         // A window the read did not list yet is asked for once more, then left until it next comes on screen.
         if(!window){if([self.missed containsObject:wid])[self.offered addObject:wid];else {[self.missed addObject:wid];again=YES;}continue;}
         // Only a real window is adopted: by Accessibility a standard window or a dialog, whatever its size or title. One its application does not
@@ -152,12 +179,13 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
         [self.offered addObject:wid];
         if(!real){
             // A window of a size a person would call a window is named, so that one this rule leaves out can be found and added by hand.
-            if(window.frame.size.width>=200&&window.frame.size.height>=150)fprintf(stderr,"%s window \"%s\" (%gx%g) not adopted: %s. Choose windows adds it by hand.\n",(window.owningApplication.applicationName?:@"An application's").UTF8String,(window.title?:@"").UTF8String,window.frame.size.width,window.frame.size.height,
+            if(window.frame.size.width>=200&&window.frame.size.height>=150)fprintf(stderr,"%s window \"%s\" (%gx%g) not adopted: %s. Choose windows adds it by hand.\n",(window.applicationName?:@"An application's").UTF8String,(window.title?:@"").UTF8String,window.frame.size.width,window.frame.size.height,
                 [subrole isKindOfClass:NSString.class]?[NSString stringWithFormat:@"Accessibility reports it as %@, not a standard window or a dialog",subrole].UTF8String:"its application does not list it among its windows");
             continue;
         }
-        // The chooser may have bound it while the read was in flight.
-        if(![host managesWindow:window.windowID pid:window.owningApplication.processID])[host windowAppeared:window];
+        // The chooser may have bound it while the read was in flight. Under --only-pid its process is asked for once more: it may have
+        // ended during the read, and its pid be another's by now.
+        if(DWInScope(self.scope,window.pid)&&![host managesWindow:window.window pid:window.pid])[host windowAppeared:window];
         if(self.stopped)return;
     }
     // A candidate owed its second read is read at the poll's own pace, not a reconciliation later.
@@ -168,11 +196,13 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
 // A window that exists but was not offered is named, so that the controller keeps its
 // slot waiting instead of taking the window for closed. Titled windows only, and by
 // their exact title: the full list carries helper windows no slot should be kept for.
+// Under --only-pid only the scope's own: another process's window is none of this run's. A run that does not read the
+// shareable windows has no `content` and names none, so the controller keeps no slot waiting for a window off screen.
 - (void)complete:(SCShareableContent *)content {
     NSMutableArray<NSDictionary *> *present=[NSMutableArray array];id<DWWindowHost> host=self.host;
     for(SCWindow *w in content.windows){
         pid_t pid=w.owningApplication.processID;NSString *bundle=w.owningApplication.bundleIdentifier;
-        if(w.windowLayer!=0||pid==getpid()||w.frame.size.width<40||w.frame.size.height<40||!w.title.length||!bundle.length||[self.offered containsObject:@(w.windowID)])continue;
+        if(w.windowLayer!=0||pid==getpid()||w.frame.size.width<40||w.frame.size.height<40||!w.title.length||!bundle.length||[self.offered containsObject:@(w.windowID)]||!DWInScope(self.scope,pid))continue;
         if([NSRunningApplication runningApplicationWithProcessIdentifier:pid].activationPolicy!=NSApplicationActivationPolicyRegular||[host managesWindow:w.windowID pid:pid])continue;
         [present addObject:@{@"bundle_id":bundle,@"title":w.title}];
     }

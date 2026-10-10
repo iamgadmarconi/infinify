@@ -17,6 +17,7 @@
 #import "hot-corners.h"
 #import "input-sources.h"
 #import "window-manager.h"
+#import "window-events.h"
 #import "pan-launch.h"
 #import "trackpad-gestures.h"
 #import "pointer-hover.h"
@@ -224,6 +225,9 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 @property NSTimeInterval scrollPanTime; // event time of that scroll's last pan, 0 once a press has ended it
 @property NSTimeInterval lastDragPan; // event time of the last timed pan under this drag pan's button, its own or a scroll's; 0 for none
 @property CFTimeInterval liftSeen; // when the gesture's button was first read as up while its gesture is still held; 0 while it is down
+// --debug-pointer: a press the DebugPointer request made is down, with no physical button behind it; the timer ends one its test abandoned.
+@property BOOL injected;
+@property NSTimer *injectedTimer;
 - (void)released:(CGPoint)p at:(NSTimeInterval)time;
 - (void)render:(NSDictionary *)snapshot;
 - (NSNumber *)outputAt:(CGPoint)p;
@@ -342,6 +346,10 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 // is open and Screen Recording access is granted; without it this run is the manual one.
 @property BOOL managing;
 @property DWWindowManager *manager;
+// --only-pid: pid → that process's start time as read at launch (DWInScope), nil for none. With one, only windows of
+// those processes are ever attached, and the manager exists without Screen Recording access too.
+@property NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope;
+@property BOOL debugPointer; // --debug-pointer: the DebugPointer request is served (-debugPointer:)
 @property BOOL adopted; // adoption_complete was sent for the manager in place
 @property NSString *discoveryNote; // the failed-read note last written to stderr
 @property BOOL sceneDirty; // a window came, went or was renamed: saved on the next poll
@@ -385,7 +393,7 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 - (void)attachChoice:(id)sender;
 - (void)openCanvas:(id)sender;
 - (void)grantAccess:(id)sender;
-- (BOOL)attach:(SCWindow *)window logical:(NSNumber *)logical world:(NSDictionary *)world;
+- (BOOL)attach:(DWWindowCandidate *)window logical:(NSNumber *)logical world:(NSDictionary *)world;
 - (void)poll;
 - (void)saveScene;
 - (BOOL)loadScene:(NSString *)path;
@@ -1446,7 +1454,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(!self.configured||self.cleaning||self.askingQueue)return;
     NSUInteger down=NSEvent.pressedMouseButtons;CFTimeInterval now=CACurrentMediaTime();
     for(DesktopView *view in self.views.copy){
-        if(!view.gesture||(down&(1UL<<view.gestureButton))){view.liftSeen=0;continue;}
+        // A press the DebugPointer request made has no button behind it: its own request or its timer ends it.
+        if(!view.gesture||view.injected||(down&(1UL<<view.gestureButton))){view.liftSeen=0;continue;}
         if(!view.liftSeen){view.liftSeen=now;continue;}
         if(now-view.liftSeen<.05)continue;
         // Looked at, not taken: the release stays for its own turn. The look is a turn of the run loop, in which a frame or a timer may run: a frame
@@ -1683,6 +1692,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     // A request that arrives during a sizing action's transaction is the controller's to answer, as an action is.
     if(self.resize&&![self.resize canRemove:nil]&&![self sizing])return ipcError(@"a native resize is pending");
     id request=[NSJSONSerialization JSONObjectWithData:line options:NSJSONReadingFragmentsAllowed error:nil];
+    // Without --debug-pointer the line goes on to the controller, which knows no such request and refuses it.
+    if(self.debugPointer&&asDict(asDict(request)[@"DebugPointer"]))return [self debugPointer:asDict(request)[@"DebugPointer"]];
     NSDictionary *command=request?@{@"op":@"ipc",@"output":[self viewOutput]?:NSNull.null,@"request":request,@"pointer":pointJSON(pointer())}:nil;
     if(!command||![NSJSONSerialization isValidJSONObject:command])return ipcError(@"invalid request");
     NSString *status=self.statusText;NSData *raw=nil;NSDictionary *data=[self call:command raw:&raw];
@@ -1705,6 +1716,38 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     // earlier subscribers get a change not yet sent to them, and the new one is not sent its snapshot twice.
     if(*subscribe)[self broadcastState];
     return jsonMember(jsonMember(raw,"data"),"reply")?:[NSJSONSerialization dataWithJSONObject:data[@"reply"] options:NSJSONWritingWithoutEscapingSlashes error:nil];
+}
+// --debug-pointer, which needs --only-pid: a left press or release on a managed window, for a test that cannot move the pointer.
+// {"DebugPointer":{"phase":"probe"|"down"|"up","window":ID,"at":[fx,fy]}}: the point is that fraction of the window's
+// placement on its output. Nothing is posted anywhere and the pointer stays where it is: an NSEvent is made and handed to the
+// view's own -mouseDown: or -mouseUp:, so everything a person's click runs from there on runs (the binding lookup, the
+// controller's focus request, the hold for native focus, the forward to the window, the release). What it does not exercise is
+// the window server delivering a click to the panel. A point that is clipped, off the panel or under another window is
+// refused, never moved. `probe` only answers where the point is and what is under it.
+- (NSData *)debugPointer:(NSDictionary *)request {
+    NSString *phase=asString(request[@"phase"]),*status=self.statusText;NSNumber *window=asNumber(request[@"window"]);NSArray *at=asArray(request[@"at"]);
+    double fx=at.count==2?[asNumber(at[0])?:@(-1) doubleValue]:-1,fy=at.count==2?[asNumber(at[1])?:@(-1) doubleValue]:-1;
+    if(![@[@"probe",@"down",@"up"]containsObject:phase]||!window||!(fx>=0&&fx<=1&&fy>=0&&fy<=1))return ipcError(@"DebugPointer needs phase probe, down or up, a window id and at [fx, fy] within 0 and 1");
+    NSDictionary *placement=nil;for(NSDictionary *p in [self call:@{@"op":@"snapshot"}][@"placements"])if([p[@"window"]isEqual:window]){placement=p;break;}
+    DesktopView *view=nil;for(DesktopView *v in self.views)if([v.outputs containsObject:placement[@"output"]])view=v;
+    if(!placement||!view)return ipcError(@"that window has no placement on an output");
+    CGRect rect=jsonRect(placement[@"screen_rect"]),clip=jsonRect(placement[@"clip_rect"]);CGPoint s=CGPointMake(rect.origin.x+fx*rect.size.width,rect.origin.y+fy*rect.size.height);
+    if(!CGRectContainsPoint(clip,s)||!CGRectContainsPoint(view.globalBounds,s))return ipcError(@"that point of the window is not on the canvas");
+    BOOL up=[phase isEqual:@"up"];
+    // A release is not asked what lies under it: it goes to the same fraction of the window's placement as it is now, whatever has come over that point since.
+    NSDictionary *hit=up?nil:asDict([view hit:s output:placement[@"output"]]);self.statusText=status;
+    if(!up&&![hit[@"window"]isEqual:window])return ipcError(hit?[NSString stringWithFormat:@"window #%@ is under that point",hit[@"window"]]:@"no window takes a press at that point");
+    NSData *reply=[NSJSONSerialization dataWithJSONObject:@{@"Ok":@{@"DebugPointer":@{@"screen":@[@(s.x),@(s.y)],@"screen_rect":placement[@"screen_rect"],@"clip_rect":placement[@"clip_rect"],@"hit":up?NSNull.null:hit[@"window"]}}} options:NSJSONWritingWithoutEscapingSlashes error:nil];
+    if([phase isEqual:@"probe"])return reply;
+    if(up?!view.injected:(view.gesture||view.injected))return ipcError(up?@"no DebugPointer press is down":@"a press is already down");
+    NSEvent *(^event)(NSEventType)=^NSEvent *(NSEventType type){return [NSEvent mouseEventWithType:type location:[view convertPoint:CGPointMake(s.x-view.globalBounds.origin.x,s.y-view.globalBounds.origin.y) toView:nil] modifierFlags:0 timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:view.window.windowNumber context:nil eventNumber:0 clickCount:1 pressure:type==NSEventTypeLeftMouseDown?1:0];};
+    [view.injectedTimer invalidate];view.injectedTimer=nil;
+    if(up){view.injected=NO;[view mouseUp:event(NSEventTypeLeftMouseUp)];return reply;}
+    view.injected=YES;[view mouseDown:event(NSEventTypeLeftMouseDown)];
+    // A press its test never released is let go where it went down, five seconds on.
+    __weak DesktopView *weak=view;view.injectedTimer=[NSTimer timerWithTimeInterval:5 repeats:NO block:^(NSTimer *timer){(void)timer;DesktopView *v=weak;if(!v.injected)return;v.injected=NO;v.injectedTimer=nil;[v mouseUp:event(NSEventTypeLeftMouseUp)];}];
+    [NSRunLoop.mainRunLoop addTimer:view.injectedTimer forMode:NSRunLoopCommonModes];
+    return reply;
 }
 // Normal runs only: main() starts the server once and stops it before the final cleanup.
 - (void)startIPC:(NSString *)path {
@@ -1836,11 +1879,14 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     // comes here without it: the desktop opens its canvas once both grants are there (main(), -onboard).
     // It says why; a more specific problem already in the status line keeps its place there.
     // The Accessibility note of the same launch is not one: it follows this note.
-    if(self.managing&&!self.manager&&!self.startupError&&!(self.manager=[DWWindowManager managerWithHost:self])){
+    BOOL unmanaged=self.managing&&!self.manager&&!self.startupError;
+    if(unmanaged&&!(self.manager=[DWWindowManager managerWithHost:self scope:self.scope])){
         NSString *note=@"Windows are not managed: Infinify has no Screen Recording access. A run without --windowed asks for it.";
         [self say:note];
         if([self.statusText isEqual:[self restingStatus]])self.statusText=note;
         else if([self.statusText isEqual:focusAccessNote])self.statusText=[NSString stringWithFormat:@"%@ · %@",note,focusAccessNote];}
+    // --only-pid: which processes, and that without Screen Recording access their windows are bound but not pictured.
+    else if(unmanaged&&self.scope)[self say:[NSString stringWithFormat:@"Managing only the windows of --only-pid %@.%@",[[self.scope.allKeys sortedArrayUsingSelector:@selector(compare:)]componentsJoinedByString:@","],self.manager.capturing?@"":@" No Screen Recording access: their tiles have no picture."]];
     [self render];
 }
 - (void)refreshChoices:(id)sender {
@@ -1906,26 +1952,32 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(self.probe&&sender){self.probeHumanInput=YES;return;}
     (void)sender;NSInteger row=self.table.selectedRow;if(row<0||row>=(NSInteger)self.choices.count){if(CGPreflightScreenCaptureAccess())self.chooserStatus.stringValue=@"Select a source window first.";else [self refreshChoices:nil];return;}
     [self openPanels];NSNumber *logical=self.rebind.selectedItem.representedObject;
-    BOOL added=[self attach:self.choices[row][@"window"] logical:logical world:nil];if(self.configured)[self fillRebind:YES];
+    BOOL added=[self attach:[DWWindowCandidate candidateWithShareable:self.choices[row][@"window"]] logical:logical world:nil];if(self.configured)[self fillRebind:YES];
     if(added){if(!self.configured)[self.chooser orderOut:nil];[self saveScene];[self render];}else self.chooserStatus.stringValue=self.statusText;
 }
-- (BOOL)attach:(SCWindow *)window logical:(NSNumber *)logical world:(NSDictionary *)world { return [self attach:window logical:logical world:world placed:NO]; }
+- (BOOL)attach:(DWWindowCandidate *)window logical:(NSNumber *)logical world:(NSDictionary *)world { return [self attach:window logical:logical world:world placed:NO]; }
 // placed: a window that appeared by itself. It is sent with neither a logical id nor a
 // world rectangle, so the controller adopts it into a matching slot or places it by
 // window_placement around the active output and the pointer. Only its size is native.
-- (BOOL)attach:(SCWindow *)window logical:(NSNumber *)logical world:(NSDictionary *)world placed:(BOOL)placed {
+// The one place a native window is bound: the only LiveSource, Router and identity made in a run that is no demo, and the
+// only attach command sent. Under --only-pid a window of any other process is refused here before any of them exists, so
+// nothing that acts on a native window (native focus, a forwarded press or motion, close, native resize) has one to act on.
+- (BOOL)attach:(DWWindowCandidate *)window logical:(NSNumber *)logical world:(NSDictionary *)world placed:(BOOL)placed {
     if(!placed)[self cancelNavigation];
-    pid_t pid=window.owningApplication.processID;uint32_t wid=window.windowID;NSArray *processBirth=birth(pid);NSDictionary *info=windowInfo(wid);CGRect bounds=CGRectZero;
+    pid_t pid=window.pid;uint32_t wid=window.window;
+    if(!DWInScope(self.scope,pid)){self.statusText=@"Not attached: its process is outside --only-pid";return NO;}
+    // Under a scope the start time is the one DWInScope has just matched, not a second reading that another process could answer.
+    NSArray *processBirth=self.scope?self.scope[@(pid)]:birth(pid);NSDictionary *info=windowInfo(wid);CGRect bounds=CGRectZero;
     if(!processBirth||[info[(id)kCGWindowOwnerPID]intValue]!=pid||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)info[(id)kCGWindowBounds],&bounds)){self.statusText=@"Source closed or identity changed; refresh the chooser.";return NO;}
     for(LiveSource *existing in self.sources.allValues)if(existing.router.pid==pid&&existing.router.wid==wid){self.statusText=@"This source is already attached; every display can view the same world window.";return NO;}
     LiveSource *source=[LiveSource new];source.router=[Router new];source.router.pid=pid;source.router.wid=wid;source.router.processBirth=processBirth;source.router.bounds=info[(id)kCGWindowBounds];source.router.deadline=NSDate.distantFuture;source.router.sent=[NSMutableArray array];source.router.tag=(int64_t)(arc4random_uniform(0x7fffff)+1)*100;source.router.eventSource=CGEventSourceCreate(kCGEventSourceStatePrivate);source.router.usePrivate=YES;
     BOOL privateAvailable=[source.router loadPrivate];source.identity=@{@"pid":@(pid),@"birth_sec":processBirth[0],@"birth_usec":processBirth[1],@"wid":@(wid)};
     source.buffer=CGSizeMake(ceil(bounds.size.width*2),ceil(bounds.size.height*2));source.surfaces=[NSMutableArray array];source.composited=self.configured;
-    NSMutableDictionary *command=[@{@"op":@"attach",@"identity":source.identity,@"bundle_id":window.owningApplication.bundleIdentifier?:@"",@"title":window.title?:@"Untitled",@"buffer":@{@"width":@(source.buffer.width),@"height":@(source.buffer.height)},@"source_rect":rectJSON(bounds)} mutableCopy];
+    NSMutableDictionary *command=[@{@"op":@"attach",@"identity":source.identity,@"bundle_id":window.bundleIdentifier?:@"",@"title":window.title?:@"Untitled",@"buffer":@{@"width":@(source.buffer.width),@"height":@(source.buffer.height)},@"source_rect":rectJSON(bounds)} mutableCopy];
     if(placed){NSNumber *output=[self viewOutput];if(output)command[@"output"]=output;command[@"pointer"]=pointJSON(pointer());}
     else if(logical)command[@"logical_id"]=logical;else {if(!world){NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}];NSDictionary *o=[snapshot[@"outputs"]firstObject];double zoom=[o[@"zoom"]doubleValue];CGPoint camera=jsonPoint(o[@"camera"]);world=rectJSON(CGRectMake(camera.x+30/MAX(.001,zoom),camera.y+30/MAX(.001,zoom),bounds.size.width,bounds.size.height));}command[@"world_rect"]=world;}
     NSDictionary *reply=[self call:command];source.logical=reply[@"window"];if(!source.logical)return NO;self.sources[source.logical]=source;
-    source.window=window;source.title=asString(info[(id)kCGWindowName])?:command[@"title"];source.resize=self.resize;
+    source.window=window.shareable;source.title=asString(info[(id)kCGWindowName])?:command[@"title"];source.resize=self.resize;
     // A new frame redraws only the outputs that show this window. The first picture of a window that just opened begins its open animation, which the frame timer plays.
     if(source.composited){__weak Desktop *weak=self;NSNumber *logical=source.logical;source.presented=^{Desktop *d=weak;if([d.compositor contentChanged:logical])[d startFrames];};}
     // A window rule's size: the controller began its size transaction with the attach, and the coordinator performs it as it
@@ -1979,6 +2031,9 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 - (CMTime)captureInterval:(LiveSource *)source { if(source.resize)return CMTimeMake(1,30);NSInteger rate=60;for(NSScreen *screen in [self canvasScreens])rate=MAX(rate,screen.maximumFramesPerSecond);return CMTimeMake(1,(int32_t)rate); }
 // One stream for a source at a pixel size. NO leaves the reason in source.error.
 - (BOOL)startCapture:(LiveSource *)source size:(CGSize)pixels {
+    // An --only-pid run without Screen Recording access has no shareable window to make a filter of. -captureDemand never comes here for one.
+    // The one NO that leaves source.error alone: a reason there would have -track: detach a source that nothing is wrong with.
+    if(!source.window)return NO;
     SCStreamConfiguration *config=[SCStreamConfiguration new];config.width=(size_t)pixels.width;config.height=(size_t)pixels.height;config.pixelFormat=kCVPixelFormatType_32BGRA;config.minimumFrameInterval=[self captureInterval:source];config.queueDepth=3;config.showsCursor=NO;config.ignoreShadowsSingleWindow=YES;compositedStream(config,source);
     source.stream=[[SCStream alloc]initWithFilter:[[SCContentFilter alloc]initWithDesktopIndependentWindow:source.window] configuration:config delegate:source];[self.resize bind:source.logical stream:source.stream];NSError *error=nil;
     if(![source.stream addStreamOutput:source type:SCStreamOutputTypeScreen sampleHandlerQueue:dispatch_get_main_queue() error:&error]){source.error=error.localizedDescription;return NO;}
@@ -2002,6 +2057,9 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     NSMutableSet<NSNumber *> *placed=[NSMutableSet set];for(NSDictionary *p in snapshot[@"placements"])[placed addObject:p[@"window"]];
     for(LiveSource *source in self.sources.allValues){
         BOOL wanted=[self.manager capture:source.logical placed:[placed containsObject:source.logical]],running=source.stream!=nil;
+        // Bound without a shareable window (--only-pid without Screen Recording access): there is nothing to capture, and no
+        // failure either, which would detach the window at the next look.
+        if(!source.window)continue;
         if(source.error||wanted==running)continue;
         if(!wanted){[self stopCapture:source];continue;}
         // The stream's size is the window's as it is now; nothing else is read from it.
@@ -2049,12 +2107,12 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     for(LiveSource *source in self.sources.allValues)if(source.router.pid==pid&&source.router.wid==window)return YES;
     return NO;
 }
-- (void)windowAppeared:(SCWindow *)window {
+- (void)windowAppeared:(DWWindowCandidate *)window {
     if(self.cleaning||!self.panels.count)return;
     // Its focus event may have come before it was bound, and no other follows: native focus is read again at the next poll, not a reconciliation later.
     if([self attach:window logical:nil world:nil placed:YES]){self.lastObservation=0;return;}
     // Nobody chose this window: a refusal is a passing note.
-    NSString *note=[NSString stringWithFormat:@"%@ window not adopted: %@",window.owningApplication.applicationName?:@"A",self.statusText?:@"refused"];
+    NSString *note=[NSString stringWithFormat:@"%@ window not adopted: %@",window.applicationName?:@"A",self.statusText?:@"refused"];
     [self say:note];[self flashStatus:note];[self render];
 }
 // macOS platform rule: on Wayland quitting the compositor ends its clients, here
@@ -2393,19 +2451,27 @@ static BOOL parseWindowSize(const char *text,NSSize *size) {
     unsigned long height=strtoul(end+1,&end,10);if(*end||width<960||width>16384||height<480||height>16384)return NO;
     *size=NSMakeSize(width,height);return YES;
 }
+// --only-pid: the start time of a process the run may be told to manage, as [seconds, microseconds]; nil for one that does
+// not exist or is another user's. Read once, at launch: DWInScope compares against it for as long as the run lasts.
+static NSArray<NSNumber *> *scopeBirth(pid_t pid) {
+    struct proc_bsdinfo p={0};if(proc_pidinfo(pid,PROC_PIDTBSDINFO,0,&p,sizeof(p))!=sizeof(p)||p.pbi_uid!=getuid())return nil;
+    return @[@(p.pbi_start_tvsec),@(p.pbi_start_tvusec)];
+}
+static int scopeRefused(const char *why,const char *value) { if(value)fprintf(stderr,"Infinify: --only-pid %s %s\n",value,why);else fprintf(stderr,"Infinify: --only-pid %s\n",why);return 64; }
 int main(int argc,const char **argv) { @autoreleasepool {
     // The IPC client runs before any AppKit initialisation: no window, no privacy grant.
     if(argc>=2&&!strcmp(argv[1],"msg"))return driftwm_desktop_msg(argc-2,argv+2);
     // So does the login item: registered, unregistered or read, and nothing else of the app starts.
     if(argc>=2&&!strcmp(argv[1],"login-item"))return DWLoginItemCommand(argc-2,argv+2);
     const char **launched=argv; // as given, for the onboarding window's Relaunch
-    if(argc>=2&&!strncmp(argv[1],"--owned-resize-",15))for(int i=2;i<argc;i++)if(!strcmp(argv[i],"--windowed")||!strcmp(argv[i],"--socket")||!strcmp(argv[i],"--config")||!strcmp(argv[i],"--super")||!strcmp(argv[i],"--no-native-focus")||!strcmp(argv[i],"--manual"))return 64;
+    if(argc>=2&&!strncmp(argv[1],"--owned-resize-",15))for(int i=2;i<argc;i++)if(!strcmp(argv[i],"--windowed")||!strcmp(argv[i],"--socket")||!strcmp(argv[i],"--config")||!strcmp(argv[i],"--super")||!strcmp(argv[i],"--no-native-focus")||!strcmp(argv[i],"--manual")||!strcmp(argv[i],"--only-pid")||!strcmp(argv[i],"--debug-pointer"))return 64;
     if(argc>=2&&!strncmp(argv[1],"--owned-resize-",15))for(int i=2;i<argc;i++)if(!strcmp(argv[i],"--no-hover-forwarding"))return 64;
     if(argc==3&&!strcmp(argv[1],"--owned-resize-check-restoration"))return ownedResizeCheckRestoration(@(argv[2]));
     if(argc==3&&!strcmp(argv[1],"--owned-resize-check-cleanup"))return ownedResizeCheckCleanup(@(argv[2]));
     if(argc>=2&&(!strcmp(argv[1],"--owned-resize-probe")||!strcmp(argv[1],"--owned-resize-fixture")))return ownedResizeEntry(argc,argv);
     BOOL experimental=NO,resize=NO,windowed=NO,logical=NO,manual=NO;const char *socket=NULL,*config=NULL,*chord=NULL;NSSize windowSize=NSMakeSize(1200,800);const char *filtered[argc+1];int count=0;
     BOOL undelivered=NO; // --no-hover-forwarding
+    BOOL scoped=NO,debugPointer=NO;NSMutableDictionary<NSNumber *,NSArray<NSNumber *> *> *scope=[NSMutableDictionary dictionary]; // --only-pid, --debug-pointer
     for(int i=0;i<argc;i++){if(i>0&&!strcmp(argv[i],"--experimental-native-resize")){resize=YES;continue;}if(i>0&&!strcmp(argv[i],"--experimental-native-navigation")){experimental=YES;continue;}
         if(i>0&&!strcmp(argv[i],"--no-native-focus")){if(logical)return 64;logical=YES;continue;}
         if(i>0&&!strcmp(argv[i],"--no-hover-forwarding")){if(undelivered)return 64;undelivered=YES;continue;}
@@ -2414,20 +2480,39 @@ int main(int argc,const char **argv) { @autoreleasepool {
         // The chord's grammar is the controller's; one it rejects is reported in the status line.
         if(i>0&&!strcmp(argv[i],"--super")){if(chord||i+1>=argc||!argv[i+1][0])return 64;chord=argv[++i];continue;}
         if(i>0&&!strcmp(argv[i],"--manual")){if(manual)return 64;manual=YES;continue;}
+        // Every process named is looked at here, before anything opens: a scope that names nothing real must not become no scope.
+        if(i>0&&!strcmp(argv[i],"--only-pid")){if(i+1>=argc)return scopeRefused("needs a process id",NULL);scoped=YES;const char *list=argv[++i],*at=list;
+            for(;;){char *end=NULL;errno=0;long pid=isdigit((unsigned char)*at)?strtol(at,&end,10):0;
+                if(!end||end==at||(*end&&*end!=',')||errno||pid<=0||pid>INT_MAX)return scopeRefused("is not a list of process ids",list);
+                if(pid==getpid())return scopeRefused("names Infinify itself",list);
+                if(scope[@(pid)])return scopeRefused("names a process twice",list);
+                NSArray<NSNumber *> *born=scopeBirth((pid_t)pid);if(!born)return scopeRefused("names a process that is not running, or not one of this user's",list);
+                scope[@(pid)]=born;if(!*end)break;at=end+1;}
+            continue;}
+        if(i>0&&!strcmp(argv[i],"--debug-pointer")){if(debugPointer)return 64;debugPointer=YES;continue;}
         if(i>0&&!strcmp(argv[i],"--windowed")){if(windowed)return 64;windowed=YES;if(i+1<argc&&isdigit((unsigned char)argv[i+1][0])&&!parseWindowSize(argv[++i],&windowSize))return 64;continue;}
         filtered[count++]=argv[i];}filtered[count]=NULL;argc=count;argv=filtered;
 
-    if(argc==2&&!strcmp(argv[1],"--help")){puts("Infinify.app — macOS 26+ Apple Silicon: DriftWM's canvas as the desktop of native Mac windows\nDefault: the desktop. One canvas panel per display covers the whole display on every Space, under the menu bar and the Dock, which both stay; there is no toolbar, no status line and no chooser. Every real application window on screen (by Accessibility a standard window or a dialog, never a popup or a helper window; without Accessibility every window but an untitled one under 200x150) lives on the canvas: existing windows are adopted, a new one is placed by window_placement, a closed one leaves (or leaves a stand-in under session.suspend_on_close). This needs Screen Recording and Accessibility access, and Stage Manager off (it keeps every window outside the current stage as a thumbnail): while one is missing or Stage Manager is on a small window says so and offers the Allow buttons, a button that opens Desktop & Dock, Relaunch (Screen Recording reaches only a newly started app) and Quit, and the canvas opens once nothing is in the way.\nStatus notes go to stderr, one line each; what a config file has wrong is drawn in the error bar.\n--manual: show the chooser first and capture only explicitly selected windows; no window is adopted automatically. Open canvas shows the saved world without adding one. The chooser stays open above the canvas; closed there, it is gone for the run.\n--owned-resize-probe EMPTY_DIRECTORY [SCENARIO]: explicit noninteractive owned-fixture resize probe (live)\n--demo EMPTY_DIRECTORY: disposable interactive fixture, bounded to 60 seconds\n--demo-probe EMPTY_DIRECTORY: automated own-fixture E2E, no permission prompts\n--demo-probe-guard EMPTY_DIRECTORY: own-fixture interruption regression (expected exit 2)\n--experimental-native-resize: experimental size-only native resize: eight handles on the focused window, and DriftWM's grow-window, shrink-window, fit-window, fit-window-snapped, fill-window and msg resize WIDTH HEIGHT on a canvas window, which without it answer not implemented; a window rule's size is then asked of a new window too\n--experimental-native-navigation: accepted and ignored; window navigation and native focus are part of every normal run\n--no-native-focus: window focus stays logical; no native window is activated or raised\n--no-hover-forwarding: pointer motion over a window is not delivered to its application; focus_follows_mouse and pick mode still follow the pointer\n--state ABSOLUTE_PATH: explicit persistent scene file (default Application Support/Infinify/scene.json)\n--socket ABSOLUTE_PATH: IPC socket of a normal run (default Application Support/Infinify/infinify.sock)\n--windowed [WIDTHxHEIGHT]: open the canvas at launch in one ordinary window instead, all of it canvas (default 1200x800, at least 960x480), with no global shortcuts and whatever access there is; with --manual the chooser comes up above it; msg action quit or Control-C in its terminal ends it\n--config ABSOLUTE_PATH: DriftWM config file of a normal run (default $XDG_CONFIG_HOME/infinify/config.toml, else ~/.config/infinify/config.toml; DriftWM's built-in defaults when it is missing); read again whenever it changes\n--super CHORD: the physical keys of DriftWM's super/mod, a +-joined subset of ctrl|alt|cmd (default ctrl+alt)\nmsg [--json] [--socket PATH] COMMAND ...: DriftWM-style IPC client for the running app; opens no window\nlogin-item on | off | status: register, unregister or report the login item, a LaunchAgent inside the bundle that starts Infinify at login and again after a crash, never after a quit. on starts it at once, off ends the instance it started, status only reads; opens no window. For the installed copy: scripts/install-app.sh puts a signed bundle in ~/Applications\n--source DIR SECONDS NONCE: internal disposable child only\nKeys and pointer gestures are DriftWM's bindings from the config file: ctrl is Control, alt is Option, super (mod) is the --super chord. With no config file and --super ctrl+alt the registered chords are:\n  Drag or two-finger scroll on empty canvas, Control-Option-drag or -scroll anywhere, three-finger swipe: pan; a released pan coasts (navigation.drift). Wheel or two-finger pinch on empty canvas, Control-Option-wheel or -pinch anywhere, three-finger pinch: anchored zoom (max 1x).\n  Option-drag on a window: world move/snap; add Shift: cluster. Held at the view's edge, a move pans the canvas under the window (navigation.edge_pan).\n  Trackpad gestures are DriftWM's [gestures] bindings: four-finger swipe: the nearest window that way. Four-finger hold: center the focused window. Four-finger pinch in / out: zoom-to-fit / home toggle. Three-finger tap, then three-finger swipe on a window: move it.\n  macOS takes three- and four-finger touches for its own gestures first: turn off Mission Control, App Expose, the full-screen swipe, Launchpad, Show Desktop and three-finger drag in System Settings for the canvas to receive them. Infinify changes no setting.\n  View actions animate one view's camera only (global shortcuts while the canvas is open, or msg action; held zoom, pan and nudge keys repeat):\n  Control-Option-A: home toggle (origin at 1:1, again to return). Control-Option-W: zoom-to-fit toggle. Control-Option-Shift-W: the same over the focused window's snap cluster.\n  Control-Option-Equals / Control-Option-Minus: zoom in / out. Control-Option-0 or Control-Option-Z: zoom 1:1.\n  Control-Option-Command-arrows: pan the view under the pointer. Control-Option-Shift-arrows: nudge the focused window.\n  Control-Option-1 to 4: fly to bookmark 1 to 4. Control-Option-Shift-1 to 4: set it.\n  Window navigation flies the camera and focuses the window, natively when Infinify has Accessibility access:\n  Option-Tab / Option-Shift-Tab: cycle windows, most recently focused first; letting go of Option commits the choice.\n  Control-Option-arrows: the nearest window in that direction. Control-Option-C: center the focused window. Control-Option-X: center the window under the pointer.\n  A click on a window gives it canvas focus and starts its native focus, then the click is forwarded; a click on empty canvas unfocuses. Focusing a canvas window in its own application is followed.\n  Pointer motion over a window is delivered to its application; with focus_follows_mouse = true it also focuses that window without raising it, a screen-pinned one before the canvas beneath it and never a widget.\n  Below [zoom] interact_min (off by default) a window on the canvas is one target: a click flies to it, a drag moves it, and no click, scroll or motion reaches its application. A screen-pinned window and a widget are not picked and keep their pointer.\n  Control-Option-Command-drag: center-nearest by pointer, DriftWM's swipe; the direction is taken 16 points from the press.\n  Control-Option-Return: exec-terminal ($TERMINAL, else a new Terminal window). Control-Option-D: exec-launcher ($LAUNCHER, else Apps).\n  Control-Option-Command-Shift-arrows: send-to-output, the focused window to the display on that side (a world move; nothing with one display).\n  Control-Option-L: DriftWM's lock binding. Its swaylock is a Linux program: where that is not installed the displays are put to sleep instead, and macOS asks for the password as its Lock Screen setting says.\n  DriftWM's volume, brightness and media key defaults run Linux programs too: without those installed the keys stay with macOS.\n  Control-Option-Q: close-window. The focused window's own close button is pressed through Accessibility; a focused placeholder is dismissed.\nThe fixture modes (--demo*, --owned-resize-*) read no config and keep Option-drag pan, Command-wheel and pinch zoom and Control-Option-drag move; they take no trackpad touches. They keep their toolbar strip, status line and chooser, and their Resize status button explains unavailable native layout resizing.\nAn unbound click, drag or scroll on a window (left, right or middle button) is forwarded only to its selected, freshly validated source.\nNative keyboard/IME remain with the real app. Control-Option-Escape (until a binding takes that chord), Control-Option-Command-Shift-Q (quit), msg action quit or SIGTERM ends the run with exit status 0 and returns the native desktop: fullscreens ended, scene saved, panels closed, capture stopped, hot keys released.\nNo SIP/settings changes.");return 0;}
+    if(argc==2&&!strcmp(argv[1],"--help")){puts("Infinify.app — macOS 26+ Apple Silicon: DriftWM's canvas as the desktop of native Mac windows\nDefault: the desktop. One canvas panel per display covers the whole display on every Space, under the menu bar and the Dock, which both stay; there is no toolbar, no status line and no chooser. Every real application window on screen (by Accessibility a standard window or a dialog, never a popup or a helper window; without Accessibility every window but an untitled one under 200x150) lives on the canvas: existing windows are adopted, a new one is placed by window_placement, a closed one leaves (or leaves a stand-in under session.suspend_on_close). This needs Screen Recording and Accessibility access, and Stage Manager off (it keeps every window outside the current stage as a thumbnail): while one is missing or Stage Manager is on a small window says so and offers the Allow buttons, a button that opens Desktop & Dock, Relaunch (Screen Recording reaches only a newly started app) and Quit, and the canvas opens once nothing is in the way.\nStatus notes go to stderr, one line each; what a config file has wrong is drawn in the error bar.\n--only-pid PID[,PID…] (may repeat): manage only the windows of these processes, each of which must be running and this user's; needs --windowed, and refuses --manual and --experimental-native-resize. It works without Screen Recording access too: the windows are then bound, focused and clicked as ever and their tiles have no picture.\n--debug-pointer: with --only-pid, serve the DebugPointer IPC request, by which a test presses and releases on a window without the pointer.\n--manual: show the chooser first and capture only explicitly selected windows; no window is adopted automatically. Open canvas shows the saved world without adding one. The chooser stays open above the canvas; closed there, it is gone for the run.\n--owned-resize-probe EMPTY_DIRECTORY [SCENARIO]: explicit noninteractive owned-fixture resize probe (live)\n--demo EMPTY_DIRECTORY: disposable interactive fixture, bounded to 60 seconds\n--demo-probe EMPTY_DIRECTORY: automated own-fixture E2E, no permission prompts\n--demo-probe-guard EMPTY_DIRECTORY: own-fixture interruption regression (expected exit 2)\n--experimental-native-resize: experimental size-only native resize: eight handles on the focused window, and DriftWM's grow-window, shrink-window, fit-window, fit-window-snapped, fill-window and msg resize WIDTH HEIGHT on a canvas window, which without it answer not implemented; a window rule's size is then asked of a new window too\n--experimental-native-navigation: accepted and ignored; window navigation and native focus are part of every normal run\n--no-native-focus: window focus stays logical; no native window is activated or raised\n--no-hover-forwarding: pointer motion over a window is not delivered to its application; focus_follows_mouse and pick mode still follow the pointer\n--state ABSOLUTE_PATH: explicit persistent scene file (default Application Support/Infinify/scene.json)\n--socket ABSOLUTE_PATH: IPC socket of a normal run (default Application Support/Infinify/infinify.sock)\n--windowed [WIDTHxHEIGHT]: open the canvas at launch in one ordinary window instead, all of it canvas (default 1200x800, at least 960x480), with no global shortcuts and whatever access there is; with --manual the chooser comes up above it; msg action quit or Control-C in its terminal ends it\n--config ABSOLUTE_PATH: DriftWM config file of a normal run (default $XDG_CONFIG_HOME/infinify/config.toml, else ~/.config/infinify/config.toml; DriftWM's built-in defaults when it is missing); read again whenever it changes\n--super CHORD: the physical keys of DriftWM's super/mod, a +-joined subset of ctrl|alt|cmd (default ctrl+alt)\nmsg [--json] [--socket PATH] COMMAND ...: DriftWM-style IPC client for the running app; opens no window\nlogin-item on | off | status: register, unregister or report the login item, a LaunchAgent inside the bundle that starts Infinify at login and again after a crash, never after a quit. on starts it at once, off ends the instance it started, status only reads; opens no window. For the installed copy: scripts/install-app.sh puts a signed bundle in ~/Applications\n--source DIR SECONDS NONCE: internal disposable child only\nKeys and pointer gestures are DriftWM's bindings from the config file: ctrl is Control, alt is Option, super (mod) is the --super chord. With no config file and --super ctrl+alt the registered chords are:\n  Drag or two-finger scroll on empty canvas, Control-Option-drag or -scroll anywhere, three-finger swipe: pan; a released pan coasts (navigation.drift). Wheel or two-finger pinch on empty canvas, Control-Option-wheel or -pinch anywhere, three-finger pinch: anchored zoom (max 1x).\n  Option-drag on a window: world move/snap; add Shift: cluster. Held at the view's edge, a move pans the canvas under the window (navigation.edge_pan).\n  Trackpad gestures are DriftWM's [gestures] bindings: four-finger swipe: the nearest window that way. Four-finger hold: center the focused window. Four-finger pinch in / out: zoom-to-fit / home toggle. Three-finger tap, then three-finger swipe on a window: move it.\n  macOS takes three- and four-finger touches for its own gestures first: turn off Mission Control, App Expose, the full-screen swipe, Launchpad, Show Desktop and three-finger drag in System Settings for the canvas to receive them. Infinify changes no setting.\n  View actions animate one view's camera only (global shortcuts while the canvas is open, or msg action; held zoom, pan and nudge keys repeat):\n  Control-Option-A: home toggle (origin at 1:1, again to return). Control-Option-W: zoom-to-fit toggle. Control-Option-Shift-W: the same over the focused window's snap cluster.\n  Control-Option-Equals / Control-Option-Minus: zoom in / out. Control-Option-0 or Control-Option-Z: zoom 1:1.\n  Control-Option-Command-arrows: pan the view under the pointer. Control-Option-Shift-arrows: nudge the focused window.\n  Control-Option-1 to 4: fly to bookmark 1 to 4. Control-Option-Shift-1 to 4: set it.\n  Window navigation flies the camera and focuses the window, natively when Infinify has Accessibility access:\n  Option-Tab / Option-Shift-Tab: cycle windows, most recently focused first; letting go of Option commits the choice.\n  Control-Option-arrows: the nearest window in that direction. Control-Option-C: center the focused window. Control-Option-X: center the window under the pointer.\n  A click on a window gives it canvas focus and starts its native focus, then the click is forwarded; a click on empty canvas unfocuses. Focusing a canvas window in its own application is followed.\n  Pointer motion over a window is delivered to its application; with focus_follows_mouse = true it also focuses that window without raising it, a screen-pinned one before the canvas beneath it and never a widget.\n  Below [zoom] interact_min (off by default) a window on the canvas is one target: a click flies to it, a drag moves it, and no click, scroll or motion reaches its application. A screen-pinned window and a widget are not picked and keep their pointer.\n  Control-Option-Command-drag: center-nearest by pointer, DriftWM's swipe; the direction is taken 16 points from the press.\n  Control-Option-Return: exec-terminal ($TERMINAL, else a new Terminal window). Control-Option-D: exec-launcher ($LAUNCHER, else Apps).\n  Control-Option-Command-Shift-arrows: send-to-output, the focused window to the display on that side (a world move; nothing with one display).\n  Control-Option-L: DriftWM's lock binding. Its swaylock is a Linux program: where that is not installed the displays are put to sleep instead, and macOS asks for the password as its Lock Screen setting says.\n  DriftWM's volume, brightness and media key defaults run Linux programs too: without those installed the keys stay with macOS.\n  Control-Option-Q: close-window. The focused window's own close button is pressed through Accessibility; a focused placeholder is dismissed.\nThe fixture modes (--demo*, --owned-resize-*) read no config and keep Option-drag pan, Command-wheel and pinch zoom and Control-Option-drag move; they take no trackpad touches. They keep their toolbar strip, status line and chooser, and their Resize status button explains unavailable native layout resizing.\nAn unbound click, drag or scroll on a window (left, right or middle button) is forwarded only to its selected, freshly validated source.\nNative keyboard/IME remain with the real app. Control-Option-Escape (until a binding takes that chord), Control-Option-Command-Shift-Q (quit), msg action quit or SIGTERM ends the run with exit status 0 and returns the native desktop: fullscreens ended, scene saved, panels closed, capture stopped, hot keys released.\nNo SIP/settings changes.");return 0;}
     BOOL child=argc==5&&!strcmp(argv[1],"--source"),demo=argc==3&&!strcmp(argv[1],"--demo"),guard=argc==3&&!strcmp(argv[1],"--demo-probe-guard"),probe=argc==3&&!strcmp(argv[1],"--demo-probe"),state=argc==3&&!strcmp(argv[1],"--state");
     if(argc!=1&&!child&&!demo&&!probe&&!guard&&!state)return 64;
     if((experimental||resize)&&(child||probe||guard))return 64;
     if((windowed||socket||config||chord||logical||manual)&&(child||demo||probe||guard))return 64;
     if(undelivered&&(child||demo||probe||guard))return 64;
+    // A scope is for a windowed run that manages by itself. Without --windowed a launch without Screen Recording access would go to
+    // the onboarding window; --manual's chooser attaches whatever is picked; native resize needs every window's capture.
+    if(scoped&&(child||demo||probe||guard))return 64;
+    if(scoped&&!windowed)return scopeRefused("needs --windowed",NULL);
+    // A scoped run settles adoption with only its own windows present: on the default scene that would drop every saved slot of a real window.
+    if(scoped&&!state)return scopeRefused("needs --state",NULL);
+    if(scoped&&manual)return scopeRefused("cannot be combined with --manual",NULL);
+    if(scoped&&resize)return scopeRefused("cannot be combined with --experimental-native-resize",NULL);
+    if(debugPointer&&!scoped){fputs("Infinify: --debug-pointer needs --only-pid\n",stderr);return 64;}
     signal(SIGTERM,stopSignal);signal(SIGINT,stopSignal);signal(SIGHUP,stopSignal);
     [ProbeApplication sharedApplication];[NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];[NSApp finishLaunching];
     if(child){char *end=NULL;double seconds=strtod(argv[3],&end);if(!end||*end||!isfinite(seconds)||seconds<1||seconds>65)return 64;return source(@(argv[2]),seconds,@(argv[4]));}
     Desktop *desktop=[Desktop new];desktop.experimentalResize=resize;desktop.logicalFocus=logical;desktop.demo=demo||probe||guard;desktop.probe=probe||guard;desktop.interruptProbe=guard;desktop.windowed=windowed;desktop.windowSize=windowSize;
-    desktop.hoverUndelivered=undelivered;
+    desktop.hoverUndelivered=undelivered;desktop.scope=scoped?[scope copy]:nil;desktop.debugPointer=debugPointer;
     if(demo||probe||guard){NSString *dir=@(argv[2]);BOOL isDir=NO;if(![NSFileManager.defaultManager fileExistsAtPath:dir isDirectory:&isDir]||!isDir||[NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:nil].count)return 64;desktop.statePath=[dir stringByAppendingPathComponent:@"scene.json"];return runDemo(desktop,dir,probe||guard);}
     NSString *dir=[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/Infinify"];
     if(state){desktop.statePath=@(argv[2]);if(!desktop.statePath.isAbsolutePath)return 64;if(!socket)[NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:nil];}

@@ -1,0 +1,102 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// The disposable application tests/e2e/scoped-windows.sh starts and names to `Infinify --only-pid`: one titled window of
+// a regular application, so that the window manager takes it for a real window, holding the three kinds of content a click
+// can land in. A first-mouse control (NSButton), a plain view that takes no first click, and a web view, whose page is
+// what an inactive application drops a click on and stops drawing under a cover. It never activates itself and posts
+// nothing: it only reports, in DIR/status.json, what reached it and where. The one thing it does when asked: DIR/below
+// holding a window number puts its window directly under that window (the test names the canvas), without activating.
+// ScopeFixture DIR TITLE DX SECONDS: the window is centred on the main screen's visible area, DX points to the right;
+// the process ends after SECONDS (120 at most) or when its parent is gone.
+#import <AppKit/AppKit.h>
+#import <WebKit/WebKit.h>
+#include <libproc.h>
+static NSWindow *window;
+static NSString *directory;
+static NSMutableDictionary<NSString *,NSNumber *> *counts;
+static NSMutableDictionary<NSString *,NSArray *> *last;
+// What this application was as each kind of event was handled: a later reading may find the foreground gone elsewhere.
+static NSMutableDictionary<NSString *,NSDictionary *> *front;
+static NSUInteger activations;
+static NSButton *button;
+static NSView *plain;
+static WKWebView *web;
+// Window-local points from the window's top left corner, the frame of reference a forwarded event is addressed in.
+static NSArray *local(NSPoint inWindow) { return @[@(inWindow.x),@(window.frame.size.height-inWindow.y)]; }
+static NSArray *control(NSView *view) { NSRect r=[view convertRect:view.bounds toView:nil];return @[@(r.origin.x),@(window.frame.size.height-NSMaxY(r)),@(r.size.width),@(r.size.height)]; }
+static void count(NSString *key) {
+    counts[key]=@(counts[key].unsignedIntegerValue+1);
+    front[key]=@{@"app_active":@(NSApp.active),@"key_window":@(window.keyWindow),@"main_window":@(window.mainWindow)};
+}
+static void report(void) {
+    uint32_t wid=(uint32_t)window.windowNumber;struct proc_bsdinfo p={0};proc_pidinfo(getpid(),PROC_PIDTBSDINFO,0,&p,sizeof(p));
+    id bounds=NSNull.null;
+    for(NSDictionary *w in CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow,wid)))if([w[(id)kCGWindowNumber]unsignedIntValue]==wid){
+        CGRect r=CGRectZero;if(CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)w[(id)kCGWindowBounds],&r))bounds=@[@(r.origin.x),@(r.origin.y),@(r.size.width),@(r.size.height)];}
+    // Every window the window server draws over this one, front to back: the canvas that covers it must be among them.
+    NSMutableArray *above=[NSMutableArray array];
+    for(NSDictionary *w in CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenAboveWindow|kCGWindowListExcludeDesktopElements,wid))){
+        CGRect r=CGRectZero;if([w[(id)kCGWindowLayer]intValue]!=0||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)w[(id)kCGWindowBounds],&r))continue;
+        [above addObject:@[w[(id)kCGWindowOwnerPID]?:@0,@[@(r.origin.x),@(r.origin.y),@(r.size.width),@(r.size.height)],w[(id)kCGWindowNumber]?:@0]];}
+    NSDictionary *status=@{@"pid":@(getpid()),@"birth":@[@(p.pbi_start_tvsec),@(p.pbi_start_tvusec)],@"window":@(wid),@"title":window.title,@"bounds":bounds,
+        @"controls":@{@"button":control(button),@"plain":control(plain),@"web":control(web)},@"counts":[counts copy],@"last":[last copy],@"front":[front copy],@"visible":@(window.visible),
+        @"frontmost":@(NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier),
+        @"key_window":@(window.keyWindow),@"main_window":@(window.mainWindow),@"app_active":@(NSApp.active),@"activations":@(activations),
+        @"occlusion_visible":(window.occlusionState&NSWindowOcclusionStateVisible)?@YES:@NO,@"above":above};
+    // Whole or not at all: a reader never sees half a report.
+    NSString *path=[directory stringByAppendingPathComponent:@"status.json"],*partial=[path stringByAppendingString:@".tmp"];
+    if([[NSJSONSerialization dataWithJSONObject:status options:0 error:nil]writeToFile:partial atomically:NO])rename(partial.fileSystemRepresentation,path.fileSystemRepresentation);
+}
+@interface ScopePlain : NSView
+@end
+@implementation ScopePlain
+// The point of this view: a click on it while its application is inactive is not delivered.
+- (BOOL)acceptsFirstMouse:(NSEvent *)e { (void)e;return NO; }
+- (void)drawRect:(NSRect)dirty { (void)dirty;[NSColor.systemTealColor setFill];NSRectFill(self.bounds); }
+- (void)mouseDown:(NSEvent *)e { count(@"plain_down");last[@"plain_down"]=local(e.locationInWindow);report(); }
+- (void)mouseUp:(NSEvent *)e { count(@"plain_up");last[@"plain_up"]=local(e.locationInWindow);report(); }
+@end
+@interface ScopeTarget : NSObject <WKScriptMessageHandler>
+@end
+@implementation ScopeTarget
+- (void)action:(id)sender { (void)sender;count(@"button_action");report(); }
+- (void)active:(NSNotification *)note { (void)note;activations++;report(); }
+// The page reports each mouse event with its client point, and its animation frames by their running count.
+- (void)userContentController:(WKUserContentController *)controller didReceiveScriptMessage:(WKScriptMessage *)message {
+    (void)controller;NSDictionary *body=[message.body isKindOfClass:NSDictionary.class]?message.body:nil;NSString *kind=body[@"t"];
+    if([kind isEqual:@"raf"]){counts[@"raf"]=body[@"n"];return;}
+    if(![@[@"down",@"up",@"click"]containsObject:kind])return;
+    NSString *key=[@"web_" stringByAppendingString:kind];count(key);
+    // The web view is flipped: a client point is measured from its top left corner.
+    last[key]=local([web convertPoint:NSMakePoint([body[@"x"]doubleValue],[body[@"y"]doubleValue]) toView:nil]);report();
+}
+@end
+int main(int argc,const char **argv) { @autoreleasepool {
+    if(argc!=5)return 64;
+    directory=@(argv[1]);char *end=NULL;double dx=strtod(argv[3],&end);if(!end||*end)return 64;
+    double seconds=strtod(argv[4],&end);if(!end||*end||!(seconds>=1&&seconds<=120))return 64;
+    BOOL isDirectory=NO;if(![NSFileManager.defaultManager fileExistsAtPath:directory isDirectory:&isDirectory]||!isDirectory)return 64;
+    counts=[NSMutableDictionary dictionary];last=[NSMutableDictionary dictionary];front=[NSMutableDictionary dictionary];
+    for(NSString *key in @[@"button_action",@"plain_down",@"plain_up",@"web_down",@"web_up",@"web_click",@"raf"])counts[key]=@0;
+    [NSApplication sharedApplication];[NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+    NSRect area=(NSScreen.mainScreen?:NSScreen.screens.firstObject).visibleFrame;CGFloat width=420,height=470;
+    window=[[NSWindow alloc]initWithContentRect:NSMakeRect(NSMidX(area)-width/2+dx,NSMidY(area)-height/2,width,height) styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable backing:NSBackingStoreBuffered defer:NO];
+    window.releasedWhenClosed=NO;window.title=@(argv[2]);
+    ScopeTarget *target=[ScopeTarget new];NSView *content=window.contentView;
+    [NSNotificationCenter.defaultCenter addObserver:target selector:@selector(active:) name:NSApplicationDidBecomeActiveNotification object:nil];
+    // AppKit's content view is not flipped: the three are laid out from the top down by hand.
+    button=[NSButton buttonWithTitle:@"First-mouse button" target:target action:@selector(action:)];button.frame=NSMakeRect(20,height-50,width-40,32);[content addSubview:button];
+    plain=[[ScopePlain alloc]initWithFrame:NSMakeRect(20,height-160,width-40,90)];[content addSubview:plain];
+    WKWebViewConfiguration *configuration=[WKWebViewConfiguration new];[configuration.userContentController addScriptMessageHandler:target name:@"s"];
+    web=[[WKWebView alloc]initWithFrame:NSMakeRect(20,20,width-40,height-200) configuration:configuration];[content addSubview:web];
+    [web loadHTMLString:@"<!doctype html><style>html,body{margin:0;height:100%}button{width:100%;height:100%;font:16px system-ui}</style><button id=b>Web button</button><script>"
+        "const s=m=>webkit.messageHandlers.s.postMessage(m);for(const[e,t]of[['mousedown','down'],['mouseup','up'],['click','click']])document.getElementById('b').addEventListener(e,v=>s({t,x:v.clientX,y:v.clientY}));"
+        "let n=0;const f=()=>{s({t:'raf',n:++n});requestAnimationFrame(f)};requestAnimationFrame(f);</script>" baseURL:nil];
+    // In front of what is on screen, but never the active application: that is for the click under test to bring about.
+    [window orderFrontRegardless];
+    pid_t parent=getppid();NSDate *until=[NSDate dateWithTimeIntervalSinceNow:seconds];
+    [NSTimer scheduledTimerWithTimeInterval:.05 repeats:YES block:^(NSTimer *timer){(void)timer;if(getppid()!=parent||until.timeIntervalSinceNow<=0||!window.visible)exit(0);
+        NSString *below=[directory stringByAppendingPathComponent:@"below"],*number=[NSString stringWithContentsOfFile:below encoding:NSUTF8StringEncoding error:nil];
+        if(number.integerValue>0){[NSFileManager.defaultManager removeItemAtPath:below error:nil];[window orderWindow:NSWindowBelow relativeTo:number.integerValue];}
+        report();}];
+    [NSApp run];return 0;
+} }
