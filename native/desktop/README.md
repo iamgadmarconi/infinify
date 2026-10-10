@@ -212,6 +212,26 @@ changes for the config path, `exec-terminal`, `PATH` and relative paths.
 
 ### Limits of desktop mode
 
+- **The canvas covers every window, and a covered window stops drawing.**
+  macOS tells a window that lies wholly under an opaque window that it is
+  not visible, and applications stop drawing one that is not: on the
+  owner's runs of 2026-10-10 typing reached a window under the canvas and
+  its tile showed none of it until the canvas was gone. The panel now has
+  an alpha value of 0.999. On a fixture window under a floating panel that
+  kept the window reported as visible, where declaring the panel and its
+  layers non-opaque had not. Whether real applications redraw under it has
+  not been observed yet. The intended design is the other way round, the
+  window server placing the real windows with nothing over them
+  (`native/privileged`, needs System Integrity Protection relaxed by the
+  owner); this panel is what runs until that exists.
+- **A click reaches a window only once its application is in front.** An
+  event posted to an inactive application is dropped by everything but a
+  control that takes a first click (measured on a WKWebView and an Electron
+  window). An unbound press therefore waits until the native focus its
+  click asked for is answered, at most half a second, with its drags and
+  release queued behind it; on the window that already has native focus it
+  goes at once. `INFINIFY_DEBUG=1` in the environment prints one stderr
+  line for each such press and each native focus request.
 - **Stage Manager has to be off.** With it on, macOS keeps only the current
   stage's windows at their size and scales every other window into a
   thumbnail in its strip. The window's bounds, its picture and the place a

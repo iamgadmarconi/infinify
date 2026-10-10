@@ -206,6 +206,14 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 @property LiveSource *pressedSource;
 @property CGPoint pressedLocal;
 @property int64_t pressedButton; // CGMouseButton held down in pressedSource
+// An unbound press on a window whose native focus is still being asked for, kept back until that request is answered
+// (-holdPress:window:at:output:): the press, where and on which output it fell, its latest drag, whether its button is up again.
+@property NSEvent *heldPress,*heldDrag;
+@property NSNumber *heldWindow,*heldOutput;
+@property CGPoint heldPoint,heldDragPoint;
+@property BOOL heldReleased;
+@property CFTimeInterval heldSince;
+@property NSTimer *heldTimer;
 @property NSNumber *resizeTransaction;
 @property NSInteger gesture; // 1 pan, 2 logical world drag, 3 native pointer, 4 native resize
 @property NSInteger gestureButton; // NSEvent button number that began the gesture
@@ -556,6 +564,38 @@ static NSNumber *liveHit(NSDictionary *hit) { return [hit[@"placeholder"]isEqual
     if(!reply&&under&&[self.desktop.statusText isEqual:@"source presentation unsettled"]){NSString *note=[self.desktop captureNote:under];if(note)self.desktop.statusText=note;}
     return reply[@"hit"];
 }
+// INFINIFY_DEBUG in the environment: one stderr line for each click that goes to a window and each native focus request.
+static BOOL DWInputTrace(void) { static int on=-1;if(on<0)on=getenv("INFINIFY_DEBUG")!=NULL;return on; }
+// Whether the native focus request a click on `window` made is still unanswered.
+- (BOOL)focusPending:(NSNumber *)window { id pending=[self.desktop call:@{@"op":@"snapshot"}][@"focus"][@"pending_effect"];return [pending isKindOfClass:NSDictionary.class]&&[pending[@"window"]isEqual:window]; }
+// Upstream forwards the press of a click-to-focus to a client it has already focused. Here the focus is a request to another
+// application that takes some tens of milliseconds, and until it has landed that application is not the active one: an
+// event posted to it then is dropped by everything but a control that takes a first click (measured on a WKWebView and an
+// Electron window, 2026-10-10: nothing arrived while inactive, every click did once active and key, covered or not). So
+// the press waits for the request to be answered, at most half a second, and its drags and release wait behind it in
+// order. The controller asks for native focus on every click; on the window that already has it the press goes at once.
+- (void)holdPress:(NSEvent *)e window:(NSNumber *)window at:(CGPoint)p output:(NSNumber *)output {
+    [self deliverHeld];BOOL pending=[self focusPending:window];
+    // Already the focused window of the frontmost application, as last observed: the request only confirms that, and the press does not wait for it.
+    if(pending){id observed=[self.desktop call:@{@"op":@"snapshot"}][@"focus"][@"observed_native"];LiveSource *focused=self.desktop.sources[window];
+        if([observed isKindOfClass:NSDictionary.class]&&[observed[@"window"]isEqual:window]&&focused&&NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier==focused.router.pid)pending=NO;}
+    if(DWInputTrace()){LiveSource *s=self.desktop.sources[window];fprintf(stderr,"debug: press #%s pid=%d app=%s frontmost=%s focus_pending=%d\n",window.description.UTF8String,(int)s.router.pid,[NSRunningApplication runningApplicationWithProcessIdentifier:s.router.pid].bundleIdentifier.UTF8String?:"?",NSWorkspace.sharedWorkspace.frontmostApplication.bundleIdentifier.UTF8String?:"?",(int)pending);}
+    self.heldPress=e;self.heldWindow=window;self.heldPoint=p;self.heldOutput=output;self.heldDrag=nil;self.heldReleased=NO;self.heldSince=CACurrentMediaTime();
+    if(!pending){[self deliverHeld];return;}
+    __weak DesktopView *weak=self;self.heldTimer=[NSTimer timerWithTimeInterval:.005 repeats:YES block:^(NSTimer *timer){DesktopView *view=weak;if(!view){[timer invalidate];return;}
+        if(view.heldPress&&(CACurrentMediaTime()-view.heldSince>=.5||![view focusPending:view.heldWindow]))[view deliverHeld];}];
+    [NSRunLoop.mainRunLoop addTimer:self.heldTimer forMode:NSRunLoopCommonModes];
+}
+// The held press goes to its window now, then its latest drag, then its release if the button is already up. Nothing held: nothing.
+- (void)deliverHeld {
+    [self.heldTimer invalidate];self.heldTimer=nil;NSEvent *press=self.heldPress,*drag=self.heldDrag;if(!press)return;
+    NSNumber *window=self.heldWindow,*output=self.heldOutput;BOOL released=self.heldReleased;CGPoint p=self.heldPoint,d=self.heldDragPoint;
+    self.heldPress=self.heldDrag=nil;self.heldWindow=self.heldOutput=nil;self.heldReleased=NO;
+    CGEventRef cg=CGEventCreateCopy(press.CGEvent);BOOL sent=[self forward:cg at:p output:output activate:NO];CFRelease(cg);
+    if(DWInputTrace()){LiveSource *s=self.desktop.sources[window];fprintf(stderr,"debug: press #%s delivered after %.0f ms sent=%d frontmost=%s source=%d valid=%d trusted=%d released=%d status=\"%s\"\n",window.description.UTF8String,(CACurrentMediaTime()-self.heldSince)*1000,(int)sent,NSWorkspace.sharedWorkspace.frontmostApplication.bundleIdentifier.UTF8String?:"?",s!=nil,(int)[s.router valid],(int)AXIsProcessTrusted(),(int)released,sent?"":(self.desktop.statusText?:@"").UTF8String);}
+    if(drag){cg=CGEventCreateCopy(drag.CGEvent);[self forward:cg at:d output:output activate:NO];CFRelease(cg);}
+    if(released)[self releasePressed];
+}
 - (BOOL)forward:(CGEventRef)e at:(CGPoint)p output:(NSNumber *)output activate:(BOOL)activate {
     if(self.desktop.resize&&![self.desktop.resize canRemove:nil])return NO;
     if(activate)[self.desktop cancelNavigation];
@@ -629,14 +669,17 @@ static NSNumber *liveHit(NSDictionary *hit) { return [hit[@"placeholder"]isEqual
     else if([kind isEqual:@"center_nearest"]){self.gesture=DWPolicyPress;[self.hover nearestPress:p output:output];}
     // Upstream raises and focuses the window under the pointer, stand-ins included, then runs the action on it.
     else if([kind isEqual:@"action"]&&action){if(hit)[self.desktop applyReply:[self.desktop call:@{@"op":@"focus",@"window":hit[@"window"]}]];[self.desktop action:action output:output at:p held:[DWCycleHold modifiersDown]!=0];return;}
-    // Unbound, or bound to a gesture with nothing to act on here: click-to-focus, then the press is the native window's.
-    else if(hit){self.gesture=3;self.clickWindow=hit[@"window"];[self.desktop activate:hit[@"window"] output:output];CGEventRef cg=CGEventCreateCopy(e.CGEvent);[self forward:cg at:p output:output activate:NO];CFRelease(cg);}
+    // Unbound, or bound to a gesture with nothing to act on here: click-to-focus, then the press is the native window's,
+    // once the window has the focus that was asked for (-holdPress:window:at:output:).
+    else if(hit){self.gesture=3;self.clickWindow=hit[@"window"];[self.desktop activate:hit[@"window"] output:output];[self holdPress:e window:hit[@"window"] at:p output:output];}
     [self.desktop render];
 }
 - (void)mouseDown:(NSEvent *)e {
     if(self.desktop.probe&&!self.desktop.probeDrivingGesture){self.desktop.probeHumanInput=YES;return;}
     // One gesture at a time: another button waits until the first is released.
     NSInteger button=self.desktop.configured?e.buttonNumber:0;if(self.gesture&&button!=self.gestureButton)return;
+    // A press still held for its window's focus goes first, before this one withdraws that request.
+    [self deliverHeld];
     // A press is a fresh interaction, as upstream. It ends an open cycle as letting go of its modifiers does, committing a
     // settled selection as upstream's focus_changed commits it. The pad is one device: in a normal run the press then ends
     // a trackpad gesture in progress, cancelled, so that the coast a pan's end launches stops with the rest. Only then is
@@ -694,6 +737,7 @@ static NSNumber *liveHit(NSDictionary *hit) { return [hit[@"placeholder"]isEqual
     // the controller pans under the window frame by frame, also while the pointer rests there.
     else if(self.gesture==2&&self.desktop.configured){if([[self.desktop call:@{@"op":@"gesture_to",@"screen_delta":pointJSON(CGPointMake(p.x-self.startPoint.x,p.y-self.startPoint.y)),@"pointer":pointJSON(p)}][@"needs_frames"]boolValue])[self.desktop ensureFrames];}
     else if(self.gesture==2)[self.desktop call:@{@"op":@"gesture_to",@"screen_delta":pointJSON(CGPointMake(p.x-self.startPoint.x,p.y-self.startPoint.y))}];
+    else if(self.gesture==3&&self.heldPress){self.heldDrag=e;self.heldDragPoint=p;}
     else if(self.gesture==3){CGEventRef cg=CGEventCreateCopy(e.CGEvent);[self forward:cg at:p output:self.dragOutput activate:NO];CFRelease(cg);}
     self.lastPoint=p;[self.desktop render];
 }
@@ -711,8 +755,8 @@ static NSNumber *liveHit(NSDictionary *hit) { return [hit[@"placeholder"]isEqual
 - (void)mouseUp:(NSEvent *)e { if(self.desktop.probe&&!self.desktop.probeDrivingGesture){self.desktop.probeHumanInput=YES;return;} if(self.desktop.configured&&e.buttonNumber!=self.gestureButton)return;[self released:[self screenPoint:e] at:e.timestamp]; }
 // The end of a press, whatever it had become: at the global point and the event time of its release, or of the moment a release that never
 // arrived was noticed (-[Desktop endLostInput]).
-- (void)released:(CGPoint)p at:(NSTimeInterval)time { self.liftSeen=0;if(self.gesture==4)[self.desktop.resize request:@{@"op":@"end_native_resize",@"transaction":self.resizeTransaction}];self.resizeTransaction=nil;[self releasePressed];
-    // Upstream resolve_click_navigate, after the release is forwarded: the button lifted within 5 points of its press, on the same output.
+- (void)released:(CGPoint)p at:(NSTimeInterval)time { self.liftSeen=0;if(self.gesture==4)[self.desktop.resize request:@{@"op":@"end_native_resize",@"transaction":self.resizeTransaction}];self.resizeTransaction=nil;if(self.heldPress)self.heldReleased=YES;else [self releasePressed];
+    // Upstream resolve_click_navigate, after the release is forwarded (or queued behind a press that is still held): the button lifted within 5 points of its press, on the same output.
     NSNumber *clicked=self.clickWindow;self.clickWindow=nil;
     if(self.gesture==3&&clicked&&hypot(p.x-self.startPoint.x,p.y-self.startPoint.y)<=5&&[[self outputAt:p]isEqual:self.dragOutput])[self.desktop clickReleased:clicked output:self.dragOutput];
     // A policy press let go: a pick, or a center-nearest press that never left its dead zone.
@@ -1735,6 +1779,13 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     NSPanel *panel=[[(self.ownedResizeProbe?RPIsolatedPanel.class:desktop?DesktopPanel.class:CanvasPanel.class) alloc]initWithContentRect:frame styleMask:NSWindowStyleMaskBorderless|NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO];
     panel.releasedWhenClosed=NO;panel.level=self.windowed?NSNormalWindowLevel:NSFloatingWindowLevel;panel.animationBehavior=NSWindowAnimationBehaviorNone;panel.collectionBehavior=NSWindowCollectionBehaviorMoveToActiveSpace|NSWindowCollectionBehaviorFullScreenAuxiliary;
     DesktopView *view=[[DesktopView alloc]initWithFrame:NSMakeRect(0,0,frame.size.width,frame.size.height)];view.desktop=self;view.globalBounds=topRect(frame);view.outputs=[NSMutableArray array];view.tiles=[NSMutableDictionary dictionary];view.surfaces=[NSMutableDictionary dictionary];view.overlays=[NSMutableArray array];view.wantsLayer=YES;view.layer.backgroundColor=[NSColor colorWithSRGBRed:.045 green:.065 blue:.10 alpha:1].CGColor;panel.contentView=view;
+    // A window wholly under an opaque window is told it is not visible, and applications stop drawing one that is not: a
+    // window took typing under the canvas and its tile showed none of it, though the text was there once the canvas was
+    // gone (owner's run, 2026-10-10). Every window a normal run shows is wholly under this panel. The window server
+    // counts a panel as covering only at full alpha; declaring the panel and its layers non-opaque changed nothing, an alpha
+    // value a thousandth short of one did (measured on a fixture window under a floating panel, the same day). At that alpha
+    // nothing of what lies under the canvas shows through an 8-bit pixel.
+    if(self.configured)panel.alphaValue=.999;
     // Normal runs only: the trackpad's raw touches, for gestures of three or more fingers.
     if(self.configured)view.allowedTouchTypes=NSTouchTypeMaskIndirect;
     for(NSUInteger i=0;i<rects.count;i++){NSNumber *output=[self call:@{@"op":@"register_output",@"stable_id":identities[i],@"screen_bounds":rects[i]}][@"output"];if(output)[view.outputs addObject:output];}

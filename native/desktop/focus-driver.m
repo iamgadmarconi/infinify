@@ -57,7 +57,10 @@ static bool driverGuard(DWFocusIdentity i,void *context){(void)i;return ((__brid
 - (BOOL)select:(NSDictionary *)value guard:(DWGuard)guard {
     DWFocusLease *lease=[DWFocusLease new];lease.guard=guard;
     // The coordinator captured ownership/foreground authorization at intent time.
-    DWFocusResult result=dw_focus_select(identity(value),driverGuard,(__bridge void *)lease);return result.focused&&guard();
+    DWFocusResult result=dw_focus_select(identity(value),driverGuard,(__bridge void *)lease);
+    // INFINIFY_DEBUG in the environment: what each native focus request came to, on stderr.
+    if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"debug: native focus pid=%d wid=%u outcome=%s focused=%d ax_error=%d frontmost=%d\n",(int)[value[@"pid"]intValue],[value[@"wid"]unsignedIntValue],dw_focus_outcome_name(result.outcome),(int)result.focused,(int)result.ax_error,(int)NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier);
+    return result.focused&&guard();
 }
 - (NSDictionary *)observe {
     // One foreground AX lookup, followed by one independently validated exact readback.

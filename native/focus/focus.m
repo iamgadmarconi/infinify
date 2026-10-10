@@ -68,11 +68,16 @@ static bool readback(DWFocusIdentity i,AXUIElementRef w,double end,DWFocusResult
     CGRect cg;bounds=bounds&&dw_focus_owner(i,&cg)&&fabs(cg.origin.x-p.x)<=1&&fabs(cg.origin.y-p.y)<=1&&fabs(cg.size.width-s.width)<=1&&fabs(cg.size.height-s.height)<=1;
     if(!bounds){r->outcome=DWFocusReadbackFailed;return false;}r->bounds=cg;
     AXUIElementRef system=AXUIElementCreateSystemWide(),app=AXUIElementCreateApplication(i.pid);CFTypeRef front=NULL;
-    r->ax_error=copy(system,kAXFocusedApplicationAttribute,&front,end);
-    bool ok=!r->ax_error&&front&&CFGetTypeID(front)==AXUIElementGetTypeID();
-    if(ok)ok=!(r->ax_error=AXUIElementGetPid(front,&r->system_pid));
-    if(ok)ok=focusedWindow(front,r->system_pid,&r->system_window,end,&r->ax_error);
+    // The system-wide element names no focused application for some applications while they are the one in front: an
+    // Electron window, activated and raised, was answered kAXErrorNoValue for as long as it was asked (2026-10-10), so a
+    // focus that had happened was reported as timed out. Unnamed, the frontmost application stands in for it and that
+    // application's own focused window, read next, for its window; the frontmost check below is the same one either way.
+    AXError unnamed=copy(system,kAXFocusedApplicationAttribute,&front,end);
+    bool named=!unnamed&&front&&CFGetTypeID(front)==AXUIElementGetTypeID(),ok=true;
+    if(named){ok=!(r->ax_error=AXUIElementGetPid(front,&r->system_pid));if(ok)ok=focusedWindow(front,r->system_pid,&r->system_window,end,&r->ax_error);}
+    else r->system_pid=NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier;
     if(ok)ok=focusedWindow(app,i.pid,&r->app_window,end,&r->ax_error);
+    if(ok&&!named&&r->system_pid==i.pid)r->system_window=r->app_window;
     if(front)CFRelease(front);CFRelease(app);CFRelease(system);
     if(!dw_focus_owner(i,&cg)||!CGRectEqualToRect(cg,r->bounds)){r->outcome=DWFocusStale;return false;}
     if(!ok){r->outcome=now()>=end?DWFocusTimedOut:DWFocusReadbackFailed;return false;}
