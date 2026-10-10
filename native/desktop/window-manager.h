@@ -20,6 +20,11 @@
 // DriftWM manages every toplevel; this is that rule for native Mac windows. Candidates
 // are the normal-layer windows of regular applications other than this process, at
 // least 40x40 and on screen, whose bounds held still from one poll to the next.
+// Of those only a real window is offered, as upstream manages toplevels and their
+// dialogs and never a popup or a helper surface: with Accessibility access, one whose
+// subrole is AXStandardWindow, AXDialog or AXSystemDialog; where Accessibility cannot
+// say (no access, an application that does not answer), any candidate but an untitled
+// one smaller than 200x150. Tested once per appearance, before adoption only.
 // Read-only: it lists windows and never moves, focuses, resizes or closes one. It owns
 // no timer, observer or dispatch source: -poll drives it. Main thread only.
 @interface DWWindowManager : NSObject

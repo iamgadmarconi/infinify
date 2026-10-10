@@ -11,18 +11,19 @@ static NSDictionary *identity(void){return @{@"pid":@123,@"birth_sec":@180000000
 static NSDictionary *call(DriftDesktop *c,NSDictionary *command){NSData *data=[NSJSONSerialization dataWithJSONObject:@{@"version":@1,@"command":command}options:0 error:nil];char *r=driftwm_desktop_request(c,data.bytes,data.length);check(r!=NULL,@"C ABI response");NSDictionary *reply=[NSJSONSerialization JSONObjectWithData:[NSData dataWithBytes:r length:strlen(r)]options:0 error:nil];driftwm_desktop_response_free(r);return [reply[@"ok"]boolValue]?reply[@"data"]:nil;}
 @interface Driver : NSObject <DWResizeDriver>
 @property CGRect bounds;
+@property double skew; // how far right of the Accessibility rectangle, `bounds`, the WindowServer's lies
 @property BOOL family,timeout;
 @property NSString *outcome;
 @property NSUInteger setters;
 @end
 @implementation Driver
-- (NSDictionary *)rootExtent:(NSDictionary *)i{(void)i;return self.family?rect(self.bounds.origin.x,self.bounds.origin.y,self.bounds.size.width,self.bounds.size.height):nil;}
+- (NSDictionary *)rootExtent:(NSDictionary *)i{(void)i;return self.family?rect(self.bounds.origin.x+self.skew,self.bounds.origin.y,self.bounds.size.width,self.bounds.size.height):nil;}
 - (NSDictionary *)perform:(NSDictionary *)e{
     BOOL setter=[e[@"requested"]isKindOfClass:NSDictionary.class];if(setter)self.setters++;
     NSDictionary *requested=setter?e[@"requested"]:@{@"width":@0,@"height":@0};
     if(setter&&!self.timeout&&![self.outcome isEqual:@"rejected"]){CGSize size=CGSizeMake([requested[@"width"]doubleValue],[requested[@"height"]doubleValue]);if([self.outcome isEqual:@"clamped"])size.width=210;self.bounds=CGRectMake(self.bounds.origin.x,self.bounds.origin.y,size.width,size.height);}
-    BOOL observed=!(setter&&self.timeout);NSDictionary *r=observed?[self rootExtent:identity()]:rect(0,0,0,0);
-    return @{@"outcome":setter?(self.timeout?@"timed_out":self.outcome?:@"applied"):@"observed",@"ax_error":setter&&self.timeout?@(-25204):@0,@"mutation_attempted":@(setter),@"observed":@(observed),@"requested":requested,@"actual_ax":r,@"actual_cg":r};
+    BOOL observed=!(setter&&self.timeout);NSDictionary *r=observed?[self rootExtent:identity()]:rect(0,0,0,0),*ax=observed&&r?rect(self.bounds.origin.x,self.bounds.origin.y,self.bounds.size.width,self.bounds.size.height):r;
+    return @{@"outcome":setter?(self.timeout?@"timed_out":self.outcome?:@"applied"):@"observed",@"ax_error":setter&&self.timeout?@(-25204):@0,@"mutation_attempted":@(setter),@"observed":@(observed),@"requested":requested,@"actual_ax":ax,@"actual_cg":r};
 }
 @end
 static CMSampleBufferRef sample(CGRect native,NSDictionary *overrides){
@@ -107,6 +108,34 @@ static void preparing(BOOL cancel,BOOL noOp){
     check([snap(c)[@"native_resize"][@"last_committed_size"][@"width"]doubleValue]==(cancel||noOp?200:220),@"quick drag commits observed final size");
     check([initial[@"outputs"]isEqual:snap(c)[@"outputs"]],@"quick drag keeps cameras fixed");check(co.obligations==0&&[co canRemove:@1],@"quick drag drains before structural change");driftwm_desktop_destroy(c);
 }
+// A window whose Accessibility rectangle lies half a point from the WindowServer's. The controller takes the two for one observation
+// (within a point) and keeps the Accessibility one; the root extent is the WindowServer's. While the transaction that observed it is
+// live they are one geometry and its frames are acknowledged; at rest the mapping is refreshed to the extent and equality is exact.
+// Each refusal on the way has its reason, which is what the shell prints.
+static void disagreeing(void){
+    DriftDesktop *c=driftwm_desktop_create();Driver *driver=[Driver new];driver.bounds=CGRectMake(10,20,200,150);driver.skew=.5;driver.family=YES;CGRect native=CGRectMake(10.5,20,200,150);
+    NSMutableArray *workers=[NSMutableArray array],*mains=[NSMutableArray array];
+    DWResizeCoordinator *co=[[DWResizeCoordinator alloc]initWithCommand:^NSDictionary *(NSDictionary *command){return call(c,command);}driver:driver clock:^uint64_t{return 100;}worker:^(DWJob job){[workers addObject:[job copy]];}main:^(DWJob job){[mains addObject:[job copy]];}];co.enabled=YES;
+    call(c,@{@"op":@"register_output",@"stable_id":@"one",@"screen_bounds":rect(0,0,1000,800)});
+    call(c,@{@"op":@"attach",@"identity":identity(),@"bundle_id":@"test",@"title":@"source",@"buffer":@{@"width":@400,@"height":@300},@"source_rect":rect(10.5,20,200,150),@"world_rect":rect(100,100,200,150)});
+    BOOL (^install)(CMSampleBufferRef)=^BOOL(CMSampleBufferRef x){(void)x;return YES;};NSString *detail=nil;
+    id stream=[NSObject new];[co bind:@1 stream:stream];check([co refusal:@1 detail:&detail]==nil&&detail==nil,@"nothing refused before a frame is judged");
+    CMSampleBufferRef stale=sample(native,@{SCStreamFrameInfoDisplayTime:@100});check(![co accept:stale window:@1 stream:stream install:install]&&[[co refusal:@1 detail:&detail]isEqual:@"stale frame"]&&detail.length,@"a frame from before the observation says so");CFRelease(stale);
+    CMSampleBufferRef misplaced=sample(CGRectOffset(native,3,0),@{});check(![co accept:misplaced window:@1 stream:stream install:install]&&[[co refusal:@1 detail:&detail]isEqual:@"metadata"]&&[detail containsString:@"screen rectangle"],@"a frame of another rectangle names the rectangles");CFRelease(misplaced);
+    CMSampleBufferRef first=sample(native,@{});check([co accept:first window:@1 stream:stream install:install]&&[co refusal:@1 detail:NULL]==nil,@"an acknowledged capture has no refusal");CFRelease(first);
+    driver.family=NO;[co observeBindings];check([[co refusal:@1 detail:&detail]isEqual:@"family"]&&detail.length,@"a family says so without a frame");driver.family=YES;
+    CMSampleBufferRef back=sample(native,@{SCStreamFrameInfoDisplayTime:@250});check([co accept:back window:@1 stream:stream install:install],@"root restored");CFRelease(back);
+    NSDictionary *begin=[co request:@{@"op":@"begin_native_resize",@"window":@1,@"output":@1,@"edges":@"right",@"start_screen":@{@"x":@50,@"y":@50}}];check(begin!=nil,@"begin at rest, extent exact");drain(workers,mains);
+    check([snap(c)[@"windows"][0][@"source"][@"observed_rect"]isEqual:rect(10,20,200,150)]&&![co canRemove:@1],@"the live transaction observed the Accessibility rectangle");
+    check([co validate:@1],@"within a point of the extent during its own transaction");
+    CMSampleBufferRef live=sample(native,@{SCStreamFrameInfoDisplayTime:@300});check([co accept:live window:@1 stream:stream install:install],@"the transaction's frame is acknowledged across the half point");CFRelease(live);
+    CMSampleBufferRef far=sample(CGRectOffset(native,2,0),@{SCStreamFrameInfoDisplayTime:@310});driver.skew=2.5;check(![co accept:far window:@1 stream:stream install:install]&&[[co refusal:@1 detail:&detail]isEqual:@"geometry"]&&[detail containsString:@"{12.5,20,200,150}"],@"more than a point is another geometry, and both rectangles are named");CFRelease(far);driver.skew=.5;
+    [co request:@{@"op":@"end_native_resize",@"transaction":begin[@"transaction"]}];drain(workers,mains);check([co canRemove:@1],@"transaction over");
+    check(![co validate:@1]&&[[co refusal:@1 detail:&detail]isEqual:@"geometry"]&&[detail containsString:@"mapped again"],@"at rest half a point is a move: mapped again");
+    check([snap(c)[@"windows"][0][@"source"][@"observed_rect"]isEqual:rect(10.5,20,200,150)],@"the mapping is the extent");
+    CMSampleBufferRef rest=sample(native,@{SCStreamFrameInfoDisplayTime:@400});check([co accept:rest window:@1 stream:stream install:install]&&[co refusal:@1 detail:NULL]==nil,@"and its next frame is acknowledged");CFRelease(rest);
+    [co shutdown];driftwm_desktop_destroy(c);
+}
 int main(void){@autoreleasepool{
     id configuredStream=[NSObject new];
     check(DWResizeConfigurationCurrent(configuredStream,configuredStream,@2,@2,NO),@"current configuration error remains actionable");
@@ -115,10 +144,10 @@ int main(void){@autoreleasepool{
     check(!DWResizeConfigurationCurrent(configuredStream,configuredStream,@2,@2,YES),@"detached configuration completion ignored");
     CGRect native=CGRectMake(10,20,200,150);CMSampleBufferRef s=sample(native,@{});NSDictionary *m=DWResizeCaptureMetadata(s,100,native);check([m[@"buffer"][@"width"]intValue]==480&&[m[@"content_rect"][@"origin"][@"x"]intValue]==20,@"actual padded crop");CFRelease(s);
     NSArray *invalid=@[@{SCStreamFrameInfoDisplayTime:NSNull.null},@{SCStreamFrameInfoDisplayTime:@100},@{SCStreamFrameInfoDisplayTime:@(-1)},@{SCStreamFrameInfoDisplayTime:@100.5},@{SCStreamFrameInfoDisplayTime:@1e30},@{SCStreamFrameInfoStatus:NSNull.null},@{SCStreamFrameInfoStatus:@.5},@{SCStreamFrameInfoContentScale:@0},@{SCStreamFrameInfoScreenRect:NSNull.null},@{SCStreamFrameInfoContentRect:CFBridgingRelease(CGRectCreateDictionaryRepresentation(CGRectMake(100,100,200,150)))}];
-    for(NSDictionary *override in invalid){s=sample(native,override);check(DWResizeCaptureMetadata(s,100,native)==nil,@"invalid metadata rejected");CFRelease(s);}
+    for(NSDictionary *override in invalid){s=sample(native,override);NSString *why=nil;check(DWResizeCaptureMetadata(s,100,native)==nil,@"invalid metadata rejected");check(DWResizeCaptureDescription(s,100,native,&why)==nil&&why.length,@"and every rejection says why");CFRelease(s);}
     check(DWResizeHandles(CGRectMake(0,0,100,100),CGRectMake(0,0,100,100)).count==8,@"eight handles");check(DWResizeHandles(CGRectMake(-50,-50,200,200),CGRectMake(0,0,100,100)).count==0,@"no clipped-edge handles");
     for(NSString *edge in @[@"top_left",@"top",@"top_right",@"right",@"bottom_right",@"bottom",@"bottom_left",@"left"])scenario(edge,nil,NO,NO,NO);
     scenario(@"right",@"clamped",NO,NO,NO);scenario(@"right",@"rejected",YES,NO,NO);scenario(@"right",nil,YES,YES,NO);scenario(@"right",nil,NO,NO,YES);
-    preparing(NO,NO);preparing(YES,NO);preparing(NO,YES);preparing(YES,YES);
+    preparing(NO,NO);preparing(YES,NO);preparing(NO,YES);preparing(YES,YES);disagreeing();
     puts("PASS: production resize coordinator + Rust C ABI + real synthetic CV/CMSampleBuffer metadata; no native app/window/AX/capture started");return 0;
 }}

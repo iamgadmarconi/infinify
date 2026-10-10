@@ -457,8 +457,34 @@ as `remove_source` is.
 the user's account of it. In this contract's terms the shell
 (`native/desktop/window-manager.m` and `main.m`):
 
+- decides which native windows are windows at all. Upstream manages
+  toplevels and their dialogs (`new_toplevel`) and never a popup, a tooltip or
+  a helper surface, which Wayland tells apart by role; the Mac window list has
+  no role, and a normal-layer window of a regular application may be a
+  browser's status bubble. A candidate (normal layer, a regular application's,
+  on screen, at least 40x40, still for one poll) is offered only when it is a
+  real window: with Accessibility access, when its application reports it
+  with the subrole `AXStandardWindow`, `AXDialog` or `AXSystemDialog`,
+  whatever its size or title; one the application reports with another
+  subrole is left alone. One its application does not list among its windows
+  gets one more look (counted by itself: a window the shareable windows missed
+  first still gets it) and is then judged as if Accessibility could not say,
+  because an application lists only the windows of the active Space and a
+  real window refused cannot be reached at all, while a helper adopted by
+  mistake can be dismissed. Where Accessibility cannot say (no access, an
+  application that does not answer in time, a window that gives no subrole or
+  is not listed) the rule is the size floor it was, less the untitled window
+  smaller than 200x150. A window of 200x150 or more that a subrole leaves out
+  is named on stderr. The test is made once per appearance and only before
+  adoption: a window already on the canvas is never asked again, so one that
+  later stops being a standard window stays for the session, and a window
+  that failed it is asked again when it next comes on screen. A window left
+  out is not named in `present` either, so a slot an earlier run saved for it
+  is dropped by the pass like any slot nothing matched. The chooser
+  (`--manual`, or Choose windows) lists as it did and adds any of them by
+  hand;
 - sends the new-window `attach`, with `output` and `pointer`, for every
-  candidate window it discovers; `adoption_complete` after the first read of
+  candidate window it discovers that passes that test; `adoption_complete` after the first read of
   each window manager, so once at launch and once whenever the canvas is
   reopened after Return to desktop, with `present` built from the titled
   candidate windows of that read that exist but were not offered;

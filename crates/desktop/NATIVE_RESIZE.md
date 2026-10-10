@@ -155,3 +155,72 @@ the setter. A veto returns Unsupported with the real preflight observation and
 `mutation_attempted=false`; this is policy refusal, not an AX capability finding.
 Ownership/deadline are rechecked after the family query. No frozen live fixture
 receipts or hashes were replaced; this guarded path has no live validation yet.
+
+### First run on real windows, 2026-10-10
+
+The owner's first run with the flag on real application windows (three Chrome
+windows, two Electron applications, a terminal; one 2056x1329 display at 2x)
+showed every adopted window as an empty tile, and every click refused with
+`source presentation unsettled`: no capture was ever acknowledged for any of
+them. Which check refused them is not known. The coordinator gave no reason,
+and nothing in that run recorded one, so two things changed, neither of which
+is the gate (the flag is as opt-in as it was, and a window still shows no
+picture that was not acknowledged against its observed geometry):
+
+- **One comparison was wrong by this contract's own terms.** A result is
+  accepted when `actual_ax` and `actual_cg` agree within one point on each
+  coordinate, and `actual_ax` becomes `observed_rect`. The coordinator then
+  required the root extent, which is the WindowServer's rectangle, to equal
+  `observed_rect` exactly, in `-validate:` and in `-accept:…`. A window whose
+  two rectangles differ by a fraction of a point could therefore get no
+  frame acknowledged, and no input, for as long as its transaction was
+  unresolved. Now the extent matches when it is exactly `observed_rect`, or
+  when it is within one point of it on each coordinate while a resize
+  transaction of that window is unresolved. At rest the comparison is exact
+  as before, and a difference of any size is still a native move that is
+  mapped again with `observe`. This cannot be what refused the six windows:
+  a freshly adopted window's `observed_rect` is the WindowServer's rectangle
+  too. It is fixed because it is wrong, and the headless regression covers
+  it (`disagreeing()` in `native/desktop/resize-regression.m`: it fails
+  without the change).
+- **Every refusal now has a reason a person can read.** The coordinator
+  records why the last frame it was offered for a window was not
+  acknowledged (`-refusal:detail:`): `family` (no root-only extent, with the
+  family query's own account: how many native windows are in the family, or
+  its error), `geometry` (the extent and `observed_rect`, both printed),
+  `metadata` (the first check of the frame's own description that failed,
+  with the values: status, display time against the cutoff, scale factors,
+  the screen rectangle against the extent, the content rectangle against the
+  extent and the buffer), `stale frame` (displayed before the cutoff, by how
+  many milliseconds), `refused` (the controller did not take the
+  acknowledgement) and `not installed`. The reason is forgotten when a
+  capture is acknowledged and when the observation moves on. The shell adds
+  three of its own: `stream` (the capture stream failed, with its error,
+  which was silent before), `unobserved`, and `no frame` (none offered in two
+  seconds). It prints one stderr line per window per change of reason, once
+  the reason has stood for two readings half a second apart:
+  `capture of #7 (com.google.Chrome) not acknowledged: family — no root-only
+  extent: 3 native windows in its family (the window and 2 attached to it)`.
+  A press on such a window shows the short reason in the status line
+  instead of `source presentation unsettled`.
+
+What reading suggests, without deciding it: `-rootExtent:` answers only for a
+window that is alone in its native family, and an application window with any
+attached child window is refused as `family` by design; a still window gets
+one frame per configuration update, so a first frame refused for any reason
+may be the only one (`stale frame` or `no frame` would then stand); and the
+frame's screen rectangle must equal the extent exactly. The next run's stderr
+says which. None of this was run: the build has no Screen Recording grant
+from an agent's shell.
+
+The capture rate of this path is unchanged, 30 frames a second at most, where
+a window captured without the flag now follows the display's refresh rate.
+Every frame offered to `-accept:…` is judged on the main thread: a controller
+snapshot for every bound window in `-sync` and several more, and a
+`-rootExtent:` family query, before the frame's own description is read. One
+snapshot round trip was measured in review at about a quarter of a millisecond
+with six windows (headless, against the release controller), so a refused
+frame costs a few milliseconds of the thread that also serves hot keys, input
+and the frame callback, and 120 frames a second from each redrawing window
+would have been four times the 30 it was. The rate can follow the display
+once a frame costs one snapshot instead of one per window.

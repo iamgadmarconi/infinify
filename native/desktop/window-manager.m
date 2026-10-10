@@ -17,6 +17,9 @@
 @property NSMutableSet<NSNumber *> *offered;
 // Candidates one read did not list: a second miss ends the asking.
 @property NSMutableSet<NSNumber *> *missed;
+// Candidates their application answered for without listing them among its windows: each is asked about once more.
+// Its own count, not `missed`: a window the shareable windows missed first is still owed that second look.
+@property NSMutableSet<NSNumber *> *unlisted;
 // The previous poll's candidate bounds, by window number.
 @property NSDictionary<NSNumber *,NSDictionary *> *bounds;
 // The candidates of the last read, until it succeeds.
@@ -27,10 +30,42 @@
 @property NSUInteger polls,retry;
 @property BOOL reading, completed, stopped;
 @end
+// Upstream manages toplevels and their dialogs (src/handlers/xdg_shell.rs: new_toplevel), never a popup, a tooltip or a helper
+// surface, which Wayland tells apart by role. A Mac window has no such role in the window list: a normal-layer window of a regular
+// application may be a browser's status bubble or an editor's completion list. Accessibility has the nearest thing, the window's
+// subrole. For each candidate {window number: pid}: the subrole its application reports for it; NSNull when the application answered
+// and does not count it among its windows; nothing when Accessibility could not say (no access, an application that did not answer in
+// time, a window that gave no subrole). Read-only. Any thread: the lookup talks to every candidate's application, so it runs off the
+// main thread. The window number of an Accessibility element is copyWindow's lookup below, with its provenance.
+static NSDictionary<NSNumber *,id> *windowSubroles(NSDictionary<NSNumber *,NSNumber *> *asked) {
+    NSMutableDictionary<NSNumber *,id> *subroles=[NSMutableDictionary dictionary];
+    AXError (*get)(AXUIElementRef,uint32_t *)=(AXError (*)(AXUIElementRef,uint32_t *))dlsym(RTLD_DEFAULT,"_AXUIElementGetWindow");
+    if(!AXIsProcessTrusted()||!get)return subroles;
+    for(NSNumber *pid in [NSSet setWithArray:asked.allValues]){
+        AXUIElementRef app=AXUIElementCreateApplication(pid.intValue);AXUIElementSetMessagingTimeout(app,.1);CFTypeRef list=NULL;
+        AXError error=AXUIElementCopyAttributeValue(app,kAXWindowsAttribute,&list);CFRelease(app);
+        if(error||!list||CFGetTypeID(list)!=CFArrayGetTypeID()){if(list)CFRelease(list);continue;}
+        BOOL complete=YES;NSMutableSet<NSNumber *> *listed=[NSMutableSet set];
+        for(CFIndex n=0;n<CFArrayGetCount(list);n++){
+            AXUIElementRef w=(AXUIElementRef)CFArrayGetValueAtIndex(list,n);uint32_t wid=0;
+            // A window that does not answer may be any of this application's candidates: none of them is then taken for unlisted.
+            if(CFGetTypeID(w)!=AXUIElementGetTypeID()||AXUIElementSetMessagingTimeout(w,.1)||get(w,&wid)){complete=NO;continue;}
+            if(![asked[@(wid)]isEqual:pid])continue;
+            [listed addObject:@(wid)];CFTypeRef subrole=NULL;
+            if(!AXUIElementCopyAttributeValue(w,kAXSubroleAttribute,&subrole)&&subrole&&CFGetTypeID(subrole)==CFStringGetTypeID())subroles[@(wid)]=[(__bridge NSString *)subrole copy];
+            if(subrole)CFRelease(subrole);
+        }
+        CFRelease(list);
+        if(complete)for(NSNumber *wid in asked)if([asked[wid]isEqual:pid]&&![listed containsObject:wid])subroles[wid]=NSNull.null;
+    }
+    return subroles;
+}
+// A real window by that reading: a standard window or a dialog.
+static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)kAXStandardWindowSubrole,(__bridge NSString *)kAXDialogSubrole,(__bridge NSString *)kAXSystemDialogSubrole]containsObject:subrole]; }
 @implementation DWWindowManager
 + (instancetype)managerWithHost:(id<DWWindowHost>)host {
     if(!CGPreflightScreenCaptureAccess())return nil;
-    DWWindowManager *manager=[self new];manager.host=host;manager.offered=[NSMutableSet set];manager.missed=[NSMutableSet set];manager.placed=[NSMutableDictionary dictionary];return manager;
+    DWWindowManager *manager=[self new];manager.host=host;manager.offered=[NSMutableSet set];manager.missed=[NSMutableSet set];manager.unlisted=[NSMutableSet set];manager.placed=[NSMutableDictionary dictionary];return manager;
 }
 - (void)poll {
     if(self.stopped)return;self.polls++;id<DWWindowHost> host=self.host;
@@ -51,7 +86,7 @@
         wanted[wid]=pid;[front addObject:wid];
     }
     // Leaving the screen ends a window's turn; coming back is a new appearance.
-    NSSet<NSNumber *> *present=[NSSet setWithArray:bounds.allKeys];self.bounds=bounds;[self.offered intersectSet:present];[self.missed intersectSet:present];
+    NSSet<NSNumber *> *present=[NSSet setWithArray:bounds.allKeys];self.bounds=bounds;[self.offered intersectSet:present];[self.missed intersectSet:present];[self.unlisted intersectSet:present];
     // The first pass waits, two seconds at most, until every window holds still, so that one read offers them all.
     if(!self.completed&&moving&&self.polls<25)return;
     if(self.reading)return;
@@ -61,10 +96,10 @@
     if(!wanted.count&&(self.completed||self.requested))return;
     NSSet<NSNumber *> *ids=[NSSet setWithArray:wanted.allKeys];if(self.requested&&[ids isEqualToSet:self.requested])return;
     self.reading=YES;self.requested=ids;__weak DWWindowManager *weak=self;NSDictionary<NSNumber *,NSNumber *> *asked=[wanted copy];
-    [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO completionHandler:^(SCShareableContent *content,NSError *error){dispatch_async(dispatch_get_main_queue(),^{[weak read:content error:error asked:asked front:front];});}];
+    [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO completionHandler:^(SCShareableContent *content,NSError *error){NSDictionary<NSNumber *,id> *subroles=content?windowSubroles(asked):nil;dispatch_async(dispatch_get_main_queue(),^{[weak read:content error:error asked:asked front:front subroles:subroles];});}];
 }
-// `front` is the window list's own order, front to back.
-- (void)read:(SCShareableContent *)content error:(NSError *)error asked:(NSDictionary<NSNumber *,NSNumber *> *)asked front:(NSArray<NSNumber *> *)front {
+// `front` is the window list's own order, front to back. `subroles` is windowSubroles' answer for `asked`, read before this turn of the main queue.
+- (void)read:(SCShareableContent *)content error:(NSError *)error asked:(NSDictionary<NSNumber *,NSNumber *> *)asked front:(NSArray<NSNumber *> *)front subroles:(NSDictionary<NSNumber *,id> *)subroles {
     if(self.stopped)return;self.reading=NO;id<DWWindowHost> host=self.host;
     // `requested` stays: the same candidates are not read again at once, so a failure cannot loop.
     if(!content){self.retry=self.polls+25;[host discoveryFailed:error.localizedDescription?:@"the shareable windows are unavailable"];return;}
@@ -75,7 +110,22 @@
         SCWindow *window=found[wid];
         // A window the read did not list yet is asked for once more, then left until it next comes on screen.
         if(!window){if([self.missed containsObject:wid])[self.offered addObject:wid];else {[self.missed addObject:wid];again=YES;}continue;}
+        // Only a real window is adopted: by Accessibility a standard window or a dialog, whatever its size or title. One its application does not
+        // list yet is asked about once more, by its own count (`unlisted`: a read that missed it above has not spent that look). Where
+        // Accessibility cannot say, or the application still does not list the window (it lists only those of the active Space), the rule is the
+        // size floor it always was, less the untitled window smaller than 200x150 that no application shows as a window of its own: a helper
+        // adopted by mistake can be dismissed, a real window refused cannot be reached at all. The test is made once per appearance and only here, before adoption: a
+        // window already on the canvas is never asked again, whatever it turns into.
+        id subrole=subroles[wid];
+        if(subrole==NSNull.null&&![self.unlisted containsObject:wid]){[self.unlisted addObject:wid];again=YES;continue;}
+        BOOL real=[subrole isKindOfClass:NSString.class]?toplevelSubrole(subrole):window.title.length||(window.frame.size.width>=200&&window.frame.size.height>=150);
         [self.offered addObject:wid];
+        if(!real){
+            // A window of a size a person would call a window is named, so that one this rule leaves out can be found and added by hand.
+            if(window.frame.size.width>=200&&window.frame.size.height>=150)fprintf(stderr,"%s window \"%s\" (%gx%g) not adopted: %s. Choose windows adds it by hand.\n",(window.owningApplication.applicationName?:@"An application's").UTF8String,(window.title?:@"").UTF8String,window.frame.size.width,window.frame.size.height,
+                [subrole isKindOfClass:NSString.class]?[NSString stringWithFormat:@"Accessibility reports it as %@, not a standard window or a dialog",subrole].UTF8String:"its application does not list it among its windows");
+            continue;
+        }
         // The chooser may have bound it while the read was in flight.
         if(![host managesWindow:window.windowID pid:window.owningApplication.processID])[host windowAppeared:window];
         if(self.stopped)return;

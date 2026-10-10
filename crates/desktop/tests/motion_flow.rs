@@ -834,6 +834,191 @@ fn a_window_dragged_to_the_edge_pans_the_canvas_under_it() {
     );
 }
 
+/// The same second of motion on a 60 Hz and on a 120 Hz frame clock, which is
+/// what a ProMotion display's frame timer changes. Upstream's rule for each
+/// kind of motion, at 352333a: a camera or zoom animation covers
+/// `1 - (1 - camera_speed)^(dt·60)` of the way a frame
+/// (viewport_animation.rs, animation_factor) and momentum is points a second
+/// decayed by `drift^(dt·60)` (canvas.rs, MomentumState::tick), so both keep
+/// their pace in seconds; an edge pan is `speed` screen points a frame with no
+/// dt in it (tick_edge_pan_on; config.reference.toml: "px/frame"), so on a
+/// 120 Hz output it covers twice the ground in the same second.
+#[test]
+fn a_second_of_motion_at_60_and_120_hz_keeps_upstreams_time_base() {
+    let scratch = Scratch::new();
+    // Two 120 Hz frames are exactly one 60 Hz frame.
+    const HALF: u64 = 8_333_333;
+    let frame = |hz: u64| HALF * (120 / hz);
+
+    // A flight to a window 5000 points away, sampled every sixtieth of a second.
+    let fly = |hz: u64| {
+        let mut h = configured(&scratch, "");
+        let window = attach(&mut h, 1, rect(5000.0, 3000.0, 300.0, 200.0));
+        let reply =
+            h.ok(json!({"op":"navigate_window","window":window,"output":1,"zoom_policy":"keep"}));
+        let target = xy(&reply["navigation"]["target_camera"]);
+        let (mut clock, mut poses, mut landed) = (0, Vec::new(), None);
+        for step in 1..=hz {
+            clock += frame(hz);
+            let tick = h.tick(clock);
+            if tick["needs_frames"] == false && landed.is_none() {
+                landed = Some(clock);
+            }
+            if step % (hz / 60) == 0 {
+                poses.push(h.camera(1));
+            }
+        }
+        assert_eq!(bits(h.camera(1)), bits(target), "{hz} Hz never arrived");
+        (poses, landed.unwrap(), target)
+    };
+    let (slow, slow_landed, target) = fly(60);
+    let (fast, fast_landed, _) = fly(120);
+    assert!(target.0 > 4000.0 && slow[0].0 > 1000.0 && slow[0].0 < target.0);
+    for (sixtieth, (a, b)) in slow.iter().zip(&fast).enumerate() {
+        // The same share of the way at the same moment. The last half point is
+        // a snap onto the target, which the faster clock may take a frame of
+        // its own earlier.
+        let apart = (a.0 - b.0).hypot(a.1 - b.1);
+        let left = (target.0 - a.0).hypot(target.1 - a.1);
+        assert!(
+            apart < if left > 1.0 { 1e-6 } else { 0.5 },
+            "sixtieth {sixtieth}: {a:?} at 60 Hz, {b:?} at 120 Hz"
+        );
+    }
+    assert!(slow_landed.abs_diff(fast_landed) <= 2 * HALF);
+
+    // A flick, coasting to rest: every frame is upstream's own momentum for
+    // that frame's dt, and the two clocks agree as upstream's own test asks of
+    // its 60 Hz and 144 Hz runs (canvas_transforms_test.rs,
+    // momentum_frame_rate_independence: within 5 %).
+    let coast = |hz: u64| {
+        let mut h = configured(&scratch, "[navigation]\ndrift = 0.5\n");
+        let (mut oracle, lifted) = throw(&mut h, Some("finger"), 1.5, 0.5, 0);
+        let (mut clock, mut camera) = (0, lifted);
+        while oracle.coasting {
+            clock += frame(hz);
+            h.tick(clock);
+            if let Some(delta) = oracle.tick(Duration::from_nanos(frame(hz))) {
+                camera = (camera.0 + delta.x, camera.1 + delta.y);
+            }
+            assert_eq!(bits(h.camera(1)), bits(camera), "{hz} Hz at {clock}");
+            assert!(clock < 60_000_000_000, "momentum never stopped");
+        }
+        assert!(!h.coasting(1));
+        ((camera.0 - lifted.0).hypot(camera.1 - lifted.1), clock)
+    };
+    let ((slow, slow_rest), (fast, fast_rest)) = (coast(60), coast(120));
+    assert!(
+        slow > 150.0 && (slow / fast - 1.0).abs() < 0.05,
+        "{slow} {fast}"
+    );
+    assert!(
+        (slow_rest as f64 / fast_rest as f64 - 1.0).abs() < 0.05,
+        "{slow_rest} {fast_rest}"
+    );
+
+    // An edge pan under a held window, at zoom 1 and the zone's full depth:
+    // navigation.edge_pan.speed_max, 10 screen points, every frame. A second
+    // is 600 points at 60 Hz and 1200 at 120 Hz, and the window goes with it.
+    let pan = |hz: u64| {
+        let mut h = configured(&scratch, "");
+        let window = attach(&mut h, 1, rect(400.0, 300.0, 300.0, 200.0));
+        h.ok(json!({"op":"begin_drag","window":window,"output":1}));
+        assert_eq!(
+            h.drag_to((0.0, 0.0), Some((1000.0, 400.0))),
+            json!({"needs_frames":true})
+        );
+        let mut clock = 0;
+        for _ in 0..hz {
+            clock += frame(hz);
+            assert_eq!(h.tick(clock)["needs_frames"], true);
+        }
+        (h.camera(1), xy(&h.world(window)["origin"]))
+    };
+    assert_eq!(pan(60), ((600.0, 0.0), (1000.0, 300.0)));
+    assert_eq!(pan(120), ((1200.0, 0.0), (1600.0, 300.0)));
+}
+
+/// A window move whose end never comes is carried for as long as frames are
+/// ticked: upstream's grab pans under a held pointer without limit, and the
+/// controller cannot know that nothing holds this one any more. So the shell
+/// must end it, and does through these two commands when a release or a
+/// gesture's touches are lost. Each stops the travel at once and leaves
+/// nothing in motion: no edge pan, no momentum, no drag for a flight to be
+/// refused over.
+#[test]
+fn a_move_nothing_holds_any_more_stops_with_the_end_the_shell_sends() {
+    let scratch = Scratch::new();
+    let flying = "navigation during active gesture";
+    for lost in ["button", "touches"] {
+        let mut h = configured(&scratch, "");
+        let window = attach(&mut h, 1, rect(100.0, 100.0, 400.0, 300.0));
+        // A flick is coasting when the move begins: the grab stops it.
+        throw(&mut h, Some("finger"), 1.5, 0.5, 0);
+        assert!(h.coasting(1));
+        let camera = h.camera(1);
+        let over = point(ORIGIN.0 + 150.0 - camera.0, ORIGIN.1 + 150.0 - camera.1);
+        if lost == "button" {
+            h.ok(json!({"op":"begin_drag","window":window,"output":1}));
+            // Into the top left corner, both edges at full depth.
+            assert_eq!(
+                h.drag_to((-150.0, -150.0), Some((0.0, 0.0))),
+                json!({"needs_frames":true})
+            );
+        } else {
+            let reply = h.ok(json!({"op":"gesture_begin","kind":"swipe","fingers":3,"modifiers":{"control":false,"option":false,"shift":false,"command":false},"context":"window","output":1,"pointer":over,"doubletap":true,"time_ms":2000}));
+            assert_eq!(reply["gesture"]["state"], "swipe_move", "{reply}");
+            // The fingers fling the window into the same corner and rest.
+            let reply =
+                h.ok(json!({"op":"gesture_update","dx":-5000.0,"dy":-5000.0,"time_ms":2010}));
+            assert_eq!(reply["needs_frames"], true, "{reply}");
+        }
+        assert!(!h.coasting(1));
+        assert_eq!(h.motion()["momentum"]["1"]["velocity"], point(0.0, 0.0));
+        // Nothing arrives any more, and every frame carries the window on: a
+        // corner's 10 points, split between its two edges.
+        let step = 10.0 / 2f64.sqrt();
+        let (mut clock, start) = (0, xy(&h.world(window)["origin"]));
+        for frame in 1..=600u64 {
+            clock += 8_333_333;
+            assert_eq!(h.tick(clock)["needs_frames"], true, "{lost}");
+            let at = xy(&h.world(window)["origin"]);
+            let gone = frame as f64 * step;
+            assert!(
+                (start.0 - at.0 - gone).abs() < 1e-6 && (start.1 - at.1 - gone).abs() < 1e-6,
+                "{lost} frame {frame}: {at:?}"
+            );
+        }
+        // Held, the controller flies nowhere: every window navigation is refused.
+        assert_eq!(
+            h.error(
+                json!({"op":"navigate_window","window":window,"output":1,"zoom_policy":"keep"})
+            ),
+            flying
+        );
+        // The end the shell sends for what it found lost.
+        if lost == "button" {
+            h.ok(json!({"op":"end_gesture"}));
+        } else {
+            let reply = h.ok(json!({"op":"gesture_end","cancelled":true,"time_ms":9000}));
+            assert_eq!(reply["needs_frames"], false, "{reply}");
+        }
+        assert_eq!(h.motion()["edge_pans"], json!({}));
+        assert!(!h.coasting(1));
+        let rest = (h.world(window), h.camera(1));
+        for _ in 0..10 {
+            clock += 8_333_333;
+            assert_eq!(
+                h.tick(clock),
+                json!({"changed_outputs":[],"needs_frames":false,"needs_pointer":false}),
+                "{lost}"
+            );
+        }
+        assert_eq!((h.world(window), h.camera(1)), rest, "{lost}");
+        h.ok(json!({"op":"navigate_window","window":window,"output":1,"zoom_policy":"keep"}));
+    }
+}
+
 #[test]
 fn an_edge_facing_another_output_waits_out_the_latency() {
     let scratch = Scratch::new();

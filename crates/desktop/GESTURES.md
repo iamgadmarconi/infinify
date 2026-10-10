@@ -377,6 +377,29 @@ The [shell notes](../../native/desktop/README.md#trackpad-gestures) say why.
 - `set-trackpad` turns gesture dispatch off, not the device.
 - A `gesture_begin` during a gesture cancels the stale one. libinput never
   sends that.
+- libinput ends every gesture it begins; raw touches can simply stop. The
+  recogniser ends a gesture when every finger lifts, cancelled when macOS
+  cancels a touch or a frame no longer reports one, and the shell cancels it
+  at a button press, a screen change and when the canvas closes. Since
+  2026-10-10 two more ends close what was left, checked on every frame and
+  every poll: the gesture's output is no longer what a press at the pointer
+  would reach (Mission Control, another window or a menu over the canvas:
+  touches go to the view under the pointer, so they are no longer the
+  panel's), and, for a move gesture only, no touch at all for thirty seconds.
+  A move is the one gesture whose lost end is not harmless: it holds a drag,
+  under which every flight is refused and the edge pan carries the window on
+  every frame ([MOTION.md](MOTION.md#what-the-shell-owes)). The second rule
+  cannot be made exact: still fingers send no touches either, and nothing
+  reports the fingers on the pad between events. So it is made harmless
+  instead. The time is long, thirty seconds without the least movement of a
+  finger, and only the controller's gesture is ended (`gesture_end`,
+  cancelled): the recogniser keeps its fingers and its swipe, whose later
+  updates and end the shell drops for want of an owner, so fingers that were
+  only resting end their move and cannot begin another gesture until they
+  lift. The first rule resets the recogniser too, since those touches are
+  another view's. A move whose touches are truly lost is carried by the edge
+  pan for those thirty seconds at most. Neither rule was exercised on a
+  trackpad.
 - Read from upstream's sources for this port: `src/input/gestures.rs`,
   `src/input/gestures/{swipe,pinch,hold,device_config}.rs`, the config types
   and defaults, `README.md` and `docs/config.md`; what the gestures drive

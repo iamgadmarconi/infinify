@@ -280,7 +280,7 @@ device-specific behavior also need the corresponding hardware.
   30-second drop of a stalled subscriber, `subscribe` before the canvas opens and
   autostart in a chooser launch were not reached; nothing drawn was observed; no
   window had a bound source. Known mismatches: the pointer is sampled every 80 ms
-  (60 Hz during a flight) instead of on every motion, and a corner is measured on
+  (every frame during a flight) instead of on every motion, and a corner is measured on
   the display's panel (toolbar strip included) rather than on the output;
   subscribers are capped at eight and a stalled one is dropped, where upstream
   does neither; a change of active output alone is found at the next idle poll
@@ -435,8 +435,10 @@ device-specific behavior also need the corresponding hardware.
   was one output, so the wait at a shared edge ran only in the controller
   scenarios. Known mismatches: a drag stays on the output it began on, zoom is
   refused during a window drag, only edge pan carries a dragged window, a resize
-  gesture and touch arm no edge pan, the pointer is never warped, and edge pan
-  speed is that of the shell's 60 Hz timer. See the
+  gesture and touch arm no edge pan, and the pointer is never warped. Edge pan
+  speed was that of the shell's 60 Hz timer until the frame timer became a
+  display link on 2026-10-10: it is per frame of the display now, as
+  upstream's is. See the
   [desktop shell notes](../../native/desktop/README.md#camera-motion) and the
   [motion contract](../../crates/desktop/MOTION.md).
 - `f083155`, trackpad gestures, brings upstream's dispatch

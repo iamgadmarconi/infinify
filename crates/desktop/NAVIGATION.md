@@ -473,5 +473,6 @@ call are covered by the canvas crate's `policy_flow`.
 This is controller ABI evidence only. It shows no key binding, shell dispatch,
 frame scheduling, native rendering, capture, or input delivery. The default
 shell binds these commands to toolbar buttons and global shortcuts and ticks
-their flights on a 60 Hz timer; the toolbar and shortcut path is built but
+their flights once per frame of the display (a display link; 60 Hz until
+2026-10-10); the toolbar and shortcut path is built but
 unrun. See the [shell README](../../native/desktop/README.md).

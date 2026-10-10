@@ -166,6 +166,24 @@ A momentum or edge-pan step that would take the viewport outside the ±1e12
 world is not applied and ends that motion, instead of failing the frame and
 every frame after it.
 
+### The frame rate
+
+A host ticks once per frame of its display, and what its frame rate changes
+is upstream's own rule for each step, read at 352333a:
+
+| Step | Upstream | At 120 Hz against 60 Hz |
+| --- | --- | --- |
+| momentum | `MomentumState::tick(dt)`: points a second, decayed by `drift^(dt·60)` (`src/canvas.rs`) | the same coast in seconds; the two differ by the integration step, within upstream's own 5 % (`momentum_frame_rate_independence`) |
+| flight, zoom and camera | `animation_factor(dt) = 1 - (1 - camera_speed)^(dt·60)` (`viewport_animation.rs`) | the same share of the way at the same moment, to the last half point, which is a snap the faster clock may take one frame earlier |
+| edge pan, a drag's and the cursor's | `velocity / zoom` every tick, with no `dt` (`tick_edge_pan_on`); the config reference calls `speed_min` and `speed_max` `px/frame` | twice the distance in the same second |
+
+So nothing here is scaled to a nominal 60 Hz that upstream does not scale:
+the controller takes whatever cadence the host has, and an edge pan on a
+120 Hz output is twice as fast in seconds as on a 60 Hz one, as it is in
+DriftWM. A tick is a frame even when no time has passed: two ticks with one
+timestamp step an edge pan twice, so a host ticks once per display frame and
+never from two clocks at once.
+
 ## Edge pan while a window is dragged
 
 `gesture_to` may carry `pointer`, the pointer's global screen point, and a
@@ -182,8 +200,9 @@ corner is cut back to the same length. With the defaults (zone 100, 4 to 10)
 a pointer 50 from one edge arms 2.75, and one on the edge 10.
 
 Every frame then moves the camera by `velocity / zoom` world points. The
-velocity is per frame and not per second, as upstream's is: the shell's frame
-rate sets the speed, and 60 Hz is upstream's at 60 Hz. Where upstream warps the
+velocity is per frame and not per second, as upstream's is: the host's frame
+rate sets the speed ([The frame rate](#the-frame-rate)), and the Infinify
+shell's is its display's, 120 Hz on a ProMotion display. Where upstream warps the
 grabbed pointer by the same world delta and its move grab places the window
 under it again, the drag adds that delta to the world distance it has been
 carried and places its window, or its cluster, again: the window stays under
@@ -354,7 +373,16 @@ shell must:
   held: a report made then arms cursor edge pan under a press the controller
   holds no gesture for
 - keep ticking while `needs_frames` is true, and start ticking when a reply
-  says so, a [gesture](GESTURES.md#reply)'s reply included
+  says so, a [gesture](GESTURES.md#reply)'s reply included; once per frame of
+  the display, and from one clock only ([The frame rate](#the-frame-rate))
+- end what it began. The controller holds a window drag until `end_gesture`,
+  or until the `gesture_end` of the move gesture that installed it, and has
+  no way to know that nothing holds the pointer any more: while the drag is
+  installed every flight is refused (`navigation during active gesture`), and
+  a drag resting in the edge zone is carried a frame's worth on every tick,
+  without limit, as upstream's grab is under a held button. A host whose
+  platform can lose a release or a gesture's end must notice and send the end
+  itself
 - send none of the above for a trackpad gesture: `gesture_begin`,
   `gesture_update` and `gesture_end` carry their own event times, and the
   controller makes the pans, the `pan_end`, the pinch and the drag's pointer of
@@ -370,7 +398,15 @@ contract carries both until one is chosen. A scroll that pans an output whose
 drag pan is held arms no delay and sends no `pan_end` at its lift; its event
 time counts as the drag's last pan, and the release launches. A scroll with
 precise deltas is reported as `finger` and any other as `wheel`; `continuous`
-is never sent. A window drag sends `pointer` with every `gesture_to`, the frame
+is never sent. The frame timer is a display link of the fastest display a
+canvas panel is on (`native/desktop/frame-driver.m`), so one tick per refresh:
+120 a second on a ProMotion display, where it was a 60 Hz `NSTimer`; it is
+made when frames are first wanted and invalidated when `needs_frames` and the
+compositor's own animations are both over. A release that never reached its
+view, and a trackpad gesture whose touches stopped without an end, are ended
+by the shell on the next frame or poll, through `end_gesture` (the whole
+release path) and a cancelled `gesture_end`
+([README](../../native/desktop/README.md#camera-motion)). A window drag sends `pointer` with every `gesture_to`, the frame
 timer starts when a reply's `needs_frames` says so, and while the snapshot's
 `needs_pointer` is true the pointer is reported before each frame and at the
 idle poll, except while a canvas panel holds a button gesture of any kind: a
@@ -489,6 +525,23 @@ minimum and the end snap. See [GESTURES.md](GESTURES.md#evidence-and-limits).
   inset usable area, the toggle, the launch-only flag, the wheel target and its
   fixed anchor on every frame, and the pinch's scale, clamps and end snap.
   Upstream's own functions are not executed for these, so parity is by reading.
+
+- Two scenarios added on 2026-10-10 after the app's first run on real windows.
+  `a_second_of_motion_at_60_and_120_hz_keeps_upstreams_time_base` ticks one
+  second of a flight, of a coast and of an edge pan at both cadences, two
+  120 Hz frames being exactly one 60 Hz frame: the flight is within 1e-6 of a
+  point at every sixtieth until the final snap and lands within a frame, the
+  coast is upstream's `MomentumState` bit for bit on both clocks and the two
+  agree within upstream's 5 % in distance and in time to rest, and the edge
+  pan covers 600 points at 60 Hz and 1200 at 120 Hz with the window carried
+  the same distance. `a_move_nothing_holds_any_more_stops_with_the_end_the_shell_sends`
+  leaves a button drag and a move gesture resting in a corner with nothing
+  more arriving: 600 frames carry the window 600 corner steps, every window
+  navigation is refused meanwhile, a coast that was running when the move
+  began is stopped and none is left, and `end_gesture`, respectively a
+  cancelled `gesture_end`, stops the travel on the spot with `needs_frames`
+  false. That is the contract the shell's lost-input rule relies on; it is no
+  evidence that the shell notices a lost release.
 
 This is controller evidence only. It does not show that a scroll, drag, pinch
 or pointer position reaches the shell, that macOS momentum events are ignored,

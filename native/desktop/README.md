@@ -2,8 +2,9 @@
 
 `./scripts/build-app.sh` builds and ad-hoc signs `target/app/Infinify.app` for
 Apple Silicon / macOS 26+. The build does not launch anything. As in DriftWM,
-where every toplevel is managed, the app puts every ordinary application window
-on the canvas by itself once it has Screen Recording access; without that
+where every toplevel is managed, the app puts every real application window
+(a standard window or a dialog, not a popup or a helper window) on the canvas
+by itself once it has Screen Recording access; without that
 access, or with `--manual`, it opens on the chooser and captures only the
 windows picked there. [Managed windows](#managed-windows) has the rules.
 Screen Recording permission is required for capture; Accessibility permission
@@ -149,8 +150,9 @@ the one window it focuses, and nothing else.
   controller's upstream-derived lerp at `navigation.camera_speed`. The view
   and bookmark actions move cameras only; they never move, resize, focus or
   otherwise touch native windows. The window navigation actions also focus a
-  window. If macOS refuses a hot key the status line names it and the
-  toolbar still works. The Quit button and Control-Option-Escape call the
+  window. If macOS refuses a hot key the status line names the first and
+  stderr names every one (`Shortcut unavailable: ⌃⌥A (home-toggle)`), at
+  launch as at a reload, and the toolbar still works. The Quit button and Control-Option-Escape call the
   shell's quit directly instead of sending the `quit` action, so exit never
   depends on the controller or on an active output. Control-Option-Escape stays
   the exit chord unless a config binding resolves to that chord, which then
@@ -298,9 +300,25 @@ about real windows has been run**: no test launch had Screen Recording access.
   owned-resize modes, which also reject `--manual` (exit 64). A saved scene that
   failed to load suppresses it too.
 
-**Which windows.** What the chooser lists, restricted to what is on screen:
-normal-layer windows of regular (Dock) applications other than Infinify, at
-least 40x40 points. **Every such window is captured** while it is in view on
+**Which windows.** Real windows only, as DriftWM manages toplevels and their
+dialogs and never a popup, a tooltip or a helper surface. The candidates are
+what the chooser lists, restricted to what is on screen: normal-layer windows
+of regular (Dock) applications other than Infinify, at least 40x40 points. Of
+those, with Accessibility access, a window is adopted when its application
+reports it as a standard window or a dialog (Accessibility subrole
+`AXStandardWindow`, `AXDialog` or `AXSystemDialog`), whatever its size or
+title. One reported as anything else (a floating panel, a sheet, which
+belongs to its window, an unknown kind) is left on the desktop. Without
+Accessibility access, for an application that does not answer, or for a
+window its application does not list (it lists only the windows of the active
+Space), every candidate is adopted except an untitled one smaller than
+200x150, which is how a browser's 56x96 untitled helper stays off the
+canvas. The test is made when a window comes on screen and never again: a
+window already on the canvas stays for the session whatever it turns into. A
+window of 200x150 or more that the test leaves out is named once on stderr
+(`… not adopted: Accessibility reports it as AXUnknown, …`), since a borderless
+application window can be one of them: Choose windows lists it as before and
+adds it by hand. **Every adopted window is captured** while it is in view on
 some display, with no further question: a managed canvas shows whatever those
 windows show. Use `--manual` to keep choosing window by window.
 
@@ -379,6 +397,23 @@ seconds shows its last frame at once, and one that returns later shows its
 last picture, which the compositor keeps ([Rendering](#rendering)), until the
 restarted stream delivers. With `--experimental-native-resize`
 every stream runs continuously, as before.
+
+**Capture rate.** A stream is asked for a frame at most once per refresh of
+the fastest display a canvas panel is on, and at least 60 times a second
+(`NSScreen.maximumFramesPerSecond`; it was 30): 120 a second on a ProMotion
+display. ScreenCaptureKit delivers a frame only when the window's content
+changed, so a still window costs what it did, none. A window that redraws
+continuously (video, a game, a fast scroll) is now captured, uploaded and
+composited up to four times as often as before, which is its share of GPU
+and WindowServer time times four at most; every delivered frame redraws only
+the outputs that show that window. The rate is read when a stream is started
+or resized: after a display is added or removed, a running stream keeps the
+rate it has until then. Under `--experimental-native-resize` the rate stays
+30 a second: there every delivered frame is judged on the main thread before
+it is shown (a controller snapshot for every bound window and several more,
+and a native family query, a few milliseconds a frame), which the display's
+rate would multiply by four for every window that redraws, on the thread
+that also serves the hot keys and the frame callback.
 
 **Closing, suspending and relaunching** are explicit actions only; nothing
 closes a window by itself.
@@ -885,7 +920,7 @@ registered again.
   repeat included, until it is released, as upstream keeps a key it
   intercepted until its release.
 - A chord macOS will not give back when it is registered again is named on
-  the status line ("Shortcut unavailable: …").
+  the status line ("Shortcut unavailable: …") and on stderr.
 - A `--windowed` run registers no global hot keys, so it has none to pass.
 
 **`pass_mouse`.** Every press and every scroll over a live window asks the
@@ -1376,17 +1411,28 @@ the compositor's frame description. What the snapshot carries is
   contexts. Each layer update is drawn inside a pool of its own, and the main
   loop of a normal run has one per turn, so a redraw issued from a poll, the
   launch's first frame or the quit-pending loop frees what it made.
-- **Animated backgrounds and the frame timer.** There is one frame timer, at
-  60 Hz, and three things keep it running: [camera motion](#camera-motion) (a
-  flight, a drift, an edge pan), a shader background that reads `u_time`,
-  redrawn at 60 Hz capped by `animate_fps` and only while a panel that shows
-  it is open, and a window that opens or leaves (an open or close animation, a
-  stand-in's fade, [below](#blur-window-animations-and-the-error-bar)), drawn
-  on every tick. It stops when none of the three is left, so the frames of an
-  opening window end with its animation. While a background or an animation
-  alone keeps it running it ticks no camera and watches no hot corner: the
-  idle poll goes on doing both every 80 ms, exactly as when the timer is
-  stopped, and regains 60 Hz for the camera when it finds motion. The
+- **Animated backgrounds and the frame timer.** There is one frame timer, and
+  it runs at the display's refresh rate: a display link
+  (`frame-driver.{h,m}`, `-[NSScreen displayLinkWithTarget:selector:]`) of the
+  fastest screen a canvas panel is on, so 120 Hz on a ProMotion display and
+  60 Hz on a 60 Hz one, where it was an `NSTimer` at 60 Hz whatever the
+  display. One link serves every panel, so the controller is ticked once a
+  frame however many displays there are. Three things keep it running:
+  [camera motion](#camera-motion) (a flight, a drift, an edge pan), a shader
+  background that reads `u_time`, redrawn at that rate capped by `animate_fps`
+  and only while a panel that shows it is open, and a window that opens or
+  leaves (an open or close animation, a stand-in's fade,
+  [below](#blur-window-animations-and-the-error-bar)), drawn on every tick.
+  It stops when none of the three is left, so the frames of an opening window
+  end with its animation, and the link is made when frames are first wanted
+  and invalidated when they stop being: no display callback is asked for
+  while nothing needs one. While a background or an animation alone keeps it
+  running it ticks no camera and watches no hot corner: the idle poll goes on
+  doing both every 80 ms, exactly as when the timer is stopped, and regains
+  the display's rate for the camera when it finds motion. A display link
+  calls back only while its display refreshes; camera motion it has not
+  served for a quarter of a second (a display asleep) is ticked by the poll
+  instead, at the poll's pace, so a flight still arrives. The
   pointer's part of a frame is the one thing such a frame still does: the
   waiting [hover](#pointer-motion-sloppy-focus-and-pick-mode) and cursor edge
   pan's pointer report go out with it, since no other timer sends a hover
@@ -1611,8 +1657,9 @@ corner where upstream takes the active one.
   installed while Infinify runs shows its bundle identifier until a restart.
 - Every managed window that was ever shown keeps one window-sized buffer, its
   last picture, until it closes or the canvas closes.
-- An animated background keeps the 60 Hz timer running while its panel is
-  open, also when other windows cover the panel completely.
+- An animated background keeps the frame timer running, at the display's
+  refresh rate, while its panel is open, also when other windows cover the
+  panel completely.
 - A shader's compile error is several lines long. All of it goes to stderr;
   the status line is one line high, and the error bar runs the lines into one
   and cuts it at the display's width.
@@ -2143,8 +2190,10 @@ reaches none of the three (the tool above read them from the same library); a
 captured window of any kind, so a real window's first picture, its last
 buffer at the moment it closes, capture on demand stopping a stream before a
 close, and whether a native window's own translucency lets a frost through;
-the frame timer itself and its 60 Hz against a display's refresh (the tools
-looped by hand, and a tick there took about 25 ms with the read-back); an
+the frame timer itself against a display's refresh (the tools
+looped by hand, and a tick there took about 25 ms with the read-back; the
+timer has since become a display link, whose callback rate was measured by
+itself, see [Camera motion](#camera-motion)); an
 animation during a camera flight; a pinned window or a widget opening or
 closing through the controller; a second display; a native-resize source
 closing; a config error at launch; blur over an animated background.
@@ -2656,7 +2705,7 @@ about to launch is not launched, at its 50 ms delay or at its lift, so the
 swipe's own end is the only launch. A magnify event is
 sent to the controller once, as a gesture event and never as a `zoom_by` too.
 The reply is an action's: a flight, a coasting camera or the edge pan under a
-moved window keeps the 60 Hz frame timer running
+moved window keeps the frame timer running
 (`needs_frames`), `dirty` saves the scene, a focus request (a move's, or that
 of a window navigation action the gesture fired) goes to the navigation
 coordinator like the request of any other reply
@@ -3032,9 +3081,11 @@ The physics and the numbers are the controller's
 pointer zooms are adapted from the pinned upstream source. The shell only says
 when and where. It stamps each pan with its event's time and source, tells the
 controller when a pan ends, passes the pointer along with a window drag,
-reports the pointer while cursor edge pan asks for it, and keeps its 60 Hz
-frame timer running for as long as the controller reports motion: a flight, a
-drift, an edge pan or a cursor pan alike. Each frame is the navigation
+reports the pointer while cursor edge pan asks for it, and keeps its frame
+timer running for as long as the controller reports motion: a flight, a
+drift, an edge pan or a cursor pan alike. The frame timer is a display link
+at the display's refresh rate ([Rendering](#rendering)), 120 Hz on a ProMotion
+display. Each frame is the navigation
 coordinator's tick, the one that flies
 [window navigation](#window-navigation-and-native-focus), watches the hot
 corners and, while a `msg subscribe` client is connected, is followed by at
@@ -3131,8 +3182,41 @@ Where this differs from DriftWM, or is rough:
   strip.
 - While nothing moves the pointer is looked at about every 80 ms, so a cursor
   pan can start that late. Once it runs it is checked every frame.
-- Edge pan speeds are per frame, as upstream's are, and the frame timer is
-  60 Hz whatever the display's refresh rate.
+- The frame timer follows the display, and what that changes is upstream's
+  own rule for each kind of motion. A flight (window navigation, a view
+  action, a wheel zoom) and a coast are scaled by each frame's elapsed time,
+  so they take the same time at 120 Hz as at 60 Hz and are only drawn twice
+  as often. Edge pan speeds are per frame, as upstream's are (`px/frame` in
+  its config reference, and no elapsed time in its `tick_edge_pan_on`): on a
+  120 Hz display `speed_min` 4 and `speed_max` 10 are 480 and 1200 points a
+  second where they were 240 and 600 on the 60 Hz timer, exactly as DriftWM
+  pans twice as fast on a 120 Hz monitor. Halve the two in
+  `[navigation.edge_pan]` for the old pace. A display in low power mode may
+  refresh, and so pan, at 60.
+- **A move that nothing holds any more is ended** (a macOS platform rule; a
+  Wayland grab cannot lose its release, and libinput ends every gesture it
+  begins). A window move whose end is lost would be held for good: the
+  controller refuses every flight while a drag is installed, and a move
+  resting in the edge zone goes on being carried by the pan beneath it, a
+  frame's worth every frame, without bound. Every frame and every poll
+  therefore look. A press whose button macOS reports up for 50 ms while its
+  gesture is still held (released over another application, inside a menu or
+  a drag session of macOS, or while the panels were rebuilt), and whose
+  release is not waiting in Infinify's event queue, is released at the
+  pointer through the path a real release takes: a pan launches, a move or a
+  resize ends, a press in a captured window gets its button back. The queue
+  is looked at because the 50 ms are wall time: after a slow poll a real
+  release may still be waiting behind that reading, and it then ends its
+  press itself, at its own point and time, so a flicked pan keeps its coast.
+  A trackpad gesture of three or more fingers ends cancelled when the canvas
+  is no longer what a press at the pointer would reach (Mission Control,
+  another window, a menu), since its touches are then not the panel's; and a
+  move gesture whose fingers have sent nothing at all for thirty seconds is
+  taken for lost. Still fingers send nothing either, so thirty seconds is
+  also the longest a move gesture can rest in the edge zone without the
+  least movement of a finger; the move then ends where it is, and those
+  fingers begin no other gesture until they lift. Each says so once on
+  stderr.
 - A drag stays on the display it began on: a pointer that has left it pans
   nothing, and the window does not cross into another display's view.
 - A wheel or pinch zoom during a window drag does nothing: the controller
@@ -3838,7 +3922,7 @@ not been seen. The controller's rules are in
 A canvas panel is never key and its application is rarely active, so a normal
 run takes pointer motion through a tracking area that is always active. The
 newest motion is sent to the controller as `hover`, at most once a frame.
-While the 60 Hz frame timer of [Camera motion](#camera-motion) runs, each of
+While the frame timer of [Camera motion](#camera-motion) runs, each of
 its frames carries the motion that is waiting, ahead of cursor edge pan's
 pointer report and the tick. That timer is also the one an animated
 `[background]`, or a window that opens or leaves, keeps running
@@ -3871,7 +3955,10 @@ send none. The shell then does what the reply says:
   the last point it was told. A tooltip or anything else the application opens
   appears at the real window, not on the canvas. Each delivered motion costs
   what a forwarded click costs (a snapshot, `hit`, `input` and the source's
-  validation), at most 60 times a second while the pointer moves over a window.
+  validation), at most 60 times a second while the pointer moves over a window,
+  and once a frame while the frame timer runs (a flight, a coast, an
+  animation): 120 times a second on a ProMotion display. Under
+  `--experimental-native-resize` that validation is a native family query.
 - **Sloppy focus** (`focus_follows_mouse = true`): the window under the pointer
   takes the focus without being raised and without the camera moving. Its native
   focus request is performed like a click's, and answered as logical without
@@ -5487,6 +5574,52 @@ is never proof of fresh pixels. Whether static native applications reliably emit
 new Complete frame after this request is **unproved**. Strict metadata checks may
 leave a tile inert. Metadata proves geometric freshness, not semantic layout or
 pixel correctness; current screenRect coordinate assumptions require live validation.
+
+**The first run on real windows (2026-10-10) left every tile inert.** Six
+adopted windows of four applications were each drawn as an empty grey tile, and
+a click on any of them was refused with `source presentation unsettled`: no
+capture was acknowledged for any of them. Which of the checks above refused
+them is not known, because nothing said. So a refusal now says why, and the
+gate itself is unchanged: a window still shows no picture, and takes no input,
+that was not acknowledged against its observed geometry.
+
+- One line on stderr per window per change of reason, once the reason has
+  stood for half a second:
+  `capture of #7 (com.google.Chrome) not acknowledged: REASON — DETAIL`.
+  The reasons: `family`, the window is not alone in its native family or the
+  family could not be read (the detail is the family query's own account,
+  `no root-only extent: 3 native windows in its family (the window and 2
+  attached to it)`, or its error); `geometry`, the window's extent is not
+  the observed rectangle (both printed); `metadata`, the frame's own
+  description failed a check (the first one that failed and its values: the
+  frame status, its display time against the cutoff, the scale factors, its
+  screen rectangle against the extent, its content rectangle against the
+  extent and the buffer); `stale frame`, the last frame offered was displayed
+  before the cutoff, by how many milliseconds; `refused`, the controller did
+  not take the acknowledgement; `not installed`; `stream`, the capture stream
+  failed, with its error, which nothing reported before; `unobserved`, a
+  resize left the geometry unknown; and `no frame`, none was offered in two
+  seconds.
+- A press on such a window puts the short reason in the status line:
+  `Window 7 has no picture yet and takes no input: capture not acknowledged
+  (family)`.
+- One comparison was wrong and is fixed. A resize result is accepted when its
+  Accessibility and WindowServer rectangles agree within one point, and the
+  Accessibility one is kept; the coordinator then demanded exact equality
+  with the WindowServer's extent, so a window whose two rectangles differ by
+  a fraction could show no picture while it was being resized. Within one
+  point is now the same geometry while that window's resize transaction is
+  unresolved; at rest the comparison is exact as before. This is not what
+  refused the six windows: a newly adopted window's observed rectangle is the
+  WindowServer's too.
+
+What reading suggests, and the next run's stderr decides: a window with any
+attached child window is refused as `family` by design, which may be most real
+application windows; a still window is sent one frame per configuration
+request, so a first frame refused for any reason may be the only one; and the
+frame's screen rectangle has to equal the window's extent exactly. Until a run
+has shown these lines, the flag is not usable on real windows: start without
+it to see and click them.
 
 `tests/e2e/desktop-resize.sh` exercises the production coordinator, Rust C ABI, and
 real synthetic CVPixelBuffer/CMSampleBuffer objects without NSApplication startup or
