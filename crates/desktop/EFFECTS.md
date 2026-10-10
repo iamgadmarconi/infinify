@@ -113,18 +113,24 @@ The config source follows upstream at launch and on a reload alike. Every
 | no file, while none was ever accepted: the built-in defaults | empty |
 | the file cannot be read, or has gone missing after one was accepted | `config: failed to read <path>: <reason>` |
 | the file does not parse | `config error: <the TOML error>`, several lines long as the parser writes it; the bar collapses its whitespace into one line (COMPOSITOR-NOTES 19.3) |
-| accepted with warnings | the first warning; with more than one, the first followed by ` (+N more)` |
+| accepted with warnings | one warning; with more than one, the first of them in sorted order followed by ` (+N more)` |
 | accepted without a warning | empty |
 
-Which warning is the first is the order `driftwm-core`'s parser, upstream's
-own, collects them in. For the tables it reads into a hash map, `[keybindings]`
-among them, that order is not fixed: one file with two unknown actions named
-one of them first in one run and the other in the next. When that happens
-between two loads of the same file the message has changed, and a revision is
-spent for it.
+Which warning stands for the rest is this port's choice: the least of them in
+byte order, the head of the sorted list. Upstream's `summarize_config_errors`
+takes the first the parser returned, and `driftwm-core`'s parser, upstream's
+own, collects the warnings of the tables it reads into a hash map,
+`[keybindings]` among them, in an order that is not fixed: one file with
+several unknown actions names a different one first from one load to the
+next. Taken as upstream takes it, the message of a file that did not change
+would change between two loads of it, and the bar would be redrawn for
+nothing. Sorted, a file has one message. The format is upstream's.
 
 They are the texts of `load_config`'s own `errors` and `warnings`, which are
-unchanged. A file that is refused leaves the last good configuration in force,
+unchanged: the reply's `warnings` are in the parser's order, whatever that was
+for this load. A shell that prints them sorts them the same way if its lines
+are to come in one order at every load, the bar's warning first; the macOS
+shell does, for stderr. A file that is refused leaves the last good configuration in force,
 as before; only the message is new. A file larger than 4 MiB is refused as
 unreadable, with `file exceeds 4 MiB` for a reason: that bound is not
 upstream's.
@@ -207,7 +213,8 @@ event is logged whether or not any of them holds.
 ### Beside a size that is owed
 
 Under a shell that can deliver a size, an `attach` whose rule names one
-begins a size transaction in the reply that maps the window
+begins a size transaction in the reply that maps the window, or, while
+another transaction is unresolved, leaves the window waiting its turn
 ([RULES.md](RULES.md#a-rules-size)), and a sizing action begins one at any
 time ([SIZES.md](SIZES.md)). The log knows nothing of either:
 
@@ -224,7 +231,15 @@ time ([SIZES.md](SIZES.md)). The log knows nothing of either:
   drag ([SIZES.md](SIZES.md#other-interactions)), and a refusal logs nothing. The shell
   reports the close again once the transaction has drained, and that one is
   logged: one `close` or `close_to_standin`, never two and never none. A
-  `forget` is refused the same way.
+  `forget` is refused the same way;
+- a window that is waiting its turn has its `open` logged with its map like
+  any other, and nothing in the snapshot says it waits: `native_resize`
+  names the window whose transaction is in the slot. A shell that holds the
+  `open` for the size holds it from the moment that window's own transaction
+  begins, so one of several ruled windows that map together may be seen
+  opening at its own size and growing afterwards, where upstream shows each
+  at the size its rule gave it. Its `window_closed` is accepted while it
+  waits: it leaves the queue.
 
 ## Differences from upstream
 
@@ -260,6 +275,13 @@ time ([SIZES.md](SIZES.md)). The log knows nothing of either:
 - **The background source is the shell's.** Upstream sets and clears it where
   it loads the background image; the controller never opens that file
   ([RENDER.md](RENDER.md#render)).
+- **Which warning the bar names.** Of several, the first in sorted order;
+  upstream names the parser's first, which for a hash-mapped table is not the
+  same from one load to the next ([above](#errors)). A file whose warnings
+  the parser returns in a fixed order can so name another one here than
+  upstream does: the three range warnings of the scenario below come back as
+  `navigation.camera_speed`, `effects.blur_strength`, `effects.animation_scale`,
+  and the bar names the third.
 - **A refused config spends a revision.** Upstream's failed reload redraws the
   bar and drops no cache. Here the new number also makes the shell build its
   background program and chrome style again, from the same tables.
@@ -309,8 +331,12 @@ throwaway directory:
 - `render.errors` and the revision after a launch with no file, an accepted
   file, a file that does not parse (with the last good table still in force),
   the same failure again, another failure, the file removed, a scene save and
-  `load`, a clean reload, a file with one warning and one with three, a
+  `load`, a clean reload, a file with one warning and one with three, whose
+  message names the least of the three in byte order, the parser's third, a
   failure after those, and at launch a refused file and a file with a warning;
+  and a file with three unknown actions in `[keybindings]` loaded two dozen
+  times, the reply's `warnings` arriving in more than one order and the
+  message naming the same one every time;
 - `lifecycle_events` after a launch pass that adopts one window and places
   another; a new window, a widget, a `focus_on_open = false` window, a
   rule-pinned one and one attached without an output; an explicit attach, a
@@ -339,7 +365,8 @@ throwaway directory:
 `tests/render_flow.rs` carries the two new keys in every whole-block
 comparison, and its refused reload now moves the revision by one.
 
-Each of six rules was broken by hand once, and the scenario that covers it
+Naming the parser's first warning again failed the scenario too. Each of six
+other rules was broken by hand once, and the scenario that covers it
 failed: a stand-in taking `[decorations] blur`, an `open` during the launch
 pass, a changed message that spends no revision, a crossfade for every
 adoption, a list of 64, and an infinite `blur_strength` sent as it was parsed

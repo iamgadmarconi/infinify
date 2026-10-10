@@ -834,7 +834,13 @@ impl Controller {
                     lifetime_ended,
                 );
             }
-            Command::NativeResizeCapability { enabled } => self.sizes.capability = enabled,
+            Command::NativeResizeCapability { enabled } => {
+                self.sizes.capability = enabled;
+                // No size can be delivered: no rule's `size` waits for one.
+                if !enabled {
+                    self.policy.sizing.clear();
+                }
+            }
             Command::InvalidateNativeCapture {
                 window,
                 identity,
@@ -1112,16 +1118,20 @@ impl Controller {
                 // Upstream resolves a window's rules once, when it maps: the
                 // bundle identifier is the rule's `app_id`.
                 let rule = self.config().resolve_window_rules(&bundle_id, &title);
-                let arrival = match (logical_id, world_rect) {
-                    (None, None) => Some(self.arrival(
-                        output,
-                        pointer,
-                        &bundle_id,
-                        &title,
-                        source_rect.size,
-                        rule.as_ref(),
-                    )?),
-                    _ => None,
+                // `ruled`: the window is placed for the size its rule names.
+                let (arrival, ruled) = match (logical_id, world_rect) {
+                    (None, None) => {
+                        let (arrival, ruled) = self.arrival_by_rule(
+                            output,
+                            pointer,
+                            &bundle_id,
+                            &title,
+                            source_rect.size,
+                            rule.as_ref(),
+                        )?;
+                        (Some(arrival), ruled)
+                    }
+                    _ => (None, false),
                 };
                 let id = if let Some(id) = logical_id {
                     if world_rect.is_some() {
@@ -1184,8 +1194,9 @@ impl Controller {
                 return match arrival {
                     Some(arrival) => {
                         let reply = self.settle_arrival(id, output, arrival)?;
-                        // Upstream's size arm: a rule's `size`, once placed.
-                        Ok(self.size_by_rule(id, output, arrival, reply))
+                        // Upstream's size arm: a rule's `size`, placed for.
+                        let own = ruled.then_some(source_rect.size);
+                        Ok(self.size_by_rule(id, output, own, reply))
                     }
                     None => Ok(json!({"window": id})),
                 };
@@ -1424,13 +1435,18 @@ impl Controller {
                 window,
                 output,
                 group,
-            } => self.install_drag(window, output, group)?,
+            } => {
+                let effect = self.focus_for_grab(window)?;
+                self.install_drag(window, output, group)?;
+                return Ok(json!({"effect": effect}));
+            }
             Command::BeginResize {
                 window,
                 output,
                 edges,
                 group,
             } => {
+                let effect = self.focus_for_grab(window)?;
                 self.guard_resize_structure(None)?;
                 if self.gesture.is_some() {
                     return Err(Error::Invalid("gesture already active"));
@@ -1455,6 +1471,9 @@ impl Controller {
                 });
                 // Upstream begin_client_resize: a resize drag ends fit and fill.
                 self.sizes.resize_begun(window);
+                // And a wait for a rule's `size`, as any sizing of the user's.
+                self.policy.sizing.retain(|queued| *queued != window);
+                return Ok(json!({"effect": effect}));
             }
             Command::GestureTo {
                 screen_delta,

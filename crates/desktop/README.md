@@ -52,8 +52,8 @@ Preserve them as integers in native code.
 | `hover` | `output`, global `screen` point, optional `time_ms` | `{dirty, pick, hit, forward}`, and `effect` when sloppy focus moved the focus; see [POINTER.md](POINTER.md#hover) |
 | `pick` | `window`, `output` | `{effect, navigation, dirty}`; a left click in pick mode |
 | `pointer_nearest` | `output`, global `screen` and `start` points, optional `held` | `{navigation, effects, dirty}`; a press bound to the mouse action `center-nearest` |
-| `begin_drag` | `window`, `output`, optional `group` boolean (default false) | `{}`; a screen-pinned window is dragged in screen space ([RULES.md](RULES.md#dragging-a-pinned-window)) |
-| `begin_resize` | `window`, `output`, `edges`, optional `group` boolean | `{}` |
+| `begin_drag` | `window`, `output`, optional `group` boolean (default false) | `{effect}`: the window is raised and focused ahead of the grab, as upstream's move press does, and `effect` is the focus request `activate` returns, or null for a window without a source; a screen-pinned window is dragged in screen space ([RULES.md](RULES.md#dragging-a-pinned-window)) |
+| `begin_resize` | `window`, `output`, `edges`, optional `group` boolean | `{effect}`, as `begin_drag`: raised and focused first |
 | `gesture_to` | total `screen_delta` from gesture start, optional global `pointer` point | `{needs_frames}`; a drag's `pointer` arms edge pan |
 | `end_gesture` | none | `{}` |
 | `gesture_begin` | `kind`, `fingers`, `modifiers`, `context`, `output`, global `pointer` point, optional `doubletap`, `time_ms` | `{gesture, fired, note, navigation, effects, dirty, needs_frames, trackpad}` |

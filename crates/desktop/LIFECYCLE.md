@@ -23,7 +23,7 @@ performs no native operation: `close_window`, `launch` and
 
 | `command.op` | Fields | Result data |
 | --- | --- | --- |
-| `attach`, a new window | as before, with neither `logical_id` nor `world_rect`; optional `output`, optional `pointer` | `{window, adopted, effect, navigation, dirty}`, and `transaction` with a one-entry `effects` when the window's rule names a `size` and a size transaction began ([RULES.md](RULES.md#a-rules-size)) |
+| `attach`, a new window | as before, with neither `logical_id` nor `world_rect`; optional `output`, optional `pointer` | `{window, adopted, effect, navigation, dirty}`, and `transaction` with a one-entry `effects` when a size transaction began with this map, for the `size` this window's rule names or for that of a window that was waiting its turn ([RULES.md](RULES.md#a-rules-size)) |
 | `window_closed` | `window`, `identity`, optional `output` | `{standin, effect, navigation, dirty}` |
 | `retitle` | `window`, `identity`, `title` | `{dirty}` |
 | `adoption_complete` | optional `present`, an array of `{bundle_id, title}` | `{dropped, standins, dirty}` |
@@ -115,7 +115,9 @@ includes its title bar.
 
 Then upstream's cascade, for all three: while the spot is within two points of
 another window's top-left on both axes it moves down the diagonal by
-`[decorations] title_bar_height` (25).
+`[decorations] title_bar_height` (25). A window still owed the `size` its
+rule names counts, here and as an obstacle of `auto`, as the frame it is
+becoming ([RULES.md](RULES.md#a-rules-size)).
 
 Without an `output` upstream has no view to place in: the origin, cascading.
 
@@ -372,8 +374,10 @@ they did.
   time, and it decides whether a slot stays, not whether it was written.
 - **Window rules** shape a new window since [RULES.md](RULES.md): `position`,
   `pinned_to_screen`, `output`, `widget` and `focus_on_open` are applied where
-  step 2 places it, and a widget is never a stand-in. A rule's `size` and
-  `fullscreen` are recorded and not applied.
+  step 2 places it, and a widget is never a stand-in. A rule's `size` is
+  asked, and the window placed for it, only under a shell that can deliver a
+  size ([RULES.md](RULES.md#a-rules-size)); `fullscreen` is recorded and not
+  applied.
 - **No parents, modals or fullscreen.** The tiers of upstream that depend on
   them are absent: a child window centered on its parent, the parent as the
   first follower after a close, placement behind a fullscreen window, and the

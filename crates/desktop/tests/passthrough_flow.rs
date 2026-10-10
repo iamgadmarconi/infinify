@@ -1100,11 +1100,27 @@ fn one_pin(scratch: &Scratch) -> Host {
     );
     h
 }
+/// The bound press's drag. Upstream raises and focuses the window ahead of
+/// its grab, try_pinned_button for a pinned window and the move arm of
+/// on_pointer_button for a canvas one: the reply is the focus request a
+/// click's carries, null for a slot with no window, and nothing else.
 fn begin_drag(h: &mut Host, window: u64) {
-    assert_eq!(
-        h.ok(json!({"op":"begin_drag","window":window,"output":1})),
-        json!({})
-    );
+    let source = h.window(window)["source"].clone();
+    let reply = h.ok(json!({"op":"begin_drag","window":window,"output":1}));
+    let effect = reply["effect"].clone();
+    assert_eq!(reply, json!({"effect":effect}));
+    let snapshot = h.snapshot();
+    assert_eq!(snapshot["focused"], window);
+    assert_eq!(snapshot["focus"]["pending_effect"], effect);
+    assert_eq!(h.stack().last(), Some(&window));
+    if source.is_null() {
+        assert_eq!(effect, Value::Null);
+    } else {
+        assert_eq!(
+            effect,
+            json!({"op":"focus_native_window","effect_id":effect["effect_id"],"window":window,"identity":source["identity"],"generation":source["generation"]})
+        );
+    }
 }
 const STILL: fn() -> Value = || json!({"needs_frames":false});
 
@@ -1358,11 +1374,12 @@ fn a_pinned_drag_is_one_gesture_among_the_others() {
         h.error(json!({"op":"begin_drag","window":3,"output":1})),
         "a widget is not moved or resized by hand"
     );
-    // A pinned window has no cluster: a group move drags it alone.
-    assert_eq!(
-        h.ok(json!({"op":"begin_drag","window":1,"output":1,"group":true})),
-        json!({})
-    );
+    // A pinned window has no cluster: a group move drags it alone, raised
+    // and focused by the press like a single one.
+    let reply = h.ok(json!({"op":"begin_drag","window":1,"output":1,"group":true}));
+    assert_eq!(reply, json!({"effect":h.pending()}));
+    assert_eq!(reply["effect"]["window"], 1);
+    assert_eq!(h.focused(), 1);
     assert_eq!(h.drag_to((10.0, 10.0), Some((330.0, 230.0))), STILL());
     assert_eq!(h.pinned(1)["screen_rect"], rect(310.0, 210.0, 400.0, 300.0));
     // It is the one pointer gesture there is, and a pin waits for it to end,
@@ -1547,7 +1564,11 @@ fn a_window_that_closes_under_a_pinned_drag_leaves_no_gesture() {
         h.error(json!({"op":"gesture_to","screen_delta":point(30.0, 30.0)})),
         "no active gesture"
     );
-    assert_eq!(h.stack(), vec![2, 3]);
+    // The press had focused the pinned window, as upstream's
+    // try_pinned_button does, so its close hands the focus on: no pinned
+    // window takes it, and the canvas window in view is raised and focused.
+    assert_eq!(h.stack(), vec![3, 2]);
+    assert_eq!(h.focused(), 2);
     // The window becomes a stand-in, which is never pinned: it is unpinned
     // under the drag, at the canvas frame its pin showed, and the drag ends.
     begin_drag(&mut h, 3);

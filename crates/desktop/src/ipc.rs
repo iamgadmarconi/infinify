@@ -799,7 +799,15 @@ impl Controller {
                     .to_string(),
             );
         }
-        self.request_window_size(window, output, [width.into(), height.into()], outcome)?;
+        let written =
+            self.request_window_size(window, output, [width.into(), height.into()], outcome)?;
+        // Upstream resize_element_to raises a client it resizes and hands it
+        // no focus: a selector reaches any window. A request identical to the
+        // one outstanding returns before its map and restacks nothing.
+        if written && self.scene.windows().last().map(|top| top.id) != Some(window) {
+            self.scene.raise(window).map_err(|e| e.to_string())?;
+            outcome.dirty = true;
+        }
         Ok(Response::Size { width, height })
     }
 }

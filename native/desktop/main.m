@@ -242,6 +242,8 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 - (void)stopNavigation;
 - (void)activate:(NSNumber *)window output:(NSNumber *)output;
 - (void)clickReleased:(NSNumber *)window output:(NSNumber *)output;
+- (void)raiseFocus:(NSNumber *)window;
+- (void)resizeFocus:(NSDictionary *)reply;
 - (void)clearFocus;
 - (void)ensureFrames;
 - (BOOL)cameraFrame;
@@ -272,7 +274,7 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 @property NSString *superChord; // --super; nil is ctrl+alt
 @property DWHotKeys *hotKeys;
 @property DWConfigWatcher *configWatcher;
-@property NSString *configNote; // the config file's first problem and a count, upstream's error bar
+@property NSString *configNote; // what a config load left for the status line and the error bar does not show: a --super chord or a load the controller refused
 @property NSString *help; // the chords registered, for the status line
 @property BOOL dismissFree; // no binding claims ⌃⌥-click on a window
 - (void)loadConfig:(BOOL)platform;
@@ -539,14 +541,19 @@ static NSNumber *liveHit(NSDictionary *hit) { return [hit[@"placeholder"]isEqual
 }
 // Edges as upstream's edges_from_position picks them: a 3×3 grid over the window,
 // its centre resizing from the bottom right. The rect is the controller's placement.
+// Upstream raises and focuses the window first (raise_and_focus, then start_compositor_resize; focus_and_raise_suspended
+// for a stand-in). A resize that begins carries that focus request in its reply. With the gate off the controller is never
+// asked, and the press is left upstream's first half: the window is raised and focused, and nothing else. So is a begin that
+// is turned away, by the resize path before the controller is asked (a detached placeholder, a window whose own extent has
+// moved on) or by the controller: a refused command changed nothing, so the focus is asked for by itself.
 - (void)beginResize:(NSNumber *)window snapped:(BOOL)snapped at:(CGPoint)p output:(NSNumber *)output {
-    if(!self.desktop.resize){[self.desktop flashStatus:@"Window resize is gated behind --experimental-native-resize"];return;}
+    if(!self.desktop.resize){[self.desktop raiseFocus:window];[self.desktop flashStatus:@"Window resize is gated behind --experimental-native-resize"];return;}
     for(NSDictionary *placement in [self.desktop call:@{@"op":@"snapshot"}][@"placements"])if([placement[@"output"]isEqual:output]&&[placement[@"window"]isEqual:window]){
         CGRect r=jsonRect(placement[@"screen_rect"]);CGFloat x=p.x-r.origin.x,y=p.y-r.origin.y;
         BOOL left=x<r.size.width/3,right=x>r.size.width*2/3,top=y<r.size.height/3,bottom=y>r.size.height*2/3;
         NSString *edges=left&&top?@"top_left":right&&top?@"top_right":left&&bottom?@"bottom_left":right&&bottom?@"bottom_right":left?@"left":right?@"right":top?@"top":bottom?@"bottom":@"bottom_right";
-        NSDictionary *reply=[self.desktop.resize request:@{@"op":@"begin_native_resize",@"window":window,@"output":output,@"edges":edges,@"start_screen":pointJSON(p),@"group":@(snapped)}];
-        if(reply){self.resizeTransaction=reply[@"transaction"];self.gesture=4;}return;
+        NSDictionary *reply=[self.desktop.resize request:@{@"op":@"begin_native_resize",@"window":window,@"output":output,@"edges":edges,@"start_screen":pointJSON(p),@"group":snapped?@YES:@NO}];
+        if(reply){self.resizeTransaction=reply[@"transaction"];self.gesture=4;[self.desktop resizeFocus:reply];}else [self.desktop raiseFocus:window];return;
     }
 }
 // A normal run's press, dispatched as upstream's on_pointer_button does: the binding
@@ -567,9 +574,11 @@ static NSNumber *liveHit(NSDictionary *hit) { return [hit[@"placeholder"]isEqual
     if(!binding&&!button&&hit&&!source&&(e.modifierFlags&NSEventModifierFlagControl)&&(e.modifierFlags&NSEventModifierFlagOption)){[self.desktop call:@{@"op":@"forget",@"window":hit[@"window"]}];[self.desktop render];[self.desktop saveScene];return;}
     // A widget ignores drags and resizes, as upstream's does: the bound press starts no gesture and goes to the widget as a plain click (upstream's move and resize arms fall through to click-to-focus and forward it).
     if((move||resize)&&[asNumber(hit[@"widget"])boolValue]){[self.desktop flashStatus:@"A widget stays where its rule puts it: drags and resizes are ignored"];move=resize=NO;}
-    // Upstream drags and resizes a pinned window in screen space. The move is the controller's begin_drag like any window's, which moves the pin by the pointer's screen delta; the resize is not implemented and the controller refuses it: the press is swallowed.
-    if(resize&&[asNumber(hit[@"pinned"])boolValue])[self.desktop flashStatus:@"A screen-pinned window is not resized: unpin it first (toggle-pin-to-screen)"];
-    else if(move&&hit){if([self.desktop call:@{@"op":@"begin_drag",@"window":hit[@"window"],@"output":output,@"group":[kind isEqual:@"move_snapped_windows"]?@YES:@NO}])self.gesture=2;}
+    // Upstream drags and resizes a pinned window in screen space, raising and focusing it first (try_pinned_button). The move is the controller's begin_drag like any window's, which moves the pin by the pointer's screen delta; the resize is not implemented and the controller refuses it: the press raises and focuses the window and is swallowed.
+    if(resize&&[asNumber(hit[@"pinned"])boolValue]){[self.desktop raiseFocus:hit[@"window"]];[self.desktop flashStatus:@"A screen-pinned window is not resized: unpin it first (toggle-pin-to-screen)"];}
+    // Upstream on_pointer_button: raise_and_focus, then the move grab. The controller does both inside begin_drag, a pinned window's included, and its reply
+    // carries the focus request an activate reply carries: the coordinator's to perform on the native window, as a click's is and a move gesture's.
+    else if(move&&hit){NSDictionary *begun=[self.desktop call:@{@"op":@"begin_drag",@"window":hit[@"window"],@"output":output,@"group":[kind isEqual:@"move_snapped_windows"]?@YES:@NO}];if(begun){self.gesture=2;[self.desktop.navigation perform:asDict(begun)];}}
     else if(resize&&hit)[self beginResize:hit[@"window"] snapped:[kind isEqual:@"resize_window_snapped"] at:p output:output];
     // Upstream's pan grab remembers that it began on empty canvas: released without a drag, it unfocuses.
     else if([kind isEqual:@"pan_viewport"]){self.gesture=1;self.clearsFocus=!hit;}
@@ -602,7 +611,7 @@ static NSNumber *liveHit(NSDictionary *hit) { return [hit[@"placeholder"]isEqual
             BOOL occluded=NO;for(NSDictionary *front in [snapshot[@"placements"]reverseObjectEnumerator]){if(front==placement)break;if([front[@"output"]isEqual:output]&&CGRectContainsPoint(jsonRect(front[@"clip_rect"]),p)){occluded=YES;break;}}if(occluded)continue;
             for(NSDictionary *h in DWResizeHandles(jsonRect(placement[@"screen_rect"]),jsonRect(placement[@"clip_rect"])))if(hypot(p.x-[h[@"x"]doubleValue],p.y-[h[@"y"]doubleValue])<=7){
                 NSDictionary *reply=[self.desktop.resize request:@{@"op":@"begin_native_resize",@"window":placement[@"window"],@"output":output,@"edges":h[@"edge"],@"start_screen":pointJSON(p),@"group":(e.modifierFlags&NSEventModifierFlagShift)?@YES:@NO}];
-                if(reply){self.resizeTransaction=reply[@"transaction"];self.gesture=4;}[self.desktop render];return;
+                if(reply){self.resizeTransaction=reply[@"transaction"];self.gesture=4;[self.desktop resizeFocus:reply];}[self.desktop render];return;
             }
         }
     }
@@ -853,9 +862,16 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // The resize coordinator's commands. The native result of a sizing action's transaction is answered with that action's
 // continuation: upstream's placement, camera and restore point for the size the window took, or why it took none. The reply
 // then gets the tail of an action's reply, on a later turn of the main queue, once the coordinator has consumed its next effect.
+// A result that ends its transaction, a pointer resize's included, can be answered with the first effect of another one: the size
+// transaction of the next window whose rule's size is still owed (RULES.md). The coordinator performs it as it performs every
+// effect a result reply carries; here the transaction it names becomes the one -sizing knows as the controller's own, like the
+// one an attach reply begins, so that a press or an action does not cancel it and a msg request is not turned away for it.
 - (NSDictionary *)resizeCall:(NSDictionary *)command {
     NSDictionary *reply=[self call:command];
-    if(!reply||!self.sizeTransaction||![command[@"op"]isEqual:@"native_resize_result"]||![command[@"transaction"]isEqual:self.sizeTransaction])return reply;
+    if(!reply||![command[@"op"]isEqual:@"native_resize_result"])return reply;
+    BOOL own=self.sizeTransaction&&[command[@"transaction"]isEqual:self.sizeTransaction];
+    NSNumber *next=asNumber(sizeEffect(reply)[@"transaction"]);if(next&&![next isEqual:command[@"transaction"]])self.sizeTransaction=next;
+    if(!own)return reply;
     NSMutableDictionary *tail=[reply mutableCopy];[tail removeObjectForKey:@"effect"];__weak Desktop *weak=self;
     dispatch_async(dispatch_get_main_queue(),^{Desktop *d=weak;if(!d||d.cleaning)return;NSString *failure=asString(tail[@"failure"]);if(failure)[d flashStatus:[@"Window not resized: " stringByAppendingString:failure]];[d applyReply:tail];});
     return reply;
@@ -886,7 +902,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     BOOL trusted=AXIsProcessTrusted();self.navigation.focusAllowed=trusted&&!self.logicalFocus;
     if(trusted||self.logicalFocus||self.focusNoted||!self.navigation)return;
     self.focusNoted=YES;NSString *note=focusAccessNote;
-    // Said once, ahead of a notice already up; the config's own problem returns as the resting status.
+    // Said once, ahead of a notice already up; what a config load left for the status line returns as the resting status.
     fprintf(stderr,"%s\n",note.UTF8String);self.statusText=!self.statusText.length||[self.statusText isEqual:self.help]?note:[NSString stringWithFormat:@"%@ · %@",note,self.statusText];
 }
 - (void)cancelNavigation {
@@ -992,7 +1008,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     self.statusText=text;NSUInteger token=++self.statusToken;__weak Desktop *weak=self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(2*NSEC_PER_SEC)),dispatch_get_main_queue(),^{Desktop *d=weak;if(d.statusToken!=token||d.cleaning||![d.statusText isEqual:text])return;d.statusText=[d restingStatus];[d render];});
 }
-// What the status line returns to: a problem in the config file stays up like upstream's error bar, else the help.
+// What the status line returns to: a config load the controller refused, or its --super chord, stays up, else why the background fell back, else the help.
+// A problem in the config file itself is the error bar's alone (-loadConfig:).
 - (NSString *)restingStatus { return self.configured?self.configNote?:self.backgroundNote?:self.help?:@"":helpText; }
 - (NSString *)actionFeedback:(NSString *)action flight:(NSDictionary *)flight output:(NSNumber *)output {
     BOOL home=[action isEqual:@"home-toggle"];
@@ -1286,6 +1303,14 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // to a window that still holds focus and is not wholly in view. The reply carries a flight or
 // nothing, never a focus request, so the press's request stays the coordinator's.
 - (void)clickReleased:(NSNumber *)window output:(NSNumber *)output { [self applyReply:[self call:@{@"op":@"activate",@"window":window,@"output":output?:NSNull.null,@"cause":@"click_release"}]]; }
+// Upstream's raise_and_focus by itself, for a press bound to a resize that begins nothing: the gate is off or the begin was
+// turned away (-beginResize:…), or the window is screen-pinned (-press:…).
+- (void)raiseFocus:(NSNumber *)window { [self applyReply:[self call:@{@"op":@"focus",@"window":window}]]; }
+// The reply to a resize the pointer began, at a handle or by a press bound to resize-window. Upstream raises and focuses the window
+// ahead of its resize grab, and the controller does so inside begin_native_resize. That reply's "effect" is the size transaction's,
+// which the resize coordinator has consumed, so the focus request is among its "effects", as in a sizing action's reply, and is the
+// navigation coordinator's to perform. Probe, demo and owned-fixture runs have no such coordinator, and nothing is read.
+- (void)resizeFocus:(NSDictionary *)reply { if(!self.navigation)return;NSMutableDictionary *rest=[reply mutableCopy];[rest removeObjectForKey:@"effect"];[self.navigation perform:rest]; }
 // Upstream src/grabs/pan_grab.rs: a press on empty canvas released within 5 points leaves
 // no window focused. Logical only: nothing is asked of any native application.
 - (void)clearFocus { [self applyReply:[self call:@{@"op":@"clear_focus"}]]; }
@@ -1431,17 +1456,24 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // Startup, a change of the config file, the reload-config action, and a canvas reopened
 // after Return to desktop. Reload semantics are the controller's, which are upstream's:
 // a file that fails to parse leaves the previous config in force and says why.
+// What the file itself has wrong, the load's errors and warnings, is shown where upstream shows it and nowhere else: in the
+// error bar, which the compositor draws from the controller's own message (snapshot.render.errors). Here those lines go to
+// stderr and never to the status line. The status line keeps what the bar does not show: a --super chord or a load the
+// controller refused (`problems`), and the bindings that were left out.
 - (void)loadConfig:(BOOL)platform {
-    NSMutableArray<NSString *> *problems=[NSMutableArray array];
+    NSMutableArray<NSString *> *problems=[NSMutableArray array],*file=[NSMutableArray array];
     if(platform&&![self call:@{@"op":@"set_platform",@"super":self.superChord?:@"ctrl+alt"}])[problems addObject:self.statusText?:@"set_platform failed"];
     NSDictionary *loaded=[self call:@{@"op":@"load_config",@"path":self.configPath?:NSNull.null}];if(!loaded)[problems addObject:self.statusText?:@"load_config failed"];
     // A reload can change what is saved (config bookmarks); the launch load precedes the scene and saves nothing.
     if(!platform&&[loaded[@"dirty"]isEqual:@YES])[self saveScene];
     // The launch load's effects are the config's autostart commands: kept for main() to run once. A reload's are never looked at.
     if(platform)self.autostart=asArray(loaded[@"effects"]);
-    for(NSString *key in @[@"errors",@"warnings"])for(id message in asArray(loaded[key]))if(asString(message))[problems addObject:message];
-    NSString *path=asString(loaded[@"path"])?:self.configPath;NSArray<NSString *> *all=[problems arrayByAddingObjectsFromArray:[self refreshBindings]];
-    for(NSString *line in all)fprintf(stderr,"%s\n",line.UTF8String);
+    for(NSString *key in @[@"errors",@"warnings"])for(id message in asArray(loaded[key]))if(asString(message))[file addObject:message];
+    // The reply lists a load's warnings in the parser's order, which for a hash-mapped table differs between two loads of one file. They are
+    // printed in byte order, the order the controller picks the bar's one line in, so the first line is the one the bar names at every load.
+    [file sortUsingComparator:^NSComparisonResult(NSString *a,NSString *b){int order=strcmp(a.UTF8String,b.UTF8String);return order<0?NSOrderedAscending:order>0?NSOrderedDescending:NSOrderedSame;}];
+    NSString *path=asString(loaded[@"path"])?:self.configPath;NSArray<NSString *> *left=[self refreshBindings],*all=[problems arrayByAddingObjectsFromArray:left];
+    for(NSArray<NSString *> *lines in @[problems,file,left])for(NSString *line in lines)fprintf(stderr,"%s\n",line.UTF8String);
     NSString *note=all.count?summary(problems.count?[@"Config " stringByAppendingString:(path?:@"").stringByAbbreviatingWithTildeInPath]:@"Bindings",all):nil;
     self.configNote=problems.count?note:nil;self.statusText=note?:[self restingStatus];
     if(!self.configWatcher){__weak Desktop *weak=self;self.configWatcher=[[DWConfigWatcher alloc]initWithChanged:^{[weak loadConfig:NO];}];}
@@ -1542,7 +1574,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 }
 // What a config load changed in the background, the chrome or the outlines is adopted
 // before any output is described, and a background that fell back says why, as
-// upstream's error bar does. A problem in the config file itself keeps the status line.
+// upstream's error bar does. A config load the controller refused keeps the status line.
 - (void)adoptRender:(NSDictionary *)snapshot {
     if(!self.views.count)return;[[self canvasRenderer]configure:snapshot];
     NSString *note=self.compositor.note,*old=self.backgroundNote;if(note==old||[note isEqual:old])return;self.backgroundNote=note;

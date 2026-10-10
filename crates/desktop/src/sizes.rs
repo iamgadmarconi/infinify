@@ -190,6 +190,12 @@ pub(crate) struct Sizes {
     /// captures the size the window has by then.
     restore_size: BTreeMap<WindowId, Px>,
     asked: BTreeMap<WindowId, Asked>,
+    /// Upstream configured_window_size: the size last asked of a window by a
+    /// step, an IPC resize, a rule, a fit, a fill or the toggle back, which
+    /// the size the window then took never replaces. A fit and a fill measure
+    /// the window by it. A resize drag ends it, and until one is asked the
+    /// window is measured by the size it has.
+    configured: BTreeMap<WindowId, Px>,
     pending: Option<Pending>,
 }
 impl Sizes {
@@ -221,6 +227,7 @@ impl Sizes {
         self.restore.remove(&window);
         self.restore_size.remove(&window);
         self.asked.remove(&window);
+        self.configured.remove(&window);
     }
     /// A filled window that no longer sits where its fill put it was moved.
     /// Only a window that snaps is a member a resize can shift: one pinned to
@@ -334,6 +341,7 @@ impl Controller {
         self.sizes.restore.retain(|id, _| live(id));
         self.sizes.restore_size.retain(|id, _| live(id));
         self.sizes.asked.retain(|id, _| live(id));
+        self.sizes.configured.retain(|id, _| live(id));
         let slot = self.resize_slot().filter(|slot| slot.live);
         let current = |pending: &Pending| {
             slot.is_some_and(|slot| {
@@ -392,8 +400,18 @@ impl Controller {
         self.scene.set_window_rect(window, placed).ok()?;
         Some(placed.origin)
     }
+    /// Upstream configured_window_size: the size the window was last asked
+    /// for, else the size it has. A fit centers on, and a fill grows from,
+    /// the frame of that size at the window's top-left, whatever the window
+    /// took of it (src/state/fit.rs compute_fit_geometry and
+    /// fit_window_snapped, src/state/fill.rs compute_fill_geometry).
+    fn configured_size(&self, window: WindowId, committed: Px) -> Px {
+        let configured = self.sizes.configured.get(&window);
+        configured.copied().unwrap_or(committed)
+    }
     /// Record or clear the restore state as upstream does beside its configure.
     fn settle(&mut self, window: WindowId, plan: &Plan, asked: Asked) {
+        self.sizes.configured.insert(window, asked.requested);
         match plan {
             // Upstream resize_element_to: clear_fit and clear_fill, and the
             // request becomes the one the next absolute resize measures from.
@@ -459,6 +477,10 @@ impl Controller {
         asked: Asked,
         outcome: &mut Outcome,
     ) -> Result<(), Error> {
+        // Upstream's rule size is one-shot at the first commit, "so the user
+        // can still resize": a window sized any other way is owed it no more.
+        // `ask_ruled` has taken its window off the queue before it asks.
+        self.policy.sizing.retain(|queued| *queued != window);
         let rect = self
             .scene
             .window(window)
@@ -495,6 +517,19 @@ impl Controller {
         outcome.resize = Some(began);
         Ok(())
     }
+    /// The frame an absolute request that no observation has answered yet is
+    /// taking `window` to: upstream writes that top-left beside its configure.
+    pub(crate) fn owed_frame(&self, window: WindowId) -> Option<Rect> {
+        let slot = self.resize_slot().filter(|slot| slot.live)?;
+        let pending = self.sizes.pending.as_ref().filter(|p| !p.settled)?;
+        if slot.window != window || slot.transaction != pending.transaction {
+            return None;
+        }
+        let Plan::Absolute { loc } = pending.plan else {
+            return None;
+        };
+        Some(rect_at(loc, pending.asked.requested))
+    }
     /// The pending request was walked back to the size the window has. The
     /// transaction sends no setter for a size already committed, and without
     /// one no result settles the plan, so what upstream writes beside its
@@ -519,7 +554,28 @@ impl Controller {
     /// upstream would have written for that size: the placement, and once the
     /// setter has been attempted and observed, the restore state. A result
     /// that is valid for the transaction is never refused for a placement.
+    ///
+    /// A result that ends the transaction frees the one slot: the next
+    /// window whose rule's `size` is still owed is asked in the same reply,
+    /// whose `transaction` and `effect` are then that window's, the keys
+    /// under which a transaction's own next effect comes back.
     pub(crate) fn sizing_result(
+        &mut self,
+        transaction: u64,
+        effect_id: u64,
+        identity: SourceIdentity,
+        generation: u64,
+        result: NativeResizeResult,
+    ) -> Result<Value, Error> {
+        let reply = self.planned_result(transaction, effect_id, identity, generation, result)?;
+        if self.resize_slot().is_some_and(|slot| slot.live) {
+            return Ok(reply);
+        }
+        let began = self.ask_ruled(None);
+        Ok(carry(reply, began))
+    }
+    /// The transaction's own handling of a result, and the plan's.
+    fn planned_result(
         &mut self,
         transaction: u64,
         effect_id: u64,
@@ -706,8 +762,12 @@ impl Controller {
             _ => None,
         };
         // Upstream configured_window_size: a fit window is measured by the
-        // frame the fit asked for, whatever the window then took.
-        let size = fit.map_or(committed, |(_, configured)| configured);
+        // frame the fit asked for, whatever the window then took, and any
+        // other by the size it was last asked for.
+        let size = fit.map_or_else(
+            || self.configured_size(window, committed),
+            |(_, configured)| configured,
+        );
         let center = center_of(loc, size);
         let shove = |to: Px, extent: Px| {
             snapped.then(|| (snap_rect_at(loc, size), snap_rect_at(to, extent)))
@@ -829,10 +889,11 @@ impl Controller {
             );
         }
         // Upstream configured_window_size, as in toggle_fit: the fill grows
-        // from the frame a fit asked for, and is measured against it.
+        // from the frame the window was last asked for, a fit's included,
+        // and is measured against it.
         let size = match self.sizes.restore.get(&window) {
             Some(Restore::Fit { configured, .. }) => *configured,
-            _ => committed,
+            _ => self.configured_size(window, committed),
         };
         // Upstream compute_fill_geometry. A window no output shows, one wholly
         // outside the usable area and one that already fills its space are
@@ -927,16 +988,18 @@ impl Controller {
     /// rule's `size`. The top-left moves by half the difference from the size
     /// last asked for, in whole pixels, and is written for the size asked: a
     /// window that grants less keeps that top-left, as upstream's does.
-    /// Stacking is untouched, as `Move` leaves it. A widget and a
-    /// screen-pinned window are the caller's to refuse in its own words, as
-    /// IPC `resize` does; the transaction refuses them in any case.
+    /// Stacking is the caller's: IPC `resize` raises the window, a rule's
+    /// `size` leaves it where the map put it. A widget and a screen-pinned
+    /// window are the caller's to refuse in its own words, as IPC `resize`
+    /// does; only the rule they mapped with asks one. True when a size was
+    /// asked or written, false for the request that repeats the last one.
     pub(crate) fn request_window_size(
         &mut self,
         window: WindowId,
         output: Option<OutputId>,
         size: Px,
         outcome: &mut Outcome,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         let text = |error: Error| error.to_string();
         if !self.sources.contains_key(&window) {
             return Err(NO_SOURCE_IPC.to_string());
@@ -967,9 +1030,12 @@ impl Controller {
                 (live.map_or(committed, |asked| asked.requested), loc, false)
             }
         };
+        // The user's own request, whatever it names, ends a wait for a rule's
+        // `size` (see `deliver`): an identical one never gets that far.
+        self.policy.sizing.retain(|queued| *queued != window);
         // An identical request is a no-op rather than a second shift.
         if size == current {
-            return Ok(());
+            return Ok(false);
         }
         let to = [
             position[0] + (current[0] - size[0]) / 2,
@@ -990,7 +1056,7 @@ impl Controller {
             if size == committed {
                 self.settle_walked_back(outcome);
             }
-            return Ok(());
+            return Ok(true);
         }
         let plan = Plan::Absolute { loc: to };
         self.deliver(
@@ -1002,7 +1068,8 @@ impl Controller {
             asked,
             outcome,
         )
-        .map_err(text)
+        .map_err(text)?;
+        Ok(true)
     }
 
     /// Upstream shift_cluster_around_primary: the snapped neighbours of a

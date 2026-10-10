@@ -125,7 +125,8 @@ a turn of the main queue later ([The shell](#the-shell)). If the transaction
 then fails, the camera has still centered on the window.
 
 A step, a fill and an unfit raise their window in the action reply, as
-upstream's map does; no camera moves for them.
+upstream's map does; no camera moves for them. An IPC resize raises its
+window in the reply that asks as well, and hands it no focus.
 
 ## The actions
 
@@ -154,7 +155,11 @@ difference is measured from the size **last asked for** while the window's size
 still reads as an answer to it (upstream `requested_element_size` and
 `PendingResize::is_live`), so an identical request is a no-op rather than a
 second shift. The place is written for the size asked: a window that grants
-less keeps that top-left, as upstream's does. Refusals, in upstream's order:
+less keeps that top-left, as upstream's does. The window is raised over the
+others in the reply that asks, as upstream raises a client and leaves a
+stand-in's stacking alone, and it is handed no focus: a selector reaches any
+window. An identical request raises nothing, as upstream's returns before
+its map; `dirty` says the stacking changed. Refusals, in upstream's order:
 the selector errors, `size must be positive`,
 `this window has no canvas size to set: it is pinned, fullscreen, a widget, or not on screen yet`
 for a widget and a screen-pinned window, and
@@ -162,8 +167,11 @@ for a widget and a screen-pinned window, and
 during a drag or resize gesture.
 
 `Controller::request_window_size` is the entry point for any policy that sets a
-size outright. A window rule's `size` goes through it when the window maps:
-[RULES.md](RULES.md#a-rules-size).
+size outright. A window rule's `size` goes through it when the window maps,
+or when its turn comes: [RULES.md](RULES.md#a-rules-size). It raises nothing
+itself: the raise is IPC resize's. A window still waiting for its rule's
+`size` that is sized through it by IPC, or by a sizing action or a resize
+drag, waits no longer: the rule's size is never asked over the user's.
 
 ### `fit-window`, `fit-window-snapped`
 
@@ -171,6 +179,9 @@ Upstream `toggle_fit_window`. A fit sizes the window to the **active** output's
 usable area less `[snap] outer_gap` on every side, keeps its center, and flies
 that output's camera to `round(window center - usable center)` at zoom 1, so the
 frame lands exactly on the inset usable area. `focus_placement` plays no part.
+The center is that of the frame the window was
+[last asked for](#the-size-a-window-was-last-asked-for), at the top-left it
+has.
 The mode becomes `fit` and the size to come back to is saved
 ([below](#the-size-a-toggle-restores)). A window that takes another size than
 asked is still fit, at the fit's top-left.
@@ -191,11 +202,14 @@ The snapped variant also moves the window's snap cluster, upstream
 `shift_cluster_around_primary`: each neighbour follows the edge it is snapped
 to by that edge's whole-pixel travel, right and bottom neighbours in one pass
 and left and top in a second, with upstream's cascade for whoever they push. A
-shifted neighbour loses its fill restore point.
+shifted neighbour loses its fill restore point. The edges travel from the
+frame the window was [last asked for](#the-size-a-window-was-last-asked-for),
+and its neighbours are the windows snapped to that frame.
 
 ### `fill-window`
 
-Upstream `toggle_fill_window`. The window grows in place inside the usable area
+Upstream `toggle_fill_window`. The window grows in place, from the frame it
+was [last asked for](#the-size-a-window-was-last-asked-for), inside the usable area
 of the output that shows it, `outer_gap` from the area's edge and `[snap] gap`
 from every other canvas window, stand-ins included, and an edge that sticks out
 is pulled back. A widget and a screen-pinned window are no obstacle: upstream's
@@ -228,6 +242,26 @@ the `focus_placement` point at zoom 1. The stored view applies only on the
 output it was measured on, while the window sits where the fill put it and the
 usable area keeps its shape. A [pick](POINTER.md#pick-mode) does the same when
 that zoom is at or above `zoom.interact_min`.
+
+### The size a window was last asked for
+
+Upstream measures a window it is about to fit or fill by
+`configured_window_size`: the last size it sent the client, which a client's
+own commit never rewrites, and the committed size only when it has sent none.
+`compute_fit_geometry` takes the fit's center from it, `fit_window_snapped`
+the frame its neighbours are measured from, and `compute_fill_geometry` the
+frame a fill grows from and is compared with.
+
+Here that is the size last asked of the window by a step, an IPC resize, a
+window rule, a fit, a fill or the toggle back of either, recorded when the
+request is written, which is when the window has answered or at once for a
+window that had the size already. A window that took another size than asked
+is still measured by the size asked: a step from 400 to 430 wide that the
+window stops at 410 leaves a frame 430 wide for the next fit to center on,
+and for a neighbour to be snapped to. A window that was asked nothing is
+measured by the size it has. A resize drag ends it
+([Differences](#differences-from-upstream)), and so does the loss of the
+window's source.
 
 ### `zoom-to-fit-snapped`
 
@@ -272,7 +306,7 @@ window that is neither a widget nor pinned to a screen (`RULES.md`).
 | `zoom-to-fit-snapped`, focused | nothing, unless a return is pending | the same |
 | IPC `Resize` write | `this window has no canvas size to set: it is pinned, fullscreen, a widget, or not on screen yet`, after `size must be positive` and before anything else, with or without the capability | the same |
 | IPC `Resize` read | its size | its size |
-| a size transaction (`begin_sized_resize`) | refused as `begin_native_resize` refuses it: `a widget is not moved or resized by hand`. No caller reaches it with one: each row above has passed it over or refused it first | `a screen-pinned window is not moved or resized by hand`, and the same |
+| a size transaction (`begin_sized_resize`) | begun by one caller only, the rule's `size` it mapped with ([RULES.md](RULES.md#a-rules-size)): each row above has passed it over or refused it first. `begin_native_resize`, the pointer's, refuses it: `a widget is not moved or resized by hand` | the same, and `a screen-pinned window is not moved or resized by hand` |
 | as an obstacle to a fill, a neighbour a snapped fit shoves, a member of the cluster `zoom-to-fit-snapped` frames | never: it has no snap rectangle (`snap_rect_for`, `Scene::snaps`) | never |
 | `center-window`, `focus-center`, a pick | never the target, so no fill view is restored for one ([RULES.md](RULES.md#actions)) | the same |
 
@@ -294,17 +328,20 @@ window that is neither a widget nor pinned to a screen (`RULES.md`).
   (`a native resize of window N is still pending`); a screen-pinned window is
   then dragged [in screen space](RULES.md#dragging-a-pinned-window), and any
   other window on the canvas. The owed-size guard stands ahead of the pinned
-  drag too and has nothing to refuse there: a pin waits for the transaction
-  (`Pin` answers `resize must drain before structural change; …`), and no
-  size is asked of a pinned window, so a pinned window never owes one.
+  drag too. No sizing action's window meets it pinned: a pin waits for the
+  transaction (`Pin` answers `resize must drain before structural change; …`).
+  The pinned window it does refuse is one whose rule pinned it and named a
+  `size`, until that size has been delivered.
 - **The pointer.** A size still owed holds the pointer exactly as a resize the
   pointer began: [`hover`](POINTER.md#what-holds-the-pointer) forwards no
   motion and moves no focus until the transaction has drained.
 - **Pick mode.** Nothing here reads `zoom.interact_min`: `fill-window` runs
   below the threshold as upstream's does. What a pick then does with the fill
   view is [POINTER.md](POINTER.md#pick-mode).
-- **A window rule's `size`** is asked of a new canvas window once it is placed,
-  through `request_window_size`, when the capability is on:
+- **A window rule's `size`** is asked of a new window as it maps, a widget
+  and a rule-pinned window included, through `request_window_size`, when the
+  capability is on. The window is placed for that size, and several that map
+  together are asked one at a time:
   [RULES.md](RULES.md#a-rules-size). `preserve_aspect_ratio` and `fullscreen`
   stay recorded and not applied.
 
@@ -313,7 +350,9 @@ window that is neither a widget nor pinned to a screen (`RULES.md`).
 There is one transaction. Upstream's rule for a window that still owes a
 configure (`owes_a_configured_size`, `placed_element_size`) is that the next
 request walks on from the size asked for. What maps onto the transaction's one
-latest-request slot is done; the rest is refused, never queued:
+latest-request slot is done; the rest is refused, never queued. The one
+request that waits instead is a window rule's `size`, which the window never
+asked for itself: [RULES.md](RULES.md#a-rules-size).
 
 - a step that moves the **same edges** as the pending step walks on from the
   size asked for and replaces the queued size. Its reply has no `effect`:
@@ -385,7 +424,23 @@ coordinator and driver are unchanged.
   the transaction as `transaction` and a one-entry `effects`, its `effect`
   being the arrival's focus request. `-attach:logical:world:placed:` hands
   that reply to `-consumeSize:` once the source is registered, before the
-  capture starts, and to `-follow:` as before.
+  capture starts, and to `-follow:` as before. The transaction can be that of
+  another window, one that was waiting its turn: the hook reads the effect,
+  not the window that mapped.
+- **The next ruled window.** The reply to the `native_resize_result` that
+  ends a transaction can carry the first effect of the next waiting window's
+  ([RULES.md](RULES.md#a-rules-size)), under `transaction` and `effect` as
+  every result reply carries a transaction's next effect.
+  `-[DWResizeCoordinator consume:]` reads `effect` from each result reply and
+  performs whatever effect the snapshot's `native_resize` holds as pending,
+  so it performs this one with no change to the coordinator. The shell also
+  takes the transaction such a reply names for the controller's own, so that
+  its gates treat it as a sizing action's and not as a drag: this controller
+  sends it from a transaction the pointer began as well as from its own.
+  `-resizeCall:` does that for every `native_resize_result` reply whose
+  effect names another transaction than the one the result was for
+  ([its notes](../../native/desktop/README.md#window-sizing-actions)). It is
+  built and read; none of it has been run.
 - **Gates.** While the remembered transaction is the one in the slot and is
   not uncertain, an action is neither dropped nor preceded by
   `cancel_native_resize`, an IPC request is not answered `a native resize is
@@ -406,7 +461,9 @@ coordinator and driver are unchanged.
   same callback renders, which is what offers a State event to subscribers.
 - No other reply begins a transaction: those of `window_closed`,
   `adoption_complete` and a retitle end in `-follow:` or nowhere, and carry
-  none.
+  none. A ruled window that waited out a drag is therefore not asked when the
+  drag ends, but with the next new window or the next transaction's end,
+  unless the user has sized it first.
 
 ## Differences from upstream
 
@@ -424,6 +481,7 @@ coordinator and driver are unchanged.
   `this window has no native size to set: it is a stand-in or has no live window`.
   `fit-window` and `fill-window` on a stand-in do nothing, as upstream's do.
 - **One transaction.** Upstream sizes any number of windows at once; see above.
+  Windows whose rules name a size are asked one after another.
 - **During a gesture** upstream bails only for the element under the grab, and
   silently for a step.
 - **`restore_size`** ([above](#the-size-a-toggle-restores)) is read as
@@ -435,26 +493,24 @@ coordinator and driver are unchanged.
   which differs only when the window clamped the request. Upstream writes it
   when a resize drag settles; here the drag drops it when it begins, and no fit
   or fill can run in between.
-- **The configured size** is kept only for a fit, as the size that fit asked
-  for. Upstream reads the size it last configured in two more places: a fit
-  pressed after a step, an IPC resize or a fill the window clamped centers on
-  the frame that request asked for (and the snapped variant measures its
-  neighbours from it). Here those center on, and measure from, the frame the
-  window took.
-- **Stacking.** IPC resize leaves stacking alone, as `Move` does here; upstream
-  raises a client. The scene has no raise apart from focus, and a resize by
-  selector must not take the focus. Neighbours shifted by a snapped fit keep
-  their stacking.
+- **The configured size after a resize drag.** A drag ends
+  [the size last asked for](#the-size-a-window-was-last-asked-for) when it
+  begins, and the window is measured by the size it has from then on.
+  Upstream goes on reading the last size the drag configured, which is
+  another only for a window that clamped the drag.
+- **Stacking.** Neighbours shifted by a snapped fit keep their stacking, which
+  upstream's re-map raises.
 - **A window that loses its source** loses its restore point, including one
   that is only detached and later rebound.
 - **Fractions.** Upstream's frames are integers. A world frame with a
   fractional size is rounded for the policy and the size asked for is whole.
-- **A pinned window is not sized at all.** Upstream resizes one in screen
-  space by its resize binding; here no size transaction begins for a
-  screen-pinned window or a widget, by hand, by action or by rule
-  ([RULES.md](RULES.md#differences-from-upstream)).
-- **A rule's `size`** is asked after the window is placed, not before, and not
-  of a widget or a screen-pinned window: [RULES.md](RULES.md#a-rules-size).
+- **A pinned window is not resized by hand.** Upstream resizes one in screen
+  space by its resize binding; here the only size transaction of a
+  screen-pinned window or a widget is the one its rule's `size` begins as it
+  maps ([RULES.md](RULES.md#differences-from-upstream)).
+- **A rule's `size` a window does not grant** leaves it at the top-left of the
+  frame asked for, where upstream places the size it got:
+  [RULES.md](RULES.md#differences-from-upstream).
 - Fullscreen is not here: `toggle-fullscreen` stays
   `action not implemented on macOS yet`.
 
@@ -465,7 +521,16 @@ plays the shell's part: it answers every resize effect with a synthetic
 `native_resize_result`. Expected sizes, places and cameras are derived by hand
 from upstream's rules on an output whose screen origin is not the global
 origin, with `outer_gap`, `resize_step` and `focus_placement` set away from
-their defaults. Nine of its thirty scenarios are the joins of
+their defaults. One scenario is
+[the size a window was last asked for](#the-size-a-window-was-last-asked-for):
+a fit after a step, an IPC resize and a fill the window clamped, each centered
+on the frame asked for with the frame it took a known distance off, a
+neighbour snapped to the frame asked for and shoved by the snapped fit, a
+fill that finds the frame asked for already filling its space, and the same
+fill growing once a resize drag has ended what was asked. In the IPC resize
+scenario a window resized by selector goes over the focused one, which keeps
+the focus, and an identical request leaves the stacking alone. Nine of its thirty-one
+scenarios are the joins of
 [Widgets, screen-pinned windows and rules](#widgets-screen-pinned-windows-and-rules):
 the pass-over of a widget and a pinned window, a pin keeping a fit, what a
 fill, a snapped fit and `zoom-to-fit-snapped` see, a drag above and below

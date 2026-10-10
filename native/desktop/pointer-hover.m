@@ -105,7 +105,10 @@ typedef NS_ENUM(NSInteger,DWPress) {
     // out and back never picks as well; a refused move leaves the press spent.
     if(_press!=DWPressPick||xx+yy<=25||![[host outputAt:screen]isEqual:_output])return NO;
     _press=DWPressSpent;
-    return [host pointerCommand:@{@"op":@"begin_drag",@"window":_window,@"output":_output,@"group":@NO} quiet:NO]!=nil;
+    // begin_drag raises and focuses its window, as the press did, and the focus request in its reply takes the place of the press's:
+    // it is carried out the same way, or the controller would wait on a request nobody answers.
+    id reply=[host pointerCommand:@{@"op":@"begin_drag",@"window":_window,@"output":_output,@"group":@NO} quiet:NO];if(typed(reply,NSDictionary.class))[host pointerApply:reply];
+    return reply!=nil;
 }
 - (void)pressReleased:(CGPoint)screen {
     NSView<DWPointerHost> *host=_host;DWPress press=_press;NSNumber *window=_window,*output=_output;

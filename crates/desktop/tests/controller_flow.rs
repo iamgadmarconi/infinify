@@ -282,7 +282,16 @@ fn snap_defaults_use_current_zoom_while_displacement_keeps_start_zoom() {
         if op == "begin_resize" {
             begin["edges"] = json!("right");
         }
-        host.ok(begin);
+        // The press raises and focuses the window ahead of its grab, as
+        // upstream's does: it is on top of its neighbour from here on, and
+        // the reply carries the focus request a click's carries.
+        let begun = host.ok(begin);
+        assert_eq!(begun["effect"]["op"], "focus_native_window", "{begun}");
+        assert_eq!(begun["effect"]["window"], window, "{begun}");
+        let stacked = host.snapshot();
+        assert_eq!(stacked["focused"], window);
+        assert_eq!(stacked["focus"]["pending_effect"], begun["effect"]);
+        assert_eq!(stacked["windows"][1]["window"], window);
         for (zoom, screen_delta, expected_delta) in [
             (1.0, 2.0, 4.0),
             (0.5, 2.0, 38.0),
@@ -297,12 +306,12 @@ fn snap_defaults_use_current_zoom_while_displacement_keeps_start_zoom() {
                 rect(0.0, 0.0, 100.0 + expected_delta, 100.0)
             };
             assert_eq!(
-                host.snapshot()["windows"][0]["world_rect"],
+                host.snapshot()["windows"][1]["world_rect"],
                 expected,
                 "{op} zoom={zoom} screen_delta={screen_delta}"
             );
             assert_eq!(
-                host.snapshot()["windows"][1]["world_rect"],
+                host.snapshot()["windows"][0]["world_rect"],
                 rect(150.0, 0.0, 100.0, 100.0)
             );
         }

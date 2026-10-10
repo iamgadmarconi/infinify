@@ -337,6 +337,18 @@ fn state_camera_and_zoom_speak_center_y_up_over_the_whole_output() {
     }
     h.ok(json!({"op":"end_gesture"}));
     assert_eq!(pose(&mut h, 2), other);
+
+    // A viewport centered on a point whose Y is 0 reads a negative zero, as
+    // upstream's own does: its viewport_center negates the Y-down center,
+    // -(0.0) is -0.0, and its client prints that as `-0`. Nothing here
+    // normalises what upstream does not.
+    let data = h.ipc(json!({"Camera":[0,0]}));
+    land(&mut h, &mut clock, &data["navigation"]);
+    let read = h.read(json!({"Camera":null}))["Camera"].clone();
+    let (x, y) = (num(&read["x"]), num(&read["y"]));
+    assert!(x == 0.0 && x.is_sign_positive(), "{read}");
+    assert!(y == 0.0 && y.is_sign_negative(), "{read}");
+    assert_eq!(format!("{x} {y}"), "0 -0");
 }
 
 #[test]

@@ -235,7 +235,8 @@ impl Controller {
             .iter()
             .filter(|w| self.on_canvas(w.id))
             .collect();
-        let frames: Vec<_> = windows.iter().map(|w| pixel_frame(w.world_rect)).collect();
+        let placed: Vec<Rect> = windows.iter().map(|w| self.placed_rect(w)).collect();
+        let frames: Vec<_> = placed.iter().map(|rect| pixel_frame(*rect)).collect();
         let in_view = |index: &usize| {
             frames[*index].is_some_and(|(loc, size)| {
                 policy::visible_fraction(loc, size, viewport.camera, view, viewport.zoom)
@@ -266,13 +267,13 @@ impl Controller {
         let Some(anchor) = anchor else {
             return Ok(None);
         };
-        let rects: Vec<auto_placement::Rect> = windows
+        let rects: Vec<auto_placement::Rect> = placed
             .iter()
-            .map(|window| auto_placement::Rect {
-                x: window.world_rect.origin.x.round(),
-                y: window.world_rect.origin.y.round(),
-                w: window.world_rect.size.width.round(),
-                h: window.world_rect.size.height.round(),
+            .map(|rect| auto_placement::Rect {
+                x: rect.origin.x.round(),
+                y: rect.origin.y.round(),
+                w: rect.size.width.round(),
+                h: rect.size.height.round(),
             })
             .collect();
         let eligible: HashSet<usize> = (0..rects.len()).collect();
@@ -340,7 +341,7 @@ impl Controller {
         }
         let step = f64::from(config.decorations.title_bar_height.max(1));
         while self.scene.windows().iter().any(|window| {
-            let origin = window.world_rect.origin;
+            let origin = self.placed_rect(window).origin;
             (origin.x.round() - at.0).abs() <= 2.0 && (origin.y.round() - at.1).abs() <= 2.0
         }) {
             at = (at.0 + step, at.1 + step);

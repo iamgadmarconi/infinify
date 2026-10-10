@@ -20,9 +20,12 @@
 // `AppliedWindowRule` and `effective_opacity`, upstream's own code. The
 // stacking rule is `Stage::enforce_stacking`, replayed on the scene. Native
 // frames already include their title bar, so chrome is zero. A rule's `size`
-// is asked of a newly placed window through sizes.rs's `request_window_size`
-// when the shell can deliver one (`native_resize_capability`), and is recorded
-// and not applied otherwise; `fullscreen` is recorded and never applied.
+// follows the size arm of that first commit and the placement of the commit
+// after it: when the shell can deliver a size (`native_resize_capability`) the
+// new window, a widget and a rule-pinned one included, is placed for the size
+// its rule names and asked for it through sizes.rs's `request_window_size`,
+// one window at a time in map order; otherwise the size is recorded and not
+// applied. `fullscreen` is recorded and never applied.
 use super::actions::Outcome;
 use super::ipc::{
     OutputPinned, Reply, Response, WindowSelector, frame, internal_to_rule, readable,
@@ -34,7 +37,7 @@ use super::*;
 use driftwm_canvas::Placement;
 use driftwm_canvas::policy::PixelSize;
 use driftwm_core::config::{AppliedWindowRule, DecorationMode, PassList, effective_opacity};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 
 /// Upstream pin_window's only refusal: a keybinding ignores it.
 const NO_OUTPUT: &str = "no output to pin to";
@@ -60,6 +63,9 @@ pub(crate) struct Policy {
     /// The windows whose rule's `size` was asked of them as they mapped, or
     /// who had it already. Never saved.
     pub(crate) sized: BTreeSet<WindowId>,
+    /// The windows whose rule's `size` is still to be asked, in map order:
+    /// there is one size transaction, and each waits for it. Never saved.
+    pub(crate) sizing: VecDeque<WindowId>,
 }
 
 /// A decoration mode under upstream's config spelling: the snapshot's
@@ -285,63 +291,176 @@ impl Controller {
             None => self.policy.applied.remove(&window),
         };
         self.policy.sized.remove(&window);
+        self.policy.sizing.retain(|queued| *queued != window);
         if let Some(Arrival::Pin { pin, .. }) = arrival {
             self.policy.pins.insert(window, pin);
         }
     }
+    /// Upstream configures a rule's `size` at a new toplevel's first commit
+    /// and places the window on the commit that follows, for the size it then
+    /// has: the pin, the `position` and the placement policy all take that
+    /// frame, for a widget and a rule-pinned window like any other. So when
+    /// the shell can deliver a size, a new window's arrival is computed for
+    /// the size its rule names. True when it was. A window that takes over a
+    /// slot keeps the slot's frame, as upstream's adopted window does, and a
+    /// frame that cannot be placed for the size asked is placed for its own:
+    /// neither is asked anything.
+    pub(crate) fn arrival_by_rule(
+        &self,
+        output: Option<OutputId>,
+        pointer: Option<Point>,
+        bundle_id: &str,
+        title: &str,
+        own: Size,
+        rule: Option<&AppliedWindowRule>,
+    ) -> Result<(Arrival, bool), Error> {
+        let size = rule.and_then(|rule| rule.size);
+        if let Some((width, height)) = size.filter(|_| self.sizes.capability) {
+            // Upstream's one-pixel floor, as IPC `resize` applies it.
+            let asked = Size::new(width.max(1).into(), height.max(1).into());
+            let placed = self.arrival(output, pointer, bundle_id, title, asked, rule);
+            if let Ok(arrival @ (Arrival::Place { .. } | Arrival::Pin { .. })) = placed {
+                return Ok((arrival, true));
+            }
+        }
+        let arrival = self.arrival(output, pointer, bundle_id, title, own, rule)?;
+        Ok((arrival, false))
+    }
     /// Upstream's size arm of a new toplevel's first commit: a rule's `size`
-    /// is asked of the window as it maps. Upstream configures the client
-    /// first and places it on the follow-up commit; here the window is placed
-    /// at its own size and the rule's is then asked through
-    /// `request_window_size`, which keeps the frame's center, so a ruled
-    /// `position`, the placement policy and the arrival's flight aim at the
-    /// same point either way. `reply` is `settle_arrival`'s and gains the
-    /// size transaction when one began: `transaction`, and its effect as the
-    /// one entry of `effects`, because `effect` is the focus request there.
+    /// is asked of the window as it maps. `own` is the size the window has,
+    /// for a window `arrival_by_rule` placed for the size its rule names; the
+    /// scene holds that frame, which the arrival's flight was aimed at.
     ///
-    /// Only a shell that can deliver a size is asked. A window that takes
-    /// over a slot keeps the slot's frame, as upstream's adopted window does.
-    /// A widget and a window the rule pinned are not canvas windows and are
-    /// never asked, whatever size they have, which is a gap: upstream's size
-    /// arm runs before its pin and widget arms. A size that cannot be asked
-    /// right now leaves the window mapped at its own size too: a drag or
-    /// another size transaction in progress (there is one slot, and nothing
-    /// is queued), or a window whose native resize is unsupported. In each of
-    /// those cases `rule.not_applied` keeps `size`; a canvas window that maps
-    /// with the rule's size already needs nothing.
+    /// Only a native observation commits a size, so until the window answers
+    /// it has its own, centered in the frame asked for: the request keeps
+    /// the center (`request_window_size`), and upstream's truncating halving
+    /// then lands it on that frame's top-left exactly. A pinned window stands
+    /// at its pin, which was computed for the size asked. A window that
+    /// grants another size keeps that top-left, as IPC `resize` leaves it.
+    ///
+    /// There is one size transaction, so the windows are asked one at a time
+    /// in map order (`ask_ruled`). `reply` is `settle_arrival`'s and gains
+    /// the transaction that began with this map, this window's or that of
+    /// one that was waiting: `transaction`, and its effect as the one entry
+    /// of `effects`, because `effect` is the focus request there.
     pub(crate) fn size_by_rule(
         &mut self,
         window: WindowId,
         output: Option<OutputId>,
-        arrival: Arrival,
+        own: Option<Size>,
         mut reply: Value,
     ) -> Value {
-        let size = self.policy.applied.get(&window).and_then(|r| r.size);
-        let (Some((width, height)), Arrival::Place { .. }, true) =
-            (size, arrival, self.sizes.capability)
-        else {
-            return reply;
-        };
-        if !self.on_canvas(window) {
-            return reply;
+        if let (Some(own), Some(rect)) = (own, self.scene.window(window).map(|w| w.world_rect)) {
+            // What the frame asked for has over the window's own size.
+            let spare = match (frame(rect), pixel_size(own)) {
+                (Ok((_, asked)), Ok(whole)) => {
+                    Some([asked[0] - i64::from(whole.w), asked[1] - i64::from(whole.h)])
+                }
+                _ => None,
+            };
+            let centered = spare
+                .filter(|_| !self.is_pinned(window))
+                .map(|[w, h]| rect.origin + Point::new((w / 2) as f64, (h / 2) as f64));
+            let standing = Rect {
+                origin: centered.unwrap_or(rect.origin),
+                size: own,
+            };
+            if self.scene.set_window_rect(window, standing).is_ok() {
+                // A window that has the size already is asked nothing.
+                if spare == Some([0, 0]) {
+                    self.policy.sized.insert(window);
+                } else {
+                    self.policy.sizing.push_back(window);
+                }
+            }
         }
-        // A refusal must leave nothing half written, and never fails the map.
-        let mut next = self.clone();
-        let mut outcome = Outcome::default();
-        let size = [width.into(), height.into()];
-        if next
-            .request_window_size(window, output, size, &mut outcome)
-            .is_err()
-        {
-            return reply;
-        }
-        next.policy.sized.insert(window);
-        *self = next;
-        if let Some(mut began) = outcome.resize.filter(|r| r["effect"].is_object()) {
+        if let Some(mut began) = self.ask_ruled(output) {
             reply["transaction"] = began["transaction"].take();
             reply["effects"] = json!([began["effect"].take()]);
         }
         reply
+    }
+    /// The frame a new window is placed against. Upstream's stage holds a
+    /// ruled window at the frame it was placed for, of the size its rule
+    /// names; here one stands inside that frame at its own size until it has
+    /// answered, so the cascade and the auto placement of a later arrival
+    /// read the frame it is becoming: the one its request named once asked,
+    /// and while it waits its turn the one `request_window_size` will name,
+    /// which keeps the center in whole pixels. A pinned window has no canvas
+    /// frame to read.
+    pub(crate) fn placed_rect(&self, window: &Window) -> Rect {
+        let rect = window.world_rect;
+        if self.is_pinned(window.id) {
+            return rect;
+        }
+        if self.policy.sized.contains(&window.id)
+            && let Some(owed) = self.owed_frame(window.id)
+        {
+            return owed;
+        }
+        if !self.policy.sizing.contains(&window.id) {
+            return rect;
+        }
+        let size = self.policy.applied.get(&window.id).and_then(|r| r.size);
+        match (size, frame(rect)) {
+            (Some((width, height)), Ok((loc, own))) => {
+                let asked = [i64::from(width).max(1), i64::from(height).max(1)];
+                Rect::new(
+                    (loc[0] + (own[0] - asked[0]) / 2) as f64,
+                    (loc[1] + (own[1] - asked[1]) / 2) as f64,
+                    asked[0] as f64,
+                    asked[1] as f64,
+                )
+            }
+            _ => rect,
+        }
+    }
+    /// Ask the next window whose rule's `size` is still owed, if the one size
+    /// transaction is free: the head of the queue, so in map order. `None`
+    /// when nothing began. While a drag, a resize or another transaction is
+    /// unresolved the head waits, and `rule.not_applied` goes on naming
+    /// `size` for every window still queued. A window that has the size
+    /// already needs nothing delivered, and one that cannot be asked (its
+    /// resize is unsupported, the frame would leave the integer range)
+    /// leaves the queue with `size` still named; the next is then tried. A
+    /// refusal leaves nothing half written.
+    ///
+    /// Upstream's rule size is one-shot at the first commit (`pending_size`,
+    /// src/handlers/compositor.rs: "so the user can still resize"), so a
+    /// window the user sizes before its turn (IPC `resize`, a step, a fit, a
+    /// fill, a resize drag) is taken off the queue where that sizing begins,
+    /// with `size` still named: it was never asked.
+    ///
+    /// The transaction that begins is returned for a reply the shell hands
+    /// to its resize coordinator: the `attach` of a new window, and the
+    /// `native_resize_result` that ended the transaction before it.
+    pub(crate) fn ask_ruled(&mut self, output: Option<OutputId>) -> Option<Value> {
+        while let Some(&window) = self.policy.sizing.front() {
+            let busy = self.resize_slot().is_some_and(|slot| slot.live);
+            if busy || self.gesture.is_some() {
+                return None;
+            }
+            self.policy.sizing.pop_front();
+            let size = self.policy.applied.get(&window).and_then(|r| r.size);
+            let Some((width, height)) = size else {
+                continue;
+            };
+            let mut next = self.clone();
+            let mut outcome = Outcome::default();
+            let size = [width.into(), height.into()];
+            if next
+                .request_window_size(window, output, size, &mut outcome)
+                .is_err()
+            {
+                continue;
+            }
+            next.policy.sized.insert(window);
+            *self = next;
+            if let Some(began) = outcome.resize.filter(|r| r["effect"].is_object()) {
+                return Some(began);
+            }
+        }
+        None
     }
     /// A pin changes which space a frame lives in, so it waits for a drag or
     /// resize to end, as `place_window` does.
@@ -681,6 +800,10 @@ impl Controller {
         self.policy.applied.retain(|id, _| live(id));
         let applied = &self.policy.applied;
         self.policy.sized.retain(|id| applied.contains_key(id));
+        // A window that closed, or lost its source, waits for no size.
+        self.policy
+            .sizing
+            .retain(|id| applied.contains_key(id) && sources.contains_key(id));
         self.settle_pinned_drag();
         let order: Vec<WindowId> = self.scene.windows().iter().map(|w| w.id).collect();
         for id in &order {

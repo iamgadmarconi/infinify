@@ -7,16 +7,24 @@ remains the logical reducer API. Native group resize is rejected. Pin, fullscree
 and aspect ratio are outside this contract. Fit, fill, the step actions, IPC
 resize and a window rule's `size` run this same transaction without a drag:
 [SIZES.md](SIZES.md) has what they ask for and what they write when its results
-arrive. Neither way of beginning one takes a [widget or a screen-pinned
-window](RULES.md#navigation-activation-gestures-and-outputs):
-`begin_native_resize` and the sized transaction both answer
+arrive. `begin_native_resize` takes no [widget and no screen-pinned
+window](RULES.md#navigation-activation-gestures-and-outputs): it answers
 `a widget is not moved or resized by hand` or
-`a screen-pinned window is not moved or resized by hand`.
+`a screen-pinned window is not moved or resized by hand`. The sized
+transaction is begun for one of those by a single caller, the rule's `size`
+the window mapped with ([RULES.md](RULES.md#a-rules-size)); every other
+caller has passed it over or refused it first.
 
 ## Commands and effects
 
 - `begin_native_resize {window, output, edges, start_screen, group:false}` returns
-  a transaction ID and `observe_resize_source` effect. The host must supply a
+  a transaction ID and `observe_resize_source` effect. It raises and focuses
+  the window first, as upstream's resize press does ahead of its grab
+  ([NAVIGATION.md](NAVIGATION.md#activate)): `effect` is the transaction's, so
+  the focus request is the one entry of `effects`, where every reply that
+  carries a size transaction keeps its focus request. A refused begin focuses
+  nothing (the native shell then asks for the focus by itself, with
+  `focus`). The host must supply a
   fresh result before any setter; the actual frame size must exactly match
   committed world size. Motion during this asynchronous baseline read is coalesced
   into the existing latest-request slot without committing geometry. Release keeps
@@ -36,7 +44,11 @@ window](RULES.md#navigation-activation-gestures-and-outputs):
   `mutation_attempted`, `observed`, `requested`, `actual_ax`, `actual_cg`.
   AX/CG rectangles must be valid and agree within one point on each coordinate
   and dimension when observed. Contradictory outcomes, stale IDs, generations,
-  identities, requested sizes and duplicates reject atomically.
+  identities, requested sizes and duplicates reject atomically. The reply's
+  `transaction` and `effect` are the next effect to perform. When the result
+  ends its transaction that can be the first effect of another one: the size
+  transaction of the next window whose rule's `size` is still owed
+  ([RULES.md](RULES.md#a-rules-size)).
 - `end_native_resize {transaction}` drains the latest request and final read.
   `cancel_native_resize {transaction}` discards unsent intent, drains sent work
   and reads actual geometry. Cancellation does not roll back a native setter.

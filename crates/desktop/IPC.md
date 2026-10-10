@@ -247,6 +247,14 @@ with Y down. Two centers are in play and they are not interchangeable:
 - Bookmarks, zoom anchoring and the focus visibility test use the **usable
   rectangle**, as upstream's `usable_center_screen` and usable area are.
 
+A viewport centered on a canvas point whose Y is 0 reads `-0.0`, and the
+client prints `0 -0` after `camera 0 0`. That is upstream's own: its
+`viewport_center` (`src/canvas.rs`, `driftwm-core`'s here) negates the Y-down
+center, the negation of a positive zero is a negative one, and its client
+prints the pair with `{x} {y}` (`src/ipc/client.rs`), which writes the sign.
+Upstream's arithmetic, compiled apart, printed `0 -0` for the same request.
+Nothing here normalises it.
+
 Only `screen_bounds`, the navigation context and world rectangles are read, and
 of `screen_bounds` only the size enters any camera or window position. Its
 origin is read in three places: the adjacency of outputs, the screen point of
@@ -275,7 +283,7 @@ into `i32` or its far edge would pass `i32::MAX`.
 | `{"Focus":null}` | no | `Focused({id,app_id})` for the logical focus, or `Focused(null)`. |
 | `{"Focus":<selector>}` | yes | Logical focus and raise, plus upstream's camera rule: a frame already wholly inside the usable area is only focused; a window with a bound source is navigated to at zoom 1, or at the current zoom when `zoom.reset_on_activation` is off, exactly as `navigate_window` does; a detached placeholder is panned to at the current zoom, as upstream's `reveal_suspended` does for a stand-in. `effects` holds the focus effect when the window has a bound source; `dirty` is true because focus and stacking are saved. A pinned window is raised and focused without a navigation; a widget is refused, `window #N is a widget and cannot be focused`. |
 | `{"Move":{window?,to?}}` | no | Without `to`: `Position{x,y}`, the frame's center. With `to`: a logical world move that puts the frame's top-left on whole points and keeps its size; `dirty` is true. Refused while a drag or resize gesture is installed, while a native resize transaction on that window is live, and when the destination frame would leave the `i32` range (`window geometry exceeds integer range`). A pinned window reads and refuses the write: `this window has no canvas position to move: it is pinned, fullscreen, or not on screen yet`. A widget is moved by nothing else. |
-| `{"Resize":{window?,to?}}` | no | Without `to`: `Size{width,height}`. With `to`: a non-positive size gets upstream's `size must be positive`, then a pinned window and a widget get upstream's `this window has no canvas size to set: it is pinned, fullscreen, a widget, or not on screen yet`, with or without the capability. For a canvas window, until the shell has sent `native_resize_capability`: `Err`, `resize is not implemented on macOS yet: native layout resize is not available`. With the capability: upstream's center-preserving resize, `Size` echoing the size asked for, and a reply that may carry `transaction` and `effect`; see [SIZES.md](SIZES.md#ipc-resizewindowto). |
+| `{"Resize":{window?,to?}}` | no | Without `to`: `Size{width,height}`. With `to`: a non-positive size gets upstream's `size must be positive`, then a pinned window and a widget get upstream's `this window has no canvas size to set: it is pinned, fullscreen, a widget, or not on screen yet`, with or without the capability. For a canvas window, until the shell has sent `native_resize_capability`: `Err`, `resize is not implemented on macOS yet: native layout resize is not available`. With the capability: upstream's center-preserving resize, `Size` echoing the size asked for, and a reply that may carry `transaction` and `effect`; the window is raised, as upstream raises a client, and is handed no focus, with `dirty` when that changed the stacking, and a request identical to the one last asked changes nothing; see [SIZES.md](SIZES.md#ipc-resizewindowto). |
 | `{"Opacity":{window?,value?}}` | no | Without `value`: `Opacity(n)`, what the window is drawn at. With one in `[0, 1]`: pins it until the window is gone, never `dirty`. Live windows only. [RULES.md](RULES.md#ipc). |
 | `{"Pin":{window?,value?}}` | for a pin, when no output shows the window | Without `value`: `Pin(bool)`. With one: `toggle-pin-to-screen` as a bool, for any live window; `dirty` when it changed. [RULES.md](RULES.md#ipc). |
 | `{"Action":"…"}` | per action | Runs the `action` command's handler. `Ok` whenever it runs, even with no effect; every refusal above is an `Err` reply. |
@@ -443,8 +451,9 @@ is its spec, joined by single spaces. Parsing is by hand; there is no clap.
 
 ## Differences from upstream
 
-- `Move` does not raise the window: Scene has no raise without focus. Upstream
-  raises a live client and activates it only when it was already focused.
+- `Move` does not raise the window. Upstream raises a live client and
+  activates it only when it was already focused. `Resize` does raise, as
+  upstream's.
 - Camera and zoom writes, and `go-to-bookmark`, reject during a drag or resize
   gesture, as every navigation command here does. Upstream has no such gate.
 - Fullscreen does not exist here, so nothing exits it.
@@ -480,7 +489,8 @@ and checks reply shapes and resulting controller state: the `State` shape,
 camera and zoom round trips on outputs whose `screen_bounds` origin is not the
 global origin and whose usable center differs from the output center, bookmark
 set / go-to / list / delete and the save file with and without the `bookmarks`
-key, `Move` with its range refusal, `Focus` of a bound window (zoom 1) and of a
+key, a camera read of `-0.0` for a viewport centered on Y 0, `Move` with its
+range refusal, `Focus` of a bound window (zoom 1) and of a
 placeholder (current zoom), every refused and unknown request against an
 unchanged `snapshot`, and an accept / reject table for the action grammar. The window navigation actions, `pointer`, `held` and the cycle prelude
 are covered by `tests/navigation_actions_flow.rs`, described under

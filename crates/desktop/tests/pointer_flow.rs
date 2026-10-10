@@ -82,6 +82,17 @@ impl Host {
             .unwrap();
         found["world_rect"].clone()
     }
+    /// A screen-pinned window's rectangle in global screen points.
+    fn pin_rect(&mut self, window: u64) -> Value {
+        let windows = self.snapshot()["windows"].clone();
+        let found = windows
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["window"] == window)
+            .unwrap();
+        found["pinned"]["screen_rect"].clone()
+    }
     fn generation(&mut self, window: u64) -> Value {
         let windows = self.snapshot()["windows"].clone();
         let found = windows
@@ -481,8 +492,16 @@ fn hover_focuses_the_window_under_the_pointer_without_raising_it() {
 #[test]
 fn hover_moves_no_focus_under_a_gesture_a_native_resize_or_an_open_cycle() {
     // A drag gesture: no focus, and the motion is not the window's either.
+    // The press that began it raised and focused its window, as upstream's
+    // move binding does ahead of the grab: D comes over A, with the focus
+    // request a click's reply carries. The history waits for its answer.
     let mut h = layout(SLOPPY);
-    h.ok(json!({"op":"begin_drag","window":1,"output":1}));
+    let begun = h.ok(json!({"op":"begin_drag","window":4,"output":1}));
+    assert_eq!(begun, json!({"effect":h.focus_state()["pending_effect"]}));
+    assert_eq!(begun["effect"]["op"], "focus_native_window", "{begun}");
+    assert_eq!(begun["effect"]["window"], 4);
+    assert_eq!((h.focused(), h.stacking()), (json!(4), vec![2, 3, 5, 1, 4]));
+    assert_eq!(h.history(), json!([1]));
     let held = h.snapshot();
     let (x, y) = center(B);
     let reply = h.hover(x, y);
@@ -494,10 +513,22 @@ fn hover_moves_no_focus_under_a_gesture_a_native_resize_or_an_open_cycle() {
     let reply = h.hover(x, y);
     moved(&mut h, &reply, 2);
 
-    // A native resize that has not drained.
+    // A native resize that has not drained. The press that begins it raises
+    // and focuses the window ahead of the grab, as upstream's resize binding
+    // does and as a move's does: D comes over A and takes the focus. The
+    // transaction's effect is the reply's `effect`, so the focus request is
+    // the one entry of `effects`.
     let mut h = layout(SLOPPY);
-    let screen = pointer(&mut h, 150.0, 150.0);
-    h.ok(json!({"op":"begin_native_resize","window":1,"output":1,"edges":"bottom_right","start_screen":screen}));
+    let screen = pointer(&mut h, 900.0, 500.0);
+    let begun = h.ok(json!({"op":"begin_native_resize","window":4,"output":1,"edges":"bottom_right","start_screen":screen}));
+    assert_eq!(begun["effect"]["op"], "observe_resize_source", "{begun}");
+    assert_eq!(begun["effect"]["window"], 4);
+    assert_eq!(begun["transaction"], begun["effect"]["transaction"]);
+    assert_eq!(begun["effects"], json!([h.focus_state()["pending_effect"]]));
+    assert_eq!(begun["effects"][0]["op"], "focus_native_window");
+    assert_eq!(begun["effects"][0]["window"], 4);
+    assert_eq!((h.focused(), h.stacking()), (json!(4), vec![2, 3, 5, 1, 4]));
+    assert_eq!(h.history(), json!([1]));
     let held = h.snapshot();
     let reply = h.hover(x, y);
     kept(&reply);
@@ -969,13 +1000,30 @@ fn below_interact_min_a_window_is_picked_or_dragged_and_takes_no_input() {
         json!([true, false, null])
     );
 
+    // The press raises and focuses the target, upstream's try_pick_button:
+    // `activate` with cause click. The stand-in is on top until then.
+    assert_eq!((h.focused(), h.stacking()), (Value::Null, vec![1, 2]));
+    let pressed = h.ok(json!({"op":"activate","window":1,"output":1,"cause":"click"}));
+    assert_eq!(pressed["effect"]["window"], 1);
+    assert_eq!((h.focused(), h.stacking()), (json!(1), vec![2, 1]));
     // Drag anywhere moves it, with no binding: 40 x 20 screen points are
-    // 100 x 50 world points at zoom 0.4. The stand-in moves the same way.
-    h.ok(json!({"op":"begin_drag","window":1,"output":1}));
+    // 100 x 50 world points at zoom 0.4. `begin_drag` raises and focuses
+    // what it grabs, as a bound press does: for the window the press already
+    // took that restacks nothing, and the request is asked again.
+    let begun = h.ok(json!({"op":"begin_drag","window":1,"output":1}));
+    assert_eq!(begun, json!({"effect":h.focus_state()["pending_effect"]}));
+    assert_eq!(begun["effect"]["window"], 1);
+    assert_ne!(begun["effect"]["effect_id"], pressed["effect"]["effect_id"]);
+    assert_eq!((h.focused(), h.stacking()), (json!(1), vec![2, 1]));
     h.ok(json!({"op":"gesture_to","screen_delta":point(40.0, 20.0)}));
     h.ok(json!({"op":"end_gesture"}));
     assert_eq!(h.frame(1), rect(2100.0, 1550.0, 400.0, 300.0));
-    h.ok(json!({"op":"begin_drag","window":2,"output":1}));
+    // The stand-in moves the same way: raised and focused, with no native
+    // window to ask.
+    let begun = h.ok(json!({"op":"begin_drag","window":2,"output":1}));
+    assert_eq!(begun, json!({"effect":null}));
+    assert_eq!((h.focused(), h.stacking()), (json!(2), vec![1, 2]));
+    assert_eq!(h.focus_state()["pending_effect"], Value::Null);
     h.ok(json!({"op":"gesture_to","screen_delta":point(-40.0, -20.0)}));
     h.ok(json!({"op":"end_gesture"}));
     assert_eq!(h.frame(2), rect(3100.0, 2350.0, 400.0, 300.0));
@@ -1578,6 +1626,27 @@ fn below_interact_min_a_pinned_window_stays_interactive_and_a_widget_is_not_pick
     assert_eq!(press["pick"], false);
     let over = hover_screen(&mut h, 850.0, 620.0);
     assert_eq!(json!([over["pick"], over["forward"]]), json!([false, true]));
+    // Where LB lies over it, global y 580..600, the widget gets nothing:
+    // upstream's focus cascade stops at the canvas window above and hands the
+    // pointer to nobody, so that the press cannot fall through to the widget.
+    let hit = hit_screen(&mut h, 850.0, 590.0);
+    assert_eq!(
+        json!([hit["pick"], hit["hit"]["window"], hit["hit"]["widget"]]),
+        json!([true, 4, false])
+    );
+    assert_eq!(
+        h.error(input_screen(4, 850.0, 590.0)),
+        "pick mode: below zoom.interact_min a window takes no pointer input"
+    );
+    assert_eq!(
+        h.error(input_screen(3, 850.0, 590.0)),
+        "stale source identity"
+    );
+    let over = hover_screen(&mut h, 850.0, 590.0);
+    assert_eq!(
+        json!([over["pick"], over["forward"], over["hit"]["window"]]),
+        json!([true, false, 4])
+    );
 
     // Neither is picked: the command does nothing with one. A widget is
     // dragged by nothing. The pinned window is dragged as above the
@@ -1595,19 +1664,41 @@ fn below_interact_min_a_pinned_window_stays_interactive_and_a_widget_is_not_pick
         h.error(json!({"op":"begin_drag","window":3,"output":1})),
         "a widget is not moved or resized by hand"
     );
-    h.ok(json!({"op":"begin_drag","window":2,"output":1}));
+    // The press that begins the pinned drag raises and focuses the window
+    // first, below the threshold as above it: upstream's try_pinned_button
+    // stands ahead of try_pick_button. Nothing else of the scene moves, and
+    // a pinned window stays out of the focus history.
+    assert_eq!((h.focused(), h.stacking()), (json!(1), vec![3, 2, 4, 1]));
+    let begun = h.ok(json!({"op":"begin_drag","window":2,"output":1}));
+    assert_eq!(begun, json!({"effect":h.focus_state()["pending_effect"]}));
+    assert_eq!(begun["effect"]["op"], "focus_native_window");
+    assert_eq!(begun["effect"]["window"], 2);
+    assert_eq!((h.focused(), h.stacking()), (json!(2), vec![3, 4, 1, 2]));
+    assert_eq!(h.history(), json!([1, 4]));
     h.ok(json!({"op":"gesture_to","screen_delta":point(-20.0, 10.0)}));
     assert_eq!(
-        h.snapshot()["windows"][1]["pinned"]["screen_rect"],
+        h.pin_rect(2),
         rect(PIN.0 - 20.0, PIN.1 + 10.0, PIN.2, PIN.3)
     );
     assert_eq!(h.snapshot()["outputs"][0]["pick"], true);
     h.ok(json!({"op":"gesture_to","screen_delta":point(0.0, 0.0)}));
     h.ok(json!({"op":"end_gesture"}));
-    assert_eq!(h.snapshot(), settled);
+    let after = h.snapshot();
+    assert_eq!(h.pin_rect(2), rect(PIN.0, PIN.1, PIN.2, PIN.3));
+    for window in [1, 3, 4] {
+        let frame = |snapshot: &Value| {
+            let windows = snapshot["windows"].as_array().unwrap();
+            windows.iter().find(|w| w["window"] == window).unwrap()["world_rect"].clone()
+        };
+        assert_eq!(frame(&after), frame(&settled));
+    }
+    assert_eq!(after["outputs"], settled["outputs"]);
+    assert_eq!(after["navigation"], settled["navigation"]);
     // LA still is: drag anywhere moves it, 20 screen points for 50 world
     // points, and its pick flies to it at zoom 1 with the pin where it was.
-    h.ok(json!({"op":"begin_drag","window":1,"output":1}));
+    let begun = h.ok(json!({"op":"begin_drag","window":1,"output":1}));
+    assert_eq!(begun["effect"]["window"], 1);
+    assert_eq!((h.focused(), h.stacking()), (json!(1), vec![3, 4, 2, 1]));
     h.ok(json!({"op":"gesture_to","screen_delta":point(-20.0, 0.0)}));
     h.ok(json!({"op":"end_gesture"}));
     assert_eq!(h.frame(1), rect(LA.0 - 50.0, LA.1, LA.2, LA.3));
@@ -1616,8 +1707,44 @@ fn below_interact_min_a_pinned_window_stays_interactive_and_a_widget_is_not_pick
     assert_eq!(reply["navigation"]["target_zoom"], 1.0);
     h.lands(&reply["navigation"]);
     assert_eq!(h.pose(1)["pick"], false);
+    assert_eq!(h.pin_rect(2), rect(PIN.0, PIN.1, PIN.2, PIN.3));
+
+    // A pinned widget is found with the pinned windows, ahead of the canvas
+    // (upstream's pinned_window_under), so below the threshold it keeps its
+    // pointer where LB covered the canvas widget: pinned where it shows at
+    // this camera, it is 300 x 200 from global (770, 580) at every zoom.
+    h.look(-575.0, -500.0, 0.4);
     assert_eq!(
-        h.snapshot()["windows"][1]["pinned"]["screen_rect"],
-        rect(PIN.0, PIN.1, PIN.2, PIN.3)
+        h.ok(json!({"op":"ipc","output":1,"request":{"Pin":{"window":3,"value":true}}}))["reply"],
+        json!({"Ok":{"Pin":true}})
+    );
+    assert_eq!(h.pin_rect(3), rect(770.0, 580.0, 300.0, 200.0));
+    let hit = hit_screen(&mut h, 850.0, 590.0);
+    assert_eq!(
+        json!([
+            hit["pick"],
+            hit["hit"]["pick"],
+            hit["hit"]["window"],
+            hit["hit"]["widget"],
+            hit["hit"]["pinned"]
+        ]),
+        json!([false, false, 3, true, true])
+    );
+    assert_eq!(h.ok(input_screen(3, 850.0, 590.0))["pick"], false);
+    let over = hover_screen(&mut h, 850.0, 590.0);
+    kept(&over);
+    assert_eq!(
+        json!([over["pick"], over["forward"], over["hit"]["window"]]),
+        json!([false, true, 3])
+    );
+    let settled = h.snapshot();
+    assert_eq!(
+        h.ok(json!({"op":"pick","window":3,"output":1})),
+        json!({"navigation":null,"dirty":false})
+    );
+    assert_eq!(h.snapshot(), settled);
+    assert_eq!(
+        h.error(json!({"op":"begin_drag","window":3,"output":1})),
+        "a widget is not moved or resized by hand"
     );
 }

@@ -237,6 +237,21 @@ arms no click navigation for a widget, and a pinned window has no canvas
 position to bring into view), and `native` records the observed focus without
 promoting it in the focus history and without a reveal.
 
+A press that a mouse binding turns into a move or a resize of the window
+under the pointer needs no `activate`. Upstream's `move-window`,
+`move-snapped-windows`, `resize-window` and `resize-window-snapped` arms call
+`raise_and_focus` and then install their grab, for a canvas window
+(`on_pointer_button`) and for a screen-pinned one (`try_pinned_button`)
+alike, and `begin_drag`, `begin_resize` and `begin_native_resize` do the
+same in one command: the window is raised, takes the logical focus, and the
+reply carries the focus request a `click` returns, null for a window without
+a source. `begin_drag` and `begin_resize` answer `{"effect":…}`;
+`begin_native_resize`, whose `effect` is its transaction's, carries it as
+the one entry of `effects`. No camera moves and no click navigation is
+armed. A begin that is refused changes nothing, focus included: a widget,
+which upstream's arms pass over for the click-to-focus fallback, and the
+refusals that are this controller's own ([below](#differences-from-upstream)).
+
 `{"op":"clear_focus"}` is upstream's click on empty canvas; see
 [FOCUS.md](FOCUS.md#upstream-entry-points).
 
@@ -276,6 +291,14 @@ Two different tests are upstream's and both are kept:
 - `focus_follows_mouse`, `zoom.interact_min`'s pick mode and the pointer's
   `center-nearest` are the [pointer policy](POINTER.md). `auto_navigate_on_close`
   belongs to the [window lifecycle](LIFECYCLE.md#a-window-closes).
+- A move or resize begin that is refused focuses nothing. Upstream's press
+  raises and focuses the window and then starts its grab, and nothing there
+  refuses the grab of a window its picker let through. Here a command that is
+  refused changes nothing, so a window whose size is still owed, a pinned
+  window asked to resize, a stand-in asked for a native resize and a second
+  press during a gesture are left as they were. A shell that wants upstream's
+  focus for such a press asks for it itself, with `activate` (cause `click`)
+  or `focus`; the native shell does for a resize press that begins nothing.
 - The focus history is promoted when a focus request is answered, not when
   logical focus is set: see [FOCUS.md](FOCUS.md#upstream-entry-points). A shell
   that performs no native focus answers `focus_logical`, and cycling then

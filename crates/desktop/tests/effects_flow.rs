@@ -458,8 +458,11 @@ fn the_config_error_is_the_error_bars_message_and_a_change_spends_a_revision() {
     let (_, warnings) = Config::from_toml_collect(three).unwrap();
     assert_eq!(warnings.len(), 3);
     assert_eq!(reply["warnings"], json!(warnings));
-    let summary = format!("{} (+2 more)", warnings[0]);
+    let summary = "config: effects.animation_scale 2 above maximum 1, using 1 (+2 more)";
     assert_eq!((h.errors(), h.revision()), (json!([summary]), 7));
+    // Which warning stands for the rest is the least in byte order, not the
+    // parser's first: here its third.
+    assert_eq!(warnings[2], summary.trim_end_matches(" (+2 more)"));
     // A failure after it keeps the warned config and replaces the message.
     std::fs::write(&path, "[effects\n").unwrap();
     h.ok(reload.clone());
@@ -481,6 +484,28 @@ fn the_config_error_is_the_error_bars_message_and_a_change_spends_a_revision() {
     warned.load_config(&scratch, one);
     assert_eq!(warned.errors().as_array().unwrap().len(), 1);
     assert_eq!(warned.revision(), 1);
+
+    // The parser reads `[keybindings]` into a hash map and reports that
+    // table's unknown actions in an order that changes from one load to the
+    // next, so the parser's first would change the message of a file that
+    // did not change. Two dozen loads of one such file name one warning: the
+    // least of the three. The reply's own list is the parser's, as it was.
+    let unordered = "[keybindings]\n\"mod+f1\" = \"zeta-is-no-action\"\n\"mod+f2\" = \"alpha-is-no-action\"\n\"mod+f3\" = \"mid-is-no-action\"\n";
+    let named =
+        "config: invalid action 'alpha-is-no-action': unknown action: alpha-is-no-action (+2 more)";
+    let mut unsorted = Host::new();
+    let mut orders = std::collections::BTreeSet::new();
+    for load in 1..=24 {
+        let reply = unsorted.load_config(&scratch, unordered);
+        assert_eq!(reply["warnings"].as_array().unwrap().len(), 3, "{reply}");
+        orders.insert(reply["warnings"].to_string());
+        // One revision for the bar at launch, one per accepted reload after.
+        assert_eq!(
+            (unsorted.errors(), unsorted.revision()),
+            (json!([named]), load)
+        );
+    }
+    assert!(orders.len() > 1, "{orders:?}");
 }
 
 #[test]

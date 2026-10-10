@@ -141,10 +141,10 @@ impl Controller {
         if self.gesture.is_some() {
             return Err(Error::Invalid("native resize during active gesture"));
         }
-        // A widget and a screen-pinned window are refused as a drag's are.
-        // Every caller has passed one over or refused it in upstream's words
-        // before this; the transaction holds the rule all the same.
-        self.movable(window)?;
+        // A widget and a screen-pinned window are sized by one caller only:
+        // the rule's `size` they mapped with (rules.rs), as upstream
+        // configures it for them. Every other caller has passed them over or
+        // refused them in upstream's words before this.
         let source = self
             .sources
             .get(&window)
@@ -248,6 +248,11 @@ impl Controller {
             ));
         }
         self.movable(window)?;
+        // Upstream's resize press raises and focuses the window ahead of its
+        // grab (`focus_for_grab`). `effect` is the transaction's here, so the
+        // focus request is the one entry of `effects`, where every reply that
+        // carries a size transaction keeps its focus request.
+        let focus = self.focus_for_grab(window)?;
         let source = self
             .sources
             .get(&window)
@@ -308,7 +313,11 @@ impl Controller {
         self.cancel_animations_everywhere();
         // Upstream begin_client_resize: a resize drag ends fit and fill.
         self.sizes.resize_begun(window);
-        self.emit_resize(None)
+        // And a wait for a rule's `size`, as any sizing of the user's.
+        self.policy.sizing.retain(|queued| *queued != window);
+        let mut reply = self.emit_resize(None)?;
+        reply["effects"] = json!([focus]);
+        Ok(reply)
     }
     fn resize_id(&self, transaction: u64) -> Result<&NativeResizeTransaction, Error> {
         self.native_resize

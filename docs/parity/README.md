@@ -592,9 +592,9 @@ device-specific behavior also need the corresponding hardware.
   pressed; one output only, so a screen change and Return to desktop with a
   pin in place were replayed only as controller commands in the shell's
   order. Known mismatches: a rule's `size` is recorded and not applied in
-  every default launch, and is asked of a new canvas window only behind
-  `--experimental-native-resize` (the window sizing milestone below), never
-  of a widget or a pinned window; `fullscreen` is recorded and not applied;
+  every default launch, and is asked of a new window only behind
+  `--experimental-native-resize` (the window sizing milestone below);
+  `fullscreen` is recorded and not applied;
   `preserve_aspect_ratio` is recorded with no effect, and so is
   `layer_order`, which upstream itself ignores for a regular window
   (`decoration` and the border, corner and shadow fields are drawn, see the
@@ -940,10 +940,7 @@ device-specific behavior also need the corresponding hardware.
   `pass_mouse` and the screen-space drag of a pinned window, which this
   milestone by itself did not have, are the pass-through milestone's below,
   with upstream's pick-mode gate on a claim and a pinned drag that is the
-  same below the threshold as above it; a widget below the
-  threshold keeps its pointer input, which follows from `input` refusing pick
-  targets only and was not compared with upstream's pointer focus for a
-  widget there. See the
+  same below the threshold as above it. See the
   [pointer contract](../../crates/desktop/POINTER.md) and the
   [desktop shell notes](../../native/desktop/README.md#pointer-motion-sloppy-focus-and-pick-mode).
 - This milestone (commit pending), window sizing, makes DriftWM's sizing
@@ -989,31 +986,35 @@ device-specific behavior also need the corresponding hardware.
   a step or an IPC resize of a stand-in is refused where upstream resizes the
   stand-in's frame; restore points are lost with the window's source and are
   never saved; upstream's `restore_size` is captured at the first fit or fill
-  rather than at a window's first commit, and its configured size is kept only
-  for a fit, so a first fit after a step, an IPC resize or a fill the window
-  clamped centres on the frame the window took; IPC resize does not raise the
-  window; `toggle-fullscreen` is not here. All of the above was built on
+  rather than at a window's first commit; `toggle-fullscreen` is not here.
+  All of the above was built on
   `f083155`. Merged with the three milestones above (per-window policy,
   rendering, pointer policy), every sizing action is a canvas window's, as
   upstream's `is_canvas_window` makes it: with a widget or a screen-pinned
   window focused the five actions and `zoom-to-fit-snapped` do nothing, IPC
   `Resize` answers upstream's `this window has no canvas size to set: …` for
-  one before the gate is asked, no size transaction begins for one (the
-  refusal `begin_native_resize` already gave), and neither is an obstacle to a
+  one before the gate is asked, no sizing action and no IPC `Resize` begins
+  a size transaction for one (`begin_native_resize` refuses it as before;
+  its one size transaction is that of its rule's `size` at its map), and
+  neither is an obstacle to a
   fill, shoved by a snapped fit or framed by `zoom-to-fit-snapped`; a window
   pinned after a fit or fill keeps its restore point, as upstream's
   `pin_window` clears neither; `send-to-output` ends a canvas window's fill
-  and only rebinds a pin; a window rule's `size` is asked of a new canvas
-  window once it is placed, through the same entry as IPC resize, when the
-  capability is on, and stays recorded and listed in `rule.not_applied`
-  when it is off, for a widget, a pinned window and an adopted slot, and for
-  a window that maps while another size is owed; a pick below
+  and only rebinds a pin; a window rule's `size` is asked of a new window as
+  it maps, a widget and a rule-pinned window included, through the same
+  entry as IPC resize, when the capability is on: the window is placed for
+  that size, and one that maps while another size is owed is asked in its
+  turn, in map order, `rule.not_applied` naming `size` until then; it stays
+  recorded and listed in `rule.not_applied` when the capability is off and
+  for an adopted slot; a pick below
   `zoom.interact_min` returns a filled window to its fill view when that view
   is at or above the threshold (upstream's `resolve_pick`); `center-window`
   and `focus-center` restore a fill view for canvas windows only; a drag is
   decided in one place, refused for a widget and for a window owed its size,
   each in its own words, and installed in screen space for a pinned window
-  (the pass-through milestone below), which never owes a size; a size still
+  (the pass-through milestone below), which owes a size only while its
+  rule's `size` is being asked at its map and is refused like any other
+  until then; a size still
   owed holds the pointer for
   `hover` as a resize drag does; the snapshot's `mode` sits beside `widget`,
   `pinned` and `rule`; and the shell hands a reply's size transaction to the
@@ -1047,11 +1048,7 @@ device-specific behavior also need the corresponding hardware.
   launch, so no size transaction ran in the app by an action or by a rule, no
   rule was resolved, no widget or pinned window existed there and no pointer
   event was sent; the joins ran only as controller scenarios. Further
-  mismatches from the join: a rule's `size` is asked after the window is
-  placed, where upstream configures it first, and never of a widget or a
-  rule-pinned window, where upstream's size arm runs for both; with one
-  transaction and nothing queued, of several ruled windows that map at once
-  only the first is asked; a pinned window is not sized at all, where
+  mismatch from the join: a pinned window is not resized by hand, where
   upstream resizes one in screen space. The feature stays behind
   `--experimental-native-resize` until a live native resize pass exists. See the
   [sizing contract](../../crates/desktop/SIZES.md) and the
@@ -1066,8 +1063,10 @@ device-specific behavior also need the corresponding hardware.
   saved: `render.effects`, the `[effects]` table as `driftwm-core`'s parser
   left it; `decoration.blur`, `driftwm-core`'s `effective_blur` over the rule
   a window mapped with, false for every stand-in; `render.errors`, upstream's
-  config error source under upstream's rules (read failure, parse failure, the
-  first warning with a count, cleared by a clean load), a changed message
+  config error source under upstream's rules (read failure, parse failure,
+  one warning with a count, since the gaps milestone below the least in byte
+  order where upstream names the parser's first, cleared by a clean load), a
+  changed message
   spending a render revision; and `lifecycle_events`, the last 32 window
   events upstream animates, each with a serial: `open`, `close`,
   `close_to_standin`, `standin_dismiss`, `standin_adopted`. The shell's
@@ -1122,7 +1121,8 @@ device-specific behavior also need the corresponding hardware.
   each output bakes its own closing snapshot where upstream shares one, and
   upstream's one-second age limit on a closing window's pixels has no
   separate test; a new window is invisible for up to a second and takes
-  clicks meanwhile; the error is shown in the status line as well; captures
+  clicks meanwhile; a background that fell back is shown in the status line
+  as well as in the bar; captures
   hold no closing snapshot or error bar, which was not checked against
   upstream's capture code (only that it omits blur). All of the above was
   built on per-window policy and rendering alone. Merged with pointer policy
@@ -1291,14 +1291,116 @@ device-specific behavior also need the corresponding hardware.
   turned under Shift counts as a notch too, and the continuous lookup is left
   with the horizontal lines (a shift-qualified wheel zoom does nothing, a pan
   goes sideways), read off events built in memory and not off a wheel; a
-  pinned window is still not resized, a gesture does not carry one to another
-  output, and a bound press's drag neither raises nor focuses it; a pinned
+  pinned window is still not resized and a gesture does not carry one to
+  another output; a pinned
   drag's pointer off every output is held in the controller's arithmetic
   only, the macOS cursor itself going on, so it has to come back to the
   output's edge before the frame leaves that edge again, where upstream's
   held cursor moves it at once; media keys are not registered at all.
   See the [rules contract](../../crates/desktop/RULES.md#pass-rules) and the
   [desktop shell notes](../../native/desktop/README.md#passing-keys-and-presses-to-an-application).
+- This milestone (commit pending), upstream behaviour gaps: nine places where
+  the milestones above recorded a difference from upstream although
+  upstream's behaviour can be had here, each followed from upstream's code at
+  the pinned commit. (1) A press bound to `move-window`,
+  `move-snapped-windows`, `resize-window` or `resize-window-snapped` raises
+  and focuses the window under the pointer before its grab, as the move and
+  resize arms of upstream's `on_pointer_button` and its `try_pinned_button`
+  do, for a canvas window and a screen-pinned one alike: `begin_drag` and
+  `begin_resize` do it themselves and answer `{"effect": <focus request or
+  null>}`, `begin_native_resize` carries the request as the one entry of
+  `effects` beside its transaction's `effect`, and the shell hands either to
+  the navigation coordinator like a click's; a resize press that can begin
+  nothing (the gate off, a pinned window, a begin the resize path or the
+  controller turns away) is raised and focused by the existing `focus`
+  command. A widget keeps its refusal. (2) IPC `Resize`
+  raises its window as upstream's `cmd_resize` does and hands it no focus;
+  a request identical to the one last asked raises nothing, as upstream's
+  `resize_element_to` returns before its map.
+  (3) A problem in the config file is shown once, in the error bar; the
+  shell's status line no longer repeats it and keeps only its own notes;
+  every message still goes to stderr. (4) The bar's one line for several
+  warnings is the first of them in byte order, then upstream's ` (+N more)`,
+  so a file that did not change has one message at every load and spends no
+  render revision for a reordering; the `load_config` reply keeps the
+  parser's order and the shell prints the warnings sorted. (5) `hit`,
+  `input`, `hover` and the pick press below `[zoom] interact_min` were read
+  against upstream's `pointer_focus_under_pick`, its focus cascade,
+  `pick_target_under` and `try_pick_button`, and needed no change: a pinned
+  window is found ahead of the pick guard, a widget after it, and a canvas
+  window over a widget ends the cascade; scenarios now pin the widget under a
+  canvas window and the pinned widget. (6) A fit and a fill measure their
+  window by the size it was last asked for, upstream's
+  `configured_window_size`, where the port read the committed frame. (7)
+  Ruled windows that map together are each asked for their rule's `size`,
+  one at a time in map order: the next is asked in the `native_resize_result`
+  reply that ends the transaction before it, or in the `attach` reply of the
+  next new window, and the shell takes the transaction such a result reply
+  names for a sizing one; a waiting window the user sizes first (IPC
+  `Resize`, a step, a fit, a fill, a resize drag) leaves the queue unasked,
+  as upstream's one-shot `pending_size` never forces a rule's size over a
+  later one. (8) With the capability on a new window is placed
+  for the size its rule names, as upstream configures the size first and
+  places for it, a widget and a rule-pinned window included, and lands on
+  that frame to the pixel when it takes the size; the cascade and the `auto`
+  placement of a later arrival read the frame a ruled window is becoming,
+  asked or still waiting its turn, so several windows of one rule that map
+  together cascade as upstream's do. (9) `msg camera` can print
+  `-0`: upstream's `viewport_center` negates a zero and its client prints the
+  pair as it is, so nothing is normalised. No command and no reply shape
+  changed but for the added keys named in (1). Evidence boundary: all nine
+  ran only as controller scenarios through the exported C ABI and JSON
+  (`pointer_flow` 16, `sizes_flow` 31, `rules_flow` 26, `effects_flow` 5,
+  `passthrough_flow` 19, `ipc_flow` 8, `lifecycle_flow` 25, `controller_flow`
+  4 and the neighbouring modules, 186 scenarios), the test answering every
+  focus request and resize effect itself. The shell's side (the focus of a
+  bound press, the status line, the sorted stderr lines, the adoption of a
+  waiting window's transaction) was built and read. The built app was
+  launched three times on 2026-10-10 (`--windowed`, private scene, config
+  and socket, no Screen Recording access, three placeholders, 5, 6 and 3
+  seconds, exit 0 on SIGTERM with the socket removed) and driven through
+  `msg` only: `camera` read `550 -318`, then `1950 -0`, `2050 -0` and `0 -0`
+  after `center-nearest right`, `pan-viewport right` and `home-toggle`;
+  `resize --id 1 800 500` without the flag answered `resize is not
+  implemented on macOS yet: native layout resize is not available`; a
+  viewport screenshot showed the dot grid and the corner of one placeholder;
+  and a config with two unknown actions printed its two warnings on stderr
+  at every load, in an order that changed between loads in the first run
+  (built before the shell sorted them) and in one order at all seventeen
+  loads of the two runs after. A fourth launch after the review of this
+  milestone (6 seconds, the same private paths, exit 0 on SIGTERM with the
+  socket removed) answered the same: `camera` `550 -318`, `1950 -0`,
+  `-620 -890` after `focus --id 3` and `0 -0` after `home-toggle`, the two
+  warnings in one order at all four loads, the same resize refusal and the
+  same screenshot. No button was pressed, nothing was dragged,
+  no window had a live source, no size was asked and nothing was looked at
+  on a display: the error bar, the status line and every focus are unseen,
+  and the bar's text is not readable over the socket. The headless
+  navigation coordinator regression was not rerun (the coordinator did not
+  change) and no fixture or probe mode was run. Known mismatches: a press
+  dropped while a size is owed and a move begin that is refused focus
+  nothing, where upstream has no such
+  refusal and has already raised and focused the window; the pick-mode drag
+  asks for the focus twice (the press's `activate`, then `begin_drag`),
+  where upstream focuses once; the bar can name another warning than
+  upstream's for a table the parser reads in a fixed order; IPC `Move` still
+  does not raise; a resize drag ends the size last asked for, where upstream
+  goes on reading the drag's last configure; a ruled window that takes
+  another size than its rule names keeps the top-left of the frame asked
+  for, where upstream places the size it got, and stands on the canvas at
+  its own size until it answers; ruled windows are asked in turn, not at
+  once, a waiting one is not marked in the snapshot so its opening is not
+  held for the size until its turn, and one that waited out a drag, or
+  whose turn came under a gesture or as a transaction was retired, is asked
+  with the next new window or at the next transaction's end; in probe, demo
+  and owned-fixture runs `begin_drag` and `begin_native_resize` now also
+  raise and logically focus the window and leave a focus request those runs
+  never answer, which no fixture run has looked at. See the
+  [desktop shell notes](../../native/desktop/README.md#upstream-behaviour-gaps-closed)
+  and the [pointer](../../crates/desktop/POINTER.md),
+  [sizes](../../crates/desktop/SIZES.md), [rules](../../crates/desktop/RULES.md),
+  [effects](../../crates/desktop/EFFECTS.md) and
+  [navigation](../../crates/desktop/NAVIGATION.md#activate) contracts.
 
 These milestones add evidence to partial rows. None satisfies an entire native
 behavior row or changes the completion requirement.

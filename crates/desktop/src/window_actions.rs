@@ -8,7 +8,9 @@
 // output_shows_canvas_point), src/state/keyboard_focus.rs (raise_and_focus,
 // clear_focus_to_empty_canvas), src/state/suspended.rs (center_on_suspended:
 // a stand-in is centered like a client), src/input/pointer.rs (the
-// click-to-focus fallback) and src/handlers/mod.rs (focus_changed's cycle rule
+// click-to-focus fallback, and the raise_and_focus that the move and resize
+// arms of on_pointer_button and of try_pinned_button run ahead of their grab)
+// and src/handlers/mod.rs (focus_changed's cycle rule
 // and the activation request's already-active rule). The directional search and the
 // visibility measures are driftwm-core's `canvas::{find_nearest,
 // visible_fraction, visible_canvas_rect}`, upstream's own code. A detached
@@ -163,6 +165,19 @@ impl Controller {
             navigation: Value::Null,
             refocused: true,
         })
+    }
+    /// Upstream's press bound to `move-window`, `move-snapped-windows`,
+    /// `resize-window` or `resize-window-snapped`: on_pointer_button's arms
+    /// for a canvas window and try_pinned_button's for a screen-pinned one
+    /// raise and focus the window under the pointer, and then install their
+    /// grab. The focus request is the reply's, as a click's is; it is null
+    /// for a stand-in. The caller installs the grab next, in upstream's
+    /// order. A grab that is refused rejects the whole command, so nothing
+    /// is focused for it: a widget, which upstream's arms pass over for the
+    /// click-to-focus fallback, and the refusals that are this port's own
+    /// and have no upstream counterpart, such as a size still owed.
+    pub(crate) fn focus_for_grab(&mut self, window: WindowId) -> Result<Value, Error> {
+        Ok(self.raise_and_focus(window)?.effect)
     }
     /// Upstream navigate_to_window_on: raise, focus, and fly `output`'s camera
     /// until the frame sits on the focus placement point. A screen-pinned

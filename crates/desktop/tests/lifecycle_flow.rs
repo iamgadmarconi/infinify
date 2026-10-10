@@ -1891,7 +1891,11 @@ fn a_drag_outlives_the_close_of_a_window_it_does_not_hold() {
     put(&mut h, 3, "app.z", "Z", rect(100.0, 500.0, 200.0, 150.0));
     h.focus_logically(2);
     h.focus_logically(1);
-    h.ok(drag(3, false));
+    // The press that begins the drag raises and focuses Z, as upstream's
+    // does; X then takes the focus back while Z is still held.
+    focus_effect(&h.ok(drag(3, false)), 3, 3);
+    assert_eq!(h.snapshot()["focused"], 3);
+    h.focus_logically(1);
     let reply = h.closed(1);
     focus_effect(&reply, 2, 2);
     assert_eq!(reply["navigation"], Value::Null);

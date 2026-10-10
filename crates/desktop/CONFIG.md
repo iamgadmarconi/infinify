@@ -60,9 +60,10 @@ code and wins over both.
   and the native shell does not read it: [`hover`](POINTER.md#hover) is sent
   either way and the controller decides.
 - What a load reports is also the message of upstream's on-screen error bar:
-  the snapshot's `render.errors` holds the one entry of `errors`, else the
-  first of `warnings` with a count of the rest, until a load without either
-  clears it ([EFFECTS.md](EFFECTS.md#errors)).
+  the snapshot's `render.errors` holds the one entry of `errors`, else one
+  of `warnings`, the least in byte order, with a count of the rest, until a
+  load without either clears it. That ordering is the port's: `warnings`
+  itself keeps the parser's order ([EFFECTS.md](EFFECTS.md#errors)).
 
 Files larger than 4 MiB are refused as unreadable. That bound is not upstream's.
 
@@ -122,7 +123,7 @@ constants they replaced.
 | `[session] restore_camera`, `restore_bookmarks` | what `load` restores, see [Session](#session) |
 | `[[window_rules]] app_id`, `title` | matched against the bundle identifier and the source title when a window maps, see [RULES.md](RULES.md) |
 | `[[window_rules]] position`, `pinned_to_screen`, `output`, `widget`, `focus_on_open` | where a new window is placed, whether it is pinned to an output's screen or a widget, and whether it is focused |
-| `[[window_rules]] size` | asked of a new canvas window once it is placed, only once the shell has sent `native_resize_capability`; otherwise recorded and named in `rule.not_applied`: [RULES.md](RULES.md#a-rules-size) |
+| `[[window_rules]] size` | asked of a new window as it maps, a widget and a rule-pinned window included, and the window placed for it, one window at a time in map order, only once the shell has sent `native_resize_capability`; otherwise recorded and named in `rule.not_applied`: [RULES.md](RULES.md#a-rules-size) |
 | `[env]`, `[cursor] theme`, `size` | the environment of an `exec` effect |
 | `focus_follows_mouse` | whether `hover` moves the focus to the window under the pointer, without raising it; see [POINTER.md](POINTER.md#sloppy-focus) |
 | `[zoom] interact_min` | the zoom below which an output is in [pick mode](POINTER.md#pick-mode): `hit`, `input`, `hover`, `pick` and the `pick` flag of `mouse_binding` |
@@ -159,8 +160,10 @@ code, and then unused, because the feature it configures does not exist here:
   and there is no fullscreen, see [Outputs](#outputs)
 - of `[[window_rules]]`, `fullscreen`, `preserve_aspect_ratio` and
   `layer_order`, which are recorded with the window and named in its
-  `rule.not_applied`; `size` joins them without the capability, and for a
-  widget or a screen-pinned window with it. `layer_order` is there by
+  `rule.not_applied`; `size` joins them without the capability, and with it
+  only for a window that was not asked (one that took over a saved slot, one
+  whose application accepts no size, one the user sized first) or that is
+  still waiting its turn. `layer_order` is there by
   upstream's own rule, which ignores it for a regular window
   ([RULES.md](RULES.md#layer_order)). `pass_keys` and `pass_mouse` are applied
   ([RULES.md](RULES.md#pass-rules))

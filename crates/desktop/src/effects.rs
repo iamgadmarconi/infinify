@@ -66,9 +66,13 @@ pub(crate) struct Effects {
 }
 
 /// Upstream summarize_config_errors: the bar has room for one line per source,
-/// so the first warning stands for the rest.
+/// so the first warning stands for the rest. Which one is first is this
+/// port's choice, not upstream's: upstream takes the parser's first, and its
+/// parser collects the warnings of the tables it reads into a hash map in an
+/// order that differs between two loads of one file. The least of them in
+/// byte order, the head of the sorted list, is the same at every load.
 fn summarize_config_errors(warnings: &[String]) -> Option<String> {
-    let first = warnings.first()?;
+    let first = warnings.iter().min()?;
     Some(match warnings.len() {
         1 => first.clone(),
         n => format!("{first} (+{} more)", n - 1),

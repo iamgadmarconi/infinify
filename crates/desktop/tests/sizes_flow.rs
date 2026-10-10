@@ -671,6 +671,192 @@ fn a_fit_the_window_clamps_commits_its_size_at_the_fit_place() {
     }
 }
 
+// Upstream configured_window_size, as compute_fit_geometry and
+// fit_window_snapped read it (src/state/fit.rs): a fit centers on the frame
+// of the size the window was last asked for, at the top-left it has, and the
+// snapped variant measures its neighbours from that frame. The size the
+// window took of the request plays no part. The usable center is (500, 410)
+// and the inset corner (28, 48), as above.
+#[test]
+fn a_fit_centers_on_the_frame_last_asked_for_not_the_one_the_window_took() {
+    // A step asks 430 x 300 from the right edge and the window takes 410.
+    // The frame asked for is (100, 100) 430 x 300, centered on (315, 250):
+    // the camera goes to round((315, 250) - (500, 410)) = (-185, -160) and the
+    // top-left to (-185 + 28, -160 + 48) = (-157, -112). The frame the window
+    // took is centered on (305, 250), 10 short of that.
+    let mut h = capable(one(CONFIG));
+    let reply = action(&mut h, "grow-window right");
+    deliver(
+        &mut h,
+        &reply,
+        (400.0, 300.0),
+        (430.0, 300.0),
+        "clamped",
+        (410.0, 300.0),
+    );
+    assert_eq!(world(&mut h, 1), rect(100.0, 100.0, 410.0, 300.0));
+    // Window 2 is one snap gap from the right edge of the frame asked for,
+    // x 530 + 12, and 32 from the frame the window took: a neighbour of the
+    // first only. The fit takes that edge from 530 to -157 + 944 = 787, and
+    // the neighbour follows it by 257 to 787 + 12.
+    attach(&mut h, 2, (542.0, 100.0, 200.0, 300.0));
+    let reply = action(&mut h, "fit-window-snapped");
+    assert_eq!(
+        reply["navigation"]["target_camera"],
+        json!({"x":-185.0,"y":-160.0})
+    );
+    deliver(
+        &mut h,
+        &reply,
+        (410.0, 300.0),
+        (944.0, 724.0),
+        "applied",
+        (944.0, 724.0),
+    );
+    assert_eq!(world(&mut h, 1), rect(-157.0, -112.0, 944.0, 724.0));
+    assert_eq!(world(&mut h, 2), rect(799.0, 100.0, 200.0, 300.0));
+    assert_eq!(mode(&mut h, 1), "fit");
+    // The unfit gives the 410 x 300 back around the fit frame's center
+    // (315, 250): the window comes back 10 from where the step left it, as
+    // upstream's does once its client has clamped the unfit's configure.
+    let reply = action(&mut h, "fit-window");
+    deliver(
+        &mut h,
+        &reply,
+        (944.0, 724.0),
+        (410.0, 300.0),
+        "applied",
+        (410.0, 300.0),
+    );
+    assert_eq!(world(&mut h, 1), rect(110.0, 100.0, 410.0, 300.0));
+
+    // An IPC resize asks 1000 x 600 around the center (300, 250) and the
+    // window takes 800 x 600 at the top-left written for the request,
+    // (-200, -50). The frame asked for is still centered on (300, 250), so
+    // the fit is the plain one: camera (-200, -160), top-left (-172, -112).
+    // The frame the window took is centered on (200, 250).
+    let mut h = capable(one(CONFIG));
+    let reply = ipc(&mut h, json!({"Resize":{"to":[1000,600]}}));
+    deliver(
+        &mut h,
+        &reply,
+        (400.0, 300.0),
+        (1000.0, 600.0),
+        "clamped",
+        (800.0, 600.0),
+    );
+    assert_eq!(world(&mut h, 1), rect(-200.0, -50.0, 800.0, 600.0));
+    let reply = action(&mut h, "fit-window");
+    assert_eq!(
+        reply["navigation"]["target_camera"],
+        json!({"x":-200.0,"y":-160.0})
+    );
+    deliver(
+        &mut h,
+        &reply,
+        (800.0, 600.0),
+        (944.0, 724.0),
+        "applied",
+        (944.0, 724.0),
+    );
+    assert_eq!(world(&mut h, 1), rect(-172.0, -112.0, 944.0, 724.0));
+    // And back: 800 x 600 around (300, 250).
+    let reply = action(&mut h, "fit-window");
+    deliver(
+        &mut h,
+        &reply,
+        (944.0, 724.0),
+        (800.0, 600.0),
+        "applied",
+        (800.0, 600.0),
+    );
+    assert_eq!(world(&mut h, 1), rect(-100.0, -50.0, 800.0, 600.0));
+
+    // A fill asks (240, 48) 732 x 724 and the window takes 700 x 700 there.
+    // The frame asked for is centered on (606, 410): camera
+    // round((606, 410) - (500, 410)) = (106, 0), top-left (134, 48). The
+    // frame the window took is centered on (590, 398). The fit saves the
+    // 300 x 200 from before the fill.
+    let mut h = capable(empty(CONFIG));
+    attach(&mut h, 1, (400.0, 300.0, 300.0, 200.0));
+    attach(&mut h, 2, (28.0, 48.0, 200.0, 724.0));
+    h.ok(json!({"op":"focus","window":1}));
+    let reply = action(&mut h, "fill-window");
+    deliver(
+        &mut h,
+        &reply,
+        (300.0, 200.0),
+        (732.0, 724.0),
+        "clamped",
+        (700.0, 700.0),
+    );
+    assert_eq!(world(&mut h, 1), rect(240.0, 48.0, 700.0, 700.0));
+    assert_eq!(mode(&mut h, 1), "fill");
+    let reply = action(&mut h, "fit-window");
+    assert_eq!(
+        reply["navigation"]["target_camera"],
+        json!({"x":106.0,"y":0.0})
+    );
+    deliver(
+        &mut h,
+        &reply,
+        (700.0, 700.0),
+        (944.0, 724.0),
+        "applied",
+        (944.0, 724.0),
+    );
+    assert_eq!(world(&mut h, 1), rect(134.0, 48.0, 944.0, 724.0));
+    assert_eq!(mode(&mut h, 1), "fit");
+    let reply = action(&mut h, "fit-window");
+    deliver(
+        &mut h,
+        &reply,
+        (944.0, 724.0),
+        (300.0, 200.0),
+        "applied",
+        (300.0, 200.0),
+    );
+    // Around (134 + 472, 48 + 362) = (606, 410).
+    assert_eq!(world(&mut h, 1), rect(456.0, 310.0, 300.0, 200.0));
+
+    // A fill grows from the frame last asked for as well (src/state/fill.rs,
+    // compute_fill_geometry). Alone on the canvas, a window at the inset
+    // corner (28, 48) is stepped from 914 to 944 wide, the whole inset
+    // width, and takes 930. The frame asked for already fills its space, so
+    // fill-window starts nothing; the frame the window took is 14 short.
+    let mut h = capable(empty(CONFIG));
+    attach(&mut h, 1, (28.0, 48.0, 914.0, 724.0));
+    h.ok(json!({"op":"focus","window":1}));
+    let reply = action(&mut h, "grow-window right");
+    deliver(
+        &mut h,
+        &reply,
+        (914.0, 724.0),
+        (944.0, 724.0),
+        "clamped",
+        (930.0, 724.0),
+    );
+    assert_eq!(world(&mut h, 1), rect(28.0, 48.0, 930.0, 724.0));
+    assert_eq!(action(&mut h, "fill-window"), nothing());
+    assert_eq!(mode(&mut h, 1), Value::Null);
+    assert_eq!(h.snapshot()["native_resize"]["phase"], "complete");
+    // A resize drag ends what was asked: the window is measured by the size
+    // it has again, and the same fill grows the 14 to the inset edge.
+    h.ok(json!({"op":"begin_resize","window":1,"output":1,"edges":"bottom"}));
+    h.ok(json!({"op":"end_gesture"}));
+    let reply = action(&mut h, "fill-window");
+    deliver(
+        &mut h,
+        &reply,
+        (930.0, 724.0),
+        (944.0, 724.0),
+        "applied",
+        (944.0, 724.0),
+    );
+    assert_eq!(world(&mut h, 1), rect(28.0, 48.0, 944.0, 724.0));
+    assert_eq!(mode(&mut h, 1), "fill");
+}
+
 // Upstream fit_window_snapped and shift_cluster_around_primary. Window 1 goes
 // from x 100..500, y 100..400 to the fit frame x -172..772, y -112..612: its
 // right edge moves +272, its left -272, its bottom +212 and its top -212.
@@ -1097,7 +1283,21 @@ fn ipc_resize_keeps_the_center_and_follows_upstreams_refusals() {
         ipc(&mut h, json!({"Resize":{"window":"app.2"}}))["reply"],
         json!({"Ok":{"Size":{"width":200,"height":100}}})
     );
+    // Upstream's cmd_resize raises a client and hands it no focus: window 2
+    // goes over the focused window 1 in the reply that asks, which says so
+    // with `dirty`, the stacking being saved, and requests no focus.
+    let before = h.snapshot();
+    assert_eq!(before["windows"][1]["window"], 1);
     let reply = ipc(&mut h, json!({"Resize":{"window":"app.2","to":[300,200]}}));
+    assert_eq!(
+        (&reply["dirty"], &reply["effects"]),
+        (&json!(true), &json!([]))
+    );
+    let raised = h.snapshot();
+    assert_eq!(raised["windows"][0]["window"], 1);
+    assert_eq!(raised["windows"][1]["window"], 2);
+    assert_eq!(raised["focused"], 1);
+    assert_eq!(raised["focus"], before["focus"]);
     deliver(
         &mut h,
         &reply,
@@ -1107,8 +1307,18 @@ fn ipc_resize_keeps_the_center_and_follows_upstreams_refusals() {
         (300.0, 200.0),
     );
     assert_eq!(world(&mut h, 2), rect(1950.0, 950.0, 300.0, 200.0));
-    // Stacking is untouched, as Move leaves it.
-    assert_eq!(h.snapshot()["windows"][1]["window"], 1);
+    // The same size again delivers nothing, moves nothing and restacks
+    // nothing, as upstream's resize_element_to returns before its map: a
+    // window that something else has covered stays covered.
+    h.ok(json!({"op":"focus","window":1}));
+    let before = h.snapshot();
+    assert_eq!(before["windows"][1]["window"], 1);
+    let reply = ipc(&mut h, json!({"Resize":{"window":2,"to":[300,200]}}));
+    assert_eq!(
+        reply,
+        json!({"reply":{"Ok":{"Size":{"width":300,"height":200}}},"effects":[],"dirty":false,"navigation":null})
+    );
+    assert_eq!(h.snapshot(), before);
 
     // Upstream's refusals, each leaving everything as it was.
     let refused = |h: &mut Host, request: Value| {
@@ -1941,8 +2151,10 @@ fn a_fill_a_shove_and_a_snapped_zoom_see_only_the_windows_that_snap() {
 // action is still owed its size is placed by that action's plan, and no drag
 // of it is installed; and below `zoom.interact_min` the same install serves a
 // pick-mode press, under the same rules. The plan's guard stands ahead of the
-// pinned drag as of any other, and has nothing to refuse there: a pin waits
-// for the transaction, so a pinned window never owes a size.
+// pinned drag as of any other. A sizing action's window never meets it
+// pinned: a pin waits for the transaction. The one pinned window that owes a
+// size is the one a rule pinned and sized as it mapped, and its drag is
+// refused the same way (tests/rules_flow.rs).
 #[test]
 fn a_drag_is_refused_for_a_widget_and_for_a_pending_plan_in_pick_mode_too() {
     let config = format!("{}[zoom]\ninteract_min = 0.5\n", layered());
@@ -1961,6 +2173,10 @@ fn a_drag_is_refused_for_a_widget_and_for_a_pending_plan_in_pick_mode_too() {
         assert_eq!(h.snapshot()["outputs"][0]["pick"], pick);
         assert_eq!(h.error(drag(widget, false)), NOT_A_WIDGET);
         pinned_drag(&mut h, false);
+        // The press that dragged the pinned window raised and focused it, as
+        // upstream's does. Window 1 takes the focus back for its step.
+        assert_eq!(h.snapshot()["focused"], 4);
+        h.ok(json!({"op":"focus","window":1}));
         // A sizing plan still owed its size: the window, and the cluster
         // drag that would carry it along, are refused in the plan's words.
         let size = world(&mut h, 1)["size"].clone();
@@ -1974,7 +2190,7 @@ fn a_drag_is_refused_for_a_widget_and_for_a_pending_plan_in_pick_mode_too() {
         assert_eq!(h.error(drag(widget, false)), NOT_A_WIDGET);
         // The pinned window is not the plan's, alone or as a cluster drag: it
         // has no cluster. And the plan's own window cannot become a pinned one
-        // while its size is owed, so no pinned drag ever meets the guard.
+        // while its size is owed.
         pinned_drag(&mut h, true);
         assert_eq!(
             ipc(&mut h, json!({"Pin":{"window":1,"value":true}}))["reply"],

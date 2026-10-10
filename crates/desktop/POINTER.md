@@ -232,7 +232,13 @@ stand-in's `pinned` and `widget` from its placement.
 - **Drag anywhere moves it.** `begin_drag` needs no binding and never did; send
   it without `group` once the pointer is past the 5 point click slop, then
   `gesture_to` and `end_gesture` as for a bound move. A stand-in moves the same
-  way. It is a window drag like any other: it is refused for a window whose
+  way. `begin_drag` raises and focuses what it grabs, as a bound press does
+  ([RULES.md](RULES.md#dragging-a-pinned-window)): for the target the press
+  already took that restacks nothing, and the focus request in its reply takes
+  the place of the press's, to be performed and answered like it. Upstream's
+  promotion of the press to a move (`maybe_promote_pick`) asks nothing again,
+  having one focus where this controller has a request per command. It is a
+  window drag like any other: it is refused for a window whose
   [sizing action](SIZES.md#other-interactions) is still owed its size
   (`a native resize of window N is still pending`), installing it stops every
   flight and coast, a `pointer` on `gesture_to` arms its
@@ -295,9 +301,9 @@ the pointer:
 | `hover`, `forward` | forwarded like any live window's motion | the same |
 | `hover` with `focus_follows_mouse` | takes the focus, where it stands, before the canvas window beneath it; the request is answered like any other and the window stays out of the focus history | passed over: the focus stays where it is. Under a pinned widget nothing takes it |
 | the echo of that hover | recorded where the window stands: no raise, no flight, no history entry | there is none: no hover asks for a widget's focus, so a native report for it is an [activation](RULES.md#navigation-activation-gestures-and-outputs) |
-| below `interact_min` | not a pick target: `pick` is false on `hit`, `input` and `hover`, `input` passes, `forward` is true. It is drawn at its own size whatever the zoom and stays interactive, as upstream documents (`docs/window-rules.md`: a pinned window's button claims still apply there, and they do: its [`pass_mouse`](RULES.md#pass_mouse) claims a press as at any zoom, and no scroll or notch while its output is below the threshold) | not a pick target either, with the same answers |
+| below `interact_min` | not a pick target: `pick` is false on `hit`, `input` and `hover`, `input` passes, `forward` is true. Upstream's pointer focus (`pointer_focus_under_pick`) asks `pinned_window_under` ahead of the canvas and of its pick guard, and its button path asks `try_pinned_button` ahead of `try_pick_button`: a pinned window is drawn at its own size whatever the zoom and stays interactive. Its [`pass_mouse`](RULES.md#pass_mouse) claims a press as at any zoom, and no scroll or notch while its output is below the threshold | not a pick target either, with the same answers: the pick guard of upstream's focus cascade withholds the pointer from a non-widget canvas window only, and a widget is reached after it like at any zoom. Where a canvas window lies over the widget the cascade stops at that window and hands the pointer to nobody, so the widget gets nothing there: the hit is the canvas window, a pick target. A pinned widget is found with the pinned windows and keeps its pointer under the same canvas window |
 | `pick` | does nothing: `{"navigation":null,"dirty":false}` | the same |
-| drag anywhere | not pick mode's: no pick-mode press is ever on it. `begin_drag`, which the move binding sends, is its [screen-space drag](RULES.md#dragging-a-pinned-window) at every zoom, below the threshold too | `begin_drag` refuses it at every zoom |
+| drag anywhere | not pick mode's: no pick-mode press is ever on it. `begin_drag`, which the move binding sends, raises and focuses it and is its [screen-space drag](RULES.md#dragging-a-pinned-window) at every zoom, below the threshold too | `begin_drag` refuses it at every zoom, and focuses nothing |
 | `pointer_nearest` | a press bound to `center-nearest` over it swipes as anywhere; the action's own rules for a focused pinned window apply | the same, with a focused widget's rules |
 
 A pinned window lying over a canvas window keeps the press below the
@@ -371,16 +377,10 @@ does nothing, where upstream had already fired.
   margin. None of those exists here: the native frame, title bar included, is
   the whole target. Pinned windows and widgets do exist and are treated as
   [above](#screen-pinned-windows-and-widgets).
-- **A widget below the threshold keeps its pointer.** That a widget is no pick
-  target is upstream's `pick_target_under`; that its application still gets
-  presses and motion there follows from that here, because `input` refuses
-  pick targets and nothing else. Upstream's own pointer focus for a widget
-  below the threshold (`pointer_focus_under_pick`) was not compared for this.
-- **A pinned window is not dragged from a pick-mode press**, here or
-  upstream: it is no pick target, so no such press exists. Upstream moves it
-  in screen space through its own button path (`try_pinned_button`, ahead of
-  `try_pick_button`), and so does the move binding here, at any zoom
-  ([RULES.md](RULES.md#dragging-a-pinned-window)).
+- **The pick-mode drag asks for the focus twice.** The press's `activate` and
+  the drag's `begin_drag` each raise and focus the target and each return a
+  request, the second replacing the first. Upstream focuses once, at the
+  press. The scene is the same either way.
 - **`pointer_nearest` is one decision from two points**, see above.
 - **Per output.** Upstream's pick mode reads the active output's zoom; here
   each command names its output.
@@ -443,9 +443,21 @@ rectangle is asymmetric:
   (the canvas window takes the focus) and pinned over one (nothing does); and
   at zoom 0.4 under a threshold of 0.5 a pinned window over a pick target and
   a widget beside it, both `pick: false` with `input` passing and `forward`
-  true, `pick` doing nothing with either, `begin_drag` refusing the widget
-  and dragging the pinned window by the pointer's own displacement, and the
-  canvas window still dragged and picked;
+  true, `pick` doing nothing with either; the same widget where a canvas
+  window lies over it, where the hit is that window, a pick target, and
+  neither takes input; the widget pinned over that canvas window, where it
+  is hit first, `pick: false`, takes input and is forwarded its motion;
+  `begin_drag` refusing the widget and dragging the pinned window by the
+  pointer's own displacement, raised and focused by that press and still
+  outside the focus history; and the canvas window still dragged and picked;
+- the focus of a press that begins a grab: `begin_drag` and
+  `begin_native_resize` on a window that is neither focused nor on top,
+  each raising and focusing it with the request in its reply (`effect`, and
+  the one entry of `effects` beside a transaction's `effect`), the focus
+  history unchanged until the answer; below the threshold the pick-mode
+  press's `activate` and then `begin_drag` on the same window, which
+  restacks nothing and returns a second request, and a stand-in dragged the
+  same way with a null request;
 - in [`tests/sizes_flow.rs`](tests/sizes_flow.rs), where a fill can be made
   (the test answers the resize effects itself; no native window is resized):
   a pick of a window filled at zoom 1, from zoom 0.4 under a threshold of
@@ -470,8 +482,11 @@ Upstream's `hover_focus.rs` and `interact_min.rs` scenarios about server-side
 chrome, client resize margins, layer surfaces and the cursor icon have nothing
 to run against here and are not ported. The scenarios about pinned windows
 and widgets above are not ports of upstream's either: they were written from
-`maybe_hover_focus` and `hover_focus_window` as read, and from upstream's
-documentation for pick mode.
+`maybe_hover_focus` and `hover_focus_window` as read, and for pick mode from
+`pointer_focus_under_pick` with its focus cascade, `pick_target_under` and
+`try_pick_button` (`src/input/mod.rs`, `src/input/pointer.rs`). Read against
+those, `hit`, `input`, `hover` and the pick press needed no change: the
+layered hit is the cascade's order, and `pick` is its guard.
 
 This is controller evidence only: synthetic identities, synthetic focus
 results, no pointer, no native window. It does not show that the shell

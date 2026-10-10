@@ -159,7 +159,9 @@ the one window it focuses, and nothing else.
   their own gate.
 - Option-drag on a window: move the logical world window, using Rust snapping
   and hysteresis with the `[snap]` settings. Add Shift to move its connected
-  cluster. Held within `navigation.edge_pan.zone` (100 points) of the edge of
+  cluster. The press raises and focuses the window first, as DriftWM's does,
+  and so does Option-right-drag, the resize binding
+  ([Upstream behaviour gaps closed](#upstream-behaviour-gaps-closed)). Held within `navigation.edge_pan.zone` (100 points) of the edge of
   the display the drag began on, the drag pans the canvas under the window,
   faster the nearer the edge. A three-finger tap followed by a three-finger
   swipe on a window moves it the same way, edge pan included. Control-Option-Shift with an arrow key
@@ -600,7 +602,9 @@ Since the pass rules were added (no new flag, no new default binding):
   three-finger double-tap and drag by default) over one does the same.
   Before, the press was swallowed with a note and the gesture did nothing. A
   resize binding still is swallowed, and the note now reads "A screen-pinned
-  window is not resized: unpin it first (toggle-pin-to-screen)".
+  window is not resized: unpin it first (toggle-pin-to-screen)" (since
+  [the gaps were closed](#upstream-behaviour-gaps-closed) the press raises
+  and focuses the window first).
 - A mouse binding on a wheel notch (`wheel-up`, `wheel-down`) now fires: one
   notch of a mouse wheel runs its action once. Before, those two triggers
   were read and never asked for. No default binding uses them.
@@ -633,7 +637,7 @@ them at once.
 | `opacity` | the window is drawn at that opacity, focused or not, and `msg screenshot window` captures it alone at it |
 | `decoration`, `border_width`, `border_color`, `border_color_focused`, `corner_radius`, `shadow` | what the window is drawn with in place of the `[decorations]` values, see [Rendering](#rendering) |
 | `suspend_on_close`, `restore_windows` | see [Managed windows](#managed-windows) |
-| `size` | in a default launch kept with the window and not applied: the window keeps its own size, and a `position` centres that size. In an app started with `--experimental-native-resize` a new canvas window is asked for that size once it is placed, around the same centre ([Window sizing actions](#window-sizing-actions)); a widget, a pinned window and a window that takes over a saved slot are never asked. No rule has resized a real window |
+| `size` | in a default launch kept with the window and not applied: the window keeps its own size, and a `position` centres that size. In an app started with `--experimental-native-resize` a new window is placed for that size, as upstream places it, and asked for it as it appears, a widget and a window the rule pins included: `position` is the centre of the size named, and a pin and the placement policy take that frame too. Several such windows that appear together are asked one after another, in the order they appeared ([Window sizing actions](#window-sizing-actions)). A window that takes over a saved slot is never asked. No rule has resized a real window |
 | `fullscreen` | kept with the window and not applied: there is no fullscreen |
 | `blur = true` | what lies beneath the window is frosted, whatever `[decorations] blur` says, see [Blur, window animations and the error bar](#blur-window-animations-and-the-error-bar) |
 | `pass_keys = true` or a list of key combos | while the window holds the keyboard, those key bindings are not Infinify's: the chord reaches the application, [below](#passing-keys-and-presses-to-an-application) |
@@ -644,7 +648,8 @@ them at once.
 A file with a key the grammar does not know inside a rule is refused whole with
 upstream's TOML error (`unknown field …`), and the previous configuration stays
 in force. A rule with neither `app_id` nor `title`, an unknown `decoration`
-mode or a non-positive `size` is a warning on stderr and in the status line,
+mode or a non-positive `size` is a warning on stderr and in the
+[error bar](#blur-window-animations-and-the-error-bar),
 and the rest of the file applies.
 
 **A widget** is fixed to the canvas.
@@ -688,7 +693,8 @@ and the rest of the file applies.
   alone.
 - The move binding drags it in screen space (⌥ left drag by default; ⌥⇧
   left drag, the cluster move, does the same, a pinned window having no
-  cluster). The window follows the pointer point for point whatever the
+  cluster). The press raises and focuses it first, as upstream's does. The
+  window follows the pointer point for point whatever the
   zoom, as upstream's pinned move does. Nothing snaps, the canvas does not
   pan when the pointer reaches an edge, and the frame is not held on the
   display: it can be dragged partly off it, never wholly, because the point
@@ -707,9 +713,10 @@ and the rest of the file applies.
   focuses and raises it first, as upstream's gesture does. The gesture's
   pointer stays on the display it began on, so a gesture does not carry a
   pinned window to another display.
-- It is not resized: a resize binding pressed on it gives the note "A
+- It is not resized: a resize binding pressed on it raises and focuses it,
+  as upstream's press does, gives the note "A
   screen-pinned window is not resized: unpin it first
-  (toggle-pin-to-screen)" and the press is swallowed. `nudge-window` and
+  (toggle-pin-to-screen)" and goes no further. `nudge-window` and
   `move-to-bookmark` pass it over, and `msg move X Y` and `msg resize W H`
   answer upstream's refusals (reading either still works).
 - It takes no part in `zoom-to-fit`, snapping, cluster moves or `auto`
@@ -781,11 +788,10 @@ covered by its scenarios and not run in the app with a live window:
 - A pinned window cannot be resized: the move binding's pointer drag and the
   move gesture move it, and that is all. Upstream's resize binding, its
   resize gesture and its title bar also act on the pinned window in screen
-  space; here a resize press is swallowed with a note, the resize swipe is
+  space; here a resize press raises and focuses the window and stops there
+  with a note, the resize swipe is
   the gated one of every window, and there is no compositor title bar to
-  drag. The pointer drag does not focus or raise the window, where upstream's
-  press does both first (a press bound to move focuses no canvas window here
-  either); the gesture does both.
+  drag.
 - Nothing marks a widget on screen. Upstream's dot marks a pinned window in a
   title bar the compositor draws, which a Mac window has only under a
   `decoration = "server"` rule: a pinned window under its own title bar shows
@@ -810,9 +816,9 @@ covered by its scenarios and not run in the app with a live window:
   a pinned window, and a handle of the focused window that lies under a pinned
   window is neither drawn nor hit. The [sizing actions](#window-sizing-actions)
   that flag turns on leave both alone as well: with a widget or a pinned
-  window focused they do nothing, `msg resize WIDTH HEIGHT` answers
-  `this window has no canvas size to set: …`, and a rule's `size` is not asked
-  of either.
+  window focused they do nothing and `msg resize WIDTH HEIGHT` answers
+  `this window has no canvas size to set: …`. The one size either is ever
+  asked for is its own rule's `size`, as it appears (the table above).
 
 ### Passing keys and presses to an application
 
@@ -1356,8 +1362,7 @@ the compositor's frame description. What the snapshot carries is
   shader that does not compile or a file that is missing falls back as
   upstream does, to the dot grid; the reason is written to stderr, is shown in
   the [error bar](#blur-window-animations-and-the-error-bar) and stays in the
-  status line too, behind a problem in the config file itself, until a reload
-  builds a program without one.
+  status line too, until a reload builds a program without one.
 - **Autorelease pools.** Metal hands out autoreleased drawables and encoder
   contexts. Each layer update is drawn inside a pool of its own, and the main
   loop of a normal run has one per turn, so a redraw issued from a poll, the
@@ -1457,10 +1462,14 @@ What changes on screen against earlier builds:
   the background's, joined by a bullet and cut with an ellipsis where the line
   is longer than the display. The config's message is upstream's:
   `config: failed to read <path>: <reason>`, `config error: <the TOML error>`
-  with its several lines run into one, or the first warning followed by
-  ` (+N more)`. It goes when a later load is clean. The bar is a picture only:
-  a click on it reaches whatever is beneath. The status line still says the
-  same, with the path.
+  with its several lines run into one, or one warning, the first of them in
+  sorted order, followed by ` (+N more)`. It goes when a later load is clean. The bar is a picture only:
+  a click on it reaches whatever is beneath. A problem in the config file is
+  shown there and nowhere else on screen, as upstream shows it: the status
+  line does not repeat it, and stderr has every message of the load, its
+  warnings in the same sorted order, so the first line there is the one the
+  bar names. A background that fell back is still named in the status line
+  as well.
 
 What plays nothing, by upstream's rules or by this port's:
 
@@ -1483,13 +1492,24 @@ Limits the owner will notice or should know of:
   rule's `size` (the experimental flag only) is invisible for as long as
   that takes and a second more at most; a click at its place is taken or
   refused as for any window being resized, whether or not it is drawn.
-- A problem in the config file is shown twice, in the bar and in the status
-  line; one about bindings that could not be registered is the status line's
-  alone, as before.
-- With several warnings, which one is "first" is the parser's order. For
-  unknown actions in `[keybindings]` that order is not stable from one load of
-  the same file to the next (the two runs of one file here named different
-  ones), so the bar's line can change on a reload that changed nothing.
+- A background that fell back is shown twice, in the bar and in the status
+  line. A problem in the config file is the bar's alone; one about bindings
+  that could not be registered, a `--super` chord the controller rejects and
+  a load it refuses outright are the status line's alone, as before. The app
+  has been launched with a config that has two unknown actions and reloaded
+  ([below](#what-has-been-run-for-the-closed-gaps)): stderr had the two
+  warnings at every load and nothing else for them, but nobody looked at the
+  panel, so that the status line no longer repeats the message, and the bar
+  itself, are compiled and read only.
+- With several warnings, the one the bar names is the first of them in sorted
+  (byte) order, the same at every load of one file, and stderr lists them in
+  that order. That choice is this port's: upstream names the parser's first
+  and logs them as the parser returns them, and for unknown actions in
+  `[keybindings]` the parser's order is not stable from one load of the same
+  file to the next (the first of this tree's runs still printed them in the
+  parser's order, and the two lines changed places between loads). For a
+  table the parser reads in a fixed order the bar can so name another warning
+  than upstream's does.
 - A file that is refused now builds the background program again once, a
   shader compile included, because the bar's message travels with the same
   revision; upstream's failed reload redraws the bar only.
@@ -2241,11 +2261,12 @@ the complete default table.
   bindings and bookmarks stay as they were. While the file has such an
   error, or a value upstream's parser warns about, upstream's
   [error bar](#blur-window-animations-and-the-error-bar) shows the message
-  along the bottom of every display, and the status line rests on the
-  first message, a count of the rest and the path,
-  until a later load is clean. Notes about bindings that were skipped are
-  shown once, until the next status message. Every message also goes to stderr,
-  upstream's own verbatim.
+  along the bottom of every display
+  until a later load is clean, and nothing else on screen repeats it. Notes
+  about bindings that were skipped are
+  shown once in the status line, until the next status message. Every message
+  also goes to stderr, upstream's own verbatim, a load's warnings in sorted
+  order.
 - **Live reload.** The app watches the file and its directory and reloads
   within about 150 ms of a change, whether the file is written in place,
   replaced by a rename, created or deleted. The `reload-config` action does the
@@ -2495,7 +2516,7 @@ context before `anywhere`.
 | mouse wheel | the application's | zoom (`wheel-scroll`) |
 | ⌥ left drag | move the logical window (`alt+left`) | nothing |
 | ⌥⇧ left drag | move its cluster (`alt+shift+left`) | nothing |
-| ⌥ / ⌥⇧ right drag | `resize-window` / `resize-window-snapped`: only with `--experimental-native-resize`, else a status note | nothing |
+| ⌥ / ⌥⇧ right drag | `resize-window` / `resize-window-snapped`: only with `--experimental-native-resize`, raising and focusing the window first; else the window is raised and focused and a status note says why | nothing |
 | ⌥ / ⌥⇧ middle | `fit-window` / `fit-window-snapped`: only with `--experimental-native-resize`, else not implemented and the status line says so | nothing |
 | ⌃⌥ middle | `toggle-fullscreen`: not implemented, the status line says so | nothing |
 | ⌃⌥ left drag | pan (`mod+left`) | pan |
@@ -2506,8 +2527,8 @@ context before `anywhere`.
 A move or resize binding pressed on a widget starts no gesture, and the status
 line says why for two seconds; the widget then gets the press as a plain
 click, as upstream's does. On a screen-pinned window the move binding drags
-the window in screen space, and a resize binding starts no gesture, says why,
-and is not passed to the application
+the window in screen space, and a resize binding raises and focuses it, starts
+no gesture, says why, and is not passed to the application
 ([Window rules](#window-rules-widgets-and-pinned-windows)).
 Over a live window the lookup also names that window: a binding its
 `pass_mouse` rule claims is not run, and the press or scroll goes to the
@@ -2516,9 +2537,16 @@ application as an unbound one
 A resize binding picks its edges from the pointer's place in the window, a 3×3 grid whose centre resizes from the
 bottom right, as upstream's resize grab does. A mouse binding that names an
 action first focuses the window under the pointer, a placeholder included, then
-runs the action. A press bound to move or resize a window does not focus it,
-where upstream's does; a move by [trackpad gesture](#trackpad-gestures) does
-focus and raise its window, as upstream's. After a
+runs the action. A press bound to move or resize a window raises and focuses
+it before the drag begins, as upstream's does, a screen-pinned window
+included, and the native focus follows as after a click. A resize press does
+so also where no resize can begin: without `--experimental-native-resize`,
+on a pinned window, and under the flag on a window whose resize is turned
+away (a detached placeholder, a window whose own extent no longer matches
+the canvas's, an application that takes no size). A move the controller
+refuses focuses nothing, where upstream has no such refusal. A move by
+[trackpad gesture](#trackpad-gestures) focuses and raises its window too, as
+upstream's. After a
 two-finger scroll has panned, scrolls stay with the canvas for 150 ms even if a
 window slides under the pointer, as upstream. One gesture runs at a time: a
 second button pressed during a gesture is ignored. Upstream's `wheel-up` and
@@ -3326,11 +3354,11 @@ is on its way, requests are answered as usual.
 | `state` | Camera, zoom, the keyboard layout (the selected input source's name and short code), windows (id, bundle id as `app_id`, title, centre position, size, `is_widget`, `suspended` for a detached placeholder, and `mode`: `Normal`, or `Fit` or `Fill` while a [fit or fill](#window-sizing-actions) can still be undone; the readable form prints neither of those two, `--json` both), `pinned` (each screen-pinned window with its display and its `position` and `size` in `pinned_to_screen` rule coordinates; such a window is not under `windows` and has no `mode`), outputs (stable id as `name`, `active`) and the active bookmark. `fullscreen` and the layer lists are always empty. |
 | `subscribe` | Keep the connection and print the state now and again after every change, until the app exits. See [Event stream](#event-stream). |
 | `layout [--short]` | The selected keyboard input source: its name, or with `--short` its first language code. Empty until the app has reported one, which it does at launch. |
-| `camera [X Y]` | Read the view centre, or fly the camera there at the current zoom. |
+| `camera [X Y]` | Read the view centre, or fly the camera there at the current zoom. A centre whose Y is 0 reads `-0` (`1950 -0`), as upstream's own client prints it: its Y-up conversion negates the zero, and nothing here rewrites that. |
 | `zoom [LEVEL]` | Read the zoom, or animate to a level about the view centre. The level is clamped to the range the zoom shortcuts use and the reply is the level applied. |
 | `focus [APP_ID] [--id N]` | Read the focused window. Setting makes a window the logical focus and, unless it is already wholly in view, flies the camera to it as upstream does: at 1:1 for a window with a bound source (at the current zoom with `[zoom] reset_on_activation = false`), at the current zoom for a detached placeholder. A pinned window is focused and raised with no flight; a widget, which only `--id` reaches, answers `window #N is a widget and cannot be focused`. For a window with a bound source the app also performs the controller's focus request on the native window when native focus is allowed (see [Window navigation and native focus](#window-navigation-and-native-focus)); that has not been run. |
 | `move [X Y] [--id N]` | Read a window's centre, or move the logical window there (whole points). The native window is not touched. A move is refused while a gesture is active, when it would put the frame outside the 32-bit integer range every other request reads positions in, and for a pinned window (`this window has no canvas position to move: …`); a pinned window reads as the canvas point its pin shows. It is the one way to move a widget. |
-| `resize [WIDTH HEIGHT] [--id N]` | Read the size. Setting one answers an error (`resize is not implemented on macOS yet: native layout resize is not available`) unless the app was started with `--experimental-native-resize`; a pinned window and a widget answer upstream's `this window has no canvas size to set: …` either way. With the flag it asks the native window for that size, keeps the window's centre where it is and answers with the size asked for, not the size the window ends up with; a detached placeholder is refused. See [Window sizing actions](#window-sizing-actions); no real window has been resized this way yet. |
+| `resize [WIDTH HEIGHT] [--id N]` | Read the size. Setting one answers an error (`resize is not implemented on macOS yet: native layout resize is not available`) unless the app was started with `--experimental-native-resize`; a pinned window and a widget answer upstream's `this window has no canvas size to set: …` either way. With the flag it asks the native window for that size, keeps the window's centre where it is, raises the window over the other canvas windows without focusing it, as upstream's does, and answers with the size asked for, not the size the window ends up with; a detached placeholder is refused. See [Window sizing actions](#window-sizing-actions); no real window has been resized this way yet. |
 | `pin [on\|off] [--id N]` | Read whether a window is pinned to the screen, or pin or unpin it without moving it on screen. A live window only: a placeholder answers `stand-ins can't be pinned`. |
 | `opacity [VALUE] [--id N]` | Read the opacity a window is drawn at, or set it (0 to 1; outside that is refused, not clamped) until the window is gone. A live window only. |
 | `action SPEC...` | Run an upstream action string, below. |
@@ -3859,9 +3887,13 @@ send none. The shell then does what the reply says:
   over a target, and ⌥-drag and the move swipe move it about its screen as
   above the threshold. A widget is none either, and is neither picked nor
   moved; its
-  clicks and motion go on as above the threshold (that last part follows from
-  the rule here, see
-  [POINTER.md](../../crates/desktop/POINTER.md#differences-from-upstream)).
+  clicks and motion go on as above the threshold, as upstream's do: its
+  pointer focus (`pointer_focus_under_pick`) withholds the pointer from an
+  ordinary canvas window only and reaches a widget after that like at any
+  zoom. Where a canvas window lies over a widget the press is that window's,
+  a target, and the widget gets nothing there; a widget that is also pinned
+  keeps its pointer under the same window
+  ([POINTER.md](../../crates/desktop/POINTER.md#screen-pinned-windows-and-widgets)).
   A press on a target with any button focuses and
   raises it and is never forwarded, unless a binding whose modifiers are held
   claims the press (Option-drag still moves, Control-Option-drag still pans).
@@ -4137,8 +4169,11 @@ committing it; logical focus stays.
   that already has focus, runs the whole native focus sequence again.
 - `auto_navigate_on_click` has no double-click deferral and no title-bar case:
   every completed click on a clipped window pans at once.
-- A press bound to move or resize a window does not focus it, where upstream's
-  does (a trackpad move gesture does).
+- A press bound to move or resize a window raises and focuses it first, as
+  upstream's does; one whose move or resize the controller refuses focuses
+  nothing, where upstream's press has by then raised and focused the window.
+  No such press has been made with a real pointer: this is compiled and read
+  only.
 - Hover, `focus_follows_mouse`, pick mode and the pointer form of
   `center-nearest` (upstream's ⌃⌥⌘-drag swipe; its trackpad form is the
   four-finger swipe) have never been tried with a real pointer, see
@@ -4306,7 +4341,7 @@ or without the flag.
 | ⌃⌥⇧M; ⌥⇧ middle click; ⌥⇧ with a two-finger pinch | `fit-window-snapped` | flag | The same, and the windows snapped to it are pushed outward by the distance each of its edges travels, then brought back by the second press. |
 | none (upstream suggests `mod+g`) | `fill-window` | flag | Grows the focused window in place into the free space of the display that shows it: up to `outer_gap` from the edge of the view and `[snap] gap` from every other canvas window, pulling back an edge that sticks out. No camera moves. A second press puts it back where it was, at the size it had before it was filled or fitted. |
 | none | `grow-window <direction>`, `shrink-window <direction>` | flag | Moves the named edge of the focused window outward, or inward, by `[navigation] resize_step` (20) points; the opposite edge stays where it is. A diagonal moves two edges. Held, the key repeats. |
-| `Infinify msg resize WIDTH HEIGHT [--id N]` | IPC resize | flag | Asks one window for that size and keeps its centre. The reply echoes the size asked for. |
+| `Infinify msg resize WIDTH HEIGHT [--id N]` | IPC resize | flag | Asks one window for that size and keeps its centre. The reply echoes the size asked for. The window is raised over the other canvas windows, as upstream's `resize` raises a client, and is not given the focus. |
 
 A config file binds any of them to a key, a mouse button, a trackpad gesture
 or a hot corner in DriftWM's grammar, and all of those arrive through the same
@@ -4331,6 +4366,15 @@ With the flag, by the code:
   the window took. So a window that accepts less than the fit asked, or
   refuses it, still goes back to where it was at the second press, and the
   windows `fit-window-snapped` pushed come back with it.
+- A fit or a fill measures its window by the size the window was last asked
+  for, by a step, `msg resize`, a rule's `size`, a fit, a fill or the press
+  that undoes one, and not by what the window took of it, as upstream
+  measures a client by the size it last configured. A window stepped from 400
+  to 430 wide that stopped at 410 has its next `fit-window` centred on the
+  430-wide frame at its top-left, `fit-window-snapped` pushes the windows
+  snapped to that frame, and `fill-window` grows from it. A window that was
+  asked nothing is measured by the size it has, and a resize by handle makes
+  it so again.
 - The size a second press gives back is the one the window had before a fit or
   a fill last changed it. A fit pressed on a filled window, or a fill after a
   filled window was moved, still comes back to the size from before the fill.
@@ -4378,13 +4422,30 @@ With the flag, by the code:
   gives its size back. `send-to-output` ends the fill of a canvas window and
   leaves a pinned one's alone.
 - A window rule's `size`: a window that appears by itself and matches such a
-  rule is placed at its own size, and its attach reply then starts the same
-  size transaction for the rule's size, around the centre it was placed at.
-  The first of several such windows that appear while a size is on its way is
-  asked and the others keep their size (`rule.not_applied` in the snapshot
-  still names `size` for them), at launch too; so does a window that maps
-  during a drag. A widget, a pinned window, a window that takes over a saved
-  slot and a window attached from the chooser are never asked.
+  rule is placed for the size the rule names, as upstream places it, a widget
+  and a window the rule pins included: a `position` is the centre of that
+  size, and the pin, the placement policy and the camera's flight to the new
+  window take that frame. `position = [0, 0]` with `size = [800, 600]` puts
+  the top-left at canvas (-400, -300) whatever size the window opened at.
+  Until the window has answered it stands at its own size in the middle of
+  that frame (a pinned one at its pin), and its attach reply starts the same
+  size transaction for the rule's size. A window that takes the size lands on
+  the frame to the pixel; one that takes another keeps the frame's top-left.
+- There is one size transaction, so several such windows that appear together,
+  at launch too, are asked one after another in the order they appeared. Each
+  waits at its own size, `rule.not_applied` in the snapshot still naming
+  `size` for it, and is asked in the reply to the result that ends the
+  transaction before it, whoever began that one. A window that appeared during
+  a drag is asked with the next new window or when the next transaction ends,
+  not when the drag ends. One that closes, or whose application goes, while it
+  waits is not asked, and neither is one that is sized meanwhile, by a sizing
+  action, by `msg resize` or by a resize handle: DriftWM applies a rule's size
+  once, as the window appears, and never over a size given since. While it
+  waits it can be moved, dragged by a move and pinned like any window. A
+  later window is placed off the frame a waiting or just-asked one is
+  taking, so several of one rule that appear together cascade and none
+  lands on another. A window that takes over a saved slot and a window
+  attached from the chooser are never asked.
 
 ### What changes for someone who used the previous build
 
@@ -4415,7 +4476,10 @@ With `--experimental-native-resize`:
   take that size; before, and still without the flag, the size was only
   recorded. Such a window is first drawn, growing and fading in, when that
   request has been answered
-  ([window animations](#blur-window-animations-and-the-error-bar)).
+  ([window animations](#blur-window-animations-and-the-error-bar)). Since
+  [the gaps were closed](#upstream-behaviour-gaps-closed) it is also placed
+  for that size, a widget and a rule-pinned window are asked like any other,
+  and of several that appear together every one is asked, in turn.
 
 ### Limits of sizing
 
@@ -4425,7 +4489,8 @@ With `--experimental-native-resize`:
   path's own open questions (below) is answered by this work.
 - One window at a time. Upstream sizes any number of windows at once; here
   there is one transaction, and a second sizing action is continued, replaced
-  or refused as described, never queued.
+  or refused as described, never queued. Only a window rule's `size` waits
+  its turn.
 - A native window's minimum and maximum size are unknown before asking. The
   request is sent as computed and the window clamps it; for a fit that leaves
   the window at the fit's top-left with the size it accepted.
@@ -4444,12 +4509,26 @@ With `--experimental-native-resize`:
   waiting for native resize result`), as for a handle drag.
 - A window that appears by itself begins a size transaction from its own
   attach reply only for a window rule's `size`; the shell hands that reply to
-  the same hook as an action's, before it starts the window's capture. No
-  rule has matched a window in the app, so this is compiled and read only. A
-  window attached from the chooser is never asked.
-- A widget and a screen-pinned window are never sized: not by an action, not
-  by `msg resize`, not by a rule. Upstream sizes a pinned window in screen
-  space and applies a rule's `size` to both.
+  the same hook as an action's, before it starts the window's capture. A
+  ruled window that had to wait begins its own in the reply to the result
+  that ended the transaction before it: the resize coordinator performs that
+  effect like any other, and the shell takes the transaction it names for a
+  sizing action's, so a press does not cancel it and `msg` is answered while
+  it runs. No rule has matched a window in the app, so all of this is compiled
+  and read only. A window attached from the chooser is never asked.
+- Nothing on screen says that a ruled window is waiting its turn, and its
+  opening is held back for the size only from the moment its own transaction
+  begins. One of several ruled windows that appear together may therefore be
+  seen opening at its own size and growing afterwards, where upstream shows
+  each at the size its rule gave it.
+- A ruled window that takes another size than its rule names keeps the
+  top-left of the frame it was placed for. Upstream places the size the
+  window took: its `position` centres that size, and its pin and its
+  placement are worked out for it.
+- A widget and a screen-pinned window are sized by nothing but their own
+  rule's `size` as they appear: not by an action, not by `msg resize`, not by
+  hand. Upstream also resizes a pinned window in screen space by its resize
+  binding.
 - The shell tells the controller it can resize on the flag alone, before the
   canvas, and so the resize coordinator, exists. No window has a live source
   until the canvas is open, so no transaction can begin in between.
@@ -4663,6 +4742,134 @@ joins sizing to rules, pins, the pointer and pick mode ran only in the
 controller scenarios. Still unrun as well: `tests/e2e/desktop-resize.sh`,
 every hot key, mouse binding, gesture and hot corner that fires a sizing
 action, key repeat, Escape during a transaction, and more than one display.
+
+## Upstream behaviour gaps closed
+
+Earlier sections of this file recorded nine places where the app behaved
+otherwise than DriftWM although DriftWM's behaviour can be had here. This is
+what each does now. **None of it has been seen on a display or done with a
+pointer**: the controller's side is covered by its scenarios, the shell's side
+is built and read, and the app has been launched and driven over its socket
+only ([What has been run for the closed gaps](#what-has-been-run-for-the-closed-gaps)).
+
+| What | Before | Now |
+| --- | --- | --- |
+| A press bound to `move-window`, `move-snapped-windows`, `resize-window` or `resize-window-snapped` (⌥ left or right drag, with ⇧ for the cluster) | started its drag and focused nothing | raises and focuses the window under the pointer first, a screen-pinned window included, and the real window is then focused natively as after a click. A widget still refuses the drag and gets the press as a click. A resize press does this also where no resize can begin: without `--experimental-native-resize`, on a pinned window, and under the flag where the resize is turned away (a detached placeholder, a window whose own extent no longer matches the canvas's) |
+| `Infinify msg resize WIDTH HEIGHT` (the flag only) | left the stacking alone | raises the window over the other canvas windows, without giving it the focus. Asking again for the size last asked changes nothing, the stacking included, as upstream's does |
+| A problem in the config file | shown in the error bar and again in the status line | shown in the error bar only; the status line keeps its own notes (bindings left out, a `--super` chord or a load the controller refuses). Every message still goes to stderr |
+| Several warnings in one file | the bar named the parser's first, which for unknown actions changed from one load to the next | the bar names the first in sorted order, the same at every load, and stderr lists them in that order |
+| Pick mode over a widget or a pinned window | as now, on a reading of upstream's documentation | unchanged, and now read against upstream's code: a widget and a pinned window keep their pointer below `[zoom] interact_min`; where a canvas window lies over a widget the press is that window's and the widget gets nothing |
+| `fit-window`, `fit-window-snapped`, `fill-window` after a step, a `msg resize` or a fill that the window clamped (the flag only) | measured the window by the size it took | measure it by the size it was last asked for, as upstream does |
+| Several windows with a rule's `size` appearing together (the flag only) | the first was asked, the others kept their size | each is asked, one after another in the order they appeared, and each is placed off the frames the earlier ones are taking, so they cascade as windows that already have the size do. One that is sized by hand, by an action or by `msg resize` while it waits is not asked afterwards |
+| A rule's `size` (the flag only) | the window was placed at its own size and then asked, a widget and a rule-pinned window never | the window is placed for the size its rule names and then asked, a widget and a rule-pinned window too |
+| `Infinify msg camera` printing `1950 -0` | as now | unchanged: upstream's own client prints a negative zero for a centre whose Y is 0, so nothing rewrites it |
+
+Flags and controls are unchanged: no new flag, no new binding, no new `msg`
+command. `--experimental-native-resize` gates exactly what it gated.
+
+What still differs from DriftWM in these nine places:
+
+- A press while a size is still owed is dropped and focuses nothing, and so
+  does a move press the controller refuses. Upstream has no such refusal and
+  has by then raised and focused the window. A resize press that is turned
+  away under the flag is raised and focused by itself, as one without the
+  flag is.
+- A pick-mode press that turns into a move asks for the native focus twice,
+  at the press and when the drag begins, the second request replacing the
+  first. Upstream focuses once.
+- `Infinify msg move X Y` still does not raise the window, where upstream
+  raises a live client.
+- The warning the bar names can be another than upstream's for a table the
+  parser reads in a fixed order, since upstream names the parser's first.
+- A ruled window that takes another size than its rule names keeps the
+  top-left of the frame it was placed for, where upstream places the size it
+  got. Until it answers it is on the canvas at its own size, where upstream
+  shows it only once it is sized.
+- Ruled windows are asked in turn, not all at once, and the opening of one
+  that waits is not held back for its size until its own turn begins; one
+  that appeared during a drag is asked with the next new window or at the
+  end of the next size transaction.
+- A resize by handle ends what a window was last asked for; upstream goes on
+  measuring by the last size the drag asked.
+- The fixture modes (`--demo*`, `--owned-resize-*`) send the same
+  `begin_drag` and `begin_native_resize` as before, and the controller now
+  also raises and logically focuses the window for them and issues a focus
+  request those runs never answer, having no navigation coordinator. Whether
+  that shows in a fixture run has not been tried: no fixture was run.
+
+### What has been run for the closed gaps
+
+On 2026-10-10, macOS 27.2, Apple Silicon, in this tree, which has every
+earlier milestone but fullscreen:
+
+- `./scripts/build-app.sh`: built and ad-hoc signed; nothing launched.
+- `cargo fmt -p driftwm-desktop -- --check` and
+  `cargo clippy -p driftwm-desktop --all-targets -- -D warnings`: clean.
+- `cargo test -p driftwm-desktop` for `pointer_flow`, `sizes_flow`,
+  `rules_flow`, `effects_flow`, `passthrough_flow`, `ipc_flow`,
+  `navigation_actions_flow`, `gesture_flow`, `lifecycle_flow`, `config_flow`,
+  `render_flow` and `controller_flow`: all 186 scenarios passed, `sizes_flow`
+  with 31 and `rules_flow` with 26. They cross the exported C ABI and JSON,
+  and the test plays the native side: it answers every focus request and
+  every resize effect with a made-up result. They cover the raise and focus
+  inside `begin_drag`, `begin_resize` and `begin_native_resize` with the
+  request in the reply, the raise of an IPC resize and the identical
+  request that raises nothing, the bar's message over
+  two dozen loads of a file whose warnings the parser returns in more than
+  one order, the pick-mode hit over a widget under a canvas window and a
+  pinned widget, the fit and the fill after a clamped request, five ruled
+  windows that map together and are asked in turn, the frames a rule's
+  `size` is placed for, three windows of one rule that map together and
+  cascade, two under `auto` placement, and a waiting window that is sized
+  first (by `msg resize`, a fit, a resize drag and a handle resize) and is
+  then not asked. `native_resize_flow` (25), the module of the one other
+  file the review fixes touched, passed too.
+- Not run: `./tests/e2e/desktop-navigation.sh`, because neither the navigation
+  coordinator nor its regression changed, and `./tests/e2e/desktop-resize.sh`,
+  whose regression reads only the transaction id of a `begin_native_resize`
+  reply and so was left alone; no fixture, probe or demo mode.
+- Four launches of the built app as `--windowed 1100x700` on a private scene
+  (three detached placeholders: "Notes" 640x420, "Browser" 900x600, "Terminal"
+  560x380), a private config whose `[keybindings]` names two unknown actions,
+  and a private socket, driven by a script through `Infinify msg`, 5, 6, 3
+  and, after the review fixes and on the final build, 6 seconds long. None
+  had Screen Recording access (stderr said `Windows are
+  not managed: …`), so no window had an application behind it. Each ended on
+  SIGTERM with exit status 0 and its socket removed. Observed:
+  - `camera` read `550 -318` at launch and after a first `action
+    home-toggle`, which does nothing there because the origin is already in
+    view; `action center-nearest right`: `1950 -0`; `action pan-viewport
+    right`: `2050 -0`; `action home-toggle`: `0 -0`. `--json state` has the
+    same centre as `[0.0, -0.0]`. The negative zero is upstream's and is
+    left. The fourth run read `550 -318`, `1950 -0` after `center-nearest
+    right`, `-620 -890` after `focus --id 3` and `0 -0` after `home-toggle`;
+  - `resize --id 1`: `640 420`; `resize --id 1 800 500`: `error: resize is
+    not implemented on macOS yet: native layout resize is not available`,
+    exit 1, and the size read `640 420` again. The runs had no
+    `--experimental-native-resize`, so the raise of an accepted resize was
+    not reached;
+  - `screenshot -o FILE`: a 1100x636 PNG of the dot grid with the corner of
+    the "Notes" placeholder at (750, 468), where its frame at world (200,
+    150) falls in a view centred on the origin. The capture has no error bar
+    by design;
+  - the two config warnings on stderr at launch and after each `action
+    reload-config`, and no other line for them. In the first run, built
+    before stderr was sorted, the two lines changed places between loads
+    (alpha then zeta at launch, zeta then alpha after the first reload, alpha
+    then zeta after the second and third). In the second run, and in a third
+    of twelve reloads, every load printed them in the same order, thirteen
+    times out of thirteen in the third, and four out of four in the fourth.
+- Not done in any run: no press, drag, scroll or gesture was made, no key was
+  pressed, nothing was looked at in the panel, so the focus a bound press
+  takes, a resize press that is turned away included, the status line
+  without the config message and the error bar with
+  its one line are compiled and read only; the bar's text is not readable
+  over the socket. No window had a live source and the flag was off, so no
+  size was asked: the raise of `msg resize`, the fit after a clamped request,
+  a rule's `size` placed for and asked in turn, the cascade of ruled windows
+  that appear together, a waiting window sized first, and the shell taking a
+  waiting window's transaction for a sizing one have the controller scenarios
+  and nothing else.
 
 ## Experimental native resizing
 

@@ -32,7 +32,7 @@ static bool finalGuard(DWResizeIdentity i,void *context){
     if(!setter)r=dw_resize_observe(identity(e[@"identity"]));
     else if(self.mutationGuard)r=dw_resize_apply_scoped(identity(e[@"identity"]),CGSizeMake([s[@"width"]doubleValue],[s[@"height"]doubleValue]),scopedGuard,finalGuard,&scope);
     else r=dw_resize_apply_guarded(identity(e[@"identity"]),CGSizeMake([s[@"width"]doubleValue],[s[@"height"]doubleValue]),rootOnly,NULL);
-    NSDictionary *result=@{@"outcome":@(dw_resize_outcome_name(r.outcome)),@"ax_error":@(r.ax_error),@"mutation_attempted":@(r.mutation_attempted),@"observed":@(r.observed),@"requested":@{@"width":@(r.requested.width),@"height":@(r.requested.height)},@"actual_ax":rect(r.actual_ax),@"actual_cg":rect(r.actual_cg)};
+    NSDictionary *result=@{@"outcome":@(dw_resize_outcome_name(r.outcome)),@"ax_error":@(r.ax_error),@"mutation_attempted":r.mutation_attempted?@YES:@NO,@"observed":r.observed?@YES:@NO,@"requested":@{@"width":@(r.requested.width),@"height":@(r.requested.height)},@"actual_ax":rect(r.actual_ax),@"actual_cg":rect(r.actual_cg)};
     if(self.didPerform)self.didPerform(e,result);
     return result;
 }
