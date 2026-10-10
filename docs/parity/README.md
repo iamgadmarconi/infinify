@@ -521,7 +521,7 @@ device-specific behavior also need the corresponding hardware.
   silence the pointer or two-finger scrolling, and `[touch.*]` stays unused. See
   the [gesture contract](../../crates/desktop/GESTURES.md) and the
   [desktop shell notes](../../native/desktop/README.md#trackpad-gestures).
-- This milestone (commit pending), per-window policy: `[[window_rules]]`,
+- `43a1525`, per-window policy: `[[window_rules]]`,
   widgets and screen-pinned windows. The controller resolves a window's rules
   once, when it maps, with `driftwm-core`'s own matcher and merge (the bundle
   identifier as `app_id`, the source title as `title`), and applies `position`
@@ -663,7 +663,7 @@ device-specific behavior also need the corresponding hardware.
   the pin's canvas frame. See the
   [rules contract](../../crates/desktop/RULES.md) and the
   [desktop shell notes](../../native/desktop/README.md#window-rules-widgets-and-pinned-windows).
-- This milestone (commit pending), rendering: the canvas of a normal run is
+- `43a1525`, rendering: the canvas of a normal run is
   drawn the way DriftWM draws it. A Metal port of upstream's frame composition
   and canvas background (`native/desktop/compositor.{h,m}`,
   `background.{h,m}`; upstream's border, shadow and corner-clip shaders and its
@@ -792,7 +792,7 @@ device-specific behavior also need the corresponding hardware.
   [rendering contract](../../crates/desktop/RENDER.md), the
   [desktop shell notes](../../native/desktop/README.md#rendering) and the
   [compositor notes](../../native/desktop/COMPOSITOR-NOTES.md).
-- This milestone (commit pending), pointer policy: what DriftWM does with a
+- `271cdc6`, pointer policy: what DriftWM does with a
   pointer that moves. Until now the shell handled no mouse-moved event, so an
   application under the canvas never saw the pointer move,
   `focus_follows_mouse` and `[zoom] interact_min` were read and ignored, and a
@@ -943,7 +943,7 @@ device-specific behavior also need the corresponding hardware.
   same below the threshold as above it. See the
   [pointer contract](../../crates/desktop/POINTER.md) and the
   [desktop shell notes](../../native/desktop/README.md#pointer-motion-sloppy-focus-and-pick-mode).
-- This milestone (commit pending), window sizing, makes DriftWM's sizing
+- `1c9bfea`, window sizing, makes DriftWM's sizing
   actions controller policy (`crates/desktop/src/sizes.rs`, adapted from
   upstream's `src/state/{resize,fit,fill}.rs` with driftwm-core's own fill
   search and cluster shifts): `grow-window` and `shrink-window` with
@@ -1053,7 +1053,7 @@ device-specific behavior also need the corresponding hardware.
   `--experimental-native-resize` until a live native resize pass exists. See the
   [sizing contract](../../crates/desktop/SIZES.md) and the
   [desktop shell notes](../../native/desktop/README.md#window-sizing-actions).
-- This milestone (commit pending), effects: DriftWM's background blur, its
+- `4eb130c`, effects: DriftWM's background blur, its
   window open and close animations and stand-in fades, and its on-screen error
   bar. The compositor above is replaced by a superset of itself, built, checked
   against upstream's blur shaders and animation curves and independently
@@ -1204,7 +1204,7 @@ device-specific behavior also need the corresponding hardware.
   [desktop shell notes](../../native/desktop/README.md#blur-window-animations-and-the-error-bar)
   and the [compositor notes](../../native/desktop/COMPOSITOR-NOTES.md),
   Part II.
-- This milestone (commit pending), pass-through and the pinned drag: the rest
+- `b11ca68`, pass-through and the pinned drag: the rest
   of upstream's per-window rules, merged with the pointer policy, window
   sizing and effects above. `pass_keys`: the controller reports in every
   snapshot what the window that holds the keyboard passes (`null`, `true` or
@@ -1299,7 +1299,7 @@ device-specific behavior also need the corresponding hardware.
   held cursor moves it at once; media keys are not registered at all.
   See the [rules contract](../../crates/desktop/RULES.md#pass-rules) and the
   [desktop shell notes](../../native/desktop/README.md#passing-keys-and-presses-to-an-application).
-- This milestone (commit pending), upstream behaviour gaps: nine places where
+- `2d409fc`, upstream behaviour gaps: nine places where
   the milestones above recorded a difference from upstream although
   upstream's behaviour can be had here, each followed from upstream's code at
   the pinned commit. (1) A press bound to `move-window`,
@@ -1401,7 +1401,7 @@ device-specific behavior also need the corresponding hardware.
   [sizes](../../crates/desktop/SIZES.md), [rules](../../crates/desktop/RULES.md),
   [effects](../../crates/desktop/EFFECTS.md) and
   [navigation](../../crates/desktop/NAVIGATION.md#activate) contracts.
-- This milestone (commit pending), fullscreen, makes DriftWM's fullscreen
+- `ed34eec`, fullscreen, makes DriftWM's fullscreen
   controller policy (`crates/desktop/src/fullscreen.rs`, adapted from
   upstream's `src/state/fullscreen.rs`, the fullscreen arms of
   `src/input/actions.rs` and the fullscreen lines of its navigation, output,
@@ -1618,3 +1618,85 @@ are not by themselves proof that private implementations are impossible.
 Policy work can proceed while native feasibility remains open. A failed or
 unproven native gate must remain visible; it cannot be hidden by progress in
 unrelated features. Tests stay focused on changed paths and touched modules.
+
+## What is still open
+
+On 2026-10-10 every row that was still `missing` was read again against the
+tree at `ed34eec`. 24 of them described behaviour a default launch already has
+and became `implemented_unverified`; the other 190 stay `missing`, each with a
+note that says why. No row is `verified` or `blocked`, and the sweep moved none
+to `out_of_scope`: that is the owner's decision, which a note only recommends.
+
+| Rows | Count |
+| --- | --- |
+| `implemented_unverified` | 395 |
+| `missing` | 190 |
+| of which gated behind `--experimental-native-resize` | 29 |
+| of which provided or owned by macOS | 68 |
+| of which with no Mac counterpart | 67 |
+| of which real gaps | 26 |
+| `out_of_scope` | 3 |
+| all rows | 588 |
+
+The `missing` rows, by group:
+
+- **Gated behind `--experimental-native-resize` (29).** `grow-window`,
+  `shrink-window`, `fit-window`, `fit-window-snapped`, `fill-window`,
+  `toggle-fullscreen` and fullscreen itself, resize by pointer, a rule's `size`
+  and `fullscreen`, `navigation.resize_step`,
+  `hot_corners.disable_when_fullscreen`, and the key, mouse and pinch bindings
+  that run them. The policy exists behind the flag, with controller scenarios
+  in which the test plays the native side. What unblocks these rows is a live
+  native resize pass on a real window, by the owner.
+- **Provided or owned by macOS (68).** macOS does the job itself and the port
+  has no code for it, which is not an implementation. Scope decision pending
+  with the owner; the notes recommend treating these as provided by macOS.
+  Families: the display arrangement (`[[outputs]]` scale, transform, position
+  and mode, and output management); display power, gamma, idle and the lock
+  screen; screencast sources and streams; synthetic keys; the trackpad, mouse
+  and tablet device settings; the keyboard layouts and Caps Lock; the pointer
+  size; resize at a window's own border; the volume, brightness, media and
+  Print keys.
+- **No Mac counterpart (67).** Scope decision pending with the owner; the notes
+  recommend out of scope. Families: everything touchscreen (the `[touch]`
+  tables and thresholds, the touch-only triggers, `[input.touch]` and the two
+  touch speeds); `[backend]`; `[xwayland]`; the cursor theme and the cursor's
+  opacity on inactive outputs; Num Lock and the XKB keyboard model; the primary
+  selection; shortcut inhibition by a client; the media stop key; the reference
+  config's tablet `map_to_output`.
+- **Real gaps (26).** Nothing but the work is waited for here:
+  - a resize carried to the snapped neighbours, by pointer
+    (`resize_window_snapped`) or from a window's own edge or zoom button
+    (`decoration_resize_snapped`, `decoration_fit_snapped`): the controller
+    refuses a group resize even with the flag (6);
+  - resize by trackpad gesture, alone or snapped: the swipe is claimed and
+    does nothing (4);
+  - `mouse.resize_on_border` and a rule's `preserve_aspect_ratio`: read and
+    never applied (2);
+  - drag-and-drop between windows on the canvas (2);
+  - pointer lock, confinement and relative motion for the application under
+    the pointer (2);
+  - tablet tools (1);
+  - reserved areas and any policy for panel or overlay windows (1);
+  - the background shader cache and its budget (4);
+  - tap-modifier bindings (1);
+  - the two brightness swipe examples, whose command is a Linux program with
+    no Mac substitute (2);
+  - the acceptance pass itself, on the M5 and macOS 26 target (1).
+
+Two keys sit in two groups because their two rows were judged apart, and want
+one answer from the owner: `resize_on_border` (its field row with macOS, its
+reference row a gap) and the tablet's `map_to_output` (its field rows with
+macOS, its reference row with no Mac counterpart).
+
+Two more gaps have no row of their own. They are recorded in the
+[pointer contract](../../crates/desktop/POINTER.md#differences-from-upstream),
+not in the inventory: popups and menus open at the native window's place, not
+where the canvas draws the window, and the cursor shape cannot follow the
+application under the pointer.
+
+The evidence boundary stands for every row, whatever its status. No launch
+from an agent session has had Screen Recording access, so in those launches
+nothing was seen on a captured window: every window was a stand-in, and the
+coverage behind the rows is controller scenarios, own-fixture probes and
+scripted `msg` sessions. No completion claim follows from these counts.

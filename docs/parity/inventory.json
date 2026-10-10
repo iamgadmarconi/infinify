@@ -793,7 +793,7 @@
       },
       "contract": "Match MouseAction::MoveWindow dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -801,7 +801,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "A press whose mouse_binding answers move_window (default alt+left on a window) runs the controller begin_drag: the window is raised and focused, then follows the pointer with snapping and edge pan until release (native/desktop/main.m press arm; crates/desktop/README.md). Covered by controller scenarios only (config_flow.rs, motion_flow.rs). It is a logical world move, and no Option-drag was performed on a real window."
     },
     {
       "id": "MouseAction.MoveSnappedWindows",
@@ -813,7 +814,7 @@
       },
       "contract": "Match MouseAction::MoveSnappedWindows dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -821,7 +822,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "A press whose mouse_binding answers move_snapped_windows (default alt+shift+left on a window) runs begin_drag with group true: the snap cluster of the window, taken at the press, moves as one (native/desktop/main.m press arm; crates/desktop/README.md). Covered by controller scenarios only (motion_flow.rs carries a cluster whole under an edge pan; rules_flow.rs leaves a docked widget out of it). No cluster was dragged on real windows."
     },
     {
       "id": "MouseAction.ResizeWindow",
@@ -841,7 +843,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Status stays missing: the policy exists only behind --experimental-native-resize. The lookup answers resize_window (default alt+right on a window) in every launch, but the shell begins the size-only native resize transaction only with the flag, and without it the press raises and focuses the window and shows a status note (native/desktop/main.m beginResize). What remains: a live native resize pass on a real window."
     },
     {
       "id": "MouseAction.ResizeWindowSnapped",
@@ -861,7 +864,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Not implemented: the lookup answers resize_window_snapped (default alt+shift+right on a window) and the shell asks for it only under --experimental-native-resize, but the controller then refuses begin_native_resize with group true, so even with the flag the press only raises and focuses the window (crates/desktop/NATIVE_RESIZE.md: native group resize is rejected). Missing: a resize whose change is carried to the snapped neighbours."
     },
     {
       "id": "MouseAction.PanViewport",
@@ -936,7 +940,7 @@
       },
       "contract": "Match MouseAction::Action dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -944,7 +948,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "A button press whose mouse_binding answers action focuses the window under the pointer and runs the action through the action dispatch; a wheel notch runs it once per line without focusing, as upstream (native/desktop/main.m; CONFIG.md). Lookup tested in config_flow.rs and passthrough_flow.rs. The three upstream defaults (fit-window, fit-window-snapped, toggle-fullscreen) are refused without --experimental-native-resize. No real press was made."
     },
     {
       "id": "GestureTrigger.Swipe",
@@ -1141,7 +1146,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "A touchscreen-only trigger of the upstream [touch] tables (N-finger-tap), which its trackpad grammar does not accept, and a Mac has no touchscreen. The port reads [touch] and dispatches none of it: gesture_begin knows swipe, pinch and hold only (crates/desktop/GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "GestureTrigger.Doubletap",
@@ -1158,7 +1164,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "A touchscreen-only trigger of the upstream [touch] tables (N-finger-doubletap), which its trackpad grammar does not accept, and a Mac has no touchscreen. The port reads [touch] and dispatches none of it: gesture_begin knows swipe, pinch and hold only (crates/desktop/GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "GestureTrigger.HoldSwipe",
@@ -1175,7 +1182,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "A touchscreen-only trigger of the upstream [touch] tables (N-finger-hold-swipe), which its trackpad grammar does not accept, and a Mac has no touchscreen. The port reads [touch] and dispatches none of it: gesture_begin knows swipe, pinch and hold only (crates/desktop/GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "GestureTrigger.DoubletapHoldSwipe",
@@ -1192,7 +1200,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "A touchscreen-only trigger of the upstream [touch] tables (N-finger-doubletap-hold-swipe), which its trackpad grammar does not accept, and a Mac has no touchscreen. The port reads [touch] and dispatches none of it: gesture_begin knows swipe, pinch and hold only (crates/desktop/GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "ContinuousAction.PanViewport",
@@ -1281,7 +1290,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Not implemented as a gesture action: a swipe bound to resize-window over a window (default alt+3-finger-swipe) is claimed and does nothing, with or without --experimental-native-resize, and the begin reply carries the note resize by gesture is not implemented on macOS yet (crates/desktop/GESTURES.md, swipe_resize; gesture_flow.rs). Missing: a native resize transaction driven by the gesture. The pointer form is MouseAction.ResizeWindow."
     },
     {
       "id": "ContinuousAction.ResizeWindowSnapped",
@@ -1298,7 +1308,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Not implemented as a gesture action: a swipe bound to resize-window-snapped over a window (default alt+shift+3-finger-swipe) is claimed and does nothing, with or without --experimental-native-resize, with the same note as ContinuousAction.ResizeWindow (crates/desktop/GESTURES.md, swipe_resize; gesture_flow.rs). Missing: a gesture-driven native resize and its propagation to snapped neighbours, which the controller refuses for the pointer too."
     },
     {
       "id": "ThresholdAction.CenterNearest",
@@ -2415,7 +2426,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "bool",
-      "required": true
+      "required": true,
+      "implementation_note": "Status stays missing: the key is parsed by upstream code, kept with the window and named in rule.not_applied, but no resize is bent to its aspect ratio, by pointer, IPC or gesture, with or without --experimental-native-resize. Nothing in sizes.rs or the resize transaction reads it. Not implemented."
     },
     {
       "id": "field.WindowRule.decoration",
@@ -2706,13 +2718,14 @@
       },
       "contract": "Match OutputConfig.name type, validation, default and live effect.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "String",
-      "required": true
+      "required": true,
+      "implementation_note": "An [[outputs]] entry is chosen by name: output_config(stable_id) in output_actions.rs (hot_corner_rule) and navigation.rs finds the entry named after the output stable id (a display UUID, or windowed), else the wildcard * entry, an exact entry replacing it whole. Covered by controller scenarios in platform_actions_flow.rs. Matched on the stable id, not a connector name; no display was matched on a live run."
     },
     {
       "id": "field.OutputConfig.scale",
@@ -2730,7 +2743,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "Option<f64>",
-      "required": true
+      "required": true,
+      "implementation_note": "macOS owns the display arrangement: each display scale is its resolution choice in System Settings, so the key is read and unused and screen_bounds is macOS result. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "field.OutputConfig.transform",
@@ -2748,7 +2762,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "Option<Transform>",
-      "required": true
+      "required": true,
+      "implementation_note": "macOS owns display rotation (System Settings > Displays), so the key is read and unused and screen_bounds is macOS result. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "field.OutputConfig.position",
@@ -2766,7 +2781,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "OutputPosition",
-      "required": true
+      "required": true,
+      "implementation_note": "macOS owns where displays sit relative to each other (System Settings > Displays), so the key is read and unused and screen_bounds is macOS result. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "field.OutputConfig.mode",
@@ -2784,7 +2800,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "OutputMode",
-      "required": true
+      "required": true,
+      "implementation_note": "macOS owns each display resolution and refresh rate (System Settings > Displays), so the key is read and unused and screen_bounds is macOS result. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "field.OutputConfig.hot_corners",
@@ -2897,7 +2914,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "bool",
-      "required": true
+      "required": true,
+      "implementation_note": "A DRM/KMS stability quirk: wait for the GPU fence before every page flip, mostly for NVIDIA. The port composites with Metal and presents through macOS, which has no such control; the key is read and unused. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "field.BackendConfig.disable_direct_scanout",
@@ -2915,7 +2933,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "bool",
-      "required": true
+      "required": true,
+      "implementation_note": "Forces EGL composition in place of DRM direct scanout of a fullscreen client. macOS presents through WindowServer with no such choice; the key is read and unused. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "field.BackendConfig.disable_hardware_cursor",
@@ -2933,7 +2952,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "bool",
-      "required": true
+      "required": true,
+      "implementation_note": "Composites the cursor into the frame in place of the KMS cursor plane. macOS draws the pointer itself and the port draws none; the key is read and unused. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "field.BackendConfig.max_capture_fps",
@@ -2951,7 +2971,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "u32",
-      "required": true
+      "required": true,
+      "implementation_note": "Caps the frame rate delivered to continuous Wayland screen-capture clients. The port has no capture protocol, only the on-demand msg screenshot, which upstream never throttles either; the key is read and unused. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "field.EffectsConfig.blur_radius",
@@ -3368,7 +3389,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "bool",
-      "required": true
+      "required": true,
+      "implementation_note": "macOS owns tap to click (System Settings > Trackpad); the key is read and unused and the port never configures the device. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "field.TrackpadSettings.natural_scroll",
@@ -3386,7 +3408,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "bool",
-      "required": true
+      "required": true,
+      "implementation_note": "macOS owns the scroll direction (System Settings > Trackpad); the key is read and unused and the port never configures the device. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "field.TrackpadSettings.tap_and_drag",
@@ -3404,7 +3427,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "bool",
-      "required": true
+      "required": true,
+      "implementation_note": "macOS owns dragging by tap (an Accessibility pointer-control option); the key is read and unused and the port never configures the device. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "field.TrackpadSettings.accel_speed",
@@ -3422,7 +3446,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "f64",
-      "required": true
+      "required": true,
+      "implementation_note": "macOS owns the pointer tracking speed (System Settings > Trackpad); the key is read and unused and the port never configures the device. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "field.TrackpadSettings.accel_profile",
@@ -3440,7 +3465,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "AccelProfile",
-      "required": true
+      "required": true,
+      "implementation_note": "macOS owns pointer acceleration; the key is read and unused and the port never configures the device. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "field.TrackpadSettings.click_method",
@@ -3458,7 +3484,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "Option<String>",
-      "required": true
+      "required": true,
+      "implementation_note": "macOS owns the click behaviour: click pressure and secondary click (System Settings > Trackpad); the key is read and unused and the port never configures the device. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "field.TrackpadSettings.disable_while_typing",
@@ -3476,7 +3503,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "bool",
-      "required": true
+      "required": true,
+      "implementation_note": "macOS owns palm and typing rejection on its trackpads; the key is read and unused and the port never configures the device. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "field.TrackpadSettings.send_events",
@@ -3513,7 +3541,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "f64",
-      "required": true
+      "required": true,
+      "implementation_note": "macOS owns the mouse tracking speed (System Settings > Mouse); the key is read and unused and the port never configures the device. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "field.MouseDeviceSettings.accel_profile",
@@ -3531,7 +3560,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "AccelProfile",
-      "required": true
+      "required": true,
+      "implementation_note": "macOS owns pointer acceleration; the key is read and unused and the port never configures the device. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "field.MouseDeviceSettings.natural_scroll",
@@ -3549,7 +3579,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "bool",
-      "required": true
+      "required": true,
+      "implementation_note": "macOS owns the mouse scroll direction (System Settings > Mouse); the key is read and unused and the port never configures the device. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "field.MouseDeviceSettings.left_handed",
@@ -3567,7 +3598,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "bool",
-      "required": true
+      "required": true,
+      "implementation_note": "macOS owns the choice of primary mouse button; the key is read and unused and the port never configures the device. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "field.TouchSettings.enable",
@@ -3585,7 +3617,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "bool",
-      "required": true
+      "required": true,
+      "implementation_note": "Switches upstream touchscreen support on or off. Macs have no touchscreen and a Mac trackpad takes the [gestures] tables, so driftwm-core's touch recogniser is not called (GESTURES.md, Why this path and not the touch recogniser). The key is read and unused. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "field.TouchSettings.map_to_output",
@@ -3603,7 +3636,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "Option<String>",
-      "required": true
+      "required": true,
+      "implementation_note": "Pins a touchscreen to an output by connector name. Macs have no touchscreen and a Mac trackpad takes the [gestures] tables, so driftwm-core's touch recogniser is not called (GESTURES.md, Why this path and not the touch recogniser). The key is read and unused. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "field.GestureThresholds.swipe_distance",
@@ -3678,7 +3712,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "f64",
-      "required": true
+      "required": true,
+      "implementation_note": "Upstream touchscreen recogniser threshold: the swipe travel, in millimetres of panel, at which a touch swipe fires. Macs have no touchscreen and a Mac trackpad takes the [gestures] tables, so driftwm-core's touch recogniser is not called (GESTURES.md, Why this path and not the touch recogniser). The trackpad thresholds are the separate GestureThresholds rows. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "field.TouchThresholds.pinch_in_scale",
@@ -3696,7 +3731,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "f64",
-      "required": true
+      "required": true,
+      "implementation_note": "Upstream touchscreen recogniser threshold: the scale below which a touch pinch-in fires. Macs have no touchscreen and a Mac trackpad takes the [gestures] tables, so driftwm-core's touch recogniser is not called (GESTURES.md, Why this path and not the touch recogniser). The trackpad thresholds are the separate GestureThresholds rows. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "field.TouchThresholds.pinch_out_scale",
@@ -3714,7 +3750,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "f64",
-      "required": true
+      "required": true,
+      "implementation_note": "Upstream touchscreen recogniser threshold: the scale above which a touch pinch-out fires. Macs have no touchscreen and a Mac trackpad takes the [gestures] tables, so driftwm-core's touch recogniser is not called (GESTURES.md, Why this path and not the touch recogniser). The trackpad thresholds are the separate GestureThresholds rows. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "field.TouchThresholds.tap_max_ms",
@@ -3732,7 +3769,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "u32",
-      "required": true
+      "required": true,
+      "implementation_note": "Upstream touchscreen recogniser threshold: the longest touch that still counts as a tap. Macs have no touchscreen and a Mac trackpad takes the [gestures] tables, so driftwm-core's touch recogniser is not called (GESTURES.md, Why this path and not the touch recogniser). The trackpad thresholds are the separate GestureThresholds rows. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "field.TouchThresholds.double_tap_ms",
@@ -3750,7 +3788,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "u32",
-      "required": true
+      "required": true,
+      "implementation_note": "Upstream touchscreen recogniser threshold: the window for a second tap to make a double-tap. Macs have no touchscreen and a Mac trackpad takes the [gestures] tables, so driftwm-core's touch recogniser is not called (GESTURES.md, Why this path and not the touch recogniser). The trackpad thresholds are the separate GestureThresholds rows. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "field.TouchThresholds.hold_ms",
@@ -3768,7 +3807,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "u32",
-      "required": true
+      "required": true,
+      "implementation_note": "Upstream touchscreen recogniser threshold: the dwell that turns a touch drag into a hold gesture. Macs have no touchscreen and a Mac trackpad takes the [gestures] tables, so driftwm-core's touch recogniser is not called (GESTURES.md, Why this path and not the touch recogniser). The trackpad thresholds are the separate GestureThresholds rows. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "field.TouchThresholds.dead_zone_mm",
@@ -3786,7 +3826,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "f64",
-      "required": true
+      "required": true,
+      "implementation_note": "Upstream touchscreen recogniser threshold: the finger travel, in millimetres, before a touch pan or zoom starts. Macs have no touchscreen and a Mac trackpad takes the [gestures] tables, so driftwm-core's touch recogniser is not called (GESTURES.md, Why this path and not the touch recogniser). The trackpad thresholds are the separate GestureThresholds rows. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "field.BackgroundConfig.kind",
@@ -3842,7 +3883,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "bool",
-      "required": true
+      "required": true,
+      "implementation_note": "Status stays missing: cache_shader is reported in render.background and accepted by the compositor, which ignores it. No static u_camera-only shader is baked to textures; every shader renders live each frame. The picture is the same, the GPU saving is not implemented."
     },
     {
       "id": "field.BackgroundConfig.transparent_shader",
@@ -3879,7 +3921,8 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "u32",
-      "required": true
+      "required": true,
+      "implementation_note": "Status stays missing: cache_budget_mb is accepted and unused. There is no background chunk cache to bound, because cache_shader bakes nothing and gigapixel TIFF tiles are not ported."
     },
     {
       "id": "field.BackgroundConfig.animate_fps",
@@ -3910,7 +3953,7 @@
       },
       "contract": "Implement the observable native Mac service; literal Wayland wire protocol is outside scope.",
       "platform_mapping": "Native macOS observable behavior required; literal Wayland wire protocol excluded by user clarification.",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "platform",
       "dependencies": [
         "native.family",
@@ -3918,7 +3961,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Upstream exports bookmarks to bars as workspaces: list, active one, activate, create, remove. The port has no bar protocol; a script gets the same from the IPC socket: msg bookmark lists, sets and deletes, msg action go-to-bookmark jumps, and msg state and msg subscribe name the active_bookmark of each output; the list itself is polled (IPC.md; ipc_flow.rs). No bar has consumed it, and no real window was involved."
     },
     {
       "id": "protocol.foreign_toplevel",
@@ -3930,7 +3974,7 @@
       },
       "contract": "Implement the observable native Mac service; literal Wayland wire protocol is outside scope.",
       "platform_mapping": "Native macOS observable behavior required; literal Wayland wire protocol excluded by user clarification.",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "platform",
       "dependencies": [
         "native.family",
@@ -3938,7 +3982,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Upstream lets docks and taskbars list every window and activate or close one. Here msg state and msg subscribe list each window by id, app_id and title, msg focus flies to one, and msg close asks the shell to press its close button (IPC.md; ipc_flow.rs, lifecycle_flow.rs). A window activated in macOS itself is followed and revealed (NAVIGATION.md). Fullscreen and maximize need --experimental-native-resize. Nothing was seen on real windows."
     },
     {
       "id": "protocol.gamma_control",
@@ -3958,7 +4003,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Upstream lets a client such as gammastep set the gamma ramp of an output. On a Mac colour temperature and gamma belong to macOS (Night Shift, True Tone, display profiles) and the port has no code that reads or sets them. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "protocol.image_capture_source",
@@ -3978,7 +4024,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Upstream offers an output or a single window as the source of a screencast. On a Mac that choice is ScreenCaptureKit and its own picker, which offer each display and each real application window, and the port adds nothing to it; its one-shot msg screenshot, with a window target, is covered by the ipc rows and protocol.screencopy. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "protocol.image_copy_capture",
@@ -3998,7 +4045,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Upstream streams frames of an output or of one window to screencast clients (OBS, browser screen sharing). On a Mac that is ScreenCaptureKit: an application records a display (nothing in the shell hides its canvas panels from it) or a real window as its owner draws it, and the port has no frame stream of its own, only the one-shot msg screenshot. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "protocol.output_management",
@@ -4018,7 +4066,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Upstream lets a client such as wlr-randr or kanshi set the mode, scale, transform, position and enabled state of an output. On a Mac the arrangement belongs to System Settings, Displays: the port only registers the resulting screens as outputs, and [[outputs]] scale, transform, position and mode are read and unused (crates/desktop/CONFIG.md, Outputs). Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "protocol.output_power",
@@ -4038,7 +4087,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Upstream lets a client switch an output off and on (DPMS), as an idle daemon does. On a Mac display sleep belongs to macOS (Lock Screen and Energy settings, pmset), and the port has no code for it: the default mod+l binding only execs /usr/bin/pmset displaysleepnow in place of swaylock, and nothing in the shell observes a display sleeping or waking. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "protocol.screencopy",
@@ -4050,7 +4100,7 @@
       },
       "contract": "Implement the observable native Mac service; literal Wayland wire protocol is outside scope.",
       "platform_mapping": "Native macOS observable behavior required; literal Wayland wire protocol excluded by user clarification.",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "platform",
       "dependencies": [
         "native.family",
@@ -4058,7 +4108,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Upstream lets a tool such as grim copy an output or a region of it. Here msg screenshot writes a PNG of the canvas the active output shows, or of a region given in screen points with --from-screen (crates/desktop/RENDER.md, Screenshots; render_flow.rs), seen only in windowed launches on placeholders. It is a re-render, not a grab: no cursor, no pinned window, no frame stream; a literal grab or a recording is left to macOS screencapture."
     },
     {
       "id": "protocol.virtual_keyboard",
@@ -4078,7 +4129,8 @@
       ],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Upstream lets an on-screen keyboard or a tool such as wtype inject keys, and runs its own bindings on them. On a Mac synthetic keys come from macOS (Accessibility Keyboard, posted events) and reach applications without the port, which has no code for them; whether such keys trigger the hot keys the shell registers was never tried. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "protocol.data_device",
@@ -4095,7 +4147,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Copy and paste is the pasteboard of macOS between the real applications, and the port has no code in it. The drag-and-drop half is not implemented: a drag begun in one window cannot be dropped on another through the canvas, because a held pointer drag never retargets another source (native/desktop/README.md, Known limits). Missing: that drag session, as platform.dnd says."
     },
     {
       "id": "protocol.primary_selection",
@@ -4112,7 +4165,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Upstream offers the X11-style primary selection: selected text pasted by a middle click, apart from the clipboard. macOS has no primary selection, only the one pasteboard, and the port has nothing for it. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "protocol.pointer_constraints",
@@ -4129,7 +4183,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Not implemented: upstream lets a client lock or confine the pointer to its surface (games, 3D viewports). On a Mac an application asks macOS for that itself, but here the canvas panel takes the pointer and forwards events to the window, nothing holds the pointer inside a window or learns of a lock, and cross-boundary pointer capture is listed as not implemented (native/desktop/README.md, Known limits). Never tried with a real application."
     },
     {
       "id": "protocol.relative_pointer",
@@ -4146,7 +4201,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Not implemented: upstream sends a client raw pointer deltas, used together with a locked pointer. On a Mac an application reads deltas from macOS itself, but here pointer events reach a window only as the shell forwards them at a translated point, and no relative-motion path exists or was tried with a real application (native/desktop/README.md, Known limits). Missing together with protocol.pointer_constraints."
     },
     {
       "id": "protocol.idle_inhibit",
@@ -4163,7 +4219,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Upstream lets a client such as a video player hold off idle while its surface is visible. On a Mac an application takes a power assertion from macOS itself, which goes on working for the real window whatever the canvas shows, and the port has no code for it. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "protocol.idle_notifier",
@@ -4180,7 +4237,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Upstream tells a client such as swayidle when the user has gone idle and when activity resumes. On a Mac the idle timer, the screen saver and display sleep belong to macOS; the port has no idle notification of its own and nothing in the shell observes sleep or wake. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "protocol.session_lock",
@@ -4197,7 +4255,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Upstream lets a locker such as swaylock take every output and all input until it unlocks. On a Mac the lock screen is the login window of macOS: the port only maps the default mod+l binding to exec /usr/bin/pmset displaysleepnow, which locks only if Lock Screen settings ask for the password at once (crates/desktop/CONFIG.md), and it observes no lock or unlock. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "protocol.tablet",
@@ -4214,7 +4273,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Not implemented: upstream forwards tablet tools (proximity, pressure, tilt, tool cursor) to clients and maps a tablet to an output. Here [input.tablet] is read and not applied (crates/desktop/CONFIG.md), the shell handles no tablet event type, and whether a forwarded pointer event keeps its pressure for the window under it was never tried. A tablet pointer lands on the canvas panel as a mouse does and goes through that same forwarding."
     },
     {
       "id": "protocol.xwayland",
@@ -4681,7 +4741,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Not implemented: the clipboard is the pasteboard of macOS between the real applications, with no code here, and drag and drop through the canvas does not exist. Native drag-and-drop is listed as not implemented: a held pointer drag cannot retarget another source, and leaving its window only ends it with a synthetic button-up (native/desktop/README.md, Known limits). Missing: a drag carried from one transformed window to another."
     },
     {
       "id": "platform.lock",
@@ -4698,7 +4759,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Idle, lock, blanking and unlock belong to macOS (login window, Lock Screen settings): the port has no lock state, no input suppression and no capture blanking of its own. The default mod+l binding execs /usr/bin/pmset displaysleepnow in place of swaylock (crates/desktop/CONFIG.md); whether the canvas and its captures resume after an unlock was never observed. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "platform.ime",
@@ -4732,7 +4794,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
-      "required": true
+      "required": true,
+      "implementation_note": "Not a feature but the acceptance pass itself, and none has been run: no recorded session on the M5 and macOS 26 target (the development host runs macOS 27.2), no physical mixed-density displays, no physical trackpad or other input device, and no third-party application window. Coverage so far is controller scenarios, own-fixture probes and scripted msg sessions on placeholders. Missing: that live pass, with saved evidence."
     },
     {
       "id": "config.mod_key",
@@ -4987,7 +5050,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for env.QT_WAYLAND_DISABLE_WINDOWDECORATION.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -5000,7 +5063,8 @@
           "source_assignment": "QT_WAYLAND_DISABLE_WINDOWDECORATION = \"1\"",
           "value": "1"
         }
-      ]
+      ],
+      "implementation_note": "An [env] entry reaches the environment of every exec, spawn, exec-terminal, exec-launcher and autostart command: Controller::exec_effect (crates/desktop/src/actions.rs) puts it in the exec effect and the shell runs the command with it. Upstream sets no default for this name. A Mac application ignores it. Tested with other names through the same path; no real application was started with it."
     },
     {
       "id": "config.env.MOZ_ENABLE_WAYLAND",
@@ -5012,7 +5076,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for env.MOZ_ENABLE_WAYLAND.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -5025,7 +5089,8 @@
           "source_assignment": "MOZ_ENABLE_WAYLAND = \"1\"",
           "value": "1"
         }
-      ]
+      ],
+      "implementation_note": "An [env] entry reaches every command the app runs (Controller::exec_effect in crates/desktop/src/actions.rs), tested with the sibling QT_QPA_PLATFORM in config_flow.rs. Known mismatch: upstream also passes MOZ_ENABLE_WAYLAND=1 by default; the port deliberately does not, unless the file sets it, because Wayland toolkit fallbacks would stop programs on macOS. The variable does nothing to a Mac application. No real application was started with it."
     },
     {
       "id": "config.input.keyboard.layout",
@@ -5050,7 +5115,8 @@
           "source_assignment": "layout = \"us\"              # XKB layout (e.g., \"us,ru\" for multi-layout)",
           "value": "us"
         }
-      ]
+      ],
+      "implementation_note": "Read and validated by upstream parser, then unused: the keyboard layouts are the input sources enabled in System Settings, Keyboard, Input Sources, and switch-layout only selects among them (CONFIG.md, Keyboard layouts). Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.input.keyboard.remember_layout_per_window",
@@ -5075,7 +5141,8 @@
           "source_assignment": "remember_layout_per_window = false  # for multi-layout setups",
           "value": false
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: the port keeps no layout per window. macOS remembers the input source per document itself when the user asks it to (CONFIG.md, Keyboard layouts). Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.input.keyboard.variant",
@@ -5100,7 +5167,8 @@
           "source_assignment": "variant = \"\"               # XKB variant (e.g., \"dvorak\", or \",\" for two defaults)",
           "value": ""
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: a layout variant on macOS is a separate input source chosen in System Settings, Keyboard, Input Sources; the port creates, removes and reorders none (CONFIG.md, Keyboard layouts). Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.input.keyboard.options",
@@ -5125,7 +5193,8 @@
           "source_assignment": "options = \"\"               # XKB options (e.g., \"grp:win_space_toggle\" for Super+Space layout switch)",
           "value": ""
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: XKB options such as group toggles and modifier remaps are not applied by the port. macOS owns the input source shortcuts and the modifier key remapping in System Settings, Keyboard (CONFIG.md, Keyboard layouts). Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.input.keyboard.model",
@@ -5150,7 +5219,8 @@
           "source_assignment": "model = \"\"                 # XKB model (e.g., \"pc105\")",
           "value": ""
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: an XKB keyboard model names the physical keyboard, which macOS identifies itself; the port has nothing to apply (CONFIG.md, Read not applied yet). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.input.keyboard.repeat_rate",
@@ -5253,7 +5323,8 @@
           "source_assignment": "num_lock = true            # num lock state on startup",
           "value": true
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: a Mac keyboard has no Num Lock state to set at startup (the keypad Clear key only stands in for the key symbol); CONFIG.md, Read not applied yet. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.input.keyboard.caps_lock",
@@ -5278,7 +5349,8 @@
           "source_assignment": "caps_lock = false          # caps lock state on startup",
           "value": false
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: the Caps Lock state belongs to macOS and the port does not set it at launch (CONFIG.md, Keyboard layouts). Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.input.trackpad.tap_to_click",
@@ -5303,7 +5375,8 @@
           "source_assignment": "tap_to_click = true         # enable tap-to-click",
           "value": true
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: macOS owns the trackpad device (CONFIG.md, Read not applied yet; native/desktop/README.md). Tap to click is System Settings, Trackpad, Point and Click; the port does not set it. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.input.trackpad.natural_scroll",
@@ -5328,7 +5401,8 @@
           "source_assignment": "natural_scroll = true       # reverse scroll direction (content follows fingers)",
           "value": true
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: macOS owns the trackpad device (CONFIG.md, Read not applied yet; native/desktop/README.md). Scroll direction is System Settings, Trackpad, Scroll and Zoom, Natural scrolling; the shell uses the deltas as delivered and does not consult the setting. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.input.trackpad.tap_and_drag",
@@ -5353,7 +5427,8 @@
           "source_assignment": "tap_and_drag = true         # double-tap-hold to drag",
           "value": true
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: macOS owns the trackpad device (CONFIG.md, Read not applied yet; native/desktop/README.md). Dragging with the trackpad is System Settings, Accessibility, Pointer Control, Trackpad Options, Dragging style; the port does not set it. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.input.trackpad.accel_speed",
@@ -5378,7 +5453,8 @@
           "source_assignment": "accel_speed = 0.0           # pointer acceleration (-1.0 to 1.0)",
           "value": 0.0
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: macOS owns the trackpad device (CONFIG.md, Read not applied yet; native/desktop/README.md). Pointer speed is System Settings, Trackpad, Point and Click, Tracking speed; the port does not set it. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.input.trackpad.accel_profile",
@@ -5403,7 +5479,8 @@
           "source_assignment": "accel_profile = \"adaptive\"  # \"flat\" or \"adaptive\"",
           "value": "adaptive"
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: macOS owns the trackpad device (CONFIG.md, Read not applied yet; native/desktop/README.md). Pointer acceleration and tracking speed are macOS settings; the port sets neither. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.input.trackpad.click_method",
@@ -5428,7 +5505,8 @@
           "source_assignment": "click_method = \"none\"       # none = device default; clickfinger = finger count (1=left, 2=right, 3=middle); button_areas = position on trackpad",
           "value": "none"
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: macOS owns the trackpad device (CONFIG.md, Read not applied yet; native/desktop/README.md). Secondary click (two fingers, or a corner of the trackpad) is System Settings, Trackpad, Point and Click; the port does not set it. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.input.trackpad.disable_while_typing",
@@ -5453,7 +5531,8 @@
           "source_assignment": "disable_while_typing = true  # ignore trackpad input shortly after a key press (palm rejection)",
           "value": true
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: macOS owns the trackpad device (CONFIG.md, Read not applied yet; native/desktop/README.md). Palm rejection while typing belongs to macOS; the port has nothing implemented. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.input.trackpad.enable",
@@ -5504,7 +5583,8 @@
           "source_assignment": "disable_on_external_mouse = false  # turn the trackpad off while an external mouse is connected",
           "value": false
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then counted as on: the port watches no device, so gestures are never turned off for a mouse (GESTURES.md, set-trackpad). macOS has the setting itself: System Settings, Accessibility, Pointer Control, Ignore built-in trackpad when mouse or wireless trackpad is present. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.input.mouse.accel_speed",
@@ -5529,7 +5609,8 @@
           "source_assignment": "accel_speed = 0.0           # pointer acceleration (-1.0 to 1.0)",
           "value": 0.0
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: macOS owns the mouse device (CONFIG.md, Read not applied yet). Pointer speed is System Settings, Mouse, Tracking speed; the port does not set it. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.input.mouse.accel_profile",
@@ -5554,7 +5635,8 @@
           "source_assignment": "accel_profile = \"flat\"      # \"flat\" or \"adaptive\"",
           "value": "flat"
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: macOS owns the mouse device (CONFIG.md, Read not applied yet). Pointer acceleration is a macOS setting; the port does not set it. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.input.mouse.natural_scroll",
@@ -5579,7 +5661,8 @@
           "source_assignment": "natural_scroll = false      # reverse scroll direction",
           "value": false
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: macOS owns the mouse device (CONFIG.md, Read not applied yet). Scroll direction is System Settings, Mouse, Natural scrolling; the shell uses the deltas as delivered and does not consult the setting. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.input.mouse.left_handed",
@@ -5604,7 +5687,8 @@
           "source_assignment": "left_handed = false         # swap left/right mouse buttons (skipped on devices without left-handed support)",
           "value": false
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: macOS owns the mouse device (CONFIG.md, Read not applied yet). Swapping the buttons is System Settings, Mouse, Primary mouse button; the port does not set it. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.input.touch.enable",
@@ -5629,7 +5713,8 @@
           "source_assignment": "enable = true               # enable touchscreen support",
           "value": true
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: a Mac has no touchscreen, and the trackpad dispatches through the [gestures] tables, not the touchscreen recogniser (GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.input.touch.map_to_output",
@@ -5660,7 +5745,8 @@
           "source_assignment": "map_to_output = \"DP-2\"",
           "value": "DP-2"
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: a Mac has no touchscreen to pin to an output (GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.input.tablet.map_to_output",
@@ -5685,7 +5771,8 @@
           "source_assignment": "map_to_output = \"none\"",
           "value": "none"
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: the port has no tablet input path, and macOS maps a drawing tablet through the tablet driver. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.cursor.theme",
@@ -5710,7 +5797,8 @@
           "source_assignment": "theme = \"none\"             # XCURSOR_THEME; \"none\" = inherit from environment (e.g. \"Adwaita\")",
           "value": "none"
         }
-      ]
+      ],
+      "implementation_note": "Only half of upstream effect exists: a theme reaches the environment of exec commands as XCURSOR_THEME (config_flow.rs, nudge_exec_spawn_and_reload_actions). macOS draws the pointer itself and has no cursor themes, so nothing changes how the pointer looks. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.cursor.size",
@@ -5735,7 +5823,8 @@
           "source_assignment": "size = 0                    # XCURSOR_SIZE; 0 = inherit from environment (e.g. 24)",
           "value": 0
         }
-      ]
+      ],
+      "implementation_note": "Only half of upstream effect exists: a size reaches the environment of exec commands as XCURSOR_SIZE (config_flow.rs, nudge_exec_spawn_and_reload_actions). macOS draws the pointer itself; its size is System Settings, Accessibility, Display, Pointer size, and the port does not change it. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.cursor.inactive_opacity",
@@ -5760,7 +5849,8 @@
           "source_assignment": "inactive_opacity = 0.5      # cursor opacity on non-active outputs (0.0–1.0)",
           "value": 0.5
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: macOS draws one system pointer across all displays and an app cannot dim it on the displays it is not on (CONFIG.md, Read not applied yet). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.navigation.trackpad_speed",
@@ -5837,7 +5927,8 @@
           "source_assignment": "touch_speed = 1.0           # touchscreen gesture pan multiplier (1.0 = direct, 0 = off)",
           "value": 1.0
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: it scales touchscreen gesture pans, and a Mac has no touchscreen; a trackpad gesture pans by navigation.trackpad_speed (CONFIG.md, Read not applied yet). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.navigation.drift",
@@ -5927,7 +6018,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for navigation.false.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -5940,7 +6031,8 @@
           "source_assignment": "false = camera stays put; focus only moves to a visible window",
           "value_note": "multiline or illustrative snippet; inspect complete source"
         }
-      ]
+      ],
+      "implementation_note": "Not a key: the reference comment line false = camera stays put, the false value of navigation.auto_navigate_on_close, which belongs with that row. Off, the camera stays when a window closes and the focus goes to a window still in view, or to none (lifecycle.rs, depart). Tested in lifecycle_flow.rs; no window was closed on a real run."
     },
     {
       "id": "config.navigation.auto_navigate_on_click",
@@ -6472,7 +6564,8 @@
           "source_assignment": "touch_speed = 1.0           # touchscreen gesture zoom multiplier (1.0 = direct, 0 = off)",
           "value": 1.0
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: it scales touchscreen gesture zoom, and a Mac has no touchscreen; a trackpad pinch zooms by zoom.trackpad_speed (CONFIG.md, Read not applied yet). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.zoom.fit_padding",
@@ -7493,7 +7586,8 @@
           "source_assignment": "cache_shader = false",
           "value": false
         }
-      ]
+      ],
+      "implementation_note": "Not implemented: the key is accepted and reported as render.background.cache_shader, but the compositor always renders a shader live and has no bake-once texture to pan. The picture is the same; only the per-frame cost differs (BACKGROUND-NOTES.md, section 9)."
     },
     {
       "id": "config.background.transparent_shader",
@@ -7544,7 +7638,8 @@
           "source_assignment": "cache_budget_mb = 128",
           "value": 128
         }
-      ]
+      ],
+      "implementation_note": "Not implemented: the key is read and not even reported to the shell, and there is no cache to budget. Its other consumer, gigapixel pyramidal TIFF wallpapers, is not ported either (a tile path ending in .tif or .tiff draws the dot grid)."
     },
     {
       "id": "config.background.animate_fps",
@@ -7668,7 +7763,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+q.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -7681,7 +7776,8 @@
           "source_assignment": "\"mod+q\" = \"close-window\"",
           "value": "close-window"
         }
-      ]
+      ],
+      "implementation_note": "Upstream default, read by driftwm-core and listed by bindings as Control-Option-Q (CONFIG.md key table). The shell registers the hot key; close-window presses the focused window's own close button through Accessibility, or dismisses a placeholder. Covered by crates/desktop/tests/lifecycle_flow.rs (close_and_suspend_actions_ask_the_shell_and_mark_what_the_close_means). The hot key and the close press are unrun on a real window."
     },
     {
       "id": "config.keybindings.mod+e",
@@ -7797,7 +7893,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+t.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -7810,7 +7906,8 @@
           "source_assignment": "\"mod+t\" = \"toggle-pin-to-screen\"",
           "value": "toggle-pin-to-screen"
         }
-      ]
+      ],
+      "implementation_note": "Upstream default, read by driftwm-core and listed by bindings as Control-Option-T. The shell registers the hot key; toggle-pin-to-screen pins the focused window at its on-screen position or returns it to the canvas (RULES.md, Actions). Covered by crates/desktop/tests/rules_flow.rs (toggle_pin_to_screen_keeps_the_on_screen_position_both_ways). The hot key was not pressed and no real window was pinned."
     },
     {
       "id": "config.keybindings.mod+c",
@@ -8628,7 +8725,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+alt+up.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -8641,7 +8738,8 @@
           "source_assignment": "\"mod+alt+up\" = \"send-to-output up\"        # move window to output above",
           "value": "send-to-output up"
         }
-      ]
+      ],
+      "implementation_note": "Upstream default send-to-output up, listed by bindings as Control-Option-Shift-Command-Up (the displaced chord, CONFIG.md). The shell registers the hot key; the action moves the focused window to the adjacent display as a logical world move (nothing with one display). Covered by crates/desktop/tests/platform_actions_flow.rs (send_to_output_lands_on_the_adjacent_outputs_placement_point). No second display or hot key press was seen."
     },
     {
       "id": "config.keybindings.mod+alt+down",
@@ -8653,7 +8751,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+alt+down.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -8666,7 +8764,8 @@
           "source_assignment": "\"mod+alt+down\" = \"send-to-output down\"",
           "value": "send-to-output down"
         }
-      ]
+      ],
+      "implementation_note": "Upstream default send-to-output down, listed by bindings as Control-Option-Shift-Command-Down (the displaced chord, CONFIG.md). The shell registers the hot key; the action moves the focused window to the adjacent display as a logical world move (nothing with one display). Covered by crates/desktop/tests/platform_actions_flow.rs (send_to_output_lands_on_the_adjacent_outputs_placement_point). No second display or hot key press was seen."
     },
     {
       "id": "config.keybindings.mod+alt+left",
@@ -8678,7 +8777,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+alt+left.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -8691,7 +8790,8 @@
           "source_assignment": "\"mod+alt+left\" = \"send-to-output left\"",
           "value": "send-to-output left"
         }
-      ]
+      ],
+      "implementation_note": "Upstream default send-to-output left, listed by bindings as Control-Option-Shift-Command-Left (the displaced chord, CONFIG.md). The shell registers the hot key; the action moves the focused window to the adjacent display as a logical world move (nothing with one display). Covered by crates/desktop/tests/platform_actions_flow.rs (send_to_output_lands_on_the_adjacent_outputs_placement_point). No second display or hot key press was seen."
     },
     {
       "id": "config.keybindings.mod+alt+right",
@@ -8703,7 +8803,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+alt+right.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -8716,7 +8816,8 @@
           "source_assignment": "\"mod+alt+right\" = \"send-to-output right\"",
           "value": "send-to-output right"
         }
-      ]
+      ],
+      "implementation_note": "Upstream default send-to-output right, listed by bindings as Control-Option-Shift-Command-Right (the displaced chord, CONFIG.md). The shell registers the hot key; the action moves the focused window to the adjacent display as a logical world move (nothing with one display). Covered by crates/desktop/tests/platform_actions_flow.rs (send_to_output_lands_on_the_adjacent_outputs_placement_point). No second display or hot key press was seen."
     },
     {
       "id": "config.keybindings.mod+l",
@@ -8793,7 +8894,8 @@
           "source_assignment": "\"XF86AudioRaiseVolume\" = \"spawn wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+\"",
           "value": "spawn wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+"
         }
-      ]
+      ],
+      "implementation_note": "Upstream default runs wpctl set-volume, a Linux program. The controller lists the binding as skipped (macOS handles the volume keys itself), the shell registers nothing and the key stays with macOS; a media key is not a Carbon hot key even where the program exists (CONFIG.md, Key identity). Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.keybindings.XF86AudioLowerVolume",
@@ -8818,7 +8920,8 @@
           "source_assignment": "\"XF86AudioLowerVolume\" = \"spawn wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-\"",
           "value": "spawn wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-"
         }
-      ]
+      ],
+      "implementation_note": "Upstream default runs wpctl set-volume, a Linux program. The controller lists the binding as skipped (macOS handles the volume keys itself), the shell registers nothing and the key stays with macOS; a media key is not a Carbon hot key even where the program exists (CONFIG.md, Key identity). Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.keybindings.XF86AudioMute",
@@ -8843,7 +8946,8 @@
           "source_assignment": "\"XF86AudioMute\" = \"spawn wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle\"",
           "value": "spawn wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"
         }
-      ]
+      ],
+      "implementation_note": "Upstream default runs wpctl set-mute, a Linux program. The controller lists the binding as skipped (macOS handles the volume keys itself), the shell registers nothing and the key stays with macOS; a media key is not a Carbon hot key even where the program exists (CONFIG.md, Key identity). Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.keybindings.XF86MonBrightnessUp",
@@ -8868,7 +8972,8 @@
           "source_assignment": "\"XF86MonBrightnessUp\" = \"spawn brightnessctl set +5%\"",
           "value": "spawn brightnessctl set +5%"
         }
-      ]
+      ],
+      "implementation_note": "Upstream default runs brightnessctl, a Linux program. The controller lists the binding as skipped (macOS handles the brightness keys itself), the shell registers nothing and the key stays with macOS; a media key is not a Carbon hot key even where the program exists (CONFIG.md, Key identity). Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.keybindings.XF86MonBrightnessDown",
@@ -8893,7 +8998,8 @@
           "source_assignment": "\"XF86MonBrightnessDown\" = \"spawn brightnessctl set 5%-\"",
           "value": "spawn brightnessctl set 5%-"
         }
-      ]
+      ],
+      "implementation_note": "Upstream default runs brightnessctl, a Linux program. The controller lists the binding as skipped (macOS handles the brightness keys itself), the shell registers nothing and the key stays with macOS; a media key is not a Carbon hot key even where the program exists (CONFIG.md, Key identity). Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.keybindings.XF86AudioPlay",
@@ -8918,7 +9024,8 @@
           "source_assignment": "\"XF86AudioPlay\" = \"spawn playerctl play-pause\"",
           "value": "spawn playerctl play-pause"
         }
-      ]
+      ],
+      "implementation_note": "Upstream default runs playerctl play-pause, a Linux program. The controller lists the binding as skipped (macOS handles the media keys itself), the shell registers nothing and the key stays with macOS; a media key is not a Carbon hot key even where the program exists (CONFIG.md, Key identity). Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.keybindings.XF86AudioPause",
@@ -8943,7 +9050,8 @@
           "source_assignment": "\"XF86AudioPause\" = \"spawn playerctl play-pause\"",
           "value": "spawn playerctl play-pause"
         }
-      ]
+      ],
+      "implementation_note": "Upstream default runs playerctl play-pause, a Linux program, on a pause key a Mac keyboard lacks. The controller lists the binding as skipped (the key has no macOS equivalent) and the shell registers nothing; macOS plays and pauses with its own play/pause media key. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.keybindings.XF86AudioNext",
@@ -8968,7 +9076,8 @@
           "source_assignment": "\"XF86AudioNext\" = \"spawn playerctl next\"",
           "value": "spawn playerctl next"
         }
-      ]
+      ],
+      "implementation_note": "Upstream default runs playerctl next, a Linux program. The controller lists the binding as skipped (macOS handles the media keys itself), the shell registers nothing and the key stays with macOS; a media key is not a Carbon hot key even where the program exists (CONFIG.md, Key identity). Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.keybindings.XF86AudioPrev",
@@ -8993,7 +9102,8 @@
           "source_assignment": "\"XF86AudioPrev\" = \"spawn playerctl previous\"",
           "value": "spawn playerctl previous"
         }
-      ]
+      ],
+      "implementation_note": "Upstream default runs playerctl previous, a Linux program. The controller lists the binding as skipped (macOS handles the media keys itself), the shell registers nothing and the key stays with macOS; a media key is not a Carbon hot key even where the program exists (CONFIG.md, Key identity). Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.keybindings.XF86AudioStop",
@@ -9018,7 +9128,8 @@
           "source_assignment": "\"XF86AudioStop\" = \"spawn playerctl stop\"",
           "value": "spawn playerctl stop"
         }
-      ]
+      ],
+      "implementation_note": "Upstream default runs playerctl stop, a Linux program, on a stop key a Mac keyboard lacks. The controller lists the binding as skipped (the key has no macOS equivalent) and the shell registers nothing; macOS has no media stop key, so nothing replaces it. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.keybindings.Print",
@@ -9043,7 +9154,8 @@
           "source_assignment": "\"Print\" = \"spawn grim - | wl-copy\"",
           "value": "spawn grim - | wl-copy"
         }
-      ]
+      ],
+      "implementation_note": "Upstream default runs grim and wl-copy (Linux programs) on Print, a key a Mac keyboard lacks. The controller lists the binding as skipped (the key has no macOS equivalent) and the shell registers nothing; macOS takes full-screen screenshots with Shift-Command-3 (add Control to copy to the clipboard). Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.keybindings.shift+Print",
@@ -9068,7 +9180,8 @@
           "source_assignment": "\"shift+Print\" = \"spawn grim -g \\\"$(slurp -d)\\\" - | wl-copy\"",
           "value": "spawn grim -g \"$(slurp -d)\" - | wl-copy"
         }
-      ]
+      ],
+      "implementation_note": "Upstream default runs grim with slurp and wl-copy (Linux programs) on Shift-Print, a key chord a Mac keyboard lacks. The controller lists the binding as skipped (the key has no macOS equivalent) and the shell registers nothing; macOS captures a region with Shift-Command-4 (add Control to copy to the clipboard). Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.keybindings.ctrl+Print",
@@ -9093,7 +9206,8 @@
           "source_assignment": "\"ctrl+Print\" = \"spawn driftwm msg screenshot window -o - | wl-copy\"",
           "value": "spawn driftwm msg screenshot window -o - | wl-copy"
         }
-      ]
+      ],
+      "implementation_note": "Commented example: window capture to the clipboard on Control-Print, a key chord a Mac keyboard lacks; the controller skips the binding (the key has no macOS equivalent). macOS captures a window with Control-Shift-Command-4 then Space. The port's own msg screenshot window -o - relay exists and could be bound to another key by exec. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.keybindings.alt+shift",
@@ -9118,7 +9232,8 @@
           "source_assignment": "\"alt+shift\" = \"switch-layout next\"",
           "value": "switch-layout next"
         }
-      ]
+      ],
+      "implementation_note": "Commented example: a tap binding that fires switch-layout next when Option and Shift are tapped alone. Tap-modifier bindings are not implemented: the controller skips it with the warning tap-modifier bindings are not supported on macOS (config_flow.rs, CONFIG.md Read not applied), since a bare modifier is not a Carbon hot key. The switch-layout action itself runs from any other chord."
     },
     {
       "id": "config.keybindings.mod+g",
@@ -9156,7 +9271,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+s.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -9169,7 +9284,8 @@
           "source_assignment": "\"mod+s\" = \"suspend-window\"",
           "value": "suspend-window"
         }
-      ]
+      ],
+      "implementation_note": "Commented example in the reference, unbound by default as upstream. A config line binds it: bindings lists Control-Option-S as implemented, and suspend-window in a default launch asks the shell to close the focused window and marks it a suspend, so a stand-in stays (LIFECYCLE.md). Covered by config_flow.rs (canonical_action_strings_round_trip_through_a_config_file) and lifecycle_flow.rs. The hot key press and a real window suspend were not seen."
     },
     {
       "id": "config.keybindings.mod+f10",
@@ -9181,7 +9297,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+f10.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -9194,7 +9310,8 @@
           "source_assignment": "\"mod+f10\" = \"set-trackpad toggle\"   # flip the trackpad between on and off",
           "value": "set-trackpad toggle"
         }
-      ]
+      ],
+      "implementation_note": "Commented example in the reference, unbound by default as upstream. A config line binds set-trackpad toggle as Control-Option-F10 and it runs in a default launch, flipping gesture dispatch for the run (GESTURES.md, set-trackpad; gesture_flow.rs set_trackpad_turns_gesture_dispatch_off_and_on). The hot key was not pressed on a real keyboard, where F10 may need fn, and no trackpad was driven."
     },
     {
       "id": "config.keybindings.mod+shift+f10",
@@ -9206,7 +9323,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for keybindings.mod+shift+f10.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -9219,7 +9336,8 @@
           "source_assignment": "\"mod+shift+f10\" = \"set-trackpad off\"   # turn it off whatever the current state",
           "value": "set-trackpad off"
         }
-      ]
+      ],
+      "implementation_note": "Commented example in the reference, unbound by default as upstream. A config line binds set-trackpad off as Control-Option-Shift-F10 and it runs in a default launch, turning gesture dispatch off for the run (GESTURES.md, set-trackpad; gesture_flow.rs set_trackpad_turns_gesture_dispatch_off_and_on). The hot key was not pressed on a real keyboard, where F10 may need fn, and no trackpad was driven."
     },
     {
       "id": "config.keybindings.mod+ctrl+shift+right",
@@ -9245,7 +9363,7 @@
           "value": "grow-window right"
         }
       ],
-      "implementation_note": "Status stays missing: this is a commented example in the reference, not a default, so nothing is bound unless a config file binds it. Bound, it is grow-window right, which runs only behind --experimental-native-resize (see Action.GrowWindow): in a default launch its chord is not registered; with the flag it is registered and repeats while held, each repeat walking on from the size already asked for. No evidence entry is recorded: the action is covered by exported-C-ABI/JSON controller scenarios in which the test plays the native side (crates/desktop/tests/sizes_flow.rs); this binding, hot-key delivery and key repeat are unrun, and no native window was resized. What remains: a live native resize pass on a real window."
+      "implementation_note": "Status stays missing: commented example, not a default. Bound as grow-window right it runs only behind --experimental-native-resize (Action.GrowWindow); a live native resize pass on a real window remains. Under the default super chord its chord Control-Option-Shift-Command-Right is held by the default mod+alt+right (send-to-output), so it is skipped with a warning unless that default is set to none or the super chord changes."
     },
     {
       "id": "config.keybindings.mod+ctrl+shift+left",
@@ -9271,7 +9389,7 @@
           "value": "shrink-window right"
         }
       ],
-      "implementation_note": "Status stays missing: this is a commented example in the reference, not a default, so nothing is bound unless a config file binds it. Bound, it is shrink-window right, which runs only behind --experimental-native-resize (see Action.ShrinkWindow): in a default launch its chord is not registered; with the flag it is registered and repeats while held, each repeat walking on from the size already asked for. No evidence entry is recorded: the action is covered by exported-C-ABI/JSON controller scenarios in which the test plays the native side (crates/desktop/tests/sizes_flow.rs); this binding, hot-key delivery and key repeat are unrun, and no native window was resized. What remains: a live native resize pass on a real window."
+      "implementation_note": "Status stays missing: commented example, not a default. Bound as shrink-window right it runs only behind --experimental-native-resize (Action.ShrinkWindow); a live native resize pass on a real window remains. Under the default super chord its chord Control-Option-Shift-Command-Left is held by the default mod+alt+left (send-to-output), so it is skipped with a warning unless that default is set to none or the super chord changes."
     },
     {
       "id": "config.mouse.resize_on_border",
@@ -9296,7 +9414,8 @@
           "source_assignment": "resize_on_border = true",
           "value": true
         }
-      ]
+      ],
+      "implementation_note": "The key is read by driftwm-core and unused (CONFIG.md, Read not applied yet). Upstream makes the invisible resize border inert when it is false. Here the eight resize handles exist only behind --experimental-native-resize and do not consult the key, and the edges of an ordinary macOS window are macOS's own."
     },
     {
       "id": "config.mouse.decoration_resize_snapped",
@@ -9321,7 +9440,8 @@
           "source_assignment": "decoration_resize_snapped = false",
           "value": false
         }
-      ]
+      ],
+      "implementation_note": "The key is read by driftwm-core and unused (CONFIG.md, Read not applied yet). Upstream, when it is true, carries an edge-drag resize to the whole snap cluster. A native group resize is rejected by the controller even with --experimental-native-resize (NATIVE_RESIZE.md), so there is nothing for the key to switch on."
     },
     {
       "id": "config.mouse.decoration_fit_snapped",
@@ -9346,7 +9466,8 @@
           "source_assignment": "decoration_fit_snapped = false",
           "value": false
         }
-      ]
+      ],
+      "implementation_note": "The key is read by driftwm-core and unused (CONFIG.md, Read not applied yet). Upstream, when it is true, makes a maximize or unmaximize from a window's decoration act on the whole snap cluster. No code observes a macOS window's zoom or maximize button, and fit-window-snapped exists only as a binding behind --experimental-native-resize."
     },
     {
       "id": "config.mouse.on-window.alt+left",
@@ -9423,7 +9544,8 @@
           "source_assignment": "\"alt+right\" = \"resize-window\"",
           "value": "resize-window"
         }
-      ]
+      ],
+      "implementation_note": "Status stays missing: upstream's default mouse binding resolves as resize_window for an Option-right press on a window (crates/desktop/tests/config_flow.rs, DEFAULT_MOUSE). The shell begins the native resize only under --experimental-native-resize; without it the press only raises and focuses the window and a status note says so. The policy exists behind the flag; a live native resize pass on a real window is what remains."
     },
     {
       "id": "config.mouse.on-window.alt+shift+right",
@@ -9448,7 +9570,8 @@
           "source_assignment": "\"alt+shift+right\" = \"resize-window-snapped\"",
           "value": "resize-window-snapped"
         }
-      ]
+      ],
+      "implementation_note": "Upstream resizes the window and its snap cluster on an Option-Shift-right drag. The binding is read and resolves as resize_window_snapped, but the shell asks for a group resize and the controller rejects it in a default launch and with --experimental-native-resize (NATIVE_RESIZE.md), so the press only raises and focuses the window. This is not waiting on a live pass."
     },
     {
       "id": "config.mouse.on-window.alt+middle",
@@ -9811,7 +9934,8 @@
           "source_assignment": "\"alt+3-finger-swipe\" = \"resize-window\"",
           "value": "resize-window"
         }
-      ]
+      ],
+      "implementation_note": "GESTURES.md calls the claimed resize swipe gated, but refuse_resize in crates/desktop/src/gestures.rs never consults the capability: the swipe is claimed over a window, the begin reply notes that resize by gesture is not implemented, and nothing resizes in a default launch or with --experimental-native-resize. Open until the swipe is wired to the native resize transaction."
     },
     {
       "id": "config.gestures.on-window.alt+shift+3-finger-swipe",
@@ -9836,7 +9960,8 @@
           "source_assignment": "\"alt+shift+3-finger-swipe\" = \"resize-window-snapped\"",
           "value": "resize-window-snapped"
         }
-      ]
+      ],
+      "implementation_note": "GESTURES.md calls the claimed snapped resize swipe gated, but refuse_resize in crates/desktop/src/gestures.rs never consults the capability: the swipe is claimed over a window, the begin reply notes that resize by gesture is not implemented, and nothing resizes in a default launch or with --experimental-native-resize. Open until the swipe is wired to the native resize transaction."
     },
     {
       "id": "config.gestures.on-window.3-finger-doubletap-swipe",
@@ -10147,7 +10272,8 @@
           "source_assignment": "\"4-finger-swipe-up\" = \"exec brightnessctl set +5%\"",
           "value": "exec brightnessctl set +5%"
         }
-      ]
+      ],
+      "implementation_note": "Commented example, unbound by default as upstream. A config line binds the named-direction swipe and its exec fires once at gestures.swipe_threshold (gesture_flow.rs; a scratch probe fired exec brightnessctl set +5%), but brightnessctl is a Linux program absent on macOS, so sh would fail, and no Mac brightness command is substituted. Not confirmed: any Mac command for this example; macOS sets brightness through its own keys and Control Center."
     },
     {
       "id": "config.gestures.anywhere.4-finger-swipe-down",
@@ -10172,7 +10298,8 @@
           "source_assignment": "\"4-finger-swipe-down\" = \"exec brightnessctl set 5%-\"",
           "value": "exec brightnessctl set 5%-"
         }
-      ]
+      ],
+      "implementation_note": "Commented example, unbound by default as upstream. A config line binds the named-direction swipe and its exec fires once at gestures.swipe_threshold (gesture_flow.rs; a scratch probe fired exec brightnessctl set 5%-), but brightnessctl is a Linux program absent on macOS, so sh would fail, and no Mac brightness command is substituted. Not confirmed: any Mac command for this example; macOS sets brightness through its own keys and Control Center."
     },
     {
       "id": "config.gestures.anywhere.4-finger-swipe-right",
@@ -10184,7 +10311,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for gestures.anywhere.4-finger-swipe-right.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -10197,7 +10324,8 @@
           "source_assignment": "\"4-finger-swipe-right\" = \"cycle-windows forward\"",
           "value": "cycle-windows forward"
         }
-      ]
+      ],
+      "implementation_note": "Commented example, unbound by default as upstream: a named-direction override of 4-finger-swipe. A config line makes a four-finger swipe moving right fire cycle-windows forward once at gestures.swipe_threshold in a default launch (GESTURES.md). Covered by gesture_flow.rs (named directions, paired the other way). No physical swipe was made, and macOS own four-finger gestures must be turned off for the touches to arrive."
     },
     {
       "id": "config.gestures.anywhere.4-finger-swipe-left",
@@ -10209,7 +10337,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for gestures.anywhere.4-finger-swipe-left.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -10222,7 +10350,8 @@
           "source_assignment": "\"4-finger-swipe-left\" = \"cycle-windows backward\"",
           "value": "cycle-windows backward"
         }
-      ]
+      ],
+      "implementation_note": "Commented example, unbound by default as upstream: a named-direction override of 4-finger-swipe. A config line makes a four-finger swipe moving left fire cycle-windows backward once at gestures.swipe_threshold in a default launch (GESTURES.md). Covered by gesture_flow.rs (named directions, paired the other way). No physical swipe was made, and macOS own four-finger gestures must be turned off for the touches to arrive."
     },
     {
       "id": "config.gestures.anywhere.mod+2-finger-pinch",
@@ -10481,7 +10610,8 @@
           "source_assignment": "swipe_threshold = 15.0        # mm cumulative distance before directional swipe fires",
           "value": 15.0
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: it is a touchscreen setting (upstream touch recogniser, carried in driftwm-core but not used here), and a Mac has no touchscreen. Trackpad gestures use the [gestures] tables (GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.touch.pinch_in_threshold",
@@ -10506,7 +10636,8 @@
           "source_assignment": "pinch_in_threshold = 0.85     # scale below which pinch-in fires (1.0 = no pinch)",
           "value": 0.85
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: it is a touchscreen setting (upstream touch recogniser, carried in driftwm-core but not used here), and a Mac has no touchscreen. Trackpad gestures use the [gestures] tables (GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.touch.pinch_out_threshold",
@@ -10531,7 +10662,8 @@
           "source_assignment": "pinch_out_threshold = 1.15    # scale above which pinch-out fires (1.0 = no pinch)",
           "value": 1.15
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: it is a touchscreen setting (upstream touch recogniser, carried in driftwm-core but not used here), and a Mac has no touchscreen. Trackpad gestures use the [gestures] tables (GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.touch.tap_time",
@@ -10556,7 +10688,8 @@
           "source_assignment": "tap_time = 250                # ms a tap may last; lift later and no tap fires",
           "value": 250
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: it is a touchscreen setting (upstream touch recogniser, carried in driftwm-core but not used here), and a Mac has no touchscreen. Trackpad gestures use the [gestures] tables (GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.touch.double_tap_time",
@@ -10581,7 +10714,8 @@
           "source_assignment": "double_tap_time = 300         # ms window for a second tap to pair into a",
           "value": 300
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: it is a touchscreen setting (upstream touch recogniser, carried in driftwm-core but not used here), and a Mac has no touchscreen. Trackpad gestures use the [gestures] tables (GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.touch.hold_time",
@@ -10606,7 +10740,8 @@
           "source_assignment": "hold_time = 350               # ms of dwell before a drag commits as a hold",
           "value": 350
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: it is a touchscreen setting (upstream touch recogniser, carried in driftwm-core but not used here), and a Mac has no touchscreen. Trackpad gestures use the [gestures] tables (GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.touch.tap_travel",
@@ -10631,7 +10766,8 @@
           "source_assignment": "tap_travel = 2.0              # mm a contact may drift and still count as a",
           "value": 2.0
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: it is a touchscreen setting (upstream touch recogniser, carried in driftwm-core but not used here), and a Mac has no touchscreen. Trackpad gestures use the [gestures] tables (GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.touch.on-window.3-finger-doubletap",
@@ -10656,7 +10792,8 @@
           "source_assignment": "\"3-finger-doubletap\" = \"fit-window\"",
           "value": "fit-window"
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then not dispatched: this is a binding of upstream touchscreen tables, which the port does not use because a Mac has no touchscreen. A trackpad gesture resolves through the [gestures] tables (GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.touch.on-window.3-finger-doubletap-swipe",
@@ -10681,7 +10818,8 @@
           "source_assignment": "\"3-finger-doubletap-swipe\" = \"move-window\"  # continuous",
           "value": "move-window"
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then not dispatched: this is a binding of upstream touchscreen tables, which the port does not use because a Mac has no touchscreen. A trackpad gesture resolves through the [gestures] tables (GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.touch.on-window.3-finger-hold-swipe",
@@ -10706,7 +10844,8 @@
           "source_assignment": "\"3-finger-hold-swipe\" = \"resize-window\"     # continuous (dwell then drag)",
           "value": "resize-window"
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then not dispatched: this is a binding of upstream touchscreen tables, which the port does not use because a Mac has no touchscreen. A trackpad gesture resolves through the [gestures] tables (GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.touch.on-window.3-finger-doubletap-hold-swipe",
@@ -10731,7 +10870,8 @@
           "source_assignment": "\"3-finger-doubletap-hold-swipe\" = \"move-snapped-windows\"  # continuous (tap, hold, then drag — moves the whole snap cluster)",
           "value": "move-snapped-windows"
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then not dispatched: this is a binding of upstream touchscreen tables, which the port does not use because a Mac has no touchscreen. A trackpad gesture resolves through the [gestures] tables (GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.touch.on-canvas.1-finger-swipe",
@@ -10756,7 +10896,8 @@
           "source_assignment": "\"1-finger-swipe\" = \"pan-viewport\"",
           "value": "pan-viewport"
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then not dispatched: this is a binding of upstream touchscreen tables, which the port does not use because a Mac has no touchscreen. A trackpad gesture resolves through the [gestures] tables (GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.touch.on-canvas.2-finger-swipe",
@@ -10781,7 +10922,8 @@
           "source_assignment": "\"2-finger-swipe\" = \"pan-viewport\"",
           "value": "pan-viewport"
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then not dispatched: this is a binding of upstream touchscreen tables, which the port does not use because a Mac has no touchscreen. A trackpad gesture resolves through the [gestures] tables (GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.touch.on-canvas.2-finger-pinch",
@@ -10806,7 +10948,8 @@
           "source_assignment": "\"2-finger-pinch\" = \"zoom\"",
           "value": "zoom"
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then not dispatched: this is a binding of upstream touchscreen tables, which the port does not use because a Mac has no touchscreen. A trackpad gesture resolves through the [gestures] tables (GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.touch.anywhere.3-finger-swipe",
@@ -10831,7 +10974,8 @@
           "source_assignment": "\"3-finger-swipe\" = \"pan-viewport\"           # continuous",
           "value": "pan-viewport"
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then not dispatched: this is a binding of upstream touchscreen tables, which the port does not use because a Mac has no touchscreen. A trackpad gesture resolves through the [gestures] tables (GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.touch.anywhere.3-finger-pinch",
@@ -10856,7 +11000,8 @@
           "source_assignment": "\"3-finger-pinch\" = \"zoom\"                    # continuous",
           "value": "zoom"
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then not dispatched: this is a binding of upstream touchscreen tables, which the port does not use because a Mac has no touchscreen. A trackpad gesture resolves through the [gestures] tables (GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.touch.anywhere.4-finger-swipe",
@@ -10881,7 +11026,8 @@
           "source_assignment": "\"4-finger-swipe\" = \"center-nearest\"         # threshold (direction from drag)",
           "value": "center-nearest"
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then not dispatched: this is a binding of upstream touchscreen tables, which the port does not use because a Mac has no touchscreen. A trackpad gesture resolves through the [gestures] tables (GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.touch.anywhere.4-finger-pinch-in",
@@ -10906,7 +11052,8 @@
           "source_assignment": "\"4-finger-pinch-in\" = \"zoom-to-fit\"         # threshold",
           "value": "zoom-to-fit"
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then not dispatched: this is a binding of upstream touchscreen tables, which the port does not use because a Mac has no touchscreen. A trackpad gesture resolves through the [gestures] tables (GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.touch.anywhere.4-finger-pinch-out",
@@ -10931,7 +11078,8 @@
           "source_assignment": "\"4-finger-pinch-out\" = \"home-toggle\"        # threshold",
           "value": "home-toggle"
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then not dispatched: this is a binding of upstream touchscreen tables, which the port does not use because a Mac has no touchscreen. A trackpad gesture resolves through the [gestures] tables (GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.touch.anywhere.5-finger-swipe",
@@ -10956,7 +11104,8 @@
           "source_assignment": "\"5-finger-swipe\" = \"center-nearest\"         # threshold (direction from drag)",
           "value": "center-nearest"
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then not dispatched: this is a binding of upstream touchscreen tables, which the port does not use because a Mac has no touchscreen. A trackpad gesture resolves through the [gestures] tables (GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.touch.anywhere.5-finger-pinch-in",
@@ -10981,7 +11130,8 @@
           "source_assignment": "\"5-finger-pinch-in\" = \"zoom-to-fit\"         # threshold",
           "value": "zoom-to-fit"
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then not dispatched: this is a binding of upstream touchscreen tables, which the port does not use because a Mac has no touchscreen. A trackpad gesture resolves through the [gestures] tables (GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.touch.anywhere.5-finger-pinch-out",
@@ -11006,7 +11156,8 @@
           "source_assignment": "\"5-finger-pinch-out\" = \"home-toggle\"        # threshold",
           "value": "home-toggle"
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then not dispatched: this is a binding of upstream touchscreen tables, which the port does not use because a Mac has no touchscreen. A trackpad gesture resolves through the [gestures] tables (GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.touch.anywhere.3-finger-tap",
@@ -11031,7 +11182,8 @@
           "source_assignment": "\"3-finger-tap\" = \"center-window\"",
           "value": "center-window"
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then not dispatched: this is a binding of upstream touchscreen tables, which the port does not use because a Mac has no touchscreen. A trackpad gesture resolves through the [gestures] tables (GESTURES.md, Why this path and not the touch recogniser). Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.xwayland.enabled",
@@ -11106,7 +11258,8 @@
           "source_assignment": "wait_for_frame_completion = false  # Force GPU-fence wait before every page flip",
           "value": false
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: it is a DRM/KMS or GPU-driver quirk of the Linux backend, and the Metal compositor has no such path. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.backend.disable_direct_scanout",
@@ -11131,7 +11284,8 @@
           "source_assignment": "disable_direct_scanout = false     # Force EGL composition (disable direct scanout)",
           "value": false
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: it is a DRM/KMS or GPU-driver quirk of the Linux backend, and the Metal compositor has no such path. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.backend.disable_hardware_cursor",
@@ -11156,7 +11310,8 @@
           "source_assignment": "disable_hardware_cursor = false    # Composite the cursor into the frame instead of",
           "value": false
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: it is a DRM/KMS or GPU-driver quirk of the Linux backend, and the Metal compositor has no such path. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.backend.max_capture_fps",
@@ -11181,7 +11336,8 @@
           "source_assignment": "max_capture_fps = 0                # Cap FPS delivered to continuous screen-capture",
           "value": 0
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: it throttles continuous Wayland screen-capture clients, and macOS delivers screen capture itself. The port has only the one-shot msg screenshot, which upstream never throttles either. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "config.output.outline.color",
@@ -11271,7 +11427,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for outputs[].name.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -11290,7 +11446,8 @@
           "source_assignment": "name = \"HDMI-A-1\"",
           "value": "HDMI-A-1"
         }
-      ]
+      ],
+      "implementation_note": "Picks the output an [[outputs]] entry governs: matched against the display UUID (Infinify msg state prints it), windowed for the --windowed panel, or * for every display without an entry; an exact entry replaces the * entry whole, as upstream. Known mismatch: upstream matches a connector name. Tested with synthetic output ids; not tried with a real display UUID or a second display."
     },
     {
       "id": "config.outputs[].scale",
@@ -11321,7 +11478,8 @@
           "source_assignment": "scale = 1.0",
           "value": 1.0
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: macOS owns the display arrangement and the port takes screen_bounds as given (CONFIG.md, Outputs). Display scaling is the display resolution setting in System Settings, Displays. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.outputs[].transform",
@@ -11346,7 +11504,8 @@
           "source_assignment": "transform = \"normal\"     # normal, 90, 180, 270, flipped, flipped-90, flipped-180, flipped-270",
           "value": "normal"
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: macOS owns the display arrangement and the port takes screen_bounds as given (CONFIG.md, Outputs). Display rotation is System Settings, Displays, Rotation. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.outputs[].position",
@@ -11371,7 +11530,8 @@
           "source_assignment": "position = \"auto\"        # \"auto\" (left-to-right) or [x, y] in layout coords",
           "value": "auto"
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: macOS owns the display arrangement and the port takes screen_bounds as given (CONFIG.md, Outputs). The display arrangement is System Settings, Displays, Arrange; screen_bounds is its result. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.outputs[].mode",
@@ -11402,7 +11562,8 @@
           "source_assignment": "mode = \"1920x1080@60\"",
           "value": "1920x1080@60"
         }
-      ]
+      ],
+      "implementation_note": "Read and validated, then unused: macOS owns the display arrangement and the port takes screen_bounds as given (CONFIG.md, Outputs). Resolution and refresh rate are System Settings, Displays. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "config.outputs[].focus_placement",
@@ -11895,13 +12056,14 @@
       },
       "contract": "Match Config.session type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "SessionConfig"
+      "source_type": "SessionConfig",
+      "implementation_note": "All four [session] keys are applied: suspend_on_close and restore_windows in lifecycle.rs (both also answer to a window rule), restore_camera and restore_bookmarks in settings.rs, storage.rs and lib.rs. Covered by controller scenarios in lifecycle_flow.rs and config_flow.rs; no window was closed or restored on a live run."
     },
     {
       "id": "field.Config.trackpad_speed",
@@ -11957,7 +12119,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "f64"
+      "source_type": "f64",
+      "implementation_note": "Scales upstream touchscreen pan gestures. Macs have no touchscreen, so [navigation] touch_speed is read and unused; trackpad_speed scales trackpad pans. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "field.Config.drift",
@@ -12298,7 +12461,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "f64"
+      "source_type": "f64",
+      "implementation_note": "Scales upstream touchscreen pinch zoom. Macs have no touchscreen, so [zoom] touch_speed is read and unused; the zoom trackpad_speed scales a pinch. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "field.Config.zoom_trackpad_speed",
@@ -12582,7 +12746,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "TrackpadSettings"
+      "source_type": "TrackpadSettings",
+      "implementation_note": "Status stays missing: of the eight TrackpadSettings fields only send_events is applied, as [input.trackpad] enable turning gesture dispatch on or off (gestures.rs trackpad_enabled; gesture_flow.rs). The other seven (tap to click, natural scroll, tap and drag, acceleration, click method, palm rejection) are macOS own trackpad settings: read and unused. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "field.Config.mouse_device",
@@ -12600,7 +12765,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "MouseDeviceSettings"
+      "source_type": "MouseDeviceSettings",
+      "implementation_note": "macOS owns the mouse device settings: tracking speed, scroll direction and primary button are System Settings values, and none of the four [input.mouse] keys is read by the port. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "field.Config.touch",
@@ -12618,7 +12784,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "TouchSettings"
+      "source_type": "TouchSettings",
+      "implementation_note": "The [input.touch] device table (enable, map_to_output) configures a touchscreen. Macs have no touchscreen and a Mac trackpad takes the [gestures] tables, so driftwm-core's touch recogniser is not called (GESTURES.md, Why this path and not the touch recogniser). Read and unused. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "field.Config.tablet",
@@ -12636,7 +12803,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "TabletSettings"
+      "source_type": "TabletSettings",
+      "implementation_note": "macOS and the tablet maker driver own the mapping of a drawing tablet to a display; [input.tablet] map_to_output is read and unused. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "field.Config.gesture_thresholds",
@@ -12673,7 +12841,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "TouchThresholds"
+      "source_type": "TouchThresholds",
+      "implementation_note": "The [touch] thresholds table (swipe, pinch, tap, double-tap, hold and dead-zone values) tunes upstream touchscreen recogniser. Macs have no touchscreen and a Mac trackpad takes the [gestures] tables, so driftwm-core's touch recogniser is not called (GESTURES.md, Why this path and not the touch recogniser). Read and unused. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "field.Config.layout_independent",
@@ -12710,7 +12879,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "KeyboardLayout"
+      "source_type": "KeyboardLayout",
+      "implementation_note": "macOS owns the keyboard layout list: [input.keyboard] layout, variant, options and model are xkb settings with no macOS meaning and are read and unused. The enabled input sources are the layouts, and switch-layout asks the shell to switch among them. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "field.Config.remember_layout_per_window",
@@ -12728,7 +12898,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "bool"
+      "source_type": "bool",
+      "implementation_note": "macOS owns the input source and remembers it per document itself when the user asks it to; [input.keyboard] remember_layout_per_window is read and unused. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "field.Config.autostart",
@@ -12765,7 +12936,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "Option<String>"
+      "source_type": "Option<String>",
+      "implementation_note": "Status stays missing: only half of the upstream effect exists. [cursor] theme reaches every exec child as XCURSOR_THEME (actions.rs exec_effect; config_flow.rs), as field.Config.child_env records, and a Mac program ignores it. Upstream also loads its own cursor from the theme; macOS draws the pointer itself and has no cursor themes, so nothing visible changes. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "field.Config.cursor_size",
@@ -12783,7 +12955,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "Option<u32>"
+      "source_type": "Option<u32>",
+      "implementation_note": "Status stays missing: only half of the upstream effect exists. [cursor] size reaches every exec child as XCURSOR_SIZE (actions.rs exec_effect; config_flow.rs), as field.Config.child_env records, and a Mac program ignores it. Upstream also sizes its own cursor with it; macOS draws the pointer, whose size is System Settings, Accessibility, Display, Pointer size. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "field.Config.inactive_cursor_opacity",
@@ -12801,7 +12974,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "f64"
+      "source_type": "f64",
+      "implementation_note": "Dims the cursor drawn on non-active outputs. macOS has one system pointer on one display and the port draws none, so [cursor] inactive_opacity is read and unused. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "field.Config.decorations",
@@ -12895,7 +13069,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "BackendConfig"
+      "source_type": "BackendConfig",
+      "implementation_note": "The [backend] table holds DRM/KMS and GPU-driver quirks and a Wayland capture throttle. The port presents through Metal and macOS and has no such controls; the table is read and unused. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "field.Config.effects",
@@ -12951,7 +13126,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "bool"
+      "source_type": "bool",
+      "implementation_note": "Starts the X11 compatibility server. There is no X11 or Xwayland on macOS and the port runs native windows, so [xwayland] enabled is read and unused. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "field.Config.xwayland_path",
@@ -12969,7 +13145,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "String"
+      "source_type": "String",
+      "implementation_note": "Names the xwayland-satellite binary to start. There is no X11 or Xwayland on macOS, so [xwayland] path is read and unused. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "field.Config.window_placement",
@@ -13057,13 +13234,14 @@
       },
       "contract": "Match Config.output_configs type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "Vec<OutputConfig>"
+      "source_type": "Vec<OutputConfig>",
+      "implementation_note": "The [[outputs]] list is applied per output: hot_corners and focus_placement of the entry named after the output stable id (a display UUID, not a connector name), else the wildcard * entry (output_actions.rs, navigation.rs), covered by platform_actions_flow.rs and config_flow.rs. scale, transform, position and mode are read and unused because macOS arranges the displays. No corner was fired on a live run."
     },
     {
       "id": "field.Config.mouse",
@@ -13100,7 +13278,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "bool"
+      "source_type": "bool",
+      "implementation_note": "macOS windows resize at their own edges by themselves, which is not an implementation: the key is read and unused, so setting it false cannot make that border inert. Pointer resize by binding exists only behind --experimental-native-resize. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "field.Config.decoration_resize_snapped",
@@ -13118,7 +13297,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "bool"
+      "source_type": "bool",
+      "implementation_note": "Status stays missing: read and unused. A native edge drag is macOS and nothing observes it to resize snapped neighbours, and the controller refuses a grouped pointer resize (alt+shift+right) even behind --experimental-native-resize. Cluster resize by edge drag is not implemented."
     },
     {
       "id": "field.Config.decoration_fit_snapped",
@@ -13136,7 +13316,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "bool"
+      "source_type": "bool",
+      "implementation_note": "Status stays missing: read and unused. A maximize from a window own decoration is macOS and nothing observes it to move snapped neighbours; fit-window-snapped exists only behind --experimental-native-resize, as an action. The decoration-initiated cluster fit is not implemented."
     },
     {
       "id": "field.Config.gestures",
@@ -13173,7 +13354,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "ContextBindings<GestureTrigger, GestureConfigEntry>"
+      "source_type": "ContextBindings<GestureTrigger, GestureConfigEntry>",
+      "implementation_note": "The [touch] binding tables map touchscreen gestures to actions. Macs have no touchscreen and a Mac trackpad takes the [gestures] tables, so driftwm-core's touch recogniser is not called (GESTURES.md, Why this path and not the touch recogniser). Read and unused. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "field.Config.num_lock",
@@ -13191,7 +13373,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "bool"
+      "source_type": "bool",
+      "implementation_note": "Sets Num Lock on at startup. Macs have no Num Lock state, so [input.keyboard] num_lock is read and unused. Scope decision pending with the owner; recommended: out of scope."
     },
     {
       "id": "field.Config.caps_lock",
@@ -13209,7 +13392,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "bool"
+      "source_type": "bool",
+      "implementation_note": "macOS owns the Caps Lock state; [input.keyboard] caps_lock is read and unused. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "field.SessionConfig.suspend_on_close",
@@ -13303,7 +13487,8 @@
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "Option<String>"
+      "source_type": "Option<String>",
+      "implementation_note": "macOS and the tablet maker driver own the mapping of a drawing tablet to a display; [input.tablet] map_to_output is read and unused. Scope decision pending with the owner; recommended: treat as provided by macOS."
     },
     {
       "id": "protocol.layer_shell",
@@ -13323,7 +13508,8 @@
         "native.input"
       ],
       "acceptance": "Exercise the actual native equivalent from a focused own-fixture through the production app, including focus/placement and failure/cleanup; wire-protocol support is outside scope.",
-      "evidence": []
+      "evidence": [],
+      "implementation_note": "Not implemented: a Mac has no layer surfaces, and the menu bar, the Dock and notifications are drawn by macOS. The port reserves nothing for them: the shell registers each output by its screen bounds and never reports a usable area (native/desktop/main.m; crates/desktop/IPC.md), State lists no layers, and layer_order is recorded and ignored (crates/desktop/RULES.md). Missing: reserved areas and any policy for panel or overlay windows."
     },
     {
       "id": "protocol.shortcuts_inhibit",
@@ -13343,7 +13529,8 @@
         "native.input"
       ],
       "acceptance": "Exercise the actual native equivalent from a focused own-fixture through the production app, including focus/placement and failure/cleanup; wire-protocol support is outside scope.",
-      "evidence": []
+      "evidence": [],
+      "implementation_note": "Upstream lets the focused client ask the compositor to stand its shortcuts down (remote desktops, virtual machines); macOS has no request by which an application asks another process to drop its hot keys, and the port has none. The configured equivalent, pass_keys in a window rule, is implemented and has its own rows (crates/desktop/RULES.md, pass_keys; passthrough_flow.rs). Scope decision pending with the owner; recommended: out of scope."
     }
   ],
   "scope_decision": {
