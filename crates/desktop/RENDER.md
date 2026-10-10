@@ -46,6 +46,9 @@ every existing command shape and snapshot key are unchanged.
              "title_bar_height":25,"font":"Adwaita Sans","font_size":11,
              "font_weight":"medium","title_align":"center"},
   "outline": {"color":[r,g,b,a],"thickness":1,"opacity":0.5},
+  "effects": {"blur_radius":2,"blur_strength":1.1,"animate_blur_fps":20,
+              "animation_speed":0.5,"animation_scale":0.95},
+  "errors": [],
   "revision": 0
 }
 ```
@@ -68,6 +71,9 @@ config's byte divided by 255.
   `black`: the first spelling upstream's parser accepts for each weight.
   `title_align` is `left` or `center`.
 - `outline` is `[output.outline]`: how another output's viewport is outlined.
+- `effects` is upstream's `[effects]` table and `errors` the controller's
+  messages for the error bar: [EFFECTS.md](EFFECTS.md) is the contract for
+  both.
 - `revision` tells the shell when to rebuild what it derived from the config:
   the background program, with the shader and image files it read, and the
   chrome style. The shell rebuilds only when it sees a new number. Every
@@ -79,9 +85,11 @@ config's byte divided by 255.
   only when its file differs from the built-in defaults in `[background]`,
   `[decorations]`, `[output.outline]` or `[effects]`, compared as upstream's
   parsed tables; the shell builds its first program whatever the number is. A
-  file that is refused and a `load` of a scene file leave it alone. It starts
-  at 0 in every run and is not saved. `[effects]` has no key in the block
-  because nothing of it is drawn yet.
+  `load` of a scene file leaves it alone. A file that is refused changes no
+  table and spends one all the same when its message changes `errors`, at
+  launch too, because the error bar is drawn from this block
+  ([EFFECTS.md](EFFECTS.md#errors)). It starts at 0 in every run and is not
+  saved.
 
 ## Placements
 
@@ -124,7 +132,7 @@ with:
 | `shadow` | `effective_shadow_enabled`; false in `none` mode |
 | `shadow_radius`, `shadow_color` | the constants `DecorationConfig::SHADOW_RADIUS` and `SHADOW_COLOR` |
 | `opacity` | `effective_opacity`: a rule's `opacity` or an IPC `Opacity` write's value in both focus states, else 1.0 for a widget, else `[decorations] opacity_focused` or `opacity` by `focused`. Always 1.0 for a stand-in. The same number as the placement's own `opacity`: both keys are one function's answer |
-| `blur` | `effective_blur`: a rule's `blur`, else `[decorations] blur` |
+| `blur` | `effective_blur`: a rule's `blur`, else `[decorations] blur`. Always false for a stand-in ([EFFECTS.md](EFFECTS.md#blur)) |
 
 Nothing here matches a rule. A bound window is drawn with the rule it mapped
 with, the one its `windows[]` entry reports as `rule`: `[[window_rules]]`
@@ -145,8 +153,10 @@ rule.
 
 A stand-in is opaque. Upstream's stand-in code resolves no opacity: the frame
 and the capture both push a stand-in at the literal alpha 1.0, and only the
-adoption crossfade, which does not exist here, lowers it. So `[decorations]
-opacity` and `opacity_focused` dim bound windows and never a stand-in or a
+adoption crossfade lowers it, which the shell plays from a `standin_adopted`
+event ([EFFECTS.md](EFFECTS.md#lifecycle-events)) without any key here
+changing. So `[decorations] opacity` and `opacity_focused` dim bound windows
+and never a stand-in or a
 detached placeholder, and neither does the rule or the `Opacity` write of the
 window a detached slot is waiting for: `opacity` and `decoration.opacity` are
 both 1.0 for every window without a source.
@@ -357,10 +367,10 @@ every `ipc` request.
   shell, which asks the system and shows the identifier for an application
   that is not installed; an `attach` that carried the name would let the
   controller save it with the slot, as upstream saves a stand-in's.
-- **`blur` and `[effects]` are reported and not drawn.** The compositor has no
-  blur and no open, close, move or resize animation; `decoration.blur` is the
-  flag upstream would act on (also on a stand-in, which upstream never blurs),
-  and `[effects]` reaches nothing.
+- **`blur` and `[effects]`** are the shell's compositor's to draw from
+  `decoration.blur`, `render.effects` and the snapshot's `lifecycle_events`:
+  [EFFECTS.md](EFFECTS.md) is their contract, and says what of upstream's
+  animations has no counterpart here (a window's move, resize and fit).
 - **A reload that finds no file while none was ever accepted** is the built-in
   defaults again and spends a revision like any accepted reload. Upstream's
   reload stops at the read failure. The program the shell rebuilds is the same
@@ -429,8 +439,9 @@ throwaway directory:
   `[background]` in each of its types, one table at a time, with the block and
   the revision after each; an identical reload and a change elsewhere in the
   file, each of which spends a revision and changes nothing else; a file that
-  does not parse and a scene `load`, neither of which moves it; a launch file
-  that names a shader, and the same file loaded again;
+  does not parse, which changes `errors` and moves it by one, and a scene
+  `load`, which moves nothing; a launch file that names a shader, and the same
+  file loaded again;
 - the placement keys for a bound window, a window under each kind of rule, a
   detached placeholder and a suspended stand-in (both at opacity 1.0 under a
   config that dims focused and unfocused windows), a relaunching one and the

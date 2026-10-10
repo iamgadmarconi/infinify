@@ -5,6 +5,7 @@
 mod actions;
 mod bindings;
 mod default_commands;
+mod effects;
 mod ffi;
 mod gestures;
 mod ipc;
@@ -25,6 +26,7 @@ mod view_actions;
 mod window_actions;
 use bindings::Platform;
 pub use bindings::{MacModifiers, PointerContext, PointerTrigger, ScrollSource};
+use effects::Effects;
 pub use ffi::*;
 pub use gestures::GestureKind;
 use gestures::{GestureStart, TrackpadGesture};
@@ -243,9 +245,10 @@ pub struct Controller {
     drags: u64,
     /// The window rules each window mapped with, and the screen-pinned windows.
     policy: Policy,
-    /// Counts the accepted config reloads, and the launch load when its file
-    /// changed what the shell draws with. Not saved: it only tells the shell
-    /// when to rebuild what it derived, the files it read included.
+    /// Counts the accepted config reloads, the launch load when its file
+    /// changed what the shell draws with, and every other load that changed
+    /// the error bar's message. Not saved: it only tells the shell when to
+    /// rebuild what it derived, the files it read included.
     render_revision: u64,
     /// The paths of the screenshot effects the shell has yet to answer,
     /// oldest first. Not saved.
@@ -253,6 +256,9 @@ pub struct Controller {
     /// Fit and fill restore points, the sizing action in flight and whether
     /// the shell can deliver a size at all. Ephemeral. See SIZES.md.
     sizes: Sizes,
+    /// The error bar's message and the window events the shell animates.
+    /// Not saved.
+    effects: Effects,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1236,7 +1242,14 @@ impl Controller {
             }
             Command::Forget { window } => {
                 self.guard_resize_structure(Some(window))?;
+                // The shell's own dismissal of a placeholder. What is drawn
+                // as a stand-in fades as a dismissed one does (effects.rs);
+                // a bound window is none, and its removal animates nothing.
+                let standin = !self.sources.contains_key(&window);
                 self.scene.remove_window(window)?;
+                if standin {
+                    self.log_dismiss(window, None)?;
+                }
                 self.metadata.remove(&window);
                 self.invalidate_focus(window);
                 self.sources.remove(&window);
@@ -1494,6 +1507,7 @@ impl Controller {
                 loaded.settings = self.settings.clone();
                 loaded.render_revision = self.render_revision;
                 loaded.pending_screenshots = std::mem::take(&mut self.pending_screenshots);
+                loaded.effects = std::mem::take(&mut self.effects);
                 loaded.platform = self.platform;
                 loaded.configured = self.configured;
                 loaded.layout = self.layout.clone();
@@ -1815,7 +1829,7 @@ impl Controller {
             navigation[key] = value;
         }
         Ok(
-            json!({"evidence": "logical_controller_only", "capabilities": ["normal_window_navigation", "native_resize_controller_contract"], "render": self.render_block(), "native_resize": self.native_resize, "lifecycle": self.lifecycle, "navigation": navigation, "bookmarks": self.bookmarks, "keyboard_layout": self.layout, "trackpad": self.trackpad_snapshot(), "outputs": self.scene.outputs(), "windows": windows, "focused": self.scene.focused(), "focus": {"intent": self.scene.focused(), "observed_native": self.focus.observed_native, "pending_effect": self.focus.pending_effect, "last_result": self.focus.last_result, "history": self.scene.stage().focus_history(), "cycle": self.scene.stage().cycle_state(), "release_pending": self.focus.release_pending}, "placements": placements}),
+            json!({"evidence": "logical_controller_only", "capabilities": ["normal_window_navigation", "native_resize_controller_contract"], "render": self.render_block(), "native_resize": self.native_resize, "lifecycle": self.lifecycle, "lifecycle_events": self.lifecycle_events(), "navigation": navigation, "bookmarks": self.bookmarks, "keyboard_layout": self.layout, "trackpad": self.trackpad_snapshot(), "outputs": self.scene.outputs(), "windows": windows, "focused": self.scene.focused(), "focus": {"intent": self.scene.focused(), "observed_native": self.focus.observed_native, "pending_effect": self.focus.pending_effect, "last_result": self.focus.last_result, "history": self.scene.stage().focus_history(), "cycle": self.scene.stage().cycle_state(), "release_pending": self.focus.release_pending}, "placements": placements}),
         )
     }
 }

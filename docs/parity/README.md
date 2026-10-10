@@ -595,11 +595,11 @@ device-specific behavior also need the corresponding hardware.
   every default launch, and is asked of a new canvas window only behind
   `--experimental-native-resize` (the window sizing milestone below), never
   of a widget or a pinned window; `fullscreen` is recorded and not applied;
-  and `blur`,
-  `preserve_aspect_ratio`, `pass_keys`,
+  and `preserve_aspect_ratio`, `pass_keys`,
   `pass_mouse` and `layer_order` are recorded with no effect (`decoration`
   and the border, corner and shadow fields are drawn, see the rendering
-  milestone below); a pinned window
+  milestone below, and `blur` is frosted, see the effects milestone below);
+  a pinned window
   cannot be dragged or resized at all, where upstream's move and resize
   bindings, gestures and title bar move and resize it in screen space and
   reassign its output when it is dragged across monitors (unimplemented
@@ -749,7 +749,9 @@ device-specific behavior also need the corresponding hardware.
   title bar in the app, the experimental native-resize presentation through
   the compositor, or any probe, demo or owned mode after the change. No pixel
   was compared with a pixel from DriftWM itself. Known mismatches: blur,
-  `[effects]` and every window animation are not drawn; `cache_shader` is
+  `[effects]` and the open and close animations were not drawn by this
+  milestone and are by the effects milestone below, and move and resize
+  animations are not drawn at all; `cache_shader` is
   accepted and ignored (a shader always renders live) and gigapixel TIFF tiles
   are not supported; text is CoreText's,
   not cosmic-text's; a window whose rectangle lies just outside an output
@@ -1048,6 +1050,154 @@ device-specific behavior also need the corresponding hardware.
   `--experimental-native-resize` until a live native resize pass exists. See the
   [sizing contract](../../crates/desktop/SIZES.md) and the
   [desktop shell notes](../../native/desktop/README.md#window-sizing-actions).
+- This milestone (commit pending), effects: DriftWM's background blur, its
+  window open and close animations and stand-in fades, and its on-screen error
+  bar. The compositor above is replaced by a superset of itself, built, checked
+  against upstream's blur shaders and animation curves and independently
+  reviewed outside the repository, then carried in with its notes; it is
+  API-additive, and the one provenance line of each file is all that differs
+  from that copy. The controller reports, all additive to ABI 1 and never
+  saved: `render.effects`, the `[effects]` table as `driftwm-core`'s parser
+  left it; `decoration.blur`, `driftwm-core`'s `effective_blur` over the rule
+  a window mapped with, false for every stand-in; `render.errors`, upstream's
+  config error source under upstream's rules (read failure, parse failure, the
+  first warning with a count, cleared by a clean load), a changed message
+  spending a render revision; and `lifecycle_events`, the last 32 window
+  events upstream animates, each with a serial: `open`, `close`,
+  `close_to_standin`, `standin_dismiss`, `standin_adopted`. The shell's
+  renderer frosts a blurred window, shows the controller's message and the
+  background program's own in upstream's source order in the bar, and plays
+  each event once from the frame it last drew: a closing snapshot baked from
+  the window's last picture at upstream's density and listed in upstream's
+  closing order, alpha only over the stand-in a close leaves, the open
+  animation from the window's first picture, and the two stand-in fades, all
+  on the one frame timer, which stops when the last ends. macOS rules: the
+  windows of the launch pass and a window that takes its own saved slot back
+  open nothing, since none of them opened in the canvas; an opening window is
+  held invisible until its stream delivers its first picture, a second at
+  most. Probe, demo and owned-fixture modes are untouched. Coverage is
+  controller scenarios through the exported C ABI
+  (`crates/desktop/tests/effects_flow.rs`, against `driftwm-core`'s own parse
+  and `effective_blur`), two throwaway offscreen tools outside the repository
+  and one scripted launch of the built app on 2026-10-10 (macOS 27.2, Apple
+  Silicon, `--windowed`, a private scene, config and socket, three seeded
+  placeholders, about 3 seconds), none of which left saved evidence. Seen, in
+  frames read back from the app's renderer linked with this controller's
+  library and driven through the C ABI with real config files (PNGs opened,
+  pixels read): the error bar with the text of an unknown-action warning, of
+  three warnings as the first and ` (+2 more)`, of a TOML parse error run into
+  one line, and of a config warning followed by a missing shader's message,
+  and its absence after a clean reload; the changed `[effects]` values in the
+  frame; a controller-placed window opening only from its first picture and
+  frosted at opacity 0.6 over a stand-in; its close as a snapshot fading over
+  0.71 s at `animation_speed = 0.1`; a close into a stand-in fading in place;
+  a relaunched window's adoption crossfade from its first picture; a
+  dismissed stand-in shrinking and fading, and nothing played for one the
+  output did not show; no pixel buffer retained after a close or a reset.
+  Seen with hand-written snapshots only: two outputs, the bake densities, the
+  closing order, a pinned snapshot, `animation_speed = 1`. Seen in the app,
+  over `msg` and on stderr only: upstream's wording of both config errors,
+  viewport captures byte-identical with and without an error and with
+  `[decorations] blur` on, two stand-ins dismissed with the app still
+  answering, exit status 0 on SIGTERM with the socket removed, and a saved
+  scene holding nothing of the effects. Evidence boundary: no run had Screen
+  Recording access and nobody looked at the app's panel, so the bar, a frost,
+  a fade and an opening window were never seen on a display, and no
+  ScreenCaptureKit buffer was ever blurred, opened or closed: every picture
+  was a plain-coloured synthetic buffer or a stand-in. `msg` reaches none of
+  the three new keys, so in the app they are known only by their effects. The
+  frame timer was imitated by a loop at about 25 ms a tick; timing at a
+  display's refresh is unmeasured. No pixel was compared with a pixel from
+  DriftWM itself. Known mismatches: upstream's keyboard error source does not
+  exist (macOS owns the layouts); `animation_speed` reaches no move, resize,
+  fit or fullscreen animation, which do not exist here; a window that takes
+  its own waiting slot back is not crossfaded; a config file that is refused
+  rebuilds the background program once where upstream redraws the bar only;
+  each output bakes its own closing snapshot where upstream shares one, and
+  upstream's one-second age limit on a closing window's pixels has no
+  separate test; a new window is invisible for up to a second and takes
+  clicks meanwhile; the error is shown in the status line as well; captures
+  hold no closing snapshot or error bar, which was not checked against
+  upstream's capture code (only that it omits blur). All of the above was
+  built on per-window policy and rendering alone. Merged with pointer policy
+  and window sizing, the joins are these. There is one frame timer, and a
+  window that opens or leaves keeps it alive exactly as an animated
+  background does: it is started without the camera-motion flag, so each of
+  its frames carries the waiting hover and cursor edge pan's pointer report,
+  ticks no camera and leaves the hot corners to the idle poll, and it ends
+  itself with the last animation. A window that opens while a rule's `size`
+  is being asked of it (the experimental flag) has no settled picture until
+  that size transaction ends, so its opening, and a stand-in fade waiting
+  with it, is held until the last of the transaction's effects is answered,
+  which the renderer reads from the snapshot's `native_resize`, and for ten
+  seconds at most; the milestone's renderer alone would have opened it on a
+  picture of the size it was leaving, or after one second on an empty frame.
+  `window_closed` for a window whose size is owed is refused and logs
+  nothing, and the report accepted once the transaction has drained logs its
+  close once. A refused reload answers with `focus_follows_mouse` beside the
+  message that spends a render revision. The sizing state and the event log
+  sit together in the controller, neither saved; the log, the error message
+  and the capability survive a scene `load`. `decoration.blur` and
+  `lifecycle_events` sit beside `mode`, `pick` and the policy keys. One
+  addition was made with the merge: `forget`, the shell's ⌃⌥-click on a
+  placeholder, now logs `standin_dismiss` for what is drawn as a stand-in, so
+  that dismissal fades like the others; a bound window it removes logs
+  nothing. Coverage of the joins: `effects_flow` gained the `forget` cases
+  and a scenario for a size that is owed, the test playing the native side
+  (one `open` at the map; `native_resize` naming the window with its pending
+  effect through the baseline read and the setter; the refused close leaving
+  the whole snapshot unchanged; one `close` after the adapter's
+  `missing_window`; a delivered size logging nothing more), and the whole
+  reply of a refused reload; the `forget` rule was broken two ways and the
+  scenario failed each time. A throwaway offscreen tool outside the
+  repository linked the merged `canvas-renderer.m`, the compositor and the
+  background module, fed them hand-written snapshots and asked
+  `-animates:draw:` whether an open had begun: with a size owed, not on a
+  picture delivered during the baseline read, not 1.3 s on, not when the
+  transaction had just ended without a settled picture, and then on the
+  first settled picture, or at the next description that had one; with no
+  size transaction, on the first picture or after a second, as before; after
+  a transaction that left no picture, one second later; with an effect never
+  answered, after ten seconds and one more. Built against the milestone's own
+  renderer the same tool reported the open begun on the baseline-read picture
+  and at one second on nothing. The tool drew no frame: it shows when the
+  frame description says an animation runs, not a pixel. The merged app was
+  launched once on 2026-10-10 (macOS 27.2, Apple Silicon, `--windowed
+  1100x700`, a private scene, config and socket, three seeded placeholders, 6
+  seconds, no Screen Recording access, nothing saved). `center-nearest
+  right`, `pan-viewport right` and `zoom-to-fit` and back landed at `1950
+  -0`, `2050 -0`, `750 -390` at 0.28484848484848485 and `2050 -0`;
+  `zoom-to-fit-snapped` answered `ok` and framed the focused placeholder at
+  `1950 -0`, zoom 0.7933333333333333, and back; the five sizing actions and
+  `msg resize` answered their refusals without the flag. An unknown action in
+  `[keybindings]` and `reload-config`: `config: invalid action
+  'no-such-action': unknown action: no-such-action` on stderr, twice, and
+  `state` still answered; a file with `[effects] blur_radius = 4`,
+  `animation_speed = 0.25` and `[decorations] blur = true` reloaded with
+  nothing more on stderr. Three viewport captures, before the error, with it
+  and with blur on, were the same bytes, and the picture, looked at, is the
+  focused stand-in on the dot grid with no bar and no frost. `focus --id 2`
+  and `close-window` left two windows and no focus; a capture taken at once
+  and one a second later were the same bytes, the dot grid alone. Exit status
+  0 on SIGTERM, the socket removed, a saved scene of two windows holding
+  nothing of the effects. That adds nothing to the evidence boundary: no live
+  window existed, so nothing opened or closed in the app, no rule or size
+  transaction ran there and the held opening exists only in the tool's
+  hand-written snapshots; nobody looked at the panel, so the dismissal's fade
+  is known only to have left the app answering; no pointer event was sent, so
+  the ⌃⌥-click's fade, a hover on a frame that only an animation keeps alive
+  and the timer stopping after one are compiled and read, not run; the app
+  was not launched with `--experimental-native-resize` for this merge.
+  Further mismatches from the join: an opening window waits for the size it
+  is owed, ten seconds at most, and then opens as it is, where upstream has
+  no such wait because a window's first sized commit already has its rule's
+  size; a window whose picture is withheld when it closes (its size still
+  owed, or left unsettled by the last resize) fades from nothing; a `forget`
+  fades a placeholder but moves the focus by none of upstream's rules. See the
+  [effects contract](../../crates/desktop/EFFECTS.md), the
+  [desktop shell notes](../../native/desktop/README.md#blur-window-animations-and-the-error-bar)
+  and the [compositor notes](../../native/desktop/COMPOSITOR-NOTES.md),
+  Part II.
 
 These milestones add evidence to partial rows. None satisfies an entire native
 behavior row or changes the completion requirement.

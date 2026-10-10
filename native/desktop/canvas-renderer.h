@@ -16,10 +16,22 @@ typedef DWCanvasContent (^DWCanvasSource)(NSNumber *window,NSDictionary *placeme
 // which holds no pinned window. Everything is derived from world rectangles, cameras
 // and screen_bounds, and a pinned placement's screen_rect; no native window geometry
 // is read. It owns no timer, observer or stream: the shell calls it. Main thread only.
+// On screen it also draws DriftWM's effects: the frost behind a window whose
+// decoration says blur, the error bar (snapshot.render.errors, with the background
+// program's own error after the first of them: upstream's config, background,
+// keyboard), which is a picture only and is never hit-tested, and the animations of
+// snapshot.lifecycle_events, each event once: a window that opens grows and fades in
+// from its first picture, one that closes leaves a snapshot that shrinks and fades, or
+// fades in place over the stand-in it left, a stand-in that is dismissed shrinks and
+// fades, and one whose slot a relaunched window adopted fades over that window from its
+// first picture. A window whose size the controller is still changing as it opens
+// (snapshot.native_resize with an effect outstanding, as for a rule's size) has no
+// first picture until that is over, and opens then. A capture draws none of the three.
 @interface DWCanvasRenderer : NSObject
 - (instancetype)initWithSource:(DWCanvasSource)source;
-// Adopts snapshot.render. The background program, the chrome style and the outline
-// settings are rebuilt only when render.revision changed; YES when they were.
+// Adopts snapshot.render. The background program, the chrome style, the outline
+// settings, [effects] and the error bar's messages are rebuilt only when
+// render.revision changed; YES when they were.
 - (BOOL)configure:(NSDictionary *)snapshot;
 // Why the background is not the configured one (a shader that does not compile, a
 // missing file: the module's own fallback is drawn instead), nil when it loaded as asked.
@@ -33,15 +45,19 @@ typedef DWCanvasContent (^DWCanvasSource)(NSNumber *window,NSDictionary *placeme
 - (void)render:(NSDictionary *)snapshot outputs:(NSArray<NSNumber *> *)outputs host:(CALayer *)host origin:(CGPoint)origin scale:(CGFloat)scale decorationScale:(NSInteger)decorationScale;
 - (CALayer *)layerForOutput:(NSNumber *)output;
 // A stream delivered a frame for this window: only the outputs showing it are redrawn.
-- (void)contentChanged:(NSNumber *)window;
-// Is the background of one of these outputs animated? draw: each such output is also
-// redrawn, at the rate its animate_fps allows.
+// YES when that frame is the first picture of a window whose opening, or whose
+// adopted stand-in's fade, was waiting for it: the animation began, and
+// -animates:draw: now says so.
+- (BOOL)contentChanged:(NSNumber *)window;
+// Is the background of one of these outputs animated, or is an open or close animation
+// running on one? draw: each such output is also redrawn, the background at the rate
+// its animate_fps allows and an animation on every call.
 - (BOOL)animates:(NSArray<NSNumber *> *)outputs draw:(BOOL)draw;
 // Describes every changed output to its layer now, which draws only when the
 // description, a pixel buffer or an animated background's clock changed. The shell
 // calls it inside the transaction that moves its own layers.
 - (void)flush;
-// Removes every layer and lets go of every pixel buffer. Before the panels close.
+// Removes every layer and lets go of every pixel buffer and closing snapshot. Before the panels close.
 - (void)reset;
 // The controller's screenshot effect {target,scale,path,output,region}: renders the
 // effect's canvas region, or upstream's region for the target when it carries none,

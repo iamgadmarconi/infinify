@@ -221,6 +221,7 @@ impl Controller {
         let launch = !self.configured;
         self.configured = true;
         let mut dirty = false;
+        let revision = self.render_revision;
         let (errors, warnings) = match parsed {
             Ok((settings, warnings)) => {
                 let old = std::mem::replace(&mut self.settings, std::sync::Arc::new(settings));
@@ -278,6 +279,8 @@ impl Controller {
                 (vec![error], Vec::new())
             }
         };
+        // The error bar's message, and a revision for it if none was spent above.
+        self.note_config(&errors, &warnings, revision)?;
         let mut effects = Vec::new();
         if launch {
             self.seed_bookmarks();

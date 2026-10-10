@@ -28,6 +28,20 @@ static const NSUInteger kIFCMaxTextureSide = 16384;
 // it go.)
 static const double kIFCTextureCacheAge = 1.0;
 
+// blur.rs constants.
+static const long kIFCBlurCacheStep = 64;             // CACHE_STEP
+static const unsigned kIFCBlurKeepFrames = 60;        // PAD_KEEP_FRAMES, SCRATCH_KEEP_FRAMES
+static const uint8_t kIFCBlurForceDirtyFrames = 2;    // BlurCache::force_dirty_frames
+static const uint8_t kIFCBlurMaskWarmupCommits = 8;   // MASK_WARMUP_COMMITS
+// `1u32 << (passes + 1)` (blur_pad) is defined up to here.
+static const uint32_t kIFCBlurMaxPasses = 30;
+// error_bar.rs constants.
+static const float kIFCErrorBarFontPx = 11.0f;        // ERROR_BAR_FONT_PX, logical px (not points)
+static const long kIFCErrorBarPadX = 12;              // ERROR_BAR_PAD_X
+static const long kIFCErrorBarPadY = 6;               // ERROR_BAR_PAD_Y
+// closing.rs DONE_EPSILON, window_animation.rs PROGRESS_DONE_EPSILON.
+static const double kIFCAnimationDoneEpsilon = 0.01;
+
 // MARK: - Rust numeric rules
 
 // Rust `f64::round() as i32`: half away from zero (C `round`), saturating.
@@ -122,7 +136,7 @@ static inline IFCRectI IFCMemoryElementRect(double locX, double locY, long logic
 
 // MARK: - Uniform block
 
-// Must match `struct IFCUniforms` in kIFCMSL (224 bytes, 16-byte aligned).
+// Must match `struct IFCUniforms` in kIFCMSL (240 bytes, 16-byte aligned).
 typedef struct {
     simd_float4 dst;            // element rectangle in target pixels (x, y, w, h): v_coords = (pixel centre - xy) / wh
     simd_float4 quad;           // the part of `dst` this draw rasterises (all of it, or one strip around a hole)
@@ -132,6 +146,7 @@ typedef struct {
     simd_float4 src;            // sampled sub-rect of the texture, normalised (x, y, w, h): smithay's tex_matrix
     simd_float4 m0, m1, m2;     // corner_clip `input_to_geo`, column-major
     simd_float4 uv_bounds;      // texel-centre bounds of `src` (min.xy, max.xy): sampling never leaves the content
+    simd_float4 blur;           // blur_down / blur_up `u_halfpixel` (xy) and `u_offset` (z)
     simd_float2 target;         // target size in pixels
     simd_float2 size;           // pixel shaders' `size`
     simd_float2 geo_size;       // corner_clip `geo_size`
@@ -146,7 +161,7 @@ typedef struct {
     float pad0, pad1;
 } IFCUniforms;
 
-_Static_assert(sizeof(IFCUniforms) == 224, "IFCUniforms layout must match the MSL struct");
+_Static_assert(sizeof(IFCUniforms) == 240, "IFCUniforms layout must match the MSL struct");
 
 // MARK: - Metal sources
 
@@ -164,6 +179,7 @@ static NSString *const kIFCMSL =
      "    float4 m1;\n"
      "    float4 m2;\n"
      "    float4 uv_bounds;\n"
+     "    float4 blur;\n"
      "    float2 target;\n"
      "    float2 size;\n"
      "    float2 geo_size;\n"
@@ -393,6 +409,93 @@ static NSString *const kIFCMSL =
      "fragment float4 ifc_solid(IFCVertexOut in [[stage_in]],\n"
      "                          constant IFCUniforms &U [[buffer(0)]]) {\n"
      "    return U.color * U.alpha;\n"
+     "}\n"
+     "\n"
+     // ------------------------------------------------------------------
+     // Hand translation of upstream src/shaders/blur_down.glsl
+     // sha256 dd87594ca3bf59d641607cbdede7b9c38dbe127a6e95a1a1690c6e01b5f27245
+     // Dual-Kawase downsample: the centre tap four times, four diagonal taps.
+     // `tex` is sampled exactly as upstream samples it — linear, wrapped by
+     // the sampler (MIRRORED_REPEAT), and NOT clamped to the sub-rectangle the
+     // pass reads: the taps do leave it (blur.rs `render_blur`). `alpha` is
+     // declared upstream and unused; DEBUG_FLAGS (tint) has no use on Metal.
+     // ------------------------------------------------------------------
+     "fragment float4 ifc_blur_down(IFCVertexOut in [[stage_in]],\n"
+     "                              constant IFCUniforms &U [[buffer(0)]],\n"
+     "                              texture2d<float> tex [[texture(0)]],\n"
+     "                              sampler smp [[sampler(0)]]) {\n"
+     "    float2 v_coords = ifc_texture_coords(in.position, U);\n"
+     "    float2 u_halfpixel = U.blur.xy;\n"
+     "    float u_offset = U.blur.z;\n"
+     "\n"
+     "    float4 sum = tex.sample(smp, v_coords) * 4.0;\n"
+     "    sum += tex.sample(smp, v_coords - u_halfpixel * u_offset);\n"
+     "    sum += tex.sample(smp, v_coords + u_halfpixel * u_offset);\n"
+     "    sum += tex.sample(smp, v_coords + float2(u_halfpixel.x, -u_halfpixel.y) * u_offset);\n"
+     "    sum += tex.sample(smp, v_coords - float2(u_halfpixel.x, -u_halfpixel.y) * u_offset);\n"
+     "    return sum / 8.0;\n"
+     "}\n"
+     "\n"
+     // ------------------------------------------------------------------
+     // Hand translation of upstream src/shaders/blur_up.glsl
+     // sha256 5a4bf2dc53f93b08ff3df2e9f3cb68bc2420c612f9bf7a92d1aa3b4acbabfbd9
+     // Dual-Kawase upsample: four axis taps and four diagonal taps, the
+     // diagonals twice. Sampled like blur_down.
+     // ------------------------------------------------------------------
+     "fragment float4 ifc_blur_up(IFCVertexOut in [[stage_in]],\n"
+     "                            constant IFCUniforms &U [[buffer(0)]],\n"
+     "                            texture2d<float> tex [[texture(0)]],\n"
+     "                            sampler smp [[sampler(0)]]) {\n"
+     "    float2 v_coords = ifc_texture_coords(in.position, U);\n"
+     "    float2 u_halfpixel = U.blur.xy;\n"
+     "    float u_offset = U.blur.z;\n"
+     "\n"
+     "    float4 sum = tex.sample(smp, v_coords + float2(-u_halfpixel.x * 2.0, 0.0) * u_offset);\n"
+     "    sum += tex.sample(smp, v_coords + float2(-u_halfpixel.x, u_halfpixel.y) * u_offset) * 2.0;\n"
+     "    sum += tex.sample(smp, v_coords + float2(0.0, u_halfpixel.y * 2.0) * u_offset);\n"
+     "    sum += tex.sample(smp, v_coords + float2(u_halfpixel.x, u_halfpixel.y) * u_offset) * 2.0;\n"
+     "    sum += tex.sample(smp, v_coords + float2(u_halfpixel.x * 2.0, 0.0) * u_offset);\n"
+     "    sum += tex.sample(smp, v_coords + float2(u_halfpixel.x, -u_halfpixel.y) * u_offset) * 2.0;\n"
+     "    sum += tex.sample(smp, v_coords + float2(0.0, -u_halfpixel.y * 2.0) * u_offset);\n"
+     "    sum += tex.sample(smp, v_coords + float2(-u_halfpixel.x, -u_halfpixel.y) * u_offset) * 2.0;\n"
+     "    return sum / 12.0;\n"
+     "}\n"
+     "\n"
+     // ------------------------------------------------------------------
+     // Hand translation of upstream src/shaders/blur_mask.glsl
+     // sha256 5d9b29e10ec0d8e532983b1cb6d2a61960e349a9018ab1f7e4e5a43364560289
+     // The window's alpha shape, thresholded. Drawn with the blend function
+     // upstream sets around it, (ZERO, SRC_ALPHA) on colour and alpha, so the
+     // frost already in the target is multiplied by it.
+     // ------------------------------------------------------------------
+     "fragment float4 ifc_blur_mask(IFCVertexOut in [[stage_in]],\n"
+     "                              constant IFCUniforms &U [[buffer(0)]],\n"
+     "                              texture2d<float> tex [[texture(0)]],\n"
+     "                              sampler smp [[sampler(0)]]) {\n"
+     "    float2 v_coords = ifc_texture_coords(in.position, U);\n"
+     "    float alpha = U.alpha;\n"
+     "\n"
+     "    float a = step(0.001, tex.sample(smp, v_coords).a);\n"
+     "    return float4(a) * alpha;\n"
+     "}\n"
+     "\n"
+     // The crop of a backdrop capture that overhangs the output. Upstream
+     // captures the part that has backdrop into a texture of exactly that size
+     // and lets the crop read past its edges with MIRRORED_REPEAT, so real
+     // backdrop is reflected back across the output boundary (blur.rs
+     // `backdrop_capture`). Here the capture sits inside a texture of the
+     // padded extent, at `rect` (texels), and this reflects about the edges of
+     // `rect` itself: texel k of a row of n maps to k mod 2n, mirrored when
+     // that is n or more — what GL_MIRRORED_REPEAT gives at texel centres.
+     "fragment float4 ifc_mirror_copy(IFCVertexOut in [[stage_in]],\n"
+     "                                constant IFCUniforms &U [[buffer(0)]],\n"
+     "                                texture2d<float> tex [[texture(0)]],\n"
+     "                                sampler smp [[sampler(0)]]) {\n"
+     "    float2 n = U.rect.zw;\n"
+     "    float2 q = in.position.xy - U.rect.xy;\n"
+     "    float2 m = q - 2.0 * n * floor(q / (2.0 * n));\n"
+     "    m = select(m, 2.0 * n - m, m > n);\n"
+     "    return tex.sample(smp, (m + U.rect.xy) / U.size);\n"
      "}\n";
 
 // MARK: - Per-device shared state
@@ -404,6 +507,10 @@ typedef NS_ENUM(NSUInteger, IFCPipe) {
     IFCPipeTexture,
     IFCPipeSolid,
     IFCPipeAlphaOne,  // writes alpha = 1 only: completes a premultiplied blend over the opaque clear
+    IFCPipeBlurDown,  // blending off: each Kawase pass replaces the region it draws
+    IFCPipeBlurUp,
+    IFCPipeBlurMask,  // (ZERO, SRC_ALPHA): multiplies the frost by the window's thresholded alpha
+    IFCPipeMirrorCopy,  // blending off
     IFCPipeCount,
 };
 
@@ -411,6 +518,7 @@ typedef NS_ENUM(NSUInteger, IFCPipe) {
 @property (nonatomic, readonly) id<MTLDevice> device;
 @property (nonatomic, readonly) id<MTLCommandQueue> queue;
 @property (nonatomic, readonly) id<MTLSamplerState> sampler;
+@property (nonatomic, readonly) id<MTLSamplerState> mirrorSampler;
 @property (nonatomic, readonly, nullable) NSString *error;
 + (instancetype)resourcesForDevice:(id<MTLDevice>)device;
 - (nullable id<MTLRenderPipelineState>)pipeline:(IFCPipe)pipe;
@@ -453,7 +561,8 @@ typedef NS_ENUM(NSUInteger, IFCPipe) {
         return self;
     }
     id<MTLFunction> vertex = [library newFunctionWithName:@"ifc_vertex"];
-    NSString *const names[IFCPipeCount] = {@"ifc_border", @"ifc_shadow", @"ifc_corner_clip", @"ifc_texture", @"ifc_solid", @"ifc_solid"};
+    NSString *const names[IFCPipeCount] = {@"ifc_border", @"ifc_shadow", @"ifc_corner_clip", @"ifc_texture", @"ifc_solid", @"ifc_solid",
+                                           @"ifc_blur_down", @"ifc_blur_up", @"ifc_blur_mask", @"ifc_mirror_copy"};
     for (NSUInteger i = 0; i < IFCPipeCount; i++) {
         MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
         pd.vertexFunction = vertex;
@@ -465,6 +574,19 @@ typedef NS_ENUM(NSUInteger, IFCPipe) {
         if (i == IFCPipeAlphaOne) {
             ca.blendingEnabled = NO;
             ca.writeMask = MTLColorWriteMaskAlpha;
+        } else if (i == IFCPipeBlurDown || i == IFCPipeBlurUp || i == IFCPipeMirrorCopy) {
+            // Upstream clears the destination to transparent and draws with
+            // premultiplied source-over, which leaves the source: no blending.
+            ca.blendingEnabled = NO;
+        } else if (i == IFCPipeBlurMask) {
+            // blur.rs: gl.BlendFuncSeparate(ZERO, SRC_ALPHA, ZERO, SRC_ALPHA)
+            ca.blendingEnabled = YES;
+            ca.rgbBlendOperation = MTLBlendOperationAdd;
+            ca.alphaBlendOperation = MTLBlendOperationAdd;
+            ca.sourceRGBBlendFactor = MTLBlendFactorZero;
+            ca.sourceAlphaBlendFactor = MTLBlendFactorZero;
+            ca.destinationRGBBlendFactor = MTLBlendFactorSourceAlpha;
+            ca.destinationAlphaBlendFactor = MTLBlendFactorSourceAlpha;
         } else {
             // smithay: glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA) — premultiplied
             // source-over, on colour and alpha alike.
@@ -491,6 +613,11 @@ typedef NS_ENUM(NSUInteger, IFCPipe) {
     sd.sAddressMode = MTLSamplerAddressModeClampToEdge;
     sd.tAddressMode = MTLSamplerAddressModeClampToEdge;
     _sampler = [device newSamplerStateWithDescriptor:sd];
+    // blur.rs `backdrop_wrap_mode`: MIRRORED_REPEAT (the GLES 3 answer) on
+    // every texture the blur samples past the edge of.
+    sd.sAddressMode = MTLSamplerAddressModeMirrorRepeat;
+    sd.tAddressMode = MTLSamplerAddressModeMirrorRepeat;
+    _mirrorSampler = [device newSamplerStateWithDescriptor:sd];
     return self;
 }
 
@@ -651,6 +778,97 @@ CGRect IFCompositorStandInBodyRect(CGRect windowRect, BOOL clientDecorated, NSIn
     // let body_h = (rect.size.h - bar).max(1);
     double bodyH = fmax(windowRect.size.height - bar, 1.0);
     return CGRectMake(windowRect.origin.x, windowRect.origin.y + bar, windowRect.size.width, bodyH);
+}
+
+// config/types.rs `EffectsConfig::default`.
+IFCompositorEffects IFCompositorEffectsDefault(void) {
+    IFCompositorEffects e;
+    memset(&e, 0, sizeof e);
+    e.blurRadius = 2;
+    e.blurStrength = 1.1;
+    e.animateBlurFPS = 20;
+    e.animationSpeed = 0.5;
+    e.animationScale = 0.95;
+    return e;
+}
+
+// config/parse_helpers.rs `unit_range_or_default`.
+static double IFCUnitRangeOrDefault(double v, double fallback) {
+    if (isnan(v) || v <= 0.0) return fallback;
+    return fmin(v, 1.0);
+}
+
+// config/parse_helpers.rs `parse_effects_config`.
+IFCompositorEffects IFCompositorEffectsSanitized(IFCompositorEffects e) {
+    // non_negative(blur_strength): negative or NaN -> 0.
+    if (!(e.blurStrength >= 0.0) || !isfinite(e.blurStrength)) e.blurStrength = 0.0;
+    e.animateBlurFPS = MIN(e.animateBlurFPS, 144u);
+    e.animationSpeed = IFCUnitRangeOrDefault(e.animationSpeed, 0.5);
+    e.animationScale = IFCUnitRangeOrDefault(e.animationScale, 0.95);
+    return e;
+}
+
+// window_animation_driver.rs `tick_window_animations_at`:
+//   frame_factor = 1 - (1 - speed).powf(dt * 60);  progress += (1 - progress) * frame_factor
+// so `1 - progress` is multiplied by (1 - speed)^(dt * 60) every tick, and
+// after ticks adding up to `elapsed` it is (1 - speed)^(elapsed * 60).
+double IFCompositorAnimationProgress(double elapsed, double animationSpeed) {
+    if (!(elapsed > 0.0)) return 0.0;
+    double speed = IFCUnitRangeOrDefault(animationSpeed, 0.5);
+    return 1.0 - pow(1.0 - speed, elapsed * 60.0);
+}
+
+// closing.rs `ClosingSnapshot::is_done`, window_animation.rs `tick_entry`.
+BOOL IFCompositorAnimationFinished(double progress) {
+    return 1.0 - progress <= kIFCAnimationDoneEpsilon;
+}
+
+double IFCompositorAnimationDuration(double animationSpeed) {
+    double speed = IFCUnitRangeOrDefault(animationSpeed, 0.5);
+    if (speed >= 1.0) return 0.0;
+    return log(kIFCAnimationDoneEpsilon) / (60.0 * log(1.0 - speed));
+}
+
+// closing.rs `fade_out_alpha`.
+float IFCompositorCloseAlpha(double progress) {
+    double p = fmin(fmax(progress, 0.0), 1.0);
+    return (float)(1.0 - p * p);
+}
+
+// closing.rs `ClosingSnapshot::render_element` / `StandInFade::shrink_scale`.
+double IFCompositorCloseScale(double progress, double amplitude) {
+    return 1.0 - (1.0 - amplitude) * progress;
+}
+
+// window_animation.rs `open_alpha` (called with p clamped to 0..1).
+float IFCompositorOpenAlpha(double progress) {
+    double p = fmin(fmax(progress, 0.0), 1.0);
+    return (float)(1.0 - (1.0 - p) * (1.0 - p));
+}
+
+// window_animation.rs `open_scale`.
+double IFCompositorOpenScale(double progress, double amplitude) {
+    return amplitude + (1.0 - amplitude) * progress;
+}
+
+// error_bar.rs `join_errors`: `m.split_whitespace().collect::<Vec<_>>().join(" ")`
+// per message, the messages joined with SEPARATOR.
+NSString *IFCompositorErrorBarText(NSArray<NSString *> *messages) {
+    NSMutableArray<NSString *> *lines = [NSMutableArray arrayWithCapacity:messages.count];
+    NSCharacterSet *whitespace = NSCharacterSet.whitespaceAndNewlineCharacterSet;
+    for (NSString *message in messages) {
+        NSMutableArray<NSString *> *words = [NSMutableArray array];
+        for (NSString *word in [message componentsSeparatedByCharactersInSet:whitespace]) {
+            if (word.length) [words addObject:word];
+        }
+        [lines addObject:[words componentsJoinedByString:@" "]];
+    }
+    return [lines componentsJoinedByString:@"  \u2022  "];
+}
+
+// error_bar.rs: `ERROR_BAR_FONT_PX.ceil() as i32 + 2 * ERROR_BAR_PAD_Y`.
+NSInteger IFCompositorErrorBarHeight(void) {
+    return (NSInteger)(IFCTrunc((double)ceilf(kIFCErrorBarFontPx)) + 2 * kIFCErrorBarPadY);
 }
 
 // MARK: - Hashing (redraw gating, cache keys)
@@ -1147,6 +1365,7 @@ static NSMutableData *IFCRenderLabel(NSString *text, long bodyW, long bodyH, lon
     _decoration = IFCompositorDecorationDefault();
     _contentRect = CGRectNull;
     _transform = (IFCompositorTransform){0, 0, 0, 0, 1, 1};
+    _lifecycleStartTime = NAN;
     return self;
 }
 
@@ -1161,7 +1380,24 @@ static NSMutableData *IFCRenderLabel(NSString *text, long bodyW, long bodyH, lon
     _pixelBuffer = pixelBuffer;
 }
 
-- (void)ifc_mix:(uint64_t *)h {
+// The identity of the content's pixels: the buffer object and its surface's
+// change seed, or the texture object; plus the host's own generation counter.
+- (void)ifc_mixContentIdentity:(uint64_t *)h {
+    IFC_MIX(h, (uintptr_t)_pixelBuffer);
+    if (_pixelBuffer) {
+        IOSurfaceRef surface = CVPixelBufferGetIOSurface(_pixelBuffer);
+        IFC_MIX(h, surface ? IOSurfaceGetID(surface) : 0u);
+        IFC_MIX(h, surface ? IOSurfaceGetSeed(surface) : 0u);
+    }
+    IFC_MIX(h, (uintptr_t)(__bridge void *)_texture);
+    IFC_MIX(h, _contentGeneration);
+}
+
+// Everything that decides how the element is drawn. With `content` NO the
+// identity of the content's pixels is left out (whether there is content at
+// all stays in): what a blurred window's own frost is keyed on, since the
+// frost does not show the window's content, only its shape.
+- (void)ifc_mix:(uint64_t *)h content:(BOOL)content {
     IFC_MIX(h, _identifier);
     IFC_MIX(h, (int64_t)_kind);
     IFCMixRect(h, _rect);
@@ -1179,16 +1415,12 @@ static NSMutableData *IFCRenderLabel(NSString *text, long bodyW, long bodyH, lon
     IFC_MIX(h, _decoration.shadowRadius);
     IFCMixColor(h, _decoration.shadowColor);
     IFC_MIX(h, _decoration.opacity);
-    // Content identity: the buffer object and its surface's change seed, or
-    // the texture object; plus the host's own generation counter.
-    IFC_MIX(h, (uintptr_t)_pixelBuffer);
-    if (_pixelBuffer) {
-        IOSurfaceRef surface = CVPixelBufferGetIOSurface(_pixelBuffer);
-        IFC_MIX(h, surface ? IOSurfaceGetID(surface) : 0u);
-        IFC_MIX(h, surface ? IOSurfaceGetSeed(surface) : 0u);
+    if (content) {
+        [self ifc_mixContentIdentity:h];
+    } else {
+        IFC_MIX(h, (uint8_t)(_pixelBuffer != NULL));
+        IFC_MIX(h, (uint8_t)(_texture != nil));
     }
-    IFC_MIX(h, (uintptr_t)(__bridge void *)_texture);
-    IFC_MIX(h, _contentGeneration);
     IFCMixRect(h, _contentRect);
     IFC_MIX(h, (uint8_t)_contentOpaque);
     IFCMixString(h, _title);
@@ -1197,14 +1429,47 @@ static NSMutableData *IFCRenderLabel(NSString *text, long bodyW, long bodyH, lon
     IFC_MIX(h, (uint8_t)_showsPinnedIndicator);
     IFC_MIX(h, (uint8_t)_hasTransform);
     if (_hasTransform) IFCMix(h, &_transform, sizeof _transform);
+    IFC_MIX(h, (uint8_t)_blur);
+    // The lifecycle's own progress is mixed by the frame: it depends on its time.
+    IFC_MIX(h, (int64_t)_lifecycle);
 }
 @end
+
+// One element's lifecycle animation resolved for one frame.
+typedef struct {
+    IFCompositorLifecycle kind;  // None when the element has none, or when it is over (see `finished`)
+    double progress;             // 0..1
+    BOOL finished;               // the animation has run out (upstream would have dropped it)
+    BOOL timed;                  // derived from `lifecycleStartTime`
+} IFCLife;
+
+static IFCLife IFCResolveLife(IFCompositorElement *element, double time, IFCompositorEffects effects) {
+    IFCLife life = {element.lifecycle, 0.0, NO, NO};
+    if (life.kind != IFCompositorLifecycleOpening && life.kind != IFCompositorLifecycleClosing &&
+        life.kind != IFCompositorLifecycleClosingAlphaOnly) {
+        life.kind = IFCompositorLifecycleNone;
+        return life;
+    }
+    double start = element.lifecycleStartTime;
+    double p;
+    if (isnan(start)) {
+        p = element.lifecycleProgress;
+    } else {
+        life.timed = YES;
+        p = IFCompositorAnimationProgress(time - start, effects.animationSpeed);
+    }
+    if (isnan(p)) p = 0.0;
+    life.progress = fmin(fmax(p, 0.0), 1.0);
+    life.finished = IFCompositorAnimationFinished(life.progress);
+    return life;
+}
 
 // MARK: - Frame
 
 @interface IFCompositorFrame ()
 - (uint64_t)ifc_fingerprint;
 - (const CGRect *)ifc_outlineRects;
+- (BOOL)ifc_backgroundAnimates;
 @end
 
 @implementation IFCompositorFrame {
@@ -1220,6 +1485,7 @@ static NSMutableData *IFCRenderLabel(NSString *text, long bodyW, long bodyH, lon
     _placeholderColor = _chrome.backgroundColor;
     _elements = [NSMutableArray array];
     _outline = IFCompositorOutlineSettingsDefault();
+    _effects = IFCompositorEffectsDefault();
     return self;
 }
 
@@ -1255,12 +1521,41 @@ static NSMutableData *IFCRenderLabel(NSString *text, long bodyW, long bodyH, lon
     return _outlineRects;
 }
 
-- (BOOL)needsContinuousRedraw {
+// The background draws and moves on its own (upstream's animated shader).
+- (BOOL)ifc_backgroundAnimates {
     if (_debugPasses && !(_debugPasses & IFCompositorPassBackground)) return NO;
     return _background.isAnimated;
 }
 
-// Everything that decides the picture except `time`.
+- (double)lifecycleProgressOfElement:(IFCompositorElement *)element {
+    if (!element) return 0.0;
+    return IFCResolveLife(element, _time, IFCompositorEffectsSanitized(_effects)).progress;
+}
+
+- (BOOL)lifecycleFinishedForElement:(IFCompositorElement *)element {
+    if (!element) return YES;
+    IFCLife life = IFCResolveLife(element, _time, IFCompositorEffectsSanitized(_effects));
+    return life.kind == IFCompositorLifecycleNone || life.finished;
+}
+
+// An open / close animation that runs on the frame's clock is still running.
+- (BOOL)ifc_lifecycleRuns {
+    IFCompositorEffects effects = IFCompositorEffectsSanitized(_effects);
+    for (IFCompositorElement *element in _elements) {
+        if (element.lifecycle == IFCompositorLifecycleNone) continue;
+        IFCLife life = IFCResolveLife(element, _time, effects);
+        if (life.kind != IFCompositorLifecycleNone && life.timed && !life.finished) return YES;
+    }
+    return NO;
+}
+
+- (BOOL)needsContinuousRedraw {
+    return [self ifc_backgroundAnimates] || [self ifc_lifecycleRuns];
+}
+
+// Everything that decides the picture except `time`. (`time` enters only
+// through the progress of an animation that runs on it: the fingerprint then
+// changes on every tick until the animation is over, and not after.)
 - (uint64_t)ifc_fingerprint {
     uint64_t h = 0xcbf29ce484222325ULL;
     IFC_MIX(&h, _size.width);
@@ -1280,8 +1575,23 @@ static NSMutableData *IFCRenderLabel(NSString *text, long bodyW, long bodyH, lon
     IFC_MIX(&h, (uint64_t)_outlineCount);
     for (NSUInteger i = 0; i < _outlineCount; i++) IFCMixRect(&h, _outlineRects[i]);
     IFC_MIX(&h, (uint64_t)_debugPasses);
+    IFCompositorEffects effects = IFCompositorEffectsSanitized(_effects);
+    IFC_MIX(&h, effects.blurRadius);
+    IFC_MIX(&h, effects.blurStrength);
+    IFC_MIX(&h, effects.animateBlurFPS);
+    IFC_MIX(&h, effects.animationSpeed);
+    IFC_MIX(&h, effects.animationScale);
+    IFC_MIX(&h, (uint64_t)_errorMessages.count);
+    for (NSString *message in _errorMessages) IFCMixString(&h, message);
     IFC_MIX(&h, (uint64_t)_elements.count);
-    for (IFCompositorElement *element in _elements) [element ifc_mix:&h];
+    for (IFCompositorElement *element in _elements) {
+        [element ifc_mix:&h content:YES];
+        if (element.lifecycle != IFCompositorLifecycleNone) {
+            IFCLife life = IFCResolveLife(element, _time, effects);
+            IFC_MIX(&h, (uint8_t)life.finished);
+            IFC_MIX(&h, life.finished ? 1.0 : life.progress);
+        }
+    }
     return h;
 }
 @end
@@ -1351,6 +1661,29 @@ static void IFCPixelSize(IFCompositorFrame *f, long *logicalW, long *logicalH, N
     uint64_t labelStyle;
     long labelBufW, labelBufH;
     IFCRectI labelRect;
+
+    // Frost (blur.rs `BlurCache`): the blurred backdrop of a blurred window,
+    // masked to the window's shape.
+    id<MTLTexture> frostTexture;   // allocated at a quantised extent; the live extent sits at its top-left
+    long frostAllocW, frostAllocH; // `BlurCache::alloc`
+    long frostW, frostH;           // the live extent: the size of `frostRect`
+    IFCRectI frostRect;            // the screen rectangle the frost was computed for, physical pixels
+    uint64_t frostKey;             // what the frost was computed from (`last_backdrop_hash`, `last_view`, geometry)
+    BOOL frostInit;                // the countdowns below were armed (`BlurCache::new`)
+    BOOL frostValid;               // `frostKey` describes what `frostTexture` holds, or that it holds nothing
+    BOOL frostZeroed;              // nothing lies beneath the window: no frost is drawn (`BlurCache::zeroed`)
+    uint8_t frostForceFrames;      // `force_dirty_frames`
+    uint8_t frostWarmup;           // `mask_warmup_commits`
+    BOOL frostHasContentId;
+    uint64_t frostContentId;       // `mask_commits`: the content the current mask was drawn from
+    uint64_t frostSeen;            // the encode in which this frost was brought up to date
+    id<MTLTexture> maskTexture;    // `BlurCache::mask`: the window's own alpha shape, same allocation as the frost
+    // `BlurCache::pads`: the padded ping-pong pair the backdrop is captured
+    // into and blurred in. Exactly the padded extent, never quantised; freed
+    // once the window has gone kIFCBlurKeepFrames encodes without recomputing.
+    id<MTLTexture> padA, padB;
+    long padW, padH;
+    unsigned padsIdle;             // `pads_idle_frames`
 }
 @end
 
@@ -1386,6 +1719,75 @@ typedef struct {
     IFCRectD r;
     double zoom;
 } IFCGeom;
+
+// One element as one encode draws it: its geometry, its clip in output
+// pixels, and what its lifecycle animation makes of it.
+typedef struct {
+    __unsafe_unretained IFCompositorElement *element;
+    IFCGeom g;
+    IFCRectI scissor;             // the element's clip (or the whole output), output pixels
+    BOOL hasXform;                // upstream `WindowRenderAnimation`
+    IFCompositorTransform xform;
+    float lifeAlpha;              // open / close fade; 1 when there is none
+    double progress;              // a snapshot's close progress
+    BOOL alphaOnly;               // a snapshot that fades in place
+} IFCItem;
+
+// What every pass of one encode shares.
+typedef struct {
+    double s;                     // output scale
+    double frameZoom;
+    long viewportW, viewportH;    // output size, logical
+    long outW, outH;              // output size, pixels
+    long decorationScale;
+    uint64_t styleHash;
+    IFCompositorEffects effects;  // sanitized
+} IFCFrameCtx;
+
+typedef NS_OPTIONS(NSUInteger, IFCChromePart) {
+    IFCChromeShadow = 1 << 0,
+    IFCChromeBorder = 1 << 1,
+};
+
+// blur.rs `quantized_extent`: grow at once, give a step back only half a step
+// past the point where it would be taken again.
+static long IFCQuantizedExtent(long live, long current) {
+    long step = kIFCBlurCacheStep;
+    long wanted = ((MAX(live, 1L) + step - 1) / step) * step;
+    if (wanted > current) return wanted;
+    if (live <= current - step - step / 2) return wanted;
+    return current;
+}
+
+// blur.rs `blur_pad`: `((offset * (1u32 << (passes + 1)) as f32).ceil() as i32).clamp(16, 256)`.
+static long IFCBlurPad(float offset, uint32_t passes) {
+    long reach = IFCTrunc((double)ceilf(offset * (float)(1u << (passes + 1))));
+    return MIN(MAX(reach, 16L), 256L);
+}
+
+// mod.rs `compose_frame`, the `wants_blur` block: the rectangle a window's
+// frost covers, in physical pixels — the content (and the title bar above it)
+// truncated and rounded up in logical pixels after the zoom, then
+// `painted_rect` at the output scale. Not the content's own rectangle
+// (`corner_round_rect`): the two can differ by a pixel, as upstream's do.
+static IFCRectI IFCBlurScreenRect(IFCGeom g, BOOL hasSSD, long titleBarHeight, double s) {
+    double zoom = g.zoom;
+    IFCRectD logical;
+    if (hasSSD) {
+        // screen_loc = ((render_loc.x * zoom) as i32, (render_loc.y * zoom) as i32),
+        // moved up by (title_bar_height as f64 * zoom) as i32
+        logical.x = (double)IFCTrunc(g.r.x * zoom);
+        logical.y = (double)(IFCTrunc(g.r.y * zoom) - IFCTrunc((double)titleBarHeight * zoom));
+        logical.w = (double)IFCCeil(g.r.w * zoom);
+        logical.h = (double)IFCCeil((g.r.h + (double)titleBarHeight) * zoom);
+    } else {
+        logical.x = (double)IFCTrunc(g.r.x * zoom);
+        logical.y = (double)IFCTrunc(g.r.y * zoom);
+        logical.w = (double)IFCCeil(g.r.w * zoom);
+        logical.h = (double)IFCCeil(g.r.h * zoom);
+    }
+    return IFCPaintedRect(logical, s);
+}
 
 // shaders.rs `outer_corner_radius`.
 static inline float IFCOuterCornerRadius(float inner, float borderWidth) {
@@ -1591,12 +1993,37 @@ static void IFCCollectStale(const void *key, const void *value, void *context) {
     IFCompositorColor _placeholderTextureColor;
     BOOL _placeholderTextureValid;
 
+    // Error bar (error_bar.rs `ErrorBarCache`).
+    id<MTLTexture> _errorBarTexture;
+    NSArray<NSString *> *_errorBarMessages;
+    long _errorBarWidth, _errorBarScale;
+
+    // Blur: this output's copy of the background for the backdrop passes, and
+    // the cadence an animated background's frost follows (blur.rs `SharedBlur`).
+    id<MTLTexture> _bgCopy;         // output-sized; kept between encodes, dropped after kIFCBlurKeepFrames unused
+    unsigned _bgCopyIdle;
+    id<MTLTexture> _bgTexture;      // `_bgCopy` once this encode has drawn the background into it
+    BOOL _bgTextureTried;
+    BOOL _hasBlurBeat;
+    double _blurBeatTime;
+    uint64_t _blurBeatView;
+
     // State of the encode in progress.
     id<MTLRenderCommandEncoder> _encoder;
     id<MTLRenderPipelineState> _boundPipeline;
     IFCRectI _target, _boundScissor, _elementScissor;
+    IFCRectI _clip;                 // what the pass may draw into: `_target`, or the part of a backdrop that is on the output
     IFCompositorPass _passMask;
-    __unsafe_unretained IFCompositorElement *_transformElement;
+    IFCompositorPass _skipPasses;   // passes an intermediate pass leaves out (the shadow, for a mask)
+    BOOL _hasXform;                 // the element being drawn carries `_xform`
+    IFCompositorTransform _xform;
+    long _originX, _originY;        // output pixel that lands on the pass's (0, 0)
+    BOOL _internal;                 // a pass into an intermediate texture (backdrop, mask, bake)
+    BOOL _bake;                     // a closing snapshot is being baked
+    NSUInteger _drawsSubmitted;
+    IFCItem *_items;                // this encode's elements, bottom to top
+    NSUInteger _itemCount, _itemCapacity;
+    BOOL _blurRequested;
 }
 
 + (instancetype)rendererWithDevice:(id<MTLDevice>)device {
@@ -1637,6 +2064,7 @@ static void IFCCollectStale(const void *key, const void *value, void *context) {
     [self purge];
     if (_entries) CFRelease(_entries);
     free(_scan.keys);
+    free(_items);
 }
 
 - (NSUInteger)cacheEntryCount {
@@ -1657,7 +2085,28 @@ static void IFCBuryEntry(const void *key, const void *value, void *context) {
     if (_placeholderTexture) [_graveyard bury:_placeholderTexture];
     _placeholderTexture = nil;
     _placeholderTextureValid = NO;
+    if (_errorBarTexture) [_graveyard bury:_errorBarTexture];
+    _errorBarTexture = nil;
+    _errorBarMessages = nil;
+    if (_bgCopy) [_graveyard bury:_bgCopy];
+    _bgCopy = nil;
+    _bgTexture = nil;
+    _bgTextureTried = NO;
+    _hasBlurBeat = NO;
     if (_textureCache->ref) CVMetalTextureCacheFlush(_textureCache->ref, 0);
+}
+
+static void IFCCountBlurTextures(const void *key, const void *value, void *context) {
+    (void)key;
+    IFCEntry *entry = (__bridge IFCEntry *)value;
+    NSUInteger *count = context;
+    *count += (entry->frostTexture ? 1u : 0u) + (entry->maskTexture ? 1u : 0u) + (entry->padA ? 1u : 0u) + (entry->padB ? 1u : 0u);
+}
+
+- (NSUInteger)blurTextureCount {
+    NSUInteger count = _bgCopy ? 1 : 0;
+    CFDictionaryApplyFunction(_entries, IFCCountBlurTextures, &count);
+    return count;
 }
 
 // The flushes in the encodes right after a retirement return the IOSurface to
@@ -1734,6 +2183,31 @@ static void IFCBuryEntry(const void *key, const void *value, void *context) {
         entry->barTitle = nil;
         entry->barValid = NO;
     }
+}
+
+// The frost goes with the request for it (upstream prunes `blur_cache` to the
+// windows that asked this frame).
+- (void)retirePadsOf:(IFCEntry *)entry {
+    if (entry->padA) [_graveyard bury:entry->padA];
+    if (entry->padB) [_graveyard bury:entry->padB];
+    entry->padA = entry->padB = nil;
+    entry->padW = entry->padH = 0;
+    entry->padsIdle = 0;
+}
+
+- (void)retireFrostOf:(IFCEntry *)entry {
+    if (!entry->frostTexture && !entry->maskTexture && !entry->padA && !entry->frostValid && !entry->frostInit) return;
+    if (entry->frostTexture) [_graveyard bury:entry->frostTexture];
+    if (entry->maskTexture) [_graveyard bury:entry->maskTexture];
+    entry->frostTexture = nil;
+    entry->maskTexture = nil;
+    [self retirePadsOf:entry];
+    entry->frostAllocW = entry->frostAllocH = 0;
+    entry->frostValid = NO;
+    entry->frostZeroed = NO;
+    entry->frostInit = NO;
+    entry->frostHasContentId = NO;
+    entry->frostSeen = 0;
 }
 
 // The texture for an element's live content, and its size in pixels. nil
@@ -1892,6 +2366,9 @@ static NSString *IFCPassName(IFCompositorPass pass) {
         case IFCompositorPassTitleBar: return @"title_bar";
         case IFCompositorPassStandInBody: return @"body";
         case IFCompositorPassLabel: return @"label";
+        case IFCompositorPassBlur: return @"blur";
+        case IFCompositorPassSnapshot: return @"snapshot";
+        case IFCompositorPassErrorBar: return @"error_bar";
     }
     return @"?";
 }
@@ -1909,15 +2386,24 @@ static NSString *IFCPassName(IFCompositorPass pass) {
 - (void)draw:(IFCPipe)pipe pass:(IFCompositorPass)pass dst:(IFCRectI)dst hole:(IFCRectI)hole uniforms:(IFCUniforms *)u
      texture:(id<MTLTexture>)texture element:(IFCompositorElement *)element {
     if (_passMask && !(_passMask & pass)) return;
-    if (_transformElement) {
-        dst = IFCTransformRect(dst, _transformElement.transform);
+    if (_skipPasses & pass) return;
+    if (_hasXform) {
+        dst = IFCTransformRect(dst, _xform);
         if (hole.w > 0 && hole.h > 0) {
             // One pixel of slack for the transform's own rounding.
-            hole = IFCTransformRect(hole, _transformElement.transform);
+            hole = IFCTransformRect(hole, _xform);
             hole = IFCRectIMake(hole.x + 1, hole.y + 1, hole.w - 2, hole.h - 2);
         }
     }
-    IFCRectI scissor = element ? _elementScissor : _target;
+    // A pass into an intermediate texture (a blurred window's backdrop or
+    // mask) draws the frame's own rectangles moved by a whole number of
+    // pixels, as upstream's `RelocateRenderElement` does: every pixel gets the
+    // value it has in the frame.
+    dst.x -= _originX;
+    dst.y -= _originY;
+    hole.x -= _originX;
+    hole.y -= _originY;
+    IFCRectI scissor = element ? _elementScissor : _clip;
     if (dst.w <= 0 || dst.h <= 0 || !IFCRectIIntersect(dst, scissor, NULL)) return;
     id<MTLRenderPipelineState> pipeline = [_resources pipeline:pipe];
     if (!pipeline) return;
@@ -1954,9 +2440,10 @@ static NSString *IFCPassName(IFCompositorPass pass) {
         [_encoder setVertexBytes:u length:sizeof *u atIndex:0];
         [_encoder setFragmentBytes:u length:sizeof *u atIndex:0];
         [_encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+        _drawsSubmitted++;
     }
 
-    if (_debugDrawHandler) {
+    if (_debugDrawHandler && !_internal) {
         _debugDrawHandler(@{
             @"pass": IFCPassName(pass),
             @"element": element ? @(element.identifier) : NSNull.null,
@@ -1997,11 +2484,13 @@ static inline IFCUniforms IFCUniformsZero(void) {
 // plus content); the shadow is cast by `inner` grown by the border.
 - (void)drawChromeAround:(IFCRectD)inner decoration:(IFCompositorDecoration)deco borderWidth:(long)bw radius:(long)radius
                   shadow:(BOOL)shadow focused:(BOOL)focused alpha:(float)alpha scale:(double)s zoom:(double)zoom
-                 element:(IFCompositorElement *)element {
-    if (shadow) {
+                   parts:(IFCChromePart)parts element:(IFCompositorElement *)element {
+    if (shadow && (parts & IFCChromeShadow)) {
         // The footprint grows by border_width so the shadow grades from the
         // border's outer edge; the radius follows `outer_corner_radius`.
-        double b = (double)bw;
+        // (closing.rs `flatten` hands `bake_shadow_element` the body as it is,
+        // not grown: a baked shadow starts under the border.)
+        double b = _bake ? 0.0 : (double)bw;
         IFCRectD body = {inner.x - b, inner.y - b, inner.w + 2.0 * b, inner.h + 2.0 * b};
         IFCUniforms u = IFCUniformsZero();
         IFCRectI dst, hole;
@@ -2010,7 +2499,7 @@ static inline IFCUniforms IFCUniformsZero(void) {
         u.alpha = alpha;
         [self draw:IFCPipeShadow pass:IFCompositorPassShadow dst:dst hole:hole uniforms:&u texture:nil element:element];
     }
-    if (bw > 0) {
+    if (bw > 0 && (parts & IFCChromeBorder)) {
         IFCUniforms u = IFCUniformsZero();
         IFCRectI dst, hole;
         if (IFCBorderGeometry(inner, bw, (float)radius, s, zoom, &dst, &hole, &u)) {
@@ -2032,9 +2521,31 @@ static inline IFCUniforms IFCUniformsZero(void) {
     [self draw:IFCPipeTexture pass:pass dst:IFCCornerRound(rect, zoom) uniforms:&u texture:texture element:element];
 }
 
+// blur.rs, the splice at the end of `process_blur_requests`: the frost as a
+// `TextureRenderElement` at `screen_rect.loc`, `src = texel_src(win_size)`,
+// logical size `round(win_size / output_scale)`, alpha 1 — whatever the
+// window's opacity is.
+- (void)drawFrostOf:(IFCompositorElement *)element entry:(IFCEntry *)entry scale:(double)s {
+    if (!entry || !entry->frostValid || entry->frostZeroed || !entry->frostTexture || entry->frostSeen != _generation) return;
+    IFCUniforms u = IFCUniformsZero();
+    IFCSetSource(&u, CGRectMake(0, 0, (CGFloat)entry->frostW, (CGFloat)entry->frostH), (double)entry->frostAllocW, (double)entry->frostAllocH);
+    IFCRectI r = entry->frostRect;
+    IFCRectI dst = IFCMemoryElementRect((double)r.x, (double)r.y, IFCRound((double)r.w / s), IFCRound((double)r.h / s), s);
+    // `screen_rect` already went through the window's animation
+    // (`transform_phys_rect`); the frost element is not wrapped in one.
+    BOOL hadXform = _hasXform;
+    _hasXform = NO;
+    [self draw:IFCPipeTexture pass:IFCompositorPassBlur dst:dst uniforms:&u texture:entry->frostTexture element:element];
+    _hasXform = hadXform;
+}
+
 // mod.rs `compose_frame`, one client window.
-- (void)drawWindow:(IFCompositorElement *)element geom:(IFCGeom)g frame:(IFCompositorFrame *)frame scale:(double)s
-   decorationScale:(long)decorationScale styleHash:(uint64_t)styleHash {
+- (void)drawWindow:(const IFCItem *)item frame:(IFCompositorFrame *)frame ctx:(const IFCFrameCtx *)c {
+    IFCompositorElement *element = item->element;
+    IFCGeom g = item->g;
+    double s = c->s;
+    long decorationScale = c->decorationScale;
+    uint64_t styleHash = c->styleHash;
     IFCompositorDecoration deco = element.decoration;
     double zoom = g.zoom;
     // `decoration = "none"` hard-vetoes compositor chrome (the effective_*
@@ -2046,11 +2557,18 @@ static inline IFCUniforms IFCUniformsZero(void) {
     long radius = bare ? 0 : MAX((long)deco.cornerRadius, 0L);
     BOOL shadow = !bare && deco.shadow;
     float opacity = (float)fmin(fmax(deco.opacity, 0.0), 1.0);
+    // An open or close fade: `effective_opacity(..) * visual_alpha as f64`.
+    if (item->lifeAlpha != 1.0f) opacity = (float)((double)opacity * (double)item->lifeAlpha);
+    // closing.rs: the bake is drawn at alpha 1; the snapshot is faded as one piece.
+    if (_bake) opacity = 1.0f;
     IFCompositorChromeStyle *style = frame.chrome;
 
     // What this identifier cached as a stand-in, or as a window with a bar.
     IFCEntry *existing = (__bridge IFCEntry *)CFDictionaryGetValue(_entries, (const void *)(uintptr_t)element.identifier);
-    if (existing) [self retireChromeOf:existing keepingBar:hasSSD];
+    if (existing) {
+        [self retireChromeOf:existing keepingBar:hasSSD];
+        if (!_internal && !element.blur) [self retireFrostOf:existing];
+    }
 
     // loc_phys = render_loc.to_physical_precise_round(scale)
     long locX = IFCRound(g.r.x * s), locY = IFCRound(g.r.y * s);
@@ -2063,10 +2581,15 @@ static inline IFCUniforms IFCUniformsZero(void) {
     double barHLogical = barHPhys / s;
     IFCRectD inner = {g.r.x, g.r.y - barHLogical, g.r.w, g.r.h + barHLogical};
 
-    // Bottom to top: shadow, border, content, title bar (upstream pushes them
-    // top to bottom: bar, content, border, shadow).
+    // Bottom to top: shadow, frost, border, content, title bar (upstream
+    // pushes them top to bottom: bar, content, border, [frost], shadow).
     [self drawChromeAround:inner decoration:deco borderWidth:bw radius:radius shadow:shadow focused:element.focused
-                     alpha:opacity scale:s zoom:zoom element:element];
+                     alpha:opacity scale:s zoom:zoom parts:IFCChromeShadow element:element];
+    // No frost in a backdrop, a mask or a bake: upstream captures them from
+    // the element list before any frost is spliced into it.
+    if (element.blur && !_internal) [self drawFrostOf:element entry:existing scale:s];
+    [self drawChromeAround:inner decoration:deco borderWidth:bw radius:radius shadow:shadow focused:element.focused
+                     alpha:opacity scale:s zoom:zoom parts:IFCChromeBorder element:element];
 
     id<MTLTexture> content = [self contentTextureFor:element];
     BOOL placeholder = content == nil;
@@ -2108,8 +2631,12 @@ static inline IFCUniforms IFCUniformsZero(void) {
 }
 
 // suspended.rs `push_suspended_element`.
-- (void)drawStandIn:(IFCompositorElement *)element geom:(IFCGeom)g frame:(IFCompositorFrame *)frame scale:(double)s
-    decorationScale:(long)decorationScale styleHash:(uint64_t)styleHash {
+- (void)drawStandIn:(const IFCItem *)item frame:(IFCompositorFrame *)frame ctx:(const IFCFrameCtx *)c {
+    IFCompositorElement *element = item->element;
+    IFCGeom g = item->g;
+    double s = c->s;
+    long decorationScale = c->decorationScale;
+    uint64_t styleHash = c->styleHash;
     IFCompositorDecoration deco = element.decoration;
     IFCompositorChromeStyle *style = frame.chrome;
     double zoom = g.zoom;
@@ -2118,11 +2645,14 @@ static inline IFCUniforms IFCUniformsZero(void) {
     long bw = MAX((long)deco.borderWidth, 0L);
     long radius = MAX((long)deco.cornerRadius, 0L);
     float alpha = (float)fmin(fmax(deco.opacity, 0.0), 1.0);
+    // closing.rs `StandInFade::alpha`: a departing stand-in fades as a whole.
+    if (item->lifeAlpha != 1.0f) alpha = (float)((double)alpha * (double)item->lifeAlpha);
 
     long locX = IFCRound(g.r.x * s), locY = IFCRound(g.r.y * s);
     double barHPhys = round((double)style.titleBarHeight * s);
     double barHLogical = barHPhys / s;
     IFCEntry *entry = [self entryFor:element.identifier];
+    [self retireFrostOf:entry];
     // A stand-in draws no content: let go of the capture buffer and its Metal
     // wrapper this identifier held as a live window (whatever the element's
     // own `pixelBuffer` still says).
@@ -2131,7 +2661,7 @@ static inline IFCUniforms IFCUniformsZero(void) {
     // Bottom to top: shadow, border, title bar, body, label.
     IFCRectD inner = {g.r.x, g.r.y - barHLogical, (double)sizeW, (double)sizeH + barHLogical};
     [self drawChromeAround:inner decoration:deco borderWidth:bw radius:radius shadow:deco.shadow focused:element.focused
-                     alpha:alpha scale:s zoom:zoom element:element];
+                     alpha:alpha scale:s zoom:zoom parts:(IFCChromeShadow | IFCChromeBorder) element:element];
 
     // Title bar via the windowless rasteriser, textless: the centred label
     // already names the app. It rounds to the element's radius like its border.
@@ -2155,6 +2685,136 @@ static inline IFCUniforms IFCUniformsZero(void) {
         IFCRectI labelDst = IFCMemoryElementRect(labelX * s, labelY * s, entry->labelBufW / decorationScale, entry->labelBufH / decorationScale, s);
         [self drawBuffer:label preZoom:labelDst zoom:zoom alpha:alpha pass:IFCompositorPassLabel element:element];
     }
+}
+
+// closing.rs `ClosingSnapshot::render_element`: the baked window as one
+// texture, faded by `fade_out_alpha` and shrunk about the centre of the
+// rectangle it covers.
+- (void)drawSnapshot:(const IFCItem *)item ctx:(const IFCFrameCtx *)c {
+    IFCompositorElement *element = item->element;
+    // What this identifier cached as a live window or a stand-in.
+    IFCEntry *existing = (__bridge IFCEntry *)CFDictionaryGetValue(_entries, (const void *)(uintptr_t)element.identifier);
+    if (existing) {
+        [self retireChromeOf:existing keepingBar:NO];
+        [self retireFrostOf:existing];
+    }
+    id<MTLTexture> texture = [self contentTextureFor:element];
+    if (!texture) return;
+    IFCGeom g = item->g;
+    double s = c->s;
+    double p = item->progress;
+    float alpha = IFCompositorCloseAlpha(p);
+    // let close_scale = if self.alpha_only { 1.0 } else { 1.0 - (1.0 - self.scale_amplitude) * self.progress };
+    double closeScale = item->alphaOnly ? 1.0 : IFCompositorCloseScale(p, c->effects.animationScale);
+
+    // (canvas_rect.loc - camera) * zoom and canvas_rect.size * zoom for a canvas
+    // snapshot; the screen rectangle itself (zoom 1) for a pinned one.
+    double screenX = g.r.x * g.zoom, screenY = g.r.y * g.zoom;
+    double screenW = g.r.w * g.zoom, screenH = g.r.h * g.zoom;
+    double locX = screenX * s, locY = screenY * s;
+    double sizeW = screenW * s, sizeH = screenH * s;
+    // TextureRenderElement at loc_phys, logical size screen_size.to_i32_round(),
+    // inside WindowTransformElement(center, offset 0, close_scale).
+    IFCompositorTransform t = {locX + sizeW / 2.0, locY + sizeH / 2.0, 0.0, 0.0, closeScale, closeScale};
+    IFCRectI dst = IFCTransformRect(IFCMemoryElementRect(locX, locY, IFCRound(screenW), IFCRound(screenH), s), t);
+
+    double bufW = (double)texture.width, bufH = (double)texture.height;
+    CGRect source = CGRectMake(0, 0, bufW, bufH);  // texel_src(self.texels)
+    if (!CGRectIsNull(element.contentRect) && element.contentRect.size.width > 0 && element.contentRect.size.height > 0) {
+        source = element.contentRect;
+    }
+    IFCUniforms u = IFCUniformsZero();
+    // Upstream: `Some(alpha)`. The element's opacity (1 for a bake) multiplies it.
+    double opacity = fmin(fmax(element.decoration.opacity, 0.0), 1.0);
+    u.alpha = opacity == 1.0 ? alpha : (float)((double)alpha * opacity);
+    u.no_alpha = element.contentOpaque ? 1.0f : 0.0f;
+    IFCSetSource(&u, source, bufW, bufH);
+    [self draw:IFCPipeTexture pass:IFCompositorPassSnapshot dst:dst uniforms:&u texture:texture element:element];
+}
+
+// One element, in whichever pass is open: the frame itself, the backdrop of a
+// blurred window above it, or its own mask.
+- (void)drawItem:(const IFCItem *)item frame:(IFCompositorFrame *)frame ctx:(const IFCFrameCtx *)c {
+    IFCRectI scissor = item->scissor;
+    scissor.x -= _originX;
+    scissor.y -= _originY;
+    if (!IFCRectIIntersect(scissor, _clip, &_elementScissor)) return;
+    _hasXform = item->hasXform;
+    _xform = item->xform;
+    switch (item->element.kind) {
+        case IFCompositorElementKindStandIn:
+            [self drawStandIn:item frame:frame ctx:c];
+            break;
+        case IFCompositorElementKindSnapshot:
+            [self drawSnapshot:item ctx:c];
+            break;
+        case IFCompositorElementKindWindow:
+        default:
+            [self drawWindow:item frame:frame ctx:c];
+            break;
+    }
+    _hasXform = NO;
+}
+
+// error_bar.rs `render_error_bar`: opaque black, the joined messages in white
+// monospace, tail-ellipsised between the side insets. RGBA8 (`Abgr8888`), at
+// buffer scale `scale`.
+static NSMutableData *IFCRenderErrorBar(NSString *text, long width, long barHeight, long scale, long *outW, long *outH) {
+    long s = MAX(scale, 1L);
+    long w = MAX(MAX(width, 1L) * s, 1L), h = MAX(MAX(barHeight, 1L) * s, 1L);
+    if ((NSUInteger)w > kIFCMaxTextureSide || (NSUInteger)h > kIFCMaxTextureSide) return nil;
+    NSMutableData *data = [NSMutableData dataWithLength:(NSUInteger)(w * h * 4)];
+    uint8_t *pixels = data.mutableBytes;
+    for (long i = 0; i < w * h; i++) pixels[i * 4 + 3] = 255;
+
+    float fontPx = kIFCErrorBarFontPx * (float)s;
+    long padX = kIFCErrorBarPadX * s;
+    long available = w - 2 * padX;
+    if (available > 0) {
+        CTFontRef font = IFCCreateFont(@"monospace", (double)fontPx, IFCompositorFontWeightNormal);
+        long textW = 0;
+        NSString *fitted = IFCFitText(text ?: @"", font, available, &textW);
+        IFCRasterizeInto(pixels, w, h, fitted, font, fontPx, IFCompositorColorMake(255, 255, 255, 255), padX);
+        CFRelease(font);
+    }
+    *outW = w;
+    *outH = h;
+    return data;
+}
+
+// error_bar.rs `build_error_bar_elements`: above every window, across the
+// bottom edge of the output. Not zoomed.
+- (void)drawErrorBar:(IFCompositorFrame *)frame ctx:(const IFCFrameCtx *)c {
+    NSArray<NSString *> *messages = frame.errorMessages;
+    if (!messages.count) {
+        // `state.render.cached_error_bar.remove(&name)`
+        if (_errorBarTexture) [_graveyard bury:_errorBarTexture];
+        _errorBarTexture = nil;
+        _errorBarMessages = nil;
+        return;
+    }
+    if (_passMask && !(_passMask & IFCompositorPassErrorBar)) return;
+    long width = MAX(c->viewportW, 1L), scale = MAX(c->decorationScale, 1L), barHeight = (long)IFCompositorErrorBarHeight();
+    // Keyed by (text, width, scale), as upstream's cache is.
+    if (!_errorBarMessages || width != _errorBarWidth || scale != _errorBarScale ||
+        (messages != _errorBarMessages && ![messages isEqualToArray:_errorBarMessages])) {
+        long w = 0, h = 0;
+        NSData *pixels = IFCRenderErrorBar(IFCompositorErrorBarText(messages), width, barHeight, scale, &w, &h);
+        if (_errorBarTexture) [_graveyard bury:_errorBarTexture];
+        _errorBarTexture = [self textureWithRGBA:pixels width:w height:h];
+        _errorBarWidth = width;
+        _errorBarScale = scale;
+    }
+    _errorBarMessages = messages;
+    if (!_errorBarTexture) return;
+    // loc = (0, viewport.h - bar_height) in logical pixels, to_physical(output_scale);
+    // the buffer's logical size is its pixel size over its scale.
+    IFCRectI dst = IFCMemoryElementRect(0.0, (double)(c->viewportH - barHeight) * c->s, width, barHeight, c->s);
+    IFCUniforms u = IFCUniformsZero();
+    IFCSetSource(&u, CGRectMake(0, 0, (CGFloat)_errorBarTexture.width, (CGFloat)_errorBarTexture.height),
+                 (double)_errorBarTexture.width, (double)_errorBarTexture.height);
+    // PixelSnapRescaleElement with a rescale of 1.0: unchanged.
+    [self draw:IFCPipeTexture pass:IFCompositorPassErrorBar dst:dst uniforms:&u texture:_errorBarTexture element:nil];
 }
 
 // mod.rs `outline_edge_strips` + `build_output_outline_elements`.
@@ -2193,66 +2853,517 @@ static inline IFCUniforms IFCUniformsZero(void) {
     }
 }
 
-// MARK: Frame
+// MARK: Intermediate passes
 
-- (BOOL)encodeFrame:(IFCompositorFrame *)frame intoTexture:(id<MTLTexture>)target commandBuffer:(id<MTLCommandBuffer>)commandBuffer {
-    if (!frame || !target || !commandBuffer || _resources.error) return NO;
-    double s = (isfinite(frame.scale) && frame.scale > 0) ? frame.scale : 1.0;
-    double frameZoom = (isfinite(frame.zoom) && frame.zoom > 0) ? frame.zoom : 1.0;
-    long viewportW, viewportH;
-    IFCPixelSize(frame, &viewportW, &viewportH, NULL, NULL);
-
-    BOOL opaqueClear = frame.clear == IFCompositorClearOpaqueBlack;
-    _pass.colorAttachments[0].texture = target;
-    _pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, opaqueClear ? 1 : 0);
+// Opens a render pass on `texture` whose viewport is its top-left
+// `width` x `height` pixels (smithay's `renderer.render(target, size, ..)`:
+// `glViewport(0, 0, w, h)` and the matching scissor).
+- (BOOL)beginPassOn:(id<MTLTexture>)texture width:(long)width height:(long)height load:(MTLLoadAction)load
+              clear:(MTLClearColor)clear commandBuffer:(id<MTLCommandBuffer>)commandBuffer {
+    if (!texture || width <= 0 || height <= 0) return NO;
+    _pass.colorAttachments[0].texture = texture;
+    _pass.colorAttachments[0].loadAction = load;
+    _pass.colorAttachments[0].clearColor = clear;
     id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:_pass];
     _pass.colorAttachments[0].texture = nil;
+    _pass.colorAttachments[0].loadAction = MTLLoadActionClear;
     if (!encoder) return NO;
-
-    // From here on the command buffer samples this renderer's textures: what
-    // is retired during or after this encode waits for it to complete.
-    _generation++;
-    _touched = 0;
-    [_graveyard began];
-    [commandBuffer addCompletedHandler:_completion];
     _encoder = encoder;
     _boundPipeline = nil;
-    _target = IFCRectIMake(0, 0, (long)target.width, (long)target.height);
-    _boundScissor = _target;
-    _passMask = frame.debugPasses;
-    _transformElement = nil;
-
-    // Background (upstream's `bg_elements`), replacing the cleared pixels.
-    IFBackgroundProgram *background = frame.background;
-    if (background && (!_passMask || (_passMask & IFCompositorPassBackground))) {
-        IFBackgroundFrame bg = {frame.cameraX, frame.cameraY, frameZoom, frame.size.width, frame.size.height, s, frame.time};
-        if ([background encodeFrame:bg inEncoder:encoder] && opaqueClear && background.isTransparent) {
-            // The background wrote premultiplied colour with its own alpha;
-            // over the opaque clear a source-over blend leaves alpha at 1.
-            _boundPipeline = nil;
-            IFCUniforms u = IFCUniformsZero();
-            u.color = simd_make_float4(0, 0, 0, 1);
-            IFCompositorPass mask = _passMask;
-            _passMask = 0;
-            [self draw:IFCPipeAlphaOne pass:IFCompositorPassBackground dst:_target uniforms:&u texture:nil element:nil];
-            _passMask = mask;
-        }
-        _boundPipeline = nil;
+    _target = IFCRectIMake(0, 0, width, height);
+    _clip = _target;
+    if ((NSUInteger)width != texture.width || (NSUInteger)height != texture.height) {
+        [encoder setViewport:(MTLViewport){0, 0, (double)width, (double)height, 0, 1}];
+        [encoder setScissorRect:(MTLScissorRect){0, 0, (NSUInteger)width, (NSUInteger)height}];
     }
+    _boundScissor = _target;
     [encoder setFragmentSamplerState:_resources.sampler atIndex:0];
+    return YES;
+}
 
-    // Outlines of other outputs' viewports: above the background, below every window.
-    [self drawOutlines:frame scale:s viewportW:viewportW viewportH:viewportH];
+- (void)endPass {
+    [_encoder endEncoding];
+    _encoder = nil;
+    _boundPipeline = nil;
+}
 
-    // Windows, bottom to top: widgets, normal, pinned.
-    long decorationScale = frame.decorationScale > 0 ? (long)frame.decorationScale : MAX(IFCCeil(s), 1L);
-    uint64_t styleHash = [frame.chrome ifc_hash];
-    static const IFCompositorStackLayer order[3] = {IFCompositorStackLayerWidget, IFCompositorStackLayerNormal, IFCompositorStackLayerPinned};
+// One quad over `dst` of the open pass, with none of the per-element state.
+- (void)rawDraw:(IFCPipe)pipe dst:(IFCRectI)dst uniforms:(IFCUniforms *)u texture:(id<MTLTexture>)texture {
+    id<MTLRenderPipelineState> pipeline = [_resources pipeline:pipe];
+    if (!pipeline || !_encoder) return;
+    u->dst = simd_make_float4((float)dst.x, (float)dst.y, (float)dst.w, (float)dst.h);
+    u->quad = u->dst;
+    u->target = simd_make_float2((float)_target.w, (float)_target.h);
+    [_encoder setRenderPipelineState:pipeline];
+    _boundPipeline = pipeline;
+    if (texture) [_encoder setFragmentTexture:texture atIndex:0];
+    [_encoder setVertexBytes:u length:sizeof *u atIndex:0];
+    [_encoder setFragmentBytes:u length:sizeof *u atIndex:0];
+    [_encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+}
+
+// MARK: Blur (blur.rs)
+
+- (id<MTLTexture>)newBlurTextureWidth:(long)width height:(long)height {
+    if (width <= 0 || height <= 0 || (NSUInteger)width > kIFCMaxTextureSide || (NSUInteger)height > kIFCMaxTextureSide) return nil;
+    // Abgr8888 offscreens upstream; BGRA8 here, like every other target.
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                  width:(NSUInteger)width
+                                                                                 height:(NSUInteger)height
+                                                                              mipmapped:NO];
+    td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    td.storageMode = MTLStorageModePrivate;
+    id<MTLTexture> texture = [_device newTextureWithDescriptor:td];
+    if (texture) _blurTextureAllocationCount++;
+    return texture;
+}
+
+// blur.rs `render_blur` + `blur_pass`: `passes` downscale passes, then
+// `passes` upscale passes, between two textures of the same extent. Each pass
+// reads the top-left `alloc >> src_shift` of one and writes the top-left
+// `alloc >> dst_shift` of the other; texture coordinates are normalised over
+// the whole allocation. Returns the texture holding the result: `a`, after an
+// even number of swaps.
+//
+// What a pass leaves outside the region it writes is read by the taps at the
+// right and bottom edges of the next one. In `a` that is the captured
+// backdrop, as upstream. In `b` upstream reads whatever `create_buffer`
+// handed over — never written, undefined; here `b` is cleared to transparent
+// by its first pass.
+- (id<MTLTexture>)encodeKawaseOn:(id<MTLTexture>)a other:(id<MTLTexture>)b passes:(uint32_t)passes offset:(float)offset
+                   commandBuffer:(id<MTLCommandBuffer>)commandBuffer stage:(void (^)(id<MTLTexture> written))stage {
+    if (!a || (passes > 0 && !b)) return nil;
+    long allocW = (long)a.width, allocH = (long)a.height;
+    for (uint32_t n = 0; n < 2 * passes; n++) {
+        BOOL downscale = n < passes;
+        uint32_t i = downscale ? n : n - passes;
+        // let (src_shift, dst_shift) = if downscale { (i, i + 1) } else { (passes - i, passes - i - 1) };
+        uint32_t srcShift = downscale ? i : passes - i;
+        uint32_t dstShift = downscale ? i + 1 : passes - i - 1;
+        long srcW = MAX(allocW >> srcShift, 1L), srcH = MAX(allocH >> srcShift, 1L);
+        long dstW = MAX(allocW >> dstShift, 1L), dstH = MAX(allocH >> dstShift, 1L);
+        // The tap distance is a UV offset over the whole texture.
+        simd_float2 halfPixel = downscale ? simd_make_float2(1.0f / (float)srcW, 1.0f / (float)srcH)
+                                          : simd_make_float2(0.5f / (float)srcW, 0.5f / (float)srcH);
+        float passOffset = offset / (float)(1 << srcShift);
+
+        BOOL whole = dstW == allocW && dstH == allocH;
+        MTLLoadAction load = n == 0 ? MTLLoadActionClear : (whole ? MTLLoadActionDontCare : MTLLoadActionLoad);
+        if (![self beginPassOn:b width:dstW height:dstH load:load clear:MTLClearColorMake(0, 0, 0, 0) commandBuffer:commandBuffer]) return nil;
+        [_encoder setFragmentSamplerState:_resources.mirrorSampler atIndex:0];
+        IFCUniforms u = IFCUniformsZero();
+        // src_buf = (0, 0, src_w, src_h) of a texture of `alloc`: smithay's tex_matrix.
+        IFCSetSource(&u, CGRectMake(0, 0, (CGFloat)srcW, (CGFloat)srcH), (double)allocW, (double)allocH);
+        u.blur = simd_make_float4(halfPixel.x, halfPixel.y, passOffset, 0.0f);
+        [self rawDraw:(downscale ? IFCPipeBlurDown : IFCPipeBlurUp) dst:IFCRectIMake(0, 0, dstW, dstH) uniforms:&u texture:a];
+        [self endPass];
+        if (stage) stage(b);
+        id<MTLTexture> swap = a;
+        a = b;
+        b = swap;
+    }
+    return a;
+}
+
+// This encode's background, once, as a texture the backdrop passes draw from:
+// the background module computes from the pixel position and cannot be
+// relocated. The texture is the output's size and is kept between encodes.
+- (void)ensureBackgroundCopy:(IFCompositorFrame *)frame ctx:(const IFCFrameCtx *)c commandBuffer:(id<MTLCommandBuffer>)commandBuffer {
+    if (_bgTextureTried) return;
+    _bgTextureTried = YES;
+    IFBackgroundProgram *background = frame.background;
+    if (!background || background.kind == IFBackgroundKindNone) return;
+    if (!_bgCopy || (long)_bgCopy.width != c->outW || (long)_bgCopy.height != c->outH) {
+        if (_bgCopy) [_graveyard bury:_bgCopy];
+        _bgCopy = [self newBlurTextureWidth:c->outW height:c->outH];
+    }
+    if (![self beginPassOn:_bgCopy width:c->outW height:c->outH load:MTLLoadActionClear clear:MTLClearColorMake(0, 0, 0, 0)
+             commandBuffer:commandBuffer]) {
+        return;
+    }
+    IFBackgroundFrame bg = {frame.cameraX, frame.cameraY, c->frameZoom, frame.size.width, frame.size.height, c->s, frame.time};
+    BOOL drew = [background encodeFrame:bg inEncoder:_encoder];
+    [self endPass];
+    if (drew) _bgTexture = _bgCopy;
+}
+
+// blur.rs, the per-window capture: everything below item `k` — the
+// background, the outlines and every lower element with all its chrome, and
+// no frost — over opaque black, moved so that output pixel `origin` lands on
+// the texture's (0, 0), and confined to `clip` (texture pixels): the part of
+// it that is on the output. Returns the number of draws that reached it.
+- (NSUInteger)encodeBackdropBelow:(NSUInteger)k into:(id<MTLTexture>)texture width:(long)width height:(long)height
+                           origin:(IFCRectI)origin clip:(IFCRectI)clip frame:(IFCompositorFrame *)frame
+                              ctx:(const IFCFrameCtx *)c commandBuffer:(id<MTLCommandBuffer>)commandBuffer {
+    // dt.render_output(renderer, &mut target, 0, &relocated, [0.0, 0.0, 0.0, 1.0])
+    if (![self beginPassOn:texture width:width height:height load:MTLLoadActionClear clear:MTLClearColorMake(0, 0, 0, 1)
+             commandBuffer:commandBuffer]) {
+        return 0;
+    }
+    IFCompositorPass mask = _passMask;
+    _passMask = 0;
+    _internal = YES;
+    _originX = origin.x;
+    _originY = origin.y;
+    _clip = clip;
+    _drawsSubmitted = 0;
+    if (_bgTexture) {
+        IFCUniforms u = IFCUniformsZero();
+        IFCSetSource(&u, CGRectMake(0, 0, (CGFloat)_bgTexture.width, (CGFloat)_bgTexture.height), (double)_bgTexture.width,
+                     (double)_bgTexture.height);
+        [self draw:IFCPipeTexture pass:IFCompositorPassBackground dst:IFCRectIMake(0, 0, c->outW, c->outH) uniforms:&u texture:_bgTexture
+           element:nil];
+    }
+    [self drawOutlines:frame scale:c->s viewportW:c->viewportW viewportH:c->viewportH];
+    for (NSUInteger j = 0; j < k; j++) [self drawItem:&_items[j] frame:frame ctx:c];
+    NSUInteger draws = _drawsSubmitted;
+    [self endPass];
+    _originX = _originY = 0;
+    _internal = NO;
+    _passMask = mask;
+    return draws;
+}
+
+// Whether a lower element can put a pixel into `capture` (output pixels).
+// Generous: its content grown by border, shadow and title bar, with slack for
+// rounding; anything animated counts.
+static BOOL IFCItemMayReach(const IFCItem *item, IFCRectI capture, double s, long titleBarHeight) {
+    if (item->hasXform || item->element.kind == IFCompositorElementKindSnapshot) return YES;
+    IFCompositorDecoration d = item->element.decoration;
+    double k = s * item->g.zoom;
+    double margin = (fabs((double)d.borderWidth) + ceil(fabs((double)d.shadowRadius)) + 3.0) * k + 4.0;
+    double bar = (double)MAX(titleBarHeight, 0L) * k;
+    double x0 = item->g.r.x * k - margin, y0 = item->g.r.y * k - margin - bar;
+    double x1 = (item->g.r.x + item->g.r.w) * k + margin, y1 = (item->g.r.y + item->g.r.h) * k + margin;
+    return x0 < (double)(capture.x + capture.w) && (double)capture.x < x1 && y0 < (double)(capture.y + capture.h) && (double)capture.y < y1;
+}
+
+// blur.rs `backdrop_fingerprint` + `ViewStamp` + the geometry generation:
+// everything a window's frost is computed from. The window's own content is
+// left out (the frost shows its shape, not its pixels), and so is every lower
+// element that cannot reach the padded capture.
+- (uint64_t)frostKeyForItem:(NSUInteger)k screen:(IFCRectI)screen capture:(IFCRectI)capture pad:(long)pad passes:(uint32_t)passes
+                     offset:(float)offset frame:(IFCompositorFrame *)frame ctx:(const IFCFrameCtx *)c {
+    uint64_t h = 0xcbf29ce484222325ULL;
+    IFC_MIX(&h, frame.size.width);
+    IFC_MIX(&h, frame.size.height);
+    IFC_MIX(&h, c->s);
+    IFC_MIX(&h, frame.cameraX);
+    IFC_MIX(&h, frame.cameraY);
+    IFC_MIX(&h, c->frameZoom);
+    IFC_MIX(&h, c->outW);
+    IFC_MIX(&h, c->outH);
+    IFC_MIX(&h, (uintptr_t)(__bridge void *)frame.background);
+    IFC_MIX(&h, c->styleHash);
+    IFC_MIX(&h, c->decorationScale);
+    IFCMixColor(&h, frame.placeholderColor);
+    IFCompositorOutlineSettings outline = frame.outline;
+    IFCMixColor(&h, outline.color);
+    IFC_MIX(&h, outline.thickness);
+    IFC_MIX(&h, outline.opacity);
+    NSUInteger outlineCount = frame.outlineRectCount;
+    const CGRect *outlineRects = [frame ifc_outlineRects];
+    IFC_MIX(&h, (uint64_t)outlineCount);
+    for (NSUInteger i = 0; i < outlineCount; i++) IFCMixRect(&h, outlineRects[i]);
+    IFC_MIX(&h, passes);
+    IFC_MIX(&h, offset);
+    IFC_MIX(&h, pad);
+    IFCMix(&h, &screen, sizeof screen);
+    IFCMix(&h, &capture, sizeof capture);
+
+    const IFCItem *own = &_items[k];
+    [own->element ifc_mix:&h content:NO];
+    IFCMix(&h, &own->scissor, sizeof own->scissor);
+    IFC_MIX(&h, (uint8_t)own->hasXform);
+    if (own->hasXform) IFCMix(&h, &own->xform, sizeof own->xform);
+    IFC_MIX(&h, own->lifeAlpha);
+
+    long titleBarHeight = (long)frame.chrome.titleBarHeight;
+    uint64_t lower = 0;
+    for (NSUInteger j = 0; j < k; j++) {
+        const IFCItem *item = &_items[j];
+        if (!IFCItemMayReach(item, capture, c->s, titleBarHeight)) continue;
+        lower++;
+        [item->element ifc_mix:&h content:YES];
+        IFCMix(&h, &item->scissor, sizeof item->scissor);
+        IFC_MIX(&h, (uint8_t)item->hasXform);
+        if (item->hasXform) IFCMix(&h, &item->xform, sizeof item->xform);
+        IFC_MIX(&h, item->lifeAlpha);
+        IFC_MIX(&h, item->progress);
+        IFC_MIX(&h, (uint8_t)item->alphaOnly);
+    }
+    IFC_MIX(&h, lower);
+    return h;
+}
+
+// blur.rs `process_blur_requests` for one window: bring its frost up to date.
+- (void)prepareFrostOfItem:(NSUInteger)k frame:(IFCompositorFrame *)frame ctx:(const IFCFrameCtx *)c beat:(BOOL)beat
+             commandBuffer:(id<MTLCommandBuffer>)commandBuffer {
+    const IFCItem *item = &_items[k];
+    IFCompositorElement *element = item->element;
+    BOOL hasSSD = element.decoration.mode == IFCompositorDecorationModeServer;
+    IFCEntry *entry = [self entryFor:element.identifier];
+    entry->frostSeen = 0;
+    if (!entry->frostInit) {
+        // BlurCache::new
+        entry->frostInit = YES;
+        entry->frostForceFrames = kIFCBlurForceDirtyFrames;
+        entry->frostWarmup = kIFCBlurMaskWarmupCommits;
+        entry->frostHasContentId = NO;
+    }
+
+    IFCRectI screen = IFCBlurScreenRect(item->g, hasSSD, (long)frame.chrome.titleBarHeight, c->s);
+    // window_animation.map_or(screen_rect, |anim| anim.transform_phys_rect(screen_rect))
+    if (item->hasXform) screen = IFCTransformRect(screen, item->xform);
+    // "no frost: the window has no on-screen extent"
+    if (screen.w <= 0 || screen.h <= 0) return;
+    // BlurCache::age_pads: reset below on the encodes that recompute.
+    if (entry->padA && ++entry->padsIdle > kIFCBlurKeepFrames) [self retirePadsOf:entry];
+
+    uint32_t passes = MIN(c->effects.blurRadius, kIFCBlurMaxPasses);
+    // let blur_offset = state.config.effects.blur_strength as f32 * output_scale as f32;
+    float offset = (float)c->effects.blurStrength * (float)c->s;
+    long pad = IFCBlurPad(offset, passes);
+    // pad_extent / padded_rect: the window's rectangle grown by the blur's reach.
+    long padW = screen.w + 2 * pad, padH = screen.h + 2 * pad;
+    if ((NSUInteger)padW > kIFCMaxTextureSide || (NSUInteger)padH > kIFCMaxTextureSide) return;
+    IFCRectI padded = IFCRectIMake(screen.x - pad, screen.y - pad, padW, padH);
+    // backdrop_capture: the part of it that has backdrop behind it.
+    IFCRectI clipped;
+    if (!IFCRectIIntersect(padded, IFCRectIMake(0, 0, c->outW, c->outH), &clipped)) {
+        // "frost left unrendered: the padded capture is entirely off the output"
+        return;
+    }
+    BOOL direct = clipped.x == padded.x && clipped.y == padded.y && clipped.w == padded.w && clipped.h == padded.h;
+
+    uint64_t key = [self frostKeyForItem:k screen:screen capture:clipped pad:pad passes:passes offset:offset frame:frame ctx:c];
+    uint64_t contentId = 0xcbf29ce484222325ULL;
+    [element ifc_mixContentIdentity:&contentId];
+    // Two re-capture budgets, as upstream: composed frames for a content that
+    // arrives late, the window's own new content for a transparent first one.
+    BOOL painted = entry->frostWarmup > 0 && entry->frostHasContentId && entry->frostContentId != contentId;
+    BOOL forced = entry->frostForceFrames > 0 || painted;
+    if (entry->frostForceFrames > 0) entry->frostForceFrames--;
+    BOOL dirty = !entry->frostValid || entry->frostKey != key || beat || forced;
+
+    if (_debugDrawHandler) {
+        _debugDrawHandler(@{
+            @"pass": @"blur_info",
+            @"element": @(element.identifier),
+            @"screen_rect": @[@(screen.x), @(screen.y), @(screen.w), @(screen.h)],
+            @"capture": @[@(clipped.x), @(clipped.y), @(clipped.w), @(clipped.h)],
+            @"pad": @(pad),
+            @"passes": @(passes),
+            @"offset": @(offset),
+            @"direct": @(direct),
+            @"recomputed": @(dirty),
+        });
+    }
+    if (!dirty) {
+        entry->frostSeen = _generation;
+        return;
+    }
+
+    // The window's own content as of this mask (`mask_commits`).
+    if (entry->frostHasContentId && entry->frostContentId != contentId && entry->frostWarmup > 0) entry->frostWarmup--;
+    entry->frostContentId = contentId;
+    entry->frostHasContentId = YES;
+
+    [self ensureBackgroundCopy:frame ctx:c commandBuffer:commandBuffer];
+    // BlurCache::ensure_pads: the padded ping-pong pair, exactly the padded
+    // extent and never quantised — the mip chain and the mirror are taken from
+    // the textures' own extent. Reallocated only when that extent changes.
+    if (!entry->padA || !entry->padB || entry->padW != padW || entry->padH != padH) {
+        [self retirePadsOf:entry];
+        entry->padA = [self newBlurTextureWidth:padW height:padH];
+        entry->padB = [self newBlurTextureWidth:padW height:padH];
+        if (!entry->padA || !entry->padB) {
+            // "frost left unrendered: the padded ping-pong pair could not be allocated"
+            entry->padA = entry->padB = nil;
+            return;
+        }
+        entry->padW = padW;
+        entry->padH = padH;
+    }
+    entry->padsIdle = 0;
+    id<MTLTexture> padA = entry->padA, padB = entry->padB;
+    NSUInteger draws = 0;
+    if (direct) {
+        // The padded rect fits on the output: capture straight into the pad.
+        draws = [self encodeBackdropBelow:k into:padA width:padW height:padH origin:padded clip:IFCRectIMake(0, 0, padW, padH)
+                                    frame:frame ctx:c commandBuffer:commandBuffer];
+    } else {
+        // It overhangs: capture the part that has backdrop, and fill the pad
+        // from it mirrored about the output boundary. Upstream captures that
+        // part into a scratch texture of exactly its size (one per extent,
+        // so one per frame while such a window moves) and crops it with
+        // MIRRORED_REPEAT; here it is captured in place inside the second pad
+        // texture and reflected by `ifc_mirror_copy` — the same texels.
+        IFCRectI part = IFCRectIMake(clipped.x - padded.x, clipped.y - padded.y, clipped.w, clipped.h);
+        draws = [self encodeBackdropBelow:k into:padB width:padW height:padH origin:padded clip:part frame:frame ctx:c
+                            commandBuffer:commandBuffer];
+        if (draws && [self beginPassOn:padA width:padW height:padH load:MTLLoadActionDontCare clear:MTLClearColorMake(0, 0, 0, 0)
+                         commandBuffer:commandBuffer]) {
+            IFCUniforms u = IFCUniformsZero();
+            u.rect = simd_make_float4((float)part.x, (float)part.y, (float)part.w, (float)part.h);
+            u.size = simd_make_float2((float)padW, (float)padH);
+            [self rawDraw:IFCPipeMirrorCopy dst:IFCRectIMake(0, 0, padW, padH) uniforms:&u texture:padB];
+            [self endPass];
+        } else {
+            draws = 0;
+        }
+    }
+    if (!draws) {
+        // "frost zeroed: nothing is drawn beneath this surface to capture":
+        // the capture would be the clear colour blurred into a black slab.
+        entry->frostZeroed = YES;
+        entry->frostValid = YES;
+        entry->frostKey = key;
+        entry->frostSeen = _generation;
+        return;
+    }
+
+    id<MTLTexture> blurred = [self encodeKawaseOn:padA other:padB passes:passes offset:offset commandBuffer:commandBuffer stage:nil];
+
+    // The frost and the mask: the window's extent, allocated in steps so that
+    // a zoom does not reallocate them on every frame (`quantized_alloc`).
+    long allocW = IFCQuantizedExtent(screen.w, entry->frostAllocW), allocH = IFCQuantizedExtent(screen.h, entry->frostAllocH);
+    if (!entry->frostTexture || !entry->maskTexture || allocW != entry->frostAllocW || allocH != entry->frostAllocH) {
+        if (entry->frostTexture) [_graveyard bury:entry->frostTexture];
+        if (entry->maskTexture) [_graveyard bury:entry->maskTexture];
+        entry->frostTexture = [self newBlurTextureWidth:allocW height:allocH];
+        entry->maskTexture = [self newBlurTextureWidth:allocW height:allocH];
+        BOOL allocated = entry->frostTexture && entry->maskTexture;
+        entry->frostAllocW = allocated ? allocW : 0;
+        entry->frostAllocH = allocated ? allocH : 0;
+    }
+    id<MTLTexture> mask = entry->frostTexture ? entry->maskTexture : nil;
+    BOOL built = NO;
+    if (blurred && entry->frostTexture && mask) {
+        // Keep only the centre: the window-sized region at (pad, pad).
+        id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
+        [blit copyFromTexture:blurred sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake((NSUInteger)pad, (NSUInteger)pad, 0)
+                   sourceSize:MTLSizeMake((NSUInteger)screen.w, (NSUInteger)screen.h, 1) toTexture:entry->frostTexture
+             destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
+        [blit endEncoding];
+
+        // The mask: the window's own elements — border, content, title bar,
+        // not its shadow — drawn into a window-sized texture with the window's
+        // origin at (0, 0), over transparent.
+        if ([self beginPassOn:mask width:screen.w height:screen.h load:MTLLoadActionClear clear:MTLClearColorMake(0, 0, 0, 0)
+                commandBuffer:commandBuffer]) {
+            IFCompositorPass passMask = _passMask;
+            _passMask = 0;
+            _skipPasses = IFCompositorPassShadow;
+            _internal = YES;
+            _originX = screen.x;
+            _originY = screen.y;
+            [self drawItem:item frame:frame ctx:c];
+            [self endPass];
+            _originX = _originY = 0;
+            _internal = NO;
+            _skipPasses = 0;
+            _passMask = passMask;
+
+            // Threshold its alpha and multiply the frost by it.
+            if ([self beginPassOn:entry->frostTexture width:screen.w height:screen.h load:MTLLoadActionLoad
+                            clear:MTLClearColorMake(0, 0, 0, 0) commandBuffer:commandBuffer]) {
+                IFCUniforms u = IFCUniformsZero();
+                IFCSetSource(&u, CGRectMake(0, 0, (CGFloat)screen.w, (CGFloat)screen.h), (double)allocW, (double)allocH);
+                [self rawDraw:IFCPipeBlurMask dst:IFCRectIMake(0, 0, screen.w, screen.h) uniforms:&u texture:mask];
+                [self endPass];
+                built = YES;
+            }
+        }
+    }
+    if (!built) {
+        entry->frostValid = NO;
+        return;
+    }
+    entry->frostW = screen.w;
+    entry->frostH = screen.h;
+    entry->frostRect = screen;
+    entry->frostKey = key;
+    entry->frostValid = YES;
+    entry->frostZeroed = NO;
+    entry->frostSeen = _generation;
+    _blurComputeCount++;
+}
+
+// The frosts of this encode, before its own pass opens.
+- (void)prepareFrosts:(IFCompositorFrame *)frame ctx:(const IFCFrameCtx *)c commandBuffer:(id<MTLCommandBuffer>)commandBuffer {
+    // blur.rs `shared_refresh_due`: the cadence every blurred window follows.
+    // A change of view or of the background itself is always due; a
+    // background that only moves on its own is due `animate_blur_fps` times
+    // a second, and never at 0.
+    uint64_t view = 0xcbf29ce484222325ULL;
+    IFC_MIX(&view, frame.cameraX);
+    IFC_MIX(&view, frame.cameraY);
+    IFC_MIX(&view, c->frameZoom);
+    IFC_MIX(&view, c->outW);
+    IFC_MIX(&view, c->outH);
+    IFC_MIX(&view, c->s);
+    IFC_MIX(&view, (uintptr_t)(__bridge void *)frame.background);
+    BOOL due = !_hasBlurBeat || view != _blurBeatView;
+    uint32_t fps = c->effects.animateBlurFPS;
+    if (!due && fps > 0 && frame.background.isAnimated && frame.time != _blurBeatTime) {
+        // since_refresh >= Duration::from_secs_f64(1.0 / fps). Upstream measures
+        // wall time; here the host's frame times are compared, and a tenth of
+        // a millisecond of slack keeps a sum of display intervals (3 x 1/60 s
+        // against 1/20 s) from falling short by a rounding error.
+        due = frame.time < _blurBeatTime || frame.time - _blurBeatTime >= 1.0 / (double)fps - 1e-4;
+    }
+    if (due) {
+        _hasBlurBeat = YES;
+        _blurBeatView = view;
+        _blurBeatTime = frame.time;
+    }
+
+    for (NSUInteger k = 0; k < _itemCount; k++) {
+        IFCompositorElement *element = _items[k].element;
+        if (!element.blur || element.kind != IFCompositorElementKindWindow) continue;
+        [self prepareFrostOfItem:k frame:frame ctx:c beat:due commandBuffer:commandBuffer];
+    }
+    // The background copy is kept while frosts keep being recomputed from it.
+    if (_bgTextureTried) {
+        _bgCopyIdle = 0;
+    } else if (_bgCopy && ++_bgCopyIdle > kIFCBlurKeepFrames) {
+        [_graveyard bury:_bgCopy];
+        _bgCopy = nil;
+    }
+    _bgTexture = nil;
+    _bgTextureTried = NO;
+}
+
+// MARK: Frame
+
+// This encode's elements, bottom to top: widgets, normal, closing, pinned
+// (upstream's `all_elements` read backwards), each with its geometry and what
+// its lifecycle animation makes of it.
+- (void)collectItems:(IFCompositorFrame *)frame ctx:(const IFCFrameCtx *)c {
+    _itemCount = 0;
+    _blurRequested = NO;
     NSArray<IFCompositorElement *> *elements = frame.elements;
-    for (int bucket = 0; bucket < 3; bucket++) {
+    NSUInteger count = elements.count;
+    if (count > _itemCapacity) {
+        IFCItem *grown = realloc(_items, count * sizeof(IFCItem));
+        if (!grown) return;
+        _items = grown;
+        _itemCapacity = count;
+    }
+    double s = c->s, frameZoom = c->frameZoom;
+    IFCRectI output = IFCRectIMake(0, 0, c->outW, c->outH);
+    static const IFCompositorStackLayer order[4] = {IFCompositorStackLayerWidget, IFCompositorStackLayerNormal,
+                                                    IFCompositorStackLayerClosing, IFCompositorStackLayerPinned};
+    for (int bucket = 0; bucket < 4; bucket++) {
         for (IFCompositorElement *element in elements) {
+            IFCompositorElementKind kind = element.kind;
             IFCompositorStackLayer layer = element.layer;
-            if (layer != IFCompositorStackLayerWidget && layer != IFCompositorStackLayerPinned) layer = IFCompositorStackLayerNormal;
+            if (kind == IFCompositorElementKindSnapshot) {
+                layer = IFCompositorStackLayerClosing;
+            } else if (layer != IFCompositorStackLayerWidget && layer != IFCompositorStackLayerPinned && layer != IFCompositorStackLayerClosing) {
+                layer = IFCompositorStackLayerNormal;
+            }
             if (layer != order[bucket]) continue;
 
             IFCGeom g;
@@ -2277,26 +3388,176 @@ static inline IFCUniforms IFCUniformsZero(void) {
             }
             if (!isfinite(g.r.x) || !isfinite(g.r.y) || !isfinite(g.r.w) || !isfinite(g.r.h) || g.r.w <= 0 || g.r.h <= 0) continue;
 
-            _elementScissor = _target;
+            IFCItem item;
+            memset(&item, 0, sizeof item);
+            item.element = element;
+            item.g = g;
+            item.scissor = output;
+            item.lifeAlpha = 1.0f;
             if (element.hasClipRect) {
-                CGRect c = element.clipRect;
-                long x0 = IFCRound(c.origin.x * s), y0 = IFCRound(c.origin.y * s);
-                long x1 = IFCRound((c.origin.x + c.size.width) * s), y1 = IFCRound((c.origin.y + c.size.height) * s);
-                if (!IFCRectIIntersect(IFCRectIMake(x0, y0, x1 - x0, y1 - y0), _target, &_elementScissor)) continue;
+                CGRect clip = element.clipRect;
+                long x0 = IFCRound(clip.origin.x * s), y0 = IFCRound(clip.origin.y * s);
+                long x1 = IFCRound((clip.origin.x + clip.size.width) * s), y1 = IFCRound((clip.origin.y + clip.size.height) * s);
+                if (!IFCRectIIntersect(IFCRectIMake(x0, y0, x1 - x0, y1 - y0), output, &item.scissor)) continue;
             }
-            _transformElement = element.hasTransform ? element : nil;
-            if (element.kind == IFCompositorElementKindStandIn) {
-                [self drawStandIn:element geom:g frame:frame scale:s decorationScale:decorationScale styleHash:styleHash];
-            } else {
-                [self drawWindow:element geom:g frame:frame scale:s decorationScale:decorationScale styleHash:styleHash];
+            if (element.hasTransform) {
+                item.hasXform = YES;
+                item.xform = element.transform;
             }
-            _transformElement = nil;
+
+            if (kind == IFCompositorElementKindSnapshot) {
+                // The snapshot's transform is its own shrink.
+                item.hasXform = NO;
+            }
+            if (element.lifecycle != IFCompositorLifecycleNone) {
+                IFCLife life = IFCResolveLife(element, frame.time, c->effects);
+                BOOL closing = life.kind == IFCompositorLifecycleClosing || life.kind == IFCompositorLifecycleClosingAlphaOnly;
+                // A close that has run out is gone, as upstream drops the
+                // snapshot (or the fade); an open that has run out is the
+                // plain window.
+                if (closing && life.finished) continue;
+                if (kind == IFCompositorElementKindSnapshot) {
+                    if (closing) {
+                        item.progress = life.progress;
+                        item.alphaOnly = life.kind == IFCompositorLifecycleClosingAlphaOnly;
+                    }
+                } else if (closing) {
+                    // closing.rs `StandInFade` (mod.rs `FadeRender`): fade, and
+                    // shrink toward the centre of the frame it occupied — the
+                    // body plus the bar strip above it.
+                    item.lifeAlpha = IFCompositorCloseAlpha(life.progress);
+                    double shrink = life.kind == IFCompositorLifecycleClosingAlphaOnly
+                                        ? 1.0
+                                        : IFCompositorCloseScale(life.progress, c->effects.animationScale);
+                    item.hasXform = NO;
+                    if (shrink < 1.0) {
+                        BOOL barAbove = kind == IFCompositorElementKindStandIn || element.decoration.mode == IFCompositorDecorationModeServer;
+                        double bar = barAbove ? (double)frame.chrome.titleBarHeight : 0.0;
+                        double w = g.r.w, h = g.r.h;
+                        if (kind == IFCompositorElementKindStandIn) {
+                            w = (double)MAX(IFCRound(w), 0L);
+                            h = (double)MAX(IFCRound(h), 0L);
+                        }
+                        item.hasXform = YES;
+                        item.xform = (IFCompositorTransform){(g.r.x + w / 2.0) * g.zoom * s, (g.r.y - bar / 2.0 + h / 2.0) * g.zoom * s,
+                                                             0.0, 0.0, shrink, shrink};
+                    }
+                } else if (life.kind == IFCompositorLifecycleOpening && kind == IFCompositorElementKindWindow && !life.finished) {
+                    // window_animation.rs `animated_visual`, the Open entry, and
+                    // mod.rs `compose_frame`'s `WindowRenderAnimation` from it.
+                    double scale = IFCompositorOpenScale(life.progress, c->effects.animationScale);
+                    // scaled_about_centre(Rectangle::new(target_loc, target_size), scale)
+                    double vw = g.r.w * scale, vh = g.r.h * scale;
+                    double vx = g.r.x + (g.r.w - vw) / 2.0, vy = g.r.y + (g.r.h - vh) / 2.0;
+                    float alpha = IFCompositorOpenAlpha(life.progress);
+                    if (vx != g.r.x || vy != g.r.y || vw != g.r.w || vh != g.r.h || alpha != 1.0f) {
+                        double physicalZoom = s * g.zoom;
+                        item.hasXform = YES;
+                        // origin: the content's top-left; offset: how far the visual
+                        // rect moved; scale: content_scale(v.size, target_size, false)
+                        item.xform = (IFCompositorTransform){g.r.x * physicalZoom, g.r.y * physicalZoom,
+                                                             (vx - g.r.x) * physicalZoom, (vy - g.r.y) * physicalZoom,
+                                                             vw / fmax(g.r.w, 1.0), vh / fmax(g.r.h, 1.0)};
+                        item.lifeAlpha = alpha;
+                    }
+                }
+            }
+            if (element.blur && kind == IFCompositorElementKindWindow) _blurRequested = YES;
+            _items[_itemCount++] = item;
         }
     }
+}
+
+- (BOOL)encodeFrame:(IFCompositorFrame *)frame intoTexture:(id<MTLTexture>)target commandBuffer:(id<MTLCommandBuffer>)commandBuffer {
+    if (!frame || !target || !commandBuffer || _resources.error) return NO;
+    double s = (isfinite(frame.scale) && frame.scale > 0) ? frame.scale : 1.0;
+    double frameZoom = (isfinite(frame.zoom) && frame.zoom > 0) ? frame.zoom : 1.0;
+    long viewportW, viewportH;
+    IFCPixelSize(frame, &viewportW, &viewportH, NULL, NULL);
+
+    // From here on the command buffer samples this renderer's textures: what
+    // is retired during or after this encode waits for it to complete.
+    _generation++;
+    _touched = 0;
+    [_graveyard began];
+    [commandBuffer addCompletedHandler:_completion];
+    _passMask = frame.debugPasses;
+    _skipPasses = 0;
+    _hasXform = NO;
+    _originX = _originY = 0;
+    _internal = NO;
+    _bake = NO;
+
+    IFCFrameCtx ctx;
+    memset(&ctx, 0, sizeof ctx);
+    ctx.s = s;
+    ctx.frameZoom = frameZoom;
+    ctx.viewportW = viewportW;
+    ctx.viewportH = viewportH;
+    ctx.outW = (long)target.width;
+    ctx.outH = (long)target.height;
+    ctx.decorationScale = frame.decorationScale > 0 ? (long)frame.decorationScale : MAX(IFCCeil(s), 1L);
+    ctx.styleHash = [frame.chrome ifc_hash];
+    ctx.effects = IFCompositorEffectsSanitized(frame.effects);
+
+    // Windows, bottom to top: widgets, normal, closing, pinned.
+    [self collectItems:frame ctx:&ctx];
+
+    // The frost of every blurred window, into textures of its own, before the
+    // frame's pass opens. Nothing here runs unless an element asks for it.
+    if (_blurRequested && (!_passMask || (_passMask & IFCompositorPassBlur))) {
+        [self prepareFrosts:frame ctx:&ctx commandBuffer:commandBuffer];
+    } else if (_hasBlurBeat || _bgCopy) {
+        // No request left on this output: upstream's `remove_blur_caches`.
+        _hasBlurBeat = NO;
+        if (_bgCopy) [_graveyard bury:_bgCopy];
+        _bgCopy = nil;
+    }
+
+    BOOL opaqueClear = frame.clear == IFCompositorClearOpaqueBlack;
+    _pass.colorAttachments[0].texture = target;
+    _pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, opaqueClear ? 1 : 0);
+    id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:_pass];
+    _pass.colorAttachments[0].texture = nil;
+    if (!encoder) return NO;
+
+    _encoder = encoder;
+    _boundPipeline = nil;
+    _target = IFCRectIMake(0, 0, (long)target.width, (long)target.height);
+    _clip = _target;
+    _boundScissor = _target;
+
+    // Background (upstream's `bg_elements`), replacing the cleared pixels.
+    IFBackgroundProgram *background = frame.background;
+    if (background && (!_passMask || (_passMask & IFCompositorPassBackground))) {
+        IFBackgroundFrame bg = {frame.cameraX, frame.cameraY, frameZoom, frame.size.width, frame.size.height, s, frame.time};
+        if ([background encodeFrame:bg inEncoder:encoder] && opaqueClear && background.isTransparent) {
+            // The background wrote premultiplied colour with its own alpha;
+            // over the opaque clear a source-over blend leaves alpha at 1.
+            _boundPipeline = nil;
+            IFCUniforms u = IFCUniformsZero();
+            u.color = simd_make_float4(0, 0, 0, 1);
+            IFCompositorPass mask = _passMask;
+            _passMask = 0;
+            [self draw:IFCPipeAlphaOne pass:IFCompositorPassBackground dst:_target uniforms:&u texture:nil element:nil];
+            _passMask = mask;
+        }
+        _boundPipeline = nil;
+    }
+    [encoder setFragmentSamplerState:_resources.sampler atIndex:0];
+
+    // Outlines of other outputs' viewports: above the background, below every window.
+    [self drawOutlines:frame scale:s viewportW:viewportW viewportH:viewportH];
+
+    for (NSUInteger i = 0; i < _itemCount; i++) [self drawItem:&_items[i] frame:frame ctx:&ctx];
+
+    // The error bar: above every window (and, upstream, every layer surface).
+    [self drawErrorBar:frame ctx:&ctx];
 
     [encoder endEncoding];
     _encoder = nil;
     _boundPipeline = nil;
+    _itemCount = 0;
 
     // Drop what this output no longer shows.
     if ((NSUInteger)CFDictionaryGetCount(_entries) > _touched) {
@@ -2316,6 +3577,174 @@ static inline IFCUniforms IFCUniformsZero(void) {
     }
     [self ifc_flushAgedTextures];
     return YES;
+}
+
+// MARK: Closing snapshot (closing.rs)
+
+static IFCRectD IFCMergeRects(IFCRectD a, IFCRectD b) {
+    double x0 = fmin(a.x, b.x), y0 = fmin(a.y, b.y);
+    double x1 = fmax(a.x + a.w, b.x + b.w), y1 = fmax(a.y + a.h, b.y + b.h);
+    return (IFCRectD){x0, y0, x1 - x0, y1 - y0};
+}
+
+- (IFCompositorElement *)closingSnapshotOfElement:(IFCompositorElement *)element inFrame:(IFCompositorFrame *)frame
+                                     flattenScale:(double)flattenScale {
+    if (!element || !frame || _resources.error || element.kind != IFCompositorElementKindWindow) return nil;
+    // flatten(renderer, pixels, flatten_scale.max(1.0), chrome)
+    double scale = (isfinite(flattenScale) && flattenScale > 1.0) ? flattenScale : 1.0;
+    double frameZoom = (isfinite(frame.zoom) && frame.zoom > 0) ? frame.zoom : 1.0;
+    CGRect rect = element.rect;
+    // The window's geometry in logical pixels before any zoom.
+    double unit = element.space == IFCompositorSpaceOutput ? frameZoom : 1.0;
+    double w = rect.size.width / unit, h = rect.size.height / unit;
+    if (!isfinite(rect.origin.x) || !isfinite(rect.origin.y) || !isfinite(w) || !isfinite(h) || w <= 0 || h <= 0) return nil;
+
+    IFCompositorDecoration deco = element.decoration;
+    BOOL bare = deco.mode == IFCompositorDecorationModeNone;
+    BOOL hasSSD = deco.mode == IFCompositorDecorationModeServer;
+    long bw = bare ? 0 : MAX((long)deco.borderWidth, 0L);
+    BOOL shadow = !bare && deco.shadow;
+    IFCompositorChromeStyle *style = frame.chrome;
+
+    // The picture's extent, with the content's top-left at the origin: the
+    // body (content plus the SSD bar strip above it), the shadow's area and
+    // the border's area. A bare window bakes its content alone.
+    double bar = hasSSD ? (double)style.titleBarHeight : 0.0;
+    IFCRectD body = {0.0, -bar, w, h + bar};
+    IFCRectD bounds = body;
+    if (shadow) {
+        // shaders.rs `shadow_area_for(body)`
+        long pad = IFCCeil((double)ceilf(deco.shadowRadius));
+        IFCRectD area = {(double)(IFCRound(body.x) - pad), (double)(IFCRound(body.y) - pad), (double)(IFCRound(body.w) + 2 * pad),
+                         (double)(IFCRound(body.h) + 2 * pad)};
+        bounds = IFCMergeRects(bounds, area);
+    }
+    if (bw > 0) {
+        // shaders.rs `border_area_for(body, border_width, scale)`
+        float borderWPhys = (float)fmax(round((double)bw * scale), 1.0);
+        long pad = IFCCeil(((double)borderWPhys + 1.0) / scale);
+        IFCRectD area = {(double)(IFCRound(body.x) - pad), (double)(IFCRound(body.y) - pad), (double)(IFCRound(body.w) + 2 * pad),
+                         (double)(IFCRound(body.h) + 2 * pad)};
+        bounds = IFCMergeRects(bounds, area);
+    }
+    // closing.rs `phys_size_of`
+    long physW = IFCCeil(bounds.w * scale), physH = IFCCeil(bounds.h * scale);
+    if (physW <= 0 || physH <= 0 || (NSUInteger)physW > kIFCMaxTextureSide || (NSUInteger)physH > kIFCMaxTextureSide) return nil;
+
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                  width:(NSUInteger)physW
+                                                                                 height:(NSUInteger)physH
+                                                                              mipmapped:NO];
+    td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    td.storageMode = MTLStorageModePrivate;
+    id<MTLTexture> texture = [_device newTextureWithDescriptor:td];
+    id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
+    if (!texture || !commandBuffer) return nil;
+    [_graveyard began];
+    [commandBuffer addCompletedHandler:_completion];
+
+    // Painter's order: shadow, border, content, bar, over transparent — the
+    // window as a frame at zoom 1 and alpha 1 would draw it.
+    BOOL began = [self beginPassOn:texture width:physW height:physH load:MTLLoadActionClear clear:MTLClearColorMake(0, 0, 0, 0)
+                     commandBuffer:commandBuffer];
+    if (began) {
+        IFCFrameCtx ctx;
+        memset(&ctx, 0, sizeof ctx);
+        ctx.s = scale;
+        ctx.frameZoom = 1.0;
+        ctx.outW = physW;
+        ctx.outH = physH;
+        double frameScale = (isfinite(frame.scale) && frame.scale > 0) ? frame.scale : 1.0;
+        ctx.decorationScale = frame.decorationScale > 0 ? (long)frame.decorationScale : MAX(IFCCeil(frameScale), 1L);
+        ctx.styleHash = [style ifc_hash];
+        ctx.effects = IFCompositorEffectsSanitized(frame.effects);
+        IFCItem item;
+        memset(&item, 0, sizeof item);
+        item.element = element;
+        item.g = (IFCGeom){{-bounds.x, -bounds.y, w, h}, 1.0};
+        item.scissor = IFCRectIMake(0, 0, physW, physH);
+        item.lifeAlpha = 1.0f;
+        _passMask = 0;
+        _skipPasses = 0;
+        _originX = _originY = 0;
+        _internal = YES;
+        _bake = YES;
+        [self drawItem:&item frame:frame ctx:&ctx];
+        _internal = NO;
+        _bake = NO;
+        [self endPass];
+    }
+    [commandBuffer commit];
+    if (!began) return nil;
+
+    IFCompositorElement *snapshot = [IFCompositorElement new];
+    snapshot.identifier = element.identifier;
+    snapshot.kind = IFCompositorElementKindSnapshot;
+    snapshot.space = element.space;
+    snapshot.layer = IFCompositorStackLayerClosing;
+    if (element.space == IFCompositorSpacePinned) {
+        // snapshot_screen: screen_origin + bounds.loc.round(), bounds.size.to_i32_round()
+        snapshot.rect = CGRectMake(rect.origin.x + round(bounds.x), rect.origin.y + round(bounds.y), (CGFloat)IFCRound(bounds.w),
+                                   (CGFloat)IFCRound(bounds.h));
+    } else {
+        // snapshot_canvas: Rectangle::new(window_origin + bounds.loc, bounds.size)
+        snapshot.rect = CGRectMake(rect.origin.x + bounds.x * unit, rect.origin.y + bounds.y * unit, bounds.w * unit, bounds.h * unit);
+    }
+    snapshot.hasClipRect = element.hasClipRect;
+    snapshot.clipRect = element.clipRect;
+    snapshot.texture = texture;
+    snapshot.lifecycle = IFCompositorLifecycleClosing;
+    snapshot.lifecycleProgress = 0.0;
+    return snapshot;
+}
+
+// MARK: Diagnostics
+
+- (NSData *)debugBlurBGRA:(NSData *)pixels width:(NSUInteger)width height:(NSUInteger)height passes:(NSUInteger)passes
+                   offset:(float)offset stages:(NSMutableArray<NSData *> *)stages {
+    if (_resources.error || width == 0 || height == 0 || width > kIFCMaxTextureSide || height > kIFCMaxTextureSide ||
+        pixels.length != width * height * 4 || passes > kIFCBlurMaxPasses) {
+        return nil;
+    }
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:width height:height mipmapped:NO];
+    td.storageMode = MTLStorageModeShared;
+    id<MTLTexture> staging = [_device newTextureWithDescriptor:td];
+    id<MTLTexture> result = [_device newTextureWithDescriptor:td];
+    id<MTLTexture> padA = [self newBlurTextureWidth:(long)width height:(long)height];
+    id<MTLTexture> padB = [self newBlurTextureWidth:(long)width height:(long)height];
+    id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
+    if (!staging || !result || !padA || !padB || !commandBuffer) return nil;
+    [staging replaceRegion:MTLRegionMake2D(0, 0, width, height) mipmapLevel:0 withBytes:pixels.bytes bytesPerRow:width * 4];
+    [_graveyard began];
+    [commandBuffer addCompletedHandler:_completion];
+
+    void (^copy)(id<MTLTexture>, id<MTLTexture>) = ^(id<MTLTexture> from, id<MTLTexture> to) {
+        id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
+        [blit copyFromTexture:from sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(width, height, 1)
+                    toTexture:to destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
+        [blit endEncoding];
+    };
+    copy(staging, padA);
+    NSMutableArray<id<MTLTexture>> *written = stages ? [NSMutableArray array] : nil;
+    id<MTLDevice> device = _device;
+    id<MTLTexture> blurred = [self encodeKawaseOn:padA other:padB passes:(uint32_t)passes offset:offset commandBuffer:commandBuffer
+                                            stage:(written ? ^(id<MTLTexture> texture) {
+                                                id<MTLTexture> kept = [device newTextureWithDescriptor:td];
+                                                if (!kept) return;
+                                                copy(texture, kept);
+                                                [written addObject:kept];
+                                            } : nil)];
+    if (blurred) copy(blurred, result);
+    [commandBuffer commit];
+    [commandBuffer waitUntilCompleted];
+    if (!blurred || commandBuffer.status != MTLCommandBufferStatusCompleted) return nil;
+    NSData * (^bytes)(id<MTLTexture>) = ^NSData *(id<MTLTexture> texture) {
+        NSMutableData *data = [NSMutableData dataWithLength:width * height * 4];
+        [texture getBytes:data.mutableBytes bytesPerRow:width * 4 fromRegion:MTLRegionMake2D(0, 0, width, height) mipmapLevel:0];
+        return data;
+    };
+    for (id<MTLTexture> texture in written) [stages addObject:bytes(texture)];
+    return bytes(result);
 }
 
 - (id<MTLTexture>)renderOffscreen:(IFCompositorFrame *)frame error:(NSError **)error {
@@ -2455,7 +3884,7 @@ static uint8_t *IFCCopyBytes(id<MTLTexture> texture) {
     // state/redraw.rs `background_animation_due`: every tick, or at most
     // `animate_fps` times a second.
     BOOL animateDue = NO;
-    if (_needsContinuousRedraw && (!_hasLast || _lastTime != frame.time)) {
+    if ([frame ifc_backgroundAnimates] && (!_hasLast || _lastTime != frame.time)) {
         NSUInteger fps = frame.background.config.animateFPS;
         animateDue = fps == 0 || !_hasAnimateStamp || frame.time < _lastAnimate || frame.time - _lastAnimate >= 1.0 / (double)fps;
     }

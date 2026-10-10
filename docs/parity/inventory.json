@@ -2441,7 +2441,7 @@
         }
       ],
       "documentation_snippet_source": "config.reference.toml (window-rule prose, not configuration entries in the preceding table)",
-      "implementation_note": "A [[window_rules]] entry that matches a window by bundle identifier (as app_id) and title when it maps, resolved once with driftwm-core's resolve_window_rules and kept with the window (field.Config.window_rules), overrides [decorations] for that window while it has a source, through the effective_* helpers: decoration picks client, server (a compositor title bar above the frame), minimal or none; border_width, border_color, border_color_focused, corner_radius and shadow replace the global values; opacity pins the window at one value in both focus states, and is what the window is captured alone with by msg screenshot window (opaque without one). A retitle and a config reload match nothing again, as upstream documents. A stand-in carries no rule, as upstream's. Known mismatches: server puts a second title bar above the Mac window's own; blur is reported and not drawn. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/render_flow.rs) and the drawing by the standalone port's checks (native/desktop/COMPOSITOR-NOTES.md); no rule was ever seen applied in the built app, whose 2026-10-09 launches had no Screen Recording access and so no bound window. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "A [[window_rules]] entry that matches a window by bundle identifier (as app_id) and title when it maps, resolved once with driftwm-core's resolve_window_rules and kept with the window (field.Config.window_rules), overrides [decorations] for that window while it has a source, through the effective_* helpers: decoration picks client, server (a compositor title bar above the frame), minimal or none; border_width, border_color, border_color_focused, corner_radius and shadow replace the global values; opacity pins the window at one value in both focus states, and is what the window is captured alone with by msg screenshot window (opaque without one). A retitle and a config reload match nothing again, as upstream documents. A stand-in carries no rule, as upstream's. Known mismatches: server puts a second title bar above the Mac window's own. No evidence entry is recorded yet: the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/render_flow.rs) and the drawing by the standalone port's checks (native/desktop/COMPOSITOR-NOTES.md); no rule was ever seen applied in the built app, whose 2026-10-09 launches had no Screen Recording access and so no bound window. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.WindowRule.blur",
@@ -2453,13 +2453,14 @@
       },
       "contract": "Match WindowRule.blur type, validation, default and live effect.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "bool",
-      "required": true
+      "required": true,
+      "implementation_note": "A matching rule's blur = true is resolved once, when the window maps, kept with it until it is gone (upstream's merge: it stays on once any matching rule sets it), and makes the window's decoration.blur true whatever [decorations] blur says, through driftwm-core's own effective_blur; the shell's compositor frosts what lies beneath that window. A reload that drops the rule leaves the window blurred, since rules are not matched again; a stand-in and a detached slot carry no rule and are never blurred. Known mismatches and how the frost is drawn: see field.DecorationConfig.blur. No evidence entry is recorded yet: automated coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/effects_flow.rs: a ruled window and one no rule matches, in the placement and in the window list, and the stand-in each leaves); no rule was ever resolved in the built app, which had no Screen Recording access and so no bound window, and the frost seen in offscreen frames on 2026-10-10 came from [decorations] blur, not from a rule. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.WindowRule.opacity",
@@ -2957,13 +2958,14 @@
       },
       "contract": "Match EffectsConfig.blur_radius type, validation, default and live effect.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "u32",
-      "required": true
+      "required": true,
+      "implementation_note": "[effects] blur_radius, the number of blur passes behind a blurred window, is reported as render.effects.blur_radius exactly as driftwm-core's parse_effects_config leaves it (default 2; a negative or non-integer value is a parse failure that refuses the file) and reaches the shell's compositor as frame.effects on the render revision every accepted reload spends. The compositor is the Metal port of upstream's dual Kawase blur (native/desktop/COMPOSITOR-NOTES.md, Part II), which frosts what lies beneath a window whose decoration.blur is set. Known mismatches: a capture holds no frost, as upstream's screenshot composer omits it; probe, demo and owned-fixture runs draw none; see field.Config.effects. No evidence entry is recorded yet: automated coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/effects_flow.rs, against driftwm-core's own parse of the same text); on 2026-10-10 a reload to 4 was seen to reach the renderer's frame, and a frost was drawn with it, in frames a throwaway tool outside the repository read back from the shell's renderer driven by this controller's snapshots, under a synthetic plain-coloured buffer at opacity 0.6 over a stand-in; the picture at one radius was not compared with another, and in the built app, which had no Screen Recording access and whose panel nobody looked at, nothing of it was seen (msg cannot read render.effects). Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.EffectsConfig.blur_strength",
@@ -2975,13 +2977,14 @@
       },
       "contract": "Match EffectsConfig.blur_strength type, validation, default and live effect.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "f64",
-      "required": true
+      "required": true,
+      "implementation_note": "[effects] blur_strength, the per-pass spread of the blur, is reported as render.effects.blur_strength as driftwm-core's parser leaves it (default 1.1; a negative value or nan becomes 0 with upstream's warning, which is then the error bar's message) and reaches the compositor's blur with blur_radius: the same path, known mismatches and evidence boundary as field.EffectsConfig.blur_radius. No evidence entry is recorded yet: covered by exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/effects_flow.rs); on 2026-10-10 a reload to 2.0 was seen to reach the frame of the shell's renderer in a throwaway tool outside the repository, where a frost was drawn with it; the picture at one strength was not compared with another, and nothing of it was seen in the built app. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.EffectsConfig.animate_blur_fps",
@@ -2993,13 +2996,14 @@
       },
       "contract": "Match EffectsConfig.animate_blur_fps type, validation, default and live effect.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "u32",
-      "required": true
+      "required": true,
+      "implementation_note": "[effects] animate_blur_fps, how often a frost is captured again over an animated background, is reported as render.effects.animate_blur_fps as driftwm-core's parser leaves it (default 20; above 144 is 144 without a warning; 0 keeps the first capture) and reaches the compositor as frame.effects, whose blur cache follows upstream's shared refresh rule (native/desktop/COMPOSITOR-NOTES.md, 18.1 and 19.1). The frame timer that redraws an animated background is the one that would refresh the frost. Known mismatches: see field.EffectsConfig.blur_radius. No evidence entry is recorded yet: covered by exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/effects_flow.rs); on 2026-10-10 a written 500 was seen to reach the frame of the shell's renderer as 144 in a throwaway tool outside the repository; a blurred window over an animated background was never run with this controller or in the app, so the refresh rate itself is compiled and read only here. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.EffectsConfig.animation_speed",
@@ -3011,13 +3015,14 @@
       },
       "contract": "Match EffectsConfig.animation_speed type, validation, default and live effect.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "f64",
-      "required": true
+      "required": true,
+      "implementation_note": "[effects] animation_speed is reported as render.effects.animation_speed as driftwm-core's parser leaves it (default 0.5; 0, a negative value or nan is the default and a value above 1 is 1, each with upstream's warning) and is the lerp factor per 60 Hz frame of the animations the shell's compositor plays from the snapshot's lifecycle_events, each event once: upstream's open scale and fade when a window maps after the launch pass (open), its closing snapshot when one closes (close, and alpha only over the stand-in for close_to_standin), and its two stand-in fades (standin_dismiss, standin_adopted). At 1 nothing is played, as upstream's animations end on their first tick. The existing frame timer runs while one is in progress and stops afterwards. Known mismatches: upstream's move, resize, fit and fullscreen animations, which the key also drives, do not exist here; the windows of the launch pass and a window that takes its own waiting slot back animate nothing (the macOS adoption rule); an opening window, and the stand-in a relaunched window adopted, wait for the window's first stream picture, a second at most, where upstream starts at the first sized commit; a ctrl-option-click removes a placeholder through forget, which upstream has not: it logs standin_dismiss with no output, so the placeholder fades as a dismissed stand-in does, without upstream's focus rules; under --experimental-native-resize a window that opens while a rule's size is owed waits for that size transaction as well, ten seconds at most, and a window whose picture is withheld when it closes fades from nothing; each output bakes its own closing snapshot where upstream shares one, and upstream's one-second age limit on a closing window's pixels has no separate test; probe, demo and owned-fixture runs animate nothing. No evidence entry is recorded yet: automated coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/effects_flow.rs: the value against driftwm-core's parse, and which commands log which event); on 2026-10-10, in frames two throwaway tools outside the repository read back from the shell's renderer, an open, a close, a close into a stand-in, an adoption crossfade and a dismissal logged by this controller each played once and ended after 0.68 to 0.71 s at a configured 0.1 (upstream's length there is 0.73 s), the first frame at the default was half way, and a hand-written speed of 1 played nothing; every picture was a synthetic plain-coloured buffer or a stand-in, the loop standing in for the frame timer ticked about every 25 ms, and in the built app, which had no Screen Recording access and whose panel nobody looked at, two stand-ins were dismissed over msg with nothing seen of the fade. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.EffectsConfig.animation_scale",
@@ -3029,13 +3034,14 @@
       },
       "contract": "Match EffectsConfig.animation_scale type, validation, default and live effect.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "f64",
-      "required": true
+      "required": true,
+      "implementation_note": "[effects] animation_scale is reported as render.effects.animation_scale as driftwm-core's parser leaves it (default 0.95, the same range rule as animation_speed with its own default) and is the scale an opening window grows from and a closing snapshot or a dismissed stand-in shrinks to, about its own centre, in the compositor's port of upstream's curves; the alpha-only variants (a close into a stand-in, an adoption crossfade) do not scale, as upstream's. Which events animate, the known mismatches and the evidence boundary are those of field.EffectsConfig.animation_speed. No evidence entry is recorded yet: covered by exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/effects_flow.rs); on 2026-10-10 a reload to 0.8 was seen to reach the frame of the shell's renderer in a throwaway tool outside the repository, where a closing snapshot and a dismissed stand-in were smaller than the window in the first frame read back and the two alpha-only fades kept their rectangle; no size was measured against upstream's curve there, and nothing of it was seen in the built app. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.DecorationConfig.bg_color",
@@ -3218,13 +3224,14 @@
       },
       "contract": "Match DecorationConfig.blur type, validation, default and live effect.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "bool",
-      "required": true
+      "required": true,
+      "implementation_note": "[decorations] blur (default false) makes decoration.blur true for every window with a bound source, a widget and a screen-pinned window included, through driftwm-core's own effective_blur over the rule the window mapped with; a reload of the key changes it for the windows already there and spends a render revision. A stand-in and a waiting slot are never blurred, as upstream requests blur for client windows only. The shell sets the flag on the window's element and the compositor frosts what lies beneath it at full strength, which shows where the window is translucent (an opacity below 1, or content with alpha). Known mismatches: nothing is fullscreen, so upstream's exemption of a fullscreen window never applies; a capture holds no frost, as upstream's; probe, demo and owned-fixture runs draw none; see field.EffectsConfig.blur_radius. No evidence entry is recorded yet: automated coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/effects_flow.rs, against driftwm-core's effective_blur); on 2026-10-10, in frames a throwaway tool outside the repository read back from the shell's renderer driven by this controller's snapshots, a controller-placed window on a synthetic red buffer reported blur true under blur = true and was drawn at opacity 0.6 with the stand-in's label behind it blurred, while the stand-ins reported false; in the built app, which had no Screen Recording access and so no bound window, viewport captures with the key on were byte-identical to those with it off and nothing else was seen. Whether a captured Mac window's own translucency lets a frost through is unknown. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.DecorationConfig.shadow",
@@ -4616,7 +4623,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "One compositor layer per output of a normal run draws every window bottom to top as upstream's compose_frame draws a client window: shadow, a border ring outside the content (the focused colour on the window with the controller's logical focus), the content clipped to the corner radius, one opacity per pass, with upstream's DrawnChrome rule (a frame that exactly covers the output is square and shadowless, one that overhangs it loses the border too) and upstream's stand-in (bar, close glyph, body, application name, launching..., always opaque) for a window without a source. Each decoration is resolved by driftwm-core's effective_* helpers from [decorations] and the rule the window mapped with, msg opacity included. A widget is drawn in upstream's bucket below the canvas windows and a screen-pinned window in the one above, from its screen rectangle at zoom 1 whatever the camera, with upstream's pin dot in a server title bar. macOS mapping: a captured native window already draws its own title bar, so it is decorated as upstream decorates a client-side-decorated window unless a rule says otherwise. Known mismatches: no blur, no fullscreen chrome, no open, close, move or resize animation; text is CoreText's, not cosmic-text's; a window lying just outside an output casts no shadow into it; a server rule draws a second title bar above the window's own; probe, demo and owned-fixture runs keep the earlier layer drawing. No evidence entry is recorded yet: the port was checked against the unmodified upstream GLSL outside the repository (native/desktop/COMPOSITOR-NOTES.md, BACKGROUND-NOTES.md), the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/render_flow.rs), and on 2026-10-09 it was seen only in PNGs that msg screenshot wrote from the built app in --windowed mode, with stand-ins: no captured window was drawn (no Screen Recording access) and the layer in the app's own panels was not seen on a display; the widget and pinned layers, the pinned space and an opacity written by msg opacity's request were drawn only by a throwaway tool outside the repository that read frames back from the shell's renderer, driven by the controller, on 2026-10-10, on synthetic sources. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "One compositor layer per output of a normal run draws every window bottom to top as upstream's compose_frame draws a client window: shadow, a border ring outside the content (the focused colour on the window with the controller's logical focus), the content clipped to the corner radius, one opacity per pass, with upstream's DrawnChrome rule (a frame that exactly covers the output is square and shadowless, one that overhangs it loses the border too) and upstream's stand-in (bar, close glyph, body, application name, launching..., always opaque) for a window without a source. Each decoration is resolved by driftwm-core's effective_* helpers from [decorations] and the rule the window mapped with, msg opacity included. A widget is drawn in upstream's bucket below the canvas windows and a screen-pinned window in the one above, from its screen rectangle at zoom 1 whatever the camera, with upstream's pin dot in a server title bar. macOS mapping: a captured native window already draws its own title bar, so it is decorated as upstream decorates a client-side-decorated window unless a rule says otherwise. Known mismatches: no fullscreen chrome, no move or resize animation (blur and the open and close animations are field.Config.effects'); text is CoreText's, not cosmic-text's; a window lying just outside an output casts no shadow into it; a server rule draws a second title bar above the window's own; probe, demo and owned-fixture runs keep the earlier layer drawing. No evidence entry is recorded yet: the port was checked against the unmodified upstream GLSL outside the repository (native/desktop/COMPOSITOR-NOTES.md, BACKGROUND-NOTES.md), the controller side is covered by exported-C-ABI/JSON scenarios (crates/desktop/tests/render_flow.rs), and on 2026-10-09 it was seen only in PNGs that msg screenshot wrote from the built app in --windowed mode, with stand-ins: no captured window was drawn (no Screen Recording access) and the layer in the app's own panels was not seen on a display; the widget and pinned layers, the pinned space and an opacity written by msg opacity's request were drawn only by a throwaway tool outside the repository that read frames back from the shell's renderer, driven by the controller, on 2026-10-10, on synthetic sources. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "render.background",
@@ -7153,7 +7160,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for decorations.blur.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -7172,7 +7179,8 @@
           "source_assignment": "blur = true",
           "value": true
         }
-      ]
+      ],
+      "implementation_note": "[decorations] key of every bound window's decoration.blur, resolved by driftwm-core's effective_blur and drawn by the compositor as a frost beneath the window: the same behaviour, known mismatches and evidence boundary as field.DecorationConfig.blur. No evidence entry is recorded yet: covered by exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/effects_flow.rs); a frost was seen only in offscreen frames of the shell's renderer on 2026-10-10, under a synthetic buffer, and never in the built app, where no window had a source. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.effects.blur_radius",
@@ -7184,7 +7192,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for effects.blur_radius.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -7197,7 +7205,8 @@
           "source_assignment": "blur_radius = 2                # number of Kawase down+up passes",
           "value": 2
         }
-      ]
+      ],
+      "implementation_note": "[effects] key reported as render.effects.blur_radius and adopted by the compositor's blur: the same behaviour, known mismatches and evidence boundary as field.EffectsConfig.blur_radius. No evidence entry is recorded yet: covered by exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/effects_flow.rs); seen reaching the renderer's frame, with a frost drawn, only in offscreen frames of a throwaway tool on 2026-10-10, and never in the built app. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.effects.blur_strength",
@@ -7209,7 +7218,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for effects.blur_strength.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -7222,7 +7231,8 @@
           "source_assignment": "blur_strength = 1.1            # per-pass texel spread",
           "value": 1.1
         }
-      ]
+      ],
+      "implementation_note": "[effects] key reported as render.effects.blur_strength and adopted by the compositor's blur: the same behaviour, known mismatches and evidence boundary as field.EffectsConfig.blur_strength. No evidence entry is recorded yet: covered by exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/effects_flow.rs); seen reaching the renderer's frame, with a frost drawn, only in offscreen frames of a throwaway tool on 2026-10-10, and never in the built app. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.effects.animate_blur_fps",
@@ -7234,7 +7244,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for effects.animate_blur_fps.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -7247,7 +7257,8 @@
           "source_assignment": "animate_blur_fps = 20          # cap (0-144) on how often the frost re-samples a background",
           "value": 20
         }
-      ]
+      ],
+      "implementation_note": "[effects] key reported as render.effects.animate_blur_fps and adopted by the compositor's blur cache: the same behaviour, known mismatches and evidence boundary as field.EffectsConfig.animate_blur_fps. No evidence entry is recorded yet: covered by exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/effects_flow.rs); the clamp of 500 to 144 was seen in the renderer's frame in an offscreen tool on 2026-10-10, and a blurred window over an animated background was never run with this controller or in the app. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.effects.animation_speed",
@@ -7259,7 +7270,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for effects.animation_speed.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -7272,7 +7283,8 @@
           "source_assignment": "animation_speed = 0.5          # window open/close/move/resize lerp factor (higher = faster; 1 = instant)",
           "value": 0.5
         }
-      ]
+      ],
+      "implementation_note": "[effects] key reported as render.effects.animation_speed, the lerp factor of the window open and close animations and the stand-in fades the compositor plays from the snapshot's lifecycle_events; of the four animations the reference comment names, move and resize do not exist here. The same behaviour, known mismatches and evidence boundary as field.EffectsConfig.animation_speed. No evidence entry is recorded yet: covered by exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/effects_flow.rs); the five animations were seen played, 0.68 to 0.71 s long at 0.1, only in offscreen frames of throwaway tools on 2026-10-10, on synthetic buffers and stand-ins, and never in the built app's panel. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.effects.animation_scale",
@@ -7284,7 +7296,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for effects.animation_scale.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -7297,7 +7309,8 @@
           "source_assignment": "animation_scale = 0.95         # open/close grow/shrink amplitude (1 = fade only)",
           "value": 0.95
         }
-      ]
+      ],
+      "implementation_note": "[effects] key reported as render.effects.animation_scale, the scale an opening window grows from and a closing snapshot or a dismissed stand-in shrinks to: the same behaviour, known mismatches and evidence boundary as field.EffectsConfig.animation_scale. No evidence entry is recorded yet: covered by exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/effects_flow.rs); a shrinking snapshot and stand-in at 0.8 were seen only in offscreen frames of a throwaway tool on 2026-10-10, unmeasured against upstream's curve, and never in the built app's panel. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.background.type",
@@ -11779,7 +11792,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for window_rules[].blur.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -11792,7 +11805,8 @@
           "source_assignment": "blur   = true",
           "value": true
         }
-      ]
+      ],
+      "implementation_note": "A matching rule's blur = true is resolved once, when the window maps, and makes its decoration.blur true whatever [decorations] blur says, through driftwm-core's effective_blur; the compositor frosts what lies beneath the window. The same behaviour, known mismatches and evidence boundary as field.WindowRule.blur. No evidence entry is recorded yet: covered by exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/effects_flow.rs); no rule was ever resolved in the built app, and no frost was ever seen drawn from a rule. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.window_rules[].opacity",
@@ -12793,7 +12807,7 @@
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
       "source_type": "DecorationConfig",
-      "implementation_note": "The [decorations] table as driftwm-core parses it: its chrome keys are reported in render.chrome, its per-window keys are resolved into every placement's decoration, and every accepted reload moves render.revision; see the field.DecorationConfig rows and render.chrome. Known mismatches: blur is reported and not drawn. No evidence entry is recorded yet: seen only in PNGs msg screenshot wrote from the built app on 2026-10-09, on stand-ins. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "The [decorations] table as driftwm-core parses it: its chrome keys are reported in render.chrome, its per-window keys are resolved into every placement's decoration, and every accepted reload moves render.revision; see the field.DecorationConfig rows and render.chrome. No evidence entry is recorded yet: seen only in PNGs msg screenshot wrote from the built app on 2026-10-09, on stand-ins. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.output_outline",
@@ -12880,13 +12894,14 @@
       },
       "contract": "Match Config.effects type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
-      "source_type": "EffectsConfig"
+      "source_type": "EffectsConfig",
+      "implementation_note": "The [effects] table as driftwm-core's parse_effects_config leaves it is reported whole as render.effects, upstream's defaults until a file says otherwise, and adopted by the shell's compositor whenever render.revision moves: every accepted reload, and the launch load when the table differs from the defaults. Its blur keys shape the frost behind a window whose decoration.blur is set and its animation keys the open, close and stand-in animations played from the snapshot's lifecycle_events; see the field.EffectsConfig rows. The same milestone draws upstream's error bar from render.errors (the config source under upstream's rules) and the background program's own message, which has no row of its own: docs/parity/README.md has it. Known mismatches: animation_speed and animation_scale reach no move, resize, fit or fullscreen animation, none of which exists here; upstream's keyboard error source is never set, macOS owning the layouts; a wrong-typed value or an unknown key refuses the whole file, as upstream's parser does, and the table in force stays. No evidence entry is recorded yet: automated coverage is exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/effects_flow.rs); on 2026-10-10 the defaults and a reload that set all five keys were read from this controller's snapshots and seen in the frame of the shell's renderer by a throwaway tool outside the repository, and the built app was taken through a failing and a mended file over msg, which cannot read the table back, with nobody looking at its panel. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.window_rules",

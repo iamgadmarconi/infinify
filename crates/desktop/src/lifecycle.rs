@@ -393,6 +393,7 @@ impl Controller {
         arrival: Arrival,
     ) -> Result<Value, Error> {
         let (mut effect, mut navigation) = (Value::Null, Value::Null);
+        self.log_arrival(window, output, arrival)?;
         // Upstream: a widget and a `focus_on_open = false` window map without
         // taking the focus or moving the camera.
         let rule = self.policy.applied.get(&window);
@@ -682,6 +683,7 @@ impl Controller {
             }
         };
         let (mut effect, mut navigation) = (Value::Null, Value::Null);
+        self.log_close(window, standin, output)?;
         if standin {
             self.release_gesture(window);
             self.invalidate_focus(window);
@@ -791,6 +793,7 @@ impl Controller {
         outcome: &mut Outcome,
     ) -> Result<(), Error> {
         self.guard_resize_structure(Some(window))?;
+        self.log_dismiss(window, output)?;
         let (effect, navigation) = self.depart(window, output)?;
         if !effect.is_null() {
             outcome.effects.push(effect);

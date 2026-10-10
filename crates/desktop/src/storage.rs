@@ -262,6 +262,7 @@ impl Controller {
             render_revision: 0,
             pending_screenshots: Vec::new(),
             sizes: Sizes::default(),
+            effects: Effects::default(),
         })
     }
 }

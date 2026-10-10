@@ -228,7 +228,7 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 - (NSDictionary *)consumeSize:(NSDictionary *)reply;
 @property DWNavigationCoordinator *navigation;
 @property NSTimer *frameTimer;
-@property BOOL frameFlying; // the frame timer serves camera motion, not only an animated background
+@property BOOL frameFlying; // the frame timer serves camera motion, not only what the compositor animates by itself (a background, a window opening or leaving)
 @property CFTimeInterval lastObservation;
 @property CFTimeInterval lastResizeObservation;
 @property CFMachPortRef navigationTap;
@@ -890,8 +890,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // The pointer's part of a frame, before the tick. It is read once, and only when one of its
 // two readers wants it, then handed to both in upstream's order for one motion of the
 // pointer (maybe_hover_focus, then refresh_cursor_edge_pan):
-// - hover: while the frame timer runs, whichever it serves (camera motion, or an animated
-//   background alone), the motion a panel's tracking area has waiting goes with the frame,
+// - hover: while the frame timer runs, whichever it serves (camera motion, or only an
+//   animated background or a window that opens or leaves), the motion a panel's tracking area has waiting goes with the frame,
 //   so a moving pointer is one hover a frame and never a timer beside this one. With no
 //   frame timer an idle poll's frame carries none: pointer-hover's own timer does, see there.
 // - cursor edge pan: while the controller's snapshot asks for it, where the pointer is and
@@ -922,17 +922,22 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 }
 // Animated backgrounds: is one on an open panel? draw: each such output's next frame is
 // drawn when its animate_fps says it is due. Never in probe, demo and owned-fixture runs.
+// An open or close animation of the compositor's counts the same way and is drawn on every frame.
 - (BOOL)animate:(BOOL)draw { BOOL any=NO;for(DesktopView *view in self.views)if(view.window.visible&&[self.compositor animates:view.outputs draw:draw])any=YES;return any; }
 // The one frame timer, 60 Hz. It runs while tick_navigation reports needs_frames (a
 // flight, a coasting pan, an edge pan under a drag or the cursor) and, in a normal run,
-// while a panel shows an animated background; it ends itself when neither is left.
+// while the compositor animates something by itself on an open panel (-animate:): an
+// animated background, or a window that opens or leaves (an open or close animation, a
+// stand-in's fade). It ends itself when none of them is left, so the frames of a window
+// that opened stop with its animation.
 // frameFlying says it is serving camera motion: each of its frames then watches the hot
 // corners and ticks the controller, and the idle poll neither ticks nor draws. While it
-// serves a background only, the poll goes on exactly as if there were no timer, ticking
-// and drawing at its own pace. Either way every frame of this timer has the pointer's
-// part first (-pointerFrame: the hover a tracking area has waiting, then cursor edge
-// pan's report): while this timer runs pointer-hover arms none of its own, so a frame
-// that served a background and skipped the pointer would leave hover to the idle poll.
+// serves the compositor only, a background or a window's animation alike, the poll goes
+// on exactly as if there were no timer, ticking, watching the corners and drawing at its
+// own pace, and no frame ticks the camera. Either way every frame of this timer has the
+// pointer's part first (-pointerFrame: the hover a tracking area has waiting, then cursor
+// edge pan's report): while this timer runs pointer-hover arms none of its own, so a frame
+// that served the compositor and skipped the pointer would leave hover to the idle poll.
 - (void)startFrames {
     if(self.frameTimer||self.cleaning)return;
     __weak Desktop *weak=self;self.frameTimer=[NSTimer timerWithTimeInterval:1.0/60 repeats:YES block:^(NSTimer *timer){Desktop *desktop=weak;
@@ -1479,7 +1484,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     self.pointerOutputs=self.configured&&self.panels.count?asArray(snapshot[@"outputs"]):nil;
     self.pointerWanted=self.pointerOutputs&&[asDict(asDict(snapshot[@"navigation"])[@"cursor_pan"])[@"needs_pointer"]isEqual:@YES];
     [self adoptRender:snapshot];for(DesktopView *view in self.views)[view render:snapshot];
-    // An animated background keeps the frame timer alive by itself.
+    // An animated background keeps the frame timer alive by itself, and so does an animation this description began: a window that opened with
+    // its picture already there or closed, a stand-in that left. Neither is camera motion, so the timer is started without frameFlying.
     if(!self.frameTimer&&[self animate:NO])[self startFrames];
     [self publishState];
 }
@@ -1637,10 +1643,11 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     else if(logical)command[@"logical_id"]=logical;else {if(!world){NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}];NSDictionary *o=[snapshot[@"outputs"]firstObject];double zoom=[o[@"zoom"]doubleValue];CGPoint camera=jsonPoint(o[@"camera"]);world=rectJSON(CGRectMake(camera.x+30/MAX(.001,zoom),camera.y+30/MAX(.001,zoom),bounds.size.width,bounds.size.height));}command[@"world_rect"]=world;}
     NSDictionary *reply=[self call:command];source.logical=reply[@"window"];if(!source.logical)return NO;self.sources[source.logical]=source;
     source.window=window;source.title=asString(info[(id)kCGWindowName])?:command[@"title"];source.resize=self.resize;
-    // A new frame redraws only the outputs that show this window.
-    if(source.composited){__weak Desktop *weak=self;NSNumber *logical=source.logical;source.presented=^{[weak.compositor contentChanged:logical];};}
+    // A new frame redraws only the outputs that show this window. The first picture of a window that just opened begins its open animation, which the frame timer plays.
+    if(source.composited){__weak Desktop *weak=self;NSNumber *logical=source.logical;source.presented=^{Desktop *d=weak;if([d.compositor contentChanged:logical])[d startFrames];};}
     // A window rule's size: the controller began its size transaction with the attach, and the coordinator performs it as it
     // performs a sizing action's. Its result reaches the controller on a later turn of the main queue, after this method.
+    // Until it has settled the compositor is given no picture of the window, so its open animation waits with it (-render: there).
     if(placed)[self consumeSize:reply];
     // A managed run captures on demand: -captureDemand starts the stream once the window has a placement.
     if(self.manager&&!self.resize)source.keepSample=YES;

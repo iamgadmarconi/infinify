@@ -379,7 +379,8 @@ drag pan, a window drag, a press forwarded to a native window, a pick-mode or
 [`hover`](POINTER.md#hover) of a moving pointer use one reading of the
 pointer: while the frame timer runs, a frame reads it once and sends the
 waiting hover, then the report, then the tick. A frame of that timer that
-serves an animated background alone ([RENDER.md](RENDER.md)) sends the
+serves an animated background alone ([RENDER.md](RENDER.md)), or a window's
+open or close animation ([EFFECTS.md](EFFECTS.md)), sends the
 hover and the report the same way and leaves the tick to the idle poll.
 Wheel input during a window drag is dropped instead of being sent as a
 `zoom_by` that would be refused. No pinch is sent as `zoom_by`: AppKit's

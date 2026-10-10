@@ -179,7 +179,7 @@ impl Controller {
     /// the logical focus for upstream's keyboard focus. Nothing is fullscreen.
     /// A window without a source is opaque: upstream's push_suspended_element
     /// resolves no opacity, and its `alpha` is 1.0 outside the adoption
-    /// crossfade, which does not exist here.
+    /// crossfade, which the shell plays (effects.rs).
     pub(crate) fn opacity_of(&self, window: WindowId) -> f64 {
         if !self.sources.contains_key(&window) {
             return 1.0;

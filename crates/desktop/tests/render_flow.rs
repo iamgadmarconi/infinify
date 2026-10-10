@@ -7,8 +7,8 @@
 //! that a PNG is written: a screenshot here is a request nobody performs, and
 //! the answers to it are typed in by the test.
 use driftwm_core::config::{
-    BackgroundKind, Config, DecorationConfig, DecorationMode, FontWeight, OutputOutlineSettings,
-    TitleAlign,
+    BackgroundKind, Config, DecorationConfig, DecorationMode, EffectsConfig, FontWeight,
+    OutputOutlineSettings, TitleAlign,
 };
 use driftwm_desktop::*;
 use serde_json::{Value, json};
@@ -220,10 +220,14 @@ fn default_block(revision: u64) -> Value {
     assert_eq!(config.background.kind, BackgroundKind::Default);
     assert_eq!(decorations.font_weight, FontWeight::Medium);
     assert_eq!(decorations.title_align, TitleAlign::Center);
+    let effects = EffectsConfig::default();
+    assert_eq!(config.effects, effects);
     json!({
         "background":{"type":"default","path":null,"texture":null,"mirror_tile":config.background.mirror_tile,"transparent_shader":config.background.transparent_shader,"animate_fps":config.background.animate_fps,"cache_shader":config.background.cache_shader},
         "chrome":{"background":rgba(decorations.bg_color),"foreground":rgba(decorations.fg_color),"corner_radius":decorations.corner_radius,"title_bar_height":decorations.title_bar_height,"font":decorations.font,"font_size":decorations.font_size,"font_weight":"medium","title_align":"center"},
         "outline":{"color":rgba(outline.color),"thickness":outline.thickness,"opacity":outline.opacity},
+        "effects":{"blur_radius":effects.blur_radius,"blur_strength":effects.blur_strength,"animate_blur_fps":effects.animate_blur_fps,"animation_speed":effects.animation_speed,"animation_scale":effects.animation_scale},
+        "errors":[],
         "revision":revision,
     })
 }
@@ -273,6 +277,7 @@ fn the_default_render_block_is_upstreams_defaults() {
             "focused",
             "keyboard_layout",
             "lifecycle",
+            "lifecycle_events",
             "native_resize",
             "navigation",
             "outputs",
@@ -331,11 +336,13 @@ fn a_reload_changes_the_block_and_every_accepted_one_spends_a_revision() {
     assert_eq!(block["outline"], outline);
     assert_eq!(block["chrome"], chrome);
 
-    // [effects] draws nothing yet and has no key of its own: only the
-    // revision says that it changed.
+    // [effects]: the table itself, which tests/effects_flow.rs covers.
     toml += "[effects]\nblur_radius = 5\n";
     let block = h.configure(&scratch, &toml);
     assert_eq!(block["revision"], 3);
+    let mut effects = default_block(0)["effects"].clone();
+    effects["blur_radius"] = json!(5);
+    assert_eq!(block["effects"], effects);
     assert_eq!(block["chrome"], chrome);
     assert_eq!(block["outline"], outline);
     assert_eq!(block["background"], default_block(0)["background"]);
@@ -372,7 +379,7 @@ fn a_reload_changes_the_block_and_every_accepted_one_spends_a_revision() {
         let block = h.configure(&scratch, &last);
         assert_eq!(
             block,
-            json!({"background":expected,"chrome":chrome,"outline":outline,"revision":revision}),
+            json!({"background":expected,"chrome":chrome,"outline":outline,"effects":effects,"errors":[],"revision":revision}),
             "{background}"
         );
     }
@@ -393,16 +400,20 @@ fn a_reload_changes_the_block_and_every_accepted_one_spends_a_revision() {
     let elsewhere = toml.replace("pan_step = 123", "pan_step = 321");
     assert_ne!(elsewhere, toml);
     assert_eq!(h.configure(&scratch, &elsewhere), again(9));
-    // A file that does not parse and a scene loaded over the controller are
-    // not accepted reloads: nothing moves.
+    // A file that does not parse is not an accepted reload: every table
+    // stays. Its message is the error bar's, which the shell draws from this
+    // block, so the revision moves for it (EFFECTS.md). A scene loaded over
+    // the controller moves nothing.
     std::fs::write(scratch.path("config.toml"), "[decorations\n").unwrap();
     let refused = h.ok(json!({"op":"load_config","path":scratch.path("config.toml")}));
     assert_eq!(refused["errors"].as_array().unwrap().len(), 1, "{refused}");
-    assert_eq!(h.render(), again(9));
+    let mut failed = again(10);
+    failed["errors"] = refused["errors"].clone();
+    assert_eq!(h.render(), failed);
     let scene = scratch.path("scene.json");
     h.ok(json!({"op":"save","path":scene}));
     h.ok(json!({"op":"load","path":scene}));
-    assert_eq!(h.render(), again(9));
+    assert_eq!(h.render(), failed);
 
     // A [decorations] key that reaches only the placements.
     let bordered = elsewhere.replace(
@@ -410,12 +421,14 @@ fn a_reload_changes_the_block_and_every_accepted_one_spends_a_revision() {
         "corner_radius = 4\nborder_width = 2\n",
     );
     assert_ne!(bordered, elsewhere);
+    // The accepted file clears the message too, for the one revision.
     let block = h.configure(&scratch, &bordered);
-    assert_eq!(block["revision"], 10);
+    assert_eq!(block["revision"], 11);
+    assert_eq!(block["errors"], json!([]));
     assert_eq!(block["chrome"], chrome);
 
     // Back to no tables at all: upstream's defaults, one more revision.
-    assert_eq!(h.configure(&scratch, unrelated), default_block(11));
+    assert_eq!(h.configure(&scratch, unrelated), default_block(12));
 
     // A launch file that names a shader spends the first revision, and the
     // same file loaded again the next: that is how an edited shader file

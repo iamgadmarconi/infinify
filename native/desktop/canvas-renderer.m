@@ -15,9 +15,13 @@
 // compose_frame's zoomed_widgets and zoomed_pinned buckets, and
 // window_render_transform in src/state/output.rs: a pin's output-relative point at
 // zoom 1), DrawnChrome's coverage rule per output, upstream's stand-in body
-// rectangle and its projection of the other outputs' viewports. New code over the
-// controller's snapshot; cameras, world rectangles and pinned screen rectangles are
-// the controller's, and no native window geometry is read.
+// rectangle and its projection of the other outputs' viewports. The effects are the
+// same port's (COMPOSITOR-NOTES.md, section 18), with src/state/errors.rs (ErrorSource:
+// the order of the error bar's messages) and src/state/window_animation_driver.rs
+// (start_window_open_animation, snapshot_closing_window, flatten_scale_for_canvas_rect:
+// an event on no output animates nothing, and the density a closing window is baked
+// at). New code over the controller's snapshot; cameras, world rectangles and pinned
+// screen rectangles are the controller's, and no native window geometry is read.
 #import "canvas-renderer.h"
 #import "compositor.h"
 #import <AppKit/AppKit.h>
@@ -89,6 +93,21 @@ static NSDictionary *refusal(NSString *message) { return @{@"error":message}; }
 @property NSMutableDictionary<NSNumber *,NSDictionary *> *placements;
 @property NSUInteger style; // the configuration its frame carries
 @property BOOL dirty;
+// Upstream's closing bucket as this output lists it, bottom to top: the fading stand-ins, newest first, then the closing snapshots, newest first.
+@property NSMutableArray<IFCompositorElement *> *leaving;
+// Upstream opens a window, and fades the stand-in it adopted, at the window's first sized commit: the first frame it has a
+// picture for. A window that maps here has none until its stream delivers. Until then, and for a second at most, what its
+// picture starts is held at its first instant: its own opening, which is invisible, and the stand-in of its slot, whole.
+@property NSMutableDictionary<NSNumber *,NSNumber *> *unseen; // such windows: when each began to wait
+@property NSMutableDictionary<NSNumber *,IFCompositorElement *> *adopted; // the stand-in fade that waits with one
+// A window whose size the controller is still changing (snapshot.native_resize with an effect outstanding: a rule's size asked as the window
+// maps, or a sizing action) is given no settled picture by the shell until that is over, so for it the second above has not begun: it begins
+// when the last effect is answered. A window that is held for its size is held even when it has a picture, which the setter is about to
+// withdraw. The shell's adapter allows each effect of a transaction two seconds, and a transaction that sets one size has four at most (a
+// read, the setter, a read, and one more after a setter that stays unresolved): sizeHold, above them, is the most a window is held for it.
+@property NSMutableDictionary<NSNumber *,NSNumber *> *owed; // of the unseen windows, those held for their size: since when
+@property uint64_t serial; // the newest lifecycle event this output was described with
+@property double presented; // the time of the last frame its layer drew
 @end
 @implementation DWCanvasOutput
 @end
@@ -102,6 +121,12 @@ static NSDictionary *refusal(NSString *message) { return @{@"error":message}; }
 @property NSUInteger style; // counts configurations
 @property (readwrite) NSString *note;
 @property BOOL pending;
+@property IFCompositorEffects effects;
+@property NSArray<NSString *> *errors; // the error bar's messages in upstream's source order, nil for none
+@property uint64_t played; // the newest lifecycle event played
+@property BOOL following; // the first frame described has set that mark
+@property uint64_t marks; // counts the identifiers of closing-bucket elements
+@property NSNumber *sizing; // the window the controller owes a size, as the snapshot last described had it
 @end
 @implementation DWCanvasRenderer
 - (instancetype)initWithSource:(DWCanvasSource)source {
@@ -131,7 +156,20 @@ static NSDictionary *refusal(NSString *message) { return @{@"error":message}; }
     IFCompositorOutlineSettings outline=IFCompositorOutlineSettingsDefault();outline.color=colorOf(o[@"color"],outline.color);
     if(number(o[@"thickness"]))outline.thickness=(int32_t)lround([o[@"thickness"]doubleValue]);
     if(number(o[@"opacity"]))outline.opacity=[o[@"opacity"]doubleValue];
-    self.outline=outline;return YES;
+    self.outline=outline;
+    // Upstream EffectsConfig, field for field, as the controller's parser left it; the compositor's own copy of upstream's parse rules changes nothing in it.
+    NSDictionary *e=dict(render[@"effects"]);IFCompositorEffects effects=IFCompositorEffectsDefault();
+    if(number(e[@"blur_radius"]))effects.blurRadius=(uint32_t)lround(fmin(fmax([e[@"blur_radius"]doubleValue],0),UINT32_MAX));
+    if(number(e[@"blur_strength"]))effects.blurStrength=[e[@"blur_strength"]doubleValue];
+    if(number(e[@"animate_blur_fps"]))effects.animateBlurFPS=(uint32_t)lround(fmin(fmax([e[@"animate_blur_fps"]doubleValue],0),UINT32_MAX));
+    if(number(e[@"animation_speed"]))effects.animationSpeed=[e[@"animation_speed"]doubleValue];
+    if(number(e[@"animation_scale"]))effects.animationScale=[e[@"animation_scale"]doubleValue];
+    self.effects=IFCompositorEffectsSanitized(effects);
+    // Upstream's error bar shows state.errors in the order of ErrorSource: config, background, keyboard. The controller sends its own
+    // sources' messages in that order, config first, and the background's is this program's, so it follows the first of them.
+    NSMutableArray<NSString *> *errors=[NSMutableArray array];for(id message in list(render[@"errors"]))if(text(message))[errors addObject:message];
+    if(self.program.errorText)[errors insertObject:self.program.errorText atIndex:MIN(errors.count,(NSUInteger)1)];
+    self.errors=errors.count?errors:nil;return YES;
 }
 // The live picture of one window element, or none.
 - (void)content:(IFCompositorElement *)element window:(NSNumber *)window placement:(NSDictionary *)placement {
@@ -167,20 +205,86 @@ static BOOL pinnedOf(NSDictionary *p) { return [number(p[@"pinned"])boolValue]||
     element.title=title.length?title:app?:@"";element.rect=world;
     [self content:element window:window placement:p];
 }
+// When an animation that begins now began, on this output's clock. Upstream advances every animation before it draws, so the
+// first frame that shows one is already a tick in: the time of the last frame presented. This canvas draws on demand, so
+// that frame can be long past, and the animation would be over before it was seen: never more than one 60 Hz tick ago.
+static double began(DWCanvasOutput *state,double now) { return fmax(state.presented,now-1.0/60); }
+static BOOL pictured(IFCompositorElement *element) { return element.pixelBuffer||element.texture; }
+static const double sizeHold=10;
+// A closing-bucket element stays in the frame beside whatever keeps its window's identifier, so it carries one of its own.
+- (uint64_t)mark { return 1ULL<<63|++self.marks; }
+// A window closed (upstream snapshot_closing_window): on each output that drew it, the element of the frame last described is
+// baked with all its chrome into one texture, and that snapshot shrinks and fades in the closing bucket, or with inPlace fades
+// where it stood, over the stand-in the window left (upstream's alpha_only). That element still retains the pixel buffer it
+// drew, whatever the shell did with the window's stream since, until this output is described again: the bake comes first.
+// Upstream's skips: a window no output showed has no element here; one that never had a picture has nothing to bake; and its
+// age test, pixels of a window hidden more than a second ago, cannot come up, since what is baked is what the last frame showed.
+// The density is upstream's flatten scale: the largest backing scale times zoom among the outputs showing a canvas window, the
+// backing scale of its output for a pinned one, at least 1. Each output bakes its own copy at it, with the chrome it drew.
+- (void)close:(NSNumber *)window inPlace:(BOOL)inPlace now:(double)now {
+    double density=1;
+    for(DWCanvasOutput *state in self.states.allValues){IFCompositorElement *element=state.elements[window];if(element.kind==IFCompositorElementKindWindow&&element.space!=IFCompositorSpacePinned&&pictured(element))density=fmax(density,state.frame.scale*state.frame.zoom);}
+    for(DWCanvasOutput *state in self.states.allValues){
+        IFCompositorElement *element=state.elements[window],*snapshot=nil;if(!element||element.kind!=IFCompositorElementKindWindow||!pictured(element))continue;
+        @autoreleasepool{snapshot=[state.layer.renderer closingSnapshotOfElement:element inFrame:state.frame flattenScale:element.space==IFCompositorSpacePinned?state.frame.scale:density];}
+        if(!snapshot)continue;
+        snapshot.identifier=[self mark];snapshot.lifecycle=inPlace?IFCompositorLifecycleClosingAlphaOnly:IFCompositorLifecycleClosing;snapshot.lifecycleStartTime=began(state,now);
+        // Upstream's order: in front of the first snapshot in the list, so beneath every snapshot still running and above every fading stand-in.
+        NSUInteger at=0;while(at<state.leaving.count&&state.leaving[at].kind!=IFCompositorElementKindSnapshot)at++;
+        [state.leaving insertObject:snapshot atIndex:at];
+    }
+}
+// A stand-in left (upstream StandInFade): the stand-in of the frame last described fades in the closing bucket, shrinking when
+// it was dismissed and, with inPlace, where it stood over the window that adopted its slot, from that window's first picture.
+// Beneath every snapshot and every older fade: first in the list.
+- (void)fade:(NSNumber *)window inPlace:(BOOL)inPlace now:(double)now {
+    for(DWCanvasOutput *state in self.states.allValues){
+        IFCompositorElement *old=state.elements[window];if(!old||old.kind!=IFCompositorElementKindStandIn)continue;
+        IFCompositorElement *fade=[IFCompositorElement new];fade.identifier=[self mark];fade.kind=IFCompositorElementKindStandIn;fade.rect=old.rect;fade.space=old.space;fade.layer=IFCompositorStackLayerClosing;
+        fade.focused=old.focused;fade.decoration=old.decoration;fade.title=old.title;fade.appName=old.appName;fade.launching=old.launching;fade.showsPinnedIndicator=old.showsPinnedIndicator;
+        fade.lifecycle=inPlace?IFCompositorLifecycleClosingAlphaOnly:IFCompositorLifecycleClosing;
+        // One fade waits per window: an earlier one that still does goes now.
+        if(inPlace){state.adopted[window].lifecycleStartTime=began(state,now);state.unseen[window]=@(now);state.adopted[window]=fade;}else fade.lifecycleStartTime=began(state,now);
+        [state.leaving insertObject:fade atIndex:0];
+    }
+}
+// snapshot.lifecycle_events: the window events upstream animates, oldest first, each with a serial that only grows. Every
+// event newer than the last one played is played once, here, before any output is described again, while each output still
+// holds the elements of its last frame. What the list held when this renderer described its first frame happened before
+// there was a frame to animate. An opening is the output's own to start, in -render:. With animation_speed 1 upstream's
+// animations are over on their first tick, and nothing is played.
+- (void)play:(NSDictionary *)snapshot now:(double)now {
+    NSArray *events=list(snapshot[@"lifecycle_events"]);uint64_t played=self.played,newest=played;
+    for(id event in events)newest=MAX(newest,[number(dict(event)[@"serial"])unsignedLongLongValue]);
+    self.played=newest;if(!self.following){self.following=YES;return;}
+    if(newest==played||self.effects.animationSpeed>=1)return;
+    for(id entry in events){
+        NSDictionary *event=dict(entry);NSNumber *window=number(event[@"window"]);NSString *name=text(event[@"event"]);
+        if(!window||[number(event[@"serial"])unsignedLongLongValue]<=played)continue;
+        if([name isEqual:@"close"]||[name isEqual:@"close_to_standin"])[self close:window inPlace:[name isEqual:@"close_to_standin"] now:now];
+        else if([name isEqual:@"standin_dismiss"]||[name isEqual:@"standin_adopted"])[self fade:window inPlace:[name isEqual:@"standin_adopted"] now:now];
+    }
+}
 - (void)render:(NSDictionary *)snapshot outputs:(NSArray<NSNumber *> *)outputs host:(CALayer *)host origin:(CGPoint)origin scale:(CGFloat)scale decorationScale:(NSInteger)decorationScale {
-    if(!snapshot||!host)return;[self configure:snapshot];
+    if(!snapshot||!host)return;[self configure:snapshot];double now=canvasTime();[self play:snapshot now:now];
+    // The windows an `open` event of this snapshot names, and the serial of each: an output that has not been described with it yet opens the window.
+    NSMutableDictionary<NSNumber *,NSNumber *> *opened=[NSMutableDictionary dictionary];
+    for(id entry in list(snapshot[@"lifecycle_events"])){NSDictionary *event=dict(entry);if(number(event[@"window"])&&number(event[@"serial"])&&[event[@"event"]isEqual:@"open"])opened[event[@"window"]]=event[@"serial"];}
+    // The window the controller owes a size: its one size transaction, while an effect of it is outstanding. Null in a run that cannot deliver a size.
+    NSDictionary *resize=dict(snapshot[@"native_resize"]);self.sizing=dict(resize[@"pending_effect"])?number(resize[@"window"]):nil;
     NSArray<NSDictionary *> *all=list(snapshot[@"outputs"]);NSMutableDictionary<NSNumber *,id> *worlds=[NSMutableDictionary dictionary];
     for(NSDictionary *w in list(snapshot[@"windows"]))if(number(w[@"window"])&&w[@"world_rect"])worlds[w[@"window"]]=w[@"world_rect"];
     for(NSDictionary *o in all){
         NSNumber *output=number(o[@"id"]);CGRect bounds=rectOf(o[@"screen_bounds"]);if(!output||![outputs containsObject:output]||CGRectIsNull(bounds))continue;
         DWCanvasOutput *state=self.states[output];
-        if(!state){state=self.states[output]=[DWCanvasOutput new];state.layer=[[IFCompositorLayer alloc]initWithRenderer:nil];state.frame=[IFCompositorFrame new];state.elements=[NSMutableDictionary dictionary];state.placements=[NSMutableDictionary dictionary];}
+        // An output that is new shows no event that came before it: nothing was on it to open.
+        if(!state){state=self.states[output]=[DWCanvasOutput new];state.layer=[[IFCompositorLayer alloc]initWithRenderer:nil];state.frame=[IFCompositorFrame new];state.elements=[NSMutableDictionary dictionary];state.placements=[NSMutableDictionary dictionary];state.leaving=[NSMutableArray array];state.unseen=[NSMutableDictionary dictionary];state.adopted=[NSMutableDictionary dictionary];state.owed=[NSMutableDictionary dictionary];state.serial=self.played;}
         // Below the toolbar and the status line, as the window tiles were.
         if(state.layer.superlayer!=host)[host insertSublayer:state.layer atIndex:0];
         CGRect place=CGRectOffset(bounds,-origin.x,-origin.y);if(!CGRectEqualToRect(state.layer.frame,place))state.layer.frame=place;
         IFCompositorFrame *frame=state.frame;CGPoint camera=pointOf(o[@"camera"]);double zoom=[number(o[@"zoom"])doubleValue];
         frame.size=bounds.size;frame.scale=scale>0?scale:1;frame.cameraX=camera.x;frame.cameraY=camera.y;frame.zoom=zoom;frame.clear=IFCompositorClearOpaqueBlack;frame.decorationScale=decorationScale;
-        if(state.style!=self.style){state.style=self.style;frame.background=self.program;frame.chrome=self.chrome;frame.placeholderColor=self.chrome.backgroundColor;frame.outline=self.outline;}
+        if(state.style!=self.style){state.style=self.style;frame.background=self.program;frame.chrome=self.chrome;frame.placeholderColor=self.chrome.backgroundColor;frame.outline=self.outline;frame.effects=self.effects;frame.errorMessages=self.errors;}
         // The other outputs' viewports, projected as upstream's build_output_outline_elements does.
         NSMutableData *outlines=[NSMutableData data];
         for(NSDictionary *other in all){
@@ -193,6 +297,7 @@ static BOOL pinnedOf(NSDictionary *p) { return [number(p[@"pinned"])boolValue]||
         // windows, then the windows pinned to it. The compositor draws the three layers in that order too
         // and keeps this order within each.
         NSMutableDictionary<NSNumber *,IFCompositorElement *> *elements=[NSMutableDictionary dictionary];NSMutableDictionary<NSNumber *,NSDictionary *> *placements=[NSMutableDictionary dictionary];[frame.elements removeAllObjects];
+        NSMutableDictionary<NSNumber *,NSNumber *> *unseen=[NSMutableDictionary dictionary],*owed=[NSMutableDictionary dictionary];
         for(NSDictionary *p in list(snapshot[@"placements"])){
             NSNumber *window=number(p[@"window"]);if(!window||![p[@"output"]isEqual:output]||elements[window])continue;
             // A screen-pinned placement has no canvas position to draw from: its screen_rect is its pin's, in
@@ -211,19 +316,45 @@ static BOOL pinnedOf(NSDictionary *p) { return [number(p[@"pinned"])boolValue]||
                 double left=pinned?world.origin.x:world.origin.x-camera.x,top=pinned?world.origin.y:world.origin.y-camera.y,z=pinned?1:zoom;
                 CGRect visual=CGRectMake((left-bw)*z,(top-bar-bw)*z,(world.size.width+2*bw)*z,(world.size.height+bar+2*bw)*z);
                 element.decoration=IFCompositorDecorationDrawn(d,NO,IFCompositorCoverageOfFrame(visual,CGRectMake(0,0,bounds.size.width,bounds.size.height)));
+                // Upstream's effective_blur, the controller's answer: a plain flag that the coverage rule does not touch. Never set for a capture.
+                element.blur=[number(dict(p[@"decoration"])[@"blur"])boolValue];
+                // Upstream's open animation, for a window an `open` event names that this output has not shown opening. It runs from the
+                // window's first picture: here when it has one, or has waited a second for it, else in -contentChanged:. While its size is
+                // owed (`owed`, above) the wait is renewed instead, so that second starts when the size transaction has ended.
+                NSNumber *since=state.unseen[window];
+                if([opened[window]unsignedLongLongValue]>state.serial&&self.effects.animationSpeed<1){since=@(now);element.lifecycle=IFCompositorLifecycleOpening;element.lifecycleStartTime=NAN;element.lifecycleProgress=0;}
+                NSNumber *held=since&&[self.sizing isEqual:window]?(state.owed[window]?:@(now)):nil;
+                if(held)owed[window]=held;
+                if(held&&now-held.doubleValue<sizeHold)unseen[window]=@(now);
+                else if(since&&!pictured(element)&&now-since.doubleValue<1)unseen[window]=since;
+                else if(element.lifecycle==IFCompositorLifecycleOpening&&isnan(element.lifecycleStartTime))element.lifecycleStartTime=began(state,now);
             }
+            // A stand-in neither opens nor is frosted, whatever the window it stands for was doing.
+            else {element.blur=NO;element.lifecycle=IFCompositorLifecycleNone;element.lifecycleStartTime=NAN;}
             elements[window]=element;placements[window]=p;[frame.elements addObject:element];
         }
-        state.elements=elements;state.placements=placements;state.dirty=YES;
+        // The stand-in of an adopted slot fades once its window is no longer waited for: it has its picture, a second has passed, or it is not drawn here as a window.
+        for(NSNumber *window in state.adopted.allKeys)if(!unseen[window]){state.adopted[window].lifecycleStartTime=began(state,now);[state.adopted removeObjectForKey:window];}
+        // Where the closing bucket sits among the windows makes no difference: the compositor draws it above the canvas windows and below the pinned ones.
+        [frame.elements addObjectsFromArray:state.leaving];
+        state.elements=elements;state.placements=placements;state.unseen=unseen;state.owed=owed;state.serial=self.played;state.dirty=YES;
     }
     [self setNeedsFlush];
 }
 - (CALayer *)layerForOutput:(NSNumber *)output { return self.states[output].layer; }
-- (void)contentChanged:(NSNumber *)window {
+- (BOOL)contentChanged:(NSNumber *)window {
+    BOOL opening=NO;
     for(DWCanvasOutput *state in self.states.allValues){
         IFCompositorElement *element=state.elements[window];if(!element||element.kind!=IFCompositorElementKindWindow)continue;
         [self content:element window:window placement:state.placements[window]];state.dirty=YES;[self setNeedsFlush];
+        // The first picture of a window that was waited for: its opening, and the fade of the stand-in whose slot it adopted, begin.
+        // Not while the window's size is owed: that picture is of the size it is leaving, and -render: starts both when the size has settled.
+        if(!state.unseen[window]||!pictured(element)||[self.sizing isEqual:window])continue;
+        [state.unseen removeObjectForKey:window];IFCompositorElement *fade=state.adopted[window];double start=began(state,canvasTime());
+        if(element.lifecycle==IFCompositorLifecycleOpening&&isnan(element.lifecycleStartTime)){element.lifecycleStartTime=start;opening=YES;}
+        if(fade){fade.lifecycleStartTime=start;[state.adopted removeObjectForKey:window];opening=YES;}
     }
+    return opening;
 }
 - (BOOL)animates:(NSArray<NSNumber *> *)outputs draw:(BOOL)draw {
     BOOL any=NO;
@@ -232,7 +363,8 @@ static BOOL pinnedOf(NSDictionary *p) { return [number(p[@"pinned"])boolValue]||
 }
 // A burst of stream frames and animation ticks in one turn of the run loop describes
 // each output to its layer once, unless the shell flushed in between; the layer itself
-// draws only when the description, a pixel buffer or the animated background's clock changed.
+// draws only when the description, a pixel buffer, the animated background's clock or
+// the progress of an open or close animation changed.
 - (void)setNeedsFlush {
     if(self.pending)return;self.pending=YES;__weak DWCanvasRenderer *weak=self;
     dispatch_async(dispatch_get_main_queue(),^{[weak flush];});
@@ -241,10 +373,15 @@ static BOOL pinnedOf(NSDictionary *p) { return [number(p[@"pinned"])boolValue]||
 // callout (the launch's first frame, the quit-pending loop) has no pool of its own to end them.
 - (void)flush {
     self.pending=NO;double now=canvasTime();
-    for(DWCanvasOutput *state in self.states.allValues){if(!state.dirty)continue;state.dirty=NO;state.frame.time=now;@autoreleasepool{[state.layer updateWithFrame:state.frame];}}
+    for(DWCanvasOutput *state in self.states.allValues){
+        if(!state.dirty)continue;state.dirty=NO;IFCompositorFrame *frame=state.frame;frame.time=now;@autoreleasepool{if([state.layer updateWithFrame:frame])state.presented=now;}
+        // An animation that has run out at this frame's time, which the frame no longer showed: upstream drops the snapshot or the fade, and a window that has opened is the plain window.
+        for(IFCompositorElement *element in state.leaving.count?state.leaving.copy:nil)if([frame lifecycleFinishedForElement:element]){[state.leaving removeObject:element];[frame.elements removeObject:element];}
+        for(IFCompositorElement *element in frame.elements)if(element.lifecycle==IFCompositorLifecycleOpening&&[frame lifecycleFinishedForElement:element]){element.lifecycle=IFCompositorLifecycleNone;element.lifecycleStartTime=NAN;}
+    }
 }
 - (void)reset {
-    for(DWCanvasOutput *state in self.states.allValues){[state.layer removeFromSuperlayer];[state.frame.elements removeAllObjects];}
+    for(DWCanvasOutput *state in self.states.allValues){[state.layer removeFromSuperlayer];[state.frame.elements removeAllObjects];[state.leaving removeAllObjects];}
     [self.states removeAllObjects];
 }
 // What a capture frames for one element, bounds rounded outward. A live window:

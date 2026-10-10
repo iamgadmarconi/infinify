@@ -101,7 +101,10 @@ A rule's `size` is a native size, and reaches a window only through the
   is the one it took. The `attach` reply then also carries `transaction`, and
   the transaction's effect as the one entry of `effects`, for the shell's
   resize coordinator; `effect` stays the arrival's focus request.
-  `rule.not_applied` no longer names `size`.
+  `rule.not_applied` no longer names `size`. The window's `open` is logged
+  with the map, once, whatever becomes of the size; a shell that animates it
+  waits for the transaction
+  ([EFFECTS.md](EFFECTS.md#beside-a-size-that-is-owed)).
 
 Still not asked, with the capability on, and still named in `not_applied`:
 
@@ -280,10 +283,11 @@ shell's, from the hit.
 `rule` is null for a window no rule matched, until an IPC `Opacity` write
 gives it an otherwise empty one. `decoration`, the border fields,
 `corner_radius`, `shadow` and `opacity` are what the window's `decoration` in
-the snapshot is resolved from while it has a source, and `blur` is reported
-there and not drawn ([RENDER.md](RENDER.md#placements)): the rule kept here
-is the only one the renderer is given, so what [Matching](#matching) says of
-retitles and reloads holds for what is drawn too.
+the snapshot is resolved from while it has a source, and `blur` makes its
+`decoration.blur` true, which the shell's compositor frosts
+([EFFECTS.md](EFFECTS.md#blur)): the rule kept here is the only one the
+renderer is given, so what [Matching](#matching) says of retitles and reloads
+holds for what is drawn too.
 
 ### Actions
 

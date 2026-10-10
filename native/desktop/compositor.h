@@ -17,6 +17,15 @@
 //   src/config/types.rs (DecorationConfig, OutputOutlineSettings,
 //   effective_*).
 //
+// Effects (this copy, compositor-effects): frosted-glass blur behind windows,
+// open / close lifecycle animations with closing snapshots, and the config
+// error bar, from
+//   src/shaders/{blur_down,blur_up,blur_mask}.glsl, src/render/blur.rs,
+//   src/render/closing.rs, src/render/error_bar.rs,
+//   src/state/window_animation.rs (open_scale, open_alpha, animated_visual),
+//   src/state/window_animation_driver.rs (frame_factor),
+//   src/config/types.rs (EffectsConfig).
+//
 // The module depends only on background.h (the canvas background renderer)
 // and system frameworks. See NOTES.md for the host protocol, the mapping from
 // the shell's snapshot, and every deviation from upstream.
@@ -141,11 +150,103 @@ typedef NS_ENUM(NSInteger, IFCompositorTitleAlign) {
 @property (nonatomic) IFCompositorTitleAlign titleAlign;   ///< `title_align`, center
 @end
 
+// MARK: - Effects
+
+/// Upstream `EffectsConfig` (`[effects]`), field for field. Global, not per
+/// window.
+typedef struct IFCompositorEffects {
+    /// `blur_radius`: number of Kawase down + up passes. Default 2. (Values
+    /// above 30 are treated as 30: upstream's `1 << (passes + 1)` is not
+    /// defined beyond that.)
+    uint32_t blurRadius;
+    /// `blur_strength`: per-pass texel spread, >= 0. Default 1.1.
+    double blurStrength;
+    /// `animate_blur_fps`: how often the frost re-samples a background that
+    /// moves on its own (an animated shader), 0..144. Default 20; 0 = never
+    /// for that motion alone. Everything else that changes what is behind a
+    /// blurred window always refreshes its frost.
+    uint32_t animateBlurFPS;
+    /// `animation_speed`: lerp factor of the open / close animations per
+    /// 1/60 s, in (0, 1]. Default 0.5; 1 = instant.
+    double animationSpeed;
+    /// `animation_scale`: open / close scale amplitude in (0, 1]. Default
+    /// 0.95; 1 = pure fade.
+    double animationScale;
+} IFCompositorEffects;
+
+/// Upstream's `EffectsConfig::default()`: 2, 1.1, 20, 0.5, 0.95.
+FOUNDATION_EXPORT IFCompositorEffects IFCompositorEffectsDefault(void);
+
+/// Upstream's parse rules (config/parse_helpers.rs `parse_effects_config`): a
+/// negative or NaN `blur_strength` becomes 0, `animate_blur_fps` is capped at
+/// 144, `animation_speed` / `animation_scale` fall back to their defaults
+/// when <= 0 or NaN and are clamped to 1 above it. (An infinite
+/// `blur_strength` also becomes 0 here.)
+FOUNDATION_EXPORT IFCompositorEffects IFCompositorEffectsSanitized(IFCompositorEffects effects);
+
+/// Progress of an open / close animation `elapsed` seconds after it began.
+/// Upstream advances `progress += (1 - progress) * frame_factor` once per
+/// frame with `frame_factor = 1 - (1 - speed)^(dt * 60)`
+/// (window_animation_driver.rs `tick_window_animations_at`); this is that
+/// recurrence in closed form, `1 - (1 - speed)^(elapsed * 60)`, which is the
+/// same number whatever the frame times were. 0 for `elapsed` <= 0.
+FOUNDATION_EXPORT double IFCompositorAnimationProgress(double elapsed, double animationSpeed);
+/// Upstream's end test: `1 - progress <= 0.01`. A finished close is no longer
+/// drawn; a finished open is drawn as the plain window.
+FOUNDATION_EXPORT BOOL IFCompositorAnimationFinished(double progress);
+/// Seconds until `IFCompositorAnimationFinished` holds: `ln 0.01 / (60 ln(1 -
+/// speed))` (0.111 s at the default 0.5); 0 for a speed of 1 or more.
+FOUNDATION_EXPORT double IFCompositorAnimationDuration(double animationSpeed);
+/// closing.rs `fade_out_alpha`: `1 - p^2` (p clamped to 0..1), as f32.
+FOUNDATION_EXPORT float IFCompositorCloseAlpha(double progress);
+/// closing.rs `ClosingSnapshot::render_element`: `1 - (1 - amplitude) * p`.
+FOUNDATION_EXPORT double IFCompositorCloseScale(double progress, double amplitude);
+/// window_animation.rs `open_alpha`: `1 - (1 - p)^2` (p clamped), as f32.
+FOUNDATION_EXPORT float IFCompositorOpenAlpha(double progress);
+/// window_animation.rs `open_scale`: `amplitude + (1 - amplitude) * p`.
+FOUNDATION_EXPORT double IFCompositorOpenScale(double progress, double amplitude);
+
+/// error_bar.rs `join_errors`: every message with its whitespace runs
+/// collapsed to one space, joined with two spaces, a bullet, two spaces.
+/// Empty for no messages.
+FOUNDATION_EXPORT NSString *IFCompositorErrorBarText(NSArray<NSString *> *_Nullable messages);
+/// Height of the error bar in logical pixels: `ceil(11) + 2 * 6` = 23.
+FOUNDATION_EXPORT NSInteger IFCompositorErrorBarHeight(void);
+
 // MARK: - Elements
 
 typedef NS_ENUM(NSInteger, IFCompositorElementKind) {
     IFCompositorElementKindWindow = 0,  ///< a live window: content texture plus chrome
     IFCompositorElementKindStandIn,     ///< upstream's suspended-window stand-in: bar, body fill, centred label
+    /// Upstream's `ClosingSnapshot`: one retained texture (`texture`) holding a
+    /// closed window with all its chrome, faded and shrunk as a single piece.
+    /// `rect` is the rectangle the whole texture covers (shadow included), in
+    /// `space`. Always drawn in the closing bucket, whatever `layer` says. No
+    /// chrome is added: `decoration` is ignored except `opacity`, which
+    /// multiplies the fade (upstream: always 1). Build one with
+    /// `-[IFCompositorRenderer closingSnapshotOfElement:inFrame:flattenScale:]`.
+    IFCompositorElementKindSnapshot,
+};
+
+/// What an element is doing, lifecycle-wise.
+typedef NS_ENUM(NSInteger, IFCompositorLifecycle) {
+    IFCompositorLifecycleNone = 0,
+    /// Upstream's open fade (`AnimationKind::Open`), on a live window: drawn
+    /// scaled about its own centre by `open_scale` and with its opacity
+    /// multiplied by `open_alpha`. Chrome rides along. Replaces `transform`
+    /// while it runs.
+    IFCompositorLifecycleOpening,
+    /// Upstream's close fade. On a snapshot: `ClosingSnapshot` (alpha
+    /// `1 - p^2`, shrink to `animation_scale` about the centre of its
+    /// rectangle). On a stand-in: `StandInFade` with a shrink (a dismissed
+    /// stand-in), about the centre of bar + body. On a live window: the same
+    /// as for a stand-in (not an upstream path; upstream always closes through
+    /// a snapshot).
+    IFCompositorLifecycleClosing,
+    /// The same fade without the shrink: upstream's `alpha_only` snapshot (a
+    /// close that turns into a stand-in) and the adoption crossfade of a
+    /// stand-in (`StandInFade` with `shrink = 1`).
+    IFCompositorLifecycleClosingAlphaOnly,
 };
 
 /// What `rect` is measured in.
@@ -172,11 +273,20 @@ typedef NS_ENUM(NSInteger, IFCompositorSpace) {
 };
 
 /// Upstream's z buckets. The renderer draws all widgets, then all normal
-/// elements, then all pinned ones, keeping the host's order within a bucket.
+/// elements, then the closing bucket, then all pinned ones, keeping the host's
+/// order within a bucket.
 typedef NS_ENUM(NSInteger, IFCompositorStackLayer) {
     IFCompositorStackLayerNormal = 0,
     IFCompositorStackLayerWidget,  ///< below normal windows (`zoomed_widgets`)
     IFCompositorStackLayerPinned,  ///< above normal windows (`zoomed_pinned`)
+    /// Above normal windows, below pinned ones (`zoomed_closing`): where
+    /// upstream draws closing snapshots and fading stand-ins. Snapshots go
+    /// here on their own; set it on a stand-in that is fading out. The host's
+    /// order is kept here as in every bucket, and upstream's order here is its
+    /// own, not the windows' stacking — bottom to top: the fading stand-ins,
+    /// newest first, then the snapshots, newest first (the window that began
+    /// to close first is on top). The host lists them so.
+    IFCompositorStackLayerClosing,
 };
 
 /// Upstream `WindowRenderAnimation`: a per-element affine applied after the
@@ -254,6 +364,26 @@ typedef struct IFCompositorTransform {
 /// Per-element animation transform (open/move/resize, stand-in dismiss).
 @property (nonatomic) BOOL hasTransform;
 @property (nonatomic) IFCompositorTransform transform;
+
+/// Frosted glass behind the window: upstream's `effective_blur` (window rule
+/// `blur = true`, or `[decorations] blur` for a window that is not
+/// fullscreen). What lies beneath the window — the background, the outlines
+/// and every lower element, without the frost of other windows — is blurred
+/// with `frame.effects.blurRadius` / `blurStrength`, masked to the window's
+/// own shape and drawn under its border, content and title bar, above its
+/// shadow, at full strength whatever the window's opacity. Windows only: a
+/// stand-in or a snapshot is never frosted. Default NO.
+@property (nonatomic) BOOL blur;
+
+/// The open / close animation this element is in; see `IFCompositorLifecycle`.
+@property (nonatomic) IFCompositorLifecycle lifecycle;
+/// `frame.time` at which the animation began. The renderer then derives the
+/// progress itself (`IFCompositorAnimationProgress(frame.time - start,
+/// frame.effects.animationSpeed)`) and `needsContinuousRedraw` stays YES until
+/// it is finished. NaN (the default) means `lifecycleProgress` is used.
+@property (nonatomic) double lifecycleStartTime;
+/// Explicit progress, 0..1, when `lifecycleStartTime` is NaN.
+@property (nonatomic) double lifecycleProgress;
 @end
 
 /// Upstream `standin_body_rect` (src/state/suspended.rs): the `rect` of the
@@ -288,6 +418,9 @@ typedef NS_OPTIONS(NSUInteger, IFCompositorPass) {
     IFCompositorPassTitleBar = 1 << 5,
     IFCompositorPassStandInBody = 1 << 6,
     IFCompositorPassLabel = 1 << 7,
+    IFCompositorPassBlur = 1 << 8,      ///< the frost of blurred windows
+    IFCompositorPassSnapshot = 1 << 9,  ///< closing snapshots
+    IFCompositorPassErrorBar = 1 << 10,
 };
 
 /// Everything one output shows at one instant. The host owns one per output,
@@ -325,8 +458,29 @@ typedef NS_OPTIONS(NSUInteger, IFCompositorPass) {
 @property (nonatomic, readonly) NSUInteger outlineRectCount;
 - (CGRect)outlineRectAtIndex:(NSUInteger)index;
 
+/// `[effects]`; defaults to upstream's. Read through
+/// `IFCompositorEffectsSanitized`.
+@property (nonatomic) IFCompositorEffects effects;
+
+/// Upstream's error bar (render/error_bar.rs): the messages of
+/// `state.errors`, in the order of their sources (config, background,
+/// keyboard). nil or empty draws no bar. With at least one message a black
+/// strip of `IFCompositorErrorBarHeight()` logical pixels covers the bottom
+/// edge of the output, above every element, with the joined text in white.
+/// Copied.
+@property (nonatomic, copy, nullable) NSArray<NSString *> *errorMessages;
+
+/// The progress the renderer draws `element`'s lifecycle animation with at
+/// this frame's `time` (from its start time, or its explicit progress).
+- (double)lifecycleProgressOfElement:(IFCompositorElement *)element;
+/// YES once that animation has run out (`IFCompositorAnimationFinished`), or
+/// when the element has none. The host removes a closing element then, and
+/// clears `lifecycle` on an opened one.
+- (BOOL)lifecycleFinishedForElement:(IFCompositorElement *)element;
+
 /// YES when the frame must be redrawn on every display tick even if the host
-/// changes nothing: today, an animated background.
+/// changes nothing: an animated background, or an element whose lifecycle
+/// animation runs on `lifecycleStartTime` and is not finished at `time`.
 @property (nonatomic, readonly) BOOL needsContinuousRedraw;
 
 @property (nonatomic) IFCompositorPass debugPasses;
@@ -367,6 +521,36 @@ typedef NS_OPTIONS(NSUInteger, IFCompositorPass) {
 - (nullable NSData *)BGRADataForFrame:(IFCompositorFrame *)frame
                                 error:(NSError **)error;
 
+/// closing.rs `flatten` + `snapshot_canvas` / `snapshot_screen`: bakes
+/// `element` — a live window as it stands, with the content it holds right
+/// now — into one texture with its shadow, border, clipped content and title
+/// bar at zoom 1 and alpha 1, and returns the element that plays its close
+/// animation: kind `Snapshot`, `texture` = the bake, `rect` = the rectangle
+/// the bake covers (the window's rectangle grown by border and shadow) in the
+/// window's own `space` (canvas, or pinned for a screen-pinned window),
+/// `lifecycle` = `Closing`, `lifecycleProgress` 0, and the window's own
+/// `identifier` and clip. The host sets its `lifecycleStartTime`, takes the
+/// window out of the frame and puts the snapshot in: in front of the first
+/// snapshot already in `elements`, or at the end when there is none (the
+/// order upstream keeps: `IFCompositorStackLayerClosing`). The renderer then
+/// drops what it cached for the live window. Should the window's element stay
+/// in the frame as well, the snapshot needs another identifier.
+///
+/// `flattenScale` is the density of the bake in pixels per logical pixel.
+/// Upstream uses, for a canvas window, the largest `backing scale * zoom`
+/// among the outputs that show it (`canvas_rect_render_scale`), and for a
+/// pinned or fullscreen window the backing scale of its output; values below
+/// 1 are raised to 1, so a zoomed-out close still bakes at full resolution.
+/// `frame` supplies the chrome style, decoration scale and placeholder
+/// colour; its camera and zoom play no part. The bake is encoded on the
+/// renderer's own queue and is complete before any frame encoded afterwards
+/// samples it. Call it before the window's last buffer is released. Returns
+/// nil for a stand-in or a snapshot, for an empty rectangle, or when the bake
+/// would exceed the texture size limit.
+- (nullable IFCompositorElement *)closingSnapshotOfElement:(IFCompositorElement *)element
+                                                   inFrame:(IFCompositorFrame *)frame
+                                              flattenScale:(double)flattenScale;
+
 /// Drops every cached texture. The next frame rebuilds what it needs.
 - (void)purge;
 /// Cached per-element entries (diagnostics).
@@ -375,6 +559,28 @@ typedef NS_OPTIONS(NSUInteger, IFCompositorPass) {
 /// (diagnostics: both stay constant across steady frames).
 @property (nonatomic, readonly) NSUInteger chromeRasterCount;
 @property (nonatomic, readonly) NSUInteger contentWrapCount;
+/// Diagnostics for the blur: frosts recomputed so far, textures the blur has
+/// allocated so far, and textures it holds now (per blurred window a frost, a
+/// mask and — while it keeps recomputing — a pad pair; plus one copy of the
+/// background). With no blurred element in any frame all three stay 0.
+@property (nonatomic, readonly) NSUInteger blurComputeCount;
+@property (nonatomic, readonly) NSUInteger blurTextureAllocationCount;
+@property (nonatomic, readonly) NSUInteger blurTextureCount;
+
+/// Diagnostics: runs the renderer's own Kawase passes (the same code a frame
+/// uses) over caller-supplied pixels. `pixels` is tightly packed premultiplied
+/// BGRA8, `width` x `height`, top row first: the padded backdrop. Returns the
+/// same texture after `passes` down and `passes` up passes with tap distance
+/// `offset` (already multiplied by the output scale). With `stages` non-nil,
+/// the whole texture written by each pass is appended to it in order
+/// (2 * passes entries, each the full `width` x `height` allocation, of which
+/// the pass wrote the top-left `(width >> shift) x (height >> shift)`).
+- (nullable NSData *)debugBlurBGRA:(NSData *)pixels
+                             width:(NSUInteger)width
+                            height:(NSUInteger)height
+                            passes:(NSUInteger)passes
+                            offset:(float)offset
+                            stages:(nullable NSMutableArray<NSData *> *)stages;
 
 /// Diagnostics: called once per draw with the pass name, the destination
 /// rectangle in pixels and the uniforms. Costs allocations; leave nil.

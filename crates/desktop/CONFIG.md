@@ -59,6 +59,10 @@ code and wins over both.
   previous one's when the file was refused. It is there for a shell to show,
   and the native shell does not read it: [`hover`](POINTER.md#hover) is sent
   either way and the controller decides.
+- What a load reports is also the message of upstream's on-screen error bar:
+  the snapshot's `render.errors` holds the one entry of `errors`, else the
+  first of `warnings` with a count of the rest, until a load without either
+  clears it ([EFFECTS.md](EFFECTS.md#errors)).
 
 Files larger than 4 MiB are refused as unreadable. That bound is not upstream's.
 
@@ -108,6 +112,7 @@ constants they replaced.
 | `[decorations] default_mode`, `border_width`, `border_color`, `border_color_focused`, `corner_radius`, `shadow`, `opacity`, `opacity_focused`, `blur` | each placement's `decoration`, through upstream's `effective_*` helpers, see [RENDER.md](RENDER.md#placements); border, shadow and bar also size a `screenshot window`. `opacity` and `opacity_focused` are also each placement's own `opacity`, the same number, for a window with no opacity of its own from a rule or an IPC `Opacity` write. They reach bound windows only: a stand-in is always 1.0, as upstream's, and a window captured alone by `screenshot window` is opaque unless a rule or an `Opacity` write pins its opacity |
 | `[[window_rules]] decoration`, `border_width`, `border_color`, `border_color_focused`, `corner_radius`, `shadow`, `opacity`, `blur` | the same, for the window the rule matched when it mapped: kept with the window, reported in `snapshot.windows[].rule`, and what its `decoration` and `opacity` are resolved from until it is gone, whatever its title or the config becomes ([RULES.md](RULES.md#matching)); never for a stand-in |
 | `[output.outline] color`, `thickness`, `opacity` | reported as `render.outline` |
+| `[effects] blur_radius`, `blur_strength`, `animate_blur_fps`, `animation_speed`, `animation_scale` | reported as `render.effects` for the shell's compositor: the frost, and the open, close and stand-in animations, see [EFFECTS.md](EFFECTS.md#rendereffects) |
 | `[zoom] fit_padding` | also the margin around a `screenshot all` |
 | `[snap] gap` | also the spacing of an `auto` placement, the cluster test for who takes the focus after a close, the cluster `zoom-to-fit-snapped` frames and, with the capability, the cluster `fit-window-snapped` shifts and the clearance `fill-window` keeps |
 | `[zoom] reset_on_new_window` | whether the navigation to a new window lands at zoom 1 |
@@ -147,8 +152,8 @@ code, and then unused, because the feature it configures does not exist here:
   `disable_on_external_mouse`, which counts as on; `[input.mouse]`,
   `[input.touch]`, `[input.tablet]`
 - `[cursor] inactive_opacity` (theme and size reach only the `exec` environment)
-- `[background] cache_budget_mb`; `[effects]`; `[backend]`; `[output]` other
-  than `[output.outline]`
+- `[background] cache_budget_mb`; `[backend]`; `[output]` other than
+  `[output.outline]`
 - `[[outputs]] scale`, `transform`, `position`, `mode`, and
   `[outputs.hot_corners] disable_when_fullscreen`: macOS arranges the displays
   and there is no fullscreen, see [Outputs](#outputs)

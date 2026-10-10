@@ -610,7 +610,8 @@ slot's frame and pin whatever its rule says of `position` and
 | `suspend_on_close`, `restore_windows` | see [Managed windows](#managed-windows) |
 | `size` | in a default launch kept with the window and not applied: the window keeps its own size, and a `position` centres that size. In an app started with `--experimental-native-resize` a new canvas window is asked for that size once it is placed, around the same centre ([Window sizing actions](#window-sizing-actions)); a widget, a pinned window and a window that takes over a saved slot are never asked. No rule has resized a real window |
 | `fullscreen` | kept with the window and not applied: there is no fullscreen |
-| `blur`, `preserve_aspect_ratio`, `pass_keys`, `pass_mouse`, `layer_order` | kept with the window; nothing is drawn or withheld for them |
+| `blur = true` | what lies beneath the window is frosted, whatever `[decorations] blur` says, see [Blur, window animations and the error bar](#blur-window-animations-and-the-error-bar) |
+| `preserve_aspect_ratio`, `pass_keys`, `pass_mouse`, `layer_order` | kept with the window; nothing is drawn or withheld for them |
 
 A file with a key the grammar does not know inside a rule is refused whole with
 upstream's TOML error (`unknown field …`), and the previous configuration stays
@@ -917,7 +918,8 @@ the compositor's frame description. What the snapshot carries is
   whose frame exactly covers the output is drawn square and without shadow,
   one that overhangs it without border as well. The usable area is the whole
   output; the 64-point toolbar strip is not part of an output. A pinned
-  window is judged where it is drawn, at its screen rectangle.
+  window is judged where it is drawn, at its screen rectangle. A window's
+  blur is not subject to it.
 - **Stand-ins.** A stand-in's bar and body together take the window's
   rectangle (upstream's `standin_body_rect` for a client-decorated window). It
   wears the global `[decorations]` table alone, no window rule, and it is
@@ -926,7 +928,9 @@ the compositor's frame description. What the snapshot carries is
   the application's name as the Finder shows it, looked up once from the
   bundle identifier; an application that is not installed shows the
   identifier. The old "Detached window" hint text is gone; ⌃⌥-click still
-  dismisses a placeholder while no binding claims that press. A placeholder
+  dismisses a placeholder while no binding claims that press, and the
+  placeholder now shrinks and fades as any dismissed stand-in does
+  ([below](#blur-window-animations-and-the-error-bar)). A placeholder
   whose slot still holds a saved pin is drawn as a stand-in at the pin's
   rectangle, in the pinned layer.
 - **Streams.** A source keeps the latest pixel buffer of its stream and the
@@ -940,37 +944,46 @@ the compositor's frame description. What the snapshot carries is
   placement returns is not blank until its stream delivers again. A window
   that has never delivered a frame is the chrome background colour inside its
   border and shadow.
-- **Config reload.** The background program, the chrome style and the outline
-  settings are rebuilt when the snapshot's `render.revision` changes and at no
-  other time. The controller moves it on every config reload it accepts, also
+- **Config reload.** The background program, the chrome style, the outline
+  settings, `[effects]` and the error bar's messages are rebuilt when the
+  snapshot's `render.revision` changes and at no other time. The controller
+  moves it on every config reload it accepts, also
   one that changed nothing, so a shader, tile, wallpaper or texture file
   edited on disk is read again after `msg action reload-config`, the
   `reload-config` binding or a `touch` of the config file, as upstream reads
-  it again on every reload. A file that fails to parse rebuilds nothing. A
+  it again on every reload. A file that fails to parse changes no table, but
+  its message is new to the error bar, so the revision moves once and the same
+  tables are built again; the same failure a second time rebuilds nothing. A
   shader that does not compile or a file that is missing falls back as
-  upstream does, to the dot grid; the reason is written to stderr and stays in
-  the status line like upstream's error bar, behind a problem in the config
-  file itself, until a reload builds a program without one.
+  upstream does, to the dot grid; the reason is written to stderr, is shown in
+  the [error bar](#blur-window-animations-and-the-error-bar) and stays in the
+  status line too, behind a problem in the config file itself, until a reload
+  builds a program without one.
 - **Autorelease pools.** Metal hands out autoreleased drawables and encoder
   contexts. Each layer update is drawn inside a pool of its own, and the main
   loop of a normal run has one per turn, so a redraw issued from a poll, the
   launch's first frame or the quit-pending loop frees what it made.
-- **Animated backgrounds.** A shader that reads `u_time` is redrawn from the
-  one frame timer, the one that also serves [camera motion](#camera-motion)
-  (a flight, a drift, an edge pan), at 60 Hz capped by `animate_fps`, and only
-  while a panel that shows it is open. The timer stops when neither motion nor
-  such a background is left. While a background alone keeps it running it
-  ticks no camera and watches no hot corner: the idle poll goes on doing both
-  every 80 ms, exactly as when the timer is stopped, and regains 60 Hz for the
-  camera when it finds motion. The pointer's part of a frame is the one thing
-  such a frame still does: the waiting
-  [hover](#pointer-motion-sloppy-focus-and-pick-mode) and cursor edge pan's
-  pointer report go out with it, since no other timer sends a hover while
-  this one runs.
+- **Animated backgrounds and the frame timer.** There is one frame timer, at
+  60 Hz, and three things keep it running: [camera motion](#camera-motion) (a
+  flight, a drift, an edge pan), a shader background that reads `u_time`,
+  redrawn at 60 Hz capped by `animate_fps` and only while a panel that shows
+  it is open, and a window that opens or leaves (an open or close animation, a
+  stand-in's fade, [below](#blur-window-animations-and-the-error-bar)), drawn
+  on every tick. It stops when none of the three is left, so the frames of an
+  opening window end with its animation. While a background or an animation
+  alone keeps it running it ticks no camera and watches no hot corner: the
+  idle poll goes on doing both every 80 ms, exactly as when the timer is
+  stopped, and regains 60 Hz for the camera when it finds motion. The
+  pointer's part of a frame is the one thing such a frame still does: the
+  waiting [hover](#pointer-motion-sloppy-focus-and-pick-mode) and cursor edge
+  pan's pointer report go out with it, since no other timer sends a hover
+  while this one runs.
 - **Experimental native resize.** A placement that is not settled is drawn
   without content (the placeholder fill), never with a stale frame, and a
   settled one whose kept frame belongs to another observation asks for a new
-  frame. The orange handles are Core Animation layers above the compositor
+  frame. A window that is still opening is not drawn at all meanwhile: its
+  open animation waits for the size it is owed
+  ([below](#blur-window-animations-and-the-error-bar)). The orange handles are Core Animation layers above the compositor
   layer, clipped to the window's visible rectangle as before; a widget and a
   pinned window get none, and no window does on a display in
   [pick mode](#pointer-motion-sloppy-focus-and-pick-mode), where no handle
@@ -983,7 +996,118 @@ the compositor's frame description. What the snapshot carries is
   the earlier drawing, a clipped `AVSampleBufferDisplayLayer` per placement on
   a flat colour, and their earlier stream configuration, because their recorded
   evidence was made with it. A placement's opacity is the opacity of its tile
-  there. They never create a compositor.
+  there. They never create a compositor, so they have no blur, no window
+  animation and no error bar.
+
+### Blur, window animations and the error bar
+
+DriftWM's visual effects, drawn in a normal run by the same compositor. There
+is no new flag, key or command: the effects follow the config file and what
+windows do. What the controller reports for them is
+[`crates/desktop/EFFECTS.md`](../../crates/desktop/EFFECTS.md); how the
+compositor draws them is [COMPOSITOR-NOTES.md](COMPOSITOR-NOTES.md), sections
+17 to 25, whose host protocol (section 18) `canvas-renderer.m` follows.
+**None of this has been seen in the app's own panel**: it was drawn offscreen
+by the app's renderer from this controller's snapshots, and the app was run
+through the same events without anyone looking at it
+([what was run](#what-was-run-for-effects)).
+
+What changes on screen against earlier builds:
+
+- **Blur.** With `[decorations] blur = true` every window, and with a window
+  rule's `blur = true` that window whatever the table says, has what lies
+  beneath it frosted: upstream's blur of `[effects] blur_radius` passes (2)
+  spread by `blur_strength` (1.1), cut to the window's shape. The frost is
+  drawn at full strength under the window and shows only where the window
+  lets it through: under one made translucent by `[decorations] opacity` or
+  `opacity_focused`, a rule's `opacity` or `msg opacity`, or through content
+  that is itself translucent. An opaque window with blur pays for a frost
+  nobody sees, as upstream. A stand-in is never frosted, as upstream's. Over
+  an animated background the frost is refreshed `animate_blur_fps` times a
+  second (20; 0 keeps what it first captured; values above 144 are 144).
+- **A window opens.** A window that appears by itself once the launch pass is
+  over grows from `[effects] animation_scale` (0.95) to its size and fades in,
+  upstream's open animation at `animation_speed` (0.5: about 0.11 seconds;
+  nearer 0 is slower, 1 is instant and plays nothing). A widget and a
+  `focus_on_open = false` window open the same way. It begins with the first
+  picture the window's stream delivers: until then, and for a second at most,
+  the window is not drawn at all, where earlier builds showed an empty frame.
+  In an app started with `--experimental-native-resize`, a window whose rule
+  names a `size` is asked for that size as it appears
+  ([Window sizing actions](#window-sizing-actions)), and no picture of it is
+  drawn while that is in progress. Its opening waits for it too, as
+  upstream's window opens at the size its rule gave it: the second for its
+  first picture starts when the resize has been answered, done or refused,
+  and a picture that arrives earlier, of the size it is leaving, starts
+  nothing. A resize that is never answered holds the window back for ten
+  seconds at most.
+- **A window closes.** Its last picture, with border and shadow, shrinks to
+  `animation_scale` and fades out where it stood, above the other canvas
+  windows and below the pinned ones. When the close leaves a stand-in
+  (`suspend_on_close`, `suspend-window`) the picture fades in place over the
+  stand-in instead. Of several windows closing at once the one that began
+  first is on top, as upstream stacks them. A window that was translucent is
+  opaque for the length of its close, as upstream's snapshot is.
+- **A stand-in leaves.** Dismissed by `close-window`, `suspend-window`,
+  `Infinify msg close` or a ⌃⌥-click on it, it shrinks and fades. When the
+  window of a relaunch takes its slot, it fades without moving over that
+  window, from the window's first picture (a second at most).
+- **The error bar.** A problem in the config file, and a background that fell
+  back, are written along the bottom of every display: one line of white
+  monospace on a black strip 23 points high, the config's message first, then
+  the background's, joined by a bullet and cut with an ellipsis where the line
+  is longer than the display. The config's message is upstream's:
+  `config: failed to read <path>: <reason>`, `config error: <the TOML error>`
+  with its several lines run into one, or the first warning followed by
+  ` (+N more)`. It goes when a later load is clean. The bar is a picture only:
+  a click on it reaches whatever is beneath. The status line still says the
+  same, with the path.
+
+What plays nothing, by upstream's rules or by this port's:
+
+- the windows the launch pass puts on the canvas, a window that takes its own
+  saved slot back at any time (a minimized window shown again, a capture that
+  recovered), and a window attached from the chooser: none of them opened
+  here. Without Screen Recording access or with `--manual` nothing ever opens;
+- a close or a dismissal that no display was drawing, a window that never had
+  a picture, and everything at `animation_speed = 1`;
+- under `--experimental-native-resize`, the close of a window whose picture
+  was being withheld when it went (its size was still owed, or the last
+  resize left it unsettled): there is nothing to fade from;
+- a move, a resize, a fit and fullscreen, which upstream also animates at
+  `animation_speed`: none of them exists here.
+
+Limits the owner will notice or should know of:
+
+- A new window is invisible until its first picture, for up to a second, and
+  takes clicks at its place meanwhile. One that is being resized to its
+  rule's `size` (the experimental flag only) is invisible for as long as
+  that takes and a second more at most; a click at its place is taken or
+  refused as for any window being resized, whether or not it is drawn.
+- A problem in the config file is shown twice, in the bar and in the status
+  line; one about bindings that could not be registered is the status line's
+  alone, as before.
+- With several warnings, which one is "first" is the parser's order. For
+  unknown actions in `[keybindings]` that order is not stable from one load of
+  the same file to the next (the two runs of one file here named different
+  ones), so the bar's line can change on a reload that changed nothing.
+- A file that is refused now builds the background program again once, a
+  shader compile included, because the bar's message travels with the same
+  revision; upstream's failed reload redraws the bar only.
+- Upstream's third error source, a keyboard layout that xkb refuses, does not
+  exist: macOS owns the layouts.
+- Each display bakes its own closing snapshot at upstream's density, where
+  upstream shares one; upstream's refusal to fade in pixels more than a second
+  old has no separate test, since what is baked is what the last frame showed.
+- Blur costs memory per blurred window (a frost and a mask of the window's
+  size on screen, and two padded copies while it keeps being recomputed) and
+  a blur of the backdrop whenever something beneath the window changes;
+  COMPOSITOR-NOTES 18.1 and 24 have the numbers.
+- A screenshot holds no frost, as upstream's screenshot composer omits blur,
+  and no closing snapshot, stand-in fade or error bar; a window that is
+  opening is captured as the plain window. Only the first is stated by the
+  port's notes; the other two were left out because a capture is of the
+  canvas, and upstream's capture code was not read again for them.
 
 ### Screenshots
 
@@ -1002,7 +1126,9 @@ and drawn at its rule's `opacity`, else opaque, whatever `[decorations]
 opacity` makes of it on screen: upstream captures an isolated window as
 itself. One of a stand-in is framed at its border, as upstream frames a
 stand-in, so only the shadow behind its rounded corners is in the picture.
-A capture is of the canvas, as upstream's is. A window pinned to the screen is
+A capture is of the canvas, as upstream's is, without the frost of a blurred
+window, a window animation or the error bar
+([above](#blur-window-animations-and-the-error-bar)). A window pinned to the screen is
 not on it, so the view, `all` and `region` never show one, also when it covers
 half the panel; `window` captures a pinned window alone, at the canvas frame
 its pin shows. A widget is drawn below the other windows, and `all` frames the
@@ -1026,7 +1152,7 @@ Differences from upstream: the file is the only thing written, so a path whose
 directory does not exist is refused (`cannot write …: No such file or
 directory (os error 2)`) where upstream creates the directories; one image is
 rendered in one pass, up to upstream's 16384 pixels a side, where upstream
-tiles; blur is not drawn anywhere; a wallpaper is cover-cropped to its output's
+tiles; a wallpaper is cover-cropped to its output's
 footprint as on screen, where upstream's capture element samples the whole
 image across it (the two differ when the image's aspect is not the output's),
 and with the region's centre on no output the footprint is that of the
@@ -1035,8 +1161,9 @@ corner where upstream takes the active one.
 
 ### What is not drawn, and other limits
 
-- Blur (`[decorations] blur`, a rule's `blur`, `[effects]`), open, close, move
-  and resize animations, and upstream's fullscreen handling.
+- Move and resize animations and upstream's fullscreen handling. Blur, the
+  open and close animations and the error bar are drawn
+  ([above](#blur-window-animations-and-the-error-bar)).
 - `[background] cache_shader` and `cache_budget_mb` are accepted and unused:
   a shader always renders live. A tile or wallpaper is a PNG or JPEG; a
   gigapixel pyramidal TIFF falls back to the dot grid with a message.
@@ -1056,7 +1183,8 @@ corner where upstream takes the active one.
 - An animated background keeps the 60 Hz timer running while its panel is
   open, also when other windows cover the panel completely.
 - A shader's compile error is several lines long. All of it goes to stderr;
-  the status line is one line high.
+  the status line is one line high, and the error bar runs the lines into one
+  and cuts it at the display's width.
 
 ### What was run for rendering
 
@@ -1445,6 +1573,253 @@ screen change or Return to desktop and Open canvas, so `outputs_settled` was
 sent only by the launch's `openPanels`; cursor edge pan under the joined
 `render`.
 
+### What was run for effects
+
+On 2026-10-10 (macOS 27.2, Apple Silicon), on a tree that had every milestone
+above and nothing later (neither the pointer policy nor window sizing, which
+[the next section](#what-was-run-for-effects-with-the-pointer-policy-and-window-sizing-built-in)
+adds), after the controller's half and the shell's half of
+[the effects](#blur-window-animations-and-the-error-bar) were written
+separately from one contract and then built together. Nothing had a Screen
+Recording or Accessibility grant, so **no ScreenCaptureKit buffer was blurred,
+opened or closed**: every picture below is a plain-coloured synthetic buffer or
+a stand-in. Nothing is saved as evidence.
+
+**Build and controller.** `./scripts/build-app.sh` built the app, controller
+and shell together, without a change to either side. `cargo fmt --check` and
+`cargo clippy --all-targets -D warnings` on `driftwm-desktop` were clean, and
+the controller scenarios passed: `effects_flow` (4, the milestone's own),
+`render_flow` (7), `rules_flow` (21), `lifecycle_flow` (25), `config_flow`
+(12), `ipc_flow` (8), `controller_flow` (4), `navigation_flow` (5). The
+headless coordinator regression was not run: none of its sources changed.
+
+**The renderer alone, offscreen, outside the repository.** A throwaway tool by
+the author of the shell's half linked `canvas-renderer.m`, the compositor and
+the background module and fed them hand-written snapshots in the contract's
+shape, two outputs at backing scale 2 (zoom 1 and zoom 0.5), reading each
+frame back from the output's layer. It was built again from the final sources
+and run once more when the halves were joined, with the same log but for
+timing: events already listed at a renderer's first frame, after `reset` and
+in a second renderer are not replayed; the blur flag reaches a window and not
+a stand-in, changes 34287 pixels inside the translucent window's rectangle and
+none outside, and leaves a capture byte for byte the same; an opening window
+is invisible until its first picture, or for 1.06 s without one, and the timer
+loop stops by itself; a closing snapshot is baked after the source dropped its
+buffer, 856x656 texels for a 400x300 window at density 2, and for a 300x200
+one 328x228 where only the zoom 0.5 output shows it and 656x456 where it is
+pinned; two closes and
+two dismissals are listed newer fade, older fade, newer snapshot, older
+snapshot, with the window that closed first on top; `animation_speed = 1`
+plays nothing; a window with no placement plays nothing; a capture taken
+while a snapshot plays does not hold it.
+
+**Controller and renderer together, offscreen, outside the repository.** A
+second throwaway tool linked the same three files with this controller's
+library and drove the controller through the exported C ABI as the app does:
+`set_platform`, `load_config` on real files, `load` of a scene of three
+placeholders, one output of 1100x636 at backing scale 2, `outputs_settled`,
+`adoption_complete`; each snapshot went to `-render:…` and `-flush` exactly as
+the app's view sends it, with a 60 Hz loop standing in for the frame timer
+while `-animates:draw:` said yes. The bar in each of its five states, the
+frame without it, the frosted window, and the first frame of the close, of the
+close into a stand-in, of the adoption and of the dismissal were opened as
+PNGs; everything else below is a pixel or the renderer's state as the tool
+printed it.
+
+- **Launch, a config holding one comment.** `render.effects`
+  `{blur_radius 2, blur_strength 1.1, animate_blur_fps 20, animation_speed
+  0.5, animation_scale 0.95}`, `render.errors` `[]`, revision 0, no event, no
+  bar; the first stand-in `decoration.blur` false.
+- **An unknown action in `[keybindings]`.** `load_config` warned `config:
+  invalid action 'no-such-action': unknown action: no-such-action`;
+  `render.errors` held that line, revision 1, and the frame had the line in
+  white on the black strip at the bottom. With two such keys and
+  `animation_speed = 7`: three warnings, `render.errors` the first followed by
+  ` (+2 more)`, `animation_speed` 1. Which of the two unknown actions came
+  first differed between two runs of the tool.
+- **`[effects` without its bracket.** `load_config` failed with `config
+  error: TOML parse error at line 1, column 9` and five more lines; the bar
+  read ``config error: TOML parse error at line 1, column 9 | 1 | [effects | ^
+  invalid table header expected `.`, `]` `` on one line, the tables stayed as
+  they were, the revision went from 2 to 3, and the same file again left it
+  at 3.
+- **A warning and a `[background]` shader file that does not exist.** The
+  bar: the config line, a bullet, `background shader '…/missing.glsl': No such
+  file or directory (os error 2)`, cut with an ellipsis at the output's width.
+  With the shader alone: `render.errors` `[]` and the background's line alone
+  in the bar.
+- **The file fixed, `[effects]` changed, `[decorations] blur = true`, opacity
+  0.6.** `render.errors` `[]`, the bar gone; `render.effects` and the frame's
+  effects `{4, 2.0, 144 (500 was written), 0.1, 0.8}`; the stand-in's
+  `decoration.blur` still false.
+- **A window attached without a place** (the request an automatic adoption
+  sends), 400x300, its buffer plain red, withheld at first. The controller
+  placed it at (350, 168) over the first stand-in and logged `open`, serial 1;
+  its `decoration.blur` was true and its opacity 0.6. The element was opening
+  and unstarted, nothing was drawn at its centre, and nothing animated. With
+  the buffer delivered `-contentChanged:` answered YES, the loop ran 0.71 s
+  (upstream's length at speed 0.1 is 0.73 s) and stopped, the centre went from
+  the stand-in's grey to (152, 44, 44), red at 0.6 over it, and the frost had
+  been computed about 30 times: in the PNG the stand-in's label behind the
+  window is a soft glow.
+- **`window_closed` for it**, the tool dropping the buffer before drawing as
+  the shell does. `standin` false, event `close`; one snapshot of 428x328 in
+  the closing bucket, (218, 40, 40) in its first frame, nearly the opaque red,
+  and fading to the grey beneath over 0.71 s, then no element left; the
+  buffer's retain count was back to the tool's own 1.
+- **`suspend_on_close = true`, a second window, green, closed.** `standin`
+  true, event `close_to_standin`; an alpha-only snapshot over the stand-in,
+  gone after 0.68 s with the stand-in's label where the green was. IPC
+  `Relaunch` on it: `Ok`, one `launch` effect, `launching` true. A window of
+  the same application attached: it took slot 5, event `standin_adopted`; the
+  stand-in stayed whole (an alpha-only fade, unstarted, nothing animating)
+  until the window's blue buffer arrived, then faded over it in 0.68 s.
+- **IPC `Close` on the first stand-in.** `Ok`, event `standin_dismiss`, no
+  placement left; the stand-in, a little smaller in the first frame, faded
+  over 0.68 s to the blue window it had been beneath. The same on the third
+  stand-in, which the output does not show: the event, no element, nothing
+  animating.
+- A scene saved at the end mentions none of `effects`, `lifecycle_events`,
+  `errors` or `blur`. After `-reset` the layer, its renderer and every buffer
+  were released. The same run under the address and undefined-behaviour
+  sanitizers reported nothing, and `leaks --atExit` reported 0 leaks (it also
+  said the unsigned tool was not debuggable).
+
+**The app.** One launch as `--windowed 1100x700` on a private scene, config
+and socket, about 3 seconds, ended with SIGTERM: exit status 0, the socket
+file removed, the not-managed note on stderr. `msg state` listed the three
+placeholders at camera `550 -318`. The config was rewritten three times, each
+followed by `msg action reload-config`: an unknown action (stderr: `config:
+invalid action 'no-such-action': unknown action: no-such-action`), the broken
+`[effects` header (stderr: `config error: TOML parse error at line 1, column
+9` and its five lines), then a valid file with a changed `[effects]` and
+`[decorations] blur = true` (nothing on stderr). Each message was printed
+twice, presumably once for the file watcher's reload and once for the
+action's. A viewport
+capture after each of the three was byte for byte the capture taken before
+the first (`cmp`): no bar in a capture, and no frost. `msg focus --id 1` then
+`msg action close-window` dismissed the placeholder in view, and `msg close
+--id 3` one out of view: `msg state` listed two windows, then one, and every
+later request was answered. The scene file saved at exit holds one window and
+none of the words `effects`, `lifecycle_events`, `errors` or `blur`.
+
+Not run, and not known from any of the above: the app's own panel on a
+display, so the bar, a frost, a fade and an opening window were never seen
+where the owner will see them, and the dismissal in the app is known only to
+have left it answering; `render.effects`, `render.errors` and
+`lifecycle_events` as the app's own controller reports them, since `msg`
+reaches none of the three (the tool above read them from the same library); a
+captured window of any kind, so a real window's first picture, its last
+buffer at the moment it closes, capture on demand stopping a stream before a
+close, and whether a native window's own translucency lets a frost through;
+the frame timer itself and its 60 Hz against a display's refresh (the tools
+looped by hand, and a tick there took about 25 ms with the read-back); an
+animation during a camera flight; a pinned window or a widget opening or
+closing through the controller; a second display; a native-resize source
+closing; a config error at launch; blur over an animated background.
+
+### What was run for effects with the pointer policy and window sizing built in
+
+The effects were built on a tree that had rules and rendering and nothing
+later. Joined to the [pointer policy](#pointer-motion-sloppy-focus-and-pick-mode)
+and to [window sizing](#window-sizing-actions), the points where the sides
+meet are these:
+
+- **One frame timer.** A window that opens or leaves keeps it running as an
+  animated background does: it is started without the flag that says it
+  serves camera motion, so each of its frames takes the pointer's part (the
+  waiting hover, cursor edge pan's report), ticks no camera and leaves the
+  hot corners to the idle poll, and it stops with the last animation. That is
+  the code as read; no run observed the timer.
+- **An opening window that is owed a size.** The effects' renderer opened a
+  window on its first picture, or after a second without one. A window whose
+  rule names a `size` is being resized as it appears, and no picture of it is
+  drawn until that has settled, which can take longer than a second. The
+  renderer now reads the size transaction from the snapshot
+  (`native_resize`, while one of its effects is outstanding) and holds the
+  opening, and a stand-in fade waiting with it, until the last effect is
+  answered, then gives the first settled picture its second; a picture that
+  arrives before that, of the size the window is leaving, starts nothing. Ten
+  seconds is the most a window is held, so a resize that is never answered
+  cannot keep one invisible. Without `--experimental-native-resize` there is
+  no size transaction and nothing changes.
+- **A close while a size is owed** is refused by the controller, as before,
+  and logs nothing; the shell reports the close again when the resize has
+  been answered, and that close is the one logged.
+- **⌃⌥-click.** The controller's `forget` now logs the same event as a
+  dismissal for a placeholder, so the click fades it; the shell's code for
+  the click is unchanged.
+- A reload that fails still answers with `focus_follows_mouse` beside its
+  message, and a capture still holds no bar, frost or fading element.
+
+On 2026-10-10 (macOS 27.2, Apple Silicon), nothing with a Screen Recording
+grant and nothing saved as evidence:
+
+**Build and controller.** `./scripts/build-app.sh`, `cargo fmt --check` and
+`cargo clippy --all-targets -D warnings` on `driftwm-desktop` were clean, and
+the controller scenarios passed: `effects_flow` (5: the `forget` cases, the
+whole reply of a refused reload and one scenario for a size that is owed were
+added), `render_flow` (7), `rules_flow` (22), `sizes_flow` (30),
+`pointer_flow` (16), `lifecycle_flow` (25), `config_flow` (12), `ipc_flow`
+(8), `controller_flow` (4), `navigation_flow` (5), `gesture_flow` (21),
+`motion_flow` (9), `native_resize_flow` (25), `navigation_actions_flow` (12),
+and `tests/e2e/desktop-navigation.sh`.
+
+**The renderer alone, offscreen, outside the repository.** A throwaway tool
+linked `canvas-renderer.m`, the compositor and the background module as
+merged, described one output with one window from hand-written snapshots and
+asked `-animates:draw:` after each step whether an open animation had begun.
+With a size owed: not when the window mapped, not on a picture delivered
+during the baseline read (`-contentChanged:` answered NO), not when the
+output was described again with that picture, not 1.3 seconds on with the
+picture withheld, not when the transaction had just ended without a settled
+picture; then on the first settled picture (`-contentChanged:` YES), and in a
+second pass at the description that came with one. With no size transaction:
+on the first picture, or after 1.1 seconds without one, as before the merge.
+After a transaction that ended and left no picture: not at once, and yes a
+second later. With an effect never answered: not at 9.5 seconds, not at 10.2,
+yes at 11.3. Built against the effects' own renderer, before the merge, the
+same tool reported the open begun on the baseline-read picture and, in the
+second pass, after a second on nothing: seven of its checks failed there. The
+tool drew no frame and read no pixel. It shows when the frame description
+says an animation is running, which is what starts the frame timer.
+
+**The app.** One launch as `--windowed 1100x700` on a private scene, config
+and socket, 6 seconds, ended with SIGTERM: exit status 0, the socket file
+removed, the not-managed note on stderr. Every window was one of three seeded
+placeholders. `msg state` listed them at camera `550 -318`; `action
+center-nearest right` landed at `1950 -0` with `#2` focused, `pan-viewport
+right` at `2050 -0`, `zoom-to-fit` at `750 -390`, zoom 0.28484848484848485,
+and again back at `2050 -0`, zoom 1; `zoom-to-fit-snapped` at `1950 -0`, zoom
+0.7933333333333333, and back. `fit-window`, `fit-window-snapped`,
+`fill-window`, `grow-window right` and `shrink-window right` each answered
+`action not implemented on macOS yet: <name>`, and `msg resize --id 2 800
+600` `resize is not implemented on macOS yet: native layout resize is not
+available`. The config was then rewritten twice, each followed by `msg action
+reload-config`: an unknown action under `[keybindings]` (stderr: `config:
+invalid action 'no-such-action': unknown action: no-such-action`, twice, and
+`msg state` still answered), then `[effects] blur_radius = 4`,
+`animation_speed = 0.25` and `[decorations] blur = true` (nothing more on
+stderr). The three viewport captures taken before the error, with it and
+with blur on were the same bytes; the picture, 1100x636 and looked at, is the
+focused stand-in on the dot grid with no bar along the bottom and no frost.
+`msg focus --id 2` then `msg action close-window` dismissed that stand-in:
+`msg state` listed two windows and `msg focus` none; a capture taken at once
+and one a second later were the same bytes, the dot grid alone. The scene
+saved at exit holds two windows and none of the words `effects`,
+`lifecycle_events`, `errors` or `blur`.
+
+Not run: the app's panel was not looked at, so the dismissal's fade, like
+every other effect, is known only to have left the app answering, and `msg`
+cannot show it. No pointer event was sent, so the ⌃⌥-click and the fade it
+now plays, a hover on a frame that only an animation keeps alive, and the
+timer stopping after one are compiled and read only. No live window existed,
+so nothing opened or closed in the app, no rule was resolved and no size
+transaction ran there: the held opening is known from the tool's hand-written
+snapshots and from the controller scenario that pins down what those
+snapshots hold, never from a window being resized. The app was not launched
+with `--experimental-native-resize` for this join.
+
 ## Configuration
 
 A normal run is configured exactly like DriftWM: one TOML file in upstream's
@@ -1465,9 +1840,11 @@ the complete default table.
   missing after the run has read it, which is upstream's read failure
   (`config: failed to read <path>: No such file or directory`): settings,
   bindings and bookmarks stay as they were. While the file has such an
-  error, or a value upstream's parser warns about, the status line rests on the
-  first message, a count of the rest and the path, as upstream's error bar
-  does, until a later load is clean. Notes about bindings that were skipped are
+  error, or a value upstream's parser warns about, upstream's
+  [error bar](#blur-window-animations-and-the-error-bar) shows the message
+  along the bottom of every display, and the status line rests on the
+  first message, a count of the rest and the path,
+  until a later load is clean. Notes about bindings that were skipped are
   shown once, until the next status message. Every message also goes to stderr,
   upstream's own verbatim.
 - **Live reload.** The app watches the file and its directory and reloads
@@ -2001,6 +2378,9 @@ Applied now:
 | `[decorations] border_width`, `border_color`, `border_color_focused`, `corner_radius`, `shadow`, `opacity`, `opacity_focused`, `default_mode` | the border, corner clip and shadow of every window and stand-in, and the opacity of every window that has none of its own from a rule or `msg opacity`: `opacity_focused` for the one holding the canvas's logical focus, `opacity` for the others, both 1 by default (a stand-in is always opaque, as upstream's); `default_mode` is `client`, `minimal` or `none` (`server` only through a window rule, as upstream) |
 | `[decorations] bg_color`, `fg_color`, `title_bar_height`, `font`, `font_size`, `font_weight`, `title_align` | the chrome the compositor draws itself: stand-ins, and the title bar of a window a rule made `server`. `title_bar_height` is also the diagonal step of the placement cascade |
 | `[[window_rules]] decoration`, `border_width`, `border_color`, `border_color_focused`, `corner_radius`, `shadow`, `opacity` | the same per window, from the rule the window matched when it reached the canvas (bundle identifier as `app_id`, and `title`), kept until it is gone; never for a stand-in |
+| `[decorations] blur`, `[[window_rules]] blur` | the frost behind every window, or behind the window the rule matched when it reached the canvas; never behind a stand-in. See [Blur, window animations and the error bar](#blur-window-animations-and-the-error-bar) |
+| `[effects] blur_radius`, `blur_strength`, `animate_blur_fps` | the frost: its number of blur passes (2), their spread (1.1), and how often it is refreshed over an animated background (20 a second; 0 never; 144 at most) |
+| `[effects] animation_speed`, `animation_scale` | the open and close animations and the stand-in fades: the share of the remaining way covered per 60 Hz frame (0.5; 1 is instant) and the scale they grow from and shrink to (0.95; 1 fades only). Upstream's move, resize, fit and fullscreen animations, which the same two keys drive, do not exist here |
 | `[output.outline] color`, `thickness`, `opacity` | the outline of every other display's view of the canvas; thickness 0 draws none |
 | `[zoom] fit_padding` | also the margin of `msg screenshot all` |
 | `focus_follows_mouse` | off by default; on, the window under a moving pointer takes the focus without being raised, see [Pointer motion, sloppy focus and pick mode](#pointer-motion-sloppy-focus-and-pick-mode) |
@@ -2025,11 +2405,11 @@ and `caps_lock` (macOS owns the input sources and the lock keys), the rest of
 `[input.trackpad]` (macOS owns the device), `[input.mouse]`, `[input.touch]`,
 `[input.tablet]`,
 `[cursor]` (theme and size reach only the environment of a run command),
-`[background] cache_budget_mb`, `[decorations] blur`, `[effects]`, `[backend]`,
+`[background] cache_budget_mb`, `[backend]`,
 the rest of `[output]`, `[[outputs]]` `scale`, `transform`, `position` and
 `mode` (macOS owns the display arrangement) and
 `hot_corners.disable_when_fullscreen`, the rest of `[[window_rules]]`
-(`size`, `fullscreen`, `blur`, `preserve_aspect_ratio`, `pass_keys`,
+(`size`, `fullscreen`, `preserve_aspect_ratio`, `pass_keys`,
 `pass_mouse` and `layer_order` are kept with the window and change nothing),
 `[touch.*]`, `[mouse] resize_on_border` and the decoration settings, and
 tap-modifier bindings (a bare `alt+shift`), which are reported and skipped.
@@ -2840,7 +3220,10 @@ an IPC move is a logical world move that never moves the native window. Nested
 The compositor that now draws the canvas has been seen only through
 `msg screenshot`, with stand-ins: the picture in the app's own panels, a
 captured window drawn through it and its colour, and the outline of a second
-display are compiled and read only; blur and window animations are not drawn.
+display are compiled and read only. Blur, the open and close animations, the
+stand-in fades and the error bar are drawn by that compositor and were seen
+only in offscreen renders with synthetic pictures, never in a panel and never
+with a captured window; move and resize animations are not drawn.
 [Rendering](#rendering) has the list.
 Cluster behavior uses the controller contract; fixture evidence currently has a
 single source. Production chooser/managing of existing user windows has not been
@@ -2987,7 +3370,8 @@ newest motion is sent to the controller as `hover`, at most once a frame.
 While the 60 Hz frame timer of [Camera motion](#camera-motion) runs, each of
 its frames carries the motion that is waiting, ahead of cursor edge pan's
 pointer report and the tick. That timer is also the one an animated
-`[background]` keeps running ([Rendering](#rendering)); its frames then tick
+`[background]`, or a window that opens or leaves, keeps running
+([Rendering](#rendering)); its frames then tick
 nothing and still carry the waiting motion and the report. While no frame
 timer runs, a timer of the hover's own
 sends it, a sixtieth of a second after the last one at the earliest. Where the
@@ -3601,7 +3985,9 @@ With `--experimental-native-resize`:
   without cancelling it.
 - A config whose window rule names a `size` now asks a matching new window to
   take that size; before, and still without the flag, the size was only
-  recorded.
+  recorded. Such a window is first drawn, growing and fading in, when that
+  request has been answered
+  ([window animations](#blur-window-animations-and-the-error-bar)).
 
 ### Limits of sizing
 

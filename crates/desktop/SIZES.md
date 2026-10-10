@@ -344,7 +344,9 @@ latest-request slot is done; the rest is refused, never queued:
 - **A window that closes while its size is owed.** `window_closed` is refused
   while the effect is outstanding, as for a drag. The adapter then reports
   `missing_window`, the transaction fails, nothing of the plan is written, the
-  close is accepted, and the next sizing action starts normally.
+  close is accepted, and the next sizing action starts normally. The refused
+  report logs no lifecycle event and the accepted one logs the close once
+  ([EFFECTS.md](EFFECTS.md#beside-a-size-that-is-owed)).
 - **A window the adapter will not resize** (`unsupported`): nothing is written
   and the source is marked `resize_disabled`, as the transaction marks it; later
   sizing actions on it answer `source resize unsupported`.

@@ -26,7 +26,7 @@ use super::view_actions::pixel_size;
 use super::*;
 use driftwm_core::config::{
     BackgroundKind, Config, DecorationConfig, DecorationMode, FontWeight, TitleAlign,
-    effective_blur, effective_border_color, effective_border_color_focused, effective_border_width,
+    effective_border_color, effective_border_color_focused, effective_border_width,
     effective_corner_radius, effective_decoration_mode, effective_shadow_enabled,
 };
 
@@ -136,6 +136,8 @@ impl Controller {
             "background":{"type":kind,"path":path,"texture":texture,"mirror_tile":background.mirror_tile,"transparent_shader":background.transparent_shader,"animate_fps":background.animate_fps,"cache_shader":background.cache_shader},
             "chrome":{"background":rgba(decorations.bg_color),"foreground":rgba(decorations.fg_color),"corner_radius":decorations.corner_radius,"title_bar_height":decorations.title_bar_height,"font":Some(&decorations.font).filter(|font| !font.is_empty()),"font_size":decorations.font_size,"font_weight":weight_name(decorations.font_weight),"title_align":align},
             "outline":{"color":rgba(outline.color),"thickness":outline.thickness,"opacity":outline.opacity},
+            "effects":self.effects_block(),
+            "errors":self.error_messages(),
             "revision":self.render_revision,
         })
     }
@@ -143,7 +145,8 @@ impl Controller {
     /// the window mapped with (`drawn_rule` in rules.rs): never resolved
     /// again here, so a retitle or a config reload re-applies none, and an
     /// IPC `Opacity` write is part of it. A stand-in carries no rule and
-    /// takes the global table alone, as upstream's does, and it is opaque.
+    /// takes the global table alone, as upstream's does, and it is opaque
+    /// and never blurred (`blur_of` in effects.rs).
     /// The opacity is `opacity_of`, the placement's own `opacity`. Never
     /// fullscreen: there is none here.
     fn decoration(&self, window: WindowId) -> Decoration {
@@ -160,7 +163,7 @@ impl Controller {
             corner_radius: effective_corner_radius(applied, mode, decorations),
             shadow: effective_shadow_enabled(applied, mode, decorations),
             opacity: self.opacity_of(window),
-            blur: effective_blur(applied, decorations, false),
+            blur: self.blur_of(window),
             mode: mode.clone(),
         }
     }

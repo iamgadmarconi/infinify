@@ -38,7 +38,7 @@ Preserve them as integers in native code.
 | `adoption_complete` | optional `present`, an array of `{bundle_id, title}` | `{dropped, standins, dirty}` |
 | `observe` | `window`, `identity`, `source_rect`, `buffer` | `{}`; never changes world geometry |
 | `remove_source` | `window`, `identity`, `keep_placeholder` boolean | `{}` |
-| `forget` | `window` | `{}`; removes source and world placeholder |
+| `forget` | `window` | `{}`; removes source and world placeholder; a placeholder it removes is logged as a `standin_dismiss` ([EFFECTS.md](EFFECTS.md#lifecycle-events)) |
 | `pan` | `output`, `screen_delta` point, optional `time_ms` and `source` | `{}`; positive X reveals world to right; with `time_ms` it feeds momentum |
 | `pan_end` | `output`, optional `time_ms` | `{needs_frames}`; launches momentum |
 | `pointer` | `output` or null, global `screen` point | `{needs_pointer, needs_frames}`; for cursor edge pan |
@@ -59,7 +59,7 @@ Preserve them as integers in native code.
 | `gesture_begin` | `kind`, `fingers`, `modifiers`, `context`, `output`, global `pointer` point, optional `doubletap`, `time_ms` | `{gesture, fired, note, navigation, effects, dirty, needs_frames, trackpad}` |
 | `gesture_update` | optional `dx`, `dy`, `scale`, `rotation`, `held`; `time_ms` | the same |
 | `gesture_end` | optional `cancelled`, `held`; `time_ms` | the same |
-| `snapshot` | none | `outputs`, `windows`, `focused`, `placements`, `lifecycle`, `render`, `evidence`; each output with `pick` ([POINTER.md](POINTER.md#pick-mode)), each window with its `widget`, `pinned`, `rule` and `mode` ([SIZES.md](SIZES.md#mode)), each placement with `pinned`, `widget` and `opacity`, and both with what the window is drawn with (`kind`, `decoration` and the rest of [RENDER.md](RENDER.md#placements)) |
+| `snapshot` | none | `outputs`, `windows`, `focused`, `placements`, `lifecycle`, `lifecycle_events` ([EFFECTS.md](EFFECTS.md#lifecycle-events)), `render`, `evidence`; each output with `pick` ([POINTER.md](POINTER.md#pick-mode)), each window with its `widget`, `pinned`, `rule` and `mode` ([SIZES.md](SIZES.md#mode)), each placement with `pinned`, `widget` and `opacity`, and both with what the window is drawn with (`kind`, `decoration` and the rest of [RENDER.md](RENDER.md#placements)) |
 | `screenshot_result` | `path`, `width`, `height`; or `error` | `{reply}`: upstream's reply to the client that asked for the screenshot |
 | `save` / `load` | explicit caller `path` string | `{}` |
 | `load_config` | `path` string or null | `{path, exists, errors, warnings, dirty, effects, focus_follows_mouse}` |
@@ -94,6 +94,9 @@ a pinned window, `toggle-pin-to-screen`, `move-to-bookmark`, and IPC `Pin` and
 snapshot's `render` block, what each placement is drawn with (the rule its
 window mapped with, the layer and the space it is drawn in), and the
 `msg screenshot` flow that ends in `screenshot_result`.
+[Effects](EFFECTS.md) covers what DriftWM's blur, window animations and error
+bar are drawn from: the `[effects]` table and the error messages in `render`,
+each window's `decoration.blur`, and the snapshot's `lifecycle_events`.
 [Trackpad gestures](GESTURES.md) covers `gesture_begin`, `gesture_update` and
 `gesture_end`: a libinput-shaped swipe, pinch or hold dispatched against the
 `[gestures]` tables. They are apart from `begin_drag`, `begin_resize`,
@@ -192,7 +195,7 @@ already exist. Loads are bounded at 32 MiB and never modify the input file.
 Verification:
 
 ```sh
-cargo test -p driftwm-desktop --test navigation_flow --test navigation_actions_flow --test focus_cycle_flow --test controller_flow --test config_flow --test lifecycle_flow --test motion_flow --test gesture_flow --test rules_flow --test render_flow --test pointer_flow --test sizes_flow --locked
+cargo test -p driftwm-desktop --test navigation_flow --test navigation_actions_flow --test focus_cycle_flow --test controller_flow --test config_flow --test lifecycle_flow --test motion_flow --test gesture_flow --test rules_flow --test render_flow --test pointer_flow --test sizes_flow --test effects_flow --locked
 cargo clippy -p driftwm-desktop --all-targets -- -D warnings
 cargo fmt -p driftwm-desktop --check
 cargo build -p driftwm-desktop

@@ -52,6 +52,10 @@ it is an object. `dirty` is true when saved state changed.
 All three are one `suspended: true` in the IPC `State` and one "detached
 placeholder" everywhere else in this ABI, as before.
 
+Which of the events below upstream animates, and how the snapshot's
+`lifecycle_events` reports each to the shell, is
+[EFFECTS.md](EFFECTS.md#lifecycle-events).
+
 ## A window appears
 
 `attach` with neither `logical_id` nor `world_rect` means a window appeared by
