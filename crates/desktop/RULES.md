@@ -194,7 +194,22 @@ A window that maps with the rule's size already is asked nothing, a widget
 and a pinned window included, and `size` is not listed. The request never
 fails the `attach`: a frame that cannot be placed for the size asked is
 placed for the window's own, as without the capability.
-`preserve_aspect_ratio` and `fullscreen` stay recorded and not applied.
+`preserve_aspect_ratio` stays recorded and not applied.
+
+`fullscreen` is applied under the same capability, in upstream's order for a
+rule that names both: the size is configured first, the window placed for it,
+and the deferred fullscreen then saves that frame. So the window is placed
+for the size its rule names, a rule-pinned one at its pin, and enters
+fullscreen from there in place of the arrival's navigation and of this
+request. It enters at the size it has: the rule's `size` is never asked
+before the output's, and is owed as the size the window comes back to, at
+the frame it was placed for. It waits in no queue, and `size` is not listed:
+[FULLSCREEN.md](FULLSCREEN.md#a-new-window). A fullscreen's own transaction
+holds the one slot like any other, so a ruled window that maps meanwhile
+waits its turn behind it and is asked in the reply that ends it; and a
+`toggle-fullscreen` on a window that still waits is a sizing of the user's
+that takes it off the queue: it comes back at the size it had, and `size`
+stays listed, since it was never asked.
 
 While its size is owed a window is the transaction's, a rule-pinned one and
 a widget like any other: `window_closed` waits for the result, no drag takes
@@ -443,6 +458,17 @@ decides whether the window may claim at all (below).
   is answered as above the threshold. A widget that is not pinned is the
   one case this does not reach, see
   [Differences](#differences-from-upstream).
+- **A fullscreen window claims with no gate at all.** Upstream's
+  `fullscreen_claims` asks its `pass_mouse` at the button site, the notch
+  site and the scroll site alike, ahead of every pick-mode test ("a pinned
+  window's button claims and a fullscreen window's claims still apply",
+  `docs/window-rules.md`). `hit` reports it on its own output, where nothing
+  else is drawn, and never as a pick target: its output is parked at zoom 1
+  and it is no canvas window. The lookup holds that whatever its caller says:
+  `pick` is ignored for a fullscreen window, a press, a scroll and a notch
+  it claims are all `passed`, and none of them is looked up again on the
+  canvas. A claimed press or scroll ends no fullscreen; an unclaimed one
+  follows [the exit rules of its site](FULLSCREEN.md#leaving).
 - **Chrome is never `pass_mouse`'s to give**, upstream says of its title bar,
   close button and resize borders. No chrome can be hit here: `hit` tests a
   window's frame, a `server` window's drawn title bar lies above the frame
@@ -540,6 +566,18 @@ are the commands of any drag:
   every gesture.
 - Nothing is installed while the pin's output is gone (`the window's output
   is not connected`), and a pinned widget is refused as a widget.
+- **A fullscreen output takes no pin.** It draws its fullscreen window alone
+  ([FULLSCREEN.md](FULLSCREEN.md#the-pointer-and-other-outputs)), so while
+  `gesture_to`'s `pointer` is over one the drag is frozen: the pin stays
+  where it was, on the output it was on, and the drag goes on from the
+  pointer's displacement once the pointer has left it again. That is
+  upstream's `MoveGrab::motion` ("a window dragged there would just
+  vanish"). No output becomes fullscreen under a drag: an enter is refused
+  while any gesture is installed, `a window is under an interactive move or
+  resize`. A window whose own pin is on a fullscreen output is hidden there
+  and is not taken from elsewhere (`the window's output is fullscreen`); a
+  press on that output is a grab, which ends its fullscreen first, and the
+  pinned window is then drawn again and dragged like any other.
 - `begin_drag` raises and focuses the window ahead of the grab, for a pinned
   window as for a canvas one, and its reply is the focus request
   (`{"effect":…}`, null for a slot with no window), which the shell performs
@@ -715,7 +753,12 @@ rule takes, sorted by output and position. `is_widget` is filled.
   after another, so the later of several that map together stand at their
   own size until their turn. Without `--experimental-native-resize` nothing
   is asked at all, and `rule.not_applied` names `size`.
-- **`fullscreen` is recorded, not applied**, and named in `not_applied`.
+- **`fullscreen` is applied only when the shell can deliver a size**
+  ([FULLSCREEN.md](FULLSCREEN.md#the-gate)), and not during the launch pass.
+  Otherwise it is recorded and named in `not_applied`. With a `size` beside
+  it the size is owed, not asked first: one transaction takes the window
+  from its own size to the output's, where upstream's client is configured
+  twice.
 - **`preserve_aspect_ratio`** is recorded and listed in `not_applied`: no
   resize is bent to it.
 - **`layer_order` is ignored, which is upstream's own rule for a window.**
@@ -762,9 +805,16 @@ rule takes, sorted by output and position. `is_widget` is filled.
   still carries horizontal lines only, so a shift-qualified `zoom` binding
   zooms nothing and a `pan-viewport` one pans sideways. The swap was read off
   wheel events built in memory (macOS 27.2); no wheel was turned.
-- **No fullscreen legs.** Upstream's fullscreen window claims in its own
-  branch of each site, and is the subject of a notch on its output. Nothing
-  is fullscreen here.
+- **The fullscreen legs are the same lookup.** Upstream's fullscreen window
+  claims in its own branch of each site (`fullscreen_claims`), ahead of every
+  pick-mode test, and is the subject of a press, a scroll and a notch
+  anywhere on its output. Here `hit` reports the fullscreen window where it
+  is drawn, never as a pick target, so its claims hold for all three with no
+  gate, and a claimed press or scroll is the application's and ends nothing.
+  In the band a smaller fullscreen window leaves, `hit` reports nothing: the
+  lookup is the canvas context's and nobody claims, where upstream still asks
+  the fullscreen window
+  ([FULLSCREEN.md](FULLSCREEN.md#differences-from-upstream)).
 - **A pinned window is not resized, and not moved by a title bar.** Upstream's
   `try_pinned_button` raises and focuses a pinned window and starts
   `start_pinned_move` or `start_compositor_resize_with_edge`; its title bar,
@@ -908,8 +958,10 @@ press, a bound scroll, a bare scroll retried on the canvas, a bound and a
 bare notch, a bare press left to the pick), a pinned window keeping its
 button claims and losing its scroll and notch claims, a window pinned on the
 other output, above the threshold, keeping them all, the pinned window
-dragged there, and every claim back at zoom 1. Its fullscreen and title-bar
-cases have nothing to run against here. A pinned window is dragged at zoom
+dragged there, and every claim back at zoom 1. Its fullscreen cases are
+`tests/fullscreen_flow.rs`'s (a fullscreen window's claims at all three
+sites, with and without `pick`, and its `pass_keys`); its title-bar cases
+have nothing to run against here. A pinned window is dragged at zoom
 0.5 on an output that is not at the global origin: by the screen
 displacement and not by twice it, a half rounded, unclamped past two
 corners, with the pointer in the edge-pan zone against a canvas window's

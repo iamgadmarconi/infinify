@@ -17,8 +17,10 @@
 // placeholder is upstream's stand-in. The candidates of every search here are
 // upstream's canvas windows (`is_canvas_window`, `Controller::on_canvas`): no
 // widget and no screen-pinned window, which are raised and focused where they
-// are and never flown to (RULES.md). Fullscreen and modal handling is absent;
-// a filled window's view restore is sizes.rs's `navigate_restoring_fill`.
+// are and never flown to (RULES.md). A fullscreen window is no canvas window
+// either: it is focused on its own output and no target from any other
+// (FULLSCREEN.md). Modal handling is absent; a filled window's view restore
+// is sizes.rs's `navigate_restoring_fill`.
 // Only world rectangles, output poses and the navigation context are read,
 // never native geometry.
 use super::view_actions::{pixel, pixel_size};
@@ -189,6 +191,16 @@ impl Controller {
         output: OutputId,
         policy: ZoomPolicy,
     ) -> Result<Moved, Error> {
+        // A fullscreen window lives in screen space on its own output. There
+        // it is focused and the parked camera stays; from any other output it
+        // is invisible and no target: nothing is focused and nothing moves.
+        if let Some(own) = self.fullscreen_output_of(window) {
+            self.navigation_context(output)?;
+            return match own == output {
+                true => self.raise_and_focus(window),
+                false => Ok(Moved::default()),
+            };
+        }
         if !self.on_canvas(window) {
             self.navigation_context(output)?;
             return self.raise_and_focus(window);
@@ -212,7 +224,8 @@ impl Controller {
     ) -> Result<Option<Moved>, Error> {
         self.navigation_context(output)?;
         self.focus.release_pending = false;
-        let Some(window) = self.scene.cycle_focus(backward)? else {
+        // Upstream cycle_step passes over a fullscreen window.
+        let Some(window) = self.cycle_past_fullscreen(backward)? else {
             return Ok(None);
         };
         let navigation = self.arm_navigation(window, output, ZoomPolicy::Keep)?;
@@ -420,11 +433,17 @@ impl Controller {
                     identity: source.identity.clone(),
                     generation: source.generation,
                 };
-                let home = self.home_output(window, output)?;
-                let share = match home {
-                    Some(home) => self.visible_share(window, home)?,
-                    None => 0.0,
+                // A fullscreen window's home is the output it fills, whatever
+                // other camera happens to show the canvas it is parked on.
+                let home = match self.fullscreen_output_of(window) {
+                    Some(own) => Some(own).filter(|own| self.scene.output(*own).is_some()),
+                    None => self.home_output(window, output)?,
                 };
+                let shown = |controller: &Self| match home {
+                    Some(home) => controller.visible_share(window, home),
+                    None => Ok(0.0),
+                };
+                let share = shown(self)?;
                 // Upstream window_already_active: the window holds the keyboard
                 // and is at least partly on screen, so the request asks for
                 // what already holds.
@@ -443,6 +462,17 @@ impl Controller {
                 if let Some(echo) = self.hover_echo(&observed)? {
                     return Ok(echo);
                 }
+                // Upstream activate_window_output_local: another window being
+                // activated on a fullscreen output ends that fullscreen first,
+                // so the target is not focused behind it and what is visible
+                // is judged by the restored camera, not the parked one.
+                let ended = home
+                    .filter(|home| self.fullscreen_on(*home).is_some_and(|held| held != window))
+                    .and_then(|home| self.exit_fullscreen_on(home));
+                let share = match ended {
+                    Some(_) => shown(self)?,
+                    None => share,
+                };
                 // The observation is the focus: nothing is asked of the adapter.
                 self.finish_cycle();
                 self.focus.pending_effect = None;

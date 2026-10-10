@@ -1401,6 +1401,174 @@ device-specific behavior also need the corresponding hardware.
   [sizes](../../crates/desktop/SIZES.md), [rules](../../crates/desktop/RULES.md),
   [effects](../../crates/desktop/EFFECTS.md) and
   [navigation](../../crates/desktop/NAVIGATION.md#activate) contracts.
+- This milestone (commit pending), fullscreen, makes DriftWM's fullscreen
+  controller policy (`crates/desktop/src/fullscreen.rs`, adapted from
+  upstream's `src/state/fullscreen.rs`, the fullscreen arms of
+  `src/input/actions.rs` and the fullscreen lines of its navigation, output,
+  pointer, gesture, IPC and map paths, with driftwm-core's own
+  `Action::runs_during_fullscreen` and `place_auto`): `toggle-fullscreen`,
+  the window rule `fullscreen = true` with its `output`, the per-output
+  fullscreen state with the saved place, size, camera, zoom and pin that the
+  exit restores, the parked camera, centring of a window that took another
+  size, what ends a fullscreen (upstream's action guard, so `exec` but not
+  `spawn`; bound pans, zooms and grabs; IPC camera, zoom and suspend, and not
+  IPC close; the activation of another window, a new one that macOS made key
+  among them; the window closing; another ruled window taking the output;
+  output removal), the background placement of a new window, `home-toggle`'s return into fullscreen and `send-to-output`'s
+  fullscreen leg, the translucent rule, `disable_when_fullscreen` for hot
+  corners, hover's re-assertion of the fullscreen window's focus, and
+  fullscreen in the snapshot (`outputs[].fullscreen`, the `fullscreen` mode,
+  one placement marked `fullscreen` in output screen space with a bare
+  decoration) and in IPC `State`. The shell's renderer draws that placement
+  as the compositor's fullscreen element (bare, at its screen rectangle at
+  zoom 1, over black or, for the translucent rule, over the canvas
+  background and the outlines), draws no resize handle on it and suppresses
+  its output's hot corners. This is not macOS native fullscreen, which is
+  never used. A fullscreen window is resized to its output, and that goes
+  through the same size transaction as the sizing milestone above, so the
+  whole feature sits behind the same gate: without
+  `native_resize_capability`, which the shell sends only when started with
+  `--experimental-native-resize`, `toggle-fullscreen` and a rule's
+  `fullscreen` answer and report byte for byte as before, no output is ever
+  fullscreen, and no switch was added. Evidence boundary: **no native window
+  was resized or presented fullscreen.** Fullscreen ran only in controller
+  scenarios through the exported C ABI
+  (`crates/desktop/tests/fullscreen_flow.rs`, 15 scenarios on two outputs,
+  neither at the global origin), in which the test plays the native side and
+  answers each resize effect with a made-up result, with the capability-off
+  replies compared against literals captured from the tree before this work
+  and upstream not executed as an oracle. The renderer's part was read back
+  offscreen by a throwaway program outside the repository, on hand-written
+  snapshots in the contract's shape, before the controller side existed. Built
+  together on 2026-10-10 (macOS 27.2, Apple Silicon), reading the two sides
+  against each other found that the controller counted on `hover` replies to
+  carry the size an exit still owed while the shell performs none from a
+  hover reply, which would have stranded a window at its output's size;
+  `hover` no longer carries one, and two replies the shell dropped (the
+  bookmark question before `go-to-bookmark`, the cancelled `gesture_end`
+  after a refused update) now reach its size hook. The test modules of every
+  touched source file then passed (229 scenarios in 17 modules), as did the
+  headless navigation coordinator script; asked with upstream's built-in
+  defaults by a throwaway program outside the repository, the controller's
+  `bindings` reply lists 45 key bindings of which 42 run without the
+  capability and all 45 with it, and of the 35 action names of upstream's
+  grammar it refuses six by name without the capability and none with it;
+  and the app was driven twice over a
+  private socket on a private scene of three detached placeholders, with no
+  Screen Recording access: without the flag `toggle-fullscreen` answered its
+  previous refusal and `state` printed `fullscreen 0`; with it
+  `toggle-fullscreen` answered `ok` on a focused placeholder and changed
+  nothing (there is no refusal for a stand-in: upstream's arm does nothing
+  without a client), `state` still printed `fullscreen 0`, and a viewport
+  screenshot rendered and was looked at. That is as far as the socket
+  reached: no live window existed, so no fullscreen was entered and no size
+  transaction ran in the app, and the shell's reply paths for one, the
+  drawing of a controller-reported fullscreen placement, every key, mouse
+  binding, gesture and hot corner that toggles fullscreen, a rule's
+  `fullscreen` on a real window and every way out are compiled and read only;
+  nothing was saved as evidence. Known mismatches: no enter or exit
+  transition, and a grey placeholder while a size is unresolved; the answer
+  to an offered size is a native result, not a configure ack; a size is
+  written only when a native observation commits it, so a window that has
+  left fullscreen keeps its output's size until its transaction answers, and
+  after an exit made by a pan, a zoom, a pointer drag, an output change or a
+  displaced incumbent that transaction begins only with the next action, IPC
+  request, gesture or click; a restore whose transaction ended before the
+  window was asked is begun again, three times at most, and one the
+  application refused is not; a new window that takes the keyboard as it
+  opens ends the fullscreen, where upstream keeps a background-placed window
+  unfocused; a resize drag out of fullscreen starts from the output's size; one transaction, so an
+  enter is refused while another size is owed; output removal is settled when
+  the shell has said which outputs exist, not at removal; a rule's
+  `fullscreen` is not applied to windows already open at launch, to a window
+  attached by hand or to an adopted slot; on the band beside a smaller
+  fullscreen window only the fullscreen window is hit and a mouse binding is
+  resolved in the canvas context; no pointer warp, no carried pointer lock
+  and no client fullscreen request; the older `cycle_focus` command does not
+  pass over a fullscreen window; a capture draws the canvas rather than the
+  fullscreen output; and a window still fullscreen at Quit or Return to
+  desktop is handed its size back by the shell before the scene is saved
+  (compiled, and run only with nothing fullscreen), while one whose shutdown
+  is cut off keeps its output's size and is saved at its old place with that
+  size, where upstream saves the frame from before. All of the above was
+  built on the window sizing milestone. Merged with the three milestones
+  above (effects, pass-through and the pinned drag, upstream behaviour
+  gaps), fullscreen meets each of them in upstream's way. Effects: a
+  fullscreen window is frosted by its own rule's `blur` alone
+  (`effective_blur`'s `is_fullscreen`, in the one function that answers
+  `decoration.blur`); a window that maps straight into fullscreen logs its
+  `open` and one that closes fullscreen its `close`; the shell's renderer
+  applies its one fullscreen function to the frame the effects build, draws
+  the error bar on a fullscreen display as on any other (upstream builds it
+  for every output, and the compositor notes say the same), leaves closing
+  snapshots and stand-in fades out of a fullscreen display's frame
+  (upstream: "no dying-window flash over a fullscreen app"), bakes a
+  fullscreen window's own snapshot bare, and does not hold the opening of a
+  window that is fullscreen for the size it is owed. Pass-through: the
+  fullscreen window claims by `pass_mouse` at the button, scroll and notch
+  sites with no pick gate (upstream `fullscreen_claims`), passes its
+  `pass_keys` while it holds the keyboard, and a wheel notch's action runs
+  through the action guard; a pinned drag is frozen while the pointer is
+  over a fullscreen output (upstream's move grab), no drag of a window
+  pinned to a fullscreen output is installed from elsewhere, and no output
+  becomes fullscreen under a drag. The closed gaps: a grab on a fullscreen
+  output ends the fullscreen, then raises and focuses the window, then takes
+  hold, upstream's order for a press bound to move or resize, and a refused
+  grab undoes all three; a rule that names both `size` and `fullscreen`
+  places the window for the size, as upstream configures it first, and the
+  fullscreen then owes that size for its exit instead of asking it, so the
+  window waits in no queue, while a ruled window that maps during a
+  fullscreen's transaction waits its turn behind it and is placed in the
+  background against the frames the waiting ones are becoming; a window
+  owed its size by an exit is measured by that size, not by the output's
+  the enter last asked, so a fit or fill out of fullscreen lands where a
+  plain one does, and a filled window comes back at the size its fill asked
+  for; IPC `resize` refuses a fullscreen window in upstream's words before
+  it raises anything; a widget or a screen-pinned window is sized by two
+  requests only, its rule's `size` as it maps and a fullscreen exit's
+  restore, and the size transaction refuses every other. Five scenarios
+  added to `fullscreen_flow` (20 now) and one case in its fit scenario cover
+  those joins, the test again playing the native side; the one that pins the
+  configured size was seen to fail with the fix taken out. The
+  capability-off literals were captured again, from the tree before this
+  merge built apart: every reply was byte for byte the one recorded but a
+  key binding's `bindings` entry, which pass-through had given `passable`,
+  and the sizing literals of `sizes_flow` did not change. Asked with
+  upstream's built-in defaults, the merged controller's `bindings` reply
+  lists 45 key bindings of which 42 run without the capability, leaving
+  `toggle-fullscreen`, `fit-window` and `fit-window-snapped`, and all 45
+  with it; of the 35 action names of upstream's grammar it refuses six by
+  name without the capability (those three, `grow-window`, `shrink-window`,
+  `fill-window`) and none with it. Nineteen controller test modules passed
+  (263 scenarios), as did the headless navigation coordinator script. The
+  merged app was launched twice on 2026-10-10 on three detached
+  placeholders (private scene, config and socket, no Screen Recording
+  access, nothing saved): without the flag `center-nearest right` settled
+  on the Browser placeholder at camera `1950 -0`, `pan-viewport right`
+  moved it to `2050 -0`, `zoom-to-fit` framed all three at zoom
+  `0.28484848484848485` and came back, `toggle-fullscreen` answered its
+  refusal unchanged, `state` printed `fullscreen 0` and a viewport
+  screenshot was written and looked at; with the flag `toggle-fullscreen`
+  answered `ok` on a focused placeholder and changed nothing, as before the
+  merge, and the app exited with status 0 on SIGTERM with its socket
+  removed, through the shutdown path that ends fullscreens, with nothing
+  fullscreen. That adds nothing to the evidence boundary: no live window
+  existed in either launch, so no fullscreen was entered, no size
+  transaction ran in the app, nothing was drawn fullscreen, no window had a
+  rule, a pin or a picture, and no pointer event was sent; the joins ran
+  only as controller scenarios, and the shell's side of them is compiled
+  and read. Further mismatches from the join: a rule's `size` beside its
+  `fullscreen` is owed, not asked first, where upstream configures the
+  client twice; and in the band beside a smaller fullscreen window nobody
+  claims by `pass_mouse`, where upstream still asks the fullscreen window.
+  The shell ends every fullscreen once before it shuts down, at Quit, on
+  SIGTERM and at Return to desktop; a screen change is no shutdown, and
+  there a fullscreen whose output is still connected is kept and one whose
+  output went is ended by the controller, as upstream does both. The
+  feature stays behind `--experimental-native-resize` until a live native
+  resize pass exists. See the
+  [fullscreen contract](../../crates/desktop/FULLSCREEN.md) and the
+  [desktop shell notes](../../native/desktop/README.md#fullscreen).
 
 These milestones add evidence to partial rows. None satisfies an entire native
 behavior row or changes the completion requirement.

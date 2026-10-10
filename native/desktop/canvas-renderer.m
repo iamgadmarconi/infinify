@@ -321,9 +321,12 @@ static const double sizeHold=10;
                 // Upstream's open animation, for a window an `open` event names that this output has not shown opening. It runs from the
                 // window's first picture: here when it has one, or has waited a second for it, else in -contentChanged:. While its size is
                 // owed (`owed`, above) the wait is renewed instead, so that second starts when the size transaction has ended.
+                // Not for a window that is fullscreen here (a rule's `fullscreen` as it mapped): the size it is owed is its output's, the
+                // controller has marked the output at once and nothing else is drawn on it, so a held window would leave it black for as
+                // long as the application takes. It is drawn from its first picture at the size it has (FULLSCREEN.md, No transition).
                 NSNumber *since=state.unseen[window];
                 if([opened[window]unsignedLongLongValue]>state.serial&&self.effects.animationSpeed<1){since=@(now);element.lifecycle=IFCompositorLifecycleOpening;element.lifecycleStartTime=NAN;element.lifecycleProgress=0;}
-                NSNumber *held=since&&[self.sizing isEqual:window]?(state.owed[window]?:@(now)):nil;
+                NSNumber *held=since&&[self.sizing isEqual:window]&&![number(p[@"fullscreen"])boolValue]?(state.owed[window]?:@(now)):nil;
                 if(held)owed[window]=held;
                 if(held&&now-held.doubleValue<sizeHold)unseen[window]=@(now);
                 else if(since&&!pictured(element)&&now-since.doubleValue<1)unseen[window]=since;
@@ -336,10 +339,61 @@ static const double sizeHold=10;
         // The stand-in of an adopted slot fades once its window is no longer waited for: it has its picture, a second has passed, or it is not drawn here as a window.
         for(NSNumber *window in state.adopted.allKeys)if(!unseen[window]){state.adopted[window].lifecycleStartTime=began(state,now);[state.adopted removeObjectForKey:window];}
         // Where the closing bucket sits among the windows makes no difference: the compositor draws it above the canvas windows and below the pinned ones.
-        [frame.elements addObjectsFromArray:state.leaving];
+        // Upstream draws no closing snapshot and no stand-in fade on an output that is visually fullscreen ("no dying-window flash over a
+        // fullscreen app": COMPOSITOR-NOTES.md 18.2, When not to). They are left out of that output's frame and run out unseen on the
+        // clock they began on, as upstream's lists do: -flush drops each when it is over, and what is left is back with the canvas.
+        if(!dict(o[@"fullscreen"]))[frame.elements addObjectsFromArray:state.leaving];
         state.elements=elements;state.placements=placements;state.unseen=unseen;state.owed=owed;state.serial=self.played;state.dirty=YES;
+        [self fullscreen:o among:all state:state];
     }
     [self setNeedsFlush];
+}
+// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
+// src/state/fullscreen.rs (enter_fullscreen: the window fills its output at zoom 1 from
+// the output's own corner; recentre_fullscreen_window: one that took another size sits
+// in the middle of it), src/render/chrome.rs (DrawnChrome::drawn: a fullscreen window
+// sheds bar, border, corners and shadow) and src/tests/translucent_fullscreen.rs
+// (fullscreen_conceals_canvas: an opaque fullscreen window conceals the background and
+// the outlines of the other outputs, also where a smaller one leaves a band, which stays
+// the clear colour; one drawn see-through leaves both drawn under it). Which window is
+// fullscreen where, what else its output still shows and where the window sits are the
+// controller's: outputs[].fullscreen, the placements it lists for that output and the
+// screen_rect of the one it marks fullscreen. No native window geometry is read.
+//
+// One output's fullscreen, applied to the frame -render: has just described. The marked
+// placement is drawn at its screen_rect, global screen points at zoom 1 whatever the
+// output's camera and zoom, and bare. That is the compositor's pinned space: output-local
+// points at zoom 1, which its output space only approximates by dividing by the frame's
+// zoom (COMPOSITOR-NOTES.md, deviation 10); at zoom 1 the two are the same arithmetic.
+// The window keeps its place in the list and its layer. Run for every output on every
+// describe, so the background and the outlines are back with the first frame after the exit.
+//
+// A fullscreen output shows a screen-space window, not a canvas viewport, so it projects no
+// outline onto the others (upstream build_output_outline_elements passes over one that is
+// visually fullscreen, opaque or see-through): an output with such a neighbour has its
+// outlines described again here, from the snapshot's outputs, without that neighbour's.
+- (void)fullscreen:(NSDictionary *)o among:(NSArray<NSDictionary *> *)all state:(DWCanvasOutput *)state {
+    IFCompositorFrame *frame=state.frame;NSDictionary *full=dict(o[@"fullscreen"]);CGPoint corner=rectOf(o[@"screen_bounds"]).origin;
+    // "black": nothing but the clear colour lies behind the window. "canvas": its opacity is below 1 and the canvas shows through it.
+    BOOL concealed=full&&![text(full[@"backdrop"])isEqual:@"canvas"],parked=NO;
+    for(NSDictionary *other in all)if(other!=o&&dict(other[@"fullscreen"]))parked=YES;
+    frame.background=concealed?nil:self.program;if(concealed)[frame setOutlineRects:NULL count:0];
+    else if(parked){
+        NSMutableData *outlines=[NSMutableData data];
+        for(NSDictionary *other in all){
+            if(other==o||!number(other[@"id"])||[other[@"id"]isEqual:o[@"id"]]||dict(other[@"fullscreen"]))continue;
+            CGPoint otherCamera=pointOf(other[@"camera"]);CGRect otherBounds=rectOf(other[@"screen_bounds"]);if(CGRectIsNull(otherBounds))continue;
+            CGRect outline=IFCompositorOutlineRect(frame.cameraX,frame.cameraY,frame.zoom,otherCamera.x,otherCamera.y,otherBounds.size,[number(other[@"zoom"])doubleValue]);[outlines appendBytes:&outline length:sizeof(outline)];
+        }
+        [frame setOutlineRects:outlines.bytes count:outlines.length/sizeof(CGRect)];
+    }
+    for(NSNumber *window in state.placements){
+        NSDictionary *p=state.placements[window];IFCompositorElement *element=state.elements[window];CGRect screen=rectOf(p[@"screen_rect"]);
+        // The controller refuses a stand-in fullscreen; one marked so all the same is drawn as the stand-in it is.
+        if(![number(p[@"fullscreen"])boolValue]||element.kind!=IFCompositorElementKindWindow||CGRectIsNull(screen))continue;
+        element.rect=CGRectOffset(screen,-corner.x,-corner.y);element.space=IFCompositorSpacePinned;
+        element.decoration=IFCompositorDecorationDrawn(element.decoration,YES,IFCompositorCoverageNone);
+    }
 }
 - (CALayer *)layerForOutput:(NSNumber *)output { return self.states[output].layer; }
 - (BOOL)contentChanged:(NSNumber *)window {
@@ -349,7 +403,8 @@ static const double sizeHold=10;
         [self content:element window:window placement:state.placements[window]];state.dirty=YES;[self setNeedsFlush];
         // The first picture of a window that was waited for: its opening, and the fade of the stand-in whose slot it adopted, begin.
         // Not while the window's size is owed: that picture is of the size it is leaving, and -render: starts both when the size has settled.
-        if(!state.unseen[window]||!pictured(element)||[self.sizing isEqual:window])continue;
+        // A window that is fullscreen here is not held for the output's size (-render:).
+        if(!state.unseen[window]||!pictured(element)||([self.sizing isEqual:window]&&![number(state.placements[window][@"fullscreen"])boolValue]))continue;
         [state.unseen removeObjectForKey:window];IFCompositorElement *fade=state.adopted[window];double start=began(state,canvasTime());
         if(element.lifecycle==IFCompositorLifecycleOpening&&isnan(element.lifecycleStartTime)){element.lifecycleStartTime=start;opening=YES;}
         if(fade){fade.lifecycleStartTime=start;[state.adopted removeObjectForKey:window];opening=YES;}

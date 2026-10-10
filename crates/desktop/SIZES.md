@@ -32,7 +32,8 @@ and nothing here makes it the default.
 ```
 
 answers `{}`. The shell sends it at startup, `true` and only with the flag: once
-before it reads the config, because `bindings` marks the five actions
+before it reads the config, because `bindings` marks the five actions, and
+[`toggle-fullscreen`](FULLSCREEN.md#the-gate) with them,
 `implemented` only after it and a chord that is not implemented is never
 registered, and again when it creates its resize coordinator, which is
 redundant since the capability survives a `load`. It never sends `false`.
@@ -111,7 +112,11 @@ The interactive commands (`begin_native_resize`, `native_resize_to`,
 `end_native_resize`, `cancel_native_resize`) behave exactly as before, and
 `cancel_native_resize` applies to a sizing action's transaction too: a setter
 not yet sent is dropped with its plan, one already sent is drained and its
-result still applies the plan, since the window did change.
+result still applies the plan, since the window did change. A fullscreen
+exit's transaction is the exception on both counts: its plan is dropped but
+the size stays owed and is asked again, and the result of a setter that asked
+for the other size applies nothing
+([FULLSCREEN.md](FULLSCREEN.md#a-size-that-is-owed)).
 
 ### What is asked at once
 
@@ -263,6 +268,16 @@ measured by the size it has. A resize drag ends it
 ([Differences](#differences-from-upstream)), and so does the loss of the
 window's source.
 
+Fullscreen asks on the same transaction, so the output's size is the last one
+asked of a fullscreen window, as it is upstream's. Upstream's exit then
+configures the size from before at once, and a fit or a fill pressed out of
+fullscreen reads that. Here the exit's size is only owed until its own
+transaction has answered ([FULLSCREEN.md](FULLSCREEN.md#a-size-that-is-owed)),
+so a window that is owed one is measured by the owed size, never by the
+output's: the record and the restore cannot disagree. A filled window that
+enters fullscreen comes back at the size its fill asked for, by this same
+record, and a fit one at the size its fit asked for.
+
 ### `zoom-to-fit-snapped`
 
 Upstream `ZoomToFitSnapped`: `zoom-to-fit` over the focused canvas window's
@@ -306,7 +321,7 @@ window that is neither a widget nor pinned to a screen (`RULES.md`).
 | `zoom-to-fit-snapped`, focused | nothing, unless a return is pending | the same |
 | IPC `Resize` write | `this window has no canvas size to set: it is pinned, fullscreen, a widget, or not on screen yet`, after `size must be positive` and before anything else, with or without the capability | the same |
 | IPC `Resize` read | its size | its size |
-| a size transaction (`begin_sized_resize`) | begun by one caller only, the rule's `size` it mapped with ([RULES.md](RULES.md#a-rules-size)): each row above has passed it over or refused it first. `begin_native_resize`, the pointer's, refuses it: `a widget is not moved or resized by hand` | the same, and `a screen-pinned window is not moved or resized by hand` |
+| a size transaction (`begin_sized_resize`) | begun by one caller only, the rule's `size` it mapped with ([RULES.md](RULES.md#a-rules-size)), which says so (`by_hand` false): each row above has passed it over or refused it first, and the transaction refuses every other all the same. `begin_native_resize`, the pointer's, refuses it: `a widget is not moved or resized by hand` | the same, and `a screen-pinned window is not moved or resized by hand`; and by one caller more, a fullscreen exit that hands a window its size back after pinning it again ([FULLSCREEN.md](FULLSCREEN.md#entering)) |
 | as an obstacle to a fill, a neighbour a snapped fit shoves, a member of the cluster `zoom-to-fit-snapped` frames | never: it has no snap rectangle (`snap_rect_for`, `Scene::snaps`) | never |
 | `center-window`, `focus-center`, a pick | never the target, so no fill view is restored for one ([RULES.md](RULES.md#actions)) | the same |
 
@@ -342,8 +357,21 @@ window that is neither a widget nor pinned to a screen (`RULES.md`).
   and a rule-pinned window included, through `request_window_size`, when the
   capability is on. The window is placed for that size, and several that map
   together are asked one at a time:
-  [RULES.md](RULES.md#a-rules-size). `preserve_aspect_ratio` and `fullscreen`
-  stay recorded and not applied.
+  [RULES.md](RULES.md#a-rules-size). `preserve_aspect_ratio` stays recorded
+  and not applied. A rule's `fullscreen` is [FULLSCREEN.md](FULLSCREEN.md)'s:
+  with one, the rule's `size` is not asked as the window maps but owed as
+  the size it comes back to.
+- **Fullscreen** runs on this same transaction: an enter asks the output's
+  size and an exit the size from before, and either takes over the other's
+  pending transaction for the same window. A sizing action pressed during a
+  fullscreen measures the window by the size it is owed, and its own request
+  replaces that one: [FULLSCREEN.md](FULLSCREEN.md#sizing-actions-out-of-fullscreen).
+  That owed size is also the window's configured size, which a fit centers
+  on and a fill grows from ([below](#differences-from-upstream)): upstream's
+  exit has configured it by then, where the last size asked here was the
+  output's. While a fullscreen's transaction holds the slot a window whose
+  rule's `size` is owed waits its turn behind it as behind any other, and
+  is asked in the reply that ends it.
 
 ## A second action while a size is owed
 
@@ -361,10 +389,13 @@ asked for itself: [RULES.md](RULES.md#a-rules-size).
 - an IPC resize of the window whose IPC resize is pending replaces it the same
   way, measured from the size already asked for;
 - either of those two that brings the request back to the size the window
-  already has leaves nothing to deliver: the transaction sends no setter for a
-  size already committed and ends at its next read. What upstream writes at
-  the request is then written at once, as for a window that already has the
-  size asked for: an IPC resize's place, and the end of fit and fill;
+  already has leaves nothing to deliver once the owed result is in: the
+  transaction sends no setter for a size already committed. With only a read
+  outstanding it ends at that read; with a setter in flight, that setter's
+  size is committed first and the transaction then asks for this one. What
+  upstream writes at the request is written at once in either case, as for a
+  window that already has the size asked for: an IPC resize's place, and the
+  end of fit and fill;
 - anything else, on that window or another, answers
   `a native resize of window N is still pending`: a step on other edges, a fit,
   a fill, a toggle, an IPC resize over a step. That includes every sizing
@@ -393,7 +424,9 @@ asked for itself: [RULES.md](RULES.md#a-rules-size).
   ([EFFECTS.md](EFFECTS.md#beside-a-size-that-is-owed)).
 - **A window the adapter will not resize** (`unsupported`): nothing is written
   and the source is marked `resize_disabled`, as the transaction marks it; later
-  sizing actions on it answer `source resize unsupported`.
+  sizing actions on it answer `source resize unsupported`. Entering fullscreen
+  is not one of them: it asks such a window nothing and centres it
+  ([FULLSCREEN.md](FULLSCREEN.md#a-size-that-is-owed)).
 - **A baseline that differs** from the committed size fails the transaction, as
   for a drag, and nothing is written.
 - **No focused window**, or a focused widget or screen-pinned window: the five
@@ -407,8 +440,9 @@ coordinator and driver are unchanged.
 - **Capability.** Sent as described under [The gate](#the-gate), in a normal
   run only: the fixture modes send nothing.
 - **One hook.** Every `action`, `hot_corner`, `ipc` and `gesture_*` reply ends
-  in `-applyReply:`, the pointer commands' (`hover`, `pick`,
-  `pointer_nearest`) and an IPC `Screenshot`'s deferred one included. Its first
+  in `-applyReply:`, and so do a click's `activate` and `clear_focus`, the
+  pointer commands' (`pick`, `pointer_nearest`, a pick-mode press's
+  `activate`) and an IPC `Screenshot`'s deferred one. Its first
   step is `-consumeSize:`, the one place a size transaction leaves a reply: an
   `effect`, or an entry of `effects`, that is an `observe_resize_source` or a
   `resize_native_window` is handed to `-[DWResizeCoordinator consume:]`, which
@@ -417,9 +451,26 @@ coordinator and driver are unchanged.
   `-applyReply:` that `effect` is then taken out of the reply before the
   navigation coordinator reads it: that coordinator takes any `effect` for a
   focus request, and a reply that lists `effects` keeps its focus request
-  there. A reply with no `effects` list, such as `activate`'s, `hover`'s or
-  `pick`'s, keeps its `effect`, which is its focus request. Without a
+  there. A reply with no `effects` list, such as `activate`'s or
+  `pick`'s, keeps its `effect`, which is its focus request, and so does one
+  that carries its transaction as an entry of `effects` beside that request
+  ([FULLSCREEN.md](FULLSCREEN.md#a-size-that-is-owed)). Without a
   coordinator the hook does nothing.
+- **A `hover` reply is not applied.** `pointer-hover.m` reads its `forward`,
+  `dirty` and focus request and nothing else, so the controller begins no
+  transaction in one.
+- **Three more callers of the hook**, for replies that end elsewhere: the
+  navigation coordinator's commands (`-navigationCall:`, for the `activate`
+  of a window the user focused natively), the `ipc` bookmark question
+  `-action:…` asks before `go-to-bookmark`, and the cancelled `gesture_end`
+  sent after a refused gesture update. Each can be the first reply after a
+  fullscreen exit left a size owed.
+- **A result's own effect.** The effect that answers one of the controller's
+  own `native_resize_result`s inside the same transaction is the
+  controller's too, and the shell has nothing to remember for it: a
+  fullscreen that is left before the window has taken the output's size asks
+  for the old size on the transaction it already has. An effect that names
+  another transaction is the next but one item's.
 - **A ruled attach.** The `attach` of a window whose rule names a size carries
   the transaction as `transaction` and a one-entry `effects`, its `effect`
   being the arrival's focus request. `-attach:logical:world:placed:` hands
@@ -505,14 +556,16 @@ coordinator and driver are unchanged.
 - **Fractions.** Upstream's frames are integers. A world frame with a
   fractional size is rounded for the policy and the size asked for is whole.
 - **A pinned window is not resized by hand.** Upstream resizes one in screen
-  space by its resize binding; here the only size transaction of a
-  screen-pinned window or a widget is the one its rule's `size` begins as it
-  maps ([RULES.md](RULES.md#differences-from-upstream)).
+  space by its resize binding; here a screen-pinned window or a widget is
+  sized by two requests only, neither of them by hand
+  (`begin_sized_resize` with `by_hand` false): the one its rule's `size`
+  begins as it maps ([RULES.md](RULES.md#differences-from-upstream)), and the
+  one by which a fullscreen exit hands a window its size back after it has
+  pinned it again ([FULLSCREEN.md](FULLSCREEN.md#entering)). Every other size
+  transaction refuses them, whatever its caller let through.
 - **A rule's `size` a window does not grant** leaves it at the top-left of the
   frame asked for, where upstream places the size it got:
   [RULES.md](RULES.md#differences-from-upstream).
-- Fullscreen is not here: `toggle-fullscreen` stays
-  `action not implemented on macOS yet`.
 
 ## Verification boundary
 

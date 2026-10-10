@@ -98,6 +98,8 @@ pub(crate) struct ResizeSlot {
     /// A result is owed and nothing is cancelled or uncertain: a newer target
     /// size can still take the latest-request slot.
     pub(crate) accepting: bool,
+    /// A setter is in flight: the window is about to take another size.
+    pub(crate) setting: bool,
 }
 impl Controller {
     pub(crate) fn resize_slot(&self) -> Option<ResizeSlot> {
@@ -110,17 +112,26 @@ impl Controller {
                 && !t.cancelled
                 && !t.uncertain_mutation
                 && matches!(t.phase, Phase::Preparing | Phase::Settling),
+            setting: t
+                .pending_effect
+                .as_ref()
+                .is_some_and(|e| e.requested.is_some()),
         })
     }
-    /// The effect a result is about to answer: whether it is a setter, and
-    /// whether an attempted setter was already unresolved before it.
-    pub(crate) fn resize_answer(&self, transaction: u64, effect_id: u64) -> Option<(bool, bool)> {
+    /// The effect a result is about to answer: the size it asked for when it
+    /// is a setter, and whether an attempted setter was already unresolved
+    /// before it.
+    pub(crate) fn resize_answer(
+        &self,
+        transaction: u64,
+        effect_id: u64,
+    ) -> Option<(Option<Size>, bool)> {
         let t = self.resize_id(transaction).ok()?;
         let effect = t
             .pending_effect
             .as_ref()
             .filter(|e| e.effect_id == effect_id)?;
-        Some((effect.requested.is_some(), t.uncertain_mutation))
+        Some((effect.requested, t.uncertain_mutation))
     }
     /// A size transaction with no drag behind it. `target` takes the place of
     /// the motion a release during the baseline read leaves queued, so the
@@ -130,21 +141,31 @@ impl Controller {
     /// non-interactive resize cancels none. Capture authority is not required
     /// either: no pointer is mapped through the picture, and a held key must
     /// not wait for a frame between two steps.
+    ///
+    /// `by_hand` is false for the two requests that are not a sizing by
+    /// hand: the rule's `size` a window mapped with, which upstream
+    /// configures for a widget and a rule-pinned window like any other
+    /// (rules.rs), and a fullscreen exit, which hands a window its size back
+    /// after it has pinned it to its screen again (FULLSCREEN.md).
     pub(crate) fn begin_sized_resize(
         &mut self,
         window: WindowId,
         output: OutputId,
         edges: Edges,
         target: Size,
+        by_hand: bool,
     ) -> Result<Value, Error> {
         self.guard_resize_structure(None)?;
         if self.gesture.is_some() {
             return Err(Error::Invalid("native resize during active gesture"));
         }
-        // A widget and a screen-pinned window are sized by one caller only:
-        // the rule's `size` they mapped with (rules.rs), as upstream
-        // configures it for them. Every other caller has passed them over or
-        // refused them in upstream's words before this.
+        // A widget and a screen-pinned window are sized by those two requests
+        // only. Every other caller has passed them over or refused them in
+        // upstream's words before this; the transaction holds the rule all
+        // the same, as a drag's does.
+        if by_hand {
+            self.movable(window)?;
+        }
         let source = self
             .sources
             .get(&window)
@@ -313,8 +334,10 @@ impl Controller {
         self.cancel_animations_everywhere();
         // Upstream begin_client_resize: a resize drag ends fit and fill.
         self.sizes.resize_begun(window);
-        // And a wait for a rule's `size`, as any sizing of the user's.
+        // And a wait for a rule's `size`, as any sizing of the user's, and
+        // the size a fullscreen exit still owed the window.
         self.policy.sizing.retain(|queued| *queued != window);
+        self.fullscreen.restored(window);
         let mut reply = self.emit_resize(None)?;
         reply["effects"] = json!([focus]);
         Ok(reply)

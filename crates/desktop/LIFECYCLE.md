@@ -376,11 +376,17 @@ they did.
   `pinned_to_screen`, `output`, `widget` and `focus_on_open` are applied where
   step 2 places it, and a widget is never a stand-in. A rule's `size` is
   asked, and the window placed for it, only under a shell that can deliver a
-  size ([RULES.md](RULES.md#a-rules-size)); `fullscreen` is recorded and not
-  applied.
-- **No parents, modals or fullscreen.** The tiers of upstream that depend on
+  size ([RULES.md](RULES.md#a-rules-size)), and its `fullscreen` is applied
+  only under one too, after that placement and in place of that request
+  ([FULLSCREEN.md](FULLSCREEN.md#a-new-window)).
+- **Behind a fullscreen window.** A new window that no rule positions is
+  placed in the background of a fullscreen one, and its attach asks for no
+  focus; one that macOS makes key all the same ends the fullscreen when the
+  shell reports that focus ([FULLSCREEN.md](FULLSCREEN.md#a-new-window)). A
+  fullscreen window that closes gives its output its view back first.
+- **No parents or modals.** The tiers of upstream that depend on
   them are absent: a child window centered on its parent, the parent as the
-  first follower after a close, placement behind a fullscreen window, and the
+  first follower after a close, and the
   dialog exclusion of suspend. A dialog or a sheet
   the shell reports is a window like any other.
 - **No blank slate.** Upstream skips auto placement's nearest-element anchor

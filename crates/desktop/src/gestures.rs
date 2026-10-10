@@ -8,9 +8,11 @@
 // (on_gesture_hold_begin and _end) and src/input/gestures/device_config.rs
 // (effective_send_events). The gesture table, the thresholds and
 // `direction_from_vector` are driftwm-core's, upstream's own code. Not
-// adapted: forwarding an unbound gesture to a client, the fullscreen legs, the
-// pointer warps, the cross-output leg of a move, and the resize grab, which
-// is gated here. gesture_target_under is adapted: a widget is grab-proof and
+// adapted: forwarding an unbound gesture to a client, the pointer warps, the
+// cross-output leg of a move, and the resize grab, which is gated here. The
+// fullscreen legs are adapted with fullscreen.rs: the window context of a
+// fullscreen output and the exit a continuous gesture makes first.
+// gesture_target_under is adapted: a widget is grab-proof and
 // a screen-pinned window is a target of its own, moved in screen space by the
 // pinned drag a bound press installs (passthrough.rs). What a continuous
 // gesture drives is motion.rs's: a swipe pan is its timed pan (upstream's
@@ -369,6 +371,19 @@ impl Controller {
         if start.doubletap {
             let trigger = GestureTrigger::DoubletapSwipe { fingers };
             if let Some(hit) = self.gesture_entry(start.modifiers, trigger, context) {
+                // Upstream: a move or resize grab ends fullscreen first and
+                // takes hold on the restored canvas.
+                if matches!(
+                    &hit.entry,
+                    GestureConfigEntry::Continuous(
+                        ContinuousAction::MoveWindow
+                            | ContinuousAction::MoveSnappedWindows
+                            | ContinuousAction::ResizeWindow
+                            | ContinuousAction::ResizeWindowSnapped
+                    )
+                ) {
+                    report.outcome.dirty |= self.exit_fullscreen_on(output).is_some();
+                }
                 self.cancel_animations(output);
                 let state = match &hit.entry {
                     GestureConfigEntry::Continuous(ContinuousAction::MoveWindow) => {
@@ -398,6 +413,11 @@ impl Controller {
             self.cancel_animations(output);
             return Ok(state);
         };
+        // Upstream: a continuous swipe ends fullscreen eagerly; a threshold
+        // one fires through the action dispatch, whose guard decides.
+        if matches!(hit.entry, GestureConfigEntry::Continuous(_)) {
+            report.outcome.dirty |= self.exit_fullscreen_on(output).is_some();
+        }
         self.cancel_animations(output);
         found.push(hit.describe(self));
         Ok(match hit.entry {
@@ -454,6 +474,7 @@ impl Controller {
         start: &GestureStart,
         context: BindingContext,
         found: &mut Vec<Value>,
+        report: &mut Report,
     ) -> Result<GestureState, Error> {
         let (fingers, output, modifiers) = (start.fingers, start.output, start.modifiers);
         // The continuous trigger first: a bare pinch is always zoom.
@@ -463,6 +484,9 @@ impl Controller {
                 GestureConfigEntry::Continuous(ContinuousAction::Zoom)
             )
         {
+            // Upstream: the zoom is baselined against the camera and zoom
+            // the exit restores, not the parked fullscreen view.
+            report.outcome.dirty |= self.exit_fullscreen_on(output).is_some();
             let pinch = self.pinch_begin(output)?;
             found.push(hit.describe(self));
             return Ok(GestureState::PinchZoom { pinch });
@@ -527,14 +551,17 @@ impl Controller {
         if !self.trackpad_enabled() {
             return Ok(self.gesture_reply(Value::Null, report));
         }
+        // Upstream: the fullscreen window fills the screen, so a gesture on
+        // its output resolves in the window context wherever the pointer is.
         let context = match start.context {
+            _ if self.fullscreen_on(start.output).is_some() => BindingContext::OnWindow,
             PointerContext::Window => BindingContext::OnWindow,
             PointerContext::Canvas => BindingContext::OnCanvas,
         };
         let mut found = Vec::new();
         let state = match start.kind {
             GestureKind::Swipe => self.begin_swipe(&start, context, &mut found, &mut report)?,
-            GestureKind::Pinch => self.begin_pinch(&start, context, &mut found)?,
+            GestureKind::Pinch => self.begin_pinch(&start, context, &mut found, &mut report)?,
             GestureKind::Hold => self.begin_hold(&start, context, &mut found),
         };
         let session = TrackpadGesture {

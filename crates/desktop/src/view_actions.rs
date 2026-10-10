@@ -4,7 +4,9 @@
 // ZoomIn, ZoomOut, ZoomReset, ZoomToFit, go_to_canvas_point,
 // try_restore_overview, fit_to_bbox, zoom_to_anchored), src/state/navigation.rs
 // (min_zoom) and src/state/viewport.rs (set_camera_target). Camera-only:
-// fullscreen legs and pointer warps are absent, and no native geometry is read.
+// pointer warps are absent and no native geometry is read. HomeToggle's
+// fullscreen legs are fullscreen.rs's `home_toggle_fullscreen`, and no flight
+// is armed on a fullscreen output, whose camera is parked.
 // `navigation.pan_step`, `zoom.step`, `zoom.fit_padding` and
 // `navigation.anchors` come from the configuration in force.
 use super::navigation::Anchor;
@@ -132,6 +134,10 @@ impl Controller {
         {
             return Err(Error::Invalid("navigation target out of bounds"));
         }
+        // Upstream set_camera_on: a fullscreen output's camera does not move.
+        if self.fullscreen_on(output).is_some() {
+            return idle();
+        }
         self.next_navigation = self
             .next_navigation
             .checked_add(1)
@@ -181,14 +187,16 @@ impl Controller {
         let target = from + Point::new(ux * step, uy * step);
         self.arm_view(output, target, viewport.zoom, None)
     }
+    /// At home means zoom ≈ 1.0 and the world origin visible on the whole output.
+    pub(crate) fn at_home(&self, viewport: &Viewport) -> Result<bool, Error> {
+        let full = pixel_size(viewport.screen_bounds.size)?;
+        Ok((viewport.zoom - 1.0).abs() < 0.01
+            && policy::is_origin_visible(viewport.camera, full, viewport.zoom))
+    }
     pub(crate) fn home_toggle(&mut self, output: OutputId) -> Result<Value, Error> {
         let (viewport, usable) = self.view(output)?;
         let center = usable.center();
-        // At home means zoom ≈ 1.0 and the world origin visible on the whole output.
-        let full = pixel_size(viewport.screen_bounds.size)?;
-        if (viewport.zoom - 1.0).abs() < 0.01
-            && policy::is_origin_visible(viewport.camera, full, viewport.zoom)
-        {
+        if self.at_home(&viewport)? {
             return match self.home_returns.remove(&output) {
                 Some(ret) => self.restore_view(output, ret, center),
                 None => idle(),
@@ -304,6 +312,9 @@ impl Controller {
         if !point_valid(target) || !point_valid(target + Point::new(size.width, size.height) / zoom)
         {
             return Err(Error::Invalid("navigation target out of bounds"));
+        }
+        if self.fullscreen_on(output).is_some() {
+            return idle();
         }
         self.next_navigation = self
             .next_navigation

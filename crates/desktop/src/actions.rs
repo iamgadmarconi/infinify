@@ -9,7 +9,9 @@
 // execute here, move-to-bookmark and toggle-pin-to-screen in rules.rs and
 // zoom-to-fit-snapped in sizes.rs; grow-window, shrink-window, fit-window,
 // fit-window-snapped and fill-window execute when the shell can deliver a size
-// (sizes.rs); every other action parses and is then refused by name.
+// (sizes.rs), and so does toggle-fullscreen (fullscreen.rs, which also holds
+// the guard that ends a fullscreen before most actions); every other action
+// parses and is then refused by name.
 use super::keyboard_layout::switch_effect;
 use super::window_actions::Moved;
 use super::*;
@@ -207,7 +209,10 @@ impl Outcome {
 impl Controller {
     /// Does `run_action` execute this action in this run, or refuse it by name?
     pub(crate) fn runs(&self, action: &Action) -> bool {
-        runs_here(action) || (self.sizes.capability && super::sizes::delivers_a_size(action))
+        runs_here(action)
+            || (self.sizes.capability
+                && (super::sizes::delivers_a_size(action)
+                    || matches!(action, Action::ToggleFullscreen)))
     }
     pub(crate) fn action(
         &mut self,
@@ -292,6 +297,24 @@ impl Controller {
         if let Some(output) = output {
             self.stop_momentum(output);
         }
+        // Upstream's fullscreen guard: most actions end the active output's
+        // fullscreen first, and what they then do, they do on the restored
+        // canvas. A refused action is rolled back with it.
+        let was_fullscreen = self.fullscreen_prelude(output, action);
+        let mut outcome = self.act(output, action, pointer, held, was_fullscreen)?;
+        outcome.dirty |= was_fullscreen.is_some();
+        Ok(outcome)
+    }
+    /// The action itself, once `run`'s prelude is done. `was_fullscreen` is
+    /// the window the prelude took out of fullscreen, for `home-toggle`.
+    fn act(
+        &mut self,
+        output: Option<OutputId>,
+        action: &Action,
+        pointer: Option<Point>,
+        held: bool,
+        was_fullscreen: Option<WindowId>,
+    ) -> Result<Outcome, Error> {
         let mut outcome = Outcome::default();
         let active = || output.ok_or(Error::Invalid("no active output"));
         let mut reply = match action {
@@ -358,6 +381,12 @@ impl Controller {
                 return Ok(outcome.moved(moved.unwrap_or_default()));
             }
             Action::SendToOutput(direction) => {
+                // Upstream's fullscreen leg comes before the pinned and the
+                // canvas ones.
+                if let Some(moved) = self.send_fullscreen_to_output(direction, &mut outcome)? {
+                    outcome.dirty |= moved;
+                    return Ok(outcome);
+                }
                 outcome.dirty = self.send_to_output(output, direction)?;
                 return Ok(outcome);
             }
@@ -383,12 +412,20 @@ impl Controller {
                 return Ok(outcome);
             }
             Action::PanViewport(direction) => self.pan_viewport(active()?, direction.into())?,
-            Action::HomeToggle => self.home_toggle(active()?)?,
+            Action::HomeToggle => {
+                self.home_toggle_fullscreen(active()?, was_fullscreen, &mut outcome)?
+            }
             Action::ZoomIn => self.zoom_in(active()?)?,
             Action::ZoomOut => self.zoom_out(active()?)?,
             Action::ZoomReset => self.zoom_reset(active()?)?,
             Action::ZoomToFit => self.zoom_to_fit(active()?)?,
             Action::ZoomToFitSnapped => self.zoom_to_fit_snapped(active()?)?,
+            // Fullscreen resizes a window to its output, through the same
+            // gate as the sizing actions below: FULLSCREEN.md.
+            Action::ToggleFullscreen if self.sizes.capability => {
+                self.toggle_fullscreen(output, &mut outcome)?;
+                return Ok(outcome);
+            }
             // These deliver a size to a native window, which only a shell
             // started with --experimental-native-resize can do: SIZES.md.
             action if self.sizes.capability && super::sizes::delivers_a_size(action) => {

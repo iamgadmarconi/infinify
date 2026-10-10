@@ -14,7 +14,15 @@
 // a cursor on no output is held on the one it was on) with src/canvas.rs
 // (clamp_to_output), which is what bounds a pinned drag. The pass lists,
 // their merge and `PassList::allows` are driftwm-core's, upstream's own code.
-// Not adapted: the fullscreen legs of every site, and the screen-space resize
+// The fullscreen legs: fullscreen_claims asks the fullscreen window with no
+// pick-mode gate at the button, the notch and the scroll site alike, which
+// here is `claimant` for the window `hit` reports on a fullscreen output, its
+// fullscreen window alone (fullscreen.rs); `pass_keys` follows a fullscreen
+// window like any other holder of the keyboard; and MoveGrab::motion freezes
+// a drag while the cursor is over a fullscreen output, which culls everything
+// else. What ends a fullscreen at each site is fullscreen.rs's: a grab, a
+// bound pan or zoom scroll, and the guard of an action a notch runs.
+// Not adapted: the screen-space resize
 // of a pinned window (src/grabs/resize_grab.rs apply_pinned_resize), which
 // needs native resize. `layer_order` is not adapted either, and has nothing
 // to adapt: upstream orders layer-shell surfaces by it
@@ -157,6 +165,13 @@ impl Controller {
     /// the pointer. A pin's output is the one the pointer is on, so its pick
     /// mode is read from the pin. `None` is nobody to ask.
     ///
+    /// A fullscreen window's claims apply with no gate at all: upstream's
+    /// fullscreen_claims asks its `pass_mouse` at the button, the notch and
+    /// the scroll site alike, ahead of every pick-mode test. It is never a
+    /// pick target, so `pick` is false for it (`pointer_binding` holds that
+    /// whatever its caller says), and it has no pin while it is fullscreen:
+    /// it gets through both tests below.
+    ///
     /// A widget that is not pinned is the one case left open: upstream's
     /// button and scroll sites drop its claim below the threshold too, and
     /// neither argument says which output the pointer is on (RULES.md).
@@ -180,6 +195,12 @@ impl Controller {
     /// output, and not at all while that output is gone. Like every move grab
     /// it takes each output out of flight. `group` means nothing to it: a
     /// pinned window has no cluster.
+    ///
+    /// Nor while that output is fullscreen: it draws its fullscreen window
+    /// alone, and upstream's pinned_window_under finds no pinned window there
+    /// ("fullscreen covers pinned windows on that output"). A press on that
+    /// output never gets this far: `begin_drag` has ended its fullscreen
+    /// first (`fullscreen_grab`), and the pinned windows are back.
     pub(crate) fn install_pinned_drag(
         &mut self,
         window: WindowId,
@@ -197,6 +218,9 @@ impl Controller {
             .scene
             .output(pin.output)
             .ok_or(Error::Invalid("the window's output is not connected"))?;
+        if self.fullscreen_on(pin.output).is_some() {
+            return Err(Error::Invalid("the window's output is fullscreen"));
+        }
         let at = Point::new(f64::from(pin.screen_pos[0]), f64::from(pin.screen_pos[1]));
         let origin = viewport.screen_bounds.origin + at;
         let on = pin.output;
@@ -219,6 +243,13 @@ impl Controller {
     /// the one it was on, as upstream's cursor is, so the point the frame was
     /// taken by stays on an output. No snap, no cluster, no edge pan. The
     /// canvas frame follows at the end of the command (`settle_policy`).
+    ///
+    /// Upstream MoveGrab::motion: a fullscreen output draws only its
+    /// fullscreen window, so a window dragged there would just vanish. The
+    /// drag is frozen while the pointer is over one, the pin staying where
+    /// it was, and goes on from wherever the pointer leaves it again. No
+    /// output becomes fullscreen under a drag: an enter is refused while one
+    /// is in progress (fullscreen.rs).
     pub(crate) fn drag_pinned(
         &mut self,
         screen_delta: Point,
@@ -235,6 +266,9 @@ impl Controller {
         let viewport = under
             .or_else(|| self.scene.output(last))
             .ok_or(Error::Invalid("unknown gesture output"))?;
+        if under.is_some_and(|on| self.fullscreen_on(on.id).is_some()) {
+            return Ok(());
+        }
         // Upstream on_pointer_motion_relative: the cursor never leaves an
         // output. Off every one it is held on the one it was on
         // (clamp_to_output, the far bound one short of the edge). The shell's

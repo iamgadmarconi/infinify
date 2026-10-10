@@ -85,8 +85,10 @@ What the shell does with the five numbers is COMPOSITOR-NOTES 18.1 to 18.3.
   false. Upstream requests blur for client windows only, and the rule of the
   window a slot is waiting for is not in force while the slot waits.
 
-Nothing is fullscreen here, so `effective_blur` is called with
-`is_fullscreen = false` and the global flag reaches every bound window.
+A fullscreen window ([FULLSCREEN.md](FULLSCREEN.md)) is the one bound window
+the global flag does not reach: `effective_blur` is called with
+`is_fullscreen` for it, so only its own rule's `blur` frosts it. Every other
+bound window is asked with `false`.
 
 The `screenshot` effect is unchanged and carries nothing about blur.
 Upstream's screenshot composer omits it, and so must the shell in a capture
@@ -300,9 +302,18 @@ time ([SIZES.md](SIZES.md)). The log knows nothing of either:
   and the compositor port draws it as 0 (COMPOSITOR-NOTES, deviation 31), so
   that is what the block says. Nothing is added to `render.errors` for it:
   upstream warns of nothing.
-- **Nothing is fullscreen**, so there is no fullscreen closing snapshot, no
-  output on which upstream would leave a snapshot out, and `[decorations]
-  blur` is never withheld from a bound window.
+- **On a fullscreen output the events are the same and the shell draws
+  less.** A window that maps straight into fullscreen by its rule logs its
+  `open`, and a fullscreen window that closes its `close` or
+  `close_to_standin`, like any other: the controller withholds nothing for
+  it, as it withholds nothing for visibility. What upstream leaves out is
+  the shell's to leave out: no closing snapshot and no stand-in fade is
+  drawn on an output that is fullscreen, a fullscreen window's own snapshot
+  is baked bare as it was drawn, and a window that opens fullscreen is not
+  held for the size it is owed
+  ([shell notes](../../native/desktop/README.md#what-a-fullscreen-display-shows)).
+  Upstream's fullscreen entry and exit animations do not exist here
+  ([FULLSCREEN.md](FULLSCREEN.md#differences-from-upstream)).
 - **An open under an interactive grab** is skipped upstream. A new window is
   never under one here, and a slot that is being dragged is adopted, not
   opened.

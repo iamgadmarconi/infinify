@@ -3,8 +3,9 @@
 This module coordinates one bound ordinary window and all eight edges. It emits
 requests for a future native shell; it does not call AX, capture pixels, resize
 third-party windows, or establish usable compositing. Existing `begin_resize`
-remains the logical reducer API. Native group resize is rejected. Pin, fullscreen
-and aspect ratio are outside this contract. Fit, fill, the step actions, IPC
+remains the logical reducer API. Native group resize is rejected. Pin
+and aspect ratio are outside this contract; fullscreen runs this same
+transaction ([FULLSCREEN.md](FULLSCREEN.md)). Fit, fill, the step actions, IPC
 resize and a window rule's `size` run this same transaction without a drag:
 [SIZES.md](SIZES.md) has what they ask for and what they write when its results
 arrive. `begin_native_resize` takes no [widget and no screen-pinned

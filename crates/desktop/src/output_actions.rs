@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
 // src/input/actions.rs (the SendToOutput and SendCursorToOutput arms of
-// execute_action, less their fullscreen and pinned legs), src/state/output.rs
+// execute_action; SendToOutput's fullscreen leg is fullscreen.rs's
+// `send_fullscreen_to_output`), src/state/output.rs
 // (output_for_window, output_shows_canvas_point, output_showing_canvas_point,
 // output_in_direction) and src/input/mod.rs (check_hot_corners: the binding
 // lookup and the grab half of its dragging suppression; the pointer latch is
@@ -91,9 +92,13 @@ impl Controller {
             return Err(Error::Invalid("unknown output"));
         }
         let grabbed = self.gesture.is_some();
+        // Upstream fullscreen_suppressed: with `disable_when_fullscreen`, a
+        // corner of an output that has a fullscreen window runs nothing.
+        let fullscreen = self.fullscreen_on(output).is_some();
         let action = self
             .hot_corner_rule(output)
             .filter(|rule| !(rule.disable_while_dragging && grabbed))
+            .filter(|rule| !(rule.disable_when_fullscreen && fullscreen))
             .and_then(|rule| rule.bindings.get(&corner.into()))
             .cloned();
         let outcome = match action {
@@ -131,7 +136,11 @@ impl Controller {
     /// Upstream output_in_direction: the nearest other output whose center
     /// lies within about 60 degrees of `direction` from this one's. Up is the
     /// smaller y, as in upstream's layout space.
-    fn output_in_direction(&self, from: OutputId, direction: &Direction) -> Option<OutputId> {
+    pub(crate) fn output_in_direction(
+        &self,
+        from: OutputId,
+        direction: &Direction,
+    ) -> Option<OutputId> {
         let from_center = self.scene.output(from)?.screen_bounds.center();
         let (dx, dy) = direction.to_unit_vec();
         self.scene

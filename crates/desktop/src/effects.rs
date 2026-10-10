@@ -110,10 +110,16 @@ impl Controller {
     /// rule the window mapped with, for a bound window only. Upstream requests
     /// blur for client windows and never for a stand-in, whatever
     /// `[decorations] blur` says (native/desktop/COMPOSITOR-NOTES.md, 18.1).
-    /// Nothing is fullscreen here.
+    /// A fullscreen window is frosted by its own rule's `blur` alone, never
+    /// by the global one: `effective_blur`'s `is_fullscreen`.
     pub(crate) fn blur_of(&self, window: WindowId) -> bool {
+        let fullscreen = self.is_fullscreen(window);
         self.sources.contains_key(&window)
-            && effective_blur(self.drawn_rule(window), &self.config().decorations, false)
+            && effective_blur(
+                self.drawn_rule(window),
+                &self.config().decorations,
+                fullscreen,
+            )
     }
     /// A config load has ended with these `errors` and `warnings`: upstream's
     /// rules for the config source, at launch and on a reload alike. A file

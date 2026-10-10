@@ -257,6 +257,10 @@ impl Controller {
         if !point_valid(target) {
             return Err(Error::Invalid("navigation target out of bounds"));
         }
+        // Upstream set_camera_on: a fullscreen output's camera does not move.
+        if self.fullscreen_on(output).is_some() {
+            return Ok(Value::Null);
+        }
         self.next_navigation = self
             .next_navigation
             .checked_add(1)

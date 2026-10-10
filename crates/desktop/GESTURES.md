@@ -227,7 +227,8 @@ answer, and `gesture_flow`'s `the_default_table_on_a_mac` reads it for every
 row: upstream binds 22 gestures, of which 14 run here, 6 are refused by name
 and the 2 resizes are claimed and inert. Four of the six, the two `fit-window`
 and the two `fit-window-snapped` pinches, run once the shell has sent
-`native_resize_capability`, which leaves the two `toggle-fullscreen` pinches.
+`native_resize_capability`, and so do the two `toggle-fullscreen` pinches
+([FULLSCREEN.md](FULLSCREEN.md)).
 
 | Input | Upstream binding | Context | Action | Here |
 | --- | --- | --- | --- | --- |
@@ -247,7 +248,7 @@ and the two `fit-window-snapped` pinches, run once the shell has sent
 | ⌃⌥ 4-finger pinch in | `mod+4-finger-pinch-in` | anywhere | `zoom-to-fit-snapped` | runs |
 | ⌥ 2-finger pinch in or out | `alt+2-finger-pinch-in`, `-out` | on-window | `fit-window` | runs with `--experimental-native-resize`, else refused: [SIZES.md](SIZES.md#the-gate) |
 | ⌥⇧ 2-finger pinch in or out | `alt+shift+2-finger-pinch-in`, `-out` | on-window | `fit-window-snapped` | the same |
-| ⌥ 3-finger pinch in or out | `alt+3-finger-pinch-in`, `-out` | on-window | `toggle-fullscreen` | refused: not implemented |
+| ⌥ 3-finger pinch in or out | `alt+3-finger-pinch-in`, `-out` | on-window | `toggle-fullscreen` | refused without the capability |
 | 4-finger hold | `4-finger-hold` | anywhere | `center-window` | runs, on release |
 | ⌃⌥ 3-finger hold | `mod+3-finger-hold` | anywhere | `center-window` | the same |
 
@@ -353,8 +354,11 @@ The [shell notes](../../native/desktop/README.md#trackpad-gestures) say why.
   and focused, as upstream's is; held inside the gesture's output like any
   move's pointer, it is not carried to another output, which upstream's
   cursor can do. A widget is grab-proof, as upstream's is.
-- Fullscreen does not exist here, so none of the gesture handlers' fullscreen
-  legs do.
+- The gesture handlers' fullscreen legs are [FULLSCREEN.md](FULLSCREEN.md#leaving)'s:
+  on a fullscreen output a gesture resolves in the window context, and a
+  continuous one ends the fullscreen first. A move gesture therefore takes a
+  pinned window of that output only once its fullscreen has ended and the
+  pinned windows are drawn again.
 - No pointer warp: upstream moves its cursor with a pan, a zoom and a move. The
   macOS pointer stays where it is, so the zoom anchor is the pointer at begin.
 - A swipe update that moves nothing is not a sample: the timed finger pan drops

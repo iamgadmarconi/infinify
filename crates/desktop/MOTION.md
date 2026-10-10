@@ -438,8 +438,9 @@ alone.
 - `zoom_by` is refused during a drag or resize gesture. Upstream zooms under a
   grab, and so does a gesture's pinch here.
 - Cursor edge pan measures the usable area only. Upstream also stands down
-  while the pointer is over a bar or dock surface that reserves no area, on a
-  fullscreen output and under a session lock; none of those exist here. The
+  while the pointer is over a bar or dock surface that reserves no area and
+  under a session lock, which do not exist here, and on a fullscreen output,
+  which it does here too ([FULLSCREEN.md](FULLSCREEN.md#the-parked-camera)). The
   experimental native resize transaction does not hold the request, and
   neither does a held button the controller has no gesture for: holding the
   reports back for those is left to the shell.
@@ -448,8 +449,8 @@ alone.
 - A swipe gesture's update that moves nothing is dropped like a scroll event
   that scrolls nothing, where upstream's swipe records every delta.
 - Upstream's wheel-notch action bindings, touch-screen gestures (`[touch]`) and
-  their edge pan, the fullscreen locks on every camera write, and
-  pointer-constraint handling are absent.
+  their edge pan and pointer-constraint handling are absent. The fullscreen
+  lock on every camera write is [FULLSCREEN.md](FULLSCREEN.md#the-parked-camera)'s.
 
 ## Evidence and limits
 

@@ -49,6 +49,15 @@ impl Controller {
         for output in self.scene.outputs() {
             scene.remove_output(output.id)?;
         }
+        // Upstream's session store: fullscreen is never saved. A fullscreen
+        // window is saved at the place it had before (live_window_rect), with
+        // the pin it had, and at the size it has: a native window outlives
+        // the canvas at that size, where upstream's client maps again at the
+        // saved one. The output's camera is saved as it stands, parked, as
+        // upstream's per_output_cameras writes it.
+        for (window, rect) in self.fullscreen_saved_frames() {
+            scene.set_window_rect(window, rect)?;
+        }
         // The pins say which windows stay out of snapping: one source, not two.
         for window in self.scene.windows() {
             scene.set_snapping(window.id, true)?;
@@ -97,8 +106,9 @@ impl Controller {
                 .policy
                 .pins
                 .iter()
-                .filter(|(id, _)| kept(id) && !self.lifecycle.standins.contains(id))
                 .map(|(id, pin)| (*id, *pin))
+                .chain(self.fullscreen.stashed_pins())
+                .filter(|(id, _)| kept(id) && !self.lifecycle.standins.contains(id))
                 .collect(),
             scene,
         };
@@ -263,6 +273,7 @@ impl Controller {
             pending_screenshots: Vec::new(),
             sizes: Sizes::default(),
             effects: Effects::default(),
+            fullscreen: Fullscreen::default(),
         })
     }
 }

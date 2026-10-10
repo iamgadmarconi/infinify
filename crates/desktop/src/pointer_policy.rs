@@ -14,9 +14,10 @@
 // takes a pinned window first and passes over a widget, as maybe_hover_focus
 // and hover_focus_window do; a pick target is a canvas window or a stand-in
 // (`Controller::on_canvas`), never a widget or a screen-pinned window, which
-// keep their pointer below the threshold. Layer surfaces, fullscreen and modal
-// windows, server-side chrome and client resize margins do not exist here, so
-// the whole frame is the target. Only world rectangles, pins, output poses
+// keep their pointer below the threshold. On a fullscreen output the hit is
+// its fullscreen window alone and hover focus re-asserts that window
+// (fullscreen.rs). Layer surfaces, modal windows, server-side chrome and
+// client resize margins do not exist here, so the whole frame is the target. Only world rectangles, pins, output poses
 // and the configuration are read, never native geometry.
 use super::actions::Outcome;
 use super::window_actions::Moved;
@@ -103,6 +104,7 @@ impl Controller {
     /// `snapshot`, each output saying whether it is in pick mode.
     pub(crate) fn pointer_snapshot(&self) -> Result<Value, Error> {
         let mut snapshot = self.snapshot()?;
+        self.fullscreen_snapshot(&mut snapshot);
         if let Some(outputs) = snapshot["outputs"].as_array_mut() {
             for (entry, viewport) in outputs.iter_mut().zip(self.scene.outputs()) {
                 entry["pick"] = json!(self.pick_mode(viewport.id));
@@ -131,6 +133,12 @@ impl Controller {
     /// receive it (on_pointer_axis). A wheel notch is neither: upstream's notch
     /// site sits ahead of both, with no modifier gate and no retry, so its
     /// lookup is the plain one.
+    ///
+    /// A fullscreen window is no pick target whatever the caller says of it:
+    /// upstream's fullscreen block answers ahead of every pick-mode test, at
+    /// the button, the notch and the scroll site alike, so its claims apply
+    /// with no gate (fullscreen_claims) and nothing of its is looked up
+    /// again in the canvas context. `hit` never says `pick` of one.
     pub(crate) fn pointer_binding(
         &self,
         trigger: PointerTrigger,
@@ -140,6 +148,7 @@ impl Controller {
         pick: bool,
         window: Option<WindowId>,
     ) -> Value {
+        let pick = pick && !window.is_some_and(|window| self.is_fullscreen(window));
         let claimant = self.claimant(window, trigger, pick);
         let found = self.mouse_binding(trigger, source, modifiers, context, claimant);
         if !pick || !matches!(context, PointerContext::Window) {
@@ -216,7 +225,12 @@ impl Controller {
         let follows = self.config().focus_follows_mouse
             && !grabbed
             && self.scene.stage().cycle_state().is_none();
-        if let Some(window) = under.filter(|window| {
+        // Upstream maybe_hover_focus: on a fullscreen output the window owns
+        // the focus and is given it back wherever the pointer is, the band
+        // beside a smaller window included, instead of a hover target being
+        // looked for. That reclaims a focus hover moved to another output.
+        let target = self.fullscreen_on(output).or(under);
+        if let Some(window) = target.filter(|window| {
             follows && !self.is_widget(*window) && self.scene.focused() != Some(*window)
         }) {
             let last = self.next_effect;

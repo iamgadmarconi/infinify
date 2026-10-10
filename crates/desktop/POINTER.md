@@ -371,8 +371,10 @@ does nothing, where upstream had already fired.
   compositor's own and nothing reports it back. Until an echo or an answer
   arrives, logical focus and the native keyboard can differ, as after any
   focus request here.
-- **The whole frame is the target.** Upstream keeps layer surfaces and a
-  fullscreen window apart from hover focus and from pick targets, redirects
+- **The whole frame is the target.** A fullscreen window is kept apart from
+  hover focus and from pick targets as upstream's is
+  ([FULLSCREEN.md](FULLSCREEN.md#the-pointer-and-other-outputs)). Upstream
+  also keeps layer surfaces apart, redirects
   hover focus to a modal child, and rejects a client's invisible resize
   margin. None of those exists here: the native frame, title bar included, is
   the whole target. Pinned windows and widgets do exist and are treated as

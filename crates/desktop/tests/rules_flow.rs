@@ -1501,7 +1501,6 @@ const SIZED_RULES: &str = r#"
 app_id = "app.sized"
 size = [800, 600]
 position = [0, 0]
-fullscreen = true
 preserve_aspect_ratio = true
 
 [[window_rules]]
@@ -1565,11 +1564,9 @@ fn a_size_rule_is_asked_of_a_new_window_when_the_shell_can_deliver_a_size() {
     let read = sized_by_rule(&mut h, &reply);
     assert_eq!(read["window"], 1);
     assert_eq!(h.world(1), rect(-201.0, -151.0, 401.0, 301.0));
-    // `size` was asked; the two fields nothing applies are still named.
-    assert_eq!(
-        h.rule(1)["not_applied"],
-        json!(["fullscreen", "preserve_aspect_ratio"])
-    );
+    // `size` was asked; the field nothing applies is still named. A rule's
+    // `fullscreen` under this shell is tests/fullscreen_flow.rs's.
+    assert_eq!(h.rule(1)["not_applied"], json!(["preserve_aspect_ratio"]));
 
     // Four more ruled windows while that size is owed. There is one
     // transaction: each is placed for the size its rule names, waits its
@@ -1580,7 +1577,7 @@ fn a_size_rule_is_asked_of_a_new_window_when_the_shell_can_deliver_a_size() {
     assert_eq!(h.world(2), rect(-200.0, -150.0, 400.0, 300.0));
     assert_eq!(
         h.rule(2)["not_applied"],
-        json!(["size", "fullscreen", "preserve_aspect_ratio"])
+        json!(["size", "preserve_aspect_ratio"])
     );
     // A widget is asked like any window, and maps without focus or flight.
     let widget = appear(&mut h, 3, "app.sized-widget", "S", (400.0, 300.0));
@@ -1635,10 +1632,7 @@ fn a_size_rule_is_asked_of_a_new_window_when_the_shell_can_deliver_a_size() {
     // The reply that ends that transaction begins the next window's: map
     // order. From then on its `size` is asked, and the others' is not.
     let read = next_ruled(&mut h, &ended, 2);
-    assert_eq!(
-        h.rule(2)["not_applied"],
-        json!(["fullscreen", "preserve_aspect_ratio"])
-    );
+    assert_eq!(h.rule(2)["not_applied"], json!(["preserve_aspect_ratio"]));
     for waiting in [3, 4, 5] {
         assert_eq!(h.rule(waiting)["not_applied"], json!(["size"]));
     }
@@ -1696,7 +1690,7 @@ fn a_size_rule_is_asked_of_a_new_window_when_the_shell_can_deliver_a_size() {
     let read = next_ruled(&mut h, &ended, 5);
     assert_eq!(
         h.rule(7)["not_applied"],
-        json!(["size", "fullscreen", "preserve_aspect_ratio"])
+        json!(["size", "preserve_aspect_ratio"])
     );
     let ended = deliver_ruled(
         &mut h,
@@ -1722,7 +1716,7 @@ fn a_size_rule_is_asked_of_a_new_window_when_the_shell_can_deliver_a_size() {
     assert_eq!(h.world(7), rect(-200.0, -150.0, 400.0, 300.0));
     assert_eq!(
         h.rule(7)["not_applied"],
-        json!(["size", "fullscreen", "preserve_aspect_ratio"])
+        json!(["size", "preserve_aspect_ratio"])
     );
     assert_eq!(h.snapshot()["native_resize"]["phase"], "complete");
 
@@ -1732,10 +1726,7 @@ fn a_size_rule_is_asked_of_a_new_window_when_the_shell_can_deliver_a_size() {
     assert_eq!(reply["window"], 8);
     assert!(reply.get("transaction").is_none() && reply.get("effects").is_none());
     assert_eq!(h.world(8), rect(-400.0, -300.0, 800.0, 600.0));
-    assert_eq!(
-        h.rule(8)["not_applied"],
-        json!(["fullscreen", "preserve_aspect_ratio"])
-    );
+    assert_eq!(h.rule(8)["not_applied"], json!(["preserve_aspect_ratio"]));
     for (wid, app) in [(10, "app.sized-widget"), (11, "app.sized-pin")] {
         let reply = appear(&mut h, wid, app, "S", (800.0, 600.0));
         assert_eq!(reply["window"], wid - 1);
@@ -1779,7 +1770,7 @@ fn a_ruled_size_that_waited_out_a_drag_is_asked_with_the_next_new_window() {
     assert_eq!(h.snapshot()["native_resize"], Value::Null);
     assert_eq!(
         h.rule(2)["not_applied"],
-        json!(["size", "fullscreen", "preserve_aspect_ratio"])
+        json!(["size", "preserve_aspect_ratio"])
     );
     // A window no rule matches maps: its reply is its own arrival, and
     // carries the transaction of the window that was waiting.
@@ -1788,10 +1779,7 @@ fn a_ruled_size_that_waited_out_a_drag_is_asked_with_the_next_new_window() {
     assert_eq!(reply["effect"]["window"], 3);
     let read = sized_by_rule(&mut h, &reply);
     assert_eq!(read["window"], 2);
-    assert_eq!(
-        h.rule(2)["not_applied"],
-        json!(["fullscreen", "preserve_aspect_ratio"])
-    );
+    assert_eq!(h.rule(2)["not_applied"], json!(["preserve_aspect_ratio"]));
     let ended = deliver_ruled(
         &mut h,
         &read,
@@ -1817,17 +1805,14 @@ fn a_ruled_size_that_waited_out_a_drag_is_asked_with_the_next_new_window() {
     assert_eq!(h.snapshot()["native_resize"]["phase"], "complete");
     assert_eq!(
         h.rule(4)["not_applied"],
-        json!(["size", "fullscreen", "preserve_aspect_ratio"])
+        json!(["size", "preserve_aspect_ratio"])
     );
     // A window that has the size already waits for nothing, a drag included.
     h.ok(json!({"op":"begin_drag","window":1,"output":1}));
     let reply = appear(&mut h, 7, "app.sized", "S", (800.0, 600.0));
     assert!(reply.get("transaction").is_none() && reply.get("effects").is_none());
     assert_eq!(h.world(7), rect(-400.0, -300.0, 800.0, 600.0));
-    assert_eq!(
-        h.rule(7)["not_applied"],
-        json!(["fullscreen", "preserve_aspect_ratio"])
-    );
+    assert_eq!(h.rule(7)["not_applied"], json!(["preserve_aspect_ratio"]));
 }
 
 // Upstream's rule size is one-shot at a window's first commit, "so the user
@@ -1863,7 +1848,7 @@ fn a_ruled_window_the_user_sizes_before_its_turn_is_not_asked_its_rules_size() {
         assert_eq!(h.ok(json!({"op":"end_gesture"})), json!({}));
         assert_eq!(
             h.rule(window)["not_applied"],
-            json!(["size", "fullscreen", "preserve_aspect_ratio"])
+            json!(["size", "preserve_aspect_ratio"])
         );
         window
     };
@@ -1872,7 +1857,7 @@ fn a_ruled_window_the_user_sizes_before_its_turn_is_not_asked_its_rules_size() {
     let left_alone = |h: &mut Host, window: u64, wid: u64| {
         assert_eq!(
             h.rule(window)["not_applied"],
-            json!(["size", "fullscreen", "preserve_aspect_ratio"])
+            json!(["size", "preserve_aspect_ratio"])
         );
         let reply = appear(h, wid, "app.plain", "P", (300.0, 200.0));
         assert!(reply.get("transaction").is_none() && reply.get("effects").is_none());
@@ -1920,7 +1905,7 @@ fn a_ruled_window_the_user_sizes_before_its_turn_is_not_asked_its_rules_size() {
     assert_eq!(h.world(window), rect(-200.0, -150.0, 400.0, 300.0));
     assert_eq!(
         h.rule(window)["not_applied"],
-        json!(["size", "fullscreen", "preserve_aspect_ratio"])
+        json!(["size", "preserve_aspect_ratio"])
     );
 
     // A fit. Asked the rule's size after it, the window would lose the fit
@@ -1951,7 +1936,7 @@ fn a_ruled_window_the_user_sizes_before_its_turn_is_not_asked_its_rules_size() {
     assert_eq!(h.world(window), rect(-200.0, -150.0, 460.0, 340.0));
     assert_eq!(
         h.rule(window)["not_applied"],
-        json!(["size", "fullscreen", "preserve_aspect_ratio"])
+        json!(["size", "preserve_aspect_ratio"])
     );
     let reply = appear(&mut h, 8, "app.plain", "P", (300.0, 200.0));
     assert!(reply.get("transaction").is_none() && reply.get("effects").is_none());

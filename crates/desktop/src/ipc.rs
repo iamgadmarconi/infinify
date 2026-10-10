@@ -381,12 +381,19 @@ impl Controller {
                 Ok(Response::Ok)
             }
             Request::Bookmark { name, to, delete } => self.cmd_bookmark(name, to, delete, outcome),
+            // Upstream cmd_close asks the window to close, or dismisses the
+            // stand-in, and ends no fullscreen: a fullscreen window's own
+            // going does, in `window_closed`.
             Request::Close(selector) => self
                 .cmd_close(output, selector.as_ref(), outcome)
                 .map(|()| Response::Ok),
-            Request::Suspend(selector) => self
-                .cmd_suspend(output, selector.as_ref(), outcome)
-                .map(|()| Response::Ok),
+            // Upstream runs it through its action, whose guard ends the active
+            // output's fullscreen. A refusal rolls that back.
+            Request::Suspend(selector) => {
+                outcome.dirty |= output.is_some_and(|o| self.exit_fullscreen_on(o).is_some());
+                self.cmd_suspend(output, selector.as_ref(), outcome)
+                    .map(|()| Response::Ok)
+            }
             Request::Relaunch(selector) => self
                 .cmd_relaunch(selector.as_ref(), outcome)
                 .map(|()| Response::Ok),
@@ -450,6 +457,9 @@ impl Controller {
         if !x.is_finite() || !y.is_finite() {
             return Err("camera coordinates must be finite numbers".to_string());
         }
+        // Upstream: a fullscreen output refuses camera moves and is parked at
+        // zoom 1, so it ends first, after the request is known to be sound.
+        outcome.dirty |= self.exit_fullscreen_on(output).is_some();
         // The target derives from the current zoom, and only the camera target
         // is written: a pending zoom flight and a zoom-to-fit return survive.
         let (viewport, _) = self.view(output).map_err(text)?;
@@ -466,6 +476,8 @@ impl Controller {
         if !zoom.is_finite() || zoom <= 0.0 {
             return Err("zoom must be a positive number".to_string());
         }
+        // As in `cmd_camera`: the anchor is the camera the exit restores.
+        outcome.dirty |= self.exit_fullscreen_on(output).is_some();
         // Same bounds and usable-center anchor as keyboard zoom; the reply
         // reports what was applied.
         let (viewport, usable) = self.view(output).map_err(text)?;
@@ -514,9 +526,9 @@ impl Controller {
         let focused = self.scene.focused();
         let mut windows = Vec::with_capacity(self.scene.windows().len());
         for window in self.scene.windows() {
-            // Upstream: a pinned window lives in screen space and is reported
-            // under `pinned` instead.
-            if self.is_pinned(window.id) {
+            // Upstream: a pinned window and a fullscreen one live in screen
+            // space and are reported under `pinned` and `fullscreen` instead.
+            if self.is_pinned(window.id) || self.is_fullscreen(window.id) {
                 continue;
             }
             let metadata = self.metadata.get(&window.id);
@@ -562,7 +574,7 @@ impl Controller {
             layout: self.layout_name(),
             layout_short: self.layout_short(),
             windows,
-            fullscreen: Vec::new(),
+            fullscreen: self.fullscreen_inventory(),
             pinned: self.pinned_inventory()?,
             layers: Vec::new(),
             canvas_layers: Vec::new(),
@@ -644,8 +656,16 @@ impl Controller {
             ));
         }
         let info = self.focused_info(window);
+        // Upstream navigate_to_window_on: a fullscreen window is shown on its
+        // own output only. From any other it is no target at all: nothing is
+        // focused and no camera moves. On its own it is focused where it is.
+        let fullscreen = self.fullscreen_output_of(window);
+        let visible = self.is_pinned(window) || self.fully_in_viewport(window, output)?;
+        if !visible && fullscreen.is_some_and(|own| own != output) {
+            return Ok(Response::Focused(Some(info)));
+        }
         // A pinned window is always on screen and has no canvas position.
-        if !self.is_pinned(window) && !self.fully_in_viewport(window, output)? {
+        if !visible && fullscreen.is_none() {
             let reset = self.config().zoom_reset_on_activation;
             let policy = if reset && self.sources.contains_key(&window) {
                 ZoomPolicy::Reset
@@ -725,20 +745,28 @@ impl Controller {
             let [x, y] = internal_to_rule(loc, size)?;
             return Ok(Response::Position { x, y });
         };
-        // A pinned window is drawn at its pin: a canvas position written
-        // under it would silently do nothing.
-        if self.is_pinned(window) {
+        // A pinned window is drawn at its pin and a fullscreen one at its
+        // output's parked camera: a canvas position written under either
+        // would silently do nothing, or displace the park.
+        if self.is_pinned(window) || self.is_fullscreen(window) {
             return Err(
                 "this window has no canvas position to move: it is pinned, fullscreen, or \
                  not on screen yet"
                     .to_string(),
             );
         }
+        // Upstream map_window_to_rule_point: a window still owed the size it
+        // had before fullscreen is centered by that size, not by the frame
+        // that still has the output's, and comes back around that center.
+        let size = self.fullscreen.restore_size(window).unwrap_or(size);
+        let origin = rule_to_internal(x, y, size);
         let moved = Rect {
-            origin: rule_to_internal(x, y, size),
+            origin,
             size: rect.size,
         };
         self.place_window(window, moved)?;
+        self.fullscreen
+            .reaimed(window, [origin.x as i64, origin.y as i64]);
         outcome.dirty = true;
         Ok(Response::Position { x, y })
     }
@@ -759,6 +787,7 @@ impl Controller {
         // Upstream NudgeWindow, SendToOutput and map_window_to_rule_point:
         // re-anchoring the window ends a fill restore point. A fit survives.
         self.sizes.clear_fill(window);
+        self.fullscreen.moved(window);
         Ok(())
     }
     fn cmd_resize(
@@ -799,8 +828,8 @@ impl Controller {
                     .to_string(),
             );
         }
-        let written =
-            self.request_window_size(window, output, [width.into(), height.into()], outcome)?;
+        let size = [width.into(), height.into()];
+        let written = self.request_window_size(window, output, size, true, outcome)?;
         // Upstream resize_element_to raises a client it resizes and hands it
         // no focus: a selector reaches any window. A request identical to the
         // one outstanding returns before its map and restacks nothing.

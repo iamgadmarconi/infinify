@@ -118,7 +118,13 @@ pub(crate) enum Arrival {
     /// It takes over a detached slot: the slot's id, frame and stacking.
     Adopt(WindowId),
     /// It is placed by `window_placement`, or by a rule's `position`.
-    Place { rect: Rect, at_cursor: bool },
+    /// `background` says it was tucked beside the home of a fullscreen
+    /// window, which keeps the focus and the screen.
+    Place {
+        rect: Rect,
+        at_cursor: bool,
+        background: bool,
+    },
     /// A `pinned_to_screen` rule fixes it to an output's screen. `rect` is the
     /// canvas frame the pin shows right now.
     Pin { rect: Rect, pin: Pin },
@@ -348,7 +354,11 @@ impl Controller {
         }
         let rect = Rect::new(at.0, at.1, size.width, size.height);
         readable(rect).map_err(Error::Refused)?;
-        Ok(Arrival::Place { rect, at_cursor })
+        Ok(Arrival::Place {
+            rect,
+            at_cursor,
+            background: false,
+        })
     }
     /// A window has appeared: the slot it adopts, or where it is placed. `rule`
     /// is what its window rules merge to. An adopted window keeps its slot
@@ -371,9 +381,18 @@ impl Controller {
         if let Some(slot) = self.adoption_target(bundle_id, title) {
             return Ok(Arrival::Adopt(slot));
         }
-        // Upstream: a rule's pin or position comes before the placement policy.
-        match self.rule_arrival(output, size, rule)? {
-            Some(arrival) => Ok(arrival),
+        // Upstream: a rule's pin or position comes before the placement policy,
+        // and fullscreen before auto, cursor and center: a new window never
+        // lands on a fullscreen one, and nothing cascades it.
+        if let Some(arrival) = self.rule_arrival(output, size, rule)? {
+            return Ok(arrival);
+        }
+        match self.fullscreen_background(output, size) {
+            Some(rect) => Ok(Arrival::Place {
+                rect,
+                at_cursor: false,
+                background: true,
+            }),
             None => self.spawn(output, pointer, size),
         }
     }
@@ -423,8 +442,13 @@ impl Controller {
                     effect = self.raise_and_focus(window)?.effect;
                 }
             }
-            Arrival::Place { at_cursor, .. } => {
-                if let Some(output) = output.filter(|_| reveal) {
+            // Upstream: a window placed in the background never activates.
+            Arrival::Place {
+                at_cursor,
+                background,
+                ..
+            } => {
+                if let Some(output) = output.filter(|_| reveal && !background) {
                     let reset = self.config().zoom_reset_on_new_window;
                     let zoom = self
                         .scene
@@ -671,6 +695,10 @@ impl Controller {
         if output.is_some_and(|output| self.scene.output(output).is_none()) {
             return Err(Error::Invalid("unknown output"));
         }
+        // Upstream toplevel_destroyed: a fullscreen window's output has its
+        // view back before the focus is handed on, and what stays of the
+        // window is seated at the frame it had before.
+        self.fullscreen_window_gone(window, true);
         let standin = match self.lifecycle.marks.remove(&window) {
             Some(CloseMark::Close) => false,
             Some(CloseMark::Suspend) => true,
@@ -731,9 +759,11 @@ impl Controller {
     /// pass, after which a window that appears is focused and revealed.
     pub(crate) fn adoption_complete(&mut self, present: &[PresentWindow]) -> Result<Value, Error> {
         self.lifecycle.settled = true;
-        // Every output that exists has been registered by now: a saved pin
-        // whose output did not come back moves to one that did.
-        let rehomed = self.rehome_pins();
+        // Every output that exists has been registered by now: a fullscreen
+        // whose output did not come back ends, and a saved pin whose output
+        // did not come back moves to one that did.
+        let ended = self.fullscreen_outputs_settled();
+        let rehomed = self.rehome_pins() || ended;
         let mut waiting: Vec<WindowId> = self
             .scene
             .windows()

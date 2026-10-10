@@ -59,7 +59,7 @@ Preserve them as integers in native code.
 | `gesture_begin` | `kind`, `fingers`, `modifiers`, `context`, `output`, global `pointer` point, optional `doubletap`, `time_ms` | `{gesture, fired, note, navigation, effects, dirty, needs_frames, trackpad}` |
 | `gesture_update` | optional `dx`, `dy`, `scale`, `rotation`, `held`; `time_ms` | the same |
 | `gesture_end` | optional `cancelled`, `held`; `time_ms` | the same |
-| `snapshot` | none | `outputs`, `windows`, `focused`, `pass_keys` ([RULES.md](RULES.md#pass_keys)), `placements`, `lifecycle`, `lifecycle_events` ([EFFECTS.md](EFFECTS.md#lifecycle-events)), `render`, `evidence`; each output with `pick` ([POINTER.md](POINTER.md#pick-mode)), each window with its `widget`, `pinned`, `rule` and `mode` ([SIZES.md](SIZES.md#mode)), each placement with `pinned`, `widget` and `opacity`, and both with what the window is drawn with (`kind`, `decoration` and the rest of [RENDER.md](RENDER.md#placements)) |
+| `snapshot` | none | `outputs`, `windows`, `focused`, `pass_keys` ([RULES.md](RULES.md#pass_keys)), `placements`, `lifecycle`, `lifecycle_events` ([EFFECTS.md](EFFECTS.md#lifecycle-events)), `render`, `evidence`; each output with `pick` ([POINTER.md](POINTER.md#pick-mode)) and `fullscreen` ([FULLSCREEN.md](FULLSCREEN.md#wire-contract)), each window with its `widget`, `pinned`, `rule` and `mode` ([SIZES.md](SIZES.md#mode)), each placement with `pinned`, `widget` and `opacity`, and both with what the window is drawn with (`kind`, `decoration` and the rest of [RENDER.md](RENDER.md#placements)) |
 | `screenshot_result` | `path`, `width`, `height`; or `error` | `{reply}`: upstream's reply to the client that asked for the screenshot |
 | `save` / `load` | explicit caller `path` string | `{}` |
 | `load_config` | `path` string or null | `{path, exists, errors, warnings, dirty, effects, focus_follows_mouse}` |
@@ -148,6 +148,12 @@ that begins a size transaction also carries its `transaction` and `effect`, and
 every `snapshot` window has a `mode`. They act on canvas windows: what each
 does beside a widget, a screen-pinned window, a window rule's `size` and pick
 mode is [there](SIZES.md#widgets-screen-pinned-windows-and-rules) too.
+[Fullscreen](FULLSCREEN.md) covers `toggle-fullscreen` and a rule's
+`fullscreen`, behind the same gate: what a fullscreen output places and hits
+(`outputs[].fullscreen`, the one placement with `fullscreen: true`, the
+`fullscreen` mode), what ends a fullscreen and what that restores, and the
+size an exit owes, which leaves with the next reply the shell performs sizes
+from.
 
 A source identity is `{pid,birth_sec,birth_usec,wid,owner?}`; `owner` optionally
 records the WindowServer connection and is compared exactly, including presence.
@@ -196,7 +202,7 @@ already exist. Loads are bounded at 32 MiB and never modify the input file.
 Verification:
 
 ```sh
-cargo test -p driftwm-desktop --test navigation_flow --test navigation_actions_flow --test focus_cycle_flow --test controller_flow --test config_flow --test lifecycle_flow --test motion_flow --test gesture_flow --test rules_flow --test render_flow --test pointer_flow --test sizes_flow --test effects_flow --locked
+cargo test -p driftwm-desktop --test navigation_flow --test navigation_actions_flow --test focus_cycle_flow --test controller_flow --test config_flow --test lifecycle_flow --test motion_flow --test gesture_flow --test rules_flow --test render_flow --test pointer_flow --test sizes_flow --test effects_flow --test fullscreen_flow --locked
 cargo clippy -p driftwm-desktop --all-targets -- -D warnings
 cargo fmt -p driftwm-desktop --check
 cargo build -p driftwm-desktop

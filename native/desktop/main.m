@@ -440,7 +440,8 @@ static BOOL sourceGone(LiveSource *source,NSDictionary *info) { return ![birth(s
         }
         // A widget and a pinned window offer no handle: the controller refuses to resize either. Below [zoom] interact_min
         // none is drawn on that output at all: -mouseDown: gives no handle the press there, which is the pick's.
-        if(!self.desktop.experimentalResize||![snapshot[@"focused"]isEqual:p[@"window"]]||!settled||[asNumber(p[@"widget"])boolValue]||[asNumber(p[@"pinned"])boolValue]||DWPickOutput(snapshot,p[@"output"]))continue;
+        // A fullscreen window offers none either: upstream gives it no resize edge, and its edges are the output's.
+        if(!self.desktop.experimentalResize||![snapshot[@"focused"]isEqual:p[@"window"]]||!settled||[asNumber(p[@"widget"])boolValue]||[asNumber(p[@"pinned"])boolValue]||[asNumber(p[@"fullscreen"])boolValue]||DWPickOutput(snapshot,p[@"output"]))continue;
         // Clipped to the placement's visible rectangle, as inside its tile.
         CGRect full=jsonRect(p[@"screen_rect"]),clip=jsonRect(p[@"clip_rect"]);CALayer *overlay=[CALayer layer],*below=[canvas layerForOutput:p[@"output"]];overlay.masksToBounds=YES;overlay.frame=CGRectOffset(clip,-origin.x,-origin.y);
         for(NSDictionary *handle in DWResizeHandles(full,clip)){
@@ -605,9 +606,9 @@ static NSNumber *liveHit(NSDictionary *hit) { return [hit[@"placeholder"]isEqual
     CGPoint p=[self screenPoint:e];NSNumber *output=[self outputAt:p];if(!output)return;
     self.startPoint=self.lastPoint=p;self.dragOutput=self.lastOutput=output;self.gestureButton=button;self.lastDragPan=0;
     // Below [zoom] interact_min no handle takes the press: upstream's try_pick_button sits ahead of every resize border.
-    // A widget and a pinned window offer none at any zoom, so none is drawn there either (-compose:).
+    // A widget, a pinned window and a fullscreen one offer none at any zoom, so none is drawn there either (-compose:).
     if(!button&&self.desktop.experimentalResize&&!(e.modifierFlags&(NSEventModifierFlagControl|NSEventModifierFlagOption))){NSDictionary *snapshot=[self.desktop call:@{@"op":@"snapshot"}];if(!DWPickOutput(snapshot,output))
-        for(NSDictionary *placement in [snapshot[@"placements"]reverseObjectEnumerator])if([placement[@"output"]isEqual:output]&&[placement[@"window"]isEqual:snapshot[@"focused"]]&&[placement[@"presentation_settled"]boolValue]&&![asNumber(placement[@"widget"])boolValue]&&![asNumber(placement[@"pinned"])boolValue]){
+        for(NSDictionary *placement in [snapshot[@"placements"]reverseObjectEnumerator])if([placement[@"output"]isEqual:output]&&[placement[@"window"]isEqual:snapshot[@"focused"]]&&[placement[@"presentation_settled"]boolValue]&&![asNumber(placement[@"widget"])boolValue]&&![asNumber(placement[@"pinned"])boolValue]&&![asNumber(placement[@"fullscreen"])boolValue]){
             BOOL occluded=NO;for(NSDictionary *front in [snapshot[@"placements"]reverseObjectEnumerator]){if(front==placement)break;if([front[@"output"]isEqual:output]&&CGRectContainsPoint(jsonRect(front[@"clip_rect"]),p)){occluded=YES;break;}}if(occluded)continue;
             for(NSDictionary *h in DWResizeHandles(jsonRect(placement[@"screen_rect"]),jsonRect(placement[@"clip_rect"])))if(hypot(p.x-[h[@"x"]doubleValue],p.y-[h[@"y"]doubleValue])<=7){
                 NSDictionary *reply=[self.desktop.resize request:@{@"op":@"begin_native_resize",@"window":placement[@"window"],@"output":output,@"edges":h[@"edge"],@"start_screen":pointJSON(p),@"group":(e.modifierFlags&NSEventModifierFlagShift)?@YES:@NO}];
@@ -863,9 +864,12 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // continuation: upstream's placement, camera and restore point for the size the window took, or why it took none. The reply
 // then gets the tail of an action's reply, on a later turn of the main queue, once the coordinator has consumed its next effect.
 // A result that ends its transaction, a pointer resize's included, can be answered with the first effect of another one: the size
-// transaction of the next window whose rule's size is still owed (RULES.md). The coordinator performs it as it performs every
-// effect a result reply carries; here the transaction it names becomes the one -sizing knows as the controller's own, like the
-// one an attach reply begins, so that a press or an action does not cancel it and a msg request is not turned away for it.
+// transaction of the next window whose rule's size is still owed (RULES.md), which may be waiting behind a fullscreen's enter or
+// exit as behind any other. The coordinator performs it as it performs every effect a result reply carries; here the transaction
+// it names becomes the one -sizing knows as the controller's own, like the one an attach reply begins, so that a press or an
+// action does not cancel it and a msg request is not turned away for it. The effect that answers one of the controller's own
+// results inside the same transaction is the controller's too, and needs nothing: a fullscreen that is left before the window has
+// taken the output's size asks for the old size on the transaction it already has (FULLSCREEN.md), which -sizing still names.
 - (NSDictionary *)resizeCall:(NSDictionary *)command {
     NSDictionary *reply=[self call:command];
     if(!reply||![command[@"op"]isEqual:@"native_resize_result"])return reply;
@@ -876,13 +880,21 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     dispatch_async(dispatch_get_main_queue(),^{Desktop *d=weak;if(!d||d.cleaning)return;NSString *failure=asString(tail[@"failure"]);if(failure)[d flashStatus:[@"Window not resized: " stringByAppendingString:failure]];[d applyReply:tail];});
     return reply;
 }
+// The navigation coordinator's commands. An activation the user made natively may leave fullscreen, as upstream exits before it
+// activates another window of that output: the size transaction that takes the window back comes with the focus request and is
+// the resize coordinator's to perform, like any other. The coordinator reads "effect" as a focus request, so a size
+// transaction's is taken out of what it is handed, as in -applyReply:; no reply of its commands carried one before fullscreen.
+- (NSDictionary *)navigationCall:(NSDictionary *)command {
+    NSDictionary *reply=[self call:command],*sized=[self consumeSize:reply];if(!sized||reply[@"effect"]!=sized)return reply;
+    NSMutableDictionary *rest=[reply mutableCopy];[rest removeObjectForKey:@"effect"];return rest;
+}
 // Every normal run: the coordinator ticks camera flights, performs the controller's focus
 // requests on native windows and follows native focus the user moved. Probe, demo and
 // owned-fixture runs have none and keep their fixed click activation.
 - (void)configureNavigation {
     if(!self.configured||self.navigation)return;
     __weak Desktop *weak=self;dispatch_queue_t queue=dispatch_queue_create("org.infinify.navigation",DISPATCH_QUEUE_SERIAL);
-    self.navigation=[[DWNavigationCoordinator alloc]initWithCommand:^NSDictionary *(NSDictionary *c){return [weak call:c];} driver:[DWNativeFocusDriver new] clock:^uint64_t{return (uint64_t)(CACurrentMediaTime()*1e9);} worker:^(DWJob job){dispatch_async(queue,job);} main:^(DWJob job){dispatch_async(dispatch_get_main_queue(),job);}];
+    self.navigation=[[DWNavigationCoordinator alloc]initWithCommand:^NSDictionary *(NSDictionary *c){return [weak navigationCall:c];} driver:[DWNativeFocusDriver new] clock:^uint64_t{return (uint64_t)(CACurrentMediaTime()*1e9);} worker:^(DWJob job){dispatch_async(queue,job);} main:^(DWJob job){dispatch_async(dispatch_get_main_queue(),job);}];
     self.navigation.enabled=YES;self.cycleHold=[DWCycleHold new];
     self.navigation.changed=^{[weak render];[weak ensureFrames];};
     self.navigation.settled=^{[weak saveScene];};
@@ -1062,8 +1074,11 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 - (void)applyReply:(NSDictionary *)reply {
     NSDictionary *sized=[self consumeSize:reply];
     // The navigation coordinator reads "effect" as a focus request. A reply that lists "effects" keeps its focus request there:
-    // its "effect" is a size transaction's, or null without one, and is kept from that reading.
-    if(reply[@"effect"]&&(sized||[reply[@"effects"]isKindOfClass:NSArray.class])){NSMutableDictionary *rest=[reply mutableCopy];[rest removeObjectForKey:@"effect"];reply=rest;}
+    // its "effect" is a size transaction's, or null without one, and is kept from that reading. The one reply whose "effect" stays
+    // a focus request beside a size transaction is the attach's shape, the transaction as an entry of "effects": an activation or a
+    // hover that leaves fullscreen may answer so, and its focus request is still the coordinator's.
+    BOOL beside=sized&&reply[@"effect"]!=sized&&asDict(reply[@"effect"]);
+    if(reply[@"effect"]&&!beside&&(sized||[reply[@"effects"]isKindOfClass:NSArray.class])){NSMutableDictionary *rest=[reply mutableCopy];[rest removeObjectForKey:@"effect"];reply=rest;}
     // A gesture reply says itself when frames are needed: a camera coasting after a swipe, or the edge pan under a move, is no flight.
     BOOL flight=asDict(reply[@"navigation"])!=nil||[reply[@"needs_frames"]isEqual:@YES];if(flight&&!self.navigation)self.flying=YES;
     // The reply's focus request, if any, is the coordinator's to perform on the native window.
@@ -1110,10 +1125,15 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // Which corners are bound depends on the outputs registered: read from the bindings
 // after every config load, and again whenever panels open.
 - (void)armCorners:(NSDictionary *)bindings { if(!self.corners)self.corners=[DWHotCorners new];[self.corners arm:asArray(bindings[@"hot_corners"])]; }
+// Is a window fullscreen on this output, by the outputs of the snapshot last drawn (-render)?
+- (BOOL)fullscreenOn:(NSNumber *)output { for(NSDictionary *o in self.pointerOutputs)if([o[@"id"]isEqual:output])return asDict(o[@"fullscreen"])!=nil;return NO; }
 // Upstream checks hot corners on every pointer motion. Here the pointer is read at
 // the poll and frame cadence, and only while some corner is bound. A display's
 // corners are its panel's: the output and the shell's own toolbar strip above it,
 // which is where the pointer comes to rest. The controller picks and runs the action.
+// An entry upstream suppresses is not sent at all, under a held button as on an output
+// that is fullscreen with disable_when_fullscreen: the status line then reports no
+// action that did not run. The controller's hot_corner applies the fullscreen rule too.
 - (void)watchCorners {
     if(self.cleaning||!self.corners.armed)return;
     CGPoint p=pointer();BOOL dragging=NSEvent.pressedMouseButtons!=0;
@@ -1124,7 +1144,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         // covered at the pointer, or left on another Space, has no pointer in its corner. Not asked of
         // the full-screen panels, whose top corners lie under the menu bar.
         if(self.windowed&&[NSWindow windowNumberAtPoint:NSMakePoint(p.x,screenTop()-p.y) belowWindowWithWindowNumber:0]!=view.window.windowNumber)continue;
-        NSNumber *output=view.outputs[0];NSString *corner=[self.corners enter:CGPointMake(p.x-display.origin.x,p.y-display.origin.y) size:display.size output:output dragging:dragging];
+        NSNumber *output=view.outputs[0];NSString *corner=[self.corners enter:CGPointMake(p.x-display.origin.x,p.y-display.origin.y) size:display.size output:output fullscreen:[self fullscreenOn:output] dragging:dragging];
         if(corner)[self action:[self.corners action:corner output:output] output:output at:p held:[DWCycleHold modifiersDown]!=0 corner:corner];
         return;
     }
@@ -1185,7 +1205,9 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(self.cleaning||!output)return;
     // Upstream's go-to-bookmark is silent on an unset name, so the bookmark table is asked first.
     NSString *name=[action hasPrefix:@"go-to-bookmark "]?[action substringFromIndex:15]:nil;
-    BOOL unset=name&&!asDict(asDict([self call:@{@"op":@"ipc",@"output":output,@"request":@{@"Bookmark":@{@"name":name}}}])[@"reply"])[@"Ok"];
+    // The question is an ipc reply like any other: a size transaction the controller began with it, the size a fullscreen exit still owed its window, is performed.
+    NSDictionary *known=name?[self call:@{@"op":@"ipc",@"output":output,@"request":@{@"Bookmark":@{@"name":name}}}]:nil;[self consumeSize:known];
+    BOOL unset=name&&!asDict(known[@"reply"])[@"Ok"];
     NSMutableDictionary *command=[(corner?@{@"op":@"hot_corner",@"output":output,@"corner":corner}:@{@"op":@"action",@"output":output,@"action":action})mutableCopy];
     if(self.configured){command[@"pointer"]=pointJSON(point);command[@"held"]=held?@YES:@NO;}
     NSDictionary *reply=[self call:command];
@@ -1227,9 +1249,9 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     else command[@"held"]=held?@YES:@NO;
     if(end)self.gestureOwner=0;
     NSDictionary *reply=[self call:command];
-    // A refusal is said once and ends the gesture on both sides.
+    // A refusal is said once and ends the gesture on both sides. That end is a gesture reply too: a size transaction it carries is performed.
     if(!reply){
-        NSString *error=self.statusText;if(!begin&&!end)[self call:@{@"op":@"gesture_end",@"cancelled":@YES,@"time_ms":event[@"time_ms"]}];
+        NSString *error=self.statusText;if(!begin&&!end)[self consumeSize:[self call:@{@"op":@"gesture_end",@"cancelled":@YES,@"time_ms":event[@"time_ms"]}]];
         self.gestureOwner=0;[self flashStatus:error];[self render];return;
     }
     // A pan that ends cancelled while still moving lost its touches: macOS took them, a button was pressed, the panels went away. (A finger lifting ahead of the others waits out the recogniser's count debounce, too long to launch.) The canvas stops there instead of coasting on as upstream's cancelled swipe does.
@@ -1581,7 +1603,9 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(note){fprintf(stderr,"%s\n",note.UTF8String);if(!self.configNote)self.statusText=note;}
     else if([self.statusText isEqual:old])self.statusText=[self restingStatus];
 }
-- (void)quit:(id)sender { (void)sender;[self.resize shutdown];[self stopNavigation];stopped=1; }
+// A size transaction of the controller's own is left to run: the quit action ends a fullscreen first, and its reply carries the
+// transaction that hands the window its size back. -cleanup performs it to its end, then shuts the coordinator down as before.
+- (void)quit:(id)sender { (void)sender;if(![self sizing])[self.resize shutdown];[self stopNavigation];stopped=1; }
 - (void)resizeUnavailable:(id)sender { if(self.probe&&sender){self.probeHumanInput=YES;return;} (void)sender;if(self.experimentalResize){self.statusText=@"Experimental: select one source, then drag an orange edge handle. Unknown family or capture mapping stays inert; Escape cancels shell input.";[self render];return;}self.statusText=@"Native layout resize is unavailable. Resize the original app on the desktop, then return; capture reconciles without changing world geometry.";[self render]; }
 - (void)returnDesktop:(id)sender { [self.resize cancel];if(self.resize&&![self.resize canRemove:nil]){self.statusText=@"Resize is pending or unresolved; source retained";[self render];return;} if(self.probe&&sender){self.probeHumanInput=YES;return;} (void)sender;[self cleanup];[self showChooser:nil]; }
 - (DesktopView *)panel:(NSRect)frame outputRects:(NSArray *)rects identities:(NSArray *)identities {
@@ -1875,6 +1899,29 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(self.sceneDirty){self.sceneDirty=NO;[self saveScene];}
     if(!self.frameFlying)[self render];
 }
+// macOS platform rule: applications outlive Infinify, where upstream's clients end with the compositor. A window still fullscreen, or
+// still owed its size by a fullscreen that has ended, would keep the display's size after the canvas is gone, so each fullscreen is
+// ended and its size transaction performed to its end before anything is shut down, one at a time, the slot being one. Upstream's
+// quit ends fullscreen first too. The snapshot is read again before every step: toggle-fullscreen ends the focused window's
+// fullscreen before the named output's, and on an output that has none it would enter one. With no fullscreen left, one read-only
+// ipc request carries a size still owed. A resize the pointer began is cancelled first; the controller's own finishes. Bounded: an
+// unanswered or uncertain resize is left to the shutdown that follows, and the scene then saves the size the window has.
+- (void)endFullscreens {
+    if(!self.resize||!self.configured)return;
+    if(![self sizing])[self.resize cancel];
+    CFTimeInterval deadline=CACurrentMediaTime()+3;
+    for(int step=0;step<16;step++){
+        while((self.resize.obligations||![self.resize canRemove:nil])&&CACurrentMediaTime()<deadline){self.statusText=@"Quit pending: waiting for native resize result";[self render];pump(.01);}
+        if(self.resize.obligations||![self.resize canRemove:nil])return;
+        NSArray *outputs=asArray([self call:@{@"op":@"snapshot"}][@"outputs"]);NSNumber *held=nil;
+        for(id o in outputs)if(asDict(asDict(o)[@"fullscreen"])){held=asNumber(asDict(o)[@"id"]);break;}
+        NSNumber *output=held?:asNumber(asDict(outputs.firstObject)[@"id"]);if(!output)return;
+        NSString *status=self.statusText;
+        NSDictionary *reply=[self call:held?@{@"op":@"action",@"output":held,@"action":@"toggle-fullscreen"}:@{@"op":@"ipc",@"output":output,@"request":@"State"}];
+        if(!reply){self.statusText=status;return;}
+        if(![self consumeSize:reply]&&!held)return;
+    }
+}
 - (void)cleanup {
     if(self.cleaning)return;self.cleaning=YES;
     // No window is discovered and no read answers from here on; a reopened canvas gets a new manager, which ends a pass of its own.
@@ -1885,6 +1932,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     [self cancelGestures];self.trackpad=nil;
     // Nor a tracking area or a pending hover: cleanup keeps handling events while it waits for streams.
     for(DesktopView *view in self.views)[view.hover stop];
+    [self endFullscreens];
     [self.resize shutdown];[self stopNavigation];
     while(self.resize.obligations){self.statusText=@"Quit pending: waiting for native resize result";[self render];pump(.01);}
     if(self.resize&&![self.resize canRemove:nil]){self.statusText=@"Resize uncertainty remains unresolved at shutdown";fprintf(stderr,"%s\n",self.statusText.UTF8String);}

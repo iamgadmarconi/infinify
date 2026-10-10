@@ -25,7 +25,9 @@
 // new window, a widget and a rule-pinned one included, is placed for the size
 // its rule names and asked for it through sizes.rs's `request_window_size`,
 // one window at a time in map order; otherwise the size is recorded and not
-// applied. `fullscreen` is recorded and never applied.
+// applied. `fullscreen` is applied by fullscreen.rs under the same condition,
+// after that placement and in place of that request: the rule's size is then
+// the one the window comes back to.
 use super::actions::Outcome;
 use super::ipc::{
     OutputPinned, Reply, Response, WindowSelector, frame, internal_to_rule, readable,
@@ -87,13 +89,14 @@ fn pass_name<C>(list: &PassList<C>) -> &'static str {
 }
 /// The applied rule under upstream's field names. `not_applied` names the set
 /// fields that change nothing here. `sized` says the rule's `size` was asked
-/// of the window when it mapped. `layer_order` is among them by upstream's
-/// own rule: it orders layer-shell surfaces and is "Ignored for regular
-/// windows" (docs/config.md), and every window here is a regular one.
-fn rule_json(rule: &AppliedWindowRule, sized: bool) -> Value {
+/// of the window when it mapped, `fullscreened` that its `fullscreen` was
+/// applied then. `layer_order` is among them by upstream's own rule: it
+/// orders layer-shell surfaces and is "Ignored for regular windows"
+/// (docs/config.md), and every window here is a regular one.
+fn rule_json(rule: &AppliedWindowRule, sized: bool, fullscreened: bool) -> Value {
     let not_applied: Vec<&str> = [
         (rule.size.is_some() && !sized, "size"),
-        (rule.fullscreen.is_some(), "fullscreen"),
+        (rule.fullscreen.is_some() && !fullscreened, "fullscreen"),
         (rule.preserve_aspect_ratio, "preserve_aspect_ratio"),
         (rule.layer_order.is_some(), "layer_order"),
     ]
@@ -127,7 +130,7 @@ fn rule_json(rule: &AppliedWindowRule, sized: bool) -> Value {
 }
 /// Upstream clamp_pin_frame: the whole frame stays on the output, and one too
 /// large for it parks its top-left at the output's origin.
-fn clamp_pin(at: [i64; 2], size: PixelSize, output: PixelSize) -> [i32; 2] {
+pub(crate) fn clamp_pin(at: [i64; 2], size: PixelSize, output: PixelSize) -> [i32; 2] {
     let fit = |at: i64, extent: i32, span: i32| {
         at.clamp(0, i64::from(span.saturating_sub(extent).max(0)))
     };
@@ -151,9 +154,14 @@ impl Controller {
     pub(crate) fn is_pinned(&self, window: WindowId) -> bool {
         self.policy.pins.contains_key(&window)
     }
-    /// Upstream is_canvas_window: neither a widget nor screen-pinned. The test
-    /// for navigation, the focus history, snapping, fitting and placement.
+    /// Upstream is_canvas_window: neither a widget nor screen-pinned nor
+    /// fullscreen. The test for navigation, snapping, fitting and placement.
     pub(crate) fn on_canvas(&self, window: WindowId) -> bool {
+        self.in_history(window) && !self.is_fullscreen(window)
+    }
+    /// Upstream update_focus_history's eligibility: neither a widget nor
+    /// screen-pinned. A fullscreen window, whose pin is put away, is in it.
+    pub(crate) fn in_history(&self, window: WindowId) -> bool {
         !self.is_widget(window) && !self.is_pinned(window)
     }
     /// Upstream's move and resize bindings pass over a widget. A
@@ -184,7 +192,8 @@ impl Controller {
             .filter(|_| self.sources.contains_key(&window))
     }
     /// The opacity a window is drawn at: upstream's effective_opacity, with
-    /// the logical focus for upstream's keyboard focus. Nothing is fullscreen.
+    /// the logical focus for upstream's keyboard focus. A fullscreen window
+    /// stays opaque unless its rule or an IPC `Opacity` pins a value.
     /// A window without a source is opaque: upstream's push_suspended_element
     /// resolves no opacity, and its `alpha` is 1.0 outside the adoption
     /// crossfade, which the shell plays (effects.rs).
@@ -196,7 +205,7 @@ impl Controller {
             self.drawn_rule(window),
             &self.config().decorations,
             self.scene.focused() == Some(window),
-            false,
+            self.is_fullscreen(window),
         )
     }
     /// A pinned window's output and its rectangle in global screen points. Its
@@ -214,7 +223,7 @@ impl Controller {
         ))
     }
     /// A connected output by upstream's output name, the stable id here.
-    fn output_named(&self, name: &str) -> Option<OutputId> {
+    pub(crate) fn output_named(&self, name: &str) -> Option<OutputId> {
         self.outputs
             .iter()
             .find(|(id, saved)| saved.stable_id == name && self.scene.output(**id).is_some())
@@ -275,6 +284,7 @@ impl Controller {
         Ok(Some(Arrival::Place {
             rect,
             at_cursor: false,
+            background: false,
         }))
     }
     /// Upstream stores the merged rule on the surface each time a window maps,
@@ -449,7 +459,7 @@ impl Controller {
             let mut outcome = Outcome::default();
             let size = [width.into(), height.into()];
             if next
-                .request_window_size(window, output, size, &mut outcome)
+                .request_window_size(window, output, size, false, &mut outcome)
                 .is_err()
             {
                 continue;
@@ -555,6 +565,11 @@ impl Controller {
         let Some(window) = self.scene.focused().filter(live) else {
             return Ok(false);
         };
+        // Fullscreen holds the pin for as long as it lasts. The action has
+        // ended the active output's; one on another output stays as it is.
+        if self.is_fullscreen(window) {
+            return Ok(false);
+        }
         if self.is_pinned(window) {
             self.unpin_window(window, true).map_err(Error::Refused)?;
             return Ok(true);
@@ -585,11 +600,17 @@ impl Controller {
             .ok_or(Error::Invalid("unknown window"))?
             .world_rect;
         let (_, extent) = frame(rect).map_err(Error::Refused)?;
+        // As IPC `Move`: a window still owed its size from before fullscreen
+        // is centered by that size (upstream map_window_to_rule_point).
+        let extent = self.fullscreen.restore_size(window).unwrap_or(extent);
+        let origin = rule_to_internal(x.round() as i32, y.round() as i32, extent);
         let moved = Rect {
-            origin: rule_to_internal(x.round() as i32, y.round() as i32, extent),
+            origin,
             size: rect.size,
         };
         self.place_window(window, moved).map_err(Error::Refused)?;
+        self.fullscreen
+            .reaimed(window, [origin.x as i64, origin.y as i64]);
         if self.sources.contains_key(&window) {
             self.scene.raise(window)?;
         }
@@ -611,6 +632,11 @@ impl Controller {
         let Some(value) = value else {
             return Ok(Response::Pin(pinned));
         };
+        // Upstream: the enter put the pin away and the exit puts it back, so
+        // neither direction can be set until the window leaves fullscreen.
+        if self.is_fullscreen(window) {
+            return Err("fullscreen windows can't be pinned".to_string());
+        }
         if value == pinned {
             return Ok(Response::Pin(value));
         }
@@ -807,8 +833,9 @@ impl Controller {
         self.settle_pinned_drag();
         let order: Vec<WindowId> = self.scene.windows().iter().map(|w| w.id).collect();
         for id in &order {
+            // A fullscreen window snaps to nothing and stays in the history.
             let snaps = self.on_canvas(*id);
-            if !snaps {
+            if !self.in_history(*id) {
                 self.scene.drop_focus_history(*id);
             }
             if self.scene.snaps(*id) != snaps {
@@ -839,6 +866,11 @@ impl Controller {
         if !viewport.screen_bounds.contains(screen) {
             return None;
         }
+        // A fullscreen output shows its fullscreen window alone, and that
+        // window is on no other output.
+        if let Some(hit) = self.fullscreen_hit(viewport, screen) {
+            return hit;
+        }
         let windows = self.scene.windows();
         let pinned = windows.iter().rev().find_map(|w| {
             let (on, rect) = self.pinned_rect(w.id)?;
@@ -850,6 +882,7 @@ impl Controller {
                 .iter()
                 .rev()
                 .filter(|w| !self.is_pinned(w.id) && self.is_widget(w.id) == widgets)
+                .filter(|w| !self.is_fullscreen(w.id))
                 .find(|w| w.world_rect.contains(world))
                 .map(|w| (w.id, world - w.world_rect.origin))
         };
@@ -917,7 +950,7 @@ impl Controller {
                 ));
             }
         }
-        layered
+        self.fullscreen_layers(layered)
     }
     /// A window's policy as the snapshot reports it: `widget`, `pinned` and
     /// `rule`.
@@ -927,11 +960,12 @@ impl Controller {
             json!({"output":pin.output,"screen_rect":screen_rect})
         });
         let sized = self.policy.sized.contains(&window);
+        let fullscreened = self.fullscreen.rule_applied(window);
         let rule = self
             .policy
             .applied
             .get(&window)
-            .map(|rule| rule_json(rule, sized));
+            .map(|rule| rule_json(rule, sized, fullscreened));
         (self.is_widget(window), json!(pinned), json!(rule))
     }
 }

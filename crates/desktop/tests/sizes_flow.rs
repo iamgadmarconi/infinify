@@ -1842,11 +1842,15 @@ fn a_gesture_a_hot_corner_and_ipc_carry_the_resize_effect() {
     let mouse = h.ok(json!({"op":"mouse_binding","trigger":"middle","modifiers":{"control":false,"option":true,"shift":false,"command":false},"context":"window"}));
     assert_eq!(mouse["binding"]["action"], "fit-window");
     assert_eq!(mouse["binding"]["implemented"], true);
-    // toggle-fullscreen stays what it was.
-    assert_eq!(
-        h.error(json!({"op":"action","output":1,"action":"toggle-fullscreen"})),
-        "action not implemented on macOS yet: toggle-fullscreen"
-    );
+    // toggle-fullscreen is delivered through the same gate, so it is
+    // implemented under it too: tests/fullscreen_flow.rs.
+    let keys = h.ok(json!({"op":"bindings"}))["keys"].clone();
+    let fullscreen = keys.as_array().unwrap().iter();
+    let fullscreen: Vec<&Value> = fullscreen
+        .filter(|k| k["action"] == "toggle-fullscreen")
+        .collect();
+    assert!(!fullscreen.is_empty());
+    assert!(fullscreen.iter().all(|k| k["implemented"] == true));
 }
 
 // The transaction's own uncertainty rules hold for a sizing action. A setter

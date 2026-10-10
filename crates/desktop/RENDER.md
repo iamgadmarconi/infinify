@@ -161,8 +161,8 @@ detached placeholder, and neither does the rule or the `Opacity` write of the
 window a detached slot is waiting for: `opacity` and `decoration.opacity` are
 both 1.0 for every window without a source.
 
-Nothing is ever fullscreen here, so the helpers are called with
-`is_fullscreen = false`.
+A fullscreen window's helpers are called with `is_fullscreen = true` and its
+decoration is bare: [FULLSCREEN.md](FULLSCREEN.md#the-fullscreen-placement).
 
 ### The decoration mode on macOS
 
@@ -405,8 +405,8 @@ every `ipc` request.
   `screen_bounds`, where upstream reads its output layout space against each
   output's layout rectangle.
 - **`All`** frames what upstream's does: the clients `is_canvas_window`
-  passes, which are neither widgets nor pinned, and every stand-in. Nothing
-  here is fullscreen.
+  passes, which are neither widgets nor pinned nor fullscreen, and every
+  stand-in.
 - **Refusals upstream does not have**: an unregistered `output`, an unusable
   path, and geometry outside `i32`, where upstream's casts saturate.
   `no renderer available for capture` and `suspended window is gone` cannot

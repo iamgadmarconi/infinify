@@ -5,8 +5,8 @@ window's camera placement with `keep` or `reset` zoom. The commands in the table
 below are that primitive. Upstream's own window navigation (`center-window`,
 `center-nearest`, `cycle-windows`, `focus-center`, and what a click or an
 activation does) is built on it and described under
-[Window navigation actions](#window-navigation-actions). Fullscreen and modal
-handling are absent throughout; the one fill rule, `center-window`'s and
+[Window navigation actions](#window-navigation-actions). Modal handling is
+absent throughout, and fullscreen is [FULLSCREEN.md](FULLSCREEN.md)'s; the one fill rule, `center-window`'s and
 `focus-center`'s return to a fill view, is described there. A widget and a screen-pinned window
 ([RULES.md](RULES.md#navigation-activation-gestures-and-outputs)) are no
 navigation target anywhere on this page: `navigate_window` raises and focuses
@@ -251,6 +251,9 @@ the one entry of `effects`. No camera moves and no click navigation is
 armed. A begin that is refused changes nothing, focus included: a widget,
 which upstream's arms pass over for the click-to-focus fallback, and the
 refusals that are this controller's own ([below](#differences-from-upstream)).
+On a fullscreen output the fullscreen ends first, as upstream's press ends
+it ahead of the binding's arm: the exit, the focus, the grab
+([FULLSCREEN.md](FULLSCREEN.md#the-order-of-a-grab)).
 
 `{"op":"clear_focus"}` is upstream's click on empty canvas; see
 [FOCUS.md](FOCUS.md#upstream-entry-points).
@@ -276,9 +279,10 @@ Two different tests are upstream's and both are kept:
 
 - A window's representative points are taken from its world rectangle, which
   already includes the title bar: there is no separate chrome strip.
-- Fullscreen and modal windows do not exist here, so none of upstream's
-  special cases for them apply, and `center-nearest` has no
-  just-exited-fullscreen anchor. Widgets and screen-pinned windows follow
+- Modal windows do not exist here, so none of upstream's special cases for
+  them apply. A fullscreen window is no navigation target
+  ([FULLSCREEN.md](FULLSCREEN.md#the-pointer-and-other-outputs)), and
+  `center-nearest` has no just-exited-fullscreen anchor. Widgets and screen-pinned windows follow
   upstream's rules, with the differences
   [RULES.md](RULES.md#differences-from-upstream) lists: `focus-center` takes no
   widget, where upstream's would fly to one.
@@ -441,9 +445,10 @@ Differences from upstream:
   and windows that move can raise the minimum, so a pose can already sit below
   it. `zoom_out` is then a complete no-op (`{"navigation":null}`,
   fit return untouched) rather than a flight that zooms in.
-- `HomeToggle`'s fullscreen legs (instant snap, fullscreen restore, pointer
-  warp) and `ZoomToFitSnapped` are absent. Every Scene window that is
-  neither a widget nor screen-pinned counts as a canvas window.
+- `HomeToggle`'s pointer warp is absent; its fullscreen legs (instant snap,
+  fullscreen restore) are the `home-toggle` action's
+  ([FULLSCREEN.md](FULLSCREEN.md#home-toggle)). Every Scene window that is
+  neither a widget nor screen-pinned nor fullscreen counts as a canvas window.
 - Upstream's `execute_action` prelude commits an in-progress focus cycle before
   any non-cycle action and stops scroll momentum. The six commands, sent
   directly, stop their output's momentum and leave logical focus and a held

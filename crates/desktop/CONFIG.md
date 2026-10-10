@@ -155,18 +155,19 @@ code, and then unused, because the feature it configures does not exist here:
 - `[cursor] inactive_opacity` (theme and size reach only the `exec` environment)
 - `[background] cache_budget_mb`; `[backend]`; `[output]` other than
   `[output.outline]`
-- `[[outputs]] scale`, `transform`, `position`, `mode`, and
-  `[outputs.hot_corners] disable_when_fullscreen`: macOS arranges the displays
-  and there is no fullscreen, see [Outputs](#outputs)
-- of `[[window_rules]]`, `fullscreen`, `preserve_aspect_ratio` and
-  `layer_order`, which are recorded with the window and named in its
-  `rule.not_applied`; `size` joins them without the capability, and with it
-  only for a window that was not asked (one that took over a saved slot, one
-  whose application accepts no size, one the user sized first) or that is
-  still waiting its turn. `layer_order` is there by
-  upstream's own rule, which ignores it for a regular window
-  ([RULES.md](RULES.md#layer_order)). `pass_keys` and `pass_mouse` are applied
-  ([RULES.md](RULES.md#pass-rules))
+- `[[outputs]] scale`, `transform`, `position` and `mode`: macOS arranges the
+  displays, see [Outputs](#outputs)
+- of `[[window_rules]]`, `preserve_aspect_ratio` and `layer_order`, which are
+  recorded with the window and named in its `rule.not_applied`. `size` and
+  `fullscreen` join them without the capability. With it `size` is named only
+  for a window that was not asked (one that took over a saved slot, one whose
+  application accepts no size, one the user sized first) or that is still
+  waiting its turn, and `fullscreen` only for a window it could not be applied
+  to as it mapped (one that took over a saved slot, one of the launch pass,
+  one whose enter could not begin: [FULLSCREEN.md](FULLSCREEN.md#a-new-window)).
+  `layer_order` is there by upstream's own rule, which ignores it for a
+  regular window ([RULES.md](RULES.md#layer_order)). `pass_keys` and
+  `pass_mouse` are applied ([RULES.md](RULES.md#pass-rules))
 - `[touch.*]` and its thresholds: upstream's touchscreen gestures, see
   [GESTURES.md](GESTURES.md#why-this-path-and-not-the-touch-recogniser)
 - `[mouse] resize_on_border`, `decoration_resize_snapped`, `decoration_fit_snapped`
@@ -275,8 +276,9 @@ which the user did not ask for.
 - `implemented` is false when the `action` command would refuse the action with
   `action not implemented on macOS yet: <name>`. The binding is listed all the
   same; registering its chord takes the chord from every app for nothing. The
-  five [sizing actions](SIZES.md#the-gate) are implemented only once the shell
-  has sent `native_resize_capability`, so the table must be read after it.
+  five [sizing actions](SIZES.md#the-gate) and
+  [`toggle-fullscreen`](FULLSCREEN.md#the-gate) are implemented only once the
+  shell has sent `native_resize_capability`, so the table must be read after it.
 - `passable` is false for the binding on the exit chord and for every `quit`:
   no window's `pass_keys` takes those. `snapshot.pass_keys` says what the
   window that holds the keyboard passes, by `combo`
@@ -337,7 +339,7 @@ no Mac key.
 | `mod+d` | ⌃⌥D | 2 | `exec-launcher` |  | yes |
 | `mod+e` | ⌃⌥E | 14 | `toggle-cursor-pan` |  | yes |
 | `mod+equal` | ⌃⌥= | 24 | `zoom-in` | yes | yes |
-| `mod+f` | ⌃⌥F | 3 | `toggle-fullscreen` |  | no |
+| `mod+f` | ⌃⌥F | 3 | `toggle-fullscreen` |  | with the capability |
 | `mod+l` | ⌃⌥L | 37 | `exec /usr/bin/pmset displaysleepnow`, for upstream's `spawn swaylock -f -c 000000 -kl` |  | yes |
 | `mod+m` | ⌃⌥M | 46 | `fit-window` |  | with `--experimental-native-resize` |
 | `mod+minus` | ⌃⌥- | 27 | `zoom-out` | yes | yes |
@@ -457,7 +459,7 @@ Upstream's defaults under the default super chord:
 | ⌥⇧ right | `resize_window_snapped` | none |
 | ⌥ middle | `action` `fit-window` (refused without `--experimental-native-resize`) | none |
 | ⌥⇧ middle | `action` `fit-window-snapped` (the same) | none |
-| ⌃⌥ middle | `action` `toggle-fullscreen` (refused) | none |
+| ⌃⌥ middle | `action` `toggle-fullscreen` (refused without the capability) | none |
 | ⌃⌥ left | `pan_viewport` | `pan_viewport` |
 | ⌃⌥⌘ left (`mod+ctrl`) | `center_nearest` | `center_nearest` |
 | finger scroll | the app's | `pan_viewport` |
@@ -637,8 +639,9 @@ any corner while a controller gesture (a drag or resize, the drag of a
 output whose `disable_while_dragging` is on, answers
 `{"navigation":null,"effects":[],"dirty":false}`. An unregistered output is a
 controller error, and so is an action that does not run here.
-`disable_when_fullscreen` is reported and has nothing to suppress: there is no
-fullscreen.
+`disable_when_fullscreen`, upstream's default, suppresses a corner of an
+output that has a fullscreen window: `hot_corner` then runs nothing and
+answers the same ([FULLSCREEN.md](FULLSCREEN.md#the-pointer-and-other-outputs)).
 
 ## Keyboard layouts
 
@@ -833,7 +836,8 @@ was restored too early back to a new output's pose.
   logical focus, and is only raised. Upstream activates it and sets keyboard
   focus again. A focused window that no output shows needs the command's
   `output`, where upstream falls back to its first output.
-  Fullscreen windows, which upstream moves in screen space, do not exist here.
+  A fullscreen window becomes fullscreen on the adjacent output instead
+  ([FULLSCREEN.md](FULLSCREEN.md#send-to-output)).
   A pinned window's source output is the one its pin is bound to, where
   upstream takes the output showing the pin's canvas frame, and a pin whose
   own output is disconnected goes nowhere. A frame with a fractional origin or

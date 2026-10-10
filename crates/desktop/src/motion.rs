@@ -649,6 +649,11 @@ impl Controller {
         let Some((output, pointer)) = active else {
             return;
         };
+        // Upstream: a fullscreen window owns the whole viewport.
+        if self.fullscreen_on(output).is_some() {
+            self.motion.clear_edge_pan(output);
+            return;
+        }
         let (Some(viewport), Ok(context)) =
             (self.scene.output(output), self.navigation_context(output))
         else {

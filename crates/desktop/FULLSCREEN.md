@@ -1,0 +1,765 @@
+# Fullscreen
+
+DriftWM's fullscreen as controller policy: `toggle-fullscreen`, the window rule
+`fullscreen = true` with its `output`, what leaves fullscreen and what that
+restores, what a fullscreen output shows and what stays within the pointer's
+reach on it, `[outputs.hot_corners] disable_when_fullscreen`, the translucent
+rule, and fullscreen in the snapshot and in IPC `State`. The rules are
+upstream's, read from malbiruk/driftwm
+`352333a8fa1b22171492d4b71a54102045c9a19d` (GPL-3.0-or-later):
+`src/state/fullscreen.rs`, `src/input/actions.rs`, `src/state/recenter.rs`,
+`src/state/placement.rs`, the fullscreen lines of
+`src/state/{navigation,output,viewport,persistence,session_store}.rs`,
+`src/input/{mod,pointer}.rs`, `src/input/gestures/*.rs`, `src/ipc/mod.rs` and
+`src/handlers/{xdg_shell,compositor}.rs`, and its tests
+`src/tests/{fullscreen_centering,fullscreen_handoff,fullscreen_exit_cost,translucent_fullscreen}.rs`.
+Which action ends a fullscreen first is driftwm-core's
+`Action::runs_during_fullscreen`, upstream's own code. The controller code is
+`src/fullscreen.rs`, with hooks where the other modules meet it.
+
+This is DriftWM's fullscreen, not macOS native fullscreen: the window stays on
+the canvas's Space and is resized to its output. **No native window was resized
+or drawn fullscreen to verify any of this.** See
+[Verification boundary](#verification-boundary).
+
+## The gate
+
+A fullscreen window is resized to its output, and delivering a size to a real
+Mac window goes only through the size transaction of [SIZES.md](SIZES.md),
+which exists only when the shell reported `native_resize_capability`, that is
+when the app was started with `--experimental-native-resize`. There is no other
+switch and the flag is not made the default.
+
+While the capability is `false`:
+
+- `toggle-fullscreen` answers `action not implemented on macOS yet:
+  toggle-fullscreen`, from the `action` command, a key or mouse binding, a
+  gesture, a hot corner and IPC alike, and `bindings`, `mouse_binding` and
+  `gesture_begin` report it `implemented: false`;
+- a window rule's `fullscreen` is recorded and named in `rule.not_applied`, and
+  its window is placed, focused and flown to like any other;
+- no output is ever fullscreen, so nothing else in this document can happen.
+
+Those replies are byte for byte what they were before this work:
+`tests/fullscreen_flow.rs` compares them with the responses captured from the
+tree before it, for a shell that never sent the capability and for one that
+sent `false`. They were captured twice: from the tree this was written on,
+and again from the tree it was merged into
+([below](#merged-with-effects-pass-through-and-the-polish-pass-2026-10-10)),
+which answered every one the same but a key binding's `bindings` entry, where
+pass-through had added `passable`. The snapshot gains `outputs[].fullscreen`,
+which is then `null`.
+
+## Wire contract
+
+Additions only; `ABI_VERSION` is unchanged and no command was added.
+
+| Where | What |
+| --- | --- |
+| `snapshot.outputs[]` | `"fullscreen"`: `null`, or `{"window": ID, "backdrop": "black" \| "canvas"}` |
+| `snapshot.windows[]` | `"mode"` gains the value `"fullscreen"`, which stands over the `fit` or `fill` that survives beneath it. `pinned` is `null` while the window is fullscreen: its pin is put away |
+| `snapshot.placements[]` | a fullscreen output has exactly one placement, its fullscreen window's, with `"fullscreen": true`. No other placement has the key |
+| `action`, `hot_corner`, `ipc`, `gesture_*` replies | an enter, and an exit, carry the size transaction under `transaction` and `effect`, as a sizing action does |
+| `activate`, `pick`, `clear_focus` replies | may gain `transaction` and an `effects` list: see [A size that is owed](#a-size-that-is-owed). A `hover` reply never does |
+| `attach` reply | a rule's `fullscreen` carries its transaction as a rule's `size` does: `transaction`, and its effect as the one entry of `effects`. `navigation` is `null` |
+| `home_toggle` reply | the direct command's return into fullscreen carries its size transaction under `transaction` and `effect`, as the action's reply does, and its focus request in an `effects` list. Every other `home_toggle` reply is unchanged |
+| IPC `State` | `fullscreen` lists one `{id, output, app_id, title}` per fullscreen output, sorted by output name and app id, and such a window is left out of `windows` |
+| `rule.not_applied` | no longer names `fullscreen` for a window whose rule's `fullscreen` was applied as it mapped |
+| `begin_drag`, `begin_resize`, `begin_native_resize` replies | unchanged in shape: the focus request of the window the grab takes, asked after the fullscreen has ended ([the order of a grab](#the-order-of-a-grab)) |
+| `mouse_binding` | a fullscreen window named as `window` claims by its `pass_mouse` whatever `pick` says ([RULES.md](RULES.md#pass_mouse)) |
+| `snapshot.pass_keys`, `snapshot.lifecycle_events`, a placement's `decoration.blur` | follow a fullscreen window as they follow any other: [RULES.md](RULES.md#pass_keys), [EFFECTS.md](EFFECTS.md) |
+
+### The fullscreen placement
+
+`screen_rect` is in global screen points at zoom 1: the output's
+`screen_bounds` origin plus how far the window sits from the camera its output
+is parked at, at the window's own size. For a window that took the size it was
+offered that is the output's rectangle exactly. It does not depend on the
+output's camera or zoom, and it is computed from the world rectangle, the
+output's `screen_bounds` and the parked camera alone. `clip_rect` is its part on
+the output, `world_local_crop` that part in the window's own points.
+
+Its `decoration` is upstream's DrawnChrome for a fullscreen window: `mode`
+`"none"`, `border_width` 0, `corner_radius` 0, `shadow` false. `opacity` is
+upstream's `effective_opacity` with `is_fullscreen`: 1 unless the window's rule
+or an IPC `Opacity` pins a value; `blur` is `effective_blur` with it: only a
+rule's own `blur`.
+
+`backdrop` is upstream's `fullscreen_conceals_canvas`. `black`: the window
+conceals the canvas, and the output clears to black around and behind it.
+`canvas`: the window's rule opacity (or IPC `Opacity`) is below 1, so the
+background and the outlines of the other outputs keep drawing under it. Either
+way no other window, no widget and no pinned window is drawn on that output.
+A window that under-fills its output conceals all the same.
+
+## Entering
+
+`toggle-fullscreen` is upstream's arm:
+
+1. the focused live window, if it is fullscreen anywhere, leaves it;
+2. else the active output's fullscreen ends;
+3. else the focused window enters, on the output upstream resolves: its rule's
+   `output` when that is connected, then the output of its pin, then the
+   active one.
+
+A widget never enters. A stand-in is no client: with one focused only leg 2
+runs. Neither is an error, as upstream's is none.
+
+Entering does, at once and in upstream's order:
+
+- saves the window's place, the size it comes back to, the output's camera and
+  zoom, and the window's pin;
+- marks the output fullscreen, as upstream marks it before its configure;
+- parks the output: camera rounded to whole pixels, zoom 1, no flight, no
+  momentum, no edge pan, no zoom-to-fit return;
+- puts the window's top-left at that camera, raises and focuses it (the focus
+  request is in the reply's `effects`);
+- asks the output's whole size of it, through a size transaction.
+
+The size it comes back to is upstream's: for a fit window the size its fit
+asked for and for a filled one the size its fill asked for (upstream's
+`configured_window_size` for both, whatever the window took of it:
+[SIZES.md](SIZES.md#the-size-a-window-was-last-asked-for)), otherwise its
+`restore_size`, else the size it has. A saved size under 100 on either axis is taken for a
+throwaway first frame and replaced by half the output, centred in the view, as
+upstream's `MIN_RESTORE_FLOOR` does. Fit and fill both survive a fullscreen.
+
+A pinned window does enter: its pin is put away and the exit pins it again.
+While it is fullscreen IPC `Pin` reads `false` and a write answers
+`fullscreen windows can't be pinned`.
+
+### Centring
+
+Until the window has answered the size it was offered it keeps its size at the
+parked corner: upstream centres nothing on an unacknowledged offer. The answer
+is the first observation with an attempted setter behind it, or the end of the
+transaction without one. From then on a window smaller than its output sits in
+its middle, by half the shortfall on each axis in whole pixels, and one that
+is larger sits at the parked corner (upstream's `max(0)`): a `clamped` answer,
+a `rejected` one, and any later size alike. That is the window's world frame,
+so what is drawn and what is hit are one rectangle. The exit restores the
+place from before, not the centred one.
+
+## Leaving
+
+Whatever ends it, the exit is upstream's `exit_fullscreen_on` and happens at
+once: the window's top-left is back where it was saved, its pin is back, and
+the output has its camera and zoom back with every animation aimed at the
+parked view dropped. The size it had before is then owed to it and asked back
+through a size transaction. When the window takes another size than that, it
+is placed again around the center of the frame it was restored to, as
+upstream's `establish_exit_placement` does. If something else has placed the
+window in between, a drag or a nudge, it keeps that top-left (upstream
+`drop_owed_recenter`); a placement that is itself a center, IPC `Move` and
+`move-to-bookmark`, centers the restored size on its point instead (upstream
+`map_window_to_rule_point`).
+
+What ends a fullscreen is upstream's list:
+
+| | |
+| --- | --- |
+| `toggle-fullscreen` | as above |
+| any action upstream does not run during fullscreen | ends the **active** output's first, then runs on the restored canvas. Upstream's list of those that do run: `toggle-fullscreen`, `spawn` (but not `exec`, `exec-terminal`, `exec-launcher`), `reload-config`, `switch-layout`, `toggle-cursor-pan`, `set-trackpad`, `send-to-output`. A refused action is rolled back with the exit |
+| IPC `Camera` and `Zoom` writes | after the request is known to be sound; a read ends nothing |
+| IPC `Suspend` | upstream runs it through its action |
+| a bound pan or zoom (`pan`, `zoom`, `zoom_by`), which is what a bound drag and a bound wheel or trackpad scroll send | ends the fullscreen of the output it acts on |
+| a wheel notch bound to an action | nothing of its own: the shell runs the action like a key's, and the action's guard decides (the second row) |
+| a grab (`begin_drag`, `begin_resize`, `begin_native_resize`) | the same as a pan, then raises and focuses the window, then takes hold of it on the restored canvas: [the order of a grab](#the-order-of-a-grab) |
+| a continuous trackpad gesture (a swipe bound to pan, move or resize, a pinch bound to zoom) | the same. A threshold or hold gesture fires through the action dispatch, whose guard decides |
+| another window is activated on that output (`activate` with `native`) | first, so the target is not focused behind it and what is visible is judged by the restored camera. A new window that macOS made key as it opened is one such: [below](#a-new-window) |
+| the fullscreen window closes or becomes a stand-in | the output has its view back before the focus is handed on; what stays of the window takes the frame it had before, pin included |
+| the fullscreen window loses its source (a detach) | the same, but its slot keeps the size the window has, at the place from before: [Saving](#saving) |
+| another window takes the output over (a rule's `fullscreen`, `send-to-output`) | the incumbent leaves first |
+| the output is gone | once the shell has said which outputs exist: [below](#outputs) |
+
+On a fullscreen output a trackpad gesture resolves its binding in the window
+context wherever the pointer is, as upstream's does.
+
+What does **not** end it, as upstream: a new window mapping that does not
+take the native keyboard ([below](#a-new-window)), IPC `Focus`, IPC `Close`, a
+hover, `spawn`, a press or a scroll the fullscreen window claims by its
+`pass_mouse` (it is the application's:
+[the pointer](#the-pointer-and-other-outputs)), IPC `Resize` of any window, and
+anything on another output. IPC `Close` is upstream's
+`cmd_close`, not its action: it asks the window to close, or dismisses a
+stand-in, and nothing else. Asked of the fullscreen window itself, the
+fullscreen ends when the window is gone, by the row above.
+
+### The order of a grab
+
+Upstream's press bound to a move or a resize on a fullscreen output
+(`on_pointer_button`): its fullscreen block ends the fullscreen first, and the
+binding's own arm then runs on the restored canvas, where it raises and
+focuses the window and installs its grab. One order here, in one command:
+
+1. the fullscreen of the output the press is on ends (`fullscreen_grab`). A
+   window that is fullscreen on another output is not this press's to take:
+   `a fullscreen window is not moved or resized by hand`;
+2. the window is raised and focused, and the reply is that focus request
+   (`{"effect":…}`; for `begin_native_resize`, whose `effect` is its
+   transaction's, the one entry of `effects`);
+3. the grab is installed. A screen-pinned window, pinned again by the exit,
+   gets [the pinned drag](RULES.md#dragging-a-pinned-window).
+
+A grab that is refused at any step rejects the whole command, so nothing
+ended and nothing was focused for it. The move gesture is upstream's
+`try_start_gesture_move` instead: the exit, the drag, then the raise and the
+focus ([GESTURES.md](GESTURES.md#dispatch)). The window the command names is
+the one `hit` reported, the fullscreen window; upstream tests the restored
+canvas again under the pointer, which the exit has warped.
+
+### The parked camera
+
+Upstream refuses every camera and zoom write on a fullscreen output. Here no
+flight is armed on one (`navigation` is `null`), cursor edge pan does not arm
+there, and every command ends by putting the output back at its parked camera
+and zoom 1 with nothing in motion. IPC `Focus` of another window therefore
+focuses it behind the fullscreen window and moves nothing, as upstream's does.
+
+### Sizing actions out of fullscreen
+
+A sizing action is not one upstream runs during fullscreen, so it ends the
+fullscreen and then acts on the restored window. Upstream takes its numbers
+from the restore authority, not from the frame that still has the output's
+size (`src/tests/fullscreen_handoff.rs`), and so does this: `fit-window`,
+`fit-window-snapped`, `fill-window`, `grow-window` and `shrink-window` measure
+a window still owed its size by that size, and their own request replaces the
+owed one. One press, one transaction: from the output's size straight to the
+fit, the fill, the unfit or the step. A step that moves a left or top edge
+holds the opposite edge of the restored frame, whatever size is granted, as a
+step on a window that was never fullscreen does: the transaction's own edge
+anchoring would measure from the frame that still has the output's size, so
+for this one step the plan places the window and the transaction moves no
+edge.
+
+### `home-toggle`
+
+Upstream's arm. Pressed out of fullscreen and away from home, the restored
+view becomes the return, the window is remembered, and the output snaps home
+at zoom 1 with no flight. Pressed at home with that window still open, the
+view is put back in one step and the window is fullscreen again.
+
+### `send-to-output`
+
+Runs during fullscreen: the focused fullscreen window becomes fullscreen on
+the output adjacent to its own, which gives the output it leaves its view
+back. One transaction, from one output's size to the other's. With no adjacent
+output nothing happens.
+
+## A size that is owed
+
+There is one size transaction ([SIZES.md](SIZES.md#a-second-action-while-a-size-is-owed)).
+
+- **Entering** while another window's transaction is unresolved is refused
+  like any sizing action: `a native resize of window N is still pending`.
+  During a drag or resize gesture: `a window is under an interactive move or
+  resize`. Nothing else refuses an enter. A window the adapter will not
+  resize (`resize_disabled`: a setter of its was answered `unsupported`, in
+  a fullscreen or in any sizing action before) enters, and enters again,
+  with no transaction: it is fullscreen at the size it has, centred, and the
+  reply has no `transaction`. Every other sizing of such a window still
+  answers `source resize unsupported`.
+- **An exit is never refused.** It is a consequence of something that
+  happened. Its size is *owed*, and delivered as soon as it can be.
+- **An exit while the enter is pending** takes that transaction over: the
+  restore size replaces the output's in the transaction's one latest-request
+  slot, so the window is never left at the output's size. Before anything was
+  sent, the request is walked back and no setter is ever dispatched; with the
+  setter already sent, the same transaction asks for the old size next. The
+  reply has no `effect` then: nothing new is dispatched. The answer to a
+  setter that asked for the other size is none to the request now in force:
+  the window is neither placed for it nor counted as having its size until
+  that request's own setter has answered. An enter pressed while the exit is
+  pending takes it over the same way, at any point of it, and still comes
+  back to the size and the place from before the first.
+- **An exit whose transaction ends before the window was asked** leaves the
+  size owed: cancelled before its setter (Escape, a screen change that
+  removes the transaction's output, a detach elsewhere), a read that failed,
+  an adapter that was not available. The next reply that can carry it begins
+  another transaction, three in all at most for one exit. A failure that
+  repeats, a baseline that differs from the committed size for one, ends
+  there, and the window is then on the canvas at the size it has.
+- **A window that was asked to close** (it carries a close mark:
+  `close-window`, `suspend-window`, IPC `Close` and `Suspend`) keeps the
+  frame it is owed until it is gone or the mark lapses. `suspend-window` on
+  a fullscreen window sends the restore and the close in one reply; when the
+  window goes before its old size was observed, the transaction ends
+  unanswered and the stand-in is seated at the frame from before all the
+  same, as upstream's suspend mark carries that rectangle.
+- **An exit while another transaction holds the slot**, or one made by a
+  command whose reply the shell does not perform sizes from, leaves the size
+  owed. It leaves with the first reply that can carry it.
+
+The replies that can are the ones the shell passes to its size hook
+(`-consumeSize:`, the first step of `-applyReply:`): `action`, `hot_corner`,
+`ipc`, `gesture_begin`, `gesture_update`, `gesture_end`, `activate`,
+`clear_focus`, `pick` and `pointer_nearest`. A reply that lists `effects`
+carries the transaction under `transaction` and `effect`. One whose `effect`
+is its focus request (`activate`, `pick`), or that has neither key
+(`clear_focus`), gains `transaction` and an `effects` list holding that focus
+request, if any, and the transaction's effect: with an `effects` list present
+the shell reads the size effect and the focus request from it. A reply that
+already carries a transaction is left alone. Until it is delivered the window
+sits where the exit put it, at the size it still has, and a save writes it so.
+
+`hover` is not one of them. The shell reads a hover reply's `forward`, `dirty`
+and focus request and nothing else (`native/desktop/pointer-hover.m`), so a
+transaction begun there would never be performed, and the next action would
+cancel it with the size still undelivered. A pointer motion therefore begins
+nothing; the click, key, gesture or IPC request that follows does.
+
+Nor is the reply to a `native_resize_result`. The one transaction it can
+begin is that of the next window still owed its rule's `size`
+([RULES.md](RULES.md#a-rules-size)), which the freed slot goes to first; a
+size an exit owes then finds the slot taken and leaves with a later reply.
+
+An output that comes back at another size owes its fullscreen window that new
+size the same way (upstream's `resize_fullscreen_for_output`).
+
+## A new window
+
+Upstream never lands a new window on a fullscreen one. With the focused
+window fullscreen, else the active output's, a new window that no rule
+positions is placed in the background: beside the frame the fullscreen window
+comes back to, a `snap.gap` away, by upstream's own `place_auto` among the
+canvas windows, biased toward that frame's center; with no slot, just below
+it. Nothing cascades it. The attach asks for no focus and moves no camera, and
+the window is drawn on the fullscreen output not at all.
+
+Whether the fullscreen then stands depends on the native keyboard, which is
+macOS's to give. A window that opens without it, its application not being
+frontmost, stays in the background and the fullscreen stands, as upstream's
+does. A window that macOS makes key as it opens, the usual case for a window
+the user has just asked for, is reported by the shell's focus follow like any
+native activation (`activate` with `native`; by reading the shell, within
+half a second and only with Accessibility access). That ends the fullscreen
+as any activation on that output does: the new window is focused beside the
+restored frame, and flown to if it is clipped. `spawn` itself ends nothing,
+but the window it opens can. Upstream never activates a window it placed in
+the background: see [Differences from upstream](#differences-from-upstream).
+
+A rule's `fullscreen = true` is applied once the window is placed, in place of
+the arrival's navigation: the window enters on the rule's `output`, else its
+pin's, else the active one, displacing whoever is fullscreen there. Entering
+raises and focuses it whatever `focus_on_open` says, as upstream's does. It
+logs its `open` like any new window ([EFFECTS.md](EFFECTS.md#lifecycle-events)).
+`rule.not_applied` keeps `fullscreen` when it could not be applied:
+without the capability, for a window that took over a slot, during the launch
+pass, or when the enter cannot begin now (another transaction holds the slot,
+a gesture is in progress); the window is then placed, focused and asked for
+its rule's `size` like any other.
+
+A rule that names a `size` too follows upstream's order at the map
+(`src/handlers/compositor.rs`): the first commit configures the size, the
+next places the window for it, and the deferred fullscreen then saves that
+frame. Here the window is placed for the size its rule names
+([RULES.md](RULES.md#a-rules-size)), a rule-pinned one at its pin, and enters
+from there at the size it has, the only one a native observation committed.
+The frame it was placed for is where it comes back to, at the rule's size,
+which is owed like any exit's and asked only then: one transaction takes the
+window from its own size to the output's, and it waits in no queue. A frame
+that could not be placed for the size asked is placed for the window's own,
+and then comes back at that. `rule.not_applied` names neither field.
+
+There is one size transaction, so fullscreen and the queue of rule sizes wait
+for each other like any two requests. A ruled window that maps while an enter
+or an exit holds the slot is placed, stands at its own size and is asked in
+the reply to the result that ends that transaction; an enter that finds the
+slot taken is refused, or for a rule's `fullscreen` not applied. A new window
+that is tucked in the background is placed against the frame each waiting
+window is becoming, not the one it stands at, as every placement is.
+
+## The pointer, and other outputs
+
+- `hit`, `input` and `hover` on a fullscreen output reach its fullscreen
+  window where it is drawn and nothing else: not a widget, not a pinned
+  window, and nothing in the band a smaller window leaves.
+- A fullscreen window is on its own output only. No other output places it or
+  hits it, whatever canvas its camera shows, and while its output is removed
+  it is drawn nowhere.
+- A fullscreen output shows a screen-space window, not a canvas viewport, so
+  it projects no viewport outline onto the other outputs, opaque or
+  translucent (upstream `build_output_outline_elements`). The outlines are
+  the shell's: its renderer leaves out a neighbour whose
+  `outputs[].fullscreen` is set.
+- `focus_follows_mouse`: on a fullscreen output the window owns the focus and
+  is given it back wherever the pointer is, the band included, instead of a
+  hover target being looked for (upstream `maybe_hover_focus`).
+- It is no canvas window (upstream `is_canvas_window`): no navigation target,
+  no snap rectangle, no member of a cluster, not framed by `zoom-to-fit`, no
+  obstacle to placement, no pick target, and IPC `Move` and `Resize` writes
+  answer upstream's `…it is pinned, fullscreen, …`. It stays in the focus
+  history, and `cycle-windows` passes over it as upstream's `cycle_step` does.
+- Navigating to it (`navigate_window`, IPC `Focus`) focuses it on its own
+  output and does nothing at all from any other.
+- `hot_corner` on an output that is fullscreen, with `disable_when_fullscreen`
+  in force there (upstream's default), runs nothing and answers
+  `{"navigation":null,"effects":[],"dirty":false}`. With it `false` the action
+  runs. Another output's fullscreen suppresses nothing.
+- `pass_mouse`: the fullscreen window claims the bindings its live rule
+  lists, for a press, a wheel or trackpad scroll and a wheel notch, with no
+  pick-mode gate (upstream `fullscreen_claims`). `mouse_binding` then answers
+  `{"binding":null,"passed":true}`, the shell forwards the event to the
+  application, and nothing ends ([RULES.md](RULES.md#pass_mouse)).
+- `pass_keys`: `snapshot.pass_keys` is the fullscreen window's while it holds
+  the keyboard, as any window's. Entering asks for the focus, and the list
+  follows once that request is answered ([RULES.md](RULES.md#pass_keys)).
+- A screen-pinned window is not drawn on a fullscreen output and is no target
+  there. A pinned drag in progress is frozen while the pointer is over one,
+  and no output becomes fullscreen under a drag
+  ([RULES.md](RULES.md#dragging-a-pinned-window)).
+
+## Outputs
+
+Upstream ends a fullscreen when its output goes. The shell removes every
+output on any screen change and registers the present ones again, so only
+`outputs_settled` (and the end of a discovery pass) knows which are really
+gone, as for a pin ([RULES.md](RULES.md#wire-contract)):
+
+- `remove_output` keeps the fullscreen. Until the output is registered again
+  the window is drawn nowhere and IPC `State` lists no fullscreen for it;
+- an output registered again keeps it, parked as it was; at another size its
+  window is asked for the new one and meanwhile centred in it;
+- `outputs_settled` ends the fullscreen of an output that is not connected:
+  the window is back on the canvas, and the output's saved camera is the one
+  from before, for when it returns. `dirty` is true.
+- `outputs_settled` also moves a pin that a fullscreen put away when the
+  pin's own output is gone while the fullscreen stands on another (a pinned
+  window sent over by `send-to-output`): to the first connected output,
+  clamped for the size the window comes back to, as upstream's
+  `reassign_orphaned_pinned` rebinds it. `dirty` is true. Without that the
+  exit would pin the window to an output that is gone.
+
+## Saving
+
+Upstream's session store never saves a fullscreen, and neither does a `save`:
+all of this state is ephemeral and gone after a `load`. The output's camera is
+saved as it stands, parked, as upstream's `per_output_cameras` writes it.
+
+Upstream saves a fullscreen window at the frame it had before
+(`live_window_rect`), because its client ends with the compositor and maps
+again at the saved size. A Mac application outlives the canvas, and its window
+keeps the size it has. So a fullscreen window is saved at the **place** it had
+before, with the pin it had, and at the **size it has**: the only size a
+native observation committed, and the one the next size transaction's first
+read is measured against. A window still owed its size is saved as it stands,
+where its exit put it. A fullscreen window that loses its source (a detach,
+as Return to desktop does) leaves its slot the same way. A slot written with
+the old size instead would be adopted by a window of the output's size, and
+every later size transaction on it would fail its first read with `baseline
+size differs from committed logical size`.
+
+So that this is the exception, the shell ends every fullscreen before it
+saves and detaches at Quit and Return to desktop, and performs the size
+transactions to their end first, bounded at three seconds
+([shell notes](../../native/desktop/README.md#limits-of-fullscreen)); the
+`quit` action's own guard ends the active output's, as upstream's does. The
+scene saved then has the restored cameras and the frames from before. What
+this section describes is what is saved when that is cut off: a crash or a
+kill, an application that does not answer in time, a size that was clamped.
+The window then comes back as a canvas window of the size it was left at, at
+its old place, and its size from before the fullscreen is not restored.
+
+## Differences from upstream
+
+- **No transition.** Upstream keeps the scene behind visible while the entry
+  animation grows, and holds the picture during the exit. Here the output
+  shows the fullscreen window alone from the action, at the size it has until
+  the native size arrives, and the exit is immediate.
+- **The answer is a native result.** Upstream's client acks a configure; here
+  the answer is the transaction's first observation behind an attempted
+  setter. A window whose transaction fails, or that the adapter will not
+  resize, stays fullscreen at its own size, centred, as a client that keeps
+  its size does, at every enter. A failed enter is not asked again; an exit
+  whose window was never asked is, three transactions at most
+  ([above](#a-size-that-is-owed)). Upstream's configure cannot fail.
+- **A new window that takes the keyboard ends the fullscreen.** Upstream
+  keeps the fullscreen window focused and on top and never activates a window
+  it placed in the background (`src/handlers/compositor.rs`). Here the attach
+  asks for nothing either, but macOS gives a new window the keyboard by
+  itself, and the shell follows native focus as an activation
+  ([A new window](#a-new-window)). Holding upstream's rule would mean asking
+  the fullscreen window for the native focus again at every such attach,
+  which would also push an application's own dialogs behind it: the shell
+  reports no parent, where upstream does activate a child placed on its
+  parent.
+- **A saved fullscreen window keeps the size it has**, at the place from
+  before, where upstream saves the frame from before: [Saving](#saving).
+- **What is hit is what is drawn.** Upstream's canvas walk on a fullscreen
+  output still reaches a culled window that lies under the band beside a
+  smaller fullscreen window, or one raised above it since. Here only the
+  fullscreen window answers there.
+- **`mouse_binding` names no output**, so a press in the band beside a smaller
+  fullscreen window resolves its binding in the canvas context the shell
+  reports; upstream resolves every press on a fullscreen output in the window
+  context. A trackpad gesture does take the window context.
+- **A window that is no longer fullscreen is at the output's size for a
+  moment**, where upstream's stage believes the restored size at once: world
+  sizes are only ever committed by a native observation. Sizing actions, IPC
+  `Move` and `move-to-bookmark` use the owed size; anything else reads the
+  frame: IPC `Resize` and `Move` reads, `State`, visibility tests.
+- **An exit by a command whose reply carries no transaction** (`pan`, `zoom`,
+  `zoom_by`, `begin_drag`, `outputs_settled`, a displaced incumbent) leaves
+  the size owed until the next reply that can carry it: the next action, IPC
+  request, trackpad gesture, click on a window, click on empty canvas or
+  pick. Moving the pointer is not enough. Until then the window is back on
+  the canvas at the output's size.
+- **A resize drag out of fullscreen starts from the output's size.**
+  `begin_resize` and `begin_native_resize` end the fullscreen and then drop
+  the size the exit owed, as a resize drag drops a fit's restore point: the
+  drag takes hold of a window that still has the output's size. Upstream's
+  stage has the restored size by then.
+- **One transaction.** A rule's `fullscreen` that finds the slot taken is not
+  applied, where upstream queues nothing either but has no slot to find taken.
+- **Output removal** is settled at `outputs_settled`, not at `remove_output`.
+- **The launch pass** applies no rule's `fullscreen`: those windows were
+  already open, and nobody opened them here. Upstream has no such pass.
+- **No client asks.** A native window's own fullscreen request, upstream's
+  `fullscreen_request` and the idempotent re-assertion, does not exist: macOS
+  native fullscreen moves a window to another Space and is not this.
+- **No pointer warp and no pointer constraint.** The pointer is the system's,
+  in screen space; upstream's warps on enter and exit and its carrying of a
+  locked cursor have nothing to do here.
+- **`focus-cycle` commands** (`cycle_focus`, the older command beside
+  `cycle-windows`) do not pass over a fullscreen window.
+- A screen-pinned window's size is handed back by a size transaction although
+  it is pinned again by then: one of the two requests that size a pinned
+  window, the other being its rule's `size` as it maps
+  ([SIZES.md](SIZES.md#differences-from-upstream)).
+- **A rule's `size` beside its `fullscreen` is owed, not asked first.**
+  Upstream configures the client to the rule's size and then to the
+  output's. Here the first of those is never sent: the window goes from the
+  size it has to the output's, and the rule's size is the one its exit asks.
+- **In the band beside a smaller fullscreen window nobody claims.** Upstream
+  asks the fullscreen window's `pass_mouse` for a press, a scroll or a notch
+  anywhere on its output. Here the claim is asked of the window `hit`
+  reports, and `hit` reports none there.
+- **What the shell draws on a fullscreen output** beside the window is the
+  error bar and nothing else: no closing snapshot, no stand-in fade, and a
+  window that opens fullscreen is not held back for its size
+  ([shell notes](../../native/desktop/README.md#what-a-fullscreen-display-shows)).
+
+## Verification boundary
+
+`tests/fullscreen_flow.rs` crosses the exported C ABI and JSON decoder on two
+outputs, neither at the global origin and of different sizes, one of them
+zoomed out at a fractional camera. The test plays the shell's part: it answers
+every resize effect with a synthetic `native_resize_result`. Its twenty
+scenarios cover the gate (against literals captured from the tree before this
+work), enter and exit by toggle, centring, each way out, the parked camera, a
+new window and a rule's `fullscreen` and `output`, the translucent rule, hot
+corners, fit and fill and the sizing actions out of fullscreen (a step on
+each edge among them), a widget, a stand-in and a pinned window (and the pin
+whose output goes meanwhile), the one transaction slot (an exit and an enter
+at each point of the other's transaction, a cancelled, unanswered and
+repeatedly failing restore, a window the adapter will not resize), IPC
+`Close`, a new window that takes the keyboard, the pointer, Alt-Tab,
+`home-toggle` as an action and as the direct command, `send-to-output`, and
+save, load and the adoption that follows; and, since
+[the merge](#merged-with-effects-pass-through-and-the-polish-pass-2026-10-10),
+a fullscreen window's `pass_mouse` claims and `pass_keys`, the order of a
+grab, the pinned drag beside a fullscreen output, the frost and the open and
+close events, and a ruled size that waits out an enter.
+
+It establishes the controller's policy and wire behaviour. It does **not**
+establish that:
+
+- a resize effect resizes a native window, or that a real window reports the
+  size the test said it took;
+- the shell routes any of these replies to its resize coordinator. The keys
+  are the ones `-applyReply:` and `-consumeSize:` read, by reading
+  `native/desktop/main.m` and `navigation-coordinator.m`; the `effects` list a
+  focus-shaped reply gains was read there and never run;
+- the compositor draws a `fullscreen` placement over a black or canvas
+  backdrop, leaves out the outline of a fullscreen neighbour, or draws
+  anything;
+- input forwarded to a fullscreen window lands where it is drawn;
+- the shell ends a fullscreen at Quit or Return to desktop. Its
+  `-endFullscreens` sends commands this test covers one by one (a
+  `toggle-fullscreen` on a fullscreen output, an `ipc` `State` that carries
+  an owed size), but the method itself is compiled and has run in the app
+  only with nothing fullscreen;
+- a new window is key when it is attached, or that the shell's focus follow
+  reports it. The scenario sends that `activate` itself.
+
+Upstream's tests were read for the contract and are not executed here. Its
+scenarios that need a Wayland surface are not ported: the unacknowledged
+commit as distinct from an acknowledged one of the same size, the carrying of
+a locked or confined cursor, the frozen exit picture, the animated
+background's render eligibility, and the coasting camera of
+`fullscreen_exit_cost.rs` (no pan can coast on a fullscreen output here: it
+ends the fullscreen first).
+
+### Built together and run, 2026-10-10
+
+The controller and the shell were written apart from this contract and then
+built into the app (`scripts/build-app.sh`, ad-hoc signed, macOS 27.2, Apple
+Silicon). Reading the two sides against each other found one mismatch, fixed
+on this side, and two replies the shell dropped, fixed there:
+
+- **`hover` was listed as a reply that carries an owed size, and the shell
+  never performs one from a hover reply.** `pointer-hover.m` reads `forward`,
+  `dirty` and the focus request and nothing else. A restore begun there would
+  have sat unperformed in the transaction slot until the next action
+  cancelled it, leaving the window at the output's size for good. `hover` is
+  no longer a carrier, and `tests/fullscreen_flow.rs` now asserts that a
+  pointer motion after a pan-exit begins nothing and that the `clear_focus`
+  after it does.
+- The `ipc` bookmark question the shell asks before `go-to-bookmark`, and the
+  cancelled `gesture_end` it sends after a refused gesture update, are replies
+  of carrying commands that the shell read for one answer and dropped. Both
+  now go through its size hook ([SIZES.md](SIZES.md#the-shell)).
+
+Everything else lined up by reading: the op names and reply keys, the two
+shapes a carried transaction takes (`effect` for a reply that lists `effects`;
+an entry of `effects` beside a focus request in `effect`), which the shell's
+`-applyReply:`, `-navigationCall:` and the ruled `attach` path each keep
+apart, `outputs[].fullscreen` and its `backdrop` strings, the placement's
+`fullscreen: true`, and `hot_corners[].disable_when_fullscreen` as a JSON
+boolean. No command gained a field, so the shell sends no new boolean.
+
+Then run: the fifteen scenarios here with the test modules of every source
+file this work touched (229 scenarios in 17 modules, all passing),
+`tests/e2e/desktop-navigation.sh` (PASS; the navigation coordinator is
+unchanged), and the built app twice as `--windowed 1100x700` on a private
+scene of three detached placeholders, a private config and a private socket,
+driven through `Infinify msg`, with no Screen Recording access:
+
+- without the flag, `action toggle-fullscreen` answered
+  `action not implemented on macOS yet: toggle-fullscreen`, before and after
+  `focus --id 1`, and `state` printed `fullscreen 0`;
+- with `--experimental-native-resize`, `action toggle-fullscreen` answered
+  `ok`, with nothing focused and with placeholder 1 focused, and changed
+  nothing: `state` still printed `fullscreen 0`, and `--json state` had
+  `"fullscreen": []` and `"mode": "Normal"` for every window. A stand-in gets
+  no refusal: upstream's arm does nothing without a client, and neither does
+  this one. The differing answer shows the app sent the capability;
+- a viewport `screenshot` rendered in both and was looked at.
+
+**No live window existed, so no fullscreen was entered in the app and no size
+transaction ran there.** Every enter, exit, restore, placement and hit in this
+document ran only in the controller scenarios, where the test plays the native
+side. [The shell notes](../../native/desktop/README.md#what-has-been-run-for-fullscreen)
+have the commands and the answers.
+
+### After review, 2026-10-10
+
+A review of the above confirmed eleven findings, several of them one defect
+seen from two sides, each reproduced through the C ABI by its reviewer, and
+listed five smaller ones read from the code. What changed: IPC `Close` ends no fullscreen; a window
+suspended out of fullscreen that goes before its size is back still leaves
+its stand-in at the frame from before; a window the adapter cannot resize
+enters every time; an exit and an enter may take each other's transaction
+over at any point, a setter in flight included; an exit whose transaction
+ends before the window was asked stays owed; a step on a left or top edge
+out of fullscreen holds the opposite edge of the restored frame; a save and a
+detach keep the size the window has; the shell ends every fullscreen before
+it saves and detaches; a new window that takes the keyboard is documented as
+ending the fullscreen, which it did and upstream's does not; a pin put away
+by a fullscreen follows its output away; the direct `home_toggle` carries
+its transaction; and a fullscreen output projects no outline.
+
+Run afterwards, in this tree: `cargo fmt --check` and `cargo clippy
+--all-targets -D warnings` on the crate (clean); the fifteen scenarios here,
+extended for each fix, with `sizes_flow`, `native_resize_flow`, `rules_flow`,
+`render_flow`, `pointer_flow`, `lifecycle_flow`, `navigation_actions_flow`,
+`platform_actions_flow`, `ipc_flow`, `config_flow`, `controller_flow` and
+`view_actions_flow` (189 scenarios in 13 modules, all passing);
+`scripts/build-app.sh`; and the same two launches of the built app on
+detached placeholders, with the same answers as above, each exiting with
+status 0 on SIGTERM and removing its socket. `tests/e2e/desktop-navigation.sh`
+was not run again: the navigation coordinator is unchanged.
+
+One temporary check is not in the repository: a test file, written and
+deleted again, that played every sequence of up to twelve `toggle-fullscreen`
+presses and adapter answers, up to eight with a cancel and up to seven with a
+carrying `State` request among them (39 874 sequences, on a plain and on a
+zoomed output), then let everything drain and asked for the window's frame,
+native size, mode and view from before. None ended anywhere else. With the
+two gates of `sizes.rs` taken out again, 191 of the 2 046 sequences of up to
+ten presses and answers did.
+
+**Still no live window: nothing above ran against a native window.** The
+shell's shutdown path ran in the app with nothing fullscreen, where it does
+nothing. The outline change is compiled only.
+
+### Merged with effects, pass-through and the polish pass, 2026-10-10
+
+This work was written on a tree that had window sizing and nothing after it.
+It was then merged into one that also had effects (the frost, the open and
+close animations, the error bar: [EFFECTS.md](EFFECTS.md)), pass-through and
+the pinned drag ([RULES.md](RULES.md#pass-rules)) and a pass over nine
+upstream behaviour gaps (the focus a grab takes first, IPC `resize`'s raise,
+the size a window was last asked for, the queue of rule sizes). Where the two
+met, upstream decided:
+
+| Where they met | What holds now | Upstream |
+| --- | --- | --- |
+| a fullscreen window's frost | its own rule's `blur` only, never `[decorations] blur`: one function answers `decoration.blur` for every window | `effective_blur`'s `is_fullscreen` |
+| a press bound to move or resize on a fullscreen output | the fullscreen ends, then the window is raised and focused, then the grab is installed: [the order of a grab](#the-order-of-a-grab) | `on_pointer_button`'s fullscreen block, then the binding's arm |
+| `pass_mouse` | the fullscreen window claims at the button, scroll and notch sites with no pick gate | `fullscreen_claims` |
+| `pass_keys` | follows the fullscreen window like any holder of the keyboard | the key filter asks the focused window |
+| a wheel notch, a bound scroll | the notch's action runs through the action guard; a bound pan or zoom ends the fullscreen itself | `on_pointer_axis` |
+| a pinned drag | frozen while the pointer is over a fullscreen output; no drag of a window pinned there from elsewhere; no enter under any drag | `MoveGrab::motion`, `pinned_window_under` |
+| a rule with `size` and `fullscreen` | placed for the size, entered at the size the window has, the rule's size owed for the exit: [a new window](#a-new-window) | size at the first commit, placement on the next, then the deferred fullscreen |
+| the queue of rule sizes | a ruled window that maps during an enter or an exit waits for the slot and is asked in the reply that ends it; entering takes a window off the queue | one-shot `pending_size` |
+| the size a window was last asked for | a window owed its size by an exit is measured by that size, not the output's; a filled window comes back at the size its fill asked for | `configured_window_size` after the exit's configure |
+| IPC `Resize` | refuses a fullscreen window in upstream's words before any raise; raises any other window it sizes | `cmd_resize` |
+| who sizes a widget or a pinned window | two requests, neither by hand: the rule's `size` at the map and an exit's restore. Every other size transaction refuses them | upstream sizes them freely |
+| a new window in the background | placed against the frame each window still owed its rule's size is becoming | `fullscreen_background_pos` over the stage's frames |
+| the shell's renderer | its one fullscreen function runs on the frame the effects build; the error bar stays; no closing snapshot and no stand-in fade on a fullscreen output; a fullscreen window's own snapshot is baked bare; a window that opens fullscreen is not held for its size | `compose_frame`: the bar for every output, "no dying-window flash over a fullscreen app" |
+| the shell's shutdown | `-endFullscreens` once in `-cleanup`, after the hot keys, gestures and hover are stopped and before the resize coordinator is shut down; Quit, SIGTERM and Return to desktop all end there. A screen change re-registers the outputs and ends no fullscreen: [Outputs](#outputs) | quit ends fullscreen first |
+
+Two of those were defects of the join and not of either side: a fit or a fill
+pressed out of fullscreen would have centered on the output's size, the last
+one asked, and a rule with both fields would have entered from a frame of the
+rule's size that no observation had committed. Each has a scenario; the first
+was seen to fail with its fix taken out.
+
+Run, in the merged tree: `cargo fmt --check` and `cargo clippy --all-targets
+-D warnings` on the crate (clean); nineteen controller test modules, 263
+scenarios, all passing (`fullscreen_flow` 20, `sizes_flow` 31,
+`native_resize_flow` 25, `passthrough_flow` 19, `effects_flow` 5,
+`pointer_flow` 16, `rules_flow` 26, `render_flow` 7, `gesture_flow` 21,
+`motion_flow` 9, `navigation_actions_flow` 12, `platform_actions_flow` 11,
+`lifecycle_flow` 25, `config_flow` 12, `ipc_flow` 8, `view_actions_flow` 2,
+`controller_flow` 4, `navigation_flow` 5, `focus_cycle_flow` 5);
+`tests/e2e/desktop-navigation.sh` (PASS); and `scripts/build-app.sh`.
+
+The capability-off replies were captured again from the tree before the
+merge, built apart and asked the same requests of the same state. Every one
+was byte for byte the literal already recorded, but a key binding's entry in
+`bindings`, which had gained `passable`; that literal is now that tree's. The
+sizing literals of `tests/sizes_flow.rs` did not change. With upstream's
+built-in defaults the merged controller's `bindings` reply lists 45 key
+bindings, 42 of them implemented without the capability (all but `mod+f`,
+`mod+m` and `mod+shift+m`) and all 45 with it; of the 35 action names of
+upstream's grammar six are refused by name without it and none with it.
+
+The built app was launched twice as `--windowed 1100x700` on a private scene
+of three detached placeholders, a private config (whose one window rule,
+with `fullscreen`, `size`, `output`, both pass lists and `blur`, matches no
+placeholder) and a private socket, with no Screen Recording access:
+
+- without the flag: `state`; `action "center-nearest right"` settled with
+  `camera` at `1950 -0` and `focus` on `#2 org.example.seed`; `action
+  "pan-viewport right"` moved the camera to `2050 -0`; `action zoom-to-fit`
+  gave zoom `0.28484848484848485` at `750 -390` and a second one zoom `1` at
+  `2050 -0`; `action toggle-fullscreen` answered `error: action not
+  implemented on macOS yet: toggle-fullscreen`, before and after `focus --id
+  1`; `state` printed `fullscreen 0`; and a viewport `screenshot` was written
+  and looked at;
+- with `--experimental-native-resize`: `state` answered; `focus --id 1`
+  answered `#1 org.example.seed`; `action toggle-fullscreen` answered `ok`,
+  with and without that focus, and changed nothing (`fullscreen 0`,
+  `"fullscreen": []`, every `mode` `Normal`). There is still no refusal for
+  a stand-in. `resize --id 1 700 500` answered `this window has no native
+  size to set: it is a stand-in or has no live window`;
+- both exited with status 0 on SIGTERM and removed the socket, the flagged
+  one through `-endFullscreens` with nothing fullscreen and nothing owed.
+
+**No live window existed in either launch, so no fullscreen was entered and
+no size transaction ran in the app.** Everything in the table ran as
+controller scenarios or is compiled and read: nothing drew a fullscreen
+placement, a frost, a snapshot or an error bar on a fullscreen output, no
+press, scroll or drag reached the app, and no rule matched a window.

@@ -147,8 +147,10 @@ impl Controller {
     /// IPC `Opacity` write is part of it. A stand-in carries no rule and
     /// takes the global table alone, as upstream's does, and it is opaque
     /// and never blurred (`blur_of` in effects.rs).
-    /// The opacity is `opacity_of`, the placement's own `opacity`. Never
-    /// fullscreen: there is none here.
+    /// The opacity is `opacity_of`, the placement's own `opacity`. A
+    /// fullscreen window sheds all of it, upstream's DrawnChrome for one: no
+    /// mode, no border, no rounded corner and no shadow, and it is blurred
+    /// only when its own rule says so (`blur_of` again).
     fn decoration(&self, window: WindowId) -> Decoration {
         let decorations = &self.config().decorations;
         let applied = self.drawn_rule(window);
@@ -156,6 +158,18 @@ impl Controller {
             applied.and_then(|rule| rule.decoration.as_ref()),
             &decorations.default_mode,
         );
+        if self.is_fullscreen(window) {
+            return Decoration {
+                mode: DecorationMode::None,
+                border_width: 0,
+                border_color: effective_border_color(applied, decorations),
+                border_color_focused: effective_border_color_focused(applied, decorations),
+                corner_radius: 0,
+                shadow: false,
+                opacity: self.opacity_of(window),
+                blur: self.blur_of(window),
+            };
+        }
         Decoration {
             border_width: effective_border_width(applied, mode, decorations),
             border_color: effective_border_color(applied, decorations),

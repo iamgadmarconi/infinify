@@ -13,9 +13,14 @@ typedef DWCanvasContent (^DWCanvasSource)(NSNumber *window,NSDictionary *placeme
 // viewports, every window with its shadow, border, rounded corners and opacity, and
 // stand-ins; widgets below the other windows, screen-pinned windows above them at
 // their own size whatever the camera), and the canvas offscreen for `msg screenshot`,
-// which holds no pinned window. Everything is derived from world rectangles, cameras
-// and screen_bounds, and a pinned placement's screen_rect; no native window geometry
-// is read. It owns no timer, observer or stream: the shell calls it. Main thread only.
+// which holds no pinned window. An output the controller reports fullscreen
+// (outputs[].fullscreen) shows what its placements list and nothing else: the placement
+// marked fullscreen bare at its screen_rect, over black, or over the canvas background
+// and the outlines when the backdrop is "canvas". No output draws the viewport outline
+// of a fullscreen neighbour. Everything is derived from world
+// rectangles, cameras and screen_bounds, and a pinned or fullscreen placement's
+// screen_rect; no native window geometry is read. It owns no timer, observer or stream:
+// the shell calls it. Main thread only.
 // On screen it also draws DriftWM's effects: the frost behind a window whose
 // decoration says blur, the error bar (snapshot.render.errors, with the background
 // program's own error after the first of them: upstream's config, background,
@@ -27,6 +32,13 @@ typedef DWCanvasContent (^DWCanvasSource)(NSNumber *window,NSDictionary *placeme
 // first picture. A window whose size the controller is still changing as it opens
 // (snapshot.native_resize with an effect outstanding, as for a rule's size) has no
 // first picture until that is over, and opens then. A capture draws none of the three.
+// On a fullscreen output: the fullscreen window is frosted only when the controller says
+// so (its own rule's blur, never the global one); the error bar is drawn as on any other
+// output, above the fullscreen window, as upstream builds it for every output; no closing
+// snapshot and no stand-in fade is drawn (upstream: "no dying-window flash over a
+// fullscreen app"), each running out unseen; a fullscreen window that closes is baked
+// bare, as it was drawn; and a window that opens fullscreen is not held for the output's
+// size it is owed: it opens from its first picture, at the size it has.
 @interface DWCanvasRenderer : NSObject
 - (instancetype)initWithSource:(DWCanvasSource)source;
 // Adopts snapshot.render. The background program, the chrome style, the outline

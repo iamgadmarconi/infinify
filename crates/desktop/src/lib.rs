@@ -7,6 +7,7 @@ mod bindings;
 mod default_commands;
 mod effects;
 mod ffi;
+mod fullscreen;
 mod gestures;
 mod ipc;
 mod ipc_client;
@@ -29,6 +30,7 @@ use bindings::Platform;
 pub use bindings::{MacModifiers, PointerContext, PointerTrigger, ScrollSource};
 use effects::Effects;
 pub use ffi::*;
+use fullscreen::Fullscreen;
 pub use gestures::GestureKind;
 use gestures::{GestureStart, TrackpadGesture};
 use keyboard_layout::KeyboardLayout;
@@ -264,6 +266,9 @@ pub struct Controller {
     /// The error bar's message and the window events the shell animates.
     /// Not saved.
     effects: Effects,
+    /// Each output's fullscreen window with what its exit restores, and the
+    /// sizes exits still owe. Ephemeral. See FULLSCREEN.md.
+    fullscreen: Fullscreen,
 }
 
 #[derive(Debug, Deserialize)]
@@ -760,7 +765,14 @@ impl Controller {
             return Err(Error::Invalid("unsupported desktop schema"));
         }
         let mut next = self.clone();
-        let result = next.apply(request.command)?;
+        let carries = fullscreen::carries(&request.command);
+        let mut result = next.apply(request.command)?;
+        // A size a fullscreen exit still owes leaves with a reply the shell
+        // performs size transactions from.
+        if carries {
+            next.carry_owed(&mut result);
+        }
+        next.settle_fullscreen()?;
         next.settle_policy()?;
         next.scene.validate()?;
         next.refresh_active_bookmarks();
@@ -792,6 +804,33 @@ impl Controller {
         | Command::ZoomToFit { output } = &command
         {
             self.stop_momentum(*output);
+            // Upstream's guard, as `run` applies it to the same six actions.
+            let was_fullscreen = self.exit_fullscreen_on(*output);
+            if let Command::HomeToggle { output } = &command {
+                let mut outcome = actions::Outcome::default();
+                let mut reply =
+                    self.home_toggle_fullscreen(*output, was_fullscreen, &mut outcome)?;
+                // A return into fullscreen asks the window for the focus and
+                // the output's size: both leave with the reply, the size
+                // transaction under the keys the action's reply has.
+                if !outcome.effects.is_empty() {
+                    reply["effects"] = Value::Array(outcome.effects);
+                }
+                return Ok(sizes::carry(reply, outcome.resize));
+            }
+        }
+        // Upstream's pointer path: a bound pan or zoom and a grab end the
+        // fullscreen of the output they act on, and run on the restored canvas.
+        match &command {
+            Command::Pan { output, .. }
+            | Command::Zoom { output, .. }
+            | Command::ZoomBy { output, .. } => self.fullscreen_grab(*output, None)?,
+            Command::BeginDrag { window, output, .. }
+            | Command::BeginResize { window, output, .. }
+            | Command::BeginNativeResize { window, output, .. } => {
+                self.fullscreen_grab(*output, Some(*window))?
+            }
+            _ => {}
         }
         match command {
             Command::Snapshot {} => return self.pointer_snapshot(),
@@ -1056,7 +1095,12 @@ impl Controller {
                 }
                 return Ok(json!({"output": id}));
             }
-            Command::OutputsSettled {} => return Ok(json!({"dirty": self.rehome_pins()})),
+            Command::OutputsSettled {} => {
+                // A fullscreen whose output is gone ends first: its window may
+                // be pinned again, to that output.
+                let ended = self.fullscreen_outputs_settled();
+                return Ok(json!({"dirty": self.rehome_pins() || ended}));
+            }
             Command::RemoveOutput { output } => {
                 let resize = self.resize_output_removed(output)?;
                 let viewport = self.scene.remove_output(output)?;
@@ -1193,9 +1237,17 @@ impl Controller {
                 }
                 return match arrival {
                     Some(arrival) => {
+                        // `own`: the window was placed for the size its
+                        // rule names, and has this one.
+                        let own = ruled.then_some(source_rect.size);
+                        // Upstream's deferred fullscreen: a rule's
+                        // `fullscreen` takes the place of the navigation,
+                        // and of the size arm, whose size it then owes.
+                        if let Some(reply) = self.fullscreen_by_rule(id, output, arrival, own) {
+                            return Ok(reply);
+                        }
                         let reply = self.settle_arrival(id, output, arrival)?;
                         // Upstream's size arm: a rule's `size`, placed for.
-                        let own = ruled.then_some(source_rect.size);
                         Ok(self.size_by_rule(id, output, own, reply))
                     }
                     None => Ok(json!({"window": id})),
@@ -1471,8 +1523,10 @@ impl Controller {
                 });
                 // Upstream begin_client_resize: a resize drag ends fit and fill.
                 self.sizes.resize_begun(window);
-                // And a wait for a rule's `size`, as any sizing of the user's.
+                // And a wait for a rule's `size`, as any sizing of the user's,
+                // and the size a fullscreen exit still owed the window.
                 self.policy.sizing.retain(|queued| *queued != window);
+                self.fullscreen.restored(window);
                 return Ok(json!({"effect": effect}));
             }
             Command::GestureTo {
@@ -1657,9 +1711,10 @@ impl Controller {
     /// Upstream update_focus_history's eligibility: a focus the adapter
     /// confirmed or observed, or answered `focus_logical`, enters the focus
     /// history, the one `cycle-windows` walks and a close follows. A widget
-    /// and a screen-pinned window take the focus without entering it.
+    /// and a screen-pinned window take the focus without entering it; a
+    /// fullscreen window enters it like any other.
     pub(crate) fn confirm_focus(&mut self, window: WindowId) -> Result<(), Error> {
-        if self.on_canvas(window) {
+        if self.in_history(window) {
             self.scene.confirm_focus(window)?;
         }
         Ok(())
@@ -1862,16 +1917,20 @@ impl Controller {
         // Bottom to top within each output: widgets, canvas windows, the
         // windows pinned to it. `opacity` and `decoration.opacity` are one
         // function's answer.
+        // A fullscreen output has one placement, its fullscreen window's, in
+        // the output's screen space and marked `fullscreen`.
         let placements: Vec<_> = self.layered_placements().iter().map(|(p, pinned)| {
             let source = self.sources.get(&p.window);
             let world_size = self.scene.window(p.window).expect("placement references scene window").world_rect.size;
             let settled = source.is_some_and(|s| s.observation_known && s.capture_revision == Some(s.observation_revision));
             let buffer_crop = source.filter(|_| settled).map(|s| { let mut crop = scale_rect(p.source_rect, world_size, s.content_rect.size); crop.origin = crop.origin + s.content_rect.origin; crop });
-            describe(json!({"window": p.window, "output": p.output, "screen_rect": p.screen_rect, "clip_rect": p.clip_rect, "world_local_crop": p.source_rect, "buffer_crop": buffer_crop, "presentation_settled": settled, "source": source, "pinned": pinned, "widget": self.is_widget(p.window), "opacity": self.opacity_of(p.window)}), p.window)
+            let mut placement = json!({"window": p.window, "output": p.output, "screen_rect": p.screen_rect, "clip_rect": p.clip_rect, "world_local_crop": p.source_rect, "buffer_crop": buffer_crop, "presentation_settled": settled, "source": source, "pinned": pinned, "widget": self.is_widget(p.window), "opacity": self.opacity_of(p.window)});
+            if self.fullscreen_on(p.output) == Some(p.window) { placement["fullscreen"] = json!(true); }
+            describe(placement, p.window)
         }).collect();
         let windows: Vec<_> = self.scene.windows().iter().map(|w| {
             let (widget, pinned, rule) = self.policy_json(w.id);
-            describe(json!({"window": w.id, "world_rect": w.world_rect, "metadata": self.metadata.get(&w.id), "source": self.sources.get(&w.id), "widget": widget, "pinned": pinned, "rule": rule, "mode": self.sizes.mode_name(w.id)}), w.id)
+            describe(json!({"window": w.id, "world_rect": w.world_rect, "metadata": self.metadata.get(&w.id), "source": self.sources.get(&w.id), "widget": widget, "pinned": pinned, "rule": rule, "mode": self.mode_name(w.id)}), w.id)
         }).collect();
         let mut navigation = json!({"flights": self.flights, "clock_ns": self.navigation_clock, "contexts": self.navigation_contexts, "home_returns": self.home_returns, "overview_returns": self.overview_returns, "active_bookmarks": self.active_bookmarks});
         for (key, value) in self.motion.snapshot() {
