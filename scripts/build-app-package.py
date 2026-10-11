@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import fcntl
 import hashlib
 import json
 import os
@@ -15,6 +16,8 @@ import stat
 import subprocess
 import sys
 import tempfile
+from contextlib import contextmanager
+from collections.abc import Iterator
 
 
 def run(args: list[str], *, cwd: Path) -> str:
@@ -105,6 +108,27 @@ def remove_path(path: Path) -> None:
         shutil.rmtree(path)
 
 
+@contextmanager
+def publication_lock(path: Path) -> Iterator[None]:
+    flags = os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    fd = os.open(path, flags, 0o600)
+    try:
+        info = os.fstat(fd)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_nlink != 1
+        ):
+            raise RuntimeError(f"refusing unsafe publication lock: {path}")
+        os.fchmod(fd, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
 def rollback(
     destination_app: Path,
     destination_manifest: Path,
@@ -131,73 +155,76 @@ def publish(args: argparse.Namespace) -> None:
     destination_manifest = app_dir / "BUILD.json"
     staged_manifest = staged_app.parent / "BUILD.json"
 
-    before = json.loads(args.snapshot.read_text(encoding="utf-8"))
-    copy_resources(root, staged_app)
-    current = source_state(root)
-    if current != before:
-        raise RuntimeError("source files or Git state changed during the build; refusing to publish")
+    app_dir.parent.mkdir(parents=True, exist_ok=True)
+    with publication_lock(app_dir.parent / ".infinify-build-app.publish.lock"):
+        app_dir.mkdir(parents=True, exist_ok=True)
+        if app_dir.is_symlink():
+            raise RuntimeError(f"refusing to publish through an app directory symlink: {app_dir}")
 
-    executable = staged_app / "Contents/MacOS/Infinify"
-    identity = os.environ.get("INFINIFY_SIGN_IDENTITY") or "-"
-    subprocess.run(["codesign", "--force", "--sign", identity, str(staged_app)], check=True)
-    subprocess.run(["codesign", "--verify", "--strict", str(staged_app)], check=True)
-    if source_state(root) != before:
-        raise RuntimeError("source files or Git state changed during signing; refusing to publish")
+        before = json.loads(args.snapshot.read_text(encoding="utf-8"))
+        copy_resources(root, staged_app)
+        current = source_state(root)
+        if current != before:
+            raise RuntimeError("source files or Git state changed during the build; refusing to publish")
 
-    manifest = {
-        "schema_version": 1,
-        "git_commit": before["commit"],
-        "built_at_utc": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
-        "dirty": before["dirty"],
-        "dirty_paths": before["dirty_paths"],
-        "executable": "Infinify.app/Contents/MacOS/Infinify",
-        "executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
-        "source_fingerprint_sha256": before["source_fingerprint_sha256"],
-        "source_file_count": before["source_file_count"],
-        "source_sha256": before["source_sha256"],
-    }
-    write_json(staged_manifest, manifest)
+        executable = staged_app / "Contents/MacOS/Infinify"
+        identity = os.environ.get("INFINIFY_SIGN_IDENTITY") or "-"
+        subprocess.run(["codesign", "--force", "--sign", identity, str(staged_app)], check=True)
+        subprocess.run(["codesign", "--verify", "--strict", str(staged_app)], check=True)
+        if source_state(root) != before:
+            raise RuntimeError("source files or Git state changed during signing; refusing to publish")
 
-    app_dir.mkdir(parents=True, exist_ok=True)
-    if app_dir.is_symlink():
-        raise RuntimeError(f"refusing to publish through an app directory symlink: {app_dir}")
-    if os.stat(staged_app.parent).st_dev != os.stat(app_dir.parent).st_dev:
-        raise RuntimeError("staged app and destination are on different filesystems; atomic rename is unavailable")
-    backup_dir = Path(tempfile.mkdtemp(prefix=".infinify-backup.", dir=app_dir.parent))
-    backup_app = backup_dir / "Infinify.app"
-    backup_manifest = backup_dir / "BUILD.json"
-    app_promoted = False
-    manifest_promoted = False
-    committed = False
+        manifest = {
+            "schema_version": 1,
+            "git_commit": before["commit"],
+            "built_at_utc": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+            "dirty": before["dirty"],
+            "dirty_paths": before["dirty_paths"],
+            "executable": "Infinify.app/Contents/MacOS/Infinify",
+            "executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+            "source_fingerprint_sha256": before["source_fingerprint_sha256"],
+            "source_file_count": before["source_file_count"],
+            "source_sha256": before["source_sha256"],
+        }
+        write_json(staged_manifest, manifest)
 
-    blocked_signals = {signal.SIGHUP, signal.SIGINT, signal.SIGTERM}
-    previous_signal_mask = signal.pthread_sigmask(signal.SIG_BLOCK, blocked_signals)
-    try:
-        if destination_app.exists() or destination_app.is_symlink():
-            os.replace(destination_app, backup_app)
-        if destination_manifest.exists() or destination_manifest.is_symlink():
-            os.replace(destination_manifest, backup_manifest)
-        os.replace(staged_app, destination_app)
-        app_promoted = True
-        os.replace(staged_manifest, destination_manifest)
-        manifest_promoted = True
-        committed = True
-    except BaseException:
-        rollback(
-            destination_app,
-            destination_manifest,
-            backup_app,
-            backup_manifest,
-            app_promoted,
-            manifest_promoted,
-        )
-        raise
-    finally:
-        if committed:
-            shutil.rmtree(backup_dir, ignore_errors=True)
-        elif not backup_app.exists() and not backup_manifest.exists():
-            shutil.rmtree(backup_dir, ignore_errors=True)
-        signal.pthread_sigmask(signal.SIG_SETMASK, previous_signal_mask)
+        if os.stat(staged_app.parent).st_dev != os.stat(app_dir.parent).st_dev:
+            raise RuntimeError("staged app and destination are on different filesystems; atomic rename is unavailable")
+        backup_dir = Path(tempfile.mkdtemp(prefix=".infinify-backup.", dir=app_dir.parent))
+        backup_app = backup_dir / "Infinify.app"
+        backup_manifest = backup_dir / "BUILD.json"
+        app_promoted = False
+        manifest_promoted = False
+        committed = False
+
+        blocked_signals = {signal.SIGHUP, signal.SIGINT, signal.SIGTERM}
+        previous_signal_mask = signal.pthread_sigmask(signal.SIG_BLOCK, blocked_signals)
+        try:
+            if destination_app.exists() or destination_app.is_symlink():
+                os.replace(destination_app, backup_app)
+            if destination_manifest.exists() or destination_manifest.is_symlink():
+                os.replace(destination_manifest, backup_manifest)
+            os.replace(staged_app, destination_app)
+            app_promoted = True
+            os.replace(staged_manifest, destination_manifest)
+            manifest_promoted = True
+            committed = True
+        except BaseException:
+            rollback(
+                destination_app,
+                destination_manifest,
+                backup_app,
+                backup_manifest,
+                app_promoted,
+                manifest_promoted,
+            )
+            raise
+        finally:
+            if committed:
+                shutil.rmtree(backup_dir, ignore_errors=True)
+            elif not backup_app.exists() and not backup_manifest.exists():
+                shutil.rmtree(backup_dir, ignore_errors=True)
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_signal_mask)
 
     print(f"Published {destination_app}")
     print(f"Build manifest: {destination_manifest}")
