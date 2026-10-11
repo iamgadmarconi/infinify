@@ -1157,18 +1157,26 @@ about 780 ms of main-thread time a second to about 20.
   nor is a display that is not the built-in one. The owner's desktop run
   with real windows has not been measured: `INFINIFY_DEBUG=1` on that run
   prints the same line.
-- About once a second the main thread is away for 13 ms or more in both
-  builds, longer than one 8.3 ms refresh. That stall is older than the
-  change, but what it costs is new: the build before drew twice a refresh
-  and still showed 120 frames a second at rest, and the build after, which
-  draws only on the display link's callback, loses the callback the stall
-  covers and shows 118 or 119, a frame or two a second repeated. The 10%
-  the test allows passes that without a word. What the main thread is doing
-  then was not profiled; the look the idle poll takes at every window once a
-  second is the likely part.
+- About once a second the main thread was away for 13 ms or more in both
+  builds, longer than one 8.3 ms refresh, and the build that draws only on
+  the display link's callback lost that callback and showed 118 or 119
+  frames a second. A sample of the benchmark's own instance found it: the
+  window tracker's reconciliation asked every running application what it
+  was, one synchronous LaunchServices round trip each, about a hundred a
+  second (35 of the 54 ms sampled in `-[DWWindowEvents add:]` were that
+  wait). The look is now made off the main thread and only an application
+  not yet observed is asked again; one that ended is found from the process
+  table. Five runs since: 119.9 to 120.0 frames presented a second in both
+  phases, the main thread never away for more than 6.1 ms at rest and 11 ms
+  while the test pans through the socket.
 - A flush of 9 to 21 ms was seen after the change about once in every other
   run (8.69 ms in the one tabulated); every other flush was under 1.2 ms.
-  Not explained.
+  Not explained. One run of six, the first after a build, held every flush
+  for 5 to 7 ms from start to end (the main thread waiting for a drawable
+  each refresh, the picture still at 120 a second); the five after it did
+  not. Not explained either: a queue of drawables that fills and stays full
+  when frames are made exactly as fast as they are shown is the likely
+  shape, and nothing bounds it yet.
 
 `tests/e2e/scoped-windows.sh` is the test. It builds
 `native/fixture/scope-fixture.m` (a regular application with one titled

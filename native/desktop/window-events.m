@@ -4,6 +4,8 @@
 // (window_observe, window_unobserve), src/event_loop.c and src/window_manager.c, as window-events.h says of each. Where this
 // differs from yabai is said where it does.
 #import "window-events.h"
+#include <signal.h>
+#include <errno.h>
 #import "../focus/focus.h"
 #include <dlfcn.h>
 // Signature provenance: yabai, same commit, src/misc/extern.h:8, as in window-manager.m.
@@ -81,6 +83,7 @@ static dispatch_queue_t worker(void) { static dispatch_queue_t queue;static disp
 @property NSTimer *timer;
 @property NSTimeInterval checked;
 @property BOOL trusted, stopped;
+@property BOOL scanning; // the look through every running application is under way off the main thread (-reconcile)
 - (void)notified:(CFStringRef)notification element:(AXUIElementRef)element application:(DWObservedApplication *)application window:(DWObservedWindow *)window;
 @end
 // yabai's application_notification_handler. On the main thread, from the observer's run-loop source. The context is the
@@ -137,10 +140,27 @@ BOOL DWInScope(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope,pid_t pid) 
     // Access withdrawn: nothing is delivered any more, so nothing is kept, and the poll is the only mechanism again.
     if(!AXIsProcessTrusted()){self.trusted=NO;for(NSNumber *pid in self.applications.allKeys)[self remove:pid.intValue ended:NO];return;}
     // yabai's window_manager_begin, made again at every reconciliation: an application that became a regular one since, which
-    // yabai learns from key-value observation of its activation policy, is found here within a second.
-    self.trusted=YES;for(NSRunningApplication *running in NSWorkspace.sharedWorkspace.runningApplications)[self add:running];
+    // yabai learns from key-value observation of its activation policy, is found here within a second. The first look is made
+    // here and now, since the caller goes on to list windows. Every later one is made off the main thread: what an
+    // NSRunningApplication says of itself is fetched from LaunchServices, one synchronous round trip an application, and for
+    // the hundred or so that run that was 12 to 18 ms of the main thread once a second, a refresh or two of a 120 Hz display
+    // (sampled 2026-10-11 under four windows drawing: 35 of the 54 ms in -add: were that wait). The class is safe to read
+    // from any thread; only the applications found to be regular and running come back, with their process ids already read.
+    BOOL first=!self.trusted;self.trusted=YES;
+    if(first)for(NSRunningApplication *running in NSWorkspace.sharedWorkspace.runningApplications)[self add:running];
+    else if(!self.scanning){self.scanning=YES;__weak DWWindowEvents *weak=self;
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY,0),^{
+            NSMutableArray<NSRunningApplication *> *found=[NSMutableArray array];NSMutableArray<NSNumber *> *pids=[NSMutableArray array];
+            for(NSRunningApplication *running in NSWorkspace.sharedWorkspace.runningApplications){pid_t pid=running.processIdentifier;
+                if(pid>0&&!running.terminated&&running.activationPolicy==NSApplicationActivationPolicyRegular){[found addObject:running];[pids addObject:@(pid)];}}
+            dispatch_async(dispatch_get_main_queue(),^{DWWindowEvents *events=weak;if(!events)return;events.scanning=NO;if(events.stopped||!events.trusted)return;
+                // One it already observes costs a dictionary lookup; -add: asks a new one again, here, for what it is.
+                for(NSUInteger n=0;n<found.count;n++)if(!events.applications[pids[n]])[events add:found[n]];});
+        });}
     for(DWObservedApplication *application in self.applications.allValues){
-        if(application.running.terminated){[self remove:application.pid ended:YES];continue;}
+        // Ended: by the process table, which costs nothing, and not by asking LaunchServices about each one every second.
+        // -terminated: has usually removed it by now.
+        if(kill(application.pid,0)&&errno==ESRCH){[self remove:application.pid ended:YES];continue;}
         if(application.registered!=every&&!application.final&&!application.retry)[self observe:application];
         // A window it did not answer for, or gave no number for, is watched once it does: its windows are listed again until then.
         if(application.unanswered)[self list:application];
