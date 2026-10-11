@@ -87,7 +87,10 @@ static bool readback(DWFocusIdentity i,AXUIElementRef w,double end,DWFocusResult
     if(ok)ok=focusedWindow(app,i.pid,&r->app_window,end,&r->ax_error);
     if(ok&&!named&&r->system_pid==i.pid)r->system_window=r->app_window;
     if(front)CFRelease(front);CFRelease(app);CFRelease(system);
-    if(!dw_focus_owner(i,&cg)||!CGRectEqualToRect(cg,r->bounds)){r->outcome=DWFocusStale;return false;}
+    if(!dw_focus_owner(i,&cg)){r->outcome=DWFocusStale;return false;}
+    // The frame changed while it was read: the canvas's own size request, or the application's, was under way. What was read
+    // is of no one moment, so it is read again; the window is the same window (process, start time and number above).
+    if(!CGRectEqualToRect(cg,r->bounds)){r->bounds=cg;r->outcome=DWFocusReadbackFailed;return false;}
     if(!ok){r->outcome=now()>=end?DWFocusTimedOut:DWFocusReadbackFailed;return false;}
     r->focused=r->system_pid==i.pid&&r->system_window==i.window&&r->app_window==i.window&&NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier==i.pid;
     r->outcome=r->focused?DWFocusFocused:DWFocusObserved;return true;
@@ -99,7 +102,10 @@ DWFocusResult dw_focus_observe(DWFocusIdentity i) { @autoreleasepool {
 static bool allowed(DWFocusIdentity i,DWFocusGuard guard,void *ctx,double end,DWFocusResult *r) {
     if(now()>=end){r->outcome=DWFocusTimedOut;return false;}
     if(!guard||!guard(i,ctx)){r->outcome=DWFocusDenied;return false;}
-    CGRect b;if(!dw_focus_owner(i,&b)||!CGRectEqualToRect(b,r->bounds)){r->outcome=DWFocusStale;return false;}return true;
+    // Stale is another window: its process, start time or number no longer the one asked for. A frame that moved or
+    // changed size is the same window, and a size request made a moment before a click changes it under this very
+    // request (a click after a fit ended stale_identity_or_bounds and was dropped, twice in the sizing test's runs).
+    CGRect b;if(!dw_focus_owner(i,&b)){r->outcome=DWFocusStale;return false;}r->bounds=b;return true;
 }
 // A window on another desktop (Space) is in the window server's list and not in its application's Accessibility list while
 // another desktop is shown, so resolve() answers DWFocusMissing for it and nothing above can reach it (the owner's run of

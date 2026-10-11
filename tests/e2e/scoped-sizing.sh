@@ -249,6 +249,20 @@ done = msg('resize', '--id', str(ids['a'])); check('6: msg resize reads the size
 since = len(trace()); resized('a', 500, 400); time.sleep(.5)
 check('6: the same request again resizes nothing', not resizes(since) and frame('a') == after, resizes(since))
 clicked('a', '6')
+# 6b. A press that follows a size request at once, while the window's frame is still changing under the focus request and
+# the forwarded press: it must be sent and land, not end as another window (stale_identity_or_bounds). The size change is
+# small so that the plain view is still under the point aimed at.
+report = status('a'); x, y, w, h = report['controls']['plain']; at = [(x + w / 2) / report['bounds'][2], (y + h / 2) / report['bounds'][3]]
+before = report['counts']; since = len(trace()); resize('a', 512, 412)
+reply = pointer('down', ids['a'], at)
+if 'Ok' not in reply: fail('6b: press on the tile of a behind a size request', reply)
+until('6b: that press is delivered', 3, lambda: [l for l in trace()[since:] if l.startswith(f"debug: press #{ids['a']} delivered")], bool)
+pointer('up', ids['a'], at)
+landed = until('6b: the click arrives', 3, lambda: {k: status('a')['counts'][k] - before[k] for k in ('plain_down', 'plain_up')}, lambda v: all(d >= 1 for d in v.values()))
+lines = trace()[since:]
+check('6b: the press behind a size request was sent and landed once', landed == {'plain_down': 1, 'plain_up': 1} and all(' sent=1 ' in l for l in lines if ' delivered after ' in l), {'landed': landed, 'delivered': [l for l in lines if ' delivered after ' in l]})
+check('6b: no focus request ended as another window', not [l for l in lines if 'stale_identity_or_bounds' in l], [l for l in lines if l.startswith('debug: native focus')])
+agreed('6b: the size asked for', 'a', [512, 412]); resized('a', 500, 400); agreed('6b: back to 500x400', 'a', [500, 400])
 
 # 7. Fit: the usable area less the outer gap on every side, the camera on the window at zoom 1; again gives the size back.
 plain = frame('a'); acted('fit-window')

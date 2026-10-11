@@ -19,7 +19,8 @@ static bool allowed(DWFocusIdentity i,void *context){
     DWFocusLease *lease=(__bridge DWFocusLease *)context;
     @synchronized(lease){
     if(lease.invalid||!lease.guard())return false;
-    CGRect bounds;if(!dw_focus_owner(i,&bounds)||!CGRectEqualToRect(bounds,lease.bounds)){lease.invalid=YES;return false;}
+    // The window must still be that process's; where and how large it is may have changed since the intent (focus.m, allowed()).
+    CGRect bounds;if(!dw_focus_owner(i,&bounds)){lease.invalid=YES;return false;}lease.bounds=bounds;
     pid_t pid=NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier;
     if(pid==i.pid){lease.reachedTarget=YES;return lease.guard();}
     uint64_t s,u;BOOL valid=!lease.reachedTarget&&pid==lease.foreground&&dw_focus_birth(pid,&s,&u)&&s==lease.seconds&&u==lease.microseconds&&lease.guard();if(!valid)lease.invalid=YES;return valid;

@@ -699,7 +699,12 @@ static BOOL DWInputTrace(void) { static int on=-1;if(on<0)on=getenv("INFINIFY_DE
     if(!e||!output)return NO;
     if(!AXIsProcessTrusted()){self.desktop.statusText=@"Input requires Accessibility access. Enable it in System Settings, then reopen.";return NO;}
     NSDictionary *hit=[self hit:p output:output];if(![hit isKindOfClass:NSDictionary.class])return NO;
-    LiveSource *source=self.desktop.sources[hit[@"window"]];if(!source||![source.router valid]||(source.resize&&![source.resize validate:source.logical]))return NO;
+    LiveSource *source=self.desktop.sources[hit[@"window"]];
+    // The window's frame may have changed since the poll last looked (a size request just made, a native drag): the same
+    // window at its new frame is still the one to post to, as -releasePressed takes it. Its process and number are checked.
+    if(source&&![source.router valid]){NSDictionary *current=windowInfo(source.router.wid);
+        if([birth(source.router.pid)isEqual:source.router.processBirth]&&[current[(id)kCGWindowOwnerPID]intValue]==source.router.pid&&current[(id)kCGWindowBounds])source.router.bounds=current[(id)kCGWindowBounds];}
+    if(!source||![source.router valid]||(source.resize&&![source.resize validate:source.logical]))return NO;
     // Unsupported cross-source pointer capture must never retarget a held drag.
     CGEventType type=CGEventGetType(e);
     if((type==kCGEventLeftMouseDragged||type==kCGEventRightMouseDragged||type==kCGEventOtherMouseDragged)&&source!=self.pressedSource)return NO;
