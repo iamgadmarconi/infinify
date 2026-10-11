@@ -18,6 +18,11 @@ macOS 27 is inherently unsupported is made.
   `host ABS_PAYLOAD PRIVATE_RUNTIME NONCE64HEX`. Runtime directory must already be
   owned by the current user with mode 0700. A relative path keeps test sockets
   below macOS's 103-byte path limit. Host has a 90-second watchdog.
+  With trailing `--windows N` (1..16) the host opens N small windows and offers all
+  of them to protocol v2 (v1 keeps the first); `--v2-queue own|main` chooses where
+  v2's native calls run. Without either flag the host is the one-window fixture.
+- `dwclient.o` (`dwclient.h`, `dwclient.c`): the protocol v2 client library the
+  shell will link; plain C and pthreads. `v2client`: a test driver built on it.
 - `client`: POSIX socket client with JSON encoding. Invocation:
   `client PRIVATE_RUNTIME NONCE64HEX`. Reads JSON lines from stdin, adds `v` and
   `nonce`, prints responses, closes on stdin EOF or rejected operation. Holding
@@ -127,6 +132,195 @@ including when no client is connected. At most one retry is scheduled; successfu
 durable recovery clears the mutation block. Native identity and UID are
 revalidated on every retry. There is no deadline that silently abandons recovery.
 
+## Protocol v2
+
+Protocol v2 does for many windows, at display rate, what v1 does for one. It lives
+beside v1 in the same payload (`payload-v2.m`, compiled into `payload.m`); v1's
+socket, code path and replies are unchanged. Constants and structs: `protocol2.h`.
+
+**Transport.** A second listener, `RUNTIME/v2.sock` (0600, same 0700 directory,
+peer UID checked with `getpeereid`). A JSON line with `v:2` on `helper.sock` is
+still refused by v1. Messages are binary, little-endian: a 16-byte header
+`{u32 length, u16 type, u16 flags=0, u64 seq}` and `length` body bytes, at most
+131072. A reply carries `type|0x8000` and the request's `seq`. A bad header, a
+wrong body length, an unknown type or a frame `seq` that does not rise (the first
+must be above 0) is a protocol error: the connection is closed. At most 8 connections are held, each on its own
+thread; the first message must be `HELLO` and arrive within 2 s. The count includes
+connections that have not yet said `HELLO`, so a process of the same user without
+the nonce can keep a new controller out for as long as it keeps eight of them open
+(it cannot move a window or disturb a live session); not addressed in this stage.
+
+| Type | Body | Reply body |
+|---|---|---|
+| 1 `HELLO` | `"DWv2"`, u16 version 2, u16 role (1 control, 2 heartbeat), 64-byte nonce, 16-byte token (zero for control) | u32 status, lease_ms 2000, max_records 1024, max_body, caps (bit 0 alpha), scope (1 cooperative, 2 allowlist, 3 same user), queue (0 own, 1 main), i32 server pid, 16-byte token |
+| 2 `FRAME` | u32 count, u32 0, count × 80-byte record | u32 disposition (0 applied, 1 dropped), u32 count, u32 superseded, u32 0, u64 frames applied in total, count × u8 status |
+| 3 `HEARTBEAT` | empty | u32 status, lease_ms, held, restoring |
+| 4 `RESTORE_ALL` | empty | u32 count, pending, journal_persisted, 0, count × 32-byte result |
+| 5 `PROBE` | empty | counters, then one 112-byte entry per table window, then (cooperative scope only) the host's own window identities |
+
+`HELLO` status: 0 ok, 1 wrong nonce, 2 wrong magic or version, 3 another session
+is live, 4 unknown token, 5 malformed. Anything but 0 closes the connection.
+
+A record is `{i32 pid, u32 wid, u64 birth_sec, u64 birth_usec, f64 m[6], f32 alpha,
+u32 flags}`: the window as the shell holds it (no owner connection: the helper
+resolves and records that itself), the affine `a,b,c,d,tx,ty` from screen to
+window-local in global top-left points, and an alpha that is used only when flag
+bit 0 is set. Matrices obey v1's bounds; alpha must be within 0..1. Record status:
+0 applied, 1 out of scope, 2 identity (no such window, or not that process
+instance, or not this user), 3 matrix, 4 alpha (invalid, or the capability is
+absent), 5 the original could not be read, 6 the journal could not be written,
+7 not applied (the set failed or read back differently; the window stays in the
+table because it may have been changed), 8 a restore of this window is still
+pending, 9 protocol v1 holds a window, 10 table full (1024), 11 malformed. "Applied"
+means the set returned 0 **and** the value read back equals the request after
+rounding to 32-bit floats, which is how the window server keeps a transform; status
+0 alone is never enough.
+
+**Session.** A control `HELLO` with the nonce opens the one session and returns a
+random token. A heartbeat connection is a second connection whose `HELLO` carries
+that token. The session ends when the control connection closes, on a protocol
+error on it, or when the lease runs out; closing a heartbeat connection ends
+nothing. Ending a session restores everything (below).
+
+**Frames: the newest wins.** A frame names any number of windows (up to 1024; the
+largest is 81 944 bytes, far over v1's 4096). The connection thread reads up to
+64 KiB at a time and never waits for the window server: a complete frame goes into
+a one-frame slot, replacing a frame still waiting there. The replaced frame is
+never applied and gets no reply of its own; the next reply's `superseded` counts
+it, so a reply for `seq` m answers every unanswered frame up to m. A slow window
+server therefore applies fewer frames, not later ones, and the last frame sent is
+always applied. One bad or stale record fails by itself: the rest of the frame is
+applied and the session and lease go on. `RESTORE_ALL` and the end of the session
+discard a waiting frame (it is answered with disposition 1); a frame sent after
+`RESTORE_ALL` is applied after it. `PROBE` is answered in turn on the same queue
+and reports what is true when it runs. A reply waits for its reader for at most
+250 ms, on the apply queue: a client that leaves a reply unread that long loses its
+connection.
+
+**Table and journal.** The helper keeps a table of every window it has touched,
+with what the window was before the first touch: transform, alpha (when the
+capability is present, whether or not that record sets it), bounds, and the owner
+connection it resolved. The capture happens before the first change. The journal,
+`RUNTIME/v2-journal.json` (staged at `v2-journal.next`, written like v1's:
+exclusive no-follow staging, fsync, rename, fsync of the directory; `recovery.json`
+is v1's and is not touched), lists the table with those originals. It is written
+when a frame brings windows into the table, once for the whole frame and before any
+of them is changed; when a window's alpha is changed for the first time (the journal
+then says its alpha must be put back); and when windows leave the table. A frame of
+known windows writes nothing. If it cannot be written, the new windows get status 6
+and are not changed. `generation` and the probe's `journal_writes` count the writes.
+A staging file left by an instance that died mid-write is removed at the next start,
+before the journal is read.
+
+**Restore.** Everything is put back on an explicit `RESTORE_ALL`, when the control
+connection closes, on a protocol error, and when the lease runs out. For each
+window the helper resolves the identity again: if it is still the recorded window
+of the recorded process instance on the recorded connection, in scope, the original
+transform (and alpha, if it was changed) is set and read back: `restored`, and the
+window leaves the table. If the window or its process is gone, or the number now
+names something else, nothing is touched: `gone`, and it leaves the table. If the
+set or the readback fails, or the window is listed but cannot be resolved, it stays
+as `pending`: it blocks nothing else, records naming it get status 8, and it is
+retried after 250 ms, 500 ms, 1 s and then every 2 s without a deadline, as v1
+retries its one window. After a pass with nothing pending the table is empty and the
+journal says `"state":"empty"` with the per-window results under `last_restore`. A
+journal that could not be written after a restore is retried on the same schedule.
+Restores made without a request are logged to stderr as `V2_RESTORE {json}`.
+
+**Lease and heartbeats.** The lease is 2000 ms. Any valid message on either
+connection renews it; a heartbeat is answered on its own connection's thread from
+counters and never waits for the window server. So a sender whose frame loop is
+stalled while its process is alive (its heartbeat thread still beating on the second
+connection) keeps its windows where they are; a process that died closes its
+connections and is restored at once; a process that is stopped or hangs in every
+thread is restored when the lease runs out. **A caller hung for good in its own
+thread, in a process that is otherwise alive, keeps its windows without end:** the
+library's heartbeat thread beats whatever the caller does, which is what keeps a
+stalled frame loop from losing them. Bounding that (the heartbeat stopping when the
+caller has not checked in for some seconds) belongs to the shell stage. Likewise a
+window-server call that never returns stalls the apply queue and the restore queued
+behind it while heartbeats are still answered; a client sees it only as a
+`last_applied_seq` that stops rising.
+
+**Scope** is enforced in the payload as v1 enforces it, from the record alone
+before any lookup and again after resolving, for every record of every frame and
+every window of every restore: the cooperative host only its own pid and the
+windows it was started with; with a spike allowlist only the listed process
+instances; otherwise only windows of processes of the helper's own user. One
+protocol holds windows at a time: while v2's table is not empty v1's `enroll` and
+`transform` fail with `protocol v2 holds windows`, and while v1 holds its window v2
+records get status 9.
+
+**Where the calls run, and what is not known.** v1 serializes its native calls on
+the process's main queue. In Dock that would put every frame behind Dock's own UI
+work and would stop restores whenever Dock's main thread stalls, so v2's native
+calls, its table, its journal, restore and the retries run on the helper's own
+serial queue; socket reading, heartbeats and the lease watch run on connection
+threads. **Whether the window server accepts these calls from a thread other than
+the main one inside Dock on macOS 27.2 is not known.** yabai makes them from its own
+thread, and the cooperative host accepts them here, but neither is evidence about
+Dock on this build: it is one of the things the owner's spike will show. The choice
+can be flipped without rewriting: `DW_V2_MAIN_QUEUE=1 ./scripts/build-privileged.sh`
+builds a payload that uses the main queue; the sidecar key `"v2_queue":"own"|"main"`
+overrides the build (any other value refuses to start); the cooperative host takes
+`--v2-queue`. The loader does not write that key today, so for Dock the build-time
+switch is the usable one.
+
+**A helper that died holding windows.** A dead process restores nothing. At its
+next start on the same runtime directory v2 reads `v2-journal.json`: each recorded
+window is restored only if its whole recorded identity (pid, start time, window
+number, owner connection) still resolves to the same process instance and passes
+the new instance's scope, and the value written is the one captured before any
+helper touched the window; the others are recorded as `gone`. A journal that cannot
+be parsed, or a `v2.sock` already there, leaves v2 off (v1 still starts) with one
+line in the log; the loader's fresh-runtime check does not look at v2's files. The loader and v1 still demand a fresh
+directory, so in Dock this path waits for the per-instance runtime of a later stage.
+
+**Client library** (`dwclient.h`). `dw_client_open` (bounded by its timeout,
+retrying while another session is live), `dw_client_submit_frame` (copies the
+records into a one-frame slot for a writer thread and returns; it never touches a
+socket), `dw_client_probe`, `dw_client_restore_all` (bounded waits), a heartbeat
+thread on the second connection every quarter lease, and a `lost` callback, fired
+once when either connection ends, a write does not complete within a second, or no
+heartbeat is answered for a whole lease. On loss the library closes its side, so the
+helper restores as soon as it can; there is no automatic reconnect. Its clock is
+`CLOCK_UPTIME_RAW`, which stops during sleep as the helper's lease clock does, so
+waking the machine is not a loss. `dw_client_open` returns `DW_CLIENT_NO_V2`
+instead of a timeout when the runtime has `helper.sock` and no `v2.sock`: a helper
+whose v2 did not start. A `v2.sock` left by a dead helper still reads as a timeout.
+
+**Tested** (`fixture_v2_test.py`, cooperative host with eight windows; rectangles
+are the window server's `SLSGetScreenRectForWindow` and alpha is `kCGWindowAlpha`,
+both read from the test process; the journal is read from disk): a frame of eight
+with two alphas; a second frame with non-dyadic values; a missing window and a
+wrong process birth failing alone among good records (in cooperative scope the
+missing number is refused as out of scope, status 1, before any lookup; only the
+wrong birth reaches the identity check); a frame over 4096 bytes; a burst of 2000
+frames, each drawing a rectangle no other does, ending exactly at the last frame's
+with fewer applied than sent (the applied count is the helper's own, from replies
+and counters); the
+journal written once for all those frames; restore-all; close without restore-all;
+a malformed message; a heartbeat connection alone holding for three leases and
+letting go one lease after it stops; SIGKILL of a client; an obstructed journal;
+the client library at 120 Hz for five seconds; the helper's process stopped under a
+running sender and under an idle one; the helper killed while holding (only the
+`gone` path: its windows die with it), with a staging file left behind; a helper
+whose v2 did not start, as the library reports it; the main-queue switch; allowlist
+refusal; and v1/v2 exclusion. **Not tested:** anything in Dock; any window of
+another process; another user's session; a native set or readback that fails (so
+`pending` and its retries run in no test); a window of the table that closes during
+a session; statuses 7, 8 and 10; startup recovery of a window that still exists;
+the library across a real sleep and wake; a failed thread start in the library; the
+accept loop's wait when descriptors run out.
+
+**Later stages:** ordering, levels and sub-level; native move and Spaces; releasing
+one window, and pruning windows that closed mid-session (they leave at the next
+restore, so a session that never restores stops adopting new windows, status 10,
+after 1024 distinct ones: needed before the shell holds one session for days); the restore target for a window moved natively after first touch;
+skipping unchanged records; reconciling a previous Dock instance's journal, the
+per-instance runtime and the fixed-path loader; a loader-written `v2_queue`; the
+shell.
+
 ## Recovery limits and evidence
 
 A process crash, forced server termination, suspended/hung Dock/main queue, or
@@ -235,7 +429,8 @@ socket handling, the heartbeat thread, the affine, the readback checks, the 240-
 loop, restore, the finally path and the evidence file — against the cooperative host
 and its own window, with no Dock, no sudo and no owner; the owner-only steps become
 recorded skips. It is the developer- and reviewer-run check of the driver;
-`tests/e2e/privileged-fixture.sh` runs only the cooperative `fixture_test.py`.
+`tests/e2e/privileged-fixture.sh` runs only the cooperative `fixture_test.py` and
+`fixture_v2_test.py`.
 
 ## Attribution
 
@@ -243,4 +438,7 @@ recorded skips. It is the developer- and reviewer-run check of the driver;
 `dd845723416f5fe92af49fad5ebab00369e07edd`, plus its Jeremy Legendre arm64e path
 attribution. `YABAI-LICENSE.txt` is the exact upstream license. Loader changes
 are documented in its header. Other files are original GPL-3.0-or-later code;
-private ABI declarations were cross-checked against that same yabai revision.
+private ABI declarations were cross-checked against that same yabai revision. The
+three optional declarations protocol v2 uses (`SLSGetWindowAlpha`,
+`SLSSetWindowAlpha`, `SLSConnectionGetPID`) follow that revision's
+`src/misc/extern.h` and say so where they are declared in `payload.m`.

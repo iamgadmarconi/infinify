@@ -12,6 +12,7 @@
 #import <unistd.h>
 #import <errno.h>
 #import <mach/mach_time.h>
+#import <os/lock.h>
 #import "protocol.h"
 
 static int (*mainConnection)(void);
@@ -20,6 +21,12 @@ static CGError (*getTransform)(int, uint32_t, CGAffineTransform *);
 static CGError (*setTransform)(int, uint32_t, CGAffineTransform);
 static CGError (*getBounds)(int, uint32_t, CGRect *);
 static CGError (*getScreenRect)(int, uint32_t, CGRect *);
+// Optional, used by protocol v2 only. Signatures as declared by yabai (MIT),
+// https://github.com/asmvik/yabai commit dd845723416f5fe92af49fad5ebab00369e07edd,
+// src/misc/extern.h lines 16, 17 and 79; resolved by dlsym like the six above.
+static CGError (*getAlpha)(int, uint32_t, float *);
+static CGError (*setAlpha)(int, uint32_t, float);
+static CGError (*connectionPID)(int, pid_t *);
 static NSDictionary *enrolled;
 static NSString *secret;
 // Optional spike allowlist of {pid,birth_sec,birth_usec}. When present the payload
@@ -35,6 +42,22 @@ static NSDictionary *pendingRestoreReceipt;
 static BOOL recoveryRetryScheduled = NO;
 static unsigned recoveryRetryDelayMS = 250;
 static NSDictionary *restore(NSString *reason);
+// One protocol holds windows at a time, so v1's main queue and v2's own queue never
+// both change a window. 1 is v1, 2 is v2; v1 is unaffected while v2 holds nothing.
+static os_unfair_lock protocolLock=OS_UNFAIR_LOCK_INIT;
+static int protocolHolder;
+static BOOL protocolClaim(int protocol) {
+    os_unfair_lock_lock(&protocolLock);
+    BOOL held=protocolHolder==0 || protocolHolder==protocol;
+    if(held)protocolHolder=protocol;
+    os_unfair_lock_unlock(&protocolLock);
+    return held;
+}
+static void protocolRelease(int protocol) {
+    os_unfair_lock_lock(&protocolLock);
+    if(protocolHolder==protocol)protocolHolder=0;
+    os_unfair_lock_unlock(&protocolLock);
+}
 static void scheduleRecoveryRetry(void) {
     if(recoveryRetryScheduled)return;
     recoveryRetryScheduled=YES;
@@ -102,7 +125,7 @@ static BOOL persist(NSDictionary *receipt) {
     return ok;
 }
 static NSDictionary *restore(NSString *reason) {
-    if(!dirty && !pendingRestoreReceipt && !recoveryBlocked) return @{@"v":@1,@"ok":@YES,@"restored":@YES,@"reason":reason,@"readback":readback()};
+    if(!dirty && !pendingRestoreReceipt && !recoveryBlocked) {protocolRelease(1);return @{@"v":@1,@"ok":@YES,@"restored":@YES,@"reason":reason,@"readback":readback()};}
     if(!validIdentity()) {
         recoveryBlocked=YES;scheduleRecoveryRetry();
         return failure(@"identity changed; original target cannot safely be restored");
@@ -124,7 +147,7 @@ static NSDictionary *restore(NSString *reason) {
     if(saved)pendingRestoreReceipt=nil;
     recoveryBlocked=!restored || !saved;
     if(recoveryBlocked)scheduleRecoveryRetry();
-    else recoveryRetryDelayMS=250;
+    else {recoveryRetryDelayMS=250;protocolRelease(1);}
     NSMutableDictionary *response=[receipt mutableCopy]; response[@"recovery_persisted"]=@(saved);
     if(!saved) {response[@"ok"]=@NO;response[@"error"]=@"restoration readback obtained but receipt persistence failed";}
     return response;
@@ -165,6 +188,7 @@ static NSDictionary *handle(NSDictionary *request) {
         struct proc_bsdinfo b={0};
         int pid=[candidate[@"pid"] intValue];
         if(![actual isEqual:candidate] || proc_pidinfo(pid,PROC_PIDTBSDINFO,0,&b,sizeof(b))!=sizeof(b) || b.pbi_uid!=getuid())return failure(@"enrollment identity or owner UID mismatch");
+        if(!protocolClaim(1))return failure(@"protocol v2 holds windows");
         CGAffineTransform snapshot;
         if(getTransform(mainConnection(),[candidate[@"wid"] unsignedIntValue],&snapshot) || !finiteMatrix(snapshot))return failure(@"cannot snapshot enrollment");
         if(!persist(@{@"v":@1,@"state":@"enrolled",@"restored":@YES,@"identity":candidate,@"original":matrix(snapshot)}))return failure(@"cannot persist enrollment");
@@ -191,6 +215,7 @@ static NSDictionary *handle(NSDictionary *request) {
     for(id n in m)if(!isNumber(n))return failure(@"matrix must contain numbers");
     CGAffineTransform requested=CGAffineTransformMake([m[0] doubleValue],[m[1] doubleValue],[m[2] doubleValue],[m[3] doubleValue],[m[4] doubleValue],[m[5] doubleValue]);
     if(!finiteMatrix(requested))return failure(@"matrix nonfinite, singular, or exceeds bound");
+    if(!protocolClaim(1))return failure(@"protocol v2 holds windows");
     if(!hasSnapshot) {
         if(getTransform(mainConnection(),[enrolled[@"wid"] unsignedIntValue],&original) || !finiteMatrix(original))return failure(@"original readback failed");
         hasSnapshot=YES;
@@ -242,12 +267,16 @@ static void serve(int fd) {
     });
     close(fd);
 }
-static int startServer(const char *directory, const char *nonce, uint32_t wid, BOOL fixture, NSArray *allow) {
+#import "payload-v2.m"
+static int startServer(const char *directory, const char *nonce, const uint32_t *wids, uint32_t count, BOOL fixture, NSArray *allow, BOOL v2Main) {
     if(!NSThread.isMainThread || started || !directory || !nonce || strlen(nonce)!=64 || getuid()!=geteuid())return -__LINE__;
     for(const char *p=nonce;*p;p++)if(!((*p>='a'&&*p<='f')||(*p>='0'&&*p<='9')))return -__LINE__;
     // Explicit enrollment is restricted to a real NSWindow owned by this fixture host.
-    if(fixture) { NSWindow *window=[NSApp windowWithWindowNumber:wid];
-        if(!window || (uint32_t)window.windowNumber!=wid)return -__LINE__; }
+    if(fixture) {
+        if(!wids || !count || count>sizeof(fixtureWids)/sizeof(*fixtureWids))return -__LINE__;
+        for(uint32_t i=0;i<count;i++) { NSWindow *window=[NSApp windowWithWindowNumber:wids[i]];
+            if(!window || (uint32_t)window.windowNumber!=wids[i])return -__LINE__; }
+    }
     else if(![NSBundle.mainBundle.bundleIdentifier isEqual:@"com.apple.dock"])return -__LINE__;
     fixtureOnly=fixture;allowlist=allow;
     void *sky=dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight",RTLD_LOCAL|RTLD_NOW);
@@ -255,8 +284,15 @@ static int startServer(const char *directory, const char *nonce, uint32_t wid, B
     mainConnection=dlsym(sky,"SLSMainConnectionID");getOwner=dlsym(sky,"SLSGetWindowOwner");
     getTransform=dlsym(sky,"SLSGetWindowTransform");setTransform=dlsym(sky,"SLSSetWindowTransform");getScreenRect=dlsym(sky,"SLSGetScreenRectForWindow");getBounds=dlsym(sky,"SLSGetWindowBounds");
     if(!mainConnection||!getOwner||!getTransform||!setTransform||!getScreenRect||!getBounds)return -__LINE__;
-    if(fixture){enrolled=identity(wid);
-        if(!enrolled || [enrolled[@"pid"] intValue]!=getpid())return -__LINE__;}
+    getAlpha=dlsym(sky,"SLSGetWindowAlpha");setAlpha=dlsym(sky,"SLSSetWindowAlpha");connectionPID=dlsym(sky,"SLSConnectionGetPID");
+    // v1's one window is the first; v2 may name any of them.
+    if(fixture){enrolled=identity(wids[0]);
+        if(!enrolled || [enrolled[@"pid"] intValue]!=getpid())return -__LINE__;
+        fixtureCount=0;
+        for(uint32_t i=0;i<count;i++) { NSDictionary *own=identity(wids[i]);
+            if(!own || [own[@"pid"] intValue]!=getpid())return -__LINE__;
+            fixtureWids[fixtureCount++]=wids[i]; }
+    }
     struct stat st;
     directoryFD=open(directory,O_RDONLY|O_DIRECTORY|O_NOFOLLOW);
     if(directoryFD<0)return -__LINE__;
@@ -273,17 +309,22 @@ static int startServer(const char *directory, const char *nonce, uint32_t wid, B
         for(;;) { int client=accept(listener,NULL,NULL);if(client<0){if(errno==EINTR)continue;break;} @autoreleasepool {serve(client);} }
         close(listener);
     });
+    int v2=v2Start(directory,v2Main);
+    if(v2)NSLog(@"DriftWM transform helper: protocol v2 not started (%d); v1 only",v2);
     return 0;
 }
 
-int dw_privileged_fixture_start(const char *directory,const char *nonce,uint32_t wid,const char *allowlistJSON) {
+int dw_privileged_fixture_start_windows(const char *directory,const char *nonce,const uint32_t *wids,uint32_t count,const char *allowlistJSON,int v2OnMainQueue) {
     NSArray *allow=nil;
     if(allowlistJSON) {
         id raw=[NSJSONSerialization JSONObjectWithData:[NSData dataWithBytes:allowlistJSON length:strlen(allowlistJSON)] options:0 error:NULL];
         allow=validAllowlist(raw);
         if(!allow)return -__LINE__;
     }
-    return startServer(directory,nonce,wid,YES,allow);
+    return startServer(directory,nonce,wids,count,YES,allow,v2OnMainQueue<0 ? DW_V2_MAIN_QUEUE : v2OnMainQueue!=0);
+}
+int dw_privileged_fixture_start(const char *directory,const char *nonce,uint32_t wid,const char *allowlistJSON) {
+    return dw_privileged_fixture_start_windows(directory,nonce,&wid,1,allowlistJSON,-1);
 }
 // Loader writes this explicit opt-in sidecar before dlopen. No sidecar means no
 // listener and no mutation. Production configuration is never inferred from env.
@@ -305,8 +346,15 @@ __attribute__((constructor)) static void productionStart(void) {
         allow=validAllowlist(config[@"allowlist"]);
         if(!allow){NSLog(@"DriftWM transform helper: sidecar allowlist present but invalid; refusing to start");return;}
     }
+    // Optional: which queue v2's native calls run on. Absent means the build's default.
+    BOOL v2Main=DW_V2_MAIN_QUEUE;
+    if(config[@"v2_queue"]) {
+        if([config[@"v2_queue"] isEqual:@"main"])v2Main=YES;
+        else if([config[@"v2_queue"] isEqual:@"own"])v2Main=NO;
+        else {NSLog(@"DriftWM transform helper: sidecar v2_queue present but invalid; refusing to start");return;}
+    }
     dispatch_async(dispatch_get_main_queue(),^{
-        int status=startServer([config[@"runtime"] fileSystemRepresentation],[config[@"nonce"] UTF8String],0,NO,allow);
+        int status=startServer([config[@"runtime"] fileSystemRepresentation],[config[@"nonce"] UTF8String],NULL,0,NO,allow,v2Main);
         NSLog(@"DriftWM transform helper start status %d; explicit enrollment required",status);
     });
 }
