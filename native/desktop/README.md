@@ -47,11 +47,22 @@ canvas, using the current camera mapping for motion and pairing release/tool-out
 with that recipient. A replacement physical tool retires the previous contact.
 Fresh overlay tablet input still enters through AppKit; unrelated native pen
 input is not captured. Hardware validation remains outstanding.
-Ordinary native windows remain where their owners put them. Cameras and world
+In capture mode, ordinary native windows remain where their owners put them. Cameras and world
 movement do not move, transform, park, or resize native windows.
 An explicit [cooperative native backend](#native-presentation-through-a-cooperative-helper)
 instead presents the fixture process's real windows through the transform helper.
 It is a separate, scoped mode; the default remains capture and redraw.
+`--native-desktop-helper RUNTIME NONCE_FILE` explicitly selects whole-desktop
+native presentation for the login user, including applications launched later.
+It requires one authenticated Apple Dock-hosted same-user helper, per-window
+restoration and a scope audit. It cannot be combined with `--only-pid`,
+`--windowed`, `--manual` or fixture modes. The app connects to an existing
+helper; it never injects or installs one. The owner-run
+[`scripts/start-native-desktop.sh`](../../scripts/start-native-desktop.sh)
+prepares or reuses that helper after its policy preflight succeeds. Merely
+building the script's artifacts performs no injection or window mutation.
+Native clipping, cross-view drag-and-drop and physical application acceptance
+remain incomplete; this explicit mode is not yet proof of full parity.
 [Window navigation](#window-navigation-and-native-focus) activates and raises
 the one window it focuses, and nothing else.
 
@@ -4518,6 +4529,13 @@ is unchanged. macOS video/dynamic assets without a loadable single still use
 the canvas background fallback. Source changes refresh on display/Space/session
 events and a low-frequency check while navigation is idle. The app reads these
 settings; it never changes the Mac wallpaper.
+
+If macOS still names a deleted source file, the shell can reuse that source's
+path-hashed image-provider cache entry for the current display resolution. This
+is a read-only fallback for the observed macOS 26 cache format; unknown cache
+layouts are ignored. Decoding retains the Mac's scaling and fill settings. An
+unavailable inherited image keeps the last loaded wallpaper or the canvas grid,
+logs the failure, and retries while idle without leaving an error bar onscreen.
 
 - **File.** `--config /absolute/path.toml`, else
   `$XDG_CONFIG_HOME/infinify/config.toml`, else `~/.config/infinify/config.toml`

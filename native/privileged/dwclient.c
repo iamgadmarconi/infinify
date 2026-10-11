@@ -237,7 +237,9 @@ static int hello(const struct sockaddr_un *address, uint16_t role, const char *n
         int64_t left=(int64_t)deadline-(int64_t)now_ms();
         ok=left>0 && poll(&p,1,(int)left)>0 && getsockopt(fd,SOL_SOCKET,SO_ERROR,&error,&size)==0 && !error;
     }
-    ok=ok && getpeereid(fd,&uid,&gid)==0 && uid==getuid()
+    // The loader drops its effective UID to the login user for this audit while
+    // retaining real UID 0. Authenticate the identity used by this connection.
+    ok=ok && getpeereid(fd,&uid,&gid)==0 && uid==geteuid()
         && getsockopt(fd,SOL_LOCAL,LOCAL_PEERPID,&peer,&peerSize)==0 && peerSize==sizeof(peer) && peer>1;
     size_t sent=0;
     while(ok && sent<sizeof(out)) {

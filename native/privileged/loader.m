@@ -35,9 +35,10 @@
 #include <sys/stat.h>
 #include <libproc.h>
 #include <fcntl.h>
-#include <ctype.h>
+#include <errno.h>
+#include <inttypes.h>
 #include "preflight.h"
-#include <sys/socket.h>
+#include "dwclient.h"
 #include <sys/un.h>
 #include <limits.h>
 
@@ -154,71 +155,159 @@ static pid_t get_dock_pid(void)
     return 0;
 }
 
-// Readiness requires the authenticated v1 socket to be served by this Dock PID.
-// The bootstrap sentinel proves only pthread dispatch, never dlopen completion.
-static BOOL wait_for_helper(const char *runtime,const char *nonce,pid_t pid,uid_t uid) {
-    struct sockaddr_un addr={.sun_family=AF_UNIX};
-    if(snprintf(addr.sun_path,sizeof(addr.sun_path),"%s/helper.sock",runtime)>=(int)sizeof(addr.sun_path))return NO;
-    for(int attempt=0;attempt<50;attempt++) {
-        int fd=socket(AF_UNIX,SOCK_STREAM,0);
-        if(fd<0)return NO;
-        struct timeval timeout={.tv_sec=1};
-        setsockopt(fd,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout));
-        setsockopt(fd,SOL_SOCKET,SO_SNDTIMEO,&timeout,sizeof(timeout));
-        int one=1;setsockopt(fd,SOL_SOCKET,SO_NOSIGPIPE,&one,sizeof(one));
-        if(connect(fd,(struct sockaddr *)&addr,sizeof(addr))){close(fd);usleep(100000);continue;}
-        uid_t peerUID;gid_t peerGID;pid_t peerPID=0;socklen_t len=sizeof(peerPID);
-        if(getpeereid(fd,&peerUID,&peerGID)||peerUID!=uid||getsockopt(fd,SOL_LOCAL,LOCAL_PEERPID,&peerPID,&len)||peerPID!=pid){close(fd);return NO;}
-        char request[256];int count=snprintf(request,sizeof(request),"{\"v\":1,\"op\":\"probe\",\"nonce\":\"%s\"}\n",nonce);
-        if(write(fd,request,count)!=count){close(fd);return NO;}
-        char response[4096];size_t used=0;
-        while(used<sizeof(response)){ssize_t n=read(fd,response+used,1);if(n!=1)break;if(response[used++]=='\n')break;}
-        close(fd);
-        if(!used||response[used-1]!='\n')return NO;
-        id object=[NSJSONSerialization JSONObjectWithData:[NSData dataWithBytes:response length:used] options:0 error:NULL];
-        return [object isKindOfClass:NSDictionary.class] && [object[@"v"] isEqual:@1] && [object[@"ok"] isEqual:@YES];
+static BOOL process_info(pid_t pid,struct proc_bsdinfo *info) {
+    memset(info,0,sizeof(*info));
+    return pid>1 && proc_pidinfo(pid,PROC_PIDTBSDINFO,0,info,sizeof(*info))==sizeof(*info)
+        && info->pbi_pid==(uint32_t)pid && info->pbi_start_tvsec && info->pbi_start_tvusec<1000000;
+}
+static BOOL current_dock(pid_t pid,const struct proc_bsdinfo *expected) {
+    struct proc_bsdinfo now;
+    return get_dock_pid()==pid && process_info(pid,&now) && now.pbi_uid==expected->pbi_uid
+        && now.pbi_start_tvsec==expected->pbi_start_tvsec && now.pbi_start_tvusec==expected->pbi_start_tvusec;
+}
+static BOOL parse_decimal(const char *text,uint64_t maximum,uint64_t *value) {
+    if(!text || !*text)return NO;
+    for(const char *p=text;*p;p++)if(*p<'0' || *p>'9')return NO;
+    errno=0;char *end=NULL;unsigned long long number=strtoull(text,&end,10);
+    if(errno==ERANGE || *end || number>maximum)return NO;
+    *value=number;return YES;
+}
+static BOOL valid_nonce(const char *nonce) {
+    if(strlen(nonce)!=64)return NO;
+    for(const char *p=nonce;*p;p++)if(!((*p>='0' && *p<='9') || (*p>='a' && *p<='f')))return NO;
+    return YES;
+}
+// The production launcher never places credentials in argv. O_NONBLOCK also
+// avoids waiting on a substituted FIFO before fstat rejects its file type.
+static BOOL read_nonce_file(const char *path,uid_t uid,char nonce[65]) {
+    if(path[0]!='/')return NO;
+    int fd=open(path,O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_NONBLOCK);
+    if(fd<0)return NO;
+    struct stat st;
+    BOOL ok=fstat(fd,&st)==0 && S_ISREG(st.st_mode) && st.st_uid==uid
+        && (st.st_mode&07777)==0600 && (st.st_size==64 || st.st_size==65);
+    char bytes[66];size_t used=0;
+    while(ok && used<sizeof(bytes)) {
+        ssize_t n=read(fd,bytes+used,sizeof(bytes)-used);
+        if(n<0 && errno==EINTR)continue;
+        if(n<0){ok=NO;break;}
+        if(!n)break;
+        used+=(size_t)n;
     }
-    return NO;
+    close(fd);
+    if(!ok || (used!=64 && !(used==65 && bytes[64]=='\n')))return NO;
+    memcpy(nonce,bytes,64);nonce[64]=0;
+    return valid_nonce(nonce);
+}
+// Readiness audits protocol v2 without submitting a frame or enrolling a window.
+// dwclient binds both authenticated peers to their kernel PID/effective UID; the
+// process birth and exact requested scope are checked here. The bootstrap
+// sentinel alone proves only pthread dispatch, never dlopen completion.
+static BOOL wait_for_helper(const char *runtime,const char *nonce,pid_t pid,
+                            const struct proc_bsdinfo *dock,const struct dw2_process *only) {
+    if(geteuid()!=dock->pbi_uid || !current_dock(pid,dock))return NO;
+    dw_client *client=NULL;struct dw_client_info info={0};
+    int status=dw_client_open(runtime,nonce,NULL,5000,&client,&info);
+    if(status!=DW_CLIENT_OK){fprintf(stderr,"protocol v2 readiness connection failed (%d)\n",status);return NO;}
+    uint32_t scope=only ? DW2_SCOPE_ALLOWLIST : DW2_SCOPE_SAME_USER;
+    uint32_t required=DW2_CAP_ALPHA|DW2_CAP_RESTORE_WINDOW|DW2_CAP_ENROLLMENT;
+    BOOL ok=info.server_pid==pid && info.scope==scope && (info.caps&required)==required
+        && !(info.caps&DW2_CAP_FIXTURE_FAMILY);
+    struct dw2_process enrolled={0};uint32_t count=UINT32_MAX;
+    if(ok)ok=dw_client_enrollment(client,2000,only ? &enrolled : NULL,only ? 1 : 0,&count)==DW_CLIENT_OK
+        && count==(only ? 1U : 0U);
+    if(ok && only) {
+        struct proc_bsdinfo now;
+        ok=enrolled.pid==only->pid && enrolled.birth_sec==only->birth_sec && enrolled.birth_usec==only->birth_usec
+            && process_info(only->pid,&now) && now.pbi_uid==dock->pbi_uid
+            && now.pbi_start_tvsec==only->birth_sec && now.pbi_start_tvusec==only->birth_usec;
+    }
+    struct dw2_probe_reply probe={0};size_t length=0;
+    if(ok)ok=dw_client_probe(client,2000,&probe,sizeof(probe),&length)==DW_CLIENT_OK
+        && length==sizeof(probe) && probe.scope==info.scope && probe.caps==info.caps
+        && probe.queue==info.queue && probe.lease_ms==info.lease_ms && probe.server_pid==pid
+        && !probe.reserved && !probe.held && !probe.restoring && !probe.table_count && !probe.fixture_count
+        && !probe.frames_received && !probe.frames_applied && !probe.frames_superseded && !probe.journal_writes;
+    // Closing an empty, never-submitted session leaves no windows to restore.
+    dw_client_close(client);
+    ok=ok && current_dock(pid,dock);
+    if(!ok)fprintf(stderr,"protocol v2 scope, process identity, capabilities or empty-window audit failed\n");
+    return ok;
+}
+static int usage(void) {
+    fprintf(stderr,"usage: loader --dock-identity\n"
+        "       loader --inject-dock PAYLOAD RUNTIME --nonce-file ABS_FILE --desktop [--expected-dock PID SEC USEC]\n"
+        "       loader --inject-dock PAYLOAD RUNTIME --nonce-file ABS_FILE --only-pid PID\n"
+        "Paths must be absolute. Explicit scope is required; run doctor first. No SIP/boot settings are changed.\n"
+        "--desktop authorizes same-login-user scope; --only-pid pins one process instance.\n");
+    return 2;
 }
 int main(int argc, char **argv) { @autoreleasepool {
-    if((argc!=5 && argc!=7) || strcmp(argv[1],"--inject-dock") || (argc==7 && strcmp(argv[5],"--only-pid"))) {
-        fprintf(stderr,"usage: loader --inject-dock /absolute/payload-arm64e.dylib /absolute/private-runtime nonce64hex [--only-pid PID]\nExplicit opt-in only; run doctor first. No SIP/boot settings are changed.\n--only-pid pins the helper's scope to that one login-user process (a disposable fixture).\n");return 2;
+    if(argc==2 && !strcmp(argv[1],"--dock-identity")) {
+        pid_t pid=get_dock_pid();struct proc_bsdinfo info;
+        if(!process_info(pid,&info) || !current_dock(pid,&info)){fprintf(stderr,"could not locate stable Dock identity\n");return 1;}
+        printf("{\"pid\":%d,\"birth_sec\":%" PRIu64 ",\"birth_usec\":%" PRIu64 ",\"uid\":%u}\n",
+            pid,(uint64_t)info.pbi_start_tvsec,(uint64_t)info.pbi_start_tvusec,info.pbi_uid);
+        return 0;
     }
+    if(argc<7 || strcmp(argv[1],"--inject-dock") || strcmp(argv[4],"--nonce-file"))return usage();
+    const char *runtime=argv[3],*nonceFile=argv[5];
+    int option=6;
+    BOOL desktop=NO,pinned=NO;uint64_t onlyPID=0,expectedPID=0,expectedSec=0,expectedUsec=0;
+    if(option<argc && !strcmp(argv[option],"--desktop")) {
+        desktop=YES;option++;
+    } else if(option+1<argc && !strcmp(argv[option],"--only-pid")) {
+        if(!parse_decimal(argv[option+1],INT_MAX,&onlyPID) || onlyPID<=1)return usage();
+        option+=2;
+    } else return usage();
+    if(desktop && option<argc && !strcmp(argv[option],"--expected-dock")) {
+        if(argc-option!=4 || !parse_decimal(argv[option+1],INT_MAX,&expectedPID) || expectedPID<=1
+            || !parse_decimal(argv[option+2],UINT64_MAX,&expectedSec) || !expectedSec
+            || !parse_decimal(argv[option+3],999999,&expectedUsec))return usage();
+        pinned=YES;option+=4;
+    }
+    if(option!=argc)return usage();
     uint32_t sip;int preview;
     if(dw_preflight(&sip,&preview)!=0){fprintf(stderr,"injection unavailable: current SIP/arm64e boot policy fails preflight\n");return 3;}
     payload_path=argv[2];
-    if(payload_path[0]!='/'||strlen(payload_path)>=sizeof(shell_code)-168||argv[3][0]!='/'||strlen(argv[4])!=64)return 2;
-    for(const char *p=argv[4];*p;p++)if(!((*p>='0'&&*p<='9')||(*p>='a'&&*p<='f')))return 2;
+    if(payload_path[0]!='/' || strlen(payload_path)>=sizeof(shell_code)-168 || runtime[0]!='/')return usage();
     pid_t pid=get_dock_pid();
     struct proc_bsdinfo dockInfo={0};
-    if(pid<=0||proc_pidinfo(pid,PROC_PIDTBSDINFO,0,&dockInfo,sizeof(dockInfo))!=sizeof(dockInfo)){fprintf(stderr,"could not locate Dock identity\n");return 1;}
+    if(!process_info(pid,&dockInfo) || !current_dock(pid,&dockInfo)){fprintf(stderr,"could not locate stable Dock identity\n");return 1;}
+    if(pinned && (pid!=(pid_t)expectedPID || dockInfo.pbi_start_tvsec!=expectedSec || dockInfo.pbi_start_tvusec!=expectedUsec)) {
+        fprintf(stderr,"Dock no longer matches the launch record; refusing load\n");return 1;
+    }
     // The IPC peer must be the login user. A root invoker drops effective UID only
     // for readiness probing; no user other than root or this login UID may load.
     if(getuid()!=0 && getuid()!=dockInfo.pbi_uid)return 1;
     struct stat st;
     if(lstat(payload_path,&st)||!S_ISREG(st.st_mode)||st.st_uid!=dockInfo.pbi_uid||(st.st_mode&0022)){fprintf(stderr,"payload ownership/mode invalid\n");return 1;}
-    if(lstat(argv[3],&st)||!S_ISDIR(st.st_mode)||st.st_uid!=dockInfo.pbi_uid||(st.st_mode&0777)!=0700){fprintf(stderr,"create a fresh 0700 runtime directory as Dock login user first\n");return 1;}
-    // Resolve an optional --only-pid into a single {pid,birth} allowlist entry. The
+    if(lstat(runtime,&st)||!S_ISDIR(st.st_mode)||st.st_uid!=dockInfo.pbi_uid||(st.st_mode&07777)!=0700){fprintf(stderr,"create a fresh 0700 runtime directory as Dock login user first\n");return 1;}
+    char nonce[65];
+    if(!read_nonce_file(nonceFile,dockInfo.pbi_uid,nonce)){fprintf(stderr,"nonce file must be a login-user-owned regular 0600 file containing 64 lowercase hex bytes and optional newline\n");return 1;}
+    // Resolve --only-pid into a single {pid,birth} allowlist entry. The
     // start time is read the same way the payload resolves window identity, so the
     // helper can pin itself to exactly that process and refuse every other window.
-    NSArray *allowlist=nil;
-    if(argc==7) {
-        // Require a leading digit so strtol cannot accept leading whitespace or a sign.
-        char *end=NULL;long only=strtol(argv[6],&end,10);
-        if(!isdigit((unsigned char)argv[6][0])||*end||only<=0||only>INT_MAX){fprintf(stderr,"--only-pid must be a positive PID\n");return 1;}
-        if((pid_t)only==pid){fprintf(stderr,"--only-pid must not be Dock itself\n");return 1;}
+    NSArray *allowlist=nil;struct dw2_process only={0};
+    if(!desktop) {
+        if((pid_t)onlyPID==pid){fprintf(stderr,"--only-pid must not be Dock itself\n");return 1;}
         struct proc_bsdinfo onlyInfo={0};
-        if(proc_pidinfo((pid_t)only,PROC_PIDTBSDINFO,0,&onlyInfo,sizeof(onlyInfo))!=sizeof(onlyInfo)){fprintf(stderr,"could not resolve --only-pid process\n");return 1;}
+        if(!process_info((pid_t)onlyPID,&onlyInfo)){fprintf(stderr,"could not resolve --only-pid process\n");return 1;}
         if(onlyInfo.pbi_uid!=dockInfo.pbi_uid){fprintf(stderr,"--only-pid must be owned by Dock's login user\n");return 1;}
-        allowlist=@[@{@"pid":@((int)only),@"birth_sec":@(onlyInfo.pbi_start_tvsec),@"birth_usec":@(onlyInfo.pbi_start_tvusec)}];
+        only=(struct dw2_process){.pid=(pid_t)onlyPID,.birth_sec=onlyInfo.pbi_start_tvsec,.birth_usec=onlyInfo.pbi_start_tvusec};
+        allowlist=@[@{@"pid":@(only.pid),@"birth_sec":@(only.birth_sec),@"birth_usec":@(only.birth_usec)}];
     }
     char socketPath[sizeof(((struct sockaddr_un *)0)->sun_path)];
-    if(snprintf(socketPath,sizeof(socketPath),"%s/helper.sock",argv[3])>=(int)sizeof(socketPath)){fprintf(stderr,"Unix socket path exceeds 103 bytes\n");return 1;}
-    if(lstat(socketPath,&st)==0){fprintf(stderr,"runtime socket already exists; refusing ambiguous retry\n");return 1;}
-    NSString *recovery=[[NSString stringWithUTF8String:argv[3]] stringByAppendingPathComponent:@"recovery.json"];
-    if(lstat(recovery.fileSystemRepresentation,&st)==0){fprintf(stderr,"runtime has a recovery journal; review it and use a fresh directory\n");return 1;}
-    NSString *configPath=[[NSString stringWithUTF8String:payload_path] stringByAppendingString:@".json"];
-    NSMutableDictionary *sidecar=[@{@"runtime":[NSString stringWithUTF8String:argv[3]],@"nonce":[NSString stringWithUTF8String:argv[4]]} mutableCopy];
+    if(snprintf(socketPath,sizeof(socketPath),"%s/helper.sock",runtime)>=(int)sizeof(socketPath)){fprintf(stderr,"Unix socket path exceeds 103 bytes\n");return 1;}
+    NSString *runtimeString=[NSString stringWithUTF8String:runtime],*payloadString=[NSString stringWithUTF8String:payload_path];
+    if(!runtimeString || !payloadString)return usage();
+    for(NSString *name in @[@"helper.sock",@DW2_SOCKET,@"recovery.json",@"recovery.next",@"v2-journal.json",@"v2-journal.next"]) {
+        NSString *path=[runtimeString stringByAppendingPathComponent:name];
+        if(lstat(path.fileSystemRepresentation,&st)==0 || errno!=ENOENT){fprintf(stderr,"runtime socket/journal exists or cannot be checked; refusing ambiguous retry\n");return 1;}
+    }
+    if(!current_dock(pid,&dockInfo)){fprintf(stderr,"Dock identity changed before sidecar creation\n");return 1;}
+    NSString *configPath=[payloadString stringByAppendingString:@".json"];
+    NSMutableDictionary *sidecar=[@{@"runtime":runtimeString,@"nonce":[NSString stringWithUTF8String:nonce]} mutableCopy];
     if(allowlist)sidecar[@"allowlist"]=allowlist;
     NSData *configuration=[NSJSONSerialization dataWithJSONObject:sidecar options:0 error:NULL];
     int configFD=open(configPath.fileSystemRepresentation,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600);
@@ -230,8 +319,10 @@ int main(int argc, char **argv) { @autoreleasepool {
     mach_port_t task=MACH_PORT_NULL;thread_act_t thread=MACH_PORT_NULL;
     mach_vm_address_t code=0,stack=0;vm_size_t stack_size=16*1024;
     uint64_t stack_contents=0xCAFEBABE;
+    if(!current_dock(pid,&dockInfo)){fprintf(stderr,"Dock identity changed before task access\n");goto cleanup;}
     kern_return_t error=task_for_pid(mach_task_self(),pid,&task);
     if(error!=KERN_SUCCESS){fprintf(stderr,"task_for_pid failed: %s\n",mach_error_string(error));goto cleanup;}
+    if(!current_dock(pid,&dockInfo)){fprintf(stderr,"Dock identity changed during task access\n");goto cleanup;}
     if(mach_vm_allocate(task,&stack,stack_size,VM_FLAGS_ANYWHERE)!=KERN_SUCCESS)goto cleanup;
     if(mach_vm_write(task,stack,(vm_address_t)&stack_contents,sizeof(stack_contents))!=KERN_SUCCESS)goto cleanup;
     if(vm_protect(task,stack,stack_size,1,VM_PROT_READ|VM_PROT_WRITE)!=KERN_SUCCESS)goto cleanup;
@@ -255,6 +346,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     if(_thread_convert_thread_state(thread,2,ARM_THREAD_STATE64,(thread_state_t)&state,count,(thread_state_t)&machine,&machineCount)!=KERN_SUCCESS)goto cleanup;
     if(thread_terminate(thread)!=KERN_SUCCESS)goto cleanup;
     mach_port_deallocate(mach_task_self(),thread);thread=MACH_PORT_NULL;
+    if(!current_dock(pid,&dockInfo)){fprintf(stderr,"Dock identity changed before remote execution\n");goto cleanup;}
     // macOS 26+ uses the converted-state create-running path from yabai.
     if(thread_create_running(task,ARM_THREAD_STATE64,(thread_state_t)&machine,machineCount,&thread)!=KERN_SUCCESS)goto cleanup;
     executed=YES;
@@ -267,7 +359,7 @@ int main(int argc, char **argv) { @autoreleasepool {
         uid_t savedUID=geteuid();
         // getpeereid is checked by server as well: root must connect as login UID.
         if(seteuid(dockInfo.pbi_uid)==0) {
-            BOOL ready=wait_for_helper(argv[3],argv[4],pid,dockInfo.pbi_uid);
+            BOOL ready=wait_for_helper(runtime,nonce,pid,&dockInfo,desktop ? NULL : &only);
             if(seteuid(savedUID)!=0){fprintf(stderr,"failed to restore effective UID\n");goto cleanup;}
             if(ready)result=0;
         }
@@ -294,7 +386,7 @@ cleanup:
     // bootstrap termination. Keep its tiny allocations and sidecar until Dock exits;
     // never restart Dock here, never free memory whose liveness is uncertain.
     if(task)mach_port_deallocate(mach_task_self(),task);
-    if(result==0)fprintf(stderr,"authenticated helper ready in Dock; no window enrolled or transformed\n");
+    if(result==0)fprintf(stderr,"authenticated v2 helper ready in Dock (%s); empty window table, no frames submitted\n",desktop ? "same-user desktop scope" : "one-process scope");
     else fprintf(stderr,"helper readiness not established%s\n",executed ? "; execution began, retain sidecar/runtime and do not retry blindly" : "; pre-execution resources and sidecar cleaned up");
     return result;
 } }

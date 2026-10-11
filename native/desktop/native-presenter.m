@@ -9,10 +9,13 @@
 #import "native-family.h"
 #import "../focus/focus.h"
 #import <AppKit/AppKit.h>
+#import <Security/Security.h>
 #include <dlfcn.h>
+#include <libproc.h>
 #include <os/lock.h>
 #include <stdatomic.h>
 #include <time.h>
+#include <unistd.h>
 #include "dwclient.h"
 
 bool DWNativeBounds(uint32_t wid,CGRect *out) {
@@ -57,6 +60,28 @@ static CGRect DWNativeJSONRect(id value) {
     return DWNativeFiniteRect(r)?r:CGRectNull;
 }
 static NSArray *DWNativeRectArray(CGRect r) { return @[@(r.origin.x),@(r.origin.y),@(r.size.width),@(r.size.height)]; }
+static NSArray<NSNumber *> *DWNativeProcessBirth(pid_t pid,uid_t uid) {
+    struct proc_bsdinfo info={0};
+    if(pid<=1||proc_pidinfo(pid,PROC_PIDTBSDINFO,0,&info,sizeof(info))!=sizeof(info)||info.pbi_uid!=uid)return nil;
+    return @[@(info.pbi_start_tvsec),@(info.pbi_start_tvusec)];
+}
+// Dynamic kernel-selected code, rather than a caller-supplied bundle path. The
+// client independently binds HELLO and heartbeat to LOCAL_PEERPID/getpeereid.
+// Public contract: Security.framework SecCode.h and Apple's requirement guide:
+// https://developer.apple.com/documentation/security/seccodecopyguestwithattributes(_:_:_:_:)
+// https://developer.apple.com/documentation/security/seccodecheckvalidity(_:_:_:)
+// https://developer.apple.com/library/archive/documentation/Security/Conceptual/CodeSigningGuide/RequirementLang/RequirementLang.html
+// "anchor apple" means Apple's own code, excluding Developer ID substitutes.
+static NSArray<NSNumber *> *DWNativeDockBirth(pid_t pid,uid_t uid) {
+    if(getuid()!=uid||geteuid()!=uid||pid==getpid())return nil;
+    NSArray *before=DWNativeProcessBirth(pid,uid);if(!before)return nil;
+    SecRequirementRef requirement=NULL;SecCodeRef code=NULL;
+    OSStatus result=SecRequirementCreateWithString(CFSTR("anchor apple and identifier \"com.apple.dock\""),kSecCSDefaultFlags,&requirement);
+    if(result==errSecSuccess)result=SecCodeCopyGuestWithAttributes(NULL,(__bridge CFDictionaryRef)@{(__bridge NSString *)kSecGuestAttributePid:@(pid)},kSecCSDefaultFlags,&code);
+    if(result==errSecSuccess)result=SecCodeCheckValidity(code,kSecCSDefaultFlags,requirement);
+    if(code)CFRelease(code);if(requirement)CFRelease(requirement);
+    return result==errSecSuccess&&[before isEqual:DWNativeProcessBirth(pid,uid)]?before:nil;
+}
 // Kept as fixed-size geometry beside the frame, so normal presentation avoids
 // allocating a dictionary per member just for read-only debug information.
 typedef struct {
@@ -100,6 +125,10 @@ static void DWCloseNativeClient(dw_client *client) {
     dw_client *_client;
     struct dw_client_info _info;
     NSDictionary<NSNumber *,NSArray<NSNumber *> *> *_scope;
+    BOOL _desktopWide;
+    uid_t _loginUID;
+    NSArray<NSNumber *> *_dockBirth;
+    _Atomic bool _preparing;
     _Atomic bool _ended;
     // When the main thread last turned its run loop or described a frame: written there, read by the watchdog.
     _Atomic uint64_t _turned;
@@ -121,7 +150,7 @@ static void DWCloseNativeClient(dw_client *client) {
     NSMutableSet<NSString *> *_said;
 }
 - (BOOL)ended { return atomic_load(&_ended); }
-- (BOOL)familiesNeeded { return _info.scope==DW2_SCOPE_ALLOWLIST||(_info.scope==DW2_SCOPE_COOPERATIVE&&(_info.caps&DW2_CAP_FIXTURE_FAMILY)); }
+- (BOOL)familiesNeeded { return _desktopWide||_info.scope==DW2_SCOPE_ALLOWLIST||(_info.scope==DW2_SCOPE_COOPERATIVE&&(_info.caps&DW2_CAP_FIXTURE_FAMILY)); }
 // Library threads. Neither takes the lock or closes anything: they leave a note for the main thread.
 static void frameResult(void *context,uint64_t seq,const uint8_t *status,uint32_t count) {
     @autoreleasepool {
@@ -135,24 +164,45 @@ static void frameResult(void *context,uint64_t seq,const uint8_t *status,uint32_
 static void lost(void *context,int reason) {
     @autoreleasepool {
         DWNativePresenter *presenter=(__bridge DWNativePresenter *)context;atomic_store(&presenter->_ended,true);
+        // A recovery candidate is audited on a worker while main still runs.
+        // Its constructor owns the client until every audit finishes: closing
+        // it on main here could free an in-flight enrollment request. Loss is
+        // already visible and preparation will reject/close the candidate.
+        if(atomic_load(&presenter->_preparing))return;
         dispatch_async(dispatch_get_main_queue(),^{[presenter lost:reason];});
     }
 }
 static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void *info) { (void)observer;(void)activity;atomic_store(&((__bridge DWNativePresenter *)info)->_turned,uptime()); }
 + (instancetype)presenterAt:(NSString *)runtime nonce:(NSString *)nonce64 scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope why:(NSString *__autoreleasing *)why {
-    return [self presenterAt:runtime nonce:nonce64 scope:scope subset:NO watch:YES why:why];
+    return [self presenterAt:runtime nonce:nonce64 scope:scope subset:NO watch:YES desktop:NO why:why];
 }
-+ (instancetype)presenterAt:(NSString *)runtime nonce:(NSString *)nonce64 scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope subset:(BOOL)subset watch:(BOOL)watch why:(NSString *__autoreleasing *)why {
++ (instancetype)desktopPresenterAt:(NSString *)runtime nonce:(NSString *)nonce64 why:(NSString *__autoreleasing *)why {
+    return [self presenterAt:runtime nonce:nonce64 scope:nil subset:NO watch:YES desktop:YES why:why];
+}
++ (instancetype)reconnectedDesktopPresenterAt:(NSString *)runtime nonce:(NSString *)nonce64 why:(NSString *__autoreleasing *)why {
+    DWNativePresenter *presenter=[self presenterAt:runtime nonce:nonce64 scope:nil subset:NO watch:NO desktop:YES why:why];
+    if(presenter&&![presenter restorationEmpty]){[presenter finish];if(why)*why=@"the Dock helper's previous native restoration is not yet confirmed empty";return nil;}
+    return presenter;
+}
++ (instancetype)presenterAt:(NSString *)runtime nonce:(NSString *)nonce64 scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope subset:(BOOL)subset watch:(BOOL)watch desktop:(BOOL)desktop why:(NSString *__autoreleasing *)why {
     DWNativePresenter *presenter=[self new];presenter->_lock=OS_UNFAIR_LOCK_INIT;
+    atomic_store(&presenter->_preparing,true);
+    presenter->_windows=[NSMutableDictionary dictionary];presenter->_releases=[NSMutableDictionary dictionary];presenter->_families=[NSMutableDictionary dictionary];presenter->_records=[NSMutableData data];presenter->_clips=[NSMutableData data];presenter->_frames=[NSMutableDictionary dictionary];presenter->_said=[NSMutableSet set];
     // The caller retains this object until its client threads have been joined.
     struct dw_client_callbacks callbacks={.context=(__bridge void *)presenter,.frame_result=frameResult,.lost=lost};
     int opened=dw_client_open(runtime.fileSystemRepresentation,nonce64.UTF8String,&callbacks,2000,&presenter->_client,&presenter->_info);
     if(opened!=DW_CLIENT_OK){
-        *why=opened==DW_CLIENT_TIMEOUT?@"no helper answered there within 2 s":opened==DW_CLIENT_REFUSED?@"the helper refused the session (wrong nonce or protocol version)":opened==DW_CLIENT_NO_V2?@"the helper there serves protocol v1 only: its protocol v2 did not start":@"the session could not be set up";
+        atomic_store(&presenter->_preparing,false);
+        if(why)*why=opened==DW_CLIENT_TIMEOUT?@"no helper answered there within 2 s":opened==DW_CLIENT_REFUSED?@"the helper refused the session (wrong nonce or protocol version)":opened==DW_CLIENT_NO_V2?@"the helper there serves protocol v1 only: its protocol v2 did not start":@"the session could not be set up";
         return nil;
     }
     NSString *refusal=nil;
-    if(!scope.count || scope.count>DW2_MAX_PROCESSES)refusal=@"native presentation needs a finite nonempty process scope";
+    if(desktop){
+        presenter->_loginUID=getuid();
+        if(presenter->_info.scope!=DW2_SCOPE_SAME_USER)refusal=@"desktop presentation needs the explicit same-user Dock helper, not a finite process helper";
+        else if((presenter->_info.caps&(DW2_CAP_ENROLLMENT|DW2_CAP_RESTORE_WINDOW|DW2_CAP_ALPHA))!=(DW2_CAP_ENROLLMENT|DW2_CAP_RESTORE_WINDOW|DW2_CAP_ALPHA))refusal=@"desktop presentation needs authenticated scope audit, alpha readback and per-window restoration";
+        else if(!(presenter->_dockBirth=DWNativeDockBirth(presenter->_info.server_pid,presenter->_loginUID)))refusal=@"the authenticated helper peer is not this login user's valid Apple-signed Dock process";
+    }else if(!scope.count || scope.count>DW2_MAX_PROCESSES)refusal=@"native presentation needs a finite nonempty process scope";
     else if(presenter->_info.scope==DW2_SCOPE_COOPERATIVE){
         if(!scope[@(presenter->_info.server_pid)])refusal=[NSString stringWithFormat:@"the helper there is process %d, which --only-pid does not name",presenter->_info.server_pid];
         else if(!subset&&scope.count!=1)refusal=@"a cooperative helper can present only its own process: --only-pid must name that process alone";
@@ -168,6 +218,7 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
         struct dw2_process *processes=calloc(DW2_MAX_PROCESSES,sizeof(*processes));uint32_t count=0;
         int result=processes?dw_client_enrollment(presenter->_client,2000,processes,DW2_MAX_PROCESSES,&count):DW_CLIENT_INVALID;
         if(result!=DW_CLIENT_OK)refusal=@"the helper's process enrollment could not be verified within 2 s";
+        else if(desktop){if(count)refusal=@"the desktop helper unexpectedly reports a finite process enrollment";}
         else if(!count||(!subset&&count!=scope.count))refusal=@"the helper's process allowlist differs from --only-pid";
         else if(presenter->_info.scope==DW2_SCOPE_COOPERATIVE&&(count!=1||processes[0].pid!=presenter->_info.server_pid))refusal=@"a cooperative helper must enroll only its own process";
         else for(uint32_t i=0;i<count;i++){
@@ -177,9 +228,13 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
         }
         free(processes);
     }
-    if(refusal){dw_client_close(presenter->_client);presenter->_client=NULL;*why=refusal;return nil;}
+    if(!refusal&&desktop&&![presenter->_dockBirth isEqual:DWNativeProcessBirth(presenter->_info.server_pid,presenter->_loginUID)])refusal=@"the Dock process instance changed during desktop admission";
+    if(!refusal&&presenter.ended)refusal=@"the helper was lost during native scope admission";
+    if(refusal){atomic_store(&presenter->_preparing,false);dw_client_close([presenter take]);if(why)*why=refusal;return nil;}
+    presenter->_desktopWide=desktop;
     presenter->_scope=subset?admitted.copy:[scope copy];
-    presenter->_windows=[NSMutableDictionary dictionary];presenter->_releases=[NSMutableDictionary dictionary];presenter->_families=[NSMutableDictionary dictionary];presenter->_records=[NSMutableData data];presenter->_clips=[NSMutableData data];presenter->_frames=[NSMutableDictionary dictionary];presenter->_said=[NSMutableSet set];
+    atomic_store(&presenter->_preparing,false);
+    if(presenter.ended){dw_client_close([presenter take]);if(why)*why=@"the helper was lost before native admission completed";return nil;}
     if(watch)[presenter watch];
     return presenter;
 }
@@ -202,7 +257,7 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
         if([runtimes containsObject:canonical]){if(why)*why=@"a helper runtime was named more than once";return nil;}[runtimes addObject:canonical];}
     NSMutableArray *sessions=[NSMutableArray array];NSMutableDictionary *owners=[NSMutableDictionary dictionary];NSString *failure=nil;
     for(NSDictionary *endpoint in endpoints){
-        DWNativePresenter *session=[self presenterAt:endpoint[@"runtime"] nonce:endpoint[@"nonce"] scope:scope subset:YES watch:!recovering why:&failure];
+        DWNativePresenter *session=[self presenterAt:endpoint[@"runtime"] nonce:endpoint[@"nonce"] scope:scope subset:YES watch:!recovering desktop:NO why:&failure];
         if(!session)break;[sessions addObject:session];
         if(recovering&&![session restorationEmpty]){failure=@"the helper's previous native restoration is not yet confirmed empty";break;}
         for(NSNumber *pid in session->_scope){if(owners[pid]){failure=[NSString stringWithFormat:@"process %@ is enrolled in more than one helper",pid];break;}owners[pid]=session;}
@@ -220,7 +275,7 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     if(result==DW_CLIENT_OK&&length>=sizeof(head))memcpy(&head,bytes,sizeof(head));free(bytes);
     return result==DW_CLIENT_OK&&length>=sizeof(head)&&!head.held&&!head.restoring&&!head.table_count&&!self.ended;
 }
-- (BOOL)activate { if(self.ended)return NO;if(!_observer)[self watch];return !self.ended; }
+- (BOOL)activate { if(self.ended||(_desktopWide&&![DWNativeProcessBirth(_info.server_pid,_loginUID)isEqual:_dockBirth]))return NO;if(!_observer)[self watch];return !self.ended; }
 - (void)suspendWithCompletion:(void (^)(void))completed {
     dw_client *client=[self take];atomic_store(&_ended,true);[self unwatch];
     // Hold the callback context until the client's reader/writer/heartbeat join.
@@ -278,9 +333,19 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     // Old acknowledgements must not clear a newer frame's retry requirement.
     if(frame&&seq==_submittedSeq)atomic_store(&_retrying,retry);
 }
+- (NSArray<NSNumber *> *)admittedBirth:(NSDictionary *)identity {
+    if(!_desktopWide)return _scope[identity[@"pid"]];
+    for(NSString *key in @[@"pid",@"wid",@"birth_sec",@"birth_usec"]){id n=identity[key];if(![n isKindOfClass:NSNumber.class]||CFGetTypeID((__bridge CFTypeRef)n)==CFBooleanGetTypeID())return nil;}
+    long long pid=[identity[@"pid"]longLongValue];unsigned long long wid=[identity[@"wid"]unsignedLongLongValue];
+    if(self.ended||getuid()!=_loginUID||geteuid()!=_loginUID||pid<=1||pid>INT32_MAX||pid==getpid()||pid==_info.server_pid||!wid||wid>UINT32_MAX
+        ||![identity[@"pid"]isEqual:@(pid)]||![identity[@"wid"]isEqual:@(wid)]
+        ||![_dockBirth isEqual:DWNativeProcessBirth(_info.server_pid,_loginUID)])return nil;
+    NSArray *born=DWNativeProcessBirth((pid_t)pid,_loginUID);
+    return born.count==2&&[born[0]isEqual:identity[@"birth_sec"]]&&[born[1]isEqual:identity[@"birth_usec"]]?born:nil;
+}
 - (BOOL)allowsWindow:(NSDictionary *)identity {
     if(![identity[@"pid"]isKindOfClass:NSNumber.class]||![identity[@"wid"]isKindOfClass:NSNumber.class]||![identity[@"wid"]unsignedIntValue])return NO;
-    NSArray *born=_scope[identity[@"pid"]];if(born.count!=2||![born[0]isEqual:identity[@"birth_sec"]]||![born[1]isEqual:identity[@"birth_usec"]])return NO;
+    NSArray *born=[self admittedBirth:identity];if(born.count!=2||![born[0]isEqual:identity[@"birth_sec"]]||![born[1]isEqual:identity[@"birth_usec"]])return NO;
     if(!self.familiesNeeded)return YES;
     uint32_t parent=0;return DWNativeWindowParent(identity,&parent)&&!parent;
 }
@@ -295,8 +360,9 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
 }
 - (void)bound:(NSDictionary *)identity bounds:(CGRect)native { [self bound:identity bounds:native family:nil]; }
 - (void)bound:(NSDictionary *)identity bounds:(CGRect)native family:(NSDictionary *)family {
-    NSNumber *wid=identity[@"wid"];NSArray *born=_scope[identity[@"pid"]];
+    NSNumber *wid=identity[@"wid"];NSArray *born=[self admittedBirth:identity];
     if(!wid.unsignedIntValue || born.count!=2 || ![born[0]isEqual:identity[@"birth_sec"]] || ![born[1]isEqual:identity[@"birth_usec"]])return;
+    if(_desktopWide&&![self allowsWindow:identity])return;
     DWNativeWindow *window=_windows[wid];
     if(window && (window->identity.pid!=[identity[@"pid"]intValue] || window->identity.birth_sec!=[identity[@"birth_sec"]unsignedLongLongValue] || window->identity.birth_usec!=[identity[@"birth_usec"]unsignedLongLongValue])){[self unbound:@{@"pid":@(window->identity.pid),@"wid":wid,@"birth_sec":@(window->identity.birth_sec),@"birth_usec":@(window->identity.birth_usec)}];window=nil;}
     if(_releases[wid]){[_releases removeObjectForKey:wid];atomic_store(&_releasing,_releases.count!=0);_forced=YES;}
@@ -325,7 +391,8 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
         if(!isfinite(x)||!isfinite(y)||!isfinite(w)||!isfinite(h)||w<=0||h<=0
             ||![who[@"pid"]isEqual:identity[@"pid"]]||![who[@"birth_sec"]isEqual:born[0]]||![who[@"birth_usec"]isEqual:born[1]]
             ||(existing&&existing->root!=wid.unsignedIntValue)||[members containsObject:child]
-            ||([child isEqual:wid]&&!CGRectEqualToRect(CGRectMake(x,y,w,h),native))){sound=NO;break;}
+            ||([child isEqual:wid]&&!CGRectEqualToRect(CGRectMake(x,y,w,h),native))
+            ||(_desktopWide&&(![self admittedBirth:who]||!DWNativeWindowBelongsToRoot(who,identity)))){sound=NO;break;}
         [members addObject:child];
     }
     if(!sound||![members containsObject:wid]){[self forgetChildrenOf:wid reason:@"inconsistent, duplicate or changed family member"];return;}

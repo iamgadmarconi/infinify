@@ -43,13 +43,20 @@ macOS 27 is inherently unsupported is made.
   frame to the status file atomically four-plus times a second, and exits by itself
   after `SECONDS` (capped at 600) or on SIGTERM. It owns no other window.
 - `loader-arm64e`: explicit Mach loader adapted from yabai. Merely building it
-  does not execute it. Its accepted action is:
-  `loader-arm64e --inject-dock ABS_PAYLOAD ABS_PRIVATE_RUNTIME NONCE64HEX [--only-pid PID]`.
+  does not execute it. Every load requires an explicit scope and a private nonce file:
+  `loader-arm64e --inject-dock ABS_PAYLOAD ABS_PRIVATE_RUNTIME --nonce-file ABS_NONCE_FILE --only-pid PID`,
+  or `--desktop` instead of `--only-pid PID` for same-login-user desktop scope.
+  `--dock-identity` reads Dock's `{pid,birth_sec,birth_usec,uid}` as JSON without
+  loading anything; desktop callers may pin that process with
+  `--expected-dock PID SEC USEC`. The production launcher always pins it and
+  records pending/ready state before loading, refusing an uncertain retry.
   `--only-pid` resolves that login-user process's start time (refusing a PID not
   owned by Dock's login user, and Dock itself) and writes a one-entry
   `{pid,birth_sec,birth_usec}` allowlist into the sidecar, pinning the helper to
-  that one process. It is **not exercised** by tests or by implementation work; the
-  owner-run Dock spike below is its only authorized run. It never changes policy,
+  that one process. Loading Dock requires the owner's explicit prepared-machine
+  authorization. The readiness audit authenticates v2, checks the requested scope,
+  process identity, required capabilities and empty window table, then disconnects
+  without submitting a frame. It never changes policy,
   runs sudo, restarts Dock, or modifies windows itself. After linking,
   `scripts/build-privileged.sh` ad-hoc signs this binary and `payload-arm64e.dylib`
   with `codesign --force --sign -`, as yabai signs its scripting addition; whether
@@ -57,7 +64,9 @@ macOS 27 is inherently unsupported is made.
 
 Before an authorized loader run, the login user must create a fresh private
 runtime directory and generate a cryptographically random 32-byte nonce encoded
-as 64 lowercase hexadecimal characters. Choose a short absolute runtime path;
+as 64 lowercase hexadecimal characters. Store it in an absolute, login-user-owned
+regular file with mode 0600; one trailing newline is allowed. The loader rejects
+symlink files and never accepts nonce bytes in argv. Choose a short absolute runtime path;
 `ABS_PRIVATE_RUNTIME/helper.sock` must fit 103 bytes. Loader creates an adjacent
 0600 login-user-owned `ABS_PAYLOAD.json` opt-in sidecar containing runtime and
 nonce. Existing sidecars, sockets, or journals fail closed. Dock's constructor

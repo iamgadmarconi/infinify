@@ -60,6 +60,22 @@ upstream contracts and source references retained. This supplies no acceptance
 evidence. The native green button must toggle fullscreen inside the canvas;
 Option-click toggles fit and uses `decoration_fit_snapped`.
 
+## 2026-10-12 whole-desktop native admission
+
+The explicit `--native-desktop-helper` mode admits this login user's application
+windows, including processes opened after launch, through one authenticated
+Apple-signed Dock helper. Fresh UID, process birth and window-family ancestry
+checks remain per admission. Finite disposable scopes remain separate modes.
+Helper readiness now audits protocol v2, exact requested scope, restoration and
+alpha capabilities, and an empty restoration table before the app can connect.
+
+The owner-run launcher keeps credentials in private files, pins Dock identity
+before injection, reuses a confirmed same-Dock helper, and preserves pending
+records and recovery journals after unknown outcomes. Building never injects.
+The loader uses nonce files exclusively; its previous raw-argument interface was
+removed with all call sites migrated. This source milestone does not establish
+native clipping, cross-application drag-and-drop, performance or app acceptance.
+
 ## 2026-10-12 capture input and frame overhead
 
 The default capture desktop now uses the same observed native green-control

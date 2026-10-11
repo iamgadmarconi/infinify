@@ -29,6 +29,15 @@ source hashes below remain the provenance of the starting implementation.
 Historical verification sections predate these additions; build/source checks
 do not establish their visual behavior on the user's display.
 
+For a deleted original still, `mac-wallpaper-cache.m` checks the image provider's
+current-user cache for the exact SHA-256 source-path key and display resolution.
+The cached bitmap can retain source dimensions, so scaling/fill remain the
+desktop's options. This private on-disk format is an optional read-only fallback;
+there is no search for unrelated recent images. Missing/unknown entries retain
+the previous loaded image or grid and report only to the log. A headless check
+on 2026-10-12 resolved the owner's missing still to its existing cache and
+rejected unrelated paths and mismatched display keys; optical parity is unrun.
+
 | File | What it is |
 |---|---|
 | `background.h`, `background.m` | The module (Objective-C, ARC). No dependency on the rest of the app. |

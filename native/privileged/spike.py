@@ -614,6 +614,9 @@ def run_dock(evidence):
     state = {'transformed': False, 'restored': False, 'main': None, 'heartbeat': None, 'fixture': None}
     run = new_runtime()
     nonce = secrets.token_hex(32)  # never printed
+    nonce_path = run / 'nonce'
+    with os.fdopen(os.open(nonce_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w') as nonce_file:
+        nonce_file.write(nonce + '\n')
     status_path = run / 'fixture-status.json'
     payload = (BUILD / 'payload-arm64e.dylib').resolve()
     # 600 s (the fixture's cap) so a slow sudo prompt or a slow owner cannot let the
@@ -652,11 +655,9 @@ def run_dock(evidence):
         print('main display. It stays above other windows and does not take the keyboard. Leave it there.')
 
         cmd = ['sudo', str(BUILD / 'loader-arm64e'), '--inject-dock', str(payload),
-               str(run), nonce, '--only-pid', str(identity['pid'])]
-        shown = ['sudo', str(BUILD / 'loader-arm64e'), '--inject-dock', str(payload),
-                 str(run), '<64-hex-nonce-hidden>', '--only-pid', str(identity['pid'])]
+               str(run), '--nonce-file', str(nonce_path), '--only-pid', str(identity['pid'])]
         print('\nAbout to run, with sudo (it will prompt for your password on this terminal):')
-        print('  ' + ' '.join(shown))
+        print('  ' + ' '.join(cmd))
         print('This injects Infinify\'s helper into Dock. Loading touches no window. Undo: killall Dock.\n', flush=True)
         loader = subprocess.run(cmd, stderr=subprocess.PIPE, text=True)
         evidence['loader'] = {'returncode': loader.returncode, 'stderr': loader.stderr}
