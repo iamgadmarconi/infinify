@@ -3377,6 +3377,17 @@ static BOOL IFCItemMayReach(const IFCItem *item, IFCRectI capture, double s, lon
 
 // MARK: Frame
 
+static unsigned IFCStackBucket(IFCompositorElementKind kind, IFCompositorStackLayer layer) {
+    if (kind == IFCompositorElementKindSnapshot) return 2;
+    switch (layer) {
+        case IFCompositorStackLayerWidget: return 0;
+        case IFCompositorStackLayerClosing: return 2;
+        case IFCompositorStackLayerPinned: return 3;
+        case IFCompositorStackLayerNormal:
+        default: return 1;
+    }
+}
+
 // This encode's elements, bottom to top: widgets, normal, closing, pinned
 // (upstream's `all_elements` read backwards), each with its geometry and what
 // its lifecycle animation makes of it.
@@ -3393,18 +3404,21 @@ static BOOL IFCItemMayReach(const IFCItem *item, IFCRectI capture, double s, lon
     }
     double s = c->s, frameZoom = c->frameZoom;
     IFCRectI output = IFCRectIMake(0, 0, c->outW, c->outH);
-    static const IFCompositorStackLayer order[4] = {IFCompositorStackLayerWidget, IFCompositorStackLayerNormal,
-                                                    IFCompositorStackLayerClosing, IFCompositorStackLayerPinned};
-    for (int bucket = 0; bucket < 4; bucket++) {
+    // The canvas normally supplies its already-applied stack order. Verify it
+    // against current kind/layer values, then collect directly instead of
+    // enumerating every element once per bucket. Arbitrary caller order keeps
+    // the original stable four-pass partition; no order is cached across frames.
+    BOOL ordered = YES;
+    unsigned previous = 0;
+    if (count > 1) for (IFCompositorElement *element in elements) {
+        unsigned bucket = IFCStackBucket(element.kind, element.layer);
+        if (bucket < previous) { ordered = NO; break; }
+        previous = bucket;
+    }
+    for (unsigned bucket = 0; bucket < (ordered ? 1u : 4u); bucket++) {
         for (IFCompositorElement *element in elements) {
             IFCompositorElementKind kind = element.kind;
-            IFCompositorStackLayer layer = element.layer;
-            if (kind == IFCompositorElementKindSnapshot) {
-                layer = IFCompositorStackLayerClosing;
-            } else if (layer != IFCompositorStackLayerWidget && layer != IFCompositorStackLayerPinned && layer != IFCompositorStackLayerClosing) {
-                layer = IFCompositorStackLayerNormal;
-            }
-            if (layer != order[bucket]) continue;
+            if (!ordered && IFCStackBucket(kind, element.layer) != bucket) continue;
 
             IFCGeom g;
             CGRect rect = element.rect;

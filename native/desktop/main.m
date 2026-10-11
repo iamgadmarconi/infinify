@@ -1255,6 +1255,7 @@ static BOOL DWInputTrace(void) { static int on=-1;if(on<0)on=getenv("INFINIFY_DE
 }
 - (BOOL)forward:(CGEventRef)e at:(CGPoint)p output:(NSNumber *)output activate:(BOOL)activate expected:(NSDictionary *)expected {
     if([self.desktop.pointerGrab ownsEvent:e])return (!expected||sameInputTarget(expected,self.desktop.pointerGrab.target))&&[self.desktop forwardCapturedPointer:e screen:p];
+    if([self.desktop.tablet ownsEvent:e])return (!expected||sameInputTarget(expected,[self.desktop.tablet capturedTargetForEvent:e]))&&[self.desktop forwardTabletTail:e];
     BOOL sent=[self forwardCaptured:e at:p output:output activate:activate expected:expected];
     if(!sent&&!expected&&DWNativeTabletEvent(e))sent=[self.desktop forwardTabletTail:e];
     return sent;
@@ -1727,14 +1728,14 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 }
 - (void)refreshNativeButtons:(LiveSource *)source {
     CFTimeInterval now=CACurrentMediaTime();
-    if(self.cleaning||!self.native||self.native.ended||!source||source.detached||source.nativeButtonsReading||source.nativeButtonsNext>now||!AXIsProcessTrusted()||!DWInScope(self.scope,source.router.pid))return;
+    if(self.cleaning||self.sessionInactive||!self.configured||self.native.ended||!source||source.detached||source.nativeButtonsReading||source.nativeButtonsNext>now||!AXIsProcessTrusted()||!DWInScope(self.scope,source.router.pid))return;
     source.nativeButtonsReading=YES;source.nativeButtonsNext=now+.2;
     if(!self.nativeButtonQueue)self.nativeButtonQueue=dispatch_queue_create("org.infinify.native-decorations",dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,QOS_CLASS_USER_INITIATED,0));
     NSDictionary *identity=[source.identity copy];uint64_t token=source.observationToken;__weak Desktop *weak=self;
     dispatch_async(self.nativeButtonQueue,^{@autoreleasepool{
         NSDictionary *report=DWNativeDecorationButtons(identity);
         dispatch_async(dispatch_get_main_queue(),^{Desktop *d=weak;source.nativeButtonsReading=NO;
-            if(!d||d.cleaning||d.sources[source.logical]!=source||source.detached||source.observationToken!=token||![source.identity isEqual:identity])return;
+            if(!d||d.cleaning||d.sessionInactive||d.sources[source.logical]!=source||source.detached||source.observationToken!=token||![source.identity isEqual:identity])return;
             source.nativeButtons=report&&CACurrentMediaTime()-[report[@"sampled_at"]doubleValue]<=.1?report:nil;
         });
     }});
@@ -1748,11 +1749,12 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     return DWNativeDecorationHit(source.nativeButtons,source.identity,own,displayed,point);
 }
 - (BOOL)replicaGreen:(LiveSource *)source at:(CGPoint)point output:(NSNumber *)output {
-    if(!source||source.detached||!source.pixels||source.error||![self.nativeViews replica:source.logical output:output]||!source.nativeButtons||CACurrentMediaTime()-[source.nativeButtons[@"sampled_at"]doubleValue]>1||!DWInScope(self.scope,source.router.pid))return NO;
-    NSDictionary *placement=[self.nativeViews placement:source.logical output:output];if([placement[@"family_only"]boolValue])return NO;CGRect own=CGRectZero;
+    if(!source||source.detached||!source.pixels||source.error||(self.native&&![self.nativeViews replica:source.logical output:output])||!source.nativeButtons||CACurrentMediaTime()-[source.nativeButtons[@"sampled_at"]doubleValue]>1||!DWInScope(self.scope,source.router.pid)||![birth(source.router.pid)isEqual:source.router.processBirth])return NO;
+    NSDictionary *placement=nil;for(NSDictionary *item in [self presentationSnapshot][@"placements"])if([item[@"window"]isEqual:source.logical]&&[item[@"output"]isEqual:output]){placement=item;break;}
+    if(!placement||[placement[@"family_only"]boolValue])return NO;CGRect own=CGRectZero;
     NSDictionary *info=windowInfo(source.router.wid);
     if([info[(id)kCGWindowOwnerPID]intValue]!=source.router.pid||!DWNativeBounds(source.router.wid,&own)||!CGRectContainsPoint(jsonRect(placement[@"clip_rect"]),point))return NO;
-    if(self.native.familiesNeeded){uint32_t parent=0;if(!DWNativeWindowParent(source.identity,&parent)||parent)return NO;}
+    if(!self.native||self.native.familiesNeeded){uint32_t parent=0;if(!DWNativeWindowParent(source.identity,&parent)||parent)return NO;}
     return DWNativeDecorationHit(source.nativeButtons,source.identity,own,jsonRect(placement[@"screen_rect"]),point);
 }
 - (void)cancelNativeInput {
@@ -1849,8 +1851,18 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(!self.pointerGrab.active)[self.relativeMotion reset];return sent;
 }
 - (BOOL)forwardTabletTail:(CGEventRef)event {
+    if(![self.tablet ownsEvent:event])return NO;
+    NSDictionary *resolved=nil;
+    if(!DWNativeTabletProximityEvent(event)||CGEventGetIntegerValueField(event,kCGTabletProximityEventEnterProximity)){
+        NSDictionary *target=[self.tablet capturedTargetForEvent:event];
+        if(target)resolved=[self resolveCapturedPointer:target screen:CGEventGetLocation(event)];
+    }
+    // A held tool always retains its original root/member and output. A current
+    // placement supplies the camera mapping even outside that display's clip.
+    // Missing/stale geometry suppresses motion; release/tool-out still closes
+    // the admitted recipient at its last validated application point.
     __weak Desktop *weak=self;
-    return [self.tablet forwardEvent:event target:nil local:CGPointZero validate:^BOOL(NSDictionary *target){return [weak validateInputTarget:target];} post:^BOOL(CGEventRef packet,NSDictionary *target,CGPoint local){return [weak postInput:packet target:target local:local];}];
+    return [self.tablet forwardEvent:event target:resolved[@"target"] local:resolved?jsonPoint(resolved[@"local"]):CGPointZero validate:^BOOL(NSDictionary *target){return [weak validateInputTarget:target];} post:^BOOL(CGEventRef packet,NSDictionary *target,CGPoint local){return [weak postInput:packet target:target local:local];}];
 }
 - (void)cancelCapturedInputForWindow:(NSNumber *)window {
     __weak Desktop *weak=self;
@@ -1870,7 +1882,13 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     int64_t tag=CGEventGetIntegerValueField(cg,kCGEventSourceUserData);
     if(tag&&[self.postingTags containsObject:@(tag)])return NO;
     if(tag)for(LiveSource *source in self.sources.allValues)if(source.router.tag==tag)return NO;
-    if([self.pointerGrab ownsEvent:cg]){
+    // A shell-owned decoration/action pair predates any second button that
+    // may have reached a captured child. That grab must not consume this up.
+    BOOL nativePair=self.nativeGestureView&&!DWNativeTabletEvent(cg)
+        &&CGEventGetIntegerValueField(cg,kCGMouseEventButtonNumber)==self.nativeGestureButton
+        &&(type==kCGEventLeftMouseDragged||type==kCGEventRightMouseDragged||type==kCGEventOtherMouseDragged
+           ||type==kCGEventLeftMouseUp||type==kCGEventRightMouseUp||type==kCGEventOtherMouseUp);
+    if(!nativePair&&[self.pointerGrab ownsEvent:cg]){
         NSDictionary *target=self.pointerGrab.target;CGPoint point=CGEventGetLocation(cg);
         [self forwardCapturedPointer:cg screen:point];
         BOOL up=type==kCGEventLeftMouseUp||type==kCGEventRightMouseUp||type==kCGEventOtherMouseUp;
@@ -1882,43 +1900,57 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         }
         return YES;
     }
-    // In capture mode this tap only owns an already admitted child mouse
-    // grab. Ordinary input remains with AppKit and the desktop canvas views.
-    if(!self.native)return NO;
     if(DWNativeTabletEvent(cg)){
         if(!self.tablet)self.tablet=[DWNativeTabletRouter new];[self.tablet observeEvent:cg];
         if(self.cleaning||self.sessionInactive||self.native.ended){[self.tablet reset];return NO;}
+        __weak Desktop *weak=self;
+        NSDictionary *retired=[self.tablet retireReplacedToolForEvent:cg validate:^BOOL(NSDictionary *target){return [weak validateInputTarget:target];} post:^BOOL(CGEventRef packet,NSDictionary *target,CGPoint local){return [weak postInput:packet target:target local:local];}];
+        NSNumber *device=@(CGEventGetIntegerValueField(cg,DWNativeTabletProximityEvent(cg)?kCGTabletProximityEventDeviceID:kCGTabletEventDeviceID));
+        CGPoint point=CGEventGetLocation(cg);
+        if(retired)for(DesktopView *view in self.views)if(view.pressedTablet&&[view.pressedTabletDevice isEqual:device]&&sameInputTarget(view.pressedTarget,retired)){
+            view.pressedSource=nil;view.pressedTarget=nil;view.pressedTablet=NO;view.pressedTabletDevice=nil;view.clickWindow=nil;
+            [view released:point at:[NSEvent eventWithCGEvent:cg].timestamp];
+        }
         BOOL owned=[self.tablet ownsEvent:cg];
         NSDictionary *capturedTarget=[self.tablet capturedTargetForEvent:cg];
-        if(DWNativeTabletProximityEvent(cg)&&!CGEventGetIntegerValueField(cg,kCGTabletProximityEventEnterProximity)){BOOL sent=[self forwardTabletTail:cg];return sent||owned;}
-        if(owned&&type!=kCGEventTabletPointer&&type!=kCGEventTabletProximity){
-            CGPoint point=CGEventGetLocation(cg);BOOL sent=NO;
-            for(DesktopView *view in self.views){NSNumber *output=[view outputAt:point];if(output){sent=[view forward:cg at:point output:output activate:NO];break;}}
-            if(!sent)[self forwardTabletTail:cg];
+        BOOL toolOut=DWNativeTabletProximityEvent(cg)&&!CGEventGetIntegerValueField(cg,kCGTabletProximityEventEnterProximity);
+        if(owned){
+            // Ownership is established by the admitted tool, not today's hit.
+            // Overlay and independent native views therefore share the same
+            // contact tail even over another source, display or native app.
+            [self forwardTabletTail:cg];
             BOOL up=type==kCGEventLeftMouseUp||type==kCGEventRightMouseUp||type==kCGEventOtherMouseUp;
-            NSNumber *device=@(CGEventGetIntegerValueField(cg,DWNativeTabletProximityEvent(cg)?kCGTabletProximityEventDeviceID:kCGTabletEventDeviceID));
-            if(up)for(DesktopView *view in self.views)if(view.pressedTablet&&[view.pressedTabletDevice isEqual:device]&&sameInputTarget(view.pressedTarget,capturedTarget)&&view.pressedButton==CGEventGetIntegerValueField(cg,kCGMouseEventButtonNumber)){
-                view.pressedSource=nil;view.pressedTarget=nil;view.pressedTablet=NO;view.pressedTabletDevice=nil;[view released:point at:[NSEvent eventWithCGEvent:cg].timestamp];
+            if(up||toolOut)for(DesktopView *view in self.views)if(view.pressedTablet&&[view.pressedTabletDevice isEqual:device]&&(!capturedTarget||sameInputTarget(view.pressedTarget,capturedTarget))&&(toolOut||view.pressedButton==CGEventGetIntegerValueField(cg,kCGMouseEventButtonNumber))){
+                // The router has already paired this release, or closed all
+                // buttons on tool-out. Do not synthesize another plain up or
+                // cancel additional admitted buttons when the primary lifts.
+                view.pressedSource=nil;view.pressedTarget=nil;view.pressedTablet=NO;view.pressedTabletDevice=nil;if(toolOut)view.clickWindow=nil;
+                [view released:point at:[NSEvent eventWithCGEvent:cg].timestamp];
             }
             return YES;
         }
-        if(type==kCGEventTabletPointer||type==kCGEventTabletProximity){CGPoint point=CGEventGetLocation(cg);
+        if(toolOut)return NO;
+        if(type==kCGEventTabletPointer||type==kCGEventTabletProximity){
+            // The overlay's fresh packets still go through AppKit's normal
+            // canvas admission. Observing proximity above does not authorize
+            // intercepting a pen which is drawing in an unrelated native app.
+            if(!self.native)return NO;
             // Dedicated tablet packets may omit mouse-only annotations. Fresh
             // admission still belongs to the actual canvas panel under the pen,
             // never a logical replica covered by another application.
             CGWindowID recipient=(CGWindowID)[NSWindow windowNumberAtPoint:NSMakePoint(point.x,screenTop()-point.y) belowWindowWithWindowNumber:0];
             for(DesktopView *view in self.views){NSNumber *output=[view outputAt:point];if(!output)continue;NSDictionary *hit=[view hit:point output:output];LiveSource *source=self.sources[hit[@"window"]];
-                if(!owned&&recipient!=(CGWindowID)view.window.windowNumber)return NO;
-                if(!source||![self.nativeViews replica:source.logical output:output]){if(owned)[self forwardTabletTail:cg];return owned;}
+                if(recipient!=(CGWindowID)view.window.windowNumber)return NO;
+                if(!source||![self.nativeViews replica:source.logical output:output])return NO;
                 BOOL old=view.nativePointValid;CGPoint previous=view.nativePoint;view.nativePointValid=YES;view.nativePoint=point;
-                BOOL sent=NO;@try{sent=[view forward:cg at:point output:output activate:NO];if(!sent&&owned)[self forwardTabletTail:cg];}@finally{view.nativePointValid=old;view.nativePoint=previous;}return sent||owned;
+                BOOL sent=NO;@try{sent=[view forward:cg at:point output:output activate:NO];}@finally{view.nativePointValid=old;view.nativePoint=previous;}return sent;
             }
-            if(owned)[self forwardTabletTail:cg];return owned;
+            return NO;
         }
     }
     if(type!=kCGEventMouseMoved&&type!=kCGEventScrollWheel&&type!=kCGEventLeftMouseDown&&type!=kCGEventLeftMouseDragged&&type!=kCGEventLeftMouseUp
         &&type!=kCGEventRightMouseDown&&type!=kCGEventRightMouseDragged&&type!=kCGEventRightMouseUp&&type!=kCGEventOtherMouseDown&&type!=kCGEventOtherMouseDragged&&type!=kCGEventOtherMouseUp){
-        NSEvent *event=[NSEvent eventWithCGEvent:cg];if(event.type!=NSEventTypeMagnify||self.globalTrackpad.running)return NO;
+        NSEvent *event=[NSEvent eventWithCGEvent:cg];if(!self.native||event.type!=NSEventTypeMagnify||self.globalTrackpad.running)return NO;
         BOOL over=(event.phase&(NSEventPhaseEnded|NSEventPhaseCancelled))!=0;
         if(event.phase&NSEventPhaseMayBegin)return NO;
         if(self.cleaning||self.sessionInactive||self.native.ended){if(self.nativeMagnifyView)[self cancelNativeInput];return NO;}
@@ -1945,10 +1977,16 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         CFTimeInterval now=CACurrentMediaTime();if(self.cleaning||self.sessionInactive||self.native.ended)return NO;
         CGWindowID wid=(CGWindowID)CGEventGetIntegerValueField(cg,kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent);
         if(!wid)wid=(CGWindowID)CGEventGetIntegerValueField(cg,kCGMouseEventWindowUnderMousePointer);
+        if(!wid)wid=(CGWindowID)[NSWindow windowNumberAtPoint:NSMakePoint(CGEventGetLocation(cg).x,screenTop()-CGEventGetLocation(cg).y) belowWindowWithWindowNumber:0];
         NSNumber *root=[self.native rootWindowFor:wid];CGPoint point=CGEventGetLocation(cg);
         if(root){NSEvent *motion=[NSEvent eventWithCGEvent:cg];if(motion)for(DesktopView *view in self.views)if([view outputAt:point]){[view.hover nativeMotion:motion];break;}}
         if(now-self.nativeButtonMotion<.1)return NO;self.nativeButtonMotion=now;self.nativeButtonHover=nil;
         for(LiveSource *source in self.sources.allValues)if(!source.detached&&source.router.wid==root.unsignedIntValue){self.nativeButtonHover=source.logical;[self refreshNativeButtons:source];break;}
+        if(!self.nativeButtonHover)for(DesktopView *view in self.views)if((CGWindowID)view.window.windowNumber==wid){
+            NSNumber *output=[view outputAt:point];NSDictionary *hit=output?[view hit:point output:output]:nil;
+            LiveSource *source=self.sources[hit[@"window"]];
+            if(source&&!hit[@"native_member"]&&!source.detached&&(!self.native||[self.nativeViews replica:source.logical output:output])){self.nativeButtonHover=source.logical;[self refreshNativeButtons:source];}break;
+        }
         return NO;
     }
     BOOL down=type==kCGEventLeftMouseDown||type==kCGEventRightMouseDown||type==kCGEventOtherMouseDown;
@@ -1964,6 +2002,11 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
             CGPoint started=jsonPoint(press[@"start"]);if(drag&&hypot(point.x-started.x,point.y-started.y)>5)self.nativeDecorationPress=nil;
             if(up){self.nativeDecorationPress=nil;LiveSource *source=self.sources[press[@"window"]];
                 BOOL green=[press[@"replica"]boolValue]?[self replicaGreen:source at:point output:press[@"output"]]:[self nativeGreen:source at:point];
+                if([press[@"replica"]boolValue]){
+                    NSDictionary *hit=[captured hit:point output:press[@"output"]];
+                    CGWindowID top=(CGWindowID)[NSWindow windowNumberAtPoint:NSMakePoint(point.x,screenTop()-point.y) belowWindowWithWindowNumber:0];
+                    green&=top==(CGWindowID)captured.window.windowNumber&&[hit[@"window"]isEqual:press[@"window"]]&&!hit[@"native_member"];
+                }
                 if(!self.cleaning&&!self.sessionInactive&&!self.native.ended&&source&&!source.detached&&[self.views containsObject:captured]&&[captured.outputs containsObject:press[@"output"]]&&boundIdentity(source.identity,press[@"identity"])&&green){
                     NSMutableDictionary *command=[press mutableCopy];[command removeObjectForKey:@"start"];[command removeObjectForKey:@"replica"];command[@"op"]=@"native_decoration";[self applyReply:[self call:command]];
                 }
@@ -1977,7 +2020,10 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         if(up)self.nativeGestureView=nil;
         return YES;
     }
-    if(self.cleaning||self.sessionInactive||!self.native||self.native.ended||(!down&&type!=kCGEventScrollWheel))return NO;
+    if(self.cleaning||self.sessionInactive||self.native.ended||(!down&&type!=kCGEventScrollWheel))return NO;
+    // Overlay gestures and scrolling stay in AppKit. This tap additionally
+    // claims only a positively identified green control and its button pair.
+    if(!self.native&&!down)return NO;
     if(type==kCGEventScrollWheel&&self.nativeScrollView){
         BOOL begin=(event.phase&(NSEventPhaseBegan|NSEventPhaseMayBegin))!=0;
         BOOL tail=event.momentumPhase!=NSEventPhaseNone;
@@ -1995,7 +2041,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     LiveSource *source=[self nativeSource:wid at:point];BOOL replica=NO;
     if(!source)for(DesktopView *view in self.views)if((CGWindowID)view.window.windowNumber==wid){
         NSNumber *output=[view outputAt:point];NSDictionary *hit=output?[view hit:point output:output]:nil;LiveSource *candidate=self.sources[hit[@"window"]];
-        if(candidate&&[self.nativeViews replica:candidate.logical output:output]&&candidate.pixels&&!candidate.error&&!candidate.detached){source=candidate;replica=YES;break;}
+        if(candidate&&(!self.native||[self.nativeViews replica:candidate.logical output:output])&&candidate.pixels&&!candidate.error&&!candidate.detached){source=candidate;replica=YES;break;}
     }
     if(!source)return NO;
     for(DesktopView *view in self.views){
@@ -2014,7 +2060,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         if(down){
             if(captured||view.gesture)return NO;
             NSEventModifierFlags extra=event.modifierFlags&(NSEventModifierFlagCommand|NSEventModifierFlagControl|NSEventModifierFlagShift);
-            if(button==0&&!extra&&!pick&&![hit[@"widget"]boolValue]&&(replica?[self replicaGreen:source at:point output:output]:(wid==source.router.wid&&[self nativeGreen:source at:point]))){
+            if(button==0&&!extra&&!pick&&!hit[@"native_member"]&&![hit[@"widget"]boolValue]&&(replica?[self replicaGreen:source at:point output:output]:(wid==source.router.wid&&[self nativeGreen:source at:point]))){
                 NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}];
                 for(NSDictionary *window in snapshot[@"windows"])if([window[@"window"]isEqual:source.logical]){NSDictionary *binding=asDict(window[@"source"]);
                     if(!boundIdentity(source.identity,binding[@"identity"]))return NO;

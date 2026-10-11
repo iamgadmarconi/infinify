@@ -18,6 +18,11 @@ typedef BOOL (^DWNativeTabletPost)(CGEventRef event,NSDictionary *target,CGPoint
 // so pressure, tilt, rotation, tool/eraser identity and vendor data survive.
 @interface DWNativeTabletRouter : NSObject
 - (void)observeEvent:(CGEventRef)event;
+// Immediately after observing a new physical tool entry, close any old
+// admission that reused this device ID. The new tool's packet remains native;
+// the returned old binding lets the caller end only its matching view gesture.
+- (NSDictionary *)retireReplacedToolForEvent:(CGEventRef)event
+                                  validate:(DWNativeTabletValidate)validate post:(DWNativeTabletPost)post;
 // Admission, not proof of posting. Sample before forwarding a contact tail:
 // YES also covers deliberately dropped motion and a dead owner's release tail.
 - (BOOL)ownsEvent:(CGEventRef)event;
@@ -26,8 +31,10 @@ typedef BOOL (^DWNativeTabletPost)(CGEventRef event,NSDictionary *target,CGPoint
 - (NSDictionary *)capturedTargetForEvent:(CGEventRef)event;
 - (BOOL)forwardEvent:(CGEventRef)event target:(NSDictionary *)target local:(CGPoint)local
             validate:(DWNativeTabletValidate)validate post:(DWNativeTabletPost)post;
-// A physical proximity exit can be forwarded with target=nil; it returns to the
-// last admitted recipient even after the pointer has left the canvas display.
+// A captured contact may refresh target geometry/local coordinates while keeping
+// the same binding. With target=nil, held motion is suppressed and its physical
+// release returns to the last admitted application point. A physical proximity
+// exit likewise returns to the admitted recipient outside the canvas display.
 // Cancel only while a target can still be validated. It releases the tablet
 // pressure/buttons and proximity for admitted recipients, never arbitrary apps.
 // Cancellation emits full-payload mouse-up packets for every admitted button;

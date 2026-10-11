@@ -37,6 +37,16 @@ parent through Accessibility. Captured mouse drags retain the original child
 until all admitted buttons are released. Unparented application windows and
 desktop-global menus are not inferred as descendants. This path is implemented
 and source-reviewed; physical application behavior remains unverified.
+The normal capture desktop also reads the managed root's actual Accessibility
+green control. Clicking its captured image requests canvas fullscreen;
+Option-click requests canvas fit. The event tap retains that button pair and
+rechecks the rendered root on release, so a covering child cannot activate its
+parent's control. Controls without readable current AX geometry are not guessed.
+Admitted pen contacts keep their original root or child and display outside the
+canvas, using the current camera mapping for motion and pairing release/tool-out
+with that recipient. A replacement physical tool retires the previous contact.
+Fresh overlay tablet input still enters through AppKit; unrelated native pen
+input is not captured. Hardware validation remains outstanding.
 Ordinary native windows remain where their owners put them. Cameras and world
 movement do not move, transform, park, or resize native windows.
 An explicit [cooperative native backend](#native-presentation-through-a-cooperative-helper)

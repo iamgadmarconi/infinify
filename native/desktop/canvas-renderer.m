@@ -490,17 +490,36 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
     NSArray<DWCanvasAttachment *> *supplied=root.kind==IFCompositorElementKindWindow&&self.liveAttachments?self.liveAttachments(window,output):nil;
     if(!family&&!supplied.count)return;
     if(!family){family=[DWCanvasFamily new];family.images=[NSMutableDictionary dictionary];family.ordered=@[];state.attachments[window]=family;}
-    NSMutableArray<DWCanvasChild *> *ordered=[NSMutableArray array];NSMutableSet<NSString *> *keys=[NSMutableSet set];
-    for(DWCanvasAttachment *image in supplied){
-        if(!validAttachment(image))continue;NSString *key=image.key;CGRect r=image.unitRect;
-        if(!key.length||[keys containsObject:key])continue;
-        [keys addObject:key];DWCanvasChild *child=family.images[key];
-        if(!child){child=[DWCanvasChild new];child.key=key;child.element=[IFCompositorElement new];child.element.identifier=[self mark];child.element.kind=IFCompositorElementKindWindow;family.images[key]=child;}
-        child.unitRect=r;child.element.pixelBuffer=image.buffer;child.element.texture=nil;child.element.contentGeneration=image.generation;child.element.contentRect=image.contentRect;
-        [ordered addObject:child];
+    NSArray<DWCanvasChild *> *ordered=family.ordered;
+    // Ordinary capture and camera frames keep the same family. Validate every
+    // current image and its ordered key before reusing the list; no provider
+    // array/object identity or prior validity can keep withdrawn pixels alive.
+    // The existing ordered keys are unique, so an exact match also excludes a
+    // duplicate without allocating another set for every pixel frame.
+    BOOL same=supplied.count==ordered.count;
+    if(same)for(NSUInteger i=0;i<supplied.count;i++){
+        DWCanvasAttachment *image=supplied[i];
+        if(!validAttachment(image)||![ordered[i].key isEqual:image.key]){same=NO;break;}
     }
-    for(NSString *key in family.images.allKeys)if(![keys containsObject:key]){
-        DWCanvasChild *child=family.images[key];child.element.pixelBuffer=NULL;child.element.texture=nil;child.element.contentGeneration=0;[family.images removeObjectForKey:key];
+    if(same){
+        for(NSUInteger i=0;i<supplied.count;i++){
+            DWCanvasAttachment *image=supplied[i];DWCanvasChild *child=ordered[i];
+            child.unitRect=image.unitRect;child.element.pixelBuffer=image.buffer;child.element.texture=nil;child.element.contentGeneration=image.generation;child.element.contentRect=image.contentRect;
+        }
+    }else{
+        NSMutableArray<DWCanvasChild *> *next=[NSMutableArray array];NSMutableSet<NSString *> *keys=[NSMutableSet set];
+        for(DWCanvasAttachment *image in supplied){
+            if(!validAttachment(image))continue;NSString *key=image.key;CGRect r=image.unitRect;
+            if(!key.length||[keys containsObject:key])continue;
+            [keys addObject:key];DWCanvasChild *child=family.images[key];
+            if(!child){child=[DWCanvasChild new];child.key=key;child.element=[IFCompositorElement new];child.element.identifier=[self mark];child.element.kind=IFCompositorElementKindWindow;family.images[key]=child;}
+            child.unitRect=r;child.element.pixelBuffer=image.buffer;child.element.texture=nil;child.element.contentGeneration=image.generation;child.element.contentRect=image.contentRect;
+            [next addObject:child];
+        }
+        for(NSString *key in family.images.allKeys)if(![keys containsObject:key]){
+            DWCanvasChild *child=family.images[key];child.element.pixelBuffer=NULL;child.element.texture=nil;child.element.contentGeneration=0;[family.images removeObjectForKey:key];
+        }
+        ordered=next;
     }
     // On a description the frame was emptied; on a content callback only a
     // changed family order or membership needs to splice the element list.

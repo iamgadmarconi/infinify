@@ -60,6 +60,34 @@ upstream contracts and source references retained. This supplies no acceptance
 evidence. The native green button must toggle fullscreen inside the canvas;
 Option-click toggles fit and uses `decoration_fit_snapped`.
 
+## 2026-10-12 capture input and frame overhead
+
+The default capture desktop now uses the same observed native green-control
+geometry as helper-backed replicas: green click requests canvas fullscreen,
+Option-click requests fit, and release must still hit that root rather than a
+covering child. The exact shell-owned button pair precedes any separately
+admitted mouse grab. Unreadable or stale Accessibility controls are not guessed.
+
+Admitted tablet contacts now retain their original native recipient and display
+while the pen leaves the canvas or crosses another window. Current camera and
+native geometry map each tail packet; missing geometry suppresses motion while
+the release closes its original admission. Device/tool replacement retires the
+previous contact without lending its authority to the new tool. These paths
+still need physical tablet validation.
+
+Unchanged captured families reuse their ordered child list after checking every
+current image and key. The compositor checks current stack buckets and skips
+repeated bucket scans for already ordered frames, retaining its full fallback
+for other inputs. These reduce source-level work; no measured performance claim
+or inventory status promotion follows from them.
+
+Cross-application drops through independently zoomed views remain open. AppKit
+exposes app-owned drag sessions and destination callbacks; posting a drag's
+mouse packets to its source does not negotiate a native destination. A foreign
+session routing contract preserving payloads, operations and completion is
+still required. No pasteboard-copy substitute is counted as drag-and-drop parity.
+This batch uses source review and compile/link checks only.
+
 ## 2026-10-11 normal capture family integration
 
 The default desktop's capture path now shares native descendant observation,
@@ -86,7 +114,8 @@ pinned conflicting declarations are recorded in
 Replica cursor image ownership and Spaces gathering also remain open.
 Physical popups above the overlay retain their application's native placement;
 captured copies alone do not establish independent-view alignment. Tablet child
-contacts leaving the overlay still lack the native mode's global tail route.
+contacts leaving the overlay still lacked the native mode's global tail route
+at this checkpoint; the 2026-10-12 implementation above closes that source gap.
 No inventory status is promoted: this batch uses source review and compile/link
 checks only, with no tests, fixtures, application launches or desktop experiments.
 

@@ -81,6 +81,24 @@ static BOOL tabletSameTool(CGEventRef a,CGEventRef b) {
     }
     return tool.contact||tool.suppressed;
 }
+- (NSDictionary *)retireReplacedToolForEvent:(CGEventRef)event validate:(DWNativeTabletValidate)validate post:(DWNativeTabletPost)post {
+    if(!NSThread.isMainThread||!DWNativeTabletProximityEvent(event)||!CGEventGetIntegerValueField(event,kCGTabletProximityEventEnterProximity))return nil;
+    NSNumber *device=tabletDevice(event);DWNativeTabletTool *tool=_tools[device];if(!tool.replaced)return nil;
+    uint64_t revision=++_revision;NSDictionary *retired=[tool.target copy];
+    [self cancelTool:tool time:CGEventGetTimestamp(event) validate:validate post:post];
+    if(revision==_revision&&_tools[device]==tool){
+        // The observed enter starts a new physical tool stream. Its payload
+        // stays in entry; neither the old contact nor its suppression can
+        // authorize posting the new tool's packets to the previous recipient.
+        tool.replaced=NO;tool.suppressed=NO;tool.contact=NO;tool.mouseButtons=0;
+        if(tool->admittedEntry){CFRelease(tool->admittedEntry);tool->admittedEntry=NULL;}
+        if(tool->point){CFRelease(tool->point);tool->point=NULL;}
+        return retired;
+    }
+    // A callback may have admitted a new lifetime with the same source key.
+    // Its view gesture must not be cleared by this stale retirement result.
+    return nil;
+}
 - (NSDictionary *)capturedTargetForEvent:(CGEventRef)event {
     if(![self ownsEvent:event])return nil;
     DWNativeTabletTool *tool=_tools[tabletDevice(event)];return [tool.target copy];
