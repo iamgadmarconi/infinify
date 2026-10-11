@@ -19,7 +19,8 @@
 # skipped and said to be.
 set -eu
 cd "$(dirname "$0")/../.."
-[ "$#" -eq 0 ] || { echo "Usage: $0" >&2; exit 2; }
+[ "$#" -ne 0 ] || { echo 'LIVE NOT RUN: pass --live-owned-fixture to validate disposable managed windows'; exit 0; }
+[ "$#" -eq 1 ] && [ "$1" = --live-owned-fixture ] || { echo "Usage: $0 [--live-owned-fixture]" >&2; exit 2; }
 root=$PWD
 # Stage Manager keeps every window outside the current set as a thumbnail at the side, a fixture's among them: nothing here
 # could be adopted or clicked, and the run would take the foreground only to fail on that. The setting is read, never written.

@@ -6,11 +6,16 @@
 // is written: *event, when set, is the first line pushed to it, and every line
 // given to -publish: follows. The connection keeps answering requests.
 typedef NSData *(^DWIPCHandler)(NSData *line,BOOL *subscribe,NSData **event);
+// The handler may return before producing its reply. Complete exactly once on
+// the main queue; nil hangs up. Other connections keep serving requests meanwhile.
+typedef void (^DWIPCReply)(NSData *reply,BOOL subscribe,NSData *event);
+typedef void (^DWIPCAsyncHandler)(NSData *line,DWIPCReply reply);
 // Line-delimited Unix-domain stream server for the current user only.
 @interface DWIPCServer : NSObject
 // nil and *error when the path is unusable or a live server already answers on it;
 // that server's socket is left alone. Only a socket nobody answers is replaced.
 + (instancetype)serverAtPath:(NSString *)path handler:(DWIPCHandler)handler error:(NSString **)error;
++ (instancetype)serverAtPath:(NSString *)path asyncHandler:(DWIPCAsyncHandler)handler error:(NSString **)error;
 // How many connections are subscribed; while it is 0 an event is not worth producing.
 @property (readonly) NSUInteger subscribers;
 // Main thread only. One event line without its newline to every subscriber, never

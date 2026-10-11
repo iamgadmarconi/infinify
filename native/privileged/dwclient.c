@@ -32,7 +32,7 @@ struct dw_client {
     uint32_t slotCount;
     uint64_t slotSeq;
     bool slotFull;
-    // The one probe or restore-all in flight.
+    // The one probe, enrollment audit or restore-all in flight.
     uint16_t request;
     uint64_t requestSeq;
     bool requestWritten, replyReady;
@@ -66,6 +66,25 @@ static bool read_all(int fd, void *bytes, size_t count) {
     while(count) {
         ssize_t n=read(fd,p,count);
         if(n<0 && errno==EINTR)continue;
+        if(n<=0)return false;
+        p+=n;count-=(size_t)n;
+    }
+    return true;
+}
+// A heartbeat may become readable with only part of a reply. Its lease still
+// bounds the remaining bytes: a truncated reply cannot strand this thread and
+// keep the control connection (and native transforms) alive forever.
+static bool read_until(int fd, void *bytes, size_t count, uint64_t deadline) {
+    char *p=bytes;
+    while(count) {
+        int64_t left=(int64_t)deadline-(int64_t)now_ms();
+        if(left<=0)return false;
+        struct pollfd ready={.fd=fd,.events=POLLIN};
+        int result=poll(&ready,1,(int)left);
+        if(result<0 && errno==EINTR)continue;
+        if(result<=0)return false;
+        ssize_t n=recv(fd,p,count,MSG_DONTWAIT);
+        if(n<0 && (errno==EINTR || errno==EAGAIN))continue;
         if(n<=0)return false;
         p+=n;count-=(size_t)n;
     }
@@ -120,15 +139,18 @@ static void *reader_main(void *argument) {
     for(;;) {
         struct dw2_header header;
         if(!body || !read_all(c->control,&header,sizeof(header)))break;
-        if(header.length>DW2_MAX_BODY || !(header.type&DW2_REPLY)){reason=DW_LOST_PROTOCOL;break;}
+        if(header.length>DW2_MAX_BODY || header.flags || !(header.type&DW2_REPLY) || !header.seq){reason=DW_LOST_PROTOCOL;break;}
         if(!read_all(c->control,body,header.length))break;
         uint16_t type=header.type&~DW2_REPLY;
         if(type==DW2_FRAME) {
             struct dw2_frame_reply head;
             if(header.length<sizeof(head)){reason=DW_LOST_PROTOCOL;break;}
             memcpy(&head,body,sizeof(head));
-            if(header.length!=sizeof(head)+head.count){reason=DW_LOST_PROTOCOL;break;}
+            if(head.count>c->info.max_records || head.reserved || head.disposition>DW2_FRAME_DROPPED
+                || (head.disposition==DW2_FRAME_DROPPED && head.count) || header.length!=sizeof(head)+head.count){reason=DW_LOST_PROTOCOL;break;}
             const uint8_t *status=body+sizeof(head);
+            bool valid=true;for(uint32_t i=0;i<head.count;i++)if(status[i]>DW2_MALFORMED){valid=false;break;}
+            if(!valid){reason=DW_LOST_PROTOCOL;break;}
             pthread_mutex_lock(&c->lock);
             c->stats.superseded+=head.superseded;
             if(head.disposition==DW2_FRAME_APPLIED) {
@@ -137,7 +159,7 @@ static void *reader_main(void *argument) {
             } else c->stats.discarded++;
             pthread_mutex_unlock(&c->lock);
             if(head.disposition==DW2_FRAME_APPLIED && c->callbacks.frame_result)c->callbacks.frame_result(c->callbacks.context,header.seq,status,head.count);
-        } else {
+        } else if(type==DW2_PROBE || type==DW2_RESTORE_ALL || type==DW2_ENROLLMENT) {
             pthread_mutex_lock(&c->lock);
             if(c->request==type && c->requestSeq==header.seq && !c->replyReady) {
                 c->replyLength=header.length;
@@ -145,7 +167,7 @@ static void *reader_main(void *argument) {
                 c->replyReady=true;pthread_cond_broadcast(&c->done);
             }
             pthread_mutex_unlock(&c->lock);
-        }
+        } else {reason=DW_LOST_PROTOCOL;break;}
     }
     free(body);
     lose(c,reason);
@@ -156,7 +178,7 @@ static void *reader_main(void *argument) {
 static void *heart_main(void *argument) {
     dw_client *c=argument;
     uint32_t interval=c->info.lease_ms/4 ? c->info.lease_ms/4 : 1;
-    uint64_t acked=now_ms();
+    uint64_t acked=now_ms(),lastReply=0;
     for(;;) {
         uint64_t started=now_ms();int reason=0;
         struct dw2_header header={.type=DW2_HEARTBEAT,.seq=started};
@@ -173,7 +195,13 @@ static void *heart_main(void *argument) {
             struct pollfd p={.fd=c->beat,.events=POLLIN};
             if(left<=0 || poll(&p,1,(int)left)<=0)break;
             struct dw2_heartbeat_reply reply;
-            if(!read_all(c->beat,&header,sizeof(header)) || header.length!=sizeof(reply) || !read_all(c->beat,&reply,sizeof(reply))){reason=DW_LOST_EOF;break;}
+            uint64_t deadline=acked+c->info.lease_ms;
+            if(!read_until(c->beat,&header,sizeof(header),deadline)){reason=DW_LOST_HEARTBEAT;break;}
+            if(header.type!=(DW2_HEARTBEAT|DW2_REPLY) || header.flags || header.length!=sizeof(reply)
+                || header.seq<=lastReply || header.seq>started){reason=DW_LOST_PROTOCOL;break;}
+            if(!read_until(c->beat,&reply,sizeof(reply),deadline)){reason=DW_LOST_HEARTBEAT;break;}
+            if(reply.status || reply.lease_ms!=c->info.lease_ms || reply.held>DW2_MAX_TABLE || reply.restoring>DW2_MAX_TABLE){reason=DW_LOST_PROTOCOL;break;}
+            lastReply=header.seq;
             acked=now_ms();
             pthread_mutex_lock(&c->lock);c->stats.heartbeats_acked++;pthread_mutex_unlock(&c->lock);
         }
@@ -196,7 +224,7 @@ static int hello(const struct sockaddr_un *address, uint16_t role, const char *n
                  uint64_t deadline, struct dw2_hello_reply *reply) {
     int fd=socket(AF_UNIX,SOCK_STREAM,0);
     if(fd<0)return -1;
-    int one=1;uid_t uid;gid_t gid;
+    int one=1;uid_t uid;gid_t gid;pid_t peer=0;socklen_t peerSize=sizeof(peer);
     setsockopt(fd,SOL_SOCKET,SO_NOSIGPIPE,&one,sizeof(one));
     fcntl(fd,F_SETFL,fcntl(fd,F_GETFL)|O_NONBLOCK);
     struct { struct dw2_header header; struct dw2_hello hello; } out={.header={.length=sizeof(struct dw2_hello),.type=DW2_HELLO},.hello={.version=DW2_VERSION,.role=role}};
@@ -209,7 +237,16 @@ static int hello(const struct sockaddr_un *address, uint16_t role, const char *n
         int64_t left=(int64_t)deadline-(int64_t)now_ms();
         ok=left>0 && poll(&p,1,(int)left)>0 && getsockopt(fd,SOL_SOCKET,SO_ERROR,&error,&size)==0 && !error;
     }
-    ok=ok && getpeereid(fd,&uid,&gid)==0 && uid==getuid() && write(fd,&out,sizeof(out))==(ssize_t)sizeof(out);
+    ok=ok && getpeereid(fd,&uid,&gid)==0 && uid==getuid()
+        && getsockopt(fd,SOL_LOCAL,LOCAL_PEERPID,&peer,&peerSize)==0 && peerSize==sizeof(peer) && peer>1;
+    size_t sent=0;
+    while(ok && sent<sizeof(out)) {
+        int64_t left=(int64_t)deadline-(int64_t)now_ms();struct pollfd ready={.fd=fd,.events=POLLOUT};
+        if(left<=0 || poll(&ready,1,(int)left)<=0){ok=false;break;}
+        ssize_t n=write(fd,(const char *)&out+sent,sizeof(out)-sent);
+        if(n<0 && (errno==EINTR || errno==EAGAIN))continue;
+        if(n<=0)ok=false;else sent+=(size_t)n;
+    }
     size_t used=0;
     while(ok && used<sizeof(in)) {
         struct pollfd p={.fd=fd,.events=POLLIN};
@@ -219,9 +256,17 @@ static int hello(const struct sockaddr_un *address, uint16_t role, const char *n
         if(n<0 && (errno==EINTR || errno==EAGAIN))continue;
         if(n<=0)ok=false;else used+=(size_t)n;
     }
-    if(!ok || in.header.type!=(DW2_HELLO|DW2_REPLY) || in.header.length!=sizeof(in.reply)){close(fd);return -1;}
+    if(!ok || in.header.type!=(DW2_HELLO|DW2_REPLY) || in.header.flags || in.header.seq || in.header.length!=sizeof(in.reply)){close(fd);return -1;}
     *reply=in.reply;
     if(reply->status){close(fd);return -1;}
+    bool nonzeroToken=false;for(size_t i=0;i<sizeof(reply->token);i++)nonzeroToken|=reply->token[i]!=0;
+    if(reply->server_pid!=peer || !reply->lease_ms || reply->lease_ms>60000
+        || !reply->max_records || reply->max_records>DW2_MAX_RECORDS || reply->max_body>DW2_MAX_BODY
+        || reply->max_body<sizeof(struct dw2_frame)+(size_t)reply->max_records*sizeof(struct dw2_record)
+        || reply->scope<DW2_SCOPE_COOPERATIVE || reply->scope>DW2_SCOPE_SAME_USER || reply->queue>DW2_QUEUE_MAIN
+        || !nonzeroToken || (token && memcmp(token,reply->token,sizeof(reply->token)))) {
+        reply->status=DW2_HELLO_MALFORMED;close(fd);return -1;
+    }
     // From here the threads use it blocking, with bounded writes.
     struct timeval second={.tv_sec=1};
     fcntl(fd,F_SETFL,fcntl(fd,F_GETFL)&~O_NONBLOCK);
@@ -252,13 +297,15 @@ int dw_client_open(const char *runtime, const char *nonce64, const struct dw_cli
         if(now_ms()+20>=deadline)return v2_missing(runtime) ? DW_CLIENT_NO_V2 : DW_CLIENT_TIMEOUT;
         usleep(20000);
     }
-    beat=hello(&address,DW2_ROLE_HEARTBEAT,nonce64,reply.token,deadline,&reply);
+    struct dw2_hello_reply beatReply={0};
+    beat=hello(&address,DW2_ROLE_HEARTBEAT,nonce64,reply.token,deadline,&beatReply);
+    if(beat>=0 && memcmp(&reply,&beatReply,sizeof(reply))){close(beat);beat=-1;beatReply.status=DW2_HELLO_MALFORMED;}
     dw_client *c=beat>=0 ? calloc(1,sizeof(*c)) : NULL;
     if(c){c->slot=malloc(reply.max_records*sizeof(*c->slot));c->writing=malloc(reply.max_records*sizeof(*c->writing));}
     if(!c || !c->slot || !c->writing) {
         if(c){free(c->slot);free(c->writing);free(c);}
         close(control);if(beat>=0)close(beat);
-        return beat>=0 ? DW_CLIENT_INVALID : DW_CLIENT_TIMEOUT;
+        return beat>=0 ? DW_CLIENT_INVALID : beatReply.status ? DW_CLIENT_REFUSED : DW_CLIENT_TIMEOUT;
     }
     c->control=control;c->beat=beat;
     c->info=(struct dw_client_info){.lease_ms=reply.lease_ms,.max_records=reply.max_records,.caps=reply.caps,.scope=reply.scope,.queue=reply.queue,.server_pid=reply.server_pid};
@@ -321,6 +368,28 @@ static int ask(dw_client *c, uint16_t type, uint32_t timeout_ms, void *reply, si
 int dw_client_probe(dw_client *c, uint32_t timeout_ms, void *reply, size_t capacity, size_t *length) {
     if(!c || !reply)return DW_CLIENT_INVALID;
     return ask(c,DW2_PROBE,timeout_ms,reply,capacity,length);
+}
+int dw_client_enrollment(dw_client *c, uint32_t timeout_ms, struct dw2_process *processes,
+                         uint32_t capacity, uint32_t *count) {
+    if(!c || !count || (capacity && !processes) || !(c->info.caps&DW2_CAP_ENROLLMENT))return DW_CLIENT_INVALID;
+    size_t size=sizeof(struct dw2_enrollment_reply)+DW2_MAX_PROCESSES*sizeof(struct dw2_process),length=0;
+    struct dw2_enrollment_reply *reply=malloc(size);
+    if(!reply)return DW_CLIENT_INVALID;
+    int result=ask(c,DW2_ENROLLMENT,timeout_ms,reply,size,&length);
+    if(result==DW_CLIENT_OK && (length<sizeof(*reply) || reply->reserved || reply->scope!=c->info.scope || reply->server_pid!=c->info.server_pid || reply->count>DW2_MAX_PROCESSES || reply->count>capacity || length!=sizeof(*reply)+(size_t)reply->count*sizeof(*processes)))result=DW_CLIENT_INVALID;
+    const struct dw2_process *entries=(const struct dw2_process *)(reply+1);
+    if(result==DW_CLIENT_OK){
+        if(reply->scope==DW2_SCOPE_COOPERATIVE && (reply->count!=1 || entries[0].pid!=reply->server_pid))result=DW_CLIENT_INVALID;
+        else if(reply->scope==DW2_SCOPE_ALLOWLIST && !reply->count)result=DW_CLIENT_INVALID;
+        else if(reply->scope==DW2_SCOPE_SAME_USER && reply->count)result=DW_CLIENT_INVALID;
+        else if(reply->scope<DW2_SCOPE_COOPERATIVE || reply->scope>DW2_SCOPE_SAME_USER)result=DW_CLIENT_INVALID;
+        for(uint32_t i=0;result==DW_CLIENT_OK && i<reply->count;i++){
+            if(entries[i].pid<=0 || entries[i].reserved || !entries[i].birth_sec || entries[i].birth_usec>=1000000){result=DW_CLIENT_INVALID;break;}
+            for(uint32_t j=0;j<i;j++)if(entries[j].pid==entries[i].pid){result=DW_CLIENT_INVALID;break;}
+        }
+    }
+    if(result==DW_CLIENT_OK){if(reply->count)memcpy(processes,entries,reply->count*sizeof(*processes));*count=reply->count;}
+    free(reply);return result;
 }
 int dw_client_restore_all(dw_client *c, uint32_t timeout_ms, struct dw2_restore_result *results,
                           uint32_t capacity, uint32_t *count, uint32_t *pending) {

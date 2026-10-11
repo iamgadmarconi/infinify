@@ -488,6 +488,41 @@ impl Controller {
         self.guard_resize_structure(Some(window))
             .map_err(|e| e.to_string())
     }
+    /// Platform adapters can place an independent overlay directly in screen
+    /// space without choosing it as the focused window or moving the camera.
+    /// The pin and output-removal behavior remain the upstream pinned policy.
+    pub(crate) fn screen_pin_arrival(
+        &self,
+        placement: &SourceScreenPin,
+        size: Size,
+    ) -> Result<Arrival, Error> {
+        let SourceScreenPin { output, screen_pos } = placement;
+        if !(screen_pos.x.is_finite() && screen_pos.y.is_finite())
+            || screen_pos.x.abs() > f64::from(i32::MAX)
+            || screen_pos.y.abs() > f64::from(i32::MAX)
+        {
+            return Err(Error::Invalid("pin coordinates exceed integer range"));
+        }
+        let viewport = self
+            .scene
+            .output(*output)
+            .ok_or(Error::Invalid("unknown output"))?;
+        let pin = Pin {
+            output: *output,
+            screen_pos: clamp_pin(
+                [screen_pos.x.round() as i64, screen_pos.y.round() as i64],
+                pixel_size(size)?,
+                pixel_size(viewport.screen_bounds.size)?,
+            ),
+        };
+        Ok(Arrival::Pin {
+            rect: Rect {
+                origin: pin_canvas(viewport, pin.screen_pos),
+                size,
+            },
+            pin,
+        })
+    }
     /// Upstream pin_window: pin the window where it is drawn right now, on
     /// the output showing its center, else the active one. Its top-left keeps
     /// its place on the screen; its size becomes its own at every zoom. A

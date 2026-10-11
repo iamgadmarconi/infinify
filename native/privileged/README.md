@@ -21,6 +21,15 @@ macOS 27 is inherently unsupported is made.
   With trailing `--windows N` (1..16) the host opens N small windows and offers all
   of them to protocol v2 (v1 keeps the first); `--v2-queue own|main` chooses where
   v2's native calls run. Without either flag the host is the one-window fixture.
+  `--level 0..4` and `--alpha 0..1` set only the new fixture windows through
+  AppKit before ordering them. Alpha defaults to 1; helper restoration checks
+  capture the initial value after this setup. These options support scoped
+  visibility diagnostics without changing another application's windows.
+  `--family popup|sheet|both|none` (default `none`) creates explicit native
+  children of its first root and enrolls every new child in the same finite
+  owned-window list. Roots plus children must total at most 16. Its separate
+  family entrypoint advertises capability bit 3 so the desktop exercises the
+  native parent/child path; no other process or late unlisted window is admitted.
 - `dwclient.o` (`dwclient.h`, `dwclient.c`): the protocol v2 client library the
   shell will link; plain C and pthreads. `v2client`: a test driver built on it.
 - `client`: POSIX socket client with JSON encoding. Invocation:
@@ -138,6 +147,15 @@ Protocol v2 does for many windows, at display rate, what v1 does for one. It liv
 beside v1 in the same payload (`payload-v2.m`, compiled into `payload.m`); v1's
 socket, code path and replies are unchanged. Constants and structs: `protocol2.h`.
 
+The desktop shell now uses this client for its explicitly scoped
+[cooperative native presentation mode](../desktop/README.md#native-presentation-through-a-cooperative-helper).
+Its fixture test independently checks transform and alpha restoration through
+normal quit, client death and a stalled main thread. Cooperative helpers remain
+limited to their own process. The desktop can also accept an allowlist helper
+after its negotiated `ENROLLMENT` audit matches exactly the desktop's `--only-pid`
+PIDs and birth timestamps. Same-user scope is refused. This prepares broader
+support in code; it does not validate a Dock host or third-party native compositing.
+
 **Transport.** A second listener, `RUNTIME/v2.sock` (0600, same 0700 directory,
 peer UID checked with `getpeereid`). A JSON line with `v:2` on `helper.sock` is
 still refused by v1. Messages are binary, little-endian: a 16-byte header
@@ -152,11 +170,30 @@ the nonce can keep a new controller out for as long as it keeps eight of them op
 
 | Type | Body | Reply body |
 |---|---|---|
-| 1 `HELLO` | `"DWv2"`, u16 version 2, u16 role (1 control, 2 heartbeat), 64-byte nonce, 16-byte token (zero for control) | u32 status, lease_ms 2000, max_records 1024, max_body, caps (bit 0 alpha), scope (1 cooperative, 2 allowlist, 3 same user), queue (0 own, 1 main), i32 server pid, 16-byte token |
+| 1 `HELLO` | `"DWv2"`, u16 version 2, u16 role (1 control, 2 heartbeat), 64-byte nonce, 16-byte token (zero for control) | u32 status, lease_ms 2000, max_records 1024, max_body, caps (bit 0 alpha, bit 1 per-window restore, bit 2 scope audit, bit 3 explicitly enrolled fixture family), scope (1 cooperative, 2 allowlist, 3 same user), queue (0 own, 1 main), i32 server pid, 16-byte token |
 | 2 `FRAME` | u32 count, u32 0, count × 80-byte record | u32 disposition (0 applied, 1 dropped), u32 count, u32 superseded, u32 0, u64 frames applied in total, count × u8 status |
 | 3 `HEARTBEAT` | empty | u32 status, lease_ms, held, restoring |
 | 4 `RESTORE_ALL` | empty | u32 count, pending, journal_persisted, 0, count × 32-byte result |
 | 5 `PROBE` | empty | counters, then one 112-byte entry per table window, then (cooperative scope only) the host's own window identities |
+| 6 `ENROLLMENT` | empty; requires capability bit 2 | u32 scope, count, i32 server pid, u32 0, then count × `{i32 pid, u32 0, u64 birth_sec, u64 birth_usec}` |
+
+`ENROLLMENT` reads the fixed process scope and changes nothing. A cooperative
+reply contains its one host instance; an allowlist reply contains all enrolled
+instances; same-user scope has no finite list. There are at most 1024 entries.
+The C client rejects inconsistent scope/server identity, duplicates, malformed
+timestamps, trailing data and insufficient output space. Allowlist parsing also
+rejects fractional/negative identities, duplicates and oversized lists. A legacy
+cooperative helper still works without this capability; a legacy allowlist helper
+cannot be accepted by the desktop. `v2client enrollment RUNTIME NONCE` is a
+read-only CLI audit; `fixture_v2_test.py --enrollment` runs only that owned-host
+scenario and independently checks unchanged native geometry, transform and alpha.
+
+Before allocating frame buffers, the C client bounds the negotiated frame count,
+body size and lease and validates scope and queue enums. The server PID must be
+the Unix socket's kernel `LOCAL_PEERPID`; control and heartbeat handshakes must
+match exactly, including their session token. Reply headers and record statuses
+are validated. A heartbeat that supplies only part of its reply remains bounded
+by the lease, then closes both connections so helper restoration can proceed.
 
 `HELLO` status: 0 ok, 1 wrong nonce, 2 wrong magic or version, 3 another session
 is live, 4 unknown token, 5 malformed. Anything but 0 closes the connection.
@@ -165,14 +202,18 @@ A record is `{i32 pid, u32 wid, u64 birth_sec, u64 birth_usec, f64 m[6], f32 alp
 u32 flags}`: the window as the shell holds it (no owner connection: the helper
 resolves and records that itself), the affine `a,b,c,d,tx,ty` from screen to
 window-local in global top-left points, and an alpha that is used only when flag
-bit 0 is set. Matrices obey v1's bounds; alpha must be within 0..1. Record status:
+bit 0 is set. Matrices obey v1's bounds; alpha must be within 0..1. When capability
+bit 1 is negotiated, a record with flag bit 1 alone restores that identity's
+journalled original; its matrix and alpha fields are ignored. Combining the two
+flags is malformed. Restoration wins over a transform of the same window in
+that frame: the transform receives status 8. Record status:
 0 applied, 1 out of scope, 2 identity (no such window, or not that process
 instance, or not this user), 3 matrix, 4 alpha (invalid, or the capability is
 absent), 5 the original could not be read, 6 the journal could not be written,
 7 not applied (the set failed or read back differently; the window stays in the
 table because it may have been changed), 8 a restore of this window is still
-pending, 9 protocol v1 holds a window, 10 table full (1024), 11 malformed. "Applied"
-means the set returned 0 **and** the value read back equals the request after
+pending, 9 protocol v1 holds a window, 10 table full (1024), 11 malformed. For a
+transform record, "applied" means the set returned 0 **and** the value read back equals the request after
 rounding to 32-bit floats, which is how the window server keeps a transform; status
 0 alone is never enough.
 
@@ -222,10 +263,21 @@ names something else, nothing is touched: `gone`, and it leaves the table. If th
 set or the readback fails, or the window is listed but cannot be resolved, it stays
 as `pending`: it blocks nothing else, records naming it get status 8, and it is
 retried after 250 ms, 500 ms, 1 s and then every 2 s without a deadline, as v1
-retries its one window. After a pass with nothing pending the table is empty and the
+retries its one window. After full restoration with nothing pending the table is empty and the
 journal says `"state":"empty"` with the per-window results under `last_restore`. A
 journal that could not be written after a restore is retried on the same schedule.
 Restores made without a request are logged to stderr as `V2_RESTORE {json}`.
+
+A negotiated per-window restore record marks only its recorded identity for
+restoration, using the same original values, identity checks, journal and retry
+path. Other held windows keep their transforms and alpha. Status 0 means it was
+restored or has no held entry (including one already restored or gone); status 8
+means restoration remains pending, and status 6 means the journal update remains
+pending. The desktop retains release records until acknowledged and retries them
+at most four times per second while frames are being submitted. Rebinding starts
+a new sequence, so an older release acknowledgement cannot remove that request.
+An older helper without the capability causes the desktop to restore and end the
+whole session when a window is unbound.
 
 **Lease and heartbeats.** The lease is 2000 ms. Any valid message on either
 connection renews it; a heartbeat is answered on its own connection's thread from
@@ -306,20 +358,23 @@ the client library at 120 Hz for five seconds; the helper's process stopped unde
 running sender and under an idle one; the helper killed while holding (only the
 `gone` path: its windows die with it), with a staging file left behind; a helper
 whose v2 did not start, as the library reports it; the main-queue switch; allowlist
-refusal; and v1/v2 exclusion. **Not tested:** anything in Dock; any window of
+refusal; and v1/v2 exclusion. The focused
+`python3 native/privileged/fixture_v2_test.py --release-window` case also passed:
+exact original transform and alpha restored for one released window, seven other
+windows unchanged, scope and malformed-flag refusals, repeated release, rebind,
+and release versus transform in the same frame. These transforms and alpha are
+read over the test's independent WindowServer connection. **Not tested:** anything in Dock; any window of
 another process; another user's session; a native set or readback that fails (so
 `pending` and its retries run in no test); a window of the table that closes during
 a session; statuses 7, 8 and 10; startup recovery of a window that still exists;
 the library across a real sleep and wake; a failed thread start in the library; the
 accept loop's wait when descriptors run out.
 
-**Later stages:** ordering, levels and sub-level; native move and Spaces; releasing
-one window, and pruning windows that closed mid-session (they leave at the next
-restore, so a session that never restores stops adopting new windows, status 10,
-after 1024 distinct ones: needed before the shell holds one session for days); the restore target for a window moved natively after first touch;
-skipping unchanged records; reconciling a previous Dock instance's journal, the
-per-instance runtime and the fixed-path loader; a loader-written `v2_queue`; the
-shell.
+**Later stages:** ordering, levels and sub-level; native move and Spaces; pruning
+closed windows when a client never sends their per-window release; the restore
+target for a window moved natively after first touch; skipping unchanged records;
+reconciling a previous Dock instance's journal, the per-instance runtime and the
+fixed-path loader; a loader-written `v2_queue`; third-party shell integration.
 
 ## Recovery limits and evidence
 

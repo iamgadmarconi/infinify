@@ -24,6 +24,11 @@ typedef bool (*DWFocusGuard)(DWFocusIdentity selected, void *context);
 bool dw_focus_birth(pid_t pid, uint64_t *seconds, uint64_t *microseconds);
 bool dw_focus_identity(pid_t pid, CGWindowID window, DWFocusIdentity *out);
 bool dw_focus_owner(DWFocusIdentity identity, CGRect *bounds);
+// Where a window's frame is read from, for every bounds this file reports and compares with Accessibility's. NULL (the default):
+// the window list's kCGWindowBounds. Under native presentation (native/desktop/native-presenter.h) that is where the transform
+// helper draws the window, not the window's own frame, and the shell sets a reader of the latter; a window it cannot read is
+// then no owner. Set once, before any other call here.
+void dw_focus_set_bounds(bool (*read)(uint32_t window, CGRect *bounds));
 DWFocusResult dw_focus_observe(DWFocusIdentity identity);
 DWFocusResult dw_focus_select(DWFocusIdentity identity, DWFocusGuard guard, void *context);
 const char *dw_focus_outcome_name(DWFocusOutcome outcome);

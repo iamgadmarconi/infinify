@@ -4,6 +4,11 @@
 [`include/driftwm_desktop.h`](include/driftwm_desktop.h) from the native shell.
 Use one handle per scene, with serialized access. The C boundary catches Rust
 unwinds; it cannot protect against invalid pointers, use-after-free or OOM aborts.
+`driftwm_desktop_clone` copies logical state into a separately owned handle,
+which may move to a worker with exclusive access. Access the source exclusively
+while cloning, then destroy each handle independently. The native scene writer
+uses this to keep serialization and durable filesystem commits off the live
+controller's main thread.
 Always release returned strings with `driftwm_desktop_response_free`. A null
 response indicates response construction failed. Null handles/requests produce
 JSON errors; null destroy/free are no-ops.

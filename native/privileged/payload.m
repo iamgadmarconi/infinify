@@ -14,6 +14,8 @@
 #import <mach/mach_time.h>
 #import <os/lock.h>
 #import "protocol.h"
+#import "protocol2.h"
+#include <limits.h>
 
 static int (*mainConnection)(void);
 static CGError (*getOwner)(int, uint32_t, int *);
@@ -36,7 +38,7 @@ static NSArray *allowlist;
 static int directoryFD = -1;
 static CGAffineTransform original;
 static BOOL hasSnapshot = NO, dirty = NO, recoveryBlocked = NO;
-static BOOL started = NO, fixtureOnly = YES;
+static BOOL started = NO, fixtureOnly = YES, fixtureNativeFamilies = NO;
 // Native restoration and durable receipt completion are separate obligations.
 static NSDictionary *pendingRestoreReceipt;
 static BOOL recoveryRetryScheduled = NO;
@@ -162,10 +164,14 @@ static BOOL allowlistPermits(NSDictionary *who) {
     return NO;
 }
 static NSArray *validAllowlist(id raw) {
-    if(![raw isKindOfClass:NSArray.class] || [raw count]==0)return nil;
+    if(![raw isKindOfClass:NSArray.class] || [raw count]==0 || [raw count]>DW2_MAX_PROCESSES)return nil;
+    NSMutableSet *pids=[NSMutableSet set];
     for(id entry in raw) {
         if(![entry isKindOfClass:NSDictionary.class] || ![[NSSet setWithArray:[entry allKeys]] isEqual:[NSSet setWithArray:@[@"pid",@"birth_sec",@"birth_usec"]]])return nil;
-        for(id key in (NSDictionary *)entry)if(!isNumber(((NSDictionary *)entry)[key]))return nil;
+        for(id key in (NSDictionary *)entry){id n=((NSDictionary *)entry)[key];if(!isNumber(n) || CFNumberIsFloatType((__bridge CFNumberRef)n))return nil;}
+        int64_t pid=[entry[@"pid"]longLongValue],seconds=[entry[@"birth_sec"]longLongValue],microseconds=[entry[@"birth_usec"]longLongValue];
+        if(pid<=0 || pid>INT_MAX || seconds<=0 || microseconds<0 || microseconds>=1000000 || [pids containsObject:entry[@"pid"]])return nil;
+        [pids addObject:entry[@"pid"]];
     }
     return raw;
 }
@@ -314,14 +320,21 @@ static int startServer(const char *directory, const char *nonce, const uint32_t 
     return 0;
 }
 
-int dw_privileged_fixture_start_windows(const char *directory,const char *nonce,const uint32_t *wids,uint32_t count,const char *allowlistJSON,int v2OnMainQueue) {
+static int startFixture(const char *directory,const char *nonce,const uint32_t *wids,uint32_t count,const char *allowlistJSON,int v2OnMainQueue,BOOL families) {
     NSArray *allow=nil;
     if(allowlistJSON) {
         id raw=[NSJSONSerialization JSONObjectWithData:[NSData dataWithBytes:allowlistJSON length:strlen(allowlistJSON)] options:0 error:NULL];
         allow=validAllowlist(raw);
         if(!allow)return -__LINE__;
     }
+    if(started)return -__LINE__;fixtureNativeFamilies=families;
     return startServer(directory,nonce,wids,count,YES,allow,v2OnMainQueue<0 ? DW_V2_MAIN_QUEUE : v2OnMainQueue!=0);
+}
+int dw_privileged_fixture_start_windows(const char *directory,const char *nonce,const uint32_t *wids,uint32_t count,const char *allowlistJSON,int v2OnMainQueue) {
+    return startFixture(directory,nonce,wids,count,allowlistJSON,v2OnMainQueue,NO);
+}
+int dw_privileged_fixture_start_family_windows(const char *directory,const char *nonce,const uint32_t *wids,uint32_t count,const char *allowlistJSON,int v2OnMainQueue) {
+    return startFixture(directory,nonce,wids,count,allowlistJSON,v2OnMainQueue,YES);
 }
 int dw_privileged_fixture_start(const char *directory,const char *nonce,uint32_t wid,const char *allowlistJSON) {
     return dw_privileged_fixture_start_windows(directory,nonce,&wid,1,allowlistJSON,-1);

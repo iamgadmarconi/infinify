@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Carried into native/desktop/ from the standalone compositor port that was built, verified against upstream's shaders and independently reviewed outside this repository. Changed here since: the chunk generation of a cached background in the two keys a frost is kept by (BACKGROUND-NOTES.md, section 17.3).
+// Originally carried into native/desktop/ from the standalone compositor port; desktop frame scheduling and diagnostics are adapted here, together with cached-background chunk generation (BACKGROUND-NOTES.md, section 17.3).
 //
 // Infinify compositor — implementation. See compositor.h and NOTES.md.
 //
@@ -3831,13 +3831,135 @@ static uint8_t *IFCCopyBytes(id<MTLTexture> texture) {
 
 // MARK: - Layer
 
-// Frames the display took, counted where the presented handlers run.
+// Frames the display took, counted where the presented handlers run. Keep the
+// sample collection independent of the layer, whose last release stays on main.
+typedef struct { double time,submitted,target,cameraX,cameraY,zoom; } IFCPresentationSample;
+static const NSUInteger kIFCPresentationSamples=2048;
+static int IFCComparePresentation(const void *a,const void *b) {
+    double x=((const IFCPresentationSample *)a)->time,y=((const IFCPresentationSample *)b)->time;return (x>y)-(x<y);
+}
+static int IFCCompareInterval(const void *a,const void *b) {double x=*(const double *)a,y=*(const double *)b;return (x>y)-(x<y);}
 @interface IFCPresentedCount : NSObject {
 @public
     _Atomic NSUInteger shown;
+    os_unfair_lock lock;
+    IFCPresentationSample samples[2048];
+    NSUInteger sampleCount,overflow,completed,errors,commandCompleted,notPresented;
+    double previous,gpuSeconds,gpuWorst,previousCameraX,previousCameraY,previousZoom,completionSeconds,completionWorst;
+    BOOL hasCamera;
 }
+- (IFCompositorPresentationStats)take:(double)interval;
 @end
 @implementation IFCPresentedCount
+- (IFCompositorPresentationStats)take:(double)interval {
+    IFCPresentationSample taken[2048];IFCompositorPresentationStats stats={0};double gpuTotal,completionTotal;
+    os_unfair_lock_lock(&lock);stats.frames=sampleCount;memcpy(taken,samples,sampleCount*sizeof(*taken));sampleCount=0;
+    stats.overflow=overflow;overflow=0;stats.completed=completed;completed=0;stats.errors=errors;errors=0;stats.notPresented=notPresented;notPresented=0;
+    gpuTotal=gpuSeconds;gpuSeconds=0;stats.gpuWorst=gpuWorst;gpuWorst=0;
+    stats.commandCompleted=commandCompleted;commandCompleted=0;completionTotal=completionSeconds;completionSeconds=0;stats.completionWorst=completionWorst;completionWorst=0;os_unfair_lock_unlock(&lock);
+    // A GPU callback need not arrive in presentation order. Sort the actual
+    // times before comparing refresh gaps; do not infer them from callback time.
+    qsort(taken,stats.frames,sizeof(*taken),IFCComparePresentation);double gaps[2048],sum=0,latency=0;
+    for(NSUInteger i=0;i<stats.frames;i++){
+        IFCPresentationSample sample=taken[i];double gap=sample.time-previous;
+        // Positive callbacks alone do not establish distinct display refreshes.
+        // Keep repeated timestamps and callbacks older than the preceding batch
+        // explicit; neither can manufacture a new presentation interval.
+        if(previous>0){stats.duplicateTime+=gap==0;stats.reorderedTime+=gap<0;}
+        if(previous>0&&gap>0){gaps[stats.intervals++]=gap;sum+=gap;stats.gapWorst=fmax(stats.gapWorst,gap);if(interval>0&&gap>interval*1.5)stats.missed+=(NSUInteger)llround(gap/interval)-1;}
+        previous=fmax(previous,sample.time);double age=fmax(0,sample.time-sample.submitted);latency+=age;stats.latencyWorst=fmax(stats.latencyWorst,age);
+        if(sample.target>0)stats.lateWorst=fmax(stats.lateWorst,sample.time-sample.target);
+        if(hasCamera){if(sample.cameraX!=previousCameraX||sample.cameraY!=previousCameraY||sample.zoom!=previousZoom)stats.cameraChanged++;else stats.cameraRepeated++;}
+        previousCameraX=sample.cameraX;previousCameraY=sample.cameraY;previousZoom=sample.zoom;hasCamera=YES;
+    }
+    if(stats.intervals){qsort(gaps,stats.intervals,sizeof(*gaps),IFCCompareInterval);stats.gapMean=sum/stats.intervals;stats.gapP99=gaps[(NSUInteger)ceil(stats.intervals*.99)-1];}
+    if(previous>0)stats.presentationSilence=fmax(0,CACurrentMediaTime()-previous);
+    if(stats.frames)stats.latencyMean=latency/stats.frames;if(stats.completed)stats.gpuMean=gpuTotal/stats.completed;
+    if(stats.commandCompleted)stats.completionMean=completionTotal/stats.commandCompleted;return stats;
+}
+@end
+
+// Acquire drawables away from input and the main run loop. Publish the ready
+// set under a short lock on that worker: a display callback can consume it even
+// when its main-queue notification has not run. Layer ownership stays on main,
+// with at most one nextDrawable call pending and no queued scene descriptions.
+@interface IFCDrawablePool : NSObject
+- (instancetype)initWithLayer:(IFCompositorLayer *)layer;
+- (id<CAMetalDrawable>)takeFrom:(IFCompositorLayer *)layer;
+- (BOOL)waiting;
+- (void)takeStats:(IFCompositorPresentationStats *)stats;
+- (void)cancel;
+@end
+@implementation IFCDrawablePool {
+    __weak IFCompositorLayer *_layer;
+    dispatch_queue_t _queue;
+    NSMutableArray<id<CAMetalDrawable>> *_ready;
+    os_unfair_lock _lock;
+    CGSize _size;
+    uint64_t _generation;
+    BOOL _transaction,_working,_cancelled;
+    NSUInteger _acquisitions,_timeouts;
+    double _acquireSeconds,_acquireWorst,_acquireQueueWorst,_publishWorst,_notificationWorst;
+}
+- (instancetype)initWithLayer:(IFCompositorLayer *)layer {
+    if(!(self=[super init]))return nil;
+    _layer=layer;_ready=[NSMutableArray array];_size=layer.drawableSize;_transaction=layer.presentsWithTransaction;
+    _queue=dispatch_queue_create("org.infinify.drawable",dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,QOS_CLASS_USER_INTERACTIVE,0));
+    return self;
+}
+- (void)fill:(IFCompositorLayer *)layer {
+    if(!layer)return;
+    NSUInteger capacity=MIN((NSUInteger)2,MAX((NSUInteger)1,layer.maximumDrawableCount-1));
+    os_unfair_lock_lock(&_lock);
+    if(_cancelled||_working||_ready.count>=capacity){os_unfair_lock_unlock(&_lock);return;}
+    _working=YES;uint64_t generation=_generation;CGSize wanted=_size;os_unfair_lock_unlock(&_lock);
+    BOOL measured=layer.countsPresented;double queued=measured?CACurrentMediaTime():0;
+    // Shared storage is cleared on main after the acquisition returns, so a
+    // retired CALayer's final release cannot occur on the worker queue.
+    __block IFCompositorLayer *held=layer;
+    dispatch_async(_queue,^{@autoreleasepool{
+        // Replenish the bounded ready set without waiting for main to turn its
+        // notification queue. A busy idle reconciliation must not delay the
+        // next acquisition after the worker has already published one drawable.
+        // The batch is bounded too; it never loops indefinitely holding a layer.
+        for(NSUInteger attempt=0;attempt<capacity;attempt++){@autoreleasepool{
+            os_unfair_lock_lock(&self->_lock);
+            BOOL needed=!self->_cancelled&&generation==self->_generation&&self->_ready.count<capacity;
+            os_unfair_lock_unlock(&self->_lock);if(!needed)break;
+            double began=measured?CACurrentMediaTime():0;
+            id<CAMetalDrawable> drawable=[held nextDrawable];
+            double acquired=measured?CACurrentMediaTime():0;
+            os_unfair_lock_lock(&self->_lock);
+            BOOL valid=!self->_cancelled&&generation==self->_generation&&drawable&&drawable.texture.width==(NSUInteger)wanted.width&&drawable.texture.height==(NSUInteger)wanted.height;
+            if(valid)[self->_ready addObject:drawable];
+            if(measured){double wait=acquired-began;self->_acquisitions++;self->_timeouts+=!drawable;self->_acquireSeconds+=wait;self->_acquireWorst=fmax(self->_acquireWorst,wait);if(!attempt)self->_acquireQueueWorst=fmax(self->_acquireQueueWorst,began-queued);self->_publishWorst=fmax(self->_publishWorst,CACurrentMediaTime()-acquired);}
+            os_unfair_lock_unlock(&self->_lock);
+            if(!valid)break;
+            dispatch_async(dispatch_get_main_queue(),^{
+                os_unfair_lock_lock(&self->_lock);BOOL available=!self->_cancelled&&self->_ready.count;
+                if(measured)self->_notificationWorst=fmax(self->_notificationWorst,CACurrentMediaTime()-acquired);os_unfair_lock_unlock(&self->_lock);
+                IFCompositorLayer *current=self->_layer;
+                if(available&&current.drawableReady)current.drawableReady();
+            });
+        }}
+        os_unfair_lock_lock(&self->_lock);self->_working=NO;os_unfair_lock_unlock(&self->_lock);
+        dispatch_async(dispatch_get_main_queue(),^{held=nil;[self fill:self->_layer];});
+    }});
+}
+- (id<CAMetalDrawable>)takeFrom:(IFCompositorLayer *)layer {
+    os_unfair_lock_lock(&_lock);
+    if(_cancelled){os_unfair_lock_unlock(&_lock);return nil;}
+    if(!CGSizeEqualToSize(_size,layer.drawableSize)||_transaction!=layer.presentsWithTransaction){_size=layer.drawableSize;_transaction=layer.presentsWithTransaction;_generation++;[_ready removeAllObjects];}
+    id<CAMetalDrawable> drawable=_ready.firstObject;if(drawable)[_ready removeObjectAtIndex:0];
+    os_unfair_lock_unlock(&_lock);[self fill:layer];return drawable;
+}
+- (BOOL)waiting {os_unfair_lock_lock(&_lock);BOOL waiting=!_cancelled&&_working&&!_ready.count;os_unfair_lock_unlock(&_lock);return waiting;}
+- (void)takeStats:(IFCompositorPresentationStats *)stats {
+    os_unfair_lock_lock(&_lock);
+    stats->acquisitions=_acquisitions;stats->acquireTimeouts=_timeouts;stats->acquireMean=_acquisitions?_acquireSeconds/_acquisitions:0;stats->acquireWorst=_acquireWorst;stats->acquireQueueWorst=_acquireQueueWorst;stats->publishWorst=_publishWorst;stats->notificationWorst=_notificationWorst;
+    _acquisitions=_timeouts=0;_acquireSeconds=_acquireWorst=_acquireQueueWorst=_publishWorst=_notificationWorst=0;os_unfair_lock_unlock(&_lock);
+}
+- (void)cancel {os_unfair_lock_lock(&_lock);_cancelled=YES;_generation++;[_ready removeAllObjects];os_unfair_lock_unlock(&_lock);_layer=nil;}
 @end
 
 @implementation IFCompositorLayer {
@@ -3850,10 +3972,27 @@ static uint8_t *IFCCopyBytes(id<MTLTexture> texture) {
     id<MTLTexture> _debugCopy;
     BOOL _debugCopyAlpha;
     IFCPresentedCount *_presented;  // made with the first handler; nil until `countsPresented`
+    IFCDrawablePool *_drawables;
+    id<CAMetalDrawable> _displayDrawable;
+    BOOL _stopped;
 }
 
 - (NSUInteger)presentedCount {
     return _presented ? atomic_load(&_presented->shown) : 0;
+}
+- (IFCompositorPresentationStats)takePresentationStats {IFCompositorPresentationStats stats=_presented?[_presented take:_presentationInterval]:(IFCompositorPresentationStats){0};[_drawables takeStats:&stats];return stats;}
+- (BOOL)drawablePending {return _displayLinkDriven?!_displayDrawable:(_asynchronousDrawables&&!_debugCaptureEnabled&&[_drawables waiting]);}
+- (void)setDisplayLinkDriven:(BOOL)driven {
+    if(_displayLinkDriven==driven)return;
+    _displayLinkDriven=driven;_displayDrawable=nil;[_drawables cancel];_drawables=nil;
+    // The display link owns the drawable's presentation budget; its offers
+    // must not wait for a second Core Animation transaction to retire.
+    if(driven)self.presentsWithTransaction=NO;
+}
+- (void)withDisplayDrawable:(id<CAMetalDrawable>)drawable presentationTime:(CFTimeInterval)time frame:(void (^)(void))frame {
+    if(_stopped||!_displayLinkDriven||!drawable||!frame)return;
+    _displayDrawable=drawable;_displaySubmissionTime=0;self.presentationTime=time;
+    @try { frame(); } @finally { _displayDrawable=nil; }
 }
 
 - (instancetype)init {
@@ -3892,15 +4031,18 @@ static uint8_t *IFCCopyBytes(id<MTLTexture> texture) {
     _dirty = YES;
 }
 
+- (void)stopDrawing { _stopped=YES;_displayDrawable=nil;self.drawableReady=nil;[_drawables cancel];_drawables=nil; }
+
 - (void)setDebugCaptureEnabled:(BOOL)enabled {
     _debugCaptureEnabled = enabled;
+    if(enabled){[_drawables cancel];_drawables=nil;}
     self.framebufferOnly = !enabled;
     if (!enabled) _debugCopy = nil;
 }
 
 - (BOOL)updateWithFrame:(IFCompositorFrame *)frame {
     _missed = NO;
-    if (!frame || !_renderer) return NO;
+    if (_stopped || !frame || !_renderer) return NO;
     NSUInteger pxW, pxH;
     IFCPixelSize(frame, NULL, NULL, &pxW, &pxH);
     _needsContinuousRedraw = frame.needsContinuousRedraw;
@@ -3921,23 +4063,28 @@ static uint8_t *IFCCopyBytes(id<MTLTexture> texture) {
     }
 
     CGSize drawableSize = CGSizeMake(pxW, pxH);
-    // The first frame, and one that changes the drawable's size, are presented inside the host's CATransaction: they land
-    // in the Core Animation commit that puts the layer there or gives it its new bounds. So is every frame the host does
-    // not draw from a display link's callback (`paced`): presented by its command buffer it would wait for a refresh, and
-    // with the display asleep there is none, the drawables run out and -nextDrawable holds the thread for its timeout.
-    // A paced frame of an unchanged size is the command buffer's to present at the refresh being served, and the main
-    // thread waits for nothing: with the transaction it sat in -waitUntilScheduled for every frame drawn.
+    // Standalone and screen-link paths present a first/resized or unpaced frame
+    // inside the host's CATransaction. Their paced, unchanged frames present by
+    // command buffer without waiting for scheduling. A Metal display-link offer
+    // always owns its presentation deadline and bypasses that transaction.
     BOOL resized = !_hasLast || !CGSizeEqualToSize(self.drawableSize, drawableSize) || (frame.scale > 0 && self.contentsScale != frame.scale);
-    BOOL transaction = resized || !_paced;
+    BOOL transaction = !_displayLinkDriven && (resized || !_paced);
     if (self.presentsWithTransaction != transaction) self.presentsWithTransaction = transaction;
     if (self.contentsScale != frame.scale && frame.scale > 0) self.contentsScale = frame.scale;
     if (!CGSizeEqualToSize(self.drawableSize, drawableSize)) self.drawableSize = drawableSize;
     BOOL opaque = frame.clear == IFCompositorClearOpaqueBlack;
     if (self.opaque != opaque) self.opaque = opaque;
 
-    id<CAMetalDrawable> drawable = [self nextDrawable];
+    id<CAMetalDrawable> drawable;double presentationTarget=_presentationTime;
+    if(_displayLinkDriven){drawable=_displayDrawable;_displayDrawable=nil;
+        // A resize can be described after the display link obtained its offer.
+        // Leave this scene owed until the link offers the new raster size.
+        if(drawable.texture.width!=pxW||drawable.texture.height!=pxH)drawable=nil;}
+    else if(_asynchronousDrawables&&!_debugCaptureEnabled){if(!_drawables)_drawables=[[IFCDrawablePool alloc]initWithLayer:self];drawable=[_drawables takeFrom:self];}
+    else drawable=[self nextDrawable];
+    if(!drawable){_missed=YES;return NO;}
     id<MTLCommandBuffer> commandBuffer = [_renderer.commandQueue commandBuffer];
-    if (!drawable || !commandBuffer) {  // still dirty: the next update retries
+    if (!commandBuffer) {  // still dirty: the next update retries
         _missed = YES;
         return NO;
     }
@@ -3962,16 +4109,33 @@ static uint8_t *IFCCopyBytes(id<MTLTexture> texture) {
         // The handler runs off the main thread and keeps the count, not the layer: a layer's last release stays the host's.
         if (!_presented) _presented = [IFCPresentedCount new];
         IFCPresentedCount *count = _presented;
+        double submitted=CACurrentMediaTime(),target=(_paced||_displayLinkDriven)?presentationTarget:0;
+        // Copy the camera used to encode, not its later mutable description.
+        // A new background clock or captured buffer is not a new camera step.
+        double cameraX=frame.cameraX,cameraY=frame.cameraY,zoom=frame.zoom;
         [drawable addPresentedHandler:^(id<MTLDrawable> shown) {
-            if (shown.presentedTime > 0) atomic_fetch_add(&count->shown, 1);
+            if(shown.presentedTime<=0){os_unfair_lock_lock(&count->lock);count->notPresented++;os_unfair_lock_unlock(&count->lock);return;}atomic_fetch_add(&count->shown,1);
+            os_unfair_lock_lock(&count->lock);
+            if(count->sampleCount<kIFCPresentationSamples)count->samples[count->sampleCount++]=(IFCPresentationSample){shown.presentedTime,submitted,target,cameraX,cameraY,zoom};else count->overflow++;
+            os_unfair_lock_unlock(&count->lock);
+        }];
+        [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> done){double elapsed=done.GPUEndTime-done.GPUStartTime,completion=fmax(0,CACurrentMediaTime()-submitted);
+            os_unfair_lock_lock(&count->lock);if(done.status==MTLCommandBufferStatusError)count->errors++;
+            count->commandCompleted++;count->completionSeconds+=completion;count->completionWorst=fmax(count->completionWorst,completion);
+            if(elapsed>0){count->completed++;count->gpuSeconds+=elapsed;count->gpuWorst=fmax(count->gpuWorst,elapsed);}os_unfair_lock_unlock(&count->lock);
         }];
     }
-    if (self.presentsWithTransaction) {
+    if (_displayLinkDriven) {
+        // CAMetalDisplayLink requires present() before targetTimestamp, with
+        // commands committed first. Its offer already carries the presentation
+        // time; an explicit atTime: would violate that drawable contract.
+        [commandBuffer commit];[drawable present];_displaySubmissionTime=CACurrentMediaTime();
+    } else if (self.presentsWithTransaction) {
         [commandBuffer commit];
         [commandBuffer waitUntilScheduled];
         [drawable present];
     } else {
-        [commandBuffer presentDrawable:drawable];
+        if(presentationTarget>0)[commandBuffer presentDrawable:drawable atTime:presentationTarget];else [commandBuffer presentDrawable:drawable];
         [commandBuffer commit];
     }
     if (copy) {

@@ -15,6 +15,7 @@ mod keyboard_layout;
 mod lifecycle;
 mod motion;
 mod navigation;
+mod observation;
 mod output_actions;
 mod passthrough;
 mod pointer_policy;
@@ -48,7 +49,7 @@ use rules::Policy;
 use settings::{CameraSeed, Settings};
 use sizes::Sizes;
 pub use view_actions::ViewDirection;
-use view_actions::{ViewReturn, pixel_size};
+use view_actions::{pixel_size, ViewReturn};
 pub use window_actions::ActivationCause;
 
 use driftwm_canvas::{
@@ -56,7 +57,7 @@ use driftwm_canvas::{
     Viewport, Window, WindowId,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -287,9 +288,33 @@ pub struct PresentWindow {
     pub title: String,
 }
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DecorationAction {
+    Fit,
+    Fullscreen,
+}
+/// Adapter-chosen screen placement. It carries no native coordinate system or
+/// ownership; `screen_pos` is local to the canvas output named here.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceScreenPin {
+    pub output: OutputId,
+    pub screen_pos: Point,
+}
+#[derive(Debug, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
     Snapshot {},
+    /// A native title-bar control, addressed to its exact source rather than
+    /// whichever window currently has canvas focus. Native geometry stays in
+    /// the adapter that identified the control.
+    NativeDecoration {
+        window: WindowId,
+        output: OutputId,
+        identity: SourceIdentity,
+        generation: u64,
+        action: DecorationAction,
+    },
     BeginNativeResize {
         window: WindowId,
         output: OutputId,
@@ -517,6 +542,17 @@ pub enum Command {
         #[serde(default, deserialize_with = "motion::time_ms")]
         time_ms: Option<u32>,
     },
+    /// A native adapter has freshly resolved the actual recipient to this
+    /// bound source. Native stacking can differ from canvas stacking.
+    HoverSource {
+        window: WindowId,
+        identity: SourceIdentity,
+        generation: u64,
+        output: OutputId,
+        screen: Point,
+        #[serde(default, deserialize_with = "motion::time_ms")]
+        time_ms: Option<u32>,
+    },
     /// A left click in pick mode, released without a drag.
     Pick {
         window: WindowId,
@@ -561,6 +597,9 @@ pub enum Command {
         output: Option<OutputId>,
         #[serde(default)]
         pointer: Option<Point>,
+        /// An independently rooted overlay maps quietly in screen space.
+        #[serde(default)]
+        screen_pin: Option<SourceScreenPin>,
     },
     /// The native window is gone. `output` is the active output, if known.
     WindowClosed {
@@ -586,6 +625,16 @@ pub enum Command {
         identity: SourceIdentity,
         source_rect: Rect,
         buffer: BufferSize,
+    },
+    /// The source owner moved its unchanged-size window. The adapter supplies
+    /// displacement in unscaled window units, separately from native geometry.
+    RelocateSource {
+        window: WindowId,
+        identity: SourceIdentity,
+        generation: u64,
+        from_rect: Rect,
+        to_rect: Rect,
+        delta: Point,
     },
     RemoveSource {
         window: WindowId,
@@ -889,6 +938,13 @@ impl Controller {
         }
         match command {
             Command::Snapshot {} => return self.pointer_snapshot(),
+            Command::NativeDecoration {
+                window,
+                output,
+                identity,
+                generation,
+                action,
+            } => return self.native_decoration(window, output, &identity, generation, &action),
             Command::BeginNativeResize {
                 window,
                 output,
@@ -1097,6 +1153,17 @@ impl Controller {
                 screen,
                 time_ms,
             } => return self.hover(output, screen, time_ms),
+            Command::HoverSource {
+                window,
+                identity,
+                generation,
+                output,
+                screen,
+                time_ms,
+            } => {
+                self.check_generation(window, &identity, generation)?;
+                return self.hover_with_target(output, screen, time_ms, Some(window));
+            }
             Command::Pick { window, output } => return self.pick(window, output),
             Command::PointerNearest {
                 output,
@@ -1219,6 +1286,7 @@ impl Controller {
                 world_rect,
                 output,
                 pointer,
+                screen_pin,
             } => {
                 identity.validate()?;
                 if self.retired_resize_identities.iter().any(|old| {
@@ -1250,7 +1318,11 @@ impl Controller {
                 // bundle identifier is the rule's `app_id`.
                 let rule = self.config().resolve_window_rules(&bundle_id, &title);
                 // `ruled`: the window is placed for the size its rule names.
-                let (arrival, ruled) = match (logical_id, world_rect) {
+                let screen_arrival = screen_pin
+                    .as_ref()
+                    .map(|pin| self.screen_pin_arrival(pin, source_rect.size))
+                    .transpose()?;
+                let (mut arrival, ruled) = match (logical_id, world_rect) {
                     (None, None) => {
                         let (arrival, ruled) = self.arrival_by_rule(
                             output,
@@ -1264,6 +1336,12 @@ impl Controller {
                     }
                     _ => (None, false),
                 };
+                if screen_arrival.is_some()
+                    && logical_id.is_none()
+                    && !matches!(arrival, Some(Arrival::Adopt(_)))
+                {
+                    arrival = screen_arrival;
+                }
                 let id = if let Some(id) = logical_id {
                     if world_rect.is_some() {
                         return Err(Error::Invalid("rebind cannot replace saved world geometry"));
@@ -1316,6 +1394,18 @@ impl Controller {
                     },
                 );
                 self.map_rule(id, rule, arrival);
+                if let Some(Arrival::Pin { pin, rect }) = screen_arrival {
+                    // A saved screen pin retains its display and position. New
+                    // utility overlays do not activate, reveal or resize a
+                    // window merely because it appeared.
+                    self.policy.pins.entry(id).or_insert(pin);
+                    self.scene.drop_focus_history(id);
+                    let arrived = arrival.unwrap_or(Arrival::Pin { pin, rect });
+                    self.log_arrival(id, output, arrived)?;
+                    return Ok(
+                        json!({"window":id,"adopted":matches!(arrived, Arrival::Adopt(_)),"effect":null,"navigation":null,"dirty":true}),
+                    );
+                }
                 // A slot under a drag or resize that its window's rule has
                 // just made a widget lets go of the gesture. A pinned slot
                 // keeps its pin, and with it the drag that is moving it.
@@ -1351,6 +1441,17 @@ impl Controller {
                 title,
             } => return self.retitle(window, identity, title),
             Command::AdoptionComplete { present } => return self.adoption_complete(&present),
+            Command::RelocateSource {
+                window,
+                identity,
+                generation,
+                from_rect,
+                to_rect,
+                delta,
+            } => {
+                return self
+                    .relocate_source(window, &identity, generation, from_rect, to_rect, delta)
+            }
             Command::Observe {
                 window,
                 identity,

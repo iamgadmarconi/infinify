@@ -37,10 +37,14 @@ class Size(C.Structure):
     _fields_ = [('width', C.c_double), ('height', C.c_double)]
 class Rect(C.Structure):
     _fields_ = [('origin', Point), ('size', Size)]
+class Transform(C.Structure):
+    _fields_ = [(name, C.c_double) for name in ('a', 'b', 'c', 'd', 'tx', 'ty')]
 sky = C.CDLL('/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight')
 sky.SLSMainConnectionID.restype = C.c_int
 sky.SLSGetScreenRectForWindow.argtypes = [C.c_int, C.c_uint32, C.POINTER(Rect)]
 sky.SLSGetScreenRectForWindow.restype = C.c_int
+sky.SLSGetWindowTransform.argtypes = [C.c_int, C.c_uint32, C.POINTER(Transform)]
+sky.SLSGetWindowTransform.restype = C.c_int
 cg = C.CDLL('/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics')
 cf = C.CDLL('/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation')
 cg.CGWindowListCopyWindowInfo.argtypes = [C.c_uint32, C.c_uint32]; cg.CGWindowListCopyWindowInfo.restype = C.c_void_p
@@ -76,6 +80,12 @@ def alpha(wid):
     finally:
         cf.CFRelease(rows)
     raise AssertionError(f'window {wid} not listed')
+
+def transform(wid):
+    """The actual transform, read over this test's independent server connection."""
+    value = Transform()
+    assert sky.SLSGetWindowTransform(sky.SLSMainConnectionID(), wid, C.byref(value)) == 0
+    return [getattr(value, name) for name, _ in Transform._fields_]
 
 def near(seen, target, tolerance=1.0):
     # The window server reports the smallest whole-point rectangle that contains
@@ -607,7 +617,7 @@ def main_queue_group():
 
 def allowlist_group():
     # Scope: a host allowed only some other process refuses its own windows.
-    host = Host('--windows', '8', allow=[dict(pid=os.getpid(), birth_sec=0, birth_usec=0)])
+    host = Host('--windows', '8', allow=[dict(pid=os.getpid(), birth_sec=1, birth_usec=0)])
     c, _, who, wids, original = setup(host)
     status = c.frame([record(who[i], half(original[i], 30), original[i]) for i in range(8)])
     assert status == [SCOPE] * 8 and [screen(w) for w in wids] == original, status
@@ -615,15 +625,71 @@ def allowlist_group():
     results.append(dict(test='allowlist scope refuses every record', status=status))
     c.close(); host.stop()
 
-# Ended from outside, the test still resumes and ends every host it started.
-signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
-try:
-    for group in (frames_group, lease_group, bench_group, crash_group, no_v2_group, main_queue_group, allowlist_group):
-        group()
-    evidence = dict(status='PASS', tests=results, scope='only the cooperative host\'s own windows; screen rectangles, alpha and journal observed from the test process; no Dock, no foreign window, no other user')
-    print(json.dumps(evidence, indent=2))
-    print(f'PASS: protocol v2, {len(results)} cases')
-finally:
-    # Every window touched belongs to a host started here; ending it removes them.
-    for host in hosts:
-        host.stop()
+def release_window_group():
+    """One bounded native lifecycle case; select with --release-window."""
+    host = Host('--windows', '8')
+    c, _, who, wids, original = setup(host)
+    try:
+        assert c.caps & 2, 'helper did not negotiate per-window restoration'
+        matrices0, alpha0 = [transform(w) for w in wids], [alpha(w) for w in wids]
+        target = [half(o, 45 + i * 3, 12) for i, o in enumerate(original)]
+        assert c.frame([record(who[i], target[i], original[i], .5 if c.caps & 1 else None) for i in range(8)]) == [APPLIED] * 8
+        wait_rects(wids, target, 1)
+        placed, alpha1 = [transform(w) for w in wids], [alpha(w) for w in wids]
+        release = RECORD.pack(*who[0], *([0.0] * 6), 0.0, 2)
+        malformed = RECORD.pack(*who[0], *([0.0] * 6), 0.0, 3)
+        outside = RECORD.pack(os.getpid(), wids[0], 0, 0, *([0.0] * 6), 0.0, 2)
+        assert c.frame([malformed, outside]) == [11, SCOPE]
+        assert [transform(w) for w in wids] == placed and [alpha(w) for w in wids] == alpha1
+        assert c.frame([release]) == [APPLIED]
+        assert transform(wids[0]) == matrices0[0] and alpha(wids[0]) == alpha0[0]
+        assert [transform(w) for w in wids[1:]] == placed[1:] and [alpha(w) for w in wids[1:]] == alpha1[1:]
+        journal = host.journal()
+        assert len(journal['windows']) == 7 and wids[0] not in [w['wid'] for w in journal['windows']]
+        assert c.frame([release]) == [APPLIED]  # idempotent, including its journal
+        assert c.frame([record(who[0], target[0], original[0], .7 if c.caps & 1 else None)]) == [APPLIED]
+        assert c.frame([record(who[0], target[0], original[0]), release]) == [8, APPLIED]
+        assert transform(wids[0]) == matrices0[0] and alpha(wids[0]) == alpha0[0]
+        restored = c.restore_all()
+        assert restored['count'] == 7 and restored['pending'] == 0
+        assert [transform(w) for w in wids] == matrices0 and [alpha(w) for w in wids] == alpha0
+        results.append(dict(test='per-window release, scope, conflicting frame, rebind and exact restoration', restored_window=wids[0], other_windows_unchanged=7, original_transform=matrices0[0], original_alpha=alpha0[0]))
+    finally:
+        c.close(); host.stop()
+
+def enrollment_group():
+    """Read-only binary scope audit through the actual C client; no frame sent."""
+    host = Host('--windows', '8')
+    c, _, who, wids, original = setup(host)
+    try:
+        matrices0, alpha0 = [transform(w) for w in wids], [alpha(w) for w in wids]
+        assert c.caps & 4, 'helper did not negotiate its process scope audit'
+        c.close()
+        reply = subprocess.run([str(BUILD / 'v2client'), 'enrollment', str(host.run), host.nonce], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=6, check=True)
+        audit = json.loads(reply.stdout)
+        assert audit == dict(scope=1, server_pid=host.child.pid, processes=[dict(pid=who[0][0], birth_sec=who[0][2], birth_usec=who[0][3])]), audit
+        assert [screen(w) for w in wids] == original and [transform(w) for w in wids] == matrices0 and [alpha(w) for w in wids] == alpha0
+        assert not (host.run / 'v2-journal.json').exists(), 'read-only audit journalled a mutation'
+        results.append(dict(test='negotiated process audit through C client, no frame or mutation', audit=audit, independent_windows_unchanged=8))
+    finally:
+        c.close(); host.stop()
+
+def main():
+    # Ended from outside, the test still resumes and ends every host it started.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+    try:
+        if sys.argv[1:] not in ([], ['--release-window'], ['--enrollment']):
+            raise SystemExit('usage: fixture_v2_test.py [--release-window | --enrollment]')
+        groups = (enrollment_group,) if sys.argv[1:] == ['--enrollment'] else (release_window_group,) if sys.argv[1:] else (frames_group, lease_group, bench_group, crash_group, no_v2_group, main_queue_group, allowlist_group, release_window_group, enrollment_group)
+        for group in groups:
+            group()
+        evidence = dict(status='PASS', tests=results, scope='only the cooperative host\'s own windows; screen rectangles, alpha and journal observed from the test process; no Dock, no foreign window, no other user')
+        print(json.dumps(evidence, indent=2))
+        print(f'PASS: protocol v2, {len(results)} cases')
+    finally:
+        # Every window touched belongs to a host started here; ending it removes them.
+        for host in hosts:
+            host.stop()
+
+if __name__ == '__main__':
+    main()

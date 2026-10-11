@@ -9,6 +9,9 @@
 // Main thread only.
 @interface DWSessionWatch : NSObject
 - (instancetype)initWithReturned:(void (^)(void))returned;
+// `left` cancels input before sleep, display sleep or leaving this login session.
+// A Space change cannot report a return while any of those states remains held.
+- (instancetype)initWithReturned:(void (^)(void))returned left:(void (^)(void))left;
 // Removes every observer: no call after this. Idempotent. Required before release.
 - (void)stop;
 @end

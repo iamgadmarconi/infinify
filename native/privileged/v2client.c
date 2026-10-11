@@ -4,6 +4,7 @@
 //   v2client bench RUNTIME NONCE HZ SECONDS   a frame of every window each tick
 //   v2client hold  RUNTIME NONCE OFFSET       one frame, then only heartbeats; reports
 //                                             the loss of the helper and exits 3
+//   v2client enrollment RUNTIME NONCE         read-only finite process scope
 // stdin: one window per line, "pid wid birth_sec birth_usec x y w h" (its untouched
 // screen rectangle), then "go". Each frame draws every window at half size, moved
 // right by an offset in points (bench: the frame number modulo 200, and down by one
@@ -52,10 +53,10 @@ static void print_stats(dw_client *client) {
         atomic_load(&lostReason) ? "true" : "false",atomic_load(&lostReason),atomic_load(&lostAtMS));
 }
 int main(int argc, char **argv) {
-    int bench=argc==6 && !strcmp(argv[1],"bench"),hold=argc==5 && !strcmp(argv[1],"hold");
-    if(!bench && !hold){fprintf(stderr,"usage: v2client bench RUNTIME NONCE HZ SECONDS | v2client hold RUNTIME NONCE OFFSET\n");return 2;}
+    int bench=argc==6 && !strcmp(argv[1],"bench"),hold=argc==5 && !strcmp(argv[1],"hold"),enrollment=argc==4 && !strcmp(argv[1],"enrollment");
+    if(!bench && !hold && !enrollment){fprintf(stderr,"usage: v2client bench RUNTIME NONCE HZ SECONDS | v2client hold RUNTIME NONCE OFFSET | v2client enrollment RUNTIME NONCE\n");return 2;}
     char line[256];
-    while(fgets(line,sizeof(line),stdin) && strncmp(line,"go",2) && windowCount<64) {
+    while(!enrollment && fgets(line,sizeof(line),stdin) && strncmp(line,"go",2) && windowCount<64) {
         struct window *w=&windows[windowCount];
         if(sscanf(line,"%d %u %llu %llu %lf %lf %lf %lf",&w->id.pid,&w->id.wid,&w->id.birth_sec,&w->id.birth_usec,&w->x,&w->y,&w->w,&w->h)!=8){fprintf(stderr,"bad window line\n");return 2;}
         windowCount++;
@@ -64,6 +65,14 @@ int main(int argc, char **argv) {
     struct dw_client_info info;dw_client *client=NULL;
     int opened=dw_client_open(argv[2],argv[3],&callbacks,3000,&client,&info);
     if(opened){fprintf(stderr,"open failed: %d\n",opened);return 1;}
+    if(enrollment){
+        struct dw2_process processes[DW2_MAX_PROCESSES];uint32_t count=0;
+        int result=dw_client_enrollment(client,2000,processes,DW2_MAX_PROCESSES,&count);
+        if(result){fprintf(stderr,"enrollment audit failed: %d\n",result);dw_client_close(client);return 1;}
+        printf("{\"scope\":%u,\"server_pid\":%d,\"processes\":[",info.scope,info.server_pid);
+        for(uint32_t i=0;i<count;i++)printf("%s{\"pid\":%d,\"birth_sec\":%llu,\"birth_usec\":%llu}",i?",":"",processes[i].pid,processes[i].birth_sec,processes[i].birth_usec);
+        printf("]}\n");dw_client_close(client);return 0;
+    }
     struct dw2_record records[64];
     if(hold) {
         uint64_t seq=0;

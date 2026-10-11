@@ -7,7 +7,7 @@ import sys
 import zlib
 
 
-def pixels(path):
+def pixels(path, expected_size=(1040, 600)):
     data = path.read_bytes()
     assert data[:8] == b'\x89PNG\r\n\x1a\n'
     offset = 8
@@ -19,7 +19,8 @@ def pixels(path):
         assert zlib.crc32(kind + body) == struct.unpack('>I', data[offset + 8 + size:offset + 12 + size])[0]
         if kind == b'IHDR':
             width, height, depth, color, compression, filtering, interlace = struct.unpack('>IIBBBBB', body)
-            assert (width, height, depth, color, compression, filtering, interlace) == (1040, 600, 8, 6, 0, 0, 0)
+            assert (width, height) == expected_size
+            assert (depth, color, compression, filtering, interlace) == (8, 6, 0, 0, 0)
         if kind == b'IDAT':
             compressed.append(body)
         offset += size + 12

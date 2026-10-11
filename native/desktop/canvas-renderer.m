@@ -91,6 +91,22 @@ static NSString *displayName(NSString *app) {
 static double canvasTime(void) { static CFTimeInterval start;static dispatch_once_t once;dispatch_once(&once,^{start=CACurrentMediaTime();});return CACurrentMediaTime()-start; }
 static NSDictionary *refusal(NSString *message) { return @{@"error":message}; }
 
+// The offscreen render owns these immutable pixels independently of the canvas.
+// Compression and filesystem writes need no renderer, source or native window.
+static NSDictionary *writeScreenshotPixels(NSDictionary *pixels) {
+    if(pixels[@"error"])return pixels;
+    NSString *path=pixels[@"path"];CGImageRef image=(__bridge CGImageRef)pixels[@"image"];
+    // Write only the client's path, preserving the synchronous export contract.
+    NSMutableData *png=[NSMutableData data];CGImageDestinationRef destination=CGImageDestinationCreateWithData((__bridge CFMutableDataRef)png,CFSTR("public.png"),1,NULL);
+    BOOL encoded=NO;if(destination){CGImageDestinationAddImage(destination,image,NULL);encoded=CGImageDestinationFinalize(destination);CFRelease(destination);}
+    if(!encoded)return refusal([NSString stringWithFormat:@"cannot write %@: the image could not be encoded",path]);
+    int file=open(path.fileSystemRepresentation,O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC,0666),failure=file<0?errno:0;const char *bytes=png.bytes;
+    for(size_t left=png.length;!failure&&left;){ssize_t n=write(file,bytes,left);if(n>0){bytes+=n;left-=(size_t)n;}else if(n==0||errno!=EINTR)failure=n?errno:EIO;}
+    if(file>=0&&close(file)&&!failure)failure=errno;
+    if(failure)return refusal([NSString stringWithFormat:@"cannot write %@: %s (os error %d)",path,strerror(failure),failure]);
+    return @{@"path":path,@"width":pixels[@"width"],@"height":pixels[@"height"]};
+}
+
 // One output on screen: its layer, the frame description refilled in place, and the
 // elements and placements of the windows it shows.
 @interface DWCanvasOutput : NSObject
@@ -121,9 +137,16 @@ static NSDictionary *refusal(NSString *message) { return @{@"error":message}; }
 // the last tick asked (-animates:draw:) for a reason of its own (the camera frame of a flight, a window's picture, a decoded chunk's wake-up), and that draw
 // is the tick's frame. forced: the redraw a tick asked for itself, which is no such reason.
 @property BOOL drawn,forced;
+@property BOOL awaitingDrawable;
 @property NSUInteger taken; // of its layer's presentedCount, what -takeCounts has reported
 @end
 @implementation DWCanvasOutput
+@end
+@implementation DWCanvasAttachment
+- (void)setBuffer:(CVPixelBufferRef)buffer {
+    if(buffer==_buffer)return;if(buffer)CVPixelBufferRetain(buffer);if(_buffer)CVPixelBufferRelease(_buffer);_buffer=buffer;
+}
+- (void)dealloc {if(_buffer)CVPixelBufferRelease(_buffer);}
 @end
 @interface DWCanvasRenderer ()
 @property (copy) DWCanvasSource source;
@@ -143,11 +166,17 @@ static NSDictionary *refusal(NSString *message) { return @{@"error":message}; }
 @property NSNumber *sizing; // the window the controller owes a size, as the snapshot last described had it
 @property BOOL paced; // inside -flushFrame: the display link's own frame, which the layers may present by themselves
 @property BOOL placed; // an output described since the last flush is new, or its layer changed its place, size or scale
+@property CFTimeInterval frameTarget; // the current display tick's upcoming refresh, also valid for a drawable retry
 @end
-@implementation DWCanvasRenderer { DWCanvasCounts _counts; }
+@implementation DWCanvasRenderer { DWCanvasCounts _counts;dispatch_queue_t _exportWorker; }
 - (DWCanvasCounts)takeCounts {
     DWCanvasCounts counts=_counts;_counts=(DWCanvasCounts){0};
-    for(DWCanvasOutput *state in self.states.allValues){NSUInteger shown=state.layer.presentedCount;counts.presented+=shown-state.taken;state.taken=shown;}
+    for(NSNumber *output in self.states){DWCanvasOutput *state=self.states[output];NSUInteger shown=state.layer.presentedCount;counts.presented+=shown-state.taken;state.taken=shown;
+        if(self.measured){
+            IFCompositorPresentationStats s=[state.layer takePresentationStats];
+            fprintf(stderr,"presentation: output=%s frames=%lu intervals=%lu gap_ms=%.3f/%.3f/%.3f missed=%lu latency_ms=%.3f/%.3f late_ms=%.3f gpu_ms=%.3f/%.3f errors=%lu overflow=%lu camera_updates=%lu camera_repeats=%lu silence_ms=%.3f duplicate_time=%lu reordered_time=%lu\n",output.stringValue.UTF8String,(unsigned long)s.frames,(unsigned long)s.intervals,s.gapMean*1000,s.gapP99*1000,s.gapWorst*1000,(unsigned long)s.missed,s.latencyMean*1000,s.latencyWorst*1000,s.lateWorst*1000,s.gpuMean*1000,s.gpuWorst*1000,(unsigned long)s.errors,(unsigned long)s.overflow,(unsigned long)s.cameraChanged,(unsigned long)s.cameraRepeated,s.presentationSilence*1000,(unsigned long)s.duplicateTime,(unsigned long)s.reorderedTime);
+            fprintf(stderr,"drawable: output=%s acquisitions=%lu timeouts=%lu acquire_ms=%.3f/%.3f queue_ms=%.3f publish_ms=%.3f completed=%lu completion_ms=%.3f/%.3f not_presented=%lu notify_ms=%.3f\n",output.stringValue.UTF8String,(unsigned long)s.acquisitions,(unsigned long)s.acquireTimeouts,s.acquireMean*1000,s.acquireWorst*1000,s.acquireQueueWorst*1000,s.publishWorst*1000,(unsigned long)s.commandCompleted,s.completionMean*1000,s.completionWorst*1000,(unsigned long)s.notPresented,s.notificationWorst*1000);
+        }}
     return counts;
 }
 - (instancetype)initWithSource:(DWCanvasSource)source {
@@ -311,7 +340,7 @@ static const double sizeHold=10;
         NSNumber *output=number(o[@"id"]);CGRect bounds=rectOf(o[@"screen_bounds"]);if(!output||![outputs containsObject:output]||CGRectIsNull(bounds))continue;
         DWCanvasOutput *state=self.states[output];
         // An output that is new shows no event that came before it: nothing was on it to open.
-        if(!state){state=self.states[output]=[DWCanvasOutput new];state.layer=[[IFCompositorLayer alloc]initWithRenderer:nil];state.frame=[IFCompositorFrame new];state.elements=[NSMutableDictionary dictionary];state.placements=[NSMutableDictionary dictionary];state.leaving=[NSMutableArray array];state.unseen=[NSMutableDictionary dictionary];state.adopted=[NSMutableDictionary dictionary];state.owed=[NSMutableDictionary dictionary];state.serial=self.played;state.layer.countsPresented=self.measured;self.placed=YES;}
+        if(!state){state=self.states[output]=[DWCanvasOutput new];state.layer=[[IFCompositorLayer alloc]initWithRenderer:nil];state.frame=[IFCompositorFrame new];state.elements=[NSMutableDictionary dictionary];state.placements=[NSMutableDictionary dictionary];state.leaving=[NSMutableArray array];state.unseen=[NSMutableDictionary dictionary];state.adopted=[NSMutableDictionary dictionary];state.owed=[NSMutableDictionary dictionary];state.serial=self.played;state.layer.countsPresented=self.measured;state.layer.asynchronousDrawables=!self.synchronousDrawables;__weak DWCanvasRenderer *weak=self;state.layer.drawableReady=^{[weak retryDrawable:output];};self.placed=YES;}
         // Below the toolbar and the status line, as the window tiles were.
         if(state.layer.superlayer!=host){[host insertSublayer:state.layer atIndex:0];self.placed=YES;}
         CGRect place=CGRectOffset(bounds,-origin.x,-origin.y);if(!CGRectEqualToRect(state.layer.frame,place)){state.layer.frame=place;self.placed=YES;}
@@ -334,6 +363,10 @@ static const double sizeHold=10;
         NSMutableDictionary<NSNumber *,NSNumber *> *unseen=[NSMutableDictionary dictionary],*owed=[NSMutableDictionary dictionary];
         for(NSDictionary *p in list(snapshot[@"placements"])){
             NSNumber *window=number(p[@"window"]);if(!window||![p[@"output"]isEqual:output]||elements[window])continue;
+            // The physical native placement is drawn by its owner. Additional
+            // displays use the same live pixels with their own camera and clip.
+            NSString *kind=text(p[@"kind"]);BOOL standin=kind?[kind isEqual:@"standin"]:!dict(p[@"source"]);
+            if(self.nativeWindows&&!standin&&!(self.nativeReplica&&self.nativeReplica(window,output)))continue;
             // A screen-pinned placement has no canvas position to draw from: its screen_rect is its pin's, in
             // global screen points at the window's own size whatever the camera and the zoom, and the pinned
             // space takes it in this output's own points. Its world rectangle is bookkeeping and is not read.
@@ -470,14 +503,30 @@ static const double sizeHold=10;
     if(self.pending)return;self.pending=YES;__weak DWCanvasRenderer *weak=self;
     dispatch_async(dispatch_get_main_queue(),^{[weak flush];});
 }
+// An acquisition can return just after the screen callback found an empty
+// pool. Use the rest of that refresh to encode the latest owed scene, and
+// wait for the next tick only once that presentation budget has expired.
+- (void)retryDrawable:(NSNumber *)output {
+    DWCanvasOutput *state=self.states[output];
+    if(!state||!state.dirty||(!state.awaitingDrawable&&!state.layer.missed))return;
+    double target=self.frameTarget;
+    if(self.placed||self.paced||target<=0||CACurrentMediaTime()>=target-.0005){[self setNeedsFlush];return;}
+    _counts.requests+=self.measured;if(self.frame&&!self.frame(YES)){[self setNeedsFlush];return;}
+    self.paced=YES;[self flush];self.paced=NO;
+}
 - (void)flushDescribed { _counts.requests+=self.measured;if(self.placed||!(self.frame&&self.frame(NO)))[self flush]; }
 // Metal hands out autoreleased drawables and encoder contexts; a caller outside a run-loop
 // callout (the launch's first frame, the quit-pending loop) has no pool of its own to end them.
-- (void)flushFrame { self.paced=YES;[self flush];self.paced=NO; }
+- (void)flushFrame {[self flushFrameAtTime:0 refreshRate:0];}
+- (void)flushFrameAtTime:(CFTimeInterval)time refreshRate:(NSInteger)rate {
+    self.frameTarget=time;self.paced=YES;for(DWCanvasOutput *state in self.states.allValues){state.layer.presentationTime=time;state.layer.presentationInterval=rate>0?1.0/rate:0;}[self flush];self.paced=NO;
+}
 - (void)flush {
     BOOL placed=self.placed;self.pending=NO;self.placed=NO;double now=canvasTime();CFTimeInterval began=self.measured?CACurrentMediaTime():0;BOOL any=NO;
     for(DWCanvasOutput *state in self.states.allValues){
-        if(!state.dirty)continue;state.dirty=NO;any=YES;IFCompositorFrame *frame=state.frame;frame.time=now;BOOL forced=state.forced;state.forced=NO;state.layer.paced=self.paced;@autoreleasepool{if([state.layer updateWithFrame:frame]){state.presented=now;_counts.drawn++;if(!forced)state.drawn=YES;}}
+        if(!state.dirty)continue;
+        if(self.paced&&!placed&&state.layer.drawablePending){state.awaitingDrawable=YES;continue;}
+        state.awaitingDrawable=NO;state.dirty=NO;any=YES;IFCompositorFrame *frame=state.frame;frame.time=now;BOOL forced=state.forced;state.forced=NO;state.layer.paced=self.paced;@autoreleasepool{if([state.layer updateWithFrame:frame]){state.presented=now;_counts.drawn++;if(!forced)state.drawn=YES;}}
         // A frame that had no drawable is still owed: the output stays marked, and what was owed inside the layer's transaction stays so.
         if(state.layer.missed){state.dirty=YES;if(forced)state.forced=YES;if(placed)self.placed=YES;}
         // An animation that has run out at this frame's time, which the frame no longer showed: upstream drops the snapshot or the fade, and a window that has opened is the plain window.
@@ -487,7 +536,7 @@ static const double sizeHold=10;
     if(began&&any){double took=CACurrentMediaTime()-began;_counts.flushes++;_counts.flushSeconds+=took;_counts.flushWorst=fmax(_counts.flushWorst,took);}
 }
 - (void)reset {
-    for(DWCanvasOutput *state in self.states.allValues){[state.layer removeFromSuperlayer];[state.frame.elements removeAllObjects];[state.leaving removeAllObjects];}
+    for(DWCanvasOutput *state in self.states.allValues){[state.layer stopDrawing];[state.layer removeFromSuperlayer];[state.frame.elements removeAllObjects];[state.leaving removeAllObjects];}
     [self.states removeAllObjects];
 }
 // What a capture frames for one element, bounds rounded outward. A live window:
@@ -530,7 +579,7 @@ static const double sizeHold=10;
     CGPoint camera=pointOf(output[@"camera"]),corner=rectOf(output[@"screen_bounds"]).origin;double zoom=[number(output[@"zoom"])doubleValue];if(!(isfinite(zoom)&&zoom>0))zoom=1;
     return CGRectMake(round(camera.x+(x-corner.x)/zoom),round(camera.y+(y-corner.y)/zoom),round(w/zoom),round(h/zoom));
 }
-- (NSDictionary *)screenshot:(NSDictionary *)effect snapshot:(NSDictionary *)snapshot {
+- (NSDictionary *)screenshotPixels:(NSDictionary *)effect snapshot:(NSDictionary *)snapshot {
     NSString *path=text(effect[@"path"]),*refused=nil;double scale=number(effect[@"scale"])?[effect[@"scale"]doubleValue]:NAN;
     if(!path.isAbsolutePath)return refusal(@"screenshot path must be absolute");
     if(!snapshot)return refusal(@"no renderer available for capture");
@@ -547,6 +596,7 @@ static const double sizeHold=10;
     NSMutableDictionary<NSNumber *,NSDictionary *> *placed=[NSMutableDictionary dictionary];
     for(NSDictionary *p in list(snapshot[@"placements"]))if(number(p[@"window"])&&!placed[p[@"window"]])placed[p[@"window"]]=p;
     NSMutableArray<IFCompositorElement *> *elements=[NSMutableArray array];
+    NSMutableDictionary<NSNumber *,NSArray<IFCompositorElement *> *> *attachments=[NSMutableDictionary dictionary];
     for(NSDictionary *w in list(snapshot[@"windows"])){
         NSNumber *window=number(w[@"window"]);CGRect world=rectOf(w[@"world_rect"]);NSDictionary *p=placed[window],*source=dict(w[@"source"]),*metadata=dict(w[@"metadata"]);
         // Upstream's windows are at least one pixel in each direction.
@@ -554,7 +604,20 @@ static const double sizeHold=10;
         if(pinnedOf(w)&&![window isEqual:wanted])continue;
         if(!p){NSMutableDictionary *described=[w mutableCopy];BOOL settled=source&&[number(source[@"observation_known"])boolValue]&&[source[@"capture_revision"]isEqual:source[@"observation_revision"]];
             described[@"presentation_settled"]=settled?@YES:@NO;if(!described[@"title"])described[@"title"]=text(metadata[@"title"])?:@"";if(!described[@"app_name"])described[@"app_name"]=text(metadata[@"bundle_id"])?:@"";p=described;}
+        // Native presentation omits live pictures from the on-screen canvas, but
+        // an export supplies separate one-shot pixels through the source provider.
         IFCompositorElement *element=[IFCompositorElement new];[self fill:element window:window placement:p snapshot:snapshot rect:world onScreen:NO];[elements addObject:element];
+        if(element.kind==IFCompositorElementKindWindow&&self.exportAttachments){NSMutableArray *family=[NSMutableArray array];
+            for(DWCanvasAttachment *image in self.exportAttachments(window)){
+                CGRect r=image.unitRect;
+                if(!image.buffer||!isfinite(r.origin.x)||!isfinite(r.origin.y)||!isfinite(r.size.width)||!isfinite(r.size.height)||r.size.width<=0||r.size.height<=0)return refusal(@"capture attachment has no valid image geometry");
+                IFCompositorElement *child=[IFCompositorElement new];child.identifier=[self mark];child.kind=IFCompositorElementKindWindow;child.space=IFCompositorSpaceCanvas;child.layer=element.layer;
+                child.rect=CGRectMake(world.origin.x+r.origin.x*world.size.width,world.origin.y+r.origin.y*world.size.height,r.size.width*world.size.width,r.size.height*world.size.height);
+                IFCompositorDecoration d=IFCompositorDecorationDefault();d.mode=IFCompositorDecorationModeNone;d.borderWidth=0;d.cornerRadius=0;d.shadow=NO;d.opacity=element.decoration.opacity;child.decoration=d;
+                child.pixelBuffer=image.buffer;child.contentRect=CGRectNull;child.contentGeneration=1;[family addObject:child];[elements addObject:child];
+            }
+            if(family.count)attachments[window]=family.copy;
+        }
     }
     if(alone){
         NSNumber *window=wanted;
@@ -562,7 +625,8 @@ static const double sizeHold=10;
         if(!isolate)return refusal(window?@"window has no capturable area":@"no window matching selector");
         // Upstream compose_capture_elements: a window captured alone is drawn as itself, at its rule's
         // opacity or 1, not at the opacity its focus gives it on screen. The controller resolved which.
-        NSNumber *opacity=number(dict(dict(target)[@"Window"])[@"opacity"]);if(opacity){IFCompositorDecoration d=isolate.decoration;d.opacity=opacity.doubleValue;isolate.decoration=d;}
+        NSNumber *opacity=number(dict(dict(target)[@"Window"])[@"opacity"]);if(opacity){IFCompositorDecoration d=isolate.decoration;d.opacity=opacity.doubleValue;isolate.decoration=d;
+            for(IFCompositorElement *child in attachments[window]){IFCompositorDecoration d=child.decoration;d.opacity=opacity.doubleValue;child.decoration=d;}}
     }
     CGRect region=rectOf(effect[@"region"]);if(CGRectIsNull(region))region=[self region:effect snapshot:snapshot elements:elements isolate:isolate refusal:&refused];
     if(refused)return refusal(refused);
@@ -595,7 +659,7 @@ static const double sizeHold=10;
     for(IFCompositorElement *element in elements){
         // Nothing of an element farther away than its bar, border and shadow reaches the region.
         double reach=ceil(element.decoration.shadowRadius)+1;
-        if(isolate?element==isolate:CGRectIntersectsRect(CGRectInset([self visual:element],-reach,-reach),region))[frame.elements addObject:element];
+        if(isolate?element==isolate||[attachments[wanted]containsObject:element]:CGRectIntersectsRect(CGRectInset([self visual:element],-reach,-reach),region))[frame.elements addObject:element];
     }
     NSError *error=nil;CGImageRef image=[renderer newImageForFrame:frame error:&error];if(!image)return refusal(error.localizedDescription?:@"the render did not complete");
     if(wallpaper&&!CGRectIsEmpty(CGRectIntersection(dest,region))){
@@ -611,17 +675,19 @@ static const double sizeHold=10;
         CGImageRelease(paper);CGImageRelease(image);image=CGBitmapContextCreateImage(context);CGContextRelease(context);
         if(!image)return refusal(@"the render did not complete");
     }
-    // Encoded in memory and written to the client's path alone: no directory is made and
-    // no temporary file beside it, so one that upstream's writer would create is refused here.
-    NSMutableData *png=[NSMutableData data];CGImageDestinationRef destination=CGImageDestinationCreateWithData((__bridge CFMutableDataRef)png,CFSTR("public.png"),1,NULL);
-    BOOL encoded=NO;if(destination){CGImageDestinationAddImage(destination,image,NULL);encoded=CGImageDestinationFinalize(destination);CFRelease(destination);}
-    long pixelsWide=(long)CGImageGetWidth(image),pixelsHigh=(long)CGImageGetHeight(image);CGImageRelease(image);
-    if(!encoded)return refusal([NSString stringWithFormat:@"cannot write %@: the image could not be encoded",path]);
-    int file=open(path.fileSystemRepresentation,O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC,0666),failure=file<0?errno:0;const char *bytes=png.bytes;
-    for(size_t left=png.length;!failure&&left;){ssize_t n=write(file,bytes,left);if(n>0){bytes+=n;left-=(size_t)n;}else if(n==0||errno!=EINTR)failure=n?errno:EIO;}
-    if(file>=0&&close(file)&&!failure)failure=errno;
-    if(failure)return refusal([NSString stringWithFormat:@"cannot write %@: %s (os error %d)",path,strerror(failure),failure]);
-    // The size reported is the size of the image written.
-    return @{@"path":path,@"width":@(pixelsWide),@"height":@(pixelsHigh)};
+    long pixelsWide=(long)CGImageGetWidth(image),pixelsHigh=(long)CGImageGetHeight(image);
+    return @{@"image":CFBridgingRelease(image),@"path":path,@"width":@(pixelsWide),@"height":@(pixelsHigh)};
+}
+- (NSDictionary *)screenshot:(NSDictionary *)effect snapshot:(NSDictionary *)snapshot {
+    return writeScreenshotPixels([self screenshotPixels:effect snapshot:snapshot]);
+}
+- (void)screenshot:(NSDictionary *)effect snapshot:(NSDictionary *)snapshot completed:(void (^)(NSDictionary *))completed {
+    NSDictionary *pixels=[self screenshotPixels:effect snapshot:snapshot];
+    if(pixels[@"error"]){completed(pixels);return;}
+    if(!_exportWorker)_exportWorker=dispatch_queue_create("org.infinify.screenshot-writer",dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,QOS_CLASS_UTILITY,0));
+    dispatch_async(_exportWorker,^{@autoreleasepool{
+        NSDictionary *result=writeScreenshotPixels(pixels);
+        dispatch_async(dispatch_get_main_queue(),^{completed(result);});
+    }});
 }
 @end

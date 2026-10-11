@@ -24,6 +24,8 @@ bool dw_focus_birth(pid_t p,uint64_t *s,uint64_t *u) {
     *s=b.pbi_start_tvsec;*u=b.pbi_start_tvusec;return true;
 }
 static bool fresh(DWFocusIdentity i) { uint64_t s,u;return dw_focus_birth(i.pid,&s,&u)&&s==i.seconds&&u==i.microseconds; }
+static bool (*ownBounds)(uint32_t,CGRect *);
+void dw_focus_set_bounds(bool (*read)(uint32_t,CGRect *)) { ownBounds=read; }
 bool dw_focus_owner(DWFocusIdentity i,CGRect *out) { @autoreleasepool {
     if(!i.window||!fresh(i))return false;
     NSArray *list=CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow,i.window));
@@ -31,6 +33,8 @@ bool dw_focus_owner(DWFocusIdentity i,CGRect *out) { @autoreleasepool {
     if([w[(id)kCGWindowOwnerPID] intValue]!=i.pid||[w[(id)kCGWindowNumber] unsignedIntValue]!=i.window||
        !w[(id)kCGWindowBounds]||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)w[(id)kCGWindowBounds],&r)||
        !isfinite(r.origin.x)||!isfinite(r.origin.y)||!isfinite(r.size.width)||!isfinite(r.size.height)||r.size.width<=0||r.size.height<=0||!fresh(i))return false;
+    // The window is this process's by the list above; its frame is the reader's when one is set.
+    if(ownBounds&&!ownBounds(i.window,&r))return false;
     if(out)*out=r;return true;
 } }
 bool dw_focus_identity(pid_t p,CGWindowID w,DWFocusIdentity *out) {

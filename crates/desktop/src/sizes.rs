@@ -10,7 +10,8 @@
 // compute_shifts), src/state/recenter.rs (establish_exit_placement),
 // src/state/window_frame.rs (visual_frame_center, frame_loc_for_center,
 // configured_window_size as fit.rs and fill.rs read it),
-// src/state/navigation.rs (the RestoreFillElseReset leg of
+// src/handlers/xdg_shell.rs (maximize_request), src/state/fit.rs
+// (decoration_toggle_fit), src/state/navigation.rs (the RestoreFillElseReset leg of
 // navigate_to_window_on), src/state/persistence.rs (window_mode),
 // src/grabs/resize_grab.rs (SizeConstraints::clamp), src/input/actions.rs (the
 // GrowWindow, ShrinkWindow, FitWindow, FitWindowSnapped, FillWindow and
@@ -267,6 +268,9 @@ pub(crate) struct Sizes {
     pending: Option<Pending>,
 }
 impl Sizes {
+    pub(crate) fn observation_idle(&self) -> bool {
+        self.readback && self.pending.is_none() && self.asked.is_empty()
+    }
     /// Upstream window_mode, in the IPC inventory's spelling.
     pub(crate) fn mode(&self, window: WindowId) -> WindowMode {
         match self.restore.get(&window) {
@@ -893,6 +897,42 @@ impl Controller {
             return self.deliver(window, output, still, target, plan, asked, outcome);
         }
         self.deliver(window, output, edges, target, Plan::Step, asked, outcome)
+    }
+    pub(crate) fn native_decoration(
+        &mut self,
+        window: WindowId,
+        output: OutputId,
+        identity: &SourceIdentity,
+        generation: u64,
+        action: &DecorationAction,
+    ) -> Result<Value, Error> {
+        self.check_generation(window, identity, generation)?;
+        self.navigation_context(output)?;
+        if !self.sizes.capability {
+            return Err(Error::Invalid("native sizing is unavailable"));
+        }
+        self.guard_resize_structure(Some(window))?;
+        let mut outcome = Outcome::default();
+        match action {
+            DecorationAction::Fullscreen => {
+                self.decoration_fullscreen(window, output, &mut outcome)?;
+            }
+            DecorationAction::Fit => {
+                if self.is_widget(window) || self.is_pinned(window) {
+                    return Err(Error::Invalid("only a canvas window can be fitted"));
+                }
+                if let Some(held) = self.fullscreen_output_of(window) {
+                    outcome.dirty |= self.exit_fullscreen_on(held).is_some();
+                }
+                self.toggle_fit(
+                    window,
+                    Some(output),
+                    self.config().decoration_fit_snapped,
+                    &mut outcome,
+                )?;
+            }
+        }
+        Ok(outcome.reply())
     }
     /// Upstream toggle_fit_window and toggle_fit_window_snapped. A fit sizes
     /// the window to the active output's usable area less `snap.outer_gap` on

@@ -283,19 +283,41 @@ impl Controller {
         screen: Point,
         time_ms: Option<u32>,
     ) -> Result<Value, Error> {
+        self.hover_with_target(output, screen, time_ms, None)
+    }
+    pub(crate) fn hover_with_target(
+        &mut self,
+        output: OutputId,
+        screen: Point,
+        time_ms: Option<u32>,
+        bound: Option<WindowId>,
+    ) -> Result<Value, Error> {
         if !point_valid(screen) {
             return Err(Error::Invalid("invalid screen point"));
         }
-        if self.scene.output(output).is_none() {
-            return Err(Error::Invalid("unknown output"));
+        let viewport = self
+            .scene
+            .output(output)
+            .ok_or(Error::Invalid("unknown output"))?;
+        if bound.is_some() && !viewport.screen_bounds.contains(screen) {
+            return Err(Error::Invalid("native hover is outside its output"));
         }
-        let under = self.hit_window(output, screen).map(|(window, _)| window);
+        // Native floating panels retain the application's keyboard focus and
+        // stacking. A canvas tile beneath one is never a fallback hover target.
+        if bound.is_some_and(|window| self.is_pinned(window) || self.is_widget(window)) {
+            return Ok(json!({"dirty":false,"pick":false,"hit":null,"forward":false}));
+        }
+        let under = bound.or_else(|| self.hit_window(output, screen).map(|(window, _)| window));
         let pick = self.pick_target(output, under);
-        let hit = self
-            .pointer_hit(output, screen, None)
-            .map_or(Value::Null, |mut reply| reply["hit"].take());
+        let hit = bound.map_or_else(
+            || {
+                self.pointer_hit(output, screen, None)
+                    .map_or(Value::Null, |mut reply| reply["hit"].take())
+            },
+            |window| json!({"window":window}),
+        );
         let grabbed = self.pointer_grabbed(time_ms);
-        let forward = !hit.is_null() && !pick && !grabbed;
+        let forward = bound.is_none() && !hit.is_null() && !pick && !grabbed;
         let mut reply = json!({"dirty":false,"pick":pick,"hit":hit,"forward":forward});
         let follows = self.config().focus_follows_mouse
             && !grabbed

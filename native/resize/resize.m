@@ -19,6 +19,8 @@ static bool birth(pid_t pid, uint64_t *sec, uint64_t *usec) {
 static bool valid_rect(CGRect r) {
     return isfinite(r.origin.x) && isfinite(r.origin.y) && isfinite(r.size.width) && isfinite(r.size.height) && r.size.width>0 && r.size.height>0;
 }
+static bool (*own_bounds)(uint32_t, CGRect *);
+void dw_resize_set_bounds(bool (*read)(uint32_t, CGRect *)) { own_bounds=read; }
 static bool owner(DWResizeIdentity i, CGRect *rect) {
     uint64_t s=0,u=0;
     if (!i.window || !birth(i.pid,&s,&u) || s!=i.birth_seconds || u!=i.birth_microseconds) return false;
@@ -28,6 +30,8 @@ static bool owner(DWResizeIdentity i, CGRect *rect) {
     if ([d[(__bridge NSString *)kCGWindowNumber] unsignedIntValue]!=i.window || [d[(__bridge NSString *)kCGWindowOwnerPID] intValue]!=i.pid ||
         !CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)d[(__bridge NSString *)kCGWindowBounds],&r) || !valid_rect(r)) return false;
     if (!birth(i.pid,&s,&u) || s!=i.birth_seconds || u!=i.birth_microseconds) return false;
+    // The window is this process's by the list above; its frame is the reader's when one is set.
+    if (own_bounds && (!own_bounds(i.window,&r) || !valid_rect(r))) return false;
     if (rect) *rect=r; return true;
 }
 bool dw_resize_identity(pid_t pid, CGWindowID window, DWResizeIdentity *identity) {

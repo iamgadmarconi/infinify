@@ -15,4 +15,7 @@ int dw_privileged_fixture_start(const char *directory, const char *nonce, uint32
 // its one window, protocol v2 may name any of them. v2OnMainQueue: 0 own queue,
 // 1 main queue, negative for the build's default.
 int dw_privileged_fixture_start_windows(const char *directory, const char *nonce, const uint32_t *wids, uint32_t count, const char *allowlistJSON, int v2OnMainQueue);
+// Same finite owned-window scope, with FIXTURE_FAMILY advertised for the
+// desktop's native parent/child path. The caller created every listed window.
+int dw_privileged_fixture_start_family_windows(const char *directory, const char *nonce, const uint32_t *wids, uint32_t count, const char *allowlistJSON, int v2OnMainQueue);
 #endif

@@ -30,6 +30,9 @@ it, and one compositor layer per display draws the canvas the way DriftWM does
 application content.
 Ordinary native windows remain where their owners put them. Cameras and world
 movement do not move, transform, park, or resize native windows.
+An explicit [cooperative native backend](#native-presentation-through-a-cooperative-helper)
+instead presents the fixture process's real windows through the transform helper.
+It is a separate, scoped mode; the default remains capture and redraw.
 [Window navigation](#window-navigation-and-native-focus) activates and raises
 the one window it focuses, and nothing else.
 
@@ -115,7 +118,13 @@ status line and chooser unchanged.
   becomes active again (the lock screen was left, a user switched back) and
   when the active Space changes, each panel is put back on its display's
   rectangle and in front of ordinary windows; nothing is closed and no output,
-  hot key, stream or gesture is touched. Only when the displays are no longer
+  hot key or gesture is touched. System-interrupted captures retain their logical
+  binding and last picture, then retry with a freshly listed shareable window.
+  Wake/session return makes a pending retry due immediately. Retries back off
+  from 250 ms to 30 seconds; each refresh and start has a two-second deadline,
+  and late callbacks cannot replace a detached or reused process/window identity.
+  Permission refusals, an explicit user stop and invalid capture arguments remain
+  terminal. No permission is requested. Only when the displays are no longer
   the ones the panels were made for are they rebuilt, the way a display change
   rebuilds them. A moment with no display at all leaves the desktop open with
   no panel, and it is rebuilt when a display is there again. Discovery goes on
@@ -1148,10 +1157,11 @@ the capture such a run may not have: IOSurface-backed 32BGRA buffers of the
 window's own pixel size, a band moving down each, made on a background queue
 and handed to the main queue where a stream's frames arrive. It makes no
 frame while two are waiting to be taken, as a stream stops at its queue
-depth, and ends with the window's binding. Where the run does capture, the
-window is fed both.
+depth, and ends with the window's binding. Synthetic sources start no real
+capture streams, so the workload is the same with or without Screen Recording
+access. The earlier measurements below predate that separation.
 
-`tests/e2e/scoped-render-bench.sh` measures with the two: four fixture
+`tests/e2e/scoped-render-bench.sh --live-owned-fixture` measures with the two: four fixture
 windows of 1700x1100 points of content, 1700x1132 with the title bar
 (3400x2264 pixels each), a canvas over the whole
 visible screen, 120 frames a second into each, all four tiles in view at
@@ -1308,6 +1318,603 @@ forwarding, close and suspend under a scope (the test runs with
 relaunch` under a scope. The refusal of `--only-pid` without `--windowed`
 was run once by hand (exit 64, `Infinify: --only-pid needs --windowed`) and
 is not in the test, which never starts Infinify without `--windowed`.
+
+### Capture and rendering performance
+
+Managed overlay streams capture enough pixels for their largest placement on any
+output, using that output's backing scale. Density is rounded up to a power of
+two, between 1/32 and the original 2 pixels per native point. A larger placement
+or native size change updates immediately; a smaller budget waits for half a
+second of stable demand. Only one configuration update is outstanding per
+source. Buffer resolution does not change native bounds, world rectangles,
+input coordinates or crop geometry. Pinned windows retain their screen density.
+Manual capture and the capture-acknowledged experimental resize path retain
+their original resolution rules. Capture cadence follows the fastest display;
+it is not reduced to obtain the pixel savings.
+
+Overlay exports request full-resolution one-shot ScreenCaptureKit samples when
+the live stream has a smaller raster, including a stopped source needed by the
+export. Preparation is asynchronous and returns an IPC reply after actual pixels
+arrive, with a two-second deadline. The main queue remains available during
+capture setup. Temporary samples leave stream budgets unchanged and are released
+after composition; cancellation prevents a late callback from installing them.
+No snapshot is requested without existing Screen Recording access. Offscreen
+Metal composition and readback still run on main after capture finishes; PNG
+compression and file writing use a serial utility worker holding an immutable
+image.
+
+The release app compiles its native C/Objective-C adapters with `-O2`, alongside
+the optimized Rust release library. An active frame driver holds a balanced
+`NSActivityUserInitiatedAllowingIdleSystemSleep` activity, ending it when that
+driver stops. This declares ongoing requested frame work between input events
+and prevents App Nap deferral while allowing idle system and display sleep,
+under [Apple's activity guidance](https://developer.apple.com/library/archive/documentation/Performance/Conceptual/power_efficiency_guidelines_osx/PrioritizeWorkAtTheAppLevel.html).
+Screen-parameter notifications retain the existing canvas panels and layers
+when physical display IDs, full frames, backing scales and refresh rates are
+unchanged; a genuine display change ends the old frame driver before replacing
+its output layer. Desktop Metal layers acquire drawables on a private serial queue, retaining up
+to two ready ones (at most the drawable pool size minus one). Acquisition publishes
+the ready set under a short lock on the worker; a screen callback can consume it
+before its main-queue notification runs. Each worker batch may make up to two
+sequential acquisitions to replenish that bounded set without waiting for main
+to handle its notification. Each acquisition drains its own autorelease pool
+before the next potentially blocking call; the layer's final release still
+occurs on main.
+They encode the latest scene only after
+acquisition; no scene descriptions wait in a queue. A
+missed frame remains owed and can retry within the current refresh's remaining
+budget. A size or presentation-mode change discards obsolete acquisitions.
+Input and the main run loop remain available during the wait in Apple's
+[nextDrawable contract](https://developer.apple.com/documentation/quartzcore/cametallayer/nextdrawable%28%29).
+Synchronous compositor probes retain their existing path. Continuous camera
+commands and scroll gestures mark the scene for a coalesced save. Configured
+desktop runs copy the controller on main and serialize, atomically replace and
+sync the file on a serial worker. One save may run while one pending copy waits;
+a newer pending copy replaces the obsolete one. Shutdown drains earlier saves
+before its final synchronous save. Standalone probes retain synchronous saves.
+Native idle reconciliation batches the on-screen list, untransformed bounds and
+missing/parked source metadata on a serial read-only worker, with at most one
+batch outstanding. Immutable PID/birth/WID and binding tokens accompany each
+request; the main consumer rejects batches older than 100 ms and revalidates
+scope, identity, prior bounds and event/resize tokens before applying results.
+Discovery retains the CG list's actual window order. Failed reads retain the
+source, while absence or identity changes trigger a fresh synchronous check.
+Event, input and resize reads remain synchronous and fresh. Native
+mode skips capture-budget snapshots, and live native windows skip canvas-element
+allocation while stand-ins and one-shot exports retain their rendering paths.
+Native readback also uses an allocation-free controller query before `Observe`:
+an unchanged source rectangle and buffer may skip the JSON transaction only when
+the current world size already matches and no gesture, pending resize, fullscreen
+restoration, pin, rule-sizing or lifecycle work requires settlement. This compares
+the live controller, so a gesture end, rebind or logical size change cannot leave
+a stored native-bounds cache looking current. Other observations retain the
+ordinary transactional path and rollback behavior.
+
+The explicitly scoped benchmark can instead select a single
+`CAMetalDisplayLink` offer clock with `INFINIFY_BENCH_METAL_CLOCK=1`. Its delegate
+advances the scene once and consumes the offered drawable at most once, without
+another acquisition queue. Commands are committed before `present()` under
+[Apple's offered-drawable contract](https://developer.apple.com/documentation/quartzcore/cametaldisplaylinkdelegate/metaldisplaylink(_:needsupdate:)).
+A screen link advances the controller if offers stop during occlusion or sleep;
+it does not acquire pixels for that covered output. `metal_clock:` reports
+offered, unused and fallback callbacks, plus actual present-call deadline misses.
+The timed screen clock remains the production default;
+`INFINIFY_BENCH_SCREEN_CLOCK=1` explicitly selects it for the same-build comparison.
+`INFINIFY_BENCH_CV_CLOCK=1` selects a separate scoped Core Video display-thread
+candidate using the timed drawable pool. Its callback publishes only a valid
+Mach-clock target and period to at most one pending main-queue tick; newer
+callbacks replace that target, and repeated targets are rejected. Scene and
+layer work stays on main. Cancellation prevents queued callbacks from drawing,
+then stops and releases the link; a quiet link retains the ordinary screen
+fallback. `display_thread:` separates source callback cadence/gaps from delivered,
+coalesced, stale and invalid ticks and original-pending/latest-target queue age.
+[Core Video's display link](https://developer.apple.com/documentation/CoreVideo/cvdisplaylink-k0k)
+is deprecated, so this candidate stays explicitly scoped. A requested frame rate
+is [best effort](https://developer.apple.com/documentation/quartzcore/cadisplaylink/preferredframeraterange),
+and none of these callback counters establish optical native-window cadence.
+
+`INFINIFY_DEBUG=1` reports distinct measurements: screen-link callback cadence,
+source delivery/acceptance, encoded draws, and actual drawable presentation.
+`presentation:` uses each drawable's positive `presentedTime`, sorting samples
+to calculate mean/p99/worst gaps, missed refreshes, command-submission latency
+and GPU time. It also reports the age of the last observed presentation, so a
+window with no newer timestamps cannot look healthy from its earlier short gaps.
+Camera updates/repeats compare the camera and zoom actually used
+to encode consecutive displayed frames. New source buffers or an animated
+background do not count as new camera steps. Submission latency is not input or
+capture freshness, and accepted source buffers may repeat content. `drawable:`
+separately reports time inside asynchronous `nextDrawable`, worker queue delay,
+ready-set publication time, notification delay back to main, and command
+submission to GPU completion. A
+short GPU execution time alone cannot exclude a scheduling or acquisition stall.
+Handlers that return a zero presentation time are counted separately from positive
+timestamps. Duplicate positive timestamps and callbacks older than the preceding
+batch are reported separately; they cannot manufacture distinct display intervals.
+Missing callbacks cannot establish zero physical display updates.
+
+The benchmark is read-only without `--live-owned-fixture`. Its scoped canvas
+uses floating level, takes no pointer input and requests no native focus. It
+reports actual visibility rather than assuming this level keeps it unoccluded.
+Read-only on-screen window ordering and rectangle coverage are sampled outside
+the selected timing windows; coverage alone does not establish an opaque region.
+During native timing windows, the harness also reads only its own canvas's
+screen rectangle, untransformed bounds and transform at 10 Hz. This distinguishes
+WindowServer composition motion from changes to the canvas's own geometry.
+Native mode
+places only its own cooperative host's four 320×232-point windows above its own
+canvas. It independently samples WindowServer rectangles and checks exact
+transform, alpha and bounds restoration before removing the host on every exit.
+Those rectangle reads show geometry updates, not optical presentation of native
+windows. Native helper submitted/written/applied/superseded/dropped counter deltas
+are read outside the selected timing windows; they establish delivery, not native
+optical frame rate. Synthetic and capture modes use four 1700×1132-point fixtures;
+`buffers:` reports retained CVPixelBuffer dimensions and `capture:` a change.
+
+```sh
+# Short strict sample: actual 120 Hz presentation, including camera motion.
+INFINIFY_BENCH_STRICT=1 INFINIFY_BENCH_SECONDS=4 \
+  ./tests/e2e/scoped-render-bench.sh --live-owned-fixture
+# Native background presentation, independent window movement and restoration.
+INFINIFY_BENCH_MODE=native INFINIFY_BENCH_STRICT=1 INFINIFY_BENCH_SECONDS=4 \
+  INFINIFY_BENCH_ZOOM_MOTION=1 ./tests/e2e/scoped-render-bench.sh --live-owned-fixture
+# Slower capture content with a background that keeps changing each refresh.
+INFINIFY_BENCH_MODE=capture INFINIFY_BENCH_RATE=60 INFINIFY_BENCH_ZOOM=0.21 \
+  INFINIFY_BENCH_ANIMATION=1 INFINIFY_BENCH_STRICT=1 INFINIFY_BENCH_SECONDS=4 \
+  ./tests/e2e/scoped-render-bench.sh --live-owned-fixture
+# Separate capture-quality check: overview pixels, zoom-in quality and export.
+INFINIFY_BENCH_MODE=capture INFINIFY_BENCH_RATE=60 INFINIFY_BENCH_ZOOM=0.21 \
+  INFINIFY_BENCH_VALIDATE_BUDGET=1 ./tests/e2e/scoped-render-bench.sh --live-owned-fixture
+```
+
+Strict mode requires a visible, unoccluded canvas, at least 99% of requested
+display refreshes, zero missed refreshes, no gap or presentation silence above
+1.5 refresh intervals, no GPU errors or lost samples, and distinct ordered
+positive presentation timestamps. Every displayed pan/zoom frame must also have
+a changed camera pose, with zero repeated poses.
+An average near 120 or the historical 90% smoke threshold cannot establish
+stable 120. `INFINIFY_BENCH_SECONDS` selects whole two-second windows per phase
+(minimum four seconds); `INFINIFY_BENCH_ZOOM_MOTION=1` adds continuous zoom.
+
+An earlier capture-budget comparison on 2026-10-11, arm64 macOS 27.2, one 120 Hz
+Retina display, used ten seconds per phase and the same build for both paths.
+The baseline switches enabled full 2x capture and synchronous drawable acquisition.
+
+| Metric | Full capture, synchronous acquisition | Adaptive capture, private acquisition |
+|---|---:|---:|
+| Pixels per captured window at zoom 0.21 | 3400×2264 | 850×566 |
+| Capture pixel area | 100% | 6.25% |
+| Main-thread flush mean, at rest | 15.93 ms | 0.12 ms |
+| Main-thread flush mean, panning | 15.19 ms | 0.07 ms |
+
+That run also observed full-size frames after zoom-in and for the exported
+window, a valid PNG, unchanged world/native bounds and the overview budget after
+export. Independently decoded PNGs recovered 64 alternating samples from a
+one-point black/white marker that an upscaled overview raster cannot preserve.
+The marker is enabled after timing measurements.
+
+The subsequent four-second synthetic 120 Hz sample displayed 119.75 frames/s at
+rest and 119.5 while panning, with one and two missed refreshes respectively,
+a 16.667 ms worst presentation gap and a 9.3 ms worst main-loop gap. All 478
+shown pan frames had a changed camera; no repeated camera step was counted as
+motion. Strict mode failed, so stable 120 remains an active target. Earlier layer-bound
+CAMetalDisplayLink acquisition trials displayed fewer frames and increased submission
+latency; that separate-clock implementation was removed. Real captured fixture updates settled
+near 60/s even when 120 was requested, and those runs also displayed near 60/s
+despite an animated background and roughly 120 callbacks/draws. These are scoped
+fixture observations, not measurements of total WindowServer CPU, an owner's
+application workload, multiple physical displays or third-party native compositing.
+
+An earlier default-alpha native sample used four seconds each of idle animation,
+pan and continuous zoom on that display. The canvas was reported visible and
+unoccluded throughout. Pan and zoom each had 480 presented frames with a changed
+camera, zero repeated camera steps, zero missed refreshes and an 8.333 ms worst
+presentation gap. Idle animation averaged 119.2 presented frames/s with three
+missed refreshes and a 25 ms worst gap, so the strict target still failed. Ready
+publication took at most 0.008 ms even while its main notification waited 6.311 ms;
+the idle main-loop worst gap was 7.5 ms. Independent geometry reads and final
+persisted-camera comparison passed, followed by exact original native transform,
+alpha and bounds restoration.
+
+Longer twenty-second samples subsequently reported occlusion during native
+idle/pan and synthetic idle/early pan, despite the floating benchmark canvas.
+The visible twenty-second synthetic zoom interval displayed 2399 frames with
+2399 changed camera poses, no repeated pose and one missed refresh with a
+16.667 ms worst gap. Its main-loop worst gap was 8.9 ms. This also fails the
+strict target. The occluded intervals produced zero-time drawable callbacks and
+long presentation silence; their encoded-frame rates cannot stand in for
+physical presentation.
+
+Read-only geometry diagnostics then found the canvas outside the active Space
+and its screen position changing even while the scene camera and helper records
+were idle. Native canvases now remain visible on deactivation and use
+`CanJoinAllSpaces | Stationary`, with no AppKit window animation. The scoped
+benchmark also creates its disposable host windows with that initial Space
+behavior. Product alpha and opaque-region declarations remain unchanged.
+
+The subsequent controlled native sample used twenty seconds each of idle
+animation, pan and continuous zoom. All thirty timing windows reported a visible,
+unoccluded canvas on the active Space, with alpha 1; independent idle geometry
+remained unchanged. Pan and zoom each displayed 2400 frames with 2400 changed
+camera poses, zero repeated poses, zero missed refreshes and an 8.334 ms worst
+gap. Idle displayed 2398 frames, missed two refreshes and had a 16.667 ms worst
+gap, so strict mode still failed. Main-loop work stayed within 3.3 ms across the
+sample, while one idle drawable acquisition took 23.798 ms. Publication took
+at most 0.008 ms, and GPU completion stayed within 7.139 ms. These observations
+identify the presentation/acquisition pipeline as the next comparison; they do
+not establish an absolute 120 FPS guarantee. Final camera persistence and exact
+original transform, alpha and bounds restoration passed.
+
+A subsequent eight-second-per-phase direct-offer clock sample kept the canvas
+visible, unoccluded and independently stationary throughout. Pan and zoom each
+displayed 960 distinct positive timestamps with 960 fresh camera poses and zero
+misses. Idle displayed 956 frames, missed four refreshes and had a 25 ms worst
+gap, with three zero-time presentation callbacks. Every measured present call
+met the offered deadline, and no fallback or unused offers occurred. Submission
+latency was about 41.4 ms, versus about 32.6 ms during the same-build timed
+pan/zoom comparison. Its idle comparison was confounded by WindowServer moving
+the canvas's screen rectangle while its own bounds and transform remained fixed,
+followed by output/panel recreation. The direct-offer clock therefore remains
+a scoped diagnostic and does not establish stable 120. Both runs persisted the
+final camera and restored original fixture geometry and alpha exactly.
+
+The thirty-second-per-phase optimized native sample after adding the frame
+activity and physical-display guard retained the same canvas window, with its
+own bounds and transform fixed throughout. Its screen rectangle nevertheless
+moved or scaled 129, 28 and 18 times during idle, pan and zoom respectively.
+Idle displayed 3567 positive timestamps with 32 missed refreshes and a 50 ms
+worst gap; pan displayed 3544 fresh camera poses with 56 misses and a 175 ms
+worst gap; zoom displayed 3575 fresh poses with 25 misses and a 150 ms worst
+gap. Three idle observations were occluded. No duplicate/reordered timestamps,
+repeated motion poses, GPU errors or acquisition timeouts occurred. This strict
+failure, with external composition motion during every phase, does not establish
+a cadence improvement from the activity token. Final camera persistence and
+exact native transform, alpha and bounds restoration passed.
+
+The subsequent stationary eight-second offer-clock sample tried a one-frame
+latency preference. Idle again displayed 956 positive timestamps with four
+missed refreshes, a 25 ms worst gap and three zero-time callbacks; pan and zoom
+each displayed 960 distinct timestamps and fresh camera poses with no misses.
+All canvas observations were visible/unoccluded, its own geometry stayed fixed,
+and the owned native window stayed still during idle. Every present call met
+the offered deadline, but one offer interval slowed to 60 Hz despite the 120 Hz
+request. Submission latency remained about 41.4 ms. The preference did not
+improve latency or idle gaps, so it was reverted; the timed path remains the
+production default. Exact restoration and final camera persistence passed.
+
+The subsequent eight-second display-thread clock sample delivered 120 source
+callbacks/s without stale or coalesced ticks in the judged windows. The canvas
+was visible, unoccluded and independently stationary throughout. Pan and zoom
+each displayed 960 distinct positive timestamps and fresh camera poses with no
+misses. Idle displayed 957 frames, missed three refreshes and had a 16.667 ms
+worst gap. Its longest drawable acquisition took 24.549 ms, while main work
+stayed within 3.2 ms and GPU completion within 7.627 ms. No zero-time callbacks,
+duplicate/reordered timestamps or GPU errors occurred in those windows. The
+separate callback thread did not remove idle acquisition stalls, so production
+still uses the timed screen clock. Exact restoration and final camera
+persistence passed.
+
+An eight-second comparison then reduced the private pool to one ready drawable.
+Idle displayed 947 positive timestamps with twelve missed refreshes and a
+41.667 ms worst gap; pan displayed 919 fresh camera poses with four misses and
+312.535 ms presentation silence; zoom displayed 960 fresh poses with no misses.
+The canvas's own bounds and transform remained fixed, but its screen rectangle
+changed ten times during idle and seventeen times during pan, with one occluded
+pan observation. This did not establish a pool improvement, so the existing
+two-ready limit was restored. Exact fixture restoration and final camera
+persistence passed. Render-ahead remained a proposal and was not implemented;
+performance experiments ended at the owner's request. Stable 120 FPS remains
+unproved.
+
+Some native launches reported the canvas occluded and drawables
+returned zero presentation timestamps. Neither a scene alpha of 0.999 nor an
+initial AppKit alpha of 0.999 reliably removed that behavior. A non-opaque owned
+host also failed to remove it in the longer sample; product opacity and opaque
+regions were left unchanged. The harness reports panel visibility separately and refuses
+a strict success when it observes an occluded canvas. Its optional six-second
+idle diagnostic compares scene camera/zoom with independent transform, rectangle,
+alpha and untransformed-bound ranges. These short samples establish compositor
+cadence only; native-window geometry and restoration do not establish optical
+native-window FPS or usable third-party compositing.
+
+### Native presentation through a cooperative helper
+
+`--native-helper RUNTIME_DIR NONCE_FILE` selects native presentation with
+`--windowed --only-pid HELPER_PID` for a cooperative helper. The one scoped process
+must be the process hosting it. An allowlist helper may instead serve the exact
+finite process instances named by `--only-pid`: the negotiated read-only
+`ENROLLMENT` report must match every PID and birth timestamp, with no extra
+process. Helpers with unrestricted same-user scope, or allowlists they cannot
+report, are refused before any canvas opens. This prepares the client for broader
+native support; no third-party application or Dock injection has been validated.
+The client checks the helper's reported PID against the Unix socket's kernel
+peer PID, bounds every negotiated frame/body/lease value, and requires the two
+connections to describe the same server and session token. A partial heartbeat
+reply cannot keep the control connection alive beyond its lease.
+The nonce file must be an absolute path to a
+regular file owned by this user, mode 0600, containing the helper's 64 hex
+characters (an optional final newline is accepted). A symlink is refused.
+Nothing is injected or loaded, and no system setting is changed. Invalid
+arguments exit 64; a refused helper or scope exits 69 before opening the canvas.
+
+The `--native-helper RUNTIME_DIR NONCE_FILE` pair may be repeated for up to four
+explicit helpers. Each grouped helper must support the authenticated enrollment
+audit. Its process instances must be a subset of `--only-pid`, and the helpers'
+disjoint union must match that scope exactly. Repeated runtimes, overlapping
+processes, extra processes and missing scope members are refused before the
+canvas or IPC socket opens. Frames and release records route to the owning
+helper; no helper gains another process's windows. Losing one helper ends native
+presentation immediately and drains the other sessions to restore their windows.
+Debug counters remain available per helper; summed counters do not imply a shared
+sequence, refresh boundary or optical synchronization across processes.
+
+`python3 tests/e2e/scoped-native-group.py --live-owned-fixture` passed on
+2026-10-11 with two newly spawned fixture processes and separate cooperative
+helpers. Each helper received only its own window's records; independent
+WindowServer reads checked both transforms through pan and zoom, with native
+bounds unchanged. Ending one helper restored the surviving window's exact
+original transform, alpha and bounds while the canvas IPC remained responsive.
+Children were removed on exit. Evidence:
+`target/ipc/group.xqf7vc6p/result.json`. This establishes scoped routing and
+recovery, not third-party compositing, cross-application drag/drop or optical
+synchronization.
+
+The canvas panel sits behind native windows and draws the background, stand-ins
+and canvas overlays. A root visible on several displays keeps one real native
+placement; additional placements use a shared live capture with each output's
+camera, zoom and clip. The protocol v2 client sends the selected placements as transforms
+and alpha values. Windows outside every output are parked beyond the union of
+the physical displays. Native bounds are read independently of the transform,
+so camera movement does not change world geometry, focus bounds or resize
+readback. A helper frame limit is enforced before submission: exceeding it ends
+presentation and restores the windows instead of silently omitting some.
+
+The owner selected **one independent view per display** on 2026-10-11, replacing
+the earlier continuous-view answer. `native-views.m` keeps a root's real placement
+on its existing output while visible, then chooses the largest remaining visible
+placement. It forgets that choice when the source identity changes. The other
+placements share one on-demand ScreenCaptureKit stream per root; no duplicate
+stream is created for each display. Capture demand uses only these extra views,
+keeps the existing two-second idle grace and bounded recovery, and never asks for
+a permission grant. Without Screen Recording access the native placement still
+works, but additional views have no pixels. Capture errors retain the native
+binding. A session departure stops these streams and clears their saved pixels;
+reconnection obtains fresh shareable-window identities.
+
+Replica mouse, scroll and hover delivery uses the existing scoped per-window
+posting mechanism. `native-replica-input.m` rechecks process birth, window owner
+and untransformed bounds, and separates application-local points from the real
+window's transformed screen location. It never forwards keyboard events. Each
+press retains its original source for release, and tagged forwarded events bypass
+the native gesture bridge. The green-button bridge also hit-tests extra display
+placements and dispatches the existing canvas-fullscreen/Option-fit command.
+
+This is source implementation, not complete native multi-display acceptance.
+Live popup/sheet replicas and clipping the real native window at its output's
+boundary remain open: the helper currently changes a transform and alpha, not
+the window's clip. Additional-display interaction, capture sharpness at different
+native scales and frame pacing have not been exercised. The no-launch app build
+and strict compiler checks passed; no tests, fixtures or applications were launched.
+
+Audited allowlist helpers bind only verified native roots. The read-only native
+family adapter requires an acyclic WindowServer parent chain, one process birth
+and finite untransformed bounds for every popup or sheet. Children follow the
+root's canvas scale and placement and do not become independent world windows.
+An invalid or changed report restores prior children; a removed child restores
+its exact original transform and alpha. Creation, appearance and child-change
+hints request an immediate serial worker read, coalesced to one follow-up when a
+batch is already in flight. Cached associations cannot authorize input: a child
+recipient must still pass fresh process, bounds and parent-chain checks. Its
+canvas gestures use the root's binding context even outside the root tile.
+The same path can be exercised by a cooperative owned host advertising fixture
+family capability; this is preparation for broader support, not evidence of
+usable third-party popup/sheet compositing. Native one-shot exports make a fresh
+audited family plan, capture each member independently without implicit child
+flattening, and compose children in their observed order. Normalized image offsets
+preserve extents outside the root without changing its canvas geometry. A changed
+identity, ancestry, native frame or family membership/order cancels the export.
+The upstream target region still decides the crop; family pixels do not expand
+the root's world rectangle or its screenshot contract.
+
+`python3 tests/e2e/scoped-native-family.py --live-owned-fixture` passed on
+2026-10-11 with one newly spawned root, a real AppKit child popup and a sheet.
+One logical root produced three helper records. An independent WindowServer
+connection checked child offsets at zoom 0.5 and 0.85 after a settled camera
+pan; native untransformed frames stayed unchanged. Normal quit restored all
+three exact original transforms, alpha values and bounds before removing the
+children. Evidence: `target/ipc/family.jhw9lwjq/result.json`. This establishes
+owned-fixture geometry and restoration, not third-party compositing acceptance.
+Focused child-window observations give the parent logical canvas focus while
+keeping the native leaf focus distinct; they never assert native focus on the root.
+
+Independent floating utility panels remain fixed to their display, as the owner
+chose on 2026-10-11. Native discovery accepts the actual floating window level
+only when Accessibility confirms `AXFloatingWindow`; no title or size heuristic
+admits a panel. Its initial output-local position becomes a canvas screen pin
+atomically during attachment. A saved pin retains its saved placement. Panel
+arrival does not focus it, fly the camera or invoke root-window opening rules.
+The generic canvas pin owns no native coordinates; the adapter supplies the
+output and position. Popups and sheets remain members of their root's family.
+
+`python3 tests/e2e/scoped-native-panels.py --live-owned-fixture` passed on
+2026-10-11 with one newly spawned normal root and one independent AppKit utility
+panel. Independent WindowServer reads found the panel's transform, screen
+rectangle and native bounds unchanged through a settled pan and zoom 0.5/0.85,
+while the root followed the canvas. Quit restored both original transforms,
+alpha values and bounds before cleanup. Evidence:
+`target/ipc/panel.s0fs_1qf/result.json`. This establishes the owned-panel policy
+and restoration; third-party panel behavior remains unverified.
+The owner also chose to retain the application's native stacking and keyboard
+focus on 2026-10-11. The adapter leaves those with WindowServer and the application;
+it does not apply synthetic exclusive focus or panel-level overrides.
+
+Configured mouse gestures can also begin over the real window: the native input
+bridge routes pan, world move, resize, center-nearest, actions and modifier scroll
+through the same handlers as the canvas. It checks the actual destination window,
+current process identity and canvas hit before taking a press. Ordinary app input
+is delivered directly by macOS. A taken button's drag and release stay with their
+original canvas view; scroll endings and momentum stay with a taken scroll.
+Helper loss, a disabled event tap, shutdown and panel replacement cancel grabs.
+The bridge uses existing Accessibility/input access and requests no permissions.
+AppKit-convertible magnify events from the annotated event tap now enter the
+same two-finger pinch bindings over a freshly validated native root or child.
+The public all-events mask avoids inventing a private CG event number; keyboard
+events and unrelated event kinds return unchanged. Admission is decided once
+for each pinch: an unbound pinch stays with the application, and a taken pinch's
+remaining phases stay swallowed after cancellation. This is compiled source
+support, not evidence that macOS delivers magnify through that tap on the target
+host. Raw multi-finger touch delivery over native windows remains open.
+
+Native mouse motion also enters the existing coalesced hover frame/timer path.
+At flush, the actual WindowServer recipient is resolved afresh to a current
+logical source and binding generation, instead of trusting canvas stacking.
+`focus_follows_mouse` can then focus that source in place. Ordinary mouse motion
+continues to the application directly; the canvas never reposts it. Independent
+floating panels keep their application's focus and stacking.
+
+An unchanged-size move of the native root's own frame is an owner movement,
+distinct from the helper's transform. The adapter submits its unscaled
+displacement with the previous and current source rectangles and binding
+generation. The controller consumes that transition once, moves a canvas root
+without changing its camera or focus, and moves a display pin within its existing
+output bounds. Compositor grabs, fullscreen and pending size restoration retain
+their own geometry. Physical titlebar behavior and displacement units at
+different zooms are unverified.
+
+Native session watching now includes native windowed runs. Leaving the user
+session or sleeping cancels gestures and frame driving, ends helper placement
+immediately and drains exact restoration on workers. Physical button-pair
+bookkeeping remains until the swallowed down events have had their releases.
+On return, worker preparation reuses only launch-time helper endpoints, nonces,
+PIDs and birth timestamps. Every helper must authenticate and report its exact
+disjoint enrolled scope again, and its probe must report an empty restore table.
+Only then does main-thread admission start a fresh watchdog and re-observe
+bindings. Retry backoff is bounded at 30 seconds; a stale completion or shutdown
+discards its inert candidate. No helper is loaded or process implicitly enrolled.
+Windowed canvas panels retain ordinary application ordering on return. Actual
+sleep, session switching and recovery have not been exercised.
+
+Native one-shot screenshot capture now retries selected transient
+ScreenCaptureKit setup/connection failures twice, after 80 and 160 milliseconds,
+within the original two-second request deadline. Each retry uses a fresh
+shareable-window list and repeats the existing identity, generation, native
+parent-chain and own-bounds checks against the original family plan. Permission
+and configuration failures remain final; no stream or helper mutation is added.
+The earlier cold-capture failure motivated this source change; successful runtime
+recovery is unverified.
+
+These continuation changes were compiled and inspected on 2026-10-11. No tests,
+fixture launches or third-party application experiments were performed after
+the owner stopped desktop testing. Compilation does not establish native
+application compatibility or stable 120 fps.
+
+The native green control toggles fullscreen inside the canvas. Option-click
+toggles fit, carrying snapped neighbours when `mouse.decoration_fit_snapped`
+is enabled. A bounded worker reads the exact root's Accessibility fullscreen
+or zoom button; input uses cached window-relative control bounds and fresh
+process/native-bound checks. A resized root invalidates that geometry. The
+clicked source identity and generation reach the controller directly, so focus
+on another window cannot redirect the command. A taken press owns its release;
+dragging off the control cancels it. No native fullscreen Space is requested.
+`DebugDecoration` requires `--debug-pointer`, native presentation and an explicit
+process scope. Its probe reads the actual control; its click calls the bridge
+directly without posting input. It cannot establish physical event delivery.
+
+`python3 tests/e2e/scoped-native-decorations.py --live-owned-fixture` passed on
+2026-10-11. The handler used the actual AX green control on one newly spawned
+fixture root, toggled fullscreen and Option-fit, and restored each original
+size. Independent WindowServer reads checked all four sizes and that a second
+fixture window's native bounds stayed unchanged. Quit restored both exact
+original transforms and alpha values before cleanup. Evidence:
+`target/ipc/green.s0mvzn2h/result.json`. This validates the scoped handler and
+owned native resizing; physical green-button delivery and third-party use remain
+unverified.
+
+Session sleep, display sleep and leaving the login session cancel canvas grabs,
+pending focus and camera flights. A Space notification cannot restart them while
+one of those states is still held. The existing system settings remain in charge;
+the port requests no power, lock or permission changes. A helper whose lease ends
+during sleep ends that presentation session; the separately audited reconnection
+path above prepares a replacement session after return.
+Screen-parameter notifications rebuild panels only when a display's identity,
+full frame, backing scale, cadence or coordinate origin changed. A Dock usable-area
+notice retains the existing panel, output and compositor layer. A genuine display
+change ends the old frame driver before replacing its layer.
+
+Native screenshots obtain one-shot ScreenCaptureKit images for the selected
+bound windows, then compose those pixels into the canvas export. The PNG uses
+the requested canvas scale, but native images have the pixel density of the
+transformed window: zoomed-out images contain less detail. No transform is
+temporarily undone to obtain sharper pixels.
+This requires existing Screen Recording access, checks ownership and native size,
+and has the same two-second deadline as overlay exports. Preparation returns the
+IPC handler immediately and continues through callbacks, so cold capture setup
+can use the main queue while other connections remain responsive. Timeout and
+shutdown prevent late samples from being installed. Single-window snapshots
+ignore display clipping. It creates no capture stream and changes no window
+transform or live rendering budget. Without access the screenshot request
+returns an error.
+
+The owned family export scenario has partial evidence at
+`target/ipc/family.ez6vd0s_/family-0.5.png`: a 438×410 PNG contains the popup above
+and to the left of the root and the sheet inside it. Independent saved PNG-byte
+inspection found both child colors within rectangles calculated from native own
+bounds and public world geometry. The scenario did not complete: its initial
+saturated-orange threshold did not match the appearance-dependent color, and a
+later run encountered ScreenCaptureKit's audio/video capture setup failure.
+Neither run is recorded as a complete E2E pass. All owned children were restored
+and removed; further live validation stopped at the owner's request.
+
+After composition, an immutable image moves to a serial worker for PNG compression
+and file writing. The IPC reply waits for that write while input and frames can
+continue. Offscreen Metal composition and readback still run on main. Requests
+remain serialized so only one export image waits for compression.
+
+Quit restores each original transform and alpha before the rest of shutdown.
+The helper also restores on client loss or lease expiry. A separate watchdog
+closes the session if the main run loop stops for ten seconds; protocol threads
+never wait for the main thread to release their client. Helper loss is reported
+once, leaves the IPC server responsive, and ends native presentation for that
+run. Reconnection or a switch to capture is not automatic. See the
+[helper's recovery contract](../privileged/README.md#recovery-limits-and-evidence).
+
+Unbinding a live window queues restoration of that window's original transform
+and alpha through the helper's negotiated per-window restore capability. Other
+bound windows keep their placements. A pending release is retained until its
+frame is acknowledged; retries use the helper's journal and recovery path.
+An older helper without this capability ends and restores the whole session on
+unbind. The focused helper release scenario passed with exact transform/alpha
+readback and seven other windows unchanged.
+
+`./tests/e2e/scoped-native.sh` is read-only by default. Its explicit
+`--live-owned-fixture` mode starts disposable fixtures, checks startup refusals,
+adoption, focus, pan, zoom, move, resize, alpha, parking, continuous movement,
+quit, client SIGKILL, a stalled main thread, helper loss and the default overlay
+path. An independent WindowServer connection checks transforms and alpha before
+and after recovery; a second disposable process checks that the scope excludes
+its windows. Children are removed on every exit.
+
+On 2026-10-11 this test passed three times on arm64 macOS 27.2, with 101 checks per
+run on one 2056×1329-point, 120 Hz display. The protocol fixture scenarios also
+passed (v1 and all 21 v2 cases). These are cooperative owned-window observations;
+they do not establish third-party window compositing or macOS 26 runtime support.
+The subsequently added physical event bridge builds cleanly; real mouse and
+trackpad input through that bridge has not been exercised. A separate focused
+native export check produced a 696×520 PNG of the fixture's real title and content
+at zoom 0.5 from its 320×232 transformed raster. Capture did not change transform
+or alpha, started no live stream, and normal quit restored the exact originals.
+The same focused export check also passed with PNG compression and writing on
+the serial worker.
+This validates export geometry and pixels, not untransformed resolution or
+third-party compositing.
+
+Remaining boundaries: extra output views now use shared live root captures,
+while the real window stays at one stable native placement. Live popup/sheet
+replicas and native clipping to an output boundary remain open. Raw
+multi-finger trackpad gestures over real windows, physical
+delivery of the new magnify bridge, Spaces gathering,
+native popup placement and ordering across applications still require further
+integration. A Dock or other third-party host has not been loaded
+or validated by these tests.
 
 ### What was run for managed windows
 

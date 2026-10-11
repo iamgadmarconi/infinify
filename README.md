@@ -31,8 +31,9 @@ most recently focused first, and a click focuses the window it lands on. With
 Accessibility access the focused window's real window is activated and raised;
 `--no-native-focus` keeps focus logical, and `--experimental-native-navigation` is
 accepted and ignored. The actions were driven live through the IPC socket on detached
-placeholders; native focus, hot keys and clicks have only been compiled, reviewed and
-covered by a headless coordinator regression. See
+placeholders. Native focus and click forwarding now also pass on disposable
+scoped fixture windows; physical hot keys and event delivery still need desktop
+validation. See
 [Window navigation and native focus](native/desktop/README.md#window-navigation-and-native-focus).
 
 DriftWM's sizing actions (Control-Option-M fits the focused window,
@@ -54,6 +55,12 @@ native resize and rendering path remains unproved. See the
 [resize integration guide](native/desktop/README.md#experimental-native-resizing).
 
 ## Using Infinify as your desktop
+
+The [cooperative native presentation backend](native/desktop/README.md#native-presentation-through-a-cooperative-helper)
+can now present real fixture windows with pan, zoom, focus, resize and recovery.
+Its scoped end-to-end test passed three times on macOS 27.2, including independent
+transform and alpha restoration checks. It accepts only its helper's own process;
+third-party native compositing remains unvalidated.
 
 DriftWM is the session, not an app one launches, and a normal run of Infinify is meant the same way: installed, started at login, and there until you quit it. These four steps are for you to run; no script or agent here installs, signs with your identity or registers a login item, and none of the four has been run yet.
 

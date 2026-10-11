@@ -40,7 +40,7 @@ enum { DWIPCMaxLine=64*1024,DWIPCMaxConnections=16,DWIPCMaxSubscribers=8,DWIPCId
 @implementation DWIPCConnection
 @end
 @interface DWIPCServer ()
-@property (copy) DWIPCHandler handler; // main queue only, like stopped
+@property (copy) DWIPCAsyncHandler handler; // main queue only, like stopped
 @property BOOL stopped;
 @property NSString *path;
 @property dev_t device;
@@ -85,6 +85,11 @@ static BOOL writeBytes(int fd,NSData *out) {
 static NSData *terminated(NSData *line) { NSMutableData *out=[line mutableCopy];[out appendBytes:"\n" length:1];return out; }
 @implementation DWIPCServer { atomic_uint _subscribers; }
 + (instancetype)serverAtPath:(NSString *)path handler:(DWIPCHandler)handler error:(NSString *__autoreleasing *)error {
+    return [self serverAtPath:path asyncHandler:^(NSData *line,DWIPCReply completed){
+        BOOL subscribe=NO;NSData *event=nil,*reply=handler(line,&subscribe,&event);completed(reply,subscribe,event);
+    } error:error];
+}
++ (instancetype)serverAtPath:(NSString *)path asyncHandler:(DWIPCAsyncHandler)handler error:(NSString *__autoreleasing *)error {
     NSString *failure=nil;struct stat created;int fd=listenAt(path,&created,&failure);
     if(fd<0){if(error)*error=failure;return nil;}
     DWIPCServer *server=[self new];server.path=path;server.device=created.st_dev;server.inode=created.st_ino;server.handler=handler;server.connections=[NSMutableSet set];
@@ -186,21 +191,25 @@ static NSData *terminated(NSData *line) { NSMutableData *out=[line mutableCopy];
     NSData *line=[c.buffer subdataWithRange:NSMakeRange(0,length)];[c.buffer replaceBytesInRange:NSMakeRange(0,length+1) withBytes:NULL length:0];
     c.busy=YES;if(!c.paused){c.paused=YES;dispatch_suspend(c.reader);}
     dispatch_async(dispatch_get_main_queue(),^{
-        BOOL subscribe=NO;NSData *event=nil,*reply=self.stopped?nil:self.handler(line,&subscribe,&event);
-        dispatch_async(self.queue,^{
-            if(c.closed)return;
-            c.busy=NO;if(!reply){[self close:c];return;}
-            NSString *refused=subscribe?[self subscribe:c]:nil;
-            NSData *answer=refused?[NSJSONSerialization dataWithJSONObject:@{@"Err":refused} options:0 error:nil]:reply;
-            // A half-written event is finished before the reply, which would otherwise land inside its line.
-            NSMutableData *out=[NSMutableData data];if(c.owed.length)[out appendData:c.owed];if(c.next)[out appendData:c.next];[out appendData:terminated(answer)];
-            if(!writeBytes(c.fd,out)){[self close:c];return;}
-            if(c.writer){
-                [c.owed setLength:0];c.next=nil;if(subscribe&&!refused&&event)[c.owed setData:terminated(event)];
-                [self flush:c];if(c.closed)return;
-            }
-            [self arm:c];[self drain:c];
-        });
+        __block BOOL completed=NO;
+        DWIPCReply finish=^(NSData *reply,BOOL subscribe,NSData *event){
+            if(completed)return;completed=YES;
+            dispatch_async(self.queue,^{
+                if(c.closed)return;
+                c.busy=NO;if(!reply){[self close:c];return;}
+                NSString *refused=subscribe?[self subscribe:c]:nil;
+                NSData *answer=refused?[NSJSONSerialization dataWithJSONObject:@{@"Err":refused} options:0 error:nil]:reply;
+                // A half-written event is finished before the reply, which would otherwise land inside its line.
+                NSMutableData *out=[NSMutableData data];if(c.owed.length)[out appendData:c.owed];if(c.next)[out appendData:c.next];[out appendData:terminated(answer)];
+                if(!writeBytes(c.fd,out)){[self close:c];return;}
+                if(c.writer){
+                    [c.owed setLength:0];c.next=nil;if(subscribe&&!refused&&event)[c.owed setData:terminated(event)];
+                    [self flush:c];if(c.closed)return;
+                }
+                [self arm:c];[self drain:c];
+            });
+        };
+        if(self.stopped)finish(nil,NO,nil);else self.handler(line,finish);
     });
 }
 - (void)stop {

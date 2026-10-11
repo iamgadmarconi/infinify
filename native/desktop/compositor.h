@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Carried into native/desktop/ unchanged from the standalone compositor port that was built, verified against upstream's shaders and independently reviewed outside this repository; only this line was added.
+// Originally carried into native/desktop/ from the standalone compositor port; desktop frame scheduling and diagnostics are adapted here.
 //
 // Infinify compositor: one Metal renderer per output that draws the whole
 // frame — canvas background, output outlines, and every window with its
@@ -589,6 +589,14 @@ typedef NS_OPTIONS(NSUInteger, IFCompositorPass) {
 
 // MARK: - Layer
 
+typedef struct {
+    NSUInteger frames,intervals,missed,overflow,completed,errors,cameraChanged,cameraRepeated;
+    double gapMean,gapP99,gapWorst,presentationSilence,latencyMean,latencyWorst,lateWorst,gpuMean,gpuWorst;
+    NSUInteger acquisitions,acquireTimeouts,commandCompleted,notPresented;
+    NSUInteger duplicateTime,reorderedTime;
+    double acquireMean,acquireWorst,acquireQueueWorst,publishWorst,notificationWorst,completionMean,completionWorst;
+} IFCompositorPresentationStats;
+
 /// One output on screen. Main thread only. The host sets `frame` (the layer's
 /// geometry) and calls `-updateWithFrame:`; the layer sets its own
 /// `drawableSize` and `contentsScale`.
@@ -619,11 +627,46 @@ typedef NS_OPTIONS(NSUInteger, IFCompositorPass) {
 /// Frames presented so far (diagnostics).
 @property (nonatomic, readonly) NSUInteger drawCount;
 
-/// The update that follows is made from a display link's callback, so a
-/// frame that changes nothing of the drawable's size or scale may be left to
-/// its command buffer to present at that refresh. NO, the default: every
-/// frame is presented inside the caller's CATransaction.
+/// A screen-link callback may present an unchanged-size frame by command
+/// buffer. NO uses the caller's CATransaction. A supplied Metal display-link
+/// offer always follows its own presentation contract regardless of this flag.
 @property (nonatomic) BOOL paced;
+/// The expected display time, in Mach absolute seconds. Screen-link frames use
+/// it as an atTime target; Metal offers use it for diagnostics only.
+/// Zero preserves immediate presentation for standalone callers.
+@property (nonatomic) CFTimeInterval presentationTime;
+/// Expected refresh interval for diagnostic gap counts. Zero leaves gaps unclassified.
+@property (nonatomic) CFTimeInterval presentationInterval;
+
+/// Acquire drawables on a private serial queue, keeping at most two ready ones
+/// (at most the layer's pool size minus one). An unavailable drawable leaves
+/// `missed` set and returns immediately. Encodes the latest scene on main only
+/// after acquisition; a size or presentation-mode change discards old acquisitions.
+/// Ready drawables are published on the worker under a short lock and can be
+/// consumed before their main-queue notification arrives.
+/// Desktop enabled; synchronous probes retain the default NO. `drawableReady`
+/// runs on the main queue to retry within the current refresh's budget.
+@property (nonatomic) BOOL asynchronousDrawables;
+@property (nonatomic, copy, nullable) void (^drawableReady)(void);
+/// An acquisition is pending and has no ready drawable. A paced host can
+/// retain its dirty scene and let drawableReady resume it within that refresh.
+@property (nonatomic, readonly) BOOL drawablePending;
+/// A desktop frame driver supplies drawables directly from CAMetalDisplayLink.
+/// While enabled, nextDrawable is never called. A callback without an offer
+/// keeps the scene owed, including the controller's occluded/asleep fallback.
+/// Main thread only; disable before detaching the driver's layer.
+@property (nonatomic) BOOL displayLinkDriven;
+/// Borrow one offered drawable for the synchronous frame callback. The layer
+/// consumes it at most once, even if describing a resized output flushes before
+/// the frame callback's final flush. The caller must not retain the offer.
+- (void)withDisplayDrawable:(id<CAMetalDrawable>)drawable
+          presentationTime:(CFTimeInterval)time
+                     frame:(void (^)(void))frame;
+/// When the current/last offer was submitted with present(); zero if unused.
+/// Main thread only. A driver's deadline diagnostics use this, not callback end.
+@property (nonatomic, readonly) CFTimeInterval displaySubmissionTime;
+/// Terminal: cancel acquisitions and release ready drawables before detaching. Main thread only.
+- (void)stopDrawing;
 
 /// The last `-updateWithFrame:` had a frame to draw and got no drawable or
 /// command buffer for it. The layer stays dirty; the host calls again.
@@ -634,6 +677,9 @@ typedef NS_OPTIONS(NSUInteger, IFCompositorPass) {
 /// screen; a drawable that was dropped reports none and is not counted.
 @property (nonatomic) BOOL countsPresented;
 @property (nonatomic, readonly) NSUInteger presentedCount;
+/// Actual drawable presentation intervals and GPU times, consumed since the
+/// previous call. Counts and timing only run when countsPresented is enabled.
+- (IFCompositorPresentationStats)takePresentationStats;
 
 /// Diagnostics only: keep a copy of each presented frame (gives up
 /// `framebufferOnly`). Used by `comprender --via-layer`.

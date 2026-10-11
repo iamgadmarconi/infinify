@@ -42,6 +42,11 @@ int dw_client_open(const char *runtime, const char *nonce64, const struct dw_cli
 int dw_client_submit_frame(dw_client *client, const struct dw2_record *records, uint32_t count, uint64_t *seq);
 // The raw probe reply (struct dw2_probe_reply, table entries, fixture identities).
 int dw_client_probe(dw_client *client, uint32_t timeout_ms, void *reply, size_t capacity, size_t *length);
+// Reads the helper's exact process scope before any frame is submitted. Fails on
+// unsupported capability, malformed/duplicate identities, or insufficient space.
+// Count is written only on success. This does not enroll or mutate any window.
+int dw_client_enrollment(dw_client *client, uint32_t timeout_ms, struct dw2_process *processes,
+                         uint32_t capacity, uint32_t *count);
 // Asks the helper to put every window back. A frame submitted and not yet written
 // is dropped. On DW_CLIENT_TIMEOUT the request may still be carried out.
 int dw_client_restore_all(dw_client *client, uint32_t timeout_ms, struct dw2_restore_result *results,

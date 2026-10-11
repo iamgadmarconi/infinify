@@ -49,6 +49,9 @@
 - (instancetype)initWithHost:(NSView<DWPointerHost> *)host;
 // A motion is waiting to be sent.
 @property (readonly) BOOL pending;
+// An observed native motion, coalesced through the same frame/timer path. The
+// host must freshly select its source at flush and leave native delivery alone.
+- (void)nativeMotion:(NSEvent *)event;
 // One frame of the shell's timer: the waiting motion, if any, is sent now, with the
 // frame's own reading of the pointer (`output` as -pointerSample: answers it).
 - (void)frame:(CGPoint)screen output:(NSNumber *)output;

@@ -10,6 +10,7 @@
 @property (copy) NSString *bundleIdentifier, *applicationName, *title;
 @property CGRect frame;
 @property SCWindow *shareable;
+@property BOOL displayFixed; // independently rooted AXFloatingWindow at the floating level
 + (instancetype)candidateWithShareable:(SCWindow *)shareable;
 @end
 // What the manager asks of the shell. Every call arrives on the main thread.
@@ -38,6 +39,11 @@
 - (void)windowDestroyed:(CGWindowID)window pid:(pid_t)pid;
 // Native focus may have moved: an application was activated, or changed its focused window.
 - (void)focusChanged;
+@optional
+// A creation/appearance hint can concern a child that is deliberately never
+// adopted as a toplevel. Native family presentation must reconcile its roots
+// without waiting for the regular one-second poll. 0 means all scoped roots.
+- (void)windowFamilyChanged:(pid_t)pid;
 @end
 // DriftWM manages every toplevel; this is that rule for native Mac windows. Candidates
 // are the normal-layer windows of regular applications other than this process, at
@@ -72,9 +78,18 @@
 @interface DWWindowManager : NSObject
 // With no scope (nil): nil without Screen Recording access. It never asks for that access, scope or none.
 + (instancetype)managerWithHost:(id<DWWindowHost>)host scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope;
+// pictures NO: a manager that never reads the shareable windows whatever access there is (`capturing` NO), for a run that
+// takes no picture of a window (native presentation). It needs a scope, as every manager without them does.
++ (instancetype)managerWithHost:(id<DWWindowHost>)host scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope pictures:(BOOL)pictures;
 // Whether this manager reads the shareable windows: Screen Recording access as it stood when the manager was made.
 // Always YES with no scope.
 @property (readonly) BOOL capturing;
+// A disposable native benchmark may put its owned windows above the canvas.
+// Default 0; an extra level is considered only with an explicit process scope.
+@property NSInteger benchmarkWindowLevel;
+// Native presentation only: discover application utility panels. A positive
+// floating level alone is insufficient; AX must report a floating-window role.
+@property BOOL nativePanels;
 // Called at the idle poll's pace. One cheap pass over the on-screen window list, unless
 // the observers are in place and the reconciliation is not due. The shareable windows are
 // read only when the set of candidates not yet offered changed, once for the first pass
@@ -82,6 +97,16 @@
 // should look at every bound window now too: on every call without the observers, once
 // a second with them.
 - (BOOL)poll;
+// The same poll, with the current on-screen WindowServer records indexed by
+// window number when a pass actually read them. nil otherwise. Records obey the
+// process scope and last only for this call's reconciliation; absence does not
+// mean closed (a parked/minimized window requires its own fresh lookup).
+- (BOOL)pollWithWindowInfo:(NSDictionary<NSNumber *,NSDictionary *> *__autoreleasing *)info;
+// Native presentation can fetch the scoped WindowServer list on a serial worker.
+// The caller must reject aged snapshots; adoption still validates identities
+// afresh. Event-driven passes retain their synchronous fresh read.
+- (BOOL)reconciliationDue;
+- (BOOL)pollWithWindowRecords:(NSArray<NSDictionary *> *)records;
 // YES while the observers report window changes: Accessibility access stands and every
 // regular application is observed in full.
 @property (readonly) BOOL live;

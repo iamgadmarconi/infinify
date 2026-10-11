@@ -35,6 +35,22 @@ and `out_of_scope`; native equivalents of platform services remain required.
 A platform equivalent must preserve the specified behavior. An unsupported API
 does not turn its feature into a pass.
 
+On 2026-10-11 the owner chose the Mac's existing settings for behavior macOS
+already controls, including display modes, screen lock, volume, brightness and
+device settings. Infinify must respect those settings; implementing a second
+set of system controls is not part of the native port. The 67 host-owned rows
+remain visible and unverified because this decision supplies no runtime
+evidence. They no longer await a scope decision or duplicate implementation.
+Native capture/input suppression around the system lock and correct display
+reconciliation are still integration obligations.
+
+The owner also excluded features without a macOS equivalent on 2026-10-11,
+including the Linux backend controls, XKB keyboard model, primary selection and
+touchscreen-specific input. Those 67 rows are now `out_of_scope`, with their
+upstream contracts and source references retained. This supplies no acceptance
+evidence. The native green button must toggle fullscreen inside the canvas;
+Option-click toggles fit and uses `decoration_fit_snapped`.
+
 ## Known differences at the initial checkpoint
 
 | Behavior | DriftWM | Infinify checkpoint |
@@ -2021,6 +2037,14 @@ different views of one window; a privileged path still needs an independently
 verified surface and interaction model. Disabling SIP alone establishes none of
 these capabilities.
 
+On 2026-10-11 the owner selected independent views per display. The native adapter
+now selects one stable real placement and renders other root placements from one
+shared live capture, with each display's camera and zoom. Scoped replica pointer
+delivery and canvas green-button actions are wired. Live popup/sheet replicas,
+native clipping at display boundaries, physical interaction, capture quality and
+presentation timing remain open. The source was compiled without running tests
+or launching fixtures; this does not change any row to verified.
+
 Other unresolved authority gates are exclusive global gestures while an app owns
 keyboard focus, relative/confined input, native cross-app drag-and-drop, secure
 capture/input suppression around lock, and display mode/scale/rotation/power.
@@ -2057,27 +2081,57 @@ tracking and desktop mode, which moved none. The tap-bindings milestone moved on
 `config.keybindings.alt+shift`, to `implemented_unverified`. The background
 caches milestone above took four more out of the real gaps, the field and
 reference rows of `cache_shader` and `cache_budget_mb`. `protocol.layer_shell`
-stays `missing` and stays counted as a gap for the panel and overlay policy it
-still lacks; its other clause, a reserved area, is not one: by the owner's
+stays `missing` and stays counted for full native panel/overlay acceptance.
+Independent floating panels now have an explicit display-pin policy and retain
+the application's stacking and keyboard focus; this does not establish full
+third-party overlay compatibility. Its reserved-area clause is not a gap: by the owner's
 decision of 2026-10-10 nothing is reserved for the menu bar and the Dock.
 On 2026-10-11 sizing and fullscreen began to run in every normal run, which
 moved 27 rows out of the gated group to `implemented_unverified`. Later that
 day resizing by pointer began to run in every normal run too, which moved 13
 more: the 2 that were gated (2 − 2 = 0), 1 that was counted as provided by
 macOS (68 − 1 = 67) and 10 of the real gaps (21 − 10 = 11), so
-427 + 13 = 440 and 158 − 13 = 145 = 0 + 67 + 67 + 11. The table is counted
-from the file as it stands after that.
+427 + 13 = 440 and 158 − 13 = 145 = 0 + 67 + 67 + 11. The owner later
+excluded the 67 features without a Mac equivalent, and native green-control
+dispatch implemented the two `decoration_fit_snapped` rows. The current counts
+are 442 implemented but unverified, 76 missing and 70 outside scope.
 
 | Rows | Count |
 | --- | --- |
-| `implemented_unverified` | 440 |
-| `missing` | 145 |
+| `implemented_unverified` | 442 |
+| `missing` | 76 |
 | of which gated behind `--experimental-native-resize` | 0 |
 | of which provided or owned by macOS | 67 |
-| of which with no Mac counterpart | 67 |
-| of which real gaps | 11 |
-| `out_of_scope` | 3 |
+| of which with no Mac counterpart | 0 |
+| of which real gaps | 9 |
+| `out_of_scope` | 70 |
 | all rows | 588 |
+
+Current implementation priorities (2026-10-11, after the independent-display
+view decision):
+
+- Complete per-display popup/sheet replicas and native clipping at display
+  boundaries. Root replicas and scoped replica pointer routing are implemented
+  but unverified.
+- Complete Spaces gathering and native popup/modal ordering across applications;
+  preserve the selected display-pin policy and application-owned panel focus.
+- Finish raw multi-finger gesture delivery over application windows and verify
+  the physical magnify path. Normal-run sizing/fullscreen dispatch is implemented.
+- Implement drag-and-drop across captured views, confined/relative pointer input,
+  and tablet event forwarding. These are five missing rows because drag-and-drop
+  is represented by both `protocol.data_device` and `platform.dnd`.
+- Complete panel/overlay compatibility (`protocol.layer_shell`) and the target
+  platform acceptance pass (`platform.acceptance`). The two remaining brightness
+  gesture examples name Linux commands; the owner uses macOS brightness controls,
+  so these do not require a new Infinify brightness setting.
+- Reconcile and verify the 442 implemented-but-unverified rows, including native
+  family/input/geometry, configuration and IPC, renderer behavior, session restore
+  and recovery. Some rows still contain known partial behavior; that status is
+  not a claim that only testing remains. Stable 120 fps is also unproven.
+
+The 67 host-owned missing rows are integration/acceptance accounting, not a
+request to duplicate Mac settings. No statuses were promoted in this refresh;
+no tests, fixture launches or application experiments were run.
 
 The `missing` rows, by group:
 
@@ -2123,26 +2177,28 @@ The `missing` rows, by group:
   made by a person, a rule's `fullscreen` and a hot corner beside a fullscreen
   window ran in controller scenarios only, and nothing was seen with a
   picture.
-- **Provided or owned by macOS (68).** macOS does the job itself and the port
-  has no code for it, which is not an implementation. Scope decision pending
-  with the owner; the notes recommend treating these as provided by macOS.
+- **Provided or owned by macOS (67).** The owner chose the Mac's existing
+  settings on 2026-10-11. macOS does the job itself and the port has no code
+  for it, which is not an implementation or proof that Infinify preserves it.
+  No duplicate controls are queued for these rows; host integration still
+  needs acceptance evidence.
   Families: the display arrangement (`[[outputs]]` scale, transform, position
   and mode, and output management); display power, gamma, idle and the lock
   screen; screencast sources and streams; synthetic keys; the trackpad, mouse
   and tablet device settings; the keyboard layouts and Caps Lock; the pointer
   size; the volume, brightness, media and Print keys.
-- **No Mac counterpart (67).** Scope decision pending with the owner; the notes
-  recommend out of scope. Families: everything touchscreen (the `[touch]`
+- **No Mac counterpart (67, now outside scope).** The owner excluded these
+  on 2026-10-11. Families: everything touchscreen (the `[touch]`
   tables and thresholds, the touch-only triggers, `[input.touch]` and the two
   touch speeds); `[backend]`; `[xwayland]`; the cursor theme and the cursor's
   opacity on inactive outputs; Num Lock and the XKB keyboard model; the primary
   selection; shortcut inhibition by a client; the media stop key; the reference
   config's tablet `map_to_output`.
-- **Real gaps (11).** Nothing but the work is waited for here:
-  - a fit carried to the snapped neighbours from a window's own zoom button
-    (`decoration_fit_snapped`, its field row and its reference row): read and
-    never applied (2, what is left of the 6 once
-    `resize_window_snapped` and `decoration_resize_snapped` moved);
+- **Native green control (2 implemented but unverified).** The native input
+  bridge dispatches the exact clicked binding to canvas fullscreen or, with
+  Option held, fit. `decoration_fit_snapped` now carries fit to snapped neighbours.
+  Actual physical input and third-party acceptance remain unverified.
+- **Real gaps (9).** Nothing but the work is waited for here:
   - drag-and-drop between windows on the canvas (2);
   - pointer lock, confinement and relative motion for the application under
     the pointer (2);
@@ -2154,10 +2210,9 @@ The `missing` rows, by group:
     no Mac substitute (2);
   - the acceptance pass itself, on the M5 and macOS 26 target (1).
 
-One key sits in two groups because its rows were judged apart, and wants one
-answer from the owner: the tablet's `map_to_output` (its field rows with
-macOS, its reference row with no Mac counterpart). `resize_on_border` was the
-other until both of its rows moved.
+The tablet's `map_to_output` was judged apart in the two groups. The owner now
+chooses the tablet driver's existing mapping, as for the other device settings;
+its Linux configuration spelling remains a separate compatibility question.
 
 Two more gaps have no row of their own. They are recorded in the
 [pointer contract](../../crates/desktop/POINTER.md#differences-from-upstream),

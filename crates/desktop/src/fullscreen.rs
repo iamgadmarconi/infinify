@@ -111,6 +111,9 @@ pub(crate) struct Fullscreen {
     ruled: BTreeSet<WindowId>,
 }
 impl Fullscreen {
+    pub(crate) fn observation_idle(&self) -> bool {
+        self.entries.is_empty() && self.restores.is_empty()
+    }
     fn output_of(&self, window: WindowId) -> Option<OutputId> {
         self.entries
             .iter()
@@ -180,6 +183,7 @@ pub(crate) fn carries(command: &Command) -> bool {
     matches!(
         command,
         Command::Action { .. }
+            | Command::NativeDecoration { .. }
             | Command::HotCorner { .. }
             | Command::Tap { .. }
             | Command::Ipc { .. }
@@ -256,6 +260,20 @@ impl Controller {
             outcome.dirty = true;
         } else if let Some(window) = focused {
             let target = self.resolve_fullscreen_output(window, active);
+            self.enter_fullscreen(window, target, outcome)?;
+        }
+        Ok(())
+    }
+    pub(crate) fn decoration_fullscreen(
+        &mut self,
+        window: WindowId,
+        output: OutputId,
+        outcome: &mut Outcome,
+    ) -> Result<(), Error> {
+        if let Some(held) = self.fullscreen_output_of(window) {
+            outcome.dirty |= self.exit_fullscreen_on(held).is_some();
+        } else {
+            let target = self.resolve_fullscreen_output(window, Some(output));
             self.enter_fullscreen(window, target, outcome)?;
         }
         Ok(())

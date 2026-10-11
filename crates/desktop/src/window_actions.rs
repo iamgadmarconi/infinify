@@ -50,6 +50,9 @@ pub enum ActivationCause {
     ClickRelease,
     /// The shell observed that native focus moved to the window by itself.
     Native,
+    /// A freshly validated native child holds focus for this logical root.
+    /// Canvas focus follows, without asserting that the root itself holds it.
+    NativeFamily,
 }
 /// What one window navigation leaves for its caller to report.
 #[derive(Debug, Default)]
@@ -428,7 +431,8 @@ impl Controller {
                 };
                 return Ok(json!({"navigation":navigation,"dirty":false}));
             }
-            ActivationCause::Native => {
+            ActivationCause::Native | ActivationCause::NativeFamily => {
+                let family = cause == ActivationCause::NativeFamily;
                 let source = self
                     .sources
                     .get(&window)
@@ -454,11 +458,15 @@ impl Controller {
                 // Upstream window_already_active: the window holds the keyboard
                 // and is at least partly on screen, so the request asks for
                 // what already holds.
-                let holds_keyboard = self.focus.observed_native.as_ref().is_some_and(|held| {
-                    held.window == window
-                        && held.identity == observed.identity
-                        && held.generation == observed.generation
-                });
+                let holds_keyboard = if family {
+                    self.focus.logical == Some(window)
+                } else {
+                    self.focus.observed_native.as_ref().is_some_and(|held| {
+                        held.window == window
+                            && held.identity == observed.identity
+                            && held.generation == observed.generation
+                    })
+                };
                 // Event delivery (LIFECYCLE.md): the same report again while
                 // the window is still off screen and the flight the first one
                 // armed is in the air asks for what is already under way.
@@ -473,7 +481,7 @@ impl Controller {
                     return Ok(Moved::default().reply_with_dirty());
                 }
                 // A hover focus's own echo: recorded where the window stands.
-                if let Some(echo) = self.hover_echo(&observed)? {
+                if !family && let Some(echo) = self.hover_echo(&observed)? {
                     return Ok(echo);
                 }
                 // Upstream activate_window_output_local: another window being
@@ -490,10 +498,10 @@ impl Controller {
                 // The observation is the focus: nothing is asked of the adapter.
                 self.finish_cycle();
                 self.focus.pending_effect = None;
-                self.focus.logical = None;
+                self.focus.logical = family.then_some(window);
                 self.scene.focus(window)?;
                 self.confirm_focus(window)?;
-                self.focus.observed_native = Some(observed);
+                self.focus.observed_native = (!family).then_some(observed);
                 // Upstream activate_window_output_local: wholly visible on its
                 // home output is focus only; any clipping pans that output. A
                 // widget or a screen-pinned window is focused where it is.

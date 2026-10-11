@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-use super::{Controller, MAX_REQUEST_BYTES, VERSION, ipc_client};
+use super::{
+    BufferSize, Controller, MAX_REQUEST_BYTES, Rect, SourceIdentity, VERSION, WindowId, ipc_client,
+};
 use serde_json::json;
 use std::{
     ffi::{CStr, CString, c_char},
@@ -12,10 +14,30 @@ use std::{
 pub extern "C" fn driftwm_desktop_create() -> *mut Controller {
     catch_unwind(|| Box::into_raw(Box::new(Controller::new()))).unwrap_or(ptr::null_mut())
 }
+/// Copy a controller into an independently owned handle. Returns null for null
+/// input or a panic. The copy may move to another thread with exclusive access.
+///
+/// # Safety
+/// Controller must be live and exclusively accessed for this call. Destroy the
+/// returned handle exactly once; it does not borrow the original handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn driftwm_desktop_clone(controller: *const Controller) -> *mut Controller {
+    fn owned_copy<T: Clone + Send>(value: &T) -> *mut T {
+        Box::into_raw(Box::new(value.clone()))
+    }
+    if controller.is_null() {
+        return ptr::null_mut();
+    }
+    catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: the caller supplies a live, exclusively accessed controller.
+        owned_copy(unsafe { &*controller })
+    }))
+    .unwrap_or(ptr::null_mut())
+}
 /// Release the controller; null is a no-op.
 ///
 /// # Safety
-/// Pointer must be null or a live value returned by create, freed exactly once.
+/// Pointer must be null or a live value returned by create or clone, freed exactly once.
 /// No operation may concurrently access this controller.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn driftwm_desktop_destroy(controller: *mut Controller) {
@@ -25,6 +47,65 @@ pub unsafe extern "C" fn driftwm_desktop_destroy(controller: *mut Controller) {
             drop(unsafe { Box::from_raw(controller) });
         }));
     }
+}
+/// Native readback observation for the allocation-free current-state query.
+/// `owner == 0` means the optional logical owner is absent.
+#[repr(C)]
+pub struct DesktopObservation {
+    pub window: u64,
+    pub birth_sec: i64,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub pid: i32,
+    pub birth_usec: i32,
+    pub wid: u32,
+    pub owner: u32,
+    pub buffer_width: u32,
+    pub buffer_height: u32,
+}
+/// Return 1 only when native readback Observe would change no source or world
+/// state and no gesture or pending structural work requires its transaction.
+/// Return 0 for changed/invalid observations, null arguments or panic; callers
+/// then use the ordinary JSON Observe path. This does not read native ownership.
+///
+/// # Safety
+/// Both pointers must be null or live and aligned for this call. Serialize access
+/// to the controller. Caller must freshly validate native identity and geometry.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn driftwm_desktop_observation_current(
+    controller: *const Controller,
+    observation: *const DesktopObservation,
+) -> u8 {
+    if controller.is_null() || observation.is_null() {
+        return 0;
+    }
+    catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: the caller holds live aligned pointers and exclusive access.
+        let (controller, observation) = unsafe { (&*controller, &*observation) };
+        controller.observation_current(
+            WindowId(observation.window),
+            &SourceIdentity {
+                pid: observation.pid,
+                birth_sec: observation.birth_sec,
+                birth_usec: observation.birth_usec,
+                wid: observation.wid,
+                owner: (observation.owner != 0).then_some(observation.owner),
+            },
+            Rect::new(
+                observation.x,
+                observation.y,
+                observation.width,
+                observation.height,
+            ),
+            BufferSize {
+                width: observation.buffer_width,
+                height: observation.buffer_height,
+            },
+        ) as u8
+    }))
+    .unwrap_or(0)
 }
 /// Execute one bounded UTF-8 JSON request. Always free the returned string with
 /// response_free. Returns null only if constructing a response itself panics.
@@ -109,4 +190,34 @@ pub unsafe extern "C" fn driftwm_desktop_msg(argc: i32, argv: *const *const c_ch
         ipc_client::run(&args)
     }))
     .unwrap_or(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cloned_handle_owns_independent_state_on_a_worker() {
+        // SAFETY: null is explicitly accepted by clone.
+        assert!(unsafe { driftwm_desktop_clone(ptr::null()) }.is_null());
+        let original = driftwm_desktop_create();
+        assert!(!original.is_null());
+        // SAFETY: the test owns original and accesses it exclusively.
+        let copy = unsafe { driftwm_desktop_clone(original) };
+        assert!(!copy.is_null());
+        let register = br#"{"version":1,"command":{"op":"register_output","stable_id":"copy-test","screen_bounds":{"origin":{"x":0,"y":0},"size":{"width":100,"height":100}}}}"#;
+        // SAFETY: neither original nor copy is accessed concurrently.
+        unsafe { &mut *original }.request(register).unwrap();
+        // SAFETY: copy transfers to this Box; original is freed exactly once.
+        let mut owned = unsafe { Box::from_raw(copy) };
+        unsafe { driftwm_desktop_destroy(original) };
+        let outputs = std::thread::spawn(move || {
+            assert!(owned.scene().outputs().is_empty());
+            owned.request(register).unwrap();
+            owned.scene().outputs().len()
+        })
+        .join()
+        .unwrap();
+        assert_eq!(outputs, 1);
+    }
 }

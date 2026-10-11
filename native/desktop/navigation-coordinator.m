@@ -23,6 +23,7 @@ static NSDictionary *focusEffect(NSDictionary *reply) {
 @property BOOL again; // native focus was reported to have moved while a read of it was under way
 @property NSDictionary *work; // the request handed to the driver and not yet answered
 @property NSUInteger held; // modifiers keeping a cycle session open, 0 for none
+@property NSDictionary *familyObservation;
 @end
 @implementation DWNavigationCoordinator
 - (instancetype)initWithCommand:(DWCommand)c driver:(id<DWNavigationDriver>)d clock:(uint64_t (^)(void))clock worker:(DWSchedule)worker main:(DWSchedule)main {
@@ -33,7 +34,7 @@ static NSDictionary *focusEffect(NSDictionary *reply) {
 - (void)cancelFocus { [self advance];self.held=0;if(!self.closed&&self.enabled)self.command(@{@"op":@"cancel_focus_cycle"}); }
 - (void)interrupt { if(self.work)[self cancelFocus]; }
 - (void)invalidate { [self cancelFocus];if(!self.closed&&self.enabled)for(NSDictionary *o in self.command(@{@"op":@"snapshot"})[@"outputs"])self.command(@{@"op":@"cancel_navigation",@"output":o[@"id"]}); }
-- (void)shutdown { [self invalidate];[self.lock lock];self.closed=YES;[self.lock unlock];self.command=nil;self.changed=nil;self.settled=nil;self.output=nil; }
+- (void)shutdown { [self invalidate];[self.lock lock];self.closed=YES;[self.lock unlock];self.command=nil;self.changed=nil;self.settled=nil;self.output=nil;self.observationBinding=nil;self.familyObservation=nil; }
 - (BOOL)binding:(NSDictionary *)effect snapshot:(NSDictionary *)snapshot {
     for(NSDictionary *window in snapshot[@"windows"])if([window[@"window"]isEqual:effect[@"window"]]){
         id source=window[@"source"];return [source isKindOfClass:NSDictionary.class]&&[source[@"identity"]isEqual:effect[@"identity"]]&&[source[@"generation"]isEqual:effect[@"generation"]];
@@ -86,17 +87,31 @@ static NSDictionary *focusEffect(NSDictionary *reply) {
     if(self.observing){self.again=YES;return;}
     self.observing=YES;
     uint64_t epoch=self.epoch;
-    self.worker(^{NSDictionary *identity=[self.driver observe];self.main(^{
+    DWObservedBinding resolve=self.observationBinding?self.observationBinding():nil;
+    self.worker(^{NSDictionary *actual=[self.driver observe];uint64_t observedAt=self.clock();NSDictionary *family=actual&&resolve?resolve(actual):nil;self.main(^{
         // After this turn: what this read reports is followed first, so the next read is judged against the focus that leaves.
         self.observing=NO;if(self.again){self.again=NO;self.main(^{[self observe];});}
-        if(!identity||![self current:epoch])return;
+        if(!actual||![self current:epoch])return;
+        NSDictionary *identity=actual;
         NSDictionary *snapshot=self.command(@{@"op":@"snapshot"}),*match=nil;
-        for(NSDictionary *w in snapshot[@"windows"]){id s=w[@"source"];if([s isKindOfClass:NSDictionary.class]&&sameIdentity(s[@"identity"],identity)){match=@{@"window":w[@"window"],@"identity":s[@"identity"],@"generation":s[@"generation"]};break;}}
+        if(family){
+            // A child is associated with the binding captured before the worker
+            // read, never a replacement of that binding or an aged parent chain.
+            if(self.clock()-observedAt>100000000||![self binding:family snapshot:snapshot])return;
+            match=family;identity=family[@"identity"];
+        }else{
+            self.familyObservation=nil;
+            for(NSDictionary *w in snapshot[@"windows"]){id s=w[@"source"];if([s isKindOfClass:NSDictionary.class]&&sameIdentity(s[@"identity"],identity)){match=@{@"window":w[@"window"],@"identity":s[@"identity"],@"generation":s[@"generation"]};break;}}
+        }
         if(!match){for(NSDictionary *w in snapshot[@"windows"]){id source=w[@"source"];if(![source isKindOfClass:NSDictionary.class])continue;NSMutableDictionary *plain=[source[@"identity"]mutableCopy];[plain removeObjectForKey:@"owner"];if(sameIdentity(plain,identity))return;}}
         NSDictionary *focus=snapshot[@"focus"];id pending=focus[@"pending_effect"];
-        if(match&&[pending isKindOfClass:NSDictionary.class]&&[pending[@"window"]isEqual:match[@"window"]]&&[pending[@"generation"]isEqual:match[@"generation"]]&&sameIdentity(pending[@"identity"],identity)){[self complete:pending epoch:epoch success:YES];return;}
+        if(match&&[pending isKindOfClass:NSDictionary.class]&&[pending[@"window"]isEqual:match[@"window"]]&&[pending[@"generation"]isEqual:match[@"generation"]]&&sameIdentity(pending[@"identity"],identity)){
+            if(family)[self answer:pending epoch:epoch with:@{@"op":@"focus_logical"}];else [self complete:pending epoch:epoch success:YES];
+            return;
+        }
         id observed=focus[@"observed_native"];
-        if(match&&[observed isKindOfClass:NSDictionary.class]&&[observed[@"window"]isEqual:match[@"window"]]&&[observed[@"generation"]isEqual:match[@"generation"]]&&sameIdentity(observed[@"identity"],identity))return;
+        if(family&&[self.familyObservation[@"binding"]isEqual:family]&&sameIdentity(self.familyObservation[@"actual"],actual)&&[focus[@"logical"]isEqual:match[@"window"]]&&pending==NSNull.null)return;
+        if(!family&&match&&[observed isKindOfClass:NSDictionary.class]&&[observed[@"window"]isEqual:match[@"window"]]&&[observed[@"generation"]isEqual:match[@"generation"]]&&sameIdentity(observed[@"identity"],identity))return;
         if(!match&&observed==NSNull.null&&pending==NSNull.null)return;
         [self advance];
         if(!match)self.command(@{@"op":@"focus_lost"});
@@ -104,10 +119,13 @@ static NSDictionary *focusEffect(NSDictionary *reply) {
             // The user focused a window of the canvas natively: upstream's activation, so focus, MRU order and by
             // its reveal rule the camera follow. The observation is the focus; a request in the reply is answered
             // from it, never by the driver. Refused (a gesture is active), the focus is still recorded.
-            NSMutableDictionary *c=[match mutableCopy];c[@"op"]=@"activate";c[@"cause"]=@"native";c[@"output"]=(self.output?self.output():nil)?:NSNull.null;
+            NSMutableDictionary *c=[match mutableCopy];c[@"op"]=@"activate";c[@"cause"]=family?@"native_family":@"native";c[@"output"]=(self.output?self.output():nil)?:NSNull.null;
             NSDictionary *reply=self.command(c),*effect=focusEffect(reply);
-            if(effect)[self complete:effect epoch:self.epoch success:YES];
-            else if(!reply){[c removeObjectsForKeys:@[@"cause",@"output"]];c[@"op"]=@"observe_focus";self.command(c);}
+            // A focused sheet/popup gives its root canvas focus, but does not
+            // prove that the root itself became the native focused window.
+            if(effect){if(family)[self answer:effect epoch:self.epoch with:@{@"op":@"focus_logical"}];else [self complete:effect epoch:self.epoch success:YES];}
+            else if(!reply&&!family){[c removeObjectsForKeys:@[@"cause",@"output"]];c[@"op"]=@"observe_focus";self.command(c);}
+            if(family&&reply)self.familyObservation=@{@"binding":family,@"actual":actual};
         }
         if(self.changed)self.changed();
     });});

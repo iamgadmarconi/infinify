@@ -62,6 +62,7 @@ typedef NS_ENUM(NSInteger,DWPress) {
     [NSRunLoop.mainRunLoop addTimer:_flush forMode:NSRunLoopCommonModes];
 }
 - (BOOL)pending { return _motion!=nil; }
+- (void)nativeMotion:(NSEvent *)event { [self mouseMoved:event]; }
 // This object's own timer. A frame timer that started while it waited has the motion from here on.
 - (void)flush {
     NSView<DWPointerHost> *host=_host;if(!_motion||!host||[host pointerFramed])return;

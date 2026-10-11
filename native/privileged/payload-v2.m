@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Protocol v2: many windows per frame, newest frame wins, restore of everything.
+// Protocol v2: many windows per frame, newest frame wins, journalled restoration.
 // Original implementation, compiled as part of payload.m (one translation unit, so
 // it shares v1's resolved symbols, scope and runtime directory). Wire format:
 // protocol2.h. Semantics: README.md "Protocol v2".
@@ -52,6 +52,7 @@ static BOOL v2Listed(const struct dw2_identity *who) {
         if([entry[@"pid"] longLongValue]==who->pid && [entry[@"birth_sec"] unsignedLongLongValue]==who->birth_sec && [entry[@"birth_usec"] unsignedLongLongValue]==who->birth_usec)return YES;
     return NO;
 }
+static uint32_t v2Caps(void) { return DW2_CAP_RESTORE_WINDOW|DW2_CAP_ENROLLMENT|(setAlpha&&getAlpha?DW2_CAP_ALPHA:0)|(fixtureOnly&&fixtureNativeFamilies?DW2_CAP_FIXTURE_FAMILY:0); }
 // Scope as v1 enforces it, allowlist first: decided from the record alone, before
 // any window-server lookup, and again for every record of every frame and restore.
 static BOOL v2InScope(const struct dw2_identity *who) {
@@ -184,12 +185,28 @@ static void v2Restore(NSString *reason,BOOL retry,NSMutableData *results,struct 
 // changed; a frame of known windows writes nothing to disk.
 static void v2Apply(const struct dw2_record *records,uint32_t count,uint8_t *status) {
     NSMutableArray *entries=[NSMutableArray arrayWithCapacity:count];
+    NSMutableSet<NSNumber *> *releasing=[NSMutableSet set];
+    for(uint32_t i=0;i<count;i++)if(records[i].flags==DW2_RECORD_RESTORE)[releasing addObject:@(records[i].id.wid)];
     BOOL changed=NO;
     for(uint32_t i=0;i<count;i++) {
         const struct dw2_record *r=&records[i];
         [entries addObject:NSNull.null];
-        if(r->flags&~(uint32_t)DW2_RECORD_HAS_ALPHA){status[i]=DW2_MALFORMED;continue;}
+        if((r->flags&~(uint32_t)(DW2_RECORD_HAS_ALPHA|DW2_RECORD_RESTORE))||r->flags==(DW2_RECORD_HAS_ALPHA|DW2_RECORD_RESTORE)){status[i]=DW2_MALFORMED;continue;}
         if(!v2InScope(&r->id)){status[i]=DW2_SCOPE;continue;}
+        if(r->flags==DW2_RECORD_RESTORE){
+            DW2Entry *entry=v2Table[@(r->id.wid)];
+            if(entry&&!v2SameProcess(&entry->who,&r->id)){status[i]=DW2_IDENTITY;continue;}
+            // No entry means this identity was never changed or already restored.
+            // Retry only marked entries; every other held window stays untouched.
+            if(entry)entry->state=DW2_RESTORING;
+            if(entry||v2JournalStale){struct dw2_restore_reply summary={0};v2Restore(@"window released",YES,nil,&summary);
+                status[i]=v2Table[@(r->id.wid)]?DW2_RESTORE_PENDING:summary.journal_persisted?DW2_APPLIED:DW2_JOURNAL;}
+            else status[i]=DW2_APPLIED;
+            continue;
+        }
+        // A malformed frame cannot both release and transform the same number.
+        // Restoration wins, regardless of its position in that frame.
+        if([releasing containsObject:@(r->id.wid)]){status[i]=DW2_RESTORE_PENDING;continue;}
         if(!finiteMatrix(CGAffineTransformMake(r->m[0],r->m[1],r->m[2],r->m[3],r->m[4],r->m[5]))){status[i]=DW2_MATRIX;continue;}
         BOOL wantsAlpha=(r->flags&DW2_RECORD_HAS_ALPHA)!=0;
         if(wantsAlpha && (!setAlpha || !getAlpha || !isfinite(r->alpha) || r->alpha<0 || r->alpha>1)){status[i]=DW2_ALPHA;continue;}
@@ -249,8 +266,20 @@ static void v2Apply(const struct dw2_record *records,uint32_t count,uint8_t *sta
     v2Count();
 }
 
+static NSData *v2Enrollment(void) {
+    struct dw2_enrollment_reply head={.scope=fixtureOnly ? DW2_SCOPE_COOPERATIVE : allowlist ? DW2_SCOPE_ALLOWLIST : DW2_SCOPE_SAME_USER,.server_pid=getpid()};
+    NSMutableData *reply=[NSMutableData dataWithLength:sizeof(head)];
+    if(fixtureOnly){
+        struct dw2_process own={.pid=getpid(),.birth_sec=[enrolled[@"birth_sec"]unsignedLongLongValue],.birth_usec=[enrolled[@"birth_usec"]unsignedLongLongValue]};
+        [reply appendBytes:&own length:sizeof(own)];head.count=1;
+    }else for(NSDictionary *entry in allowlist){
+        struct dw2_process process={.pid=[entry[@"pid"]intValue],.birth_sec=[entry[@"birth_sec"]unsignedLongLongValue],.birth_usec=[entry[@"birth_usec"]unsignedLongLongValue]};
+        [reply appendBytes:&process length:sizeof(process)];head.count++;
+    }
+    memcpy(reply.mutableBytes,&head,sizeof(head));return reply;
+}
 static NSData *v2Probe(void) {
-    struct dw2_probe_reply head={.scope=fixtureOnly ? DW2_SCOPE_COOPERATIVE : allowlist ? DW2_SCOPE_ALLOWLIST : DW2_SCOPE_SAME_USER,.caps=setAlpha && getAlpha ? DW2_CAP_ALPHA : 0,
+    struct dw2_probe_reply head={.scope=fixtureOnly ? DW2_SCOPE_COOPERATIVE : allowlist ? DW2_SCOPE_ALLOWLIST : DW2_SCOPE_SAME_USER,.caps=v2Caps(),
         .queue=v2OnMain ? DW2_QUEUE_MAIN : DW2_QUEUE_OWN,.lease_ms=DW2_LEASE_MS,.server_pid=getpid(),.held=atomic_load(&v2Held),.restoring=atomic_load(&v2Restoring),
         .frames_received=atomic_load(&v2FramesReceived),.frames_applied=atomic_load(&v2FramesApplied),.frames_superseded=atomic_load(&v2FramesSuperseded),.journal_writes=atomic_load(&v2JournalWrites),
         .table_count=(uint32_t)v2Table.count,.fixture_count=fixtureOnly ? fixtureCount : 0};
@@ -335,7 +364,7 @@ static void v2SendDropped(DW2Connection *c,uint64_t seq,uint32_t superseded) {
 }
 
 static BOOL v2Hello(DW2Connection *c,const struct dw2_header *h,const void *body) {
-    struct dw2_hello_reply reply={.status=DW2_HELLO_OK,.lease_ms=DW2_LEASE_MS,.max_records=DW2_MAX_RECORDS,.max_body=DW2_MAX_BODY,.caps=setAlpha && getAlpha ? DW2_CAP_ALPHA : 0,
+    struct dw2_hello_reply reply={.status=DW2_HELLO_OK,.lease_ms=DW2_LEASE_MS,.max_records=DW2_MAX_RECORDS,.max_body=DW2_MAX_BODY,.caps=v2Caps(),
         .scope=fixtureOnly ? DW2_SCOPE_COOPERATIVE : allowlist ? DW2_SCOPE_ALLOWLIST : DW2_SCOPE_SAME_USER,.queue=v2OnMain ? DW2_QUEUE_MAIN : DW2_QUEUE_OWN,.server_pid=getpid()};
     struct dw2_hello hello;
     if(h->type!=DW2_HELLO)return NO;
@@ -400,10 +429,11 @@ static BOOL v2Handle(DW2Connection *c,const struct dw2_header *h,const void *bod
         pthread_mutex_unlock(&v2Lock);
         return YES;
     }
-    if(h->length || (h->type!=DW2_RESTORE_ALL && h->type!=DW2_PROBE))return NO;
+    if(h->length || (h->type!=DW2_RESTORE_ALL && h->type!=DW2_PROBE && h->type!=DW2_ENROLLMENT))return NO;
     pthread_mutex_lock(&v2Lock);
     atomic_store(&v2Deadline,v2Now()+DW2_LEASE_MS);
     if(h->type==DW2_PROBE)dispatch_async(v2q,^{NSData *reply=v2Probe();v2Send(c,DW2_PROBE,seq,reply.bytes,reply.length);});
+    else if(h->type==DW2_ENROLLMENT)dispatch_async(v2q,^{NSData *reply=v2Enrollment();v2Send(c,DW2_ENROLLMENT,seq,reply.bytes,reply.length);});
     else {
         // A frame still waiting is older than this request and must not follow it.
         uint64_t droppedSeq;uint32_t superseded;

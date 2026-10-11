@@ -4,6 +4,9 @@ typedef NSDictionary *(^DWCommand)(NSDictionary *);
 typedef void (^DWJob)(void);
 typedef void (^DWSchedule)(DWJob);
 typedef BOOL (^DWGuard)(void);
+// A worker-only read may associate an observed child with a logical root's
+// exact {window, identity, generation} binding. nil leaves ordinary focus alone.
+typedef NSDictionary *(^DWObservedBinding)(NSDictionary *observed);
 // Drivers return an exact independently observed identity, or nil (unknown).
 @protocol DWNavigationDriver <NSObject>
 - (DWGuard)authorization:(NSDictionary *)identity;
@@ -23,6 +26,9 @@ typedef BOOL (^DWGuard)(void);
 @property (copy) DWJob settled;
 // The active output, for the camera to follow native focus on; unset or nil sends null.
 @property (copy) NSNumber *(^output)(void);
+// Called on main before an observation to capture immutable native root
+// bindings; its returned block runs on the worker and must only read native state.
+@property (copy) DWObservedBinding (^observationBinding)(void);
 // The focus request of any controller reply — "effect", or the focus_native_window
 // entry of "effects" — goes to the driver and its result back as focus_result, or with
 // focusAllowed NO is answered focus_logical at once. A reply without one withdraws work

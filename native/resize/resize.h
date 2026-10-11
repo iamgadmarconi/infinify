@@ -25,6 +25,10 @@ typedef struct { DWResizeIdentity identity; CGRect original; bool valid; } DWRes
 // Synchronous bounded calls, intended for a serial background queue, never a display callback.
 // Identity enrollment is read-only; caller must authorize ownership separately.
 bool dw_resize_identity(pid_t pid, CGWindowID window, DWResizeIdentity *identity);
+// Where a window's frame is read from, for every actual_cg reported and compared with Accessibility's. NULL (the default): the
+// window list's kCGWindowBounds. Under native presentation (native/desktop/native-presenter.h) the shell sets a reader of the
+// window's own, untransformed frame; a window it cannot read is then no owner. Set once, before any other call here.
+void dw_resize_set_bounds(bool (*read)(uint32_t window, CGRect *bounds));
 DWResizeResult dw_resize_observe(DWResizeIdentity identity);
 // A size that does not fit the visible frame of the window's screen from where the window sits is preceded by one native
 // position write, the least that makes room (resize.m, room()); under a scoped final authorization nothing is moved.

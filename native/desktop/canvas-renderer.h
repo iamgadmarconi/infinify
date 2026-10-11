@@ -8,6 +8,14 @@ typedef struct { CVPixelBufferRef buffer;uint64_t generation;CGRect rect; } DWCa
 // `placement` is the window's entry of snapshot.placements, or, for a window that is
 // on no output, {window,presentation_settled,source} read from snapshot.windows.
 typedef DWCanvasContent (^DWCanvasSource)(NSNumber *window,NSDictionary *placement);
+// Optional offscreen attachments in the root's normalized top-left rectangle:
+// (0,0,1,1) is the root; negative coordinates and extents beyond one are valid.
+// This generic image geometry carries no native identity or ownership. Each
+// attachment retains its pixels, and the provider orders them back to front.
+@interface DWCanvasAttachment : NSObject
+@property(nonatomic) CVPixelBufferRef buffer;
+@property(nonatomic) CGRect unitRect;
+@end
 // The canvas drawn the way DriftWM draws it, from the controller's snapshot: one
 // compositor layer per output (background, the outlines of the other outputs'
 // viewports, every window with its shadow, border, rounded corners and opacity, and
@@ -48,9 +56,22 @@ typedef DWCanvasContent (^DWCanvasSource)(NSNumber *window,NSDictionary *placeme
 typedef struct { NSUInteger requests,flushes,drawn,presented;double flushSeconds,flushWorst; } DWCanvasCounts;
 @interface DWCanvasRenderer : NSObject
 - (instancetype)initWithSource:(DWCanvasSource)source;
+// Used only by screenshot composition. Onscreen rendering never calls this.
+@property(copy) NSArray<DWCanvasAttachment *> *(^exportAttachments)(NSNumber *window);
 // Counts for -takeCounts. Set before the first frame is described; without it nothing is counted or timed.
 @property BOOL measured;
+// Scoped benchmark baseline only: retain the previous synchronous drawable acquisition. Set before the first frame.
+@property BOOL synchronousDrawables;
 - (DWCanvasCounts)takeCounts;
+// Native presentation (native-presenter.h): WindowServer draws each real window
+// at its selected placement. That placement draws no duplicate picture or chrome
+// here. Extra placements selected by nativeReplica use ordinary live content.
+// Exports include actual one-shot pixels for native windows. The background, outlines, stand-ins with their fades and the
+// error bar are drawn as ever. Set before the first frame.
+@property BOOL nativeWindows;
+// In native mode only these extra output placements draw live pixels. The
+// single real-window placement keeps ordinary WindowServer presentation.
+@property(copy) BOOL (^nativeReplica)(NSNumber *window,NSNumber *output);
 // Adopts snapshot.render. The background program, the chrome style, the outline
 // settings, [effects] and the error bar's messages are rebuilt only when
 // render.revision changed; YES when they were.
@@ -88,6 +109,9 @@ typedef struct { NSUInteger requests,flushes,drawn,presented;double flushSeconds
 // The same from the shell's frame timer, once per refresh of the display, after everything else of that frame: its frames
 // are the command buffer's to present at the refresh being served, and the main thread waits for nothing.
 - (void)flushFrame;
+// A paced flush with the display link's next refresh as presentation target and
+// drawable retry deadline. refreshRate sets the expected presentation interval.
+- (void)flushFrameAtTime:(CFTimeInterval)time refreshRate:(NSInteger)refreshRate;
 // The shell's frame timer, asked whether a frame of it is coming that will -flush. start: one is to be begun for a
 // change that has just been made (a window's picture, an animation's frame, a decoded chunk) if none runs. YES leaves
 // the change to that frame, so that however many changes fall into one refresh the scene is gone through once for it.
@@ -111,4 +135,8 @@ typedef struct { NSUInteger requests,flushes,drawn,presented;double flushSeconds
 // Returns {path,width,height}, or {error} with upstream's refusal. Nothing but that
 // file is written.
 - (NSDictionary *)screenshot:(NSDictionary *)effect snapshot:(NSDictionary *)snapshot;
+// Same export with compression and file writes on a serial worker. Call on main;
+// offscreen rendering prepares independent pixels before returning. Completion
+// runs on main exactly once. The caller serializes requests to bound pixel memory.
+- (void)screenshot:(NSDictionary *)effect snapshot:(NSDictionary *)snapshot completed:(void (^)(NSDictionary *))completed;
 @end
