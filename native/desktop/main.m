@@ -27,6 +27,7 @@
 #import "onboarding.h"
 #import "session-watch.h"
 #include <mach/mach_time.h>
+#include <stdatomic.h>
 #include <spawn.h>
 
 static NSDictionary *pointJSON(CGPoint p) { return @{@"x":@(p.x),@"y":@(p.y)}; }
@@ -122,7 +123,18 @@ static NSArray<NSArray<NSString *> *> *toolbarActions(BOOL navigation) {
 // Fitted widths keep every toolbar button inside the 1040 px demo panel and, with window navigation, the 960 px windowed minimum.
 static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.frame=NSMakeRect(x,8,ceil(button.fittingSize.width),26);[view addSubview:button];return NSMaxX(button.frame)+4; }
 #include "resize-isolation.inc.m"
-@class Desktop, DesktopView;
+@class Desktop, DesktopView, LiveSource;
+// INFINIFY_DEBUG_SYNTH=RATE, in a run with --only-pid and in no other: a load to measure the frame path with from a process that
+// has no Screen Recording access and so captures nothing. Every bound source is handed RATE frames a second, each an
+// IOSurface-backed 32BGRA buffer of the window's own pixel size (its bounds times 2) on which a band has moved, made on a
+// background queue and delivered on the main queue to -installSample:, which is where and how a stream's frame arrives.
+// As a stream does with its queue depth, it makes no frame while two it made are still waiting for the main thread.
+// The buffers are five, written in turn: the source keeps one, the compositor that one and the one before it, and two may be on
+// their way. Only the band's rows are written, so the load is the frames and not the filling of them. It ends with its source.
+@interface SynthLoad : NSObject
++ (instancetype)loadFor:(LiveSource *)source rate:(double)rate;
+- (void)stop;
+@end
 @interface LiveSource : NSObject <SCStreamOutput,SCStreamDelegate>
 @property Router *router;
 @property NSDictionary *identity;
@@ -154,6 +166,15 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
 @property BOOL composited;
 @property CVPixelBufferRef pixels;
 @property (copy) void (^presented)(void);
+// INFINIFY_DEBUG's frame line (-frameStats), since it was last printed: screen frames the stream handed over, frames kept, and
+// complete frames passed over because nothing in them had changed.
+@property NSUInteger delivered,accepted,skipped;
+// The stream was started or given a new size and has had no frame kept since: its next complete frame is kept whatever it
+// says of itself. The picture held is from before (-stopCapture: keeps it), so "nothing changed" is not about that one.
+@property BOOL restarted;
+// INFINIFY_DEBUG_SYNTH under --only-pid: the frames this source is fed instead of waiting for a capture; nil otherwise.
+@property SynthLoad *synth;
+- (BOOL)installSample:(CMSampleBufferRef)sample;
 - (void)clearSample;
 @end
 @implementation LiveSource
@@ -161,11 +182,17 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
 - (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sample ofType:(SCStreamOutputType)type {
     if(stream!=self.stream)return;
     if(self.detached||self.error||type!=SCStreamOutputTypeScreen||!CMSampleBufferIsValid(sample)||!CMSampleBufferGetImageBuffer(sample))return;
+    self.delivered++;
     if(self.resize){[self.resize accept:sample window:self.logical stream:stream install:^BOOL(CMSampleBufferRef accepted){return [self installSample:accepted];}];return;}
     CFArrayRef a=CMSampleBufferGetSampleAttachmentsArray(sample,NO);
     if(!a||!CFArrayGetCount(a))return;
     NSDictionary *info=(__bridge NSDictionary *)CFArrayGetValueAtIndex(a,0);
     if(![info[SCStreamFrameInfoStatus]isKindOfClass:NSNumber.class]||[info[SCStreamFrameInfoStatus]integerValue]!=SCFrameStatusComplete)return;
+    // A complete frame that says nothing in it changed is the picture already kept: installing it would redraw the scene for
+    // nothing. One that does not say (no dirty rectangles at all) is installed, and so is any frame while no picture is kept,
+    // the first of a stream just started or resized, and one whose size is not the kept picture's.
+    NSArray *dirty=info[SCStreamFrameInfoDirtyRects];CVImageBufferRef image=CMSampleBufferGetImageBuffer(sample);
+    if(self.composited&&self.pixels&&!self.restarted&&CVPixelBufferGetWidth(image)==CVPixelBufferGetWidth(self.pixels)&&CVPixelBufferGetHeight(image)==CVPixelBufferGetHeight(self.pixels)&&[dirty isKindOfClass:NSArray.class]&&!dirty.count){self.skipped++;return;}
     [self installSample:sample];
 }
 - (BOOL)installSample:(CMSampleBufferRef)sample {
@@ -174,7 +201,7 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
         CVPixelBufferRetain(pixels);if(self.pixels)CVPixelBufferRelease(self.pixels);self.pixels=pixels;
         // Native resize: the frame belongs to the observation the controller just acknowledged.
         if(self.resize)self.latestRevision=[self.resize captureState:self.logical][@"observation_revision"];
-        self.frames++;if(self.presented)self.presented();return YES;
+        self.frames++;self.accepted++;self.restarted=NO;if(self.presented)self.presented();return YES;
     }
     if(self.resize){for(AVSampleBufferDisplayLayer *surface in self.surfaces)if(surface.hidden||surface.sampleBufferRenderer.status==AVQueuedSampleBufferRenderingStatusFailed||!surface.sampleBufferRenderer.readyForMoreMediaData)return NO;}
     CFArrayRef attachments=CMSampleBufferGetSampleAttachmentsArray(sample,YES);if(attachments&&CFArrayGetCount(attachments))CFDictionarySetValue((CFMutableDictionaryRef)CFArrayGetValueAtIndex(attachments,0),kCMSampleAttachmentKey_DisplayImmediately,kCFBooleanTrue);
@@ -182,10 +209,63 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
     for(AVSampleBufferDisplayLayer *surface in self.surfaces){if(surface.hidden)continue;if(surface.sampleBufferRenderer.status==AVQueuedSampleBufferRenderingStatusFailed)[surface.sampleBufferRenderer flush];if(surface.sampleBufferRenderer.readyForMoreMediaData)[surface.sampleBufferRenderer enqueueSampleBuffer:sample];}
     if(self.resize){[self clearSample];self.latestSample=(CMSampleBufferRef)CFRetain(sample);self.latestRevision=[self.resize captureState:self.logical][@"observation_revision"];}
     else if(self.keepSample){[self clearSample];self.latestSample=(CMSampleBufferRef)CFRetain(sample);}
-    self.frames++;return YES;
+    self.frames++;self.accepted++;return YES;
 }
 - (void)clearSample {if(self.latestSample){CFRelease(self.latestSample);self.latestSample=NULL;}if(self.pixels){CVPixelBufferRelease(self.pixels);self.pixels=NULL;}self.latestRevision=nil;}
-- (void)dealloc { if(_latestSample)CFRelease(_latestSample);if(_pixels)CVPixelBufferRelease(_pixels);if(_router.eventSource)CFRelease(_router.eventSource); }
+- (void)dealloc { [_synth stop];if(_latestSample)CFRelease(_latestSample);if(_pixels)CVPixelBufferRelease(_pixels);if(_router.eventSource)CFRelease(_router.eventSource); }
+@end
+// 0 unless INFINIFY_DEBUG_SYNTH names a rate; at most 240 a second.
+static double DWSynthRate(void) { static double rate=-1;if(rate<0){const char *text=getenv("INFINIFY_DEBUG_SYNTH");double value=text?strtod(text,NULL):0;rate=isfinite(value)&&value>0?fmin(value,240):0;}return rate; }
+enum { SynthBuffers=5,SynthBand=64 };
+@implementation SynthLoad {
+    __weak LiveSource *_source;dispatch_source_t _timer;
+    CVPixelBufferRef _ring[SynthBuffers];long _band[SynthBuffers]; // each buffer, and the row its band was last drawn at (-1: none yet)
+    size_t _wide,_high;NSUInteger _made;
+    _Atomic int _waiting;_Atomic uint64_t _size; // frames made and not yet taken; the window's pixel size as the main thread last read it, width in the high half
+}
+static uint64_t synthSize(CGSize pixels) { return (uint64_t)MAX(pixels.width,1)<<32|(uint32_t)MAX(pixels.height,1); }
++ (instancetype)loadFor:(LiveSource *)source rate:(double)rate {
+    SynthLoad *load=[self new];load->_source=source;atomic_store(&load->_size,synthSize(source.buffer));
+    dispatch_queue_t queue=dispatch_queue_create("org.infinify.synth",dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,QOS_CLASS_USER_INTERACTIVE,0));
+    uint64_t interval=(uint64_t)(NSEC_PER_SEC/rate);dispatch_source_t timer=dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER,0,0,queue);load->_timer=timer;
+    // Each source starts somewhere of its own within a frame: streams do not deliver in step with one another.
+    dispatch_source_set_timer(timer,dispatch_time(DISPATCH_TIME_NOW,(int64_t)arc4random_uniform((uint32_t)MIN(interval,UINT32_MAX))),interval,0);
+    // The handler keeps the load until the timer is cancelled, and the buffers are let go on the queue that writes them.
+    dispatch_source_set_event_handler(timer,^{[load make];});
+    dispatch_source_set_cancel_handler(timer,^{for(int i=0;i<SynthBuffers;i++)if(load->_ring[i]){CVPixelBufferRelease(load->_ring[i]);load->_ring[i]=NULL;}});
+    dispatch_resume(timer);return load;
+}
+static void synthRows(uint32_t *base,size_t rowBytes,size_t wide,long from,long count,uint32_t colour) { for(long y=from;y<from+count;y++)memset_pattern4((uint8_t *)base+(size_t)y*rowBytes,&colour,wide*4); }
+- (void)make {
+    if(!_source||atomic_load(&_waiting)>=2)return;
+    uint64_t size=atomic_load(&_size);size_t wide=size>>32,high=(uint32_t)size;
+    if(wide!=_wide||high!=_high){for(int i=0;i<SynthBuffers;i++)if(_ring[i]){CVPixelBufferRelease(_ring[i]);_ring[i]=NULL;}_wide=wide;_high=high;}
+    int slot=(int)(_made%SynthBuffers);CVPixelBufferRef buffer=_ring[slot];BOOL fresh=!buffer;
+    if(fresh){
+        NSDictionary *attributes=@{(id)kCVPixelBufferIOSurfacePropertiesKey:@{},(id)kCVPixelBufferMetalCompatibilityKey:@YES};
+        if(CVPixelBufferCreate(kCFAllocatorDefault,wide,high,kCVPixelFormatType_32BGRA,(__bridge CFDictionaryRef)attributes,&buffer)!=kCVReturnSuccess||!buffer)return;
+        _ring[slot]=buffer;_band[slot]=-1;
+    }
+    // BGRA, opaque: a grey field and an orange band that comes down it eight rows a frame.
+    long band=MIN(SynthBand,(long)high),row=high>(size_t)band?(long)(_made*8%(high-(size_t)band)):0;const uint32_t field=0xff3a3a3a,orange=0xffff8c1a;
+    if(CVPixelBufferLockBaseAddress(buffer,0)!=kCVReturnSuccess)return;
+    uint32_t *base=CVPixelBufferGetBaseAddress(buffer);size_t rowBytes=CVPixelBufferGetBytesPerRow(buffer);
+    if(fresh)synthRows(base,rowBytes,wide,0,(long)high,field);else if(_band[slot]>=0)synthRows(base,rowBytes,wide,_band[slot],band,field);
+    synthRows(base,rowBytes,wide,row,band,orange);_band[slot]=row;CVPixelBufferUnlockBaseAddress(buffer,0);_made++;
+    CMVideoFormatDescriptionRef format=NULL;CMSampleBufferRef sample=NULL;CMSampleTimingInfo timing={kCMTimeInvalid,CMClockGetTime(CMClockGetHostTimeClock()),kCMTimeInvalid};
+    if(CMVideoFormatDescriptionCreateForImageBuffer(kCFAllocatorDefault,buffer,&format)==noErr)CMSampleBufferCreateReadyWithImageBuffer(kCFAllocatorDefault,buffer,format,&timing,&sample);
+    if(format)CFRelease(format);if(!sample)return;
+    atomic_fetch_add(&_waiting,1);
+    dispatch_async(dispatch_get_main_queue(),^{
+        LiveSource *source=self->_source;
+        if(source&&!source.detached&&source.synth==self){
+            source.delivered++;[source installSample:sample];
+            CGRect bounds=CGRectZero;if(CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)source.router.bounds,&bounds))atomic_store(&self->_size,synthSize(CGSizeMake(ceil(bounds.size.width*2),ceil(bounds.size.height*2))));
+        }
+        CFRelease(sample);atomic_fetch_sub(&self->_waiting,1);});
+}
+- (void)stop { dispatch_source_t timer=_timer;_timer=nil;if(timer)dispatch_source_cancel(timer); }
+- (void)dealloc { [self stop]; }
 @end
 // The compositor reads a stream's buffers as sRGB values, and holds the current one and
 // the one before it until the frame that sampled it has completed: its stream says sRGB
@@ -254,7 +334,13 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 - (void)resizeCapability;
 - (NSDictionary *)consumeSize:(NSDictionary *)reply;
 @property DWNavigationCoordinator *navigation;
-@property DWFrameDriver *frameDriver; // the frame timer: a display link, alive only while frames are wanted (-startFrames)
+@property DWFrameDriver *frameDriver; // the frame timer: a display link, alive only while frames are wanted (-startFrames), and where the canvas is flushed
+// A change of the compositor's asked for a frame since the frame timer last looked, and the frames it has since gone without one (-frameComing:).
+@property BOOL frameOwed;
+@property NSInteger frameQuiet;
+@property CGPoint pointerReported; // where the pointer was when cursor edge pan was last told (-pointerFrame:)
+@property NSTimer *statsTimer; // INFINIFY_DEBUG's frame line, every two seconds (-frameStats)
+@property CFTimeInterval statsSince;
 @property BOOL frameFlying; // the frame timer serves camera motion, not only what the compositor animates by itself (a background, a window opening or leaving)
 @property CFTimeInterval lastObservation;
 @property CFTimeInterval lastResizeObservation;
@@ -511,8 +597,9 @@ static BOOL sourceGone(LiveSource *source,NSDictionary *info) { return ![birth(s
         }
         if(below)[self.layer insertSublayer:overlay above:below];else [self.layer insertSublayer:overlay atIndex:0];[self.overlays addObject:overlay];
     }
-    // Drawn inside this transaction, so the frame lands in the same commit as the handles and the layers' geometry.
-    [canvas flush];
+    // Drawn inside this transaction when an output's layer is new or was moved or resized, so that the frame lands in the same
+    // commit as the layer's geometry, and when the frame timer is not running; else by the timer's next frame.
+    [canvas flushDescribed];
     [CATransaction commit];self.status.stringValue=self.desktop.statusText?:@"";for(NSNumber *window in invalidate)[self.desktop.resize invalidate:window];
 }
 - (void)render:(NSDictionary *)snapshot {
@@ -1084,14 +1171,18 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 //   status line alone. Nothing is reported while a panel holds a button gesture:
 //   upstream's refresh stands down under any pointer grab, and the controller knows only
 //   its own, not a press forwarded to a native window.
-- (void)pointerFrame {
+- (void)pointerFrame { [self pointerFrame:NO]; }
+// moved: the report is made only if the pointer is not where it was last reported. A frame of the timer that serves no camera
+// motion asks so: such frames come at the display's rate for as long as a window's pictures do, the idle poll goes on beside
+// them and reports a pointer at rest at its own pace, and a call into the controller per refresh would be for nothing.
+- (void)pointerFrame:(BOOL)moved {
     if(self.cleaning)return;
     BOOL report=self.pointerWanted,hover=NO;
     for(DesktopView *view in self.views){if(view.gesture)report=NO;if(self.frameDriver&&view.hover.pending)hover=YES;}
     if(!report&&!hover)return;
     CGPoint p=pointer();NSNumber *output=[self outputUnderPointer:p];
     if(hover)for(DesktopView *view in self.views.copy)[view.hover frame:p output:[view.outputs containsObject:output]?output:nil];
-    if(!report)return;
+    if(!report||(moved&&CGPointEqualToPoint(p,self.pointerReported)))return;self.pointerReported=p;
     NSString *status=self.statusText;[self call:@{@"op":@"pointer",@"output":output?:NSNull.null,@"screen":pointJSON(p)}];self.statusText=status;
 }
 // One frame of camera motion: every armed flight, a coasting pan, an edge pan. A normal
@@ -1118,9 +1209,12 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // while the compositor animates something by itself on an open panel (-animate:): an
 // animated background, a background chunk cache that is still filling, or a window that
 // opens or leaves (an open or close animation, a
-// stand-in's fade). It ends itself when none of them is left, so the frames of a window
+// stand-in's fade), and while windows' pictures arrive (-frameComing:). It ends itself when
+// none of them is left, a quarter of a second after the last picture, so the frames of a window
 // that opened stop with its animation. The link exists only between those two moments:
 // nothing is drawn or ticked, and no display callback is asked for, while nothing needs it.
+// Each of its frames ends with the compositor's one flush of that refresh: the camera's frame, the
+// animations and every picture delivered since the last are drawn together, once.
 // frameFlying says it is serving camera motion: each of its frames then watches the hot
 // corners and ticks the controller, and the idle poll neither ticks nor draws. While it
 // serves the compositor only, a background or a window's animation alike, the poll goes
@@ -1131,14 +1225,31 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // that served the compositor and skipped the pointer would leave hover to the idle poll.
 // A frame that stopped the timer and started another (a quit, a screen change) leaves the new one alone.
 - (void)startFrames {
-    if(self.frameDriver||self.cleaning)return;
+    if(self.frameDriver||self.cleaning)return;self.frameQuiet=0;
     __weak Desktop *weak=self;self.frameDriver=[DWFrameDriver driverOn:[self canvasScreens] frame:^(DWFrameDriver *driver){Desktop *desktop=weak;
         if(!desktop||desktop.frameDriver!=driver){[driver invalidate];return;}
         [desktop endLostInput];
         if(desktop.frameFlying){[desktop watchCorners];desktop.frameFlying=[desktop cameraFrame];}
-        else [desktop pointerFrame];
-        BOOL mine=desktop.frameDriver==driver;
-        if(!mine||(![desktop animate:YES]&&!desktop.frameFlying)){[driver invalidate];if(mine)desktop.frameDriver=nil;}}];
+        else [desktop pointerFrame:YES];
+        if(desktop.frameDriver!=driver){[driver invalidate];return;}
+        // The one flush of this refresh, after the camera's frame is described and the animations are marked: whatever the
+        // streams delivered since the last one, the camera's move and an animation's step are one pass over the scene.
+        BOOL animating=[desktop animate:YES];[desktop.compositor flushFrame];
+        // Pictures keep the timer too. They come when their windows draw, a video's every few refreshes, so the timer
+        // outlasts the last of them by a quarter of a second: a display link is not made and ended between two frames of a film.
+        if(desktop.frameOwed){desktop.frameOwed=NO;desktop.frameQuiet=0;}else desktop.frameQuiet++;
+        if(!animating&&!desktop.frameFlying&&desktop.frameQuiet*4>driver.framesPerSecond){[driver invalidate];desktop.frameDriver=nil;}}];
+}
+// The compositor's question (canvas-renderer.h, `frame`): will a frame of the timer flush what has just changed? start: a
+// picture arrived, an animation stepped or a chunk was decoded, and the timer is started for it if it is not running.
+// A timer that has not called back for a quarter of a second is not counted on (its display is asleep, or there is none):
+// the answer is NO and the compositor flushes by itself, as the idle poll's own description does. One silent for a second
+// is replaced, at most once a second, so a link that will never call again cannot keep the canvas waiting for it.
+- (BOOL)frameComing:(BOOL)start {
+    if(self.cleaning||!self.panels.count)return NO;
+    CFTimeInterval silent=self.frameDriver?CACurrentMediaTime()-self.frameDriver.lastFrame:0;
+    if(start){self.frameOwed=YES;if(silent>1&&!self.frameFlying){[self.frameDriver invalidate];self.frameDriver=nil;silent=0;}[self startFrames];}
+    return self.frameDriver&&silent<.25;
 }
 // The screens the canvas panels are on: the frame timer follows the fastest, and a window is captured at its rate.
 - (NSArray<NSScreen *> *)canvasScreens { NSMutableArray<NSScreen *> *screens=[NSMutableArray array];for(NSPanel *panel in self.panels)if(panel.screen&&![screens containsObject:panel.screen])[screens addObject:panel.screen];return screens; }
@@ -1835,7 +1946,42 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         if(![placement[@"presentation_settled"]boolValue]||![source.latestRevision isEqual:state[@"observation_revision"]]||!asDict(state[@"content_rect"]))return none;
         return (DWCanvasContent){source.pixels,source.frames,jsonRect(state[@"content_rect"])};
     }];
+    self.compositor.frame=^BOOL(BOOL start){return [weak frameComing:start];};
+    if(DWInputTrace()){self.compositor.measured=YES;[self startFrameStats];}
     return self.compositor;
+}
+// INFINIFY_DEBUG: how long the main thread went without turning its run loop, the longest such stretch since it was last asked.
+// Every activity of the loop is a mark, and so are its exit and its next entry, between which the idle poll runs; the stretch
+// from one mark to the next is the time a callout held the thread, but for the one the loop slept through. Main thread only.
+static CFTimeInterval DWTurnMark,DWTurnWorst;static BOOL DWTurnSlept;
+static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void *info) {
+    (void)observer;(void)info;CFTimeInterval now=CACurrentMediaTime();
+    if(DWTurnMark&&!DWTurnSlept)DWTurnWorst=fmax(DWTurnWorst,now-DWTurnMark);
+    DWTurnMark=now;DWTurnSlept=activity==kCFRunLoopBeforeWaiting;
+}
+// INFINIFY_DEBUG, while the canvas is open, one stderr line every two seconds, every rate a second:
+//   frames: 2.00s display=120 redraws=R flushes=F drawn=D presented=P flush_ms=MEAN/WORST main_gap_ms=G sources #ID=DELIVERED/ACCEPTED/SKIPPED ...
+// display: the refresh rate the frame timer follows. redraws: changes that asked for a frame. flushes: the times the scene was gone
+// through with an output to draw. drawn: frames encoded and handed to the display. presented: frames the display showed.
+// flush_ms: how long one flush kept the main thread, mean and worst. main_gap_ms: the worst stretch the main thread was not at
+// its run loop. Per bound window: frames its stream (or INFINIFY_DEBUG_SYNTH) delivered, those kept, and those passed over as unchanged.
+// Without the variable nothing is timed or observed and the renderer counts nothing; a source's three counters are added to and never read.
+- (void)startFrameStats {
+    if(self.statsTimer)return;
+    CFRunLoopObserverRef observer=CFRunLoopObserverCreate(kCFAllocatorDefault,kCFRunLoopAllActivities,true,0,DWTurnObserved,NULL);CFRunLoopAddObserver(CFRunLoopGetMain(),observer,kCFRunLoopCommonModes);CFRelease(observer);
+    __weak Desktop *weak=self;self.statsSince=CACurrentMediaTime();
+    self.statsTimer=[NSTimer timerWithTimeInterval:2 repeats:YES block:^(NSTimer *timer){(void)timer;[weak frameStats];}];[NSRunLoop.mainRunLoop addTimer:self.statsTimer forMode:NSRunLoopCommonModes];
+}
+- (void)frameStats {
+    // Nothing is taken while there is no line to print: a period that is not printed is in the next one that is.
+    if(!self.compositor||!self.panels.count||self.cleaning)return;
+    CFTimeInterval now=CACurrentMediaTime(),span=now-self.statsSince;if(span<=0)return;self.statsSince=now;double worst=DWTurnWorst;DWTurnWorst=0;
+    DWCanvasCounts c=[self.compositor takeCounts];NSMutableString *sources=[NSMutableString string];
+    for(NSNumber *window in [self.sources.allKeys sortedArrayUsingSelector:@selector(compare:)]){LiveSource *source=self.sources[window];
+        [sources appendFormat:@" #%@=%.1f/%.1f/%.1f",window,source.delivered/span,source.accepted/span,source.skipped/span];source.delivered=source.accepted=source.skipped=0;}
+    NSInteger rate=0;for(NSScreen *screen in [self canvasScreens])rate=MAX(rate,screen.maximumFramesPerSecond);
+    fprintf(stderr,"frames: %.2fs display=%ld redraws=%.1f flushes=%.1f drawn=%.1f presented=%.1f flush_ms=%.2f/%.2f main_gap_ms=%.1f sources%s\n",span,(long)rate,c.requests/span,c.flushes/span,c.drawn/span,c.presented/span,
+        c.flushes?c.flushSeconds/c.flushes*1000:0,c.flushWorst*1000,worst*1000,sources.length?sources.UTF8String:" none");
 }
 // What a config load changed in the background, the chrome or the outlines is adopted
 // before any output is described, and a background that fell back says why, as
@@ -2014,6 +2160,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     source.window=window.shareable;source.title=asString(info[(id)kCGWindowName])?:command[@"title"];source.resize=self.experimentalResize?self.resize:nil;
     // A new frame redraws only the outputs that show this window. The first picture of a window that just opened begins its open animation, which the frame timer plays.
     if(source.composited){__weak Desktop *weak=self;NSNumber *logical=source.logical;source.presented=^{Desktop *d=weak;if([d.compositor contentChanged:logical])[d startFrames];};}
+    // INFINIFY_DEBUG_SYNTH: only a run that names its processes is fed made-up frames, and only what it draws itself.
+    if(self.scope&&source.composited&&DWSynthRate()>0)source.synth=[SynthLoad loadFor:source rate:DWSynthRate()];
     // A window rule's size: the controller began its size transaction with the attach, and the coordinator performs it as it
     // performs a sizing action's. Its result reaches the controller on a later turn of the main queue, after this method.
     // Until it has settled the compositor is given no picture of the window, so its open animation waits with it (-render: there).
@@ -2069,7 +2217,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     // The one NO that leaves source.error alone: a reason there would have -track: detach a source that nothing is wrong with.
     if(!source.window)return NO;
     SCStreamConfiguration *config=[SCStreamConfiguration new];config.width=(size_t)pixels.width;config.height=(size_t)pixels.height;config.pixelFormat=kCVPixelFormatType_32BGRA;config.minimumFrameInterval=[self captureInterval:source];config.queueDepth=3;config.showsCursor=NO;config.ignoreShadowsSingleWindow=YES;compositedStream(config,source);
-    source.stream=[[SCStream alloc]initWithFilter:[[SCContentFilter alloc]initWithDesktopIndependentWindow:source.window] configuration:config delegate:source];[source.resize bind:source.logical stream:source.stream];NSError *error=nil;
+    source.stream=[[SCStream alloc]initWithFilter:[[SCContentFilter alloc]initWithDesktopIndependentWindow:source.window] configuration:config delegate:source];source.restarted=YES;[source.resize bind:source.logical stream:source.stream];NSError *error=nil;
     if(![source.stream addStreamOutput:source type:SCStreamOutputTypeScreen sampleHandlerQueue:dispatch_get_main_queue() error:&error]){source.error=error.localizedDescription;return NO;}
     SCStream *starting=source.stream;[starting startCaptureWithCompletionHandler:^(NSError *e){if(e)dispatch_async(dispatch_get_main_queue(),^{if(source.stream==starting&&!source.detached)source.error=e.localizedDescription;});}];
     return YES;
@@ -2122,7 +2270,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 }
 // The shell's half of a source the controller no longer binds: held button, kept frame, stream and table.
 - (void)drop:(LiveSource *)source {
-    for(DesktopView *view in self.views)if(view.pressedSource==source)[view releasePressed];source.detached=YES;[source clearSample];[self.manager forget:source.logical];
+    for(DesktopView *view in self.views)if(view.pressedSource==source)[view releasePressed];source.detached=YES;[source.synth stop];source.synth=nil;[source clearSample];[self.manager forget:source.logical];
     // Capture on demand may have stopped the stream already: only a stop that was asked for is waited on.
     if(source.stream){[self.pendingStops addObject:source];[source.stream stopCaptureWithCompletionHandler:^(NSError *error){(void)error;dispatch_async(dispatch_get_main_queue(),^{source.streamStopped=YES;source.stream=nil;[self.pendingStops removeObject:source];});}];}else source.streamStopped=YES;
     [source.surfaces removeAllObjects];[self.sources removeObjectForKey:source.logical];
@@ -2270,7 +2418,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         CGRect bounds=CGRectZero;if(busy||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)w[(id)kCGWindowBounds],&bounds))return;
         if(![source.router.bounds isEqual:w[(id)kCGWindowBounds]]){
             CGRect old=CGRectZero;CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)source.router.bounds,&old);source.router.bounds=w[(id)kCGWindowBounds];
-            if(!CGSizeEqualToSize(old.size,bounds.size)){SCStreamConfiguration *config=[SCStreamConfiguration new];config.width=(size_t)ceil(bounds.size.width*2);config.height=(size_t)ceil(bounds.size.height*2);config.pixelFormat=kCVPixelFormatType_32BGRA;config.minimumFrameInterval=[self captureInterval:source];config.queueDepth=3;config.showsCursor=NO;config.ignoreShadowsSingleWindow=YES;compositedStream(config,source);[source.stream updateConfiguration:config completionHandler:^(NSError *e){if(e)dispatch_async(dispatch_get_main_queue(),^{source.error=e.localizedDescription;});}];}
+            if(!CGSizeEqualToSize(old.size,bounds.size)){SCStreamConfiguration *config=[SCStreamConfiguration new];config.width=(size_t)ceil(bounds.size.width*2);config.height=(size_t)ceil(bounds.size.height*2);config.pixelFormat=kCVPixelFormatType_32BGRA;config.minimumFrameInterval=[self captureInterval:source];config.queueDepth=3;config.showsCursor=NO;config.ignoreShadowsSingleWindow=YES;compositedStream(config,source);source.restarted=YES;[source.stream updateConfiguration:config completionHandler:^(NSError *e){if(e)dispatch_async(dispatch_get_main_queue(),^{source.error=e.localizedDescription;});}];}
         }
         // The native window is the authority for its size: one the application or the user changed is the canvas's from here on, and is saved.
         NSDictionary *seen=[self call:@{@"op":@"observe",@"window":source.logical,@"identity":source.identity,@"source_rect":rectJSON(bounds),@"buffer":@{@"width":@(source.buffer.width),@"height":@(source.buffer.height)}}];

@@ -42,8 +42,15 @@ typedef DWCanvasContent (^DWCanvasSource)(NSNumber *window,NSDictionary *placeme
 // fullscreen app"), each running out unseen; a fullscreen window that closes is baked
 // bare, as it was drawn; and a window that opens fullscreen is not held for the output's
 // size it is owed: it opens from its first picture, at the size it has.
+// What INFINIFY_DEBUG's frame line reports of the renderer, counted since they were last taken: changes that asked for a
+// redraw (-contentChanged:, an animation's frame, a decoded chunk, a description), -flush calls that had an output to
+// draw, frames the layers drew, frames the display then took, and how long those flushes held the main thread.
+typedef struct { NSUInteger requests,flushes,drawn,presented;double flushSeconds,flushWorst; } DWCanvasCounts;
 @interface DWCanvasRenderer : NSObject
 - (instancetype)initWithSource:(DWCanvasSource)source;
+// Counts for -takeCounts. Set before the first frame is described; without it nothing is counted or timed.
+@property BOOL measured;
+- (DWCanvasCounts)takeCounts;
 // Adopts snapshot.render. The background program, the chrome style, the outline
 // settings, [effects] and the error bar's messages are rebuilt only when
 // render.revision changed; YES when they were.
@@ -54,9 +61,8 @@ typedef DWCanvasContent (^DWCanvasSource)(NSNumber *window,NSDictionary *placeme
 // Describes these outputs' frames from the snapshot. Each output's layer sits in
 // `host` at its screen_bounds less `origin`, below every other sublayer. scale: the
 // hosting window's backing scale. decorationScale: the largest backing scale among
-// all outputs, rounded up. Nothing is drawn here: -flush draws the outputs whose
-// description changed, and without one they are drawn later in the same turn of the
-// main run loop.
+// all outputs, rounded up. Nothing is drawn here, and nothing is asked for: the caller
+// follows it with -flushDescribed.
 - (void)render:(NSDictionary *)snapshot outputs:(NSArray<NSNumber *> *)outputs host:(CALayer *)host origin:(CGPoint)origin scale:(CGFloat)scale decorationScale:(NSInteger)decorationScale;
 - (CALayer *)layerForOutput:(NSNumber *)output;
 // A stream delivered a frame for this window: only the outputs showing it are redrawn.
@@ -73,9 +79,26 @@ typedef DWCanvasContent (^DWCanvasSource)(NSNumber *window,NSDictionary *placeme
 // tick's frame, since each frame drawn spends upstream's per-frame allowances.
 - (BOOL)animates:(NSArray<NSNumber *> *)outputs draw:(BOOL)draw;
 // Describes every changed output to its layer now, which draws only when the
-// description, a pixel buffer or an animated background's clock changed. The shell
-// calls it inside the transaction that moves its own layers.
+// description, a pixel buffer or an animated background's clock changed.
+// Every frame it draws is presented inside the caller's Core Animation transaction, waiting for the command buffer to be
+// scheduled: right for a frame that must land with a layer change, and for one drawn while no display link is known to be
+// refreshing (the launch's first frame, the quit-pending loop, a display asleep), where a drawable left to the next refresh
+// could wait for one that does not come.
 - (void)flush;
+// The same from the shell's frame timer, once per refresh of the display, after everything else of that frame: its frames
+// are the command buffer's to present at the refresh being served, and the main thread waits for nothing.
+- (void)flushFrame;
+// The shell's frame timer, asked whether a frame of it is coming that will -flush. start: one is to be begun for a
+// change that has just been made (a window's picture, an animation's frame, a decoded chunk) if none runs. YES leaves
+// the change to that frame, so that however many changes fall into one refresh the scene is gone through once for it.
+// NO, or no block: the renderer flushes by itself, later in the same turn of the main run loop, as it always did.
+// It is asked at every change and holds no answer, so a timer that ended with a flush owed costs one change its frame at most.
+@property (copy) BOOL (^frame)(BOOL start);
+// After -render:, inside the transaction that moves the shell's own layers. Flushes now when an output is new or its layer
+// changed its place, size or scale, so that the frame lands in that transaction with the layer, and when no frame of the
+// timer is coming (the launch's first frame, the quit-pending loop, a display that is not refreshing). Otherwise the
+// timer's next frame draws what was described: a camera frame and a window's picture of the same refresh are one flush.
+- (void)flushDescribed;
 // Removes every layer and lets go of every pixel buffer and closing snapshot, and of every output's background chunk cache with its decoders. Before the panels close.
 - (void)reset;
 // The controller's screenshot effect {target,scale,path,output,region}: renders the

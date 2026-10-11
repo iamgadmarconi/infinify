@@ -15,6 +15,7 @@
 #import <IOSurface/IOSurface.h>
 #import <ImageIO/ImageIO.h>
 #import <os/lock.h>
+#import <stdatomic.h>
 #import <simd/simd.h>
 
 static NSString *const IFCErrorDomain = @"IFCompositorErrorDomain";
@@ -3830,6 +3831,15 @@ static uint8_t *IFCCopyBytes(id<MTLTexture> texture) {
 
 // MARK: - Layer
 
+// Frames the display took, counted where the presented handlers run.
+@interface IFCPresentedCount : NSObject {
+@public
+    _Atomic NSUInteger shown;
+}
+@end
+@implementation IFCPresentedCount
+@end
+
 @implementation IFCompositorLayer {
     BOOL _dirty;
     BOOL _hasLast;
@@ -3839,6 +3849,11 @@ static uint8_t *IFCCopyBytes(id<MTLTexture> texture) {
     double _lastAnimate;  // upstream `background_last_animate`, in frame time
     id<MTLTexture> _debugCopy;
     BOOL _debugCopyAlpha;
+    IFCPresentedCount *_presented;  // made with the first handler; nil until `countsPresented`
+}
+
+- (NSUInteger)presentedCount {
+    return _presented ? atomic_load(&_presented->shown) : 0;
 }
 
 - (instancetype)init {
@@ -3856,8 +3871,7 @@ static uint8_t *IFCCopyBytes(id<MTLTexture> texture) {
     self.colorspace = srgb;
     CGColorSpaceRelease(srgb);
     self.opaque = YES;
-    // Presents inside the host's CATransaction, so the frame lands in the same
-    // Core Animation commit as whatever else the host changed.
+    // Until the first frame is drawn; -updateWithFrame: decides it for each frame.
     self.presentsWithTransaction = YES;
     self.allowsNextDrawableTimeout = YES;
     self.needsDisplayOnBoundsChange = NO;
@@ -3885,6 +3899,7 @@ static uint8_t *IFCCopyBytes(id<MTLTexture> texture) {
 }
 
 - (BOOL)updateWithFrame:(IFCompositorFrame *)frame {
+    _missed = NO;
     if (!frame || !_renderer) return NO;
     NSUInteger pxW, pxH;
     IFCPixelSize(frame, NULL, NULL, &pxW, &pxH);
@@ -3905,15 +3920,27 @@ static uint8_t *IFCCopyBytes(id<MTLTexture> texture) {
         return NO;
     }
 
-    if (self.contentsScale != frame.scale && frame.scale > 0) self.contentsScale = frame.scale;
     CGSize drawableSize = CGSizeMake(pxW, pxH);
+    // The first frame, and one that changes the drawable's size, are presented inside the host's CATransaction: they land
+    // in the Core Animation commit that puts the layer there or gives it its new bounds. So is every frame the host does
+    // not draw from a display link's callback (`paced`): presented by its command buffer it would wait for a refresh, and
+    // with the display asleep there is none, the drawables run out and -nextDrawable holds the thread for its timeout.
+    // A paced frame of an unchanged size is the command buffer's to present at the refresh being served, and the main
+    // thread waits for nothing: with the transaction it sat in -waitUntilScheduled for every frame drawn.
+    BOOL resized = !_hasLast || !CGSizeEqualToSize(self.drawableSize, drawableSize) || (frame.scale > 0 && self.contentsScale != frame.scale);
+    BOOL transaction = resized || !_paced;
+    if (self.presentsWithTransaction != transaction) self.presentsWithTransaction = transaction;
+    if (self.contentsScale != frame.scale && frame.scale > 0) self.contentsScale = frame.scale;
     if (!CGSizeEqualToSize(self.drawableSize, drawableSize)) self.drawableSize = drawableSize;
     BOOL opaque = frame.clear == IFCompositorClearOpaqueBlack;
     if (self.opaque != opaque) self.opaque = opaque;
 
     id<CAMetalDrawable> drawable = [self nextDrawable];
     id<MTLCommandBuffer> commandBuffer = [_renderer.commandQueue commandBuffer];
-    if (!drawable || !commandBuffer) return NO;  // still dirty: the next update retries
+    if (!drawable || !commandBuffer) {  // still dirty: the next update retries
+        _missed = YES;
+        return NO;
+    }
     if (![_renderer encodeFrame:frame intoTexture:drawable.texture commandBuffer:commandBuffer]) {
         [commandBuffer commit];
         return NO;
@@ -3931,6 +3958,14 @@ static uint8_t *IFCCopyBytes(id<MTLTexture> texture) {
         [blit endEncoding];
     }
 
+    if (_countsPresented) {
+        // The handler runs off the main thread and keeps the count, not the layer: a layer's last release stays the host's.
+        if (!_presented) _presented = [IFCPresentedCount new];
+        IFCPresentedCount *count = _presented;
+        [drawable addPresentedHandler:^(id<MTLDrawable> shown) {
+            if (shown.presentedTime > 0) atomic_fetch_add(&count->shown, 1);
+        }];
+    }
     if (self.presentsWithTransaction) {
         [commandBuffer commit];
         [commandBuffer waitUntilScheduled];

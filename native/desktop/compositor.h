@@ -601,7 +601,9 @@ typedef NS_OPTIONS(NSUInteger, IFCompositorPass) {
 
 /// Redraws if, and only if, the frame description or a content buffer changed
 /// since the last drawn frame, or an animated background is due. Returns YES
-/// when a new frame was presented. A call that does not redraw touches no
+/// when a new frame was presented: inside the caller's CATransaction when it
+/// is the first or changes the drawable's size, else by its command buffer at
+/// the next refresh, without waiting. A call that does not redraw touches no
 /// GPU state; at most once every 1.5 s it flushes the renderer's texture
 /// cache, which is what frees the surface of a capture buffer released a
 /// second or more ago (a window that closed or became a stand-in).
@@ -616,6 +618,22 @@ typedef NS_OPTIONS(NSUInteger, IFCompositorPass) {
 
 /// Frames presented so far (diagnostics).
 @property (nonatomic, readonly) NSUInteger drawCount;
+
+/// The update that follows is made from a display link's callback, so a
+/// frame that changes nothing of the drawable's size or scale may be left to
+/// its command buffer to present at that refresh. NO, the default: every
+/// frame is presented inside the caller's CATransaction.
+@property (nonatomic) BOOL paced;
+
+/// The last `-updateWithFrame:` had a frame to draw and got no drawable or
+/// command buffer for it. The layer stays dirty; the host calls again.
+@property (nonatomic, readonly) BOOL missed;
+
+/// Diagnostics only: count the frames the display took. `presentedCount` is
+/// then the number of drawables whose presented handler reported a time on
+/// screen; a drawable that was dropped reports none and is not counted.
+@property (nonatomic) BOOL countsPresented;
+@property (nonatomic, readonly) NSUInteger presentedCount;
 
 /// Diagnostics only: keep a copy of each presented frame (gives up
 /// `framebufferOnly`). Used by `comprender --via-layer`.

@@ -121,6 +121,7 @@ static NSDictionary *refusal(NSString *message) { return @{@"error":message}; }
 // the last tick asked (-animates:draw:) for a reason of its own (the camera frame of a flight, a window's picture, a decoded chunk's wake-up), and that draw
 // is the tick's frame. forced: the redraw a tick asked for itself, which is no such reason.
 @property BOOL drawn,forced;
+@property NSUInteger taken; // of its layer's presentedCount, what -takeCounts has reported
 @end
 @implementation DWCanvasOutput
 @end
@@ -140,8 +141,15 @@ static NSDictionary *refusal(NSString *message) { return @{@"error":message}; }
 @property BOOL following; // the first frame described has set that mark
 @property uint64_t marks; // counts the identifiers of closing-bucket elements
 @property NSNumber *sizing; // the window the controller owes a size, as the snapshot last described had it
+@property BOOL paced; // inside -flushFrame: the display link's own frame, which the layers may present by themselves
+@property BOOL placed; // an output described since the last flush is new, or its layer changed its place, size or scale
 @end
-@implementation DWCanvasRenderer
+@implementation DWCanvasRenderer { DWCanvasCounts _counts; }
+- (DWCanvasCounts)takeCounts {
+    DWCanvasCounts counts=_counts;_counts=(DWCanvasCounts){0};
+    for(DWCanvasOutput *state in self.states.allValues){NSUInteger shown=state.layer.presentedCount;counts.presented+=shown-state.taken;state.taken=shown;}
+    return counts;
+}
 - (instancetype)initWithSource:(DWCanvasSource)source {
     if((self=[super init])){_source=[source copy];_states=[NSMutableDictionary dictionary];canvasTime();}
     return self;
@@ -303,11 +311,12 @@ static const double sizeHold=10;
         NSNumber *output=number(o[@"id"]);CGRect bounds=rectOf(o[@"screen_bounds"]);if(!output||![outputs containsObject:output]||CGRectIsNull(bounds))continue;
         DWCanvasOutput *state=self.states[output];
         // An output that is new shows no event that came before it: nothing was on it to open.
-        if(!state){state=self.states[output]=[DWCanvasOutput new];state.layer=[[IFCompositorLayer alloc]initWithRenderer:nil];state.frame=[IFCompositorFrame new];state.elements=[NSMutableDictionary dictionary];state.placements=[NSMutableDictionary dictionary];state.leaving=[NSMutableArray array];state.unseen=[NSMutableDictionary dictionary];state.adopted=[NSMutableDictionary dictionary];state.owed=[NSMutableDictionary dictionary];state.serial=self.played;}
+        if(!state){state=self.states[output]=[DWCanvasOutput new];state.layer=[[IFCompositorLayer alloc]initWithRenderer:nil];state.frame=[IFCompositorFrame new];state.elements=[NSMutableDictionary dictionary];state.placements=[NSMutableDictionary dictionary];state.leaving=[NSMutableArray array];state.unseen=[NSMutableDictionary dictionary];state.adopted=[NSMutableDictionary dictionary];state.owed=[NSMutableDictionary dictionary];state.serial=self.played;state.layer.countsPresented=self.measured;self.placed=YES;}
         // Below the toolbar and the status line, as the window tiles were.
-        if(state.layer.superlayer!=host)[host insertSublayer:state.layer atIndex:0];
-        CGRect place=CGRectOffset(bounds,-origin.x,-origin.y);if(!CGRectEqualToRect(state.layer.frame,place))state.layer.frame=place;
+        if(state.layer.superlayer!=host){[host insertSublayer:state.layer atIndex:0];self.placed=YES;}
+        CGRect place=CGRectOffset(bounds,-origin.x,-origin.y);if(!CGRectEqualToRect(state.layer.frame,place)){state.layer.frame=place;self.placed=YES;}
         IFCompositorFrame *frame=state.frame;CGPoint camera=pointOf(o[@"camera"]);double zoom=[number(o[@"zoom"])doubleValue];
+        if(frame.scale!=(scale>0?scale:1))self.placed=YES;
         frame.size=bounds.size;frame.scale=scale>0?scale:1;frame.cameraX=camera.x;frame.cameraY=camera.y;frame.zoom=zoom;frame.clear=IFCompositorClearOpaqueBlack;frame.decorationScale=decorationScale;
         if(state.style!=self.style){state.style=self.style;[self cache:state];frame.background=state.background;frame.chrome=self.chrome;frame.placeholderColor=self.chrome.backgroundColor;frame.outline=self.outline;frame.effects=self.effects;frame.errorMessages=self.errors;}
         // The other outputs' viewports, projected as upstream's build_output_outline_elements does.
@@ -371,7 +380,6 @@ static const double sizeHold=10;
         state.elements=elements;state.placements=placements;state.unseen=unseen;state.owed=owed;state.serial=self.played;state.dirty=YES;
         [self fullscreen:o among:all state:state];
     }
-    [self setNeedsFlush];
 }
 // Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
 // src/state/fullscreen.rs (enter_fullscreen: the window fills its output at zoom 1 from
@@ -445,30 +453,38 @@ static const double sizeHold=10;
         // again as an animation is, until nothing is pending. That frame is forced: its description is the one already drawn.
         BOOL filling=state.frame.background.pendingChunkCount>0;if(!filling&&!state.frame.needsContinuousRedraw)continue;
         // Every frame drawn spends the cache's allowances (two bakes, eight uploads), which upstream grants once per output frame. An output that has drawn since
-        // the last tick, as it does inside this very tick when a flight's camera frame is described and flushed before this is asked, has had this tick's frame:
-        // forcing another would spend them twice a tick, and on a 120 Hz display link draw the output twice in 8 ms.
+        // the last tick (a description the shell flushed by itself, as for a layer that moved) has had this tick's frame: forcing another would spend
+        // them twice a tick, and on a 120 Hz display link draw the output twice in 8 ms. A flight's camera frame is described before this is asked and
+        // drawn after it, by the tick's one flush, forced or not.
         any=YES;if(draw){BOOL had=state.drawn;state.drawn=NO;state.dirty=YES;if(filling&&!had){state.forced=YES;[state.layer setNeedsRedraw];}[self setNeedsFlush];}
     }
     return any;
 }
-// A burst of stream frames and animation ticks in one turn of the run loop describes
-// each output to its layer once, unless the shell flushed in between; the layer itself
-// draws only when the description, a pixel buffer, the animated background's clock or
-// the progress of an open or close animation changed.
+// Stream frames, animation ticks and decoded chunks describe each output to its layer once per refresh of the display: the
+// shell's frame timer flushes (`frame`). Each stream delivers on a turn of the main queue of its own, at a moment of its own,
+// so a flush per turn was a flush per window per frame, several to a refresh. Without a timer they are flushed once per turn
+// of the run loop, unless the shell flushed in between. The layer itself draws only when the description, a pixel buffer, the
+// animated background's clock or the progress of an open or close animation changed.
 - (void)setNeedsFlush {
+    _counts.requests+=self.measured;if(self.frame&&self.frame(YES))return;
     if(self.pending)return;self.pending=YES;__weak DWCanvasRenderer *weak=self;
     dispatch_async(dispatch_get_main_queue(),^{[weak flush];});
 }
+- (void)flushDescribed { _counts.requests+=self.measured;if(self.placed||!(self.frame&&self.frame(NO)))[self flush]; }
 // Metal hands out autoreleased drawables and encoder contexts; a caller outside a run-loop
 // callout (the launch's first frame, the quit-pending loop) has no pool of its own to end them.
+- (void)flushFrame { self.paced=YES;[self flush];self.paced=NO; }
 - (void)flush {
-    self.pending=NO;double now=canvasTime();
+    BOOL placed=self.placed;self.pending=NO;self.placed=NO;double now=canvasTime();CFTimeInterval began=self.measured?CACurrentMediaTime():0;BOOL any=NO;
     for(DWCanvasOutput *state in self.states.allValues){
-        if(!state.dirty)continue;state.dirty=NO;IFCompositorFrame *frame=state.frame;frame.time=now;BOOL forced=state.forced;state.forced=NO;@autoreleasepool{if([state.layer updateWithFrame:frame]){state.presented=now;if(!forced)state.drawn=YES;}}
+        if(!state.dirty)continue;state.dirty=NO;any=YES;IFCompositorFrame *frame=state.frame;frame.time=now;BOOL forced=state.forced;state.forced=NO;state.layer.paced=self.paced;@autoreleasepool{if([state.layer updateWithFrame:frame]){state.presented=now;_counts.drawn++;if(!forced)state.drawn=YES;}}
+        // A frame that had no drawable is still owed: the output stays marked, and what was owed inside the layer's transaction stays so.
+        if(state.layer.missed){state.dirty=YES;if(forced)state.forced=YES;if(placed)self.placed=YES;}
         // An animation that has run out at this frame's time, which the frame no longer showed: upstream drops the snapshot or the fade, and a window that has opened is the plain window.
         for(IFCompositorElement *element in state.leaving.count?state.leaving.copy:nil)if([frame lifecycleFinishedForElement:element]){[state.leaving removeObject:element];[frame.elements removeObject:element];}
         for(IFCompositorElement *element in frame.elements)if(element.lifecycle==IFCompositorLifecycleOpening&&[frame lifecycleFinishedForElement:element]){element.lifecycle=IFCompositorLifecycleNone;element.lifecycleStartTime=NAN;}
     }
+    if(began&&any){double took=CACurrentMediaTime()-began;_counts.flushes++;_counts.flushSeconds+=took;_counts.flushWorst=fmax(_counts.flushWorst,took);}
 }
 - (void)reset {
     for(DWCanvasOutput *state in self.states.allValues){[state.layer removeFromSuperlayer];[state.frame.elements removeAllObjects];[state.leaving removeAllObjects];}

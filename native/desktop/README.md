@@ -237,7 +237,9 @@ changes for the config path, `exec-terminal`, `PATH` and relative paths.
   click asked for is answered, at most half a second, with its drags and
   release queued behind it; on the window that already has native focus it
   goes at once. `INFINIFY_DEBUG=1` in the environment prints one stderr
-  line for each such press and each native focus request.
+  line for each such press and each native focus request, and one every two
+  seconds that says how the canvas is keeping up
+  ([the frame line](#managing-only-named-processes)).
 - **Stage Manager has to be off.** With it on, macOS keeps only the current
   stage's windows at their size and scales every other window into a
   thumbnail in its strip. The window's bounds, its picture and the place a
@@ -1075,6 +1077,79 @@ does not exercise is the window server delivering a click to the panel. A
 press that is not released within five seconds is released where it went
 down. Without the flag the line reaches the controller, which refuses it as
 an invalid request.
+
+`INFINIFY_DEBUG=1` in the environment, in any run that draws the canvas,
+prints one line on stderr every two seconds while the canvas is open, every
+rate a second:
+
+```
+frames: 2.00s display=120 redraws=491.5 flushes=118.0 drawn=118.0 presented=118.0 flush_ms=0.13/0.36 main_gap_ms=14.0 sources #1=120.0/120.0/0.0 #2=120.0/120.0/0.0
+```
+
+`display` is the refresh rate the frame timer follows; `redraws` the changes
+that asked for the scene to be drawn (a window's picture, an animation's
+step, a decoded chunk, a description); `flushes` the times the scene was
+gone through with something to draw; `drawn` the frames handed to the
+display and `presented` those it showed; `flush_ms` how long one flush kept
+the main thread, mean and worst; `main_gap_ms` the longest the main thread
+went without returning to its run loop; and for each bound window the frames
+its stream delivered, those kept, and those passed over because they said
+nothing had changed. Without the variable nothing is timed or observed and
+the renderer counts nothing; each window's three counters are added to and
+never read.
+
+`INFINIFY_DEBUG_SYNTH=RATE` beside `--only-pid`, and in no other run, feeds
+every bound window RATE made-up frames a second (240 at most) in place of
+the capture such a run may not have: IOSurface-backed 32BGRA buffers of the
+window's own pixel size, a band moving down each, made on a background queue
+and handed to the main queue where a stream's frames arrive. It makes no
+frame while two are waiting to be taken, as a stream stops at its queue
+depth, and ends with the window's binding. Where the run does capture, the
+window is fed both.
+
+`tests/e2e/scoped-render-bench.sh` measures with the two: four fixture
+windows of 1700x1100 points of content, 1700x1132 with the title bar
+(3400x2264 pixels each), a canvas over the whole
+visible screen, 120 frames a second into each, all four tiles in view at
+zoom 0.54, ten seconds at rest and ten while a camera target is sent through
+the socket at about 110 a second. On the 120 Hz built-in display, 2026-10-11,
+the build before the [frame pacing](#rendering) change and the one after it,
+one run of each (the build after is the tree as it landed, after review):
+
+| per second | at rest, before | at rest, after | panning, before | panning, after |
+|---|---|---|---|---|
+| flushes | 239.0 | 119.0 | 302.9 | 119.2 |
+| frames drawn | 239.0 | 119.0 | 238.5 | 119.2 |
+| frames presented | 120.0 | 119.0 | 119.1 | 119.2 |
+| one flush, mean / worst, ms | 3.27 / 7.84 | 0.14 / 0.37 | 2.76 / 21.75 | 0.23 / 8.69 |
+| worst main-thread gap, ms | 13.5 | 15.2 | 22.3 | 13.4 |
+
+It asserts that each window kept at least 90% of its frames, that flushes do
+not exceed the display's rate by more than 3%, that frames presented are
+within 10% of it, and that the main thread was never away for 50 ms. The
+build before failed the second in both phases and held the others: the
+display was already given a frame for every refresh, and what the change
+removed is the second draw of each refresh and the wait in every draw, from
+about 780 ms of main-thread time a second to about 20.
+
+- The pictures are made up. What ScreenCaptureKit and the window server
+  spend to capture four real windows of that size, and what the windows'
+  own applications spend drawing under the canvas, is not in these numbers;
+  nor is a display that is not the built-in one. The owner's desktop run
+  with real windows has not been measured: `INFINIFY_DEBUG=1` on that run
+  prints the same line.
+- About once a second the main thread is away for 13 ms or more in both
+  builds, longer than one 8.3 ms refresh. That stall is older than the
+  change, but what it costs is new: the build before drew twice a refresh
+  and still showed 120 frames a second at rest, and the build after, which
+  draws only on the display link's callback, loses the callback the stall
+  covers and shows 118 or 119, a frame or two a second repeated. The 10%
+  the test allows passes that without a word. What the main thread is doing
+  then was not profiled; the look the idle poll takes at every window once a
+  second is the likely part.
+- A flush of 9 to 21 ms was seen after the change about once in every other
+  run (8.69 ms in the one tabulated); every other flush was under 1.2 ms.
+  Not explained.
 
 `tests/e2e/scoped-windows.sh` is the test. It builds
 `native/fixture/scope-fixture.m` (a regular application with one titled
@@ -2302,8 +2377,17 @@ the compositor's frame description. What the snapshot carries is
   rectangle, in the pinned layer.
 - **Streams.** A source keeps the latest pixel buffer of its stream and the
   compositor samples it; nothing is enqueued into a display layer. A new frame
-  redraws only the outputs that show that window, a burst of frames in one
-  turn of the run loop once, and nothing is drawn while nothing changes.
+  redraws only the outputs that show that window, once per refresh of the
+  display however many frames arrived in it (Frame pacing, below), and
+  nothing is drawn while nothing changes. A complete frame whose
+  `SCStreamFrameInfoDirtyRects` is there and empty changed nothing: it is
+  not kept and redraws nothing, once the window has a picture. A frame that
+  carries no such list is kept as before, and so are the first complete frame
+  of a stream that was just started or given a new size and a frame whose
+  size is not the kept picture's: the picture held then is from before the
+  stream stopped or the window was resized. Not observed: whether
+  ScreenCaptureKit delivers such frames at all could not be seen from a
+  process without Screen Recording access.
   Streams are configured with `colorSpaceName = sRGB`, which the compositor's
   colour handling requires, and a queue depth of 5 instead of 3, because the
   compositor holds the current buffer and briefly the one before it. When
@@ -2311,6 +2395,42 @@ the compositor's frame description. What the snapshot carries is
   placement returns is not blank until its stream delivers again. A window
   that has never delivered a frame is the chrome background colour inside its
   border and shadow.
+- **Frame pacing.** The scene is gone through once per refresh of the
+  display, by the [frame timer](#rendering) below, and at no other moment
+  while that timer runs. Every stream hands its frames to the main queue,
+  each on a turn of its own and at a moment of its own, and until this was
+  measured each such turn drew the scene: four windows changing at 120 Hz
+  drew it 239 times a second on a 120 Hz display, of which the display
+  showed 120, and each draw waited on the main thread for its command buffer
+  to be scheduled, 3.3 ms on average: 0.78 s of every second in which the
+  main thread, which also serves input, hot keys, Accessibility and the
+  socket, was not available. Now a picture, an animation's step or a decoded
+  chunk only marks its outputs and asks for a frame; the timer's frame
+  describes the camera, marks the animations and then flushes once, so a
+  camera frame and a window's picture of the same refresh are one draw with
+  both in it. A description made outside a frame (the idle poll, a socket
+  command, a pan from the trackpad) is left to the next frame too while the
+  timer is running, and is drawn at once when it is not, as before. Drawn at
+  once whatever the timer does: a frame whose output is new or whose layer
+  changed its place, size or scale, which is presented inside the
+  transaction that moves the layer (the launch's first frame, a panel
+  resized, the panels rebuilt after a display change); and everything while
+  no frame is coming: the quit-pending loop, and a timer that has not called
+  back for a quarter of a second because its display is asleep. A timer
+  silent for a second is replaced by the next change that wants one.
+  Only the timer's own flush leaves a frame to its command buffer to
+  present at the refresh being served, with nothing waiting for it
+  (`presentsWithTransaction` is set per frame). Every frame drawn at once is
+  presented inside the transaction, as all were before: no display link is
+  known to be refreshing then, and a drawable left to a refresh that does
+  not come would not return to the layer's pool. A frame that got no
+  drawable stays owed and is tried again by the next flush. While the timer
+  serves no camera motion its frames tell cursor edge pan of the pointer
+  only when it has moved; the idle poll, which goes on beside it, reports a
+  pointer at rest. The
+  same load after the change: 119 draws a second, all shown, 0.14 ms each
+  (`tests/e2e/scoped-render-bench.sh`, [below](#managing-only-named-processes)).
+  What that run cannot say is in the same place.
 - **Config reload.** The background program, the chrome style, the outline
   settings, `[effects]` and the error bar's messages are rebuilt when the
   snapshot's `render.revision` changes and at no other time. The controller
@@ -2335,7 +2455,10 @@ the compositor's frame description. What the snapshot carries is
   fastest screen a canvas panel is on, so 120 Hz on a ProMotion display and
   60 Hz on a 60 Hz one, where it was an `NSTimer` at 60 Hz whatever the
   display. One link serves every panel, so the controller is ticked once a
-  frame however many displays there are. Four things keep it running:
+  frame however many displays there are. Five things keep it running:
+  windows' pictures as their streams deliver them, and for a quarter of a
+  second after the last, so that a display link is not made and ended
+  between two frames of a video;
   [camera motion](#camera-motion) (a flight, a drift, an edge pan), a shader
   background that reads `u_time`, redrawn at that rate capped by `animate_fps`
   and only while a panel that shows it is open, a background
@@ -2343,7 +2466,7 @@ the compositor's frame description. What the snapshot carries is
   tick until nothing is pending, and a window that opens or
   leaves (an open or close animation, a stand-in's fade,
   [below](#blur-window-animations-and-the-error-bar)), drawn on every tick.
-  It stops when none of the four is left, so the frames of an opening window
+  It stops when none of the five is left, so the frames of an opening window
   end with its animation, and the link is made when frames are first wanted
   and invalidated when they stop being: no display callback is asked for
   while nothing needs one. While a background or an animation alone keeps it
