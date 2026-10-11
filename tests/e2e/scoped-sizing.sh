@@ -73,6 +73,9 @@ start a "Size fixture A $$" -300 resizable; A=$!
 start b "Size fixture B $$" 0 resizable min 300x260 max 640x520; B=$!
 start c "Size fixture C $$" 300 resizable increment 37x23; C=$!
 start r "Size rule R $$" 0 resizable hidden; R=$!
+# Shown together, late (case 23).
+start n "Size pair N $$" -200 resizable hidden; N=$!
+start m "Size pair M $$" 200 resizable hidden; M=$!
 # Low and to the right, 40 points inside the visible area's corner: from there no larger size fits the screen (case 19).
 start d "Size fixture D $$" 0 resizable corner 40x40; D=$!
 # Out of scope and exactly as scoped-windows.sh starts it: four arguments, so none of the sizing test's commands apply to it.
@@ -438,10 +441,27 @@ r = until('18: the ruled window is adopted', 8, windows, lambda w: any(x['title'
 ids['r'] = next(x['id'] for x in r if x['title'] == status('r')['title'])
 agreed('18: the rule\'s size [480, 360]', 'r', [480, 360]); clicked('r', '18')
 
+# 23. Two windows that appear together: each gets the focus a new window gets, the second request withdrawing the first
+# after it has asked for its application. Both are adopted; the request that was withdrawn may end refused, which is what
+# withdrawn means; the last one answered must end focused, where it used to be refused for the change of foreground the
+# first one made; and the window the canvas holds focused is the one in front.
+since = len(trace()); (evidence / 'n' / 'show').write_text('1'); (evidence / 'm' / 'show').write_text('1')
+pair = until('23: both windows are adopted', 8, windows, lambda w: all(any(x['title'] == status(k)['title'] for x in w) for k in ('n', 'm')))
+for k in ('n', 'm'): ids[k] = next(x['id'] for x in pair if x['title'] == status(k)['title'])
+pids = {status(k)['pid']: k for k in ('n', 'm')}
+def focus_lines(): return [l for l in trace()[since:] if l.startswith('debug: native focus') and any(f' pid={p} ' in l for p in pids)]
+until('23: a focus request for one of them is answered focused', 5, focus_lines, lambda ls: any('outcome=focused' in l for l in ls)); time.sleep(.6)
+lines = focus_lines()
+check('23: the last focus request answered for the pair ended focused', bool(lines) and 'outcome=focused focused=1' in lines[-1], lines)
+front = until('23: one of the two is the application in front', 3, lambda: {k: status(k)['app_active'] for k in ('n', 'm')}, lambda v: sum(v.values()) == 1)
+held = [w['id'] for w in windows() if w.get('is_focused')]; want = ids[next(k for k, v in front.items() if v)]
+check('23: the window the canvas holds focused is the one in front', held == [want], {'front': front, 'focused': held, 'ids': {k: ids[k] for k in ('n', 'm')}})
+away('n'); away('m'); time.sleep(.3)
+
 # 21. Nothing but the scope was acted on, and no window was ever left unsettled.
 z = status('z')
 check('21: decoy took no event, was never activated and has its bounds', z['counts'] | {'raf': 0} == decoy['counts'] | {'raf': 0} and z['activations'] == 0 and z['bounds'] == decoy['bounds'], {'bounds': z['bounds'], 'activations': z['activations']})
-allowed = {status(n)['pid'] for n in scope + ['r']} | {pid}
+allowed = {status(n)['pid'] for n in scope + ['r', 'n', 'm']} | {pid}
 named = {int(p) for l in trace() if l.startswith('debug:') for p in re.findall(r'(?<![a-z_])pid=(\d+)', l)}
 check('21: every pid acted on is in the scope', named and named <= allowed, {'named': sorted(named), 'scope': sorted(allowed), 'decoy': decoy['pid']})
 check('21: no press or tile was refused as unsettled', not any('source presentation unsettled' in l for l in trace()), [l for l in trace() if 'unsettled' in l])
@@ -467,7 +487,7 @@ for name in a b c d z ${E:+e}; do
 done
 sleep .5
 # The ruled fixture is in the scope from the start: its window appears later, and must be managed when it does.
-launch --debug-pointer --only-pid "$A,$B,$C,$D,$R${E:+,$E}"
+launch --debug-pointer --only-pid "$A,$B,$C,$D,$R,$N,$M${E:+,$E}"
 python3 "$evidence/driver.py" "$evidence" "$app" scoped "$infinify" ${E:+electron}
 quit; [ "$gone" = yes ] || { echo 'FAIL: Infinify did not quit within 8 s of msg action quit'; exit 1; }
 echo 'ok: quit within 8 s'

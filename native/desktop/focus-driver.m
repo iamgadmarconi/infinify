@@ -2,6 +2,7 @@
 #import "focus-driver.h"
 #import "../focus/focus.h"
 #import <AppKit/AppKit.h>
+#import <QuartzCore/QuartzCore.h>
 #include <dlfcn.h>
 static DWFocusIdentity identity(NSDictionary *i){return (DWFocusIdentity){[i[@"pid"]intValue],[i[@"birth_sec"]unsignedLongLongValue],[i[@"birth_usec"]unsignedLongLongValue],[i[@"wid"]unsignedIntValue]};}
 static NSDictionary *json(DWFocusIdentity i){return @{@"pid":@(i.pid),@"birth_sec":@(i.seconds),@"birth_usec":@(i.microseconds),@"wid":@(i.window)};}
@@ -12,9 +13,19 @@ static NSDictionary *json(DWFocusIdentity i){return @{@"pid":@(i.pid),@"birth_se
 @property uint64_t seconds,microseconds;
 @property BOOL reachedTarget, invalid;
 @property DWFocusIdentity target;
+// The targets of the requests this one followed within two seconds, as [pid, start seconds, start microseconds]: a request
+// that was withdrawn for this one may already have asked for its application, and that application in front is this
+// run's own doing, not the user's.
+@property NSArray<NSArray<NSNumber *> *> *earlier;
+@property CFTimeInterval made;
 @end
 @implementation DWFocusLease
 @end
+// Is the application in front one an earlier request of this run brought there?
+static BOOL ours(DWFocusLease *lease,pid_t pid,uint64_t s,uint64_t u){
+    for(NSArray<NSNumber *> *e in lease.earlier)if(e[0].intValue==pid&&e[1].unsignedLongLongValue==s&&e[2].unsignedLongLongValue==u)return YES;
+    return NO;
+}
 static bool allowed(DWFocusIdentity i,void *context){
     DWFocusLease *lease=(__bridge DWFocusLease *)context;
     @synchronized(lease){
@@ -23,7 +34,8 @@ static bool allowed(DWFocusIdentity i,void *context){
     CGRect bounds;if(!dw_focus_owner(i,&bounds)){lease.invalid=YES;return false;}lease.bounds=bounds;
     pid_t pid=NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier;
     if(pid==i.pid){lease.reachedTarget=YES;return lease.guard();}
-    uint64_t s,u;BOOL valid=!lease.reachedTarget&&pid==lease.foreground&&dw_focus_birth(pid,&s,&u)&&s==lease.seconds&&u==lease.microseconds&&lease.guard();if(!valid)lease.invalid=YES;return valid;
+    uint64_t s,u;BOOL fresh=dw_focus_birth(pid,&s,&u);
+    BOOL valid=!lease.reachedTarget&&fresh&&((pid==lease.foreground&&s==lease.seconds&&u==lease.microseconds)||ours(lease,pid,s,u))&&lease.guard();if(!valid)lease.invalid=YES;return valid;
     }
 }
 static bool driverGuard(DWFocusIdentity i,void *context){(void)i;return ((__bridge DWFocusLease *)context).guard();}
@@ -39,7 +51,7 @@ static bool driverGuard(DWFocusIdentity i,void *context){(void)i;return ((__brid
             NSRunningApplication *app=note.userInfo[NSWorkspaceApplicationKey];pid_t pid=app.processIdentifier;uint64_t s,u;BOOL fresh=dw_focus_birth(pid,&s,&u);
             @synchronized(lease){BOOL target=fresh&&pid==lease.target.pid&&s==lease.target.seconds&&u==lease.target.microseconds;
                 BOOL original=fresh&&pid==lease.foreground&&s==lease.seconds&&u==lease.microseconds;
-                if(target)lease.reachedTarget=YES;else if(!original||lease.reachedTarget)lease.invalid=YES;
+                if(target)lease.reachedTarget=YES;else if((!original&&!(fresh&&ours(lease,pid,s,u)))||lease.reachedTarget)lease.invalid=YES;
             }
         }];
     }return self;
@@ -52,7 +64,14 @@ static bool driverGuard(DWFocusIdentity i,void *context){(void)i;return ((__brid
     CGRect bounds;if(!dw_focus_owner(i,&bounds))return nil;lease.bounds=bounds;
     lease.foreground=NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier;
     uint64_t s,u;if(!dw_focus_birth(lease.foreground,&s,&u))return nil;lease.seconds=s;lease.microseconds=u;
-    lease.target=i;@synchronized(self){self.lease=lease;}
+    // Two windows that appear together each get the focus a new window gets, and the second request withdraws the first
+    // after the first has asked for its application: with only the application that was in front at this intent allowed,
+    // the second was refused as soon as the first one's arrived, and neither window was focused (guard_denied, both).
+    lease.target=i;lease.made=CACurrentMediaTime();
+    @synchronized(self){DWFocusLease *before=self.lease;
+        if(before&&lease.made-before.made<2){NSMutableArray *earlier=[NSMutableArray arrayWithArray:before.earlier?:@[]];[earlier addObject:@[@(before.target.pid),@(before.target.seconds),@(before.target.microseconds)]];
+            while(earlier.count>4)[earlier removeObjectAtIndex:0];lease.earlier=earlier;}
+        self.lease=lease;}
     return ^BOOL{return allowed(i,(__bridge void *)lease);};
 }
 - (BOOL)select:(NSDictionary *)value guard:(DWGuard)guard {

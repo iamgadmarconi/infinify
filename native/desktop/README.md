@@ -1262,15 +1262,18 @@ over the fixtures when they were measured.
 An Electron window that another opaque window covers whole stops its
 animation frames; under the canvas alone it does not.
 
-Open, found while the test was written, not traced and not changed: **a
-scoped window that appears after Infinify has started.** When two did, each
-got the focus a new window gets, and both requests came back
-`outcome=guard_denied`; the first application was left frontmost and neither
-was reported focused. The reading at the time, not checked in code, was that
-the second request withdrew the first after the first had already activated
-its application and was then refused because the foreground had changed. The
-test starts its fixtures first and so never has a new window: the arrival of
-a window under a scope, alone or two at once, has no test.
+Found while the test was written, and since traced and changed: **two
+windows that appear together after Infinify has started.** Each gets the
+focus a new window gets, and the second request withdraws the first after
+the first has asked for its application. The focus lease allowed only the
+application that was in front at its own intent, so the second request was
+refused as soon as the first one's application arrived, and neither window
+was focused (`guard_denied`, both). A lease now also allows the
+applications that the requests it followed within two seconds were for:
+that change of foreground is this run's own doing. `tests/e2e/scoped-sizing.sh`
+shows two fixtures at once (case 23): the withdrawn request may end refused,
+the last one ends focused, and the window the canvas holds focused is the
+one in front.
 
 Not run: a scoped run with Screen Recording access (capture, the retitle,
 and the scope filter on the windows named as present), which this shell
