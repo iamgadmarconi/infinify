@@ -181,6 +181,15 @@ static void readback(void){
     check(![co canRemove:@1]&&[co busyWindow]==nil,@"readback: an orphaned transaction is live");[co reap];check(![co canRemove:@1],@"readback: an orphan is given one look");[co reap];
     check(co.obligations==0&&[co canRemove:@1],@"readback: an orphaned transaction is reaped");usable(@"after an orphan");
     check(co.failure==nil,@"readback: a failure ends with the next result the controller takes");
+    // A resize grab. It begins without the acknowledged mode's check of the window's own extent (the first read is the check), and at
+    // rest it owes no effect: it is no orphan while the input that holds it is down, and is reaped like one when that input is gone.
+    driver.skew=1;NSDictionary *grab=[co request:@{@"op":@"begin_native_resize",@"window":@1,@"output":@1,@"edges":@"right",@"start_screen":@{@"x":@50,@"y":@50}}];driver.skew=0;
+    check(grab!=nil,@"readback: a grab begins on a window whose extent is not the one observed");drain(workers,mains);
+    check(co.obligations==0&&![co canRemove:@1]&&[snap(c)[@"native_resize"][@"phase"]isEqual:@"dragging"],@"readback: a grab at rest owes nothing and is live");usable(@"during a grab at rest");
+    __block BOOL down=YES;co.held=^BOOL(NSNumber *transaction){return down&&[transaction isEqual:grab[@"transaction"]];};
+    [co reap];[co reap];[co reap];check(![co canRemove:@1]&&[snap(c)[@"native_resize"][@"phase"]isEqual:@"dragging"],@"readback: a held grab at rest is not reaped");
+    down=NO;[co reap];check(![co canRemove:@1],@"readback: a grab nobody holds is given one look");[co reap];drain(workers,mains);
+    check(co.obligations==0&&[co canRemove:@1],@"readback: a grab nobody holds is reaped");usable(@"after a reaped grab");[delays removeAllObjects];
     [co shutdown];driftwm_desktop_destroy(c);
 }
 int main(void){@autoreleasepool{

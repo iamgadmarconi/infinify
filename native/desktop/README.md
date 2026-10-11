@@ -1081,21 +1081,46 @@ request on the IPC socket, for a test that may not move the pointer:
 
 ```json
 {"DebugPointer":{"phase":"probe","window":1,"at":[0.5,0.5]}}
+{"DebugPointer":{"phase":"down","window":1,"at":[0.83,0.5],"button":"right","modifiers":["alt"]}}
+{"DebugPointer":{"phase":"drag","to":[40,0]}}
+{"DebugPointer":{"phase":"up"}}
 ```
 
-`phase` is `probe`, `down` or `up`, `window` the id `msg state` gives, and
-`at` the point as a fraction of the window's placement on its output. The
-reply is `{"Ok":{"DebugPointer":{"screen":[x,y],"screen_rect":…,"clip_rect":…,"hit":ID}}}`
+`phase` is `probe`, `down`, `drag` or `up`, `window` the id `msg state` gives,
+and `at` the point as a fraction of the window's placement on its output. The
+reply is `{"Ok":{"DebugPointer":{"screen":[x,y],"screen_rect":…,"clip_rect":…,"hit":ID,"border":EDGE}}}`
 or `{"Err":"…"}`: a point that is clipped, off the panel or under another
-window is refused, never moved. `down` and `up` make a left mouse event and
-hand it to the canvas view's own `-mouseDown:` and `-mouseUp:`, so the
-binding lookup, the controller's focus request, the hold for native focus,
-the forward to the window and the release run as for a person's click.
-Nothing is posted to the session and the pointer stays where it is. What it
-does not exercise is the window server delivering a click to the panel. A
-press that is not released within five seconds is released where it went
-down. Without the flag the line reaches the controller, which refuses it as
-an invalid request.
+window is refused, never moved.
+
+- `down` takes `button` (`left`, `right` or `middle`; left when absent),
+  `modifiers` (any of `alt`, `shift`, `ctrl`, `super`) and `offset`
+  (`[ox, oy]` screen points added to the point), which is how a point of the
+  [resize border](#resizing-a-window-with-the-pointer) just outside a frame is
+  named; the controller must then say that the point is that window's border.
+- `drag` needs a press that is down. Its point is where the press went down
+  plus `to` screen points, since a fraction of a tile that is changing size
+  names no steady point, and it must be on the canvas panel.
+- `up` with `window` and `at` releases at that fraction of the placement as it
+  is now; without them it releases where the press last was, which is how a
+  drag ends and the only way to release over a window that has closed.
+
+Each makes a mouse event of the matching type and hands it to the canvas
+view's own `-mouseDown:`, `-mouseDragged:` and `-mouseUp:` (the right and
+middle buttons' handlers for those), so the binding lookup, the controller's
+focus request, the hold for native focus, the forward to the window, a window
+drag, a resize grab with every size it asks and the release run as for a
+person's press, drag and release. Those handlers read the event's button
+number, modifiers, location and time. `+[NSEvent mouseEventWithType:…]`
+numbers every event it makes 0, a right-button one too, so for the right and
+middle buttons the event's own Quartz event is copied, given the number its
+type means, and made an `NSEvent` again; the trace line
+`debug: pointer down button=1 trigger=right binding=resize_window` shows what
+the handler then read. Nothing is posted to the session and the pointer stays
+where it is. What it does not exercise is the window server delivering a
+click or a modified right-button drag to the panel. A press that is not
+released within five seconds of its last event is released where it last was,
+with its own button. Without the flag the line reaches the controller, which
+refuses it as an invalid request.
 
 `INFINIFY_DEBUG=1` in the environment, in any run that draws the canvas,
 prints one line on stderr every two seconds while the canvas is open, every
@@ -1836,7 +1861,8 @@ covered by its scenarios and not run in the app with a live window:
 - A three-finger move swipe (a tap, then the swipe) over a widget pans the
   canvas, as upstream's falls back to a pan, a pinned widget included. Over a
   pinned window it moves that window about its display's screen, as above.
-  The resize swipe is gated for every window; over a widget it pans. A window
+  The resize swipe [resizes a canvas window](#resizing-a-window-with-the-pointer) at the controller and is claimed
+  and inert over a pinned one; over a widget it pans. A window
   that becomes a widget while a move swipe holds it is let go.
 - A hot corner or a gesture bound to `toggle-pin-to-screen` or
   `move-to-bookmark` runs it as the key does: an open Option-Tab cycle ends
@@ -1856,8 +1882,8 @@ covered by its scenarios and not run in the app with a live window:
   move gesture move it, and that is all. Upstream's resize binding, its
   resize gesture and its title bar also act on the pinned window in screen
   space; here a resize press raises and focuses the window and stops there
-  with a note, the resize swipe is
-  the gated one of every window, and there is no compositor title bar to
+  with a note, the resize swipe over one is
+  claimed and does nothing, and there is no compositor title bar to
   drag.
 - Nothing marks a widget on screen. Upstream's dot marks a pinned window in a
   title bar the compositor draws, which a Mac window has only under a
@@ -4083,7 +4109,8 @@ context before `anywhere`.
 | mouse wheel | the application's | zoom (`wheel-scroll`) |
 | ⌥ left drag | move the logical window (`alt+left`) | nothing |
 | ⌥⇧ left drag | move its cluster (`alt+shift+left`) | nothing |
-| ⌥ / ⌥⇧ right drag | `resize-window` / `resize-window-snapped`: only with `--experimental-native-resize`, raising and focusing the window first; else the window is raised and focused and a status note says why | nothing |
+| ⌥ / ⌥⇧ right drag | `resize-window` / `resize-window-snapped`: raises and focuses the window and resizes it from the edge or corner nearest the press, with its snap cluster for ⇧ ([Resizing a window with the pointer](#resizing-a-window-with-the-pointer)) | nothing |
+| left drag just outside a window's frame | resizes the window by that edge (`resize_on_border`) | the same: the band is around the window |
 | ⌥ / ⌥⇧ middle | `fit-window` / `fit-window-snapped` ([Window sizing actions](#window-sizing-actions)) | nothing |
 | ⌃⌥ middle | `toggle-fullscreen` ([Fullscreen](#fullscreen)) | nothing |
 | ⌃⌥ left drag | pan (`mod+left`) | pan |
@@ -4211,7 +4238,8 @@ coordinator like the request of any other reply
 ([What focusing does natively](#what-focusing-does-natively)), and the status
 line shows what a
 threshold gesture fired (`Home`, `Zoom to fit`), the refusal of an action that
-does not run here yet, and the note of a gated resize.
+does not run here yet, and the note of a resize that is refused (a
+screen-pinned window's).
 
 **macOS takes three- and four-finger touches for itself first.** Infinify
 changes no system setting. For the canvas to receive those finger counts
@@ -4239,7 +4267,9 @@ pan with `cancel_navigation` on that display.
 Not done: an unbound gesture is not forwarded to the application under it
 (upstream forwards it to the client), so with the default table a bare
 two-finger pinch over a window now does nothing where it used to zoom the
-canvas. `resize-window` by gesture is gated and says so.
+canvas. `resize-window` by gesture begins the same resize grab a bound
+press begins ([Resizing a window with the pointer](#resizing-a-window-with-the-pointer));
+it has been run in controller scenarios only, never with fingers.
 
 What changes for someone who used the previous build:
 
@@ -4263,7 +4293,8 @@ What changes for someone who used the previous build:
   the fingers lift. Both are
   [window navigation](#window-navigation-and-native-focus), native focus
   request included. Option with a three-finger swipe on a window is
-  upstream's resize and shows the gated note.
+  upstream's resize: the resize grab, which has been run at the controller
+  only and not through the shell.
 - `set-trackpad off` (no default key; bind it, or `Infinify msg action
   set-trackpad off`) stops all of the above, the two-finger pinch included,
   until `on`, `toggle`, a config change of `[input.trackpad] enable`, or a
@@ -6142,7 +6173,7 @@ been pressed by a test.
 | Launch | What runs |
 | --- | --- |
 | default | Everything in this section: `zoom-to-fit-snapped`, `fit-window`, `fit-window-snapped`, `fill-window`, `grow-window`, `shrink-window`, `msg resize WIDTH HEIGHT`, and a [window rule](#window-rules-widgets-and-pinned-windows)'s `size`, asked of a new window that matches it. Keys bound to those actions are registered where a run registers keys. A size is settled by reading the window back. |
-| `--experimental-native-resize` | The same, in the older capture-acknowledged mode: a window's picture is shown, and the window takes input, only once a capture of it at its new size has been acknowledged. Beside that the eight orange handles on the focused window, which is all the flag is for now ([Experimental native resizing](#experimental-native-resizing)). On the owner's real windows no capture was ever acknowledged in this mode. |
+| `--experimental-native-resize` | The same, in the older capture-acknowledged mode: a window's picture is shown, and the window takes input, only once a capture of it at its new size has been acknowledged. Beside that the eight orange handles on the focused window, which is all the flag is for now and is legacy: a normal run resizes by pointer without it ([Resizing a window with the pointer](#resizing-a-window-with-the-pointer), [Experimental native resizing](#experimental-native-resizing)). On the owner's real windows no capture was ever acknowledged in this mode. |
 | `--demo*`, `--owned-resize-*` | As before: a demo and a probe are told nothing and answer `action not implemented on macOS yet: <name>`. |
 
 All of them act on canvas windows. With a widget or a screen-pinned window
@@ -6403,7 +6434,8 @@ In every normal run (until 2026-10-11 only with
 - A widget and a screen-pinned window are sized by nothing but their own
   rule's `size` as they appear: not by an action, not by `msg resize`, not by
   hand. Upstream also resizes a pinned window in screen space by its resize
-  binding.
+  binding; here that press raises and focuses it and says it is not resized.
+  This is a decision of the port, not a limit of a Mac window.
 - The shell tells the controller it can resize before the
   canvas, and so the resize coordinator, exists. No window has a live source
   until the canvas is open, so no transaction can begin in between.
@@ -6788,6 +6820,339 @@ controller scenarios. Still unrun as well: `tests/e2e/desktop-resize.sh`,
 every hot key, mouse binding, gesture and hot corner that fires a sizing
 action, key repeat, Escape during a transaction, and more than one display.
 
+## Resizing a window with the pointer
+
+In every normal run, with no flag, DriftWM's pointer resize works on real
+windows:
+
+- **⌥ right drag on a window** (`resize-window`, upstream's default
+  `alt+right`) raises and focuses the window and resizes it. Where the press
+  falls decides what moves, by upstream's 3×3 grid over the window: a corner
+  cell moves that corner, an edge cell that edge, and the middle resizes from
+  the bottom right. The opposite edge or corner stays where it is.
+- **⌥⇧ right drag** (`resize-window-snapped`) does the same and carries the
+  snap cluster: the windows snapped to the moving edges move with them, by as
+  much as the window grew or shrank, without being resized.
+- **A left drag just outside a window's frame** resizes by that edge
+  (`[mouse] resize_on_border`, default true): the band is 8 canvas units
+  around the frame, so it scales with the zoom. With
+  `decoration_resize_snapped = true` that drag carries the cluster. A binding
+  whose modifiers are held on that window wins over the border.
+- **A window rule's `preserve_aspect_ratio`** keeps the width to height the
+  window has when the drag begins: an edge drives its own axis and the other
+  follows, a corner follows the axis dragged farther. Such a resize does not
+  snap and carries no cluster.
+- **⌥ three-finger swipe over a window** (`alt+3-finger-swipe`, and with ⇧ the
+  snapped one) begins the same resize from the pointer's place and follows the
+  fingers. This has been run in controller scenarios only.
+
+Each size the drag asks is asked of the real window through Accessibility, and
+the canvas shows the size the window then has. One size is asked at a time:
+while the window is answering, later pointer motion only replaces the size
+that waits, so a fast drag asks a few sizes, not one per event (thirty events
+asked three sizes of a fixture in the run recorded below). What is drawn therefore follows the pointer by
+one request, and a window that grants another size than was asked (a minimum,
+a maximum, a resize increment) is shown at the size it took. Sizes snap to
+other windows as a move does (`[snap]`). When the button lifts the last size
+is let through, the window is read once more, and the canvas and the window
+agree. Nothing waits for a capture and no input is held: a click on another
+window lands during a resize that has not been answered yet.
+
+A drag ends without its release when the window will not be resized at all
+(the press has then only raised and focused it), when the window closes, and
+when its application stops answering: the size request then ends by itself
+within the adapter's deadline and one more read. The rest of that press does
+nothing, and the next press starts afresh.
+
+### Where a Mac window cannot follow DriftWM's
+
+- **A left or top drag moves the tile, not the real window's corner.** A Mac
+  window's origin is its top-left and a size request keeps it, so the real
+  window grows right and down wherever the drag was taken. Upstream shows the
+  opposite edge standing still, and so does the canvas: the tile's origin is
+  moved by what the size changed. The real window's own place is the shell's
+  affair as for every other size request (it is moved only to make room on its
+  screen).
+- **Limits are not known before asking.** Upstream clamps to the limits its
+  client declares and never asks for more. Here a size past a limit is asked
+  and refused, about an eighth of a second each time while the pointer keeps
+  moving (by the adapter's polling constants; not measured); a pointer at rest
+  asks nothing. The snap cluster follows the size
+  granted, so it stops with the window.
+- **macOS grants no size larger than the screen's visible area**, and the
+  real window is moved first when a larger size has no room where it sits.
+- **A screen-pinned window is not resized**, where upstream resizes it in
+  screen space. The press raises and focuses it and says so. A decision of
+  the port, for the owner to confirm.
+- **One size transaction at a time.** While a resize drag lasts, a sizing
+  action, a fullscreen toggle and `msg resize`, of this or any other window,
+  are refused as pending. A second resize press while the last one is still
+  settling only raises and focuses the window.
+- **The drag ends when its own button lifts**, where upstream's ends with the
+  last of several buttons.
+- **The border is on the canvas.** A real window's own edges lie under the
+  canvas and no pointer reaches them. The rest is a decision of the port, not
+  a limit of a Mac window: the band exists only where no window's frame covers
+  it, a lower window's included (upstream's topmost band wins over the body of
+  a window beneath it), a press it does not take is a canvas press (upstream
+  still counts the band as the window for bindings), and a stand-in, a widget,
+  a pinned and a fullscreen window have none.
+- **No resize cursor** is shown over the border or during a drag: the shell
+  sets no cursor anywhere.
+
+### What has been run for the pointer resize
+
+On 2026-10-11, macOS 27.2, Apple Silicon, one 2056x1329 display, from a shell
+with Accessibility and no Screen Recording access, on the build of this tree:
+
+- `tests/e2e/scoped-resize-drag.sh`: eight AppKit fixture applications of the
+  test's own (A, N, K and H resizable; B with a content minimum of 300x260 and
+  a maximum of 640x520; C with a resize increment of 37x23; F not resizable;
+  P, whose title a rule with `preserve_aspect_ratio = true` names) and a decoy
+  outside the scope, managed by
+  `Infinify --windowed 1100x700 --debug-pointer --no-hover-forwarding --only-pid …`
+  on a private state, config and socket, with `[snap] gap = 12`,
+  `distance = 16`, `break_force = 24` and upstream's default bindings. Every
+  press, drag and release is a `DebugPointer` request: an event handed to the
+  canvas view's own handlers, as described under `--debug-pointer` above. Each
+  fixture reports its own window's bounds; `canvas` is `msg state`'s size for
+  the window; a frame is `[x, y, width, height]` on the canvas. After each
+  case a press and release on the window's tile must land once in its plain
+  view. Sizes are frame sizes: a fixture's title bar is 32 points. Its output,
+  less the evidence path:
+
+```
+ok: adopts exactly the scope: [(1, 'Drag fixture H 38755', [420, 502]), (2, 'Drag fixture A 38755', [420, 502]), (3, 'Drag fixture B 38755', [420, 502]), (4, 'Ratio P 38755', [420, 502]), (5, 'Drag fixture K 38755', [420, 502]), (6, 'Drag neighbour N 38755', [420, 502]), (7, 'Drag fixture F 38755', [420, 502]), (8, 'Drag fixture C 38755', [420, 502])]
+ok: Screen Recording: not granted: tiles have no picture
+ok: zoom is 1: 1.0
+ok: 1: N is focused first: a click on the tile of n lands once, within 2 points: {'delta': {'plain_down': 1, 'plain_up': 1}, 'last': {'plain_down': [210, 147], 'plain_up': [210, 147]}, 'want': [210.0, 147.0]}
+ok: 1: N holds the focus before the first press: [6]
+ok: 1 top_left from (0.17, 0.17): a at 480x360: {'native': [480, 360], 'canvas': [480, 360]}
+ok: 1 top_left from (0.17, 0.17): the press is the right button's, bound to resize-window: debug: pointer down button=1 trigger=right binding=resize_window window=#2
+ok: 1 top_left from (0.17, 0.17): the grab resizes the top_left edge: debug: resize grab transaction=2 window=#2 edges=top_left group=0 ratio=0
+ok: 1: the press raises and focuses A before any drag: [2]
+ok: 1 top_left from (0.17, 0.17): the window and the canvas end at 520x390: {'native': [520, 390], 'canvas': [520, 390]}
+ok: 1 top_left from (0.17, 0.17): the opposite edge stays on the canvas: {'before': [110, 170, 480, 360], 'after': [70, 140, 520, 390], 'want': [70, 140, 520, 390]}
+ok: 1 top_left from (0.17, 0.17): the native window keeps its own top-left (no setter moved it): {'before': [518, 417, 480, 360], 'after': [518, 417, 520, 390], 'setters': 5}
+ok: 1 top_left from (0.17, 0.17): the transaction completed: ['debug: size transaction 2 of #2 ended phase=complete']
+ok: 1 top_left from (0.17, 0.17): a click on the tile of a lands once, within 2 points: {'delta': {'plain_down': 1, 'plain_up': 1}, 'last': {'plain_down': [260, 147], 'plain_up': [260, 147]}, 'want': [260.0, 147.0]}
+ok: 1 top from (0.50, 0.17): a at 480x360: {'native': [480, 360], 'canvas': [480, 360]}
+ok: 1 top from (0.50, 0.17): the press is the right button's, bound to resize-window: debug: pointer down button=1 trigger=right binding=resize_window window=#2
+ok: 1 top from (0.50, 0.17): the grab resizes the top edge: debug: resize grab transaction=4 window=#2 edges=top group=0 ratio=0
+ok: 1 top from (0.50, 0.17): the window and the canvas end at 480x390: {'native': [480, 390], 'canvas': [480, 390]}
+ok: 1 top from (0.50, 0.17): the opposite edge stays on the canvas: {'before': [90, 155, 480, 360], 'after': [90, 125, 480, 390], 'want': [90, 125, 480, 390]}
+ok: 1 top from (0.50, 0.17): the native window keeps its own top-left (no setter moved it): {'before': [518, 417, 480, 360], 'after': [518, 417, 480, 390], 'setters': 5}
+ok: 1 top from (0.50, 0.17): the transaction completed: ['debug: size transaction 4 of #2 ended phase=complete']
+ok: 1 top from (0.50, 0.17): a click on the tile of a lands once, within 2 points: {'delta': {'plain_down': 1, 'plain_up': 1}, 'last': {'plain_down': [240, 147], 'plain_up': [240, 147]}, 'want': [240.0, 147.0]}
+ok: 1 top_right from (0.83, 0.17): a at 480x360: {'native': [480, 360], 'canvas': [480, 360]}
+ok: 1 top_right from (0.83, 0.17): the press is the right button's, bound to resize-window: debug: pointer down button=1 trigger=right binding=resize_window window=#2
+ok: 1 top_right from (0.83, 0.17): the grab resizes the top_right edge: debug: resize grab transaction=6 window=#2 edges=top_right group=0 ratio=0
+ok: 1 top_right from (0.83, 0.17): the window and the canvas end at 520x390: {'native': [520, 390], 'canvas': [520, 390]}
+ok: 1 top_right from (0.83, 0.17): the opposite edge stays on the canvas: {'before': [90, 140, 480, 360], 'after': [90, 110, 520, 390], 'want': [90, 110, 520, 390]}
+ok: 1 top_right from (0.83, 0.17): the native window keeps its own top-left (no setter moved it): {'before': [518, 417, 480, 360], 'after': [518, 417, 520, 390], 'setters': 5}
+ok: 1 top_right from (0.83, 0.17): the transaction completed: ['debug: size transaction 6 of #2 ended phase=complete']
+ok: 1 top_right from (0.83, 0.17): a click on the tile of a lands once, within 2 points: {'delta': {'plain_down': 1, 'plain_up': 1}, 'last': {'plain_down': [260, 147], 'plain_up': [260, 147]}, 'want': [260.0, 147.0]}
+ok: 1 left from (0.17, 0.50): a at 480x360: {'native': [480, 360], 'canvas': [480, 360]}
+ok: 1 left from (0.17, 0.50): the press is the right button's, bound to resize-window: debug: pointer down button=1 trigger=right binding=resize_window window=#2
+ok: 1 left from (0.17, 0.50): the grab resizes the left edge: debug: resize grab transaction=8 window=#2 edges=left group=0 ratio=0
+ok: 1 left from (0.17, 0.50): the window and the canvas end at 520x360: {'native': [520, 360], 'canvas': [520, 360]}
+ok: 1 left from (0.17, 0.50): the opposite edge stays on the canvas: {'before': [110, 125, 480, 360], 'after': [70, 125, 520, 360], 'want': [70, 125, 520, 360]}
+ok: 1 left from (0.17, 0.50): the native window keeps its own top-left (no setter moved it): {'before': [518, 417, 480, 360], 'after': [518, 417, 520, 360], 'setters': 5}
+ok: 1 left from (0.17, 0.50): the transaction completed: ['debug: size transaction 8 of #2 ended phase=complete']
+ok: 1 left from (0.17, 0.50): a click on the tile of a lands once, within 2 points: {'delta': {'plain_down': 1, 'plain_up': 1}, 'last': {'plain_down': [260, 147], 'plain_up': [260, 147]}, 'want': [260.0, 147.0]}
+ok: 1 bottom_right from (0.50, 0.50): a at 480x360: {'native': [480, 360], 'canvas': [480, 360]}
+ok: 1 bottom_right from (0.50, 0.50): the press is the right button's, bound to resize-window: debug: pointer down button=1 trigger=right binding=resize_window window=#2
+ok: 1 bottom_right from (0.50, 0.50): the grab resizes the bottom_right edge: debug: resize grab transaction=10 window=#2 edges=bottom_right group=0 ratio=0
+ok: 1 bottom_right from (0.50, 0.50): the window and the canvas end at 520x390: {'native': [520, 390], 'canvas': [520, 390]}
+ok: 1 bottom_right from (0.50, 0.50): the opposite edge stays on the canvas: {'before': [90, 125, 480, 360], 'after': [90, 125, 520, 390], 'want': [90, 125, 520, 390]}
+ok: 1 bottom_right from (0.50, 0.50): the native window keeps its own top-left (no setter moved it): {'before': [518, 417, 480, 360], 'after': [518, 417, 520, 390], 'setters': 5}
+ok: 1 bottom_right from (0.50, 0.50): the transaction completed: ['debug: size transaction 10 of #2 ended phase=complete']
+ok: 1 bottom_right from (0.50, 0.50): a click on the tile of a lands once, within 2 points: {'delta': {'plain_down': 1, 'plain_up': 1}, 'last': {'plain_down': [260, 147], 'plain_up': [260, 147]}, 'want': [260.0, 147.0]}
+ok: 1 right from (0.83, 0.50): a at 480x360: {'native': [480, 360], 'canvas': [480, 360]}
+ok: 1 right from (0.83, 0.50): the press is the right button's, bound to resize-window: debug: pointer down button=1 trigger=right binding=resize_window window=#2
+ok: 1 right from (0.83, 0.50): the grab resizes the right edge: debug: resize grab transaction=12 window=#2 edges=right group=0 ratio=0
+ok: 1 right from (0.83, 0.50): the window and the canvas end at 520x360: {'native': [520, 360], 'canvas': [520, 360]}
+ok: 1 right from (0.83, 0.50): the opposite edge stays on the canvas: {'before': [110, 140, 480, 360], 'after': [110, 140, 520, 360], 'want': [110, 140, 520, 360]}
+ok: 1 right from (0.83, 0.50): the native window keeps its own top-left (no setter moved it): {'before': [518, 417, 480, 360], 'after': [518, 417, 520, 360], 'setters': 5}
+ok: 1 right from (0.83, 0.50): the transaction completed: ['debug: size transaction 12 of #2 ended phase=complete']
+ok: 1 right from (0.83, 0.50): a click on the tile of a lands once, within 2 points: {'delta': {'plain_down': 1, 'plain_up': 1}, 'last': {'plain_down': [260, 147], 'plain_up': [260, 147]}, 'want': [260.0, 147.0]}
+ok: 1 bottom_left from (0.17, 0.83): a at 480x360: {'native': [480, 360], 'canvas': [480, 360]}
+ok: 1 bottom_left from (0.17, 0.83): the press is the right button's, bound to resize-window: debug: pointer down button=1 trigger=right binding=resize_window window=#2
+ok: 1 bottom_left from (0.17, 0.83): the grab resizes the bottom_left edge: debug: resize grab transaction=14 window=#2 edges=bottom_left group=0 ratio=0
+ok: 1 bottom_left from (0.17, 0.83): the window and the canvas end at 520x390: {'native': [520, 390], 'canvas': [520, 390]}
+ok: 1 bottom_left from (0.17, 0.83): the opposite edge stays on the canvas: {'before': [130, 140, 480, 360], 'after': [90, 140, 520, 390], 'want': [90, 140, 520, 390]}
+ok: 1 bottom_left from (0.17, 0.83): the native window keeps its own top-left (no setter moved it): {'before': [518, 417, 480, 360], 'after': [518, 417, 520, 390], 'setters': 5}
+ok: 1 bottom_left from (0.17, 0.83): the transaction completed: ['debug: size transaction 14 of #2 ended phase=complete']
+ok: 1 bottom_left from (0.17, 0.83): a click on the tile of a lands once, within 2 points: {'delta': {'plain_down': 1, 'plain_up': 1}, 'last': {'plain_down': [260, 147], 'plain_up': [260, 147]}, 'want': [260.0, 147.0]}
+ok: 1 bottom from (0.50, 0.83): a at 480x360: {'native': [480, 360], 'canvas': [480, 360]}
+ok: 1 bottom from (0.50, 0.83): the press is the right button's, bound to resize-window: debug: pointer down button=1 trigger=right binding=resize_window window=#2
+ok: 1 bottom from (0.50, 0.83): the grab resizes the bottom edge: debug: resize grab transaction=16 window=#2 edges=bottom group=0 ratio=0
+ok: 1 bottom from (0.50, 0.83): the window and the canvas end at 480x390: {'native': [480, 390], 'canvas': [480, 390]}
+ok: 1 bottom from (0.50, 0.83): the opposite edge stays on the canvas: {'before': [110, 155, 480, 360], 'after': [110, 155, 480, 390], 'want': [110, 155, 480, 390]}
+ok: 1 bottom from (0.50, 0.83): the native window keeps its own top-left (no setter moved it): {'before': [518, 417, 480, 360], 'after': [518, 417, 480, 390], 'setters': 5}
+ok: 1 bottom from (0.50, 0.83): the transaction completed: ['debug: size transaction 16 of #2 ended phase=complete']
+ok: 1 bottom from (0.50, 0.83): a click on the tile of a lands once, within 2 points: {'delta': {'plain_down': 1, 'plain_up': 1}, 'last': {'plain_down': [240, 147], 'plain_up': [240, 147]}, 'want': [240.0, 147.0]}
+ok: 1 bottom_right from (0.83, 0.83): a at 480x360: {'native': [480, 360], 'canvas': [480, 360]}
+ok: 1 bottom_right from (0.83, 0.83): the press is the right button's, bound to resize-window: debug: pointer down button=1 trigger=right binding=resize_window window=#2
+ok: 1 bottom_right from (0.83, 0.83): the grab resizes the bottom_right edge: debug: resize grab transaction=18 window=#2 edges=bottom_right group=0 ratio=0
+ok: 1 bottom_right from (0.83, 0.83): the window and the canvas end at 520x390: {'native': [520, 390], 'canvas': [520, 390]}
+ok: 1 bottom_right from (0.83, 0.83): the opposite edge stays on the canvas: {'before': [110, 170, 480, 360], 'after': [110, 170, 520, 390], 'want': [110, 170, 520, 390]}
+ok: 1 bottom_right from (0.83, 0.83): the native window keeps its own top-left (no setter moved it): {'before': [518, 417, 480, 360], 'after': [518, 417, 520, 390], 'setters': 5}
+ok: 1 bottom_right from (0.83, 0.83): the transaction completed: ['debug: size transaction 18 of #2 ended phase=complete']
+ok: 1 bottom_right from (0.83, 0.83): a click on the tile of a lands once, within 2 points: {'delta': {'plain_down': 1, 'plain_up': 1}, 'last': {'plain_down': [260, 147], 'plain_up': [260, 147]}, 'want': [260.0, 147.0]}
+ok: 2: a at 480x360: {'native': [480, 360], 'canvas': [480, 360]}
+ok: 2: thirty drag events asked fewer than thirty sizes, and the last is the final one: {'setters': 3, 'last': 'debug: native resize pid=38769 wid=102458 requested=630x450 outcome=applied observed=1 actual=630x450 moved=0'}
+ok: 2: the window and the canvas end where the pointer did: {'native': [630, 450], 'canvas': [630, 450]}
+ok: 2: the top-left stays: {'before': [130, 185, 480, 360], 'after': [130, 185, 630, 450]}
+ok: 2: a click on the tile of a lands once, within 2 points: {'delta': {'plain_down': 1, 'plain_up': 1}, 'last': {'plain_down': [315, 147], 'plain_up': [315, 147]}, 'want': [315.0, 147.0]}
+ok: 11: a at 480x360: {'native': [480, 360], 'canvas': [480, 360]}
+ok: 11: the first motion is followed: {'native': [500, 380], 'canvas': [500, 380]}
+ok: 11: nothing ended the grab while the pointer rested: []
+ok: 11: the next motion is taken: {'Ok': {'DebugPointer': {'screen': [1143, 904]}}}
+ok: 11: and the size follows it: {'native': [540, 400], 'canvas': [540, 400]}
+ok: 11: completed: ['debug: size transaction 22 of #2 ended phase=complete']
+ok: 11: a click on the tile of a lands once, within 2 points: {'delta': {'plain_down': 1, 'plain_up': 1}, 'last': {'plain_down': [270, 147], 'plain_up': [270, 147]}, 'want': [270.0, 147.0]}
+ok: 6: a at 480x360: {'native': [480, 360], 'canvas': [480, 360]}
+ok: 6: N is a snap gap to the right of A: {'a': [235, 250, 480, 360], 'n': [727, 250, 420, 502]}
+ok: 6: alt + shift + right is bound to resize-window-snapped: debug: pointer down button=1 trigger=right binding=resize_window_snapped window=#2
+ok: 6: it carries the cluster: debug: resize grab transaction=24 window=#2 edges=right group=1 ratio=0
+ok: 6: A grew by 40: {'native': [520, 360], 'canvas': [520, 360]}
+ok: 6: N moved on the canvas by what A's window took: {'a': [[235, 250, 480, 360], [235, 250, 520, 360]], 'n': [[727, 250, 420, 502], [767, 250, 420, 502]]}
+ok: 6: N's own window was neither resized nor moved: {'before': [968, 417, 420, 502], 'after': [968, 417, 420, 502], 'requests': []}
+ok: 6 plain: resize-window carries no cluster: debug: resize grab transaction=25 window=#2 edges=right group=0 ratio=0
+ok: 6 plain: A shrank by 80: {'native': [440, 360], 'canvas': [440, 360]}
+ok: 6 plain: N stayed where it was: {'before': [767, 250, 420, 502], 'after': [767, 250, 420, 502]}
+ok: 6: a click on the tile of a lands once, within 2 points: {'delta': {'plain_down': 1, 'plain_up': 1}, 'last': {'plain_down': [220, 147], 'plain_up': [220, 147]}, 'want': [220.0, 147.0]}
+ok: 7: a at 480x360: {'native': [480, 360], 'canvas': [480, 360]}
+ok: 7: four points right of A's frame is its resize border, right edge: {'Ok': {'DebugPointer': {'screen': [1177, 764], 'hit': None, 'border': 'right', 'clip_rect': {'origin': {'x': 693, 'y': 584}, 'size': {'width': 480, 'height': 360}}, 'screen_rect': {'origin': {'x': 693, 'y': 584}, 'size': {'width': 480, 'height': 360}}}}}
+ok: 7: an unbound left press on the border starts a resize by that edge: debug: pointer down button=0 trigger=left binding=none border=right window=#2
+ok: 7: by the right edge, without the cluster (decoration_resize_snapped is off): debug: resize grab transaction=27 window=#2 edges=right group=0 ratio=0
+ok: 7: A grew by 30: {'native': [510, 360], 'canvas': [510, 360]}
+ok: 7: the left edge stays: {'before': [215, 250, 480, 360], 'after': [215, 250, 510, 360]}
+ok: 7: twelve points out is no window and no border: {'Err': 'no window takes a press at that point'}
+ok: 7: a click on the tile of a lands once, within 2 points: {'delta': {'plain_down': 1, 'plain_up': 1}, 'last': {'plain_down': [255, 147], 'plain_up': [255, 147]}, 'want': [255.0, 147.0]}
+ok: 7b: a at 480x360: {'native': [480, 360], 'canvas': [480, 360]}
+ok: 7b: N is a snap gap to the right of A: {'a': [230, 250, 480, 360], 'n': [722, 250, 420, 502]}
+ok: 7b: with decoration_resize_snapped the border's resize carries the cluster: debug: resize grab transaction=29 window=#2 edges=right group=1 ratio=0
+ok: 7b: A grew by 30: {'native': [510, 360], 'canvas': [510, 360]}
+ok: 7b: N moved by what A's window took, and its own window was left alone: {'n': [[722, 250, 420, 502], [752, 250, 420, 502]], 'native': [[968, 417, 420, 502], [968, 417, 420, 502]]}
+ok: 7b: with resize_on_border off the band is no border: {'Err': 'no window takes a press at that point'}
+ok: 7b: and it is one again with the default: {'Ok': {'DebugPointer': {'screen': [1222, 764], 'hit': None, 'border': 'right', 'clip_rect': {'origin': {'x': 708, 'y': 584}, 'size': {'width': 510, 'height': 360}}, 'screen_rect': {'origin': {'x': 708, 'y': 584}, 'size': {'width': 510, 'height': 360}}}}}
+ok: 3: b at 300x292: {'native': [300, 292], 'canvas': [300, 292]}
+ok: 3: dragged past its maximum the window ends at it: {'native': [640, 552], 'canvas': [640, 552]}
+ok: 3: the top-left stays, and some request was answered clamped: {'frame': [[200, 54, 300, 292], [200, 54, 640, 552]], 'outcomes': ['applied', 'clamped', 'rejected']}
+ok: 3 maximum: a click on the tile of b lands once, within 2 points: {'delta': {'plain_down': 1, 'plain_up': 1}, 'last': {'plain_down': [320, 147], 'plain_up': [320, 147]}, 'want': [320.0, 147.0]}
+ok: 3 minimum: the grab is the left edge's: debug: resize grab transaction=32 window=#3 edges=left group=0 ratio=0
+ok: 3: dragged below its minimum the window ends at it: {'native': [300, 552], 'canvas': [300, 552]}
+ok: 3 minimum: the right edge stays for the size the window took: {'before': [200, 54, 640, 552], 'after': [540, 54, 300, 552], 'want': [540, 54, 300, 552]}
+ok: 3: what the adapter answered while B was dragged below its minimum: ['applied', 'clamped', 'rejected']
+ok: 3 minimum: a click on the tile of b lands once, within 2 points: {'delta': {'plain_down': 1, 'plain_up': 1}, 'last': {'plain_down': [150, 147], 'plain_up': [150, 147]}, 'want': [150.0, 147.0]}
+ok: 4: C before: {'native': [420, 502], 'canvas': [420, 502]}
+ok: 4: the canvas has the size C took: {'native': [457, 502], 'canvas': [457, 502]}
+ok: 4: C ends on a whole step within one step of the 50 asked: {'start': [420, 502], 'asked': [470, 502], 'took': [457, 502]}
+ok: 4: a click on the tile of c lands once, within 2 points: {'delta': {'plain_down': 1, 'plain_up': 1}, 'last': {'plain_down': [228.5, 147], 'plain_up': [228.5, 147]}, 'want': [228.5, 147.0]}
+ok: 5: C still holds the focus before the press on F: [8]
+ok: 5: what the adapter answered for a window that cannot be resized: [('size read', 'observed'), ('resize', 'unsupported'), ('size read', 'observed')]
+ok: 5: nothing was resized, on the canvas or natively: {'canvas': [[340, 99, 420, 502], [340, 99, 420, 502]], 'native': [[668, 417, 420, 502], [668, 417, 420, 502]]}
+ok: 5: no size transaction is left behind: 420 502
+ok: 5: a click on the tile of f lands once, within 2 points: {'delta': {'plain_down': 1, 'plain_up': 1}, 'last': {'plain_down': [210, 147], 'plain_up': [210, 147]}, 'want': [210.0, 147.0]}
+ok: 8: p at 400x300: {'native': [400, 300], 'canvas': [400, 300]}
+ok: 8 right edge +60: the grab holds the ratio: debug: resize grab transaction=36 window=#4 edges=right group=0 ratio=1
+ok: 8 right edge +60: P ends at [460, 345]: {'native': [460, 345], 'canvas': [460, 345]}
+ok: 8 corner, width drives (80 * 300 >= 10 * 400): p at 400x300: {'native': [400, 300], 'canvas': [400, 300]}
+ok: 8 corner, width drives (80 * 300 >= 10 * 400): the grab holds the ratio: debug: resize grab transaction=38 window=#4 edges=bottom_right group=0 ratio=1
+ok: 8 corner, width drives (80 * 300 >= 10 * 400): P ends at [480, 360]: {'native': [480, 360], 'canvas': [480, 360]}
+ok: 8 corner, height drives (20 * 300 < 90 * 400): p at 400x300: {'native': [400, 300], 'canvas': [400, 300]}
+ok: 8 corner, height drives (20 * 300 < 90 * 400): the grab holds the ratio: debug: resize grab transaction=40 window=#4 edges=bottom_right group=0 ratio=1
+ok: 8 corner, height drives (20 * 300 < 90 * 400): P ends at [520, 390]: {'native': [520, 390], 'canvas': [520, 390]}
+ok: 8: a click on the tile of p lands once, within 2 points: {'delta': {'plain_down': 1, 'plain_up': 1}, 'last': {'plain_down': [260, 147], 'plain_up': [260, 147]}, 'want': [260.0, 147.0]}
+ok: 9: a at 480x360: {'native': [480, 360], 'canvas': [480, 360]}
+ok: 9: K follows the drag: {'native': [440, 522], 'canvas': [440, 522]}
+ok: 9: the closed window left the canvas: {'seconds': 0.13, 'transaction': ['debug: size transaction 42 of #5 ended phase=failed']}
+ok: 9: a drag after the close is taken and asks nothing; the release answers Ok: {'drag': {'Ok': {'DebugPointer': {'screen': [948, 881.3333333333334]}}}, 'setters after the close': 0}
+ok: 9: after the close: a click on the tile of a lands once, within 2 points: {'delta': {'plain_down': 1, 'plain_up': 1}, 'last': {'plain_down': [240, 147], 'plain_up': [240, 147]}, 'want': [240.0, 147.0]}
+ok: 9: another window is sizable at once: msg resize a 500 380
+ok: 9: and was resized: {'native': [500, 380], 'canvas': [500, 380]}
+ok: 10: a at 480x360: {'native': [480, 360], 'canvas': [480, 360]}
+ok: 10: H follows the drag: {'native': [440, 522], 'canvas': [440, 522]}
+ok: 10: a drag over the hung application is taken: {'Ok': {'DebugPointer': {'screen': [978, 911.3333333333334]}}}
+ok: 10: while H does not answer: a click on the tile of a lands once, within 2 points: {'delta': {'plain_down': 1, 'plain_up': 1}, 'last': {'plain_down': [240, 147], 'plain_up': [240, 147]}, 'want': [240.0, 147.0]}
+ok: 10: H's transaction had already ended when the click on A was made: {'seconds since the hang': 0.54, 'ended': ['debug: size transaction 45 of #1 ended phase=failed']}
+ok: 10: H's transaction ended: {'seconds': 0.54, 'line': 'debug: size transaction 45 of #1 ended phase=failed', 'answers': [('size read', 'observed', '1'), ('resize', 'applied', '1'), ('resize', 'applied', '1'), ('resize', 'unavailable', '0')]}
+ok: 10: after H's transaction ended: a click on the tile of a lands once, within 2 points: {'delta': {'plain_down': 1, 'plain_up': 1}, 'last': {'plain_down': [240, 147], 'plain_up': [240, 147]}, 'want': [240.0, 147.0]}
+ok: 10: the canvas has the size H's window has: {'native': [440, 522], 'canvas': [440, 522]}
+ok: 10: H after it answers again: a click on the tile of h lands once, within 2 points: {'delta': {'plain_down': 1, 'plain_up': 1}, 'last': {'plain_down': [220, 147], 'plain_up': [220, 147]}, 'want': [220.0, 147.0]}
+ok: 10b: H follows the drag: {'native': [460, 542], 'canvas': [460, 542]}
+ok: 10b: the drag that stalls H is taken: {'Ok': {'DebugPointer': {'screen': [994.6666666666666, 928]}}}
+ok: 10b: while H's size request is unanswered: a click on the tile of a lands once, within 2 points: {'delta': {'plain_down': 1, 'plain_up': 1}, 'last': {'plain_down': [240, 147], 'plain_up': [240, 147]}, 'want': [240.0, 147.0]}
+ok: 10b: H's transaction was unresolved when the click on A was made: {'unresolved before the click': True, 'and after it': True, 'seconds since the stall': 0.54}
+ok: 10b: msg resize of another window meanwhile: refused as pending: error: a native resize of window 1 is still pending
+ok: 10b: H's transaction ended: {'seconds': 1.08, 'line': 'debug: size transaction 46 of #1 ended phase=failed', 'answers': [('size read', 'observed', '1'), ('resize', 'applied', '1'), ('resize', 'applied', '1'), ('resize', 'readback_failed', '0'), ('size read', 'unavailable', '0')]}
+ok: 10b: after H's transaction ended: a click on the tile of a lands once, within 2 points: {'delta': {'plain_down': 1, 'plain_up': 1}, 'last': {'plain_down': [240, 147], 'plain_up': [240, 147]}, 'want': [240.0, 147.0]}
+ok: 10b: the canvas has the size H's window took: {'native': [500, 582], 'canvas': [500, 582]}
+ok: 10b: H after it answers again: a click on the tile of h lands once, within 2 points: {'delta': {'plain_down': 1, 'plain_up': 1}, 'last': {'plain_down': [250, 147], 'plain_up': [250, 147]}, 'want': [250.0, 147.0]}
+ok: 12: decoy took no event, was never activated and has its bounds: {'bounds': [968, 417, 420, 502], 'activations': 0}
+ok: 12: every pid acted on is in the scope: {'named': [38769, 38771, 38773, 38775, 38777, 38779, 38781, 38783], 'scope': [38769, 38771, 38773, 38775, 38777, 38779, 38781, 38783], 'decoy': 38785}
+ok: 12: no press or tile was refused as unsettled: []
+ok: 12: nothing said a pointer resize is gated: []
+ok: 12: every resize grab's transaction ended: {'grabs': 25, 'not ended': []}
+ok: 12: the one slot is free at the end: msg resize a 480 360
+ok: 12: and A was resized: {'native': [480, 360], 'canvas': [480, 360]}
+ok: 12: what the native adapter answered, by outcome: {'size read observed': 89, 'resize applied': 124, 'resize clamped': 4, 'resize rejected': 5, 'resize unsupported': 1, 'size read stale_identity': 1, 'resize unavailable': 1, 'resize readback_failed': 1, 'size read unavailable': 1}
+ok: quit within 8 s
+PASS: scoped resize drag: the nine cells, coalesced requests, a pointer at rest, minimum, maximum and increment, a window that takes no size, the snapped cluster, the resize border, preserve_aspect_ratio, a window closed and an application hung or stalled mid-grab; decoy untouched
+```
+
+The test was tightened after that run and run again on the same day (182
+`ok`, the same `PASS` line; the window ids are that run's). The line
+`1: the press raises and focuses A before any drag` above showed the focus
+alone; the raise is now shown by what a press would hit, the press on F is
+checked for its binding, and the drag after a close for its answer:
+
+```
+ok: 1: A's right side lies beneath N before the press: {'Err': 'window #5 is under that point'}
+ok: 1: the press focuses A before any drag: [1]
+ok: 1: and raises it: the same point is A's now: {'Ok': {'DebugPointer': {'screen': [996, 684], 'hit': 1, 'border': None, 'clip_rect': {'origin': {'x': 618, 'y': 433}, 'size': {'width': 420, 'height': 502}}, 'screen_rect': {'origin': {'x': 618, 'y': 433}, 'size': {'width': 420, 'height': 502}}}}}
+ok: 5: the press is the right button's, bound to resize-window: debug: pointer down button=1 trigger=right binding=resize_window window=#8
+ok: 9: a drag after the close is taken: {'Ok': {'DebugPointer': {'screen': [948, 881.3333333333334]}}}
+```
+
+What that run shows, and what it does not:
+
+- The nine cells resize the edges upstream's grid names, the opposite edge
+  stays on the canvas, and in every case each setter was answered `moved=0`
+  and the fixture's own top-left was where it had been: the real window is
+  not moved for a left or top drag.
+- Thirty drag events with nothing between them asked three sizes, the last
+  the final one (two in earlier runs of the same case).
+- A window dragged past its maximum and below its minimum ended at the limit
+  with the canvas at that size; the adapter answered `applied`, `clamped`
+  and `rejected` on the way.
+- The fixture that is not resizable answered `unsupported` to the one size
+  asked, the transaction ended failed within a second of the release, and
+  nothing was resized.
+- A window closed under a resting grab left the canvas in 0.13 s. An
+  application hung before the next size was asked refused it as
+  `unavailable` and the grab ended in about half a second. An application
+  that took the size and never answered (case 10b) left the transaction
+  unresolved for about a second, the adapter's failed readback and one more
+  read; a click on another window landed while it was unresolved, and
+  `msg resize` of another window was refused as pending meanwhile.
+- Not shown: a person's press or drag, the window server delivering an
+  Option-right drag to the canvas panel, any application of the owner's, a
+  tile with a picture during a drag, a second display, a trackpad gesture
+  through the shell, a pointer that leaves the screen (the clamp is in the
+  controller scenarios only), and how long a real application takes to answer
+  or refuse a size.
+- `tests/e2e/scoped-windows.sh` and `tests/e2e/scoped-sizing.sh` passed on the
+  same build, before it.
+- Controller scenarios, in which the test plays the native side:
+  `cargo test -p driftwm-desktop --test gesture_flow --test native_resize_flow --test sizes_flow --test rules_flow --test pointer_flow`
+  (the resize swipes, `readback_grab_*`, the ratio, the resize border), and
+  `tests/e2e/desktop-resize.sh`, the headless coordinator regression, whose
+  readback case now also covers a grab at rest that is held and one that is
+  not.
+
 ## Upstream behaviour gaps closed
 
 Earlier sections of this file recorded nine places where the app behaved
@@ -6799,7 +7164,7 @@ only ([What has been run for the closed gaps](#what-has-been-run-for-the-closed-
 
 | What | Before | Now |
 | --- | --- | --- |
-| A press bound to `move-window`, `move-snapped-windows`, `resize-window` or `resize-window-snapped` (⌥ left or right drag, with ⇧ for the cluster) | started its drag and focused nothing | raises and focuses the window under the pointer first, a screen-pinned window included, and the real window is then focused natively as after a click. A widget still refuses the drag and gets the press as a click. A resize press does this also where no resize can begin: without `--experimental-native-resize`, on a pinned window, and under the flag where the resize is turned away (a detached placeholder, a window whose own extent no longer matches the canvas's) |
+| A press bound to `move-window`, `move-snapped-windows`, `resize-window` or `resize-window-snapped` (⌥ left or right drag, with ⇧ for the cluster) | started its drag and focused nothing | raises and focuses the window under the pointer first, a screen-pinned window included, and the real window is then focused natively as after a click. A widget still refuses the drag and gets the press as a click. A resize press does this also where no resize can begin: without `--experimental-native-resize`, on a pinned window, and under the flag where the resize is turned away (a detached placeholder, a window whose own extent no longer matches the canvas's). Since 2026-10-11 a resize press begins a resize in every normal run ([Resizing a window with the pointer](#resizing-a-window-with-the-pointer)) |
 | `Infinify msg resize WIDTH HEIGHT` (the flag only) | left the stacking alone | raises the window over the other canvas windows, without giving it the focus. Asking again for the size last asked changes nothing, the stacking included, as upstream's does |
 | A problem in the config file | shown in the error bar and again in the status line | shown in the error bar only; the status line keeps its own notes (bindings left out, a `--super` chord or a load the controller refuses). Every message still goes to stderr |
 | Several warnings in one file | the bar named the parser's first, which for unknown actions changed from one load to the next | the bar names the first in sorted order, the same at every load, and stderr lists them in that order |
@@ -6810,7 +7175,7 @@ only ([What has been run for the closed gaps](#what-has-been-run-for-the-closed-
 | `Infinify msg camera` printing `1950 -0` | as now | unchanged: upstream's own client prints a negative zero for a centre whose Y is 0, so nothing rewrites it |
 
 Flags and controls are unchanged: no new flag, no new binding, no new `msg`
-command. `--experimental-native-resize` gated exactly what it gated then; since 2026-10-11 it gates the pointer's edge handles only.
+command. `--experimental-native-resize` gated exactly what it gated then; since 2026-10-11 it gates the orange edge handles only, and a press bound to `resize-window` resizes without it.
 
 What still differs from DriftWM in these nine places:
 
@@ -7476,8 +7841,11 @@ fullscreen display.
 `--experimental-native-resize` enables eight orange handles on the
 selected ordinary source, and that is all it is for since 2026-10-11:
 DriftWM's [sizing actions](#window-sizing-actions), `msg resize`, a rule's
-size and [fullscreen](#fullscreen) run without it, settled by reading the
-window's size back. Under the flag they run the same transaction in the
+size, [fullscreen](#fullscreen) and
+[resizing by pointer](#resizing-a-window-with-the-pointer) run without it,
+settled by reading the window's size back. The flag and its handles are
+legacy: they are kept as they were, they are not the way forward, and they
+were not run for this change. Under the flag they run the same transaction in the
 capture-acknowledged mode described here, in which a window shows a picture
 and takes input only once a capture of it at its size has been acknowledged;
 on the owner's real windows none ever was, so the flag is for work on the

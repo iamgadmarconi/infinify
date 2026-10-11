@@ -28,6 +28,7 @@ collected in one place below.
 | `pick` | `window`, `output` | `{effect, navigation, dirty}`, or `{navigation: null, dirty: false}` when the output is no longer in pick mode |
 | `pointer_nearest` | `output`, global `screen` and `start` points, optional `held` boolean (default false) | `{navigation, effects, dirty}`, the reply of the `center-nearest` action |
 | `hit`, `input` | unchanged | gain `pick` on the reply and on the hit object |
+| `resize_border` | `output`, global `screen` point | `{border}`: null, or `{window, edges, snapped}` when the point is in a window's resize border. Read-only, see [The resize border](#the-resize-border) |
 | `mouse_binding` | gains optional `pick` boolean (default false), beside its optional `window` ([RULES.md](RULES.md#pass_mouse)) | unchanged; a pick target never answers `passed` |
 | `snapshot` | unchanged | each entry of `outputs` gains `pick` |
 | `load_config` | unchanged | gains `focus_follows_mouse`, the value now in force |
@@ -311,6 +312,40 @@ the pointer:
 A pinned window lying over a canvas window keeps the press below the
 threshold: the hit is the pinned window, so nothing there is a pick target.
 
+### The resize border
+
+Upstream's `[mouse] resize_on_border` (default true): the band of
+`RESIZE_BORDER_WIDTH`, 8 canvas units, strictly outside a window's frame. A
+left press there raises and focuses the window and resizes it by that edge
+(`decoration_hit_for`, `resize_margin_hit_for`, `resize_edge_at`). A native
+frame already includes its title bar, so the band is around the whole frame.
+
+`resize_border` answers for a press. A point over any window's frame is that
+window's and no band; elsewhere the walk is upstream's z-order walk over the
+canvas windows, topmost first, and the first whose band holds the point ends
+it. `edges` is the side or corner the point
+lies off, and `snapped` is `decoration_resize_snapped`, since an edge drag has
+no modifier to ask for the cluster. It answers null with `resize_on_border`
+off, in [pick mode](#pick-mode) (upstream's `try_pick_button` stands ahead of
+the border), on a fullscreen output, over any window's frame, and for a
+widget, a screen-pinned window and a stand-in, which have no band here. The
+shell begins the [resize grab](NATIVE_RESIZE.md#pointer-resize) with that
+edge unless a binding whose modifiers are held claims the press on that
+window, as upstream asks `modifier_button_binding` first.
+
+Not adapted, by choice of the port and not for anything a Mac window cannot
+do: upstream also counts the band as the window for the binding context and
+for occlusion whether or not the option is on. Its topmost window's band
+therefore covers a lower window's body (`decoration_under`, and
+`surface_under` ends its walk on a band): a left press 4 units outside A's
+edge over B beneath resizes A there, and here it is a click on B. And a point
+of the band is canvas to `hit`, `hover` and `mouse_binding`, so a press the
+border does not take is a canvas press, where upstream's alt+left there moves
+the window and alt+right resizes it. A stand-in's band (upstream resizes a
+stand-in's frame) and a pinned window's are not offered. The band is on the
+canvas: a real window's own edges lie under the canvas panel and no pointer
+reaches them.
+
 ### `pointer_nearest`
 
 ```json
@@ -379,7 +414,8 @@ does nothing, where upstream had already fired.
   also keeps layer surfaces apart, redirects
   hover focus to a modal child, and rejects a client's invisible resize
   margin. None of those exists here: the native frame, title bar included, is
-  the whole target. Pinned windows and widgets do exist and are treated as
+  the whole target for hover and for a hit; the resize margin exists for a
+  press only ([The resize border](#the-resize-border)). Pinned windows and widgets do exist and are treated as
   [above](#screen-pinned-windows-and-widgets).
 - **The pick-mode drag asks for the focus twice.** The press's `activate` and
   the drag's `begin_drag` each raise and focus the target and each return a

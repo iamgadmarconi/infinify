@@ -16,9 +16,17 @@
 // (`Controller::on_canvas`), never a widget or a screen-pinned window, which
 // keep their pointer below the threshold. On a fullscreen output the hit is
 // its fullscreen window alone and hover focus re-asserts that window
-// (fullscreen.rs). Layer surfaces, modal windows, server-side chrome and
-// client resize margins do not exist here, so the whole frame is the target. Only world rectangles, pins, output poses
-// and the configuration are read, never native geometry.
+// (fullscreen.rs). Layer surfaces, modal windows and server-side chrome do not
+// exist here, so the whole frame is the target. Upstream's resize margin does:
+// `resize_border` is src/input/mod.rs's decoration_hit_for and
+// resize_margin_hit_for with src/decorations.rs's resize_edge_at, the band of
+// DecorationConfig::RESIZE_BORDER_WIDTH canvas units strictly outside a
+// window's frame, which a native window's frame already includes its title
+// bar in. It is asked only for a press: upstream also counts the band as the
+// window for the binding context and for occlusion with `resize_on_border`
+// off, which is not adapted (a point of the band is canvas to `hit`). Only
+// world rectangles, pins, output poses and the configuration are read, never
+// native geometry.
 use super::actions::Outcome;
 use super::window_actions::Moved;
 use super::*;
@@ -74,6 +82,73 @@ impl Controller {
     /// and a pinned window lying over a canvas window keeps the press.
     fn pick_target(&self, output: OutputId, under: Option<WindowId>) -> bool {
         under.is_some_and(|window| self.on_canvas(window)) && self.pick_mode(output)
+    }
+    /// Upstream decoration_hit_for's ResizeBorder: the window whose resize
+    /// band holds this screen point of `output`, the edge it resizes, and
+    /// whether a press there carries the cluster (`decoration_resize_snapped`;
+    /// an edge drag has no modifier to say so). A point over any window's
+    /// frame is that window's and no band, a lower window's frame included:
+    /// upstream's topmost band wins over what lies beneath it, which is not
+    /// adapted (POINTER.md). Among bands the walk is upstream's z-order walk:
+    /// the topmost canvas window whose band holds the point ends it. A widget
+    /// and a fullscreen window have
+    /// none (resize_margin_hit_for), a screen-pinned window is not resized
+    /// here (`movable`), and a stand-in has no window to ask a size of. Below
+    /// `zoom.interact_min` a press is the pick's (try_pick_button stands
+    /// ahead of the border), and a fullscreen output shows no canvas.
+    pub(crate) fn resize_border(&self, output: OutputId, screen: Point) -> Value {
+        let band = f64::from(driftwm_core::config::DecorationConfig::RESIZE_BORDER_WIDTH);
+        let Some(viewport) = self.scene.output(output) else {
+            return Value::Null;
+        };
+        if !self.config().resize_on_border
+            || self.pick_mode(output)
+            || self.fullscreen_on(output).is_some()
+            || !viewport.screen_bounds.contains(screen)
+            || self.hit_window(output, screen).is_some()
+        {
+            return Value::Null;
+        }
+        let at = viewport.screen_to_world(screen);
+        let reach = |rect: Rect| {
+            at.x >= rect.origin.x - band
+                && at.x < rect.right() + band
+                && at.y >= rect.origin.y - band
+                && at.y < rect.bottom() + band
+        };
+        let Some(window) = self
+            .scene
+            .windows()
+            .iter()
+            .rev()
+            .filter(|w| self.on_canvas(w.id))
+            .find(|w| reach(w.world_rect))
+        else {
+            return Value::Null;
+        };
+        if !self.sources.contains_key(&window.id) {
+            return Value::Null;
+        }
+        let rect = window.world_rect;
+        // resize_edge_at, for a point already known to be outside the frame.
+        let (left, right) = (at.x < rect.origin.x, at.x >= rect.right());
+        let (top, bottom) = (at.y < rect.origin.y, at.y >= rect.bottom());
+        let edges = match (left, right, top, bottom) {
+            (true, _, true, _) => Edges::TopLeft,
+            (_, true, true, _) => Edges::TopRight,
+            (true, _, _, true) => Edges::BottomLeft,
+            (_, true, _, true) => Edges::BottomRight,
+            (true, _, _, _) => Edges::Left,
+            (_, true, _, _) => Edges::Right,
+            (_, _, true, _) => Edges::Top,
+            (_, _, _, true) => Edges::Bottom,
+            _ => return Value::Null,
+        };
+        json!({
+            "window":window.id,
+            "edges":edges,
+            "snapped":self.config().decoration_resize_snapped,
+        })
     }
     /// `hit` and `input` with upstream's pick mode: `pick` says the hit is a
     /// pick target, on the reply and on the hit object alike, and `input`, the

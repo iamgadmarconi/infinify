@@ -308,6 +308,11 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 // --debug-pointer: a press the DebugPointer request made is down, with no physical button behind it; the timer ends one its test abandoned.
 @property BOOL injected;
 @property NSTimer *injectedTimer;
+// That press: where it is now, a global screen point (where it went down, then where its last drag took it), where it went down, its
+// button (0 left, 1 right, 2 middle) and the modifiers held with it.
+@property CGPoint injectedPoint,injectedStart;
+@property NSInteger injectedButton;
+@property NSEventModifierFlags injectedFlags;
 - (void)released:(CGPoint)p at:(NSTimeInterval)time;
 - (void)render:(NSDictionary *)snapshot;
 - (NSNumber *)outputAt:(CGPoint)p;
@@ -405,7 +410,8 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 @property NSInteger gestureOwner; // whose gesture the controller holds: 0 none, 1 the recogniser's, 2 magnify's
 @property NSNumber *gestureOutput; // the output that gesture began on
 @property BOOL gestureWatched; // that gesture began with its output's panel under the pointer: while it is, the touches are the panel's
-@property BOOL gestureMove; // the controller made a window move of it: it holds a drag until its end
+@property BOOL gestureMove; // the controller made a window move or resize of it: it holds a drag, or a resize grab, until its end
+@property BOOL gestureResize; // that grab is a resize: a size transaction is held open for it (-configureResize)
 - (void)endLostInput;
 @property BOOL askingQueue; // -endLostInput is looking into the event queue for a release: a frame that runs inside that look does not look again
 @property BOOL magnifying; // a magnify stream is running, whether or not the controller took it
@@ -724,22 +730,23 @@ static BOOL DWInputTrace(void) { static int on=-1;if(on<0)on=getenv("INFINIFY_DE
     if(current.processIdentifier!=source.router.pid){self.desktop.previousFocus=current;self.desktop.previousFocusBirth=current.launchDate;[[NSRunningApplication runningApplicationWithProcessIdentifier:source.router.pid] activateWithOptions:0];}
     [self.desktop call:@{@"op":@"focus",@"window":source.logical}];
 }
-// Edges as upstream's edges_from_position picks them: a 3×3 grid over the window,
-// its centre resizing from the bottom right. The rect is the controller's placement.
-// Upstream raises and focuses the window first (raise_and_focus, then start_compositor_resize; focus_and_raise_suspended
-// for a stand-in). A resize that begins carries that focus request in its reply. With the gate off the controller is never
-// asked, and the press is left upstream's first half: the window is raised and focused, and nothing else. So is a begin that
-// is turned away, by the resize path before the controller is asked (a detached placeholder, a window whose own extent has
-// moved on) or by the controller: a refused command changed nothing, so the focus is asked for by itself.
-- (void)beginResize:(NSNumber *)window snapped:(BOOL)snapped at:(CGPoint)p output:(NSNumber *)output {
-    if(!self.desktop.experimentalResize){[self.desktop raiseFocus:window];[self.desktop flashStatus:@"Resizing a window with the pointer is gated behind --experimental-native-resize"];return;}
-    for(NSDictionary *placement in [self.desktop call:@{@"op":@"snapshot"}][@"placements"])if([placement[@"output"]isEqual:output]&&[placement[@"window"]isEqual:window]){
-        CGRect r=jsonRect(placement[@"screen_rect"]);CGFloat x=p.x-r.origin.x,y=p.y-r.origin.y;
-        BOOL left=x<r.size.width/3,right=x>r.size.width*2/3,top=y<r.size.height/3,bottom=y>r.size.height*2/3;
-        NSString *edges=left&&top?@"top_left":right&&top?@"top_right":left&&bottom?@"bottom_left":right&&bottom?@"bottom_right":left?@"left":right?@"right":top?@"top":bottom?@"bottom":@"bottom_right";
-        NSDictionary *reply=[self.desktop.resize request:@{@"op":@"begin_native_resize",@"window":window,@"output":output,@"edges":edges,@"start_screen":pointJSON(p),@"group":snapped?@YES:@NO}];
-        if(reply){self.resizeTransaction=reply[@"transaction"];self.gesture=4;[self.desktop resizeFocus:reply];}else [self.desktop raiseFocus:window];return;
-    }
+// Upstream's resize grab, begun by a press bound to resize-window or resize-window-snapped, or by a left press on the resize border
+// (`edges` is then the border's; nil lets the controller take them from where in the window the press fell, upstream's
+// edges_from_position). In a normal run the grab is a size transaction in readback mode (crates/desktop/NATIVE_RESIZE.md): each size
+// the drag asks is asked of the real window, and the canvas shows the size the window then has. Under --experimental-native-resize it
+// is the older capture-acknowledged transaction, which the orange handles also begin; that path is legacy.
+// Upstream raises and focuses the window first (raise_and_focus, then start_compositor_resize). A resize that begins carries that
+// focus request in its reply. A begin that is turned away, by the resize path before the controller is asked or by the controller
+// (a size transaction still settling, a window with no source), changed nothing: the press is left upstream's first half, the window
+// raised and focused, and the refusal is shown in the controller's words.
+- (void)beginResize:(NSNumber *)window edges:(NSString *)edges snapped:(BOOL)snapped at:(CGPoint)p output:(NSNumber *)output {
+    NSMutableDictionary *command=[@{@"op":@"begin_native_resize",@"window":window,@"output":output,@"start_screen":pointJSON(p),@"group":snapped?@YES:@NO}mutableCopy];if(edges)command[@"edges"]=edges;
+    NSString *status=self.desktop.statusText;NSDictionary *reply=[self.desktop.resize request:command];
+    if(reply){self.resizeTransaction=reply[@"transaction"];self.gesture=4;[self.desktop resizeFocus:reply];
+        if(DWInputTrace()){NSDictionary *t=asDict([self.desktop call:@{@"op":@"snapshot"}][@"native_resize"]);fprintf(stderr,"debug: resize grab transaction=%s window=#%s edges=%s group=%d ratio=%d\n",[t[@"transaction"]description].UTF8String,window.description.UTF8String,asString(t[@"edges"]).UTF8String?:"?",[asNumber(t[@"group"])boolValue],asNumber(t[@"ratio"])!=nil);}
+        return;}
+    NSString *refusal=[self.desktop.statusText isEqual:status]?nil:self.desktop.statusText;self.desktop.statusText=status;
+    [self.desktop raiseFocus:window];if(refusal)[self.desktop flashStatus:[@"Window not resized: " stringByAppendingString:refusal]];
 }
 // A normal run's press, dispatched as upstream's on_pointer_button does: the binding
 // for the held modifiers in the window or canvas context, else the native window
@@ -751,6 +758,16 @@ static BOOL DWInputTrace(void) { static int on=-1;if(on<0)on=getenv("INFINIFY_DE
     // its button claims below [zoom] interact_min (upstream's try_pinned_button, which stands ahead of try_pick_button).
     NSDictionary *binding=button<(NSInteger)triggers.count?[self.desktop mouseBinding:triggers[button] source:nil flags:e.modifierFlags window:hit!=nil under:liveHit(hit) pick:[hit[@"pick"]isEqual:@YES]]:nil;NSString *kind=asString(binding[@"kind"]),*action=asString(binding[@"action"]);
     BOOL move=[kind isEqual:@"move_window"]||[kind isEqual:@"move_snapped_windows"],resize=[kind isEqual:@"resize_window"]||[kind isEqual:@"resize_window_snapped"];
+    // Upstream's resize border ([mouse] resize_on_border): a left press in the band just outside a window's frame raises and focuses that
+    // window and resizes it by that edge, with the cluster when decoration_resize_snapped says so, unless a binding whose modifiers are
+    // held claims the press on that window (on_pointer_button asks modifier_button_binding first). The controller says where the band is.
+    // A press it does not take goes on as the canvas press it is to -hit:, where upstream would still count the band as the window.
+    // Not under --experimental-native-resize: that run resizes by its handles alone, and a band press there would begin a transaction that holds input.
+    NSDictionary *border=!button&&!hit&&!self.desktop.experimentalResize?asDict([self pointerCommand:@{@"op":@"resize_border",@"output":output,@"screen":pointJSON(p)} quiet:YES][@"border"]):nil;
+    if(border&&!((e.modifierFlags&(NSEventModifierFlagControl|NSEventModifierFlagOption|NSEventModifierFlagShift|NSEventModifierFlagCommand))&&[self.desktop mouseBinding:@"left" source:nil flags:e.modifierFlags window:YES under:asNumber(border[@"window"]) pick:NO])){
+        if(DWInputTrace())fprintf(stderr,"debug: pointer down button=%ld trigger=left binding=none border=%s window=#%s\n",(long)button,asString(border[@"edges"]).UTF8String?:"?",[border[@"window"]description].UTF8String);
+        [self beginResize:asNumber(border[@"window"]) edges:asString(border[@"edges"]) snapped:[asNumber(border[@"snapped"])boolValue] at:p output:output];[self.desktop render];return;}
+    if(DWInputTrace())fprintf(stderr,"debug: pointer down button=%ld trigger=%s binding=%s window=%s\n",(long)button,button<(NSInteger)triggers.count?triggers[button].UTF8String:"?",kind.UTF8String?:"none",hit?[NSString stringWithFormat:@"#%@",hit[@"window"]].UTF8String:"none");
     // Upstream try_pick_button, ahead of everything but a binding whose modifiers are held, which is the only kind the
     // lookup answers over a pick target: below [zoom] interact_min a window or placeholder is one target, whatever the
     // button, and the press is never the application's.
@@ -759,12 +776,12 @@ static BOOL DWInputTrace(void) { static int on=-1;if(on<0)on=getenv("INFINIFY_DE
     if(!binding&&!button&&hit&&!source&&(e.modifierFlags&NSEventModifierFlagControl)&&(e.modifierFlags&NSEventModifierFlagOption)){[self.desktop call:@{@"op":@"forget",@"window":hit[@"window"]}];[self.desktop render];[self.desktop saveScene];return;}
     // A widget ignores drags and resizes, as upstream's does: the bound press starts no gesture and goes to the widget as a plain click (upstream's move and resize arms fall through to click-to-focus and forward it).
     if((move||resize)&&[asNumber(hit[@"widget"])boolValue]){[self.desktop flashStatus:@"A widget stays where its rule puts it: drags and resizes are ignored"];move=resize=NO;}
-    // Upstream drags and resizes a pinned window in screen space, raising and focusing it first (try_pinned_button). The move is the controller's begin_drag like any window's, which moves the pin by the pointer's screen delta; the resize is not implemented and the controller refuses it: the press raises and focuses the window and is swallowed.
+    // Upstream drags and resizes a pinned window in screen space, raising and focusing it first (try_pinned_button). The move is the controller's begin_drag like any window's, which moves the pin by the pointer's screen delta; the resize is not adapted and the controller refuses it (a port decision, not a limit of a Mac window): the press raises and focuses the window and is swallowed.
     if(resize&&[asNumber(hit[@"pinned"])boolValue]){[self.desktop raiseFocus:hit[@"window"]];[self.desktop flashStatus:@"A screen-pinned window is not resized: unpin it first (toggle-pin-to-screen)"];}
     // Upstream on_pointer_button: raise_and_focus, then the move grab. The controller does both inside begin_drag, a pinned window's included, and its reply
     // carries the focus request an activate reply carries: the coordinator's to perform on the native window, as a click's is and a move gesture's.
     else if(move&&hit){NSDictionary *begun=[self.desktop call:@{@"op":@"begin_drag",@"window":hit[@"window"],@"output":output,@"group":[kind isEqual:@"move_snapped_windows"]?@YES:@NO}];if(begun){self.gesture=2;[self.desktop.navigation perform:asDict(begun)];}}
-    else if(resize&&hit)[self beginResize:hit[@"window"] snapped:[kind isEqual:@"resize_window_snapped"] at:p output:output];
+    else if(resize&&hit)[self beginResize:hit[@"window"] edges:nil snapped:[kind isEqual:@"resize_window_snapped"] at:p output:output];
     // Upstream's pan grab remembers that it began on empty canvas: released without a drag, it unfocuses.
     else if([kind isEqual:@"pan_viewport"]){self.gesture=1;self.clearsFocus=!hit;}
     // Upstream's NavigateGrab: the drag, not the press, takes the direction.
@@ -793,6 +810,8 @@ static BOOL DWInputTrace(void) { static int on=-1;if(on<0)on=getenv("INFINIFY_DE
     if([self.desktop resizeHolds]){if(![self.desktop sizing])[self.desktop.resize cancel];return;}
     CGPoint p=[self screenPoint:e];NSNumber *output=[self outputAt:p];if(!output)return;
     self.startPoint=self.lastPoint=p;self.dragOutput=self.lastOutput=output;self.gestureButton=button;self.lastDragPan=0;
+    // Legacy, --experimental-native-resize only: the orange handles of the capture-acknowledged path. A normal run has upstream's resize
+    // border instead (-press:button:hit:at:output:).
     // Below [zoom] interact_min no handle takes the press: upstream's try_pick_button sits ahead of every resize border.
     // A widget, a pinned window and a fullscreen one offer none at any zoom, so none is drawn there either (-compose:).
     if(!button&&self.desktop.experimentalResize&&!(e.modifierFlags&(NSEventModifierFlagControl|NSEventModifierFlagOption))){NSDictionary *snapshot=[self.desktop call:@{@"op":@"snapshot"}];if(!DWPickOutput(snapshot,output))
@@ -829,7 +848,11 @@ static BOOL DWInputTrace(void) { static int on=-1;if(on<0)on=getenv("INFINIFY_DE
     CGPoint p=[self screenPoint:e];
     // A pick-mode press dragged past the click slop is a window move from here on, as upstream's grab starts where it is promoted.
     if(self.gesture==DWPolicyPress&&[self.hover pressDragged:p]){self.gesture=2;self.startPoint=p;}
-    if(self.gesture==4)[self.desktop.resize request:@{@"op":@"native_resize_to",@"transaction":self.resizeTransaction,@"screen":pointJSON(p)}];
+    // Each drag event says where the pointer is; the controller asks one size at a time of the window and keeps only the latest while one
+    // is out. A transaction that takes no more motion has ended by itself (its window will not be resized, closed, or stopped answering):
+    // nothing more is sent for this press, which stays swallowed until its button lifts, as upstream's grab outlives a dead client.
+    // Under --experimental-native-resize nothing ends an acknowledged transaction for it (-reap is readback's), so a refused motion cancels there.
+    if(self.gesture==4){if(self.resizeTransaction){NSString *status=self.desktop.statusText;if(![self.desktop.resize request:@{@"op":@"native_resize_to",@"transaction":self.resizeTransaction,@"screen":pointJSON(p)}]){if(self.desktop.experimentalResize)[self.desktop.resize cancel];self.resizeTransaction=nil;self.desktop.statusText=status;}}}
     else if(self.gesture==1){
         if(hypot(p.x-self.startPoint.x,p.y-self.startPoint.y)>=5)self.clearsFocus=NO;
         // A normal run's drag pan is timed, for the coast its release launches.
@@ -858,7 +881,11 @@ static BOOL DWInputTrace(void) { static int on=-1;if(on<0)on=getenv("INFINIFY_DE
 - (void)mouseUp:(NSEvent *)e { if(self.desktop.probe&&!self.desktop.probeDrivingGesture){self.desktop.probeHumanInput=YES;return;} if(self.desktop.configured&&e.buttonNumber!=self.gestureButton)return;[self released:[self screenPoint:e] at:e.timestamp]; }
 // The end of a press, whatever it had become: at the global point and the event time of its release, or of the moment a release that never
 // arrived was noticed (-[Desktop endLostInput]).
-- (void)released:(CGPoint)p at:(NSTimeInterval)time { self.liftSeen=0;if(self.gesture==4)[self.desktop.resize request:@{@"op":@"end_native_resize",@"transaction":self.resizeTransaction}];self.resizeTransaction=nil;if(self.heldPress)self.heldReleased=YES;else [self releasePressed];
+- (void)released:(CGPoint)p at:(NSTimeInterval)time { self.liftSeen=0;
+    // The release of a resize grab: the last size asked is let through, the window is read once more, and the canvas has the size it has.
+    // A transaction that ended by itself meanwhile has nothing to release, and says so to nobody.
+    if(self.gesture==4&&self.resizeTransaction){NSString *status=self.desktop.statusText;if(![self.desktop.resize request:@{@"op":@"end_native_resize",@"transaction":self.resizeTransaction}])self.desktop.statusText=status;}
+    self.resizeTransaction=nil;if(self.heldPress)self.heldReleased=YES;else [self releasePressed];
     // Upstream resolve_click_navigate, after the release is forwarded (or queued behind a press that is still held): the button lifted within 5 points of its press, on the same output.
     NSNumber *clicked=self.clickWindow;self.clickWindow=nil;
     if(self.gesture==3&&clicked&&hypot(p.x-self.startPoint.x,p.y-self.startPoint.y)<=5&&[[self outputAt:p]isEqual:self.dragOutput])[self.desktop clickReleased:clicked output:self.dragOutput];
@@ -1034,9 +1061,13 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         // transaction. When a transaction has ended, the window is looked at as the poll looks at it: its bounds, its stream's size
         // and the controller's observation follow the size it has, or it is found closed. Then the scene is saved, once.
         self.resize.acknowledges=NO;self.resize.timeout=3;
+        // A resize grab whose pointer rests owes no effect and is no orphan: its press, or its swipe, ends it (-released:at:, gesture_end),
+        // and a press or swipe whose end is lost is ended by -endLostInput.
+        self.resize.held=^BOOL(NSNumber *transaction){Desktop *d=weak;for(DesktopView *view in d.views)if(view.gesture==4&&[view.resizeTransaction isEqual:transaction])return YES;return d.gestureOwner&&d.gestureResize;};
         self.resize.changed=^{Desktop *d=weak;if(d.cleaning)return;if(d.resize.failure)d.statusText=d.resize.failure;
             NSDictionary *transaction=asDict([d call:@{@"op":@"snapshot"}][@"native_resize"]);
             if(transaction&&[d.resize canRemove:nil]&&!d.resize.obligations&&![d.resizeSavedTransaction isEqual:transaction[@"transaction"]]){d.resizeSavedTransaction=transaction[@"transaction"];
+                if(DWInputTrace())fprintf(stderr,"debug: size transaction %s of #%s ended phase=%s\n",[transaction[@"transaction"]description].UTF8String,[transaction[@"window"]description].UTF8String,asString(transaction[@"phase"]).UTF8String?:"?");
                 LiveSource *source=d.sources[transaction[@"window"]];if(source&&!source.detached)[d track:source];[d saveScene];}
             [d render];};
         if(self.configured)[self resizeCapability];return;}
@@ -1492,7 +1523,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // output and the window-or-canvas context under the pointer, and the pointer itself.
 // An update or an end, which may fire an action, says whether a real modifier is down
 // as it does, as a hot key's action does. The reply is an action's, with what the
-// gesture fired and a note when it is gated.
+// gesture fired and a note when it is refused (a resize of a screen-pinned window).
 - (void)gesture:(NSDictionary *)event owner:(NSInteger)owner {
     NSString *op=event[@"op"];BOOL begin=[op isEqual:@"gesture_begin"],end=[op isEqual:@"gesture_end"],held=[DWCycleHold modifiersDown]!=0;NSMutableDictionary *command=[event mutableCopy];
     if(begin){
@@ -1515,7 +1546,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         // swallowed. A two-finger pinch and a hold hold no scroll back, and end none.
         if(owner==1&&self.trackpad.engaged){[self.panLaunch cancel];for(DesktopView *view in self.views)view.scrollPanTime=0;}
         command[@"modifiers"]=modifiersJSON(NSEvent.modifierFlags);command[@"context"]=[[under hit:p output:output]isKindOfClass:NSDictionary.class]?@"window":@"canvas";command[@"output"]=output;command[@"pointer"]=pointJSON(p);
-        self.gestureOwner=owner;self.gestureOutput=output;self.gestureWatched=[[self outputUnderPointer:p]isEqual:output];self.gestureMove=NO;
+        self.gestureOwner=owner;self.gestureOutput=output;self.gestureWatched=[[self outputUnderPointer:p]isEqual:output];self.gestureMove=self.gestureResize=NO;
     }else if(owner!=self.gestureOwner)return;
     else command[@"held"]=held?@YES:@NO;
     if(end)self.gestureOwner=0;
@@ -1529,7 +1560,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(end&&[command[@"cancelled"]isEqual:@YES]&&self.gestureOutput&&[asString(asDict(reply[@"gesture"])[@"state"])isEqual:@"swipe_pan"])[self call:@{@"op":@"cancel_navigation",@"output":self.gestureOutput}];
     // No gesture in the reply: trackpad gestures are off (set-trackpad), and the rest of this one has nowhere to go.
     if(begin&&!asDict(reply[@"gesture"]))self.gestureOwner=0;
-    if(begin)self.gestureMove=[asString(asDict(reply[@"gesture"])[@"state"])isEqual:@"swipe_move"];
+    if(begin){NSString *state=asString(asDict(reply[@"gesture"])[@"state"]);self.gestureResize=[state isEqual:@"swipe_resize"];self.gestureMove=self.gestureResize||[state isEqual:@"swipe_move"];}
     NSDictionary *fired=asDict(reply[@"fired"]);NSString *action=asString(fired[@"action"]);
     // An action the gesture fired and the controller ran holds a cycle open, or ends one, as a hot key's does.
     if(action&&!asString(fired[@"error"]))[self holdCycle:action held:held];
@@ -1615,7 +1646,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(self.gestureOwner!=1)return;
     BOOL covered=self.gestureWatched&&![[self outputUnderPointer:pointer()]isEqual:self.gestureOutput],silent=self.gestureMove&&now-self.lastTouches>30;
     if(!covered&&!silent)return;
-    fprintf(stderr,"A trackpad gesture lost its touches (%s): ended cancelled.\n",covered?"the canvas is no longer under the pointer":"none for thirty seconds during a window move");
+    fprintf(stderr,"A trackpad gesture lost its touches (%s): ended cancelled.\n",covered?"the canvas is no longer under the pointer":"none for thirty seconds during a window move or resize");
     if(covered)[self cancelGestures];else [self gesture:@{@"op":@"gesture_end",@"cancelled":@YES,@"time_ms":DWGestureTime(now)} owner:1];
     [self render];
 }
@@ -1715,7 +1746,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     }
     self.statusText=status;NSMutableArray<NSString *> *parts=[NSMutableArray array];
     for(NSUInteger i=0;i<kinds.count;i++){
-        NSArray<NSString *> *chords=found[kinds[i]];if(!chords||(i==4&&!self.experimentalResize))continue;
+        NSArray<NSString *> *chords=found[kinds[i]];if(!chords)continue;
         NSString *both=chords[0].length&&chords[1].length&&![chords[0]isEqual:chords[1]]?[NSString stringWithFormat:@"%@ or %@",chords[0],chords[1]]:chords[0].length?chords[0]:chords[1];
         [parts addObject:[NSString stringWithFormat:@"%@: %@",both,words[i]]];
     }
@@ -1867,36 +1898,77 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(*subscribe)[self broadcastState];
     return jsonMember(jsonMember(raw,"data"),"reply")?:[NSJSONSerialization dataWithJSONObject:data[@"reply"] options:NSJSONWritingWithoutEscapingSlashes error:nil];
 }
-// --debug-pointer, which needs --only-pid: a left press or release on a managed window, for a test that cannot move the pointer.
-// {"DebugPointer":{"phase":"probe"|"down"|"up","window":ID,"at":[fx,fy]}}: the point is that fraction of the window's
-// placement on its output. Nothing is posted anywhere and the pointer stays where it is: an NSEvent is made and handed to the
-// view's own -mouseDown: or -mouseUp:, so everything a person's click runs from there on runs (the binding lookup, the
-// controller's focus request, the hold for native focus, the forward to the window, the release). What it does not exercise is
-// the window server delivering a click to the panel. A point that is clipped, off the panel or under another window is
-// refused, never moved. `probe` only answers where the point is and what is under it.
+// --debug-pointer, which needs --only-pid: a press, a drag and a release on a managed window, for a test that cannot move the pointer.
+// {"DebugPointer":{"phase":"probe"|"down"|"drag"|"up","window":ID,"at":[fx,fy],"offset":[ox,oy],"button":"left"|"right"|"middle",
+// "modifiers":["alt","shift","ctrl","super"],"to":[dx,dy]}}.
+// down: the point is that fraction of the window's placement on its output, plus `offset` screen points when one is given, which is
+// how a point of the resize border just outside the frame is named. `button` (left when absent) and `modifiers` are the event's.
+// drag: needs a press that is down; the point is where that press went down plus `to` screen points (a fraction of a tile that is
+// changing size names no steady point), and it must be on the canvas panel. up: with `window` and `at`, the release goes to that
+// fraction of the window's placement as it is now; without them, to where the press last was, which is how a drag ends and the only
+// way to release over a window that has closed.
+// Nothing is posted anywhere and the pointer stays where it is: an NSEvent of the matching type is made and handed to the view's own
+// -mouseDown:, -mouseDragged: or -mouseUp: (the right and middle buttons' equivalents for those), so everything a person's press,
+// drag and release run from there on runs: the binding lookup, the controller's focus request, the hold for native focus, the
+// forward to the window, a window drag, a resize grab with every size it asks, the release. Those handlers read the event's button
+// number, modifiers, location and time, all of which the made event carries; its CGEvent is read only where a press is forwarded to
+// a window. What this does not exercise is the window server delivering a click or a drag to the panel. A point that is clipped,
+// off the panel or under another window is refused, never moved. `probe` only answers where the point is and what is under it.
+- (void)injected:(DesktopView *)view phase:(int)phase {
+    static const NSEventType types[3][3]={{NSEventTypeLeftMouseDown,NSEventTypeRightMouseDown,NSEventTypeOtherMouseDown},{NSEventTypeLeftMouseDragged,NSEventTypeRightMouseDragged,NSEventTypeOtherMouseDragged},{NSEventTypeLeftMouseUp,NSEventTypeRightMouseUp,NSEventTypeOtherMouseUp}};
+    NSInteger b=view.injectedButton;CGPoint s=view.injectedPoint;
+    NSEvent *e=[NSEvent mouseEventWithType:types[phase][b] location:[view convertPoint:CGPointMake(s.x-view.globalBounds.origin.x,s.y-view.globalBounds.origin.y) toView:nil] modifierFlags:view.injectedFlags timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:view.window.windowNumber context:nil eventNumber:0 clickCount:1 pressure:phase==2?0:1];
+    // +mouseEventWithType: has no button parameter and numbers every event it makes 0, a right or middle one too, where the event of a
+    // real right or middle button says 1 or 2 and the handlers go by that number. So the event's own Quartz event is copied, given the
+    // number its type means, and made an NSEvent again: still posted nowhere, with the same window, location, modifiers and time.
+    if(b&&e.buttonNumber!=b){CGEventRef cg=e.CGEvent?CGEventCreateCopy(e.CGEvent):NULL;if(cg){CGEventSetIntegerValueField(cg,kCGMouseEventButtonNumber,b);NSEvent *numbered=[NSEvent eventWithCGEvent:cg];CFRelease(cg);if(numbered)e=numbered;}}
+    if(phase==0){if(b==0)[view mouseDown:e];else if(b==1)[view rightMouseDown:e];else [view otherMouseDown:e];}
+    else if(phase==1){if(b==0)[view mouseDragged:e];else if(b==1)[view rightMouseDragged:e];else [view otherMouseDragged:e];}
+    else{if(b==0)[view mouseUp:e];else if(b==1)[view rightMouseUp:e];else [view otherMouseUp:e];}
+}
+// A press its test never released is let go where it last was, five seconds after its last event, with the button it went down with.
+- (void)armInjected:(DesktopView *)view {
+    [view.injectedTimer invalidate];__weak DesktopView *weak=view;__weak Desktop *desktop=self;
+    view.injectedTimer=[NSTimer timerWithTimeInterval:5 repeats:NO block:^(NSTimer *timer){(void)timer;DesktopView *v=weak;if(!v.injected)return;v.injected=NO;v.injectedTimer=nil;[desktop injected:v phase:2];}];
+    [NSRunLoop.mainRunLoop addTimer:view.injectedTimer forMode:NSRunLoopCommonModes];
+}
 - (NSData *)debugPointer:(NSDictionary *)request {
-    NSString *phase=asString(request[@"phase"]),*status=self.statusText;NSNumber *window=asNumber(request[@"window"]);NSArray *at=asArray(request[@"at"]);
+    NSString *phase=asString(request[@"phase"]),*status=self.statusText;NSNumber *window=asNumber(request[@"window"]);NSArray *at=asArray(request[@"at"]),*offset=request[@"offset"]?asArray(request[@"offset"]):nil,*to=asArray(request[@"to"]);
     double fx=at.count==2?[asNumber(at[0])?:@(-1) doubleValue]:-1,fy=at.count==2?[asNumber(at[1])?:@(-1) doubleValue]:-1;
-    if(![@[@"probe",@"down",@"up"]containsObject:phase]||!window||!(fx>=0&&fx<=1&&fy>=0&&fy<=1))return ipcError(@"DebugPointer needs phase probe, down or up, a window id and at [fx, fy] within 0 and 1");
+    BOOL up=[phase isEqual:@"up"],drag=[phase isEqual:@"drag"],placed=window&&fx>=0&&fx<=1&&fy>=0&&fy<=1;
+    if(![@[@"probe",@"down",@"drag",@"up"]containsObject:phase]||(!drag&&!up&&!placed)||(up&&(window||at.count)&&!placed))return ipcError(@"DebugPointer needs phase probe, down, drag or up; for probe and down a window id and at [fx, fy] within 0 and 1; for drag to [dx, dy]");
+    if(drag||(up&&!placed)){
+        DesktopView *view=nil;for(DesktopView *v in self.views)if(v.injected)view=v;
+        if(!view)return ipcError(@"no DebugPointer press is down");
+        if(drag){
+            if(to.count!=2||!asNumber(to[0])||!asNumber(to[1]))return ipcError(@"DebugPointer drag needs to [dx, dy], screen points from where the press went down");
+            CGPoint s=CGPointMake(view.injectedStart.x+[to[0]doubleValue],view.injectedStart.y+[to[1]doubleValue]);
+            if(!CGRectContainsPoint(view.globalBounds,s))return ipcError(@"that point is not on the canvas");
+            view.injectedPoint=s;[self injected:view phase:1];[self armInjected:view];
+        }else{[view.injectedTimer invalidate];view.injectedTimer=nil;view.injected=NO;[self injected:view phase:2];}
+        return [NSJSONSerialization dataWithJSONObject:@{@"Ok":@{@"DebugPointer":@{@"screen":@[@(view.injectedPoint.x),@(view.injectedPoint.y)]}}} options:NSJSONWritingWithoutEscapingSlashes error:nil];
+    }
+    NSString *named=asString(request[@"button"])?:@"left";NSUInteger button=[@[@"left",@"right",@"middle"]indexOfObject:named];NSEventModifierFlags flags=0;
+    if(button==NSNotFound||(request[@"button"]&&!asString(request[@"button"])))return ipcError(@"DebugPointer button is left, right or middle");
+    for(id name in asArray(request[@"modifiers"])){NSNumber *flag=@{@"alt":@(NSEventModifierFlagOption),@"shift":@(NSEventModifierFlagShift),@"ctrl":@(NSEventModifierFlagControl),@"super":@(NSEventModifierFlagCommand)}[asString(name)?:@""];if(!flag)return ipcError(@"DebugPointer modifiers are alt, shift, ctrl and super");flags|=flag.unsignedIntegerValue;}
+    if(offset&&(offset.count!=2||!asNumber(offset[0])||!asNumber(offset[1])))return ipcError(@"DebugPointer offset is [ox, oy], screen points");
     NSDictionary *placement=nil;for(NSDictionary *p in [self call:@{@"op":@"snapshot"}][@"placements"])if([p[@"window"]isEqual:window]){placement=p;break;}
     DesktopView *view=nil;for(DesktopView *v in self.views)if([v.outputs containsObject:placement[@"output"]])view=v;
     if(!placement||!view)return ipcError(@"that window has no placement on an output");
-    CGRect rect=jsonRect(placement[@"screen_rect"]),clip=jsonRect(placement[@"clip_rect"]);CGPoint s=CGPointMake(rect.origin.x+fx*rect.size.width,rect.origin.y+fy*rect.size.height);
-    if(!CGRectContainsPoint(clip,s)||!CGRectContainsPoint(view.globalBounds,s))return ipcError(@"that point of the window is not on the canvas");
-    BOOL up=[phase isEqual:@"up"];
+    CGRect rect=jsonRect(placement[@"screen_rect"]),clip=jsonRect(placement[@"clip_rect"]);CGPoint s=CGPointMake(rect.origin.x+fx*rect.size.width+(offset?[offset[0]doubleValue]:0),rect.origin.y+fy*rect.size.height+(offset?[offset[1]doubleValue]:0));
+    if((!offset&&!CGRectContainsPoint(clip,s))||!CGRectContainsPoint(view.globalBounds,s))return ipcError(@"that point of the window is not on the canvas");
     // A release is not asked what lies under it: it goes to the same fraction of the window's placement as it is now, whatever has come over that point since.
-    NSDictionary *hit=up?nil:asDict([view hit:s output:placement[@"output"]]);self.statusText=status;
-    if(!up&&![hit[@"window"]isEqual:window])return ipcError(hit?[NSString stringWithFormat:@"window #%@ is under that point",hit[@"window"]]:@"no window takes a press at that point");
-    NSData *reply=[NSJSONSerialization dataWithJSONObject:@{@"Ok":@{@"DebugPointer":@{@"screen":@[@(s.x),@(s.y)],@"screen_rect":placement[@"screen_rect"],@"clip_rect":placement[@"clip_rect"],@"hit":up?NSNull.null:hit[@"window"]}}} options:NSJSONWritingWithoutEscapingSlashes error:nil];
+    NSDictionary *hit=up?nil:asDict([view hit:s output:placement[@"output"]]);
+    // A point named by an offset is one of the window's resize border, or of the window itself: the controller says which.
+    NSDictionary *border=!up&&offset&&!hit?asDict([view pointerCommand:@{@"op":@"resize_border",@"output":placement[@"output"],@"screen":pointJSON(s)} quiet:YES][@"border"]):nil;self.statusText=status;
+    if(!up&&![hit[@"window"]isEqual:window]&&![border[@"window"]isEqual:window])return ipcError(hit?[NSString stringWithFormat:@"window #%@ is under that point",hit[@"window"]]:border?[NSString stringWithFormat:@"the resize border of window #%@ is under that point",border[@"window"]]:@"no window takes a press at that point");
+    NSData *reply=[NSJSONSerialization dataWithJSONObject:@{@"Ok":@{@"DebugPointer":@{@"screen":@[@(s.x),@(s.y)],@"screen_rect":placement[@"screen_rect"],@"clip_rect":placement[@"clip_rect"],@"hit":up||!hit?NSNull.null:hit[@"window"],@"border":border?border[@"edges"]:NSNull.null}}} options:NSJSONWritingWithoutEscapingSlashes error:nil];
     if([phase isEqual:@"probe"])return reply;
     if(up?!view.injected:(view.gesture||view.injected))return ipcError(up?@"no DebugPointer press is down":@"a press is already down");
-    NSEvent *(^event)(NSEventType)=^NSEvent *(NSEventType type){return [NSEvent mouseEventWithType:type location:[view convertPoint:CGPointMake(s.x-view.globalBounds.origin.x,s.y-view.globalBounds.origin.y) toView:nil] modifierFlags:0 timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:view.window.windowNumber context:nil eventNumber:0 clickCount:1 pressure:type==NSEventTypeLeftMouseDown?1:0];};
     [view.injectedTimer invalidate];view.injectedTimer=nil;
-    if(up){view.injected=NO;[view mouseUp:event(NSEventTypeLeftMouseUp)];return reply;}
-    view.injected=YES;[view mouseDown:event(NSEventTypeLeftMouseDown)];
-    // A press its test never released is let go where it went down, five seconds on.
-    __weak DesktopView *weak=view;view.injectedTimer=[NSTimer timerWithTimeInterval:5 repeats:NO block:^(NSTimer *timer){(void)timer;DesktopView *v=weak;if(!v.injected)return;v.injected=NO;v.injectedTimer=nil;[v mouseUp:event(NSEventTypeLeftMouseUp)];}];
-    [NSRunLoop.mainRunLoop addTimer:view.injectedTimer forMode:NSRunLoopCommonModes];
+    if(up){view.injected=NO;view.injectedPoint=s;[self injected:view phase:2];return reply;}
+    view.injected=YES;view.injectedPoint=view.injectedStart=s;view.injectedButton=(NSInteger)button;view.injectedFlags=flags;[self injected:view phase:0];
+    [self armInjected:view];
     return reply;
 }
 // Normal runs only: main() starts the server once and stops it before the final cleanup.
@@ -2266,10 +2338,14 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     if(asDict(reply[@"navigation"])){if(!self.navigation)self.flying=YES;[self ensureFrames];}
     if(![reply[@"dirty"]isEqual:@NO])self.sceneDirty=YES;
 }
+// Readback mode: is a size transaction of this window live with no effect owed? Only a resize grab is, between two sizes it asks: the
+// controller takes no close, removal or observation of the window meanwhile, exactly as while a result is owed.
+- (BOOL)grabbed:(LiveSource *)source { return !self.experimentalResize&&self.resize&&![[self.resize busyWindow]isEqual:source.logical]&&![self.resize canRemove:source.logical]; }
 - (void)detach:(LiveSource *)source {
     [self cancelNavigation];
     // Without the flag only the transaction of this very window is cancelled: its last read is then all that is waited for.
-    if(source.detached)return;if(self.experimentalResize||[[self.resize busyWindow]isEqual:source.logical])[self.resize cancel];
+    // A resize grab of this window at rest owes no result and is cancelled the same way: one read follows, and ends it.
+    if(source.detached)return;if(self.experimentalResize||[[self.resize busyWindow]isEqual:source.logical]||[self grabbed:source])[self.resize cancel];
     if(![self call:@{@"op":@"remove_source",@"window":source.logical,@"identity":source.identity,@"keep_placeholder":@YES}])return;
     [self drop:source];
 }
@@ -2418,6 +2494,10 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
         // again (-configureResize). Its bounds are not read meanwhile either: the look that follows the transaction reports them.
         BOOL busy=!self.experimentalResize&&[[self.resize busyWindow]isEqual:source.logical];
         if(gone&&busy)return;
+        // A resize grab of this window whose pointer rests: no result is owed that would find the window gone, so the grab is cancelled
+        // here. The one read that follows fails, the transaction ends, and its end looks at the window again and finds it closed. While
+        // the window is there its frame is the transaction's to read, not this look's.
+        if([self grabbed:source]){if(gone)[self.resize cancel];return;}
         if(gone&&(self.manager||[self marked:source])){[self closed:source];return;}
         if(source.error||gone){self.statusText=source.error?:@"A source closed. Its world placeholder is retained for explicit rebind.";[self detach:source];return;}
         CGRect bounds=CGRectZero;if(busy||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)w[(id)kCGWindowBounds],&bounds))return;

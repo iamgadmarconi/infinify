@@ -293,10 +293,20 @@ pub enum Command {
     BeginNativeResize {
         window: WindowId,
         output: OutputId,
-        edges: Edges,
+        /// The resize border's own edge. Absent, the edge is where in the
+        /// window `start_screen` falls (upstream edges_from_position).
+        #[serde(default)]
+        edges: Option<Edges>,
         start_screen: Point,
         #[serde(default)]
         group: bool,
+    },
+    /// Upstream's resize border (`[mouse] resize_on_border`): is this screen
+    /// point of `output` in the band around a window, and which edge is it.
+    /// Read-only.
+    ResizeBorder {
+        output: OutputId,
+        screen: Point,
     },
     NativeResizeTo {
         transaction: u64,
@@ -736,6 +746,26 @@ pub enum Edges {
     BottomLeft,
     BottomRight,
 }
+impl Edges {
+    pub(crate) fn left(self) -> bool {
+        matches!(self, Self::Left | Self::TopLeft | Self::BottomLeft)
+    }
+    pub(crate) fn right(self) -> bool {
+        matches!(self, Self::Right | Self::TopRight | Self::BottomRight)
+    }
+    pub(crate) fn top(self) -> bool {
+        matches!(self, Self::Top | Self::TopLeft | Self::TopRight)
+    }
+    pub(crate) fn bottom(self) -> bool {
+        matches!(self, Self::Bottom | Self::BottomLeft | Self::BottomRight)
+    }
+    pub(crate) fn horizontal(self) -> bool {
+        self.left() || self.right()
+    }
+    pub(crate) fn vertical(self) -> bool {
+        self.top() || self.bottom()
+    }
+}
 impl From<Edges> for ResizeEdges {
     fn from(value: Edges) -> Self {
         match value {
@@ -866,6 +896,9 @@ impl Controller {
                 start_screen,
                 group,
             } => return self.begin_native_resize(window, output, edges, start_screen, group),
+            Command::ResizeBorder { output, screen } => {
+                return Ok(json!({"border":self.resize_border(output, screen)}));
+            }
             Command::NativeResizeTo {
                 transaction,
                 screen,

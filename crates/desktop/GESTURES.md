@@ -145,7 +145,7 @@ unbound, never the unmodified binding.
 | --- | --- | --- |
 | `swipe_pan` | `N-finger-swipe` is `pan-viewport`; or `zoom` (a swipe has no scale); or a move or resize with no window under the pointer | each update is the [timed `pan`](MOTION.md#timed-pans-and-momentum) of a finger scroll: the camera moves by `-(dx, dy) · navigation.trackpad_speed / zoom` canvas points, so the canvas follows the fingers, and the output's momentum hears the delta at the event's `time_ms`. The end is that pan's `pan_end`, see [Momentum](#momentum) |
 | `swipe_move` | `N-finger-swipe` or `N-finger-doubletap-swipe` is `move-window` or `move-snapped-windows`, and a window is under the pointer | focuses and raises the window, then installs the drag a bound button press installs, with the cluster for `move-snapped-windows`. Each update moves a virtual pointer by the raw `(dx, dy)`, held inside the gesture's output, and the window follows it with the usual snapping, as under `gesture_to` with that `pointer`: inside `navigation.edge_pan.zone` of an edge the drag's [edge pan](MOTION.md#edge-pan-while-a-window-is-dragged) is armed and the canvas pans under the window frame by frame. On end the drag is released and its edge pan with it. Over a [screen-pinned window](RULES.md#screen-pinned-windows) the drag is its [screen-space drag](RULES.md#dragging-a-pinned-window), as upstream's `GestureTarget::Pinned` arm installs the pinned move grab: the window is raised and focused and follows the virtual pointer point for point whatever the zoom, on the gesture's output, with no snapping, no cluster and no edge pan |
-| `swipe_resize` | the same triggers bound to `resize-window` or `resize-window-snapped`, over a window | nothing: native layout resize is gated. The begin reply's `note` says so |
+| `swipe_resize` | the same triggers bound to `resize-window` or `resize-window-snapped`, over a window | upstream's `try_start_gesture_resize`: raises and focuses the window and begins the [resize grab](NATIVE_RESIZE.md#pointer-resize) a bound button press begins, its edges from where in the window the pointer is, with the cluster for `resize-window-snapped`. Each update moves a virtual pointer by the raw `(dx, dy)`, held inside the gesture's output, with no `trackpad_speed` factor, and the grab asks the size that pointer means; the reply carries the size transaction's `transaction` and `effect` when one is to be performed. The end, cancelled or not, is the grab's release. When the grab cannot begin (the window has no source, a size transaction is already live, the shell performs no resize) the gesture is `swipe_pan`, as upstream's `false`, and nothing was focused. Over a [screen-pinned window](RULES.md#screen-pinned-windows) the gesture is claimed and does nothing, and the begin reply's `note` says so: upstream resizes it in screen space. Under `--experimental-native-resize` (no readback) it is claimed and does nothing too, with a `note`: that run resizes by its handles alone |
 | `swipe_threshold` | `N-finger-swipe` is a threshold action, or only named directions are bound | accumulates the physical vector; when its length reaches `gestures.swipe_threshold` (12) it fires once. `N-finger-swipe-up/down/left/right` win in the physical direction the fingers moved, the larger axis deciding; otherwise the `N-finger-swipe` action fires. A bare `center-nearest` takes the opposite of the vector, in eight directions: fingers left look right |
 | `pinch_zoom` | `N-finger-pinch` is bound (it can only be `zoom`) | the [pinch](MOTION.md#pointer-zoom) a `zoom_by` makes, given the scale itself: zoom = start zoom · `(1 + (scale − 1) · zoom.trackpad_speed)`, held between the dynamic minimum of the begin and 1.0, around the pointer. On end, cancelled or not, a zoom within 0.05 of 1.0 snaps to it |
 | `pinch_threshold` | no continuous pinch, and `N-finger-pinch-in` or `-out` is bound | fires the in action once when `scale` drops below `gestures.pinch_in_threshold` (0.85) and the out action once when it rises above `gestures.pinch_out_threshold` (1.15). One gesture can fire both |
@@ -202,7 +202,7 @@ three-finger tap is a middle click, holds that click back for 300 ms
 
 - if `N-finger-doubletap-swipe` is bound to a move and a window is under the
   pointer, the gesture is `swipe_move`; bound to a resize over a window, it is
-  the inert `swipe_resize`;
+  `swipe_resize`;
 - "a window under the pointer" is upstream's `gesture_target_under`, in the
   order a press resolves: the windows pinned to the output, then the canvas
   windows, then the widgets. A [widget](RULES.md#widgets) is grab-proof and
@@ -224,8 +224,8 @@ Control+Option) and `mod_key = "super"`. "Runs" means the action executes in
 this build; the others are dispatched and refused by name until their actions
 exist. The `implemented` flag of each binding in the begin reply is the live
 answer, and `gesture_flow`'s `the_default_table_on_a_mac` reads it for every
-row: upstream binds 22 gestures, of which 14 run here, 6 are refused by name
-and the 2 resizes are claimed and inert. Four of the six, the two `fit-window`
+row: upstream binds 22 gestures, of which 16 run here, the 2 resizes among
+them, and 6 are refused by name. Four of the six, the two `fit-window`
 and the two `fit-window-snapped` pinches, run once the shell has sent
 `native_resize_capability`, and so do the two `toggle-fullscreen` pinches
 ([FULLSCREEN.md](FULLSCREEN.md)).
@@ -236,8 +236,8 @@ and the two `fit-window-snapped` pinches, run once the shell has sent
 | 4-finger swipe | `4-finger-swipe` | anywhere | `center-nearest` | runs: fires `center-nearest <dir>`, fingers left looking right |
 | ⌃⌥ 3-finger swipe | `mod+3-finger-swipe` | anywhere | `center-nearest` | the same |
 | 3-finger tap, then 3-finger swipe | `3-finger-doubletap-swipe` | on-window | `move-window` | runs |
-| ⌥ 3-finger swipe | `alt+3-finger-swipe` | on-window | `resize-window` | claimed, does nothing: gated |
-| ⌥⇧ 3-finger swipe | `alt+shift+3-finger-swipe` | on-window | `resize-window-snapped` | the same |
+| ⌥ 3-finger swipe | `alt+3-finger-swipe` | on-window | `resize-window` | runs at the controller: the resize grab. Not run through the shell |
+| ⌥⇧ 3-finger swipe | `alt+shift+3-finger-swipe` | on-window | `resize-window-snapped` | the same, with the snap cluster |
 | 2-finger pinch | `2-finger-pinch` | on-canvas | `zoom` | runs |
 | ⌃⌥ 2-finger pinch | `mod+2-finger-pinch` | anywhere | `zoom` | runs |
 | 3-finger pinch | `3-finger-pinch` | anywhere | `zoom` | runs |
@@ -346,8 +346,11 @@ The [shell notes](../../native/desktop/README.md#trackpad-gestures) say why.
   than the stream it is given.
 - An unbound gesture is forwarded to the focused client upstream. Here it does
   nothing.
-- `resize-window` and `resize-window-snapped` are claimed and inert: native
-  layout resize is gated. Upstream resizes through its pointer grab.
+- `resize-window` and `resize-window-snapped` resize through the size
+  transaction of [NATIVE_RESIZE.md](NATIVE_RESIZE.md#pointer-resize), whose
+  differences from upstream's grab are listed there. A screen-pinned window is
+  claimed and not resized. No resize gesture has been run through the shell:
+  `gesture_flow` plays the native side.
 - A move's virtual pointer is held inside the gesture's output, where upstream's
   cursor also crosses to a neighbouring output and takes the window with it.
   A screen-pinned window is moved in screen space by the same gesture, raised
@@ -538,7 +541,7 @@ cannot be injected. What was run instead:
   `center-window` on lift, refused by name; a three-finger pinch out became
   `pinch_zoom`; Control-Option with a three-finger swipe resolved
   `mod+3-finger-swipe`; Option with a three-finger swipe over a window became
-  the inert `swipe_resize` with its note; and after `set-trackpad off` a swipe's
+  `swipe_resize`, which was inert with a note at the time of that run; and after `set-trackpad off` a swipe's
   begin answered `"gesture":null` and nothing moved.
 
 Still unrun, and not shown by any of the above: real fingers on a trackpad;

@@ -3,8 +3,10 @@
 This module coordinates one bound ordinary window and all eight edges. It emits
 requests for a future native shell; it does not call AX, capture pixels, resize
 third-party windows, or establish usable compositing. Existing `begin_resize`
-remains the logical reducer API. Native group resize is rejected. Pin
-and aspect ratio are outside this contract; fullscreen runs this same
+remains the logical reducer API. Native group resize is rejected in the
+capture-acknowledged mode and carried in readback mode, where a rule's aspect
+ratio is kept too ([Pointer resize](#pointer-resize)). Pin is outside this
+contract; fullscreen runs this same
 transaction ([FULLSCREEN.md](FULLSCREEN.md)). Fit, fill, the step actions, IPC
 resize and a window rule's `size` run this same transaction without a drag:
 [SIZES.md](SIZES.md) has what they ask for and what they write when its results
@@ -139,10 +141,11 @@ original upstream request/clamp and ordinary settlement blocks come from
 malbiruk/driftwm `352333a8fa1b22171492d4b71a54102045c9a19d` (GPL-3.0-or-later).
 See `tests/resize_upstream/README.md` for the exact mechanical extraction scope.
 The original Wayland release/configure/commit machinery does not execute here.
-The existing snap oracle remains separate. Floating-point fractional displacement
-is still the existing reducer behavior, whereas upstream truncates displacement
-to integers; literal fractional parity is unresolved. No full DriftWM/native
-macOS behavior parity is claimed.
+The existing snap oracle remains separate. The native transaction cuts the
+displacement to whole units toward zero on each axis, as upstream's `as i32`
+does, and holds the pointer inside its output; the logical reducer
+(`begin_resize`, `gesture_to`) still takes the fractional displacement. No full
+DriftWM/native macOS behavior parity is claimed.
 
 ## Readback mode
 
@@ -226,6 +229,79 @@ Scenarios: `readback_*` in `tests/sizes_flow.rs`, `tests/fullscreen_flow.rs`
 and `tests/native_resize_flow.rs`, the `readback` case of
 `native/desktop/resize-regression.m`, and on real fixture windows
 `tests/e2e/scoped-sizing.sh`.
+
+### Pointer resize
+
+In readback mode `begin_native_resize`, `native_resize_to` and
+`end_native_resize` are upstream's resize grab
+(`src/grabs/resize_grab.rs`, `start_compositor_resize_with_edge`,
+`handle_resize_commit`): the one a press bound to `resize-window` or
+`resize-window-snapped` starts, a left press on the
+[resize border](POINTER.md#the-resize-border), and a [resize gesture](GESTURES.md). It is the
+transaction above, so there is one at a time and each ends in bounded time.
+
+- **Begin.** `edges` may be left out: the edge is then where `start_screen`
+  falls in the window, by upstream's `edges_from_position` (a 3×3 grid, `<`
+  and `>` at the thirds, the centre resizing from the bottom right). Every
+  refusal stands ahead of every side effect, as upstream's bails do; then the
+  window is raised and focused, every flight is cancelled, fit and fill end,
+  and one baseline read is emitted. No size is asked before motion.
+  `resize_disabled` does not refuse: the window is asked again.
+- **Motion.** The pointer is held inside the grab's output,
+  `[0, w-1] × [0, h-1]`. The delta is `(pointer − start_screen) / start_zoom`,
+  each axis cut to a whole number toward zero. Left and top subtract it, right
+  and bottom add it, the floor is 1, and the size is snapped by
+  `Scene::resize_proposal`. With a rule's `preserve_aspect_ratio` the ratio
+  the window has at the begin bends the size instead (`constrain_to_ratio`: an
+  edge drives its own axis, a corner the axis that moved farther relative to
+  the ratio), and there is no snap and no cluster.
+- **One request at a time.** While an effect is owed, motion only replaces the
+  one latest request; when the result arrives the latest is asked. A size is
+  not asked when it is the size committed, or the size of the last setter
+  sent: upstream configures a client only when the size differs from the last
+  one it configured, so a window resting at a limit is not asked the same
+  refused size again by motion that does not change it.
+- **Commit.** The size read back is the size shown, whatever was asked. For a
+  left or top edge the world origin moves by `committed − granted` on that
+  axis, upstream's commit-time compensation, so the opposite edge stays on the
+  canvas. The native window's own top-left is never written for this: a size
+  write keeps it, and the native origin stays observation-only.
+- **Cluster.** With `group` the windows snapped to the moving edges are
+  captured at the begin (`Scene::begin_resize`) and translated at each commit
+  from the granted rectangle (`Scene::resize_settle`); they are never resized
+  and their native windows are not touched. A port decision: the cluster
+  follows the size granted, one request behind the pointer, because a Mac
+  window's limits are not known before asking. Upstream clamps to the
+  client's declared limits ahead of its cluster step and ends in the same
+  place.
+- **A baseline that differs** is adopted as above, and the snap state, the
+  cluster and the ratio are taken again from the adopted size; motion that
+  waited for the baseline is measured again from it.
+- **End.** `end_native_resize` lets the latest request through and reads the
+  window once more; the canvas then has the size the window has.
+  `cancel_native_resize` drops what was not yet sent. Upstream has no cancel
+  key for a resize and neither has a normal run.
+- **What ends it without a release.** A window that is not settable answers
+  `unsupported`: the transaction is cancelled, one read follows and it ends
+  `failed`; later motion and the release are refused and change nothing. A
+  window that closed or whose application does not answer ends it by the
+  unobserved result of the next effect, as above; the shell cancels a grab
+  whose pointer rests when it finds the window gone. The grab's output being
+  removed cancels it.
+- **While it lasts** every other size request is refused: a sizing action, a
+  fullscreen toggle, an IPC resize of any window, a second begin.
+
+Where a Mac window cannot follow upstream's client: its minimum and maximum
+are unknown until a size past them was asked and refused (about 120 ms each
+by the adapter's polling constants, not measured);
+macOS grants no size past the screen's visible area; its own top-left does
+not move for a left or top drag, so only the tile on the canvas keeps the
+opposite edge; and what is drawn lags the pointer by one request, since the
+canvas shows the size the window has, not the one asked.
+
+Scenarios: `readback_grab_*` in `tests/native_resize_flow.rs`, the resize
+swipes of `tests/gesture_flow.rs`, the ratio in `tests/rules_flow.rs`, and on
+fixture windows `tests/e2e/scoped-resize-drag.sh`.
 
 ### Experimental desktop integration (headless evidence only)
 

@@ -1029,26 +1029,17 @@ fn modifiers_select_the_mod_and_alt_variants() {
     h.end(false, 1020);
     assert_eq!(h.camera(), [0.0, 0.0]);
 
-    // alt+3-finger-swipe over a window is upstream's resize, which is gated:
-    // the gesture is claimed, says why, and changes nothing.
+    // alt+3-finger-swipe over a window is upstream's resize: its own
+    // scenarios are at the end of this file. Both bindings resolve and run.
     for (held, combo, action) in [
         ("⌥", "alt+3-finger-swipe", "resize-window"),
         ("⌥⇧", "alt+shift+3-finger-swipe", "resize-window-snapped"),
     ] {
-        let before = h.snapshot();
         let reply = h.begin("swipe", 3, held, "window", ON_WINDOW);
-        assert_eq!(reply["gesture"]["state"], "swipe_resize", "{reply}");
-        assert_eq!(reply["gesture"]["window"], 1);
         assert_eq!(bindings(&reply), [format!("{combo} = {action}")]);
-        assert_eq!(reply["gesture"]["bindings"][0]["implemented"], false);
-        assert_eq!(
-            reply["note"],
-            "resize by gesture is not implemented on macOS yet: native layout resize is not available"
-        );
-        assert_eq!(h.swipe(40.0, 40.0, 1010)["note"], Value::Null);
-        let reply = h.end(false, 1020);
-        assert_eq!(reply["dirty"], false, "{reply}");
-        assert_eq!(h.snapshot(), before);
+        assert_eq!(reply["gesture"]["bindings"][0]["implemented"], true);
+        assert_eq!(reply["note"], Value::Null, "{reply}");
+        h.end(false, 1020);
     }
     // The resize bindings are on-window: on canvas the chord has no swipe.
     let reply = h.begin("swipe", 3, "⌥", "canvas", ON_CANVAS);
@@ -1802,8 +1793,8 @@ fn the_default_table_on_a_mac() {
             "4-finger-swipe = center-nearest: runs",
             "mod+3-finger-swipe = center-nearest: runs",
             "3-finger-doubletap-swipe = move-window: runs",
-            "alt+3-finger-swipe = resize-window: refused",
-            "alt+shift+3-finger-swipe = resize-window-snapped: refused",
+            "alt+3-finger-swipe = resize-window: runs",
+            "alt+shift+3-finger-swipe = resize-window-snapped: runs",
             "2-finger-pinch = zoom: runs",
             "mod+2-finger-pinch = zoom: runs",
             "3-finger-pinch = zoom: runs",
@@ -1828,4 +1819,203 @@ fn the_default_table_on_a_mac() {
         gestures.on_window.len() + gestures.on_canvas.len() + gestures.anywhere.len(),
         seen.len()
     );
+}
+
+// Upstream's resize gesture (try_start_gesture_resize, the SwipeResize arms
+// of on_gesture_swipe_update and _end), on the readback path every normal run
+// has. These drive the controller alone: nothing here shows a trackpad, a
+// native window or the shell performing a size request.
+fn readback() -> Host {
+    let mut h = setup();
+    h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":true}));
+    h
+}
+/// The adapter's answer to a size effect: what was read back from the window.
+fn sized(h: &mut Host, effect: &Value, outcome: &str, size: [f64; 2]) -> Value {
+    let setter = !effect["requested"].is_null();
+    let actual = rect(4000.0, 3000.0, size[0], size[1]);
+    h.ok(json!({"op":"native_resize_result","transaction":effect["transaction"],"effect_id":effect["effect_id"],"identity":effect["identity"],"generation":effect["generation"],"result":{"outcome":outcome,"ax_error":0,"mutation_attempted":setter,"observed":true,"requested":if setter{effect["requested"].clone()}else{json!({"width":0.0,"height":0.0})},"actual_ax":actual,"actual_cg":actual}}))
+}
+fn world(h: &mut Host, window: u64) -> Value {
+    let snapshot = h.snapshot();
+    let windows = snapshot["windows"].as_array().unwrap();
+    windows.iter().find(|w| w["window"] == window).unwrap()["world_rect"].clone()
+}
+fn size(w: f64, h: f64) -> Value {
+    json!({"width":w,"height":h})
+}
+
+// ON_WINDOW is (100, 100) inside window 1's 400 x 300: the left third, the
+// middle row. Upstream's edges_from_position makes that a resize of the left
+// edge alone, whose opposite edge, the right one at x = 500, must stay.
+#[test]
+fn a_resize_swipe_asks_each_size_of_the_window_and_shows_the_size_it_took() {
+    let mut h = readback();
+    let reply = h.begin("swipe", 3, "⌥", "window", ON_WINDOW);
+    assert_eq!(reply["gesture"]["state"], "swipe_resize", "{reply}");
+    assert_eq!(reply["gesture"]["window"], 1);
+    assert_eq!(reply["note"], Value::Null);
+    // Raised and focused, and one read of the window before any size is asked.
+    focus_effect(&reply, 1);
+    assert_eq!(h.snapshot()["focused"], 1);
+    let read = reply["effect"].clone();
+    assert_eq!(read["op"], "observe_resize_source", "{reply}");
+    assert_eq!(h.snapshot()["native_resize"]["edges"], "left");
+    // Motion before the answer takes the one latest-request slot.
+    assert_eq!(h.swipe(-10.0, 0.0, 1010)["effect"], Value::Null);
+    assert_eq!(h.swipe(-10.5, 7.0, 1020)["effect"], Value::Null);
+    // The baseline answers: the latest size is asked, once. 20.5 screen
+    // points at zoom 1 are 20 whole units (upstream's `as i32`), and the
+    // vertical motion means nothing to a left edge.
+    let setter = sized(&mut h, &read, "observed", [400.0, 300.0])["effect"].clone();
+    assert_eq!(setter["op"], "resize_native_window");
+    assert_eq!(setter["requested"], size(420.0, 300.0));
+    // More motion while that setter is out: nothing is sent.
+    assert_eq!(h.swipe(-20.0, 0.0, 1030)["effect"], Value::Null);
+    assert_eq!(world(&mut h, 1), rect(100.0, 100.0, 400.0, 300.0));
+    // It answers: the canvas takes the size, the right edge stays, and the
+    // newer size goes out.
+    let next = sized(&mut h, &setter, "applied", [420.0, 300.0])["effect"].clone();
+    assert_eq!(world(&mut h, 1), rect(80.0, 100.0, 420.0, 300.0));
+    assert_eq!(next["requested"], size(440.0, 300.0));
+    // The window grants less than was asked: what it took is what is shown.
+    assert_eq!(
+        sized(&mut h, &next, "clamped", [432.0, 300.0])["effect"],
+        Value::Null
+    );
+    assert_eq!(world(&mut h, 1), rect(68.0, 100.0, 432.0, 300.0));
+    // A swipe that asks nothing new of a window at rest sends nothing.
+    assert_eq!(h.swipe(0.0, 5.0, 1040)["effect"], Value::Null);
+    // The end is a release: one last read, and the transaction completes.
+    let reply = h.end(false, 1050);
+    let last = reply["effect"].clone();
+    assert_eq!(last["op"], "observe_resize_source", "{reply}");
+    assert_eq!(reply["dirty"], true);
+    sized(&mut h, &last, "observed", [432.0, 300.0]);
+    assert_eq!(h.snapshot()["native_resize"]["phase"], "complete");
+    assert_eq!(world(&mut h, 1), rect(68.0, 100.0, 432.0, 300.0));
+    assert_eq!(h.trackpad()["gesture"], Value::Null);
+}
+
+// Upstream ends the grab the same way for a cancelled swipe: what was asked
+// stays asked, and the transaction still completes.
+#[test]
+fn a_cancelled_resize_swipe_still_completes_and_the_pointer_is_held_inside_the_output() {
+    let mut h = readback();
+    let reply = h.begin("swipe", 3, "⌥", "window", ON_WINDOW);
+    let read = reply["effect"].clone();
+    sized(&mut h, &read, "observed", [400.0, 300.0]);
+    // The virtual pointer starts 200 points inside the output's left edge
+    // and cannot leave it: a swipe of 5000 to the left is 200.
+    let setter = h.swipe(-5000.0, 0.0, 1010)["effect"].clone();
+    assert_eq!(setter["requested"], size(600.0, 300.0));
+    let reply = h.end(true, 1020);
+    assert_eq!(reply["gesture"]["cancelled"], true);
+    assert_eq!(reply["effect"], Value::Null, "{reply}");
+    let last = sized(&mut h, &setter, "applied", [600.0, 300.0])["effect"].clone();
+    assert_eq!(last["op"], "observe_resize_source");
+    sized(&mut h, &last, "observed", [600.0, 300.0]);
+    assert_eq!(h.snapshot()["native_resize"]["phase"], "complete");
+    assert_eq!(world(&mut h, 1), rect(-100.0, 100.0, 600.0, 300.0));
+}
+
+// resize-window-snapped: a window a snap gap to the left of window 1 follows
+// its left edge by what the window took, not by what was asked, and its own
+// size is never asked for.
+#[test]
+fn a_snapped_resize_swipe_shifts_the_cluster_by_the_size_the_window_took() {
+    let mut h = readback();
+    attach(&mut h, 3, rect(-212.0, 100.0, 300.0, 300.0));
+    let reply = h.begin("swipe", 3, "⌥⇧", "window", ON_WINDOW);
+    assert_eq!(reply["gesture"]["state"], "swipe_resize", "{reply}");
+    assert_eq!(h.snapshot()["native_resize"]["group"], true);
+    let read = reply["effect"].clone();
+    sized(&mut h, &read, "observed", [400.0, 300.0]);
+    let setter = h.swipe(-60.0, 0.0, 1010)["effect"].clone();
+    assert_eq!(setter["requested"], size(460.0, 300.0));
+    assert_eq!(setter["window"], 1);
+    // Nothing moves before the answer.
+    assert_eq!(world(&mut h, 3), rect(-212.0, 100.0, 300.0, 300.0));
+    sized(&mut h, &setter, "clamped", [440.0, 300.0]);
+    assert_eq!(world(&mut h, 1), rect(60.0, 100.0, 440.0, 300.0));
+    assert_eq!(world(&mut h, 3), rect(-252.0, 100.0, 300.0, 300.0));
+    let last = h.end(false, 1020)["effect"].clone();
+    sized(&mut h, &last, "observed", [440.0, 300.0]);
+    assert_eq!(world(&mut h, 3), rect(-252.0, 100.0, 300.0, 300.0));
+    // The plain binding leaves the neighbour where it is.
+    let reply = h.begin("swipe", 3, "⌥", "window", [LEFT + 70.0, TOP + 200.0]);
+    assert_eq!(h.snapshot()["native_resize"]["group"], false, "{reply}");
+    let read = reply["effect"].clone();
+    sized(&mut h, &read, "observed", [440.0, 300.0]);
+    // The left edge rests a snap gap from the neighbour: a short swipe is
+    // held by that snap and asks nothing, a long one breaks away.
+    assert_eq!(h.swipe(-20.0, 0.0, 1030)["effect"], Value::Null);
+    let setter = h.swipe(-80.0, 0.0, 1040)["effect"].clone();
+    sized(&mut h, &setter, "applied", [540.0, 300.0]);
+    assert_eq!(world(&mut h, 1), rect(-40.0, 100.0, 540.0, 300.0));
+    assert_eq!(world(&mut h, 3), rect(-252.0, 100.0, 300.0, 300.0));
+}
+
+// Upstream's `false` from try_start_gesture_resize: the swipe pans, and
+// nothing was raised, focused or begun for the resize that was refused.
+#[test]
+fn a_resize_swipe_that_cannot_begin_pans_and_a_pinned_window_is_claimed_and_inert() {
+    let mut h = readback();
+    // A stand-in has no window to ask a size of.
+    h.ok(json!({"op":"remove_source","window":1,"identity":{"pid":123,"birth_sec":1800000000,"birth_usec":0,"wid":1},"keep_placeholder":true}));
+    let reply = h.begin("swipe", 3, "⌥", "window", ON_WINDOW);
+    assert_eq!(reply["gesture"]["state"], "swipe_pan", "{reply}");
+    assert_eq!(reply["effects"], json!([]));
+    assert!(reply.get("transaction").is_none(), "{reply}");
+    assert_eq!(h.snapshot()["focused"], Value::Null);
+    assert_eq!(h.snapshot()["native_resize"], Value::Null);
+    h.swipe(-30.0, 0.0, 1010);
+    h.end(false, 1020);
+    assert_eq!(world(&mut h, 1), rect(100.0, 100.0, 400.0, 300.0));
+    // Empty canvas: pan, as upstream.
+    let reply = h.begin("swipe", 3, "⌥", "window", ON_CANVAS);
+    assert_eq!(reply["gesture"]["state"], "swipe_pan", "{reply}");
+    h.end(false, 1030);
+    // A size transaction already holds the one slot: pan.
+    let mut h = readback();
+    h.ok(json!({"op":"ipc","output":1,"request":{"Resize":{"window":2,"to":[320,220]}}}));
+    let reply = h.begin("swipe", 3, "⌥", "window", ON_WINDOW);
+    assert_eq!(reply["gesture"]["state"], "swipe_pan", "{reply}");
+    assert_eq!(h.snapshot()["focused"], Value::Null);
+    h.end(false, 1040);
+    // A screen-pinned window: upstream resizes it in screen space, which is
+    // not done here. The gesture is claimed, says so, and changes nothing.
+    let mut h = readback();
+    h.ok(json!({"op":"focus","window":1}));
+    h.action("toggle-pin-to-screen");
+    let before = h.snapshot();
+    let reply = h.begin("swipe", 3, "⌥", "window", ON_WINDOW);
+    assert_eq!(reply["gesture"]["state"], "swipe_resize", "{reply}");
+    assert_eq!(
+        reply["note"],
+        "a screen-pinned window is not resized: unpin it first"
+    );
+    assert!(reply.get("transaction").is_none(), "{reply}");
+    assert_eq!(h.swipe(40.0, 40.0, 1010)["effect"], Value::Null);
+    let reply = h.end(false, 1020);
+    assert_eq!(reply["dirty"], false, "{reply}");
+    assert_eq!(h.snapshot(), before);
+    // The capture-acknowledged mode of --experimental-native-resize: its
+    // transactions are begun by the shell's handles alone. The gesture is
+    // claimed, says so, and begins none.
+    let mut h = setup();
+    h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":false}));
+    let before = h.snapshot();
+    let reply = h.begin("swipe", 3, "⌥", "window", ON_WINDOW);
+    assert_eq!(reply["gesture"]["state"], "swipe_resize", "{reply}");
+    assert!(
+        reply["note"]
+            .as_str()
+            .is_some_and(|n| n.contains("--experimental-native-resize")),
+        "{reply}"
+    );
+    assert!(reply.get("transaction").is_none(), "{reply}");
+    assert_eq!(h.swipe(40.0, 40.0, 1010)["effect"], Value::Null);
+    h.end(false, 1020);
+    assert_eq!(h.snapshot(), before);
 }

@@ -3,13 +3,14 @@
 // src/input/gestures.rs (GestureState), src/input/gestures/swipe.rs
 // (on_gesture_swipe_begin, _update and _end, build_swipe_threshold,
 // has_swipe_direction_bindings, try_start_gesture_move,
-// execute_threshold_action), src/input/gestures/pinch.rs
+// try_start_gesture_resize, execute_threshold_action), src/input/gestures/pinch.rs
 // (on_gesture_pinch_begin, _update and _end), src/input/gestures/hold.rs
 // (on_gesture_hold_begin and _end) and src/input/gestures/device_config.rs
 // (effective_send_events). The gesture table, the thresholds and
 // `direction_from_vector` are driftwm-core's, upstream's own code. Not
 // adapted: forwarding an unbound gesture to a client, the pointer warps, the
-// cross-output leg of a move, and the resize grab, which is gated here. The
+// cross-output leg of a move, and the resize of a screen-pinned window. The
+// resize grab is resize_transaction.rs's size transaction. The
 // fullscreen legs are adapted with fullscreen.rs: the window context of a
 // fullscreen output and the exit a continuous gesture makes first.
 // gesture_target_under is adapted: a widget is grab-proof and
@@ -37,8 +38,8 @@ use driftwm_core::config::{
 };
 use driftwm_core::input::gestures::direction_from_vector;
 
-const RESIZE_NOTE: &str =
-    "resize by gesture is not implemented on macOS yet: native layout resize is not available";
+const PINNED_RESIZE_NOTE: &str = "a screen-pinned window is not resized: unpin it first";
+const LEGACY_RESIZE_NOTE: &str = "resize by gesture is not offered under --experimental-native-resize: that run resizes by its handles";
 
 /// The gesture libinput would have reported.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -78,8 +79,16 @@ enum GestureState {
         at: Point,
         drag: u64,
     },
-    /// Upstream's resize grab. Native layout resize is gated, so it is inert.
-    SwipeResize { window: WindowId },
+    /// Upstream's resize grab: the swipe drives the size transaction it
+    /// began, `transaction`, from the virtual pointer `at`, as SwipeMove
+    /// drives its drag. `None` once that transaction no longer takes motion
+    /// (its window refused, closed or stopped answering), and for a
+    /// screen-pinned window, which is claimed and not resized.
+    SwipeResize {
+        window: WindowId,
+        at: Point,
+        transaction: Option<u64>,
+    },
     /// Accumulate the physical finger vector, pick a direction, fire once.
     SwipeThreshold {
         cumulative: Point,
@@ -121,7 +130,7 @@ impl GestureState {
     }
     fn window(&self) -> Option<WindowId> {
         match self {
-            Self::SwipeMove { window, .. } | Self::SwipeResize { window } => Some(*window),
+            Self::SwipeMove { window, .. } | Self::SwipeResize { window, .. } => Some(*window),
             _ => None,
         }
     }
@@ -156,10 +165,8 @@ impl Found {
                 ContinuousAction::Zoom => ("zoom".to_owned(), true),
                 ContinuousAction::MoveWindow => ("move-window".to_owned(), true),
                 ContinuousAction::MoveSnappedWindows => ("move-snapped-windows".to_owned(), true),
-                ContinuousAction::ResizeWindow => ("resize-window".to_owned(), false),
-                ContinuousAction::ResizeWindowSnapped => {
-                    ("resize-window-snapped".to_owned(), false)
-                }
+                ContinuousAction::ResizeWindow => ("resize-window".to_owned(), true),
+                ContinuousAction::ResizeWindowSnapped => ("resize-window-snapped".to_owned(), true),
             },
             // The direction comes from the swipe; any one decides `implemented`.
             GestureConfigEntry::Threshold(ThresholdAction::CenterNearest) => (
@@ -344,18 +351,64 @@ impl Controller {
             _ => false,
         }
     }
-    /// Upstream try_start_gesture_resize, gated: over a window, screen-pinned
-    /// or not, the gesture is claimed and does nothing, and elsewhere, over a
-    /// widget included, the caller falls back to pan.
-    fn refuse_resize(
-        &self,
+    /// Upstream try_start_gesture_resize: the resize grab a bound button press
+    /// starts on the window under the pointer, its edges from where in the
+    /// window the pointer is, raised and focused once nothing can refuse it.
+    /// `None` when nothing resizable is there (empty canvas, a widget), when
+    /// the shell performs no resize, or when the grab is refused, as
+    /// upstream's `false`, and the caller falls back to pan: the refused begin ran on a copy, so nothing was focused,
+    /// cancelled or taken out of fit for it. A screen-pinned window is
+    /// claimed and not resized: upstream resizes it in screen space
+    /// (start_pinned_resize), which is not adapted.
+    fn try_start_resize(
+        &mut self,
         output: OutputId,
         pointer: Point,
+        cluster: bool,
         report: &mut Report,
     ) -> Option<GestureState> {
         let window = self.gesture_target(output, pointer)?;
-        report.note = Some(RESIZE_NOTE);
-        Some(GestureState::SwipeResize { window })
+        if self.is_pinned(window) {
+            report.note = Some(PINNED_RESIZE_NOTE);
+            return Some(GestureState::SwipeResize {
+                window,
+                at: pointer,
+                transaction: None,
+            });
+        }
+        // A shell that performs no resize effect (a demo, a probe) would
+        // leave the transaction's first read unanswered for good.
+        if !self.sizes.capability {
+            return None;
+        }
+        // The capture-acknowledged mode of --experimental-native-resize is
+        // begun by its handles alone, through the shell's own check of the
+        // window: a swipe there is claimed and does nothing, as before.
+        if !self.sizes.readback {
+            report.note = Some(LEGACY_RESIZE_NOTE);
+            return Some(GestureState::SwipeResize {
+                window,
+                at: pointer,
+                transaction: None,
+            });
+        }
+        let mut next = self.clone();
+        let mut begun = next
+            .begin_native_resize(window, output, None, pointer, cluster)
+            .ok()?;
+        *self = next;
+        if let Some(focus) = begun["effects"].get_mut(0).map(Value::take)
+            && !focus.is_null()
+        {
+            report.outcome.effects.push(focus);
+        }
+        let transaction = begun["transaction"].as_u64();
+        report.outcome.resize = Some(begun);
+        Some(GestureState::SwipeResize {
+            window,
+            at: pointer,
+            transaction,
+        })
     }
     fn begin_swipe(
         &mut self,
@@ -392,9 +445,12 @@ impl Controller {
                     GestureConfigEntry::Continuous(ContinuousAction::MoveSnappedWindows) => {
                         self.try_start_move(output, pointer, true, report)?
                     }
-                    GestureConfigEntry::Continuous(
-                        ContinuousAction::ResizeWindow | ContinuousAction::ResizeWindowSnapped,
-                    ) => self.refuse_resize(output, pointer, report),
+                    GestureConfigEntry::Continuous(ContinuousAction::ResizeWindow) => {
+                        self.try_start_resize(output, pointer, false, report)
+                    }
+                    GestureConfigEntry::Continuous(ContinuousAction::ResizeWindowSnapped) => {
+                        self.try_start_resize(output, pointer, true, report)
+                    }
                     _ => None,
                 };
                 if let Some(state) = state {
@@ -430,8 +486,11 @@ impl Controller {
                 ContinuousAction::MoveSnappedWindows => {
                     self.try_start_move(output, pointer, true, report)?
                 }
-                ContinuousAction::ResizeWindow | ContinuousAction::ResizeWindowSnapped => {
-                    self.refuse_resize(output, pointer, report)
+                ContinuousAction::ResizeWindow => {
+                    self.try_start_resize(output, pointer, false, report)
+                }
+                ContinuousAction::ResizeWindowSnapped => {
+                    self.try_start_resize(output, pointer, true, report)
                 }
             }
             .unwrap_or(GestureState::SwipePan),
@@ -567,8 +626,16 @@ impl Controller {
         let session = TrackpadGesture {
             output: start.output,
             pointer: start.pointer,
-            // A move has already focused and raised its window.
-            changed: matches!(state, GestureState::SwipeMove { .. }),
+            // A move has already focused and raised its window, and so has
+            // a resize that began.
+            changed: matches!(
+                state,
+                GestureState::SwipeMove { .. }
+                    | GestureState::SwipeResize {
+                        transaction: Some(_),
+                        ..
+                    }
+            ),
             state,
         };
         let mut description = session.describe();
@@ -690,9 +757,29 @@ impl Controller {
                     self.fire(output, &action, session.pointer, held, &mut report);
                 }
             }
-            GestureState::SwipeResize { .. }
-            | GestureState::HoldAction { .. }
-            | GestureState::Unbound => {}
+            // Upstream SwipeResize: the cursor is warped by the raw delta, held
+            // inside the gesture's output, and the resize grab follows it as
+            // it follows a pointer. No `trackpad_speed` and no threshold. The
+            // size it asks takes the transaction's one latest-request slot;
+            // a transaction that takes no more motion is let go of, and the
+            // rest of the swipe does nothing.
+            GestureState::SwipeResize {
+                at, transaction, ..
+            } => {
+                if let Some(id) = *transaction {
+                    let local = *at - bounds.origin + delta;
+                    *at = bounds.origin
+                        + Point::new(
+                            local.x.clamp(0.0, (bounds.size.width - 1.0).max(0.0)),
+                            local.y.clamp(0.0, (bounds.size.height - 1.0).max(0.0)),
+                        );
+                    match self.native_resize_to(id, *at) {
+                        Ok(asked) => report.outcome.resize = Some(asked),
+                        Err(_) => *transaction = None,
+                    }
+                }
+            }
+            GestureState::HoldAction { .. } | GestureState::Unbound => {}
         }
         let description = session.describe();
         // An action the gesture fired may have turned the trackpad off.
@@ -760,8 +847,18 @@ impl Controller {
                     self.fire(output, &action, session.pointer, held, report);
                 }
             }
-            GestureState::SwipeResize { .. }
-            | GestureState::SwipeThreshold { .. }
+            // Upstream unsets the resize grab whether or not the swipe was
+            // cancelled: its release, which asks the last size queued and
+            // reads the window once more. A transaction that has ended by
+            // itself has nothing to release.
+            GestureState::SwipeResize { transaction, .. } => {
+                if let Some(id) = transaction
+                    && let Ok(ended) = self.finish_native_resize(id, false)
+                {
+                    report.outcome.resize = Some(ended);
+                }
+            }
+            GestureState::SwipeThreshold { .. }
             | GestureState::PinchThreshold { .. }
             | GestureState::Unbound => {}
         }

@@ -835,7 +835,7 @@
       },
       "contract": "Match MouseAction::ResizeWindow dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -844,7 +844,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Status stays missing: the policy exists only behind --experimental-native-resize. The lookup answers resize_window (default alt+right on a window) in every launch, but the shell begins the size-only native resize transaction only with the flag, and without it the press raises and focuses the window and shows a status note (native/desktop/main.m beginResize). What remains: a live native resize pass on a real window."
+      "implementation_note": "Implemented in every normal run, unverified. A press bound to resize_window (default alt+right on a window) raises and focuses the window and starts upstream's resize grab as a size transaction in readback mode (crates/desktop/NATIVE_RESIZE.md, Pointer resize; native/desktop/main.m beginResize): the edges are upstream's 3x3 grid, the delta is the screen displacement over the zoom of the start cut to whole units and held inside the output, each size is asked of the real window through Accessibility one at a time with later motion replacing the request that waits, and the canvas shows the size read back, the opposite edge kept on the canvas for a left or top edge. Run end to end on disposable fixture windows by tests/e2e/scoped-resize-drag.sh on 2026-10-11 (a windowed, scoped run without Screen Recording, so tiles had no picture); the press, the drag and the release were made by the DebugPointer request through the canvas view's own mouse handlers, not by a person and not delivered by the window server. Cases: the nine cells, thirty drag events asking three sizes, a pointer at rest for three seconds, a minimum, a maximum and a resize increment, a window that is not settable, a window closed and an application hung or stalled in the middle of a grab, each followed by a click that landed. Controller scenarios: crates/desktop/tests/native_resize_flow.rs (readback_grab_*). Known mismatches: a Mac window declares no limits, so a size past one is asked and refused where upstream never asks; macOS grants no size past the screen's visible area; the native window's own top-left never moves for a left or top drag, only its tile does; a screen-pinned window is refused where upstream resizes it in screen space; no resize cursor; while a grab lasts every other sizing action, fullscreen toggle and IPC resize is refused; the grab ends when its own button lifts, not the last of several; a second resize press while a transaction settles only raises the window. Unverified: no person dragged, no application of the owner's was resized, nothing was seen with a picture, one display. The older capture-acknowledged path behind --experimental-native-resize is legacy and was not run."
     },
     {
       "id": "MouseAction.ResizeWindowSnapped",
@@ -856,7 +856,7 @@
       },
       "contract": "Match MouseAction::ResizeWindowSnapped dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [
         "native.family",
@@ -865,7 +865,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Not implemented: the lookup answers resize_window_snapped (default alt+shift+right on a window) and the shell asks for it only under --experimental-native-resize, but the controller then refuses begin_native_resize with group true, so even with the flag the press only raises and focuses the window (crates/desktop/NATIVE_RESIZE.md: native group resize is rejected). Missing: a resize whose change is carried to the snapped neighbours."
+      "implementation_note": "Implemented in every normal run, unverified. A press bound to resize_window_snapped (default alt+shift+right on a window) starts the same grab as MouseAction.ResizeWindow with upstream's cluster: the windows snapped to the moving edges are captured at the start and translated on the canvas at each committed size (canvas resize_settle), never resized, and their native windows are not touched. Run end to end on disposable fixture windows by tests/e2e/scoped-resize-drag.sh on 2026-10-11 (a windowed, scoped run without Screen Recording, so tiles had no picture); the press, the drag and the release were made by the DebugPointer request through the canvas view's own mouse handlers, not by a person and not delivered by the window server. Case 6: a neighbour a snap gap to the right moved by the 40 units the window took, its own window neither resized nor moved, and the plain binding left it in place. Controller scenarios: native_resize_flow.rs readback_grab_carries_its_cluster_by_the_size_the_window_took, gesture_flow.rs. Known mismatch, by decision of this port: the cluster follows the size the window granted, one request late, not the size asked, because a Mac window's limits are unknown before asking (upstream clamps ahead of its cluster step and reaches the same end); with a preserve_aspect_ratio rule the cluster is dropped, as upstream. Unverified: no person dragged, no application of the owner's was resized, nothing was seen with a picture, one display."
     },
     {
       "id": "MouseAction.PanViewport",
@@ -967,7 +967,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "N-finger-swipe is resolved at gesture_begin for a swipe, in the pointer's own context table and then anywhere, with the physical modifiers mapped back to upstream's: pan-viewport (and zoom, which a swipe treats as pan) follows the fingers and coasts, move-window and move-snapped-windows drag the window under the pointer, and a threshold action fires once at gestures.swipe_threshold: a bare center-nearest in the direction the canvas would follow the fingers, run as Action.CenterNearest runs it (see ThresholdAction.CenterNearest). The shell makes the swipe from three or more raw trackpad touches moving together. Known mismatches: the event stream is the shell recogniser's imitation of libinput, with a constant 10.5 units per millimetre in place of pointer acceleration; an unbound swipe is not forwarded to the application; resize-window is gated; a two-finger swipe never arrives, since macOS scrolling stays a mouse binding. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "N-finger-swipe is resolved at gesture_begin for a swipe, in the pointer's own context table and then anywhere, with the physical modifiers mapped back to upstream's: pan-viewport (and zoom, which a swipe treats as pan) follows the fingers and coasts, move-window and move-snapped-windows drag the window under the pointer, and a threshold action fires once at gestures.swipe_threshold: a bare center-nearest in the direction the canvas would follow the fingers, run as Action.CenterNearest runs it (see ThresholdAction.CenterNearest). The shell makes the swipe from three or more raw trackpad touches moving together. Known mismatches: the event stream is the shell recogniser's imitation of libinput, with a constant 10.5 units per millimetre in place of pointer acceleration; an unbound swipe is not forwarded to the application; resize-window runs at the controller and was not run through the shell (ContinuousAction.ResizeWindow); a two-finger swipe never arrives, since macOS scrolling stays a mouse binding. No evidence entry is recorded yet: the controller dispatch is covered by exported-C-ABI/JSON scenarios with synthetic event streams (crates/desktop/tests/gesture_flow.rs); the shell's recogniser has only been fed scripted touch sequences in throwaway programs, and its touch delivery is compiled and reviewed only. No physical trackpad gesture has been performed. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "GestureTrigger.SwipeUp",
@@ -1285,13 +1285,13 @@
       },
       "contract": "Match ContinuousAction::ResizeWindow dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Not implemented as a gesture action: a swipe bound to resize-window over a window (default alt+3-finger-swipe) is claimed and does nothing, with or without --experimental-native-resize, and the begin reply carries the note resize by gesture is not implemented on macOS yet (crates/desktop/GESTURES.md, swipe_resize; gesture_flow.rs). Missing: a native resize transaction driven by the gesture. The pointer form is MouseAction.ResizeWindow."
+      "implementation_note": "Implemented in the controller in every normal run, unverified. A swipe bound to resize-window over a window (default alt+3-finger-swipe) is upstream's try_start_gesture_resize: the window under the pointer is raised and focused and a resize grab begins from a virtual pointer that the swipe's raw deltas move, held inside the output, with no trackpad_speed factor; the end, cancelled or not, is the grab's release. A resize that cannot begin (empty canvas, a widget, a stand-in, a size transaction already live) falls back to pan with nothing focused. The grab is MouseAction.ResizeWindow's size transaction. Tested at the controller only: crates/desktop/tests/gesture_flow.rs (a_resize_swipe_*, a_cancelled_resize_swipe_*, a_resize_swipe_that_cannot_begin_*), where the test plays the native side. The shell hands a gesture reply's size effect to the same coordinator that performs a pointer drag's, which tests/e2e/scoped-resize-drag.sh ran on fixture windows; no gesture was run through the shell, since no request can make one. Known mismatch: a screen-pinned window is claimed and not resized. Unverified: no trackpad gesture was made by a person or reached the recogniser, and no real window was resized by one."
     },
     {
       "id": "ContinuousAction.ResizeWindowSnapped",
@@ -1303,13 +1303,13 @@
       },
       "contract": "Match ContinuousAction::ResizeWindowSnapped dispatch, parameters, context, repeat/fullscreen policy and errors.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "policy",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Not implemented as a gesture action: a swipe bound to resize-window-snapped over a window (default alt+shift+3-finger-swipe) is claimed and does nothing, with or without --experimental-native-resize, with the same note as ContinuousAction.ResizeWindow (crates/desktop/GESTURES.md, swipe_resize; gesture_flow.rs). Missing: a gesture-driven native resize and its propagation to snapped neighbours, which the controller refuses for the pointer too."
+      "implementation_note": "Implemented in the controller in every normal run, unverified. A swipe bound to resize-window-snapped over a window (default alt+shift+3-finger-swipe) is ContinuousAction.ResizeWindow with the cluster of MouseAction.ResizeWindowSnapped: the snapped neighbours are translated by the size the window took. Tested at the controller only: gesture_flow.rs a_snapped_resize_swipe_shifts_the_cluster_by_the_size_the_window_took. The cluster on real windows was run by the pointer drag only (tests/e2e/scoped-resize-drag.sh case 6); no gesture was run through the shell. Unverified as ContinuousAction.ResizeWindow."
     },
     {
       "id": "ThresholdAction.CenterNearest",
@@ -1966,7 +1966,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Partial: the read runs everywhere, the write only behind --experimental-native-resize. Read returns the window's logical world size as width and height (msg resize [--id N]). In a default launch a write is refused with the same Err as before (resize is not implemented on macOS yet: native layout resize is not available); native resizing is never simulated by changing world geometry. In an app started with the flag a write follows upstream's cmd_resize: the window is asked for the size through the existing size-only native resize transaction begun without a drag, its centre is kept (the top-left moves by half the difference from the size last asked for, in whole pixels), the reply echoes the size asked for, the window is raised over the other canvas windows and handed no focus, as upstream raises a client (a request identical to the one last asked changes nothing, as upstream's returns before its map), and the size the window is then observed to have is what is committed. A write on a screen-pinned window or a widget answers upstream's own refusal for those instead (this window has no canvas size to set: it is pinned, fullscreen, a widget, or not on screen yet), with or without the flag. Known mismatches: the write is behind the flag, so in a default launch the main behaviour of the request is still missing; a stand-in or a window without a live source is refused (this window has no native size to set: it is a stand-in or has no live window) where upstream resizes the stand-in's frame; there is one size transaction, so a write while another resize is pending is refused unless it replaces a pending write on the same window; a window's own size limits are unknown before asking. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios in which the test plays the native side (crates/desktop/tests/sizes_flow.rs, ipc_flow.rs), and scripted msg sessions against the built app on 2026-10-10 that showed the read, the unchanged refusal without the flag and the stand-in refusal with it. No native window has been resized by a write. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "Since 2026-10-11 the write runs in every normal run, in readback mode (crates/desktop/NATIVE_RESIZE.md; run on fixture windows by tests/e2e/scoped-sizing.sh), and a write made while a pointer resize grab holds the one size transaction is refused as pending (tests/e2e/scoped-resize-drag.sh case 10b). The rest of this note was written while the write was behind --experimental-native-resize and is kept for its account of the policy; what it says of a default launch and of the flag no longer holds: the read runs everywhere, the write only behind --experimental-native-resize. Read returns the window's logical world size as width and height (msg resize [--id N]). In a default launch a write is refused with the same Err as before (resize is not implemented on macOS yet: native layout resize is not available); native resizing is never simulated by changing world geometry. In an app started with the flag a write follows upstream's cmd_resize: the window is asked for the size through the existing size-only native resize transaction begun without a drag, its centre is kept (the top-left moves by half the difference from the size last asked for, in whole pixels), the reply echoes the size asked for, the window is raised over the other canvas windows and handed no focus, as upstream raises a client (a request identical to the one last asked changes nothing, as upstream's returns before its map), and the size the window is then observed to have is what is committed. A write on a screen-pinned window or a widget answers upstream's own refusal for those instead (this window has no canvas size to set: it is pinned, fullscreen, a widget, or not on screen yet), with or without the flag. Known mismatches: the write is behind the flag, so in a default launch the main behaviour of the request is still missing; a stand-in or a window without a live source is refused (this window has no native size to set: it is a stand-in or has no live window) where upstream resizes the stand-in's frame; there is one size transaction, so a write while another resize is pending is refused unless it replaces a pending write on the same window; a window's own size limits are unknown before asking. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios in which the test plays the native side (crates/desktop/tests/sizes_flow.rs, ipc_flow.rs), and scripted msg sessions against the built app on 2026-10-10 that showed the read, the unchanged refusal without the flag and the stand-in refusal with it. No native window has been resized by a write. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "ipc.Request.Opacity",
@@ -2420,14 +2420,14 @@
       },
       "contract": "Match WindowRule.preserve_aspect_ratio type, validation, default and live effect.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "source_type": "bool",
       "required": true,
-      "implementation_note": "Status stays missing: the key is parsed by upstream code, kept with the window and named in rule.not_applied, but no resize is bent to its aspect ratio, by pointer, IPC or gesture, with or without --experimental-native-resize. Nothing in sizes.rs or the resize transaction reads it. Not implemented."
+      "implementation_note": "Implemented in every normal run, unverified. A pointer or gesture resize of a window whose rule has preserve_aspect_ratio keeps the width / height it has when the grab begins (upstream locked_ratio_for and constrain_to_ratio, crates/desktop/src/resize_transaction.rs): an edge drives its own axis, a corner the axis that moved farther relative to the ratio, the other axis is derived and rounded, and such a resize neither snaps nor carries a cluster. Interactive resizes only, as upstream: msg resize, the sizing actions and a rule's size are not bent. The key is no longer in rule.not_applied. Run end to end on disposable fixture windows by tests/e2e/scoped-resize-drag.sh on 2026-10-11 (a windowed, scoped run without Screen Recording, so tiles had no picture); the press, the drag and the release were made by the DebugPointer request through the canvas view's own mouse handlers, not by a person and not delivered by the window server. Case 8: 400x300 ended at 460x345 from the right edge, 480x360 and 520x390 from the bottom right corner. Controller scenario: rules_flow.rs. Known mismatch: the application's own limits may bend the ratio, as upstream's clamp does, but here only after the size was asked. Unverified: no person dragged, no application of the owner's was resized, nothing was seen with a picture, one display."
     },
     {
       "id": "field.WindowRule.decoration",
@@ -9401,7 +9401,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for mouse.resize_on_border.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -9415,7 +9415,7 @@
           "value": true
         }
       ],
-      "implementation_note": "The key is read by driftwm-core and unused (CONFIG.md, Read not applied yet). Upstream makes the invisible resize border inert when it is false. Here the eight resize handles exist only behind --experimental-native-resize and do not consult the key, and the edges of an ordinary macOS window are macOS's own."
+      "implementation_note": "Implemented in every normal run, unverified. With resize_on_border (default true) a left press in the band of 8 canvas units just outside a window's frame raises and focuses the window and resizes it by that edge, unless a binding whose modifiers are held claims the press; false makes the band take no press. The controller's resize_border command is upstream's decoration_hit_for with resize_edge_at (crates/desktop/src/pointer_policy.rs). Run end to end on disposable fixture windows by tests/e2e/scoped-resize-drag.sh on 2026-10-11 (a windowed, scoped run without Screen Recording, so tiles had no picture); the press, the drag and the release were made by the DebugPointer request through the canvas view's own mouse handlers, not by a person and not delivered by the window server. Cases 7 and 7b: a press four points right of a frame grew the window by 30 from its right edge; with the key false, reloaded from the config file, the band was no border. Controller scenarios: pointer_flow.rs the_resize_border_*. Known mismatches: the band exists only where no window's frame covers it, and a real window's own edges, under the canvas panel, are not reachable by the pointer at all; a press the band does not take is a canvas press, where upstream still counts the band as the window for bindings and occlusion; a stand-in, a widget, a screen-pinned and a fullscreen window have no band; no resize cursor over it. Unverified: no person dragged, no application of the owner's was resized, nothing was seen with a picture, one display."
     },
     {
       "id": "config.mouse.decoration_resize_snapped",
@@ -9427,7 +9427,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for mouse.decoration_resize_snapped.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -9441,7 +9441,7 @@
           "value": false
         }
       ],
-      "implementation_note": "The key is read by driftwm-core and unused (CONFIG.md, Read not applied yet). Upstream, when it is true, carries an edge-drag resize to the whole snap cluster. A native group resize is rejected by the controller even with --experimental-native-resize (NATIVE_RESIZE.md), so there is nothing for the key to switch on."
+      "implementation_note": "Implemented in every normal run, unverified. With decoration_resize_snapped true a resize begun on the resize border carries the snap cluster, as MouseAction.ResizeWindowSnapped does; false, the default, resizes the one window. Run end to end on disposable fixture windows by tests/e2e/scoped-resize-drag.sh on 2026-10-11 (a windowed, scoped run without Screen Recording, so tiles had no picture); the press, the drag and the release were made by the DebugPointer request through the canvas view's own mouse handlers, not by a person and not delivered by the window server. Case 7b: with the key true, reloaded from the config file, a border drag of 30 moved the neighbour a snap gap away by 30 and left its own window alone. Controller scenario: pointer_flow.rs. Known mismatch: there is no window edge of macOS's own in this: the key acts on the canvas border only. Unverified: no person dragged, no application of the owner's was resized, nothing was seen with a picture, one display."
     },
     {
       "id": "config.mouse.decoration_fit_snapped",
@@ -9531,7 +9531,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for mouse.on-window.alt+right.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -9545,7 +9545,7 @@
           "value": "resize-window"
         }
       ],
-      "implementation_note": "Status stays missing: upstream's default mouse binding resolves as resize_window for an Option-right press on a window (crates/desktop/tests/config_flow.rs, DEFAULT_MOUSE). The shell begins the native resize only under --experimental-native-resize; without it the press only raises and focuses the window and a status note says so. The policy exists behind the flag; a live native resize pass on a real window is what remains."
+      "implementation_note": "Implemented in every normal run, unverified: upstream's default mouse binding resolves as resize_window for an Option-right press on a window and starts the resize grab of MouseAction.ResizeWindow, with no flag. Run end to end on disposable fixture windows by tests/e2e/scoped-resize-drag.sh on 2026-10-11 (a windowed, scoped run without Screen Recording, so tiles had no picture); the press, the drag and the release were made by the DebugPointer request through the canvas view's own mouse handlers, not by a person and not delivered by the window server. The trace of each press showed button=1 trigger=right binding=resize_window with upstream's defaults in force. What remains is that row's: a person's drag on the owner's windows."
     },
     {
       "id": "config.mouse.on-window.alt+shift+right",
@@ -9557,7 +9557,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for mouse.on-window.alt+shift+right.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -9571,7 +9571,7 @@
           "value": "resize-window-snapped"
         }
       ],
-      "implementation_note": "Upstream resizes the window and its snap cluster on an Option-Shift-right drag. The binding is read and resolves as resize_window_snapped, but the shell asks for a group resize and the controller rejects it in a default launch and with --experimental-native-resize (NATIVE_RESIZE.md), so the press only raises and focuses the window. This is not waiting on a live pass."
+      "implementation_note": "Implemented in every normal run, unverified: upstream's default mouse binding resolves as resize_window_snapped for an Option-Shift-right press on a window and starts the cluster resize of MouseAction.ResizeWindowSnapped, with no flag. Run end to end on disposable fixture windows by tests/e2e/scoped-resize-drag.sh on 2026-10-11 (a windowed, scoped run without Screen Recording, so tiles had no picture); the press, the drag and the release were made by the DebugPointer request through the canvas view's own mouse handlers, not by a person and not delivered by the window server. The trace of the press showed trigger=right binding=resize_window_snapped and the grab carried the cluster. What remains is that row's."
     },
     {
       "id": "config.mouse.on-window.alt+middle",
@@ -9921,7 +9921,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for gestures.on-window.alt+3-finger-swipe.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -9935,7 +9935,7 @@
           "value": "resize-window"
         }
       ],
-      "implementation_note": "GESTURES.md calls the claimed resize swipe gated, but refuse_resize in crates/desktop/src/gestures.rs never consults the capability: the swipe is claimed over a window, the begin reply notes that resize by gesture is not implemented, and nothing resizes in a default launch or with --experimental-native-resize. Open until the swipe is wired to the native resize transaction."
+      "implementation_note": "Implemented in the controller, unverified: the default binding resolves as resize-window and begins the resize grab of ContinuousAction.ResizeWindow (crates/desktop/src/gestures.rs try_start_resize). Tested at the controller only (crates/desktop/tests/gesture_flow.rs); no gesture was run through the shell or made by a person. What remains is that row's."
     },
     {
       "id": "config.gestures.on-window.alt+shift+3-finger-swipe",
@@ -9947,7 +9947,7 @@
       },
       "contract": "Match configuration grammar, validation, precedence, live effect and actual runtime default for gestures.on-window.alt+shift+3-finger-swipe.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
@@ -9961,7 +9961,7 @@
           "value": "resize-window-snapped"
         }
       ],
-      "implementation_note": "GESTURES.md calls the claimed snapped resize swipe gated, but refuse_resize in crates/desktop/src/gestures.rs never consults the capability: the swipe is claimed over a window, the begin reply notes that resize by gesture is not implemented, and nothing resizes in a default launch or with --experimental-native-resize. Open until the swipe is wired to the native resize transaction."
+      "implementation_note": "Implemented in the controller, unverified: the default binding resolves as resize-window-snapped and begins the cluster resize of ContinuousAction.ResizeWindowSnapped (crates/desktop/src/gestures.rs try_start_resize). Tested at the controller only (crates/desktop/tests/gesture_flow.rs); no gesture was run through the shell or made by a person. What remains is that row's."
     },
     {
       "id": "config.gestures.on-window.3-finger-doubletap-swipe",
@@ -11954,7 +11954,7 @@
           ]
         }
       ],
-      "implementation_note": "A rule's pass_mouse is read by driftwm-core's own parser: a boolean, or a list of mouse combos in the mouse-binding grammar; a combo that does not parse is dropped with upstream's warning (config: pass_mouse invalid mouse combo ...) and the rest of the file applies; absent or false claims nothing, the default. Its effect is field.WindowRule.pass_mouse: with the reference example, the default move (alt+left), fit-window (alt+middle) and resize-window (alt+right) bindings are not run over a window the rule matches, and the press goes to its application as an unbound one. Known mismatches: those of field.WindowRule.pass_mouse; of the three bindings the example names, fit-window is not implemented here and resize-window is gated, so only the move binding had anything to give up. No evidence entry is recorded yet: the effect ran in exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/passthrough_flow.rs); in the launch of the built app on 2026-10-10 a config carrying pass_mouse as a list and as true loaded without a warning and an unknown trigger in a list printed upstream's warning on stderr, with placeholders only and no press or scroll made. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "A rule's pass_mouse is read by driftwm-core's own parser: a boolean, or a list of mouse combos in the mouse-binding grammar; a combo that does not parse is dropped with upstream's warning (config: pass_mouse invalid mouse combo ...) and the rest of the file applies; absent or false claims nothing, the default. Its effect is field.WindowRule.pass_mouse: with the reference example, the default move (alt+left), fit-window (alt+middle) and resize-window (alt+right) bindings are not run over a window the rule matches, and the press goes to its application as an unbound one. Known mismatches: those of field.WindowRule.pass_mouse; of the three bindings the example names, fit-window is not implemented here; when this was run resize-window was still gated, so only the move binding had anything to give up, and the resize binding, which now runs in every normal run, was not run over a pass_mouse window. No evidence entry is recorded yet: the effect ran in exported-C-ABI/JSON controller scenarios only (crates/desktop/tests/passthrough_flow.rs); in the launch of the built app on 2026-10-10 a config carrying pass_mouse as a list and as true loaded without a warning and an unknown trigger in a list printed upstream's warning on stderr, with placeholders only and no press or scroll made. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.window_rules[].blur",
@@ -13272,14 +13272,14 @@
       },
       "contract": "Match Config.resize_on_border type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
       "source_type": "bool",
-      "implementation_note": "macOS windows resize at their own edges by themselves, which is not an implementation: the key is read and unused, so setting it false cannot make that border inert. Pointer resize by binding exists only behind --experimental-native-resize. Scope decision pending with the owner; recommended: treat as provided by macOS."
+      "implementation_note": "Implemented in every normal run, unverified: the key switches the canvas resize border of config.mouse.resize_on_border on and off, read at each press and after a config reload. See that row for what was run (tests/e2e/scoped-resize-drag.sh cases 7 and 7b) and for the mismatches: the border is the canvas band outside a frame, not the window's own edge, which lies under the canvas panel."
     },
     {
       "id": "field.Config.decoration_resize_snapped",
@@ -13291,14 +13291,14 @@
       },
       "contract": "Match Config.decoration_resize_snapped type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
+      "status": "implemented_unverified",
       "required": true,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
       "source_type": "bool",
-      "implementation_note": "Status stays missing: read and unused. A native edge drag is macOS and nothing observes it to resize snapped neighbours, and the controller refuses a grouped pointer resize (alt+shift+right) even behind --experimental-native-resize. Cluster resize by edge drag is not implemented."
+      "implementation_note": "Implemented in every normal run, unverified: the key is read at each press on the resize border and decides whether that resize carries the snap cluster. See config.mouse.decoration_resize_snapped for what was run (tests/e2e/scoped-resize-drag.sh case 7b)."
     },
     {
       "id": "field.Config.decoration_fit_snapped",

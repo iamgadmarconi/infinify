@@ -1748,3 +1748,76 @@ fn below_interact_min_a_pinned_window_stays_interactive_and_a_widget_is_not_pick
         "a widget is not moved or resized by hand"
     );
 }
+
+// Upstream's resize border (`[mouse] resize_on_border`): decoration_hit_for,
+// resize_margin_hit_for and resize_edge_at. The band is 8 canvas units
+// strictly outside a window's frame. In `layout`, A (window 1, x 100..400,
+// y 100..300) is on top and O (window 5, x 300..500, y 200..400) lies under
+// its lower right corner; C (window 3) is a stand-in.
+fn border(h: &mut Host, x: f64, y: f64) -> Value {
+    let screen = pointer(h, x, y);
+    h.ok(json!({"op":"resize_border","output":1,"screen":screen}))["border"].clone()
+}
+fn edge(window: u64, edges: &str) -> Value {
+    json!({"window":window,"edges":edges,"snapped":false})
+}
+#[test]
+fn the_resize_border_is_the_band_outside_a_frame_and_names_its_edge() {
+    let mut h = layout("");
+    let before = h.snapshot();
+    for (x, y, edges) in [
+        (96.0, 200.0, "left"),
+        (92.0, 200.0, "left"),
+        (404.0, 150.0, "right"),
+        (250.0, 96.0, "top"),
+        (250.0, 304.0, "bottom"),
+        (96.0, 96.0, "top_left"),
+        (404.0, 96.0, "top_right"),
+        (96.0, 304.0, "bottom_left"),
+    ] {
+        assert_eq!(border(&mut h, x, y), edge(1, edges), "({x}, {y})");
+    }
+    // Eight units and no more, and a frame is no band: its own, or the one
+    // of a window that lies there.
+    assert_eq!(border(&mut h, 91.9, 200.0), Value::Null);
+    assert_eq!(border(&mut h, 407.9, 150.0), edge(1, "right"));
+    assert_eq!(border(&mut h, 408.0, 150.0), Value::Null);
+    assert_eq!(border(&mut h, 250.0, 200.0), Value::Null);
+    assert_eq!(border(&mut h, 404.0, 250.0), Value::Null);
+    // The topmost window whose frame or band holds the point ends the walk:
+    // A's band over O's, until O is raised.
+    assert_eq!(border(&mut h, 404.0, 196.0), edge(1, "right"));
+    assert_eq!(border(&mut h, 296.0, 350.0), edge(5, "left"));
+    // A stand-in has no window to ask a size of, and empty canvas no band.
+    assert_eq!(border(&mut h, 96.0, 500.0), Value::Null);
+    assert_eq!(border(&mut h, 700.0, 600.0), Value::Null);
+    // Asking changes nothing.
+    assert_eq!(h.snapshot(), before);
+    h.focus(5);
+    assert_eq!(border(&mut h, 404.0, 196.0), edge(5, "top"));
+    // decoration_resize_snapped: an edge drag has no modifier to say so.
+    h.reload("[mouse]\ndecoration_resize_snapped = true\n");
+    assert_eq!(
+        border(&mut h, 96.0, 150.0),
+        json!({"window":1,"edges":"left","snapped":true})
+    );
+    // Off, the band takes no press.
+    h.reload("[mouse]\nresize_on_border = false\n");
+    assert_eq!(border(&mut h, 96.0, 150.0), Value::Null);
+    // A screen-pinned window is not resized here, and has no band.
+    h.reload("");
+    h.focus(1);
+    h.ok(json!({"op":"action","output":1,"action":"toggle-pin-to-screen"}));
+    assert_eq!(border(&mut h, 96.0, 150.0), Value::Null);
+}
+// The band is a canvas distance, as upstream's is: 8 units are 4.8 screen
+// points at zoom 0.6. Below `zoom.interact_min` a press is the pick's.
+#[test]
+fn the_resize_border_scales_with_the_zoom_and_is_off_in_pick_mode() {
+    let mut h = zoomed_out(PICK, 0.6);
+    assert_eq!(border(&mut h, W.0 - 7.0, W.1 + 100.0), edge(1, "left"));
+    assert_eq!(border(&mut h, W.0 - 10.0, W.1 + 100.0), Value::Null);
+    let mut h = zoomed_out(PICK, 0.4);
+    assert_eq!(h.snapshot()["outputs"][0]["pick"], true);
+    assert_eq!(border(&mut h, W.0 - 4.0, W.1 + 100.0), Value::Null);
+}

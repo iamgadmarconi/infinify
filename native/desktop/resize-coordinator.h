@@ -39,6 +39,10 @@
 // Readback mode, once a second: a live transaction whose effect nobody is performing (a reply whose effect never reached -consume:)
 // is answered as unanswered the second time it is seen, so that it ends like any other.
 - (void)reap;
+// Readback mode: is this transaction held by input that is still down (a resize press whose button is down, a resize swipe whose fingers
+// are)? A pointer at rest sends nothing and no effect is owed for it: such a transaction is no orphan, and -reap leaves it alone. Whoever
+// answers YES ends the transaction itself when that input ends or is lost. Unset, nothing is held.
+@property (copy) BOOL (^held)(NSNumber *transaction);
 - (void)invalidate:(NSNumber *)window;
 - (NSDictionary *)captureState:(NSNumber *)window;
 // Why the last capture offered for the window was not acknowledged, for a person to read: a short reason (family, geometry, metadata,

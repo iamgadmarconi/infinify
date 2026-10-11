@@ -941,3 +941,200 @@ fn readback_survives_a_scene_load_with_the_capability() {
     assert_eq!(reply["effect"]["op"], "observe_resize_source", "{reply}");
     std::fs::remove_file(path).unwrap();
 }
+
+// The pointer resize of a normal run: upstream's resize grab on the readback
+// path. Output 1 is 1000 x 800 at the screen origin with the camera at the
+// world origin, so a screen point is a world point; window 1 is at
+// (100, 100) 200 x 150.
+fn grab(h: &mut Host, at: (f64, f64), group: bool) -> Value {
+    h.ok(json!({"op":"begin_native_resize","window":1,"output":1,"start_screen":{"x":at.0,"y":at.1},"group":group}))["effect"].clone()
+}
+fn to(h: &mut Host, t: &Value, x: f64, y: f64) -> Value {
+    h.ok(json!({"op":"native_resize_to","transaction":t["transaction"],"screen":{"x":x,"y":y}}))["effect"].clone()
+}
+fn size(w: f64, h: f64) -> Value {
+    json!({"width":w,"height":h})
+}
+#[test]
+fn readback_grab_takes_its_edges_from_where_in_the_window_it_began() {
+    // Upstream edges_from_position: thirds, strict, the centre resizing from
+    // the bottom right. 200 / 3 = 66.7 and 150 / 3 = 50.
+    for (at, edges) in [
+        ((110.0, 110.0), "top_left"),
+        ((200.0, 110.0), "top"),
+        ((290.0, 110.0), "top_right"),
+        ((110.0, 175.0), "left"),
+        ((200.0, 175.0), "bottom_right"),
+        ((290.0, 175.0), "right"),
+        ((110.0, 240.0), "bottom_left"),
+        ((200.0, 240.0), "bottom"),
+        ((290.0, 240.0), "bottom_right"),
+        // On the lines between the cells: `<` and `>`, so the centre.
+        ((100.0 + 200.0 / 3.0 + 0.1, 150.0), "bottom_right"),
+        ((100.0 + 200.0 / 3.0 - 0.1, 150.0), "left"),
+    ] {
+        let mut h = readback();
+        grab(&mut h, at, false);
+        assert_eq!(h.snap()["native_resize"]["edges"], edges, "{at:?}");
+    }
+    // An edge the caller names stands: the resize border's.
+    let mut h = readback();
+    h.ok(json!({"op":"begin_native_resize","window":1,"output":1,"edges":"top","start_screen":{"x":290.0,"y":240.0}}));
+    assert_eq!(h.snap()["native_resize"]["edges"], "top");
+}
+#[test]
+fn readback_grab_cuts_the_delta_to_whole_units_and_holds_the_pointer_on_its_output() {
+    let mut h = readback();
+    let t = grab(&mut h, (290.0, 240.0), false);
+    h.ok(reply(&t, "observed", false, true, 200., 150.));
+    // Upstream's `as i32`: toward zero on each axis.
+    let e = to(&mut h, &t, 300.9, 236.3);
+    assert_eq!(e["requested"], size(210., 147.));
+    h.ok(reply(&e, "applied", true, true, 210., 147.));
+    // Less than one unit of further motion asks nothing.
+    assert_eq!(to(&mut h, &t, 300.2, 236.9), Value::Null);
+    assert_eq!(
+        h.snap()["native_resize"]["latest_requested"],
+        size(210., 147.)
+    );
+    // The pointer cannot leave [0, 999] x [0, 799]: 999 - 290 and 0 - 240,
+    // the height floored at 1.
+    let e = to(&mut h, &t, 5000.0, -5000.0);
+    assert_eq!(e["requested"], size(909., 1.));
+}
+#[test]
+fn readback_grab_keeps_the_opposite_edge_for_the_size_the_window_took() {
+    let mut h = readback();
+    let t = grab(&mut h, (110.0, 110.0), false);
+    h.ok(reply(&t, "observed", false, true, 200., 150.));
+    let e = to(&mut h, &t, 80.0, 90.0);
+    assert_eq!(e["requested"], size(230., 170.));
+    // Nothing is shown before the window answers.
+    assert_eq!(world(&mut h), rect(100., 100., 200., 150.));
+    // It took less than was asked: the bottom right corner, (300, 250),
+    // stays for the size it has.
+    h.ok(reply(&e, "clamped", true, true, 220., 160.));
+    assert_eq!(world(&mut h), rect(80., 90., 220., 160.));
+    // Upstream configures a client only when the size differs from the last
+    // one it configured: the size just bent is not asked again, another is.
+    assert_eq!(to(&mut h, &t, 80.0, 90.0), Value::Null);
+    assert_eq!(to(&mut h, &t, 79.6, 89.6), Value::Null);
+    let e = to(&mut h, &t, 70.0, 90.0);
+    assert_eq!(e["requested"], size(240., 170.));
+    // Refused outright: the canvas keeps the size the window has.
+    h.ok(reply(&e, "rejected", true, true, 220., 160.));
+    assert_eq!(world(&mut h), rect(80., 90., 220., 160.));
+    let last = finish(&mut h, &t, false);
+    assert_eq!(last["op"], "observe_resize_source");
+    h.ok(reply(&last, "observed", false, true, 220., 160.));
+    assert_eq!(h.snap()["native_resize"]["phase"], "complete");
+    assert_eq!(world(&mut h), rect(80., 90., 220., 160.));
+}
+#[test]
+fn readback_grab_measures_from_the_size_its_baseline_read_found() {
+    let mut h = readback();
+    let t = grab(&mut h, (290.0, 240.0), false);
+    // Motion ahead of the answer waits in the one slot.
+    assert_eq!(to(&mut h, &t, 300.0, 250.0), Value::Null);
+    // The window had another size than the canvas: adopted, top-left kept,
+    // and the queued motion is asked of that size.
+    let e = h.ok(reply(&t, "observed", false, true, 260., 190.))["effect"].clone();
+    assert_eq!(world(&mut h), rect(100., 100., 260., 190.));
+    assert_eq!(e["requested"], size(270., 200.));
+    h.ok(reply(&e, "applied", true, true, 270., 200.));
+    let e = to(&mut h, &t, 310.0, 240.0);
+    assert_eq!(e["requested"], size(280., 190.));
+}
+#[test]
+fn readback_grab_carries_its_cluster_by_the_size_the_window_took() {
+    let mut h = readback();
+    // Window 2 a snap gap (12) to the right of window 1.
+    h.ok(json!({"op":"attach","identity":{"pid":123,"birth_sec":1800000000,"birth_usec":5,"wid":2},"bundle_id":"test","title":"neighbour","buffer":{"width":400,"height":300},"source_rect":rect(900.,20.,200.,150.),"world_rect":rect(312.,100.,200.,150.),"logical_id":null}));
+    let frame = |h: &mut Host, id: u64| {
+        h.snap()["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["window"] == id)
+            .unwrap()["world_rect"]
+            .clone()
+    };
+    let neighbour = |h: &mut Host| frame(h, 2);
+    let t = grab(&mut h, (290.0, 175.0), true);
+    assert_eq!(h.snap()["native_resize"]["group"], true);
+    h.ok(reply(&t, "observed", false, true, 200., 150.));
+    let e = to(&mut h, &t, 350.0, 175.0);
+    assert_eq!(e["requested"], size(260., 150.));
+    assert_eq!(e["window"], 1);
+    assert_eq!(neighbour(&mut h), rect(312., 100., 200., 150.));
+    h.ok(reply(&e, "clamped", true, true, 240., 150.));
+    assert_eq!(frame(&mut h, 1), rect(100., 100., 240., 150.));
+    assert_eq!(neighbour(&mut h), rect(352., 100., 200., 150.));
+    // Back past the start: the neighbour comes back with the edge.
+    let e = to(&mut h, &t, 270.0, 175.0);
+    h.ok(reply(&e, "applied", true, true, 180., 150.));
+    assert_eq!(neighbour(&mut h), rect(292., 100., 200., 150.));
+    // The acknowledged mode commits one window against one picture.
+    let mut h = setup();
+    h.rejects(json!({"op":"begin_native_resize","window":1,"output":1,"start_screen":{"x":290.0,"y":175.0},"group":true}));
+}
+#[test]
+fn readback_grab_asks_again_of_a_window_that_was_not_settable() {
+    let mut h = readback();
+    let t = grab(&mut h, (290.0, 240.0), false);
+    h.ok(reply(&t, "observed", false, true, 200., 150.));
+    let e = to(&mut h, &t, 300.0, 250.0);
+    // Not settable: the grab is over, and one read ends its transaction.
+    let last = h.ok(reply(&e, "unsupported", false, true, 200., 150.))["effect"].clone();
+    assert_eq!(last["op"], "observe_resize_source");
+    // Motion meanwhile, and after, is refused and changes nothing.
+    h.rejects(json!({"op":"native_resize_to","transaction":t["transaction"],"screen":{"x":320.0,"y":260.0}}));
+    h.ok(reply(&last, "observed", false, true, 200., 150.));
+    assert_eq!(h.snap()["native_resize"]["phase"], "failed");
+    h.rejects(json!({"op":"native_resize_to","transaction":t["transaction"],"screen":{"x":320.0,"y":260.0}}));
+    h.rejects(json!({"op":"end_native_resize","transaction":t["transaction"]}));
+    assert_eq!(h.snap()["windows"][0]["source"]["resize_disabled"], true);
+    // The next press asks again: a sheet may have closed since.
+    let t = grab(&mut h, (290.0, 240.0), false);
+    assert_eq!(t["op"], "observe_resize_source");
+}
+// One size transaction at a time: while a grab holds the slot, a sizing
+// action, a fullscreen toggle and an IPC resize are refused and change
+// nothing, whether or not an effect is owed.
+#[test]
+fn readback_grab_refuses_every_other_sizing_while_it_lasts() {
+    let mut h = readback();
+    let t = grab(&mut h, (290.0, 240.0), false);
+    let others = [
+        json!({"op":"action","output":1,"action":"grow-window right"}),
+        json!({"op":"action","output":1,"action":"fit-window"}),
+        json!({"op":"action","output":1,"action":"toggle-fullscreen"}),
+        json!({"op":"ipc","output":1,"request":{"Resize":{"window":1,"to":[300,200]}}}),
+        json!({"op":"begin_native_resize","window":1,"output":1,"start_screen":{"x":290.0,"y":240.0}}),
+    ];
+    // An action and a second grab are refused as commands; the socket's
+    // Resize is answered, with the refusal as its reply.
+    let refused = |h: &mut Host| {
+        for c in &others {
+            let before = h.snap();
+            let answer = h.call(c.clone());
+            if c["op"] == "ipc" {
+                assert_eq!(
+                    answer["data"]["reply"],
+                    json!({"Err":"a native resize of window 1 is still pending"}),
+                    "{answer}"
+                );
+            } else {
+                assert_eq!(answer["ok"], false, "{c}: {answer}");
+            }
+            assert_eq!(h.snap(), before, "{c}");
+        }
+    };
+    refused(&mut h);
+    h.ok(reply(&t, "observed", false, true, 200., 150.));
+    assert_eq!(h.snap()["native_resize"]["phase"], "dragging");
+    refused(&mut h);
+    let last = finish(&mut h, &t, false);
+    h.ok(reply(&last, "observed", false, true, 200., 150.));
+    h.ok(others[3].clone());
+}

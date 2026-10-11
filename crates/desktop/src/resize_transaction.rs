@@ -1,6 +1,54 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
+// src/grabs/resize_grab.rs (constrain_to_ratio, locked_ratio_for, and the
+// pointer clamp and integer delta of ResizeGrab::motion and apply_resize) and
+// src/input/pointer.rs (edges_from_position). The grab itself is this file's
+// transaction: upstream configures a client and draws what it commits, and
+// here a size is asked of a native window and the size read back is drawn.
 //! Size-only native transactions. Effects are obligations, not native evidence.
 use super::*;
+
+/// Upstream edges_from_position: a 3×3 grid over the window, corners resizing
+/// diagonally, edge strips along one axis, the centre from the bottom right.
+/// Canvas coordinates, as upstream's.
+fn edges_from_position(at: Point, rect: Rect) -> Edges {
+    let (x, y) = (at.x - rect.origin.x, at.y - rect.origin.y);
+    let (w, h) = (rect.size.width, rect.size.height);
+    let (left, right) = (x < w / 3.0, x > w * 2.0 / 3.0);
+    let (top, bottom) = (y < h / 3.0, y > h * 2.0 / 3.0);
+    match (left, right, top, bottom) {
+        (true, _, true, _) => Edges::TopLeft,
+        (_, true, true, _) => Edges::TopRight,
+        (true, _, _, true) => Edges::BottomLeft,
+        (_, true, _, true) => Edges::BottomRight,
+        (true, _, _, _) => Edges::Left,
+        (_, true, _, _) => Edges::Right,
+        (_, _, true, _) => Edges::Top,
+        (_, _, _, true) => Edges::Bottom,
+        _ => Edges::BottomRight,
+    }
+}
+/// Upstream constrain_to_ratio: `target` bent to `ratio` (width / height). A
+/// horizontal edge drives the width, a vertical edge the height, and a corner
+/// the axis that moved farther from `initial` relative to the ratio, so the
+/// driver does not flip as the pointer crosses the ratio ray. The other axis
+/// is derived, rounded, and at least 1.
+fn constrain_to_ratio(target: Size, initial: Size, ratio: f64, edges: Edges) -> Size {
+    let width_drives = match (edges.horizontal(), edges.vertical()) {
+        (true, false) => true,
+        (false, true) => false,
+        _ => {
+            let dw = (target.width - initial.width).abs();
+            let dh = (target.height - initial.height).abs();
+            dw * initial.height >= dh * initial.width
+        }
+    };
+    if width_drives {
+        Size::new(target.width, (target.width / ratio).round().max(1.0))
+    } else {
+        Size::new((target.height * ratio).round().max(1.0), target.height)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -58,12 +106,26 @@ pub struct NativeResizeTransaction {
     output: OutputId,
     edges: Edges,
     start_screen: Point,
+    /// Where the pointer last was, for a grab that has moved.
+    pointer: Option<Point>,
     start_zoom: f64,
     initial_size: Size,
     last_committed_size: Size,
+    /// Upstream's cluster resize: the windows snapped to the moving edges
+    /// follow each committed size (`resize_settle`). Readback mode only.
+    group: bool,
+    /// Upstream's locked_ratio: width / height at the start, for a window
+    /// whose rule has `preserve_aspect_ratio`. Such a resize neither snaps
+    /// nor carries a cluster.
+    ratio: Option<f64>,
     /// Native min/max are not supplied by AX; no constraints are inferred.
     native_constraints: Option<Size>,
     latest_requested: Option<Size>,
+    /// The size of the last setter sent. Upstream configures a client only
+    /// when the size differs from the last one it configured
+    /// (`last_window_size`): motion that asks the size a window has just
+    /// refused or bent asks nothing, and costs no refusal.
+    last_sent: Option<Size>,
     requested_outline: Option<Rect>,
     coalesced_latest: Option<Size>,
     pending_effect: Option<ResizeEffect>,
@@ -214,11 +276,15 @@ impl Controller {
             output,
             edges,
             start_screen: Point::default(),
+            pointer: None,
             start_zoom: 1.0,
             initial_size: size,
             last_committed_size: size,
+            group: false,
+            ratio: None,
             native_constraints: None,
             latest_requested: Some(target),
+            last_sent: None,
             requested_outline: None,
             coalesced_latest: Some(target),
             pending_effect: None,
@@ -271,31 +337,37 @@ impl Controller {
         }
         Ok(None)
     }
+    /// Upstream start_compositor_resize_with_edge and begin_client_resize: the
+    /// resize grab of a bound press, of the resize border and of a resize
+    /// gesture. `edges` is the border's own edge; `None` takes it from where
+    /// in the window the grab was taken. Every refusal stands ahead of every
+    /// side effect, as upstream's bails do: a gesture whose resize is refused
+    /// pans instead, in the same command, and must find nothing raised,
+    /// focused or cancelled for it.
     pub(crate) fn begin_native_resize(
         &mut self,
         window: WindowId,
         output: OutputId,
-        edges: Edges,
+        edges: Option<Edges>,
         start_screen: Point,
         group: bool,
     ) -> Result<Value, Error> {
         self.guard_resize_structure(None)?;
-        if group || self.gesture.is_some() || !point_valid(start_screen) {
+        // The acknowledged mode commits one window against one picture.
+        if (group && !self.sizes.readback) || self.gesture.is_some() || !point_valid(start_screen) {
             return Err(Error::Invalid(
                 "native resize requires one ordinary window and valid screen point",
             ));
         }
         self.movable(window)?;
-        // Upstream's resize press raises and focuses the window ahead of its
-        // grab (`focus_for_grab`). `effect` is the transaction's here, so the
-        // focus request is the one entry of `effects`, where every reply that
-        // carries a size transaction keeps its focus request.
-        let focus = self.focus_for_grab(window)?;
         let source = self
             .sources
             .get(&window)
             .ok_or(Error::Invalid("unbound source"))?;
-        if source.resize_disabled
+        // Readback mode asks again, as `begin_sized_resize` does: the answer
+        // costs one bounded setter, and a window that still refuses ends the
+        // grab there.
+        if (source.resize_disabled && !self.sizes.readback)
             || !source.observation_known
             || source.capture_revision != Some(source.observation_revision)
         {
@@ -303,40 +375,57 @@ impl Controller {
                 "source resize unsupported or presentation unsettled",
             ));
         }
-        let zoom = self
+        let (identity, generation) = (source.identity.clone(), source.generation);
+        let viewport = self
             .scene
             .output(output)
-            .ok_or(Error::Invalid("unknown output"))?
-            .zoom;
-        let size = self
+            .ok_or(Error::Invalid("unknown output"))?;
+        let zoom = viewport.zoom;
+        let rect = self
             .scene
             .window(window)
             .ok_or(Error::Invalid("unknown window"))?
-            .world_rect
-            .size;
+            .world_rect;
+        let size = rect.size;
+        let edges = edges
+            .unwrap_or_else(|| edges_from_position(viewport.screen_to_world(start_screen), rect));
+        // Upstream locked_ratio_for. A locked resize is one window's.
+        let ratio = (self.keeps_ratio(window) && size.width > 0.0 && size.height > 0.0)
+            .then(|| size.width / size.height);
+        let group = group && ratio.is_none();
         let snap = self.snap(zoom);
         let snap_intent = self
             .scene
-            .begin_resize(window, edges.into(), snap.options, false)?
+            .begin_resize(window, edges.into(), snap.options, group)?
             .with_break_force(snap.break_force)?
             .with_same_edge(snap.corners);
-        self.next_resize = self
+        let transaction = self
             .next_resize
             .checked_add(1)
             .ok_or(Error::Invalid("resize IDs exhausted"))?;
+        // Upstream's resize press raises and focuses the window ahead of its
+        // grab (`focus_for_grab`). `effect` is the transaction's here, so the
+        // focus request is the one entry of `effects`, where every reply that
+        // carries a size transaction keeps its focus request.
+        let focus = self.focus_for_grab(window)?;
+        self.next_resize = transaction;
         self.native_resize = Some(NativeResizeTransaction {
-            transaction: self.next_resize,
+            transaction,
             window,
-            identity: source.identity.clone(),
-            generation: source.generation,
+            identity,
+            generation,
             output,
             edges,
             start_screen,
+            pointer: None,
             start_zoom: zoom,
             initial_size: size,
             last_committed_size: size,
+            group,
+            ratio,
             native_constraints: None,
             latest_requested: None,
+            last_sent: None,
             requested_outline: None,
             coalesced_latest: None,
             pending_effect: None,
@@ -386,12 +475,89 @@ impl Controller {
         };
         t.pending_effect = Some(effect.clone());
         if requested.is_some() {
+            t.last_sent = requested;
             stale(
                 self.sources.get_mut(&t.window).expect("bound source"),
                 self.sizes.readback,
             );
         }
         Ok(json!({"transaction":t.transaction,"effect":effect}))
+    }
+    /// The size a grab asks with the pointer at `screen`, a global screen
+    /// point: upstream's apply_resize up to its configure. The outline and
+    /// the latest request are the transaction's from here on.
+    fn resize_request(&mut self, screen: Point) -> Result<Size, Error> {
+        let t = self.native_resize.as_ref().expect("resize exists");
+        let viewport = self
+            .scene
+            .output(t.output)
+            .ok_or(Error::Invalid("unknown resize output"))?;
+        let (zoom, bounds) = (viewport.zoom, viewport.screen_bounds);
+        let current = self
+            .scene
+            .window(t.window)
+            .ok_or(Error::Invalid("unknown window"))?
+            .world_rect;
+        let snap = self.snap(zoom);
+        let t = self.native_resize.as_mut().expect("resize exists");
+        // Upstream ResizeGrab::motion: the pointer is held inside the grab's
+        // output, `[0, w-1] × [0, h-1]`, so an edge cannot be dragged past
+        // what the output shows. Then apply_resize: the screen displacement
+        // over the zoom of the start, each axis cut to a whole number toward
+        // zero (its `as i32`).
+        let local = screen - bounds.origin;
+        let screen = bounds.origin
+            + Point::new(
+                local.x.clamp(0.0, (bounds.size.width - 1.0).max(0.0)),
+                local.y.clamp(0.0, (bounds.size.height - 1.0).max(0.0)),
+            );
+        let delta = (screen - t.start_screen) / t.start_zoom;
+        let delta = Point::new(delta.x.trunc(), delta.y.trunc());
+        let outline = if let Some(ratio) = t.ratio {
+            // Upstream: the ratio bends the size ahead of the client's bounds,
+            // and a locked resize neither snaps nor carries a cluster. The
+            // far edges are where the commits have kept them.
+            let initial = t.initial_size;
+            let target = Size::new(
+                initial.width
+                    + if t.edges.left() {
+                        -delta.x
+                    } else if t.edges.right() {
+                        delta.x
+                    } else {
+                        0.0
+                    },
+                initial.height
+                    + if t.edges.top() {
+                        -delta.y
+                    } else if t.edges.bottom() {
+                        delta.y
+                    } else {
+                        0.0
+                    },
+            );
+            // Bent first, floored after, as upstream clamps to the client's
+            // bounds only once the ratio has chosen its driving axis.
+            let size = constrain_to_ratio(target, initial, ratio, t.edges);
+            let size = Size::new(size.width.max(1.0), size.height.max(1.0));
+            let mut outline = Rect { size, ..current };
+            if t.edges.left() {
+                outline.origin.x = current.right() - size.width;
+            }
+            if t.edges.top() {
+                outline.origin.y = current.bottom() - size.height;
+            }
+            outline
+        } else {
+            t.snap_intent
+                .set_snap_distances(snap.options.threshold, snap.break_force)?;
+            self.scene.resize_proposal(&mut t.snap_intent, delta)?
+        };
+        t.requested_outline = Some(outline);
+        let requested = outline.size;
+        t.latest_requested = Some(requested);
+        t.pointer = Some(screen);
+        Ok(requested)
     }
     pub(crate) fn native_resize_to(
         &mut self,
@@ -410,26 +576,13 @@ impl Controller {
         {
             return Err(Error::Invalid("resize is not accepting motion"));
         }
-        let zoom = self
-            .scene
-            .output(t.output)
-            .ok_or(Error::Invalid("unknown resize output"))?
-            .zoom;
-        let snap = self.snap(zoom);
+        let requested = self.resize_request(screen)?;
         let t = self.native_resize.as_mut().expect("resize exists");
-        t.snap_intent
-            .set_snap_distances(snap.options.threshold, snap.break_force)?;
-        let outline = self
-            .scene
-            .resize_proposal(&mut t.snap_intent, (screen - t.start_screen) / t.start_zoom)?;
-        t.requested_outline = Some(outline);
-        let requested = outline.size;
-        t.latest_requested = Some(requested);
         if let Some(effect) = &t.pending_effect {
             t.coalesced_latest = (effect.requested != Some(requested)).then_some(requested);
             return Ok(json!({"transaction":transaction,"effect":null}));
         }
-        if requested == t.last_committed_size {
+        if requested == t.last_committed_size || Some(requested) == t.last_sent {
             return Ok(json!({"transaction":transaction,"effect":null}));
         }
         self.emit_resize(Some(requested))
@@ -515,7 +668,9 @@ impl Controller {
             return Err(Error::Invalid("invalid resize result contract"));
         }
         let preparing = !t.baseline_observed;
+        let mut adopted = false;
         let readback = self.sizes.readback;
+        let snap = self.snap(t.start_zoom);
         let t = self.native_resize.as_mut().expect("resize exists");
         t.pending_effect = None;
         t.last_result = Some(result.clone());
@@ -552,6 +707,18 @@ impl Controller {
                     self.scene.set_window_rect(t.window, rect)?;
                     t.initial_size = rect.size;
                     t.last_committed_size = rect.size;
+                    // What the drag measures from is this size: its snap
+                    // state, its cluster and its ratio were taken from the
+                    // size the canvas had, and are taken again.
+                    t.snap_intent = self
+                        .scene
+                        .begin_resize(t.window, t.edges.into(), snap.options, t.group)?
+                        .with_break_force(snap.break_force)?
+                        .with_same_edge(snap.corners);
+                    if t.ratio.is_some() {
+                        t.ratio = Some(rect.size.width / rect.size.height);
+                    }
+                    adopted = true;
                 } else {
                     t.phase = Phase::Failed;
                     t.coalesced_latest = None;
@@ -576,14 +743,28 @@ impl Controller {
                 stale(source, readback);
             }
             if actual != t.last_committed_size {
-                if matches!(t.edges, Edges::Left | Edges::TopLeft | Edges::BottomLeft) {
+                // Upstream handle_resize_commit: a left or top resize moves the
+                // window by what the committed size changed, so the opposite
+                // edge stays where it is on screen. On the canvas only: a size
+                // write keeps a native window's own top-left.
+                if t.edges.left() {
                     rect.origin.x += t.last_committed_size.width - actual.width;
                 }
-                if matches!(t.edges, Edges::Top | Edges::TopLeft | Edges::TopRight) {
+                if t.edges.top() {
                     rect.origin.y += t.last_committed_size.height - actual.height;
                 }
                 rect.size = actual;
-                self.scene.set_window_rect(t.window, rect)?;
+                // A cluster follows the size the window took, not the one
+                // asked: a window that stops at a limit stops its neighbours
+                // too, as upstream's do by clamping ahead of the cluster.
+                // A cluster that can no longer be moved as it was captured (a
+                // member is not where the last settle left it) is let go of
+                // for the rest of the grab, and the transaction says so: every
+                // later settle would fail on the same member.
+                if !t.group || self.scene.resize_settle(&mut t.snap_intent, rect).is_err() {
+                    self.scene.set_window_rect(t.window, rect)?;
+                    t.group = false;
+                }
                 t.last_committed_size = actual;
                 stale(source, readback);
             }
@@ -634,6 +815,14 @@ impl Controller {
             t.coalesced_latest = None;
             return Ok(json!({"effect":null}));
         }
+        // Motion that waited for the baseline was measured from the size the
+        // canvas had. It is measured again, from the size adopted.
+        if adopted && let Some(pointer) = self.native_resize.as_ref().and_then(|t| t.pointer) {
+            let size = self.resize_request(pointer)?;
+            let t = self.native_resize.as_mut().expect("resize exists");
+            t.coalesced_latest = Some(size);
+        }
+        let t = self.native_resize.as_mut().expect("resize exists");
         if t.cancelled {
             t.coalesced_latest = None;
         }

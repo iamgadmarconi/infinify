@@ -1566,7 +1566,7 @@ fn a_size_rule_is_asked_of_a_new_window_when_the_shell_can_deliver_a_size() {
     assert_eq!(h.world(1), rect(-201.0, -151.0, 401.0, 301.0));
     // `size` was asked; the field nothing applies is still named. A rule's
     // `fullscreen` under this shell is tests/fullscreen_flow.rs's.
-    assert_eq!(h.rule(1)["not_applied"], json!(["preserve_aspect_ratio"]));
+    assert_eq!(h.rule(1)["not_applied"], json!([]));
 
     // Four more ruled windows while that size is owed. There is one
     // transaction: each is placed for the size its rule names, waits its
@@ -1575,10 +1575,7 @@ fn a_size_rule_is_asked_of_a_new_window_when_the_shell_can_deliver_a_size() {
     assert!(second.get("transaction").is_none() && second.get("effects").is_none());
     assert_eq!(second["effect"]["window"], 2);
     assert_eq!(h.world(2), rect(-200.0, -150.0, 400.0, 300.0));
-    assert_eq!(
-        h.rule(2)["not_applied"],
-        json!(["size", "preserve_aspect_ratio"])
-    );
+    assert_eq!(h.rule(2)["not_applied"], json!(["size"]));
     // A widget is asked like any window, and maps without focus or flight.
     let widget = appear(&mut h, 3, "app.sized-widget", "S", (400.0, 300.0));
     assert!(widget.get("transaction").is_none() && widget.get("effects").is_none());
@@ -1632,7 +1629,7 @@ fn a_size_rule_is_asked_of_a_new_window_when_the_shell_can_deliver_a_size() {
     // The reply that ends that transaction begins the next window's: map
     // order. From then on its `size` is asked, and the others' is not.
     let read = next_ruled(&mut h, &ended, 2);
-    assert_eq!(h.rule(2)["not_applied"], json!(["preserve_aspect_ratio"]));
+    assert_eq!(h.rule(2)["not_applied"], json!([]));
     for waiting in [3, 4, 5] {
         assert_eq!(h.rule(waiting)["not_applied"], json!(["size"]));
     }
@@ -1688,10 +1685,7 @@ fn a_size_rule_is_asked_of_a_new_window_when_the_shell_can_deliver_a_size() {
     // the closed one is gone, and the slot without a source still names
     // `size`, which nothing asked of it.
     let read = next_ruled(&mut h, &ended, 5);
-    assert_eq!(
-        h.rule(7)["not_applied"],
-        json!(["size", "preserve_aspect_ratio"])
-    );
+    assert_eq!(h.rule(7)["not_applied"], json!(["size"]));
     let ended = deliver_ruled(
         &mut h,
         &read,
@@ -1714,10 +1708,7 @@ fn a_size_rule_is_asked_of_a_new_window_when_the_shell_can_deliver_a_size() {
     assert_eq!(reply["adopted"], true);
     assert!(reply.get("transaction").is_none() && reply.get("effects").is_none());
     assert_eq!(h.world(7), rect(-200.0, -150.0, 400.0, 300.0));
-    assert_eq!(
-        h.rule(7)["not_applied"],
-        json!(["size", "preserve_aspect_ratio"])
-    );
+    assert_eq!(h.rule(7)["not_applied"], json!(["size"]));
     assert_eq!(h.snapshot()["native_resize"]["phase"], "complete");
 
     // A window that maps with the rule's size already needs nothing
@@ -1726,7 +1717,7 @@ fn a_size_rule_is_asked_of_a_new_window_when_the_shell_can_deliver_a_size() {
     assert_eq!(reply["window"], 8);
     assert!(reply.get("transaction").is_none() && reply.get("effects").is_none());
     assert_eq!(h.world(8), rect(-400.0, -300.0, 800.0, 600.0));
-    assert_eq!(h.rule(8)["not_applied"], json!(["preserve_aspect_ratio"]));
+    assert_eq!(h.rule(8)["not_applied"], json!([]));
     for (wid, app) in [(10, "app.sized-widget"), (11, "app.sized-pin")] {
         let reply = appear(&mut h, wid, app, "S", (800.0, 600.0));
         assert_eq!(reply["window"], wid - 1);
@@ -1768,10 +1759,7 @@ fn a_ruled_size_that_waited_out_a_drag_is_asked_with_the_next_new_window() {
     assert_eq!(h.snapshot()["native_resize"], Value::Null);
     assert_eq!(h.ok(json!({"op":"end_gesture"})), json!({}));
     assert_eq!(h.snapshot()["native_resize"], Value::Null);
-    assert_eq!(
-        h.rule(2)["not_applied"],
-        json!(["size", "preserve_aspect_ratio"])
-    );
+    assert_eq!(h.rule(2)["not_applied"], json!(["size"]));
     // A window no rule matches maps: its reply is its own arrival, and
     // carries the transaction of the window that was waiting.
     let reply = appear(&mut h, 3, "app.plain", "P", (300.0, 200.0));
@@ -1779,7 +1767,7 @@ fn a_ruled_size_that_waited_out_a_drag_is_asked_with_the_next_new_window() {
     assert_eq!(reply["effect"]["window"], 3);
     let read = sized_by_rule(&mut h, &reply);
     assert_eq!(read["window"], 2);
-    assert_eq!(h.rule(2)["not_applied"], json!(["preserve_aspect_ratio"]));
+    assert_eq!(h.rule(2)["not_applied"], json!([]));
     let ended = deliver_ruled(
         &mut h,
         &read,
@@ -1803,16 +1791,13 @@ fn a_ruled_size_that_waited_out_a_drag_is_asked_with_the_next_new_window() {
     let reply = appear(&mut h, 6, "app.plain", "P", (300.0, 200.0));
     assert!(reply.get("transaction").is_none() && reply.get("effects").is_none());
     assert_eq!(h.snapshot()["native_resize"]["phase"], "complete");
-    assert_eq!(
-        h.rule(4)["not_applied"],
-        json!(["size", "preserve_aspect_ratio"])
-    );
+    assert_eq!(h.rule(4)["not_applied"], json!(["size"]));
     // A window that has the size already waits for nothing, a drag included.
     h.ok(json!({"op":"begin_drag","window":1,"output":1}));
     let reply = appear(&mut h, 7, "app.sized", "S", (800.0, 600.0));
     assert!(reply.get("transaction").is_none() && reply.get("effects").is_none());
     assert_eq!(h.world(7), rect(-400.0, -300.0, 800.0, 600.0));
-    assert_eq!(h.rule(7)["not_applied"], json!(["preserve_aspect_ratio"]));
+    assert_eq!(h.rule(7)["not_applied"], json!([]));
 }
 
 // Upstream's rule size is one-shot at a window's first commit, "so the user
@@ -1846,19 +1831,13 @@ fn a_ruled_window_the_user_sizes_before_its_turn_is_not_asked_its_rules_size() {
         let window = reply["window"].as_u64().unwrap();
         assert_eq!(h.world(window), rect(-200.0, -150.0, 400.0, 300.0));
         assert_eq!(h.ok(json!({"op":"end_gesture"})), json!({}));
-        assert_eq!(
-            h.rule(window)["not_applied"],
-            json!(["size", "preserve_aspect_ratio"])
-        );
+        assert_eq!(h.rule(window)["not_applied"], json!(["size"]));
         window
     };
     // Nothing is owed it afterwards: `size` is still named, and the next new
     // window's reply begins no transaction for it.
     let left_alone = |h: &mut Host, window: u64, wid: u64| {
-        assert_eq!(
-            h.rule(window)["not_applied"],
-            json!(["size", "preserve_aspect_ratio"])
-        );
+        assert_eq!(h.rule(window)["not_applied"], json!(["size"]));
         let reply = appear(h, wid, "app.plain", "P", (300.0, 200.0));
         assert!(reply.get("transaction").is_none() && reply.get("effects").is_none());
         assert_eq!(h.snapshot()["native_resize"]["window"], window);
@@ -1903,10 +1882,7 @@ fn a_ruled_window_the_user_sizes_before_its_turn_is_not_asked_its_rules_size() {
     );
     assert_eq!(ended, json!({"effect":null}));
     assert_eq!(h.world(window), rect(-200.0, -150.0, 400.0, 300.0));
-    assert_eq!(
-        h.rule(window)["not_applied"],
-        json!(["size", "preserve_aspect_ratio"])
-    );
+    assert_eq!(h.rule(window)["not_applied"], json!(["size"]));
 
     // A fit. Asked the rule's size after it, the window would lose the fit
     // and its restore point with it.
@@ -1934,16 +1910,17 @@ fn a_ruled_window_the_user_sizes_before_its_turn_is_not_asked_its_rules_size() {
     h.ok(json!({"op":"gesture_to","screen_delta":point(60.0,40.0)}));
     h.ok(json!({"op":"end_gesture"}));
     assert_eq!(h.world(window), rect(-200.0, -150.0, 460.0, 340.0));
-    assert_eq!(
-        h.rule(window)["not_applied"],
-        json!(["size", "preserve_aspect_ratio"])
-    );
+    assert_eq!(h.rule(window)["not_applied"], json!(["size"]));
     let reply = appear(&mut h, 8, "app.plain", "P", (300.0, 200.0));
     assert!(reply.get("transaction").is_none() && reply.get("effects").is_none());
     assert_eq!(h.world(window), rect(-200.0, -150.0, 460.0, 340.0));
 
     // And a resize by hand through the native transaction: 100 points down
-    // and right from the bottom right corner, at zoom 1.
+    // and right from the bottom right corner, at zoom 1. The rule has
+    // `preserve_aspect_ratio`, so the 4:3 the window starts with is kept
+    // (upstream constrain_to_ratio): on a corner the axis that moved farther
+    // relative to the ratio drives, here the height (100 * 400 > 100 * 300),
+    // and the width is 400 * 4 / 3, rounded.
     let window = waiting(&mut h, 9);
     let begun = h.ok(json!({"op":"begin_native_resize","window":window,"output":1,"edges":"bottom_right","start_screen":point(500.0,500.0),"group":false}));
     let read = begun["effect"].clone();
@@ -1953,16 +1930,16 @@ fn a_ruled_window_the_user_sizes_before_its_turn_is_not_asked_its_rules_size() {
     let setter = moved["effect"].clone();
     assert_eq!(
         setter["requested"],
-        json!({"width":500.0,"height":400.0}),
+        json!({"width":533.0,"height":400.0}),
         "{moved}"
     );
-    resized(&mut h, &setter, "applied", true, (500.0, 400.0));
+    resized(&mut h, &setter, "applied", true, (533.0, 400.0));
     let end = h.ok(json!({"op":"end_native_resize","transaction":read["transaction"]}));
-    let ended = resized(&mut h, &end["effect"], "observed", false, (500.0, 400.0));
+    let ended = resized(&mut h, &end["effect"], "observed", false, (533.0, 400.0));
     assert_eq!(ended, json!({"effect":null}));
-    assert_eq!(h.world(window), rect(-200.0, -150.0, 500.0, 400.0));
+    assert_eq!(h.world(window), rect(-200.0, -150.0, 533.0, 400.0));
     left_alone(&mut h, window, 10);
-    assert_eq!(h.world(window), rect(-200.0, -150.0, 500.0, 400.0));
+    assert_eq!(h.world(window), rect(-200.0, -150.0, 533.0, 400.0));
 
     // Sizing another window ends no wait: the queued one is asked in the
     // reply that ends that transaction, as before.
@@ -2900,10 +2877,15 @@ fn trackpad_gestures_grab_no_widget_and_move_a_pinned_window_in_screen_space() {
     assert_eq!(h.pinned(4)["screen_rect"], rect(840.0, 500.0, 150.0, 100.0));
     assert_eq!(h.snapshot()["outputs"][0], camera);
     let before = h.snapshot();
-    // A resize over it is the gated resize of any window.
+    // A resize over it is claimed and does nothing: upstream resizes a
+    // pinned window in screen space, which is not done here.
     let reply = begin(&mut h, ON_PIN, true, false);
     assert_eq!(reply["gesture"]["state"], "swipe_resize", "{reply}");
     assert_eq!(reply["gesture"]["window"], 4);
+    assert_eq!(
+        reply["note"],
+        "a screen-pinned window is not resized: unpin it first"
+    );
     end(&mut h);
     assert_eq!(h.snapshot(), before);
     h.observe_focus(1);
@@ -3013,4 +2995,68 @@ fn the_pin_and_bookmark_actions_run_through_the_action_prelude() {
         .collect();
     assert_eq!(bound.len(), 1, "{keys}");
     assert_eq!(bound[0]["implemented"], true, "{keys}");
+}
+
+// Upstream's `preserve_aspect_ratio` (locked_ratio_for, constrain_to_ratio)
+// on the readback path of a normal run: the ratio is the one the window has
+// when a grab begins, an edge drives its own axis, and neither a snap nor a
+// cluster takes part. Output 1 is at the global point (200, 100) with its
+// camera at the world origin, so the screen point (510, 450) is the world
+// point (310, 350): the left third of the window, in its middle row.
+#[test]
+fn preserve_aspect_ratio_bends_a_resize_grab_from_an_edge_and_drops_its_cluster() {
+    let scratch = Scratch::new();
+    let mut h = running(
+        &scratch,
+        "[[window_rules]]\napp_id = \"app.ratio\"\npreserve_aspect_ratio = true\n",
+    );
+    h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":true}));
+    let window = put(
+        &mut h,
+        1,
+        "app.ratio",
+        "R",
+        rect(300.0, 200.0, 400.0, 300.0),
+    );
+    // A window a snap gap to the left, which a cluster resize would carry.
+    let other = put(&mut h, 2, "app.plain", "P", rect(88.0, 200.0, 200.0, 300.0));
+    assert_eq!(h.rule(window)["preserve_aspect_ratio"], true);
+    assert_eq!(h.rule(window)["not_applied"], json!([]));
+    // The left edge, 60 points to the left: 460 wide, and 460 * 300 / 400
+    // high. The right edge stays; the height grows downwards, as upstream's.
+    let begun = h.ok(json!({"op":"begin_native_resize","window":window,"output":1,"start_screen":point(510.0,450.0),"group":true}));
+    let read = begun["effect"].clone();
+    let slot = h.snapshot()["native_resize"].clone();
+    assert_eq!(slot["edges"], "left", "{slot}");
+    assert_eq!(slot["group"], false, "{slot}");
+    resized(&mut h, &read, "observed", false, (400.0, 300.0));
+    let moved = h.ok(json!({"op":"native_resize_to","transaction":read["transaction"],"screen":point(450.0,600.0)}));
+    let setter = moved["effect"].clone();
+    assert_eq!(
+        setter["requested"],
+        json!({"width":460.0,"height":345.0}),
+        "{moved}"
+    );
+    assert_eq!(
+        h.snapshot()["native_resize"]["requested_outline"],
+        rect(240.0, 200.0, 460.0, 345.0)
+    );
+    resized(&mut h, &setter, "applied", true, (460.0, 345.0));
+    let end = h.ok(json!({"op":"end_native_resize","transaction":read["transaction"]}));
+    resized(&mut h, &end["effect"], "observed", false, (460.0, 345.0));
+    assert_eq!(h.world(window), rect(240.0, 200.0, 460.0, 345.0));
+    // The neighbour was not carried, and the edge was not snapped to it.
+    assert_eq!(h.world(other), rect(88.0, 200.0, 200.0, 300.0));
+    // The next grab takes the ratio the window has by then, still 4:3. A
+    // corner: 30 right and 90 down, the height moved farther relative to the
+    // ratio (30 * 345 < 90 * 460), so it drives: 435 high, 435 * 4 / 3 wide.
+    let begun = h.ok(json!({"op":"begin_native_resize","window":window,"output":1,"edges":"bottom_right","start_screen":point(900.0,645.0)}));
+    let read = begun["effect"].clone();
+    resized(&mut h, &read, "observed", false, (460.0, 345.0));
+    let moved = h.ok(json!({"op":"native_resize_to","transaction":read["transaction"],"screen":point(930.0,735.0)}));
+    assert_eq!(
+        moved["effect"]["requested"],
+        json!({"width":580.0,"height":435.0}),
+        "{moved}"
+    );
 }

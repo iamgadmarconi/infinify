@@ -198,7 +198,8 @@ A window that maps with the rule's size already is asked nothing, a widget
 and a pinned window included, and `size` is not listed. The request never
 fails the `attach`: a frame that cannot be placed for the size asked is
 placed for the window's own, as without the capability.
-`preserve_aspect_ratio` stays recorded and not applied.
+`preserve_aspect_ratio` does not bend it: upstream locks the ratio for
+interactive resizes only.
 
 `fullscreen` is applied under the same capability, in upstream's order for a
 rule that names both: the size is configured first, the window placed for it,
@@ -333,7 +334,7 @@ flies to, grabs or sends "a window" asks it.
 | the size transaction of its rule's `size`, as it maps ([A rule's `size`](#a-rules-size)) | begun | begun |
 | `grow-window`, `shrink-window`, `fit-window`, `fit-window-snapped`, `fill-window` (with the capability), `zoom-to-fit-snapped` ([SIZES.md](SIZES.md#widgets-screen-pinned-windows-and-rules)) | focused: nothing happens, without an error | the same; a fit or fill it had before it was pinned stays with it |
 | a move gesture ([GESTURES.md](GESTURES.md#dispatch)) | grab-proof: the gesture falls back to a pan and nothing is focused; a pinned widget too, and nothing beneath it is reached | state `swipe_move`: the same [screen-space drag](#dragging-a-pinned-window) is installed, then the window is raised and focused, as upstream's `GestureTarget::Pinned` arm does |
-| a resize gesture | falls back to a pan | the gated `swipe_resize` of any window |
+| a resize gesture | falls back to a pan | a `swipe_resize` that is claimed and does nothing, with a note: a pinned window is not resized |
 | a gesture in progress on a slot whose window maps as a widget | its drag ends at once, with its edge pan; the gesture goes on with nothing to move | a pinned slot whose window maps keeps its pin, and the [screen-space drag](#dragging-a-pinned-window) moving it goes on; mapped as a widget it keeps the pin and the drag ends |
 | `send-to-output` | nothing happens | the pin is bound to the output adjacent to its own, keeping its place on the screen, clamped until the whole frame is on that output (`send_pinned_to_output`); `dirty` when the pin changed; nothing is raised |
 | a hot corner, a gesture's threshold or hold action | runs the action it is bound to through the same dispatch, so every row above holds | the same |
@@ -600,7 +601,7 @@ are the commands of any drag:
 
 ### What resizing one would need
 
-Not implemented: native resize is gated, and `begin_resize` and
+Not implemented: `begin_resize` and
 `begin_native_resize` refuse a pinned window with `a screen-pinned window is
 not moved or resized by hand`. Upstream's `apply_pinned_resize`
 (`src/grabs/resize_grab.rs`) takes the pointer in the pin's output, clamped to
@@ -772,8 +773,13 @@ rule takes, sorted by output and position. `is_widget` is filled.
   it the size is owed, not asked first: one transaction takes the window
   from its own size to the output's, where upstream's client is configured
   twice.
-- **`preserve_aspect_ratio`** is recorded and listed in `not_applied`: no
-  resize is bent to it.
+- **`preserve_aspect_ratio`** is applied to a pointer or gesture resize, as
+  upstream's `locked_ratio_for` and `constrain_to_ratio`: the window keeps the
+  width / height it has when the grab begins, an edge driving its own axis and
+  a corner the axis that moved farther relative to the ratio, with no snap and
+  no cluster ([NATIVE_RESIZE.md](NATIVE_RESIZE.md#pointer-resize)). The sizing
+  actions, IPC `resize` and a rule's `size` are not bent, as upstream's are
+  not. The application's own limits may bend the ratio.
 - **`layer_order` is ignored, which is upstream's own rule for a window.**
   It is listed in `not_applied` because the field does nothing here, not
   because something is missing: upstream applies it to layer-shell surfaces
@@ -837,7 +843,7 @@ rule takes, sorted by output and position. `is_widget` is filled.
   refused: the shell reads `pinned` from the hit, starts no gesture,
   withholds the press and says why on stderr (a normal run draws no status
   line since 2026-10-10), and a resize gesture
-  over one is the gated `swipe_resize` of any window. There is no compositor
+  over one is a `swipe_resize` that is claimed and does nothing. There is no compositor
   title bar to drag. So of upstream's way to find a
   rule's numbers (pin, drag and resize into place, copy `position` and
   `size` from `msg state`) the drag and `position` work and the resize does
@@ -916,7 +922,7 @@ each against a control that shows what the unfiltered search would have
 taken; `send-to-output` with a widget and with a pinned window focused, and
 the `state_event` line afterwards; a move and a resize gesture begun over a
 widget, over a pinned window (the move drags it in screen space and raises
-and focuses it, the resize is the gated one) and over a canvas window, and a
+and focuses it, the resize is claimed and does nothing) and over a canvas window, and a
 move gesture whose slot is adopted as a widget; an open cycle and a coast ended by
 `toggle-pin-to-screen` and by `move-to-bookmark`, and both run from a hot
 corner;

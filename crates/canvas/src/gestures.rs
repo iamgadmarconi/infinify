@@ -355,6 +355,33 @@ impl Scene {
         Ok(rect)
     }
 
+    /// Commit a primary rectangle the gesture did not choose: the size a native
+    /// window granted for the one `resize_proposal` asked. Captured members
+    /// follow it exactly as they follow `resize_to`'s own rectangle, from their
+    /// positions at gesture start, so a window that stops at a limit stops its
+    /// members with it. The snap latches are the proposal's and are left alone.
+    /// Fails atomically like `resize_to`.
+    pub fn resize_settle(&mut self, gesture: &mut ResizeGesture, rect: Rect) -> Result<(), Error> {
+        if !rect.valid() {
+            return Err(Error::Invalid("resized window geometry"));
+        }
+        let mut next = gesture.clone();
+        let initial = next.primary.1;
+        let (shifts, bonds) = resolve(&next.members, initial, rect, next.options.gap, &next.bonds)?;
+        let mut updates = vec![(next.primary.0, rect)];
+        updates.extend(
+            next.members
+                .iter()
+                .zip(shifts)
+                .map(|(member, delta)| (member.id, member.initial.translated(delta))),
+        );
+        self.apply_gesture(&next.expected, &updates)?;
+        next.expected = updates;
+        next.bonds = bonds;
+        *gesture = next;
+        Ok(())
+    }
+
     /// Advance the single-window snap intent without changing committed geometry.
     /// Native callers must settle actual dimensions separately. This method
     /// computes the primary rectangle only; it does not propagate group members.

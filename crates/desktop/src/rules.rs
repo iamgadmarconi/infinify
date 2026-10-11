@@ -97,7 +97,6 @@ fn rule_json(rule: &AppliedWindowRule, sized: bool, fullscreened: bool) -> Value
     let not_applied: Vec<&str> = [
         (rule.size.is_some() && !sized, "size"),
         (rule.fullscreen.is_some() && !fullscreened, "fullscreen"),
-        (rule.preserve_aspect_ratio, "preserve_aspect_ratio"),
         (rule.layer_order.is_some(), "layer_order"),
     ]
     .into_iter()
@@ -150,6 +149,14 @@ impl Controller {
     /// Upstream is_widget: the rule the window mapped with says so.
     pub(crate) fn is_widget(&self, window: WindowId) -> bool {
         self.policy.applied.get(&window).is_some_and(|r| r.widget)
+    }
+    /// Upstream's `preserve_aspect_ratio`: the window's interactive resizes
+    /// keep the width / height it has when one begins (resize_transaction.rs).
+    pub(crate) fn keeps_ratio(&self, window: WindowId) -> bool {
+        self.policy
+            .applied
+            .get(&window)
+            .is_some_and(|r| r.preserve_aspect_ratio)
     }
     pub(crate) fn is_pinned(&self, window: WindowId) -> bool {
         self.policy.pins.contains_key(&window)

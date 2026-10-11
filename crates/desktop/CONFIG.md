@@ -161,9 +161,9 @@ code, and then unused, because the feature it configures does not exist here:
 - `[backend]`; `[output]` other than `[output.outline]`
 - `[[outputs]] scale`, `transform`, `position` and `mode`: macOS arranges the
   displays, see [Outputs](#outputs)
-- of `[[window_rules]]`, `preserve_aspect_ratio` and `layer_order`, which are
+- of `[[window_rules]]`, `layer_order`, which is
   recorded with the window and named in its `rule.not_applied`. `size` and
-  `fullscreen` join them without the capability. With it `size` is named only
+  `fullscreen` join it without the capability. With it `size` is named only
   for a window that was not asked (one that took over a saved slot, one whose
   application accepts no size, one the user sized first) or that is still
   waiting its turn, and `fullscreen` only for a window it could not be applied
@@ -174,7 +174,9 @@ code, and then unused, because the feature it configures does not exist here:
   `pass_mouse` are applied ([RULES.md](RULES.md#pass-rules))
 - `[touch.*]` and its thresholds: upstream's touchscreen gestures, see
   [GESTURES.md](GESTURES.md#why-this-path-and-not-the-touch-recogniser)
-- `[mouse] resize_on_border`, `decoration_resize_snapped`, `decoration_fit_snapped`
+- `[mouse] decoration_fit_snapped` (`resize_on_border` and
+  `decoration_resize_snapped` are applied: the `resize_border` command,
+  [POINTER.md](POINTER.md#the-resize-border))
 
 ## macOS modifiers
 

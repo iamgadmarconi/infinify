@@ -597,8 +597,10 @@ device-specific behavior also need the corresponding hardware.
   every default launch, and is asked of a new window only behind
   `--experimental-native-resize` (the window sizing milestone below);
   `fullscreen` is recorded and not applied;
-  `preserve_aspect_ratio` is recorded with no effect, and so is
-  `layer_order`, which upstream itself ignores for a regular window
+  `preserve_aspect_ratio` was recorded with no effect at that commit (since
+  2026-10-11 a pointer or gesture resize keeps it, see the counts below), and
+  `layer_order` is recorded with no effect, which upstream itself ignores for
+  a regular window
   (`decoration` and the border, corner and shadow fields are drawn, see the
   rendering milestone below, `blur` is frosted, see the effects milestone
   below, and `pass_keys` and `pass_mouse` act, see the pass-through
@@ -1318,8 +1320,9 @@ device-specific behavior also need the corresponding hardware.
   null>}`, `begin_native_resize` carries the request as the one entry of
   `effects` beside its transaction's `effect`, and the shell hands either to
   the navigation coordinator like a click's; a resize press that can begin
-  nothing (the gate off, a pinned window, a begin the resize path or the
-  controller turns away) is raised and focused by the existing `focus`
+  nothing (the gate off, which was so at that commit and is no more since a
+  resize press begins a resize in every normal run; a pinned window; a begin
+  the resize path or the controller turns away) is raised and focused by the existing `focus`
   command. A widget keeps its refusal. (2) IPC `Resize`
   raises its window as upstream's `cmd_resize` does and hands it no focus;
   a request identical to the one last asked raises nothing, as upstream's
@@ -2058,28 +2061,51 @@ stays `missing` and stays counted as a gap for the panel and overlay policy it
 still lacks; its other clause, a reserved area, is not one: by the owner's
 decision of 2026-10-10 nothing is reserved for the menu bar and the Dock.
 On 2026-10-11 sizing and fullscreen began to run in every normal run, which
-moved 27 rows out of the gated group to `implemented_unverified`; the table is
-counted from the file as it stands after that.
+moved 27 rows out of the gated group to `implemented_unverified`. Later that
+day resizing by pointer began to run in every normal run too, which moved 13
+more: the 2 that were gated (2 − 2 = 0), 1 that was counted as provided by
+macOS (68 − 1 = 67) and 10 of the real gaps (21 − 10 = 11), so
+427 + 13 = 440 and 158 − 13 = 145 = 0 + 67 + 67 + 11. The table is counted
+from the file as it stands after that.
 
 | Rows | Count |
 | --- | --- |
-| `implemented_unverified` | 427 |
-| `missing` | 158 |
-| of which gated behind `--experimental-native-resize` | 2 |
-| of which provided or owned by macOS | 68 |
+| `implemented_unverified` | 440 |
+| `missing` | 145 |
+| of which gated behind `--experimental-native-resize` | 0 |
+| of which provided or owned by macOS | 67 |
 | of which with no Mac counterpart | 67 |
-| of which real gaps | 21 |
+| of which real gaps | 11 |
 | `out_of_scope` | 3 |
 | all rows | 588 |
 
 The `missing` rows, by group:
 
-- **Gated behind `--experimental-native-resize` (2).** Resize by pointer:
-  `MouseAction.ResizeWindow` and its default binding
-  `config.mouse.on-window.alt+right`. The drag maps the pointer through a
-  window's acknowledged picture, and on the owner's real windows no picture
-  was ever acknowledged. What unblocks these rows is a pointer resize that
-  does not depend on a capture.
+- **Gated behind `--experimental-native-resize` (0).** Nothing is gated any
+  more. The flag still exists and enables the orange edge handles of the
+  capture-acknowledged path, which is legacy.
+- **Resize by pointer in every normal run (13 rows moved on 2026-10-11).**
+  `MouseAction.ResizeWindow` and `ResizeWindowSnapped` with their default
+  bindings `config.mouse.on-window.alt+right` and `alt+shift+right`;
+  `ContinuousAction.ResizeWindow` and `ResizeWindowSnapped` with
+  `config.gestures.on-window.alt+3-finger-swipe` and
+  `alt+shift+3-finger-swipe`; `field.WindowRule.preserve_aspect_ratio`; and
+  `resize_on_border` and `decoration_resize_snapped`, each with its field row
+  and its reference row. A bound press, and a left press on the resize border,
+  start upstream's resize grab as a size transaction in readback mode: each
+  size is asked of the real window and the canvas shows the size it took
+  (`crates/desktop/NATIVE_RESIZE.md`, "Pointer resize"). The pointer rows, the
+  border and the ratio were run end to end on disposable fixture windows by
+  `tests/e2e/scoped-resize-drag.sh` (`native/desktop/README.md`, "What has
+  been run for the pointer resize"). The four gesture rows were run at the
+  controller only (`crates/desktop/tests/gesture_flow.rs`): no gesture can be
+  made through the shell by a test, and what the shell does with the size
+  requests a gesture reply carries was shown by the pointer drag. What keeps
+  all 13 unverified: every press and drag was synthesized through the canvas
+  view's own handlers, none was made by a person or delivered by the window
+  server, no application of the owner's was resized, nothing was seen with a
+  picture, and there was one display. Where a Mac window cannot follow
+  upstream's client is in each row's note.
 - **Sizing and fullscreen in every normal run (27 rows moved on 2026-10-11).**
   `grow-window`, `shrink-window`, `fit-window`, `fit-window-snapped`,
   `fill-window`, `toggle-fullscreen` and fullscreen itself, a rule's `size`
@@ -2104,8 +2130,7 @@ The `missing` rows, by group:
   and mode, and output management); display power, gamma, idle and the lock
   screen; screencast sources and streams; synthetic keys; the trackpad, mouse
   and tablet device settings; the keyboard layouts and Caps Lock; the pointer
-  size; resize at a window's own border; the volume, brightness, media and
-  Print keys.
+  size; the volume, brightness, media and Print keys.
 - **No Mac counterpart (67).** Scope decision pending with the owner; the notes
   recommend out of scope. Families: everything touchscreen (the `[touch]`
   tables and thresholds, the touch-only triggers, `[input.touch]` and the two
@@ -2113,15 +2138,11 @@ The `missing` rows, by group:
   opacity on inactive outputs; Num Lock and the XKB keyboard model; the primary
   selection; shortcut inhibition by a client; the media stop key; the reference
   config's tablet `map_to_output`.
-- **Real gaps (21).** Nothing but the work is waited for here:
-  - a resize carried to the snapped neighbours, by pointer
-    (`resize_window_snapped`) or from a window's own edge or zoom button
-    (`decoration_resize_snapped`, `decoration_fit_snapped`): the controller
-    refuses a group resize even with the flag (6);
-  - resize by trackpad gesture, alone or snapped: the swipe is claimed and
-    does nothing (4);
-  - `mouse.resize_on_border` and a rule's `preserve_aspect_ratio`: read and
-    never applied (2);
+- **Real gaps (11).** Nothing but the work is waited for here:
+  - a fit carried to the snapped neighbours from a window's own zoom button
+    (`decoration_fit_snapped`, its field row and its reference row): read and
+    never applied (2, what is left of the 6 once
+    `resize_window_snapped` and `decoration_resize_snapped` moved);
   - drag-and-drop between windows on the canvas (2);
   - pointer lock, confinement and relative motion for the application under
     the pointer (2);
@@ -2133,10 +2154,10 @@ The `missing` rows, by group:
     no Mac substitute (2);
   - the acceptance pass itself, on the M5 and macOS 26 target (1).
 
-Two keys sit in two groups because their two rows were judged apart, and want
-one answer from the owner: `resize_on_border` (its field row with macOS, its
-reference row a gap) and the tablet's `map_to_output` (its field rows with
-macOS, its reference row with no Mac counterpart).
+One key sits in two groups because its rows were judged apart, and wants one
+answer from the owner: the tablet's `map_to_output` (its field rows with
+macOS, its reference row with no Mac counterpart). `resize_on_border` was the
+other until both of its rows moved.
 
 Two more gaps have no row of their own. They are recorded in the
 [pointer contract](../../crates/desktop/POINTER.md#differences-from-upstream),

@@ -114,6 +114,7 @@ NSArray<NSDictionary *> *DWResizeHandles(CGRect full,CGRect clip){
 - (void)reap {
     if(self.acknowledges||self.pending.count||[self canRemove:nil]){self.orphan=nil;return;}
     id t=self.command(@{@"op":@"snapshot"})[@"native_resize"],e=[t isKindOfClass:NSDictionary.class]?t[@"pending_effect"]:nil;id mark=[e isKindOfClass:NSDictionary.class]?e:t;
+    if(![e isKindOfClass:NSDictionary.class]&&[t isKindOfClass:NSDictionary.class]&&self.held&&self.held(t[@"transaction"])){self.orphan=nil;return;}
     if(![self.orphan isEqual:mark]){self.orphan=mark;return;}
     self.orphan=nil;
     if([e isKindOfClass:NSDictionary.class]){[self.seen addObject:e[@"effect_id"]];self.pending[e[@"effect_id"]]=e;[self finish:e result:[self unanswered:e]];}
@@ -121,7 +122,9 @@ NSArray<NSDictionary *> *DWResizeHandles(CGRect full,CGRect clip){
 }
 - (NSDictionary *)request:(NSDictionary *)c {
     if(!self.enabled||self.stopping)return nil;
-    if([c[@"op"]isEqual:@"begin_native_resize"]){NSDictionary *s=[self source:c[@"window"]];NSDictionary *extent=s?[self.driver rootExtent:s[@"identity"]]:nil;
+    // The acknowledged mode maps a pointer through the window's picture, so the window must be alone in its native family and exactly where
+    // it was observed. Readback mode asks the window itself and reads its answer: the baseline read is the check, as for a sizing action.
+    if(self.acknowledges&&[c[@"op"]isEqual:@"begin_native_resize"]){NSDictionary *s=[self source:c[@"window"]];NSDictionary *extent=s?[self.driver rootExtent:s[@"identity"]]:nil;
         if(!extent||!CGRectEqualToRect(rjson(extent),rjson(s[@"observed_rect"])))return nil;
     }
     NSDictionary *reply=self.command(c);[self consume:reply];return reply;
