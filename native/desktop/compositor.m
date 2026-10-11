@@ -672,14 +672,18 @@ typedef NS_ENUM(NSUInteger, IFCPipe) {
 }
 
 - (void)finished {
-    NSMutableArray *released = nil;
+    __attribute__((objc_precise_lifetime)) NSArray *released = nil;
     os_unfair_lock_lock(&_lock);
     _completed++;
-    while (_dead.count && _deadline[0].unsignedLongLongValue <= _completed) {
-        if (!released) released = [NSMutableArray array];
-        [released addObject:_dead[0]];
-        [_dead removeObjectAtIndex:0];
-        [_deadline removeObjectAtIndex:0];
+    NSUInteger count = 0;
+    while (count < _dead.count && _deadline[count].unsignedLongLongValue <= _completed) count++;
+    if (count) {
+        // Deadlines are appended in order. Remove the completed prefix once,
+        // rather than shifting both arrays for every retired window texture.
+        NSRange range = NSMakeRange(0, count);
+        released = [_dead subarrayWithRange:range];
+        [_dead removeObjectsInRange:range];
+        [_deadline removeObjectsInRange:range];
     }
     os_unfair_lock_unlock(&_lock);
     released = nil;  // dropped outside the lock
@@ -2435,12 +2439,18 @@ static NSString *IFCPassName(IFCompositorPass pass) {
         _boundScissor = scissor;
     }
     if (texture) [_encoder setFragmentTexture:texture atIndex:0];
+    BOOL fragmentUniformsBound = NO;
     for (int i = 0; i < partCount; i++) {
         IFCRectI part = parts[i];
         if (part.w <= 0 || part.h <= 0 || !IFCRectIIntersect(part, scissor, NULL)) continue;
         u->quad = simd_make_float4((float)part.x, (float)part.y, (float)part.w, (float)part.h);
         [_encoder setVertexBytes:u length:sizeof *u atIndex:0];
-        [_encoder setFragmentBytes:u length:sizeof *u atIndex:0];
+        // Only the vertex shader reads quad. A split shadow/border changes
+        // that rectangle per strip, but every strip shares its fragment data.
+        if (!fragmentUniformsBound) {
+            [_encoder setFragmentBytes:u length:sizeof *u atIndex:0];
+            fragmentUniformsBound = YES;
+        }
         [_encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
         _drawsSubmitted++;
     }
@@ -3897,7 +3907,7 @@ static int IFCCompareInterval(const void *a,const void *b) {double x=*(const dou
     os_unfair_lock _lock;
     CGSize _size;
     uint64_t _generation;
-    BOOL _transaction,_working,_cancelled;
+    BOOL _transaction,_working,_cancelled,_notificationPending;
     NSUInteger _acquisitions,_timeouts;
     double _acquireSeconds,_acquireWorst,_acquireQueueWorst,_publishWorst,_notificationWorst;
 }
@@ -3918,6 +3928,7 @@ static int IFCCompareInterval(const void *a,const void *b) {double x=*(const dou
     // retired CALayer's final release cannot occur on the worker queue.
     __block IFCompositorLayer *held=layer;
     dispatch_async(_queue,^{@autoreleasepool{
+        BOOL needsDemand=NO;
         // Replenish the bounded ready set without waiting for main to turn its
         // notification queue. A busy idle reconciliation must not delay the
         // next acquisition after the worker has already published one drawable.
@@ -3932,18 +3943,29 @@ static int IFCCompareInterval(const void *a,const void *b) {double x=*(const dou
             os_unfair_lock_lock(&self->_lock);
             BOOL valid=!self->_cancelled&&generation==self->_generation&&drawable&&drawable.texture.width==(NSUInteger)wanted.width&&drawable.texture.height==(NSUInteger)wanted.height;
             if(valid)[self->_ready addObject:drawable];
+            BOOL notify=valid&&!self->_notificationPending;
+            if(notify)self->_notificationPending=YES;
             if(measured){double wait=acquired-began;self->_acquisitions++;self->_timeouts+=!drawable;self->_acquireSeconds+=wait;self->_acquireWorst=fmax(self->_acquireWorst,wait);if(!attempt)self->_acquireQueueWorst=fmax(self->_acquireQueueWorst,began-queued);self->_publishWorst=fmax(self->_publishWorst,CACurrentMediaTime()-acquired);}
             os_unfair_lock_unlock(&self->_lock);
-            if(!valid)break;
-            dispatch_async(dispatch_get_main_queue(),^{
-                os_unfair_lock_lock(&self->_lock);BOOL available=!self->_cancelled&&self->_ready.count;
+            if(!valid){needsDemand=YES;break;}
+            if(notify)dispatch_async(dispatch_get_main_queue(),^{
+                os_unfair_lock_lock(&self->_lock);self->_notificationPending=NO;BOOL available=!self->_cancelled&&self->_ready.count;
                 if(measured)self->_notificationWorst=fmax(self->_notificationWorst,CACurrentMediaTime()-acquired);os_unfair_lock_unlock(&self->_lock);
                 IFCompositorLayer *current=self->_layer;
                 if(available&&current.drawableReady)current.drawableReady();
             });
         }}
         os_unfair_lock_lock(&self->_lock);self->_working=NO;os_unfair_lock_unlock(&self->_lock);
-        dispatch_async(dispatch_get_main_queue(),^{held=nil;[self fill:self->_layer];});
+        dispatch_async(dispatch_get_main_queue(),^{
+            held=nil;IFCompositorLayer *current=self->_layer;
+            if(needsDemand){
+                // A covered/asleep layer can return nil; a resized layer can
+                // return an old size. Ask the owner to retry only if a scene
+                // is still owed, rather than acquiring forever after the
+                // frame driver stops or retrying an invalid size in a loop.
+                if(current.drawableReady)current.drawableReady();
+            }else [self fill:current];
+        });
     }});
 }
 - (id<CAMetalDrawable>)takeFrom:(IFCompositorLayer *)layer {

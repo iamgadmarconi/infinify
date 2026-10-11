@@ -16,6 +16,17 @@
 // [80,937,320,232] untouched, at half size and parked). NO when the window server
 // does not answer for that window. Any thread.
 bool DWNativeBounds(uint32_t wid,CGRect *out);
+// Desired rectangular display clipping in a member's own local coordinates.
+// Pure geometry: native and rootNative are untransformed bounds; rootScreen is
+// the canvas placement in global top-left points. The viewport is that output's
+// screen_bounds, not the root's clip_rect (a popup may extend beyond its root).
+// This does not read or replace the native window's original shape, shadow or
+// event region, and is not evidence that WindowServer can enforce the clip.
+typedef struct {
+    CGRect screen,visible,local;
+    bool required;
+} DWNativeClipGeometry;
+bool DWNativeClipPlacement(CGRect native,CGRect rootNative,CGRect rootScreen,CGRect viewport,DWNativeClipGeometry *out);
 // Main thread only, but for the library's two callbacks and the watchdog, which touch
 // only what is said of them in the implementation.
 @interface DWNativePresenter : NSObject
@@ -67,6 +78,12 @@ bool DWNativeBounds(uint32_t wid,CGRect *out);
 // Hands the described frame to the library's writer thread if it differs from the
 // last one handed over, or a window's own frame changed since. Never waits.
 - (void)submit;
+// Main-thread, read-only desired clip plan from the last -describe. Every entry
+// is tied to a still-bound full native identity, including family children.
+// Native clipping is unsupported until the helper can snapshot, persist, apply,
+// read back and restore the exact original shape/event/shadow regions. A plan
+// is not a clipping acknowledgement, and never changes placement or authority.
+- (NSArray<NSDictionary *> *)clippingPlan;
 // Quit: every window put back, confirmed, within two seconds per helper; then each session is
 // closed, which makes the helper restore whatever it still holds. One stderr line
 // unless every window was restored or was gone.

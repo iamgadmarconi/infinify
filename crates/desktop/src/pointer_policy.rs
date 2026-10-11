@@ -20,9 +20,11 @@
 // exist here, so the whole frame is the target. Upstream's resize margin does:
 // `resize_border` is src/input/mod.rs's decoration_hit_for and
 // resize_margin_hit_for with src/decorations.rs's resize_edge_at, the band of
-// DecorationConfig::RESIZE_BORDER_WIDTH canvas units strictly outside a
-// window's frame, which a native window's frame already includes its title
-// bar in. It is asked only for a press: upstream also counts the band as the
+// DecorationConfig::RESIZE_BORDER_WIDTH canvas units outside a window's frame,
+// extended five screen points inside the edge on macOS: the captured frame
+// already includes the native resize edge and title bar. Forwarding that edge
+// to an application through a scaled capture does not start a compositor grab.
+// It is asked for a press and its cursor: upstream also counts the band as the
 // window for the binding context and for occlusion with `resize_on_border`
 // off, which is not adapted (a point of the band is canvas to `hit`). Only
 // world rectangles, pins, output poses and the configuration are read, never
@@ -86,8 +88,9 @@ impl Controller {
     /// Upstream decoration_hit_for's ResizeBorder: the window whose resize
     /// band holds this screen point of `output`, the edge it resizes, and
     /// whether a press there carries the cluster (`decoration_resize_snapped`;
-    /// an edge drag has no modifier to say so). A point over any window's
-    /// frame is that window's and no band, a lower window's frame included:
+    /// an edge drag has no modifier to say so). The visible native frame has
+    /// an inner band of five screen points too. A point over a window's
+    /// frame can resize only that window, a lower window's frame included:
     /// upstream's topmost band wins over what lies beneath it, which is not
     /// adapted (POINTER.md). Among bands the walk is upstream's z-order walk:
     /// the topmost canvas window whose band holds the point ends it. A widget
@@ -105,10 +108,10 @@ impl Controller {
             || self.pick_mode(output)
             || self.fullscreen_on(output).is_some()
             || !viewport.screen_bounds.contains(screen)
-            || self.hit_window(output, screen).is_some()
         {
             return Value::Null;
         }
+        let under = self.hit_window(output, screen).map(|(window, _)| window);
         let at = viewport.screen_to_world(screen);
         let reach = |rect: Rect| {
             at.x >= rect.origin.x - band
@@ -122,7 +125,7 @@ impl Controller {
             .iter()
             .rev()
             .filter(|w| self.on_canvas(w.id))
-            .find(|w| reach(w.world_rect))
+            .find(|w| under.map_or_else(|| reach(w.world_rect), |id| w.id == id))
         else {
             return Value::Null;
         };
@@ -130,9 +133,18 @@ impl Controller {
             return Value::Null;
         }
         let rect = window.world_rect;
-        // resize_edge_at, for a point already known to be outside the frame.
-        let (left, right) = (at.x < rect.origin.x, at.x >= rect.right());
-        let (top, bottom) = (at.y < rect.origin.y, at.y >= rect.bottom());
+        // Preserve an interior even for a very small projected window. Native
+        // edge thickness is a screen distance, independent of canvas zoom.
+        let inner_x = (5.0 / viewport.zoom).min(rect.size.width / 4.0);
+        let inner_y = (5.0 / viewport.zoom).min(rect.size.height / 4.0);
+        let (left, right) = (
+            at.x < rect.origin.x + inner_x,
+            at.x >= rect.right() - inner_x,
+        );
+        let (top, bottom) = (
+            at.y < rect.origin.y + inner_y,
+            at.y >= rect.bottom() - inner_y,
+        );
         let edges = match (left, right, top, bottom) {
             (true, _, true, _) => Edges::TopLeft,
             (_, true, true, _) => Edges::TopRight,
@@ -283,7 +295,7 @@ impl Controller {
         screen: Point,
         time_ms: Option<u32>,
     ) -> Result<Value, Error> {
-        self.hover_with_target(output, screen, time_ms, None)
+        self.hover_with_target(output, screen, time_ms, None, false)
     }
     pub(crate) fn hover_with_target(
         &mut self,
@@ -291,6 +303,7 @@ impl Controller {
         screen: Point,
         time_ms: Option<u32>,
         bound: Option<WindowId>,
+        forward_bound: bool,
     ) -> Result<Value, Error> {
         if !point_valid(screen) {
             return Err(Error::Invalid("invalid screen point"));
@@ -302,10 +315,18 @@ impl Controller {
         if bound.is_some() && !viewport.screen_bounds.contains(screen) {
             return Err(Error::Invalid("native hover is outside its output"));
         }
-        // Native floating panels retain the application's keyboard focus and
-        // stacking. A canvas tile beneath one is never a fallback hover target.
+        let grabbed = self.pointer_grabbed(time_ms);
+        // Native floating panels retain application focus and stacking. A
+        // captured panel still needs pointer motion after native hit validation.
         if bound.is_some_and(|window| self.is_pinned(window) || self.is_widget(window)) {
-            return Ok(json!({"dirty":false,"pick":false,"hit":null,"forward":false}));
+            let hit = if forward_bound {
+                json!({"window":bound})
+            } else {
+                Value::Null
+            };
+            return Ok(
+                json!({"dirty":false,"pick":false,"hit":hit,"forward":forward_bound && !grabbed}),
+            );
         }
         let under = bound.or_else(|| self.hit_window(output, screen).map(|(window, _)| window));
         let pick = self.pick_target(output, under);
@@ -316,8 +337,7 @@ impl Controller {
             },
             |window| json!({"window":window}),
         );
-        let grabbed = self.pointer_grabbed(time_ms);
-        let forward = bound.is_none() && !hit.is_null() && !pick && !grabbed;
+        let forward = (bound.is_none() || forward_bound) && !hit.is_null() && !pick && !grabbed;
         let mut reply = json!({"dirty":false,"pick":pick,"hit":hit,"forward":forward});
         let follows = self.config().focus_follows_mouse
             && !grabbed

@@ -41,19 +41,33 @@ static NSDictionary *ownedCGWindow(uint32_t wid,pid_t pid,NSArray *enrolledBirth
     NSDictionary *info=cg(wid);return [info[(id)kCGWindowOwnerPID]intValue]==pid?info:nil;
 }
 
-static NSDictionary *queryOwnedParent(uint32_t wid,pid_t pid,NSArray *enrolledBirth) {
-    if(!loadFamilyAPI()||!ownedCGWindow(wid,pid,enrolledBirth))return @{@"valid":@NO,@"error":@"Private ABI unavailable or source identity invalid"};
+typedef struct {
+    uint32_t actual,parent;
+    int count;
+    BOOL present,exact;
+} FamilyParentQuery;
+
+// Only the iterator read is shared here. Callers must load the ABI and bracket
+// this read with fresh process-instance/window ownership checks.
+static FamilyParentQuery readFamilyParent(uint32_t wid) {
     CFArrayRef ids=(__bridge CFArrayRef)@[@(wid)];
     CFTypeRef query=familyAPI.query(familyAPI.mainConnection(),ids,1);
-    if(!query)return @{@"valid":@NO,@"error":@"WindowServer query returned no result"};
+    if(!query)return (FamilyParentQuery){0};
     CFTypeRef iterator=familyAPI.copyWindows(query);
     int count=iterator?familyAPI.count(iterator):0;BOOL advanced=iterator&&count==1&&familyAPI.advance(iterator);
     uint32_t actual=advanced?familyAPI.window(iterator):0,parent=advanced?familyAPI.parent(iterator):0;
     BOOL extra=advanced&&familyAPI.advance(iterator);
     if(iterator)CFRelease(iterator);CFRelease(query);
-    BOOL valid=advanced&&!extra&&actual==wid&&ownedCGWindow(wid,pid,enrolledBirth)!=nil;
-    if(parent&&!ownedCGWindow(parent,pid,enrolledBirth))valid=NO;
-    return @{@"valid":@(valid),@"id":@(wid),@"iterator_id":@(actual),@"parent_id":@(parent),@"iterator_count":@(count),
+    return (FamilyParentQuery){.actual=actual,.parent=parent,.count=count,.present=YES,.exact=advanced&&!extra&&actual==wid};
+}
+
+static NSDictionary *queryOwnedParent(uint32_t wid,pid_t pid,NSArray *enrolledBirth) {
+    if(!loadFamilyAPI()||!ownedCGWindow(wid,pid,enrolledBirth))return @{@"valid":@NO,@"error":@"Private ABI unavailable or source identity invalid"};
+    FamilyParentQuery query=readFamilyParent(wid);
+    if(!query.present)return @{@"valid":@NO,@"error":@"WindowServer query returned no result"};
+    BOOL valid=query.exact&&ownedCGWindow(wid,pid,enrolledBirth)!=nil;
+    if(query.parent&&!ownedCGWindow(query.parent,pid,enrolledBirth))valid=NO;
+    return @{@"valid":@(valid),@"id":@(wid),@"iterator_id":@(query.actual),@"parent_id":@(query.parent),@"iterator_count":@(query.count),
         @"error":valid?@"":@"Ambiguous iterator result or ownership changed"};
 }
 

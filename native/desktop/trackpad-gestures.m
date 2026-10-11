@@ -79,7 +79,38 @@
 //   A touch the system cancels, or one a frame no longer reports, ends the gesture
 //   cancelled; so does -cancel:. The fingers still down start over.
 #import "trackpad-gestures.h"
+#import <AppKit/AppKit.h>
 #include <math.h>
+
+@implementation DWTrackpadTouchFrame
++ (instancetype)frameWithEvent:(NSEvent *)event device:(id)device {
+    // Public contract: NSEvent.h documents allTouches as valid only for
+    // NSEventTypeGesture. The session-tap conversion is also used by Hammerspoon
+    // 23e387e2805a9890066366e0ac96c71b27f0cfd5, eventtap/getTouches, and Scroll
+    // Reverser c24319548e390f53ced3b95926b84df099145935, MouseTap.m. No code is
+    // copied from either project. High-level gesture touches are not consulted:
+    // https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/EventOverview/HandlingTouchEvents/HandlingTouchEvents.html
+    if(event.type!=NSEventTypeGesture||!isfinite(event.timestamp)||event.timestamp<0)return nil;
+    NSArray<NSTouch *> *all=event.allTouches.allObjects;id selected=device;BOOL found=NO;
+    for(NSTouch *touch in all)if(touch.type==NSTouchTypeIndirect){
+        if(!touch.device)return nil;
+        if(!selected)selected=touch.device;
+        if([selected isEqual:touch.device])found=YES;
+        else if(!device)return nil;
+    }
+    if(!found)return nil;
+    NSMutableArray *points=[NSMutableArray array];NSUInteger fingers=0;
+    for(NSTouch *touch in all){
+        if(touch.type!=NSTouchTypeIndirect||touch.resting||![selected isEqual:touch.device])continue;
+        NSPoint point=touch.normalizedPosition;NSSize pad=touch.deviceSize;NSTouchPhase phase=touch.phase;
+        if(!touch.identity||!isfinite(point.x)||!isfinite(point.y)||!isfinite(pad.width)||!isfinite(pad.height)||pad.width<=0||pad.height<=0||!(phase&NSTouchPhaseAny))return nil;
+        DWTouchPhase translated=phase&NSTouchPhaseCancelled?DWTouchCancelled:phase&NSTouchPhaseEnded?DWTouchEnded:phase&NSTouchPhaseBegan?DWTouchBegan:DWTouchMoved;
+        [points addObject:@{@"identity":touch.identity,@"x":@(point.x*pad.width*25.4/72),@"y":@((1-point.y)*pad.height*25.4/72),@"phase":@(translated)}];
+        if(phase&NSTouchPhaseTouching)fingers++;
+    }
+    DWTrackpadTouchFrame *frame=[self new];frame->_device=selected;frame->_touches=[points copy];frame->_fingers=fingers;frame->_time=event.timestamp;return frame;
+}
+@end
 
 static const double unitsPerMM=10.5,undecided=1,rowWidth=40,rowHeight=7,holdMove=1,tapMove=1.3;
 static const NSTimeInterval settleTime=.05,switchTime=.1,holdTime=.18,rowTime=.15,tapTime=.18,doubletapTime=.3;

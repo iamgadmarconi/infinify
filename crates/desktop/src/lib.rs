@@ -49,7 +49,7 @@ use rules::Policy;
 use settings::{CameraSeed, Settings};
 use sizes::Sizes;
 pub use view_actions::ViewDirection;
-use view_actions::{pixel_size, ViewReturn};
+use view_actions::{ViewReturn, pixel_size};
 pub use window_actions::ActivationCause;
 
 use driftwm_canvas::{
@@ -57,7 +57,7 @@ use driftwm_canvas::{
     Viewport, Window, WindowId,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -552,6 +552,10 @@ pub enum Command {
         screen: Point,
         #[serde(default, deserialize_with = "motion::time_ms")]
         time_ms: Option<u32>,
+        /// A captured view needs motion delivery after policy accepts it.
+        /// The adapter still validates the exact native recipient at posting.
+        #[serde(default)]
+        forward_motion: bool,
     },
     /// A left click in pick mode, released without a drag.
     Pick {
@@ -868,6 +872,22 @@ impl Controller {
         if request.version != VERSION {
             return Err(Error::Invalid("unsupported desktop schema"));
         }
+        // Construction and successful mutations leave state settled. These
+        // queries borrow it directly, without cloning or changing the state
+        // that the native caller may already have decoded from a snapshot.
+        match &request.command {
+            Command::Snapshot {} => return self.pointer_snapshot(),
+            Command::Hit { output, screen } => return self.pointer_hit(*output, *screen, None),
+            Command::Input {
+                output,
+                screen,
+                identity,
+            } => return self.pointer_hit(*output, *screen, Some(identity)),
+            Command::ResizeBorder { output, screen } => {
+                return Ok(json!({"border":self.resize_border(*output, *screen)}));
+            }
+            _ => {}
+        }
         let mut next = self.clone();
         let carries = fullscreen::carries(&request.command);
         let mut result = next.apply(request.command)?;
@@ -876,15 +896,22 @@ impl Controller {
         if carries {
             next.carry_owed(&mut result);
         }
-        next.settle_fullscreen()?;
-        next.settle_policy()?;
-        next.scene.validate()?;
-        next.refresh_active_bookmarks();
-        next.lifecycle
-            .prune(&next.scene, &next.sources, next.navigation_clock);
-        next.prune_sizes();
+        next.settle_state()?;
         *self = next;
         Ok(result)
+    }
+    fn settle_state(&mut self) -> Result<(), Error> {
+        // Fullscreen restoration reads close marks. Prune them first so an
+        // expired mark is settled by the mutation that advances the clock,
+        // without depending on a later snapshot to finish that transition.
+        self.lifecycle
+            .prune(&self.scene, &self.sources, self.navigation_clock);
+        self.settle_fullscreen()?;
+        self.settle_policy()?;
+        self.scene.validate()?;
+        self.refresh_active_bookmarks();
+        self.prune_sizes();
+        Ok(())
     }
     fn fresh(&self, id: WindowId, identity: &SourceIdentity) -> Result<&Source, Error> {
         identity.validate()?;
@@ -1160,9 +1187,16 @@ impl Controller {
                 output,
                 screen,
                 time_ms,
+                forward_motion,
             } => {
                 self.check_generation(window, &identity, generation)?;
-                return self.hover_with_target(output, screen, time_ms, Some(window));
+                return self.hover_with_target(
+                    output,
+                    screen,
+                    time_ms,
+                    Some(window),
+                    forward_motion,
+                );
             }
             Command::Pick { window, output } => return self.pick(window, output),
             Command::PointerNearest {
@@ -1450,7 +1484,7 @@ impl Controller {
                 delta,
             } => {
                 return self
-                    .relocate_source(window, &identity, generation, from_rect, to_rect, delta)
+                    .relocate_source(window, &identity, generation, from_rect, to_rect, delta);
             }
             Command::Observe {
                 window,

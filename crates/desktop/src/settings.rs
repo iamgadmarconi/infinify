@@ -14,7 +14,8 @@
 use super::bindings::{Platform, key_known};
 use super::*;
 use driftwm_core::config::{
-    Config, Modifiers, config_path, parse_action, parse_key_combo, parse_tap_combo,
+    BindingContext, Config, GestureBinding, Modifiers, config_path, parse_action,
+    parse_gesture_binding, parse_gesture_config_entry, parse_key_combo, parse_tap_combo,
 };
 use std::io::Read;
 
@@ -32,6 +33,10 @@ pub(crate) struct Settings {
     pub(crate) extra_keysyms: Vec<(u32, String)>,
     /// Every key combo the file's `[keybindings]` table binds or unbinds.
     written_keys: Vec<(Modifiers, u32)>,
+    written_gestures: Vec<(BindingContext, GestureBinding)>,
+    /// The macOS adapter must honor the same category switches as upstream.
+    pub(crate) default_keys_disabled: bool,
+    pub(crate) default_gestures_disabled: bool,
     /// Parsed from a file. False for the built-in defaults, whether no file was
     /// found or the launch file was refused.
     pub(crate) from_file: bool,
@@ -67,6 +72,11 @@ impl Settings {
             .iter()
             .any(|(written, key)| written == modifiers && *key == sym)
     }
+    pub(crate) fn wrote_gesture(&self, context: BindingContext, binding: &GestureBinding) -> bool {
+        self.written_gestures
+            .iter()
+            .any(|(written_context, written)| *written_context == context && written == binding)
+    }
     /// An accepted file's configuration, with what its `[keybindings]` table
     /// names: every key combo upstream's loader took the entry of (`none`, or
     /// an action that parses; an entry it warns about and drops leaves the
@@ -76,6 +86,46 @@ impl Settings {
     fn of_file(contents: &str, config: Config) -> Self {
         let (mut written_keys, mut extra_keysyms) = (Vec::new(), Vec::<(u32, String)>::new());
         let table = contents.parse::<toml::Table>().unwrap_or_default();
+        // Upstream accepts exactly keys/mouse/gestures/touch. Unknown categories
+        // (including "all") are warned and ignored by its config parser.
+        let disabled = table
+            .get("bindings")
+            .and_then(toml::Value::as_table)
+            .and_then(|bindings| bindings.get("disable_defaults"))
+            .and_then(toml::Value::as_array);
+        let disables = |category: &str| {
+            disabled.is_some_and(|categories| {
+                categories
+                    .iter()
+                    .any(|value| value.as_str() == Some(category))
+            })
+        };
+        let (default_keys_disabled, default_gestures_disabled) =
+            (disables("keys"), disables("gestures"));
+        let mut written_gestures = Vec::new();
+        if let Some(gestures) = table.get("gestures").and_then(toml::Value::as_table) {
+            for (name, context) in [
+                ("on-window", BindingContext::OnWindow),
+                ("on-canvas", BindingContext::OnCanvas),
+                ("anywhere", BindingContext::Anywhere),
+            ] {
+                for (name, action) in gestures
+                    .get(name)
+                    .and_then(toml::Value::as_table)
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Ok(binding) = parse_gesture_binding(name, config.mod_key)
+                        && action.as_str().is_some_and(|action| {
+                            action == "none"
+                                || parse_gesture_config_entry(&binding.trigger, action).is_ok()
+                        })
+                    {
+                        written_gestures.push((context, binding));
+                    }
+                }
+            }
+        }
         for (name, action) in table
             .get("keybindings")
             .and_then(toml::Value::as_table)
@@ -104,6 +154,9 @@ impl Settings {
             config,
             extra_keysyms,
             written_keys,
+            written_gestures,
+            default_keys_disabled,
+            default_gestures_disabled,
             from_file: true,
             refused: false,
         }

@@ -21,7 +21,8 @@ or documented defaults; the runtime defaults and dispatch code remain authoritat
 An inventory row is a coverage obligation, not an executable specification or a
 claim that every edge case has already been enumerated.
 
-Rows use `missing`, `implemented_unverified`, `verified`, or `blocked`.
+Rows use `missing`, `implemented_unverified`, `verified`, `blocked`, or
+`out_of_scope`.
 `implemented_unverified` includes partial implementations with known mismatches.
 Every required row must acquire an exact behavioral contract, a production-path
 test, saved evidence tied to its implementation revision, and independent review
@@ -38,11 +39,19 @@ does not turn its feature into a pass.
 On 2026-10-11 the owner chose the Mac's existing settings for behavior macOS
 already controls, including display modes, screen lock, volume, brightness and
 device settings. Infinify must respect those settings; implementing a second
-set of system controls is not part of the native port. The 67 host-owned rows
-remain visible and unverified because this decision supplies no runtime
-evidence. They no longer await a scope decision or duplicate implementation.
-Native capture/input suppression around the system lock and correct display
-reconciliation are still integration obligations.
+set of system controls is not part of the native port. In the subsequent
+67-question review and its follow-up, the owner confirmed **65 Use macOS**
+answers and excluded the **two tablet display-mapping** rows. Question 18
+(`protocol.image_copy_capture`) is resolved: use existing Mac display/window
+capture; no dedicated live Infinify canvas feed is required.
+The exact answers are recorded under `scope_decision.host_owned_review` in
+the inventory. The 65 delegated rows remain visible and unverified: no duplicate
+control is queued, but the decisions supply no runtime acceptance evidence.
+Native capture/input suppression around the system lock, safe restoration and
+correct display reconciliation remain integration obligations. Tablet pressure,
+tilt, proximity and tool-cursor forwarding remain required; only display mapping
+was excluded. The review does not authorize tests, fixture launches, Mac settings
+changes or experiments with other applications.
 
 The owner also excluded features without a macOS equivalent on 2026-10-11,
 including the Linux backend controls, XKB keyboard model, primary selection and
@@ -2040,14 +2049,32 @@ these capabilities.
 On 2026-10-11 the owner selected independent views per display. The native adapter
 now selects one stable real placement and renders other root placements from one
 shared live capture, with each display's camera and zoom. Scoped replica pointer
-delivery and canvas green-button actions are wired. Live popup/sheet replicas,
-native clipping at display boundaries, physical interaction, capture quality and
-presentation timing remain open. The source was compiled without running tests
-or launching fixtures; this does not change any row to verified.
+delivery and canvas green-button actions are wired. Separate popup/sheet streams,
+metadata crops, scoped member input and family closing/export are now implemented
+but unverified. Child-only replica placements also preserve visible popups when
+their root is outside a display viewport, without changing world geometry or
+native ownership. Hover uses the exact validated child and retains controller
+pick/grab policy; stale session or binding observations cannot restore family
+placements. Captured-view hover is now enabled in native mode while physical
+native motion is not reposted. Canvas pick, resize and mouse-grab cursor shapes
+are implemented with conditional application-local restoration; foreign replica
+cursor images remain unavailable. Captured root/child ordering now uses a
+coherent native rank cohort within controller-order and physical/pinned/closing
+barriers. Hit detection consumes the renderer's applied order, refusing stale
+descriptions; clicks delayed for focus retain their original binding and exact
+recipient, and are discarded on source/session cancellation. One-shot exports
+use their own revalidated stacking cohort with offscreen-family fallback and
+the same compositor order constraints. Cross-family closing order and
+physical-versus-replica stacking remain incomplete. Native clipping at display boundaries, physical interaction, capture
+quality and presentation timing remain open. Targeted Rust linting, a release
+library build and native compilation/linking passed without running tests or
+launching fixtures; this does not change any row to verified.
 
 Other unresolved authority gates are exclusive global gestures while an app owns
 keyboard focus, relative/confined input, native cross-app drag-and-drop, secure
-capture/input suppression around lock, and display mode/scale/rotation/power.
+capture/input suppression around lock, and reconciliation with macOS-owned
+display mode/scale/rotation/power. The owner's host-control decisions require
+coexistence with those display settings, not a second configuration interface.
 The available public APIs cover parts of these behaviors; missing public APIs
 are not by themselves proof that private implementations are impossible.
 
@@ -2094,44 +2121,57 @@ macOS (68 − 1 = 67) and 10 of the real gaps (21 − 10 = 11), so
 427 + 13 = 440 and 158 − 13 = 145 = 0 + 67 + 67 + 11. The owner later
 excluded the 67 features without a Mac equivalent, and native green-control
 dispatch implemented the two `decoration_fit_snapped` rows. The current counts
-are 442 implemented but unverified, 76 missing and 70 outside scope.
+after the 67-question review and native continuation are 444 implemented but
+unverified, 72 missing and 72 outside scope. The two newly excluded rows concern
+tablet display mapping; source tablet delivery and relative mouse-delta conversion
+moved their rows to partial `implemented_unverified`. No runtime status was promoted.
 
 | Rows | Count |
 | --- | --- |
-| `implemented_unverified` | 442 |
-| `missing` | 76 |
+| `implemented_unverified` | 444 |
+| `missing` | 72 |
 | of which gated behind `--experimental-native-resize` | 0 |
-| of which provided or owned by macOS | 67 |
+| of which delegated to macOS | 65 |
+| of which awaiting a scope decision | 0 |
 | of which with no Mac counterpart | 0 |
-| of which real gaps | 9 |
-| `out_of_scope` | 70 |
+| of which real gaps | 7 |
+| `out_of_scope` | 72 |
 | all rows | 588 |
 
 Current implementation priorities (2026-10-11, after the independent-display
 view decision):
 
-- Complete per-display popup/sheet replicas and native clipping at display
-  boundaries. Root replicas and scoped replica pointer routing are implemented
-  but unverified.
+- Complete native clipping at display boundaries and replica cursor-image
+  synchronization. Root/member replicas, scoped pointer/tablet routing and family
+  closing/export are implemented but unverified.
 - Complete Spaces gathering and native popup/modal ordering across applications;
   preserve the selected display-pin policy and application-owned panel focus.
 - Finish raw multi-finger gesture delivery over application windows and verify
   the physical magnify path. Normal-run sizing/fullscreen dispatch is implemented.
-- Implement drag-and-drop across captured views, confined/relative pointer input,
-  and tablet event forwarding. These are five missing rows because drag-and-drop
-  is represented by both `protocol.data_device` and `platform.dnd`.
+- Implement drag-and-drop across captured views and application-requested pointer
+  lock/confinement. Implicit mouse capture, relative delta conversion and tablet
+  payload forwarding are partially implemented; physical delivery
+  and replica cursor images remain open. Tablet display mapping is excluded.
+  These are three missing rows because drag-and-drop is
+  represented by both `protocol.data_device` and `platform.dnd`.
 - Complete panel/overlay compatibility (`protocol.layer_shell`) and the target
   platform acceptance pass (`platform.acceptance`). The two remaining brightness
   gesture examples name Linux commands; the owner uses macOS brightness controls,
   so these do not require a new Infinify brightness setting.
-- Reconcile and verify the 442 implemented-but-unverified rows, including native
+- Reconcile and verify the 444 implemented-but-unverified rows, including native
   family/input/geometry, configuration and IPC, renderer behavior, session restore
   and recovery. Some rows still contain known partial behavior; that status is
   not a claim that only testing remains. Stable 120 fps is also unproven.
+- Preserve existing Mac display/window capture for sharing and recording.
+  Question 18 is resolved: no dedicated Infinify canvas feed is queued. Internal
+  root-replica streams for independent per-display views remain required.
 
-The 67 host-owned missing rows are integration/acceptance accounting, not a
-request to duplicate Mac settings. No statuses were promoted in this refresh;
-no tests, fixture launches or application experiments were run.
+The 65 delegated missing rows remain integration/acceptance accounting, without
+duplicate Mac controls. All 67 questionnaire decisions are resolved; work remains
+on the implementation gaps above. Runtime acceptance stays deferred under the owner's current
+no-tests/no-launches instruction; the work order above is not authorization to
+resume it. No tests, fixture launches or application experiments were run for
+this scope update.
 
 The `missing` rows, by group:
 
@@ -2177,16 +2217,25 @@ The `missing` rows, by group:
   made by a person, a rule's `fullscreen` and a hot corner beside a fullscreen
   window ran in controller scenarios only, and nothing was seen with a
   picture.
-- **Provided or owned by macOS (67).** The owner chose the Mac's existing
-  settings on 2026-10-11. macOS does the job itself and the port has no code
-  for it, which is not an implementation or proof that Infinify preserves it.
-  No duplicate controls are queued for these rows; host integration still
-  needs acceptance evidence.
+- **Delegated to macOS (65).** The owner confirmed the Mac's existing controls
+  and services in the 67-question review and follow-up on 2026-10-11. Infinify must preserve
+  their behavior; the decisions do not establish successful integration.
+  No duplicate controls are queued; host integration still needs acceptance
+  evidence.
   Families: the display arrangement (`[[outputs]]` scale, transform, position
   and mode, and output management); display power, gamma, idle and the lock
-  screen; screencast sources and streams; synthetic keys; the trackpad, mouse
-  and tablet device settings; the keyboard layouts and Caps Lock; the pointer
+  screen; screencast source selection and native display/window capture;
+  synthetic keys; trackpad and mouse
+  settings; keyboard layouts and Caps Lock; the pointer
   size; the volume, brightness, media and Print keys.
+- **Live capture (included in the 65 delegated rows).** The owner resolved
+  question 18, `protocol.image_copy_capture`, with “Use existing Mac capture”.
+  A dedicated Infinify canvas feed is not required. The row remains `missing`
+  for host integration/acceptance accounting, without runtime evidence.
+- **Tablet display mapping (2 newly outside scope).** Questions 62 and 67,
+  `field.Config.tablet` and `field.TabletSettings.map_to_output`, are now
+  `out_of_scope` with `required: false`. The corresponding reference-config row
+  was already excluded. Pen-event forwarding remains a separate required gap.
 - **No Mac counterpart (67, now outside scope).** The owner excluded these
   on 2026-10-11. Families: everything touchscreen (the `[touch]`
   tables and thresholds, the touch-only triggers, `[input.touch]` and the two
@@ -2210,9 +2259,9 @@ The `missing` rows, by group:
     no Mac substitute (2);
   - the acceptance pass itself, on the M5 and macOS 26 target (1).
 
-The tablet's `map_to_output` was judged apart in the two groups. The owner now
-chooses the tablet driver's existing mapping, as for the other device settings;
-its Linux configuration spelling remains a separate compatibility question.
+The questionnaire resolves the earlier split treatment of tablet `map_to_output`:
+display mapping is excluded across both typed fields and the reference-config
+spelling. The existing Mac/driver feature stays available.
 
 Two more gaps have no row of their own. They are recorded in the
 [pointer contract](../../crates/desktop/POINTER.md#differences-from-upstream),

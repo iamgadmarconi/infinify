@@ -33,6 +33,7 @@ typedef NS_ENUM(NSInteger,DWPress) {
 @implementation DWPointerHover {
     __weak NSView<DWPointerHost> *_host;
     NSTrackingArea *_area;
+    NSTrackingArea *_cursorArea;
     NSEvent *_motion;      // the newest motion not yet sent
     NSTimer *_flush;       // the one pending hover, while no frame timer runs
     CFTimeInterval _sent;  // when the last hover went
@@ -43,8 +44,13 @@ typedef NS_ENUM(NSInteger,DWPress) {
 - (instancetype)initWithHost:(NSView<DWPointerHost> *)host {
     if((self=[super init])){
         _host=host;_forwarding=YES;
-        _area=[[NSTrackingArea alloc]initWithRect:NSZeroRect options:NSTrackingMouseMoved|NSTrackingActiveAlways|NSTrackingInVisibleRect owner:self userInfo:nil];
+        _area=[[NSTrackingArea alloc]initWithRect:NSZeroRect options:NSTrackingMouseMoved|NSTrackingMouseEnteredAndExited|NSTrackingActiveAlways|NSTrackingInVisibleRect|NSTrackingEnabledDuringMouseDrag owner:self userInfo:nil];
         [host addTrackingArea:_area];host.window.acceptsMouseMovedEvents=YES;
+        // AppKit suppresses cursorUpdate: for ActiveAlways, so cursor resets
+        // while our application is active use a separate tracking area.
+        // https://developer.apple.com/documentation/appkit/nstrackingarea/options-swift.struct/activealways
+        _cursorArea=[[NSTrackingArea alloc]initWithRect:NSZeroRect options:NSTrackingCursorUpdate|NSTrackingActiveInActiveApp|NSTrackingInVisibleRect owner:self userInfo:nil];
+        [host addTrackingArea:_cursorArea];
     }
     return self;
 }
@@ -62,6 +68,15 @@ typedef NS_ENUM(NSInteger,DWPress) {
     [NSRunLoop.mainRunLoop addTimer:_flush forMode:NSRunLoopCommonModes];
 }
 - (BOOL)pending { return _motion!=nil; }
+- (void)mouseEntered:(NSEvent *)event { [self cursorUpdate:event]; }
+- (void)mouseExited:(NSEvent *)event {
+    (void)event;[_flush invalidate];_flush=nil;_motion=nil;
+    [_host pointerCursor:CGPointZero output:nil reply:nil];
+}
+- (void)cursorUpdate:(NSEvent *)event {
+    (void)event;if(!_area)return;CGPoint point=CGPointZero;NSNumber *output=[_host pointerSample:&point];
+    [_host pointerCursor:point output:output reply:nil];
+}
 - (void)nativeMotion:(NSEvent *)event { [self mouseMoved:event]; }
 // This object's own timer. A frame timer that started while it waited has the motion from here on.
 - (void)flush {
@@ -74,10 +89,12 @@ typedef NS_ENUM(NSInteger,DWPress) {
 // chooser, a menu, in a windowed run another application), which is not on an output.
 - (void)hover:(CGPoint)p output:(NSNumber *)output {
     NSEvent *motion=_motion;NSView<DWPointerHost> *host=_host;_motion=nil;_sent=CACurrentMediaTime();
-    if(!motion||!host||!_area||!output||[host pointerBusy])return;
+    if(!motion||!host||!_area)return;
+    if(!output||[host pointerBusy]){[host pointerCursor:p output:output reply:nil];return;}
     // time_ms is now on the clock events are stamped with, as a timed pan's is its event's: the controller
     // tells from the two whether a scroll that panned is still to launch its coast.
-    NSDictionary *reply=[host pointerCommand:@{@"op":@"hover",@"output":output,@"screen":pointJSON(p),@"time_ms":@((uint32_t)(uint64_t)(_sent*1000))} quiet:YES];if(!reply)return;
+    NSDictionary *reply=[host pointerCommand:@{@"op":@"hover",@"output":output,@"screen":pointJSON(p),@"time_ms":@((uint32_t)(uint64_t)(_sent*1000))} quiet:YES];
+    [host pointerCursor:p output:output reply:reply];if(!reply)return;
     // Upstream's order: the motion goes to the window under it, whoever holds the keyboard, then focus follows.
     if(self.forwarding&&[reply[@"forward"]isEqual:@YES])[host pointerDeliver:motion at:p output:output];
     // Sloppy focus moved: only then is there an effect to perform and anything to draw.
@@ -122,6 +139,8 @@ typedef NS_ENUM(NSInteger,DWPress) {
 - (void)stop {
     [_flush invalidate];_flush=nil;_motion=nil;_press=DWPressNone;_window=_output=nil;
     if(_area){[_host removeTrackingArea:_area];_area=nil;}
+    if(_cursorArea){[_host removeTrackingArea:_cursorArea];_cursorArea=nil;}
+    [_host pointerCursor:CGPointZero output:nil reply:nil];_host=nil;
 }
 - (void)dealloc { [_flush invalidate]; }
 @end

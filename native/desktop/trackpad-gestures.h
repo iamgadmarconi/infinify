@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import <Foundation/Foundation.h>
+@class NSEvent;
 // Raw trackpad touches in, the swipe, pinch and hold streams libinput hands DriftWM
 // out: the controller's {"op":"gesture_begin"|"gesture_update"|"gesture_end"} without
 // what only the shell knows (modifiers, context, output, pointer). Only three or more
@@ -30,3 +31,14 @@ typedef NS_ENUM(NSInteger,DWTouchPhase){DWTouchBegan,DWTouchMoved,DWTouchEnded,D
 @end
 // "time_ms" for a time in seconds on the clock the touches are stamped with.
 NSNumber *DWGestureTime(NSTimeInterval seconds);
+
+// An immutable frame obtained only from an AppKit generic touch packet. Gesture
+// magnify/swipe packets do not promise current touches and are never decoded here.
+// Device selection prevents two trackpads from becoming one fictitious gesture.
+@interface DWTrackpadTouchFrame : NSObject
+@property (readonly) id device;
+@property (readonly) NSArray<NSDictionary *> *touches;
+@property (readonly) NSUInteger fingers;
+@property (readonly) NSTimeInterval time;
++ (instancetype)frameWithEvent:(NSEvent *)event device:(id)device;
+@end

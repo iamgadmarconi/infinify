@@ -105,6 +105,9 @@ pub struct NativeResizeTransaction {
     generation: u64,
     output: OutputId,
     edges: Edges,
+    /// Pointer grabs follow observed native sizes without a presentation tween.
+    /// Action sizing may animate that observed geometry independently of AX.
+    interactive: bool,
     start_screen: Point,
     /// Where the pointer last was, for a grab that has moved.
     pointer: Option<Point>,
@@ -275,6 +278,7 @@ impl Controller {
             generation: source.generation,
             output,
             edges,
+            interactive: false,
             start_screen: Point::default(),
             pointer: None,
             start_zoom: 1.0,
@@ -416,6 +420,7 @@ impl Controller {
             generation,
             output,
             edges,
+            interactive: true,
             start_screen,
             pointer: None,
             start_zoom: zoom,

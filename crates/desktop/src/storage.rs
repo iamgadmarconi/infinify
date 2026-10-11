@@ -229,7 +229,7 @@ impl Controller {
         for output in outputs.values_mut() {
             output.seed = CameraSeed::File;
         }
-        Ok(Self {
+        let mut controller = Self {
             scene: saved.scene,
             metadata: saved.metadata,
             sources: BTreeMap::new(),
@@ -274,6 +274,11 @@ impl Controller {
             sizes: Sizes::default(),
             effects: Effects::default(),
             fullscreen: Fullscreen::default(),
-        })
+        };
+        // Saved scenes reset snapping; their pins restore its exclusions.
+        // Public load returns that normalized state immediately, so queries
+        // need not mutate a newly loaded controller to finish restoring it.
+        controller.settle_state()?;
+        Ok(controller)
     }
 }

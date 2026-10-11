@@ -25,6 +25,7 @@ collected in one place below.
 | `command.op` | Fields | Result data |
 | --- | --- | --- |
 | `hover` | `output`, global `screen` point, optional `time_ms` | `{dirty, pick, hit, forward}`, and `effect` when the focus moved |
+| `hover_source` | `window`, exact `identity` and `generation`, `output`, global `screen`, optional `time_ms`, optional `forward_motion` (default false) | The same policy reply for a recipient freshly resolved by the native adapter |
 | `pick` | `window`, `output` | `{effect, navigation, dirty}`, or `{navigation: null, dirty: false}` when the output is no longer in pick mode |
 | `pointer_nearest` | `output`, global `screen` and `start` points, optional `held` boolean (default false) | `{navigation, effects, dirty}`, the reply of the `center-nearest` action |
 | `hit`, `input` | unchanged | gain `pick` on the reply and on the hit object |
@@ -87,6 +88,23 @@ would have without it.
   flight.
 - `dirty` is true when the focus moved: logical focus is saved, as upstream
   arms its session write on a hover focus too.
+
+### Native recipients: `hover_source`
+
+The native adapter can resolve a recipient that differs from the controller's
+root-rectangle hit, including a popup visible beyond its parent. `hover_source`
+requires the current source identity and generation, a known output, and a
+finite point inside that output. The adapter must validate the exact native
+recipient before asking for policy and again before delivery; the command does
+not establish native ownership or return application-local coordinates.
+
+The default `forward_motion: false` observes a native hover without reposting
+motion already delivered by macOS. A captured view uses `forward_motion: true`
+to request motion delivery after the ordinary pick and pointer-grab gates.
+Its `hit` contains only the logical `window`; the adapter retains the exact
+captured member for posting. For native widgets and screen-pinned panels this
+can forward motion without requesting focus or changing application stacking.
+For ordinary canvas windows, the existing hover-focus policy applies.
 
 ### What holds the pointer
 

@@ -4,7 +4,7 @@ The controller is configured by one TOML file in DriftWM's own grammar. The
 parser, the defaults, the action grammar and the binding tables are upstream's
 code, carried in `driftwm-core` (malbiruk/driftwm at
 `352333a8fa1b22171492d4b71a54102045c9a19d`, `src/config/`); nothing here
-re-implements them. What is new is the map from upstream's modifiers and keysyms
+re-implements their grammar. The Mac adapter adds Super+Tab and F3 overview defaults, while honoring explicit bindings and disabled key defaults. What is new is the map from upstream's modifiers and keysyms
 to a Mac keyboard, and six additive ABI 1 commands. Existing commands, their
 shapes, `ABI_VERSION` and `SAVE_VERSION` are unchanged.
 
@@ -188,7 +188,7 @@ Upstream's modifiers are `ctrl`, `alt`, `shift`, `logo` (written `super` or
 | `ctrl` | Control ⌃ |
 | `alt` | Option ⌥ |
 | `shift` | Shift ⇧ |
-| `logo` | the **super chord**: Control+Option ⌃⌥ by default |
+| `logo` | the **super chord**: Command ⌘ by default |
 | `mod3` | none; the binding is skipped with a warning |
 
 `set_platform` chooses another super chord, any non-empty subset of `ctrl`,
@@ -198,11 +198,11 @@ super. The chord is not part of the config file and is not saved.
 **Displacement.** A binding that holds `logo` and also names a modifier the
 super chord already contains would be indistinguishable from the binding
 without it, so that modifier is re-expressed: displaced `ctrl` becomes Command,
-displaced `alt` becomes Command+Shift. With the default chord `mod+ctrl+Right`
+displaced `alt` becomes Command+Shift. With `super = "ctrl+alt"`, `mod+ctrl+Right`
 is ⌃⌥⌘→ and `mod+alt+Right` is ⌃⌥⇧⌘→. When the chord itself contains Command
 there is nothing left to displace to, and the binding is skipped with a warning.
 
-**Collisions.** The map is not one to one: under the default chord `mod+alt+X`,
+**Collisions.** The map is not one to one: under `super = "ctrl+alt"`, `mod+alt+X`,
 `mod+ctrl+shift+X` and `mod+alt+shift+X` are all ⌃⌥⇧⌘X, and `ctrl+alt+X` is
 `mod+X`. Upstream's binding table is unordered, so bindings are sorted by their
 upstream combo text (bytewise): the first one on a chord keeps it, every later
@@ -255,14 +255,14 @@ which the user did not ask for.
 ## Key bindings
 
 ```json
-{"keys":[{"key_code":0,"character":"a","modifiers":{"control":true,"option":true,"shift":false,"command":false},
-          "action":"home-toggle","combo":"mod+a","chord":"⌃⌥A","repeat":false,"implemented":true,"passable":true}],
+{"keys":[{"key_code":0,"character":"a","modifiers":{"control":false,"option":false,"shift":false,"command":true},
+          "action":"home-toggle","combo":"mod+a","chord":"⌘A","repeat":false,"implemented":true,"passable":true}],
  "media_keys":[{"nx_key_type":16,"modifiers":{…},"action":"spawn …","combo":"XF86AudioPlay","chord":"…","repeat":true,"implemented":true,"passable":true}],
  "taps":[{"combo":"alt+shift","modifiers":{"control":false,"option":true,"shift":true,"command":false},"action":"switch-layout next","implemented":true}],
  "skipped":[{"combo":"Print","action":"spawn grim - | wl-copy","reason":"the key has no macOS equivalent"}],
  "hot_corners":[{"output":1,"stable_id":"…","threshold":4.0,"disable_while_dragging":true,"disable_when_fullscreen":true,"corners":{}}],
  "reserved":[{"purpose":"exit","key_code":53,"modifiers":{…},"claimed_by":null}],
- "layout_independent":true,"repeat_delay_ms":200,"repeat_rate_hz":25,"super":"ctrl+alt",
+ "layout_independent":true,"repeat_delay_ms":200,"repeat_rate_hz":25,"super":"cmd",
  "cycle_hold":{"control":false,"option":true,"shift":false,"command":false},
  "settings":{"trackpad_speed":1.5,"mouse_speed":1.0,"zoom_step":1.1,"zoom_mouse_speed":1.0,"zoom_trackpad_speed":1.0},
  "warnings":[]}
@@ -315,7 +315,7 @@ as skipped instead of vanishing.
 
 With no config file, the default super chord and `mod_key = "super"`, on a Mac
 that has none of upstream's Linux programs. "Runs" is `implemented`. Upstream
-binds 57 keys: 45 land on Mac keys and are registered, one of them with a
+plus the Mac adapter binds 59 keys: 47 land on Mac keys and are registered, one of them with a
 substituted command; 8 are on media keys that macOS handles itself; and 4 have
 no Mac key.
 
@@ -323,52 +323,53 @@ no Mac key.
 | --- | --- | --- | --- | --- | --- |
 | `alt+Tab` | ⌥Tab | 48 | `cycle-windows forward` | yes | yes |
 | `alt+shift+Tab` | ⌥⇧Tab | 48 | `cycle-windows backward` | yes | yes |
-| `mod+0` | ⌃⌥0 | 29 | `zoom-reset` |  | yes |
-| `mod+1` | ⌃⌥1 | 18 | `go-to-bookmark 1` |  | yes |
-| `mod+2` | ⌃⌥2 | 19 | `go-to-bookmark 2` |  | yes |
-| `mod+3` | ⌃⌥3 | 20 | `go-to-bookmark 3` |  | yes |
-| `mod+4` | ⌃⌥4 | 21 | `go-to-bookmark 4` |  | yes |
-| `mod+Down` | ⌃⌥Down | 125 | `center-nearest down` |  | yes |
-| `mod+Left` | ⌃⌥Left | 123 | `center-nearest left` |  | yes |
-| `mod+Return` | ⌃⌥Return | 36 | `exec-terminal` |  | yes |
-| `mod+Right` | ⌃⌥Right | 124 | `center-nearest right` |  | yes |
-| `mod+Up` | ⌃⌥Up | 126 | `center-nearest up` |  | yes |
-| `mod+a` | ⌃⌥A | 0 | `home-toggle` |  | yes |
-| `mod+alt+Down` | ⌃⌥⇧⌘Down | 125 | `send-to-output down` |  | yes |
-| `mod+alt+Left` | ⌃⌥⇧⌘Left | 123 | `send-to-output left` |  | yes |
-| `mod+alt+Right` | ⌃⌥⇧⌘Right | 124 | `send-to-output right` |  | yes |
-| `mod+alt+Up` | ⌃⌥⇧⌘Up | 126 | `send-to-output up` |  | yes |
-| `mod+c` | ⌃⌥C | 8 | `center-window` |  | yes |
-| `mod+ctrl+Down` | ⌃⌥⌘Down | 125 | `pan-viewport down` | yes | yes |
-| `mod+ctrl+Left` | ⌃⌥⌘Left | 123 | `pan-viewport left` | yes | yes |
-| `mod+ctrl+Right` | ⌃⌥⌘Right | 124 | `pan-viewport right` | yes | yes |
-| `mod+ctrl+Up` | ⌃⌥⌘Up | 126 | `pan-viewport up` | yes | yes |
-| `mod+ctrl+shift+q` | ⌃⌥⇧⌘Q | 12 | `quit` |  | yes |
-| `mod+d` | ⌃⌥D | 2 | `exec-launcher` |  | yes |
-| `mod+e` | ⌃⌥E | 14 | `toggle-cursor-pan` |  | yes |
-| `mod+equal` | ⌃⌥= | 24 | `zoom-in` | yes | yes |
-| `mod+f` | ⌃⌥F | 3 | `toggle-fullscreen` |  | with the capability |
-| `mod+l` | ⌃⌥L | 37 | `exec /usr/bin/pmset displaysleepnow`, for upstream's `spawn swaylock -f -c 000000 -kl` |  | yes |
-| `mod+m` | ⌃⌥M | 46 | `fit-window` |  | with the capability |
-| `mod+minus` | ⌃⌥- | 27 | `zoom-out` | yes | yes |
-| `mod+q` | ⌃⌥Q | 12 | `close-window` |  | yes |
-| `mod+shift+1` | ⌃⌥⇧1 | 18 | `set-bookmark 1` |  | yes |
-| `mod+shift+2` | ⌃⌥⇧2 | 19 | `set-bookmark 2` |  | yes |
-| `mod+shift+3` | ⌃⌥⇧3 | 20 | `set-bookmark 3` |  | yes |
-| `mod+shift+4` | ⌃⌥⇧4 | 21 | `set-bookmark 4` |  | yes |
-| `mod+shift+Down` | ⌃⌥⇧Down | 125 | `nudge-window down` | yes | yes |
-| `mod+shift+Left` | ⌃⌥⇧Left | 123 | `nudge-window left` | yes | yes |
-| `mod+shift+Right` | ⌃⌥⇧Right | 124 | `nudge-window right` | yes | yes |
-| `mod+shift+Up` | ⌃⌥⇧Up | 126 | `nudge-window up` | yes | yes |
-| `mod+shift+m` | ⌃⌥⇧M | 46 | `fit-window-snapped` |  | with the capability |
-| `mod+shift+w` | ⌃⌥⇧W | 13 | `zoom-to-fit-snapped` |  | yes |
-| `mod+t` | ⌃⌥T | 17 | `toggle-pin-to-screen` |  | yes |
-| `mod+w` | ⌃⌥W | 13 | `zoom-to-fit` |  | yes |
-| `mod+x` | ⌃⌥X | 7 | `focus-center` |  | yes |
-| `mod+z` | ⌃⌥Z | 6 | `zoom-reset` |  | yes |
+| `mod+0` | ⌘0 | 29 | `zoom-reset` |  | yes |
+| `mod+1` | ⌘1 | 18 | `go-to-bookmark 1` |  | yes |
+| `mod+2` | ⌘2 | 19 | `go-to-bookmark 2` |  | yes |
+| `mod+3` | ⌘3 | 20 | `go-to-bookmark 3` |  | yes |
+| `mod+4` | ⌘4 | 21 | `go-to-bookmark 4` |  | yes |
+| `mod+Down` | ⌘Down | 125 | `center-nearest down` |  | yes |
+| `mod+Left` | ⌘Left | 123 | `center-nearest left` |  | yes |
+| `mod+Return` | ⌘Return | 36 | `exec-terminal` |  | yes |
+| `mod+Right` | ⌘Right | 124 | `center-nearest right` |  | yes |
+| `mod+Up` | ⌘Up | 126 | `center-nearest up` |  | yes |
+| `mod+a` | ⌘A | 0 | `home-toggle` |  | yes |
+| `mod+alt+Down` | ⌥⌘Down | 125 | `send-to-output down` |  | yes |
+| `mod+alt+Left` | ⌥⌘Left | 123 | `send-to-output left` |  | yes |
+| `mod+alt+Right` | ⌥⌘Right | 124 | `send-to-output right` |  | yes |
+| `mod+alt+Up` | ⌥⌘Up | 126 | `send-to-output up` |  | yes |
+| `mod+c` | ⌘C | 8 | `center-window` |  | yes |
+| `mod+ctrl+Down` | ⌃⌘Down | 125 | `pan-viewport down` | yes | yes |
+| `mod+ctrl+Left` | ⌃⌘Left | 123 | `pan-viewport left` | yes | yes |
+| `mod+ctrl+Right` | ⌃⌘Right | 124 | `pan-viewport right` | yes | yes |
+| `mod+ctrl+Up` | ⌃⌘Up | 126 | `pan-viewport up` | yes | yes |
+| `mod+ctrl+shift+q` | ⌃⇧⌘Q | 12 | `quit` |  | yes |
+| `mod+d` | ⌘D | 2 | `exec-launcher` |  | yes |
+| `mod+e` | ⌘E | 14 | `toggle-cursor-pan` |  | yes |
+| `mod+equal` | ⌘= | 24 | `zoom-in` | yes | yes |
+| `mod+f` | ⌘F | 3 | `toggle-fullscreen` |  | with the capability |
+| `mod+l` | ⌘L | 37 | `exec /usr/bin/pmset displaysleepnow`, for upstream's `spawn swaylock -f -c 000000 -kl` |  | yes |
+| `mod+m` | ⌘M | 46 | `fit-window` |  | with the capability |
+| `mod+minus` | ⌘- | 27 | `zoom-out` | yes | yes |
+| `mod+q` | ⌘Q | 12 | `close-window` |  | yes |
+| `mod+shift+1` | ⇧⌘1 | 18 | `set-bookmark 1` |  | yes |
+| `mod+shift+2` | ⇧⌘2 | 19 | `set-bookmark 2` |  | yes |
+| `mod+shift+3` | ⇧⌘3 | 20 | `set-bookmark 3` |  | yes |
+| `mod+shift+4` | ⇧⌘4 | 21 | `set-bookmark 4` |  | yes |
+| `mod+shift+Down` | ⇧⌘Down | 125 | `nudge-window down` | yes | yes |
+| `mod+shift+Left` | ⇧⌘Left | 123 | `nudge-window left` | yes | yes |
+| `mod+shift+Right` | ⇧⌘Right | 124 | `nudge-window right` | yes | yes |
+| `mod+shift+Up` | ⇧⌘Up | 126 | `nudge-window up` | yes | yes |
+| `mod+shift+m` | ⇧⌘M | 46 | `fit-window-snapped` |  | with the capability |
+| `mod+shift+w` | ⇧⌘W | 13 | `zoom-to-fit-snapped` |  | yes |
+| `mod+t` | ⌘T | 17 | `toggle-pin-to-screen` |  | yes |
+| `mod+w` | ⌘W | 13 | `zoom-to-fit` |  | yes |
+| `mod+x` | ⌘X | 7 | `focus-center` |  | yes |
+| `mod+z` | ⌘Z | 6 | `zoom-reset` |  | yes |
+| `mod+Tab` | ⌘Tab | 48 | `zoom-to-fit` | | yes |
+| `F3` | F3 | 99 | `zoom-to-fit` | | yes |
 
-Under `{"super":"cmd"}` every ⌃⌥ above is ⌘, `mod+ctrl+…` is ⌃⌘…, `mod+alt+…`
-is ⌥⌘… and `mod+ctrl+shift+q` is ⌃⇧⌘Q; nothing is displaced.
+The two added overview keys preserve the previous view on the first press and return to it on the second. The shell filters Command-Tab and F3 before system shortcut dispatch (including the top-row Mission Control key alias). The filter exists only while desktop shortcuts are enabled. A failed filter is reported; no system preferences are changed.
 
 `media_keys` is empty. `skipped` lists upstream's eight media-key defaults,
 which macOS handles itself:
@@ -420,7 +421,7 @@ writes one.
 - `modifiers` is the chord in physical modifiers, by the mapping a key binding
   takes ([macOS modifiers](#macos-modifiers)): `mod` is the super chord, and a
   `ctrl` or `alt` the super chord already holds is displaced. Under the default
-  chord `mod` is ⌃⌥, `mod+ctrl` is ⌃⌥⌘ and `mod+alt` is ⌃⌥⇧⌘.
+  chord `mod` is ⌘, `mod+ctrl` is ⌃⌘ and `mod+alt` is ⌥⌘.
 - A tap whose modifier set has no chord (`mod3`, or a displacement the super
   chord leaves no room for) is listed under `skipped` with the reason a key
   binding gets, and named in `warnings`.
@@ -553,13 +554,13 @@ Upstream's defaults under the default super chord:
 | ⌥⇧ right | `resize_window_snapped` | none |
 | ⌥ middle | `action` `fit-window` (refused without the capability) | none |
 | ⌥⇧ middle | `action` `fit-window-snapped` (the same) | none |
-| ⌃⌥ middle | `action` `toggle-fullscreen` (refused without the capability) | none |
-| ⌃⌥ left | `pan_viewport` | `pan_viewport` |
-| ⌃⌥⌘ left (`mod+ctrl`) | `center_nearest` | `center_nearest` |
+| ⌘ middle | `action` `toggle-fullscreen` (refused without the capability) | none |
+| ⌘ left | `pan_viewport` | `pan_viewport` |
+| ⌃⌘ left (`mod+ctrl`) | `center_nearest` | `center_nearest` |
 | finger scroll | the app's | `pan_viewport` |
 | wheel scroll | the app's | `zoom` |
-| ⌃⌥ finger scroll | `pan_viewport` | `pan_viewport` |
-| ⌃⌥ wheel scroll | `zoom` | `zoom` |
+| ⌘ finger scroll | `pan_viewport` | `pan_viewport` |
+| ⌘ wheel scroll | `zoom` | `zoom` |
 
 ## Actions that run now
 

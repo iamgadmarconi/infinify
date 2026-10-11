@@ -288,15 +288,46 @@ impl Controller {
             BindingContext::Anywhere => &gestures.anywhere,
         };
         let candidates = self.chord_candidates(modifiers, &trigger_name(&trigger));
-        [own, &gestures.anywhere].into_iter().find_map(|table| {
+        [
+            (context, own),
+            (BindingContext::Anywhere, &gestures.anywhere),
+        ]
+        .into_iter()
+        .find_map(|(table_context, table)| {
             candidates.iter().find_map(|(combo, set)| {
                 let key = GestureBinding {
                     modifiers: set.clone(),
                     trigger: trigger.clone(),
                 };
+                // Desktop adapter defaults leave driftwm-core unchanged. An
+                // explicit binding/unbinding and disable_defaults take priority.
+                let desktop_default = if *set == driftwm_core::config::Modifiers::EMPTY
+                    && !self.settings.default_gestures_disabled
+                    && !self.settings.wrote_gesture(table_context, &key)
+                {
+                    match (&trigger, table_context) {
+                        (GestureTrigger::SwipeUp { fingers: 4 }, BindingContext::Anywhere) => {
+                            Some(GestureConfigEntry::Threshold(ThresholdAction::Fixed(
+                                Action::ZoomToFit,
+                            )))
+                        }
+                        (GestureTrigger::Pinch { fingers: 2 }, BindingContext::OnWindow) => {
+                            Some(GestureConfigEntry::Continuous(ContinuousAction::Zoom))
+                        }
+                        (
+                            GestureTrigger::DoubletapSwipe { fingers: 3 },
+                            BindingContext::OnWindow,
+                        ) => Some(GestureConfigEntry::Continuous(
+                            ContinuousAction::PanViewport,
+                        )),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
                 Some(Found {
                     combo: combo.clone(),
-                    entry: table.get(&key)?.clone(),
+                    entry: desktop_default.or_else(|| table.get(&key).cloned())?,
                 })
             })
         })

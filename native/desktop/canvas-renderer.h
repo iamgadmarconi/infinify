@@ -8,12 +8,22 @@ typedef struct { CVPixelBufferRef buffer;uint64_t generation;CGRect rect; } DWCa
 // `placement` is the window's entry of snapshot.placements, or, for a window that is
 // on no output, {window,presentation_settled,source} read from snapshot.windows.
 typedef DWCanvasContent (^DWCanvasSource)(NSNumber *window,NSDictionary *placement);
-// Optional offscreen attachments in the root's normalized top-left rectangle:
+// Optional image attachments in the root's normalized top-left rectangle:
 // (0,0,1,1) is the root; negative coordinates and extents beyond one are valid.
 // This generic image geometry carries no native identity or ownership. Each
 // attachment retains its pixels, and the provider orders them back to front.
 @interface DWCanvasAttachment : NSObject
+// Opaque identity, stable within this root's family. Required for live images;
+// one-shot exports require it when exportOrder is installed and may otherwise
+// omit it. Never a native ownership identifier here.
+@property(nonatomic,copy) NSString *key;
 @property(nonatomic) CVPixelBufferRef buffer;
+// Changes whenever pixels change, including when the buffer is reused.
+@property(nonatomic) uint64_t generation;
+// Image region inside the buffer, in top-left pixel coordinates. CGRectNull
+// (the default) samples all pixels. A crop must be finite, positive and inside
+// the buffer; invalid live crops withdraw the image and invalid exports refuse.
+@property(nonatomic) CGRect contentRect;
 @property(nonatomic) CGRect unitRect;
 @end
 // The canvas drawn the way DriftWM draws it, from the controller's snapshot: one
@@ -58,6 +68,45 @@ typedef struct { NSUInteger requests,flushes,drawn,presented;double flushSeconds
 - (instancetype)initWithSource:(DWCanvasSource)source;
 // Used only by screenshot composition. Onscreen rendering never calls this.
 @property(copy) NSArray<DWCanvasAttachment *> *(^exportAttachments)(NSNumber *window);
+// Optional one-shot ordering, independent of live output order and evidence.
+// The shell freezes and revalidates the export's own cohort before composition.
+// Its roots/children use {window,bucket} / {window,key,bucket}; stand-ins and
+// roots absent from that cohort have barrier:YES. Only Widget then Normal canvas
+// buckets occur, even for a pinned window captured alone. Root order, exact token
+// membership and barrier partitions use the live order's validation contract.
+// Called once before region clipping; never changes native ownership or cameras.
+@property(copy) NSArray<NSDictionary *> *(^exportOrder)(NSArray<NSDictionary *> *baseTokens,NSDictionary *effect,NSDictionary *snapshot);
+// Is this root covered by the frozen one-shot ordering cohort? Used only when
+// exportOrder is installed. Missing predicate means every root is a barrier.
+@property(copy) BOOL (^exportOrderRoot)(NSNumber *window);
+// Live images drawn above a root by default, in its stack bucket and coordinate
+// space on this output. Called when its placement is described or its content
+// changes, and for a screenshot's matching output when no export provider is
+// installed. A missing key, NULL buffer or invalid rectangle withdraws that image;
+// an empty family withdraws every child. Children keep no earlier frame as a
+// fallback. The root's opacity and opening transform apply to the whole family,
+// and the output clips it without clipping children to the root's bounds.
+@property(copy) NSArray<DWCanvasAttachment *> *(^liveAttachments)(NSNumber *window,NSNumber *output);
+// Optional complete back-to-front live order. Tokens are immutable dictionaries:
+// roots {window,bucket}, children {window,key,bucket}; physical native roots and
+// stand-ins also carry barrier:YES. Closing elements are {mark,bucket,barrier:YES}.
+// `key` is the attachment's opaque key, never a native identity. Bucket numbers
+// are IFCompositorStackLayer values, traversed Widget, Normal, Closing, Pinned.
+// Return an exact permutation: root order, bucket boundaries and barrier positions
+// cannot change, and nothing may cross a barrier. Invalid results keep the base
+// family order. Recomputed on membership/order changes or a provider revision,
+// without rebuilding the controller snapshot for each video frame.
+@property(copy) NSArray<NSDictionary *> *(^liveOrder)(NSArray<NSDictionary *> *baseTokens,NSNumber *output);
+// Opaque semantic revision of ordering evidence, membership and capture epochs;
+// unchanged pixels/observer reports should keep it. Optional: without a revision,
+// freshness is checked by comparing the provider's current validated permutation.
+@property(copy) uint64_t (^liveOrderRevision)(NSNumber *output);
+// The order of the current frame description, not a presentation acknowledgement.
+// nil for a missing output, changed output/ordered placement bindings or stale
+// provider revision. Layout-equivalent snapshots compare by value (ignoring only
+// a placement's focused flag); exact source bindings and generations must match.
+// Callers must block stale replica input rather than regroup the drawn families.
+- (NSArray<NSDictionary *> *)appliedOrderForOutput:(NSNumber *)output snapshot:(NSDictionary *)snapshot;
 // Counts for -takeCounts. Set before the first frame is described; without it nothing is counted or timed.
 @property BOOL measured;
 // Scoped benchmark baseline only: retain the previous synchronous drawable acquisition. Set before the first frame.
@@ -99,6 +148,18 @@ typedef struct { NSUInteger requests,flushes,drawn,presented;double flushSeconds
 // reason (a camera frame, a window's picture, a decoded chunk): that draw was the
 // tick's frame, since each frame drawn spends upstream's per-frame allowances.
 - (BOOL)animates:(NSArray<NSNumber *> *)outputs draw:(BOOL)draw;
+// Overlay-only presentation of an action resize or fullscreen change, between
+// the old frame and the controller's observed new geometry. Never authorizes a
+// native size or changes the snapshot, and never interpolates a pointer resize.
+// The shell suppresses hover while these run and finishes them before pointer
+// interaction, so ordinary hit/input always maps through the endpoint geometry.
+@property (readonly) BOOL hasGeometryTransitions;
+// Installs the current observed endpoints, updates whole-family geometry and
+// attempts a synchronous flush. If a drawable is unavailable, the property stays
+// YES until the endpoint is drawn; callers must defer input in that case. This
+// is a successful-draw fence, not an on-screen presentation acknowledgement.
+// No native/window/controller operation is performed.
+- (void)finishGeometryTransitions;
 // Describes every changed output to its layer now, which draws only when the
 // description, a pixel buffer or an animated background's clock changed.
 // Every frame it draws is presented inside the caller's Core Animation transaction, waiting for the command buffer to be

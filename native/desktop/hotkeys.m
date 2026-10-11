@@ -2,6 +2,7 @@
 #import "hotkeys.h"
 #import <AppKit/AppKit.h>
 #import <Carbon/Carbon.h>
+#import <ApplicationServices/ApplicationServices.h>
 
 static const UInt32 chordModifiers=cmdKey|shiftKey|optionKey|controlKey;
 NSNumber *DWChord(uint32_t keyCode,uint32_t carbonModifiers) { return @((keyCode<<16)|(carbonModifiers&chordModifiers)); }
@@ -43,6 +44,7 @@ static NSNumber *keyTyping(NSData *layout,NSString *character,NSNumber *own,BOOL
 @interface DWHotKeys ()
 - (void)pressed:(UInt32)identifier;
 - (void)released:(UInt32)identifier;
+- (CGEventRef)filterKey:(CGEventType)type event:(CGEventRef)event;
 @end
 static OSStatus hotKeyEvent(EventHandlerCallRef next,EventRef event,void *context) {
     (void)next;EventHotKeyID key={0};GetEventParameter(event,kEventParamDirectObject,typeEventHotKeyID,NULL,sizeof(key),NULL,&key);
@@ -51,11 +53,18 @@ static OSStatus hotKeyEvent(EventHandlerCallRef next,EventRef event,void *contex
     if(GetEventKind(event)==kEventHotKeyReleased)[keys released:key.id];else [keys pressed:key.id];
     return noErr;
 }
+static CGEventRef reservedKeyEvent(CGEventTapProxy proxy,CGEventType type,CGEventRef event,void *context) {
+    (void)proxy;return [(__bridge DWHotKeys *)context filterKey:type event:event];
+}
 @implementation DWHotKeys {
     void (^_fire)(NSString *);
     NSDictionary *_bindings;
     EventHandlerRef _handler;
     NSMutableArray<NSValue *> *_registered;
+    CFMachPortRef _keyTap;
+    CFRunLoopSourceRef _keySource;
+    NSMutableIndexSet *_tapKeys;
+    NSMutableDictionary<NSNumber *,NSNumber *> *_suppressedKeys;
     NSTimer *_timer;
     UInt32 _repeating; // hot key id whose repeat timer is armed, 0 for none
     NSUInteger _generation;
@@ -104,6 +113,22 @@ static OSStatus hotKeyEvent(EventHandlerCallRef next,EventRef event,void *contex
     EventTypeSpec types[]={{kEventClassKeyboard,kEventHotKeyPressed},{kEventClassKeyboard,kEventHotKeyReleased}};
     if(InstallApplicationEventHandler(hotKeyEvent,2,types,(__bridge void *)self,&_handler)!=noErr){_handler=NULL;return _keys.count?@[@"every key binding (no hot key handler)"]:@[];}
     NSMutableArray *refused=[NSMutableArray array];_generation++;_registered=[NSMutableArray array];_withheld=[NSMutableIndexSet indexSet];
+    _tapKeys=[NSMutableIndexSet indexSet];_suppressedKeys=[NSMutableDictionary dictionary];
+    for(NSUInteger i=0;i<_keys.count;i++){
+        UInt32 chord=[_keys[i][@"chord"]unsignedIntValue],code=chord>>16;
+        if(code==99||(code==48&&(chord&cmdKey)))[_tapKeys addIndex:i];
+    }
+    // Carbon cannot reliably take system-owned Command-Tab or Mission Control.
+    // A session filter owns their physical down/up pair while the desktop is open.
+    // No global shortcut preferences are modified, and stopping removes the tap.
+    if(_tapKeys.count&&AXIsProcessTrusted()){
+        _keyTap=CGEventTapCreate(kCGSessionEventTap,kCGHeadInsertEventTap,kCGEventTapOptionDefault,
+            CGEventMaskBit(kCGEventKeyDown)|CGEventMaskBit(kCGEventKeyUp)|CGEventMaskBit(kCGEventFlagsChanged),reservedKeyEvent,(__bridge void *)self);
+        if(_keyTap){_keySource=CFMachPortCreateRunLoopSource(NULL,_keyTap,0);
+            if(_keySource)CFRunLoopAddSource(CFRunLoopGetMain(),_keySource,kCFRunLoopCommonModes);
+            else {CFMachPortInvalidate(_keyTap);CFRelease(_keyTap);_keyTap=NULL;}}
+    }
+    if(_tapKeys.count&&!_keyTap)[refused addObject:@"System shortcut interception unavailable; Command-Tab and Mission Control may remain with macOS"];
     for(NSUInteger i=0;i<_keys.count;i++){
         // A key the focused window is passed is not registered at all: see -pass:.
         BOOL passed=[self passes:_keys[i]];if(passed)[_withheld addIndex:i];
@@ -113,9 +138,47 @@ static OSStatus hotKeyEvent(EventHandlerCallRef next,EventRef event,void *contex
 }
 // One key's Carbon hot key, its id the key's place in _keys + 1; NULL, and a line in `refused`, when macOS will not have the chord.
 - (EventHotKeyRef)hotKey:(NSUInteger)i refused:(NSMutableArray<NSString *> *)refused {
+    if(_keyTap&&[_tapKeys containsIndex:i])return NULL;
     NSDictionary *key=_keys[i];UInt32 chord=[key[@"chord"]unsignedIntValue];EventHotKeyID identifier={'InfB',(UInt32)i+1};EventHotKeyRef reference=NULL;
     if(RegisterEventHotKey(chord>>16,chord&chordModifiers,identifier,GetApplicationEventTarget(),0,&reference)!=noErr){reference=NULL;[refused addObject:[NSString stringWithFormat:@"%@%@ (%@)",key[@"modifiers"],key[@"key"],key[@"action"]]];}
     return reference;
+}
+- (BOOL)registered:(NSUInteger)i {
+    return i<_registered.count&&(_registered[i].pointerValue||(_keyTap&&[_tapKeys containsIndex:i]&&![_withheld containsIndex:i]));
+}
+- (CGEventRef)filterKey:(CGEventType)type event:(CGEventRef)event {
+    if(type==kCGEventTapDisabledByTimeout||type==kCGEventTapDisabledByUserInput){
+        [self endRepeat];[self lift];if(_keyTap&&AXIsProcessTrusted())CGEventTapEnable(_keyTap,true);return event;
+    }
+    if(type==kCGEventFlagsChanged){
+        if(_down&&_down<=_keys.count){UInt32 modifiers=[_keys[_down-1][@"chord"]unsignedIntValue]&chordModifiers;
+            CGEventFlags f=CGEventGetFlags(event);UInt32 held=(f&kCGEventFlagMaskControl?controlKey:0)|(f&kCGEventFlagMaskAlternate?optionKey:0)|(f&kCGEventFlagMaskShift?shiftKey:0)|(f&kCGEventFlagMaskCommand?cmdKey:0);
+            if((held&modifiers)!=modifiers){[self endRepeat];[self lift];}}
+        return event;
+    }
+    if(type!=kCGEventKeyDown&&type!=kCGEventKeyUp)return event;
+    NSNumber *physical=@(CGEventGetIntegerValueField(event,kCGKeyboardEventKeycode));
+    NSNumber *owned=_suppressedKeys[physical];NSUInteger generation=_generation;__weak DWHotKeys *weak=self;
+    if(type==kCGEventKeyUp){
+        if(!owned)return event;[_suppressedKeys removeObjectForKey:physical];
+        dispatch_async(dispatch_get_main_queue(),^{DWHotKeys *keys=weak;if(keys&&keys->_generation==generation)[keys released:owned.unsignedIntValue];});return NULL;
+    }
+    if(owned)return NULL; // one toggle per physical press, including auto-repeat
+    if(CGEventGetIntegerValueField(event,kCGKeyboardEventAutorepeat))return event;
+    UInt32 code=physical.unsignedIntValue;
+    // Apple top-row Mission Control emits 160 when F3 emits 99 in function mode.
+    // Mapping evidence: tauri-plugin-macos-input-monitor 0.1.0, keycode reference
+    // https://docs.rs/crate/tauri-plugin-macos-input-monitor/0.1.0
+    if(code==160)code=99;
+    CGEventFlags f=CGEventGetFlags(event);UInt32 modifiers=(f&kCGEventFlagMaskControl?controlKey:0)|(f&kCGEventFlagMaskAlternate?optionKey:0)|(f&kCGEventFlagMaskShift?shiftKey:0)|(f&kCGEventFlagMaskCommand?cmdKey:0);
+    NSNumber *chord=DWChord(code,modifiers);
+    for(NSUInteger i=_tapKeys.firstIndex;i!=NSNotFound;i=[_tapKeys indexGreaterThanIndex:i]){
+        if(![self registered:i]||[self passes:_keys[i]]||![_keys[i][@"chord"]isEqual:chord])continue;
+        NSNumber *identifier=@(i+1);_suppressedKeys[physical]=identifier;
+        // The action may resize/focus an app; keep that work outside the tap callback.
+        dispatch_async(dispatch_get_main_queue(),^{DWHotKeys *keys=weak;if(keys&&keys->_generation==generation)[keys pressed:identifier.unsignedIntValue];});return NULL;
+    }
+    return event;
 }
 // Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d, src/input/keyboard.rs (the pass_keys
 // arm of the key filter: a combo the focused window's rule allows is forwarded to its client before any binding is
@@ -128,8 +191,9 @@ static OSStatus hotKeyEvent(EventHandlerCallRef next,EventRef event,void *contex
 }
 // A passed key stops being a hot key.
 - (void)withhold:(NSUInteger)i {
-    EventHotKeyRef reference=_registered[i].pointerValue;if(!reference)return;
-    UnregisterEventHotKey(reference);_registered[i]=[NSValue valueWithPointer:NULL];[_withheld addIndex:i];
+    EventHotKeyRef reference=_registered[i].pointerValue;
+    if(!reference&&!(_keyTap&&[_tapKeys containsIndex:i]))return;
+    if(reference)UnregisterEventHotKey(reference);_registered[i]=[NSValue valueWithPointer:NULL];[_withheld addIndex:i];
 }
 // The key Carbon reported down is up, or its chord is over: if it became the window's while it was held, it stops being a hot key now.
 - (void)lift {
@@ -162,12 +226,12 @@ static OSStatus hotKeyEvent(EventHandlerCallRef next,EventRef event,void *contex
     // Another press ends the one before it, whether or not Carbon reported that release.
     [self endRepeat];[self lift];if(identifier<1||identifier>_keys.count)return;
     // A press already on its way when its key was passed to the window runs nothing.
-    if(!_registered[identifier-1].pointerValue)return;
+    if(![self registered:identifier-1])return;
     NSDictionary *key=_keys[identifier-1];NSString *action=key[@"action"];NSUInteger generation=_generation;_down=identifier;
     _fire(action);
     double delay=[typed(_bindings[@"repeat_delay_ms"],NSNumber.class)doubleValue]/1000,rate=[typed(_bindings[@"repeat_rate_hz"],NSNumber.class)doubleValue];
     // The action may have stopped or replaced the registration it was fired from, or the key may have been passed and let go meanwhile.
-    if(generation!=_generation||!_handler||!_registered[identifier-1].pointerValue||![key[@"repeat"]boolValue]||!(rate>0)||!(delay>=0))return;
+    if(generation!=_generation||!_handler||![self registered:identifier-1]||![key[@"repeat"]boolValue]||!(rate>0)||!(delay>=0))return;
     UInt32 modifiers=[key[@"chord"]unsignedIntValue]&chordModifiers;__weak DWHotKeys *weak=self;_repeating=identifier;
     _timer=[[NSTimer alloc]initWithFireDate:[NSDate dateWithTimeIntervalSinceNow:delay] interval:1/rate repeats:YES block:^(NSTimer *timer){
         DWHotKeys *keys=weak;if(!keys||keys->_timer!=timer){[timer invalidate];return;}
@@ -180,6 +244,9 @@ static OSStatus hotKeyEvent(EventHandlerCallRef next,EventRef event,void *contex
 - (void)released:(UInt32)identifier { if(identifier==_repeating)[self endRepeat];if(identifier==_down)[self lift]; }
 - (void)stop {
     [self endRepeat];_generation++;_down=0;
+    if(_keyTap){CGEventTapEnable(_keyTap,false);CFMachPortInvalidate(_keyTap);}
+    if(_keySource){CFRunLoopRemoveSource(CFRunLoopGetMain(),_keySource,kCFRunLoopCommonModes);CFRelease(_keySource);_keySource=NULL;}
+    if(_keyTap){CFRelease(_keyTap);_keyTap=NULL;}_tapKeys=nil;_suppressedKeys=nil;
     for(NSValue *reference in _registered)if(reference.pointerValue)UnregisterEventHotKey(reference.pointerValue);
     _registered=nil;_withheld=nil;if(_handler){RemoveEventHandler(_handler);_handler=NULL;}
 }

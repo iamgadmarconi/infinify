@@ -22,13 +22,21 @@ BOOL DWNativeWindowParent(NSDictionary *identity,uint32_t *parent){
 BOOL DWNativeWindowBelongsToRoot(NSDictionary *member,NSDictionary *root){
     for(NSString *key in @[@"pid",@"birth_sec",@"birth_usec"])if(!member[key]||![member[key]isEqual:root[key]])return NO;
     uint32_t target=[root[@"wid"]unsignedIntValue],cursor=[member[@"wid"]unsignedIntValue];if(!target||!cursor)return NO;
-    NSMutableSet<NSNumber *> *seen=[NSMutableSet set];
+    id seconds=member[@"birth_sec"],microseconds=member[@"birth_usec"];
+    if(![seconds isKindOfClass:NSNumber.class]||![microseconds isKindOfClass:NSNumber.class])return NO;
+    pid_t pid=[member[@"pid"]intValue];NSArray *enrolled=@[seconds,microseconds];
+    if(!loadFamilyAPI()||!ownedCGWindow(cursor,pid,enrolled))return NO;
+    uint32_t seen[64];
     for(NSUInteger depth=0;depth<64;depth++){
-        if([seen containsObject:@(cursor)])return NO;[seen addObject:@(cursor)];
-        NSMutableDictionary *identity=[member mutableCopy];identity[@"wid"]=@(cursor);uint32_t parent=0;
-        if(!DWNativeWindowParent(identity,&parent))return NO;
-        if(cursor==target)return !parent;
-        if(!parent)return NO;cursor=parent;
+        for(NSUInteger i=0;i<depth;i++)if(seen[i]==cursor)return NO;seen[depth]=cursor;
+        FamilyParentQuery query=readFamilyParent(cursor);
+        if(!query.exact||!ownedCGWindow(cursor,pid,enrolled))return NO;
+        if(cursor==target)return !query.parent;
+        // This fresh parent check is also the next iterator read's before
+        // guard. Nothing is retained past this operation, and that next read
+        // still gets its own process-birth/ownership check afterward.
+        if(!query.parent||!ownedCGWindow(query.parent,pid,enrolled))return NO;
+        cursor=query.parent;
     }
     return NO;
 }

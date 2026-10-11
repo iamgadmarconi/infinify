@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import <Foundation/Foundation.h>
-// The controller's {"op":"bindings"} reply as Carbon global hot keys. Main thread only.
+// The controller's {"op":"bindings"} reply as global hot keys. Command-Tab and F3 use a session event filter
+// (including the top-row Mission Control alias); other keys use Carbon. Main thread only.
 // A key with a "character" is the key that types it in the current keyboard layout,
 // unshifted, or with Shift for a chord that holds Shift. When no key types it,
 // "key_code" is the key if the reply says layout_independent (or leaves it out), and
@@ -26,7 +27,7 @@
 - (BOOL)holds:(NSNumber *)chord;
 // Display chords bound to one action, as "⌃⌥A".
 - (NSArray<NSString *> *)chords:(NSString *)action;
-// Registers every key that is not passed; returns one line per chord macOS refused. No-op while started.
+// Registers every key that is not passed; system shortcut filters end on -stop; returns one line per chord macOS refused. No-op while started.
 - (NSArray<NSString *> *)start;
 // DriftWM's pass_keys: what the focused window's rule passes, as the controller's
 // snapshot says it: true for every key, an array of "combo" strings for those keys,

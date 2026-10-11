@@ -163,28 +163,36 @@ enum Plan {
     /// asked for the output's size. The transaction's edges hold the parked
     /// top-left; fullscreen.rs centres whatever size the window then has.
     Fullscreen,
-    /// fullscreen.rs's exit: the size the window had before, around the
-    /// center of the frame the exit put back. `None` once something else has
-    /// placed the window since: it then keeps its top-left.
+    /// macOS fullscreen exit restores its exact original world top-left.
+    /// `None` once something else has placed the window since.
     Unfullscreen {
-        place: Option<(Px, Px, Point)>,
+        place: Option<Point>,
+        extent: Size,
     },
 }
 /// What fullscreen.rs asks the one size transaction for.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Screen {
-    /// Its output's whole size.
+    /// Its output's usable size (menu/notch excluded, Dock overlays it).
     Fill,
     /// The size it had before fullscreen, at the top-left the exit restored,
     /// or wherever the window has been placed since (`None`).
-    Restore(Option<Px>),
+    Restore { at: Option<Point>, extent: Size },
 }
 impl Plan {
+    // Preserve the exact native extent saved by fullscreen; whole logical
+    // pixels remain the policy basis for the other upstream sizing actions.
+    fn requested_size(&self, fallback: Px) -> Size {
+        match self {
+            Self::Unfullscreen { extent, .. } => *extent,
+            _ => size_of(fallback),
+        }
+    }
     /// Where the window's top-left goes once it has `actual` size, or `None`
     /// when the transaction's own edge anchoring places it.
     fn origin(&self, actual: Px) -> Option<Px> {
         match self {
-            Self::Step | Self::Fullscreen | Self::Unfullscreen { place: None } => None,
+            Self::Step | Self::Fullscreen | Self::Unfullscreen { place: None, .. } => None,
             Self::StepRestored { loc, far, edges } => {
                 let left = matches!(edges, Edges::Left | Edges::TopLeft | Edges::BottomLeft);
                 let top = matches!(edges, Edges::Top | Edges::TopLeft | Edges::TopRight);
@@ -205,6 +213,9 @@ impl Plan {
             Self::Absolute { loc, .. } | Self::Fit { loc, .. } | Self::Fill { loc, .. } => {
                 Some(*loc)
             }
+            Self::Unfullscreen {
+                place: Some(loc), ..
+            } => Some([loc.x.round() as i64, loc.y.round() as i64]),
             // Upstream establish_exit_placement: a window that keeps its size
             // stays where it was mapped; one that changes is re-placed around
             // the center the exit preserved.
@@ -218,9 +229,6 @@ impl Plan {
                 loc,
                 pre_exit_size,
                 center,
-            }
-            | Self::Unfullscreen {
-                place: Some((loc, pre_exit_size, center)),
             } => Some(if actual == *pre_exit_size {
                 *loc
             } else {
@@ -473,7 +481,12 @@ impl Controller {
         let rect = self.scene.window(window)?.world_rect;
         let (_, actual) = frame(rect).ok()?;
         let placed = Rect {
-            origin: point_of(plan.origin(actual)?),
+            origin: match plan {
+                Plan::Unfullscreen {
+                    place: Some(loc), ..
+                } => *loc,
+                _ => point_of(plan.origin(actual)?),
+            },
             size: rect.size,
         };
         readable(placed).ok()?;
@@ -600,7 +613,8 @@ impl Controller {
         let fixed = matches!(plan, Plan::Fullscreen)
             && !self.sizes.readback
             && self.sources.get(&window).is_some_and(|s| s.resize_disabled);
-        if rect.size == size_of(target) || fixed {
+        let requested = plan.requested_size(target);
+        if rect.size == requested || fixed {
             self.place(window, &plan);
             self.settle(window, &plan, asked);
             outcome.dirty = true;
@@ -614,7 +628,7 @@ impl Controller {
         // A window pinned again by its exit is still handed its size back,
         // and a widget or a rule-pinned window the size its rule names.
         let by_hand = !restoring && !matches!(plan, Plan::Absolute { by_hand: false, .. });
-        let began = self.begin_sized_resize(window, output, edges, size_of(target), by_hand)?;
+        let began = self.begin_sized_resize(window, output, edges, requested, by_hand)?;
         let transaction = self
             .resize_slot()
             .ok_or(Error::Invalid("resize transaction missing"))?
@@ -723,7 +737,7 @@ impl Controller {
             // comes when the transaction was cancelled meanwhile: until one
             // has answered, the window is neither placed for the plan nor
             // counted as having its size.
-            let asked = size_of(pending.asked.requested);
+            let asked = pending.plan.requested_size(pending.asked.requested);
             let superseded = matches!(pending.plan, Plan::Fullscreen | Plan::Unfullscreen { .. })
                 && requested.is_some_and(|size| size != asked)
                 && rect.size != asked;
@@ -1204,10 +1218,7 @@ impl Controller {
         let (_, committed) = self.committed_frame(window)?;
         let plan = match screen {
             Screen::Fill => Plan::Fullscreen,
-            // Upstream establish_exit_placement's target_center.
-            Screen::Restore(loc) => Plan::Unfullscreen {
-                place: loc.map(|loc| (loc, committed, center_of(loc, target))),
-            },
+            Screen::Restore { at, extent } => Plan::Unfullscreen { place: at, extent },
         };
         let asked = Asked {
             requested: target,
@@ -1233,7 +1244,8 @@ impl Controller {
         if !own || slot.window != window || !slot.accepting {
             return Ok(false);
         }
-        self.retarget_sized_resize(size_of(target))?;
+        let requested = plan.requested_size(target);
+        self.retarget_sized_resize(requested)?;
         if let Some(pending) = self.sizes.pending.as_mut() {
             pending.plan = plan;
             pending.asked = asked;
@@ -1243,7 +1255,12 @@ impl Controller {
         // Walked back only while nothing has been sent. With a setter in
         // flight the window is about to take that size, and the transaction
         // then asks for this one: the plan waits for that setter's result.
-        if target == committed && !slot.setting {
+        if self
+            .scene
+            .window(window)
+            .is_some_and(|w| w.world_rect.size == requested)
+            && !slot.setting
+        {
             self.settle_walked_back(outcome);
         }
         Ok(true)
@@ -1260,23 +1277,6 @@ impl Controller {
             Plan::Fullscreen => Some(false),
             Plan::Unfullscreen { .. } => Some(true),
             _ => None,
-        }
-    }
-    /// Upstream enter_fullscreen's saved size: fit and fill survive
-    /// fullscreen, so a fit window comes back at the size its fit asked for
-    /// and a filled one at the size its fill asked for
-    /// (configured_window_size, whatever the window took of it); any other
-    /// at its `restore_size`, else the size it has.
-    pub(crate) fn windowed_size(&self, window: WindowId, committed: Px) -> Px {
-        match self.sizes.restore.get(&window) {
-            Some(Restore::Fit { configured, .. }) => *configured,
-            Some(Restore::Fill(_)) => self.configured_size(window, committed),
-            None => self
-                .sizes
-                .restore_size
-                .get(&window)
-                .copied()
-                .unwrap_or(committed),
         }
     }
     /// Give one window a size, keeping its center: upstream cmd_resize, and the

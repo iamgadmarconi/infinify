@@ -25,6 +25,14 @@ Unsupported versions, duplicate schema fields, invalid numbers and bad geometry
 are rejected. Rejected commands leave scene, bindings and gesture state unchanged.
 Error messages are diagnostic strings, not stable error codes.
 
+`snapshot`, `hit`, `input` and `resize_border` read the settled controller
+directly, without cloning it or changing state. Mutating commands retain the
+clone/apply/settle/commit transaction. Public `Controller::load` also normalizes
+the loaded state before returning, including saved pins' snapping exclusions.
+Expired lifecycle marks are removed before fullscreen/policy settlement, so
+cleanup completes with the mutation that advances time instead of depending on
+a later query. These source optimizations have not been benchmarked.
+
 All rectangles are `{origin:{x,y},size:{width,height}}`, points are `{x,y}`.
 Coordinates are logical points with top-left origin and Y down. Output bounds
 and pointer positions are global screen points. The AppKit shell must convert
@@ -120,11 +128,11 @@ Bindings are written in upstream's modifiers and mapped to a Mac keyboard:
 
 - `ctrl` is Control, `alt` is Option, `shift` is Shift.
 - `logo` (`super`, and `mod` when `mod_key = "super"`, upstream's default) is a
-  physical chord: Control+Option unless `set_platform` chooses another subset of
-  `ctrl`, `alt` and `cmd`. `{"super":"cmd"}` gives upstream's chords literally.
+  physical chord: Command unless `set_platform` chooses another subset of
+  `ctrl`, `alt` and `cmd`. The Mac adapter also adds Super+Tab and F3 as overview toggles; explicit user bindings and disabled defaults take precedence.
 - A binding that holds `logo` and a modifier the chord already contains is
   displaced so it stays distinct: `ctrl` becomes Command and `alt` becomes
-  Command+Shift. With the default chord `mod+ctrl+Right` is ⌃⌥⌘→ and
+  Command+Shift. With `super = "ctrl+alt"`, `mod+ctrl+Right` is ⌃⌥⌘→ and
   `mod+alt+Right` is ⌃⌥⇧⌘→. A chord that contains Command leaves nothing to
   displace to, and such a binding is skipped with a warning.
 - `mod3` has no macOS equivalent: such bindings are skipped with a warning.

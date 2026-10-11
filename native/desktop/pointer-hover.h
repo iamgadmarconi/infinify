@@ -32,6 +32,10 @@
 // Pointer motion for the application whose window is under `screen`, by the route
 // and through the validation a click takes. Nothing is said when it is not delivered.
 - (void)pointerDeliver:(NSEvent *)motion at:(CGPoint)screen output:(NSNumber *)output;
+// Update only this application's canvas cursor. A nil output withdraws this
+// view's override. A hover reply may be reused for pick/hit policy; nil asks the
+// host to resolve the current shape without forwarding or changing focus.
+- (void)pointerCursor:(CGPoint)screen output:(NSNumber *)output reply:(NSDictionary *)reply;
 @end
 // DriftWM's pointer policy for one canvas panel of a normal run: pointer motion with
 // no button down (hover: sloppy focus and the motion an application sees), a press in

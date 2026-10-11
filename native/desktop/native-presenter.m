@@ -23,6 +23,50 @@ bool DWNativeBounds(uint32_t wid,CGRect *out) {
     if(out)*out=r;return true;
 }
 
+static bool DWNativeFiniteRect(CGRect r) {
+    return isfinite(r.origin.x)&&isfinite(r.origin.y)&&isfinite(r.size.width)&&isfinite(r.size.height)
+        &&r.size.width>0&&r.size.height>0&&isfinite(CGRectGetMaxX(r))&&isfinite(CGRectGetMaxY(r));
+}
+bool DWNativeClipPlacement(CGRect native,CGRect rootNative,CGRect rootScreen,CGRect viewport,DWNativeClipGeometry *out) {
+    if(!out||!DWNativeFiniteRect(native)||!DWNativeFiniteRect(rootNative)||!DWNativeFiniteRect(rootScreen)||!DWNativeFiniteRect(viewport))return false;
+    double zx=rootScreen.size.width/rootNative.size.width,zy=rootScreen.size.height/rootNative.size.height;
+    if(!isfinite(zx)||!isfinite(zy)||zx<=0||zy<=0)return false;
+    CGRect screen=CGRectMake(rootScreen.origin.x+(native.origin.x-rootNative.origin.x)*zx,
+        rootScreen.origin.y+(native.origin.y-rootNative.origin.y)*zy,native.size.width*zx,native.size.height*zy);
+    if(!DWNativeFiniteRect(screen))return false;
+    CGRect visible=CGRectIntersection(screen,viewport),local=CGRectZero;
+    // A fully off-output child needs an empty local clip. Never serialize
+    // CGRectNull's infinite origin as if it were a valid region.
+    if(CGRectIsNull(visible)||CGRectIsEmpty(visible))visible=CGRectZero;
+    else {
+        double left=fmax(0,fmin(native.size.width,(CGRectGetMinX(visible)-CGRectGetMinX(screen))/zx));
+        double top=fmax(0,fmin(native.size.height,(CGRectGetMinY(visible)-CGRectGetMinY(screen))/zy));
+        double right=fmax(left,fmin(native.size.width,(CGRectGetMaxX(visible)-CGRectGetMinX(screen))/zx));
+        double bottom=fmax(top,fmin(native.size.height,(CGRectGetMaxY(visible)-CGRectGetMinY(screen))/zy));
+        local=CGRectMake(left,top,right-left,bottom-top);
+    }
+    *out=(DWNativeClipGeometry){.screen=screen,.visible=visible,.local=local,.required=!CGRectContainsRect(viewport,screen)};
+    return true;
+}
+static CGRect DWNativeJSONRect(id value) {
+    if(![value isKindOfClass:NSDictionary.class])return CGRectNull;
+    NSDictionary *origin=value[@"origin"],*size=value[@"size"];
+    if(![origin isKindOfClass:NSDictionary.class]||![size isKindOfClass:NSDictionary.class])return CGRectNull;
+    for(id n in @[origin[@"x"]?:NSNull.null,origin[@"y"]?:NSNull.null,size[@"width"]?:NSNull.null,size[@"height"]?:NSNull.null])if(![n isKindOfClass:NSNumber.class])return CGRectNull;
+    CGRect r=CGRectMake([origin[@"x"]doubleValue],[origin[@"y"]doubleValue],[size[@"width"]doubleValue],[size[@"height"]doubleValue]);
+    return DWNativeFiniteRect(r)?r:CGRectNull;
+}
+static NSArray *DWNativeRectArray(CGRect r) { return @[@(r.origin.x),@(r.origin.y),@(r.size.width),@(r.size.height)]; }
+// Kept as fixed-size geometry beside the frame, so normal presentation avoids
+// allocating a dictionary per member just for read-only debug information.
+typedef struct {
+    struct dw2_identity identity;
+    uint64_t logical,output;
+    uint32_t root;
+    CGRect viewport;
+    DWNativeClipGeometry geometry;
+} DWNativeClipRecord;
+
 // The helper's lease clock and the library's: it stops while the machine sleeps, so a night asleep is not a hang.
 static uint64_t uptime(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW)/1000000; }
 // How long the main thread may stay away from its run loop before the session is closed for it.
@@ -68,6 +112,7 @@ static void DWCloseNativeClient(dw_client *client) {
     _Atomic bool _retrying;
     uint64_t _lastSent,_submittedSeq;
     NSMutableData *_records;                                    // the frame last described
+    NSMutableData *_clips;                                      // desired geometry; never sent as a native clip
     NSData *_sent;                                              // the frame last handed over
     NSArray<NSNumber *> *_order,*_sentOrder;                    // the world window of each of their records, for -debug:
     BOOL _described,_forced;
@@ -134,7 +179,7 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     }
     if(refusal){dw_client_close(presenter->_client);presenter->_client=NULL;*why=refusal;return nil;}
     presenter->_scope=subset?admitted.copy:[scope copy];
-    presenter->_windows=[NSMutableDictionary dictionary];presenter->_releases=[NSMutableDictionary dictionary];presenter->_families=[NSMutableDictionary dictionary];presenter->_records=[NSMutableData data];presenter->_frames=[NSMutableDictionary dictionary];presenter->_said=[NSMutableSet set];
+    presenter->_windows=[NSMutableDictionary dictionary];presenter->_releases=[NSMutableDictionary dictionary];presenter->_families=[NSMutableDictionary dictionary];presenter->_records=[NSMutableData data];presenter->_clips=[NSMutableData data];presenter->_frames=[NSMutableDictionary dictionary];presenter->_said=[NSMutableSet set];
     if(watch)[presenter watch];
     return presenter;
 }
@@ -310,6 +355,9 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     if(self.ended||![snapshot[@"outputs"]isKindOfClass:NSArray.class]||![snapshot[@"outputs"]count])return;
     // One placement per window: where it is shown on several outputs, the one that shows most of it. A transform has one target.
     NSMutableDictionary<NSNumber *,NSDictionary *> *placed=[NSMutableDictionary dictionary];NSMutableDictionary<NSNumber *,NSNumber *> *shown=[NSMutableDictionary dictionary];
+    NSMutableDictionary<NSNumber *,NSValue *> *viewports=[NSMutableDictionary dictionary];
+    for(NSDictionary *output in snapshot[@"outputs"]){CGRect viewport=DWNativeJSONRect(output[@"screen_bounds"]);NSNumber *identifier=output[@"id"];
+        if([identifier isKindOfClass:NSNumber.class]&&!CGRectIsNull(viewport))viewports[identifier]=[NSValue valueWithRect:NSRectFromCGRect(viewport)];}
     for(NSDictionary *p in snapshot[@"placements"]){
         NSNumber *logical=p[@"window"];NSDictionary *clip=p[@"clip_rect"][@"size"];if(!logical||!identities[logical])continue;
         double area=[clip[@"width"]doubleValue]*[clip[@"height"]doubleValue];if(placed[logical]&&area<=shown[logical].doubleValue)continue;
@@ -323,7 +371,7 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     double parkX=ceil(CGRectGetMaxX(all))+256,parkY=ceil(CGRectGetMaxY(all))+256;
     NSMutableDictionary<NSNumber *,NSNumber *> *logicals=[NSMutableDictionary dictionary];
     for(NSNumber *logical in identities){NSNumber *wid=identities[logical][@"wid"];DWNativeWindow *root=_windows[wid];if(!root||root->root!=wid.unsignedIntValue)continue;for(NSNumber *member in _families[wid]?:[NSSet setWithObject:wid])if(_windows[member])logicals[member]=logical;}
-    [_records setLength:0];NSMutableArray<NSNumber *> *order=[NSMutableArray array];
+    [_records setLength:0];[_clips setLength:0];NSMutableArray<NSNumber *> *order=[NSMutableArray array];
     // In the order of the window numbers: the same scene is then the same bytes, and is not sent twice.
     for(NSNumber *wid in [logicals.allKeys sortedArrayUsingSelector:@selector(compare:)]){
         DWNativeWindow *window=_windows[wid];NSDictionary *p=placed[logicals[wid]];CGSize own=window->bounds.size;
@@ -339,7 +387,18 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
             double m[6]={mx,0,0,my,-sx*mx-dx,-sy*my-dy};BOOL sound=YES;
             // The helper's bounds on a matrix; a placement they cannot express (a window a million points off, a zoom of a thousandth) is parked.
             for(int i=0;i<6;i++)if(!isfinite(m[i])||fabs(m[i])>1e6)sound=NO;
-            if(sound)memcpy(record.m,m,sizeof(m));
+            if(sound){
+                memcpy(record.m,m,sizeof(m));
+                NSValue *viewport=viewports[p[@"output"]];DWNativeClipGeometry geometry={0};
+                if(viewport&&root&&DWNativeClipPlacement(window->bounds,root->bounds,CGRectMake(sx,sy,sw,sh),NSRectToCGRect(viewport.rectValue),&geometry)){
+                    DWNativeClipRecord clip={.identity=window->identity,.logical=logicals[wid].unsignedLongLongValue,.output=[p[@"output"]unsignedLongLongValue],.root=window->root,.viewport=NSRectToCGRect(viewport.rectValue),.geometry=geometry};
+                    [_clips appendBytes:&clip length:sizeof(clip)];
+                    if(geometry.required){
+                        NSString *key=[NSString stringWithFormat:@"clip:%d:%llu:%llu:%u",window->identity.pid,(unsigned long long)window->identity.birth_sec,(unsigned long long)window->identity.birth_usec,window->identity.wid];
+                        if(![_said containsObject:key]){[_said addObject:key];fprintf(stderr,"Infinify: native window %u of process %d needs display clipping; the helper cannot restore original native regions yet, so its transformed content may extend outside the selected output\n",window->identity.wid,window->identity.pid);}
+                    }
+                }
+            }
         }
         // Alpha is sent for a window from the first frame its opacity is not 1, and from then on always, 1 included: a window whose
         // alpha nobody asked to change is never written, and the helper journals no alpha for it.
@@ -353,6 +412,20 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
         [_records appendBytes:&record length:sizeof(record)];[order addObject:window->logical?:wid];
     }
     _order=order;_described=YES;
+}
+- (NSArray<NSDictionary *> *)clippingPlan {
+    if(self.ended)return @[];
+    NSMutableArray *result=[NSMutableArray array];const DWNativeClipRecord *records=_clips.bytes;
+    for(NSUInteger i=0;i<_clips.length/sizeof(*records);i++){
+        const DWNativeClipRecord *record=&records[i];DWNativeWindow *window=_windows[@(record->identity.wid)];
+        if(!window||memcmp(&window->identity,&record->identity,sizeof(record->identity))||window->root!=record->root)continue;
+        DWNativeClipGeometry geometry=record->geometry;CGRect screen=geometry.screen,viewport=record->viewport;
+        [result addObject:@{@"identity":@{@"pid":@(record->identity.pid),@"birth_sec":@(record->identity.birth_sec),@"birth_usec":@(record->identity.birth_usec),@"wid":@(record->identity.wid)},
+            @"window":@(record->logical),@"root":@(record->root),@"output":@(record->output),@"required":@(geometry.required),
+            @"screen_rect":DWNativeRectArray(screen),@"viewport":DWNativeRectArray(viewport),@"visible_screen_rect":DWNativeRectArray(geometry.visible),@"local_clip_rect":DWNativeRectArray(geometry.local),
+            @"overflow":@{@"left":@(CGRectGetMinX(screen)<CGRectGetMinX(viewport)),@"top":@(CGRectGetMinY(screen)<CGRectGetMinY(viewport)),@"right":@(CGRectGetMaxX(screen)>CGRectGetMaxX(viewport)),@"bottom":@(CGRectGetMaxY(screen)>CGRectGetMaxY(viewport))}}];
+    }
+    return result;
 }
 - (void)submit {
     BOOL retry=_releases.count||atomic_load(&_retrying);
@@ -399,6 +472,8 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     NSMutableArray *records=[NSMutableArray array];const struct dw2_record *sent=_sent.bytes;
     for(NSUInteger i=0;i<_sent.length/sizeof(*sent);i++)[records addObject:@{@"window":i<_sentOrder.count?_sentOrder[i]:NSNull.null,@"wid":@(sent[i].id.wid),@"m":@[@(sent[i].m[0]),@(sent[i].m[1]),@(sent[i].m[2]),@(sent[i].m[3]),@(sent[i].m[4]),@(sent[i].m[5])],@"alpha":sent[i].flags&DW2_RECORD_HAS_ALPHA?@(sent[i].alpha):NSNull.null}];
     reply[@"records"]=records;
+    reply[@"clipping"]=@{@"native_supported":@NO,@"planning_only":@YES,@"basis":@"last described placement and cached native family bounds; content rectangles only",
+        @"remaining":@"exact original native shape, event and shadow region snapshot/persistence, apply/readback and restoration support",@"plan":[self clippingPlan]};
     return [NSJSONSerialization dataWithJSONObject:@{@"Ok":@{@"DebugNative":reply}} options:0 error:nil];
 }
 @end
@@ -448,6 +523,9 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
         [session describe:snapshot bound:owned];}
 }
 - (void)submit { if(self.ended)return;for(DWNativePresenter *session in self.sessions){[session submit];if(self.ended)break;} }
+- (NSArray<NSDictionary *> *)clippingPlan {
+    if(self.ended)return @[];NSMutableArray *result=[NSMutableArray array];for(DWNativePresenter *session in self.sessions)[result addObjectsFromArray:[session clippingPlan]];return result;
+}
 - (NSData *)debug:(NSDictionary *)request {
     if([request[@"stall"]isKindOfClass:NSNumber.class])return [self.sessions.firstObject debug:request];
     NSMutableArray *sessions=[NSMutableArray array],*records=[NSMutableArray array],*table=[NSMutableArray array];NSMutableDictionary *stats=[NSMutableDictionary dictionary],*probe=[NSMutableDictionary dictionary];
@@ -461,7 +539,8 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
         for(NSString *key in @[@"held",@"restoring",@"frames_received",@"frames_applied",@"frames_superseded",@"journal_writes"])probe[key]=@([probe[key]unsignedLongLongValue]+[local[key]unsignedLongLongValue]);
     }
     probe[@"table"]=table;
-    NSDictionary *reply=@{@"group":@YES,@"ended":@(self.ended),@"sessions":sessions,@"records":records,@"stats":stats,@"probe":complete?probe:(id)NSNull.null};
+    NSDictionary *reply=@{@"group":@YES,@"ended":@(self.ended),@"sessions":sessions,@"records":records,@"stats":stats,@"probe":complete?probe:(id)NSNull.null,
+        @"clipping":@{@"native_supported":@NO,@"planning_only":@YES,@"plan":[self clippingPlan]}};
     return [NSJSONSerialization dataWithJSONObject:@{@"Ok":@{@"DebugNative":reply}} options:0 error:nil];
 }
 @end

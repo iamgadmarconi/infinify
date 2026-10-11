@@ -3,7 +3,7 @@
   "upstream_revision": "352333a8fa1b22171492d4b71a54102045c9a19d",
   "target_baseline": "27a868e",
   "date": "2026-10-09",
-  "scope": "Exact DriftWM user-visible behavior for native Mac apps. The owner excludes literal Wayland/X11 hosting and features without a macOS equivalent; native equivalents remain required, using the Mac’s existing settings for host controls.",
+  "scope": "Exact DriftWM user-visible behavior for native Mac apps, subject to recorded owner decisions. Literal Wayland/X11 hosting, features without a macOS equivalent and tablet display mapping are excluded. 65 reviewed host-owned rows use existing Mac settings/services, including native display/window capture; no dedicated Infinify canvas feed is required. Native integration and safe lock/input/capture lifecycle remain required.",
   "coverage_note": "Source-indexed inventory, not a complete semantic oracle. Includes commented reference defaults/examples and typed configuration fields. Source-dispatch contracts and production E2E remain required; example assignments are not automatically runtime defaults.",
   "source_sha256": {
     "src/config/types.rs": "d709bb9c4adc8212ff38e21b60676ceddbbed24b0ab184acb7745255d78fb1b2",
@@ -290,7 +290,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "center-nearest <direction> runs through the action command in every normal launch, with driftwm-core's find_nearest and upstream's closest-point rule: candidates are every canvas window (detached placeholders included; no widget and no screen-pinned window) and the navigation.anchors points; the search starts at the focused window while all of it is on the output (upstream's threshold 1.0) and it is not screen-pinned, and at the viewport centre otherwise; a window is focused and flown to at the current zoom (NavZoom::Keep), and an anchor clears focus and flies the camera there. Default shell: the config file's bindings (upstream's default mod+arrows, Control-Option-arrows under the default super chord). Known mismatches: representative points come from the world rectangle, which has no separate title-bar strip; a fractional frame's visibility is measured by the largest whole-pixel rectangle inside it; there is no just-exited-fullscreen anchor; an anchor outside the ±1e12 world is not a candidate; the gesture form (ThresholdAction.CenterNearest) has run only as a synthetic event stream, and the pointer form has its own row (MouseAction.CenterNearest); the native focus request is performed only with Accessibility access and has never been exercised live. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/navigation_actions_flow.rs, expected targets derived by hand, not from an executed upstream oracle) and scripted msg sessions against the built app in --windowed mode on 2026-10-09 with detached placeholders only (right, left, up, down and up-right, a kept zoom, the viewport-centre origin, an anchor), which left no saved evidence. Hot-key delivery and native focus are unrun on a live run. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "center-nearest <direction> runs through the action command in every normal launch, with driftwm-core's find_nearest and upstream's closest-point rule: candidates are every canvas window (detached placeholders included; no widget and no screen-pinned window) and the navigation.anchors points; the search starts at the focused window while all of it is on the output (upstream's threshold 1.0) and it is not screen-pinned, and at the viewport centre otherwise; a window is focused and flown to at the current zoom (NavZoom::Keep), and an anchor clears focus and flies the camera there. Default shell: the config file's bindings (upstream's default mod+arrows, Control-Option-arrows under the default super chord). Known mismatches: representative points come from the world rectangle, which has no separate title-bar strip; a fractional frame's visibility is measured by the largest whole-pixel rectangle inside it; there is no just-exited-fullscreen anchor; an anchor outside the \u00b11e12 world is not a candidate; the gesture form (ThresholdAction.CenterNearest) has run only as a synthetic event stream, and the pointer form has its own row (MouseAction.CenterNearest); the native focus request is performed only with Accessibility access and has never been exercised live. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/navigation_actions_flow.rs, expected targets derived by hand, not from an executed upstream oracle) and scripted msg sessions against the built app in --windowed mode on 2026-10-09 with detached placeholders only (right, left, up, down and up-right, a kept zoom, the viewport-centre origin, an anchor), which left no saved evidence. Hot-key delivery and native focus are unrun on a live run. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "Action.CycleWindows",
@@ -613,7 +613,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "The controller action send-to-output <dir> picks the adjacent output as upstream's output_in_direction does, over the outputs' screen_bounds (from the centre of the source output, the nearest other output whose centre lies within about 60 degrees of the direction), and moves the focused logical window so that its centre lands on the target viewport's focus_placement point at the target's current zoom, truncated toward zero as upstream's cast is; the window is raised and the scene is dirty. The source output is the first whose viewport shows the window's centre, else the active output. No focused window, a focused widget, a single output and no output in that direction do nothing, as upstream. A focused screen-pinned window is not moved on the canvas: its pin is bound to the output adjacent to the pin's own, keeping its place on the screen, clamped until the whole frame is on that output (upstream's send_pinned_to_output). Default shell: Control-Option-Command-Shift with an arrow key (upstream mod+alt+arrow); also msg action send-to-output <dir>. Known mismatches: the native window is never moved; native focus is not asserted again (the window already holds the logical focus); with no output showing the window and no active output the action is refused, where upstream falls back to its first output; upstream's fullscreen leg does not exist; a pinned window's source output is the one its pin is bound to, where upstream takes the output showing the pin's canvas frame. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios (crates/desktop/tests/platform_actions_flow.rs, and crates/desktop/tests/rules_flow.rs for a widget and a pinned window), and one scripted msg session against the built app in --windowed mode, which has a single output, in which the action answered Ok and the focused window stayed where it was, left no saved evidence; a window sent to another display and the hot key are unrun on a live run. Native verification and full-row acceptance remain incomplete. On 2026-10-11 the owner selected independent display views. The native adapter now selects a stable real placement and draws other root placements from one shared capture with independent output cameras/zoom, and routes scoped replica pointer events and canvas green-button actions. Live popup/sheet replicas and native display-boundary clipping remain open. No tests or launches; compilation is not acceptance evidence."
+      "implementation_note": "The controller action send-to-output <dir> picks the adjacent output as upstream's output_in_direction does, over the outputs' screen_bounds (from the centre of the source output, the nearest other output whose centre lies within about 60 degrees of the direction), and moves the focused logical window so that its centre lands on the target viewport's focus_placement point at the target's current zoom, truncated toward zero as upstream's cast is; the window is raised and the scene is dirty. The source output is the first whose viewport shows the window's centre, else the active output. No focused window, a focused widget, a single output and no output in that direction do nothing, as upstream. A focused screen-pinned window is not moved on the canvas: its pin is bound to the output adjacent to the pin's own, keeping its place on the screen, clamped until the whole frame is on that output (upstream's send_pinned_to_output). Default shell: Control-Option-Command-Shift with an arrow key (upstream mod+alt+arrow); also msg action send-to-output <dir>. Known mismatches: the native window is never moved; native focus is not asserted again (the window already holds the logical focus); with no output showing the window and no active output the action is refused, where upstream falls back to its first output; upstream's fullscreen leg does not exist; a pinned window's source output is the one its pin is bound to, where upstream takes the output showing the pin's canvas frame. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios (crates/desktop/tests/platform_actions_flow.rs, and crates/desktop/tests/rules_flow.rs for a widget and a pinned window), and one scripted msg session against the built app in --windowed mode, which has a single output, in which the action answered Ok and the focused window stayed where it was, left no saved evidence; a window sent to another display and the hot key are unrun on a live run. Native verification and full-row acceptance remain incomplete. On 2026-10-11 the owner selected independent display views. The native adapter now selects a stable real placement and draws other root placements from one shared capture with independent output cameras/zoom, and routes scoped replica pointer events and canvas green-button actions. Separate live popup/sheet replicas now share root-relative geometry and exact-member input across views; physical interaction and native display-boundary clipping remain open. No tests or launches; compilation is not acceptance evidence."
     },
     {
       "id": "Action.SendCursorToOutput",
@@ -634,7 +634,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "The controller action send-cursor-to-output <dir> picks the output adjacent to the active one as send-to-output does and returns a warp_pointer effect carrying the centre of the target output's usable area in global screen coordinates; the shell performs it with CGWarpMouseCursorPosition, in normal runs only. With a single output, or none in that direction, there is no effect, as upstream. Reachable from a key binding in the config file (upstream binds none by default) and as msg action send-cursor-to-output <dir>. Known mismatches: with no active output the action is refused, where upstream falls back to its first output; the active output after the warp is whichever the shell next finds under the pointer; the app registers no usable area, so the target is the centre of the whole view. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios (the effect, not the pointer), and one scripted msg session against the built app in --windowed mode, in which the single-output answer (Ok, no effect) was seen, left no saved evidence; the pointer has never been warped on a live run. Native verification and full-row acceptance remain incomplete. On 2026-10-11 the owner selected independent display views. The native adapter now selects a stable real placement and draws other root placements from one shared capture with independent output cameras/zoom, and routes scoped replica pointer events and canvas green-button actions. Live popup/sheet replicas and native display-boundary clipping remain open. No tests or launches; compilation is not acceptance evidence."
+      "implementation_note": "The controller action send-cursor-to-output <dir> picks the output adjacent to the active one as send-to-output does and returns a warp_pointer effect carrying the centre of the target output's usable area in global screen coordinates; the shell performs it with CGWarpMouseCursorPosition, in normal runs only. With a single output, or none in that direction, there is no effect, as upstream. Reachable from a key binding in the config file (upstream binds none by default) and as msg action send-cursor-to-output <dir>. Known mismatches: with no active output the action is refused, where upstream falls back to its first output; the active output after the warp is whichever the shell next finds under the pointer; the app registers no usable area, so the target is the centre of the whole view. No evidence entry is recorded yet: automated coverage is limited to exported-C-ABI/JSON controller scenarios (the effect, not the pointer), and one scripted msg session against the built app in --windowed mode, in which the single-output answer (Ok, no effect) was seen, left no saved evidence; the pointer has never been warped on a live run. Native verification and full-row acceptance remain incomplete. On 2026-10-11 the owner selected independent display views. The native adapter now selects a stable real placement and draws other root placements from one shared capture with independent output cameras/zoom, and routes scoped replica pointer events and canvas green-button actions. Separate live popup/sheet replicas now share root-relative geometry and exact-member input across views; physical interaction and native display-boundary clipping remain open. No tests or launches; compilation is not acceptance evidence."
     },
     {
       "id": "Action.FocusCenter",
@@ -844,7 +844,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Implemented in every normal run, unverified. A press bound to resize_window (default alt+right on a window) raises and focuses the window and starts upstream's resize grab as a size transaction in readback mode (crates/desktop/NATIVE_RESIZE.md, Pointer resize; native/desktop/main.m beginResize): the edges are upstream's 3x3 grid, the delta is the screen displacement over the zoom of the start cut to whole units and held inside the output, each size is asked of the real window through Accessibility one at a time with later motion replacing the request that waits, and the canvas shows the size read back, the opposite edge kept on the canvas for a left or top edge. Run end to end on disposable fixture windows by tests/e2e/scoped-resize-drag.sh on 2026-10-11 (a windowed, scoped run without Screen Recording, so tiles had no picture); the press, the drag and the release were made by the DebugPointer request through the canvas view's own mouse handlers, not by a person and not delivered by the window server. Cases: the nine cells, thirty drag events asking three sizes, a pointer at rest for three seconds, a minimum, a maximum and a resize increment, a window that is not settable, a window closed and an application hung or stalled in the middle of a grab, each followed by a click that landed. Controller scenarios: crates/desktop/tests/native_resize_flow.rs (readback_grab_*). Known mismatches: a Mac window declares no limits, so a size past one is asked and refused where upstream never asks; macOS grants no size past the screen's visible area; the native window's own top-left never moves for a left or top drag, only its tile does; a screen-pinned window is refused where upstream resizes it in screen space; no resize cursor; while a grab lasts every other sizing action, fullscreen toggle and IPC resize is refused; the grab ends when its own button lifts, not the last of several; a second resize press while a transaction settles only raises the window. Unverified: no person dragged, no application of the owner's was resized, nothing was seen with a picture, one display. The older capture-acknowledged path behind --experimental-native-resize is legacy and was not run."
+      "implementation_note": "Implemented in every normal run, unverified. A press bound to resize_window (default alt+right on a window) raises and focuses the window and starts upstream's resize grab as a size transaction in readback mode (crates/desktop/NATIVE_RESIZE.md, Pointer resize; native/desktop/main.m beginResize): the edges are upstream's 3x3 grid, the delta is the screen displacement over the zoom of the start cut to whole units and held inside the output, each size is asked of the real window through Accessibility one at a time with later motion replacing the request that waits, and the canvas shows the size read back, the opposite edge kept on the canvas for a left or top edge. Run end to end on disposable fixture windows by tests/e2e/scoped-resize-drag.sh on 2026-10-11 (a windowed, scoped run without Screen Recording, so tiles had no picture); the press, the drag and the release were made by the DebugPointer request through the canvas view's own mouse handlers, not by a person and not delivered by the window server. Cases: the nine cells, thirty drag events asking three sizes, a pointer at rest for three seconds, a minimum, a maximum and a resize increment, a window that is not settable, a window closed and an application hung or stalled in the middle of a grab, each followed by a click that landed. Controller scenarios: crates/desktop/tests/native_resize_flow.rs (readback_grab_*). Known mismatches: a Mac window declares no limits, so a size past one is asked and refused where upstream never asks; macOS grants no size past the screen's visible area; the native window's own top-left never moves for a left or top drag, only its tile does; a screen-pinned window is refused where upstream resizes it in screen space; no resize cursor; while a grab lasts every other sizing action, fullscreen toggle and IPC resize is refused; the grab ends when its own button lifts, not the last of several; a second resize press while a transaction settles only raises the window. Unverified: no person dragged, no application of the owner's was resized, nothing was seen with a picture, one display. The older capture-acknowledged path behind --experimental-native-resize is legacy and was not run. 2026-10-11 cursor continuation supersedes the earlier canvas-cursor limitation: source now selects pointing-hand for pick targets, all eight native resize shapes for accepted borders/held transactions, and closed-hand for mouse pan/move grabs. Overrides are limited to the actual canvas panel, avoid unchanged sets, and restore app-local state only while still owned. Foreign replica cursor images remain unavailable; no runtime evidence added."
     },
     {
       "id": "MouseAction.ResizeWindowSnapped",
@@ -2516,19 +2516,19 @@
         {
           "line": 932,
           "comment_depth": 2,
-          "source_assignment": "pass_keys = true — forward ALL keys (game-friendly)",
+          "source_assignment": "pass_keys = true \u2014 forward ALL keys (game-friendly)",
           "value_note": "multiline or illustrative snippet; inspect complete source"
         },
         {
           "line": 933,
           "comment_depth": 2,
-          "source_assignment": "pass_keys = [\"mod+q\", \"ctrl+q\"] — forward ONLY these combos; all other compositor shortcuts stay active",
+          "source_assignment": "pass_keys = [\"mod+q\", \"ctrl+q\"] \u2014 forward ONLY these combos; all other compositor shortcuts stay active",
           "value_note": "multiline or illustrative snippet; inspect complete source"
         },
         {
           "line": 934,
           "comment_depth": 2,
-          "source_assignment": "pass_keys = false / omit — compositor handles everything (default)",
+          "source_assignment": "pass_keys = false / omit \u2014 compositor handles everything (default)",
           "value_note": "multiline or illustrative snippet; inspect complete source"
         }
       ],
@@ -2556,19 +2556,19 @@
         {
           "line": 937,
           "comment_depth": 2,
-          "source_assignment": "pass_mouse = true — forward ALL mouse bindings over this window",
+          "source_assignment": "pass_mouse = true \u2014 forward ALL mouse bindings over this window",
           "value_note": "multiline or illustrative snippet; inspect complete source"
         },
         {
           "line": 938,
           "comment_depth": 2,
-          "source_assignment": "pass_mouse = [\"alt+left\", \"alt+right\"] — forward ONLY these combos; all other mouse bindings stay active",
+          "source_assignment": "pass_mouse = [\"alt+left\", \"alt+right\"] \u2014 forward ONLY these combos; all other mouse bindings stay active",
           "value_note": "multiline or illustrative snippet; inspect complete source"
         },
         {
           "line": 939,
           "comment_depth": 2,
-          "source_assignment": "pass_mouse = false / omit — compositor handles everything (default)",
+          "source_assignment": "pass_mouse = false / omit \u2014 compositor handles everything (default)",
           "value_note": "multiline or illustrative snippet; inspect complete source"
         }
       ],
@@ -2725,7 +2725,7 @@
       "evidence": [],
       "source_type": "String",
       "required": true,
-      "implementation_note": "An [[outputs]] entry is chosen by name: output_config(stable_id) in output_actions.rs (hot_corner_rule) and navigation.rs finds the entry named after the output stable id (a display UUID, or windowed), else the wildcard * entry, an exact entry replacing it whole. Covered by controller scenarios in platform_actions_flow.rs. Matched on the stable id, not a connector name; no display was matched on a live run. On 2026-10-11 the owner selected independent display views. The native adapter now selects a stable real placement and draws other root placements from one shared capture with independent output cameras/zoom, and routes scoped replica pointer events and canvas green-button actions. Live popup/sheet replicas and native display-boundary clipping remain open. No tests or launches; compilation is not acceptance evidence."
+      "implementation_note": "An [[outputs]] entry is chosen by name: output_config(stable_id) in output_actions.rs (hot_corner_rule) and navigation.rs finds the entry named after the output stable id (a display UUID, or windowed), else the wildcard * entry, an exact entry replacing it whole. Covered by controller scenarios in platform_actions_flow.rs. Matched on the stable id, not a connector name; no display was matched on a live run. On 2026-10-11 the owner selected independent display views. The native adapter now selects a stable real placement and draws other root placements from one shared capture with independent output cameras/zoom, and routes scoped replica pointer events and canvas green-button actions. Separate live popup/sheet replicas now share root-relative geometry and exact-member input across views; physical interaction and native display-boundary clipping remain open. No tests or launches; compilation is not acceptance evidence."
     },
     {
       "id": "field.OutputConfig.scale",
@@ -2744,7 +2744,7 @@
       "evidence": [],
       "source_type": "Option<f64>",
       "required": true,
-      "implementation_note": "macOS owns the display arrangement: each display scale is its resolution choice in System Settings, so the key is read and unused and screen_bounds is macOS result. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "macOS owns the display arrangement: each display scale is its resolution choice in System Settings, so the key is read and unused and screen_bounds is macOS result. Owner questionnaire review 2026-10-11, question 1: Use macOS. Use the scaling selected in macOS Displays settings. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "field.OutputConfig.transform",
@@ -2763,7 +2763,7 @@
       "evidence": [],
       "source_type": "Option<Transform>",
       "required": true,
-      "implementation_note": "macOS owns display rotation (System Settings > Displays), so the key is read and unused and screen_bounds is macOS result. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "macOS owns display rotation (System Settings > Displays), so the key is read and unused and screen_bounds is macOS result. Owner questionnaire review 2026-10-11, question 2: Use macOS. Follow the display orientation supplied by macOS. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "field.OutputConfig.position",
@@ -2782,7 +2782,7 @@
       "evidence": [],
       "source_type": "OutputPosition",
       "required": true,
-      "implementation_note": "macOS owns where displays sit relative to each other (System Settings > Displays), so the key is read and unused and screen_bounds is macOS result. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "macOS owns where displays sit relative to each other (System Settings > Displays), so the key is read and unused and screen_bounds is macOS result. Owner questionnaire review 2026-10-11, question 3: Use macOS. Follow the monitor arrangement configured in macOS. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "field.OutputConfig.mode",
@@ -2801,7 +2801,7 @@
       "evidence": [],
       "source_type": "OutputMode",
       "required": true,
-      "implementation_note": "macOS owns each display resolution and refresh rate (System Settings > Displays), so the key is read and unused and screen_bounds is macOS result. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "macOS owns each display resolution and refresh rate (System Settings > Displays), so the key is read and unused and screen_bounds is macOS result. Owner questionnaire review 2026-10-11, question 4: Use macOS. Use the resolution and refresh rate selected in macOS. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "field.OutputConfig.hot_corners",
@@ -3390,7 +3390,7 @@
       "evidence": [],
       "source_type": "bool",
       "required": true,
-      "implementation_note": "macOS owns tap to click (System Settings > Trackpad); the key is read and unused and the port never configures the device. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "macOS owns tap to click (System Settings > Trackpad); the key is read and unused and the port never configures the device. Owner questionnaire review 2026-10-11, question 5: Use macOS. Respect the Mac trackpad preference. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "field.TrackpadSettings.natural_scroll",
@@ -3409,7 +3409,7 @@
       "evidence": [],
       "source_type": "bool",
       "required": true,
-      "implementation_note": "macOS owns the scroll direction (System Settings > Trackpad); the key is read and unused and the port never configures the device. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "macOS owns the scroll direction (System Settings > Trackpad); the key is read and unused and the port never configures the device. Owner questionnaire review 2026-10-11, question 6: Use macOS. Use the trackpad scroll direction delivered by macOS. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "field.TrackpadSettings.tap_and_drag",
@@ -3428,7 +3428,7 @@
       "evidence": [],
       "source_type": "bool",
       "required": true,
-      "implementation_note": "macOS owns dragging by tap (an Accessibility pointer-control option); the key is read and unused and the port never configures the device. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "macOS owns dragging by tap (an Accessibility pointer-control option); the key is read and unused and the port never configures the device. Owner questionnaire review 2026-10-11, question 7: Use macOS. Use the Mac dragging preference. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "field.TrackpadSettings.accel_speed",
@@ -3447,7 +3447,7 @@
       "evidence": [],
       "source_type": "f64",
       "required": true,
-      "implementation_note": "macOS owns the pointer tracking speed (System Settings > Trackpad); the key is read and unused and the port never configures the device. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "macOS owns the pointer tracking speed (System Settings > Trackpad); the key is read and unused and the port never configures the device. Owner questionnaire review 2026-10-11, question 8: Use macOS. Use the Mac tracking-speed preference. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "field.TrackpadSettings.accel_profile",
@@ -3466,7 +3466,7 @@
       "evidence": [],
       "source_type": "AccelProfile",
       "required": true,
-      "implementation_note": "macOS owns pointer acceleration; the key is read and unused and the port never configures the device. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "macOS owns pointer acceleration; the key is read and unused and the port never configures the device. Owner questionnaire review 2026-10-11, question 9: Use macOS. Keep the acceleration behavior supplied by macOS. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "field.TrackpadSettings.click_method",
@@ -3485,7 +3485,7 @@
       "evidence": [],
       "source_type": "Option<String>",
       "required": true,
-      "implementation_note": "macOS owns the click behaviour: click pressure and secondary click (System Settings > Trackpad); the key is read and unused and the port never configures the device. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "macOS owns the click behaviour: click pressure and secondary click (System Settings > Trackpad); the key is read and unused and the port never configures the device. Owner questionnaire review 2026-10-11, question 10: Use macOS. Use the Mac click and secondary-click preferences. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "field.TrackpadSettings.disable_while_typing",
@@ -3504,7 +3504,7 @@
       "evidence": [],
       "source_type": "bool",
       "required": true,
-      "implementation_note": "macOS owns palm and typing rejection on its trackpads; the key is read and unused and the port never configures the device. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "macOS owns palm and typing rejection on its trackpads; the key is read and unused and the port never configures the device. Owner questionnaire review 2026-10-11, question 11: Use macOS. Rely on macOS palm rejection and typing behavior. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "field.TrackpadSettings.send_events",
@@ -3542,7 +3542,7 @@
       "evidence": [],
       "source_type": "f64",
       "required": true,
-      "implementation_note": "macOS owns the mouse tracking speed (System Settings > Mouse); the key is read and unused and the port never configures the device. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "macOS owns the mouse tracking speed (System Settings > Mouse); the key is read and unused and the port never configures the device. Owner questionnaire review 2026-10-11, question 12: Use macOS. Use the Mac or mouse-driver tracking-speed preference. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "field.MouseDeviceSettings.accel_profile",
@@ -3561,7 +3561,7 @@
       "evidence": [],
       "source_type": "AccelProfile",
       "required": true,
-      "implementation_note": "macOS owns pointer acceleration; the key is read and unused and the port never configures the device. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "macOS owns pointer acceleration; the key is read and unused and the port never configures the device. Owner questionnaire review 2026-10-11, question 13: Use macOS. Use macOS or the mouse driver\u2019s acceleration behavior. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "field.MouseDeviceSettings.natural_scroll",
@@ -3580,7 +3580,7 @@
       "evidence": [],
       "source_type": "bool",
       "required": true,
-      "implementation_note": "macOS owns the mouse scroll direction (System Settings > Mouse); the key is read and unused and the port never configures the device. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "macOS owns the mouse scroll direction (System Settings > Mouse); the key is read and unused and the port never configures the device. Owner questionnaire review 2026-10-11, question 14: Use macOS. Use the mouse scroll direction delivered by macOS. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "field.MouseDeviceSettings.left_handed",
@@ -3599,7 +3599,7 @@
       "evidence": [],
       "source_type": "bool",
       "required": true,
-      "implementation_note": "macOS owns the choice of primary mouse button; the key is read and unused and the port never configures the device. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "macOS owns the choice of primary mouse button; the key is read and unused and the port never configures the device. Owner questionnaire review 2026-10-11, question 15: Use macOS. Use the Mac or mouse-driver button assignment. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "field.TouchSettings.enable",
@@ -4004,7 +4004,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Upstream lets a client such as gammastep set the gamma ramp of an output. On a Mac colour temperature and gamma belong to macOS (Night Shift, True Tone, display profiles) and the port has no code that reads or sets them. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Upstream lets a client such as gammastep set the gamma ramp of an output. On a Mac colour temperature and gamma belong to macOS (Night Shift, True Tone, display profiles) and the port has no code that reads or sets them. Owner questionnaire review 2026-10-11, question 16: Use macOS. Keep color management with macOS and existing display utilities. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "protocol.image_capture_source",
@@ -4025,7 +4025,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Upstream offers an output or a single window as the source of a screencast. On a Mac that choice is ScreenCaptureKit and its own picker, which offer each display and each real application window, and the port adds nothing to it; its one-shot msg screenshot, with a window target, is covered by the ipc rows and protocol.screencopy. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Upstream offers an output or a single window as the source of a screencast. On a Mac that choice is ScreenCaptureKit and its own picker, which offer each display and each real application window, and the port adds nothing to it; its one-shot msg screenshot, with a window target, is covered by the ipc rows and protocol.screencopy. Owner questionnaire review 2026-10-11, question 17: Use macOS. Use the sharing app\u2019s native Mac display/window picker. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "protocol.image_copy_capture",
@@ -4046,7 +4046,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Upstream streams frames of an output or of one window to screencast clients (OBS, browser screen sharing). On a Mac that is ScreenCaptureKit: an application records a display (nothing in the shell hides its canvas panels from it) or a real window as its owner draws it, and the port has no frame stream of its own, only the one-shot msg screenshot. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Upstream supplies live output/window frames to screencast clients. Owner follow-up to questionnaire question 18 on 2026-10-11: Use existing Mac capture (Recommended). Use native Mac display/window capture for external recording and sharing; a dedicated live Infinify canvas feed is not required. This resolves the earlier Discuss first answer. Internal per-display root-replica capture streams remain a separate rendering requirement. Native coexistence and integration acceptance remain required and unverified; the scope decision supplies no runtime evidence."
     },
     {
       "id": "protocol.output_management",
@@ -4067,7 +4067,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Upstream lets a client such as wlr-randr or kanshi set the mode, scale, transform, position and enabled state of an output. On a Mac the arrangement belongs to System Settings, Displays: the port only registers the resulting screens as outputs, and [[outputs]] scale, transform, position and mode are read and unused (crates/desktop/CONFIG.md, Outputs). Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Upstream lets a client such as wlr-randr or kanshi set the mode, scale, transform, position and enabled state of an output. On a Mac the arrangement belongs to System Settings, Displays: the port only registers the resulting screens as outputs, and [[outputs]] scale, transform, position and mode are read and unused (crates/desktop/CONFIG.md, Outputs). Owner questionnaire review 2026-10-11, question 19: Use macOS. Leave display configuration to macOS and existing utilities. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "protocol.output_power",
@@ -4088,7 +4088,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Upstream lets a client switch an output off and on (DPMS), as an idle daemon does. On a Mac display sleep belongs to macOS (Lock Screen and Energy settings, pmset), and the port has no code for it: the default mod+l binding only execs /usr/bin/pmset displaysleepnow in place of swaylock, and nothing in the shell observes a display sleeping or waking. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Display sleep/wake policy stays with macOS. The default lock binding may invoke pmset displaysleepnow, which is not an unconditional secure lock. native/desktop/session-watch.m observes workspace sleep/wake and session-activity notifications; notification wiring is not physical power/lifecycle acceptance. Owner questionnaire review 2026-10-11, question 20: Use macOS. Use the Mac\u2019s display-sleep and power settings. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "protocol.screencopy",
@@ -4130,7 +4130,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Upstream lets an on-screen keyboard or a tool such as wtype inject keys, and runs its own bindings on them. On a Mac synthetic keys come from macOS (Accessibility Keyboard, posted events) and reach applications without the port, which has no code for them; whether such keys trigger the hot keys the shell registers was never tried. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Upstream lets an on-screen keyboard or a tool such as wtype inject keys, and runs its own bindings on them. On a Mac synthetic keys come from macOS (Accessibility Keyboard, posted events) and reach applications without the port, which has no code for them; whether such keys trigger the hot keys the shell registers was never tried. Owner questionnaire review 2026-10-11, question 21: Use macOS. Use native Mac accessibility keyboards and synthetic-input tools. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "protocol.data_device",
@@ -4148,7 +4148,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Copy and paste is the pasteboard of macOS between the real applications, and the port has no code in it. The drag-and-drop half is not implemented: a drag begun in one window cannot be dropped on another through the canvas, because a held pointer drag never retargets another source (native/desktop/README.md, Known limits). Missing: that drag session, as platform.dnd says."
+      "implementation_note": "The existing Mac pasteboard remains application-owned. Cross-application drag-and-drop through captured views is not implemented. Implicit mouse capture now retains the original native recipient beyond viewport bounds, but it does not establish an OS drag session or negotiate a destination through a replica. Third-party drag sessions and native effect acceptance remain open."
     },
     {
       "id": "protocol.primary_selection",
@@ -4184,7 +4184,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Not implemented: upstream lets a client lock or confine the pointer to its surface (games, 3D viewports). On a Mac an application asks macOS for that itself, but here the canvas panel takes the pointer and forwards events to the window, nothing holds the pointer inside a window or learns of a lock, and cross-boundary pointer capture is listed as not implemented (native/desktop/README.md, Known limits). Never tried with a real application."
+      "implementation_note": "2026-10-11: native-pointer-grab now retains an admitted replica mouse recipient across viewport boundaries, with same-binding validation, multi-button pairing and cancelled-tail suppression. This is implicit button capture only. Discovering and honoring an application-requested pointer lock or confinement, including restoration and cursor behavior, remains unimplemented; no physical application acceptance is claimed."
     },
     {
       "id": "protocol.relative_pointer",
@@ -4196,13 +4196,13 @@
       },
       "contract": "Match native user-visible relative_pointer behavior; literal wire protocol is outside scope.",
       "platform_mapping": "Native macOS observable behavior required; literal Wayland wire protocol excluded by user clarification.",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "platform",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Not implemented: upstream sends a client raw pointer deltas, used together with a locked pointer. On a Mac an application reads deltas from macOS itself, but here pointer events reach a window only as the shell forwards them at a translated point, and no relative-motion path exists or was tried with a real application (native/desktop/README.md, Known limits). Missing together with protocol.pointer_constraints."
+      "implementation_note": "2026-10-11 partial source implementation: native-relative-motion converts accelerated CGEvent mouse deltas into application points using the original output view scale, carrying fractional remainder for one exact recipient/scale. Native posting adapts a copy once; raw unaccelerated fields 170/171 and tablet payload remain untouched. Target/scale changes, cancellation and failed posting reset carry. Native pointer-grab preserves the original root/member recipient across viewport boundaries. Application-requested pointer lock/confinement and physical raw-delta acceptance remain open; compiler checks supply no runtime evidence."
     },
     {
       "id": "protocol.idle_inhibit",
@@ -4220,7 +4220,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Upstream lets a client such as a video player hold off idle while its surface is visible. On a Mac an application takes a power assertion from macOS itself, which goes on working for the real window whatever the canvas shows, and the port has no code for it. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Upstream lets a client such as a video player hold off idle while its surface is visible. On a Mac an application takes a power assertion from macOS itself, which goes on working for the real window whatever the canvas shows, and the port has no code for it. Owner questionnaire review 2026-10-11, question 22: Use macOS. Let apps make their own native Mac keep-awake requests. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "protocol.idle_notifier",
@@ -4238,7 +4238,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Upstream tells a client such as swayidle when the user has gone idle and when activity resumes. On a Mac the idle timer, the screen saver and display sleep belong to macOS; the port has no idle notification of its own and nothing in the shell observes sleep or wake. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "macOS owns the idle timer, screen saver and display sleep. Infinify has no public idle-threshold notification service. native/desktop/session-watch.m observes workspace sleep/wake and session-activity notifications for its internal lifecycle; these are separate from a user-idle event API. Owner questionnaire review 2026-10-11, question 23: Use macOS. Leave idle automation to macOS and existing tools. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "protocol.session_lock",
@@ -4256,7 +4256,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Upstream lets a locker such as swaylock take every output and all input until it unlocks. On a Mac the lock screen is the login window of macOS: the port only maps the default mod+l binding to exec /usr/bin/pmset displaysleepnow, which locks only if Lock Screen settings ask for the password at once (crates/desktop/CONFIG.md), and it observes no lock or unlock. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "macOS owns the lock screen and authentication. The default lock binding may invoke pmset displaysleepnow, whose password behavior follows native settings. native/desktop/session-watch.m observes workspace session-activity and sleep/wake notifications; secure lock and unlock acceptance remains unverified. Owner questionnaire review 2026-10-11, question 24: Use macOS. Use the Mac\u2019s existing lock controls and preferences. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "protocol.tablet",
@@ -4268,13 +4268,13 @@
       },
       "contract": "Match native user-visible tablet behavior; literal wire protocol is outside scope.",
       "platform_mapping": "Native macOS observable behavior required; literal Wayland wire protocol excluded by user clarification.",
-      "status": "missing",
+      "status": "implemented_unverified",
       "owner": "platform",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Not implemented: upstream forwards tablet tools (proximity, pressure, tilt, tool cursor) to clients and maps a tablet to an output. Here [input.tablet] is read and not applied (crates/desktop/CONFIG.md), the shell handles no tablet event type, and whether a forwarded pointer event keeps its pressure for the window under it was never tried. A tablet pointer lands on the canvas panel as a mouse does and goes through that same forwarding."
+      "implementation_note": "2026-10-11 source implementation: native-tablet.h/.m preserves physical pen/eraser proximity, pressure, tilt, rotation, tangential pressure, buttons and vendor payload through copied CGEvents. Main-thread routing admits only the current root generation/output and validated native family member, retains contact ownership and pairs release/tool-out on cancellation. Native event taps and replica posting accept dedicated tablet packets as well as mouse tablet subtypes. Tools already in proximity at startup wait for a physical enter; no identity is fabricated. Tablet mapping remains excluded by questions 62/67. Replica cursor-image synchronization and physical hardware delivery remain unverified or incomplete. Strict compiler checks only; no runtime evidence added."
     },
     {
       "id": "protocol.xwayland",
@@ -4326,7 +4326,7 @@
         }
       ],
       "required": true,
-      "implementation_note": "2026-10-11 source reconciliation: audited native root families are integrated into the desktop presenter. Same-process, acyclic parent chains and untransformed bounds determine popup/sheet placement; detached members restore their original native state. One-shot family exports use independently captured members. Additional display views currently capture roots only. Remaining: live popup/sheet replicas, native display-boundary clipping, Spaces gathering, cross-application popup/modal ordering and full third-party acceptance. Historical owned-fixture observations are documented in native/desktop/README.md; no new tests or launches were run for this inventory refresh."
+      "implementation_note": "2026-10-11 source reconciliation: audited native root families use same-process, acyclic parent chains and untransformed bounds for popup/sheet placement; detached members restore original native state. Native-replica-family supplies separate extra-display member streams, metadata pixel crops, root-relative geometry and fresh birth/parent/bounds checks. The renderer shares members across independent views, closing snapshots and window export. Child-only adapter placements retain visible descendants when a root leaves the viewport without changing world geometry or physical ownership. Capture demand and input use the same derived snapshot; only exact captured child hits authorize input within a child envelope. Reports are fenced by binding generation and session. Family queues drain temporary objects per work item and skip shareable-content enumeration for empty plans. Remaining: native display-boundary clipping, Spaces gathering, cross-application popup/modal ordering, replica cursor images and third-party acceptance. Compilation and source review supply no runtime evidence."
     },
     {
       "id": "native.input",
@@ -4359,7 +4359,7 @@
         }
       ],
       "required": true,
-      "implementation_note": "2026-10-11 source reconciliation: real native placements use ordinary WindowServer application input; a scoped event bridge takes configured canvas gestures and green-button actions. Hover resolves the actual native recipient, with identity/generation validation. Additional display views use scoped per-window pointer forwarding with separate local and transformed-screen coordinates and paired releases. Remaining: physical event delivery and third-party acceptance, cross-view drag-and-drop, confined/relative input, tablet events, and live popup/sheet replica interaction. Compilation and API-return success do not prove these behaviors."
+      "implementation_note": "2026-10-11 source reconciliation: real native placements retain ordinary WindowServer input; the scoped event bridge takes configured canvas gestures and green-button actions. Root/member replica hits require current generation, output, process birth, native parentage and capture geometry. Native-pointer-grab retains the original recipient across tile/display boundaries, maps current original-output geometry without hit retargeting, pairs multiple buttons and consumes cancelled physical tails. Native-relative-motion converts accelerated deltas while preserving unaccelerated payload. Native-tablet forwards copied physical pen/eraser pressure, tilt, rotation and proximity with per-device contact ownership. Child hover uses a freshly validated exact member even beyond the root rectangle; hover_source forward_motion preserves pick/grab gating and native panel focus. Posted-event tags bypass physical-pair bookkeeping for the session lifetime. Stream loss, detach, display changes and session departure cancel admitted input before retirement. Snapshot, hit, input and resize-border queries now read normalized controller state without a transaction clone; the shell preserves its decoded snapshot across those reads and invalidates it before other commands. Public load and mutation commits finish lifecycle/fullscreen/policy normalization themselves. Remaining: native lock/confinement, cross-application drag-and-drop, replica cursor images and physical input/third-party acceptance. No runtime evidence added. The native-mode hover forwarding switch now permits captured views while physical hover_source replies still suppress reposting. Canvas pick, edge/corner resize and mouse pan/move cursors use one application-local coordinator with conditional restoration, own-panel gating and unchanged-set suppression. No physical cursor or hover acceptance was run."
     },
     {
       "id": "native.geometry",
@@ -4400,7 +4400,7 @@
         }
       ],
       "required": true,
-      "implementation_note": "2026-10-11 source reconciliation: the AX/native resize adapter and controller are integrated into normal desktop runs for sizing actions, pointer resizing, rules and canvas fullscreen. Observation reads untransformed native bounds; owner movement is translated into logical relocation without changing camera/focus. Family children follow their root transform, and per-display root replicas use independent camera placements. Remaining: application-specific constraints and failures, titlebar displacement at different zooms, mixed-density displays, native boundary clipping and full target-platform acceptance. Earlier owned-fixture evidence and no-launch compilation do not establish third-party compatibility."
+      "implementation_note": "2026-10-11 source reconciliation: the AX/native resize adapter and controller are integrated into normal desktop runs for sizing actions, pointer resizing, rules and canvas fullscreen. Observation reads untransformed native bounds; owner movement is translated into logical relocation without changing camera/focus. Family children follow their root transform, and per-display root/member replicas use independent camera placements and metadata pixel crops. Child-only adapter placements project observed descendants into a viewport even when the root is outside it; world rectangles, display pins, fullscreen isolation and physical ownership remain authoritative. Delayed observations from a replaced or departed native session cannot restore family geometry. Remaining: application-specific constraints and failures, titlebar displacement at different zooms, mixed-density displays, native boundary clipping and full target-platform acceptance. Earlier owned-fixture evidence and no-launch compilation do not establish third-party compatibility."
     },
     {
       "id": "native.gestures",
@@ -4744,7 +4744,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Not implemented: the clipboard is the pasteboard of macOS between the real applications, with no code here, and drag and drop through the canvas does not exist. Native drag-and-drop is listed as not implemented: a held pointer drag cannot retarget another source, and leaving its window only ends it with a synthetic button-up (native/desktop/README.md, Known limits). Missing: a drag carried from one transformed window to another."
+      "implementation_note": "The existing Mac pasteboard remains application-owned. Cross-application drag-and-drop through captured views is not implemented. Implicit mouse capture now retains the original native recipient beyond viewport bounds, but it does not establish an OS drag session or negotiate a destination through a replica. Third-party drag sessions and native effect acceptance remain open."
     },
     {
       "id": "platform.lock",
@@ -4762,7 +4762,7 @@
       "acceptance": "Define source-matching production-path E2E, including defaults, failure cases and lifecycle; record actual native effects where applicable.",
       "evidence": [],
       "required": true,
-      "implementation_note": "Idle, lock, blanking and unlock belong to macOS (login window, Lock Screen settings): the port has no lock state, no input suppression and no capture blanking of its own. The default mod+l binding execs /usr/bin/pmset displaysleepnow in place of swaylock (crates/desktop/CONFIG.md); whether the canvas and its captures resume after an unlock was never observed. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "macOS owns idle, locking, blanking and authentication. native/desktop/session-watch.m wires workspace sleep/wake and session-activity transitions to Desktop leftSession/returned in native/desktop/main.m. Safe input suppression, capture handling and restoration across native lock/unlock remain mandatory integration obligations; this source wiring is not runtime acceptance evidence. Owner questionnaire review 2026-10-11, question 25: Use macOS. Follow native Mac lock policy and restore the canvas safely. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "platform.ime",
@@ -4849,7 +4849,7 @@
           "value": false
         }
       ],
-      "implementation_note": "With focus_follows_mouse = true the controller's hover command, which the shell sends for pointer motion over a canvas panel while no button is down (at most once per 60 Hz frame), is upstream's maybe_hover_focus: the window under the pointer in the layered hit order (the windows pinned to the output, then the canvas windows, then the widgets), a detached placeholder (upstream's stand-in) included, takes logical focus without being raised and with no camera motion, a screen-pinned window before the canvas beneath it and outside the focus history; a widget is passed over, pinned or not, and its application still gets the motion; empty canvas keeps the focus; a window that already holds the focus intent is left alone; a drag or resize gesture (a move gesture's drag and a pick-mode press's included), a drag pan whose button is down and a native resize that has not drained stand for upstream's pointer grab, and a trackpad gesture between its begin and its end and a scroll pan whose momentum is yet to launch hold the pointer as well; a hover stops no flight and no coast. The focus request goes to the navigation coordinator like a click's (performed natively with Accessibility access, otherwise answered focus_logical), and a native focus report that only echoes it is recorded without a raise or a flight; a request that failed or was withdrawn unanswered stops counting as echoed 3 seconds after its hover, on the controller's tick clock. With false (the default) hover reports the hit and moves no focus. A config reload applies at the next hover. Known mismatches: an open focus cycle also blocks hover focus, where upstream's hover would end the cycle; a trackpad gesture and a scroll about to launch block it too, which are no pointer grab upstream; the focus history is promoted when the request is answered, not at the hover; the native request activates and raises the real window although the canvas does not restack; the echo rule has no upstream counterpart; there are no fullscreen or modal windows, layer surfaces or client resize margins for upstream's exclusions and redirections to apply to; the cursor does not change. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/pointer_flow.rs, a pinned window and a widget under the pointer among them, synthetic identities and focus results, expected values derived by hand, not from an executed upstream oracle) and one scripted launch of the built app on 2026-10-10 in --windowed mode with detached placeholders only, where the setting loaded as true and was reloaded as false with nothing on stderr; msg exposes neither the setting nor hover, so no pointer motion, no hover in the app, no native focus change and no echo has been observed. Native verification and full-row acceptance remain incomplete. 2026-10-11 native continuation: real-window motion now enters the coalesced hover path. A fresh WindowServer-recipient lookup plus source identity/generation selects the logical root even where native stacking differs from the scene. Ordinary native motion is never reposted. Native floating panels retain application focus/stacking. Source compiled and inspected only; physical hover behavior remains unverified."
+      "implementation_note": "With focus_follows_mouse = true the controller's hover command, which the shell sends for pointer motion over a canvas panel while no button is down (at most once per 60 Hz frame), is upstream's maybe_hover_focus: the window under the pointer in the layered hit order (the windows pinned to the output, then the canvas windows, then the widgets), a detached placeholder (upstream's stand-in) included, takes logical focus without being raised and with no camera motion, a screen-pinned window before the canvas beneath it and outside the focus history; a widget is passed over, pinned or not, and its application still gets the motion; empty canvas keeps the focus; a window that already holds the focus intent is left alone; a drag or resize gesture (a move gesture's drag and a pick-mode press's included), a drag pan whose button is down and a native resize that has not drained stand for upstream's pointer grab, and a trackpad gesture between its begin and its end and a scroll pan whose momentum is yet to launch hold the pointer as well; a hover stops no flight and no coast. The focus request goes to the navigation coordinator like a click's (performed natively with Accessibility access, otherwise answered focus_logical), and a native focus report that only echoes it is recorded without a raise or a flight; a request that failed or was withdrawn unanswered stops counting as echoed 3 seconds after its hover, on the controller's tick clock. With false (the default) hover reports the hit and moves no focus. A config reload applies at the next hover. Known mismatches: an open focus cycle also blocks hover focus, where upstream's hover would end the cycle; a trackpad gesture and a scroll about to launch block it too, which are no pointer grab upstream; the focus history is promoted when the request is answered, not at the hover; the native request activates and raises the real window although the canvas does not restack; the echo rule has no upstream counterpart; there are no fullscreen or modal windows, layer surfaces or client resize margins for upstream's exclusions and redirections to apply to; the cursor does not change. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/pointer_flow.rs, a pinned window and a widget under the pointer among them, synthetic identities and focus results, expected values derived by hand, not from an executed upstream oracle) and one scripted launch of the built app on 2026-10-10 in --windowed mode with detached placeholders only, where the setting loaded as true and was reloaded as false with nothing on stderr; msg exposes neither the setting nor hover, so no pointer motion, no hover in the app, no native focus change and no echo has been observed. Native verification and full-row acceptance remain incomplete. 2026-10-11 native continuation: real-window motion now enters the coalesced hover path. A fresh WindowServer-recipient lookup plus source identity/generation selects the logical root even where native stacking differs from the scene. Ordinary native motion is never reposted. Native floating panels retain application focus/stacking. Source compiled and inspected only; physical hover behavior remains unverified. 2026-10-11 cursor continuation supersedes the earlier canvas-cursor limitation: source now selects pointing-hand for pick targets, all eight native resize shapes for accepted borders/held transactions, and closed-hand for mouse pan/move grabs. Overrides are limited to the actual canvas panel, avoid unchanged sets, and restore app-local state only while still owned. Foreign replica cursor images remain unavailable; no runtime evidence added."
     },
     {
       "id": "config.window_placement",
@@ -5118,7 +5118,7 @@
           "value": "us"
         }
       ],
-      "implementation_note": "Read and validated by upstream parser, then unused: the keyboard layouts are the input sources enabled in System Settings, Keyboard, Input Sources, and switch-layout only selects among them (CONFIG.md, Keyboard layouts). Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Read and validated by upstream parser, then unused: the keyboard layouts are the input sources enabled in System Settings, Keyboard, Input Sources, and switch-layout only selects among them (CONFIG.md, Keyboard layouts). Owner questionnaire review 2026-10-11, question 26: Use macOS. Use the input sources configured in macOS. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.input.keyboard.remember_layout_per_window",
@@ -5144,7 +5144,7 @@
           "value": false
         }
       ],
-      "implementation_note": "Read and validated, then unused: the port keeps no layout per window. macOS remembers the input source per document itself when the user asks it to (CONFIG.md, Keyboard layouts). Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Read and validated, then unused: the port keeps no layout per window. macOS remembers the input source per document itself when the user asks it to (CONFIG.md, Keyboard layouts). Owner questionnaire review 2026-10-11, question 27: Use macOS. Use the Mac\u2019s existing document/input-source behavior. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.input.keyboard.variant",
@@ -5170,7 +5170,7 @@
           "value": ""
         }
       ],
-      "implementation_note": "Read and validated, then unused: a layout variant on macOS is a separate input source chosen in System Settings, Keyboard, Input Sources; the port creates, removes and reorders none (CONFIG.md, Keyboard layouts). Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Read and validated, then unused: a layout variant on macOS is a separate input source chosen in System Settings, Keyboard, Input Sources; the port creates, removes and reorders none (CONFIG.md, Keyboard layouts). Owner questionnaire review 2026-10-11, question 28: Use macOS. Choose variants through Mac input sources. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.input.keyboard.options",
@@ -5196,7 +5196,7 @@
           "value": ""
         }
       ],
-      "implementation_note": "Read and validated, then unused: XKB options such as group toggles and modifier remaps are not applied by the port. macOS owns the input source shortcuts and the modifier key remapping in System Settings, Keyboard (CONFIG.md, Keyboard layouts). Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Read and validated, then unused: XKB options such as group toggles and modifier remaps are not applied by the port. macOS owns the input source shortcuts and the modifier key remapping in System Settings, Keyboard (CONFIG.md, Keyboard layouts). Owner questionnaire review 2026-10-11, question 29: Use macOS. Use Mac keyboard settings and input-source shortcuts. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.input.keyboard.model",
@@ -5352,7 +5352,7 @@
           "value": false
         }
       ],
-      "implementation_note": "Read and validated, then unused: the Caps Lock state belongs to macOS and the port does not set it at launch (CONFIG.md, Keyboard layouts). Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Read and validated, then unused: the Caps Lock state belongs to macOS and the port does not set it at launch (CONFIG.md, Keyboard layouts). Owner questionnaire review 2026-10-11, question 30: Use macOS. Preserve the Caps Lock state supplied by macOS. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.input.trackpad.tap_to_click",
@@ -5378,7 +5378,7 @@
           "value": true
         }
       ],
-      "implementation_note": "Read and validated, then unused: macOS owns the trackpad device (CONFIG.md, Read not applied yet; native/desktop/README.md). Tap to click is System Settings, Trackpad, Point and Click; the port does not set it. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Read and validated, then unused: macOS owns the trackpad device (CONFIG.md, Read not applied yet; native/desktop/README.md). Tap to click is System Settings, Trackpad, Point and Click; the port does not set it. Owner questionnaire review 2026-10-11, question 31: Use macOS. Respect the Mac trackpad preference. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.input.trackpad.natural_scroll",
@@ -5404,7 +5404,7 @@
           "value": true
         }
       ],
-      "implementation_note": "Read and validated, then unused: macOS owns the trackpad device (CONFIG.md, Read not applied yet; native/desktop/README.md). Scroll direction is System Settings, Trackpad, Scroll and Zoom, Natural scrolling; the shell uses the deltas as delivered and does not consult the setting. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Read and validated, then unused: macOS owns the trackpad device (CONFIG.md, Read not applied yet; native/desktop/README.md). Scroll direction is System Settings, Trackpad, Scroll and Zoom, Natural scrolling; the shell uses the deltas as delivered and does not consult the setting. Owner questionnaire review 2026-10-11, question 32: Use macOS. Use the trackpad scroll direction delivered by macOS. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.input.trackpad.tap_and_drag",
@@ -5430,7 +5430,7 @@
           "value": true
         }
       ],
-      "implementation_note": "Read and validated, then unused: macOS owns the trackpad device (CONFIG.md, Read not applied yet; native/desktop/README.md). Dragging with the trackpad is System Settings, Accessibility, Pointer Control, Trackpad Options, Dragging style; the port does not set it. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Read and validated, then unused: macOS owns the trackpad device (CONFIG.md, Read not applied yet; native/desktop/README.md). Dragging with the trackpad is System Settings, Accessibility, Pointer Control, Trackpad Options, Dragging style; the port does not set it. Owner questionnaire review 2026-10-11, question 33: Use macOS. Use the Mac dragging preference. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.input.trackpad.accel_speed",
@@ -5456,7 +5456,7 @@
           "value": 0.0
         }
       ],
-      "implementation_note": "Read and validated, then unused: macOS owns the trackpad device (CONFIG.md, Read not applied yet; native/desktop/README.md). Pointer speed is System Settings, Trackpad, Point and Click, Tracking speed; the port does not set it. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Read and validated, then unused: macOS owns the trackpad device (CONFIG.md, Read not applied yet; native/desktop/README.md). Pointer speed is System Settings, Trackpad, Point and Click, Tracking speed; the port does not set it. Owner questionnaire review 2026-10-11, question 34: Use macOS. Use the Mac tracking-speed preference. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.input.trackpad.accel_profile",
@@ -5482,7 +5482,7 @@
           "value": "adaptive"
         }
       ],
-      "implementation_note": "Read and validated, then unused: macOS owns the trackpad device (CONFIG.md, Read not applied yet; native/desktop/README.md). Pointer acceleration and tracking speed are macOS settings; the port sets neither. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Read and validated, then unused: macOS owns the trackpad device (CONFIG.md, Read not applied yet; native/desktop/README.md). Pointer acceleration and tracking speed are macOS settings; the port sets neither. Owner questionnaire review 2026-10-11, question 35: Use macOS. Keep the acceleration behavior supplied by macOS. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.input.trackpad.click_method",
@@ -5508,7 +5508,7 @@
           "value": "none"
         }
       ],
-      "implementation_note": "Read and validated, then unused: macOS owns the trackpad device (CONFIG.md, Read not applied yet; native/desktop/README.md). Secondary click (two fingers, or a corner of the trackpad) is System Settings, Trackpad, Point and Click; the port does not set it. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Read and validated, then unused: macOS owns the trackpad device (CONFIG.md, Read not applied yet; native/desktop/README.md). Secondary click (two fingers, or a corner of the trackpad) is System Settings, Trackpad, Point and Click; the port does not set it. Owner questionnaire review 2026-10-11, question 36: Use macOS. Use the Mac click and secondary-click preferences. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.input.trackpad.disable_while_typing",
@@ -5534,7 +5534,7 @@
           "value": true
         }
       ],
-      "implementation_note": "Read and validated, then unused: macOS owns the trackpad device (CONFIG.md, Read not applied yet; native/desktop/README.md). Palm rejection while typing belongs to macOS; the port has nothing implemented. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Read and validated, then unused: macOS owns the trackpad device (CONFIG.md, Read not applied yet; native/desktop/README.md). Palm rejection while typing belongs to macOS; the port has nothing implemented. Owner questionnaire review 2026-10-11, question 37: Use macOS. Rely on macOS palm rejection and typing behavior. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.input.trackpad.enable",
@@ -5586,7 +5586,7 @@
           "value": false
         }
       ],
-      "implementation_note": "Read and validated, then counted as on: the port watches no device, so gestures are never turned off for a mouse (GESTURES.md, set-trackpad). macOS has the setting itself: System Settings, Accessibility, Pointer Control, Ignore built-in trackpad when mouse or wireless trackpad is present. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Read and validated, then counted as on: the port watches no device, so gestures are never turned off for a mouse (GESTURES.md, set-trackpad). macOS has the setting itself: System Settings, Accessibility, Pointer Control, Ignore built-in trackpad when mouse or wireless trackpad is present. Owner questionnaire review 2026-10-11, question 38: Use macOS. Use the Mac\u2019s native ignore-trackpad preference. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.input.mouse.accel_speed",
@@ -5612,7 +5612,7 @@
           "value": 0.0
         }
       ],
-      "implementation_note": "Read and validated, then unused: macOS owns the mouse device (CONFIG.md, Read not applied yet). Pointer speed is System Settings, Mouse, Tracking speed; the port does not set it. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Read and validated, then unused: macOS owns the mouse device (CONFIG.md, Read not applied yet). Pointer speed is System Settings, Mouse, Tracking speed; the port does not set it. Owner questionnaire review 2026-10-11, question 39: Use macOS. Use the Mac or mouse-driver tracking-speed preference. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.input.mouse.accel_profile",
@@ -5638,7 +5638,7 @@
           "value": "flat"
         }
       ],
-      "implementation_note": "Read and validated, then unused: macOS owns the mouse device (CONFIG.md, Read not applied yet). Pointer acceleration is a macOS setting; the port does not set it. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Read and validated, then unused: macOS owns the mouse device (CONFIG.md, Read not applied yet). Pointer acceleration is a macOS setting; the port does not set it. Owner questionnaire review 2026-10-11, question 40: Use macOS. Use macOS or the mouse driver\u2019s acceleration behavior. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.input.mouse.natural_scroll",
@@ -5664,7 +5664,7 @@
           "value": false
         }
       ],
-      "implementation_note": "Read and validated, then unused: macOS owns the mouse device (CONFIG.md, Read not applied yet). Scroll direction is System Settings, Mouse, Natural scrolling; the shell uses the deltas as delivered and does not consult the setting. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Read and validated, then unused: macOS owns the mouse device (CONFIG.md, Read not applied yet). Scroll direction is System Settings, Mouse, Natural scrolling; the shell uses the deltas as delivered and does not consult the setting. Owner questionnaire review 2026-10-11, question 41: Use macOS. Use the mouse scroll direction delivered by macOS. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.input.mouse.left_handed",
@@ -5690,7 +5690,7 @@
           "value": false
         }
       ],
-      "implementation_note": "Read and validated, then unused: macOS owns the mouse device (CONFIG.md, Read not applied yet). Swapping the buttons is System Settings, Mouse, Primary mouse button; the port does not set it. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Read and validated, then unused: macOS owns the mouse device (CONFIG.md, Read not applied yet). Swapping the buttons is System Settings, Mouse, Primary mouse button; the port does not set it. Owner questionnaire review 2026-10-11, question 42: Use macOS. Use the Mac or mouse-driver button assignment. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.input.touch.enable",
@@ -5774,7 +5774,7 @@
           "value": "none"
         }
       ],
-      "implementation_note": "Read and validated, then unused: the port has no tablet input path, and macOS maps a drawing tablet through the tablet driver. Owner decision 2026-10-11: exclude features without a macOS equivalent; no compatibility shim is required. This is a scope decision, not runtime validation."
+      "implementation_note": "Read and validated, then unused: the port has no tablet input path, and macOS maps a drawing tablet through the tablet driver. Owner decision 2026-10-11: exclude features without a macOS equivalent; no compatibility shim is required. This is a scope decision, not runtime validation. Owner questionnaire review 2026-10-11, questions 62 and 67, also explicitly excludes tablet display mapping itself; this reference-configuration row remains outside scope on that product basis."
     },
     {
       "id": "config.cursor.theme",
@@ -5826,7 +5826,7 @@
           "value": 0
         }
       ],
-      "implementation_note": "Only half of upstream effect exists: a size reaches the environment of exec commands as XCURSOR_SIZE (config_flow.rs, nudge_exec_spawn_and_reload_actions). macOS draws the pointer itself; its size is System Settings, Accessibility, Display, Pointer size, and the port does not change it. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Only half of upstream effect exists: a size reaches the environment of exec commands as XCURSOR_SIZE (config_flow.rs, nudge_exec_spawn_and_reload_actions). macOS draws the pointer itself; its size is System Settings, Accessibility, Display, Pointer size, and the port does not change it. Owner questionnaire review 2026-10-11, question 43: Use macOS. Use the pointer size selected in Mac Accessibility settings. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.cursor.inactive_opacity",
@@ -5848,7 +5848,7 @@
         {
           "line": 176,
           "comment_depth": 1,
-          "source_assignment": "inactive_opacity = 0.5      # cursor opacity on non-active outputs (0.0–1.0)",
+          "source_assignment": "inactive_opacity = 0.5      # cursor opacity on non-active outputs (0.0\u20131.0)",
           "value": 0.5
         }
       ],
@@ -6191,7 +6191,7 @@
           ]
         }
       ],
-      "implementation_note": "zoom-to-fit frames navigation.anchors together with the windows, as upstream's ZoomToFit does: points with Y up, truncated to whole pixels. center-nearest also treats each anchor as a candidate, and landing on one clears focus and flies the camera there. Known mismatches: an anchor outside the ±1e12 world is not a center-nearest candidate. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs, navigation_actions_flow.rs) and one center-nearest landing on an anchor written to the config of the running built app on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "zoom-to-fit frames navigation.anchors together with the windows, as upstream's ZoomToFit does: points with Y up, truncated to whole pixels. center-nearest also treats each anchor as a candidate, and landing on one clears focus and flies the camera there. Known mismatches: an anchor outside the \u00b11e12 world is not a center-nearest candidate. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs, navigation_actions_flow.rs) and one center-nearest landing on an anchor written to the config of the running built app on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.navigation.bookmarks.1",
@@ -6671,7 +6671,7 @@
           "value": 0.0
         }
       ],
-      "implementation_note": "zoom.interact_min is the zoom below which an output is in upstream's pick mode: a pure function of that output's live zoom (strictly below; 0, the default, is off; driftwm-core clamps the value to 0..1 with upstream's warning). hit, input and hover report a canvas window or placeholder under the pointer there as a pick target and snapshot.outputs[].pick the mode; a screen-pinned window and a widget are never one and keep their pointer input, a pinned window also where it lies over a target; input refuses a pick target and hover answers forward false, so no press, drag, scroll or motion can be forwarded to its application. The shell focuses and raises a target at a press with any button and swallows the press, unless a held-modifier binding claims it (upstream's try_pick_button rule, answered by mouse_binding with pick), starts a single-window move once a left press drags past the 5 point click slop, and at a left release within the slop on the same display sends pick: upstream's resolve_pick, a navigation to the window at zoom 1 that lands per focus_placement. A scroll with no window binding over a target is looked up again in the canvas context, and what is found there pans, with momentum, or zooms like any bound scroll; one with no binding there either goes nowhere. A window drag begun from a pick-mode press is a drag like any other, edge pan included. Trackpad gestures do not read pick mode, as upstream's gesture handlers do not: a move gesture over a target moves it. A config reload applies at once. Known mismatches: pick mode is per output, not the active output's; a filled window is returned to its fill view, when that view is at or above the threshold, only behind --experimental-native-resize, where fill-window runs, so in a default launch a pick always lands at zoom 1; there is no pointing-hand cursor over a target; there is no fullscreen window to exclude, and a widget that is not pinned keeps its pass_mouse claims below the threshold, where upstream drops them (field.WindowRule.pass_mouse; a pick target claims nothing and a screen-pinned window keeps its button claims, as upstream, and the move binding drags a pinned window in screen space below the threshold as above it); a placeholder has no chrome to bypass, and the shell's Control-Option-click dismissal of a placeholder becomes a pick in pick mode. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/pointer_flow.rs: zoom 0.4 under a threshold of 0.5, at 0.5 and 0.6, the threshold off, a second output, a live reload, drags of a window and of a stand-in, picks landing under focus_placement top-left with an outer gap, and a pinned window over a target and a widget beside it, neither picked; expected values derived by hand, not from an executed upstream oracle) and one scripted launch of the built app on 2026-10-10 in --windowed mode with detached placeholders only, where interact_min = 0.5 loaded with nothing on stderr, eight zoom-out actions took msg zoom from 1 to 0.467 and zoom-reset back to 1, and -1 and 5 written to the file were reported with upstream's below-minimum and above-maximum warnings; msg does not expose pick mode, so the mode itself, a pick-mode press, drag, pick or scroll and the refusal of forwarded input have not been observed in the app. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "zoom.interact_min is the zoom below which an output is in upstream's pick mode: a pure function of that output's live zoom (strictly below; 0, the default, is off; driftwm-core clamps the value to 0..1 with upstream's warning). hit, input and hover report a canvas window or placeholder under the pointer there as a pick target and snapshot.outputs[].pick the mode; a screen-pinned window and a widget are never one and keep their pointer input, a pinned window also where it lies over a target; input refuses a pick target and hover answers forward false, so no press, drag, scroll or motion can be forwarded to its application. The shell focuses and raises a target at a press with any button and swallows the press, unless a held-modifier binding claims it (upstream's try_pick_button rule, answered by mouse_binding with pick), starts a single-window move once a left press drags past the 5 point click slop, and at a left release within the slop on the same display sends pick: upstream's resolve_pick, a navigation to the window at zoom 1 that lands per focus_placement. A scroll with no window binding over a target is looked up again in the canvas context, and what is found there pans, with momentum, or zooms like any bound scroll; one with no binding there either goes nowhere. A window drag begun from a pick-mode press is a drag like any other, edge pan included. Trackpad gestures do not read pick mode, as upstream's gesture handlers do not: a move gesture over a target moves it. A config reload applies at once. Known mismatches: pick mode is per output, not the active output's; a filled window is returned to its fill view, when that view is at or above the threshold, only behind --experimental-native-resize, where fill-window runs, so in a default launch a pick always lands at zoom 1; a pointing-hand cursor over canvas pick targets is now implemented in source but physically unverified; there is no fullscreen window to exclude, and a widget that is not pinned keeps its pass_mouse claims below the threshold, where upstream drops them (field.WindowRule.pass_mouse; a pick target claims nothing and a screen-pinned window keeps its button claims, as upstream, and the move binding drags a pinned window in screen space below the threshold as above it); a placeholder has no chrome to bypass, and the shell's Control-Option-click dismissal of a placeholder becomes a pick in pick mode. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/pointer_flow.rs: zoom 0.4 under a threshold of 0.5, at 0.5 and 0.6, the threshold off, a second output, a live reload, drags of a window and of a stand-in, picks landing under focus_placement top-left with an outer gap, and a pinned window over a target and a widget beside it, neither picked; expected values derived by hand, not from an executed upstream oracle) and one scripted launch of the built app on 2026-10-10 in --windowed mode with detached placeholders only, where interact_min = 0.5 loaded with nothing on stderr, eight zoom-out actions took msg zoom from 1 to 0.467 and zoom-reset back to 1, and -1 and 5 written to the file were reported with upstream's below-minimum and above-maximum warnings; msg does not expose pick mode, so the mode itself, a pick-mode press, drag, pick or scroll and the refusal of forwarded input have not been observed in the app. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "config.snap.enabled",
@@ -6719,7 +6719,7 @@
         {
           "line": 246,
           "comment_depth": 1,
-          "source_assignment": "gap = 12.0                   # spacing kept between windows, in canvas px —",
+          "source_assignment": "gap = 12.0                   # spacing kept between windows, in canvas px \u2014",
           "value": 12.0
         }
       ],
@@ -6901,7 +6901,7 @@
         {
           "line": 260,
           "comment_depth": 1,
-          "source_assignment": "fg_color = \"#FFFFFF\"           # title text + close button × color",
+          "source_assignment": "fg_color = \"#FFFFFF\"           # title text + close button \u00d7 color",
           "value": "#FFFFFF"
         }
       ],
@@ -7187,7 +7187,7 @@
         {
           "line": 290,
           "comment_depth": 1,
-          "source_assignment": "border_color_focused = \"#303030\"  # focused border. Same default as above —",
+          "source_assignment": "border_color_focused = \"#303030\"  # focused border. Same default as above \u2014",
           "value": "#303030"
         }
       ],
@@ -8897,7 +8897,7 @@
           "value": "spawn wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+"
         }
       ],
-      "implementation_note": "Upstream default runs wpctl set-volume, a Linux program. The controller lists the binding as skipped (macOS handles the volume keys itself), the shell registers nothing and the key stays with macOS; a media key is not a Carbon hot key even where the program exists (CONFIG.md, Key identity). Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Upstream default runs wpctl set-volume, a Linux program. The controller lists the binding as skipped (macOS handles the volume keys itself), the shell registers nothing and the key stays with macOS; a media key is not a Carbon hot key even where the program exists (CONFIG.md, Key identity). Owner questionnaire review 2026-10-11, question 44: Use macOS. Keep the Mac\u2019s normal volume-up behavior. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.keybindings.XF86AudioLowerVolume",
@@ -8923,7 +8923,7 @@
           "value": "spawn wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-"
         }
       ],
-      "implementation_note": "Upstream default runs wpctl set-volume, a Linux program. The controller lists the binding as skipped (macOS handles the volume keys itself), the shell registers nothing and the key stays with macOS; a media key is not a Carbon hot key even where the program exists (CONFIG.md, Key identity). Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Upstream default runs wpctl set-volume, a Linux program. The controller lists the binding as skipped (macOS handles the volume keys itself), the shell registers nothing and the key stays with macOS; a media key is not a Carbon hot key even where the program exists (CONFIG.md, Key identity). Owner questionnaire review 2026-10-11, question 45: Use macOS. Keep the Mac\u2019s normal volume-down behavior. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.keybindings.XF86AudioMute",
@@ -8949,7 +8949,7 @@
           "value": "spawn wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"
         }
       ],
-      "implementation_note": "Upstream default runs wpctl set-mute, a Linux program. The controller lists the binding as skipped (macOS handles the volume keys itself), the shell registers nothing and the key stays with macOS; a media key is not a Carbon hot key even where the program exists (CONFIG.md, Key identity). Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Upstream default runs wpctl set-mute, a Linux program. The controller lists the binding as skipped (macOS handles the volume keys itself), the shell registers nothing and the key stays with macOS; a media key is not a Carbon hot key even where the program exists (CONFIG.md, Key identity). Owner questionnaire review 2026-10-11, question 46: Use macOS. Keep the Mac\u2019s normal mute behavior. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.keybindings.XF86MonBrightnessUp",
@@ -8975,7 +8975,7 @@
           "value": "spawn brightnessctl set +5%"
         }
       ],
-      "implementation_note": "Upstream default runs brightnessctl, a Linux program. The controller lists the binding as skipped (macOS handles the brightness keys itself), the shell registers nothing and the key stays with macOS; a media key is not a Carbon hot key even where the program exists (CONFIG.md, Key identity). Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Upstream default runs brightnessctl, a Linux program. The controller lists the binding as skipped (macOS handles the brightness keys itself), the shell registers nothing and the key stays with macOS; a media key is not a Carbon hot key even where the program exists (CONFIG.md, Key identity). Owner questionnaire review 2026-10-11, question 47: Use macOS. Keep the Mac\u2019s normal brightness-up behavior. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.keybindings.XF86MonBrightnessDown",
@@ -9001,7 +9001,7 @@
           "value": "spawn brightnessctl set 5%-"
         }
       ],
-      "implementation_note": "Upstream default runs brightnessctl, a Linux program. The controller lists the binding as skipped (macOS handles the brightness keys itself), the shell registers nothing and the key stays with macOS; a media key is not a Carbon hot key even where the program exists (CONFIG.md, Key identity). Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Upstream default runs brightnessctl, a Linux program. The controller lists the binding as skipped (macOS handles the brightness keys itself), the shell registers nothing and the key stays with macOS; a media key is not a Carbon hot key even where the program exists (CONFIG.md, Key identity). Owner questionnaire review 2026-10-11, question 48: Use macOS. Keep the Mac\u2019s normal brightness-down behavior. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.keybindings.XF86AudioPlay",
@@ -9027,7 +9027,7 @@
           "value": "spawn playerctl play-pause"
         }
       ],
-      "implementation_note": "Upstream default runs playerctl play-pause, a Linux program. The controller lists the binding as skipped (macOS handles the media keys itself), the shell registers nothing and the key stays with macOS; a media key is not a Carbon hot key even where the program exists (CONFIG.md, Key identity). Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Upstream default runs playerctl play-pause, a Linux program. The controller lists the binding as skipped (macOS handles the media keys itself), the shell registers nothing and the key stays with macOS; a media key is not a Carbon hot key even where the program exists (CONFIG.md, Key identity). Owner questionnaire review 2026-10-11, question 49: Use macOS. Keep native Mac media-key routing. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.keybindings.XF86AudioPause",
@@ -9053,7 +9053,7 @@
           "value": "spawn playerctl play-pause"
         }
       ],
-      "implementation_note": "Upstream default runs playerctl play-pause, a Linux program, on a pause key a Mac keyboard lacks. The controller lists the binding as skipped (the key has no macOS equivalent) and the shell registers nothing; macOS plays and pauses with its own play/pause media key. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Upstream default runs playerctl play-pause, a Linux program, on a pause key a Mac keyboard lacks. The controller lists the binding as skipped (the key has no macOS equivalent) and the shell registers nothing; macOS plays and pauses with its own play/pause media key. Owner questionnaire review 2026-10-11, question 50: Use macOS. Use the existing Mac play/pause key. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.keybindings.XF86AudioNext",
@@ -9079,7 +9079,7 @@
           "value": "spawn playerctl next"
         }
       ],
-      "implementation_note": "Upstream default runs playerctl next, a Linux program. The controller lists the binding as skipped (macOS handles the media keys itself), the shell registers nothing and the key stays with macOS; a media key is not a Carbon hot key even where the program exists (CONFIG.md, Key identity). Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Upstream default runs playerctl next, a Linux program. The controller lists the binding as skipped (macOS handles the media keys itself), the shell registers nothing and the key stays with macOS; a media key is not a Carbon hot key even where the program exists (CONFIG.md, Key identity). Owner questionnaire review 2026-10-11, question 51: Use macOS. Keep native Mac next-track behavior. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.keybindings.XF86AudioPrev",
@@ -9105,7 +9105,7 @@
           "value": "spawn playerctl previous"
         }
       ],
-      "implementation_note": "Upstream default runs playerctl previous, a Linux program. The controller lists the binding as skipped (macOS handles the media keys itself), the shell registers nothing and the key stays with macOS; a media key is not a Carbon hot key even where the program exists (CONFIG.md, Key identity). Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Upstream default runs playerctl previous, a Linux program. The controller lists the binding as skipped (macOS handles the media keys itself), the shell registers nothing and the key stays with macOS; a media key is not a Carbon hot key even where the program exists (CONFIG.md, Key identity). Owner questionnaire review 2026-10-11, question 52: Use macOS. Keep native Mac previous-track behavior. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.keybindings.XF86AudioStop",
@@ -9157,7 +9157,7 @@
           "value": "spawn grim - | wl-copy"
         }
       ],
-      "implementation_note": "Upstream default runs grim and wl-copy (Linux programs) on Print, a key a Mac keyboard lacks. The controller lists the binding as skipped (the key has no macOS equivalent) and the shell registers nothing; macOS takes full-screen screenshots with Shift-Command-3 (add Control to copy to the clipboard). Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Upstream default runs grim and wl-copy (Linux programs) on Print, a key a Mac keyboard lacks. The controller lists the binding as skipped (the key has no macOS equivalent) and the shell registers nothing; macOS takes full-screen screenshots with Shift-Command-3 (add Control to copy to the clipboard). Owner questionnaire review 2026-10-11, question 53: Use macOS. Use native Mac screen capture and clipboard shortcuts. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.keybindings.shift+Print",
@@ -9183,7 +9183,7 @@
           "value": "spawn grim -g \"$(slurp -d)\" - | wl-copy"
         }
       ],
-      "implementation_note": "Upstream default runs grim with slurp and wl-copy (Linux programs) on Shift-Print, a key chord a Mac keyboard lacks. The controller lists the binding as skipped (the key has no macOS equivalent) and the shell registers nothing; macOS captures a region with Shift-Command-4 (add Control to copy to the clipboard). Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Upstream default runs grim with slurp and wl-copy (Linux programs) on Shift-Print, a key chord a Mac keyboard lacks. The controller lists the binding as skipped (the key has no macOS equivalent) and the shell registers nothing; macOS captures a region with Shift-Command-4 (add Control to copy to the clipboard). Owner questionnaire review 2026-10-11, question 54: Use macOS. Use native Mac region capture and clipboard shortcuts. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.keybindings.ctrl+Print",
@@ -9209,7 +9209,7 @@
           "value": "spawn driftwm msg screenshot window -o - | wl-copy"
         }
       ],
-      "implementation_note": "Commented example: window capture to the clipboard on Control-Print, a key chord a Mac keyboard lacks; the controller skips the binding (the key has no macOS equivalent). macOS captures a window with Control-Shift-Command-4 then Space. The port's own msg screenshot window -o - relay exists and could be bound to another key by exec. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Commented example: window capture to the clipboard on Control-Print, a key chord a Mac keyboard lacks; the controller skips the binding (the key has no macOS equivalent). macOS captures a window with Control-Shift-Command-4 then Space. The port's own msg screenshot window -o - relay exists and could be bound to another key by exec. Owner questionnaire review 2026-10-11, question 55: Use macOS. Use native Mac window capture and clipboard shortcuts. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.keybindings.alt+shift",
@@ -9417,7 +9417,7 @@
           "value": true
         }
       ],
-      "implementation_note": "Implemented in every normal run, unverified. With resize_on_border (default true) a left press in the band of 8 canvas units just outside a window's frame raises and focuses the window and resizes it by that edge, unless a binding whose modifiers are held claims the press; false makes the band take no press. The controller's resize_border command is upstream's decoration_hit_for with resize_edge_at (crates/desktop/src/pointer_policy.rs). Run end to end on disposable fixture windows by tests/e2e/scoped-resize-drag.sh on 2026-10-11 (a windowed, scoped run without Screen Recording, so tiles had no picture); the press, the drag and the release were made by the DebugPointer request through the canvas view's own mouse handlers, not by a person and not delivered by the window server. Cases 7 and 7b: a press four points right of a frame grew the window by 30 from its right edge; with the key false, reloaded from the config file, the band was no border. Controller scenarios: pointer_flow.rs the_resize_border_*. Known mismatches: the band exists only where no window's frame covers it, and a real window's own edges, under the canvas panel, are not reachable by the pointer at all; a press the band does not take is a canvas press, where upstream still counts the band as the window for bindings and occlusion; a stand-in, a widget, a screen-pinned and a fullscreen window have no band; no resize cursor over it. Unverified: no person dragged, no application of the owner's was resized, nothing was seen with a picture, one display."
+      "implementation_note": "Implemented in every normal run, unverified. With resize_on_border (default true) a left press in the band of 8 canvas units just outside a window's frame raises and focuses the window and resizes it by that edge, unless a binding whose modifiers are held claims the press; false makes the band take no press. The controller's resize_border command is upstream's decoration_hit_for with resize_edge_at (crates/desktop/src/pointer_policy.rs). Run end to end on disposable fixture windows by tests/e2e/scoped-resize-drag.sh on 2026-10-11 (a windowed, scoped run without Screen Recording, so tiles had no picture); the press, the drag and the release were made by the DebugPointer request through the canvas view's own mouse handlers, not by a person and not delivered by the window server. Cases 7 and 7b: a press four points right of a frame grew the window by 30 from its right edge; with the key false, reloaded from the config file, the band was no border. Controller scenarios: pointer_flow.rs the_resize_border_*. Known mismatches: the band exists only where no window's frame covers it, and a real window's own edges, under the canvas panel, are not reachable by the pointer at all; a press the band does not take is a canvas press, where upstream still counts the band as the window for bindings and occlusion; a stand-in, a widget, a screen-pinned and a fullscreen window have no band; no resize cursor over it. Unverified: no person dragged, no application of the owner's was resized, nothing was seen with a picture, one display. 2026-10-11 cursor continuation supersedes the earlier canvas-cursor limitation: source now selects pointing-hand for pick targets, all eight native resize shapes for accepted borders/held transactions, and closed-hand for mouse pan/move grabs. Overrides are limited to the actual canvas panel, avoid unchanged sets, and restore app-local state only while still owned. Foreign replica cursor images remain unavailable; no runtime evidence added."
     },
     {
       "id": "config.mouse.decoration_resize_snapped",
@@ -9673,7 +9673,7 @@
         {
           "line": 562,
           "comment_depth": 1,
-          "source_assignment": "\"left\" = \"pan-viewport\"            # unmodified left-click on empty canvas → pan",
+          "source_assignment": "\"left\" = \"pan-viewport\"            # unmodified left-click on empty canvas \u2192 pan",
           "value": "pan-viewport"
         }
       ],
@@ -9699,7 +9699,7 @@
         {
           "line": 563,
           "comment_depth": 1,
-          "source_assignment": "\"trackpad-scroll\" = \"pan-viewport\" # trackpad scroll on empty canvas → pan",
+          "source_assignment": "\"trackpad-scroll\" = \"pan-viewport\" # trackpad scroll on empty canvas \u2192 pan",
           "value": "pan-viewport"
         }
       ],
@@ -9725,7 +9725,7 @@
         {
           "line": 564,
           "comment_depth": 1,
-          "source_assignment": "\"wheel-scroll\" = \"zoom\"            # mouse wheel on empty canvas → zoom",
+          "source_assignment": "\"wheel-scroll\" = \"zoom\"            # mouse wheel on empty canvas \u2192 zoom",
           "value": "zoom"
         }
       ],
@@ -10869,7 +10869,7 @@
         {
           "line": 695,
           "comment_depth": 1,
-          "source_assignment": "\"3-finger-doubletap-hold-swipe\" = \"move-snapped-windows\"  # continuous (tap, hold, then drag — moves the whole snap cluster)",
+          "source_assignment": "\"3-finger-doubletap-hold-swipe\" = \"move-snapped-windows\"  # continuous (tap, hold, then drag \u2014 moves the whole snap cluster)",
           "value": "move-snapped-windows"
         }
       ],
@@ -11413,7 +11413,7 @@
         {
           "line": 753,
           "comment_depth": 1,
-          "source_assignment": "opacity = 0.5               # 0.0–1.0",
+          "source_assignment": "opacity = 0.5               # 0.0\u20131.0",
           "value": 0.5
         }
       ],
@@ -11449,7 +11449,7 @@
           "value": "HDMI-A-1"
         }
       ],
-      "implementation_note": "Picks the output an [[outputs]] entry governs: matched against the display UUID (Infinify msg state prints it), windowed for the --windowed panel, or * for every display without an entry; an exact entry replaces the * entry whole, as upstream. Known mismatch: upstream matches a connector name. Tested with synthetic output ids; not tried with a real display UUID or a second display. On 2026-10-11 the owner selected independent display views. The native adapter now selects a stable real placement and draws other root placements from one shared capture with independent output cameras/zoom, and routes scoped replica pointer events and canvas green-button actions. Live popup/sheet replicas and native display-boundary clipping remain open. No tests or launches; compilation is not acceptance evidence."
+      "implementation_note": "Picks the output an [[outputs]] entry governs: matched against the display UUID (Infinify msg state prints it), windowed for the --windowed panel, or * for every display without an entry; an exact entry replaces the * entry whole, as upstream. Known mismatch: upstream matches a connector name. Tested with synthetic output ids; not tried with a real display UUID or a second display. On 2026-10-11 the owner selected independent display views. The native adapter now selects a stable real placement and draws other root placements from one shared capture with independent output cameras/zoom, and routes scoped replica pointer events and canvas green-button actions. Separate live popup/sheet replicas now share root-relative geometry and exact-member input across views; physical interaction and native display-boundary clipping remain open. No tests or launches; compilation is not acceptance evidence."
     },
     {
       "id": "config.outputs[].scale",
@@ -11481,7 +11481,7 @@
           "value": 1.0
         }
       ],
-      "implementation_note": "Read and validated, then unused: macOS owns the display arrangement and the port takes screen_bounds as given (CONFIG.md, Outputs). Display scaling is the display resolution setting in System Settings, Displays. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Read and validated, then unused: macOS owns the display arrangement and the port takes screen_bounds as given (CONFIG.md, Outputs). Display scaling is the display resolution setting in System Settings, Displays. Owner questionnaire review 2026-10-11, question 56: Use macOS. Use the scaling selected in macOS Displays settings. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.outputs[].transform",
@@ -11507,7 +11507,7 @@
           "value": "normal"
         }
       ],
-      "implementation_note": "Read and validated, then unused: macOS owns the display arrangement and the port takes screen_bounds as given (CONFIG.md, Outputs). Display rotation is System Settings, Displays, Rotation. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Read and validated, then unused: macOS owns the display arrangement and the port takes screen_bounds as given (CONFIG.md, Outputs). Display rotation is System Settings, Displays, Rotation. Owner questionnaire review 2026-10-11, question 57: Use macOS. Follow the display orientation supplied by macOS. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.outputs[].position",
@@ -11533,7 +11533,7 @@
           "value": "auto"
         }
       ],
-      "implementation_note": "Read and validated, then unused: macOS owns the display arrangement and the port takes screen_bounds as given (CONFIG.md, Outputs). The display arrangement is System Settings, Displays, Arrange; screen_bounds is its result. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Read and validated, then unused: macOS owns the display arrangement and the port takes screen_bounds as given (CONFIG.md, Outputs). The display arrangement is System Settings, Displays, Arrange; screen_bounds is its result. Owner questionnaire review 2026-10-11, question 58: Use macOS. Follow the monitor arrangement configured in macOS. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.outputs[].mode",
@@ -11565,7 +11565,7 @@
           "value": "1920x1080@60"
         }
       ],
-      "implementation_note": "Read and validated, then unused: macOS owns the display arrangement and the port takes screen_bounds as given (CONFIG.md, Outputs). Resolution and refresh rate are System Settings, Displays. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Read and validated, then unused: macOS owns the display arrangement and the port takes screen_bounds as given (CONFIG.md, Outputs). Resolution and refresh rate are System Settings, Displays. Owner questionnaire review 2026-10-11, question 59: Use macOS. Use the resolution and refresh rate selected in macOS. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "config.outputs[].focus_placement",
@@ -12046,7 +12046,7 @@
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
       "source_type": "bool",
-      "implementation_note": "With focus_follows_mouse = true the controller's hover command, which the shell sends for pointer motion over a canvas panel while no button is down (at most once per 60 Hz frame), is upstream's maybe_hover_focus: the window under the pointer in the layered hit order (the windows pinned to the output, then the canvas windows, then the widgets), a detached placeholder (upstream's stand-in) included, takes logical focus without being raised and with no camera motion, a screen-pinned window before the canvas beneath it and outside the focus history; a widget is passed over, pinned or not, and its application still gets the motion; empty canvas keeps the focus; a window that already holds the focus intent is left alone; a drag or resize gesture (a move gesture's drag and a pick-mode press's included), a drag pan whose button is down and a native resize that has not drained stand for upstream's pointer grab, and a trackpad gesture between its begin and its end and a scroll pan whose momentum is yet to launch hold the pointer as well; a hover stops no flight and no coast. The focus request goes to the navigation coordinator like a click's (performed natively with Accessibility access, otherwise answered focus_logical), and a native focus report that only echoes it is recorded without a raise or a flight; a request that failed or was withdrawn unanswered stops counting as echoed 3 seconds after its hover, on the controller's tick clock. With false (the default) hover reports the hit and moves no focus. A config reload applies at the next hover. Known mismatches: an open focus cycle also blocks hover focus, where upstream's hover would end the cycle; a trackpad gesture and a scroll about to launch block it too, which are no pointer grab upstream; the focus history is promoted when the request is answered, not at the hover; the native request activates and raises the real window although the canvas does not restack; the echo rule has no upstream counterpart; there are no fullscreen or modal windows, layer surfaces or client resize margins for upstream's exclusions and redirections to apply to; the cursor does not change. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/pointer_flow.rs, a pinned window and a widget under the pointer among them, synthetic identities and focus results, expected values derived by hand, not from an executed upstream oracle) and one scripted launch of the built app on 2026-10-10 in --windowed mode with detached placeholders only, where the setting loaded as true and was reloaded as false with nothing on stderr; msg exposes neither the setting nor hover, so no pointer motion, no hover in the app, no native focus change and no echo has been observed. Native verification and full-row acceptance remain incomplete. 2026-10-11 native continuation: real-window motion now enters coalesced hover through a fresh actual recipient and current binding generation; no synthetic native motion is posted. Floating panels retain application focus/stacking. Compilation/source review only; runtime acceptance remains incomplete."
+      "implementation_note": "With focus_follows_mouse = true the controller's hover command, which the shell sends for pointer motion over a canvas panel while no button is down (at most once per 60 Hz frame), is upstream's maybe_hover_focus: the window under the pointer in the layered hit order (the windows pinned to the output, then the canvas windows, then the widgets), a detached placeholder (upstream's stand-in) included, takes logical focus without being raised and with no camera motion, a screen-pinned window before the canvas beneath it and outside the focus history; a widget is passed over, pinned or not, and its application still gets the motion; empty canvas keeps the focus; a window that already holds the focus intent is left alone; a drag or resize gesture (a move gesture's drag and a pick-mode press's included), a drag pan whose button is down and a native resize that has not drained stand for upstream's pointer grab, and a trackpad gesture between its begin and its end and a scroll pan whose momentum is yet to launch hold the pointer as well; a hover stops no flight and no coast. The focus request goes to the navigation coordinator like a click's (performed natively with Accessibility access, otherwise answered focus_logical), and a native focus report that only echoes it is recorded without a raise or a flight; a request that failed or was withdrawn unanswered stops counting as echoed 3 seconds after its hover, on the controller's tick clock. With false (the default) hover reports the hit and moves no focus. A config reload applies at the next hover. Known mismatches: an open focus cycle also blocks hover focus, where upstream's hover would end the cycle; a trackpad gesture and a scroll about to launch block it too, which are no pointer grab upstream; the focus history is promoted when the request is answered, not at the hover; the native request activates and raises the real window although the canvas does not restack; the echo rule has no upstream counterpart; there are no fullscreen or modal windows, layer surfaces or client resize margins for upstream's exclusions and redirections to apply to; the cursor does not change. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/pointer_flow.rs, a pinned window and a widget under the pointer among them, synthetic identities and focus results, expected values derived by hand, not from an executed upstream oracle) and one scripted launch of the built app on 2026-10-10 in --windowed mode with detached placeholders only, where the setting loaded as true and was reloaded as false with nothing on stderr; msg exposes neither the setting nor hover, so no pointer motion, no hover in the app, no native focus change and no echo has been observed. Native verification and full-row acceptance remain incomplete. 2026-10-11 native continuation: real-window motion now enters coalesced hover through a fresh actual recipient and current binding generation; no synthetic native motion is posted. Floating panels retain application focus/stacking. Compilation/source review only; runtime acceptance remains incomplete. 2026-10-11 cursor continuation supersedes the earlier canvas-cursor limitation: source now selects pointing-hand for pick targets, all eight native resize shapes for accepted borders/held transactions, and closed-hand for mouse pan/move grabs. Overrides are limited to the actual canvas panel, avoid unchanged sets, and restore app-local state only while still owned. Foreign replica cursor images remain unavailable; no runtime evidence added."
     },
     {
       "id": "field.Config.session",
@@ -12578,7 +12578,7 @@
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
       "source_type": "f64",
-      "implementation_note": "zoom.interact_min is the zoom below which an output is in upstream's pick mode: a pure function of that output's live zoom (strictly below; 0, the default, is off; driftwm-core clamps the value to 0..1 with upstream's warning). hit, input and hover report a canvas window or placeholder under the pointer there as a pick target and snapshot.outputs[].pick the mode; a screen-pinned window and a widget are never one and keep their pointer input, a pinned window also where it lies over a target; input refuses a pick target and hover answers forward false, so no press, drag, scroll or motion can be forwarded to its application. The shell focuses and raises a target at a press with any button and swallows the press, unless a held-modifier binding claims it (upstream's try_pick_button rule, answered by mouse_binding with pick), starts a single-window move once a left press drags past the 5 point click slop, and at a left release within the slop on the same display sends pick: upstream's resolve_pick, a navigation to the window at zoom 1 that lands per focus_placement. A scroll with no window binding over a target is looked up again in the canvas context, and what is found there pans, with momentum, or zooms like any bound scroll; one with no binding there either goes nowhere. A window drag begun from a pick-mode press is a drag like any other, edge pan included. Trackpad gestures do not read pick mode, as upstream's gesture handlers do not: a move gesture over a target moves it. A config reload applies at once. Known mismatches: pick mode is per output, not the active output's; a filled window is returned to its fill view, when that view is at or above the threshold, only behind --experimental-native-resize, where fill-window runs, so in a default launch a pick always lands at zoom 1; there is no pointing-hand cursor over a target; there is no fullscreen window to exclude, and a widget that is not pinned keeps its pass_mouse claims below the threshold, where upstream drops them (field.WindowRule.pass_mouse; a pick target claims nothing and a screen-pinned window keeps its button claims, as upstream, and the move binding drags a pinned window in screen space below the threshold as above it); a placeholder has no chrome to bypass, and the shell's Control-Option-click dismissal of a placeholder becomes a pick in pick mode. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/pointer_flow.rs: zoom 0.4 under a threshold of 0.5, at 0.5 and 0.6, the threshold off, a second output, a live reload, drags of a window and of a stand-in, picks landing under focus_placement top-left with an outer gap, and a pinned window over a target and a widget beside it, neither picked; expected values derived by hand, not from an executed upstream oracle) and one scripted launch of the built app on 2026-10-10 in --windowed mode with detached placeholders only, where interact_min = 0.5 loaded with nothing on stderr, eight zoom-out actions took msg zoom from 1 to 0.467 and zoom-reset back to 1, and -1 and 5 written to the file were reported with upstream's below-minimum and above-maximum warnings; msg does not expose pick mode, so the mode itself, a pick-mode press, drag, pick or scroll and the refusal of forwarded input have not been observed in the app. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "zoom.interact_min is the zoom below which an output is in upstream's pick mode: a pure function of that output's live zoom (strictly below; 0, the default, is off; driftwm-core clamps the value to 0..1 with upstream's warning). hit, input and hover report a canvas window or placeholder under the pointer there as a pick target and snapshot.outputs[].pick the mode; a screen-pinned window and a widget are never one and keep their pointer input, a pinned window also where it lies over a target; input refuses a pick target and hover answers forward false, so no press, drag, scroll or motion can be forwarded to its application. The shell focuses and raises a target at a press with any button and swallows the press, unless a held-modifier binding claims it (upstream's try_pick_button rule, answered by mouse_binding with pick), starts a single-window move once a left press drags past the 5 point click slop, and at a left release within the slop on the same display sends pick: upstream's resolve_pick, a navigation to the window at zoom 1 that lands per focus_placement. A scroll with no window binding over a target is looked up again in the canvas context, and what is found there pans, with momentum, or zooms like any bound scroll; one with no binding there either goes nowhere. A window drag begun from a pick-mode press is a drag like any other, edge pan included. Trackpad gestures do not read pick mode, as upstream's gesture handlers do not: a move gesture over a target moves it. A config reload applies at once. Known mismatches: pick mode is per output, not the active output's; a filled window is returned to its fill view, when that view is at or above the threshold, only behind --experimental-native-resize, where fill-window runs, so in a default launch a pick always lands at zoom 1; a pointing-hand cursor over canvas pick targets is now implemented in source but physically unverified; there is no fullscreen window to exclude, and a widget that is not pinned keeps its pass_mouse claims below the threshold, where upstream drops them (field.WindowRule.pass_mouse; a pick target claims nothing and a screen-pinned window keeps its button claims, as upstream, and the move binding drags a pinned window in screen space below the threshold as above it); a placeholder has no chrome to bypass, and the shell's Control-Option-click dismissal of a placeholder becomes a pick in pick mode. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/pointer_flow.rs: zoom 0.4 under a threshold of 0.5, at 0.5 and 0.6, the threshold off, a second output, a live reload, drags of a window and of a stand-in, picks landing under focus_placement top-left with an outer gap, and a pinned window over a target and a widget beside it, neither picked; expected values derived by hand, not from an executed upstream oracle) and one scripted launch of the built app on 2026-10-10 in --windowed mode with detached placeholders only, where interact_min = 0.5 loaded with nothing on stderr, eight zoom-out actions took msg zoom from 1 to 0.467 and zoom-reset back to 1, and -1 and 5 written to the file were reported with upstream's below-minimum and above-maximum warnings; msg does not expose pick mode, so the mode itself, a pick-mode press, drag, pick or scroll and the refusal of forwarded input have not been observed in the app. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.snap_enabled",
@@ -12749,7 +12749,7 @@
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
       "source_type": "TrackpadSettings",
-      "implementation_note": "Status stays missing: of the eight TrackpadSettings fields only send_events is applied, as [input.trackpad] enable turning gesture dispatch on or off (gestures.rs trackpad_enabled; gesture_flow.rs). The other seven (tap to click, natural scroll, tap and drag, acceleration, click method, palm rejection) are macOS own trackpad settings: read and unused. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Status stays missing: of the eight TrackpadSettings fields only send_events is applied, as [input.trackpad] enable turning gesture dispatch on or off (gestures.rs trackpad_enabled; gesture_flow.rs). The other seven (tap to click, natural scroll, tap and drag, acceleration, click method, palm rejection) are macOS own trackpad settings: read and unused. Owner questionnaire review 2026-10-11, question 60: Use macOS. Keep physical-device preferences in macOS; retain Infinify gesture controls. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "field.Config.mouse_device",
@@ -12768,7 +12768,7 @@
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
       "source_type": "MouseDeviceSettings",
-      "implementation_note": "macOS owns the mouse device settings: tracking speed, scroll direction and primary button are System Settings values, and none of the four [input.mouse] keys is read by the port. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "macOS owns the mouse device settings: tracking speed, scroll direction and primary button are System Settings values, and none of the four [input.mouse] keys is read by the port. Owner questionnaire review 2026-10-11, question 61: Use macOS. Keep physical-device preferences in macOS or the mouse driver. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "field.Config.touch",
@@ -12799,14 +12799,14 @@
       },
       "contract": "Match Config.tablet type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
-      "required": true,
+      "status": "out_of_scope",
+      "required": false,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
       "source_type": "TabletSettings",
-      "implementation_note": "macOS and the tablet maker driver own the mapping of a drawing tablet to a display; [input.tablet] map_to_output is read and unused. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "macOS and the tablet maker driver own the mapping of a drawing tablet to a display; [input.tablet] map_to_output is read and unused. Owner questionnaire review 2026-10-11, question 62: exclude tablet-to-display mapping from parity. The existing Mac/driver feature remains available; tablet pressure, tilt and proximity forwarding remain required under protocol.tablet. This is a scope decision, not runtime validation."
     },
     {
       "id": "field.Config.gesture_thresholds",
@@ -12882,7 +12882,7 @@
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
       "source_type": "KeyboardLayout",
-      "implementation_note": "macOS owns the keyboard layout list: [input.keyboard] layout, variant, options and model are xkb settings with no macOS meaning and are read and unused. The enabled input sources are the layouts, and switch-layout asks the shell to switch among them. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "macOS owns the keyboard layout list: [input.keyboard] layout, variant, options and model are xkb settings with no macOS meaning and are read and unused. The enabled input sources are the layouts, and switch-layout asks the shell to switch among them. Owner questionnaire review 2026-10-11, question 63: Use macOS. Use the input sources configured in macOS. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "field.Config.remember_layout_per_window",
@@ -12901,7 +12901,7 @@
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
       "source_type": "bool",
-      "implementation_note": "macOS owns the input source and remembers it per document itself when the user asks it to; [input.keyboard] remember_layout_per_window is read and unused. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "macOS owns the input source and remembers it per document itself when the user asks it to; [input.keyboard] remember_layout_per_window is read and unused. Owner questionnaire review 2026-10-11, question 64: Use macOS. Use the Mac\u2019s existing document/input-source behavior. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "field.Config.autostart",
@@ -12958,7 +12958,7 @@
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
       "source_type": "Option<u32>",
-      "implementation_note": "Status stays missing: only half of the upstream effect exists. [cursor] size reaches every exec child as XCURSOR_SIZE (actions.rs exec_effect; config_flow.rs), as field.Config.child_env records, and a Mac program ignores it. Upstream also sizes its own cursor with it; macOS draws the pointer, whose size is System Settings, Accessibility, Display, Pointer size. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "Status stays missing: only half of the upstream effect exists. [cursor] size reaches every exec child as XCURSOR_SIZE (actions.rs exec_effect; config_flow.rs), as field.Config.child_env records, and a Mac program ignores it. Upstream also sizes its own cursor with it; macOS draws the pointer, whose size is System Settings, Accessibility, Display, Pointer size. Owner questionnaire review 2026-10-11, question 65: Use macOS. Use the pointer size selected in Mac Accessibility settings. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "field.Config.inactive_cursor_opacity",
@@ -13034,7 +13034,7 @@
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
       "source_type": "Vec<Point<f64, Logical>>",
-      "implementation_note": "zoom-to-fit frames navigation.anchors together with the windows, as upstream's ZoomToFit does: points with Y up, truncated to whole pixels. center-nearest also treats each anchor as a candidate, and landing on one clears focus and flies the camera there. Known mismatches: an anchor outside the ±1e12 world is not a center-nearest candidate. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs, navigation_actions_flow.rs) and one center-nearest landing on an anchor written to the config of the running built app on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
+      "implementation_note": "zoom-to-fit frames navigation.anchors together with the windows, as upstream's ZoomToFit does: points with Y up, truncated to whole pixels. center-nearest also treats each anchor as a candidate, and landing on one clears focus and flies the camera there. Known mismatches: an anchor outside the \u00b11e12 world is not a center-nearest candidate. No evidence entry is recorded yet: coverage is exported-C-ABI/JSON controller scenarios (crates/desktop/tests/config_flow.rs, navigation_actions_flow.rs) and one center-nearest landing on an anchor written to the config of the running built app on 2026-10-09, which left no saved evidence. Native verification and full-row acceptance remain incomplete."
     },
     {
       "id": "field.Config.navigation_bookmarks",
@@ -13243,7 +13243,7 @@
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
       "source_type": "Vec<OutputConfig>",
-      "implementation_note": "The [[outputs]] list is applied per output: hot_corners and focus_placement of the entry named after the output stable id (a display UUID, not a connector name), else the wildcard * entry (output_actions.rs, navigation.rs), covered by platform_actions_flow.rs and config_flow.rs. scale, transform, position and mode are read and unused because macOS arranges the displays. No corner was fired on a live run. On 2026-10-11 the owner selected independent display views. The native adapter now selects a stable real placement and draws other root placements from one shared capture with independent output cameras/zoom, and routes scoped replica pointer events and canvas green-button actions. Live popup/sheet replicas and native display-boundary clipping remain open. No tests or launches; compilation is not acceptance evidence."
+      "implementation_note": "The [[outputs]] list is applied per output: hot_corners and focus_placement of the entry named after the output stable id (a display UUID, not a connector name), else the wildcard * entry (output_actions.rs, navigation.rs), covered by platform_actions_flow.rs and config_flow.rs. scale, transform, position and mode are read and unused because macOS arranges the displays. No corner was fired on a live run. On 2026-10-11 the owner selected independent display views. The native adapter now selects a stable real placement and draws other root placements from one shared capture with independent output cameras/zoom, and routes scoped replica pointer events and canvas green-button actions. Separate live popup/sheet replicas now share root-relative geometry and exact-member input across views; physical interaction and native display-boundary clipping remain open. No tests or launches; compilation is not acceptance evidence."
     },
     {
       "id": "field.Config.mouse",
@@ -13395,7 +13395,7 @@
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
       "source_type": "bool",
-      "implementation_note": "macOS owns the Caps Lock state; [input.keyboard] caps_lock is read and unused. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "macOS owns the Caps Lock state; [input.keyboard] caps_lock is read and unused. Owner questionnaire review 2026-10-11, question 66: Use macOS. Preserve the Caps Lock state supplied by macOS. No duplicate Infinify control is required. Native coexistence and integration acceptance remain required and unverified; this decision supplies no runtime evidence."
     },
     {
       "id": "field.SessionConfig.suspend_on_close",
@@ -13483,14 +13483,14 @@
       },
       "contract": "Match TabletSettings.map_to_output type, validation, default and native behavior.",
       "platform_mapping": "native macOS behavior",
-      "status": "missing",
-      "required": true,
+      "status": "out_of_scope",
+      "required": false,
       "owner": "config_ipc",
       "dependencies": [],
       "acceptance": "Define source-matching production-path E2E for parameters/defaults, dispatch, errors and lifecycle; verify actual native effects when applicable.",
       "evidence": [],
       "source_type": "Option<String>",
-      "implementation_note": "macOS and the tablet maker driver own the mapping of a drawing tablet to a display; [input.tablet] map_to_output is read and unused. Owner decision 2026-10-11: use the Mac's existing settings for host-owned system behavior; no duplicate Infinify controls are required. Host integration and acceptance evidence remain unverified."
+      "implementation_note": "macOS and the tablet maker driver own the mapping of a drawing tablet to a display; [input.tablet] map_to_output is read and unused. Owner questionnaire review 2026-10-11, question 67: exclude tablet-to-display mapping from parity. The existing Mac/driver feature remains available; tablet pressure, tilt and proximity forwarding remain required under protocol.tablet. This is a scope decision, not runtime validation."
     },
     {
       "id": "protocol.layer_shell",
@@ -13616,7 +13616,7 @@
     },
     "green_button": {
       "date": "2026-10-11",
-      "user_answer": "Fullscreen within Infinify’s canvas",
+      "user_answer": "Fullscreen within Infinify\u2019s canvas",
       "option_click": "fit; decoration_fit_snapped determines whether snapped neighbours follow"
     },
     "multi_display": {
@@ -13624,9 +13624,436 @@
       "user_answer": "nvm, one per display",
       "interpretation": "Independent views of the same world window on each display, with separate cameras and zoom.",
       "supersedes": "One continuous native view across displays",
-      "implementation": "One stable real native placement plus shared live root captures on other output placements; scoped replica pointer routing and green-button actions.",
-      "remaining": "Live popup/sheet replicas, native display-boundary clipping and physical multi-display acceptance remain open.",
-      "verification_note": "Strict compiler checks and a no-launch app build only; no tests or fixture launches. No runtime or stable-120-fps claim."
+      "implementation": "One stable real native placement plus shared root and separately captured popup/sheet images on other output placements, including child-only replica sites when the root leaves a viewport; scoped exact-member pointer/tablet routing and hover policy, original-recipient mouse capture across viewport boundaries, delta conversion, metadata sampling, family closing snapshots and window exports. Family observations are fenced by native session and current binding.",
+      "remaining": "Native display-boundary clipping, complete cross-application ordering, replica cursor images and physical multi-display acceptance remain open.",
+      "verification_note": "Source-only strict arm64/macOS 26 compiler checks; no tests, fixtures, application launches or desktop mutations. No runtime or stable-120-fps claim."
+    },
+    "host_owned_review": {
+      "date": "2026-10-11",
+      "questionnaire_inventory_revision": "2aa6f6006938e560ab825f30b50fad305395450e",
+      "reviewed_count": 67,
+      "counts": {
+        "use_macos": 65,
+        "exclude": 2,
+        "discuss_first": 0
+      },
+      "implementation_policy": "For Use macOS decisions, preserve native behavior and required Infinify integration without duplicating host controls. Exclusions remove only the named parity requirement. Discuss first does not authorize implementation or exclusion.",
+      "preserved_obligations": [
+        "Safe input suppression, capture handling and restoration around native locking",
+        "Display reconciliation with one independent Infinify view per display",
+        "Native tablet pressure, tilt, proximity and tool-cursor forwarding"
+      ],
+      "runtime_boundary": "No Mac settings changes, tests, fixture launches or other-application experiments are authorized by these product decisions. No acceptance evidence was added.",
+      "open_questions": [],
+      "answers": [
+        {
+          "question": 1,
+          "inventory_id": "field.OutputConfig.scale",
+          "choice": "Use macOS",
+          "decision": "Use the scaling selected in macOS Displays settings."
+        },
+        {
+          "question": 2,
+          "inventory_id": "field.OutputConfig.transform",
+          "choice": "Use macOS",
+          "decision": "Follow the display orientation supplied by macOS."
+        },
+        {
+          "question": 3,
+          "inventory_id": "field.OutputConfig.position",
+          "choice": "Use macOS",
+          "decision": "Follow the monitor arrangement configured in macOS."
+        },
+        {
+          "question": 4,
+          "inventory_id": "field.OutputConfig.mode",
+          "choice": "Use macOS",
+          "decision": "Use the resolution and refresh rate selected in macOS."
+        },
+        {
+          "question": 5,
+          "inventory_id": "field.TrackpadSettings.tap_to_click",
+          "choice": "Use macOS",
+          "decision": "Respect the Mac trackpad preference."
+        },
+        {
+          "question": 6,
+          "inventory_id": "field.TrackpadSettings.natural_scroll",
+          "choice": "Use macOS",
+          "decision": "Use the trackpad scroll direction delivered by macOS."
+        },
+        {
+          "question": 7,
+          "inventory_id": "field.TrackpadSettings.tap_and_drag",
+          "choice": "Use macOS",
+          "decision": "Use the Mac dragging preference."
+        },
+        {
+          "question": 8,
+          "inventory_id": "field.TrackpadSettings.accel_speed",
+          "choice": "Use macOS",
+          "decision": "Use the Mac tracking-speed preference."
+        },
+        {
+          "question": 9,
+          "inventory_id": "field.TrackpadSettings.accel_profile",
+          "choice": "Use macOS",
+          "decision": "Keep the acceleration behavior supplied by macOS."
+        },
+        {
+          "question": 10,
+          "inventory_id": "field.TrackpadSettings.click_method",
+          "choice": "Use macOS",
+          "decision": "Use the Mac click and secondary-click preferences."
+        },
+        {
+          "question": 11,
+          "inventory_id": "field.TrackpadSettings.disable_while_typing",
+          "choice": "Use macOS",
+          "decision": "Rely on macOS palm rejection and typing behavior."
+        },
+        {
+          "question": 12,
+          "inventory_id": "field.MouseDeviceSettings.accel_speed",
+          "choice": "Use macOS",
+          "decision": "Use the Mac or mouse-driver tracking-speed preference."
+        },
+        {
+          "question": 13,
+          "inventory_id": "field.MouseDeviceSettings.accel_profile",
+          "choice": "Use macOS",
+          "decision": "Use macOS or the mouse driver\u2019s acceleration behavior."
+        },
+        {
+          "question": 14,
+          "inventory_id": "field.MouseDeviceSettings.natural_scroll",
+          "choice": "Use macOS",
+          "decision": "Use the mouse scroll direction delivered by macOS."
+        },
+        {
+          "question": 15,
+          "inventory_id": "field.MouseDeviceSettings.left_handed",
+          "choice": "Use macOS",
+          "decision": "Use the Mac or mouse-driver button assignment."
+        },
+        {
+          "question": 16,
+          "inventory_id": "protocol.gamma_control",
+          "choice": "Use macOS",
+          "decision": "Keep color management with macOS and existing display utilities."
+        },
+        {
+          "question": 17,
+          "inventory_id": "protocol.image_capture_source",
+          "choice": "Use macOS",
+          "decision": "Use the sharing app\u2019s native Mac display/window picker."
+        },
+        {
+          "question": 18,
+          "inventory_id": "protocol.image_copy_capture",
+          "choice": "Use macOS",
+          "decision": "Use existing native Mac display/window capture for recording and sharing; no dedicated Infinify canvas feed is required.",
+          "follow_up": {
+            "date": "2026-10-11",
+            "user_answer": "Use existing Mac capture (Recommended)",
+            "supersedes": "Discuss first"
+          }
+        },
+        {
+          "question": 19,
+          "inventory_id": "protocol.output_management",
+          "choice": "Use macOS",
+          "decision": "Leave display configuration to macOS and existing utilities."
+        },
+        {
+          "question": 20,
+          "inventory_id": "protocol.output_power",
+          "choice": "Use macOS",
+          "decision": "Use the Mac\u2019s display-sleep and power settings."
+        },
+        {
+          "question": 21,
+          "inventory_id": "protocol.virtual_keyboard",
+          "choice": "Use macOS",
+          "decision": "Use native Mac accessibility keyboards and synthetic-input tools."
+        },
+        {
+          "question": 22,
+          "inventory_id": "protocol.idle_inhibit",
+          "choice": "Use macOS",
+          "decision": "Let apps make their own native Mac keep-awake requests."
+        },
+        {
+          "question": 23,
+          "inventory_id": "protocol.idle_notifier",
+          "choice": "Use macOS",
+          "decision": "Leave idle automation to macOS and existing tools."
+        },
+        {
+          "question": 24,
+          "inventory_id": "protocol.session_lock",
+          "choice": "Use macOS",
+          "decision": "Use the Mac\u2019s existing lock controls and preferences."
+        },
+        {
+          "question": 25,
+          "inventory_id": "platform.lock",
+          "choice": "Use macOS",
+          "decision": "Follow native Mac lock policy and restore the canvas safely."
+        },
+        {
+          "question": 26,
+          "inventory_id": "config.input.keyboard.layout",
+          "choice": "Use macOS",
+          "decision": "Use the input sources configured in macOS."
+        },
+        {
+          "question": 27,
+          "inventory_id": "config.input.keyboard.remember_layout_per_window",
+          "choice": "Use macOS",
+          "decision": "Use the Mac\u2019s existing document/input-source behavior."
+        },
+        {
+          "question": 28,
+          "inventory_id": "config.input.keyboard.variant",
+          "choice": "Use macOS",
+          "decision": "Choose variants through Mac input sources."
+        },
+        {
+          "question": 29,
+          "inventory_id": "config.input.keyboard.options",
+          "choice": "Use macOS",
+          "decision": "Use Mac keyboard settings and input-source shortcuts."
+        },
+        {
+          "question": 30,
+          "inventory_id": "config.input.keyboard.caps_lock",
+          "choice": "Use macOS",
+          "decision": "Preserve the Caps Lock state supplied by macOS."
+        },
+        {
+          "question": 31,
+          "inventory_id": "config.input.trackpad.tap_to_click",
+          "choice": "Use macOS",
+          "decision": "Respect the Mac trackpad preference."
+        },
+        {
+          "question": 32,
+          "inventory_id": "config.input.trackpad.natural_scroll",
+          "choice": "Use macOS",
+          "decision": "Use the trackpad scroll direction delivered by macOS."
+        },
+        {
+          "question": 33,
+          "inventory_id": "config.input.trackpad.tap_and_drag",
+          "choice": "Use macOS",
+          "decision": "Use the Mac dragging preference."
+        },
+        {
+          "question": 34,
+          "inventory_id": "config.input.trackpad.accel_speed",
+          "choice": "Use macOS",
+          "decision": "Use the Mac tracking-speed preference."
+        },
+        {
+          "question": 35,
+          "inventory_id": "config.input.trackpad.accel_profile",
+          "choice": "Use macOS",
+          "decision": "Keep the acceleration behavior supplied by macOS."
+        },
+        {
+          "question": 36,
+          "inventory_id": "config.input.trackpad.click_method",
+          "choice": "Use macOS",
+          "decision": "Use the Mac click and secondary-click preferences."
+        },
+        {
+          "question": 37,
+          "inventory_id": "config.input.trackpad.disable_while_typing",
+          "choice": "Use macOS",
+          "decision": "Rely on macOS palm rejection and typing behavior."
+        },
+        {
+          "question": 38,
+          "inventory_id": "config.input.trackpad.disable_on_external_mouse",
+          "choice": "Use macOS",
+          "decision": "Use the Mac\u2019s native ignore-trackpad preference."
+        },
+        {
+          "question": 39,
+          "inventory_id": "config.input.mouse.accel_speed",
+          "choice": "Use macOS",
+          "decision": "Use the Mac or mouse-driver tracking-speed preference."
+        },
+        {
+          "question": 40,
+          "inventory_id": "config.input.mouse.accel_profile",
+          "choice": "Use macOS",
+          "decision": "Use macOS or the mouse driver\u2019s acceleration behavior."
+        },
+        {
+          "question": 41,
+          "inventory_id": "config.input.mouse.natural_scroll",
+          "choice": "Use macOS",
+          "decision": "Use the mouse scroll direction delivered by macOS."
+        },
+        {
+          "question": 42,
+          "inventory_id": "config.input.mouse.left_handed",
+          "choice": "Use macOS",
+          "decision": "Use the Mac or mouse-driver button assignment."
+        },
+        {
+          "question": 43,
+          "inventory_id": "config.cursor.size",
+          "choice": "Use macOS",
+          "decision": "Use the pointer size selected in Mac Accessibility settings."
+        },
+        {
+          "question": 44,
+          "inventory_id": "config.keybindings.XF86AudioRaiseVolume",
+          "choice": "Use macOS",
+          "decision": "Keep the Mac\u2019s normal volume-up behavior."
+        },
+        {
+          "question": 45,
+          "inventory_id": "config.keybindings.XF86AudioLowerVolume",
+          "choice": "Use macOS",
+          "decision": "Keep the Mac\u2019s normal volume-down behavior."
+        },
+        {
+          "question": 46,
+          "inventory_id": "config.keybindings.XF86AudioMute",
+          "choice": "Use macOS",
+          "decision": "Keep the Mac\u2019s normal mute behavior."
+        },
+        {
+          "question": 47,
+          "inventory_id": "config.keybindings.XF86MonBrightnessUp",
+          "choice": "Use macOS",
+          "decision": "Keep the Mac\u2019s normal brightness-up behavior."
+        },
+        {
+          "question": 48,
+          "inventory_id": "config.keybindings.XF86MonBrightnessDown",
+          "choice": "Use macOS",
+          "decision": "Keep the Mac\u2019s normal brightness-down behavior."
+        },
+        {
+          "question": 49,
+          "inventory_id": "config.keybindings.XF86AudioPlay",
+          "choice": "Use macOS",
+          "decision": "Keep native Mac media-key routing."
+        },
+        {
+          "question": 50,
+          "inventory_id": "config.keybindings.XF86AudioPause",
+          "choice": "Use macOS",
+          "decision": "Use the existing Mac play/pause key."
+        },
+        {
+          "question": 51,
+          "inventory_id": "config.keybindings.XF86AudioNext",
+          "choice": "Use macOS",
+          "decision": "Keep native Mac next-track behavior."
+        },
+        {
+          "question": 52,
+          "inventory_id": "config.keybindings.XF86AudioPrev",
+          "choice": "Use macOS",
+          "decision": "Keep native Mac previous-track behavior."
+        },
+        {
+          "question": 53,
+          "inventory_id": "config.keybindings.Print",
+          "choice": "Use macOS",
+          "decision": "Use native Mac screen capture and clipboard shortcuts."
+        },
+        {
+          "question": 54,
+          "inventory_id": "config.keybindings.shift+Print",
+          "choice": "Use macOS",
+          "decision": "Use native Mac region capture and clipboard shortcuts."
+        },
+        {
+          "question": 55,
+          "inventory_id": "config.keybindings.ctrl+Print",
+          "choice": "Use macOS",
+          "decision": "Use native Mac window capture and clipboard shortcuts."
+        },
+        {
+          "question": 56,
+          "inventory_id": "config.outputs[].scale",
+          "choice": "Use macOS",
+          "decision": "Use the scaling selected in macOS Displays settings."
+        },
+        {
+          "question": 57,
+          "inventory_id": "config.outputs[].transform",
+          "choice": "Use macOS",
+          "decision": "Follow the display orientation supplied by macOS."
+        },
+        {
+          "question": 58,
+          "inventory_id": "config.outputs[].position",
+          "choice": "Use macOS",
+          "decision": "Follow the monitor arrangement configured in macOS."
+        },
+        {
+          "question": 59,
+          "inventory_id": "config.outputs[].mode",
+          "choice": "Use macOS",
+          "decision": "Use the resolution and refresh rate selected in macOS."
+        },
+        {
+          "question": 60,
+          "inventory_id": "field.Config.trackpad",
+          "choice": "Use macOS",
+          "decision": "Keep physical-device preferences in macOS; retain Infinify gesture controls."
+        },
+        {
+          "question": 61,
+          "inventory_id": "field.Config.mouse_device",
+          "choice": "Use macOS",
+          "decision": "Keep physical-device preferences in macOS or the mouse driver."
+        },
+        {
+          "question": 62,
+          "inventory_id": "field.Config.tablet",
+          "choice": "Exclude",
+          "decision": "Remove tablet-to-display mapping from the parity requirement; keep the Mac/driver feature available."
+        },
+        {
+          "question": 63,
+          "inventory_id": "field.Config.keyboard_layout",
+          "choice": "Use macOS",
+          "decision": "Use the input sources configured in macOS."
+        },
+        {
+          "question": 64,
+          "inventory_id": "field.Config.remember_layout_per_window",
+          "choice": "Use macOS",
+          "decision": "Use the Mac\u2019s existing document/input-source behavior."
+        },
+        {
+          "question": 65,
+          "inventory_id": "field.Config.cursor_size",
+          "choice": "Use macOS",
+          "decision": "Use the pointer size selected in Mac Accessibility settings."
+        },
+        {
+          "question": 66,
+          "inventory_id": "field.Config.caps_lock",
+          "choice": "Use macOS",
+          "decision": "Preserve the Caps Lock state supplied by macOS."
+        },
+        {
+          "question": 67,
+          "inventory_id": "field.TabletSettings.map_to_output",
+          "choice": "Exclude",
+          "decision": "Remove tablet-to-display mapping from the parity requirement; keep the Mac/driver feature available."
+        }
+      ]
     }
   }
 }

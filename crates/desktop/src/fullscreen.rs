@@ -51,9 +51,6 @@ use std::collections::{BTreeSet, HashSet};
 /// A location or a size in upstream's whole logical pixels.
 type Px = [i64; 2];
 
-/// Upstream MIN_RESTORE_FLOOR: a saved size under this on either axis is a
-/// throwaway first frame, and the window comes back at half the output.
-const MIN_RESTORE_FLOOR: i64 = 100;
 /// What sizes.rs says to a sizing action during a drag or resize gesture.
 const GRABBED: &str = "a window is under an interactive move or resize";
 const HELD: &str = "a fullscreen window is not moved or resized by hand";
@@ -67,11 +64,15 @@ const RESTORE_TRIES: u8 = 3;
 #[derive(Clone, Debug)]
 struct Entry {
     window: WindowId,
-    saved_location: Px,
+    // macOS policy: restore the precise original world top-left, including
+    // sub-point positions, rather than upstream's whole-pixel recentering.
+    saved_location: Point,
     saved_size: Px,
-    /// The whole-pixel camera the output is parked at: the window's top-left
-    /// while it has the output's size. Upstream reads it back as the window's
-    /// position less its `centre_offset`.
+    // Native frames may contain fractional logical dimensions. The integer
+    // size is the upstream policy basis; the extent is the exact exit target.
+    saved_extent: Size,
+    /// The whole-pixel camera the output is parked at. The window's top-left
+    /// also includes the output-local menu/notch exclusion and any underfill.
     park: Px,
     /// The size last asked of the window: the output's as it was then.
     offered: Px,
@@ -87,8 +88,9 @@ struct Entry {
 /// configure, until the size transaction that delivers it has answered.
 #[derive(Clone, Debug)]
 struct Restore {
-    loc: Px,
+    loc: Point,
     size: Px,
+    extent: Size,
     /// The window still sits where the exit put it. Upstream
     /// drop_owed_recenter: a later placement keeps its own top-left.
     placed: bool,
@@ -148,7 +150,7 @@ impl Fullscreen {
     /// at `loc` for the size it is owed, and comes back around that frame.
     pub(crate) fn reaimed(&mut self, window: WindowId, loc: [i64; 2]) {
         if let Some(restore) = self.restores.get_mut(&window) {
-            (restore.loc, restore.placed) = (loc, true);
+            (restore.loc, restore.placed) = (point_of(loc), true);
         }
     }
     pub(crate) fn rule_applied(&self, window: WindowId) -> bool {
@@ -194,6 +196,7 @@ pub(crate) fn carries(command: &Command) -> bool {
             | Command::GestureBegin { .. }
             | Command::GestureUpdate { .. }
             | Command::GestureEnd { .. }
+            | Command::SetUsableArea { .. }
     )
 }
 
@@ -218,8 +221,19 @@ impl Controller {
         self.sizes.mode_name(window)
     }
     fn output_px(&self, output: OutputId) -> Option<Px> {
-        let size = pixel_size(self.scene.output(output)?.screen_bounds.size).ok()?;
+        let size = pixel_size(self.navigation_context(output).ok()?.usable_rect_local.size).ok()?;
         Some([size.w.into(), size.h.into()])
+    }
+    fn output_inset_px(&self, output: OutputId) -> Option<Px> {
+        let at = self
+            .navigation_context(output)
+            .ok()?
+            .usable_rect_local
+            .origin;
+        Some([
+            pixel(at.x.round()).ok()?.into(),
+            pixel(at.y.round()).ok()?.into(),
+        ])
     }
     /// Upstream resolve_fullscreen_output: the rule's `output` when it is
     /// connected, then the output of the window's pin, then the active one. A
@@ -318,29 +332,37 @@ impl Controller {
         let view = self
             .output_px(output)
             .ok_or(Error::Invalid("view geometry exceeds integer range"))?;
+        let inset = self
+            .output_inset_px(output)
+            .ok_or(Error::Invalid("view geometry exceeds integer range"))?;
         let rect = self
             .scene
             .window(window)
             .ok_or(Error::Invalid("unknown window"))?
             .world_rect;
-        let (mut saved_location, committed) = frame(rect).map_err(Error::Refused)?;
+        let (_, committed) = frame(rect).map_err(Error::Refused)?;
         // A size an exit still owes the window is the one it comes back to.
-        let mut saved_size = match self.fullscreen.restores.remove(&window) {
-            Some(restore) => restore.size,
-            None => self.windowed_size(window, committed),
-        };
-        if saved_size[0] < MIN_RESTORE_FLOOR || saved_size[1] < MIN_RESTORE_FLOOR {
-            let half = [view[0] / 2, view[1] / 2];
-            let middle = viewport.camera + point_of(view) / 2.0 / viewport.zoom;
-            saved_location = [middle.x as i64 - half[0] / 2, middle.y as i64 - half[1] / 2];
-            saved_size = half;
-        }
+        // User policy overrides upstream's configured-size/floor substitute:
+        // fullscreen returns to the frame that was actually visible before it.
+        let (saved_location, saved_size, saved_extent) =
+            match self.fullscreen.restores.remove(&window) {
+                Some(restore) => (
+                    if restore.placed {
+                        restore.loc
+                    } else {
+                        rect.origin
+                    },
+                    restore.size,
+                    restore.extent,
+                ),
+                None => (rect.origin, committed, rect.size),
+            };
         let park = [
             i64::from(pixel(viewport.camera.x.round())?),
             i64::from(pixel(viewport.camera.y.round())?),
         ];
         let parked = Rect {
-            origin: point_of(park),
+            origin: point_of(park) + point_of(inset),
             size: rect.size,
         };
         readable(parked).map_err(Error::Refused)?;
@@ -352,6 +374,7 @@ impl Controller {
                 window,
                 saved_location,
                 saved_size,
+                saved_extent,
                 park,
                 offered: view,
                 awaiting: true,
@@ -407,7 +430,7 @@ impl Controller {
         let window = entry.window;
         if let Some(rect) = self.scene.window(window).map(|w| w.world_rect) {
             let at = Rect {
-                origin: point_of(entry.saved_location),
+                origin: entry.saved_location,
                 size: rect.size,
             };
             let _ = self.scene.set_window_rect(window, at);
@@ -415,6 +438,7 @@ impl Controller {
                 let restore = Restore {
                     loc: entry.saved_location,
                     size: entry.saved_size,
+                    extent: entry.saved_extent,
                     placed: true,
                     delivered: false,
                     tries: 0,
@@ -462,18 +486,18 @@ impl Controller {
     /// can be sized.
     pub(crate) fn fullscreen_window_gone(&mut self, window: WindowId, closed: bool) {
         let held = self.scene.window(window).map(|w| w.world_rect.size);
-        let frame_of = |loc: Px, size: Px| Rect {
-            origin: point_of(loc),
+        let frame_of = |loc: Point, extent: Size| Rect {
+            origin: loc,
             size: match held {
                 Some(held) if !closed => held,
-                _ => Size::new(size[0] as f64, size[1] as f64),
+                _ => extent,
             },
         };
         if let Some(output) = self.fullscreen_output_of(window)
             && let Some(entry) = self.fullscreen.entries.remove(&output)
         {
             if self.scene.window(window).is_some() {
-                let rect = frame_of(entry.saved_location, entry.saved_size);
+                let rect = frame_of(entry.saved_location, entry.saved_extent);
                 let _ = self.scene.set_window_rect(window, rect);
                 if let Some(pin) = entry.pinned {
                     self.policy.pins.insert(window, pin);
@@ -486,11 +510,11 @@ impl Controller {
         {
             let loc = match restore.placed {
                 true => restore.loc,
-                false => frame(rect).map_or(restore.loc, |(loc, _)| loc),
+                false => rect.origin,
             };
             let _ = self
                 .scene
-                .set_window_rect(window, frame_of(loc, restore.size));
+                .set_window_rect(window, frame_of(loc, restore.extent));
         }
     }
     /// The shell has said which outputs exist. Upstream ends a fullscreen
@@ -518,7 +542,7 @@ impl Controller {
         let connected: BTreeSet<OutputId> = self.scene.outputs().iter().map(|o| o.id).collect();
         let mut rebound = false;
         for entry in self.fullscreen.entries.values_mut() {
-            let size = Size::new(entry.saved_size[0] as f64, entry.saved_size[1] as f64);
+            let size = entry.saved_extent;
             if let (Some(pin), Some((to, on)), Ok(size)) =
                 (entry.pinned.as_mut(), to, pixel_size(size))
                 && !connected.contains(&pin.output)
@@ -585,6 +609,9 @@ impl Controller {
             let Some(view) = self.output_px(output) else {
                 continue;
             };
+            let Some(inset) = self.output_inset_px(output) else {
+                continue;
+            };
             let Some(entry) = self.fullscreen.entries.get(&output).cloned() else {
                 continue;
             };
@@ -599,7 +626,10 @@ impl Controller {
                 continue;
             };
             let offset = centre(view, size);
-            let at = [entry.park[0] + offset[0], entry.park[1] + offset[1]];
+            let at = [
+                entry.park[0] + inset[0] + offset[0],
+                entry.park[1] + inset[1] + offset[1],
+            ];
             if !awaiting && loc != at {
                 let centred = Rect {
                     origin: point_of(at),
@@ -640,7 +670,10 @@ impl Controller {
         for (window, restore) in owed {
             // A refusal must leave nothing half written.
             let mut next = self.clone();
-            let screen = Screen::Restore(restore.placed.then_some(restore.loc));
+            let screen = Screen::Restore {
+                at: restore.placed.then_some(restore.loc),
+                extent: restore.extent,
+            };
             match next.fullscreen_resize(window, None, restore.size, screen, &mut outcome) {
                 Ok(true) => {
                     if let Some(restore) = next.fullscreen.restores.get_mut(&window) {
@@ -847,7 +880,7 @@ impl Controller {
         let mut next = self.clone();
         if let Some(((width, height), own)) = size {
             let rect = next.scene.window(window)?.world_rect;
-            let (loc, _) = frame(rect).ok()?;
+            let loc = rect.origin;
             let size = [i64::from(width).max(1), i64::from(height).max(1)];
             let at = Rect {
                 origin: rect.origin,
@@ -857,6 +890,7 @@ impl Controller {
             let restore = Restore {
                 loc,
                 size,
+                extent: Size::new(size[0] as f64, size[1] as f64),
                 placed: true,
                 delivered: false,
                 tries: 0,
@@ -902,10 +936,10 @@ impl Controller {
             .and_then(|window| self.fullscreen_output_of(window));
         let entry = self.fullscreen.entries.get(&focused.or(active)?)?;
         let anchor = auto_placement::Rect {
-            x: entry.saved_location[0] as f64,
-            y: entry.saved_location[1] as f64,
-            w: entry.saved_size[0] as f64,
-            h: entry.saved_size[1] as f64,
+            x: entry.saved_location.x,
+            y: entry.saved_location.y,
+            w: entry.saved_extent.width,
+            h: entry.saved_extent.height,
         };
         let mut rects = vec![anchor];
         rects.extend(
@@ -977,7 +1011,11 @@ impl Controller {
     }
     fn fullscreen_placement(&self, viewport: &Viewport) -> Option<Placement> {
         let (window, screen_rect) = self.fullscreen_rect(viewport)?;
-        let clip_rect = screen_rect.intersection(viewport.screen_bounds)?;
+        let usable = self.navigation_context(viewport.id).ok()?.usable_rect_local;
+        let clip_rect = screen_rect.intersection(Rect {
+            origin: viewport.screen_bounds.origin + usable.origin,
+            size: usable.size,
+        })?;
         Some(Placement {
             window,
             output: viewport.id,
@@ -1066,7 +1104,7 @@ impl Controller {
             .values()
             .filter_map(|entry| {
                 let size = self.scene.window(entry.window)?.world_rect.size;
-                let origin = point_of(entry.saved_location);
+                let origin = entry.saved_location;
                 Some((entry.window, Rect { origin, size }))
             })
             .collect()

@@ -12,7 +12,7 @@
 //! `mod` when `mod_key = "super"`, the default) and `mod3`. On macOS:
 //!
 //! - `ctrl` is Control, `alt` is Option, `shift` is Shift.
-//! - `logo` is a physical chord, Control+Option unless `set_platform` chooses
+//! - `logo` is a physical chord, Command unless `set_platform` chooses
 //!   another subset of Control, Option and Command.
 //! - A binding that holds `logo` together with a modifier the chord already
 //!   contains would vanish into the chord, so that modifier is displaced:
@@ -109,8 +109,7 @@ impl Default for Platform {
     fn default() -> Self {
         Self {
             chord: MacModifiers {
-                control: true,
-                option: true,
+                command: true,
                 ..MacModifiers::default()
             },
         }
@@ -453,7 +452,24 @@ impl Controller {
             .chain(extra)
         {
             for modifiers in modifier_sets() {
-                if let Some(action) = config.lookup(&state(&modifiers), Keysym::from(sym)) {
+                // macOS desktop defaults live in the adapter, leaving the
+                // platform-independent upstream table intact. Explicit user
+                // bindings (including `none`) always take precedence.
+                let overview = !self.settings.default_keys_disabled
+                    && !self.settings.wrote(&modifiers, sym)
+                    && ((sym == sym::KEY_Tab
+                        && modifiers
+                            == Modifiers {
+                                logo: true,
+                                ..Modifiers::EMPTY
+                            })
+                        || (sym == sym::KEY_F3 && modifiers == Modifiers::EMPTY));
+                let action = if overview {
+                    Some(&Action::ZoomToFit)
+                } else {
+                    config.lookup(&state(&modifiers), Keysym::from(sym))
+                };
+                if let Some(action) = action {
                     bound.push(Bound {
                         combo: combo_text(&modifiers, config.mod_key, Some(name)),
                         modifiers,

@@ -81,17 +81,21 @@ static AXUIElementRef resolve(DWResizeIdentity i, double deadline, DWResizeResul
 static bool near(double a,double b) { return fabs(a-b)<=1.; }
 static bool same_size(CGSize a,CGSize b) { return near(a.width,b.width)&&near(a.height,b.height); }
 // Where the window has to sit for `size` to be granted. macOS does not let an Accessibility size change carry a window past the
-// visible frame of its screen: from an origin the size does not fit from, the request changes nothing (the owner's run of
+// available frame of its screen: from an origin the size does not fit from, the request changes nothing (the owner's run of
 // 2026-10-10: 2056x1329 asked four times of a window at (223,39) on a 2056x1329 display, answered each time with the 1833x1290
 // that reaches the screen's edges). The least move that makes room, one axis at a time and only on an axis the request grows on:
-// a size that fits the visible frame is given exactly its room, a larger one starts at the frame's origin and is asked as it is,
-// so that the application grants what it can. The screen is the one that holds most of the window; a window on none is left alone.
+// a size that fits is given exactly its room, a larger one starts at the frame's origin and is asked as it is,
+// so that the application grants what it can. Match the canvas's menu/notch-only exclusion: the Dock overlays it and must not
+// make this preparatory move ask for less room. AX readback still reports any stricter limit the application actually enforces.
+// The screen is the one that holds most of the window; a window on none is left alone.
 // AppKit's screens are measured upwards from the primary screen's lower left corner, Accessibility downwards from its top left.
 static bool room(CGRect before, CGSize size, CGPoint *to) {
     NSArray<NSScreen *> *screens=NSScreen.screens; if (!screens.count) return false;
     CGFloat top=NSMaxY(screens[0].frame), most=0; CGRect visible=CGRectZero;
     for (NSScreen *screen in screens) {
-        NSRect f=screen.frame, v=screen.visibleFrame;
+        NSRect f=screen.frame;CGFloat inset=MAX(screen.safeAreaInsets.top,MAX(0,NSMaxY(f)-NSMaxY(screen.visibleFrame)));
+        inset=isfinite(inset)?MIN(ceil(inset),MAX(0,f.size.height-1)):0;
+        NSRect v=NSMakeRect(f.origin.x,f.origin.y,f.size.width,f.size.height-inset);
         CGRect shared=CGRectIntersection(before,CGRectMake(f.origin.x,top-NSMaxY(f),f.size.width,f.size.height));
         if (CGRectIsNull(shared) || shared.size.width*shared.size.height<=most) continue;
         most=shared.size.width*shared.size.height; visible=CGRectMake(v.origin.x,top-NSMaxY(v),v.size.width,v.size.height);
@@ -147,8 +151,12 @@ DWResizeResult dw_resize_apply_scoped(DWResizeIdentity i, CGSize size, DWResizeG
     if (!final_authorize && room(before,size,&to)) {
         AXValueRef p=AXValueCreate(kAXValueCGPointType,&to); DWResizeResult kept=r; bool seen=false;
         if (p) { positioned=true; AXUIElementSetAttributeValue(w,kAXPositionAttribute,p); CFRelease(p); }
-        for (int n=0;positioned && n<4 && now()<deadline;n++) {
-            usleep(30000); seen=readback(i,w,deadline,&r);
+        for (int n=0;positioned && n<5 && now()<deadline;n++) {
+            // AX setters commonly complete before returning. Read that answer
+            // immediately; only a change still in flight needs a delayed retry.
+            // Four retries retain the former 120ms settling window.
+            if (n) usleep(30000);
+            seen=readback(i,w,deadline,&r);
             if (r.outcome==DWResizeStaleIdentity) { CFRelease(w); return r; }
             if (seen && near(r.actual_ax.origin.x,to.x) && near(r.actual_ax.origin.y,to.y)) break;
         }
@@ -173,8 +181,9 @@ DWResizeResult dw_resize_apply_scoped(DWResizeIdentity i, CGSize size, DWResizeG
     r.observed=false; r.outcome=now()>=deadline?DWResizeTimedOut:DWResizeReadbackFailed;
     // Always read back even after an error: the receiver may have accepted a timed-out call.
     bool observed=false;
-    for (int n=0;n<4 && now()<deadline;n++) {
-        usleep(30000); observed=readback(i,w,deadline,&r);
+    for (int n=0;n<5 && now()<deadline;n++) {
+        if (n) usleep(30000);
+        observed=readback(i,w,deadline,&r);
         if (observed && (!same_size(before.size,r.actual_ax.size)||same_size(size,r.actual_ax.size))) break;
         if (r.outcome==DWResizeStaleIdentity) break;
     }

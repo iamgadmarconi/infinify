@@ -1511,6 +1511,16 @@ static IFBGChunkView IFBGChunkViewMake(IFBackgroundFrame f) {
     return v;
 }
 
+// Baked shaders and TIFF chunks are static in canvas space. A new content
+// frame can advance only time while the background's view is unchanged;
+// settled caches then reuse their quads without rebuilding their working set.
+// Keep the exact-instant check as well: a cache still filling may spend its
+// bake/upload allowance only once for that instant.
+static BOOL IFBGSameChunkView(IFBackgroundFrame a, IFBackgroundFrame b) {
+    return a.cameraX == b.cameraX && a.cameraY == b.cameraY && a.zoom == b.zoom &&
+           a.width == b.width && a.height == b.height && a.scale == b.scale;
+}
+
 // The pixels an element with this area covers. `x, y` are relative to
 // `camera_i`. elements.rs `tile_corner_round` takes the area to physical
 // pixels and `corner_round_rect` (PixelSnapRescaleElement, anchored at the
@@ -1625,6 +1635,7 @@ static void IFBGApronDims(long chunkSize, long bakePx, long *areaCanvas, long *f
     BOOL _coverTooLarge;   // the last frame's coarse cover exceeded the budget by itself
     BOOL _degraded;        // `degraded`
     BOOL _hasPlan;
+    BOOL _planSettled;
     IFBackgroundFrame _planFrame;
     NSArray<IFBGChunkDraw *> *_plan;
 }
@@ -1763,7 +1774,8 @@ static IFBGChunk *IFBGChunkMake(uint32_t lod, long cx, long cy) {
 
 - (NSArray<IFBGChunkDraw *> *)drawsForFrame:(IFBackgroundFrame)f {
     if (_broken) return nil;
-    if (_hasPlan && memcmp(&f, &_planFrame, sizeof f) == 0) return _plan;
+    if (_hasPlan && (memcmp(&f, &_planFrame, sizeof f) == 0 ||
+                     (_planSettled && IFBGSameChunkView(f, _planFrame)))) return _plan;
     _hasPlan = NO;
     _plan = nil;
     IFBGChunkView v = IFBGChunkViewMake(f);
@@ -1900,6 +1912,10 @@ static IFBGChunk *IFBGChunkMake(uint32_t lod, long cx, long cy) {
     _plan = IFBGSortDraws(draws);
     _planFrame = f;
     _hasPlan = YES;
+    // A failed texture allocation can leave a useful coarse plan despite a
+    // bake attempt. Retry that attempt on a later frame instead of treating
+    // it as settled merely because no allowance-limited bakes remain.
+    _planSettled = bakes.count == 0 && _pendingCount == 0;
     return _plan;
 }
 @end
@@ -1998,9 +2014,10 @@ static void IFBGTileChunkTexels(const IFBGTileLayout *l, uint32_t lod, long cx, 
 // `visibility_query`: every chunk `(cx, cy)` of every image instance
 // `(kx, ky)` the visible rectangle touches (`compute_k_range`,
 // `chunks_intersecting`). The image repeats with its own period; a chunk past
-// its right or bottom edge is never listed.
+// its right or bottom edge is never listed. A NO result stops enumeration once
+// a caller has exhausted its budget; subsequent cells would do no work.
 static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l, long chunkSize,
-                                void (^each)(long cx, long cy, long kx, long ky)) {
+                                BOOL (^each)(long cx, long cy, long kx, long ky)) {
     if (chunkSize <= 0 || v->viewW <= 0 || v->viewH <= 0 || l->imageW <= 0 || l->imageH <= 0) return;
     long kx0 = IFBGDivFloor(v->viewX - l->positionX, l->imageW), kx1 = IFBGDivFloor(v->viewX + v->viewW - 1 - l->positionX, l->imageW);
     long ky0 = IFBGDivFloor(v->viewY - l->positionY, l->imageH), ky1 = IFBGDivFloor(v->viewY + v->viewH - 1 - l->positionY, l->imageH);
@@ -2011,7 +2028,9 @@ static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l,
             long maxX = MIN(relX + v->viewW, l->imageW), maxY = MIN(relY + v->viewH, l->imageH);
             if (minX >= maxX || minY >= maxY) continue;
             for (long cy = minY / chunkSize; cy <= (maxY - 1) / chunkSize; cy++) {
-                for (long cx = minX / chunkSize; cx <= (maxX - 1) / chunkSize; cx++) each(cx, cy, kx, ky);
+                for (long cx = minX / chunkSize; cx <= (maxX - 1) / chunkSize; cx++) {
+                    if (!each(cx, cy, kx, ky)) return;
+                }
             }
         }
     }
@@ -2151,7 +2170,8 @@ static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l,
 }
 
 - (NSArray<IFBGChunkDraw *> *)drawsForFrame:(IFBackgroundFrame)f {
-    if (_hasPlan && memcmp(&f, &_planFrame, sizeof f) == 0) return _plan;
+    if (_hasPlan && (memcmp(&f, &_planFrame, sizeof f) == 0 ||
+                     (!_inFlight.count && IFBGSameChunkView(f, _planFrame)))) return _plan;
     _hasPlan = NO;
     _plan = nil;
     IFBGChunkView view = IFBGChunkViewMake(f);
@@ -2178,30 +2198,31 @@ static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l,
     __block uint64_t wanted = 0;
     __block BOOL over = NO;
     NSMutableSet<NSNumber *> *seen = [NSMutableSet set];
-    for (uint32_t lod = coarsest; lod-- > target;) {
+    for (uint32_t lod = coarsest; !over && lod-- > target;) {
         uint32_t aggregation = l->aggregations[lod];
-        IFBGVisibilityQuery(v, l, l->sizes[lod], ^(long cx, long cy, long kx, long ky) {
+        IFBGVisibilityQuery(v, l, l->sizes[lod], ^BOOL(long cx, long cy, long kx, long ky) {
             (void)kx;
             (void)ky;
             NSNumber *key = IFBGChunkKey(lod, cx, cy);
-            if (over || [seen containsObject:key]) return;
+            if ([seen containsObject:key]) return YES;
             [seen addObject:key];
             long texelsW, texelsH;
             IFBGTileChunkTexels(l, lod, cx, cy, &texelsW, &texelsH);
             uint64_t bytes = (uint64_t)texelsW * (uint64_t)texelsH * 4;
             if (wanted + bytes > self->_budget) {
                 over = YES;
-                return;
+                return NO;
             }
             wanted += bytes;
             IFBGChunk *chunk = self->_chunks[key];
             if (chunk) {
                 chunk->touched = frame;
-                return;
+                return YES;
             }
-            if ([self->_inFlight containsObject:key] || [self->_failed containsObject:key]) return;
+            if ([self->_inFlight containsObject:key] || [self->_failed containsObject:key]) return YES;
             [self->_inFlight addObject:key];
             [self->_pool enqueueLevel:lod cx:(uint32_t)cx cy:(uint32_t)cy aggregation:aggregation];
+            return YES;
         });
     }
     if (over != _degraded) {
@@ -2220,7 +2241,7 @@ static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l,
     NSMutableDictionary<NSString *, IFBGChunkDraw *> *chosen = [NSMutableDictionary dictionary];
     if (target < coarsest) {
         long targetSize = l->sizes[target];
-        IFBGVisibilityQuery(v, l, targetSize, ^(long cxT, long cyT, long kx, long ky) {
+        IFBGVisibilityQuery(v, l, targetSize, ^BOOL(long cxT, long cyT, long kx, long ky) {
             // (kx, ky) places the element; the coarser chunk is looked up on
             // the image's own grid.
             long canvasX = cxT * targetSize, canvasY = cyT * targetSize;
@@ -2229,7 +2250,7 @@ static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l,
                 IFBGChunk *chunk = self->_chunks[IFBGChunkKey(lod, cx, cy)];
                 if (!chunk) continue;
                 NSString *key = [NSString stringWithFormat:@"%u/%ld/%ld/%ld/%ld", lod, cx, cy, kx, ky];
-                if (chosen[key]) return;
+                if (chosen[key]) return YES;
                 // `chunk_actual_size`: a chunk at the image's right or bottom
                 // edge is as wide as what is left of the image.
                 long w = MIN(MAX(l->imageW - cx * size, 0L), size), h = MIN(MAX(l->imageH - cy * size, 0L), size);
@@ -2244,8 +2265,9 @@ static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l,
                 draw->uniforms.target = simd_make_float2(v->targetW, v->targetH);
                 draw->uniforms.tex_size = simd_make_float2((float)chunk->texture.width, (float)chunk->texture.height);
                 chosen[key] = draw;
-                return;
+                return YES;
             }
+            return YES;
         });
     }
     _plan = IFBGSortDraws(chosen.allValues);

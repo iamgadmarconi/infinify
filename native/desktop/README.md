@@ -109,7 +109,7 @@ status line and chooser unchanged.
   ([Blur, window animations and the error bar](#blur-window-animations-and-the-error-bar)).
 - **Quitting returns the native desktop.** Control-Option-Escape (until a
   binding takes that chord), a key bound to `quit` (DriftWM's default is
-  Control-Option-Command-Shift-Q), `Infinify msg action quit`, SIGTERM and a
+  Control-Command-Shift-Q), `Infinify msg action quit`, SIGTERM and a
   log out all end the same way: fullscreens ended, the scene saved, panels
   closed, capture stopped, hot keys released, exit status 0. There is no Quit
   button and no Return to desktop. `msg quit` is not a command: the action is
@@ -514,7 +514,7 @@ is a line on stderr ([Desktop mode](#desktop-mode)).
   canvas opened this way manages no window. The chooser stays open above the
   canvas. A run that manages windows by itself has no chooser: a window it did
   not take, or one whose capture failed, cannot be added by hand there.
-- Close and suspend: Control-Option-Q (`close-window`) asks the focused window's
+- Close and suspend: Command-Q (`close-window`) asks the focused window's
   application to close it, by pressing that window's own close button through
   Accessibility; on a focused placeholder it dismisses the placeholder.
   `suspend-window` (no default key) does the same and leaves a stand-in behind.
@@ -524,7 +524,7 @@ is a line on stderr ([Desktop mode](#desktop-mode)).
   grammar; [Configuration](#configuration) has the file, the modifier mapping
   and the default tables. With no file, DriftWM's default bindings apply. The
   chords named in this list are those defaults under the default super chord
-  (Control-Option). Nothing on screen lists the chords the running app
+  (Command). Nothing on screen lists the chords the running app
   resolved, now that the status line and the toolbar's tooltips are gone:
   `Infinify --help` and the default table under
   [Configuration](#configuration) have them, three of which start a program.
@@ -535,22 +535,22 @@ is a line on stderr ([Desktop mode](#desktop-mode)).
   [Tap bindings](#tap-bindings) has the rule, what it needs of macOS, and that
   no chord has yet been pressed against it.
 - Pan a display's camera: drag or two-finger scroll on empty canvas,
-  Control-Option-drag / Control-Option-scroll anywhere, or a three-finger swipe
+  Command-drag / Command-scroll anywhere, or a three-finger swipe
   anywhere. A pan that is still moving when the fingers lift or the button is
   released keeps drifting until friction stops it (`navigation.drift`; 0 turns
   that off). Zoom, pointer-anchored, up to 1.0 and down to half the zoom that
-  fits every window: mouse wheel on empty canvas, Control-Option-wheel
-  anywhere, a two-finger pinch on empty canvas (Control-Option-pinch anywhere),
+  fits every window: mouse wheel on empty canvas, Command-wheel
+  anywhere, a two-finger pinch on empty canvas (Command-pinch anywhere),
   or a three-finger pinch anywhere. The view actions below are the animated
   keyboard equivalents; [Camera motion](#camera-motion) has the
   details of drift, edge pan and the pointer speeds, and
   [Trackpad gestures](#trackpad-gestures) the rest of the gesture table and
   what macOS must be told first.
 - View actions: while panels are open, the global hot keys bound to
-  `home-toggle` (Control-Option-A), `zoom-to-fit` (Control-Option-W; press
-  again to return), `zoom-in` (Control-Option-=), `zoom-out`
-  (Control-Option--), `zoom-reset` (Control-Option-0 or Control-Option-Z) and
-  `pan-viewport <direction>` (Control-Option-Command with an arrow key, one
+  `zoom-to-fit` (Command-Tab or F3, again to return), `home-toggle` (Command-A), `zoom-to-fit` (Command-W; press
+  again to return), `zoom-in` (Command-=), `zoom-out`
+  (Command--), `zoom-reset` (Command-0 or Command-Z) and
+  `pan-viewport <direction>` (Control-Command with an arrow key, one
   `navigation.pan_step`). Hot keys act on the display under the pointer, or
   the first display when the pointer is over no panel. The toolbar buttons
   Home, Fit, −, 1:1 and + exist in the demo panel only, where they act on the
@@ -572,10 +572,10 @@ is a line on stderr ([Desktop mode](#desktop-mode)).
 - Window navigation, in every normal run (the hot keys only while panels are
   open and not with `--windowed`, where `Infinify msg action` runs the same
   actions):
-  Control-Option with an arrow key (`center-nearest <direction>`) focuses the
+  Command with an arrow key (`center-nearest <direction>`) focuses the
   nearest window in that direction and flies the camera to it at the current
-  zoom; Control-Option-C (`center-window`) centres the focused window, or the
-  one nearest the middle of the view, at 1:1; Control-Option-X (`focus-center`)
+  zoom; Command-C (`center-window`) centres the focused window, or the
+  one nearest the middle of the view, at 1:1; Command-X (`focus-center`)
   does the same for the window under the pointer; Option-Tab and
   Option-Shift-Tab (`cycle-windows forward` / `backward`) step through the
   windows most recently focused first, and letting go of Option commits the
@@ -600,15 +600,15 @@ is a line on stderr ([Desktop mode](#desktop-mode)).
   window on the canvas is one target: a click flies to it at 1:1, a drag moves
   it, and no click, scroll or motion reaches its application; a screen-pinned
   window and a widget are not picked and stay as they are.
-  Control-Option-Command-drag
+  Control-Command-drag
   (`center-nearest` as a mouse binding) steps to the nearest window the way the
   drag pulls the canvas: drag left to go right. Both settings are off by
   default. None of this has been tried with a real pointer:
   [Pointer motion, sloppy focus and pick mode](#pointer-motion-sloppy-focus-and-pick-mode)
   has the rules and the exact boundary.
-- Bookmarks: Control-Option-1 to 4 (`go-to-bookmark N`) fly the camera of the
+- Bookmarks: Command-1 to 4 (`go-to-bookmark N`) fly the camera of the
   display under the pointer to bookmark 1 to 4 (zoom is left alone and any Fit
-  return is forgotten); Control-Option-Shift-1 to 4 (`set-bookmark N`) save the
+  return is forgotten); Command-Shift-1 to 4 (`set-bookmark N`) save the
   usable-area centre of the current view as that bookmark. Pressed while a pan
   step or a bookmark jump is still flying, they save where it is heading. During
   a Home, Fit or zoom flight the saved point is not reliably the destination,
@@ -635,7 +635,7 @@ is a line on stderr ([Desktop mode](#desktop-mode)).
   depends on the controller or on an active output. Control-Option-Escape stays
   the exit chord unless a config binding resolves to that chord, which then
   takes it. DriftWM's own `quit` binding, `mod+ctrl+shift+q`, is
-  Control-Option-Command-Shift-Q. The experimental resize controls below keep
+  Control-Command-Shift-Q. The experimental resize controls below keep
   their own gate.
 - Option-drag on a window: move the logical world window, using Rust snapping
   and hysteresis with the `[snap]` settings. Add Shift to move its connected
@@ -644,15 +644,15 @@ is a line on stderr ([Desktop mode](#desktop-mode)).
   ([Upstream behaviour gaps closed](#upstream-behaviour-gaps-closed)). Held within `navigation.edge_pan.zone` (100 points) of the edge of
   the display the drag began on, the drag pans the canvas under the window,
   faster the nearer the edge. A three-finger tap followed by a three-finger
-  swipe on a window moves it the same way, edge pan included. Control-Option-Shift with an arrow key
+  swipe on a window moves it the same way, edge pan included. Command-Shift with an arrow key
   (`nudge-window <direction>`) moves the focused logical window by
   `navigation.nudge_step` world points. None of this moves a native window.
-- Window sizing. Control-Option-Shift-W (`zoom-to-fit-snapped`; also
-  Control-Option with a four-finger pinch in) frames the focused window's snap
+- Window sizing. Command-Shift-W (`zoom-to-fit-snapped`; also
+  Command with a four-finger pinch in) frames the focused window's snap
   cluster and nothing else, and a second press returns, as Fit does for every
   window. It moves a camera only and runs in every normal run. DriftWM's
   actions that give a window a new size are a different matter: `fit-window`
-  (Control-Option-M, Option-middle-click, Option with a two-finger pinch on a
+  (Command-M, Option-middle-click, Option with a two-finger pinch on a
   window), `fit-window-snapped` (the same with Shift), and `fill-window`,
   `grow-window <direction>` and `shrink-window <direction>` (no default
   binding), with `Infinify msg resize WIDTH HEIGHT`, run in every normal run, with
@@ -661,7 +661,7 @@ is a line on stderr ([Desktop mode](#desktop-mode)).
   [Window sizing actions](#window-sizing-actions) has what each does, and what
   has been run: disposable fixture windows and an Electron window, not yet any
   application of the owner's.
-- Fullscreen, DriftWM's and not macOS's: Control-Option-F, Control-Option with
+- Fullscreen, DriftWM's and not macOS's: Command-F, Command with
   a middle click on a window, or Option with a three-finger pinch in or out on
   a window (`toggle-fullscreen`) gives the focused window its whole display,
   alone, on the canvas's own Space; a second press puts the window, the camera
@@ -670,13 +670,13 @@ is a line on stderr ([Desktop mode](#desktop-mode)).
   [Fullscreen](#fullscreen) has the rules, how it differs from macOS's own
   full screen, and what has been run: fixture windows, not yet any application
   of the owner's.
-- Cursor edge pan, off by default: Control-Option-E (`toggle-cursor-pan`)
+- Cursor edge pan, off by default: Command-E (`toggle-cursor-pan`)
   turns it on or off for the run, and `navigation.edge_pan.cursor_pan = true`
   starts with it on. While it is on, a bare pointer resting within
   `cursor_zone` (20 points) of a display's edge pans that display's view,
   except under the menu bar and the Dock ([Desktop mode](#limits-of-desktop-mode)).
   The toggle writes no status note.
-- Control-Option-Command-Shift with an arrow key (`send-to-output <direction>`)
+- Command-Option with an arrow key (`send-to-output <direction>`)
   moves the focused logical window into the view of the display on that side,
   where a navigation on that display would park it. `send-cursor-to-output
   <direction>` (no default key) moves the pointer to the centre of that display.
@@ -702,7 +702,7 @@ is a line on stderr ([Desktop mode](#desktop-mode)).
   that is bound to pan (the default left button) and is released within 5
   points of where it went down leaves no window focused, as upstream's pan
   grab does.
-- Pin to screen: Control-Option-T (`toggle-pin-to-screen`) fixes the focused
+- Pin to screen: Command-T (`toggle-pin-to-screen`) fixes the focused
   window to its display, where it ignores pan and zoom and is drawn above the
   canvas windows; pressed again it returns the window to the canvas at the same
   place. Option-drag (the move binding) moves a pinned window about its
@@ -1689,11 +1689,165 @@ the native gesture bridge. The green-button bridge also hit-tests extra display
 placements and dispatches the existing canvas-fullscreen/Option-fit command.
 
 This is source implementation, not complete native multi-display acceptance.
-Live popup/sheet replicas and clipping the real native window at its output's
-boundary remain open: the helper currently changes a transform and alpha, not
+Live popup/sheet replicas are now implemented through separate member streams;
+clipping the real native window at its output's boundary remains open: the helper
+currently changes a transform and alpha, not
 the window's clip. Additional-display interaction, capture sharpness at different
 native scales and frame pacing have not been exercised. The no-launch app build
 and strict compiler checks passed; no tests, fixtures or applications were launched.
+
+`native-replica-family.m` captures each freshly parented child independently and
+orders children by observed WindowServer stacking. Frame metadata supplies the
+source pixel crop; native extents are normalized relative to the root for every
+display's camera. Separate frame queues avoid waiting behind family discovery.
+Capture size/rate changes update existing streams, and downsizing follows the
+root's demand hysteresis. Observation and stream-start deadlines reject stale
+work, with at most one uncancellable shareable-content request outstanding.
+Permission loss, changed ancestry/bounds or retired generations withdraw child
+images. The renderer carries image geometry only, includes children in closing
+snapshots and window screenshots, and refuses invalid source crops.
+
+Live captured families now share one validated ordering plan with pointer hit
+detection. A complete on-screen native stacking observation can interleave roots and
+children within one contiguous compositor bucket only when every captured
+member matches and the observed root order agrees with the controller. Physical
+native placements, stand-ins and closing snapshots are barriers. Missing or
+incompatible evidence keeps the grouped order. Semantic order changes refresh
+the existing output frames; unchanged video frames reuse the ordering plan.
+Input reads that applied description and an exact child key, refusing stale
+layout, source bindings, provider revisions or withdrawn images. This is not a
+presentation acknowledgement or proof of physical popup behavior. Total stacking
+between real windows and replicas and cross-family closing interleaving remain
+open; closing snapshots preserve only
+the applied relative order within the closing family.
+
+One-shot screenshots now record a separate request-scoped stacking cohort and
+opaque child keys, then re-read the complete family, bounds, relative order and
+binding before composition. The renderer interleaves only complete ranked
+families whose root order agrees with the frozen canvas snapshot. Offscreen or
+otherwise unranked families still capture in a stable grouped order and act as
+barriers. Stand-ins, widgets and canvas pin exclusion retain their existing
+rules. Region clipping follows ordering, and an isolated window includes just
+its complete family. Exports do not borrow live-stream ordering evidence. This
+implementation has compiler/source-review coverage only; no new screenshot or
+native application experiment was run.
+
+An observed child can now remain visible in a display view after its root leaves
+that viewport. The adapter adds a child-only replica placement using that
+display's camera, without expanding the root's world rectangle or choosing it
+as a real native owner. Its clipping envelope requests capture and rendering;
+only an exact captured child hit can authorize input inside it. Fullscreen and
+display-pin isolation still apply. Capture demand, drawing and pointer routing
+share the derived presentation snapshot. Family reports are bound to the current
+identity, generation, native bounds and session; delayed reports from a departed
+or replaced session cannot restore them.
+
+Replica hits retain the captured root generation and exact child identity.
+Fresh root ownership and parent checks precede posting. A release returns to the
+already-pressed identity even if its native bounds changed; it never retargets
+another hit. A click waiting for native focus also retains its original root or
+child identity, binding generation and output before focus changes. If the fresh
+hit names another recipient, its queued down, drag and release are discarded
+together. Source removal, session departure and capture cancellation also discard
+pending clicks and their timers. Click navigation waits behind delivery rather than moving the view
+while the initial press is pending. Child hover uses the freshly validated recipient even beyond its
+root rectangle, while retaining controller pick/grab rules and application-owned
+panel focus. `native-tablet.m` preserves physical pen/eraser payloads, pressure,
+tilt, rotation and proximity. Admitted contact stays with its original recipient;
+cancellation pairs held mouse buttons, pressure release and tool-out. A physical
+enter is required for a tool already in proximity at startup. Tablet display
+mapping is excluded by the owner's review. Replica cursor-image synchronization
+and hardware delivery remain incomplete or unverified.
+
+`native-pointer-grab.m` retains the original native root/member and output after
+an admitted mouse press. Motion and releases map through that output's current
+view even beyond tile/display bounds, without retargeting a different window.
+Multiple buttons remain paired independently; cancellation releases the admitted
+recipient and consumes the remaining physical tails. Stream failure, source
+removal, display rebuild, event-tap disable and session departure cancel the
+capture. Forwarded tags bypass the event bridge before physical-pair bookkeeping.
+`native-relative-motion.m` converts accelerated mouse deltas to application
+points with fractional carry; raw unaccelerated fields and tablet data remain
+unchanged. This supplies neither application-requested pointer lock/confinement
+nor native cross-application drag-and-drop. No physical acceptance is claimed.
+
+`canvas-cursor.m` now coordinates Infinify's own pointing-hand cursor for pick
+targets, all eight border/drag resize cursors, and a closed hand during mouse
+pan/move grabs. Only the actual canvas panel under the pointer can set them;
+other applications, the Dock, menus and the chooser retain their cursor. Entry,
+coalesced motion, scene changes and release refresh the policy. Session departure
+and panel teardown withdraw it, restoring the saved application-local cursor
+only while Infinify still owns the override. Unchanged cursor sets are suppressed.
+Native-mode hover forwarding is enabled for captured views; physical native
+recipients continue to answer `forward: false` and are not reposted. No physical
+cursor or hover acceptance has been performed. A foreign application's cursor
+image, hotspot, visibility and animation over a replica remain unimplemented;
+neither the global cursor getter nor cursor pixels in a capture bind them to the
+replica's exact recipient and remapped point.
+
+The 2026-10-11 source performance pass reuses settled background plans across
+time-only changes, stops TIFF visibility scans when the cache budget is exhausted,
+batches retired-resource removal, shares one uniform upload across effect strips,
+coalesces drawable notifications and retries failed drawable acquisition only
+when the owner still owes a scene. Controller snapshots, hits, input checks and
+resize-border queries read settled state without cloning the whole controller.
+Mutations and public scene load finish normalization themselves; lifecycle marks
+are pruned before fullscreen settlement. The native shell retains its decoded
+snapshot across those four reads and invalidates it before any other command.
+Shared GPU queues and cross-queue
+synchronization remain intact. Family worker queues drain temporary Objective-C
+objects after each work item, and an empty child plan skips shareable-content
+enumeration while still retiring old streams through the usual reconciliation.
+An ancestry walk reuses each freshly validated parent as the next step's
+before-check, while retaining a fresh after-check around every private parent
+read. The direct-child capture path therefore makes five window-info queries
+and four process-birth reads instead of six and five, by source inspection.
+No validation result is cached across frames, and final frame metadata remains
+freshly checked after bounds validation.
+Drawable child-attachment arrays are retained across ordinary pixel changes and
+rebuilt before membership, first-frame, failure or retirement callbacks. Rank
+cohorts compare relative managed-window order, so unrelated desktop windows do
+not trigger redraws, and unchanged capture descriptions reuse their state.
+Normal composited root captures now receive callbacks on a serial worker with
+a separate mailbox for each stream. At most one latest sample waits behind one
+main-thread drain. Coalescing carries dirty/unknown-dirty and size changes into
+the retained complete frame, so a later unchanged frame cannot hide an update.
+Retirement cancels the old mailbox, and publication checks the exact source,
+stream and mailbox on main. Controller, renderer and capture installation stay
+on main; experimental resize and display-layer capture keep their existing
+callback path. This does not guarantee that ScreenCaptureKit moves every internal
+deserialization operation off main. Ordinary overlay input also reuses its first
+successful router validation within the straight-line pre-controller check;
+bounds refresh, controller input and posting retain their subsequent validation.
+These are unmeasured source optimizations.
+A bounded read-only process sample at 21:11:52–21:12:02 UTC found no running
+Infinify. WindowServer used approximately 45.5% of one CPU by cumulative-time
+delta and 546.5–546.6 MiB RSS for the whole desktop. This is not an equivalent
+workload comparison or evidence of improvement. No tests, fixtures, apps or
+benchmarks were launched; CPU/memory parity and stable 120 fps remain unverified.
+
+After the owner enabled live profiling and launched Infinify, a read-only
+15.006-second observation at 22:07:32–22:07:47 UTC measured 3.56 CPU seconds
+(23.7% of one core) and 107.64–191.31 MiB RSS for PID 3542. WindowServer used
+8.46 CPU seconds (56.4% of one core) and 570.0–570.6 MiB RSS for the entire
+desktop. A later five-second stack sample reported physical footprint 389.1M,
+peak 498.4M; that metric and time are distinct from the RSS interval. The app
+had no launch flags: this measured the default capture overlay, not native-helper
+presentation. Its loaded executable UUID was
+`874BAD98-BBFF-397E-BA23-13A73AA87660`, matching the bundle built at 19:57:36 UTC,
+before the current source changes. The sample contains main-thread capture
+processing, snapshot JSON and pointer-validation work; blocked drawable waits
+are not evidence of CPU spinning. No before/after improvement, steady-state
+memory bound, native workload comparison or 120 fps acceptance follows from
+this sample. Saved local evidence is under
+`target/performance/20261011-live-overlay/`; no app was launched or restarted by
+the profiler.
+
+Native clipping currently exposes identity-bound geometry plans through
+`DebugNative`, with `planning_only` and `native_supported=false`. No shape write
+is enabled: exact original-region snapshot/restoration is not implemented. These
+source additions passed strict compiler checks without tests or desktop activity;
+they establish neither usable third-party compositing nor stable 120 fps.
 
 Audited allowlist helpers bind only verified native roots. The read-only native
 family adapter requires an acyclic WindowServer parent chain, one process birth
@@ -1909,7 +2063,8 @@ third-party compositing.
 
 Remaining boundaries: extra output views now use shared live root captures,
 while the real window stays at one stable native placement. Live popup/sheet
-replicas and native clipping to an output boundary remain open. Raw
+replicas are implemented but unverified; native clipping to an output boundary
+remains open. Raw
 multi-finger trackpad gestures over real windows, physical
 delivery of the new magnify bridge, Spaces gathering,
 native popup placement and ordering across applications still require further
@@ -2615,7 +2770,7 @@ window and is forwarded to it, a scroll is forwarded.
   can differ: the chords are then released while another application is in
   front, and that application gets them.
 - A list names a binding by its combo text. Two spellings can be one physical
-  chord (`mod+q` and `ctrl+alt+q` are both ⌃⌥Q under the default `--super`);
+  chord (`mod+q` and `ctrl+alt+q` are both ⌃⌥Q under `--super ctrl+alt`);
   only the spelling of the binding that holds the chord passes it. Upstream
   compares modifier state and has no such choice.
 - When the focus leaves a passing window while a passed chord is still held,
@@ -4368,7 +4523,7 @@ the complete default table.
 | `ctrl` | Control ⌃ |
 | `alt` | Option ⌥ |
 | `shift` | Shift ⇧ |
-| `super`, and `mod` while `mod_key = "super"` (the default) | the super chord: Control-Option ⌃⌥ unless `--super` says otherwise |
+| `super`, and `mod` while `mod_key = "super"` (the default) | the super chord: Command ⌘ unless `--super` says otherwise |
 | `mod3` | none; such a binding is skipped with a warning |
 
 `--super CHORD` picks the super chord at launch: a `+`-joined subset of `ctrl`,
@@ -4380,7 +4535,7 @@ reported in the status line and the default stays.
 A binding that holds super together with a modifier the super chord already
 contains would be indistinguishable from the binding without it, so that
 modifier is displaced: `ctrl` becomes Command and `alt` becomes Command-Shift.
-With the default chord `mod+ctrl+Right` is ⌃⌥⌘→ and `mod+alt+Right` is ⌃⌥⇧⌘→.
+With `--super ctrl+alt`, `mod+ctrl+Right` is ⌃⌥⌘→ and `mod+alt+Right` is ⌃⌥⇧⌘→.
 When the super chord itself contains Command there is nowhere to displace to and
 the binding is skipped with a warning. Two bindings that land on one physical
 chord are settled by upstream combo text: the first in sorted order keeps the
@@ -4409,40 +4564,41 @@ registered either, ⌃⌥Esc and `quit` excepted
 
 | Chord | DriftWM binding | Action |
 | --- | --- | --- |
-| ⌃⌥A | `mod+a` | `home-toggle` |
-| ⌃⌥W | `mod+w` | `zoom-to-fit` |
-| ⌃⌥⇧W | `mod+shift+w` | `zoom-to-fit-snapped` |
-| ⌃⌥= / ⌃⌥- | `mod+equal` / `mod+minus` | `zoom-in` / `zoom-out` (repeat) |
-| ⌃⌥0, ⌃⌥Z | `mod+0`, `mod+z` | `zoom-reset` |
-| ⌃⌥⌘ arrows | `mod+ctrl+<arrow>` | `pan-viewport <direction>` (repeat) |
-| ⌃⌥⇧ arrows | `mod+shift+<arrow>` | `nudge-window <direction>` (repeat) |
-| ⌃⌥⇧⌘ arrows | `mod+alt+<arrow>` | `send-to-output <direction>` |
-| ⌃⌥ arrows | `mod+<arrow>` | `center-nearest <direction>` |
-| ⌃⌥C | `mod+c` | `center-window` |
-| ⌃⌥X | `mod+x` | `focus-center` |
+| ⌘Tab / F3 | `mod+Tab` / `F3` (Mac defaults) | `zoom-to-fit` toggle |
+| ⌘A | `mod+a` | `home-toggle` |
+| ⌘W | `mod+w` | `zoom-to-fit` |
+| ⇧⌘W | `mod+shift+w` | `zoom-to-fit-snapped` |
+| ⌘= / ⌘- | `mod+equal` / `mod+minus` | `zoom-in` / `zoom-out` (repeat) |
+| ⌘0, ⌘Z | `mod+0`, `mod+z` | `zoom-reset` |
+| ⌃⌘ arrows | `mod+ctrl+<arrow>` | `pan-viewport <direction>` (repeat) |
+| ⇧⌘ arrows | `mod+shift+<arrow>` | `nudge-window <direction>` (repeat) |
+| ⌥⌘ arrows | `mod+alt+<arrow>` | `send-to-output <direction>` |
+| ⌘ arrows | `mod+<arrow>` | `center-nearest <direction>` |
+| ⌘C | `mod+c` | `center-window` |
+| ⌘X | `mod+x` | `focus-center` |
 | ⌥Tab / ⌥⇧Tab | `alt+Tab` / `alt+shift+Tab` | `cycle-windows forward` / `backward` (repeat) |
-| ⌃⌥1 to ⌃⌥4 | `mod+1` to `mod+4` | `go-to-bookmark 1` to `4` |
-| ⌃⌥⇧1 to ⌃⌥⇧4 | `mod+shift+1` to `mod+shift+4` | `set-bookmark 1` to `4` |
-| ⌃⌥Return | `mod+return` | `exec-terminal`: `$TERMINAL`, else `open -a Terminal "$HOME"` |
-| ⌃⌥D | `mod+d` | `exec-launcher`: `$LAUNCHER`, else `open -a Apps` |
-| ⌃⌥L | `mod+l` | `exec /usr/bin/pmset displaysleepnow`, standing in for upstream's `spawn swaylock -f -c 000000 -kl` (see [Linux-only default commands](#linux-only-default-commands)) |
-| ⌃⌥Q | `mod+q` | `close-window`: close the focused window, or dismiss a focused placeholder |
-| ⌃⌥E | `mod+e` | `toggle-cursor-pan` |
-| ⌃⌥T | `mod+t` | `toggle-pin-to-screen`: pin the focused window to the screen, or return it to the canvas |
-| ⌃⌥⇧⌘Q | `mod+ctrl+shift+q` | `quit` |
+| ⌘1 to ⌘4 | `mod+1` to `mod+4` | `go-to-bookmark 1` to `4` |
+| ⇧⌘1 to ⇧⌘4 | `mod+shift+1` to `mod+shift+4` | `set-bookmark 1` to `4` |
+| ⌘Return | `mod+return` | `exec-terminal`: `$TERMINAL`, else `open -a Terminal "$HOME"` |
+| ⌘D | `mod+d` | `exec-launcher`: `$LAUNCHER`, else `open -a Apps` |
+| ⌘L | `mod+l` | `exec /usr/bin/pmset displaysleepnow`, standing in for upstream's `spawn swaylock -f -c 000000 -kl` (see [Linux-only default commands](#linux-only-default-commands)) |
+| ⌘Q | `mod+q` | `close-window`: close the focused window, or dismiss a focused placeholder |
+| ⌘E | `mod+e` | `toggle-cursor-pan` |
+| ⌘T | `mod+t` | `toggle-pin-to-screen`: pin the focused window to the screen, or return it to the canvas |
+| ⌃⇧⌘Q | `mod+ctrl+shift+q` | `quit` |
 | ⌃⌥Esc | none (the shell's own) | exit, until a binding takes the chord |
 
 Those are 42 of upstream's 57 default key bindings. ⌥Tab and ⌥⇧Tab are taken
 from every application while a canvas panel is open; rebind or unbind
-`cycle-windows` in the config file to give them back. ⌃⌥⇧W is newly taken the
+`cycle-windows` in the config file to give them back. ⇧⌘W is newly taken the
 same way: `zoom-to-fit-snapped` used not to run, so its chord used to stay with
 the applications. The rest are not registered, so their chords stay with the
 applications:
 
-- Until 2026-10-11, 3 whose action did not run in a default launch: ⌃⌥F
-  (`toggle-fullscreen`), and ⌃⌥M and ⌃⌥⇧M (`fit-window`,
-  `fit-window-snapped`). All three run in every normal run now, so ⌃⌥F, ⌃⌥M
-  and ⌃⌥⇧M are registered as well (45 of 57, which the bindings trace of
+- Until 2026-10-11, 3 whose action did not run in a default launch: ⌘F
+  (`toggle-fullscreen`), and ⌘M and ⇧⌘M (`fit-window`,
+  `fit-window-snapped`). All three run in every normal run now, so ⌘F, ⌘M
+  and ⇧⌘M are registered as well (45 of 57, which the bindings trace of
   `tests/e2e/scoped-sizing.sh` lists as the 45 key bindings that run), and so
   is any key a config binds to `fill-window`, `grow-window` or
   `shrink-window`; see [Window sizing actions](#window-sizing-actions) and
@@ -4451,6 +4607,8 @@ applications:
 - 8 on media keys (volume, mute, brightness, play, next, previous), which macOS
   handles itself, and 4 on keys a Mac keyboard lacks (`Print`, `shift+Print`,
   `XF86AudioPause`, `XF86AudioStop`).
+
+The two Mac overview defaults bring the total to 47 registered bindings. Explicit config bindings, unbindings and `disable_defaults = ["keys"]` take precedence. Command-Tab and F3 use a session event filter while desktop mode is active; the known Mission Control keycode 160 aliases F3. Other hardware packet formats remain unverified. No system shortcut preferences are changed.
 
 **Key repeat.** A held hot key whose action upstream marks repeatable
 (`zoom-in`, `zoom-out`, `pan-viewport`, `nudge-window`, `cycle-windows` and
@@ -5987,10 +6145,12 @@ or arbitrary third-party app compatibility.
 
 ## Known limits
 
-Native AX layout resizing is deliberately gated, not simulated by changing
-world geometry. Cross-boundary pointer capture, context-menu/popover
-capture, native drag-and-drop, and application-specific floating child windows
-are not implemented. Pointer motion with no button down is forwarded to the
+Native AX layout resizing is implemented through guarded transactions rather
+than simulated world-geometry changes. Native replicas now have separate
+parented popup/sheet streams and implicit mouse capture across viewport bounds;
+these source paths remain unverified with ordinary applications. Native
+cross-application drag-and-drop, pointer lock/confinement, display-boundary
+clipping and arbitrary family stacking remain incomplete. Pointer motion with no button down is forwarded to the
 application under it, but has never been delivered to a real one, and the
 cursor stays the canvas's own whatever that application would show. Right and middle clicks are forwarded through the
 per-window route but have never been delivered to a real application. Ordinary selected app activation
@@ -5998,8 +6158,10 @@ works with the tested native window in the fixture modes; a normal run's click
 now focuses through the focus driver instead, which has not been exercised, and
 choosing among multiple native windows of one application and app-specific
 focus rules needs broader validation.
-A held pointer drag cannot retarget another source. Only the last validated
-in-window point receives a synthetic button-up if a pointer leaves its source; arbitrary outside-source drag delivery is not claimed.
+A held pointer drag stays with its original native recipient beyond its tile.
+Loss of ownership or current presentation cancels that capture; a copied release
+is posted only while the same binding and native identity remain valid. This
+implementation has not been exercised with physical cross-display input.
 Desktop mode itself, the whole-display panels on every Space, the permission
 window, the login item and what happens across sleep, lock and a display
 change, has not been run on a display at all: [Desktop mode](#desktop-mode)
@@ -6383,9 +6545,10 @@ send none. The shell then does what the reply says:
   (upstream's code does this, whatever its comment says), and a drag more than
   about 22° off an axis is a diagonal.
 
-Not done: upstream shows a pointing-hand cursor over a pick target, and the
-cursor of the application under the pointer. The cursor here stays the
-canvas's arrow.
+The source now supplies a pointing hand over pick targets on the canvas,
+directional resize cursors and a closed hand during mouse pan/move grabs.
+These shapes have not been exercised with a physical pointer. The captured
+application's own cursor image remains unavailable over its replica.
 
 ### What has been run for the pointer policy
 
@@ -6627,8 +6790,9 @@ committing it; logical focus stays.
   `center-nearest` (upstream's ⌃⌥⌘-drag swipe; its trackpad form is the
   four-finger swipe) have never been tried with a real pointer, see
   [Pointer motion, sloppy focus and pick mode](#pointer-motion-sloppy-focus-and-pick-mode).
-  What will differ from DriftWM even when they work: the cursor stays the
-  canvas's arrow (no pointing hand over a pick target, no application cursor);
+  The source now provides the canvas's pick, resize and mouse-grab cursors;
+  the captured application's own cursor is still unavailable over a replica.
+  Other differences remain:
   an application is not told when the pointer leaves its window; sloppy focus
   raises the real window natively although the canvas does not restack; a
   window enters the Option-Tab order when its focus request is answered, not
@@ -7504,8 +7668,9 @@ nothing, and the next press starts afresh.
   a window beneath it), a press it does not take is a canvas press (upstream
   still counts the band as the window for bindings), and a stand-in, a widget,
   a pinned and a fullscreen window have none.
-- **No resize cursor** is shown over the border or during a drag: the shell
-  sets no cursor anywhere.
+- **Resize cursors** now use AppKit's edge/corner shapes over the accepted
+  canvas border and during the matching native resize transaction. The source
+  is compiled but has not been exercised with a physical pointer.
 
 ### What has been run for the pointer resize
 
