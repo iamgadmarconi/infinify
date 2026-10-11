@@ -228,6 +228,7 @@ static CGRect geometryFromScreen(CGRect rect,IFCompositorSpace space,IFComposito
 @property (copy) DWCanvasSource source;
 @property NSMutableDictionary<NSNumber *,DWCanvasOutput *> *states;
 @property IFBackgroundProgram *program;
+@property(readwrite) BOOL inheritsMacBackground;
 @property IFCompositorChromeStyle *chrome;
 @property IFCompositorOutlineSettings outline;
 @property NSNumber *revision;
@@ -265,9 +266,11 @@ static CGRect geometryFromScreen(CGRect rect,IFCompositorSpace space,IFComposito
     if(self.program&&(!snapshot||revision==self.revision||[revision isEqual:self.revision]))return NO;
     self.revision=revision;self.style++;
     NSDictionary *b=dict(render[@"background"]),*c=dict(render[@"chrome"]),*o=dict(render[@"outline"]);NSString *warning=nil;
+    self.inheritsMacBackground=[number(b[@"inherit_macos"])boolValue];
     // Upstream BackgroundConfig, field for field; the module expands ~ and falls back by itself.
     IFBackgroundConfig *config=[IFBackgroundConfig configWithTypeString:text(b[@"type"]) path:text(b[@"path"]) texture:text(b[@"texture"]) warning:&warning];
     config.mirrorTile=[number(b[@"mirror_tile"])boolValue];config.transparentShader=[number(b[@"transparent_shader"])boolValue];config.cacheShader=[number(b[@"cache_shader"])boolValue];
+    if(number(b[@"parallax"]))config.parallax=[number(b[@"parallax"])boolValue];
     config.animateFPS=(NSUInteger)lround(fmin(fmax([number(b[@"animate_fps"])doubleValue],0),1000));
     // Upstream's u32 of megabytes; a controller that does not report the key leaves upstream's default of 128.
     if(number(b[@"cache_budget_mb"]))config.cacheBudgetMB=(NSUInteger)llround(fmin(fmax([b[@"cache_budget_mb"]doubleValue],0),UINT32_MAX));
@@ -304,10 +307,25 @@ static CGRect geometryFromScreen(CGRect rect,IFCompositorSpace space,IFComposito
 // unless a fullscreen window conceals its canvas; the frame is forced, since nothing in its description changed. Under such a window
 // the chunk is one a decoder was still working on when the cache was shrunk: it is discarded at once, as upstream's shrink on every
 // frame of that session does, where nothing here would drain it until the output is next described.
-- (void)cache:(DWCanvasOutput *)state {
-    state.background=[self.program programForOutput];if(state.background==self.program)return;
+- (NSArray<NSString *> *)backgroundErrors:(IFBackgroundProgram *)program {
+    if(!program.errorText||[self.errors containsObject:program.errorText])return self.errors;
+    NSMutableArray *errors=[self.errors mutableCopy]?:[NSMutableArray array];[errors insertObject:program.errorText atIndex:MIN(errors.count,(NSUInteger)1)];return errors.copy;
+}
+- (void)cache:(DWCanvasOutput *)state output:(NSDictionary *)description {
+    IFBackgroundProgram *base=self.backgroundForOutput?self.backgroundForOutput(number(description[@"id"]),description,self.program):nil;
+    base=base?:self.program;state.background=[base programForOutput];if(state.background==base)return;
     __weak DWCanvasRenderer *weak=self;__weak DWCanvasOutput *output=state;
     state.background.chunkReadyHandler=^{DWCanvasOutput *shown=output;if(!shown.frame.background){[shown.background shrinkChunkCache];return;}shown.dirty=YES;[shown.layer setNeedsRedraw];[weak setNeedsFlush];};
+}
+- (void)refreshBackgrounds {
+    if(!self.program||!self.backgroundForOutput)return;BOOL changed=NO;
+    for(DWCanvasOutput *state in self.states.allValues){
+        IFBackgroundProgram *prior=state.background;[self cache:state output:state.orderOutput];if(state.background==prior)continue;
+        [prior shrinkChunkCache];NSDictionary *full=dict(state.orderOutput[@"fullscreen"]);
+        state.frame.background=full&&![text(full[@"backdrop"])isEqual:@"canvas"]?nil:state.background;
+        state.frame.errorMessages=[self backgroundErrors:state.background];state.dirty=YES;changed=YES;
+    }
+    if(changed)[self setNeedsFlush];
 }
 // The live picture of one window element, or none.
 - (void)content:(IFCompositorElement *)element window:(NSNumber *)window placement:(NSDictionary *)placement {
@@ -685,7 +703,7 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
         IFCompositorFrame *frame=state.frame;CGPoint camera=pointOf(o[@"camera"]);double zoom=[number(o[@"zoom"])doubleValue];
         if(frame.scale!=(scale>0?scale:1))self.placed=YES;
         frame.size=bounds.size;frame.scale=scale>0?scale:1;frame.cameraX=camera.x;frame.cameraY=camera.y;frame.zoom=zoom;frame.clear=IFCompositorClearOpaqueBlack;frame.decorationScale=decorationScale;
-        if(state.style!=self.style){state.style=self.style;[self cache:state];frame.background=state.background;frame.chrome=self.chrome;frame.placeholderColor=self.chrome.backgroundColor;frame.outline=self.outline;frame.effects=self.effects;frame.errorMessages=self.errors;}
+        if(state.style!=self.style||!CGRectEqualToRect(bounds,rectOf(state.orderOutput[@"screen_bounds"]))){state.style=self.style;[self cache:state output:o];frame.background=state.background;frame.chrome=self.chrome;frame.placeholderColor=self.chrome.backgroundColor;frame.outline=self.outline;frame.effects=self.effects;frame.errorMessages=[self backgroundErrors:state.background];}
         // The other outputs' viewports, projected as upstream's build_output_outline_elements does.
         NSMutableData *outlines=[NSMutableData data];
         for(NSDictionary *other in all){
@@ -1030,13 +1048,16 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
     // fixed to the screen, so a capture shows it over the canvas footprint of the output the region's centre
     // lies on, else of the active output. The region crops it and the rest stays transparent; with no such
     // output there is no background.
-    BOOL wallpaper=!isolate&&self.program.kind==IFBackgroundKindWallpaper;CGRect dest=CGRectNull;
+    CGPoint backgroundCentre=CGPointMake(region.origin.x+trunc(region.size.width/2),region.origin.y+trunc(region.size.height/2));NSDictionary *backgroundOutput=nil,*activeBackgroundOutput=nil;
+    for(NSDictionary *output in list(snapshot[@"outputs"])){if(!backgroundOutput&&CGRectContainsPoint(viewportOf(output),backgroundCentre))backgroundOutput=output;if([output[@"id"]isEqual:effect[@"output"]])activeBackgroundOutput=output;}
+    backgroundOutput=backgroundOutput?:activeBackgroundOutput;
+    IFBackgroundProgram *backgroundProgram=!isolate&&self.backgroundForOutput&&backgroundOutput?self.backgroundForOutput(number(backgroundOutput[@"id"]),backgroundOutput,self.program):nil;backgroundProgram=backgroundProgram?:self.program;
+    BOOL wallpaper=!isolate&&backgroundProgram.kind==IFBackgroundKindWallpaper;CGRect dest=CGRectNull;
     if(wallpaper){
-        CGPoint centre=CGPointMake(region.origin.x+trunc(region.size.width/2),region.origin.y+trunc(region.size.height/2));NSDictionary *on=nil,*active=nil;
-        for(id o in list(snapshot[@"outputs"])){if(!on&&CGRectContainsPoint(viewportOf(dict(o)),centre))on=o;if(!active&&number(effect[@"output"])&&[dict(o)[@"id"]isEqual:effect[@"output"]])active=o;}
-        dest=viewportOf(on?:active);
-        // The region is that footprint itself (the bare viewport capture): one pass, as on screen.
-        if(CGRectEqualToRect(dest,region))wallpaper=NO;
+        dest=viewportOf(backgroundOutput);
+        // The upstream fixed cover-fit image can use the bare viewport's one
+        // pass. Mac sizing/parallax still needs its real output sampling pose.
+        if(CGRectEqualToRect(dest,region)&&!backgroundProgram.config.parallax&&!backgroundProgram.config.inheritedWallpaper)wallpaper=NO;
     }
     // Upstream's capture: zoom 1, a transparent target, no outlines, and the background
     // under every scene but not under a window captured alone. A capture draws no chunk
@@ -1044,7 +1065,7 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
     // most 4096 pixels, whatever the outputs have loaded (the module's captureProgram).
     IFCompositorFrame *frame=[IFCompositorFrame new];
     frame.size=region.size;frame.scale=scale;frame.cameraX=region.origin.x;frame.cameraY=region.origin.y;frame.zoom=1;frame.time=canvasTime();frame.clear=IFCompositorClearTransparent;
-    frame.chrome=self.chrome;frame.placeholderColor=self.chrome.backgroundColor;frame.background=isolate||wallpaper?nil:self.program.captureProgram;
+    frame.chrome=self.chrome;frame.placeholderColor=self.chrome.backgroundColor;frame.background=isolate||wallpaper?nil:backgroundProgram.captureProgram;
     for(IFCompositorElement *element in elements){
         // Nothing of an element farther away than its bar, border and shadow reaches the region.
         double reach=ceil(element.decoration.shadowRadius)+1;
@@ -1055,7 +1076,8 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
         // The picture that output shows, drawn by the same module at the capture's density (one texture at
         // most), laid under the scene at whole pixels. Core Graphics counts rows from the bottom.
         IFCompositorFrame *under=[IFCompositorFrame new];size_t wide=CGImageGetWidth(image),high=CGImageGetHeight(image);
-        under.size=dest.size;under.scale=fmin(scale,16384/fmax(dest.size.width,dest.size.height));under.cameraX=dest.origin.x;under.cameraY=dest.origin.y;under.zoom=1;under.time=frame.time;under.clear=IFCompositorClearTransparent;under.background=self.program;
+        CGRect paperBounds=rectOf(backgroundOutput[@"screen_bounds"]);CGPoint paperCamera=pointOf(backgroundOutput[@"camera"]);double paperZoom=[number(backgroundOutput[@"zoom"])doubleValue];
+        under.size=paperBounds.size;under.scale=fmin(scale/paperZoom,16384/fmax(paperBounds.size.width,paperBounds.size.height));under.cameraX=paperCamera.x;under.cameraY=paperCamera.y;under.zoom=paperZoom;under.time=frame.time;under.clear=IFCompositorClearTransparent;under.background=backgroundProgram;
         CGImageRef paper=[renderer newImageForFrame:under error:&error];CGColorSpaceRef srgb=CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
         CGContextRef context=paper?CGBitmapContextCreate(NULL,wide,high,8,0,srgb,kCGImageAlphaPremultipliedFirst|kCGBitmapByteOrder32Little):NULL;CGColorSpaceRelease(srgb);
         if(!context){CGImageRelease(paper);CGImageRelease(image);return refusal(error.localizedDescription?:@"the render did not complete");}

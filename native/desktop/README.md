@@ -41,9 +41,10 @@ the one window it focuses, and nothing else.
 DriftWM is a compositor: it is the session, not an app one launches. Since
 2026-10-10 a normal run of Infinify is that for macOS, as far as public API
 goes: it replaces the desktop instead of sitting on it in a panel with a
-toolbar. **None of it has been seen on a real display**: every launch made for
-this section was `--windowed` and had no Screen Recording access, so its canvas
-held detached placeholders only.
+toolbar. The original validation for this section used `--windowed` without
+Screen Recording access, with detached placeholders only. Subsequent user-run
+desktop sessions exposed interaction issues; their fixes still need user
+validation and do not establish compositor or performance parity.
 [What was run for desktop mode](#what-was-run-for-desktop-mode) has the
 boundary.
 
@@ -66,10 +67,9 @@ status line and chooser unchanged.
 
 - **Edge to edge.** One borderless, nonactivating panel per display covers the
   display's whole frame (`NSScreen.frame`, not the visible frame), and that
-  same rectangle is registered as the display's output. Nothing is kept free
-  for the menu bar or the Dock: a window may come to rest beneath either, and
-  centering, placement, fit and a new window's place are measured on the whole
-  display ([The usable area](#the-usable-area) has what follows from that).
+  same rectangle is registered as the display's output. Placement, centering,
+  fit and fullscreen use an inset area below the menu bar and notch. The Dock
+  remains an overlay and reserves no bottom or side gap.
   Both stay: the panel's level is the floating level (3 on this Mac),
   above every ordinary window and below the Dock (20) and the menu bar (24),
   so both go on drawing over the canvas and taking their own clicks. Neither
@@ -535,12 +535,12 @@ is a line on stderr ([Desktop mode](#desktop-mode)).
   [Tap bindings](#tap-bindings) has the rule, what it needs of macOS, and that
   no chord has yet been pressed against it.
 - Pan a display's camera: drag or two-finger scroll on empty canvas,
-  Command-drag / Command-scroll anywhere, or a three-finger swipe
+  Command-drag anywhere, or a three-finger swipe
   anywhere. A pan that is still moving when the fingers lift or the button is
   released keeps drifting until friction stops it (`navigation.drift`; 0 turns
   that off). Zoom, pointer-anchored, up to 1.0 and down to half the zoom that
-  fits every window: mouse wheel on empty canvas, Command-wheel
-  anywhere, a two-finger pinch on empty canvas (Command-pinch anywhere),
+  fits every window: mouse wheel on empty canvas, Command-wheel or
+  Command-two-finger-scroll anywhere, a two-finger pinch anywhere,
   or a three-finger pinch anywhere. The view actions below are the animated
   keyboard equivalents; [Camera motion](#camera-motion) has the
   details of drift, edge pan and the pointer speeds, and
@@ -4482,6 +4482,23 @@ and binding tables are upstream's own code (`driftwm-core`); the controller maps
 them to a Mac keyboard and the shell registers what it reports.
 [CONFIG.md](../../crates/desktop/CONFIG.md) is the controller's contract and has
 the complete default table.
+
+With no explicit background `type`, `path` or `texture`, each display inherits
+its macOS wallpaper still, scaling, clipping and fill color. Image decoding and
+upload happen away from the main thread and are cached across camera frames.
+Set the following in the config to enable or disable pan/zoom parallax (default
+`true`):
+
+```toml
+[background]
+parallax = false
+```
+
+Explicit wallpapers also support this switch. Grid, tile and shader behavior
+is unchanged. macOS video/dynamic assets without a loadable single still use
+the canvas background fallback. Source changes refresh on display/Space/session
+events and a low-frequency check while navigation is idle. The app reads these
+settings; it never changes the Mac wallpaper.
 
 - **File.** `--config /absolute/path.toml`, else
   `$XDG_CONFIG_HOME/infinify/config.toml`, else `~/.config/infinify/config.toml`

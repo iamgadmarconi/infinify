@@ -12,6 +12,7 @@
 #import "background-tiff.h"
 
 #import <Accelerate/Accelerate.h>
+#import <AppKit/NSImage.h>
 #import <ImageIO/ImageIO.h>
 #import <simd/simd.h>
 
@@ -30,7 +31,7 @@ static const NSUInteger kIFBGMaxTextureSide = 16384;
 
 // MARK: - Uniform block
 
-// Must match `struct IFBGUniforms` in kIFBGCommonMSL (64 bytes, 8-byte aligned).
+// Must match `struct IFBGUniforms` in kIFBGCommonMSL (80 bytes, 16-byte aligned).
 typedef struct {
     simd_float2 camera;        // u_camera
     simd_float2 size;          // `size` / u_output_size: visible canvas area in canvas pixels
@@ -42,9 +43,10 @@ typedef struct {
     float zoom;                // u_zoom
     float alpha;               // smithay's `alpha`: always 1.0 for a background
     float opaque;              // 1.0 when composited opaque (output alpha forced to 1)
+    simd_float4 wallpaper_fill; // opaque macOS fill; alpha 0 preserves upstream image alpha
 } IFBGUniforms;
 
-_Static_assert(sizeof(IFBGUniforms) == 64, "IFBGUniforms layout must match the MSL struct");
+_Static_assert(sizeof(IFBGUniforms) == 80, "IFBGUniforms layout must match the MSL struct");
 
 // MARK: - Metal sources
 
@@ -63,6 +65,7 @@ static NSString *const kIFBGCommonMSL =
      "    float zoom;\n"
      "    float alpha;\n"
      "    float opaque;\n"
+     "    float4 wallpaper_fill;\n"
      "};\n"
      "struct IFBGVertexOut { float4 position [[position]]; };\n"
      // smithay's `v_coords`: the element's 0..1 extent mapped through its
@@ -165,6 +168,8 @@ static NSString *const kIFBGBuiltinMSL =
      // ------------------------------------------------------------------
      // Hand translation of upstream src/shaders/wallpaper_bg.glsl
      // sha256 50a2605d87382512f40d5cfe4207f837cb3c6a57afb5656af7b2d6d3a028f463
+     // macOS extension: inherited fit/centre images have an opaque fill around
+     // the image and beneath its alpha. Explicit images keep upstream alpha.
      // ------------------------------------------------------------------
      "fragment float4 ifbg_wallpaper(IFBGVertexOut in [[stage_in]],\n"
      "                               constant IFBGUniforms &U [[buffer(0)]],\n"
@@ -173,7 +178,9 @@ static NSString *const kIFBGBuiltinMSL =
      "    float2 v_coords = ifbg_v_coords(in.position, U);\n"
      "    float alpha = U.alpha;\n"
      "\n"
+     "    if (U.wallpaper_fill.a > 0.5 && (any(v_coords < 0.0) || any(v_coords > 1.0))) return U.wallpaper_fill;\n"
      "    float4 color = tex.sample(smp, v_coords);\n"
+     "    if (U.wallpaper_fill.a > 0.5) color = float4(mix(U.wallpaper_fill.rgb, color.rgb, color.a), 1.0);\n"
      "    return ifbg_finish(color * alpha, U);\n"
      "}\n";
 
@@ -1235,9 +1242,11 @@ static NSString *IFBGPNGDefect(NSData *file) {
 
 /// Upstream `load_image_to_texture`: decodes to straight-alpha RGBA8 and
 /// uploads the bytes untouched. The file's colour profile is ignored (the
-/// `image` crate never reads it); the values are taken to be sRGB.
+/// `image` crate never reads it); the values are taken to be sRGB. Inherited
+/// macOS still images instead use ImageIO's formats, orientation and sRGB
+/// conversion. A multi-image asset is not evidence of its active wallpaper.
 static id<MTLTexture> IFBGLoadImage(id<MTLDevice> device, NSString *path, CGSize *size,
-                                    BOOL *hasTransparency, NSString **error) {
+                                    BOOL inherited, BOOL *hasTransparency, NSString **error) {
     NSString *(^fail)(NSString *) = ^(NSString *why) {
         return [NSString stringWithFormat:@"background image '%@': %@", path, why];
     };
@@ -1248,7 +1257,7 @@ static id<MTLTexture> IFBGLoadImage(id<MTLDevice> device, NSString *path, CGSize
     CGImageSourceRef source = CGImageSourceCreateWithURL((__bridge CFURLRef)[NSURL fileURLWithPath:path], NULL);
     NSString *uti = source ? (__bridge NSString *)CGImageSourceGetType(source) : nil;
     // Upstream builds the `image` crate with PNG and JPEG decoders only.
-    if (!source || !([uti isEqualToString:@"public.png"] || [uti isEqualToString:@"public.jpeg"])) {
+    if (!source || (!inherited && !([uti isEqualToString:@"public.png"] || [uti isEqualToString:@"public.jpeg"]))) {
         if (error) *error = fail(uti ? [NSString stringWithFormat:@"unsupported image format %@ (PNG/JPEG only)", uti]
                                      : @"The image format could not be determined");
         if (source) CFRelease(source);
@@ -1264,7 +1273,31 @@ static id<MTLTexture> IFBGLoadImage(id<MTLDevice> device, NSString *path, CGSize
             return nil;
         }
     }
-    CGImageRef image = CGImageSourceCreateImageAtIndex(source, 0, NULL);
+    NSDictionary *decode = nil;
+    if (inherited) {
+        if (CGImageSourceGetCount(source) != 1) {
+            CFRelease(source);
+            if (error) *error = fail(@"the active image of a dynamic or multi-image wallpaper is unavailable");
+            return nil;
+        }
+        NSDictionary *properties = CFBridgingRelease(CGImageSourceCopyPropertiesAtIndex(source, 0, NULL));
+        double width = [properties[(__bridge NSString *)kCGImagePropertyPixelWidth] doubleValue];
+        double height = [properties[(__bridge NSString *)kCGImagePropertyPixelHeight] doubleValue];
+        // Reject an oversized still before allocating its decoded pixels. Do
+        // not route an ordinary inherited TIFF into the tiled-canvas decoder.
+        if (!isfinite(width) || !isfinite(height) || width < 1 || height < 1 ||
+            width > kIFBGMaxTextureSide || height > kIFBGMaxTextureSide) {
+            CFRelease(source);
+            if (error) *error = fail(@"the still image has invalid dimensions or exceeds the texture limit");
+            return nil;
+        }
+        decode = @{(__bridge NSString *)kCGImageSourceCreateThumbnailFromImageAlways: @YES,
+                   (__bridge NSString *)kCGImageSourceCreateThumbnailWithTransform: @YES,
+                   (__bridge NSString *)kCGImageSourceThumbnailMaxPixelSize: @(MAX(width, height)),
+                   (__bridge NSString *)kCGImageSourceShouldCacheImmediately: @YES};
+    }
+    CGImageRef image = inherited ? CGImageSourceCreateThumbnailAtIndex(source, 0, (__bridge CFDictionaryRef)decode)
+                                 : CGImageSourceCreateImageAtIndex(source, 0, NULL);
     if (!image) {
         CFRelease(source);
         if (error) *error = fail(@"the image could not be decoded");
@@ -1288,10 +1321,11 @@ static id<MTLTexture> IFBGLoadImage(id<MTLDevice> device, NSString *path, CGSize
         base = CGColorSpaceGetBaseColorSpace(space);
         model = base ? CGColorSpaceGetModel(base) : kCGColorSpaceModelUnknown;
     }
-    BOOL grey = (model == kCGColorSpaceModelMonochrome);
+    BOOL grey = !inherited && (model == kCGColorSpaceModelMonochrome);
     CGColorSpaceRef fallback = NULL;
-    if (model != kCGColorSpaceModelRGB && !grey) {
-        // CMYK and other exotic models: let CoreGraphics convert to sRGB.
+    if (inherited || (model != kCGColorSpaceModelRGB && !grey)) {
+        // macOS wallpapers retain their colour profile through this conversion;
+        // custom CMYK and other exotic models also need an RGB destination.
         base = fallback = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
     }
     vImage_CGImageFormat format = {
@@ -1314,6 +1348,7 @@ static id<MTLTexture> IFBGLoadImage(id<MTLDevice> device, NSString *path, CGSize
     CGImageSourceStatus status = CGImageSourceGetStatusAtIndex(source, 0);
     CFRelease(source);
     if (verr != kvImageNoError) {
+        free(buffer.data);
         if (error) *error = fail([NSString stringWithFormat:@"the image could not be decoded (vImage error %ld)", (long)verr]);
         return nil;
     }
@@ -1321,11 +1356,16 @@ static id<MTLTexture> IFBGLoadImage(id<MTLDevice> device, NSString *path, CGSize
         free(buffer.data);
         if (error) *error = fail([NSString stringWithFormat:@"%@ (the %@ is truncated or damaged, ImageIO status %d)",
                                      status == kCGImageStatusUnexpectedEOF ? @"unexpected end of file" : @"the image could not be decoded completely",
-                                     png ? @"PNG" : @"JPEG", (int)status]);
+                                     png ? @"PNG" : uti, (int)status]);
         return nil;
     }
 
     uint8_t *rgba = malloc(w * h * 4);
+    if (!rgba) {
+        free(buffer.data);
+        if (error) *error = fail(@"not enough memory to decode the image");
+        return nil;
+    }
     BOOL transparent = NO;
     for (size_t y = 0; y < h; y++) {
         const uint8_t *row = (const uint8_t *)buffer.data + y * buffer.rowBytes;
@@ -1367,6 +1407,10 @@ static id<MTLTexture> IFBGLoadImage(id<MTLDevice> device, NSString *path, CGSize
     if ((self = [super init])) {
         _type = IFBackgroundTypeDefault;
         _cacheBudgetMB = 128;
+        _parallax = YES;
+        _wallpaperScaling = NSImageScaleProportionallyUpOrDown;
+        _wallpaperClipping = YES;
+        _wallpaperFillColor = @[@0, @0, @0, @1];
     }
     return self;
 }
@@ -1385,6 +1429,11 @@ static id<MTLTexture> IFBGLoadImage(id<MTLDevice> device, NSString *path, CGSize
     c.transparentShader = _transparentShader;
     c.cacheBudgetMB = _cacheBudgetMB;
     c.animateFPS = _animateFPS;
+    c.parallax = _parallax;
+    c.inheritedWallpaper = _inheritedWallpaper;
+    c.wallpaperScaling = _wallpaperScaling;
+    c.wallpaperClipping = _wallpaperClipping;
+    c.wallpaperFillColor = _wallpaperFillColor;
     return c;
 }
 
@@ -2287,6 +2336,7 @@ static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l,
     IFBGDeviceResources *_resources;
     id<MTLRenderPipelineState> _pipeline;
     id<MTLTexture> _texture;
+    simd_float4 _wallpaperFill;
     // A pyramidal TIFF, as every program of one load shares it: the open file,
     // what `new_from_tiff` derived from it, and (in `_texture`) its fallback level.
     IFBGTiffSource *_tiff;
@@ -2379,7 +2429,7 @@ static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l,
                                                         wallpaper ? @"wallpaper" : @"tile"];
                 return;
             }
-            if (IFBGIsTIFFPath(path)) {
+            if (IFBGIsTIFFPath(path) && !(wallpaper && _config.inheritedWallpaper)) {
                 if (wallpaper) {
                     [self useDotGrid];
                     _errorText = [NSString stringWithFormat:@"wallpaper '%@': TIFF isn't supported in wallpaper mode (PNG/JPEG only) — use [background] type = \"tile\" for TIFF images", path];
@@ -2397,7 +2447,8 @@ static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l,
             NSString *imageError = nil;
             BOOL hasTransparency = NO;
             CGSize size = CGSizeZero;
-            id<MTLTexture> texture = IFBGLoadImage(_device, path, &size, &hasTransparency, &imageError);
+            BOOL inherited = wallpaper && _config.inheritedWallpaper;
+            id<MTLTexture> texture = IFBGLoadImage(_device, path, &size, inherited, &hasTransparency, &imageError);
             NSString *fragment = wallpaper ? @"ifbg_wallpaper" : (_config.mirrorTile ? @"ifbg_tile_mirror" : @"ifbg_tile");
             id<MTLRenderPipelineState> pipeline = texture ? [_resources builtinPipeline:fragment] : nil;
             if (!texture || !pipeline) {
@@ -2410,9 +2461,17 @@ static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l,
             _texture = texture;
             _textureSize = size;
             _animated = NO;
-            _usesCamera = !wallpaper;  // tile: uniforms move on every camera change
-            _usesZoom = NO;
-            _transparent = hasTransparency;  // images: detected from the alpha channel
+            _usesCamera = !wallpaper || _config.parallax;
+            _usesZoom = wallpaper && _config.parallax;
+            _transparent = hasTransparency && !inherited;
+            if (inherited) {
+                _wallpaperFill = simd_make_float4(0, 0, 0, 1);
+                NSArray<NSNumber *> *fill = _config.wallpaperFillColor;
+                if (fill.count >= 3) for (NSUInteger i = 0; i < 3; i++) {
+                    double component = [fill[i] doubleValue];
+                    _wallpaperFill[i] = isfinite(component) ? (float)fmin(fmax(component, 0.0), 1.0) : 0.0f;
+                }
+            }
             return;
         }
         case IFBackgroundTypeShader:
@@ -2445,7 +2504,7 @@ static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l,
         NSString *translated = _translatedShaderSource;
         NSString *imageError = nil;
         CGSize size = CGSizeZero;
-        id<MTLTexture> texture = IFBGLoadImage(_device, texturePath, &size, NULL, &imageError);
+        id<MTLTexture> texture = IFBGLoadImage(_device, texturePath, &size, NO, NULL, &imageError);
         if (!texture) {
             [self useDotGrid];
             _errorText = imageError;
@@ -2563,7 +2622,7 @@ static void IFBGPixelSize(IFBackgroundFrame f, long *logicalW, long *logicalH, N
     if (pxH) *pxH = (NSUInteger)MAX(0L, lround((double)lh * scale));
 }
 
-/// The uniform mapping. Every line cites the upstream expression it mirrors.
+/// The uniform mapping, including the macOS wallpaper extension below.
 - (IFBGUniforms)uniformsForFrame:(IFBackgroundFrame)f {
     IFBGUniforms u;
     memset(&u, 0, sizeof u);
@@ -2583,20 +2642,50 @@ static void IFBGPixelSize(IFBackgroundFrame f, long *logicalW, long *logicalH, N
     u.texture_size = simd_make_float2((float)_textureSize.width, (float)_textureSize.height);
 
     if (_kind == IFBackgroundKindWallpaper) {
-        // Viewport-fixed: the element covers the output and is not rescaled.
-        // background.rs wallpaper_cover_src():
+        // Upstream wallpaper_cover_src(), or NSWorkspace's centred fit/fill,
+        // stretch or unscaled still image. Fill is opaque outside image UVs.
         double tw = MAX(_textureSize.width, 1.0), th = MAX(_textureSize.height, 1.0);
-        double outputAspect = (double)outW / (double)outH;
-        double subW, subH;
-        if (tw / th > outputAspect) {
-            subW = th * outputAspect;  // image relatively wider: crop the sides
-            subH = th;
-        } else {
-            subW = tw;                 // image relatively taller: crop top/bottom
-            subH = tw / outputAspect;
+        double factorX = (double)outW / tw, factorY = (double)outH / th;
+        double imageScale = MAX(factorX, factorY);
+        BOOL stretch = NO;
+        if (_config.inheritedWallpaper) {
+            switch (_config.wallpaperScaling) {
+                case NSImageScaleAxesIndependently:
+                    stretch = YES;
+                    break;
+                case NSImageScaleNone:
+                    imageScale = 1.0;
+                    break;
+                case NSImageScaleProportionallyDown:
+                    imageScale = MIN(_config.wallpaperClipping ? MAX(factorX, factorY) : MIN(factorX, factorY), 1.0);
+                    break;
+                case NSImageScaleProportionallyUpOrDown:
+                default:
+                    imageScale = _config.wallpaperClipping ? MAX(factorX, factorY) : MIN(factorX, factorY);
+                    break;
+            }
         }
-        u.src_origin = simd_make_float2((float)((tw - subW) / 2.0 / tw), (float)((th - subH) / 2.0 / th));
-        u.src_size = simd_make_float2((float)(subW / tw), (float)(subH / th));
+        double baseX = stretch ? 1.0 : factorX / imageScale;
+        double baseY = stretch ? 1.0 : factorY / imageScale;
+        double cropX = baseX, cropY = baseY, panX = 0.0, panY = 0.0;
+        if (_config.parallax) {
+            // A shallow, bounded depth: 4..12% overscan changes smoothly with
+            // zoom. Camera movement uses only its overscan margin, so a cover
+            // image cannot run out, repeat, or expose clamped border pixels.
+            // Use the world centre to keep a centred zoom from panning as well.
+            double overscan = 1.04 + 0.08 * (2.0 / M_PI) * atan(zoom);
+            cropX /= overscan;
+            cropY /= overscan;
+            double cameraX = isfinite(f.cameraX) ? f.cameraX : 0.0;
+            double cameraY = isfinite(f.cameraY) ? f.cameraY : 0.0;
+            double centreX = cameraX / (double)outW + 0.5 * (1.0 / zoom - 1.0);
+            double centreY = cameraY / (double)outH + 0.5 * (1.0 / zoom - 1.0);
+            panX = tanh(2.0 * centreX) * (baseX - cropX) * 0.5;
+            panY = tanh(2.0 * centreY) * (baseY - cropY) * 0.5;
+        }
+        u.src_origin = simd_make_float2((float)((1.0 - cropX) * 0.5 + panX), (float)((1.0 - cropY) * 0.5 + panY));
+        u.src_size = simd_make_float2((float)cropX, (float)cropY);
+        u.wallpaper_fill = _wallpaperFill;
         u.dest_px = simd_make_float2((float)MAX(1.0, round((double)outW * scale)), (float)MAX(1.0, round((double)outH * scale)));
         u.size = simd_make_float2((float)outW, (float)outH);
         return u;
@@ -2748,6 +2837,7 @@ static void IFBGPixelSize(IFBackgroundFrame f, long *logicalW, long *logicalH, N
     _translatedShaderSource = base->_translatedShaderSource;
     _pipeline = base->_pipeline;
     _texture = base->_texture;
+    _wallpaperFill = base->_wallpaperFill;
     _cache = base->_cache;
     _tiff = base->_tiff;
     _layout = base->_layout;
@@ -3004,8 +3094,8 @@ static CGImageRef IFBGCreateImage(id<MTLTexture> texture, BOOL transparent) CF_R
     if (!need && kind != IFBackgroundKindNone) {
         // Upstream: a zoom change resizes and rescales every canvas-space
         // element; the camera only matters to a background that reads it.
-        BOOL zoomChanged = canvasSpace && _last.zoom != frame.zoom;
-        BOOL cameraMoved = canvasSpace && program.usesCamera &&
+        BOOL zoomChanged = (canvasSpace || program.usesZoom) && _last.zoom != frame.zoom;
+        BOOL cameraMoved = program.usesCamera &&
                            (_last.cameraX != frame.cameraX || _last.cameraY != frame.cameraY);
         need = zoomChanged || cameraMoved;
     }

@@ -14,19 +14,36 @@
 use super::bindings::{Platform, key_known};
 use super::*;
 use driftwm_core::config::{
-    BindingContext, Config, GestureBinding, Modifiers, config_path, parse_action,
-    parse_gesture_binding, parse_gesture_config_entry, parse_key_combo, parse_tap_combo,
+    BindingContext, Config, GestureBinding, Modifiers, MouseBinding, config_path, parse_action,
+    parse_gesture_binding, parse_gesture_config_entry, parse_key_combo, parse_mouse_action,
+    parse_mouse_binding, parse_tap_combo,
 };
 use std::io::Read;
 
 /// A config file is hand-written text; anything larger is not one.
 const MAX_CONFIG_BYTES: u64 = 4 * 1024 * 1024;
 
+/// macOS presentation policy, separate from upstream's portable background.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DesktopBackground {
+    pub(crate) inherit_macos: bool,
+    pub(crate) parallax: bool,
+}
+impl Default for DesktopBackground {
+    fn default() -> Self {
+        Self {
+            inherit_macos: true,
+            parallax: true,
+        }
+    }
+}
+
 /// The configuration in force. Never saved: it is the file's, or the built-in
 /// defaults. Replaced whole by an accepted `load_config`.
 #[derive(Debug, Default)]
 pub(crate) struct Settings {
     pub(crate) config: Config,
+    pub(crate) desktop_background: DesktopBackground,
     /// Keysyms the file's `[keybindings]` table names that the macOS key table
     /// does not have, each with the key name as the file spells it, so their
     /// bindings can be reported instead of vanishing.
@@ -34,9 +51,11 @@ pub(crate) struct Settings {
     /// Every key combo the file's `[keybindings]` table binds or unbinds.
     written_keys: Vec<(Modifiers, u32)>,
     written_gestures: Vec<(BindingContext, GestureBinding)>,
+    written_mouse: Vec<(BindingContext, MouseBinding)>,
     /// The macOS adapter must honor the same category switches as upstream.
     pub(crate) default_keys_disabled: bool,
     pub(crate) default_gestures_disabled: bool,
+    pub(crate) default_mouse_disabled: bool,
     /// Parsed from a file. False for the built-in defaults, whether no file was
     /// found or the launch file was refused.
     pub(crate) from_file: bool,
@@ -65,6 +84,43 @@ pub(crate) struct Snap {
 }
 
 impl Settings {
+    /// Extract the Mac-only boolean before the strict upstream parser runs.
+    /// The original document still supplies binding provenance; every other
+    /// option is validated by upstream with its existing defaults and errors.
+    fn parse(contents: &str) -> Result<(Self, Vec<String>), String> {
+        let mut table = contents
+            .parse::<toml::Table>()
+            .map_err(|error| format!("config error: {error}"))?;
+        let mut desktop_background = DesktopBackground::default();
+        let mut extracted = false;
+        if let Some(background) = table
+            .get_mut("background")
+            .and_then(toml::Value::as_table_mut)
+        {
+            desktop_background.inherit_macos = !["type", "path", "texture"]
+                .iter()
+                .any(|key| background.contains_key(*key));
+            if let Some(value) = background.remove("parallax") {
+                extracted = true;
+                desktop_background.parallax = value.as_bool().ok_or_else(|| {
+                    "config error: [background] parallax must be true or false".to_owned()
+                })?;
+            }
+        }
+        let normalized;
+        let upstream = if extracted {
+            normalized =
+                toml::to_string(&table).map_err(|error| format!("config error: {error}"))?;
+            normalized.as_str()
+        } else {
+            contents
+        };
+        let (config, warnings) = Config::from_toml_collect(upstream)
+            .map_err(|error| format!("config error: {error}"))?;
+        let mut settings = Self::of_file(contents, config);
+        settings.desktop_background = desktop_background;
+        Ok((settings, warnings))
+    }
     /// Did the file's `[keybindings]` table bind or unbind this combo? If
     /// not, a binding on it is one of upstream's defaults.
     pub(crate) fn wrote(&self, modifiers: &Modifiers, sym: u32) -> bool {
@@ -74,6 +130,11 @@ impl Settings {
     }
     pub(crate) fn wrote_gesture(&self, context: BindingContext, binding: &GestureBinding) -> bool {
         self.written_gestures
+            .iter()
+            .any(|(written_context, written)| *written_context == context && written == binding)
+    }
+    pub(crate) fn wrote_mouse(&self, context: BindingContext, binding: &MouseBinding) -> bool {
+        self.written_mouse
             .iter()
             .any(|(written_context, written)| *written_context == context && written == binding)
     }
@@ -102,6 +163,30 @@ impl Settings {
         };
         let (default_keys_disabled, default_gestures_disabled) =
             (disables("keys"), disables("gestures"));
+        let default_mouse_disabled = disables("mouse");
+        let mut written_mouse = Vec::new();
+        if let Some(mouse) = table.get("mouse").and_then(toml::Value::as_table) {
+            for (name, context) in [
+                ("on-window", BindingContext::OnWindow),
+                ("on-canvas", BindingContext::OnCanvas),
+                ("anywhere", BindingContext::Anywhere),
+            ] {
+                for (name, action) in mouse
+                    .get(name)
+                    .and_then(toml::Value::as_table)
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Ok(binding) = parse_mouse_binding(name, config.mod_key)
+                        && action.as_str().is_some_and(|action| {
+                            action == "none" || parse_mouse_action(action).is_ok()
+                        })
+                    {
+                        written_mouse.push((context, binding));
+                    }
+                }
+            }
+        }
         let mut written_gestures = Vec::new();
         if let Some(gestures) = table.get("gestures").and_then(toml::Value::as_table) {
             for (name, context) in [
@@ -152,11 +237,14 @@ impl Settings {
         }
         Self {
             config,
+            desktop_background: DesktopBackground::default(),
             extra_keysyms,
             written_keys,
             written_gestures,
+            written_mouse,
             default_keys_disabled,
             default_gestures_disabled,
+            default_mouse_disabled,
             from_file: true,
             refused: false,
         }
@@ -254,12 +342,7 @@ impl Controller {
             Ok(contents)
         })();
         let (exists, parsed) = match contents {
-            Ok(contents) => (
-                true,
-                Config::from_toml_collect(&contents)
-                    .map(|(config, warnings)| (Settings::of_file(&contents, config), warnings))
-                    .map_err(|e| format!("config error: {e}")),
-            ),
+            Ok(contents) => (true, Settings::parse(&contents)),
             // Upstream's startup: no file is the built-in defaults. Once a file
             // has been accepted, its disappearance is upstream's reload read
             // failure and the config in force stays.
@@ -291,8 +374,14 @@ impl Controller {
                 // caches whatever the file changed, so that a shader or image
                 // edited on disk is read again (src/state/reload.rs): every
                 // accepted reload spends a revision. The launch load spends
-                // one only for a file whose drawn tables are not the defaults.
-                if !launch || render::sections_differ(&old.config, &self.settings.config) {
+                // one when drawn tables change, including activation of Mac
+                // wallpaper policy from an unconfigured controller snapshot.
+                if !launch
+                    || render::sections_differ(&old.config, &self.settings.config)
+                    || old.desktop_background != self.settings.desktop_background
+                    || self.settings.desktop_background.inherit_macos
+                    || self.settings.desktop_background.parallax
+                {
                     self.render_revision = self
                         .render_revision
                         .checked_add(1)

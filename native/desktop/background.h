@@ -54,7 +54,8 @@ typedef NS_ENUM(NSInteger, IFBackgroundCache) {
     IFBackgroundCacheTileChunks,   ///< a tiled pyramidal TIFF, drawn from its levels chunk by chunk
 };
 
-/// The upstream `[background]` table (`BackgroundConfig`), field for field.
+/// The upstream `[background]` table (`BackgroundConfig`) and macOS wallpaper
+/// options. The latter do not change tile or user-shader coordinates.
 @interface IFBackgroundConfig : NSObject <NSCopying>
 @property (nonatomic) IFBackgroundType type;            ///< `type`, default "default"
 @property (nonatomic, copy, nullable) NSString *path;   ///< `path` (shader / tile / wallpaper source)
@@ -64,6 +65,11 @@ typedef NS_ENUM(NSInteger, IFBackgroundCache) {
 @property (nonatomic) BOOL transparentShader;           ///< `transparent_shader`, default false
 @property (nonatomic) NSUInteger cacheBudgetMB;         ///< `cache_budget_mb`, default 128: the ceiling of each output's chunk cache
 @property (nonatomic) NSUInteger animateFPS;            ///< `animate_fps`, default 0, clamped to 1000
+@property (nonatomic) BOOL parallax;                    ///< `parallax`, default true: wallpaper follows camera/zoom at a bounded depth
+@property (nonatomic) BOOL inheritedWallpaper;          ///< macOS still image; permits ImageIO formats and honours the following options
+@property (nonatomic) NSInteger wallpaperScaling;       ///< NSImageScaling, default proportionally up or down (3)
+@property (nonatomic) BOOL wallpaperClipping;            ///< proportional image covers the output; default true (resolver supplies NSWorkspace's value)
+@property (nonatomic, copy) NSArray<NSNumber *> *wallpaperFillColor; ///< opaque sRGB RGBA, default black; inherited wallpaper only
 
 /// Upstream `resolve_background_kind`: builds a config from the raw TOML
 /// strings. A missing `path` for shader/tile/wallpaper or an unknown type
@@ -104,10 +110,11 @@ typedef struct IFBackgroundFrame {
 /// The shader reads `u_time`: the host must call update every frame.
 @property (nonatomic, readonly, getter=isAnimated) BOOL animated;
 /// The output changes when the camera moves (upstream `background_uses_camera`,
-/// plus tile mode, which always scrolls).
+/// plus tile mode and wallpapers with parallax enabled).
 @property (nonatomic, readonly) BOOL usesCamera;
 /// The shader reads `u_zoom` (informational; every canvas-space kind is
 /// redrawn on a zoom change regardless, as upstream resizes the element).
+/// Wallpapers with parallax enabled also report YES.
 @property (nonatomic, readonly) BOOL usesZoom;
 /// The output carries alpha that must be composited (premultiplied) over
 /// whatever is below; otherwise it is opaque.

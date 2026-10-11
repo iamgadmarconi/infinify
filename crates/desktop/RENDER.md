@@ -42,7 +42,7 @@ every existing command shape and snapshot key are unchanged.
 "render": {
   "background": {"type":"default","path":null,"texture":null,"mirror_tile":false,
                  "transparent_shader":false,"animate_fps":0,"cache_shader":false,
-                 "cache_budget_mb":128},
+                 "cache_budget_mb":128,"inherit_macos":false,"parallax":false},
   "chrome": {"background":[r,g,b,a],"foreground":[r,g,b,a],"corner_radius":10,
              "title_bar_height":25,"font":"Adwaita Sans","font_size":11,
              "font_weight":"medium","title_align":"center"},
@@ -54,8 +54,8 @@ every existing command shape and snapshot key are unchanged.
 }
 ```
 
-The values shown are upstream's defaults, which is what the block holds until a
-config file says otherwise. Colours are straight-alpha sRGB, each channel the
+The values shown are the unconfigured defaults. A normal config load also
+activates the Mac wallpaper policy described below. Colours are straight-alpha sRGB, each channel the
 config's byte divided by 255.
 
 - `background` is upstream's `[background]` table. `type` is `default` (the
@@ -72,6 +72,12 @@ config's byte divided by 255.
   the others: a reload that changes it spends the revision every accepted
   reload spends, and a launch file that changes nothing else drawn spends the
   first one for it.
+- `background.inherit_macos` and `background.parallax` are Mac adapter fields.
+  Both remain false for an unconfigured controller. After a config load,
+  inheritance is true unless the file explicitly names a background `type`,
+  `path` or `texture`; `parallax` defaults to true and accepts a boolean in
+  `[background]`. The shell resolves inherited images per display. Parallax
+  affects wallpapers only. See [CONFIG.md](CONFIG.md#macos-wallpaper).
 - `chrome` is the part of `[decorations]` that compositor-drawn chrome is
   rasterised from: stand-ins, and the title bar of a `server` window.
   `font` is `null` when the config's is empty. `font_weight` is one of `thin`,
@@ -90,7 +96,7 @@ config's byte divided by 255.
   background caches unconditionally, so that a shader or image edited on disk
   is read again after `reload-config` or a `touch` of the config file, and the
   new number is what makes the shell do the same. The launch load spends one
-  only when its file differs from the built-in defaults in `[background]`,
+  when it activates Mac wallpaper policy or its file differs from the built-in defaults in `[background]`,
   `[decorations]`, `[output.outline]` or `[effects]`, compared as upstream's
   parsed tables; the shell builds its first program whatever the number is. A
   `load` of a scene file leaves it alone. A file that is refused changes no

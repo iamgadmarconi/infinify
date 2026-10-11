@@ -4,7 +4,9 @@ The controller is configured by one TOML file in DriftWM's own grammar. The
 parser, the defaults, the action grammar and the binding tables are upstream's
 code, carried in `driftwm-core` (malbiruk/driftwm at
 `352333a8fa1b22171492d4b71a54102045c9a19d`, `src/config/`); nothing here
-re-implements their grammar. The Mac adapter adds Super+Tab and F3 overview defaults, while honoring explicit bindings and disabled key defaults. What is new is the map from upstream's modifiers and keysyms
+re-implements their grammar. The Mac adapter adds wallpaper policy and Super+Tab,
+F3 and Super+scroll defaults, while honoring explicit bindings and disabled
+defaults. What is new is the map from upstream's modifiers and keysyms
 to a Mac keyboard, and six additive ABI 1 commands. Existing commands, their
 shapes, `ABI_VERSION` and `SAVE_VERSION` are unchanged.
 
@@ -67,6 +69,25 @@ code and wins over both.
 
 Files larger than 4 MiB are refused as unreadable. That bound is not upstream's.
 
+### macOS wallpaper
+
+A normal run inherits each display's macOS wallpaper when `[background]` has
+no explicit `type`, `path` or `texture`. An explicit background keeps the
+upstream source and fallback rules. The adapter adds one boolean:
+
+```toml
+[background]
+parallax = true
+```
+
+`true` is the default: still wallpapers move gently with the camera during pan
+and zoom. Set `false` to keep the image fixed to its display. This applies to
+both inherited and explicitly configured wallpapers; grids, tiles and shaders
+keep their own coordinate behavior. A value other than a boolean rejects the
+config load. macOS wallpaper scaling, clipping and fill color are inherited
+with the image; video wallpaper playback is not captured. If macOS exposes no
+loadable still, the canvas uses its background fallback.
+
 The first `load_config` of a controller is its **launch**. Until then the
 controller is unconfigured and behaves exactly as it did before configuration
 existed: nothing is seeded from the config, a scene file restores its bookmarks
@@ -108,7 +129,7 @@ constants they replaced.
 | `autostart` | `exec` effects of the launch load, see [Autostart](#autostart) |
 | `window_placement` | where a window that appears by itself is placed: `center`, `cursor` or `auto`, see [LIFECYCLE.md](LIFECYCLE.md#2-placement) |
 | `[decorations] title_bar_height` | the diagonal step of the placement cascade; also part of `render.chrome` below |
-| `[background] type`, `path`, `texture`, `mirror_tile`, `transparent_shader`, `animate_fps`, `cache_shader`, `cache_budget_mb` | reported as the snapshot's `render.background` for the shell's compositor, see [RENDER.md](RENDER.md#render). Reporting is all the controller does: what the app's compositor does with each, `cache_shader` and `cache_budget_mb` included, is `native/desktop/BACKGROUND-NOTES.md` |
+| `[background] type`, `path`, `texture`, `mirror_tile`, `transparent_shader`, `animate_fps`, `cache_shader`, `cache_budget_mb`, `parallax` | reported as the snapshot's `render.background` for the shell's compositor, including the derived `inherit_macos` policy; see [macOS wallpaper](#macos-wallpaper) and [RENDER.md](RENDER.md#render). What the compositor does with each is described in `native/desktop/BACKGROUND-NOTES.md` |
 | `[decorations] bg_color`, `fg_color`, `corner_radius`, `title_bar_height`, `font`, `font_size`, `font_weight`, `title_align` | reported as `render.chrome`: what stand-ins and compositor title bars are rasterised from |
 | `[decorations] default_mode`, `border_width`, `border_color`, `border_color_focused`, `corner_radius`, `shadow`, `opacity`, `opacity_focused`, `blur` | each placement's `decoration`, through upstream's `effective_*` helpers, see [RENDER.md](RENDER.md#placements); border, shadow and bar also size a `screenshot window`. `opacity` and `opacity_focused` are also each placement's own `opacity`, the same number, for a window with no opacity of its own from a rule or an IPC `Opacity` write. They reach bound windows only: a stand-in is always 1.0, as upstream's, and a window captured alone by `screenshot window` is opaque unless a rule or an `Opacity` write pins its opacity |
 | `[[window_rules]] decoration`, `border_width`, `border_color`, `border_color_focused`, `corner_radius`, `shadow`, `opacity`, `blur` | the same, for the window the rule matched when it mapped: kept with the window, reported in `snapshot.windows[].rule`, and what its `decoration` and `opacity` are resolved from until it is gone, whatever its title or the config becomes ([RULES.md](RULES.md#matching)); never for a stand-in |
@@ -132,10 +153,9 @@ Once a config is loaded, `focus_placement`, `navigation.camera_speed` and
 `snap.outer_gap` supersede the `focus_placement`, `camera_speed` and `outer_gap`
 of `set_navigation_context`; only its `usable_rect_local` is still taken, the
 rectangle `register_output` and `set_usable_area` also carry. The shell sends
-it with none of the three, by the owner's decision: nothing is reserved for
-the menu bar and the Dock, so the
-[usable area](NAVIGATION.md#the-usable-area) those three keys are measured in
-is the whole output. An
+it with none of the three. The
+[usable area](NAVIGATION.md#the-usable-area) excludes the menu bar and notch;
+the Dock remains an overlay and reserves no placement gap. An
 `[[outputs]]` entry is matched by the output's `stable_id` (or `name = "*"`),
 where upstream matches a connector name.
 
@@ -543,7 +563,8 @@ themselves, so a shell that uses those commands must not scale again, and a
 [gesture](GESTURES.md)'s pan and pinch go through the same code. See
 [camera motion](MOTION.md).
 
-Upstream's defaults under the default super chord:
+Mac defaults under the default Super chord (Command). Explicit mouse bindings,
+unbindings and `disable_defaults = ["mouse"]` take precedence:
 
 | Chord | On a window | On the canvas |
 | --- | --- | --- |
@@ -559,7 +580,7 @@ Upstream's defaults under the default super chord:
 | ⌃⌘ left (`mod+ctrl`) | `center_nearest` | `center_nearest` |
 | finger scroll | the app's | `pan_viewport` |
 | wheel scroll | the app's | `zoom` |
-| ⌘ finger scroll | `pan_viewport` | `pan_viewport` |
+| ⌘ finger scroll | `zoom` | `zoom` |
 | ⌘ wheel scroll | `zoom` | `zoom` |
 
 ## Actions that run now

@@ -11,6 +11,24 @@ Upstream: DriftWM, GPL-3.0-or-later, commit
 `352333a8fa1b22171492d4b71a54102045c9a19d`. This module is a derived work and
 carries the same licence.
 
+### macOS wallpaper extension (2026-10-11)
+
+The native shell now resolves the Mac desktop still and its scaling, clipping
+and fill color per display when no explicit background source is configured.
+Loading happens on a serial worker and the renderer reuses the resulting
+program. Explicit sources retain their upstream resolution and fallback rules.
+Inherited images may use ImageIO formats, including single-image HEIC and TIFF;
+assets that require selecting a dynamic/video frame fall back.
+
+`[background] parallax = true` (the Mac default) adds bounded camera movement
+and slower zoom to wallpaper sampling. `false` restores a screen-fixed image.
+This extends wallpaper uniforms and redraw dependency flags; it does not change
+tile or user-shader coordinates. The inherited wallpaper shader also composites
+the desktop fill color for letterboxing and image alpha. The exact upstream
+source hashes below remain the provenance of the starting implementation.
+Historical verification sections predate these additions; build/source checks
+do not establish their visual behavior on the user's display.
+
 | File | What it is |
 |---|---|
 | `background.h`, `background.m` | The module (Objective-C, ARC). No dependency on the rest of the app. |

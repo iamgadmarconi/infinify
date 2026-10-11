@@ -32,8 +32,8 @@ use super::default_commands::{Equivalent, SearchPath, equivalent, program};
 use super::passthrough::passable;
 use super::*;
 use driftwm_core::config::{
-    Action, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, Config, ModKey, Modifiers, MouseAction, MouseBinding,
-    MouseTrigger,
+    Action, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, BindingContext, Config, ModKey, Modifiers,
+    MouseAction, MouseBinding, MouseTrigger,
 };
 use driftwm_core::platform::backend::input::AxisSource;
 use driftwm_core::platform::input::keyboard::{Keysym, ModifiersState, keysyms as sym};
@@ -686,18 +686,43 @@ impl Controller {
             PointerTrigger::WheelUp => (MouseTrigger::for_wheel_step(true), "wheel-up"),
             PointerTrigger::WheelDown => (MouseTrigger::for_wheel_step(false), "wheel-down"),
         };
-        let own = match context {
-            PointerContext::Window => &config.mouse.on_window,
-            PointerContext::Canvas => &config.mouse.on_canvas,
+        let (own_context, own) = match context {
+            PointerContext::Window => (BindingContext::OnWindow, &config.mouse.on_window),
+            PointerContext::Canvas => (BindingContext::OnCanvas, &config.mouse.on_canvas),
         };
         let candidates = self.chord_candidates(modifiers, name);
-        let found = [own, &config.mouse.anywhere].into_iter().find_map(|table| {
+        let desktop_zoom = MouseAction::Zoom;
+        let found = [
+            (own_context, own),
+            (BindingContext::Anywhere, &config.mouse.anywhere),
+        ]
+        .into_iter()
+        .find_map(|(table_context, table)| {
             candidates.iter().find_map(|(combo, set)| {
                 let key = MouseBinding {
                     modifiers: set.clone(),
                     trigger: trigger.clone(),
                 };
-                Some((combo, set, table.get(&key)?))
+                let bound = table.get(&key)?;
+                // Mac Super-scroll zooms for both wheel and finger input. Change
+                // only upstream's default anywhere finger-pan; explicit entries,
+                // category disabling and context precedence remain the file's.
+                let bound = if table_context == BindingContext::Anywhere
+                    && trigger == MouseTrigger::TrackpadScroll
+                    && *set
+                        == (Modifiers {
+                            logo: true,
+                            ..Modifiers::EMPTY
+                        })
+                    && matches!(bound, MouseAction::PanViewport)
+                    && !self.settings.default_mouse_disabled
+                    && !self.settings.wrote_mouse(table_context, &key)
+                {
+                    &desktop_zoom
+                } else {
+                    bound
+                };
+                Some((combo, set, bound))
             })
         });
         // Upstream's notch site takes an action and nothing else: any other

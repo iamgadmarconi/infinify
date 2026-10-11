@@ -133,7 +133,7 @@ impl Controller {
             TitleAlign::Center => "center",
         };
         json!({
-            "background":{"type":kind,"path":path,"texture":texture,"mirror_tile":background.mirror_tile,"transparent_shader":background.transparent_shader,"animate_fps":background.animate_fps,"cache_shader":background.cache_shader,"cache_budget_mb":background.cache_budget_mb},
+            "background":{"type":kind,"path":path,"texture":texture,"mirror_tile":background.mirror_tile,"transparent_shader":background.transparent_shader,"animate_fps":background.animate_fps,"cache_shader":background.cache_shader,"cache_budget_mb":background.cache_budget_mb,"inherit_macos":self.configured && self.settings.desktop_background.inherit_macos,"parallax":self.configured && self.settings.desktop_background.parallax},
             "chrome":{"background":rgba(decorations.bg_color),"foreground":rgba(decorations.fg_color),"corner_radius":decorations.corner_radius,"title_bar_height":decorations.title_bar_height,"font":Some(&decorations.font).filter(|font| !font.is_empty()),"font_size":decorations.font_size,"font_weight":weight_name(decorations.font_weight),"title_align":align},
             "outline":{"color":rgba(outline.color),"thickness":outline.thickness,"opacity":outline.opacity},
             "effects":self.effects_block(),

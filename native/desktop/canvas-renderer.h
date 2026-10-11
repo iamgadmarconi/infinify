@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import <QuartzCore/QuartzCore.h>
 #import <CoreVideo/CoreVideo.h>
+@class IFBackgroundProgram;
 // One window's live picture as the shell holds it: the latest pixel buffer of its
 // stream, a counter that moves with every frame, and where the window sits inside
 // that buffer in pixels (CGRectNull: all of it). A NULL buffer draws no content.
@@ -66,6 +67,15 @@ typedef DWCanvasContent (^DWCanvasSource)(NSNumber *window,NSDictionary *placeme
 typedef struct { NSUInteger requests,flushes,drawn,presented;double flushSeconds,flushWorst; } DWCanvasCounts;
 @interface DWCanvasRenderer : NSObject
 - (instancetype)initWithSource:(DWCanvasSource)source;
+// Optional platform wallpaper selection. Called only on configuration/display
+// refresh and export, never for a video frame. A resolver may return the base
+// while an asynchronous image load is pending, then call -refreshBackgrounds.
+// The platform adapter owns screen/URL/options discovery and its image cache.
+@property(copy) IFBackgroundProgram *(^backgroundForOutput)(NSNumber *output,NSDictionary *description,IFBackgroundProgram *base);
+@property(readonly) BOOL inheritsMacBackground;
+// Replaces only changed output programs and schedules their redraw. The resolver
+// must retain explicit configured sources and perform no per-frame disk work.
+- (void)refreshBackgrounds;
 // Used only by screenshot composition. Onscreen rendering never calls this.
 @property(copy) NSArray<DWCanvasAttachment *> *(^exportAttachments)(NSNumber *window);
 // Optional one-shot ordering, independent of live output order and evidence.
