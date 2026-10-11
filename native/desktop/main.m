@@ -1693,6 +1693,10 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 }
 - (BOOL)admitGlobalTouches:(DWTrackpadTouchFrame *)frame {
     if(![self globalGesturesEnabled]||frame.fingers<3||[self resizeHolds])return NO;
+    // A native mouse press already owns its drag session, even when its pointer
+    // crosses a canvas panel. Extra fingers cannot begin a new camera contact
+    // that steals the original source's physical drag and release.
+    if(NSEvent.pressedMouseButtons||self.globalTrackpad.hasNativeMousePress)return NO;
     CGPoint at=pointer();BOOL output=NO;
     for(DesktopView *view in self.views){if(view.gesture)return NO;if([view outputAt:at])output=YES;}
     if(!output)return NO;
@@ -1709,6 +1713,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(![self globalGesturesEnabled]||[self resizeHolds])return NO;
     BOOL beginning=!self.magnifying;
     if(beginning){
+        if(NSEvent.pressedMouseButtons||self.globalTrackpad.hasNativeMousePress)return NO;
         CGPoint at=pointer();BOOL output=NO;
         for(DesktopView *view in self.views){if(view.gesture)return NO;if([view outputAt:at])output=YES;}
         if(!output)return NO;
@@ -3240,7 +3245,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     IFBackgroundProgram *previous=[asDict(record[@"signature"])[@"url"]isEqual:signature[@"url"]]?record[@"program"]:nil;
     if(previous.errorText||!previous.config.inheritedWallpaper)previous=nil;
     record=[@{@"base":base,@"signature":signature,@"program":previous?:base}mutableCopy];self.macWallpapers[display]=record;
-    if(!url.isFileURL||!url.path.length){fprintf(stderr,"background: macOS exposes no readable still wallpaper for display %s; using canvas default\n",display.stringValue.UTF8String);return base;}
+    if(!url.isFileURL||!url.path.length){fprintf(stderr,"background: macOS exposes no readable still wallpaper for display %s; using canvas default\n",display.stringValue.UTF8String);return record[@"program"];}
     IFBackgroundConfig *config=[base.config copy];config.type=IFBackgroundTypeWallpaper;config.path=url.path;config.inheritedWallpaper=YES;
     config.wallpaperScaling=scaling.integerValue;config.wallpaperClipping=clipping.boolValue;config.wallpaperFillColor=fill;
     if(!self.wallpaperWorker)self.wallpaperWorker=dispatch_queue_create("org.infinify.wallpaper",dispatch_queue_attr_make_with_autorelease_frequency(DISPATCH_QUEUE_SERIAL,DISPATCH_AUTORELEASE_FREQUENCY_WORK_ITEM));
@@ -3257,7 +3262,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
             else record[@"program"]=loaded;
             [d.compositor refreshBackgrounds];});
     });
-    return base;
+    return record[@"program"];
 }
 - (void)refreshMacWallpapers {
     if(!self.compositor.inheritsMacBackground||self.cleaning||self.sessionInactive)return;

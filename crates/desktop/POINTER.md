@@ -333,19 +333,22 @@ threshold: the hit is the pinned window, so nothing there is a pick target.
 ### The resize border
 
 Upstream's `[mouse] resize_on_border` (default true): the band of
-`RESIZE_BORDER_WIDTH`, 8 canvas units, strictly outside a window's frame. A
-left press there raises and focuses the window and resizes it by that edge
+`RESIZE_BORDER_WIDTH`, 8 canvas units, outside a window's frame. The shell also
+offers an inner band of five observed native points, with a minimum of three
+display points and a cap of one quarter of each frame dimension. Capture pixel
+density never determines its thickness. A left press in either band raises and
+focuses the window and resizes it by that edge
 (`decoration_hit_for`, `resize_margin_hit_for`, `resize_edge_at`). A native
 frame already includes its title bar, so the band is around the whole frame.
 
-`resize_border` answers for a press. A point over any window's frame is that
-window's and no band; elsewhere the walk is upstream's z-order walk over the
+`resize_border` answers for a press. A point over a window's frame can take
+only that window's inner band; elsewhere the walk is upstream's z-order walk over the
 canvas windows, topmost first, and the first whose band holds the point ends
 it. `edges` is the side or corner the point
 lies off, and `snapped` is `decoration_resize_snapped`, since an edge drag has
 no modifier to ask for the cluster. It answers null with `resize_on_border`
 off, in [pick mode](#pick-mode) (upstream's `try_pick_button` stands ahead of
-the border), on a fullscreen output, over any window's frame, and for a
+the border), on a fullscreen output, in the interior beyond the inner band, and for a
 widget, a screen-pinned window and a stand-in, which have no band here. The
 shell begins the [resize grab](NATIVE_RESIZE.md#pointer-resize) with that
 edge unless a binding whose modifiers are held claims the press on that
@@ -362,7 +365,8 @@ border does not take is a canvas press, where upstream's alt+left there moves
 the window and alt+right resizes it. A stand-in's band (upstream resizes a
 stand-in's frame) and a pinned window's are not offered. The band is on the
 canvas: a real window's own edges lie under the canvas panel and no pointer
-reaches them.
+reaches them. The inner band uses the same resize transaction as the outer
+band, so the native application never receives an unscaled edge-drag tail.
 
 ### `pointer_nearest`
 

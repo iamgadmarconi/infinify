@@ -591,14 +591,21 @@ fn withheld(h: &mut Host, time_ms: Option<u64>) {
 #[test]
 fn hover_stands_down_while_the_pad_or_a_pan_has_the_pointer_and_stops_no_motion() {
     let (x, y) = center(B);
-    // A trackpad gesture, whatever it resolved to: a swipe that pans, a hold
-    // nothing is bound to, and a move, whose drag is the pointer's own.
+    // Desktop defaults pan on a three-finger swipe, even after a double tap
+    // over a window. A hold can remain unbound and still own the pointer.
     for (kind, doubletap, at, state) in [
         ("swipe", false, (950.0, 750.0), "swipe_pan"),
         ("hold", false, (950.0, 750.0), "unbound"),
+        ("swipe", true, (150.0, 150.0), "swipe_pan"),
         ("swipe", true, (150.0, 150.0), "swipe_move"),
     ] {
         let mut h = layout(SLOPPY);
+        if state == "swipe_move" {
+            // An explicit move binding still owns the pointer for its grab.
+            h.reload(&format!(
+                "{SLOPPY}\n[gestures.on-window]\n\"3-finger-doubletap-swipe\" = \"move-window\"\n"
+            ));
+        }
         let at = pointer(&mut h, at.0, at.1);
         let context = if doubletap { "window" } else { "canvas" };
         let begun = h.ok(json!({"op":"gesture_begin","kind":kind,"fingers":3,"modifiers":{},"context":context,"output":1,"pointer":at,"doubletap":doubletap,"time_ms":1000}));
@@ -1157,7 +1164,7 @@ fn at_or_above_interact_min_and_with_it_off_nothing_is_a_pick() {
 fn a_binding_lookup_over_a_pick_target_follows_upstreams_pick_rules() {
     let mut h = empty("[mouse.on-window]\n\"left\" = \"move-window\"\n");
     let (none, option) = (json!({}), json!({"option":true}));
-    let mods = json!({"control":true,"option":true});
+    let mods = json!({"command":true});
     // A bare scroll over a window is the application's. Over a pick target it
     // could reach nobody, so the canvas binding answers: pan, or wheel zoom.
     for (source, kind, combo) in [
@@ -1171,13 +1178,20 @@ fn a_binding_lookup_over_a_pick_target_follows_upstreams_pick_rules() {
         let found = h.binding("scroll", json!(source), none.clone(), true);
         assert_eq!(json!([found["kind"], found["combo"]]), json!([kind, combo]));
     }
-    // A scroll that is bound over a window is that binding either way.
+    // Command-scroll zooms with wheel or finger input, including over a pick.
     for pick in [false, true] {
-        let found = h.binding("scroll", json!("wheel"), mods.clone(), pick);
-        assert_eq!(
-            json!([found["kind"], found["combo"]]),
-            json!(["zoom", "mod+wheel-scroll"])
-        );
+        for source in ["wheel", "finger"] {
+            let found = h.binding("scroll", json!(source), mods.clone(), pick);
+            let combo = if source == "wheel" {
+                "mod+wheel-scroll"
+            } else {
+                "mod+trackpad-scroll"
+            };
+            assert_eq!(
+                json!([found["kind"], found["combo"]]),
+                json!(["zoom", combo])
+            );
+        }
     }
     // A bare button bound on a window does not outrank the pick; a
     // held-modifier binding does.
@@ -1750,8 +1764,8 @@ fn below_interact_min_a_pinned_window_stays_interactive_and_a_widget_is_not_pick
 }
 
 // Upstream's resize border (`[mouse] resize_on_border`): decoration_hit_for,
-// resize_margin_hit_for and resize_edge_at. The band is 8 canvas units
-// strictly outside a window's frame. In `layout`, A (window 1, x 100..400,
+// resize_margin_hit_for and resize_edge_at. The outer band is 8 canvas units;
+// the native frame also offers a small inner band. In `layout`, A (window 1, x 100..400,
 // y 100..300) is on top and O (window 5, x 300..500, y 200..400) lies under
 // its lower right corner; C (window 3) is a stand-in.
 fn border(h: &mut Host, x: f64, y: f64) -> Value {
@@ -1820,4 +1834,42 @@ fn the_resize_border_scales_with_the_zoom_and_is_off_in_pick_mode() {
     let mut h = zoomed_out(PICK, 0.4);
     assert_eq!(h.snapshot()["outputs"][0]["pick"], true);
     assert_eq!(border(&mut h, W.0 - 4.0, W.1 + 100.0), Value::Null);
+}
+
+#[test]
+fn the_inner_resize_border_uses_native_points_and_never_a_viewport_clip() {
+    for zoom in [0.2, 0.6, 1.0] {
+        let mut h = layout("");
+        h.look(0., 0., zoom);
+        // These sources are twice their world size: five observed native
+        // points project to 2.5*zoom display points. A three-display-point
+        // minimum keeps an edge usable in overview without using buffer pixels.
+        let band = (2.5_f64 * zoom).max(3.) / zoom;
+        let inside = band - 0.1;
+        for (x, y, edges) in [
+            (100. + inside, 150., "left"),
+            (400. - inside, 150., "right"),
+            (250., 100. + inside, "top"),
+            (250., 300. - inside, "bottom"),
+            (100. + inside, 100. + inside, "top_left"),
+            (400. - inside, 100. + inside, "top_right"),
+            (100. + inside, 300. - inside, "bottom_left"),
+            (400. - inside, 300. - inside, "bottom_right"),
+        ] {
+            assert_eq!(
+                border(&mut h, x, y),
+                edge(1, edges),
+                "zoom={zoom} ({x}, {y})"
+            );
+        }
+        assert!(
+            border(&mut h, 100. + band + 0.1, 150.).is_null(),
+            "zoom={zoom}: frame controls are outside the band"
+        );
+    }
+    let mut h = layout("");
+    // D ends at x=1150, beyond this output's right edge x=1000. The visible
+    // clip at x=1000 is in D's body and must never synthesize a right edge.
+    assert!(border(&mut h, 999., 500.).is_null());
+    assert_eq!(border(&mut h, 852., 500.), edge(4, "left"));
 }

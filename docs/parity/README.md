@@ -62,6 +62,11 @@ Option-click toggles fit and uses `decoration_fit_snapped`.
 
 ## 2026-10-12 whole-desktop native admission
 
+The owner authorized overnight benchmarks and tests on 2026-10-12. Disposable
+fixtures remain the native mutation scope; no SIP, permissions or system settings
+are changed by these runs. Obsolete interfaces must be removed with their call
+sites migrated because this project is pre-release.
+
 The explicit `--native-desktop-helper` mode admits this login user's application
 windows, including processes opened after launch, through one authenticated
 Apple-signed Dock helper. Fresh UID, process birth and window-family ancestry
@@ -75,6 +80,29 @@ records and recovery journals after unknown outcomes. Building never injects.
 The loader uses nonce files exclusively; its previous raw-argument interface was
 removed with all call sites migrated. This source milestone does not establish
 native clipping, cross-application drag-and-drop, performance or app acceptance.
+
+## 2026-10-12 resize and capture responsiveness
+
+Interactive resizing now rebases the grabbed edge when a delayed native baseline
+differs from its displayed size. Subsequent motion uses the current camera and
+zoom, retains fractional precision at distant world coordinates, and delivers
+the final release position. Focused resize and pointer scenarios pass; physical
+edge tracking and third-party acceptance still require runtime evidence.
+
+Unclaimed native mouse presses now retain their original drag/release pair while
+crossing canvas panels. New trackpad contacts cannot steal an existing native
+press. This preserves native drag ownership; it does not provide an AppKit file
+drop destination for captured or replica windows. That integration remains open.
+
+Capture-family permission preflight runs on the bounded observation worker,
+removing a measured synchronous TCC wait from the main-thread demand path. Six
+large-window real-capture benchmarks reproduced substantial zoom stalls. The
+permission change and capture-size transitions are being measured separately;
+stable 120 Hz and native compositor performance have not been established.
+
+The application build now signs and verifies a staged bundle before replacing
+`target/app/Infinify.app`. Its adjacent `BUILD.json` records the source snapshot
+and signed executable hash; changed sources or failed packaging refuse promotion.
 
 ## 2026-10-12 capture input and frame overhead
 
@@ -2344,8 +2372,9 @@ not in the inventory: popups and menus open at the native window's place, not
 where the canvas draws the window, and the cursor shape cannot follow the
 application under the pointer.
 
-The evidence boundary stands for every row, whatever its status. No launch
-from an agent session has had Screen Recording access, so in those launches
-nothing was seen on a captured window: every window was a stand-in, and the
-coverage behind the rows is controller scenarios, own-fixture probes and
-scripted `msg` sessions. No completion claim follows from these counts.
+The evidence boundary stands for every row, whatever its status. The original
+inventory evidence consisted of controller scenarios, own-fixture probes and
+scripted `msg` sessions without Screen Recording access. Overnight performance
+runs on 2026-10-12 additionally captured real animated disposable fixture
+windows. That does not establish third-party acceptance or verify the inventory
+rows. No completion claim follows from these counts.

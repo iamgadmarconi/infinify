@@ -50,6 +50,25 @@ fn constrain_to_ratio(target: Size, initial: Size, ratio: f64, edges: Edges) -> 
     }
 }
 
+/// Whole native units toward zero, retaining a mathematically whole movement
+/// after screen/world projection has introduced floating-point roundoff.
+fn native_delta(value: f64, precision: f64) -> f64 {
+    let whole = value.round();
+    if (value - whole).abs() <= precision {
+        whole
+    } else {
+        value.trunc()
+    }
+}
+
+/// A world point kept as an origin and a local offset. Adding a fractional
+/// press offset to a distant camera would discard precision before motion.
+#[derive(Clone, Debug, Default, Serialize)]
+struct ResizePointerAnchor {
+    origin: Point,
+    offset: Point,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ResizeOutcome {
@@ -108,10 +127,12 @@ pub struct NativeResizeTransaction {
     /// Pointer grabs follow observed native sizes without a presentation tween.
     /// Action sizing may animate that observed geometry independently of AX.
     interactive: bool,
-    start_screen: Point,
+    /// Canvas point grabbed at the press. Motion resolves the pointer through
+    /// the current viewport, so a changed camera/zoom cannot separate the edge
+    /// from the pointer. A fresh baseline rebases this by its moving-edge shift.
+    pointer_anchor: ResizePointerAnchor,
     /// Where the pointer last was, for a grab that has moved.
     pointer: Option<Point>,
-    start_zoom: f64,
     initial_size: Size,
     last_committed_size: Size,
     /// Upstream's cluster resize: the windows snapped to the moving edges
@@ -279,9 +300,8 @@ impl Controller {
             output,
             edges,
             interactive: false,
-            start_screen: Point::default(),
+            pointer_anchor: ResizePointerAnchor::default(),
             pointer: None,
-            start_zoom: 1.0,
             initial_size: size,
             last_committed_size: size,
             group: false,
@@ -385,6 +405,10 @@ impl Controller {
             .output(output)
             .ok_or(Error::Invalid("unknown output"))?;
         let zoom = viewport.zoom;
+        let pointer_anchor = ResizePointerAnchor {
+            origin: viewport.camera,
+            offset: (start_screen - viewport.screen_bounds.origin) / zoom,
+        };
         let rect = self
             .scene
             .window(window)
@@ -421,9 +445,8 @@ impl Controller {
             output,
             edges,
             interactive: true,
-            start_screen,
+            pointer_anchor,
             pointer: None,
-            start_zoom: zoom,
             initial_size: size,
             last_committed_size: size,
             group,
@@ -497,7 +520,7 @@ impl Controller {
             .scene
             .output(t.output)
             .ok_or(Error::Invalid("unknown resize output"))?;
-        let (zoom, bounds) = (viewport.zoom, viewport.screen_bounds);
+        let (zoom, bounds, camera) = (viewport.zoom, viewport.screen_bounds, viewport.camera);
         let current = self
             .scene
             .window(t.window)
@@ -507,17 +530,31 @@ impl Controller {
         let t = self.native_resize.as_mut().expect("resize exists");
         // Upstream ResizeGrab::motion: the pointer is held inside the grab's
         // output, `[0, w-1] × [0, h-1]`, so an edge cannot be dragged past
-        // what the output shows. Then apply_resize: the screen displacement
-        // over the zoom of the start, each axis cut to a whole number toward
-        // zero (its `as i32`).
+        // what the output shows. Resolve the pointer in the current viewport,
+        // independently of native ownership and coordinates. Unlike upstream's
+        // frozen start zoom, this keeps the grabbed edge under the pointer when
+        // another input changes the canvas camera or zoom during the grab.
+        // Native size requests still cut each axis toward zero (its `as i32`).
         let local = screen - bounds.origin;
         let screen = bounds.origin
             + Point::new(
                 local.x.clamp(0.0, (bounds.size.width - 1.0).max(0.0)),
                 local.y.clamp(0.0, (bounds.size.height - 1.0).max(0.0)),
             );
-        let delta = (screen - t.start_screen) / t.start_zoom;
-        let delta = Point::new(delta.x.trunc(), delta.y.trunc());
+        let anchor =
+            bounds.origin + ((t.pointer_anchor.origin - camera) + t.pointer_anchor.offset) * zoom;
+        let delta = (screen - anchor) / zoom;
+        // Subtract in screen space to avoid cancellation of large world
+        // coordinates. Normalize only projection roundoff at an integer: a
+        // physical 24-point resize at zoom .2 must not become 23 native units.
+        let precision = Point::new(
+            (screen.x.abs() + anchor.x.abs()) * 8.0 * f64::EPSILON / zoom,
+            (screen.y.abs() + anchor.y.abs()) * 8.0 * f64::EPSILON / zoom,
+        );
+        let delta = Point::new(
+            native_delta(delta.x, precision.x),
+            native_delta(delta.y, precision.y),
+        );
         let outline = if let Some(ratio) = t.ratio {
             // Upstream: the ratio bends the size ahead of the client's bounds,
             // and a locked resize neither snaps nor carries a cluster. The
@@ -675,7 +712,13 @@ impl Controller {
         let preparing = !t.baseline_observed;
         let mut adopted = false;
         let readback = self.sizes.readback;
-        let snap = self.snap(t.start_zoom);
+        // Output removal cancels the grab, but its outstanding native result
+        // must still drain. No pointer request uses this fallback snap scale.
+        let zoom = self
+            .scene
+            .output(t.output)
+            .map_or(1.0, |viewport| viewport.zoom);
+        let snap = self.snap(zoom);
         let t = self.native_resize.as_mut().expect("resize exists");
         t.pending_effect = None;
         t.last_result = Some(result.clone());
@@ -708,6 +751,22 @@ impl Controller {
                         .window(t.window)
                         .expect("bound window")
                         .world_rect;
+                    if t.interactive {
+                        // The press was on the displayed edge, not the size a
+                        // delayed baseline later found. Adoption keeps the
+                        // top-left, so right/bottom move by the observed size
+                        // difference. Rebase their anchor by that exact amount
+                        // to retain the original pointer-to-edge offset. Left
+                        // and top do not move during adoption.
+                        if t.edges.right() {
+                            t.pointer_anchor.offset.x +=
+                                result.actual_ax.size.width - rect.size.width;
+                        }
+                        if t.edges.bottom() {
+                            t.pointer_anchor.offset.y +=
+                                result.actual_ax.size.height - rect.size.height;
+                        }
+                    }
                     rect.size = result.actual_ax.size;
                     self.scene.set_window_rect(t.window, rect)?;
                     t.initial_size = rect.size;

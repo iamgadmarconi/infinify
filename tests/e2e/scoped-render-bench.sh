@@ -16,6 +16,7 @@
 # nothing is posted at the session level. Run it while nobody is using the machine: the canvas covers the visible screen.
 #
 # INFINIFY_BENCH_SIZE=WxH (1700x1100) is the fixture windows' content size, INFINIFY_BENCH_RATE (120) the frames a second.
+# INFINIFY_BENCH_WINDOWS selects 1..16 synthetic/capture fixture windows (default 4); native mode retains its four-window oracle.
 # INFINIFY_BENCH_MODE=capture uses real animated fixture captures and requires Screen Recording access; synthetic is the default.
 # INFINIFY_BENCH_MODE=native uses four cooperative helper windows and an animated background, with no capture streams.
 # Native mode measures background drawable times and independently samples window geometry; geometry samples do not prove optical FPS.
@@ -28,6 +29,8 @@
 # INFINIFY_BENCH_STRICT=1 additionally requires 99% of refreshes, no missed refreshes and no presentation silence above 1.5 refresh intervals.
 # INFINIFY_BENCH_ANIMATION=1 keeps the scene changing every refresh with an animated background even for slower captures.
 # INFINIFY_BENCH_ZOOM_MOTION=1 adds continuous zoom targets after the pan phase.
+# INFINIFY_BENCH_MOVE_MOTION=1 moves one owned logical window continuously over IPC (not physical pointer forwarding).
+# INFINIFY_BENCH_FOCUS_SWITCH=1 switches logical focus among owned windows over IPC (native activation remains disabled).
 # INFINIFY_BENCH_CV_CLOCK=1 selects the scoped separate display-thread clock candidate.
 # INFINIFY_BENCH_OPACITY sets only the owned fixture windows' scene opacity, to isolate native occlusion.
 # INFINIFY_BENCH_HOST_ALPHA sets native fixtures' initial AppKit alpha (default 1), before adoption.
@@ -52,6 +55,14 @@ size=${INFINIFY_BENCH_SIZE:-1700x1100}; rate=${INFINIFY_BENCH_RATE:-120}
 mode=${INFINIFY_BENCH_MODE:-synthetic}; synth=$rate; nativebench=0
 baseline=${INFINIFY_BENCH_BASELINE:-0}
 case "$mode" in synthetic) ;; capture) synth=0 ;; native) synth=0; nativebench=1; INFINIFY_BENCH_ANIMATION=1; export INFINIFY_BENCH_ANIMATION ;; *) echo 'INFINIFY_BENCH_MODE must be synthetic, capture or native' >&2; exit 2 ;; esac
+fixture_count=${INFINIFY_BENCH_WINDOWS:-4}
+case "$fixture_count" in ''|*[!0-9]*) echo 'INFINIFY_BENCH_WINDOWS must be 1..16' >&2; exit 2 ;; esac
+[ "$fixture_count" -ge 1 ] && [ "$fixture_count" -le 16 ] || { echo 'INFINIFY_BENCH_WINDOWS must be 1..16' >&2; exit 2; }
+if [ "$fixture_count" -ne 4 ] && { [ "$mode" = native ] || [ "${INFINIFY_BENCH_VALIDATE_BUDGET:-0}" = 1 ]; }; then
+  echo 'Native geometry and capture-budget validation retain their four-window layout; use four windows for those checks.' >&2; exit 2
+fi
+INFINIFY_BENCH_WINDOWS=$fixture_count; export INFINIFY_BENCH_WINDOWS
+fixture_names=$(python3 -c 'import os; print(" ".join(chr(97+i) for i in range(int(os.environ["INFINIFY_BENCH_WINDOWS"]))))')
 mkdir -p target/ipc
 # Short: a socket path has room for about a hundred bytes.
 evidence=$(mktemp -d "$root/target/ipc/bench.XXXXXX")
@@ -192,11 +203,11 @@ xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werr
   -framework AppKit -framework WebKit -o "$bundle/Contents/MacOS/ScopeFixture"
 fixture=$bundle/Contents/MacOS/ScopeFixture
 start() { mkdir "$evidence/$1"; if [ "$mode" = capture ]; then "$fixture" "$evidence/$1" "Bench fixture $1 $$" "$2" 150 size "$size" animate "$rate" & else "$fixture" "$evidence/$1" "Bench fixture $1 $$" "$2" 150 size "$size" & fi; fixtures="$fixtures $!"; }
-start a -30; A=$!
-start b -10; B=$!
-start c 10; C=$!
-start d 30; D=$!
-scope=$A,$B,$C,$D
+scope=; fixture_index=0
+for name in $fixture_names; do
+  start "$name" "$((fixture_index % 4 * 20 - 30))"; fixture_pid=$!
+  scope=${scope:+$scope,}$fixture_pid; fixture_index=$((fixture_index+1))
+done
 fi
 
 # One read-only list outside each measured phase diagnoses an occluded canvas
@@ -256,6 +267,16 @@ def helper_counters():
     value = reply.get('Ok', {}).get('DebugNative', {})
     if not isinstance(value.get('stats'), dict): stop('native helper counters', reply)
     return (time.monotonic(), value['stats'])
+def process_snapshot():
+    # Outside the selected presentation windows: cumulative target-only CPU and
+    # resident memory. This is RSS, not physical footprint or capture allocation.
+    pid = (evidence / 'app.pid').read_text().strip()
+    result = subprocess.run(['ps', '-p', pid, '-o', 'time=,rss='], capture_output=True, text=True)
+    fields = result.stdout.split()
+    if result.returncode or len(fields) != 2: stop('benchmark process counters', result.stderr)
+    cpu = 0.0
+    for part in fields[0].split(':'): cpu = cpu * 60 + float(part)
+    return {'time': time.monotonic(), 'cpu_seconds': cpu, 'rss_kib': int(fields[1])}
 def visibility(name, pid=None):
     # No WindowServer API executes on the app's main queue, and these probes
     # remain outside the frame windows selected below.
@@ -278,9 +299,10 @@ def until(what, seconds, read, passed):
             stop(what, value)
         time.sleep(.05)
 def lines(): return [l for l in errlog.read_text(errors='replace').splitlines() if l.startswith('frames: ')]
-names = ['a', 'b', 'c', 'd']; titles = sorted(status(n)['title'] for n in names)
-adopted = until('adopts the four fixture windows', 10, lambda: state()['windows'], lambda w: sorted(x['title'] for x in w) == titles)
-ok('adopts the four fixture windows', [(w['id'], w['size']) for w in adopted])
+fixture_count = int(os.environ['INFINIFY_BENCH_WINDOWS'])
+names = [chr(97+i) for i in range(fixture_count)]; titles = sorted(status(n)['title'] for n in names)
+adopted = until(f'adopts the {fixture_count} fixture windows', 10, lambda: state()['windows'], lambda w: sorted(x['title'] for x in w) == titles)
+ok(f'adopts the {fixture_count} fixture windows', [(w['id'], w['size']) for w in adopted])
 if os.environ.get('INFINIFY_BENCH_OPACITY'):
     opacity = float(os.environ['INFINIFY_BENCH_OPACITY'])
     if not math.isfinite(opacity) or not 0 < opacity <= 1: stop('fixture opacity must be in (0,1]', opacity)
@@ -300,19 +322,21 @@ for n in names: ok(f'fixture {n} window', {'points': status(n)['bounds'][2:], 'p
 # Let that first reconciliation land before choosing the layout's center.
 if mode == 'native': time.sleep(1.1)
 
-# Two rows of two about the middle of the view, and a zoom that shows all four with room for the pan.
+# A grid about the middle of the view, with room for the pan. Four windows retain
+# the original two-by-two geometry used by the native and capture-budget oracles.
 first = state(); cx, cy = first['camera']; out = first['outputs'][0]['size']; gap = 40; swing = 120
 wide = max(w['size'][0] for w in adopted); high = max(w['size'][1] for w in adopted)
+columns = math.ceil(math.sqrt(fixture_count)); rows = math.ceil(fixture_count / columns)
 requested_zoom = float(os.environ['INFINIFY_BENCH_ZOOM']) if os.environ.get('INFINIFY_BENCH_ZOOM') else .5 if mode == 'native' else None
 if requested_zoom is not None:
     if not math.isfinite(requested_zoom) or requested_zoom <= 0: stop('overview zoom must be finite and positive', requested_zoom)
     # The layout bounds set DriftWM's dynamic minimum zoom. Leave enough world space to permit the requested overview.
     gap = max(gap, int(out[1] / (2 * requested_zoom) - 2 * high + 100))
-spots = [(-1, 1), (1, 1), (-1, -1), (1, -1)]
+spots = [(i % columns - (columns-1)/2, (rows-1)/2 - i//columns) for i in range(fixture_count)]
 for w, (sx, sy) in zip(sorted(adopted, key=lambda w: w['title']), spots):
-    done = msg('move', '--id', str(w['id']), str(int(cx + sx * (wide + gap) / 2)), str(int(cy + sy * (high + gap) / 2)))
+    done = msg('move', '--id', str(w['id']), str(int(cx + sx * (wide + gap))), str(int(cy + sy * (high + gap))))
     if done.returncode: stop(f'msg move {w["title"]}', done.stderr.strip())
-zoom = min(out[0] / (2 * wide + 3 * gap + 2 * swing), out[1] / (2 * high + 3 * gap))
+zoom = min(out[0] / (columns * wide + (columns+1) * gap + 2 * swing), out[1] / (rows * high + (rows+1) * gap))
 if requested_zoom is not None: zoom = requested_zoom if mode == 'native' else min(zoom, requested_zoom)
 zoom = float(f'{zoom:.4f}')
 done = msg('zoom', f'{zoom:.4f}')
@@ -338,7 +362,7 @@ def inside(s, x):
     z = s['zoom']; half = [out[0] / z / 2, out[1] / z / 2]
     return all(abs(w['position'][0] - x) + w['size'][0] / 2 <= half[0] and abs(w['position'][1] - s['camera'][1]) + w['size'][1] / 2 <= half[1] for w in s['windows'])
 settled = until('the zoom and the camera arrive', 5, state, lambda s: abs(s['zoom'] - zoom) < .002 and abs(s['camera'][0] - cx) < 1 and abs(s['camera'][1] - cy) < 1)
-check('all four tiles are in view, at either end of the pan too', inside(settled, cx - swing) and inside(settled, cx + swing), {'output': out, 'zoom': round(settled['zoom'], 4), 'camera': settled['camera'], 'tiles': [(w['position'], w['size']) for w in settled['windows']]})
+check(f'all {fixture_count} tiles are in view, at either end of the pan too', inside(settled, cx - swing) and inside(settled, cx + swing), {'output': out, 'zoom': round(settled['zoom'], 4), 'camera': settled['camera'], 'tiles': [(w['position'], w['size']) for w in settled['windows']]})
 if os.environ.get('INFINIFY_BENCH_IDLE_DIAGNOSTIC') == '1':
     if not oracle: stop('idle native diagnostic requires native mode', mode)
     # This is an observation of the owned fixtures, not a cadence benchmark:
@@ -375,6 +399,7 @@ def measure(name, work):
     # A helper probe can wait on its socket: take it outside the selected
     # presentation windows, with the first partial window still discarded.
     helper_before = helper_counters()
+    process_before = process_snapshot()
     panel_ids = [p['wid'] for p in visibility(name + ' before')['panels']]
     time.sleep(1); begun = len(lines()); end = time.time() + windows * 2 + 12
     observations = []; canvas_observations = []; errors = []; finished = threading.Event(); observer = None
@@ -464,7 +489,13 @@ def measure(name, work):
     # The mean flush is weighted by the flushes of each line.
     flushes = sum(r[3] * r[0] for r in rows)
     sources = [min(s[i][1] for r in rows for s in [r[9]] if i < len(s)) for i in range(max(len(r[9]) for r in rows))]
-    return {'display': rows[0][1], 'redraws': mean(2), 'flushes': mean(3), 'drawn': mean(4), 'presented': mean(5),
+    process_after = process_snapshot(); process_seconds = process_after['time'] - process_before['time']
+    # The CPU interval includes phase setup/alignment; the drawable metrics above
+    # cover only whole two-second windows. Keep both intervals explicit.
+    return {'process_interval_seconds': process_seconds,
+            'cpu_percent_one_core': 100 * (process_after['cpu_seconds'] - process_before['cpu_seconds']) / process_seconds,
+            'rss_start_kib': process_before['rss_kib'], 'rss_end_kib': process_after['rss_kib'],
+            'display': rows[0][1], 'redraws': mean(2), 'flushes': mean(3), 'drawn': mean(4), 'presented': mean(5),
             'flush_mean_ms': sum(r[6] * r[3] * r[0] for r in rows) / flushes if flushes else 0, 'flush_worst_ms': max(r[7] for r in rows), 'main_gap_worst_ms': max(r[8] for r in rows),
             'sources': len(sources), 'accepted_least': min(sources) if sources else 0,
             'received_most': max((s[0] for r in rows for s in r[9]), default=0), 'accepted_most': max((s[1] for r in rows for s in r[9]), default=0),
@@ -515,6 +546,33 @@ if os.environ.get('INFINIFY_BENCH_ZOOM_MOTION') == '1':
     phases.append(('zooming', measure('zooming', zooming)))
     check('the camera zoomed continuously', max(zoom_step['seen']) - min(zoom_step['seen']) > (high_zoom - zoom) / 2, [round(min(zoom_step['seen']), 4), round(max(zoom_step['seen']), 4)])
     ask({'Zoom': zoom}); until('overview zoom resumes', 5, state, lambda s: abs(s['zoom'] - zoom) < 1e-10)
+if os.environ.get('INFINIFY_BENCH_MOVE_MOTION') == '1':
+    chosen = min(state()['windows'], key=lambda w: w['id']); origin = chosen['position']
+    window_step = {'n': 0, 'next': time.monotonic(), 'seen': []}
+    def moving_window():
+        for _ in range(max(1, int(rate) // 4)):
+            phase = (window_step['n'] / rate / 2) % 1
+            x = round(origin[0] + swing * (4 * phase - 1 if phase < .5 else 3 - 4 * phase))
+            reply = ask({'Move': {'window': chosen['id'], 'to': [x, round(origin[1])]}})
+            if 'Ok' not in reply: stop('owned logical window move', reply)
+            window_step['n'] += 1; window_step['next'] += 1 / rate
+            remaining = window_step['next'] - time.monotonic()
+            if remaining > 0: time.sleep(remaining)
+            else: window_step['next'] = time.monotonic()
+        window_step['seen'].append(next(w['position'][0] for w in state()['windows'] if w['id'] == chosen['id']))
+    phases.append(('moving window', measure('moving window', moving_window)))
+    check('owned logical window moved continuously', max(window_step['seen']) - min(window_step['seen']) > swing / 2, [min(window_step['seen']), max(window_step['seen'])])
+    restored = ask({'Move': {'window': chosen['id'], 'to': [round(origin[0]), round(origin[1])]}})
+    if 'Ok' not in restored: stop('restore owned logical window position', restored)
+if os.environ.get('INFINIFY_BENCH_FOCUS_SWITCH') == '1':
+    ids = sorted(w['id'] for w in adopted); focus_step = {'n': 0, 'seen': set()}
+    def switching_focus():
+        wanted = ids[focus_step['n'] % len(ids)]; reply = ask({'Focus': wanted})
+        focused = reply.get('Ok', {}).get('Focused')
+        if not focused or focused.get('id') != wanted: stop('owned logical focus switch', reply)
+        focus_step['seen'].add(wanted); focus_step['n'] += 1; time.sleep(.125)
+    phases.append(('switching focus', measure('switching focus', switching_focus)))
+    check('logical focus reached every owned window', focus_step['seen'] == set(ids), sorted(focus_step['seen']))
 if mode == 'capture':
     for line in errlog.read_text(errors='replace').splitlines():
         if line.startswith('buffers:'): print(line, flush=True)
@@ -581,10 +639,14 @@ for name, r in phases:
     print(f'{name}: actual_gap_p99_worst_ms={r["presentation_p99_worst_ms"]:.3f} actual_gap_worst_ms={r["presentation_gap_worst_ms"]:.3f} presentation_silence_worst_ms={r["presentation_silence_worst_ms"]:.3f} missed_refreshes={r["missed"]:.0f} submission_latency_worst_ms={r["latency_worst_ms"]:.3f} gpu_worst_ms={r["gpu_worst_ms"]:.3f} camera_updates={r["camera_updates"]:.0f} camera_repeats={r["camera_repeats"]:.0f}', flush=True)
     print(f'{name}: acquire_worst_ms={r["acquire_worst_ms"]:.3f} acquire_queue_worst_ms={r["acquire_queue_worst_ms"]:.3f} publish_worst_ms={r["publish_worst_ms"]:.3f} notify_worst_ms={r["notify_worst_ms"]:.3f} completion_worst_ms={r["completion_worst_ms"]:.3f} acquire_timeouts={r["acquire_timeouts"]:.0f} not_presented={r["not_presented"]:.0f}', flush=True)
     print(f'{name}: panel_observations={r["panel_rows"]} occluded_observations={r["occluded_rows"]} hidden_observations={r["hidden_rows"]} hides_inactive_observations={r["hides_inactive_rows"]} inactive_space_observations={r["inactive_space_rows"]}', flush=True)
+    print(f'{name}: cpu_percent_one_core={r["cpu_percent_one_core"]:.2f} cpu_interval_seconds={r["process_interval_seconds"]:.2f} rss_start_kib={r["rss_start_kib"]} rss_end_kib={r["rss_end_kib"]}', flush=True)
+(evidence / 'summary.json').write_text(json.dumps({'mode': mode, 'fixture_count': fixture_count, 'requested_rate': rate,
+    'fixture_points': [status(n)['bounds'][2:] for n in names], 'output_points': out,
+    'selected_seconds_per_phase': windows * 2, 'phases': dict(phases)}, indent=2) + '\n')
 for name, r in phases:
     hz = r['display']
     if mode == 'native': check(f'{name}: native scene has no captured frame delivery or acceptance', r['received_most'] == 0 and r['accepted_most'] == 0, {'bound_sources': r['sources'], 'received_most': r['received_most'], 'accepted_most': r['accepted_most']})
-    else: check(f'{name}: four sources, each kept at least 90% of {rate:.0f} frames a second', r['sources'] == 4 and r['accepted_least'] >= .9 * rate, {'sources': r['sources'], 'least': r['accepted_least']})
+    else: check(f'{name}: {fixture_count} sources, each kept at least 90% of {rate:.0f} frames a second', r['sources'] == fixture_count and r['accepted_least'] >= .9 * rate, {'sources': r['sources'], 'least': r['accepted_least']})
     check(f'{name}: flushes a second do not exceed the display\'s {hz:.0f} by more than 3%', r['flushes'] <= hz * 1.03, round(r['flushes'], 1))
     # A load slower than the display leaves refreshes with nothing new to show: then it is printed and not judged.
     if rate >= hz: check(f'{name}: frames presented a second are within 10% of the display\'s {hz:.0f}', hz * .9 <= r['presented'] <= hz * 1.1, round(r['presented'], 1))
@@ -614,7 +676,7 @@ if failed: print(f'FAILED: {len(failed)} of the assertions above', flush=True); 
 PY
 
 shown() { grep -Eq '"visible"[[:space:]]*:[[:space:]]*true' "$evidence/$1/status.json" 2>/dev/null; }
-for name in a b c d; do
+for name in $fixture_names; do
   n=0; while ! shown "$name" && [ "$n" -lt 150 ]; do sleep .1; n=$((n+1)); done
   shown "$name" || { echo "FAIL: fixture $name never showed its window"; exit 1; }
 done
@@ -641,4 +703,4 @@ PY
 fi
 [ "$result" -eq 0 ] || exit 1
 if [ "${INFINIFY_BENCH_IDLE_DIAGNOSTIC:-0}" = 1 ]; then echo 'PASS: scoped idle native geometry diagnostic'; exit 0; fi
-echo "PASS: scoped render bench: four owned windows, $mode, requested $rate Hz, at rest and panning"
+echo "PASS: scoped render bench: $fixture_count owned windows, $mode, requested $rate Hz, at rest and panning"

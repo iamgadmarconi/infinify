@@ -89,7 +89,8 @@ impl Controller {
     /// band holds this screen point of `output`, the edge it resizes, and
     /// whether a press there carries the cluster (`decoration_resize_snapped`;
     /// an edge drag has no modifier to say so). The visible native frame has
-    /// an inner band of five screen points too. A point over a window's
+    /// an inner band of five native points, with a three-screen-point minimum
+    /// so that a zoomed-out edge can still be grabbed. A point over a window's
     /// frame can resize only that window, a lower window's frame included:
     /// upstream's topmost band wins over what lies beneath it, which is not
     /// adapted (POINTER.md). Among bands the walk is upstream's z-order walk:
@@ -129,14 +130,23 @@ impl Controller {
         else {
             return Value::Null;
         };
-        if !self.sources.contains_key(&window.id) {
+        let Some(source) = self.sources.get(&window.id) else {
             return Value::Null;
-        }
+        };
         let rect = window.world_rect;
-        // Preserve an interior even for a very small projected window. Native
-        // edge thickness is a screen distance, independent of canvas zoom.
-        let inner_x = (5.0 / viewport.zoom).min(rect.size.width / 4.0);
-        let inner_y = (5.0 / viewport.zoom).min(rect.size.height / 4.0);
+        // Use the native frame actually observed, independently of the capture
+        // buffer's pixel density. A window rebound to a differently sized
+        // saved slot still has a native-point affordance. The visible minimum
+        // is in display points, not Retina pixels; cap it to keep an interior
+        // for small projected windows. These are the full frame's edges: an
+        // output clip never creates a resize edge in the middle of a window.
+        let native = source.observed_rect.size;
+        let inner_x = (5.0 * rect.size.width / native.width)
+            .max(3.0 / viewport.zoom)
+            .min(rect.size.width / 4.0);
+        let inner_y = (5.0 * rect.size.height / native.height)
+            .max(3.0 / viewport.zoom)
+            .min(rect.size.height / 4.0);
         let (left, right) = (
             at.x < rect.origin.x + inner_x,
             at.x >= rect.right() - inner_x,

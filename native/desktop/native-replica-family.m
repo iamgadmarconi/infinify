@@ -264,7 +264,6 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
     [self endChanges];
 }
 - (void)describe:(NSArray<NSDictionary *> *)roots rate:(NSInteger)rate {
-    if(!CGPreflightScreenCaptureAccess()){[self reset];return;}
     NSMutableDictionary *wanted=[NSMutableDictionary dictionary];
     for(NSDictionary *root in roots)if(root[@"window"]&&root[@"identity"]&&root[@"generation"]&&familySize(familyRect(root[@"native_bounds"])))wanted[root[@"window"]]=root;
     NSInteger hz=MAX(1,MIN(rate,240));BOOL changed=![self.roots isEqual:wanted]||self.rate!=hz;
@@ -395,7 +394,7 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
 - (void)request {
     // An uncancellable shareable-content request remains outstanding even after
     // its deadline. Never pile later observations behind a stalled native read.
-    if(self.reading||self.requestPending||!self.roots.count||!CGPreflightScreenCaptureAccess())return;
+    if(self.reading||self.requestPending||!self.roots.count)return;
     // A request sequence is not a binding epoch: keep the last complete order
     // during an ordinary refresh, then replace the whole cohort atomically.
     self.reading=YES;self.requestPending=YES;NSUInteger sequence=++self.requestSequence,epoch=self.epoch;NSDictionary *roots=self.roots;NSInteger rate=self.rate;self.nextRead=CACurrentMediaTime()+1;
@@ -405,6 +404,18 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
         [owner invalidatePID:0];owner.nextRead=CACurrentMediaTime()+1;
     });
     dispatch_async(self.observer,^{
+        // TCC preflight may synchronously wait on another process. Check once
+        // per bounded observation here, never in the main-thread description
+        // path (including empty families). This is not a cached grant: every
+        // discovery rechecks, and stream errors still retire revoked captures.
+        if(!CGPreflightScreenCaptureAccess()){
+            dispatch_async(dispatch_get_main_queue(),^{
+                DWNativeReplicaFamilies *owner=weak;if(!owner)return;owner.requestPending=NO;
+                if(!owner.reading||owner.epoch!=epoch||owner.requestSequence!=sequence||![owner.roots isEqual:roots])return;
+                [owner invalidatePID:0];owner.nextRead=CACurrentMediaTime()+1;
+            });
+            return;
+        }
         NSMutableDictionary *plans=[NSMutableDictionary dictionary],*descriptions=[NSMutableDictionary dictionary];NSMutableSet *completeRoots=[NSMutableSet set];
         // This option documents front-to-back order. Offscreen captures remain
         // eligible for default grouping, but cannot borrow an inferred rank.

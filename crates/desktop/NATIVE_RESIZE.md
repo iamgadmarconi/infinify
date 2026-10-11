@@ -34,8 +34,12 @@ caller has passed it over or refused it first.
   that intent for baseline validation, setter, and final read; cancel drops it.
   Failed or mismatched baselines never dispatch the queued setter. A scaled/mismatched baseline fails explicitly. Beginning cancels
   camera flights on every output.
-- `native_resize_to {transaction, screen}` uses absolute screen displacement from
-  `start_screen`, divided by start zoom. Live zoom only changes snap distances.
+- `native_resize_to {transaction, screen}` resolves the absolute screen point
+  through the current output camera and zoom and measures it from the canvas
+  point grabbed at `start_screen`. A camera or zoom change during a grab keeps
+  the pointer's offset from the moving edge. Live zoom also changes snap distances.
+  The world anchor keeps its origin and local offset separately, preserving a
+  fractional press at distant camera coordinates.
   The primary resize proposal advances snap intent without changing the Scene.
   `latest_requested` and `requested_outline` are presentation hints only.
 - `resize_native_window` effects contain size only. There is one pending effect,
@@ -176,6 +180,8 @@ these points, and in no geometry or policy:
   transaction goes on to ask the queued target of it. When the window already
   has the size asked for, the transaction ends complete without a setter and
   the sizing plan is written as for a window that had it.
+  The adopted actual size can appear while the queued setter awaits its
+  readback; presentation does not substitute an unconfirmed requested size.
 - **`observe` adopts a size.** An `observe` whose `source_rect` has another
   size than the window's world rectangle writes that size, top-left kept, and
   answers `{"resized":true}`; the shell then saves the scene. It writes
@@ -248,8 +254,9 @@ transaction above, so there is one at a time and each ends in bounded time.
   and one baseline read is emitted. No size is asked before motion.
   `resize_disabled` does not refuse: the window is asked again.
 - **Motion.** The pointer is held inside the grab's output,
-  `[0, w-1] × [0, h-1]`. The delta is `(pointer − start_screen) / start_zoom`,
-  each axis cut to a whole number toward zero. Left and top subtract it, right
+  `[0, w-1] × [0, h-1]`. The delta is the pointer's current canvas point minus
+  its canvas anchor at the press, each axis cut to a whole number toward zero
+  after normalizing floating-point projection roundoff at an integer. Left and top subtract it, right
   and bottom add it, the floor is 1, and the size is snapped by
   `Scene::resize_proposal`. With a rule's `preserve_aspect_ratio` the ratio
   the window has at the begin bends the size instead (`constrain_to_ratio`: an
@@ -275,8 +282,11 @@ transaction above, so there is one at a time and each ends in bounded time.
   client's declared limits ahead of its cluster step and ends in the same
   place.
 - **A baseline that differs** is adopted as above, and the snap state, the
-  cluster and the ratio are taken again from the adopted size; motion that
-  waited for the baseline is measured again from it.
+  cluster and the ratio are taken again from the adopted size. Its actual
+  right/bottom edge shift rebases the pointer anchor, so queued motion retains
+  the press's original offset from the moving edge instead of jumping by the
+  baseline size difference. Left/top are unchanged by the baseline's top-left
+  adoption. Every later size still comes from native readback.
 - **End.** `end_native_resize` lets the latest request through and reads the
   window once more; the canvas then has the size the window has.
   `cancel_native_resize` drops what was not yet sent. Upstream has no cancel

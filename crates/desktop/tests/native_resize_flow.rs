@@ -331,7 +331,7 @@ fn rejected_actual_size_is_authority_and_unsupported_disables_binding() {
     }
 }
 #[test]
-fn baseline_mismatch_rejects_and_start_zoom_freezes_displacement() {
+fn baseline_mismatch_rejects_and_motion_tracks_the_current_viewport() {
     let mut h = setup();
     let e = begin(&mut h, "right");
     h.ok(reply(&e, "observed", false, true, 180., 150.));
@@ -339,13 +339,18 @@ fn baseline_mismatch_rejects_and_start_zoom_freezes_displacement() {
     assert_eq!(world(&mut h), rect(100., 100., 200., 150.));
     let mut h = setup();
     h.ok(json!({"op":"zoom","output":1,"zoom":0.5,"anchor":{"x":0.,"y":0.}}));
-    let t = ready(&mut h, "right");
+    let t = h.ok(json!({"op":"begin_native_resize","window":1,"output":1,"edges":"right","start_screen":{"x":150.,"y":87.5}}))["effect"].clone();
+    h.ok(reply(&t, "observed", false, true, 200., 150.));
     h.ok(json!({"op":"pan","output":1,"screen_delta":{"x":30.,"y":50.}}));
     h.ok(json!({"op":"zoom","output":1,"zoom":1.,"anchor":{"x":0.,"y":0.}}));
     let outputs = h.snap()["outputs"].clone();
-    let e = motion(&mut h, &t, 20., 0.);
-    assert_eq!(e["requested"]["width"], 240.);
-    h.ok(reply(&e, "applied", true, true, 210., 150.));
+    let e = to(&mut h, &t, 170., 87.5);
+    assert_eq!(e["requested"]["width"], 130.);
+    h.ok(reply(&e, "applied", true, true, 130., 150.));
+    assert_eq!(world(&mut h), rect(100., 100., 130., 150.));
+    // The observed right edge projects to x=170 after the camera and zoom
+    // changed; frozen start-zoom displacement would project it elsewhere.
+    assert_eq!((100. + 130. - 60.) * 1., 170.);
     assert_eq!(h.snap()["outputs"], outputs);
 }
 #[test]
@@ -1031,19 +1036,193 @@ fn readback_grab_keeps_the_opposite_edge_for_the_size_the_window_took() {
     assert_eq!(world(&mut h), rect(80., 90., 220., 160.));
 }
 #[test]
-fn readback_grab_measures_from_the_size_its_baseline_read_found() {
+fn readback_grab_preserves_the_pressed_edge_after_a_changed_baseline() {
     let mut h = readback();
     let t = grab(&mut h, (290.0, 240.0), false);
     // Motion ahead of the answer waits in the one slot.
     assert_eq!(to(&mut h, &t, 300.0, 250.0), Value::Null);
-    // The window had another size than the canvas: adopted, top-left kept,
-    // and the queued motion is asked of that size.
+    // The window had another size than the canvas: adopt its actual size,
+    // top-left kept, but keep the pointer's original offset from the edge.
     let e = h.ok(reply(&t, "observed", false, true, 260., 190.))["effect"].clone();
     assert_eq!(world(&mut h), rect(100., 100., 260., 190.));
-    assert_eq!(e["requested"], size(270., 200.));
-    h.ok(reply(&e, "applied", true, true, 270., 200.));
+    assert_eq!(e["requested"], size(210., 160.));
+    h.ok(reply(&e, "applied", true, true, 210., 160.));
     let e = to(&mut h, &t, 310.0, 240.0);
-    assert_eq!(e["requested"], size(280., 190.));
+    assert_eq!(e["requested"], size(220., 150.));
+}
+
+// These cross the exported controller ABI and supply synthetic native results.
+// They verify pointer/world geometry, not native input or compositor usability.
+#[test]
+fn zoomed_readback_edges_keep_the_pointer_offset_through_delayed_baselines() {
+    for zoom in [0.2, 0.5, 0.8, 1.0] {
+        for baseline in [(200., 150.), (260., 190.)] {
+            for (edges, x, y) in [
+                ("top_left", 100., 100.),
+                ("top", 200., 100.),
+                ("top_right", 300., 100.),
+                ("right", 300., 175.),
+                ("bottom_right", 300., 250.),
+                ("bottom", 200., 250.),
+                ("bottom_left", 100., 250.),
+                ("left", 100., 175.),
+            ] {
+                let mut h = readback();
+                // Nonzero display origin and asymmetric camera: screen and
+                // native origins must never be mistaken for canvas points.
+                h.ok(json!({"op":"register_output","stable_id":"one","screen_bounds":rect(37.,53.,1000.,800.)}));
+                h.ok(json!({"op":"pan","output":1,"screen_delta":{"x":17.,"y":29.}}));
+                h.ok(json!({"op":"zoom","output":1,"zoom":zoom,"anchor":{"x":37.,"y":53.}}));
+                let left = edges.contains("left");
+                let right = edges.contains("right");
+                let top = edges.contains("top");
+                let bottom = edges.contains("bottom");
+                let sx = 37.
+                    + (x - 17.) * zoom
+                    + if left {
+                        2.
+                    } else if right {
+                        -2.
+                    } else {
+                        0.
+                    };
+                let sy = 53.
+                    + (y - 29.) * zoom
+                    + if top {
+                        2.
+                    } else if bottom {
+                        -2.
+                    } else {
+                        0.
+                    };
+                let dx = if left {
+                    -40.
+                } else if right {
+                    40.
+                } else {
+                    0.
+                };
+                let dy = if top {
+                    -24.
+                } else if bottom {
+                    24.
+                } else {
+                    0.
+                };
+                let t = h.ok(json!({"op":"begin_native_resize","window":1,"output":1,"edges":edges,"start_screen":{"x":sx,"y":sy}}))["effect"].clone();
+                // Many motions/release may arrive while the baseline is owed.
+                assert!(to(&mut h, &t, sx + dx * zoom / 2., sy + dy * zoom / 2.).is_null());
+                assert!(to(&mut h, &t, sx + dx * zoom, sy + dy * zoom).is_null());
+                assert!(finish(&mut h, &t, false).is_null());
+                let e = h.ok(reply(&t, "observed", false, true, baseline.0, baseline.1))["effect"]
+                    .clone();
+                let width = if left {
+                    baseline.0 + 40.
+                } else if right {
+                    240.
+                } else {
+                    baseline.0
+                };
+                let height = if top {
+                    baseline.1 + 24.
+                } else if bottom {
+                    174.
+                } else {
+                    baseline.1
+                };
+                let context = format!("{edges} zoom={zoom} baseline={baseline:?}");
+                assert_eq!(e["requested"], size(width, height), "{context}");
+                let last = h.ok(reply(&e, "applied", true, true, width, height))["effect"].clone();
+                h.ok(reply(&last, "observed", false, true, width, height));
+                let expected = rect(
+                    if left { 60. } else { 100. },
+                    if top { 76. } else { 100. },
+                    width,
+                    height,
+                );
+                assert_eq!(world(&mut h), expected, "{context}");
+                let rect = world(&mut h);
+                if left || right {
+                    let edge =
+                        rect["origin"]["x"].as_f64().unwrap() + if right { width } else { 0. };
+                    let offset = 37. + (edge - 17.) * zoom - (sx + dx * zoom);
+                    assert!(
+                        (offset - if right { 2. } else { -2. }).abs() <= zoom,
+                        "{context}: x offset {offset}"
+                    );
+                }
+                if top || bottom {
+                    let edge =
+                        rect["origin"]["y"].as_f64().unwrap() + if bottom { height } else { 0. };
+                    let offset = 53. + (edge - 29.) * zoom - (sy + dy * zoom);
+                    assert!(
+                        (offset - if bottom { 2. } else { -2. }).abs() <= zoom,
+                        "{context}: y offset {offset}"
+                    );
+                }
+            }
+        }
+    }
+}
+#[test]
+fn distant_world_cameras_preserve_whole_and_fractional_native_resize_motion() {
+    for zoom in [0.2, 0.5, 0.8, 1.0] {
+        for base in [-900_000_000_000., 900_000_000_000.] {
+            for fraction in [0., 0.01] {
+                let mut h = Host::new();
+                h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":true}));
+                h.ok(json!({"op":"register_output","stable_id":"one","screen_bounds":rect(37.,53.,1000.,800.)}));
+                h.ok(json!({"op":"attach","identity":identity(),"bundle_id":"test","title":"distant window","buffer":{"width":400,"height":300},"source_rect":rect(10.,20.,200.,150.),"world_rect":rect(base+100.,-base+100.,200.,150.)}));
+                h.ok(json!({"op":"pan","output":1,"screen_delta":{"x":base,"y":-base}}));
+                h.ok(json!({"op":"zoom","output":1,"zoom":zoom,"anchor":{"x":37.,"y":53.}}));
+                // The inward offset is fractional in world units at zoom .8.
+                // It must survive even at the largest supported world scale.
+                let (sx, sy) = (37. + 300. * zoom - 2., 53. + 250. * zoom - 2.);
+                let t = h.ok(json!({"op":"begin_native_resize","window":1,"output":1,"edges":"bottom_right","start_screen":{"x":sx,"y":sy}}))["effect"].clone();
+                assert!(
+                    to(
+                        &mut h,
+                        &t,
+                        sx + (40. - fraction) * zoom,
+                        sy + (24. - fraction) * zoom
+                    )
+                    .is_null()
+                );
+                let baseline = if fraction == 0. {
+                    (260., 190.)
+                } else {
+                    (200., 150.)
+                };
+                let e = h.ok(reply(&t, "observed", false, true, baseline.0, baseline.1))["effect"]
+                    .clone();
+                let expected = size(
+                    if fraction == 0. { 240. } else { 239. },
+                    if fraction == 0. { 174. } else { 173. },
+                );
+                assert_eq!(
+                    e["requested"], expected,
+                    "base={base} zoom={zoom} fraction={fraction}"
+                );
+                h.ok(reply(
+                    &e,
+                    "applied",
+                    true,
+                    true,
+                    expected["width"].as_f64().unwrap(),
+                    expected["height"].as_f64().unwrap(),
+                ));
+                assert_eq!(
+                    world(&mut h),
+                    rect(
+                        base + 100.,
+                        -base + 100.,
+                        expected["width"].as_f64().unwrap(),
+                        expected["height"].as_f64().unwrap()
+                    )
+                );
+            }
+        }
+    }
 }
 #[test]
 fn readback_grab_carries_its_cluster_by_the_size_the_window_took() {

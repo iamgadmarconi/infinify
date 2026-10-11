@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
 # DriftWM's pointer resize on real windows, in a normal run with no flag: a press bound to resize-window (alt + right button)
-# or resize-window-snapped (alt + shift + right button) on a window's tile, and a left press on the resize border just outside
+# or resize-window-snapped (alt + shift + right button) on a window's tile, and a left press on the inner or outer resize border
 # it, start upstream's resize grab; the drag asks each size of the real window and the canvas shows the size the window then
 # has. Disposable fixture applications are started, Infinify manages exactly those (`--only-pid`), and the fixture itself says
 # what size its window has. Checked: which edges move from where in the window the press fell, the opposite edge staying, a
@@ -329,6 +329,42 @@ check('7b: with resize_on_border off the band is no border', 'Err' in off, off)
 reload('', '7b'); on = pointer(phase='probe', window=ids['a'], at=[1, .5], offset=[4, 0])
 check('7b: and it is one again with the default', on.get('Ok', {}).get('DebugPointer', {}).get('border') == 'right', on)
 
+# 7c. Ordinary unmodified presses just inside every edge and corner, through
+# the normal capture-overlay handlers. Measure display points against the full
+# projected frame after native readback, at three zooms. No physical mouse is
+# moved: this establishes handler/adapter geometry on owned windows only.
+for zoom in (.5, .8, 1.):
+    reply = ask({'Zoom': zoom}); check(f'7c zoom {zoom}: request accepted', 'Ok' in reply, reply)
+    until(f'7c zoom {zoom}: settled', 5, State, lambda s: abs(s['zoom'] - zoom) < 1e-8); show('a')
+    for edges, fx, fy in [('left', 0., .5), ('right', 1., .5), ('top', .5, 0.), ('bottom', .5, 1.),
+                          ('top_left', 0., 0.), ('top_right', 1., 0.), ('bottom_left', 0., 1.), ('bottom_right', 1., 1.)]:
+        what = f'7c {edges} zoom {zoom}'
+        sized('a', 480, 360, what); show('a'); f0 = frame('a')
+        left, right, top, bottom = ('left' in edges, 'right' in edges, 'top' in edges, 'bottom' in edges)
+        offset = [2 if left else -2 if right else 0, 2 if top else -2 if bottom else 0]
+        before = pointer(phase='probe', window=ids['a'], at=[fx, fy], offset=offset)
+        check(f'{what}: the press is on A\'s own frame', before.get('Ok', {}).get('DebugPointer', {}).get('hit') == ids['a'], before)
+        start = before['Ok']['DebugPointer']['screen']; full0 = before['Ok']['DebugPointer']['screen_rect']
+        since = down('a', [fx, fy], button='left', modifiers=(), offset=offset, what=what)
+        began = until(f'{what}: normal edge begins a resize grab', 2, lambda: grab(since), bool)[0]
+        check(f'{what}: the correct edge was retained', f' edges={edges} group=0 ' in began, began)
+        dx = (-40 if left else 40 if right else 0) * zoom
+        dy = (-24 if top else 24 if bottom else 0) * zoom
+        drag(dx, dy, what, steps=3, pause=.02); up(what)
+        until(f'{what}: completed', 5, lambda: ended(since, 'a'), bool)
+        want = [520 if left or right else 480, 384 if top or bottom else 360]
+        agreed(f'{what}: native readback is the canvas size', 'a', want)
+        projected = pointer(phase='probe', window=ids['a'], at=[fx, fy], offset=offset)['Ok']['DebugPointer']
+        full = projected['screen_rect']; actual = projected['screen']; f1 = frame('a')
+        # The same fractional edge plus its original inward offset must now
+        # be where the pointer ended, independently of native top-left.
+        check(f'{what}: visible edge tracks the pointer in display points',
+              (not (left or right) or abs(actual[0] - start[0] - dx) <= 1.1) and
+              (not (top or bottom) or abs(actual[1] - start[1] - dy) <= 1.1),
+              {'start': start, 'pointer_end': [start[0] + dx, start[1] + dy], 'edge_with_offset': actual,
+               'full_frame_before': full0, 'full_frame_after': full, 'world_before': f0, 'world_after': f1})
+clicked('a', '7c: after zoomed ordinary edge grabs')
+
 # 3. A minimum and a maximum. The drag asks for more than the window allows; the window ends at its limit and the canvas
 # has that size. From the left edge the opposite edge stays for the size the window took. Unlike upstream's client, a Mac
 # window does not declare its limits: each size past one is asked and refused.
@@ -464,4 +500,4 @@ launch --debug-pointer --only-pid "$A,$B,$C,$F,$N,$P,$K,$H"
 python3 "$evidence/driver.py" "$evidence" "$app"
 quit; [ "$gone" = yes ] || { echo 'FAIL: Infinify did not quit within 8 s of msg action quit'; exit 1; }
 echo 'ok: quit within 8 s'
-echo 'PASS: scoped resize drag: the nine cells, coalesced requests, a pointer at rest, minimum, maximum and increment, a window that takes no size, the snapped cluster, the resize border, preserve_aspect_ratio, a window closed and an application hung or stalled mid-grab; decoy untouched'
+echo 'PASS: scoped resize drag: the nine cells, zoomed ordinary edges/corners, coalesced requests, a pointer at rest, minimum, maximum and increment, a window that takes no size, the snapped cluster, the resize border, preserve_aspect_ratio, a window closed and an application hung or stalled mid-grab; decoy untouched'

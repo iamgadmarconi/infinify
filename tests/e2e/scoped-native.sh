@@ -81,10 +81,13 @@ refused() {
   n=0; while kill -0 "$r" 2>/dev/null && [ "$n" -lt 40 ]; do sleep .1; n=$((n+1)); done
   if kill -0 "$r" 2>/dev/null; then kill "$r" 2>/dev/null || true; wait "$r" 2>/dev/null || true; echo "FAIL: $what: still running after 4 s and killed, $(cat "$evidence/usage.log")"; exit 1; fi
   if wait "$r"; then code=0; else code=$?; fi
-  if [ "$code" -ne "$want" ] || [ "$(grep -c '^Infinify: --native-helper ' "$evidence/usage.log")" -ne 1 ] || grep -q '^Managing' "$evidence/usage.log" || [ -e "$socket" ] || [ -n "$(ls -A "$evidence/home")" ]; then echo "FAIL: $what: exit $code, $(cat "$evidence/usage.log")"; exit 1; fi
+  if [ "$code" -ne "$want" ] || [ "$(grep -c '^Infinify: native helper ' "$evidence/usage.log")" -ne 1 ] || grep -q '^Managing' "$evidence/usage.log" || [ -e "$socket" ] || [ -n "$(ls -A "$evidence/home")" ]; then echo "FAIL: $what: exit $code, $(cat "$evidence/usage.log")"; exit 1; fi
   echo "ok: $what: exit $code, $(cat "$evidence/usage.log")"
 }
 refused 64 '--native-helper without a scope' --native-helper "$runtime" "$evidence/nonce"
+refused 64 'desktop helper cannot be windowed' --native-desktop-helper "$runtime" "$evidence/nonce"
+refused 64 'desktop helper cannot mix finite scope' --only-pid "$P" --native-desktop-helper "$runtime" "$evidence/nonce"
+refused 64 'desktop helper cannot mix helper endpoints' --native-desktop-helper "$runtime" "$evidence/nonce" --native-helper "$runtime" "$evidence/nonce"
 refused 64 'a relative runtime directory' --only-pid "$P" --native-helper h "$evidence/nonce"
 refused 64 'one path only' --only-pid "$P" --native-helper "$runtime"
 refused 64 'the same helper runtime twice' --only-pid "$P" --native-helper "$runtime" "$evidence/nonce" --native-helper "$runtime" "$evidence/nonce"

@@ -47,12 +47,13 @@ bool DWNativeClipPlacement(CGRect native,CGRect rootNative,CGRect rootScreen,CGR
 + (instancetype)reconnectedPresentersAt:(NSArray<NSDictionary *> *)endpoints scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope why:(NSString *__autoreleasing *)why;
 // Explicit desktop-wide mode: one authenticated same-user helper hosted by the
 // login user's Apple-signed Dock. Audits SAME_USER with zero finite enrollment
-// entries and requires alpha readback plus per-window restoration. Future same-user application
+// entries and requires alpha readback, per-window restoration and an empty
+// previous restoration table. Future same-user application
 // processes are admitted by fresh UID/birth/window/root checks, not by a PID
 // list captured at launch. No helper is loaded and no window is enrolled here.
 // The caller must reject multiple endpoints rather than partition this mode.
 + (instancetype)desktopPresenterAt:(NSString *)runtime nonce:(NSString *)nonce64 why:(NSString *__autoreleasing *)why;
-// Same admission on a worker queue, plus an empty previous restoration table;
+// Same admission on a worker queue, including the previous restoration table;
 // no frames/watchdog until -activate. A restarted Dock is independently audited.
 + (instancetype)reconnectedDesktopPresenterAt:(NSString *)runtime nonce:(NSString *)nonce64 why:(NSString *__autoreleasing *)why;
 // Main-thread admission after recovery preparation. NO if a helper was lost

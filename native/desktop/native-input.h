@@ -11,6 +11,10 @@
 // returning NO leaves their full physical payload with the native recipient.
 // AppKit-convertible magnify events share the configured canvas pinch path.
 // A gesture's admission is decided once; an unbound stream stays with its app.
+// An unclaimed press addressed to a foreign native window keeps its physical
+// button pair with WindowServer across canvas/app boundaries. This preserves
+// native drag tracking; it does not forward a foreign NSDraggingSession into a
+// captured image or create a destination on the application's behalf.
 @interface DWNativeInput : NSObject
 - (instancetype)initWithConsume:(BOOL (^)(CGEventType,CGEventRef))consume cancelled:(void (^)(void))cancelled;
 // Application-posted events identified by a lifetime tag must bypass BOTH the
@@ -39,6 +43,10 @@
                       cancelled:(void (^)(void))cancelled;
 @property (readonly) BOOL running;
 @property (readonly) BOOL ownsTouches;
+// An original mouse press is outside this adapter's owned touch contact.
+// Tagged application-posted packets never alter
+// this state. New global gesture admission must leave such a press alone.
+@property (readonly) BOOL hasNativeMousePress;
 - (BOOL)start;
 // Ends logical gestures while retaining ownership of physical tails. Idempotent
 // until another stream is admitted. Stopping instead discards all bridge state.

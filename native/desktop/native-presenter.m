@@ -180,9 +180,7 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     return [self presenterAt:runtime nonce:nonce64 scope:nil subset:NO watch:YES desktop:YES why:why];
 }
 + (instancetype)reconnectedDesktopPresenterAt:(NSString *)runtime nonce:(NSString *)nonce64 why:(NSString *__autoreleasing *)why {
-    DWNativePresenter *presenter=[self presenterAt:runtime nonce:nonce64 scope:nil subset:NO watch:NO desktop:YES why:why];
-    if(presenter&&![presenter restorationEmpty]){[presenter finish];if(why)*why=@"the Dock helper's previous native restoration is not yet confirmed empty";return nil;}
-    return presenter;
+    return [self presenterAt:runtime nonce:nonce64 scope:nil subset:NO watch:NO desktop:YES why:why];
 }
 + (instancetype)presenterAt:(NSString *)runtime nonce:(NSString *)nonce64 scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope subset:(BOOL)subset watch:(BOOL)watch desktop:(BOOL)desktop why:(NSString *__autoreleasing *)why {
     DWNativePresenter *presenter=[self new];presenter->_lock=OS_UNFAIR_LOCK_INIT;
@@ -228,6 +226,9 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
         }
         free(processes);
     }
+    // Relaunching through a saved launcher record is an initial constructor,
+    // too: every desktop admission must wait for the prior restore table.
+    if(!refusal&&desktop&&![presenter restorationEmpty])refusal=@"the Dock helper's previous native restoration is not yet confirmed empty";
     if(!refusal&&desktop&&![presenter->_dockBirth isEqual:DWNativeProcessBirth(presenter->_info.server_pid,presenter->_loginUID)])refusal=@"the Dock process instance changed during desktop admission";
     if(!refusal&&presenter.ended)refusal=@"the helper was lost during native scope admission";
     if(refusal){atomic_store(&presenter->_preparing,false);dw_client_close([presenter take]);if(why)*why=refusal;return nil;}
