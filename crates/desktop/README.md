@@ -69,7 +69,7 @@ Preserve them as integers in native code.
 | `mouse_binding` | `trigger` (a button, `scroll`, or the wheel notch `wheel_up` / `wheel_down`), `source`, `modifiers`, `context`, optional `window`, optional `pick` boolean | `{binding}` or `{binding: null}`; `{binding: null, passed: true}` when the window's `pass_mouse` claims the trigger, which a pick target never does ([RULES.md](RULES.md#pass_mouse)) |
 | `hot_corner` | `output`, `corner`, optional `pointer`, `held` | `{navigation, effects, dirty}` |
 | `tap` | `modifiers`, `output` or null, optional `pointer`, `held` | `{navigation, effects, dirty}`, an `action` reply: the [tap binding](CONFIG.md#tap-bindings) on a bare modifier chord that was pressed and released alone |
-| `native_resize_capability` | `enabled` boolean | `{}`; the shell can perform resize effects in this run, see [SIZES.md](SIZES.md#the-gate) |
+| `native_resize_capability` | `enabled` boolean, optional `readback` boolean | `{}`; the shell performs resize effects in this run, and with `readback` a size is settled by the native read alone: see [SIZES.md](SIZES.md#the-gate) and [NATIVE_RESIZE.md](NATIVE_RESIZE.md#readback-mode) |
 | `layout_changed` | `name`, `short`, `index`, `count` | `{}` |
 | `state_event` | `output` or null | `{line}`: the State event line, or null when unchanged |
 

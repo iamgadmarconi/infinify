@@ -24,10 +24,14 @@ NSArray<NSDictionary *> *DWResizeHandles(CGRect full,CGRect clip){
 @property NSMutableSet<NSNumber *> *seen;
 @property (readwrite) NSString *failure;
 @property (readwrite) NSNumber *installingWindow;
+@property id orphan;
+// Effects whose obligation has ended, by id. The one state of the coordinator the worker reads, so it is read and written locked.
+@property NSMutableSet<NSNumber *> *discharged;
 @end
 @implementation DWResizeCoordinator
 - (instancetype)initWithCommand:(DWCommand)command driver:(id<DWResizeDriver>)driver clock:(uint64_t (^)(void))clock worker:(DWSchedule)worker main:(DWSchedule)main {
-    if((self=[super init])){_command=[command copy];_driver=driver;_clock=[clock copy];_worker=[worker copy];_main=[main copy];_pending=[NSMutableDictionary dictionary];_seen=[NSMutableSet set];_bindings=[NSMutableDictionary dictionary];}return self;
+    if((self=[super init])){_command=[command copy];_driver=driver;_clock=[clock copy];_worker=[worker copy];_main=[main copy];_pending=[NSMutableDictionary dictionary];_seen=[NSMutableSet set];_bindings=[NSMutableDictionary dictionary];_discharged=[NSMutableSet set];_acknowledges=YES;
+        _delay=^(NSTimeInterval seconds,DWJob job){dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(seconds*NSEC_PER_SEC)),dispatch_get_main_queue(),job);};}return self;
 }
 - (NSUInteger)obligations{return self.pending.count;}
 - (NSDictionary *)source:(NSNumber *)window {for(NSDictionary *w in self.command(@{@"op":@"snapshot"})[@"windows"])if([w[@"window"]isEqual:window]&&[w[@"source"]isKindOfClass:NSDictionary.class])return w[@"source"];return nil;}
@@ -66,22 +70,54 @@ NSArray<NSDictionary *> *DWResizeHandles(CGRect full,CGRect clip){
         [self.seen addObject:key];
         // Registration precedes dispatch; cancellation can never retract this obligation.
         self.pending[key]=e;
-        self.worker(^{NSDictionary *result=[self.driver perform:e];self.main(^{
-            if(![self.pending[key]isEqual:e])return;
-            if(!result){self.failure=@"Adapter returned no result; resize obligation remains pending";if(self.changed)self.changed();return;}
-            NSDictionary *reply=self.command(@{@"op":@"native_resize_result",@"transaction":e[@"transaction"],@"effect_id":key,@"identity":e[@"identity"],@"generation":e[@"generation"],@"result":result});
-            if(!reply){self.failure=@"Adapter result rejected; resize obligation remains pending";if(self.changed)self.changed();return;}
-            [self.pending removeObjectForKey:key];
-            if([result[@"observed"]boolValue]){
-                // Every accepted native observation establishes a main-thread cutoff,
-                // including unchanged-size final reads and native-origin changes.
-                [self invalidate:e[@"window"]];
-                NSMutableDictionary *binding=self.bindings[e[@"window"]];if(binding)binding[@"cutoff"]=@(self.clock());
-            }
-            [self consume:reply];
-        });});
+        // An effect answered for while it waited for the worker (the watchdog's answer) is not performed: its setter would ask a size
+        // of a window whose transaction is over.
+        self.worker(^{if([self discharged:key])return;NSDictionary *result=[self.driver perform:e];self.main(^{[self finish:e result:result];});});
+        // Readback mode: the watchdog. The real result, should it still come, finds the obligation gone and is dropped.
+        if(!self.acknowledges&&self.timeout>0)self.delay(self.timeout,^{[self finish:e result:[self unanswered:e]];});
     }
     [self sync];
+}
+// What the adapter reports for a call that never returned: nothing observed, and a setter that may still run.
+- (NSDictionary *)unanswered:(NSDictionary *)e {
+    BOOL setter=[e[@"requested"]isKindOfClass:NSDictionary.class];NSDictionary *none=@{@"origin":@{@"x":@0,@"y":@0},@"size":@{@"width":@0,@"height":@0}};
+    return @{@"outcome":@"timed_out",@"ax_error":@(-25204),@"mutation_attempted":setter?@YES:@NO,@"observed":@NO,@"requested":setter?e[@"requested"]:@{@"width":@0,@"height":@0},@"actual_ax":none,@"actual_cg":none};
+}
+- (BOOL)discharged:(NSNumber *)key { @synchronized(self.discharged){return [self.discharged containsObject:key];} }
+- (void)discharge:(NSNumber *)key { [self.pending removeObjectForKey:key];@synchronized(self.discharged){[self.discharged addObject:key];} }
+- (NSDictionary *)report:(NSDictionary *)e result:(NSDictionary *)result { return self.command(@{@"op":@"native_resize_result",@"transaction":e[@"transaction"],@"effect_id":e[@"effect_id"],@"identity":e[@"identity"],@"generation":e[@"generation"],@"result":result}); }
+// The one completion of an effect, on the main thread: the driver's result, or in readback mode the watchdog's.
+- (void)finish:(NSDictionary *)e result:(NSDictionary *)result {
+    NSAssert(NSThread.isMainThread,@"Rust controller is main-only");
+    NSNumber *key=e[@"effect_id"];if(![self.pending[key]isEqual:e])return;
+    if(!result&&!self.acknowledges)result=[self unanswered:e];
+    if(!result){self.failure=@"Adapter returned no result; resize obligation remains pending";if(self.changed)self.changed();return;}
+    NSDictionary *reply=[self report:e result:result];
+    if(!reply&&!self.acknowledges){
+        // Readback mode: no obligation outlives its effect. A result the controller would not take is replaced once by the unanswered
+        // one, which is valid for any effect still pending; refused too, the transaction is no longer this effect's, and it is let go.
+        result=[self unanswered:e];reply=[self report:e result:result];
+        if(!reply){[self discharge:key];self.failure=@"The size request ended without a result the controller accepted";[self sync];return;}
+    }
+    if(!reply){self.failure=@"Adapter result rejected; resize obligation remains pending";if(self.changed)self.changed();return;}
+    // A failure is said of the effect it happened to, and ends with the next one the controller takes.
+    [self discharge:key];self.failure=nil;
+    if(self.acknowledges&&[result[@"observed"]boolValue]){
+        // Every accepted native observation establishes a main-thread cutoff,
+        // including unchanged-size final reads and native-origin changes.
+        [self invalidate:e[@"window"]];
+        NSMutableDictionary *binding=self.bindings[e[@"window"]];if(binding)binding[@"cutoff"]=@(self.clock());
+    }
+    [self consume:reply];
+}
+- (NSNumber *)busyWindow { return self.pending.allValues.firstObject[@"window"]; }
+- (void)reap {
+    if(self.acknowledges||self.pending.count||[self canRemove:nil]){self.orphan=nil;return;}
+    id t=self.command(@{@"op":@"snapshot"})[@"native_resize"],e=[t isKindOfClass:NSDictionary.class]?t[@"pending_effect"]:nil;id mark=[e isKindOfClass:NSDictionary.class]?e:t;
+    if(![self.orphan isEqual:mark]){self.orphan=mark;return;}
+    self.orphan=nil;
+    if([e isKindOfClass:NSDictionary.class]){[self.seen addObject:e[@"effect_id"]];self.pending[e[@"effect_id"]]=e;[self finish:e result:[self unanswered:e]];}
+    else [self cancel];
 }
 - (NSDictionary *)request:(NSDictionary *)c {
     if(!self.enabled||self.stopping)return nil;

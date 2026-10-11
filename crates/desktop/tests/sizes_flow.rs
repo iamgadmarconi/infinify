@@ -2477,3 +2477,336 @@ fn a_resize_drag_elsewhere_leaves_a_pinned_windows_fill() {
     h.ok(json!({"op":"end_gesture"}));
     assert_eq!(mode(&mut h, 1), "fill");
 }
+
+// Readback mode: what every normal run without the flag reports. A size is
+// settled by the native read alone, so no command may leave a bound window
+// without a picture revision or refuse a press on it (NATIVE_RESIZE.md).
+fn readback(mut h: Host) -> Host {
+    assert_eq!(
+        h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":true})),
+        json!({})
+    );
+    h
+}
+/// The readback invariant, read from the snapshot, and a press on every
+/// placed window answered rather than refused.
+fn usable(h: &mut Host) {
+    let snapshot = h.snapshot();
+    for w in snapshot["windows"].as_array().unwrap() {
+        let source = &w["source"];
+        if source.is_null() {
+            continue;
+        }
+        assert_eq!(source["observation_known"], true, "{w}");
+        assert_eq!(
+            source["capture_revision"], source["observation_revision"],
+            "{w}"
+        );
+    }
+    for p in snapshot["placements"].as_array().unwrap() {
+        assert_eq!(p["presentation_settled"], true, "{p}");
+        assert!(p["buffer_crop"].is_object(), "{p}");
+        let clip = &p["clip_rect"];
+        let at = json!({"x":clip["origin"]["x"].as_f64().unwrap()+clip["size"]["width"].as_f64().unwrap()/2.0,"y":clip["origin"]["y"].as_f64().unwrap()+clip["size"]["height"].as_f64().unwrap()/2.0});
+        let hit = h.ok(json!({"op":"hit","output":p["output"],"screen":at}));
+        assert!(hit["hit"].is_object(), "{hit}");
+    }
+}
+/// `deliver`, with the invariant checked after every command of it.
+fn served(
+    h: &mut Host,
+    reply: &Value,
+    from: (f64, f64),
+    asks: (f64, f64),
+    outcome: &str,
+    took: (f64, f64),
+) {
+    usable(h);
+    let read = began(h, reply);
+    let setter = answer(h, &read, "observed", false, from)["effect"].clone();
+    usable(h);
+    assert_eq!(setter["requested"], json!({"width":asks.0,"height":asks.1}));
+    let last = answer(h, &setter, outcome, true, took)["effect"].clone();
+    usable(h);
+    assert_eq!(last["op"], "observe_resize_source", "{last}");
+    assert_eq!(
+        answer(h, &last, "observed", false, took)["effect"],
+        Value::Null
+    );
+    usable(h);
+    let slot = h.snapshot()["native_resize"].clone();
+    assert_eq!(slot["phase"], "complete", "{slot}");
+    assert_eq!(world(h, 1)["size"], json!({"width":took.0,"height":took.1}));
+}
+/// A setter result with no observation behind it, as the adapter's deadline
+/// or the shell's watchdog reports one.
+fn timed_out(h: &mut Host, effect: &Value) -> Value {
+    let none = rect(0.0, 0.0, 0.0, 0.0);
+    let attempted = !effect["requested"].is_null();
+    let requested = if attempted {
+        effect["requested"].clone()
+    } else {
+        json!({"width":0.0,"height":0.0})
+    };
+    h.ok(json!({"op":"native_resize_result","transaction":effect["transaction"],"effect_id":effect["effect_id"],"identity":effect["identity"],"generation":effect["generation"],"result":{"outcome":"timed_out","ax_error":-25204,"mutation_attempted":attempted,"observed":false,"requested":requested,"actual_ax":none,"actual_cg":none}}))
+}
+#[test]
+fn readback_keeps_every_window_usable_through_applied_clamped_and_rejected() {
+    let mut h = readback(one(CONFIG));
+    usable(&mut h);
+    let reply = action(&mut h, "fit-window");
+    served(
+        &mut h,
+        &reply,
+        (400.0, 300.0),
+        (944.0, 724.0),
+        "applied",
+        (944.0, 724.0),
+    );
+    assert_eq!(mode(&mut h, 1), "fit");
+    // A step the window only partly grants: the canvas has the size it took.
+    let reply = action(&mut h, "grow-window right");
+    served(
+        &mut h,
+        &reply,
+        (944.0, 724.0),
+        (974.0, 724.0),
+        "clamped",
+        (960.0, 724.0),
+    );
+    // An absolute request the window ignores: it keeps the size it has.
+    let reply = ipc(&mut h, json!({"Resize":{"window":1,"to":[500,400]}}));
+    served(
+        &mut h,
+        &reply,
+        (960.0, 724.0),
+        (500.0, 400.0),
+        "rejected",
+        (960.0, 724.0),
+    );
+}
+#[test]
+fn readback_adopts_a_baseline_the_window_changed_by_itself() {
+    let mut h = readback(one(CONFIG));
+    let reply = action(&mut h, "grow-window right");
+    let read = began(&mut h, &reply);
+    // The window is 450 x 320 by now and no `observe` has said so: the size
+    // it has is the baseline, its top-left kept, and the target is asked.
+    let setter = answer(&mut h, &read, "observed", false, (450.0, 320.0));
+    assert_eq!(setter["failure"], Value::Null, "{setter}");
+    assert_eq!(world(&mut h, 1), rect(100.0, 100.0, 450.0, 320.0));
+    usable(&mut h);
+    let setter = setter["effect"].clone();
+    assert_eq!(setter["requested"], json!({"width":430.0,"height":300.0}));
+    let last = answer(&mut h, &setter, "applied", true, (430.0, 300.0))["effect"].clone();
+    answer(&mut h, &last, "observed", false, (430.0, 300.0));
+    assert_eq!(world(&mut h, 1), rect(100.0, 100.0, 430.0, 300.0));
+    assert_eq!(h.snapshot()["native_resize"]["phase"], "complete");
+    usable(&mut h);
+    // The window already has the size a fit asks for: the transaction ends
+    // without a setter, and the fit is written as for a window that had it.
+    let reply = action(&mut h, "fit-window");
+    let read = began(&mut h, &reply);
+    assert_eq!(
+        answer(&mut h, &read, "observed", false, (944.0, 724.0))["effect"],
+        Value::Null
+    );
+    assert_eq!(h.snapshot()["native_resize"]["phase"], "complete");
+    assert_eq!(
+        world(&mut h, 1)["size"],
+        json!({"width":944.0,"height":724.0})
+    );
+    assert_eq!(mode(&mut h, 1), "fit");
+    usable(&mut h);
+}
+#[test]
+fn readback_ends_a_timed_out_setter_with_its_one_diagnostic_read() {
+    for observed in [true, false] {
+        let mut h = readback(one(CONFIG));
+        attach(&mut h, 2, (2000.0, 1000.0, 200.0, 100.0));
+        h.ok(json!({"op":"focus","window":1}));
+        let reply = action(&mut h, "fit-window");
+        let read = began(&mut h, &reply);
+        let setter = answer(&mut h, &read, "observed", false, (400.0, 300.0))["effect"].clone();
+        let diagnostic = timed_out(&mut h, &setter)["effect"].clone();
+        assert_eq!(diagnostic["op"], "observe_resize_source");
+        usable(&mut h);
+        // While it is owed, another window's request is refused, not queued.
+        h.ok(json!({"op":"focus","window":2}));
+        assert_eq!(
+            h.error(json!({"op":"action","output":1,"action":"grow-window right"})),
+            BUSY
+        );
+        let end = if observed {
+            answer(&mut h, &diagnostic, "observed", false, (944.0, 724.0))
+        } else {
+            timed_out(&mut h, &diagnostic)
+        };
+        assert_eq!(end["effect"], Value::Null);
+        let slot = h.snapshot()["native_resize"].clone();
+        assert_eq!(slot["uncertain_mutation"], false, "{slot}");
+        assert_eq!(slot["pending_effect"], Value::Null);
+        if observed {
+            assert_eq!(slot["phase"], "complete", "{slot}");
+            assert_eq!(world(&mut h, 1), rect(-172.0, -112.0, 944.0, 724.0));
+            assert_eq!(mode(&mut h, 1), "fit");
+        } else {
+            assert_eq!(slot["phase"], "failed", "{slot}");
+            assert_eq!(
+                end["failure"],
+                "the window did not answer the size request in time"
+            );
+            assert_eq!(
+                world(&mut h, 1)["size"],
+                json!({"width":400.0,"height":300.0})
+            );
+        }
+        usable(&mut h);
+        // The slot is free: the next request is accepted, and the structural
+        // commands the transaction held back are too.
+        let reply = action(&mut h, "grow-window right");
+        deliver(
+            &mut h,
+            &reply,
+            (200.0, 100.0),
+            (230.0, 100.0),
+            "applied",
+            (230.0, 100.0),
+        );
+        h.ok(json!({"op":"window_closed","window":1,"identity":identity(1),"output":1}));
+    }
+}
+#[test]
+fn readback_fails_an_unanswered_transaction_and_the_window_stays_usable() {
+    let mut h = readback(one(CONFIG));
+    let reply = action(&mut h, "fit-window");
+    let read = began(&mut h, &reply);
+    assert_eq!(timed_out(&mut h, &read)["effect"], Value::Null);
+    let slot = h.snapshot()["native_resize"].clone();
+    assert_eq!(slot["phase"], "failed", "{slot}");
+    assert_eq!(world(&mut h, 1), rect(100.0, 100.0, 400.0, 300.0));
+    assert_eq!(mode(&mut h, 1), Value::Null);
+    usable(&mut h);
+    let reply = action(&mut h, "grow-window right");
+    served(
+        &mut h,
+        &reply,
+        (400.0, 300.0),
+        (430.0, 300.0),
+        "applied",
+        (430.0, 300.0),
+    );
+}
+#[test]
+fn readback_asks_again_a_window_accessibility_said_is_not_settable() {
+    for (ax_error, disabled) in [(0, true), (-25204, false)] {
+        let mut h = readback(one(CONFIG));
+        let reply = action(&mut h, "grow-window right");
+        let read = began(&mut h, &reply);
+        let setter = answer(&mut h, &read, "observed", false, (400.0, 300.0))["effect"].clone();
+        let frame = rect(4000.0, 3000.0, 400.0, 300.0);
+        let last = h.ok(json!({"op":"native_resize_result","transaction":setter["transaction"],"effect_id":setter["effect_id"],"identity":setter["identity"],"generation":setter["generation"],"result":{"outcome":"unsupported","ax_error":ax_error,"mutation_attempted":false,"observed":true,"requested":setter["requested"],"actual_ax":frame,"actual_cg":frame}}))["effect"].clone();
+        answer(&mut h, &last, "observed", false, (400.0, 300.0));
+        assert_eq!(h.snapshot()["native_resize"]["phase"], "failed");
+        assert_eq!(
+            window(&mut h, 1)["source"]["resize_disabled"],
+            disabled,
+            "{ax_error}"
+        );
+        usable(&mut h);
+        // Not settable then (a sheet was up) is no answer for now: the next
+        // request is asked, and the size it is granted ends the record.
+        let reply = action(&mut h, "grow-window right");
+        served(
+            &mut h,
+            &reply,
+            (400.0, 300.0),
+            (430.0, 300.0),
+            "applied",
+            (430.0, 300.0),
+        );
+        assert_eq!(window(&mut h, 1)["source"]["resize_disabled"], false);
+        assert_eq!(world(&mut h, 1), rect(100.0, 100.0, 430.0, 300.0));
+    }
+}
+// Upstream cmd_resize clamps the size to its client's limits, then keeps the
+// center for the clamped size and records that as the request
+// (src/ipc/mod.rs). The limits are learned here from what the window took.
+#[test]
+fn readback_keeps_the_center_for_the_size_an_absolute_request_was_granted() {
+    let mut h = readback(one(CONFIG));
+    // From 400 x 300 at (100, 100): 800 x 600 of 1000 x 600 is 200 to the
+    // left and 150 up, where 1000 x 600 would have been 300 to the left.
+    let reply = ipc(&mut h, json!({"Resize":{"to":[1000,600]}}));
+    served(
+        &mut h,
+        &reply,
+        (400.0, 300.0),
+        (1000.0, 600.0),
+        "clamped",
+        (800.0, 600.0),
+    );
+    assert_eq!(world(&mut h, 1), rect(-100.0, -50.0, 800.0, 600.0));
+    // The next request is measured from the 800 granted: (800 - 1200) / 2.
+    let reply = ipc(&mut h, json!({"Resize":{"to":[1200,600]}}));
+    served(
+        &mut h,
+        &reply,
+        (800.0, 600.0),
+        (1200.0, 600.0),
+        "applied",
+        (1200.0, 600.0),
+    );
+    assert_eq!(world(&mut h, 1), rect(-300.0, -50.0, 1200.0, 600.0));
+    // Below a minimum, and a request the window ignores: the center stays.
+    let reply = ipc(&mut h, json!({"Resize":{"to":[100,100]}}));
+    served(
+        &mut h,
+        &reply,
+        (1200.0, 600.0),
+        (100.0, 100.0),
+        "clamped",
+        (300.0, 260.0),
+    );
+    assert_eq!(world(&mut h, 1), rect(150.0, 120.0, 300.0, 260.0));
+    let reply = ipc(&mut h, json!({"Resize":{"to":[50,50]}}));
+    served(
+        &mut h,
+        &reply,
+        (300.0, 260.0),
+        (50.0, 50.0),
+        "rejected",
+        (300.0, 260.0),
+    );
+    assert_eq!(world(&mut h, 1), rect(150.0, 120.0, 300.0, 260.0));
+    // The size granted is the size on record: asked for again, it is nothing.
+    let before = h.snapshot();
+    let reply = ipc(&mut h, json!({"Resize":{"to":[300,260]}}));
+    assert_eq!(reply["effects"], json!([]), "{reply}");
+    assert_eq!(h.snapshot(), before);
+}
+#[test]
+fn readback_sizes_a_window_by_its_rule() {
+    let toml = format!("{CONFIG}[[window_rules]]\napp_id = \"app.sized\"\nsize = [480, 360]\n");
+    let mut h = readback(empty(&toml));
+    h.ok(json!({"op":"adoption_complete"}));
+    let reply = h.ok(json!({"op":"attach","identity":identity(1),"bundle_id":"app.sized","title":"R","buffer":{"width":200,"height":100},"source_rect":rect(4000.0,3000.0,400.0,300.0),"output":1}));
+    let read = reply["effects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["op"] == "observe_resize_source")
+        .unwrap_or_else(|| panic!("{reply}"))
+        .clone();
+    usable(&mut h);
+    let setter = answer(&mut h, &read, "observed", false, (400.0, 300.0))["effect"].clone();
+    assert_eq!(setter["requested"], json!({"width":480.0,"height":360.0}));
+    let last = answer(&mut h, &setter, "applied", true, (480.0, 360.0))["effect"].clone();
+    usable(&mut h);
+    answer(&mut h, &last, "observed", false, (480.0, 360.0));
+    assert_eq!(
+        world(&mut h, 1)["size"],
+        json!({"width":480.0,"height":360.0})
+    );
+    usable(&mut h);
+}

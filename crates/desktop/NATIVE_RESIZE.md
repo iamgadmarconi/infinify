@@ -144,10 +144,96 @@ is still the existing reducer behavior, whereas upstream truncates displacement
 to integers; literal fractional parity is unresolved. No full DriftWM/native
 macOS behavior parity is claimed.
 
+## Readback mode
+
+`{"op":"native_resize_capability","enabled":true,"readback":true}` puts the
+controller in readback mode, which every normal run without
+`--experimental-native-resize` sets. Everything above this section describes
+the capture-acknowledged mode, which a controller that was told nothing, or
+told `"readback":false`, keeps unchanged. Readback mode differs in exactly
+these points, and in no geometry or policy:
+
+- **The native window is the authority for its size.** The size a transaction
+  commits is the one its result read back (`actual_ax.size`), as before, and
+  nothing else is waited for. No command sets `capture_revision` to null:
+  where the acknowledged mode marks a source stale, readback mode sets
+  `capture_revision` to the source's `observation_revision`.
+- **Invariant.** After every command, every bound source has
+  `observation_known == true` and
+  `capture_revision == observation_revision`. So `hit` and `input` never
+  answer `source presentation unsettled`, a placement's
+  `presentation_settled` is always true and its `buffer_crop` never null. A
+  result that observed nothing leaves `observed_rect` and
+  `observation_known` as they were: the window is mapped by the last
+  rectangle it was seen at.
+- **A baseline that differs is adopted.** The first read of a transaction that
+  finds the window at another size than the scene has (the window changed it
+  by itself and no `observe` has said so yet, or a rebind kept a saved slot's
+  size) writes that size to the scene with the top-left kept, and the
+  transaction goes on to ask the queued target of it. When the window already
+  has the size asked for, the transaction ends complete without a setter and
+  the sizing plan is written as for a window that had it.
+- **`observe` adopts a size.** An `observe` whose `source_rect` has another
+  size than the window's world rectangle writes that size, top-left kept, and
+  answers `{"resized":true}`; the shell then saves the scene. It writes
+  nothing during a gesture; the next one after it does. This is the one place
+  the canvas follows a size the application or the user changed.
+- **Every transaction ends.** An attempted setter that timed out or was not
+  observed is still followed by exactly one diagnostic read, and that read's
+  result ends the transaction: complete when it observed the window, whose
+  size is then committed and the plan placed for it, else failed with
+  `"failure":"the window did not answer the size request in time"`.
+  `uncertain_mutation` is cleared either way and the phase is never left at
+  `needs_observation`. A setter that lands after that is a native size change
+  like any other, which `observe` adopts. The shell answers for an effect its
+  adapter did not: after three seconds it reports the effect as `timed_out`,
+  unobserved, with `mutation_attempted` true for a setter
+  (`-[DWResizeCoordinator finish:result:]`), so a transaction is at most a
+  baseline read, its setters and one more read, each bounded.
+- **`unsupported` never disables a window for good.** `resize_disabled` is
+  set when the result's `ax_error` is 0 (the size attribute is not settable)
+  and is a record only: a window is not settable while it has a sheet up or
+  while its application says so, and nothing reports when it is again, so
+  every later request begins a transaction and asks, fullscreen's enter
+  included, and the first setter the window takes clears the record. A
+  settable query that failed says nothing about the window and sets nothing.
+  The shell's driver applies no root-only family guard in this mode, so no
+  policy veto arrives as `unsupported`.
+- **An absolute size keeps the center for the size granted.** Upstream's
+  `cmd_resize` clamps the size to its client's declared limits, then computes
+  the center-preserving top-left and records the clamped size as the request
+  (`src/ipc/mod.rs`). Accessibility declares no limits; the size the window
+  took of the request is how they are learned. So for IPC `resize` and a
+  rule's `size` the top-left is `position + (current - granted) / 2`, as
+  upstream's for the clamped size, and the size granted is the one on record:
+  the next absolute request is measured from it. A request for more than a
+  window's maximum is therefore sent again when it is repeated (upstream's is
+  a no-op once clamped), and changes nothing. In the acknowledged mode the
+  place is still the one for the size asked.
+- `invalidate_native_capture` still advances `observation_revision` and keeps
+  the source settled. `native_resize_capture_ready` is accepted and changes
+  nothing a readback run reads. The shell sends neither.
+
+While a transaction is live the controller still refuses `observe`,
+`window_closed`, `remove_source` and `forget` for its window; the shell sends
+none of them for that window until the transaction has ended
+(`-[DWResizeCoordinator busyWindow]`), which the points above bound. A second
+window's request during it is refused with `a native resize of window N is
+still pending`, as in the acknowledged mode: upstream has no such queue, and
+the refusal lasts as long as the first request does.
+
+Scenarios: `readback_*` in `tests/sizes_flow.rs`, `tests/fullscreen_flow.rs`
+and `tests/native_resize_flow.rs`, the `readback` case of
+`native/desktop/resize-regression.m`, and on real fixture windows
+`tests/e2e/scoped-sizing.sh`.
+
 ### Experimental desktop integration (headless evidence only)
 
-The desktop flag `--experimental-native-resize` now connects eight true-edge handles
-to the native resize transaction C ABI through a serial adapter coordinator. See
+The desktop flag `--experimental-native-resize` connects eight true-edge handles
+to the native resize transaction C ABI through a serial adapter coordinator, in
+the capture-acknowledged mode. It gates only those handles: the sizing actions,
+IPC resize, a rule's size and fullscreen run without it, in
+[readback mode](#readback-mode). See
 `native/desktop/README.md` for dispatch, capture metadata, provenance, lifecycle,
 and exact unrun native boundaries. `dw_resize_apply_guarded` preserves the original
 `dw_resize_apply` wrapper while allowing a fresh root-only family policy veto before

@@ -12,7 +12,8 @@
 #
 # Exit status: 0 everything was checked and held; 1 something failed; 3 nothing failed but the run was not whole, because a
 # window of another application lay over a fixture (SKIPPED) or another application took the foreground after a click had
-# landed (DISTURBED). The last line names what was not checked. 2 is a usage error.
+# landed (DISTURBED), or because Stage Manager is on and nothing was started (NOT RUN). The last line names what was not
+# checked. 2 is a usage error.
 #
 # INFINIFY_E2E_ELECTRON=/path/to/Electron (a generic Electron binary) adds an Electron window; unset, that case is
 # skipped and said to be.
@@ -20,6 +21,9 @@ set -eu
 cd "$(dirname "$0")/../.."
 [ "$#" -eq 0 ] || { echo "Usage: $0" >&2; exit 2; }
 root=$PWD
+# Stage Manager keeps every window outside the current set as a thumbnail at the side, a fixture's among them: nothing here
+# could be adopted or clicked, and the run would take the foreground only to fail on that. The setting is read, never written.
+[ "$(defaults read com.apple.WindowManager GloballyEnabled 2>/dev/null || echo 0)" != 1 ] || { echo 'NOT RUN: Stage Manager is on (com.apple.WindowManager GloballyEnabled is 1); nothing was started and nothing was checked. Run it with Stage Manager off.'; exit 3; }
 app=$root/target/app/Infinify.app/Contents/MacOS/Infinify
 [ -x "$app" ] || ./scripts/build-app.sh
 mkdir -p target/ipc

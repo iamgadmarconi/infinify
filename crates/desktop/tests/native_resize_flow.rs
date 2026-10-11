@@ -861,3 +861,83 @@ fn skipping_coalesced_size_already_observed_still_drains_final_read_after_setter
     h.ok(reply(&final_read, "observed", false, true, 240., 150.));
     assert_eq!(h.snap()["native_resize"]["phase"], "complete");
 }
+
+// Readback mode: what every normal run without the flag reports
+// (NATIVE_RESIZE.md). The native window is the authority for its size.
+fn readback() -> Host {
+    let mut h = setup();
+    h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":true}));
+    h
+}
+fn observe(size: (f64, f64)) -> Value {
+    json!({"op":"observe","window":1,"identity":identity(),"source_rect":rect(10.,20.,size.0,size.1),"buffer":{"width":400,"height":300}})
+}
+fn settled(h: &mut Host) {
+    let source = h.snap()["windows"][0]["source"].clone();
+    assert_eq!(source["observation_known"], true, "{source}");
+    assert_eq!(
+        source["capture_revision"], source["observation_revision"],
+        "{source}"
+    );
+    h.ok(json!({"op":"input","output":1,"screen":{"x":150.,"y":150.},"identity":identity()}));
+}
+#[test]
+fn readback_observe_adopts_a_size_the_window_changed_and_says_so() {
+    let mut h = readback();
+    assert_eq!(h.ok(observe((200., 150.))), json!({}));
+    assert_eq!(h.ok(observe((260., 190.))), json!({"resized":true}));
+    // Top-left kept: nobody knows which edge moved.
+    assert_eq!(world(&mut h), rect(100., 100., 260., 190.));
+    settled(&mut h);
+    assert_eq!(h.ok(observe((260., 190.))), json!({}));
+    // The acknowledged mode maps the picture again and leaves the world alone.
+    let mut h = setup();
+    assert_eq!(h.ok(observe((260., 190.))), json!({}));
+    assert_eq!(world(&mut h), rect(100., 100., 200., 150.));
+}
+#[test]
+fn readback_holds_structure_only_while_the_transaction_is_live() {
+    let mut h = readback();
+    let reply =
+        h.ok(json!({"op":"ipc","output":1,"request":{"Resize":{"window":1,"to":[300,200]}}}));
+    let read = reply["effect"].clone();
+    assert_eq!(read["op"], "observe_resize_source", "{reply}");
+    let setter = h.ok(self::reply(&read, "observed", false, true, 200., 150.))["effect"].clone();
+    assert_eq!(setter["op"], "resize_native_window");
+    settled(&mut h);
+    for c in [
+        observe((300., 200.)),
+        json!({"op":"window_closed","window":1,"identity":identity(),"output":1}),
+        json!({"op":"remove_source","window":1,"identity":identity(),"keep_placeholder":true}),
+    ] {
+        h.rejects(c);
+    }
+    // The window went away under the setter: one diagnostic read, and its
+    // answer ends the transaction.
+    let read = h.ok(self::reply(&setter, "stale_identity", true, false, 0., 0.))["effect"].clone();
+    assert_eq!(read["op"], "observe_resize_source");
+    settled(&mut h);
+    h.rejects(observe((300., 200.)));
+    let end = h.ok(self::reply(&read, "stale_identity", false, false, 0., 0.));
+    assert_eq!(end["effect"], Value::Null);
+    let slot = h.snap()["native_resize"].clone();
+    assert_eq!(slot["phase"], "failed", "{slot}");
+    assert_eq!(slot["uncertain_mutation"], false);
+    settled(&mut h);
+    assert_eq!(h.ok(observe((200., 150.))), json!({}));
+    h.ok(json!({"op":"window_closed","window":1,"identity":identity(),"output":1}));
+}
+#[test]
+fn readback_survives_a_scene_load_with_the_capability() {
+    let path = std::env::temp_dir().join(format!("native-readback-{}.json", std::process::id()));
+    let mut h = readback();
+    h.ok(json!({"op":"save","path":path}));
+    h.ok(json!({"op":"load","path":path}));
+    h.ok(json!({"op":"register_output","stable_id":"one","screen_bounds":rect(0.,0.,1000.,800.)}));
+    attach(&mut h, Some(1), identity());
+    assert_eq!(h.ok(observe((260., 190.))), json!({"resized":true}));
+    let reply =
+        h.ok(json!({"op":"ipc","output":1,"request":{"Resize":{"window":1,"to":[300,200]}}}));
+    assert_eq!(reply["effect"]["op"], "observe_resize_source", "{reply}");
+    std::fs::remove_file(path).unwrap();
+}

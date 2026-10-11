@@ -30,7 +30,8 @@
 // Upstream sends a client a configure and lets it answer. Here the output's
 // size, and the size a window had before, reach a native window only through
 // the size transaction of sizes.rs, which exists only when the shell reported
-// `native_resize_capability`: without it nothing in this file is reachable.
+// `native_resize_capability`, as every normal run's does: without it nothing
+// in this file is reachable.
 // Native frames include their title bar, so chrome is zero. A fullscreen
 // window is drawn in its output's screen space from world rectangles, the
 // output's `screen_bounds` and the parked camera alone, never native geometry.

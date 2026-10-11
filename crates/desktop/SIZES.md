@@ -22,16 +22,26 @@ Every sizing action is a canvas window's. What each does beside a
 ## The gate
 
 Delivering a size to a real Mac window goes through the size-only
-[native resize transaction](NATIVE_RESIZE.md), which exists in the shell only
-when the app is started with `--experimental-native-resize`. That path has
-never been proven on a live third-party window, so it stays an explicit opt-in
-and nothing here makes it the default.
+[native resize transaction](NATIVE_RESIZE.md), which a shell performs once it
+has said that it does. Every normal run says so; a demo, a probe and a
+controller nobody told anything do not.
 
 ```json
-{"op":"native_resize_capability","enabled":true}
+{"op":"native_resize_capability","enabled":true,"readback":true}
 ```
 
-answers `{}`. The shell sends it at startup, `true` and only with the flag: once
+answers `{}`. `readback` is optional and false when absent. With it, a size
+is settled by the native read alone and nothing waits for a capture
+([Readback mode](NATIVE_RESIZE.md#readback-mode)): what every normal run sends.
+A shell started with `--experimental-native-resize` sends `"readback":false`
+and keeps the capture-acknowledged mode, which the pointer's edge handles map
+through. The flag gates only those handles; it gates no sizing action, no IPC
+resize, no rule's `size` and no fullscreen. On fixture windows of the test's
+own the readback path is run end to end by `tests/e2e/scoped-sizing.sh`
+([native/desktop/README.md](../../native/desktop/README.md#window-sizing-actions));
+on the owner's real applications it has not been run.
+
+The shell sends it at startup, `true`: once
 before it reads the config, because `bindings` marks the five actions, and
 [`toggle-fullscreen`](FULLSCREEN.md#the-gate) with them,
 `implemented` only after it and a chord that is not implemented is never
@@ -160,7 +170,11 @@ difference is measured from the size **last asked for** while the window's size
 still reads as an answer to it (upstream `requested_element_size` and
 `PendingResize::is_live`), so an identical request is a no-op rather than a
 second shift. The place is written for the size asked: a window that grants
-less keeps that top-left, as upstream's does. The window is raised over the
+less keeps that top-left, as upstream's does for a client that commits
+another size than it declared room for. In readback mode, which every normal
+run is, the size granted stands for the limits upstream clamps to first, and
+the center is kept for that size
+([NATIVE_RESIZE.md](NATIVE_RESIZE.md#readback-mode)). The window is raised over the
 others in the reply that asks, as upstream raises a client and leaves a
 stand-in's stacking alone, and it is handed no focus: a selector reaches any
 window. An identical request raises nothing, as upstream's returns before
@@ -426,7 +440,10 @@ asked for itself: [RULES.md](RULES.md#a-rules-size).
   and the source is marked `resize_disabled`, as the transaction marks it; later
   sizing actions on it answer `source resize unsupported`. Entering fullscreen
   is not one of them: it asks such a window nothing and centres it
-  ([FULLSCREEN.md](FULLSCREEN.md#a-size-that-is-owed)).
+  ([FULLSCREEN.md](FULLSCREEN.md#a-size-that-is-owed)). In readback mode the
+  mark refuses nothing: the next request asks the window again, and the first
+  setter it takes clears the mark
+  ([NATIVE_RESIZE.md](NATIVE_RESIZE.md#readback-mode)).
 - **A baseline that differs** from the committed size fails the transaction, as
   for a drag, and nothing is written.
 - **No focused window**, or a focused widget or screen-pinned window: the five

@@ -364,8 +364,9 @@ throwaway directory:
 - beside a size that is owed, under `native_resize_capability`: a window whose
   rule names a size maps with one `open` and its size transaction in the same
   reply; the snapshot's `native_resize` names it with the pending effect
-  through the baseline read and the setter, and its placement is unsettled
-  from the setter on; `window_closed` is refused meanwhile and the snapshot,
+  through the baseline read and the setter, and in the capture-acknowledged
+  mode its placement is unsettled from the setter on (in
+  [readback mode](NATIVE_RESIZE.md#readback-mode) it never is); `window_closed` is refused meanwhile and the snapshot,
   the list included, is unchanged; after the adapter's `missing_window` the
   same report is accepted and logs one `close`, and a third is refused; a
   second such window whose size is delivered logs its `open` and nothing else,

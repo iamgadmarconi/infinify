@@ -125,9 +125,17 @@ enum Plan {
     /// IPC `resize` and a rule's `size`: the top-left that keeps the center
     /// for the size asked. `by_hand` is false for the rule's, the one request
     /// of the two that sizes a widget and a screen-pinned window too.
+    ///
+    /// `basis` is readback mode's: the top-left and the size the request was
+    /// measured from. Upstream clamps the size to its client's declared
+    /// limits before it computes the top-left (src/ipc/mod.rs cmd_resize);
+    /// Accessibility declares none, and the size the window took of the
+    /// request is the only way they are learned, so the center is kept for
+    /// that size.
     Absolute {
         loc: Px,
         by_hand: bool,
+        basis: Option<(Px, Px)>,
     },
     Fit {
         loc: Px,
@@ -184,6 +192,13 @@ impl Plan {
                     if top { far[1] - actual[1] } else { loc[1] },
                 ])
             }
+            Self::Absolute {
+                basis: Some((position, current)),
+                ..
+            } => Some([
+                position[0] + (current[0] - actual[0]) / 2,
+                position[1] + (current[1] - actual[1]) / 2,
+            ]),
             // Upstream places for the size it asks for and does not re-derive
             // the place from what the client then commits.
             Self::Absolute { loc, .. } | Self::Fit { loc, .. } | Self::Fill { loc, .. } => {
@@ -230,7 +245,12 @@ struct Pending {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Sizes {
     /// The shell performs resize effects in this run: `native_resize_capability`.
+    /// Every normal run's does.
     pub(crate) capability: bool,
+    /// A size is settled by the native read alone; this run acknowledges no
+    /// capture. Every normal run without `--experimental-native-resize`:
+    /// NATIVE_RESIZE.md, "Readback mode".
+    pub(crate) readback: bool,
     restore: BTreeMap<WindowId, Restore>,
     /// Upstream's per-entry `restore_size`: the size a window had before a fit
     /// or a fill changed it. A fit and a fill read it and never replace it; a
@@ -357,8 +377,8 @@ fn step_edges(direction: &Direction) -> Edges {
         _ => Edges::Bottom,
     }
 }
-/// The actions that end by delivering a size to a native window, which only a
-/// shell started with `--experimental-native-resize` can do.
+/// The actions that end by delivering a size to a native window, which a shell
+/// that performs resize effects can do (`native_resize_capability`).
 pub(crate) fn delivers_a_size(action: &Action) -> bool {
     matches!(
         action,
@@ -571,7 +591,10 @@ impl Controller {
         // A window the adapter will not resize is asked nothing more: it is
         // fullscreen at the size it has, upstream's fixed-size client, and
         // fullscreen.rs centres it. Every other plan is still refused below.
+        // Readback mode asks every time (`begin_sized_resize`), and the
+        // setter's answer centres it as the first enter's does.
         let fixed = matches!(plan, Plan::Fullscreen)
+            && !self.sizes.readback
             && self.sources.get(&window).is_some_and(|s| s.resize_disabled);
         if rect.size == size_of(target) || fixed {
             self.place(window, &plan);
@@ -709,9 +732,35 @@ impl Controller {
                     pending.placed = self.place(pending.window, &pending.plan);
                 }
                 if !pending.settled {
+                    // Readback mode, an absolute request the window took
+                    // another size of: that size is the request upstream
+                    // would have made of a client with these limits, and
+                    // the one the next request is measured from.
+                    if let Ok((_, actual)) = frame(rect)
+                        && let Some(at) = pending.plan.origin(actual)
+                        && let Plan::Absolute {
+                            loc,
+                            basis: Some(_),
+                            ..
+                        } = &mut pending.plan
+                    {
+                        *loc = at;
+                        pending.asked.requested = actual;
+                    }
                     self.settle(pending.window, &pending.plan, pending.asked);
                     pending.settled = true;
                 }
+            }
+            // Readback mode: the baseline read found the window already at
+            // the size asked for (it took it by itself before any `observe`
+            // said so) and the transaction ended without a setter. The plan
+            // is written as `deliver` writes it for a window that has the
+            // size asked for.
+            let ended = !self.resize_slot().is_some_and(|slot| slot.live);
+            if self.sizes.readback && ended && !setter && !pending.settled && rect.size == asked {
+                pending.placed = self.place(pending.window, &pending.plan);
+                self.settle(pending.window, &pending.plan, pending.asked);
+                pending.settled = true;
             }
         }
         self.sizes.pending = Some(pending);
@@ -1194,7 +1243,11 @@ impl Controller {
     /// entry point for any policy that sets a size outright, such as a window
     /// rule's `size`. The top-left moves by half the difference from the size
     /// last asked for, in whole pixels, and is written for the size asked: a
-    /// window that grants less keeps that top-left, as upstream's does.
+    /// window that grants less keeps that top-left, as upstream's does when
+    /// its client commits another size than it was configured with. In
+    /// readback mode the size granted is taken for the client's limits,
+    /// which upstream clamps to first: the center is kept for that size and
+    /// it is the request on record (`Plan::Absolute`).
     /// Stacking is the caller's: IPC `resize` raises the window, a rule's
     /// `size` leaves it where the map put it. A widget and a screen-pinned
     /// window are the caller's to refuse in its own words, as IPC `resize`
@@ -1251,6 +1304,7 @@ impl Controller {
             position[1] + (current[1] - size[1]) / 2,
         ];
         readable(rect_at(to, size))?;
+        let basis = self.sizes.readback.then_some((position, current));
         let asked = Asked {
             requested: size,
             at_request: committed,
@@ -1258,7 +1312,11 @@ impl Controller {
         if outstanding {
             self.retarget_sized_resize(size_of(size)).map_err(text)?;
             if let Some(pending) = self.sizes.pending.as_mut() {
-                pending.plan = Plan::Absolute { loc: to, by_hand };
+                pending.plan = Plan::Absolute {
+                    loc: to,
+                    by_hand,
+                    basis,
+                };
                 pending.asked = asked;
                 pending.settled = false;
             }
@@ -1267,7 +1325,11 @@ impl Controller {
             }
             return Ok(true);
         }
-        let plan = Plan::Absolute { loc: to, by_hand };
+        let plan = Plan::Absolute {
+            loc: to,
+            by_hand,
+            basis,
+        };
         self.deliver(
             window,
             output,

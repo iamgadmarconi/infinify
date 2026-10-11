@@ -71,7 +71,10 @@ pub struct NativeResizeTransaction {
     baseline_observed: bool,
     released: bool,
     cancelled: bool,
-    /// A timed-out setter can still execute later. Reads cannot discharge this.
+    /// A timed-out setter can still execute later. In the acknowledged mode no
+    /// read discharges this. In readback mode the one diagnostic read that
+    /// follows the setter does: a setter that lands after it is a native size
+    /// change like any other, which `observe` adopts.
     uncertain_mutation: bool,
     last_result: Option<NativeResizeResult>,
     #[serde(skip)]
@@ -100,6 +103,14 @@ pub(crate) struct ResizeSlot {
     pub(crate) accepting: bool,
     /// A setter is in flight: the window is about to take another size.
     pub(crate) setting: bool,
+}
+/// A size was asked of the window, or its geometry is no longer what the
+/// picture shows. In the acknowledged mode the source is unsettled until a
+/// capture of the new revision is acknowledged. In readback mode nothing ever
+/// acknowledges one: the source stays settled at the revision it now has, so
+/// no tile goes blank and no input is refused for a size request.
+fn stale(source: &mut Source, readback: bool) {
+    source.capture_revision = readback.then_some(source.observation_revision);
 }
 impl Controller {
     pub(crate) fn resize_slot(&self) -> Option<ResizeSlot> {
@@ -140,7 +151,10 @@ impl Controller {
     /// read from a pointer, and no camera flight is cancelled: upstream's
     /// non-interactive resize cancels none. Capture authority is not required
     /// either: no pointer is mapped through the picture, and a held key must
-    /// not wait for a frame between two steps.
+    /// not wait for a frame between two steps. In readback mode (sizes.rs) no
+    /// capture exists to wait for at all, the baseline read adopts a size
+    /// the window changed by itself, and every transaction ends in bounded
+    /// time: NATIVE_RESIZE.md.
     ///
     /// `by_hand` is false for the two requests that are not a sizing by
     /// hand: the rule's `size` a window mapped with, which upstream
@@ -170,7 +184,10 @@ impl Controller {
             .sources
             .get(&window)
             .ok_or(Error::Invalid("unbound source"))?;
-        if source.resize_disabled {
+        // Readback mode asks again: a window is not settable while it has a
+        // sheet up, or while its application says so, and nothing reports
+        // the day it is settable again. The answer costs one bounded read.
+        if source.resize_disabled && !self.sizes.readback {
             return Err(Error::Invalid("source resize unsupported"));
         }
         let size = self
@@ -369,10 +386,10 @@ impl Controller {
         };
         t.pending_effect = Some(effect.clone());
         if requested.is_some() {
-            self.sources
-                .get_mut(&t.window)
-                .expect("bound source")
-                .capture_revision = None;
+            stale(
+                self.sources.get_mut(&t.window).expect("bound source"),
+                self.sizes.readback,
+            );
         }
         Ok(json!({"transaction":t.transaction,"effect":effect}))
     }
@@ -498,24 +515,51 @@ impl Controller {
             return Err(Error::Invalid("invalid resize result contract"));
         }
         let preparing = !t.baseline_observed;
+        let readback = self.sizes.readback;
         let t = self.native_resize.as_mut().expect("resize exists");
         t.pending_effect = None;
         t.last_result = Some(result.clone());
         let source = self.sources.get_mut(&t.window).expect("binding validated");
         if result.outcome == ResizeOutcome::Unsupported {
-            source.resize_disabled = true;
+            // In readback mode only Accessibility's own answer that the size
+            // is not settable is recorded, and only until a setter is taken
+            // (`begin_sized_resize` asks again). A settable query that failed
+            // (an application that did not answer) says nothing about the
+            // window.
+            if !readback || result.ax_error == 0 {
+                source.resize_disabled = true;
+            }
             t.cancelled = true;
+        } else if readback && result.mutation_attempted && result.observed {
+            source.resize_disabled = false;
         }
         if result.observed {
             source.observed_rect = result.actual_ax;
             source.observation_known = true;
             if preparing && result.actual_ax.size != t.initial_size {
-                t.phase = Phase::Failed;
-                t.coalesced_latest = None;
-                source.capture_revision = None;
-                return Ok(
-                    json!({"effect":null,"failure":"baseline size differs from committed logical size"}),
-                );
+                if readback {
+                    // The window changed its size by itself and no `observe`
+                    // has said so yet, or a rebind kept the saved slot's size:
+                    // the size it has is the baseline. Nobody knows which
+                    // edge moved, so the top-left is kept. The queued target
+                    // is then asked of it as of any other baseline.
+                    let mut rect = self
+                        .scene
+                        .window(t.window)
+                        .expect("bound window")
+                        .world_rect;
+                    rect.size = result.actual_ax.size;
+                    self.scene.set_window_rect(t.window, rect)?;
+                    t.initial_size = rect.size;
+                    t.last_committed_size = rect.size;
+                } else {
+                    t.phase = Phase::Failed;
+                    t.coalesced_latest = None;
+                    stale(source, readback);
+                    return Ok(
+                        json!({"effect":null,"failure":"baseline size differs from committed logical size"}),
+                    );
+                }
             }
             t.baseline_observed = true;
             let mut rect = self
@@ -529,7 +573,7 @@ impl Controller {
                     .observation_revision
                     .checked_add(1)
                     .ok_or(Error::Invalid("observation revisions exhausted"))?;
-                source.capture_revision = None;
+                stale(source, readback);
             }
             if actual != t.last_committed_size {
                 if matches!(t.edges, Edges::Left | Edges::TopLeft | Edges::BottomLeft) {
@@ -541,12 +585,15 @@ impl Controller {
                 rect.size = actual;
                 self.scene.set_window_rect(t.window, rect)?;
                 t.last_committed_size = actual;
-                source.capture_revision = None;
+                stale(source, readback);
             }
-        } else {
+        } else if !readback {
             source.observation_known = false;
-            source.capture_revision = None;
+            stale(source, readback);
         }
+        // Readback mode, unobserved: the last rectangle the window was seen
+        // at stays what it is mapped by. The window is gone, which the shell
+        // reports next, or did not answer, and is usable where it was.
         if result.mutation_attempted
             && (!result.observed
                 || result.outcome == ResizeOutcome::TimedOut
@@ -554,11 +601,29 @@ impl Controller {
         {
             t.uncertain_mutation = true;
         }
+        if t.uncertain_mutation && readback && effect.requested.is_none() {
+            // The diagnostic read's answer ends the transaction either way:
+            // the size it found is committed above, and a setter that lands
+            // after it is a native size change, which `observe` adopts.
+            t.uncertain_mutation = false;
+            t.coalesced_latest = None;
+            t.phase = if result.observed && !t.cancelled {
+                Phase::Complete
+            } else {
+                Phase::Failed
+            };
+            return Ok(if result.observed {
+                json!({"effect":null})
+            } else {
+                json!({"effect":null,"failure":"the window did not answer the size request in time"})
+            });
+        }
         if t.uncertain_mutation {
             t.phase = Phase::NeedsObservation;
             t.coalesced_latest = None;
-            // Exactly one diagnostic read after the ambiguous setter; its result
-            // never proves that a late setter cannot still run.
+            // Exactly one diagnostic read after the ambiguous setter. In the
+            // acknowledged mode its result never proves that a late setter
+            // cannot still run; in readback mode it ends the transaction.
             if effect.requested.is_some() {
                 return self.emit_resize(None);
             }

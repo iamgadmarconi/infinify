@@ -322,9 +322,13 @@ pub enum Command {
         lifetime_ended: bool,
     },
     /// Whether the shell can perform resize effects in this run. Sent once at
-    /// startup; false until then and never saved. See SIZES.md.
+    /// startup; false until then and never saved. See SIZES.md. `readback`:
+    /// the shell acknowledges no capture, and a size is settled by the native
+    /// read alone (NATIVE_RESIZE.md).
     NativeResizeCapability {
         enabled: bool,
+        #[serde(default)]
+        readback: bool,
     },
     InvalidateNativeCapture {
         window: WindowId,
@@ -894,8 +898,17 @@ impl Controller {
                     lifetime_ended,
                 );
             }
-            Command::NativeResizeCapability { enabled } => {
+            Command::NativeResizeCapability { enabled, readback } => {
                 self.sizes.capability = enabled;
+                self.sizes.readback = enabled && readback;
+                // Nothing will acknowledge a capture from here on: no source
+                // waits for one.
+                if self.sizes.readback {
+                    for source in self.sources.values_mut() {
+                        source.observation_known = true;
+                        source.capture_revision = Some(source.observation_revision);
+                    }
+                }
                 // No size can be delivered: no rule's `size` waits for one.
                 if !enabled {
                     self.policy.sizing.clear();
@@ -913,7 +926,9 @@ impl Controller {
                     .observation_revision
                     .checked_add(1)
                     .ok_or(Error::Invalid("observation revisions exhausted"))?;
-                source.capture_revision = None;
+                // Readback mode has no capture authority to lose.
+                source.capture_revision =
+                    self.sizes.readback.then_some(source.observation_revision);
                 return Ok(json!({"observation_revision":source.observation_revision}));
             }
             Command::NativeResizeCaptureReady {
@@ -1322,8 +1337,10 @@ impl Controller {
                 let capture_metadata_changed = source.buffer.width != buffer.width
                     || source.buffer.height != buffer.height
                     || source.observed_rect.size != source_rect.size;
-                let managed_capture = source.observation_revision > 0
-                    || source.content_rect != source.buffer.full_rect();
+                let readback = self.sizes.readback;
+                let managed_capture = !readback
+                    && (source.observation_revision > 0
+                        || source.content_rect != source.buffer.full_rect());
                 if capture_metadata_changed && managed_capture {
                     source.observation_revision = source
                         .observation_revision
@@ -1339,6 +1356,23 @@ impl Controller {
                 }
                 source.observed_rect = source_rect;
                 source.buffer = buffer;
+                // Readback mode: the native window is the authority for its
+                // size. One the application or the user changed is the size
+                // the canvas has from here on, top-left kept: nobody knows
+                // which edge moved. A gesture places its windows from its own
+                // anchors; the next observation after it adopts.
+                if readback && self.gesture.is_none() {
+                    let mut rect = self
+                        .scene
+                        .window(window)
+                        .ok_or(Error::Invalid("unknown window"))?
+                        .world_rect;
+                    if rect.size != source_rect.size {
+                        rect.size = source_rect.size;
+                        self.scene.set_window_rect(window, rect)?;
+                        return Ok(json!({"resized": true}));
+                    }
+                }
             }
             Command::RemoveSource {
                 window,
@@ -1640,6 +1674,7 @@ impl Controller {
                 loaded.motion.cursor_pan = self.motion.cursor_pan;
                 loaded.trackpad_override = self.trackpad_override;
                 loaded.sizes.capability = self.sizes.capability;
+                loaded.sizes.readback = self.sizes.readback;
                 if loaded.configured {
                     loaded.seed_bookmarks();
                 }

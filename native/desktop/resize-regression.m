@@ -13,13 +13,17 @@ static NSDictionary *call(DriftDesktop *c,NSDictionary *command){NSData *data=[N
 @property CGRect bounds;
 @property double skew; // how far right of the Accessibility rectangle, `bounds`, the WindowServer's lies
 @property BOOL family,timeout;
+@property BOOL silent,garbled; // readback cases: no result at all, and one that breaks the result contract
 @property NSString *outcome;
 @property NSUInteger setters;
+@property NSUInteger performed;
 @end
 @implementation Driver
 - (NSDictionary *)rootExtent:(NSDictionary *)i{(void)i;return self.family?rect(self.bounds.origin.x+self.skew,self.bounds.origin.y,self.bounds.size.width,self.bounds.size.height):nil;}
 - (NSDictionary *)perform:(NSDictionary *)e{
-    BOOL setter=[e[@"requested"]isKindOfClass:NSDictionary.class];if(setter)self.setters++;
+    BOOL setter=[e[@"requested"]isKindOfClass:NSDictionary.class];if(setter)self.setters++;self.performed++;
+    if(self.silent)return nil;
+    if(self.garbled)return @{@"outcome":@"observed",@"ax_error":@0,@"mutation_attempted":@YES,@"observed":@YES,@"requested":@{@"width":@1,@"height":@1},@"actual_ax":rect(0,0,5,5),@"actual_cg":rect(90,90,5,5)};
     NSDictionary *requested=setter?e[@"requested"]:@{@"width":@0,@"height":@0};
     if(setter&&!self.timeout&&![self.outcome isEqual:@"rejected"]){CGSize size=CGSizeMake([requested[@"width"]doubleValue],[requested[@"height"]doubleValue]);if([self.outcome isEqual:@"clamped"])size.width=210;self.bounds=CGRectMake(self.bounds.origin.x,self.bounds.origin.y,size.width,size.height);}
     BOOL observed=!(setter&&self.timeout);NSDictionary *r=observed?[self rootExtent:identity()]:rect(0,0,0,0),*ax=observed&&r?rect(self.bounds.origin.x,self.bounds.origin.y,self.bounds.size.width,self.bounds.size.height):r;
@@ -136,6 +140,49 @@ static void disagreeing(void){
     CMSampleBufferRef rest=sample(native,@{SCStreamFrameInfoDisplayTime:@400});check([co accept:rest window:@1 stream:stream install:install]&&[co refusal:@1 detail:NULL]==nil,@"and its next frame is acknowledged");CFRelease(rest);
     [co shutdown];driftwm_desktop_destroy(c);
 }
+// Readback mode, what every normal run without --experimental-native-resize sets: no result invalidates a capture, an effect nobody
+// answers is discharged by the watchdog, and a result the controller refuses leaves no obligation. After every step the window is
+// settled and takes input.
+static void readback(void){
+    DriftDesktop *c=driftwm_desktop_create();Driver *driver=[Driver new];driver.bounds=CGRectMake(10,20,200,150);driver.family=YES;
+    NSMutableArray *workers=[NSMutableArray array],*mains=[NSMutableArray array],*delays=[NSMutableArray array],*ops=[NSMutableArray array];__block BOOL deaf=NO;
+    DWResizeCoordinator *co=[[DWResizeCoordinator alloc]initWithCommand:^NSDictionary *(NSDictionary *command){[ops addObject:command[@"op"]];if(deaf&&[command[@"op"]isEqual:@"native_resize_result"])return nil;return call(c,command);}driver:driver clock:^uint64_t{return 100;}worker:^(DWJob job){[workers addObject:[job copy]];}main:^(DWJob job){[mains addObject:[job copy]];}];
+    co.enabled=YES;co.acknowledges=NO;co.timeout=3;co.delay=^(NSTimeInterval seconds,DWJob job){check(seconds==3,@"the watchdog waits the timeout");[delays addObject:[job copy]];};
+    void (^expire)(void)=^{NSArray *due=[delays copy];[delays removeAllObjects];for(DWJob job in due)job();};
+    void (^usable)(NSString *)=^(NSString *when){NSDictionary *source=snap(c)[@"windows"][0][@"source"];
+        check([source[@"observation_known"]boolValue]&&[source[@"capture_revision"]isEqual:source[@"observation_revision"]],[@"readback: settled " stringByAppendingString:when]);
+        check(call(c,@{@"op":@"input",@"output":@1,@"screen":@{@"x":@120,@"y":@120},@"identity":identity()})!=nil,[@"readback: input taken " stringByAppendingString:when]);};
+    NSDictionary *(^resize)(int)=^NSDictionary *(int width){NSDictionary *reply=call(c,@{@"op":@"ipc",@"output":@1,@"request":@{@"Resize":@{@"window":@1,@"to":@[@(width),@200]}}});check([reply[@"effect"]isKindOfClass:NSDictionary.class],@"readback: a size request begins a transaction");[co consume:@{@"effect":reply[@"effect"]}];return reply;};
+    check(call(c,@{@"op":@"native_resize_capability",@"enabled":@YES,@"readback":@YES})!=nil,@"capability");
+    call(c,@{@"op":@"register_output",@"stable_id":@"one",@"screen_bounds":rect(0,0,1000,800)});
+    call(c,@{@"op":@"attach",@"identity":identity(),@"bundle_id":@"test",@"title":@"source",@"buffer":@{@"width":@400,@"height":@300},@"source_rect":rect(10,20,200,150),@"world_rect":rect(100,100,200,150)});
+    // An answered transaction: nothing is invalidated, the size is the window's, and the watchdogs find nothing left to do.
+    resize(300);check(co.obligations==1&&[[co busyWindow]isEqual:@1],@"readback: the window is busy while its effect is owed");usable(@"while the baseline is owed");
+    drain(workers,mains);check(co.obligations==0&&[co canRemove:@1]&&[co busyWindow]==nil,@"readback: answered transaction ends");
+    check(![ops containsObject:@"invalidate_native_capture"],@"readback: no result invalidates a capture");
+    check([snap(c)[@"windows"][0][@"world_rect"][@"size"]isEqual:@{@"width":@300,@"height":@200}]&&[snap(c)[@"native_resize"][@"phase"]isEqual:@"complete"],@"readback: the size the window took is committed");usable(@"after an applied size");
+    NSDictionary *ended=snap(c);expire();check([ended isEqual:snap(c)]&&co.obligations==0,@"readback: a watchdog after the result changes nothing");
+    // A baseline read nobody answers: the watchdog ends the transaction, and the late result is dropped.
+    resize(320);expire();check(co.obligations==0&&[co canRemove:@1]&&[snap(c)[@"native_resize"][@"phase"]isEqual:@"failed"],@"readback: the watchdog discharges an unanswered read");usable(@"after an unanswered read");
+    ended=snap(c);driver.performed=0;drain(workers,mains);check([ended isEqual:snap(c)]&&co.obligations==0,@"readback: a late result is dropped");
+    check(driver.performed==0,@"readback: an effect the watchdog answered for is not performed afterwards");
+    // A setter nobody answers: one diagnostic read, unanswered too, and the transaction is over.
+    resize(340);{DWJob job=workers[0];[workers removeObjectAtIndex:0];job();job=mains[0];[mains removeObjectAtIndex:0];job();}
+    check(co.obligations==1&&[snap(c)[@"native_resize"][@"pending_effect"][@"op"]isEqual:@"resize_native_window"],@"readback: the setter is owed");[delays removeObjectAtIndex:0];
+    expire();check(co.obligations==1&&[snap(c)[@"native_resize"][@"pending_effect"][@"op"]isEqual:@"observe_resize_source"]&&![co canRemove:@1],@"readback: an unanswered setter is followed by one read");usable(@"while the diagnostic read is owed");
+    expire();check(co.obligations==0&&[co canRemove:@1]&&![snap(c)[@"native_resize"][@"uncertain_mutation"]boolValue],@"readback: the watchdog ends an unanswered setter's transaction");usable(@"after an unanswered setter");
+    [workers removeAllObjects];[mains removeAllObjects];driver.bounds=CGRectMake(10,20,300,200);
+    // A driver that returns nothing is answered for at once.
+    driver.silent=YES;resize(360);drain(workers,mains);driver.silent=NO;check(co.obligations==0&&[co canRemove:@1],@"readback: no result is an unanswered effect");usable(@"after a driver without a result");[delays removeAllObjects];
+    // A result the controller refuses is replaced by the unanswered one; when that is refused too the obligation is dropped.
+    driver.garbled=YES;resize(380);drain(workers,mains);driver.garbled=NO;check(co.obligations==0&&[co canRemove:@1],@"readback: a refused result leaves no obligation");usable(@"after a refused result");[delays removeAllObjects];
+    resize(400);deaf=YES;drain(workers,mains);deaf=NO;check(co.obligations==0&&co.failure.length,@"readback: a result refused twice leaves no obligation");
+    // That transaction is still live in the controller with nobody performing its effect: seen twice a second apart, it is ended.
+    check(![co canRemove:@1]&&[co busyWindow]==nil,@"readback: an orphaned transaction is live");[co reap];check(![co canRemove:@1],@"readback: an orphan is given one look");[co reap];
+    check(co.obligations==0&&[co canRemove:@1],@"readback: an orphaned transaction is reaped");usable(@"after an orphan");
+    check(co.failure==nil,@"readback: a failure ends with the next result the controller takes");
+    [co shutdown];driftwm_desktop_destroy(c);
+}
 int main(void){@autoreleasepool{
     id configuredStream=[NSObject new];
     check(DWResizeConfigurationCurrent(configuredStream,configuredStream,@2,@2,NO),@"current configuration error remains actionable");
@@ -148,6 +195,6 @@ int main(void){@autoreleasepool{
     check(DWResizeHandles(CGRectMake(0,0,100,100),CGRectMake(0,0,100,100)).count==8,@"eight handles");check(DWResizeHandles(CGRectMake(-50,-50,200,200),CGRectMake(0,0,100,100)).count==0,@"no clipped-edge handles");
     for(NSString *edge in @[@"top_left",@"top",@"top_right",@"right",@"bottom_right",@"bottom",@"bottom_left",@"left"])scenario(edge,nil,NO,NO,NO);
     scenario(@"right",@"clamped",NO,NO,NO);scenario(@"right",@"rejected",YES,NO,NO);scenario(@"right",nil,YES,YES,NO);scenario(@"right",nil,NO,NO,YES);
-    preparing(NO,NO);preparing(YES,NO);preparing(NO,YES);preparing(YES,YES);disagreeing();
+    preparing(NO,NO);preparing(YES,NO);preparing(NO,YES);preparing(YES,YES);disagreeing();readback();
     puts("PASS: production resize coordinator + Rust C ABI + real synthetic CV/CMSampleBuffer metadata; no native app/window/AX/capture started");return 0;
 }}

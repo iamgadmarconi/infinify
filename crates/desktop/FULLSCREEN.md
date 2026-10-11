@@ -26,9 +26,10 @@ or drawn fullscreen to verify any of this.** See
 
 A fullscreen window is resized to its output, and delivering a size to a real
 Mac window goes only through the size transaction of [SIZES.md](SIZES.md),
-which exists only when the shell reported `native_resize_capability`, that is
-when the app was started with `--experimental-native-resize`. There is no other
-switch and the flag is not made the default.
+which exists only when the shell reported `native_resize_capability`. Every
+normal run reports it, in [readback mode](NATIVE_RESIZE.md#readback-mode)
+unless it was started with `--experimental-native-resize`; a demo and a probe
+do not. There is no other switch.
 
 While the capability is `false`:
 
@@ -258,7 +259,10 @@ There is one size transaction ([SIZES.md](SIZES.md#a-second-action-while-a-size-
   a fullscreen or in any sizing action before) enters, and enters again,
   with no transaction: it is fullscreen at the size it has, centred, and the
   reply has no `transaction`. Every other sizing of such a window still
-  answers `source resize unsupported`.
+  answers `source resize unsupported`. In readback mode nothing of this is
+  remembered: each enter asks, and the setter's answer centres the window
+  at the size it has or finds it settable by now
+  ([NATIVE_RESIZE.md](NATIVE_RESIZE.md#readback-mode)).
 - **An exit is never refused.** It is a consequence of something that
   happened. Its size is *owed*, and delivered as soon as it can be.
 - **An exit while the enter is pending** takes that transaction over: the

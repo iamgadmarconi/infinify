@@ -100,7 +100,7 @@ constants they replaced.
 | `[gestures] swipe_threshold`, `pinch_in_threshold`, `pinch_out_threshold` | when a threshold gesture fires |
 | `[input.trackpad] enable` | whether gestures are dispatched, until `set-trackpad` overrides it |
 | `[zoom] fit_padding` | `zoom-to-fit`, `zoom-to-fit-snapped`, and the dynamic minimum zoom |
-| `[navigation] resize_step` | the step of `grow-window` and `shrink-window`, which run only once the shell has sent `native_resize_capability`: [SIZES.md](SIZES.md#the-gate) |
+| `[navigation] resize_step` | the step of `grow-window` and `shrink-window`, which run once the shell has sent `native_resize_capability`, as every normal run does: [SIZES.md](SIZES.md#the-gate) |
 | `[snap] enabled`, `gap`, `distance`, `break_force`, `corners`, `centers` | `begin_drag`, `begin_resize`, `gesture_to` and the native resize transaction's snap intent |
 | `[snap] outer_gap` | the inset of a placed window in window navigation; with the capability, also the inset of `fit-window` and `fill-window` |
 | `focus_placement`, `[[outputs]] focus_placement` | where window navigation and `send-to-output` park the window, and with it where `window_placement = "center"` spawns one |
@@ -123,7 +123,7 @@ constants they replaced.
 | `[session] restore_camera`, `restore_bookmarks` | what `load` restores, see [Session](#session) |
 | `[[window_rules]] app_id`, `title` | matched against the bundle identifier and the source title when a window maps, see [RULES.md](RULES.md) |
 | `[[window_rules]] position`, `pinned_to_screen`, `output`, `widget`, `focus_on_open` | where a new window is placed, whether it is pinned to an output's screen or a widget, and whether it is focused |
-| `[[window_rules]] size` | asked of a new window as it maps, a widget and a rule-pinned window included, and the window placed for it, one window at a time in map order, only once the shell has sent `native_resize_capability`; otherwise recorded and named in `rule.not_applied`: [RULES.md](RULES.md#a-rules-size) |
+| `[[window_rules]] size` | asked of a new window as it maps, a widget and a rule-pinned window included, and the window placed for it, one window at a time in map order, once the shell has sent `native_resize_capability`, as every normal run does; otherwise recorded and named in `rule.not_applied`: [RULES.md](RULES.md#a-rules-size) |
 | `[env]`, `[cursor] theme`, `size` | the environment of an `exec` effect |
 | `focus_follows_mouse` | whether `hover` moves the focus to the window under the pointer, without raising it; see [POINTER.md](POINTER.md#sloppy-focus) |
 | `[zoom] interact_min` | the zoom below which an output is in [pick mode](POINTER.md#pick-mode): `hit`, `input`, `hover`, `pick` and the `pick` flag of `mouse_binding` |
@@ -284,6 +284,7 @@ which the user did not ask for.
   five [sizing actions](SIZES.md#the-gate) and
   [`toggle-fullscreen`](FULLSCREEN.md#the-gate) are implemented only once the
   shell has sent `native_resize_capability`, so the table must be read after it.
+  Every normal run sends it before it reads the config.
 - `passable` is false for the binding on the exit chord and for every `quit`:
   no window's `pass_keys` takes those. `snapshot.pass_keys` says what the
   window that holds the keyboard passes, by `combo`
@@ -346,7 +347,7 @@ no Mac key.
 | `mod+equal` | ⌃⌥= | 24 | `zoom-in` | yes | yes |
 | `mod+f` | ⌃⌥F | 3 | `toggle-fullscreen` |  | with the capability |
 | `mod+l` | ⌃⌥L | 37 | `exec /usr/bin/pmset displaysleepnow`, for upstream's `spawn swaylock -f -c 000000 -kl` |  | yes |
-| `mod+m` | ⌃⌥M | 46 | `fit-window` |  | with `--experimental-native-resize` |
+| `mod+m` | ⌃⌥M | 46 | `fit-window` |  | with the capability |
 | `mod+minus` | ⌃⌥- | 27 | `zoom-out` | yes | yes |
 | `mod+q` | ⌃⌥Q | 12 | `close-window` |  | yes |
 | `mod+shift+1` | ⌃⌥⇧1 | 18 | `set-bookmark 1` |  | yes |
@@ -357,7 +358,7 @@ no Mac key.
 | `mod+shift+Left` | ⌃⌥⇧Left | 123 | `nudge-window left` | yes | yes |
 | `mod+shift+Right` | ⌃⌥⇧Right | 124 | `nudge-window right` | yes | yes |
 | `mod+shift+Up` | ⌃⌥⇧Up | 126 | `nudge-window up` | yes | yes |
-| `mod+shift+m` | ⌃⌥⇧M | 46 | `fit-window-snapped` |  | with `--experimental-native-resize` |
+| `mod+shift+m` | ⌃⌥⇧M | 46 | `fit-window-snapped` |  | with the capability |
 | `mod+shift+w` | ⌃⌥⇧W | 13 | `zoom-to-fit-snapped` |  | yes |
 | `mod+t` | ⌃⌥T | 17 | `toggle-pin-to-screen` |  | yes |
 | `mod+w` | ⌃⌥W | 13 | `zoom-to-fit` |  | yes |
@@ -548,7 +549,7 @@ Upstream's defaults under the default super chord:
 | ⌥⇧ left | `move_snapped_windows` | none |
 | ⌥ right | `resize_window` | none |
 | ⌥⇧ right | `resize_window_snapped` | none |
-| ⌥ middle | `action` `fit-window` (refused without `--experimental-native-resize`) | none |
+| ⌥ middle | `action` `fit-window` (refused without the capability) | none |
 | ⌥⇧ middle | `action` `fit-window-snapped` (the same) | none |
 | ⌃⌥ middle | `action` `toggle-fullscreen` (refused without the capability) | none |
 | ⌃⌥ left | `pan_viewport` | `pan_viewport` |
@@ -960,8 +961,8 @@ was restored too early back to a new output's pose.
 - `exec` does not reveal the cursor; upstream's does for a few seconds.
 - `nudge-window` is applied at once; upstream animates the frame from its old
   place. It does not raise the window. It ends a fill restore point as
-  upstream's does; one exists only for a window filled behind
-  `--experimental-native-resize` ([SIZES.md](SIZES.md#mode)).
+  upstream's does; one exists only for a window filled with `fill-window`, which needs the
+  capability ([SIZES.md](SIZES.md#mode)).
 - A new output's camera is the world origin at its top-left corner, as before;
   upstream centers the origin.
 - Every window is saved as a slot whatever `restore_windows` says, because

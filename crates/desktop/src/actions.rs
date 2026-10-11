@@ -426,8 +426,9 @@ impl Controller {
                 self.toggle_fullscreen(output, &mut outcome)?;
                 return Ok(outcome);
             }
-            // These deliver a size to a native window, which only a shell
-            // started with --experimental-native-resize can do: SIZES.md.
+            // These deliver a size to a native window, which a shell that
+            // performs resize effects can do, as every normal run's does:
+            // SIZES.md.
             action if self.sizes.capability && super::sizes::delivers_a_size(action) => {
                 self.run_sizing(output, action, &mut outcome)?;
                 return Ok(outcome);

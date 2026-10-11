@@ -958,10 +958,13 @@ device-specific behavior also need the corresponding hardware.
   `zoom-to-fit-snapped` moves a camera only and runs in every normal launch.
   The rest end by giving a native window a new size, which goes through the
   existing size-only native resize transaction (`f5007b8`, `6a49484`) started
-  without a drag, and that path stays an explicit opt-in: a new command,
-  `native_resize_capability`, which the shell sends only when started with
-  `--experimental-native-resize`, turns them on, and without it every one of
-  them and the IPC resize write answer byte for byte as before. A sizing
+  without a drag: a new command,
+  `native_resize_capability`, turns them on, and without it every one of
+  them and the IPC resize write answer byte for byte as before. When this
+  milestone landed the shell sent it only when started with
+  `--experimental-native-resize`; since 2026-10-11 every normal run sends it
+  (see "Sizing and fullscreen in every normal run" under
+  "What is still open"). A sizing
   action asks for a size and writes the place, the neighbours' shift and the
   fit or fill state when the native result arrives, for the size the window
   actually took. Evidence boundary: **no native window was resized.** Sizing
@@ -1052,8 +1055,9 @@ device-specific behavior also need the corresponding hardware.
   rule was resolved, no widget or pinned window existed there and no pointer
   event was sent; the joins ran only as controller scenarios. Further
   mismatch from the join: a pinned window is not resized by hand, where
-  upstream resizes one in screen space. The feature stays behind
-  `--experimental-native-resize` until a live native resize pass exists. See the
+  upstream resizes one in screen space. The feature stayed behind
+  `--experimental-native-resize` until 2026-10-11, and runs in every normal
+  run since. See the
   [sizing contract](../../crates/desktop/SIZES.md) and the
   [desktop shell notes](../../native/desktop/README.md#window-sizing-actions).
 - `4eb130c`, effects: DriftWM's background blur, its
@@ -1430,8 +1434,9 @@ device-specific behavior also need the corresponding hardware.
   never used. A fullscreen window is resized to its output, and that goes
   through the same size transaction as the sizing milestone above, so the
   whole feature sits behind the same gate: without
-  `native_resize_capability`, which the shell sends only when started with
-  `--experimental-native-resize`, `toggle-fullscreen` and a rule's
+  `native_resize_capability`, which the shell then sent only when started with
+  `--experimental-native-resize` and since 2026-10-11 sends in every normal
+  run, `toggle-fullscreen` and a rule's
   `fullscreen` answer and report byte for byte as before, no output is ever
   fullscreen, and no switch was added. Evidence boundary: **no native window
   was resized or presented fullscreen.** Fullscreen ran only in controller
@@ -1568,8 +1573,8 @@ device-specific behavior also need the corresponding hardware.
   SIGTERM and at Return to desktop; a screen change is no shutdown, and
   there a fullscreen whose output is still connected is kept and one whose
   output went is ended by the controller, as upstream does both. The
-  feature stays behind `--experimental-native-resize` until a live native
-  resize pass exists. See the
+  feature stayed behind `--experimental-native-resize` until 2026-10-11, and
+  runs in every normal run since. See the
   [fullscreen contract](../../crates/desktop/FULLSCREEN.md) and the
   [desktop shell notes](../../native/desktop/README.md#fullscreen).
 - `72be7ea`, tap bindings, closes one gap of a default launch, with no flag.
@@ -2052,12 +2057,15 @@ reference rows of `cache_shader` and `cache_budget_mb`. `protocol.layer_shell`
 stays `missing` and stays counted as a gap for the panel and overlay policy it
 still lacks; its other clause, a reserved area, is not one: by the owner's
 decision of 2026-10-10 nothing is reserved for the menu bar and the Dock.
+On 2026-10-11 sizing and fullscreen began to run in every normal run, which
+moved 27 rows out of the gated group to `implemented_unverified`; the table is
+counted from the file as it stands after that.
 
 | Rows | Count |
 | --- | --- |
-| `implemented_unverified` | 400 |
-| `missing` | 185 |
-| of which gated behind `--experimental-native-resize` | 29 |
+| `implemented_unverified` | 427 |
+| `missing` | 158 |
+| of which gated behind `--experimental-native-resize` | 2 |
 | of which provided or owned by macOS | 68 |
 | of which with no Mac counterpart | 67 |
 | of which real gaps | 21 |
@@ -2066,14 +2074,29 @@ decision of 2026-10-10 nothing is reserved for the menu bar and the Dock.
 
 The `missing` rows, by group:
 
-- **Gated behind `--experimental-native-resize` (29).** `grow-window`,
-  `shrink-window`, `fit-window`, `fit-window-snapped`, `fill-window`,
-  `toggle-fullscreen` and fullscreen itself, resize by pointer, a rule's `size`
+- **Gated behind `--experimental-native-resize` (2).** Resize by pointer:
+  `MouseAction.ResizeWindow` and its default binding
+  `config.mouse.on-window.alt+right`. The drag maps the pointer through a
+  window's acknowledged picture, and on the owner's real windows no picture
+  was ever acknowledged. What unblocks these rows is a pointer resize that
+  does not depend on a capture.
+- **Sizing and fullscreen in every normal run (27 rows moved on 2026-10-11).**
+  `grow-window`, `shrink-window`, `fit-window`, `fit-window-snapped`,
+  `fill-window`, `toggle-fullscreen` and fullscreen itself, a rule's `size`
   and `fullscreen`, `navigation.resize_step`,
   `hot_corners.disable_when_fullscreen`, and the key, mouse and pinch bindings
-  that run them. The policy exists behind the flag, with controller scenarios
-  in which the test plays the native side. What unblocks these rows is a live
-  native resize pass on a real window, by the owner.
+  that run them were `missing` behind the flag and are now
+  `implemented_unverified`: the shell of every normal run performs size
+  requests, and a size is settled by reading the window back, with no capture
+  (`crates/desktop/NATIVE_RESIZE.md`, "Readback mode"). They were run end to
+  end on disposable fixture windows and an Electron window by
+  `tests/e2e/scoped-sizing.sh`
+  (`native/desktop/README.md`, "What has been run for sizing without the
+  flag"). What keeps them unverified: no application of the owner's has been
+  resized or made fullscreen, no chord, mouse press or trackpad gesture was
+  made by a person, a rule's `fullscreen` and a hot corner beside a fullscreen
+  window ran in controller scenarios only, and nothing was seen with a
+  picture.
 - **Provided or owned by macOS (68).** macOS does the job itself and the port
   has no code for it, which is not an implementation. Scope decision pending
   with the owner; the notes recommend treating these as provided by macOS.

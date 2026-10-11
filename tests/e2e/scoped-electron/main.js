@@ -6,7 +6,7 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const fs = require('fs'), path = require('path');
 const dir = process.env.SCOPE_DIR, title = process.env.SCOPE_TITLE || 'Scope Electron';
-const seconds = Math.min(120, Number(process.env.SCOPE_SECONDS) || 60), parent = process.ppid, began = Date.now();
+const seconds = Math.min(300, Number(process.env.SCOPE_SECONDS) || 60), parent = process.ppid, began = Date.now();
 const counts = { web_down: 0, web_up: 0, web_click: 0, raf: 0 }, last = {}, front = {};
 let win, active = false, activations = 0;
 function report() {

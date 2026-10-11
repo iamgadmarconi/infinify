@@ -246,7 +246,7 @@ and the two `fit-window-snapped` pinches, run once the shell has sent
 | ⌃⌥ 3-finger pinch in | `mod+3-finger-pinch-in` | anywhere | `zoom-to-fit` | runs |
 | ⌃⌥ 3-finger pinch out | `mod+3-finger-pinch-out` | anywhere | `home-toggle` | runs |
 | ⌃⌥ 4-finger pinch in | `mod+4-finger-pinch-in` | anywhere | `zoom-to-fit-snapped` | runs |
-| ⌥ 2-finger pinch in or out | `alt+2-finger-pinch-in`, `-out` | on-window | `fit-window` | runs with `--experimental-native-resize`, else refused: [SIZES.md](SIZES.md#the-gate) |
+| ⌥ 2-finger pinch in or out | `alt+2-finger-pinch-in`, `-out` | on-window | `fit-window` | runs with the capability, which every normal run sends, else refused: [SIZES.md](SIZES.md#the-gate) |
 | ⌥⇧ 2-finger pinch in or out | `alt+shift+2-finger-pinch-in`, `-out` | on-window | `fit-window-snapped` | the same |
 | ⌥ 3-finger pinch in or out | `alt+3-finger-pinch-in`, `-out` | on-window | `toggle-fullscreen` | refused without the capability |
 | 4-finger hold | `4-finger-hold` | anywhere | `center-window` | runs, on release |

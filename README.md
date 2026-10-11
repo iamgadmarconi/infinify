@@ -35,8 +35,18 @@ placeholders; native focus, hot keys and clicks have only been compiled, reviewe
 covered by a headless coordinator regression. See
 [Window navigation and native focus](native/desktop/README.md#window-navigation-and-native-focus).
 
+DriftWM's sizing actions (Control-Option-M fits the focused window,
+`grow-window`, `shrink-window`, `fill-window`, `Infinify msg resize W H`), a
+window rule's `size` and fullscreen (Control-Option-F) act on the real window in
+every normal run: the size is asked through Accessibility and read back, and the
+canvas takes the size the application allowed. They have been run end to end on
+disposable fixture windows and an Electron window
+(`tests/e2e/scoped-sizing.sh`), not yet on real applications. See
+[Window sizing actions](native/desktop/README.md#window-sizing-actions) and
+[Fullscreen](native/desktop/README.md#fullscreen).
+
 The separate `--experimental-native-resize` flag connects eight resize handles to
-the native adapter. It commits observed sizes and withholds input and captured
+the native adapter, and is needed for nothing else. It commits observed sizes and withholds input and captured
 content until a fresh frame passes the capture checks. Focused headless checks
 cover the controller and coordinator. Live disposable-window attempts have reached
 capture enrollment but stop before resizing or pixel verification; the complete

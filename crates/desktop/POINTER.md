@@ -265,7 +265,7 @@ stand-in's `pinned` and `widget` from its placement.
   zoom 1 when the stored zoom is below `zoom.interact_min`, and so does this.
   A stored view that no longer applies (another output, a moved window, a
   usable area of another shape) is the plain pick too. A fill needs
-  `--experimental-native-resize`, so without it every pick is the plain one.
+  the shell's `native_resize_capability`, so without it every pick is the plain one.
 - **Bindings.** Pass `"pick":true` to `mouse_binding` when the pointer is over
   a pick target. A press is then the pick's unless a held-modifier binding
   claims it: a bare button bound in `[mouse.on-window]` answers

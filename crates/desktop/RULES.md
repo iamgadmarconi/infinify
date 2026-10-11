@@ -111,12 +111,14 @@ pin, no `size`).
 ### A rule's `size`
 
 A rule's `size` is a native size, and reaches a window only through the
-[size transaction](SIZES.md#what-a-sizing-action-does) of
-`--experimental-native-resize`. So it follows that gate:
+[size transaction](SIZES.md#what-a-sizing-action-does), which a shell performs
+once it has sent `native_resize_capability` ([SIZES.md](SIZES.md#the-gate)).
+So it follows that gate:
 
 - **Without `native_resize_capability`** nothing is asked. The window keeps
   its own size, a `position` centers that size, and `rule.not_applied` names
-  `size`. This is what every run without the flag does.
+  `size`. This is what a demo or a probe does; every normal run sends the
+  capability.
 - **With it**, upstream's order holds. Upstream configures the rule's size at
   the window's first commit and places the window on the commit after it,
   for the size it then has (`src/handlers/compositor.rs`): step 2, 3 or 4
@@ -187,7 +189,9 @@ Still not asked, with the capability on, and still named in `not_applied`:
 
 - a window that **takes over a slot**, which keeps the slot's frame as
   upstream's adopted window does;
-- a window whose application does not accept a size (`resize_disabled`);
+- a window whose application does not accept a size (`resize_disabled`); in
+  readback mode such a window is asked all the same, and `size` is then not
+  named, whatever its application answers;
 - a window the user sized while it waited its turn (above).
 
 A window that maps with the rule's size already is asked nothing, a widget
@@ -760,7 +764,7 @@ rule takes, sorted by output and position. `is_widget` is filled.
   the canvas at its own size, where upstream shows it only once it is sized.
   Upstream configures every ruled window at once; here they are asked one
   after another, so the later of several that map together stand at their
-  own size until their turn. Without `--experimental-native-resize` nothing
+  own size until their turn. Without `native_resize_capability` nothing
   is asked at all, and `rule.not_applied` names `size`.
 - **`fullscreen` is applied only when the shell can deliver a size**
   ([FULLSCREEN.md](FULLSCREEN.md#the-gate)), and not during the launch pass.
