@@ -28,6 +28,15 @@ world. One ScreenCaptureKit stream per source feeds every display that shows
 it, and one compositor layer per display draws the canvas the way DriftWM does
 ([Rendering](#rendering)). This is continuous live capture of native
 application content.
+Normal capture mode now observes each managed root's native descendants and
+captures positively parented popups/sheets as separate child images. They share
+the root's canvas transform, including a child visible beyond an offscreen root,
+and clicks use the rendered child order with fresh identity/ancestry checks.
+Child clicks preserve the application's native focus instead of raising its
+parent through Accessibility. Captured mouse drags retain the original child
+until all admitted buttons are released. Unparented application windows and
+desktop-global menus are not inferred as descendants. This path is implemented
+and source-reviewed; physical application behavior remains unverified.
 Ordinary native windows remain where their owners put them. Cameras and world
 movement do not move, transform, park, or resize native windows.
 An explicit [cooperative native backend](#native-presentation-through-a-cooperative-helper)

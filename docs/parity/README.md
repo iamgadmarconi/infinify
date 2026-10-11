@@ -60,6 +60,36 @@ upstream contracts and source references retained. This supplies no acceptance
 evidence. The native green button must toggle fullscreen inside the canvas;
 Option-click toggles fit and uses `decoration_fit_snapped`.
 
+## 2026-10-11 normal capture family integration
+
+The default desktop's capture path now shares native descendant observation,
+separate popup/sheet streams, display-clipped family composition, exact rendered
+input ordering and full-family screenshot export with the native replica path.
+Observation-only roots retain ancestry/geometry without capturing hidden child
+images; their descriptions can project an offscreen root's visible child into
+an independent display view. Root binding changes, session departure and child
+invalidation retire these descriptions or prevent them authorizing input.
+
+Child click activation settles canvas focus logically and activates only the
+application when needed, preserving its native child focus. Held mouse input
+keeps its exact child recipient and pairs each admitted button independently.
+An extra button pressed before initial activation/delivery remains subject to
+the existing one-pending-gesture rule. Cross-application drag-and-drop and
+application-requested pointer lock are still open.
+
+Two source optimizations remove an extra image-sized RGBA allocation/copy from
+ordinary wallpaper uploads and repeated title/app-name text hashing from frame
+keys. These are code-path savings, not measured FPS/CPU claims. Native clipping
+still lacks a sufficiently established snapshot/set/restore contract; the
+pinned conflicting declarations are recorded in
+[`native/privileged/CLIPPING.md`](../../native/privileged/CLIPPING.md).
+Replica cursor image ownership and Spaces gathering also remain open.
+Physical popups above the overlay retain their application's native placement;
+captured copies alone do not establish independent-view alignment. Tablet child
+contacts leaving the overlay still lack the native mode's global tail route.
+No inventory status is promoted: this batch uses source review and compile/link
+checks only, with no tests, fixtures, application launches or desktop experiments.
+
 ## Known differences at the initial checkpoint
 
 | Behavior | DriftWM | Infinify checkpoint |

@@ -1360,27 +1360,36 @@ static id<MTLTexture> IFBGLoadImage(id<MTLDevice> device, NSString *path, CGSize
         return nil;
     }
 
-    uint8_t *rgba = malloc(w * h * 4);
-    if (!rgba) {
-        free(buffer.data);
-        if (error) *error = fail(@"not enough memory to decode the image");
-        return nil;
-    }
-    BOOL transparent = NO;
-    for (size_t y = 0; y < h; y++) {
-        const uint8_t *row = (const uint8_t *)buffer.data + y * buffer.rowBytes;
-        uint8_t *dst = rgba + y * w * 4;
-        if (grey) {
+    // vImage already produced straight RGBA8 for every non-grey image. Metal
+    // accepts that buffer's padded row stride directly: do not allocate and
+    // copy a second full image just to remove padding. Grey custom images
+    // still need their upstream-preserving expansion from grey/alpha to RGBA.
+    if (grey) {
+        uint8_t *rgba = malloc(w * h * 4);
+        if (!rgba) {
+            free(buffer.data);
+            if (error) *error = fail(@"not enough memory to decode the image");
+            return nil;
+        }
+        for (size_t y = 0; y < h; y++) {
+            const uint8_t *row = (const uint8_t *)buffer.data + y * buffer.rowBytes;
+            uint8_t *dst = rgba + y * w * 4;
             for (size_t x = 0; x < w; x++) {
                 dst[4 * x] = dst[4 * x + 1] = dst[4 * x + 2] = row[2 * x];
                 dst[4 * x + 3] = row[2 * x + 1];
             }
-        } else {
-            memcpy(dst, row, w * 4);
         }
-        for (size_t x = 0; x < w && !transparent; x++) transparent = dst[4 * x + 3] < 255;
+        free(buffer.data);
+        buffer.data = rgba;
+        buffer.rowBytes = w * 4;
     }
-    free(buffer.data);
+    BOOL transparent = NO;
+    // Inherited wallpaper has an opaque fill; shader textures derive their
+    // output alpha in the shader. Neither consumer needs an image-alpha scan.
+    if (hasTransparency) for (size_t y = 0; y < h && !transparent; y++) {
+        const uint8_t *row = (const uint8_t *)buffer.data + y * buffer.rowBytes;
+        for (size_t x = 0; x < w && !transparent; x++) transparent = row[4 * x + 3] < 255;
+    }
 
     MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
                                                                                   width:w
@@ -1388,8 +1397,8 @@ static id<MTLTexture> IFBGLoadImage(id<MTLDevice> device, NSString *path, CGSize
                                                                               mipmapped:NO];
     td.usage = MTLTextureUsageShaderRead;
     id<MTLTexture> texture = [device newTextureWithDescriptor:td];
-    if (texture) [texture replaceRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:0 withBytes:rgba bytesPerRow:w * 4];
-    free(rgba);
+    if (texture) [texture replaceRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:0 withBytes:buffer.data bytesPerRow:buffer.rowBytes];
+    free(buffer.data);
     if (!texture) {
         if (error) *error = fail(@"upload failed (image likely too large) — gigapixel wallpapers need a tiled pyramidal TIFF");
         return nil;
@@ -2448,7 +2457,7 @@ static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l,
             BOOL hasTransparency = NO;
             CGSize size = CGSizeZero;
             BOOL inherited = wallpaper && _config.inheritedWallpaper;
-            id<MTLTexture> texture = IFBGLoadImage(_device, path, &size, inherited, &hasTransparency, &imageError);
+            id<MTLTexture> texture = IFBGLoadImage(_device, path, &size, inherited, inherited ? NULL : &hasTransparency, &imageError);
             NSString *fragment = wallpaper ? @"ifbg_wallpaper" : (_config.mirrorTile ? @"ifbg_tile_mirror" : @"ifbg_tile");
             id<MTLRenderPipelineState> pipeline = texture ? [_resources builtinPipeline:fragment] : nil;
             if (!texture || !pipeline) {

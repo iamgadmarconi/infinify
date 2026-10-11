@@ -22,6 +22,19 @@ static NSDictionary *viewIdentity(id value) {
     if(!viewPositiveID(pid)||!viewPositiveID(seconds)||!micros||!isfinite(micros.doubleValue)||floor(micros.doubleValue)!=micros.doubleValue||!viewPositiveID(wid)||pid.longLongValue>INT32_MAX||seconds.longLongValue<=0||micros.longLongValue<0||micros.longLongValue>=1000000||wid.unsignedLongLongValue>UINT32_MAX)return nil;
     return @{@"pid":pid,@"birth_sec":seconds,@"birth_usec":micros,@"wid":wid};
 }
+static NSDictionary<NSNumber *,NSDictionary *> *viewOutputs(NSDictionary *snapshot) {
+    NSMutableDictionary<NSNumber *,NSDictionary *> *outputs=[NSMutableDictionary dictionary];
+    for(id value in viewList(snapshot[@"outputs"])){NSDictionary *output=viewDictionary(value);NSNumber *identifier=viewNumber(output[@"id"]),*zoom=viewNumber(output[@"zoom"]);NSDictionary *camera=viewDictionary(output[@"camera"]);
+        if(!viewPositiveID(identifier)||CGRectIsNull(viewRect(output[@"screen_bounds"]))||!zoom||!isfinite(zoom.doubleValue)||zoom.doubleValue<=0||!viewNumber(camera[@"x"])||!viewNumber(camera[@"y"])||!isfinite([camera[@"x"]doubleValue])||!isfinite([camera[@"y"]doubleValue]))continue;
+        if(!outputs[identifier])outputs[identifier]=output;
+    }
+    return outputs.copy;
+}
+static NSDictionary<NSNumber *,NSDictionary *> *viewBindings(NSDictionary *identities) {
+    identities=viewDictionary(identities);NSMutableDictionary<NSNumber *,NSDictionary *> *bindings=[NSMutableDictionary dictionary];
+    for(id window in identities){NSDictionary *identity=viewIdentity(identities[window]);if(viewPositiveID(viewNumber(window))&&identity)bindings[window]=identity;}
+    return bindings.copy;
+}
 static NSDictionary *viewRectJSON(CGRect rect) {
     return @{@"origin":@{@"x":@(rect.origin.x),@"y":@(rect.origin.y)},@"size":@{@"width":@(rect.size.width),@"height":@(rect.size.height)}};
 }
@@ -98,6 +111,12 @@ static NSArray<NSDictionary *> *viewFamilyPlacements(NSDictionary *snapshot,NSDi
     [placements removeAllObjects];for(NSDictionary *entry in ordered)[placements addObject:entry[@"placement"]];return placements.copy;
 }
 
+NSDictionary *DWNativeFamilyPresentationSnapshot(NSDictionary *snapshot,NSDictionary<NSNumber *,NSDictionary *> *bound,NSDictionary<NSNumber *,NSDictionary *> *families) {
+    snapshot=viewDictionary(snapshot);if(!snapshot)return nil;
+    NSArray<NSDictionary *> *placements=viewFamilyPlacements(snapshot,viewOutputs(snapshot),viewBindings(bound),viewDictionary(families)?:@{});
+    NSMutableDictionary *presentation=[snapshot mutableCopy];presentation[@"placements"]=placements;return presentation.copy;
+}
+
 @implementation DWNativeViews {
     NSDictionary<NSNumber *,NSNumber *> *_owners;
     NSDictionary<NSNumber *,NSDictionary *> *_identities;
@@ -115,13 +134,8 @@ static NSArray<NSDictionary *> *viewFamilyPlacements(NSDictionary *snapshot,NSDi
 }
 - (NSDictionary *)describe:(NSDictionary *)snapshot bound:(NSDictionary<NSNumber *,NSDictionary *> *)identities families:(NSDictionary<NSNumber *,NSDictionary *> *)families {
     if(!viewDictionary(snapshot))return nil;
-    NSMutableDictionary<NSNumber *,NSDictionary *> *outputs=[NSMutableDictionary dictionary],*bindings=[NSMutableDictionary dictionary];
-    for(id value in viewList(snapshot[@"outputs"])){NSDictionary *output=viewDictionary(value);NSNumber *identifier=viewNumber(output[@"id"]),*zoom=viewNumber(output[@"zoom"]);NSDictionary *camera=viewDictionary(output[@"camera"]);
-        if(!viewPositiveID(identifier)||CGRectIsNull(viewRect(output[@"screen_bounds"]))||!zoom||!isfinite(zoom.doubleValue)||zoom.doubleValue<=0||!viewNumber(camera[@"x"])||!viewNumber(camera[@"y"])||!isfinite([camera[@"x"]doubleValue])||!isfinite([camera[@"y"]doubleValue]))continue;
-        if(!outputs[identifier])outputs[identifier]=output;
-    }
-    for(NSNumber *window in identities){NSDictionary *identity=viewIdentity(identities[window]);if(viewPositiveID(viewNumber(window))&&identity)bindings[window]=identity;}
-    NSArray<NSDictionary *> *presented=viewFamilyPlacements(snapshot,outputs,bindings,families);NSMutableDictionary *presentation=[snapshot mutableCopy];presentation[@"placements"]=presented;_presentationSnapshot=presentation.copy;
+    NSDictionary<NSNumber *,NSDictionary *> *outputs=viewOutputs(snapshot),*bindings=viewBindings(identities);
+    NSArray<NSDictionary *> *presented=viewFamilyPlacements(snapshot,outputs,bindings,viewDictionary(families)?:@{});NSMutableDictionary *presentation=[snapshot mutableCopy];presentation[@"placements"]=presented;_presentationSnapshot=presentation.copy;
     NSMutableDictionary *choices=[NSMutableDictionary dictionary],*areas=[NSMutableDictionary dictionary],*copies=[NSMutableDictionary dictionary],*placements=[NSMutableDictionary dictionary];
     for(NSDictionary *placement in presented){
         NSNumber *window=viewNumber(placement[@"window"]),*output=viewNumber(placement[@"output"]);if(!viewPositiveID(window)||!viewPositiveID(output))continue;

@@ -910,6 +910,12 @@ static inline void IFCMixString(uint64_t *h, NSString *s) {
     }
 }
 
+static uint64_t IFCStringFingerprint(NSString *s) {
+    uint64_t h = 0xcbf29ce484222325ULL;
+    IFCMixString(&h, s);
+    return h;
+}
+
 static inline void IFCMixRect(uint64_t *h, CGRect r) {
     double v[4] = {r.origin.x, r.origin.y, r.size.width, r.size.height};
     IFCMix(h, v, sizeof v);
@@ -1363,7 +1369,9 @@ static NSMutableData *IFCRenderLabel(NSString *text, long bodyW, long bodyH, lon
 
 // MARK: - Element
 
-@implementation IFCompositorElement
+@implementation IFCompositorElement {
+    uint64_t _titleFingerprint, _appNameFingerprint;
+}
 
 - (instancetype)init {
     if (!(self = [super init])) return nil;
@@ -1371,6 +1379,7 @@ static NSMutableData *IFCRenderLabel(NSString *text, long bodyW, long bodyH, lon
     _contentRect = CGRectNull;
     _transform = (IFCompositorTransform){0, 0, 0, 0, 1, 1};
     _lifecycleStartTime = NAN;
+    _titleFingerprint = _appNameFingerprint = IFCStringFingerprint(nil);
     return self;
 }
 
@@ -1383,6 +1392,21 @@ static NSMutableData *IFCRenderLabel(NSString *text, long bodyW, long bodyH, lon
     if (pixelBuffer) CVPixelBufferRetain(pixelBuffer);
     if (_pixelBuffer) CVPixelBufferRelease(_pixelBuffer);
     _pixelBuffer = pixelBuffer;
+}
+
+// These properties own immutable copies, so every UTF-16 unit needs hashing
+// only when the text changes. Redraw and backdrop keys reuse the scalar on
+// pixel/camera frames; NSString's sampled -hash would miss long-title edits.
+- (void)setTitle:(NSString *)title {
+    if (_title == title || (title && [_title isEqualToString:title])) return;
+    _title = [title copy];
+    _titleFingerprint = IFCStringFingerprint(_title);
+}
+
+- (void)setAppName:(NSString *)appName {
+    if (_appName == appName || (appName && [_appName isEqualToString:appName])) return;
+    _appName = [appName copy];
+    _appNameFingerprint = IFCStringFingerprint(_appName);
 }
 
 // The identity of the content's pixels: the buffer object and its surface's
@@ -1428,8 +1452,8 @@ static NSMutableData *IFCRenderLabel(NSString *text, long bodyW, long bodyH, lon
     }
     IFCMixRect(h, _contentRect);
     IFC_MIX(h, (uint8_t)_contentOpaque);
-    IFCMixString(h, _title);
-    IFCMixString(h, _appName);
+    IFC_MIX(h, _titleFingerprint);
+    IFC_MIX(h, _appNameFingerprint);
     IFC_MIX(h, (uint8_t)_launching);
     IFC_MIX(h, (uint8_t)_showsPinnedIndicator);
     IFC_MIX(h, (uint8_t)_hasTransform);

@@ -1,6 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import <Foundation/Foundation.h>
 
+// Pure adapter projection for either capture-overlay or native presentation.
+// Normalizes output rectangles/cameras and exact root bindings, then adds only
+// observed descendant placements whose root is outside an output. No owner is
+// selected, no window is mutated, and no capture/input readiness is inferred.
+// Invalid snapshots return nil; invalid bindings/families cannot add a site.
+NSDictionary *DWNativeFamilyPresentationSnapshot(NSDictionary *snapshot,
+    NSDictionary<NSNumber *,NSDictionary *> *bound,
+    NSDictionary<NSNumber *,NSDictionary *> *families);
+
 // Adapter-only presentation plan. A native window has one WindowServer
 // transform; other output placements are live images with independent cameras.
 // Current output rectangles and source identities are reconciled on every

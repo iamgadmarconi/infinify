@@ -97,6 +97,7 @@ static void familyNormalizeOrder(NSDictionary<NSNumber *,DWReplicaOrder *> *orde
 @interface DWNativeReplicaFamilies ()
 @property(copy) void (^changed)(NSNumber *);
 @property NSDictionary<NSNumber *,NSDictionary *> *roots;
+@property(nonatomic,readwrite) NSDictionary<NSNumber *,NSDictionary *> *descriptions;
 @property NSMutableDictionary<NSNumber *,NSArray<DWReplicaMember *> *> *members;
 @property NSMutableDictionary<NSNumber *,NSArray<DWCanvasAttachment *> *> *drawableAttachments;
 @property dispatch_queue_t observer;
@@ -119,6 +120,7 @@ static void familyNormalizeOrder(NSDictionary<NSNumber *,DWReplicaOrder *> *orde
 - (void)changedWindow:(NSNumber *)window;
 - (void)markOrderingChanged;
 - (void)invalidateOrdering;
+- (void)replaceDescriptions:(NSDictionary<NSNumber *,NSDictionary *> *)descriptions;
 - (void)memberFailed:(NSNumber *)window;
 - (void)memberBecameDrawable:(NSNumber *)window;
 @end
@@ -257,6 +259,7 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
     [self invalidateOrdering];
     for(NSArray<DWReplicaMember *> *family in self.members.allValues)for(DWReplicaMember *member in family)[member retire];
     [self.members removeAllObjects];[self.drawableAttachments removeAllObjects];self.roots=@{};
+    [self replaceDescriptions:@{}];
     for(NSNumber *window in changed)[self changedWindow:window];
     [self endChanges];
 }
@@ -270,12 +273,15 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
     for(NSNumber *window in wanted)if(!familyBinding(self.roots[window],wanted[window])){bindingChanged=YES;break;}
     [self beginChanges];
     if(bindingChanged){self.epoch++;[self invalidateOrdering];}
-    for(NSNumber *window in self.members.allKeys)if(!familyBinding(self.roots[window],wanted[window])){
+    for(NSNumber *window in self.members.allKeys)if(!familyBinding(self.roots[window],wanted[window])||[wanted[window][@"capture"]isEqual:@NO]){
         for(DWReplicaMember *member in self.members[window])[member retire];[self.members removeObjectForKey:window];
         [self.drawableAttachments removeObjectForKey:window];
         [self changedWindow:window];
     }
     self.roots=wanted.copy;self.rate=hz;
+    NSMutableDictionary *descriptions=[self.descriptions mutableCopy]?:[NSMutableDictionary dictionary];
+    for(NSNumber *window in descriptions.allKeys)if(!familyBinding(descriptions[window],wanted[window]))[descriptions removeObjectForKey:window];
+    [self replaceDescriptions:descriptions.copy];
     if(bindingChanged)[self markOrderingChanged];
     if(changed){self.reading=NO;self.nextRead=0;}
     [self endChanges];
@@ -375,7 +381,16 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
     for(NSNumber *window in self.members.allKeys)if(!pid||[self.roots[window][@"identity"][@"pid"]intValue]==pid){
         for(DWReplicaMember *member in self.members[window])[member retire];[self.members removeObjectForKey:window];[self.drawableAttachments removeObjectForKey:window];[self markOrderingChanged];[self changedWindow:window];
     }
+    NSMutableDictionary *descriptions=[self.descriptions mutableCopy]?:[NSMutableDictionary dictionary];
+    for(NSNumber *window in descriptions.allKeys)if(!pid||[descriptions[window][@"identity"][@"pid"]intValue]==pid)[descriptions removeObjectForKey:window];
+    [self replaceDescriptions:descriptions.copy];
     [self endChanges];
+}
+- (void)replaceDescriptions:(NSDictionary<NSNumber *,NSDictionary *> *)descriptions {
+    if([self.descriptions isEqual:descriptions])return;
+    NSDictionary *prior=self.descriptions;self.descriptions=descriptions.copy;
+    NSMutableSet *windows=[NSMutableSet setWithArray:prior.allKeys?:@[]];[windows addObjectsFromArray:descriptions.allKeys];
+    for(NSNumber *window in windows)if(![prior[window]isEqual:descriptions[window]])[self changedWindow:window];
 }
 - (void)request {
     // An uncancellable shareable-content request remains outstanding even after
@@ -390,7 +405,7 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
         [owner invalidatePID:0];owner.nextRead=CACurrentMediaTime()+1;
     });
     dispatch_async(self.observer,^{
-        NSMutableDictionary *plans=[NSMutableDictionary dictionary];NSMutableSet *completeRoots=[NSMutableSet set];
+        NSMutableDictionary *plans=[NSMutableDictionary dictionary],*descriptions=[NSMutableDictionary dictionary];NSMutableSet *completeRoots=[NSMutableSet set];
         // This option documents front-to-back order. Offscreen captures remain
         // eligible for default grouping, but cannot borrow an inferred rank.
         NSArray *ordered=CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly,kCGNullWindowID));
@@ -409,6 +424,7 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
                 [children addObject:member];if(!familyRank(ranks,owners,member[@"identity"]))rankedChildren=NO;
             }
             if(!family||rootCount!=1){plans[window]=@[];continue;}
+            NSMutableDictionary *description=[family mutableCopy];description[@"window"]=window;description[@"generation"]=roots[window][@"generation"];description[@"native_bounds"]=roots[window][@"native_bounds"];descriptions[window]=description.copy;
             if(rankedChildren)[children sortUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b){return [ranks[b[@"identity"][@"wid"]]compare:ranks[a[@"identity"][@"wid"]]];}];
             plans[window]=children.copy;
             if(rankedChildren&&familyRank(ranks,owners,roots[window][@"identity"]))[completeRoots addObject:window];
@@ -419,7 +435,7 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
             NSMutableDictionary *windows=[NSMutableDictionary dictionary];for(SCWindow *window in content.windows)windows[@(window.windowID)]=window;
             NSMutableDictionary *nextMembers=[NSMutableDictionary dictionary],*nextOrdering=[NSMutableDictionary dictionary];
             for(NSNumber *logical in roots){NSMutableArray *installed=[NSMutableArray array];NSArray<DWReplicaMember *> *old=owner.members[logical]?:@[];
-                for(NSDictionary *plan in error?@[]:plans[logical]){
+                for(NSDictionary *plan in error||[roots[logical][@"capture"]isEqual:@NO]?@[]:plans[logical]){
                     NSDictionary *identity=plan[@"identity"];CGRect bounds=familyRect(plan[@"native_bounds"]);SCWindow *window=windows[identity[@"wid"]];
                     CGRect rootNow=CGRectZero,memberNow=CGRectZero;
                     if(!window||window.owningApplication.processID!=[identity[@"pid"]intValue]||!familySize(bounds)
@@ -470,12 +486,13 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
             if(!familySameOrder(owner.ordering,accepted))[owner markOrderingChanged];
             owner.members=nextMembers;owner.ordering=accepted;
             owner.orderingEpoch=owner.epoch;owner.orderingObservation=accepted.count?sequence:0;
+            [owner replaceDescriptions:owner.epoch==epoch?descriptions.copy:@{}];
             [owner endChanges];
         });};
         // A fresh empty family needs only retirement of prior children. Do not
         // ask ScreenCaptureKit to enumerate the desktop when no filter can be
         // created, but retain the same epoch/deadline/reconciliation path.
-        BOOL children=NO;for(NSArray *plan in plans.allValues)if(plan.count){children=YES;break;}
+        BOOL children=NO;for(NSNumber *window in plans)if([plans[window]count]&&![roots[window][@"capture"]isEqual:@NO]){children=YES;break;}
         if(children)[SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO completionHandler:reconcile];
         else reconcile(nil,nil);
     });

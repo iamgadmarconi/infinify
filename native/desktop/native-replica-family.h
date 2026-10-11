@@ -3,12 +3,16 @@
 #import "canvas-renderer.h"
 
 // Capture only freshly parented members of roots already bound by the shell.
-// Each root is {window,identity,generation,native_bounds,density}. Native
+// Each root is {window,identity,generation,native_bounds,density,capture?}.
+// capture:NO observes ancestry/geometry without starting child streams. Native
 // identities and bounds stay here; the renderer receives normalized images.
 // Main thread only. Observation and frame identity checks run on serial workers.
 @interface DWNativeReplicaFamilies : NSObject
 - (instancetype)initWithChanged:(void (^)(NSNumber *window))changed;
 - (void)describe:(NSArray<NSDictionary *> *)roots rate:(NSInteger)rate;
+// Freshly observed geometry for offscreen-child projection, keyed by logical
+// root. Matches the exact root binding; contains no pixel/input acknowledgement.
+@property(nonatomic,readonly) NSDictionary<NSNumber *,NSDictionary *> *descriptions;
 - (NSArray<DWCanvasAttachment *> *)attachments:(NSNumber *)window;
 // Full back-to-front tokens: {window,key? ,bucket?}, with barrier:YES separating
 // physical roots, stand-ins and closing elements. Reorders a whole same-bucket
