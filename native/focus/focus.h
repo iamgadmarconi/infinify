@@ -11,7 +11,8 @@ typedef enum { DWFocusObserved, DWFocusFocused, DWFocusInvalid, DWFocusStale,
 typedef struct {
     DWFocusOutcome outcome;
     AXError ax_error;
-    bool mutation_attempted, focused;
+    // brought_forward: the window was off screen and in no Accessibility list (another desktop) and was first brought forward by window number.
+    bool mutation_attempted, focused, brought_forward;
     CGRect bounds;
     pid_t system_pid;
     CGWindowID system_window, app_window;

@@ -24,5 +24,15 @@ Private ABI declarations and the read-only query/iterator call sequence are adap
 from https://github.com/koekeishiya/yabai at commit
  dd845723416f5fe92af49fad5ebab00369e07edd
 src/window.c:872-897; src/misc/extern.h:9,66-72;
-src/window_manager.c:841-855. No mutation or scripting-addition code is included.
+src/window_manager.c:841-855. No mutation or scripting-addition code is included
+in that adaptation (native/families).
 The surrounding ownership validation and extent normalization are new GPL-3.0-or-later code.
+
+native/focus/focus.m, forward(): the calls and the event record that bring a
+window forward by its window number are adapted from the same commit,
+src/window_manager.c:1269-1291 (window_manager_make_key_window) and 1324-1335
+(window_manager_focus_window_with_raise); src/misc/extern.h:81-82;
+src/window_manager.h:5 (kCPSUserGenerated). This is mutation code: it changes
+which application and window are in front. No scripting-addition code is
+included. The guard, the identity checks and the wait around it are new
+GPL-3.0-or-later code.

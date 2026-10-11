@@ -17,7 +17,20 @@ finite dimensions in [1, 32768] points. Each AX message has a <=150 ms timeout;
 resolution/readback retries share a two-second deadline. Synchronous WindowServer
 and process-info calls are OS calls without a cancellable timeout. The remaining
 AX timeout is refreshed per message. No activation, input posting, camera state,
-position changes, UI loop, or background observer is owned by this adapter.
+UI loop, or background observer is owned by this adapter.
+
+One native position write may precede the size. macOS grants no Accessibility size
+that would carry a window past the visible frame of its screen: asked from an
+origin the size does not fit from, the window keeps the size it has (rejected). On
+each axis the request grows on and would overflow, the window is first moved by the
+least that makes room: to where the size ends at the visible frame's far edge, or
+to the frame's origin for a size larger than the frame, which is then asked as it
+is and comes back clamped. The identity, settable and guard checks stand before
+the move, identity and timeout again between the move and the size, and a move that
+fails or is not honoured does not stop the size from being asked. `moved` in the
+result says that the window was read at another origin afterwards;
+`mutation_attempted` remains the size setter's alone. Nothing is moved under
+`dw_resize_apply_scoped`'s final authorization, which is one ticket for one setter.
 
 `dw_resize_apply_scoped` adds separate slow preparation and final lightweight
 caller-authorization callbacks. Existing `apply`/`apply_guarded` wrappers retain
@@ -42,7 +55,7 @@ Private APIs may change across OS versions. Identity checks narrow but cannot
 eliminate the cross-process race between final validation and an AX message.
 
 Snapshot captures identity and actual geometry. Restore restores **size only**;
-it never forces an origin or changes camera state. Compare returned origin with
+it never puts an origin back or changes camera state. Compare returned origin with
 the snapshot and reconcile any native movement. The owned test fixture also saves
 and restores its full original frames locally during teardown, including signals,
 parent death and a 30-second deadline. Decoys must remain unchanged.

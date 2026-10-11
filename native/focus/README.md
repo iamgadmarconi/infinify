@@ -19,6 +19,19 @@ an explicit caller guard, called before activation, each exact AX setter/raise,
 and while polling. Guard cancellation, stale identity/bounds, missing or ambiguous
 AX identity, AX errors, and a 1.5 second call deadline are distinct outcomes.
 
+One case is not left at "missing": a window the window server still lists as its
+process's, that is not on screen and that is in no Accessibility list, which is what a
+window on another desktop (Space) is while another desktop is shown; one that is on
+screen and missing from the list stays "missing". After the guard has allowed it,
+`dw_focus_select` brings it forward by window number as yabai does
+(`_SLPSSetFrontProcessWithOptions` and two `SLPSPostEventRecordTo` records to that
+process, adapted from yabai dd845723416f5fe92af49fad5ebab00369e07edd,
+`src/window_manager.c:1269-1335`, MIT), waits for it in the Accessibility list under
+the same guard and deadline, and goes on with the steps above; the result's
+`brought_forward` says so. All three symbols are looked up by name and the answer
+stays "missing" when one is absent. **Never run:** no test here can put a window on
+another desktop, so that this works is unobserved.
+
 Successful selection requires current CG ownership, AX/CG bounds agreement,
 system-wide AX focused application and its focused CGWindowID, the selected app's
 AX focused CGWindowID, and the native foreground PID. The ordinary fixture's

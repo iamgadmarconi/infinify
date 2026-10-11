@@ -4,7 +4,8 @@
 # flag: disposable fixture applications are started, Infinify manages exactly those (`--only-pid`), each size is asked through
 # the socket, and the fixture itself says what size its window then has. The canvas must agree with it, whatever the
 # application made of the request (a minimum, a maximum, a resize increment), and no request may leave a window that refuses
-# a press: after each step a click is made on the window's tile and must land in the window.
+# a press: after each step a click is made on the window's tile and must land in the window. One window sits where a larger size
+# does not fit its screen: its real window must be moved to make room, and its place on the canvas must not.
 #
 # It runs with or without Screen Recording access; without it the tiles have no picture and everything here is the same.
 # Everything acted on is a process this script started, as in tests/e2e/scoped-windows.sh, whose conventions these are: the
@@ -72,6 +73,8 @@ start a "Size fixture A $$" -300 resizable; A=$!
 start b "Size fixture B $$" 0 resizable min 300x260 max 640x520; B=$!
 start c "Size fixture C $$" 300 resizable increment 37x23; C=$!
 start r "Size rule R $$" 0 resizable hidden; R=$!
+# Low and to the right, 40 points inside the visible area's corner: from there no larger size fits the screen (case 19).
+start d "Size fixture D $$" 0 resizable corner 40x40; D=$!
 # Out of scope and exactly as scoped-windows.sh starts it: four arguments, so none of the sizing test's commands apply to it.
 mkdir "$evidence/z"; "$fixture" "$evidence/z" "Size decoy Z $$" 150 120 & Z=$!; fixtures="$fixtures $Z"
 E=
@@ -132,7 +135,7 @@ if phase == 'quit':
     sys.exit(0)
 
 infinify = int(sys.argv[4]); electron = len(sys.argv) > 5 and sys.argv[5] == 'electron'
-scope = ['a', 'b', 'c'] + (['e'] if electron else [])
+scope = ['a', 'b', 'c', 'd'] + (['e'] if electron else [])
 if electron: until('Electron fixture has a window', 15, lambda: status('e'), lambda r: r.get('window'))
 decoy = status('z')
 def State(): return ask('State')['Ok']['State']
@@ -210,7 +213,7 @@ def show(name):
     def still():
         camera = State()['camera']; was, seen[0] = seen[0], camera; time.sleep(.15); return camera == was
     until('the camera is at rest', 5, still, bool); place(name, *State()['camera'])
-show('a'); away('b'); away('c')
+show('a'); away('b'); away('c'); away('d')
 if electron: away('e')
 time.sleep(.3)
 W0, H0 = agreed('adoption: the canvas has the size of A\'s window', 'a')
@@ -233,7 +236,8 @@ stepped('3', 'grow-window left', -30, 0, 30, 0)
 stepped('4', 'shrink-window right', 0, 0, -30, 0)
 # (0.7071 * 30).round() on each axis.
 stepped('5', 'grow-window down-right', 0, 0, 21, 21)
-# The top edge, which only the canvas can hold still (nothing sets a native position), and a low edge walking inward.
+# The top edge, which only the canvas can hold still (no native position is set for a size that fits the screen from where the
+# window sits), and a low edge walking inward.
 stepped('5 up', 'grow-window up', 0, -30, 0, 30)
 stepped('5 left', 'shrink-window left', 30, 0, -30, 0)
 
@@ -299,13 +303,15 @@ check(f'11: ends on a whole step within one step of the request (snapped by {by}
 clicked('c', '11')
 
 # 12. Fullscreen: the output's size is asked, the window is placed in the output's screen space, and leaving gives back the
-# size, the place and the view. Nothing sets a native position: where macOS has the window is printed.
+# size, the place and the view. The panel's size fits the screen from where the window sits, so no native position is set for
+# it (case 19 is the size that does not fit): where macOS has the window is printed.
 away('c'); show('a'); time.sleep(.2); clicked('a', '12 before')
 before = {'frame': frame('a'), 'camera': State()['camera'], 'zoom': State()['zoom'], 'origin': status('a')['bounds'][:2]}
 since = len(trace()); acted('toggle-fullscreen')
 took = until('12: the window takes a size for fullscreen', 3, lambda: native('a'), lambda size: size != before['frame'][2:]); time.sleep(.4); took = native('a')
 check('12: toggle-fullscreen asked the window for the output\'s size, 1100x700', any(' requested=1100x700 ' in l for l in resizes(since, 'a')), resizes(since, 'a'))
 check('12: and a window with no limits took it', took == [1100, 700], took)
+check('12: no native position was set for a size that fits the screen from there', all(l.endswith(' moved=0') for l in resizes(since, 'a')), resizes(since, 'a'))
 full = State()['fullscreen']; check('12: the output\'s fullscreen entry names A', len(full) == 1 and full[0]['id'] == ids['a'] and entry('a') is None, full)
 at = tile('a', '12'); want = [P[0] + max(0, (1100 - took[0]) // 2), P[1] + max(0, (700 - took[1]) // 2), took[0], took[1]]
 check('12: the tile has the window\'s size, at the corner or centred', close(at, want, .5), {'tile': at, 'want': want})
@@ -313,7 +319,7 @@ clicked('a', '12 fullscreen')
 acted('toggle-fullscreen'); agreed('12: toggle-fullscreen again gives the size back', 'a', before['frame'][2:])
 after = {'frame': frame('a'), 'camera': State()['camera'], 'zoom': State()['zoom'], 'origin': status('a')['bounds'][:2]}
 check('12: the place, the camera and the zoom from before', (after['frame'], after['camera'], after['zoom']) == (before['frame'], before['camera'], before['zoom']) and State()['fullscreen'] == [], {'before': before, 'after': after})
-ok('12: the native origin, which nothing here sets', {'before': before['origin'], 'after': after['origin'], 'moved by macOS': before['origin'] != after['origin']})
+ok('12: the native origin, which nothing here set', {'before': before['origin'], 'after': after['origin'], 'moved by macOS': before['origin'] != after['origin']})
 clicked('a', '12 after')
 
 # 13. A window that will not take the output's size is fullscreen at the size it took, centred.
@@ -372,6 +378,33 @@ until('17: the closed window leaves and no fullscreen is left', 10, lambda: (Sta
 now = {'camera': State()['camera'], 'zoom': State()['zoom']}; check('17: the camera and the zoom from before the fullscreen', now == view, {'before': view, 'after': now})
 until('17: another window is sizable', 10, lambda: resize('a', 520, 420).returncode == 0, bool); agreed('17: and was resized', 'a', [520, 420])
 
+# 19. Room on the screen. macOS grants no size that would carry a window past its screen's visible area, so the adapter moves
+# the real window first, by the least that makes room, and the canvas knows nothing of it: the frame on the canvas follows the
+# size alone, by msg resize's rule (the center stays), and the camera stays. Every number is from the visible area D reports.
+away('a'); show('d'); time.sleep(.2)
+V = [int(v) for v in status('d')['screen_visible']]; d0 = status('d')['bounds']
+W, H = V[2] - 200, V[3] - 150
+check('19: D sits where a size that fits the visible area does not fit', d0[0] + W > V[0] + V[2] and d0[1] + H > V[1] + V[3] and d0[0] + d0[2] <= V[0] + V[2] and d0[1] + d0[3] <= V[1] + V[3], {'visible': V, 'window': d0, 'size to ask': [W, H]})
+def roomed(what, w, h, outcome, origin, size, moved):
+    before = frame('d'); view = State()['camera']; since = len(trace()); resized('d', w, h); took = agreed(f'19: {what}: the window and the canvas end at {size}', 'd', size)
+    asked = resizes(since, 'd'); check(f'19: {what}: answered {outcome}, moved={moved}', len(asked) == 1 and f' outcome={outcome} ' in asked[0] and asked[0].endswith(f' moved={moved}'), asked)
+    at = until(f'19: {what}: the fixture\'s own frame', 2, lambda: status('d')['bounds'], lambda b: b == origin + size)
+    check(f'19: {what}: the fixture\'s own frame is at {origin} and inside the visible area', at[0] >= V[0] and at[1] >= V[1] and at[0] + at[2] <= V[0] + V[2] and at[1] + at[3] <= V[1] + V[3], {'frame': at, 'visible': V})
+    want = [before[0] + half(before[2] - took[0]), before[1] + half(before[3] - took[1]), took[0], took[1]]
+    # Once at the answer, and again after the shell has looked at the window where it now sits (it looks once a second).
+    for when in ('at the answer', 'after the next look at the window'):
+        now = {'frame': frame('d'), 'camera': State()['camera']}
+        check(f'19: {what}: on the canvas the center and the camera stay, {when}', now == {'frame': want, 'camera': view}, {'before': before, 'now': now, 'want': want, 'camera before': view})
+        if when == 'at the answer': time.sleep(1.3)
+roomed('a size that fits the visible area but not from there', W, H, 'applied', [V[0] + 200, V[1] + 150], [W, H], 1)
+# Wider than the visible area: asked as it is from the area's left edge, and the window takes the width there is.
+roomed('wider than the visible area', V[2] + 300, H, 'clamped', [V[0], V[1] + 150], [V[2], H], 1)
+# The screen's whole size, which a fullscreen on a whole display asks (the owner's 2056x1329): the visible area's, at its origin.
+S = [int(v) for v in status('d')['screen_size']]
+roomed(f'the whole screen, {S[0]}x{S[1]}', S[0], S[1], 'clamped', V[:2], V[2:], 1)
+# Smaller needs no room: the window stays where it was put, and a click on its tile lands in it there.
+roomed('a smaller size', 500, 400, 'applied', V[:2], [500, 400], 0); clicked('d', '19'); away('d')
+
 # 22. Electron, within the adapter's one point: a step, an absolute size, fit and fullscreen.
 if electron:
     away('a'); show('e'); time.sleep(.3); clicked('e', '22 before'); e0 = agreed('22: adoption', 'e', tol=1)
@@ -414,15 +447,15 @@ PY
 launch() { : > "$evidence/err.log"; INFINIFY_DEBUG=1 "$app" --windowed 1100x700 --state "$state" --config "$config" --socket "$socket" --no-hover-forwarding "$@" 2>"$evidence/err.log" & infinify=$!
   n=0; while [ ! -S "$socket" ] && [ "$n" -lt 50 ]; do sleep .1; n=$((n+1)); done; [ -S "$socket" ] || { echo "FAIL: no socket: $(cat "$evidence/err.log")"; exit 1; }; }
 shown() { grep -q '"visible":true' "$evidence/$1/status.json" 2>/dev/null; }
-for name in a b c z ${E:+e}; do
+for name in a b c d z ${E:+e}; do
   n=0; while ! shown "$name" && [ "$n" -lt 150 ]; do sleep .1; n=$((n+1)); done
   shown "$name" || { echo "FAIL: fixture $name never showed its window: $(cat "$evidence/electron.log" 2>/dev/null)"; exit 1; }
 done
 sleep .5
 # The ruled fixture is in the scope from the start: its window appears later, and must be managed when it does.
-launch --debug-pointer --only-pid "$A,$B,$C,$R${E:+,$E}"
+launch --debug-pointer --only-pid "$A,$B,$C,$D,$R${E:+,$E}"
 python3 "$evidence/driver.py" "$evidence" "$app" scoped "$infinify" ${E:+electron}
 quit; [ "$gone" = yes ] || { echo 'FAIL: Infinify did not quit within 8 s of msg action quit'; exit 1; }
 echo 'ok: quit within 8 s'
 python3 "$evidence/driver.py" "$evidence" "$app" quit
-echo 'PASS: scoped sizing: steps, msg resize, fit, fill, fit snapped, minimum, maximum and increment, fullscreen, a size the application set, an application that stops answering or dies mid-request, a fullscreen window closed, a rule size, quit from fullscreen; decoy untouched'
+echo 'PASS: scoped sizing: steps, msg resize, fit, fill, fit snapped, minimum, maximum and increment, fullscreen, a size the application set, an application that stops answering or dies mid-request, a fullscreen window closed, a size that needs room on the screen, a rule size, quit from fullscreen; decoy untouched'

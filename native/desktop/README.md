@@ -254,6 +254,25 @@ changes for the config path, `exec-terminal`, `PATH` and relative paths.
   once on stderr and the run goes on. `--windowed` and `--manual` launches
   are not held. That the canvas works on real windows with it off has not
   been observed yet.
+- **A window on another desktop (Space): addressed, never run.** A window
+  left on a desktop that is not the one shown is in no Accessibility list, so
+  a click on its tile used to do nothing (`native focus … outcome=missing_window`,
+  fourteen times in the owner's run of 2026-10-10, after opening Safari had
+  made macOS switch desktops). For exactly that answer, and only while the
+  window server still lists the window as that process's and as not on
+  screen, the focus adapter
+  now brings the window forward by its window number the way yabai does
+  (`native/focus/focus.m`, `forward()`), waits for it to appear in the
+  Accessibility list, and goes on as for any window; the trace line ends
+  `brought_forward=1`. Nothing here can put a test window on another desktop,
+  so this has not run once: `tests/e2e/scoped-windows.sh` shows only that
+  windows on the shown desktop are focused as before. What to expect if it
+  works: macOS slides to that window's desktop, the canvas comes along, and
+  the windows left behind stop drawing until one of them is clicked and macOS
+  slides back. What may differ: the
+  slide may outlast the 1.5 seconds a focus request has, or another
+  application may be in front for a moment and end the request, and then the
+  first click only changes the desktop and the second focuses the window.
 - **Capture after sleep or lock is not restarted.** If macOS stops a window's
   capture stream with an error, the window becomes a stand-in and is not
   offered again until its native window has left the screen and come back.
@@ -6320,6 +6339,20 @@ In every normal run (until 2026-10-11 only with
   there is one transaction, and a second sizing action is continued, replaced
   or refused as described, never queued. Only a window rule's `size` waits
   its turn.
+- **A size that does not fit the screen from where the real window sits
+  moves the real window first.** macOS grants no size that would carry a
+  window past the visible area of its screen (the owner's run of 2026-10-10:
+  2056x1329 asked of a window at (223,39), answered with the 1833x1290 it
+  had). The adapter therefore writes a native position before the size, the
+  least that makes room, and a size larger than the visible area is asked from
+  the area's corner and comes back clamped to it: on a 2056x1329 display under
+  a 39 point menu bar a fullscreen ends at 2056x1290. The place on the canvas
+  and the camera do not change (case 19 of the test); the trace line ends
+  `moved=1`. The real window is not put back afterwards, and one with a
+  maximum size is moved to the corner all the same when it is asked for more
+  than the screen (case 10's window is). Tried on an AppKit fixture window on
+  one display; with two displays the screen is the one that holds most of the
+  window, by the code.
 - A native window's minimum and maximum size are unknown before asking. The
   request is sent as computed and the window clamps it; for a fit that leaves
   the window at the fit's top-left with the size it accepted.
@@ -7058,11 +7091,14 @@ replies captured from the tree before this work):
   owner's has been made fullscreen, no window has been asked for a whole
   display, and nothing has been seen in the app's own panel.
 - The size asked for is the display's whole rectangle, the area under the menu
-  bar and the Dock included, since the output is the whole display. Whether an
-  application grants that height, and whether macOS then moves the window from
-  under the menu bar, was not tried; a size it clamps is a case the
-  size transaction handles (case 13 of the sizing test). The real window is only resized: where it
-  sits on the real desktop is still its application's business.
+  bar and the Dock included, since the output is the whole display. macOS
+  grants the visible area at most, and only from that area's corner: the real
+  window is moved there first ([Limits of sizing](#limits-of-sizing)) and
+  takes the visible area's size, which the size transaction handles as a
+  clamped size (cases 13 and 19 of the sizing test): fullscreen at the size it
+  took, centred. Leaving fullscreen gives the size back and leaves the real
+  window at that corner. Not seen on a whole display: the test's panel is
+  1100x700.
 - No transition. Upstream grows the window in and holds the picture on the
   way out; here the display shows the window alone from the moment it is
   asked. Under the flag its picture is the grey placeholder while a size

@@ -15,9 +15,13 @@
 //   hidden             the window is shown only when DIR/show appears
 //   size WxH           the window's content opens at this size, or at what of it fits the screen's visible area, instead of 420x470
 //                      (tests/e2e/scoped-render-bench.sh: a window as large as a person keeps one)
+//   corner WxH         the window opens with its lower right corner W and H points inside the visible area's, instead of centred:
+//                      from there a larger size does not fit the screen
 // and it then also obeys, each a file in DIR removed once read: `frame` "W H" (set its own frame size, top left kept), `hang` SECONDS
 // (block the main thread now), `stall` SECONDS (block it inside the next resize, once the window has its new size) and `close` (close the window; the process ends on the next tick).
 // The report gains `limits` (min, max as frame sizes and increment, or null), `snapped` and `resizes`.
+// Every report has `screen_visible`, the visible area of the window's screen as the window server and Accessibility measure it,
+// and `screen_size`, that screen's whole size.
 #import <AppKit/AppKit.h>
 #import <WebKit/WebKit.h>
 #include <libproc.h>
@@ -55,12 +59,16 @@ static void report(void) {
     for(NSDictionary *w in CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenAboveWindow|kCGWindowListExcludeDesktopElements,wid))){
         CGRect r=CGRectZero;if([w[(id)kCGWindowLayer]intValue]!=0||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)w[(id)kCGWindowBounds],&r))continue;
         [above addObject:@[w[(id)kCGWindowOwnerPID]?:@0,@[@(r.origin.x),@(r.origin.y),@(r.size.width),@(r.size.height)],w[(id)kCGWindowNumber]?:@0]];}
+    // Measured downwards from the primary screen's top left corner, as `bounds` is.
+    NSRect area=(window.screen?:NSScreen.mainScreen?:NSScreen.screens.firstObject).visibleFrame;
+    NSSize whole=(window.screen?:NSScreen.mainScreen?:NSScreen.screens.firstObject).frame.size;
+    NSArray *visible=@[@(area.origin.x),@(NSMaxY(NSScreen.screens.firstObject.frame)-NSMaxY(area)),@(area.size.width),@(area.size.height)];
     NSDictionary *status=@{@"pid":@(getpid()),@"birth":@[@(p.pbi_start_tvsec),@(p.pbi_start_tvusec)],@"window":@(wid),@"title":window.title,@"bounds":bounds,
         @"controls":@{@"button":control(button),@"plain":control(plain),@"web":control(web)},@"counts":[counts copy],@"last":[last copy],@"front":[front copy],@"visible":@(window.visible),
         @"frontmost":@(NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier),
         @"key_window":@(window.keyWindow),@"main_window":@(window.mainWindow),@"app_active":@(NSApp.active),@"activations":@(activations),
         @"occlusion_visible":(window.occlusionState&NSWindowOcclusionStateVisible)?@YES:@NO,@"above":above,
-        @"limits":@{@"min":framed(window.contentMinSize),@"max":framed(window.contentMaxSize),@"increment":pair(increment)},@"snapped":@(snapped),@"resizes":@(resizes)};
+        @"limits":@{@"min":framed(window.contentMinSize),@"max":framed(window.contentMaxSize),@"increment":pair(increment)},@"snapped":@(snapped),@"resizes":@(resizes),@"screen_visible":visible,@"screen_size":@[@(whole.width),@(whole.height)]};
     // Whole or not at all: a reader never sees half a report.
     NSString *path=[directory stringByAppendingPathComponent:@"status.json"],*partial=[path stringByAppendingString:@".tmp"];
     if([[NSJSONSerialization dataWithJSONObject:status options:0 error:nil]writeToFile:partial atomically:NO])rename(partial.fileSystemRepresentation,path.fileSystemRepresentation);
@@ -103,11 +111,11 @@ int main(int argc,const char **argv) { @autoreleasepool {
     if(argc<5)return 64;
     directory=@(argv[1]);char *end=NULL;double dx=strtod(argv[3],&end);if(!end||*end)return 64;
     double seconds=strtod(argv[4],&end);if(!end||*end||!(seconds>=1&&seconds<=300))return 64;
-    BOOL resizable=NO,hidden=NO;NSSize least=NSZeroSize,most=NSZeroSize,opens=NSZeroSize;
+    BOOL resizable=NO,hidden=NO;NSSize least=NSZeroSize,most=NSZeroSize,opens=NSZeroSize,corner=NSZeroSize;
     for(int i=5;i<argc;i++){
         if(!strcmp(argv[i],"resizable")){resizable=YES;continue;}
         if(!strcmp(argv[i],"hidden")){hidden=YES;continue;}
-        NSSize *into=!strcmp(argv[i],"min")?&least:!strcmp(argv[i],"max")?&most:!strcmp(argv[i],"increment")?&increment:!strcmp(argv[i],"size")?&opens:NULL;int w=0,h=0;
+        NSSize *into=!strcmp(argv[i],"min")?&least:!strcmp(argv[i],"max")?&most:!strcmp(argv[i],"increment")?&increment:!strcmp(argv[i],"size")?&opens:!strcmp(argv[i],"corner")?&corner:NULL;int w=0,h=0;
         if(!into||++i>=argc||sscanf(argv[i],"%dx%d",&w,&h)!=2||w<1||h<1)return 64;
         *into=NSMakeSize(w,h);
     }
@@ -118,7 +126,9 @@ int main(int argc,const char **argv) { @autoreleasepool {
     NSRect area=(NSScreen.mainScreen?:NSScreen.screens.firstObject).visibleFrame;CGFloat width=420,height=470;
     // Less its title bar, and no wider than leaves DX its place.
     if(opens.width>0){width=MAX(420,MIN(opens.width,area.size.width-2*fabs(dx)));height=MAX(470,MIN(opens.height,area.size.height-40));}
-    window=[[NSWindow alloc]initWithContentRect:NSMakeRect(NSMidX(area)-width/2+dx,NSMidY(area)-height/2,width,height) styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|(resizable?NSWindowStyleMaskResizable:0) backing:NSBackingStoreBuffered defer:NO];
+    NSRect opening=NSMakeRect(NSMidX(area)-width/2+dx,NSMidY(area)-height/2,width,height);
+    if(corner.width>0)opening.origin=NSMakePoint(NSMaxX(area)-corner.width-width,NSMinY(area)+corner.height);
+    window=[[NSWindow alloc]initWithContentRect:opening styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|(resizable?NSWindowStyleMaskResizable:0) backing:NSBackingStoreBuffered defer:NO];
     window.releasedWhenClosed=NO;window.title=@(argv[2]);base=NSMakeSize(width,height);
     if(least.width>0)window.contentMinSize=least;
     if(most.width>0)window.contentMaxSize=most;

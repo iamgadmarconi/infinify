@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import "resize.h"
-#import <Foundation/Foundation.h>
+#import <AppKit/AppKit.h>
 #include <libproc.h>
 #include <dlfcn.h>
 #include <math.h>
@@ -76,6 +76,28 @@ static AXUIElementRef resolve(DWResizeIdentity i, double deadline, DWResizeResul
 }
 static bool near(double a,double b) { return fabs(a-b)<=1.; }
 static bool same_size(CGSize a,CGSize b) { return near(a.width,b.width)&&near(a.height,b.height); }
+// Where the window has to sit for `size` to be granted. macOS does not let an Accessibility size change carry a window past the
+// visible frame of its screen: from an origin the size does not fit from, the request changes nothing (the owner's run of
+// 2026-10-10: 2056x1329 asked four times of a window at (223,39) on a 2056x1329 display, answered each time with the 1833x1290
+// that reaches the screen's edges). The least move that makes room, one axis at a time and only on an axis the request grows on:
+// a size that fits the visible frame is given exactly its room, a larger one starts at the frame's origin and is asked as it is,
+// so that the application grants what it can. The screen is the one that holds most of the window; a window on none is left alone.
+// AppKit's screens are measured upwards from the primary screen's lower left corner, Accessibility downwards from its top left.
+static bool room(CGRect before, CGSize size, CGPoint *to) {
+    NSArray<NSScreen *> *screens=NSScreen.screens; if (!screens.count) return false;
+    CGFloat top=NSMaxY(screens[0].frame), most=0; CGRect visible=CGRectZero;
+    for (NSScreen *screen in screens) {
+        NSRect f=screen.frame, v=screen.visibleFrame;
+        CGRect shared=CGRectIntersection(before,CGRectMake(f.origin.x,top-NSMaxY(f),f.size.width,f.size.height));
+        if (CGRectIsNull(shared) || shared.size.width*shared.size.height<=most) continue;
+        most=shared.size.width*shared.size.height; visible=CGRectMake(v.origin.x,top-NSMaxY(v),v.size.width,v.size.height);
+    }
+    if (most<=0 || !valid_rect(visible)) return false;
+    CGPoint p=before.origin;
+    if (size.width>before.size.width && p.x+size.width>CGRectGetMaxX(visible)) p.x=fmax(CGRectGetMinX(visible),CGRectGetMaxX(visible)-size.width);
+    if (size.height>before.size.height && p.y+size.height>CGRectGetMaxY(visible)) p.y=fmax(CGRectGetMinY(visible),CGRectGetMaxY(visible)-size.height);
+    *to=p; return !CGPointEqualToPoint(p,before.origin);
+}
 static bool readback(DWResizeIdentity i, AXUIElementRef window, double deadline, DWResizeResult *r) {
     r->observed=false;
     CGRect cg=CGRectZero; if (!owner(i,&cg)) { r->outcome=DWResizeStaleIdentity; return false; }
@@ -113,6 +135,27 @@ DWResizeResult dw_resize_apply_scoped(DWResizeIdentity i, CGSize size, DWResizeG
     if (guard && !guard(i,context)) { r.outcome=DWResizeUnsupported; CFRelease(w); return r; }
     if (guard && !owner(i,NULL)) { r.outcome=DWResizeStaleIdentity; r.observed=false; CFRelease(w); return r; }
     if (guard) { r.ax_error=timeout(w,deadline); if(r.ax_error!=kAXErrorSuccess) {r.outcome=DWResizeTimedOut;CFRelease(w);return r;} }
+    // Room first, by a native position write that the same identity, settable and guard checks have just preceded. It is a
+    // place on the real screen only: the caller maps the window by the origin every result reports and keeps its own geometry.
+    // A scoped final authorization is one ticket for one setter, the size's, so nothing is moved under one. A write that fails
+    // or is not honoured changes nothing below: the size is asked from wherever the window then is.
+    CGPoint origin=before.origin, to=origin; bool positioned=false;
+    if (!final_authorize && room(before,size,&to)) {
+        AXValueRef p=AXValueCreate(kAXValueCGPointType,&to); DWResizeResult kept=r; bool seen=false;
+        if (p) { positioned=true; AXUIElementSetAttributeValue(w,kAXPositionAttribute,p); CFRelease(p); }
+        for (int n=0;positioned && n<4 && now()<deadline;n++) {
+            usleep(30000); seen=readback(i,w,deadline,&r);
+            if (r.outcome==DWResizeStaleIdentity) { CFRelease(w); return r; }
+            if (seen && near(r.actual_ax.origin.x,to.x) && near(r.actual_ax.origin.y,to.y)) break;
+        }
+        // Unread, the window is taken to be where it was read last; the read after the size write says where it is.
+        if (!seen) r=kept;
+        r.moved=seen && !CGPointEqualToPoint(r.actual_ax.origin,origin);
+        // The checks that stood before the position write stand before the size write as well.
+        if (!owner(i,NULL)) { r.outcome=DWResizeStaleIdentity; r.observed=false; CFRelease(w); return r; }
+        r.ax_error=timeout(w,deadline);
+        if (r.ax_error!=kAXErrorSuccess) { r.outcome=DWResizeTimedOut; CFRelease(w); return r; }
+    }
     AXValueRef v=AXValueCreate(kAXValueCGSizeType,&size);
     if (!v) { r.outcome=DWResizeUnavailable; CFRelease(w); return r; }
     // A scoped final callback must be lightweight: no AX/family/file operations.
@@ -133,6 +176,7 @@ DWResizeResult dw_resize_apply_scoped(DWResizeIdentity i, CGSize size, DWResizeG
     }
     if (observed) r.outcome=same_size(size,r.actual_ax.size)?DWResizeApplied:(!same_size(before.size,r.actual_ax.size)?DWResizeClamped:DWResizeRejected);
     if (setter!=kAXErrorSuccess) r.ax_error=setter;
+    if (positioned && observed) r.moved=!CGPointEqualToPoint(r.actual_ax.origin,origin);
     CFRelease(w); return r;
 } }
 DWResizeResult dw_resize_apply_guarded(DWResizeIdentity i, CGSize size, DWResizeGuard guard, void *context) { return dw_resize_apply_scoped(i,size,guard,NULL,context); }

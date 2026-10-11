@@ -19,7 +19,7 @@ static DWResizeResult snapshot_ready(DWResizeIdentity identity, DWResizeSnapshot
 }
 static NSArray *rect(CGRect r) { return @[@(r.origin.x),@(r.origin.y),@(r.size.width),@(r.size.height)]; }
 static NSDictionary *report(DWResizeResult r) {
-    return @{@"outcome":@(dw_resize_outcome_name(r.outcome)),@"ax_error":@(r.ax_error),@"mutation_attempted":@(r.mutation_attempted),@"observed":@(r.observed),@"ax":rect(r.actual_ax),@"cg":rect(r.actual_cg)};
+    return @{@"outcome":@(dw_resize_outcome_name(r.outcome)),@"ax_error":@(r.ax_error),@"mutation_attempted":@(r.mutation_attempted),@"observed":@(r.observed),@"moved":@(r.moved),@"ax":rect(r.actual_ax),@"cg":rect(r.actual_cg)};
 }
 #define CHECK(x) do { if(!(x)) { fprintf(stderr,"failed: %s\n",#x); status=1; goto cleanup; } } while(0)
 int main(int argc,const char **argv) { @autoreleasepool {
@@ -64,6 +64,10 @@ int main(int argc,const char **argv) { @autoreleasepool {
     CHECK(r.outcome==DWResizeApplied&&r.observed&&!CGPointEqualToPoint(r.actual_ax.origin,snapshots[0].original.origin));
 cleanup:
     if(snapshots[0].valid) { r=dw_resize_restore(snapshots[0]); evidence[@"restore"]=report(r); if(!r.observed||(!moved&&!CGRectEqualToRect(r.actual_ax,snapshots[0].original))||!CGSizeEqualToSize(r.actual_ax.size,snapshots[0].original.size)) status=1; }
-    evidence[@"passed"]=@(status==0); evidence[@"activation_calls"]=@0; evidence[@"input_posts"]=@0; evidence[@"position_setters"]=@0;
+    evidence[@"passed"]=@(status==0); evidence[@"activation_calls"]=@0; evidence[@"input_posts"]=@0; 
+    // A size that needs room on the screen is preceded by a position write (resize.m, room()), so none is no longer a constant:
+    // the results that say the window was moved by one are counted. A write that was not honoured is not seen here.
+    int moves=0; for(NSString *key in evidence) if([evidence[key] isKindOfClass:NSDictionary.class]&&[evidence[key][@"moved"] boolValue]) moves++;
+    evidence[@"position_moves"]=@(moves);
     NSData *out=[NSJSONSerialization dataWithJSONObject:evidence options:NSJSONWritingPrettyPrinted error:NULL]; fwrite(out.bytes,1,out.length,stdout); putchar('\n'); return status;
 } }

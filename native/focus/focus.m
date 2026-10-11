@@ -4,11 +4,19 @@
 #include <libproc.h>
 #include <dlfcn.h>
 #include <math.h>
+#include <string.h>
 #include <time.h>
 // Signature provenance: yabai dd845723416f5fe92af49fad5ebab00369e07edd,
 // src/misc/extern.h:8 and src/misc/helpers.h:499-504, as native/resize.
-// New implementation; no title matching or copied upstream implementation.
+// New implementation with no title matching, but for forward() below, which is adapted from yabai (MIT, same commit):
+// src/window_manager.c:1269-1291 (window_manager_make_key_window) and 1324-1335 (window_manager_focus_window_with_raise),
+// with the signatures of src/misc/extern.h:81-82 and kCPSUserGenerated of src/window_manager.h:5.
 typedef AXError (*GetWindow)(AXUIElementRef, uint32_t *);
+typedef CGError (*FrontWithOptions)(ProcessSerialNumber *,uint32_t,uint32_t);
+typedef CGError (*PostEventRecord)(ProcessSerialNumber *,uint8_t *);
+// Not yabai's, which is handed its serial numbers by Carbon process events: the deprecated HIServices call, looked up by
+// name like the private ones.
+typedef OSStatus (*ProcessForPID)(pid_t,ProcessSerialNumber *);
 static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return t.tv_sec+t.tv_nsec/1e9; }
 bool dw_focus_birth(pid_t p,uint64_t *s,uint64_t *u) {
     struct proc_bsdinfo b={0};
@@ -93,9 +101,43 @@ static bool allowed(DWFocusIdentity i,DWFocusGuard guard,void *ctx,double end,DW
     if(!guard||!guard(i,ctx)){r->outcome=DWFocusDenied;return false;}
     CGRect b;if(!dw_focus_owner(i,&b)||!CGRectEqualToRect(b,r->bounds)){r->outcome=DWFocusStale;return false;}return true;
 }
+// A window on another desktop (Space) is in the window server's list and not in its application's Accessibility list while
+// another desktop is shown, so resolve() answers DWFocusMissing for it and nothing above can reach it (the owner's run of
+// 2026-10-10: fourteen requests for one window, each missing_window). It is brought forward the way yabai focuses a window,
+// by the window server and by window number: macOS then shows the window's desktop, and the window is waited for in the
+// Accessibility list, inside the caller's deadline. A symbol or serial number that is not to be had, or a window that is on
+// screen, leaves the answer as it was. Never run on a window of another desktop: nothing that builds here can put one there.
+static AXUIElementRef forward(DWFocusIdentity i,DWFocusGuard guard,void *ctx,double end,DWFocusResult *r) {
+    FrontWithOptions front=(FrontWithOptions)dlsym(RTLD_DEFAULT,"_SLPSSetFrontProcessWithOptions");
+    PostEventRecord post=(PostEventRecord)dlsym(RTLD_DEFAULT,"SLPSPostEventRecordTo");
+    ProcessForPID serial=(ProcessForPID)dlsym(RTLD_DEFAULT,"GetProcessForPID");ProcessSerialNumber psn={0};
+    if(!front||!post||!serial||serial(i.pid,&psn)!=noErr)return NULL;
+    // Only a window that is not on screen, which one on another desktop is not. One the window server shows here and that its
+    // application leaves out of the list would have that application fronted for nothing, so it stays missing.
+    NSArray *list=CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow,i.window));
+    if(list.count!=1||[list[0][(id)kCGWindowIsOnscreen] boolValue])return NULL;
+    // The window server must still list the window as this process's, where resolve() saw it, and the caller must allow it.
+    if(!allowed(i,guard,ctx,end,r))return NULL;
+    r->mutation_attempted=true;r->brought_forward=true;
+    // yabai dd845723416f5fe92af49fad5ebab00369e07edd src/window_manager.c:1329-1330, 1280-1290; 0x200 is kCPSUserGenerated.
+    front(&psn,i.window,0x200);
+    uint8_t bytes[0xf8]={0};bytes[0x04]=0xf8;bytes[0x3a]=0x10;memcpy(bytes+0x3c,&i.window,sizeof(uint32_t));memset(bytes+0x20,0xff,0x10);
+    bytes[0x08]=0x01;post(&psn,bytes);
+    bytes[0x08]=0x02;post(&psn,bytes);
+    // The application is in front from here on, so the wait goes on through an answer that may pass (the list not read, the
+    // window not in it yet) and ends on one that will not, or when the guard or the deadline ends it.
+    while(allowed(i,guard,ctx,end,r)) {
+        AXUIElementRef w=resolve(i,end,r);if(w)return w;
+        if(r->outcome==DWFocusStale||r->outcome==DWFocusAmbiguous)break;
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.015]];
+    }
+    return NULL;
+}
 DWFocusResult dw_focus_select(DWFocusIdentity i,DWFocusGuard guard,void *ctx) { @autoreleasepool {
     DWFocusResult r={.outcome=DWFocusInvalid};if(!guard)return r;
-    double end=now()+1.5;AXUIElementRef w=resolve(i,end,&r);if(!w)return r;
+    double end=now()+1.5;AXUIElementRef w=resolve(i,end,&r);
+    if(!w&&r.outcome==DWFocusMissing)w=forward(i,guard,ctx,end,&r);
+    if(!w)return r;
     if(!allowed(i,guard,ctx,end,&r)){CFRelease(w);return r;}
     r.mutation_attempted=true;
     BOOL activated=[[NSRunningApplication runningApplicationWithProcessIdentifier:i.pid] activateWithOptions:0];
