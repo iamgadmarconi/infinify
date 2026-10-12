@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Hot corners, output transfer, keyboard layouts, the State event stream,
-//! autostart and upstream's Linux default commands, through the exported C ABI
+//! autostart and Mac default commands, through the exported C ABI
 //! and JSON decoder with config files in a throwaway directory. Expected
 //! positions are worked out by hand from the adapted upstream rules, not from an
 //! oracle build. Nothing here watches a pointer, warps one, selects an input
@@ -513,8 +513,8 @@ fn three_outputs_are_adjacent_as_upstreams_direction_cone_says() {
         }
     }
     assert_eq!(
-        h.refused(Value::Null, "send-cursor-to-output up"),
-        "no active output"
+        h.action_on(Value::Null, "send-cursor-to-output up"),
+        warp(3)
     );
     assert_eq!(
         h.refused(json!(99), "send-cursor-to-output up"),
@@ -548,6 +548,32 @@ fn three_outputs_are_adjacent_as_upstreams_direction_cone_says() {
 }
 
 #[test]
+fn cursor_transfer_falls_back_to_the_first_remaining_display() {
+    let mut h = Host::new();
+    register(&mut h, 3);
+    h.ok(json!({"op":"remove_output","output":1}));
+    let before = h.snapshot();
+    // The surviving first display is the right-hand one, so its upper
+    // neighbour is output 3. Explicit stale IDs still refuse above.
+    assert_eq!(
+        h.ipc(Value::Null, json!({"Action":"send-cursor-to-output up"})),
+        json!({"reply":{"Ok":"Ok"},"effects":[{"op":"warp_pointer","screen":point(500.0,-600.0),"output":3}],"dirty":false,"navigation":null})
+    );
+    assert_eq!(h.snapshot(), before);
+}
+
+#[test]
+fn cursor_transfer_without_displays_is_an_idle_success() {
+    let mut h = Host::new();
+    let before = h.snapshot();
+    assert_eq!(
+        h.action_on(Value::Null, "send-cursor-to-output right"),
+        idle()
+    );
+    assert_eq!(h.snapshot(), before);
+}
+
+#[test]
 fn a_single_output_has_no_neighbour() {
     let mut h = Host::new();
     register(&mut h, 1);
@@ -559,6 +585,10 @@ fn a_single_output_has_no_neighbour() {
             let action = format!("{action} {direction}");
             assert_eq!(h.action_on(json!(1), &action), idle(), "{action}");
         }
+        assert_eq!(
+            h.action_on(Value::Null, &format!("send-cursor-to-output {direction}")),
+            idle()
+        );
     }
     assert_eq!(h.snapshot(), before);
     // Over IPC both are an `Ok` that asks nothing of the shell.

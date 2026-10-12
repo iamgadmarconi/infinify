@@ -681,8 +681,8 @@ It is a logical world move like `nudge-window`, refused during a gesture or a
 live native resize of that window. `navigation` is null and `effects` is empty:
 no camera moves and the window keeps the logical focus it had.
 
-`send-cursor-to-output <dir>` needs the active output as `output`. With an
-adjacent output it returns the effect
+`send-cursor-to-output <dir>` uses `output`, or the first registered display
+when no output is supplied. With an adjacent output it returns the effect
 
 ```json
 {"op":"warp_pointer","screen":{"x":1800.0,"y":570.0},"output":2}
@@ -692,7 +692,9 @@ adjacent output it returns the effect
 coordinates (`screen_bounds.origin + usable_rect_local.center()`), which is
 where upstream's canvas-space warp puts the cursor on that monitor, and
 `output` is the target. The shell moves the pointer there; the controller moves
-nothing. With no adjacent output `effects` is empty.
+nothing. With no displays or no adjacent output `effects` is empty. An explicitly
+unknown output is refused. The fallback is resolved before the fullscreen and
+momentum prelude, so the first display leaves fullscreen as upstream requires.
 
 ## Hot corners
 
@@ -1000,10 +1002,8 @@ was restored too early back to a new output's pose.
   own output is disconnected goes nowhere. A frame with a fractional origin or
   size is read at upstream's integer boundary for the source output and the
   half size, and keeps its size.
-- `send-cursor-to-output` with no `output` is refused, where upstream falls
-  back to its first output. The pointer is the shell's, so the warp is an
-  effect, and the next action's active output is whatever the shell then
-  reports.
+- The pointer is the shell's, so `send-cursor-to-output` returns a warp effect,
+  and the next action's active output is whatever the shell then reports.
 - Output adjacency reads `screen_bounds` as given, where upstream's layout
   positions and logical sizes are whole numbers.
 - The hot-corner latch and the held-button half of `disable_while_dragging` are
@@ -1111,7 +1111,8 @@ move gesture, and `[input.trackpad] enable` with `set-trackpad`. See
   shows the window; truncation toward zero for odd and fractional frames; the
   raise; the refusals; and a single output;
 - `send-cursor-to-output` for all eight directions from each of three outputs,
-  with the effect's coordinates;
+  with the effect's coordinates, absent active output, display removal,
+  no displays and fullscreen restoration before a fallback transfer;
 - every `switch-layout` form, `layout_changed` feeding `Layout`, `StateInfo` and
   the snapshot, its refusals, and a scene save and load;
 - the `subscribe` effect's line against the `State` reply and against

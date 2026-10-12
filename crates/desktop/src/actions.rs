@@ -285,6 +285,13 @@ impl Controller {
         pointer: Option<Point>,
         held: bool,
     ) -> Result<Outcome, Error> {
+        // SendCursorToOutput uses upstream active_output's first-display
+        // fallback before the fullscreen and momentum prelude runs.
+        let output = if matches!(action, Action::SendCursorToOutput(_)) {
+            output.or_else(|| self.scene.outputs().first().map(|view| view.id))
+        } else {
+            output
+        };
         // Upstream's execute_action prelude. A non-cycle action ends an
         // Alt-Tab cycle in progress before it runs, and every action stops the
         // active output's scroll momentum first. A refused action is rolled
@@ -391,7 +398,10 @@ impl Controller {
                 return Ok(outcome);
             }
             Action::SendCursorToOutput(direction) => {
-                let warp = self.send_cursor_to_output(active()?, direction)?;
+                let Some(output) = output else {
+                    return Ok(outcome);
+                };
+                let warp = self.send_cursor_to_output(output, direction)?;
                 outcome.effects.extend(warp);
                 return Ok(outcome);
             }

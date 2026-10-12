@@ -309,6 +309,29 @@ fn entered(h: &mut Host) {
         (USABLE.2, USABLE.3),
     );
 }
+
+#[test]
+fn cursor_transfer_without_active_output_exits_fullscreen_on_first_display() {
+    let mut h = zoomed(CONFIG);
+    entered(&mut h);
+    let target = pose(&mut h, 2);
+    let reply = h.ok(json!({"op":"action","output":null,"action":"send-cursor-to-output right"}));
+    assert_eq!(fullscreen(&mut h, 1), Value::Null);
+    assert_eq!(pose(&mut h, 1), view(CAMERA, 0.5));
+    assert_eq!(pose(&mut h, 2), target);
+    assert!(reply["effects"].as_array().unwrap().iter().any(|effect| {
+        effect == &json!({"op":"warp_pointer","screen":{"x":B.0+B.2/2.0,"y":B.1+B.3/2.0},"output":2})
+    }), "{reply}");
+    deliver(
+        &mut h,
+        &reply,
+        (USABLE.2, USABLE.3),
+        (START.2, START.3),
+        "applied",
+        (START.2, START.3),
+    );
+    assert_eq!(world(&mut h, 1), of(START));
+}
 /// Tick until every flight has landed. One clock serves every controller:
 /// each only needs its own timestamps to grow.
 fn settle(h: &mut Host) {
