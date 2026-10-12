@@ -85,39 +85,50 @@ to check an installed bundle; `--build` explicitly rebuilds production artifacts
 and the app first. A stale bundle requires a rebuild. This checks delivery
 freshness, not native usability.
 
-The bundled launcher obtains Dock's exact PID, process birth and UID from the loader's
-read-only `--dock-identity` query. It pins these fields during the explicit loader
-step and binds the `pending`/`ready` launch record (schema 2) to the bundled
-payload SHA-256. Reuse also hashes the actual private runtime payload and requires
-it to match both the bundle and record. It records `pending` before execution,
-then records `ready` only after an authenticated empty-helper audit. A ready
-record for the exact same Dock instance can be reused after the runtime payload
-checks pass. For a changed Dock, the launcher may archive only the old record
-when the prior Dock is proven gone and its private v2 journal has `state=empty`
-and no windows; the prior runtime and journal remain untouched. Pending or
-unknown outcomes, a live or uncertain prior Dock, invalid payloads, unknown
-journal schemas, interrupted journal staging or any restoration obligation
-still block startup and preserve the record and runtime for inspection. There is
-no compatibility fallback or automatic injection retry. The launcher runs
-only the loader through sudo and starts the app as the login user. The regular
-LaunchAgent remains the capture-mode startup and does not invoke this explicit
-helper path.
+The bundled launcher obtains Dock's exact PID, process birth, UID and boot
+identity from the loader's read-only `--dock-identity` query. It pins the current
+Dock during the explicit loader step and binds the `pending`/`ready` launch
+record (schema 2) to the bundled payload SHA-256. Reuse also hashes the actual
+private runtime payload and requires it to match both the bundle and record. A
+ready record for the exact same Dock instance can be reused after the runtime
+payload checks pass.
 
-In the authorized arm64 macOS 27.0.1 UTM guest, build `7a57b32` archived a ready
-record after its Dock process had exited with an empty generation-7 journal,
-then authenticated a fresh helper and launched the app. The previous runtime
-remained in place. A fresh ordinary Calculator window retained its native
-position across Dock replacement, was admitted at its observed original
-transform, and returned to that transform and screen rectangle after normal
-app quit; the new journal was empty at generation 2. This is one successful
-recovery path, not validation of every refusal branch or crash-recovery case.
-Evidence is under `target/native-vm/pending-restore-inspect/`.
+For a retired Dock, the launcher accepts only a committed schema-3 journal
+written by the recorded Dock process, same login UID and same boot. The loader
+rechecks the journal's private file and directory, exact writer identity,
+positive old-process retirement and schema-3 header, then copies its bytes to
+the new private runtime as `recovery-source.json`. The sidecar binds the copy by
+SHA-256 and recorded writer identity; the payload validates its complete schema
+and identities before any restore setter. On first import, the fresh runtime has
+no committed journal yet, so this exact source supplies the initial recovery
+state. The payload commits that state under the new writer before any restore
+setter. On later starts, the new runtime's committed `v2-journal.json` is the
+replay authority; a malformed committed journal never falls back to the older
+source. When that runtime is retired, its own current journal is the only handoff
+input. Any retained `recovery-source.json` is hash-checked historical provenance,
+never merged or used as a fallback.
 
-An earlier Terminal/Notes session already had incorrect zero-translation
-originals by the time a new helper admitted it. Repeating Dock replacement did
-not reproduce that change. Its first failing boundary remains unresolved;
-equality with those later snapshots must not be reported as restoration of the
-earlier desktop positions.
+The launcher keeps the previous ready record until the recovery loader reports
+authenticated readiness. A private `launch.pending.plist` marker blocks any
+retry after an interrupted or uncertain recovery. On success, the old record is
+archived byte-for-byte and the new ready record is promoted. The old runtime and
+journal remain untouched. Schema-2 and unknown journals are refused because
+they lack the retained originals needed for safe connection handoff; the
+launcher never reconstructs transforms from native bounds. Unresolved recovery,
+a live or uncertain prior Dock, invalid payloads, or changed boot identity also
+block startup and preserve all state. There is no compatibility fallback or
+automatic injection retry. The launcher runs only the loader through sudo and
+starts the app as the login user. The regular LaunchAgent remains the
+capture-mode startup and does not invoke this explicit helper path.
+
+An earlier UTM run established that a new helper could start after an empty
+schema-2 journal, but it did not cover a window whose transform had been touched
+by the retiring Dock. A later read-only receipt showed Calculator WID 183 at
+transform `[-510,-554]` with `windows: []` before Dock exit, then at identity
+transform before the replacement helper was injected. The old empty journal had
+already discarded the original transform. Schema-3 retained-original recovery
+is the source fix for that case; its production guest path remains unvalidated.
+Receipts are under `target/native-vm/pending-restore-inspect/`.
 
 Direct loader invocation also requires explicit prepared-machine authorization:
 
@@ -125,6 +136,11 @@ Direct loader invocation also requires explicit prepared-machine authorization:
 loader-arm64e --inject-dock ABS_PAYLOAD ABS_PRIVATE_RUNTIME
   --nonce-file ABS_NONCE_FILE --only-pid PID
   [--expected-dock PID BIRTH_SEC BIRTH_USEC]
+
+loader-arm64e --inject-dock ABS_PAYLOAD ABS_PRIVATE_RUNTIME
+  --nonce-file ABS_NONCE_FILE --desktop --expected-dock PID BIRTH_SEC BIRTH_USEC
+  --recover-journal ABS_OLD_RUNTIME/v2-journal.json
+  --expected-retired-dock OLD_PID OLD_BIRTH_SEC OLD_BIRTH_USEC
 ```
 
 `--desktop` selects same-login-user scope instead of a finite `--only-pid` scope.
@@ -133,10 +149,16 @@ hexadecimal characters, in a login-user-owned regular file with mode 0600; one
 trailing newline is accepted. Nonce bytes are never accepted in the loader's
 argv. A private, adjacent `ABS_PAYLOAD.json` sidecar opts in the constructor with
 runtime, nonce and optional exact-process allowlist. No sidecar means no listener.
-The production loader refuses existing sidecars, sockets and retained v2 journals
-without deleting them. It does not automatically recover or reinject into an
-existing runtime. The cooperative restart test exercises the payload's validated
-replay path directly; that is not a production launcher recovery path.
+The recovery form accepts only a committed same-boot schema-3 journal from the
+positively retired Dock recorded by the launcher. It copies those exact bytes to
+the fresh runtime and binds their digest and writer identity in the sidecar. The
+payload validates the complete journal, then commits the new writer's journal
+before any restore setter. Later recovery uses that committed journal; if it is
+malformed, the retained import source is not a fallback. The launcher adds a
+private pending marker before sudo and promotes its ready record only after
+authenticated readiness; an interrupted or uncertain handoff blocks retry.
+Schema-2 journals are refused because their original-window ledger was not
+retained.
 After loading, readiness authenticates v2, verifies scope/process identity,
 required restoration/scope/inspection capabilities, `held=restoring=table_count=0`
 and `journal_pending=0`, then disconnects without submitting a frame. A missing
@@ -235,11 +257,19 @@ inside Dock still requires scoped real-host evidence.
 
 ## Journal and strict recovery
 
-`v2-journal.json` preserves each first-touch identity, owner, original transform,
-alpha, alpha-restoration obligation and native bounds. Originals are captured
-before any change. The entire new-window batch is journaled before applying any
-of it; unchanged held windows require no journal write. A first alpha change is
-journaled before setting it. Persistence uses exclusive no-follow mode-0600
+Schema-3 `v2-journal.json` preserves the current Dock writer identity and each
+first-touch identity, owner, original transform, alpha, alpha-restoration
+obligation and native bounds. Its `released_windows` table retains exact original
+records after a successful restore, because a later Dock replacement may reset
+WindowServer transforms again. When retiring a runtime, its current journal is
+the handoff input. A fresh recovery runtime initially imports the exact staged
+`recovery-source.json`; the payload commits a journal under its new writer before
+any native setter. From then on that committed journal is the replay authority,
+and a malformed one never falls back to the import source. The source and its
+sidecar digest remain provenance only after import. Originals are captured before
+any change. The entire new-window batch is journaled before applying any of it;
+unchanged held windows require no journal write. A first alpha change is journaled
+before setting it. Persistence uses exclusive no-follow mode-0600
 `v2-journal.next`, file fsync, rename and directory fsync. Failed persistence
 blocks unjournaled mutation and leaves `journal_pending=1` until a durable retry.
 

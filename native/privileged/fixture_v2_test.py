@@ -133,7 +133,10 @@ class Host:
     def text(self):
         return (self.run / 'host.log').read_text()
     def journal(self):
-        return json.loads((self.run / 'v2-journal.json').read_text())
+        journal = json.loads((self.run / 'v2-journal.json').read_text())
+        assert journal['v'] == 3, journal
+        assert isinstance(journal['released_windows'], list), journal
+        return journal
     def wait_journal(self, state, timeout=4):
         deadline = time.monotonic() + timeout
         while True:
@@ -387,7 +390,8 @@ def frames_group():
         assert alpha_writes == 2 and host.journal()['generation'] == 2
     results.append(dict(test='journal at first touch only', frames_applied=frames_so_far, journal_writes_after_frames=1, journal_writes_after_first_alpha_of_a_third_window=alpha_writes))
 
-    # 7. Restore-all: everything back, table empty, journal says so.
+    # 7. Restore-all empties the active table, retaining released originals for
+    # writer retirement. This fixture does not prove foreign-window recovery.
     generation = host.journal()['generation']
     restored = c.restore_all()
     assert restored['count'] == 8 and restored['pending'] == 0 and restored['outcomes'] == [0] * 8 and restored['journal_persisted'] == 1, restored
@@ -396,6 +400,8 @@ def frames_group():
     probe = c.probe()
     journal = host.journal()
     assert probe['table_count'] == 0 and probe['held'] == 0 and journal['state'] == 'empty' and journal['windows'] == [] and journal['generation'] == generation + 1, (probe, journal)
+    assert sorted(w['wid'] for w in journal['released_windows']) == sorted(wids), journal
+    assert all(w['state'] == 'released' for w in journal['released_windows']), journal
     assert journal['last_restore']['reason'] == 'explicit' and [r['outcome'] for r in journal['last_restore']['results']] == ['restored'] * 8
     results.append(dict(test='restore-all', reply=restored, screen_rect=seen, journal_state=journal['state'], journal_generation=journal['generation']))
 
@@ -606,12 +612,14 @@ def crash_group():
     (host.run / 'v2.sock').unlink()
     # As if it had died while staging a journal write: the leftover must not stop
     # the next instance from writing its own.
-    (host.run / 'v2-journal.next').write_text('{"v":2,"state":"hol')
+    (host.run / 'v2-journal.next').write_text('{"v":3,"state":"hol')
     os.chmod(host.run / 'v2-journal.next', 0o600)
     second = Host('--windows', '8', run=host.run, nonce=host.nonce)
     after = second.journal()
-    assert after['state'] == 'empty' and after['windows'] == [] and after['server_pid'] == second.child.pid and after['generation'] == before['generation'] + 1, after
-    assert after['last_restore']['reason'] == 'startup recovery' and [r['outcome'] for r in after['last_restore']['results']] == ['gone'] * 8, after
+    # New writer commits the inherited obligations before its restoration pass,
+    # then commits the pass that proves these process-owned windows are gone.
+    assert after['state'] == 'empty' and after['windows'] == [] and after['released_windows'] == [] and after['server_pid'] == second.child.pid and after['generation'] == before['generation'] + 2, after
+    assert after['last_restore']['reason'] == 'connection handoff' and [r['outcome'] for r in after['last_restore']['results']] == ['gone'] * 8, after
     assert not (host.run / 'v2-journal.next').exists()
     c, probe, who2, wids2, original2 = setup(second)
     assert probe['table_count'] == 0 and not set(wids) & set(wids2)
@@ -629,6 +637,13 @@ def startup_refusal_group():
     c.restore_all(); c.close(); source.stop()
     variants = []
     for name, alter in [
+        ('obsolete journal schema', lambda j: j.update(v=2)),
+        ('missing writer birth', lambda j: j.pop('server_birth_sec')),
+        ('fractional writer birth', lambda j: j.update(server_birth_usec=0.5)),
+        ('missing boot identity', lambda j: j.pop('boot_sec')),
+        ('missing released ledger', lambda j: j.pop('released_windows')),
+        ('invalid released ledger', lambda j: j.update(released_windows={})),
+        ('active and released duplicate', lambda j: j['released_windows'].append(dict(j['windows'][0], state='released'))),
         ('unknown root field', lambda j: j.update(unknown=True)),
         ('fractional generation', lambda j: j.update(generation=1.5)),
         ('inconsistent root state', lambda j: j.update(state='empty')),
@@ -736,6 +751,7 @@ def release_window_group():
         assert [transform(w) for w in wids[1:]] == placed[1:] and [alpha(w) for w in wids[1:]] == alpha1[1:]
         journal = host.journal()
         assert len(journal['windows']) == 7 and wids[0] not in [w['wid'] for w in journal['windows']]
+        assert [w['wid'] for w in journal['released_windows']] == [wids[0]], journal
         assert c.frame([release]) == [APPLIED]  # idempotent, including its journal
         assert c.frame([record(who[0], target[0], original[0], .7 if c.caps & 1 else None)]) == [APPLIED]
         assert c.frame([record(who[0], target[0], original[0]), release]) == [8, APPLIED]

@@ -118,10 +118,13 @@ native_dock_pid=$(dock_value pid) || fail 'invalid Dock PID report.'
 native_dock_sec=$(dock_value birth_sec) || fail 'invalid Dock birth report.'
 native_dock_usec=$(dock_value birth_usec) || fail 'invalid Dock birth report.'
 native_dock_uid=$(dock_value uid) || fail 'invalid Dock user report.'
+native_boot_sec=$(dock_value boot_sec) || fail 'invalid boot identity report.'
+native_boot_usec=$(dock_value boot_usec) || fail 'invalid boot identity report.'
 [ "$native_dock_uid" = "$native_uid" ] || fail 'Dock belongs to another login user.'
 
 native_state_dir="$HOME/Library/Application Support/Infinify/native-desktop"
 native_record="$native_state_dir/launch.plist"
+native_pending_record="$native_state_dir/launch.pending.plist"
 native_lock="$native_state_dir/launch.lock"
 [ ! -L "$native_state_dir" ] || fail 'the launch-state directory must not be a symlink.'
 /bin/mkdir -p "$native_state_dir"
@@ -138,6 +141,10 @@ record_value() { /usr/bin/plutil -extract "$1" raw -expect "$2" -o - "$native_re
 private_file() { [ -f "$1" ] && [ ! -L "$1" ] && [ "$(/usr/bin/stat -f '%u:%Lp' "$1")" = "$native_uid:600" ]; }
 native_decimal() { case "$1" in ''|*[!0-9]*) return 1 ;; esac; }
 native_pid_valid() { native_decimal "$1" && [ "$1" -ge 1 ] && [ "$1" -le 2147483647 ]; }
+if [ -e "$native_pending_record" ] || [ -L "$native_pending_record" ]; then
+  private_file "$native_pending_record" || fail 'an interrupted launch or recovery marker is not private; preserve it and inspect before retrying.'
+  fail 'an interrupted launch or recovery remains pending; preserve its runtime and inspect it before retrying.'
+fi
 
 native_prior_dock_gone() {
   if [ "$native_old_dock_pid" = "$native_dock_pid" ]; then
@@ -157,7 +164,8 @@ native_archive_retired_record() {
   native_archive_dir=$(/usr/bin/mktemp -d "$native_state_dir/retired-launch.XXXXXX") || fail 'could not create a private archive for the retired launch record.'
   [ "$(/usr/bin/stat -f '%u:%Lp' "$native_archive_dir")" = "$native_uid:700" ] || fail 'retired launch-record archive is not private.'
   native_record_sha256=$(native_digest "$native_record") || fail 'could not hash the retired launch record.'
-  /bin/mv "$native_record" "$native_archive_dir/launch.plist" || fail 'could not preserve the retired launch record.'
+  /bin/cp "$native_record" "$native_archive_dir/launch.plist" || fail 'could not preserve the retired launch record.'
+  /bin/chmod 600 "$native_archive_dir/launch.plist" || fail 'could not secure the archived launch record.'
   private_file "$native_archive_dir/launch.plist" || fail 'archived launch record is not a private regular file.'
   [ "$(native_digest "$native_archive_dir/launch.plist")" = "$native_record_sha256" ] || fail 'archived launch record bytes changed; preserve the archive and inspect it.'
   printf 'Archived the retired Dock launch record at %s; its runtime and recovery journal were preserved.\n' "$native_archive_dir/launch.plist"
@@ -168,24 +176,59 @@ native_validate_retired_journal() {
   private_file "$native_journal" || fail 'the retired helper has no private committed v2 journal; preserve its state and inspect it.'
   native_journal_size=$(/usr/bin/stat -f '%z' "$native_journal") || fail 'could not inspect the retired helper journal.'
   native_decimal "$native_journal_size" && [ "$native_journal_size" -ge 1 ] && [ "$native_journal_size" -le 4194304 ] || fail 'the retired helper journal size is invalid; preserve it and inspect it.'
-  native_journal_version=$(/usr/bin/plutil -extract v raw -expect integer -o - "$native_journal") || fail 'the retired helper journal is not a valid v2 journal.'
-  [ "$native_journal_version" = 2 ] || fail 'the retired helper journal has an unknown schema; preserve it and inspect it.'
+  native_journal_version=$(/usr/bin/plutil -extract v raw -expect integer -o - "$native_journal") || fail 'the retired helper journal is not a valid schema-3 journal.'
+  [ "$native_journal_version" = 3 ] || fail 'the retired helper journal is schema 2 or unknown; it has no retained original-window ledger for safe Dock recovery. Preserve it and inspect it; no automatic transform reconstruction is safe.'
   native_journal_pid=$(/usr/bin/plutil -extract server_pid raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no exact integer server PID.'
   native_pid_valid "$native_journal_pid" && [ "$native_journal_pid" = "$native_old_dock_pid" ] || fail 'the retired helper journal does not identify its recorded Dock process.'
+  native_journal_sec=$(/usr/bin/plutil -extract server_birth_sec raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no exact server birth time.'
+  native_journal_usec=$(/usr/bin/plutil -extract server_birth_usec raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no exact server birth time.'
+  native_journal_uid=$(/usr/bin/plutil -extract server_uid raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no exact server UID.'
+  native_decimal "$native_journal_sec" && [ "$native_journal_sec" = "$native_old_dock_sec" ] || fail 'the retired helper journal birth time differs from the launch record.'
+  native_decimal "$native_journal_usec" && [ "$native_journal_usec" = "$native_old_dock_usec" ] || fail 'the retired helper journal birth time differs from the launch record.'
+  [ "$native_journal_uid" = "$native_uid" ] || fail 'the retired helper journal belongs to another login user.'
+  native_journal_boot_sec=$(/usr/bin/plutil -extract boot_sec raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no exact boot identity.'
+  native_journal_boot_usec=$(/usr/bin/plutil -extract boot_usec raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no exact boot identity.'
+  [ "$native_journal_boot_sec" = "$native_boot_sec" ] && [ "$native_journal_boot_usec" = "$native_boot_usec" ] || fail 'the retired helper journal belongs to a different boot; preserve it and inspect it.'
   native_journal_generation=$(/usr/bin/plutil -extract generation raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no exact integer generation.'
   native_decimal "$native_journal_generation" || fail 'the retired helper journal generation is invalid.'
   native_journal_state=$(/usr/bin/plutil -extract state raw -expect string -o - "$native_journal") || fail 'the retired helper journal has no valid state.'
-  [ "$native_journal_state" = empty ] || fail 'the retired helper journal still records windows or an unknown state; preserve it and inspect it.'
-  native_journal_windows=$(/usr/bin/plutil -extract windows json -o - "$native_journal") || fail 'the retired helper journal has no valid window table.'
-  [ "$native_journal_windows" = '[]' ] || fail 'the retired helper journal still records windows; preserve it and inspect it.'
+  case "$native_journal_state" in empty|holding|restoring) ;; *) fail 'the retired helper journal has an unknown state; preserve it and inspect it.' ;; esac
+  [ "$(/usr/bin/plutil -type windows "$native_journal")" = array ] || fail 'the retired helper journal has no valid active window table.'
+  [ "$(/usr/bin/plutil -type released_windows "$native_journal")" = array ] || fail 'the retired helper journal has no valid retained-original table.'
   native_journal_restore_type=$(/usr/bin/plutil -type last_restore "$native_journal") || fail 'the retired helper journal has no valid restoration receipt.'
   case "$native_journal_restore_type" in '(any)'|dictionary) ;; *) fail 'the retired helper journal has an unknown restoration receipt; preserve it and inspect it.' ;; esac
+  native_import_source="$native_runtime/recovery-source.json"
+  native_sidecar="$native_runtime/payload-arm64e.dylib.json"
+  private_file "$native_sidecar" || fail 'the retired helper sidecar is missing or not private; preserve the runtime and inspect it.'
+  if [ -e "$native_import_source" ] || [ -L "$native_import_source" ]; then
+    private_file "$native_import_source" || fail 'the retained historical recovery source is not private; preserve it and inspect it.'
+    native_import_size=$(/usr/bin/stat -f '%z' "$native_import_source") || fail 'could not inspect the historical recovery source.'
+    native_decimal "$native_import_size" && [ "$native_import_size" -ge 1 ] && [ "$native_import_size" -le 4194304 ] || fail 'the historical recovery source size is invalid; preserve it and inspect it.'
+    private_file "$native_sidecar" || fail 'the retained recovery sidecar is missing or not private; preserve the runtime and inspect it.'
+    native_import_hash=$(/usr/bin/plutil -extract recovery_source_sha256 raw -expect string -o - "$native_sidecar") || fail 'the retained recovery sidecar has no source digest.'
+    native_valid_hash "$native_import_hash" || fail 'the retained recovery sidecar has an invalid source digest.'
+    [ "$(native_digest "$native_import_source")" = "$native_import_hash" ] || fail 'the retained historical recovery source differs from its sidecar digest.'
+    [ "$(/usr/bin/plutil -extract v raw -expect integer -o - "$native_import_source")" = 3 ] || fail 'the retained historical recovery source is not schema 3.'
+    for native_pair in 'server_pid recovery_server_pid' 'server_birth_sec recovery_server_birth_sec' 'server_birth_usec recovery_server_birth_usec' 'server_uid recovery_server_uid' 'boot_sec recovery_boot_sec' 'boot_usec recovery_boot_usec'; do
+      native_source_key=${native_pair%% *}
+      native_sidecar_key=${native_pair#* }
+      native_source_value=$(/usr/bin/plutil -extract "$native_source_key" raw -expect integer -o - "$native_import_source") || fail 'the retained historical recovery source is missing writer identity.'
+      native_sidecar_value=$(/usr/bin/plutil -extract "$native_sidecar_key" raw -expect integer -o - "$native_sidecar") || fail 'the retained recovery sidecar is missing writer identity.'
+      [ "$native_source_value" = "$native_sidecar_value" ] || fail 'the retained historical source identity differs from its sidecar.'
+    done
+  else
+    if /usr/bin/plutil -extract recovery_source_sha256 raw -expect string -o - "$native_sidecar" >/dev/null 2>&1; then
+      fail 'the recovery sidecar names a historical source that is missing; preserve the runtime and inspect it.'
+    fi
+  fi
   for native_artifact in v2-journal.next recovery.json recovery.next helper.sock; do
     [ ! -e "$native_runtime/$native_artifact" ] && [ ! -L "$native_runtime/$native_artifact" ] || fail "the retired helper runtime contains $native_artifact; preserve it and inspect it."
   done
+  native_recovery_source=$native_journal
 }
 
 native_reuse=false
+native_recovery=false
 
 if [ -e "$native_record" ] || [ -L "$native_record" ]; then
   private_file "$native_record" || fail 'the existing launch record is not a private regular file; inspect it before retrying.'
@@ -224,14 +267,16 @@ if [ -e "$native_record" ] || [ -L "$native_record" ]; then
       fail 'could not prove the recorded Dock process is gone; preserve its launch record and runtime.'
     fi
     native_validate_retired_journal
-    native_archive_retired_record
+    native_recovery=true
   fi
 fi
 
 if [ "$native_reuse" = true ]; then
   printf '%s\n' 'Reusing the recorded same-Dock desktop helper with the payload hash bound to this bundle; the app will authenticate its scope and restoration capabilities.'
 else
-  [ ! -e "$native_record" ] && [ ! -L "$native_record" ] || fail 'launch record remains after the retired record check; preserve it and inspect it.'
+  if [ "$native_recovery" != true ]; then
+    [ ! -e "$native_record" ] && [ ! -L "$native_record" ] || fail 'launch record remains after the retired record check; preserve it and inspect it.'
+  fi
   [ -t 0 ] || fail 'start this owner-run launcher in a terminal for the explicit sudo loader step.'
   native_runtime=$(/usr/bin/mktemp -d /tmp/if-native.XXXXXX)
   native_nonce_file="$native_runtime/nonce"
@@ -243,6 +288,8 @@ else
   [ "$(native_digest "$native_runtime/payload-arm64e.dylib")" = "$native_payload_sha256" ] || fail 'copied runtime payload bytes differ from the bundle.'
   /usr/bin/codesign --verify --strict "$native_runtime/payload-arm64e.dylib" || fail 'copied payload signature verification failed.'
   write_record() {
+    native_record_target=$1
+    native_record_outcome=$2
     native_record_tmp=$(/usr/bin/mktemp "$native_state_dir/.launch.XXXXXX")
     cat > "$native_record_tmp" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -256,18 +303,32 @@ PLIST
     /usr/bin/plutil -insert runtime -string "$native_runtime" "$native_record_tmp"
     /usr/bin/plutil -insert nonce_file -string "$native_nonce_file" "$native_record_tmp"
     /usr/bin/plutil -insert payload_sha256 -string "$native_payload_sha256" "$native_record_tmp"
-    /usr/bin/plutil -insert outcome -string "$1" "$native_record_tmp"
+    /usr/bin/plutil -insert outcome -string "$native_record_outcome" "$native_record_tmp"
     /bin/chmod 600 "$native_record_tmp"
-    /bin/mv "$native_record_tmp" "$native_record"
+    /bin/mv "$native_record_tmp" "$native_record_target"
   }
   # Save ambiguity BEFORE sudo can execute remote code. A signal, failed loader
   # or uncertain bootstrap leaves pending on disk and forbids blind reinjection.
-  write_record pending
-  printf '%s\n' 'Starting the explicitly selected full-desktop SAME_USER helper, including newly opened applications. Only the loader runs with sudo.'
-  if ! /usr/bin/sudo "$native_loader" --inject-dock "$native_runtime/payload-arm64e.dylib" "$native_runtime" --nonce-file "$native_nonce_file" --desktop --expected-dock "$native_dock_pid" "$native_dock_sec" "$native_dock_usec"; then
-    fail "loader did not establish readiness; retained pending record at $native_record and runtime at $native_runtime. Inspect before any retry."
+  if [ "$native_recovery" = true ]; then
+    [ ! -e "$native_pending_record" ] && [ ! -L "$native_pending_record" ] || fail 'an interrupted recovery marker already exists; preserve it and inspect it.'
+    write_record "$native_pending_record" pending
+  else
+    write_record "$native_record" pending
   fi
-  write_record ready
+  printf '%s\n' 'Starting the explicitly selected full-desktop SAME_USER helper, including newly opened applications. Only the loader runs with sudo.'
+  if [ "$native_recovery" = true ]; then
+    if ! /usr/bin/sudo "$native_loader" --inject-dock "$native_runtime/payload-arm64e.dylib" "$native_runtime" --nonce-file "$native_nonce_file" --desktop --expected-dock "$native_dock_pid" "$native_dock_sec" "$native_dock_usec" --recover-journal "$native_recovery_source" --expected-retired-dock "$native_old_dock_pid" "$native_old_dock_sec" "$native_old_dock_usec"; then
+      fail "recovery loader did not establish readiness; retained old ready record at $native_record, pending marker at $native_pending_record and runtime at $native_runtime. Inspect before any retry."
+    fi
+    native_archive_retired_record
+    write_record "$native_pending_record" ready
+    /bin/mv "$native_pending_record" "$native_record" || fail 'helper recovered, but the ready record could not be promoted; preserve the pending marker and inspect it.'
+  else
+    if ! /usr/bin/sudo "$native_loader" --inject-dock "$native_runtime/payload-arm64e.dylib" "$native_runtime" --nonce-file "$native_nonce_file" --desktop --expected-dock "$native_dock_pid" "$native_dock_sec" "$native_dock_usec"; then
+      fail "loader did not establish readiness; retained pending record at $native_record and runtime at $native_runtime. Inspect before any retry."
+    fi
+    write_record "$native_record" ready
+  fi
 fi
 [ "$(/usr/bin/id -u)" = "$native_uid" ] && [ "$native_uid" != 0 ] || fail 'refusing to run the app as root or another user.'
 release_lock

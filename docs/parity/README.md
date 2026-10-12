@@ -142,8 +142,29 @@ observed transform and screen rectangle after a native-mode launch and quit.
 Evidence: `target/native-vm/pending-restore-inspect/launch-recovery-live.png` and
 `launch-recovery-quit.jsonl`; executable SHA256
 `ad79a846b79773182d8f15641d3df1342d54dee7bb75f0db4a7bdda83834b3ad`.
-Earlier Terminal/Notes zero-translation restoration remains unresolved, as
-described in the [helper lifecycle notes](../../native/privileged/README.md).
+That successful quit did not survive helper retirement. After a subsequent
+session restored the same Calculator and committed an empty journal, terminating
+its Dock writer changed the window transform from translation (-510,-554) to
+identity. The screen rectangle moved from (510,554,230,408) to (0,0,230,408), while
+its process birth, window ID, owner and native bounds stayed unchanged. This was
+observed before loading another helper and confirmed in a screenshot. Evidence:
+`target/native-vm/pending-restore-inspect/touched-calculator-before-retirement.jsonl`,
+`touched-calculator-after-retirement.jsonl` and
+`touched-calculator-after-retirement.png`. An empty active restoration table is
+therefore insufficient evidence for safe Dock retirement. The historical schema-2
+journals discarded restored originals and cannot reconstruct them. See the
+[helper lifecycle notes](../../native/privileged/README.md) for the recovery work.
+
+The same bundle passed one ordinary TextEdit selection at zoom 0.75: normal HID
+drag events selected the exact 22-character seed, with unchanged native bounds
+and transform throughout the drag and paired release. A Finder-to-TextEdit file
+drop was inconclusive: both the transformed case and the app-stopped native
+baseline left the document unchanged. It establishes neither working file drop
+nor an Infinify-specific failure. Local evidence:
+`target/native-vm/native-content-dnd/receipt.json`. The test-created TextEdit and
+Finder windows were closed afterward. Terminal/Notes already had displaced
+transforms at that test's start, so restoring that baseline did not repair their
+older positions.
 
 These checks establish standard Terminal title-drag and edge-resize routing for
 the sampled interactions, and free-space placement for that TextEdit window. They

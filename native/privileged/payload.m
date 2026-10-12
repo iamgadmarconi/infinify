@@ -11,6 +11,8 @@
 #import <fcntl.h>
 #import <unistd.h>
 #import <errno.h>
+#import <sys/sysctl.h>
+#import <CommonCrypto/CommonDigest.h>
 #import "protocol.h"
 #import "protocol2.h"
 #include <limits.h>
@@ -76,7 +78,7 @@ static NSArray *validAllowlist(id raw) {
 }
 static double nowMS(void) { return NSProcessInfo.processInfo.systemUptime*1000; }
 #import "payload-v2.m"
-static int startServer(const char *directory, const char *nonce, const uint32_t *wids, uint32_t count, BOOL fixture, NSArray *allow, BOOL v2Main) {
+static int startServer(const char *directory, const char *nonce, const uint32_t *wids, uint32_t count, BOOL fixture, NSArray *allow, BOOL v2Main,NSDictionary *recovery) {
     if(!NSThread.isMainThread || started || !directory || !nonce || strlen(nonce)!=64 || getuid()!=geteuid())return -__LINE__;
     for(const char *p=nonce;*p;p++)if(!((*p>='a'&&*p<='f')||(*p>='0'&&*p<='9')))return -__LINE__;
     // Explicit enrollment is restricted to a real NSWindow owned by this fixture host.
@@ -110,7 +112,7 @@ static int startServer(const char *directory, const char *nonce, const uint32_t 
         if(fstatat(directoryFD,*name,&st,AT_SYMLINK_NOFOLLOW)==0 || errno!=ENOENT){close(directoryFD);directoryFD=-1;return -__LINE__;}
     }
     secret=[NSString stringWithUTF8String:nonce];
-    int status=v2Start(directory,v2Main);
+    int status=v2Start(directory,v2Main,recovery);
     if(status){close(directoryFD);directoryFD=-1;return status;}
     started=YES;
     return 0;
@@ -124,7 +126,7 @@ static int startFixture(const char *directory,const char *nonce,const uint32_t *
         if(!allow)return -__LINE__;
     }
     if(started)return -__LINE__;fixtureNativeFamilies=families;
-    return startServer(directory,nonce,wids,count,YES,allow,v2OnMainQueue<0 ? DW_V2_MAIN_QUEUE : v2OnMainQueue!=0);
+    return startServer(directory,nonce,wids,count,YES,allow,v2OnMainQueue<0 ? DW_V2_MAIN_QUEUE : v2OnMainQueue!=0,nil);
 }
 int dw_privileged_fixture_start_windows(const char *directory,const char *nonce,const uint32_t *wids,uint32_t count,const char *allowlistJSON,int v2OnMainQueue) {
     return startFixture(directory,nonce,wids,count,allowlistJSON,v2OnMainQueue,NO);
@@ -138,12 +140,13 @@ __attribute__((constructor)) static void productionStart(void) {
     if(![NSBundle.mainBundle.bundleIdentifier isEqual:@"com.apple.dock"])return;
     Dl_info info={0};if(!dladdr((void *)&productionStart,&info)||!info.dli_fname)return;
     NSString *path=[[NSString stringWithUTF8String:info.dli_fname] stringByAppendingString:@".json"];
-    int fd=open(path.fileSystemRepresentation,O_RDONLY|O_NOFOLLOW);if(fd<0)return;
+    int fd=open(path.fileSystemRepresentation,O_RDONLY|O_NOFOLLOW|O_NONBLOCK);if(fd<0)return;
     struct stat st;char buffer[DW_SIDECAR_MAX_BYTES];
     if(fstat(fd,&st)||!S_ISREG(st.st_mode)||st.st_uid!=getuid()||(st.st_mode&0777)!=0600||st.st_size<=0||st.st_size>=DW_SIDECAR_MAX_BYTES){close(fd);return;}
     ssize_t count=read(fd,buffer,sizeof(buffer));close(fd);if(count!=st.st_size)return;
     id config=[NSJSONSerialization JSONObjectWithData:[NSData dataWithBytes:buffer length:count] options:0 error:NULL];
     if(![config isKindOfClass:NSDictionary.class] || ![config[@"runtime"] isKindOfClass:NSString.class] || ![config[@"nonce"] isKindOfClass:NSString.class])return;
+    if(!v2RecoveryConfigValid(config))return;
     // An optional allowlist pins the helper to explicit process instances.
     NSArray *allow=nil;
     if(config[@"allowlist"]) {
@@ -160,7 +163,7 @@ __attribute__((constructor)) static void productionStart(void) {
         else {NSLog(@"DriftWM transform helper: sidecar v2_queue present but invalid; refusing to start");return;}
     }
     dispatch_async(dispatch_get_main_queue(),^{
-        int status=startServer([config[@"runtime"] fileSystemRepresentation],[config[@"nonce"] UTF8String],NULL,0,NO,allow,v2Main);
+        int status=startServer([config[@"runtime"] fileSystemRepresentation],[config[@"nonce"] UTF8String],NULL,0,NO,allow,v2Main,config[@"recovery_source_sha256"] ? config : nil);
         NSLog(@"DriftWM transform helper start status %d; explicit enrollment required",status);
     });
 }

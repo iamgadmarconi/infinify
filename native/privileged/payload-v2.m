@@ -24,6 +24,9 @@ static uint32_t fixtureWids[16], fixtureCount;
 - (void)dealloc { close(fd);pthread_mutex_destroy(&writeLock); }
 @end
 @interface DW2Entry : NSObject { @public struct dw2_identity who; int owner; CGAffineTransform transform; CGRect bounds; float alpha; BOOL hasAlpha, alphaTouched, fresh, alphaFresh; uint32_t state;
+    // A released original imported after its writer died needs the narrower
+    // unchanged-geometry/reset guard on every retry, including after a crash.
+    BOOL reattaching;
     // Apply-only state. Originals and restoration never depend on this hint.
     CGAffineTransform appliedTransform; BOOL appliedTransformKnown;
 } @end
@@ -43,6 +46,8 @@ static _Atomic uint32_t v2Held, v2Restoring;
 static _Atomic int v2Connections;
 // Touched on v2q only.
 static NSMutableDictionary<NSNumber *,DW2Entry *> *v2Table;
+static NSMutableDictionary<NSNumber *,DW2Entry *> *v2Released;
+static NSDictionary *v2WriterIdentity;
 static NSDictionary *v2LastRestore;
 static uint64_t v2Generation;
 static BOOL v2JournalStale, v2RetryScheduled;
@@ -133,6 +138,14 @@ static int v2RestoreIdentity(const struct dw2_identity *recorded,int recordedOwn
 static BOOL v2SameTransform(CGAffineTransform a,CGAffineTransform b) {
     return (float)a.a==(float)b.a && (float)a.b==(float)b.b && (float)a.c==(float)b.c && (float)a.d==(float)b.d && (float)a.tx==(float)b.tx && (float)a.ty==(float)b.ty;
 }
+static BOOL v2FiniteRect(CGRect r);
+static BOOL v2ReattachCurrent(DW2Entry *e) {
+    CGRect bounds=CGRectZero;CGAffineTransform actual=CGAffineTransformIdentity;float alpha=-1;
+    return v2EntryCurrent(e) && !getBounds(mainConnection(),e->who.wid,&bounds) && v2FiniteRect(bounds)
+        && CGRectEqualToRect(bounds,e->bounds) && !getTransform(mainConnection(),e->who.wid,&actual) && finiteMatrix(actual)
+        && (v2SameTransform(actual,e->transform) || v2SameTransform(actual,CGAffineTransformIdentity))
+        && (!e->alphaTouched || (getAlpha && !getAlpha(mainConnection(),e->who.wid,&alpha) && alpha==e->alpha)) && v2EntryCurrent(e);
+}
 static void v2Count(void) {
     uint32_t restoring=0;
     for(DW2Entry *e in v2Table.objectEnumerator)if(e->state==DW2_RESTORING)restoring++;
@@ -140,18 +153,24 @@ static void v2Count(void) {
 }
 
 // Durable no-follow staging and rename; original values survive every frame.
+static NSDictionary *v2JournalEntry(DW2Entry *e,NSString *state) {
+    return @{@"pid":@(e->who.pid),@"birth_sec":@(e->who.birth_sec),@"birth_usec":@(e->who.birth_usec),@"wid":@(e->who.wid),@"owner":@(e->owner),
+        @"transform":matrix(e->transform),@"alpha":e->hasAlpha ? @(e->alpha) : (id)NSNull.null,@"alpha_touched":@(e->alphaTouched),
+        @"bounds":@[@(e->bounds.origin.x),@(e->bounds.origin.y),@(e->bounds.size.width),@(e->bounds.size.height)],@"state":state};
+}
 static BOOL v2Persist(void) {
-    NSMutableArray *windows=[NSMutableArray array];
+    if(!v2WriterIdentity || v2Table.count+v2Released.count>DW2_MAX_TABLE)return NO;
+    NSMutableArray *windows=[NSMutableArray array],*released=[NSMutableArray array];
     BOOL restoring=NO;
     for(NSNumber *wid in [v2Table.allKeys sortedArrayUsingSelector:@selector(compare:)]) {
         DW2Entry *e=v2Table[wid];
         if(e->state==DW2_RESTORING)restoring=YES;
-        [windows addObject:@{@"pid":@(e->who.pid),@"birth_sec":@(e->who.birth_sec),@"birth_usec":@(e->who.birth_usec),@"wid":@(e->who.wid),@"owner":@(e->owner),
-            @"transform":matrix(e->transform),@"alpha":e->hasAlpha ? @(e->alpha) : (id)NSNull.null,@"alpha_touched":@(e->alphaTouched),
-            @"bounds":@[@(e->bounds.origin.x),@(e->bounds.origin.y),@(e->bounds.size.width),@(e->bounds.size.height)],@"state":e->state==DW2_HELD ? @"held" : @"restoring"}];
+        [windows addObject:v2JournalEntry(e,e->reattaching ? @"reattaching" : e->state==DW2_HELD ? @"held" : @"restoring")];
     }
-    NSDictionary *journal=@{@"v":@2,@"server_pid":@(getpid()),@"generation":@(v2Generation+1),@"state":!windows.count ? @"empty" : restoring ? @"restoring" : @"holding",
-        @"windows":windows,@"last_restore":v2LastRestore ?: (id)NSNull.null};
+    for(NSNumber *wid in [v2Released.allKeys sortedArrayUsingSelector:@selector(compare:)])[released addObject:v2JournalEntry(v2Released[wid],@"released")];
+    NSMutableDictionary *journal=[v2WriterIdentity mutableCopy];
+    [journal addEntriesFromDictionary:@{@"v":@3,@"generation":@(v2Generation+1),@"state":!windows.count ? @"empty" : restoring ? @"restoring" : @"holding",
+        @"windows":windows,@"released_windows":released,@"last_restore":v2LastRestore ?: (id)NSNull.null}];
     NSData *data=[NSJSONSerialization dataWithJSONObject:journal options:NSJSONWritingPrettyPrinted error:NULL];
     if(!data)return NO;
     int fd=openat(directoryFD,"v2-journal.next",O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600);
@@ -188,23 +207,30 @@ static void v2Restore(NSString *reason,BOOL retry,NSMutableData *results,struct 
         struct dw2_restore_result r={.id=e->who,.outcome=DW2_PENDING,.set_status=-1};
         BOOL transformSet=NO,transformRead=NO,transformMatches=NO,alphaChecked=NO,alphaCurrent=NO,alphaSet=NO,alphaRead=NO;
         int transformSetStatus=0,transformGetStatus=0,alphaSetStatus=0,alphaGetStatus=0,finalIdentity=-1;
-        CGAffineTransform actual=CGAffineTransformIdentity;float alpha=-1;
+        CGAffineTransform actual=CGAffineTransformIdentity;float alpha=-1;CGRect releasedBounds=CGRectZero;
         int observed=v2RestoreIdentity(&e->who,e->owner);
         if(observed==DW2_INSTANCE_GONE){r.outcome=DW2_GONE;r.set_status=0;}
-        else if(observed==DW2_INSTANCE_CURRENT) {
+        else if(observed==DW2_INSTANCE_CURRENT && (!e->reattaching || v2ReattachCurrent(e))) {
             transformSet=YES;r.set_status=transformSetStatus=setTransform(mainConnection(),e->who.wid,e->transform);
             BOOL ok=r.set_status==0 && (transformRead=YES,transformGetStatus=getTransform(mainConnection(),e->who.wid,&actual))==0
                 && (transformMatches=v2SameTransform(actual,e->transform));
             if(e->alphaTouched) {
-                alphaChecked=YES;alphaCurrent=v2EntryCurrent(e);
+                alphaChecked=YES;alphaCurrent=e->reattaching ? v2ReattachCurrent(e) : v2EntryCurrent(e);
                 int status=alphaCurrent ? (alphaSet=YES,alphaSetStatus=setAlpha(mainConnection(),e->who.wid,e->alpha)) : -1;
                 if(status && !r.set_status)r.set_status=status;
                 if(status || (alphaRead=YES,alphaGetStatus=getAlpha(mainConnection(),e->who.wid,&alpha)) || alpha!=e->alpha)ok=NO;
             }
+            // The retained release describes the geometry at restoration, not
+            // the possibly resized geometry from first admission.
+            ok=ok && !getBounds(mainConnection(),e->who.wid,&releasedBounds) && v2FiniteRect(releasedBounds)
+                && (!e->reattaching || CGRectEqualToRect(releasedBounds,e->bounds));
             r.outcome=ok && (finalIdentity=v2RestoreIdentity(&e->who,e->owner))==DW2_INSTANCE_CURRENT ? DW2_RESTORED : DW2_PENDING;
         }
         if(r.outcome==DW2_PENDING){e->state=DW2_RESTORING;pending++;}
-        else [v2Table removeObjectForKey:wid];
+        else {
+            if(r.outcome==DW2_RESTORED){e->bounds=releasedBounds;e->reattaching=NO;e->appliedTransformKnown=NO;v2Released[wid]=e;}
+            [v2Table removeObjectForKey:wid];
+        }
         count++;
         [results appendBytes:&r length:sizeof(r)];
         NSMutableDictionary *receipt=[@{@"pid":@(r.id.pid),@"birth_sec":@(r.id.birth_sec),@"birth_usec":@(r.id.birth_usec),@"wid":@(r.id.wid),
@@ -248,6 +274,7 @@ static void v2Restore(NSString *reason,BOOL retry,NSMutableData *results,struct 
 // changed; a frame of known windows writes nothing to disk.
 static void v2Apply(const struct dw2_record *records,uint32_t count,uint8_t *status) {
     NSMutableArray *entries=[NSMutableArray arrayWithCapacity:count];
+    NSMutableDictionary *replacedReleases=[NSMutableDictionary dictionary];
     NSMutableSet<NSNumber *> *releasing=[NSMutableSet set];
     for(uint32_t i=0;i<count;i++)if(records[i].flags==DW2_RECORD_RESTORE)[releasing addObject:@(records[i].id.wid)];
     BOOL changed=NO;
@@ -284,15 +311,23 @@ static void v2Apply(const struct dw2_record *records,uint32_t count,uint8_t *sta
         if(e && e->owner!=owner){status[i]=DW2_IDENTITY;continue;}
         if(e && e->state==DW2_RESTORING){status[i]=DW2_RESTORE_PENDING;continue;}
         if(!e) {
-            if(v2Table.count>=DW2_MAX_TABLE){status[i]=DW2_TABLE_FULL;continue;}
+            // Live released originals remain obligations across connection death.
+            // Make room only by proving a recorded instance is gone, never age.
+            if(!v2Released[key] && v2Table.count+v2Released.count>=DW2_MAX_TABLE) {
+                for(NSNumber *releasedKey in v2Released.allKeys){DW2Entry *old=v2Released[releasedKey];
+                    if(v2RestoreIdentity(&old->who,old->owner)==DW2_INSTANCE_GONE){[v2Released removeObjectForKey:releasedKey];changed=YES;}}
+            }
+            if(v2Table.count+v2Released.count-(v2Released[key]?1:0)>=DW2_MAX_TABLE){status[i]=DW2_TABLE_FULL;continue;}
             e=[DW2Entry new];e->who=now;e->owner=owner;e->state=DW2_HELD;e->fresh=YES;
-            if(getTransform(mainConnection(),now.wid,&e->transform) || !finiteMatrix(e->transform) || getBounds(mainConnection(),now.wid,&e->bounds)){status[i]=DW2_SNAPSHOT;continue;}
+            if(getTransform(mainConnection(),now.wid,&e->transform) || !finiteMatrix(e->transform) || getBounds(mainConnection(),now.wid,&e->bounds) || !v2FiniteRect(e->bounds)){status[i]=DW2_SNAPSHOT;continue;}
             // The original alpha is captured with the window, whether or not this
             // record changes it, so a later record can.
             if(getAlpha && setAlpha) {
                 if(getAlpha(mainConnection(),now.wid,&e->alpha) || !isfinite(e->alpha)){status[i]=DW2_SNAPSHOT;continue;}
                 e->hasAlpha=YES;
             }
+            if(!v2EntryCurrent(e)){status[i]=DW2_IDENTITY;continue;}
+            if(v2Released[key]){replacedReleases[key]=v2Released[key];[v2Released removeObjectForKey:key];}
             v2Table[key]=e;changed=YES;
         }
         if(wantsAlpha && !e->alphaTouched){e->alphaTouched=e->alphaFresh=YES;changed=YES;}
@@ -306,7 +341,7 @@ static void v2Apply(const struct dw2_record *records,uint32_t count,uint8_t *sta
             if(!saved) {
                 // Nothing of this window (or of its alpha) is changed without a record on disk.
                 status[i]=DW2_JOURNAL;entries[i]=NSNull.null;
-                if(e->fresh)[v2Table removeObjectForKey:@(e->who.wid)];
+                if(e->fresh){NSNumber *key=@(e->who.wid);[v2Table removeObjectForKey:key];if(replacedReleases[key])v2Released[key]=replacedReleases[key];}
                 else e->alphaTouched=NO;
             }
         }
@@ -646,71 +681,155 @@ static BOOL v2LastRestoreValid(id value) {
     }
     return YES;
 }
-static BOOL v2LoadJournal(void) {
-    int fd=openat(directoryFD,"v2-journal.json",O_RDONLY|O_NOFOLLOW);
-    if(fd<0) {
-        if(errno!=ENOENT)return NO;
-        // No committed journal means no original could have been used to mutate.
-        // Remove only our interrupted regular private staging file, never a directory,
-        // symlink, foreign-owned file or any legacy recovery artifact.
-        struct stat stage;
-        if(fstatat(directoryFD,"v2-journal.next",&stage,AT_SYMLINK_NOFOLLOW)==0) {
-            if(!S_ISREG(stage.st_mode) || stage.st_uid!=getuid() || (stage.st_mode&0777)!=0600)return NO;
-            if(unlinkat(directoryFD,"v2-journal.next",0) || fsync(directoryFD))return NO;
-        } else if(errno!=ENOENT)return NO;
-        return YES;
-    }
-    struct stat stat;
-    if(fstat(fd,&stat) || !S_ISREG(stat.st_mode) || stat.st_uid!=getuid() || (stat.st_mode&0777)!=0600 || stat.st_size<=0 || stat.st_size>4*1024*1024){close(fd);return NO;}
+// Schema 3 preserves released originals for a later, explicitly authorized
+// connection handoff. No schema-2 journal can establish that missing obligation.
+static NSArray *v2WriterKeys(void) {
+    return @[@"server_pid",@"server_birth_sec",@"server_birth_usec",@"server_uid",@"boot_sec",@"boot_usec"];
+}
+static BOOL v2WriterValid(NSDictionary *value) {
+    return v2Integer(value[@"server_pid"],1,INT_MAX) && v2Integer(value[@"server_birth_sec"],1,UINT64_MAX)
+        && v2Integer(value[@"server_birth_usec"],0,999999) && v2Integer(value[@"server_uid"],0,UINT32_MAX)
+        && v2Integer(value[@"boot_sec"],1,UINT64_MAX) && v2Integer(value[@"boot_usec"],0,999999);
+}
+static NSDictionary *v2CurrentWriterIdentity(void) {
+    struct proc_bsdinfo process={0};struct timeval boot={0};size_t length=sizeof(boot);
+    if(proc_pidinfo(getpid(),PROC_PIDTBSDINFO,0,&process,sizeof(process))!=sizeof(process)
+        || process.pbi_uid!=getuid() || sysctlbyname("kern.boottime",&boot,&length,NULL,0) || length!=sizeof(boot)
+        || boot.tv_sec<=0 || boot.tv_usec<0 || boot.tv_usec>=1000000 || !process.pbi_start_tvsec)return nil;
+    return @{@"server_pid":@(getpid()),@"server_birth_sec":@(process.pbi_start_tvsec),@"server_birth_usec":@(process.pbi_start_tvusec),
+        @"server_uid":@(getuid()),@"boot_sec":@(boot.tv_sec),@"boot_usec":@(boot.tv_usec)};
+}
+static BOOL v2WriterSame(NSDictionary *a,NSDictionary *b) {
+    for(NSString *key in v2WriterKeys())if(![a[key]isEqual:b[key]])return NO;
+    return YES;
+}
+static BOOL v2OldWriterDead(NSDictionary *writer) {
+    int pid=[writer[@"server_pid"]intValue];struct proc_bsdinfo process={0};
+    if(proc_pidinfo(pid,PROC_PIDTBSDINFO,0,&process,sizeof(process))==sizeof(process))
+        return process.pbi_start_tvsec!=[writer[@"server_birth_sec"]unsignedLongLongValue]
+            || process.pbi_start_tvusec!=[writer[@"server_birth_usec"]unsignedLongLongValue];
+    // An inaccessible process is not dead. ESRCH is affirmative kernel absence.
+    errno=0;return kill(pid,0)<0 && errno==ESRCH;
+}
+static BOOL v2RetiredWriter(NSDictionary *writer) {
+    return [writer[@"server_uid"]isEqual:v2WriterIdentity[@"server_uid"]]
+        && [writer[@"boot_sec"]isEqual:v2WriterIdentity[@"boot_sec"]] && [writer[@"boot_usec"]isEqual:v2WriterIdentity[@"boot_usec"]]
+        && !v2WriterSame(writer,v2WriterIdentity) && v2OldWriterDead(writer);
+}
+static BOOL v2RecoveryConfigValid(NSDictionary *config) {
+    NSArray *keys=@[@"recovery_source_sha256",@"recovery_server_pid",@"recovery_server_birth_sec",@"recovery_server_birth_usec",
+        @"recovery_server_uid",@"recovery_boot_sec",@"recovery_boot_usec"];
+    NSUInteger count=0;
+    for(NSString *key in config)if([key hasPrefix:@"recovery_"]){if(![keys containsObject:key])return NO;count++;}
+    if(!count)return YES;
+    NSString *hash=config[@"recovery_source_sha256"];
+    if(count!=keys.count || ![hash isKindOfClass:NSString.class] || hash.length!=64)return NO;
+    for(NSUInteger i=0;i<hash.length;i++){unichar c=[hash characterAtIndex:i];if(!((c>='0'&&c<='9')||(c>='a'&&c<='f')))return NO;}
+    NSMutableDictionary *writer=[NSMutableDictionary dictionary];
+    for(NSString *key in v2WriterKeys())writer[key]=config[[@"recovery_"stringByAppendingString:key]];
+    return v2WriterValid(writer);
+}
+static NSData *v2ReadJournal(const char *name,BOOL *absent) {
+    *absent=NO;int fd=openat(directoryFD,name,O_RDONLY|O_NOFOLLOW|O_NONBLOCK);
+    if(fd<0){*absent=errno==ENOENT;return nil;}
+    struct stat st;
+    if(fstat(fd,&st) || !S_ISREG(st.st_mode) || st.st_uid!=getuid() || (st.st_mode&0777)!=0600
+        || st.st_size<=0 || st.st_size>4*1024*1024){close(fd);return nil;}
     NSMutableData *data=[NSMutableData data];char chunk[4096];ssize_t n;
-    while((n=read(fd,chunk,sizeof(chunk)))>0 && data.length<=4*1024*1024)[data appendBytes:chunk length:n];
-    close(fd);
-    NSDictionary *journal=n==0 ? [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL] : nil;
-    if(!v2Keys(journal,@[@"v",@"server_pid",@"generation",@"state",@"windows",@"last_restore"])
-        || !v2Integer(journal[@"v"],2,2) || !v2Integer(journal[@"server_pid"],1,INT_MAX) || !v2Integer(journal[@"generation"],0,UINT64_MAX-1)
-        || ![journal[@"windows"]isKindOfClass:NSArray.class] || [journal[@"windows"]count]>DW2_MAX_TABLE || !v2LastRestoreValid(journal[@"last_restore"]))return NO;
-    NSMutableDictionary *loaded=[NSMutableDictionary dictionary];BOOL restoring=NO;
-    for(NSDictionary *w in journal[@"windows"]) {
-        if(!v2Keys(w,@[@"pid",@"birth_sec",@"birth_usec",@"wid",@"owner",@"transform",@"alpha",@"alpha_touched",@"bounds",@"state"])
-            || !v2Integer(w[@"pid"],1,INT_MAX) || !v2Integer(w[@"birth_sec"],1,UINT64_MAX) || !v2Integer(w[@"birth_usec"],0,999999)
-            || !v2Integer(w[@"wid"],1,UINT32_MAX) || !v2Integer(w[@"owner"],1,INT_MAX) || !v2Boolean(w[@"alpha_touched"])
-            || ![@[@"held",@"restoring"]containsObject:w[@"state"]] || loaded[w[@"wid"]])return NO;
-        restoring|=[w[@"state"]isEqual:@"restoring"];
-        NSArray *t=w[@"transform"],*b=w[@"bounds"];
-        if(![t isKindOfClass:NSArray.class] || t.count!=6 || ![b isKindOfClass:NSArray.class] || b.count!=4)return NO;
-        for(id value in [t arrayByAddingObjectsFromArray:b])if(!isNumber(value) || !isfinite([value doubleValue]))return NO;
-        DW2Entry *e=[DW2Entry new];
-        e->who=(struct dw2_identity){.pid=[w[@"pid"]intValue],.wid=[w[@"wid"]unsignedIntValue],.birth_sec=[w[@"birth_sec"]unsignedLongLongValue],.birth_usec=[w[@"birth_usec"]unsignedLongLongValue]};
-        e->owner=[w[@"owner"]intValue];e->state=DW2_RESTORING;
-        e->transform=CGAffineTransformMake([t[0]doubleValue],[t[1]doubleValue],[t[2]doubleValue],[t[3]doubleValue],[t[4]doubleValue],[t[5]doubleValue]);
-        e->bounds=CGRectMake([b[0]doubleValue],[b[1]doubleValue],[b[2]doubleValue],[b[3]doubleValue]);
-        if(!finiteMatrix(e->transform) || !v2FiniteRect(e->bounds))return NO;
-        if(w[@"alpha"]!=NSNull.null) {
-            if(!isNumber(w[@"alpha"]) || !isfinite([w[@"alpha"]doubleValue]) || [w[@"alpha"]doubleValue]<0 || [w[@"alpha"]doubleValue]>1)return NO;
-            e->alpha=[w[@"alpha"]floatValue];e->hasAlpha=YES;
-        }
-        e->alphaTouched=[w[@"alpha_touched"]boolValue];
-        if(e->alphaTouched && (!e->hasAlpha || !setAlpha || !getAlpha))return NO;
-        loaded[@(e->who.wid)]=e;
-    }
-    NSString *state=!loaded.count ? @"empty" : restoring ? @"restoring" : @"holding";
-    if(![journal[@"state"]isEqual:state])return NO;
-    // Validate the entire committed journal before removing an interrupted stage.
+    for(;;){n=read(fd,chunk,sizeof(chunk));if(n<0&&errno==EINTR)continue;if(n<=0)break;
+        [data appendBytes:chunk length:n];if(data.length>4*1024*1024){n=-1;break;}}
+    close(fd);return n==0 && data.length==(NSUInteger)st.st_size ? data : nil;
+}
+static BOOL v2RemoveStaging(void) {
     struct stat stage;
     if(fstatat(directoryFD,"v2-journal.next",&stage,AT_SYMLINK_NOFOLLOW)==0) {
-        if(!S_ISREG(stage.st_mode) || stage.st_uid!=getuid() || (stage.st_mode&0777)!=0600 || unlinkat(directoryFD,"v2-journal.next",0) || fsync(directoryFD))return NO;
-    } else if(errno!=ENOENT)return NO;
-    v2Generation=[journal[@"generation"]unsignedLongLongValue];
+        if(!S_ISREG(stage.st_mode) || stage.st_uid!=getuid() || (stage.st_mode&0777)!=0600)return NO;
+        return !unlinkat(directoryFD,"v2-journal.next",0) && !fsync(directoryFD);
+    }
+    return errno==ENOENT;
+}
+static DW2Entry *v2DecodeEntry(NSDictionary *w,BOOL released) {
+    if(!v2Keys(w,@[@"pid",@"birth_sec",@"birth_usec",@"wid",@"owner",@"transform",@"alpha",@"alpha_touched",@"bounds",@"state"])
+        || !v2Integer(w[@"pid"],1,INT_MAX) || !v2Integer(w[@"birth_sec"],1,UINT64_MAX) || !v2Integer(w[@"birth_usec"],0,999999)
+        || !v2Integer(w[@"wid"],1,UINT32_MAX) || !v2Integer(w[@"owner"],1,INT_MAX) || !v2Boolean(w[@"alpha_touched"])
+        || !(released ? [w[@"state"]isEqual:@"released"] : [@[@"held",@"restoring",@"reattaching"]containsObject:w[@"state"]]))return nil;
+    NSArray *t=w[@"transform"],*b=w[@"bounds"];
+    if(![t isKindOfClass:NSArray.class] || t.count!=6 || ![b isKindOfClass:NSArray.class] || b.count!=4)return nil;
+    for(id value in [t arrayByAddingObjectsFromArray:b])if(!isNumber(value) || !isfinite([value doubleValue]))return nil;
+    DW2Entry *e=[DW2Entry new];
+    e->who=(struct dw2_identity){.pid=[w[@"pid"]intValue],.wid=[w[@"wid"]unsignedIntValue],.birth_sec=[w[@"birth_sec"]unsignedLongLongValue],.birth_usec=[w[@"birth_usec"]unsignedLongLongValue]};
+    e->owner=[w[@"owner"]intValue];e->state=DW2_RESTORING;e->reattaching=[w[@"state"]isEqual:@"reattaching"];
+    e->transform=CGAffineTransformMake([t[0]doubleValue],[t[1]doubleValue],[t[2]doubleValue],[t[3]doubleValue],[t[4]doubleValue],[t[5]doubleValue]);
+    e->bounds=CGRectMake([b[0]doubleValue],[b[1]doubleValue],[b[2]doubleValue],[b[3]doubleValue]);
+    if(!finiteMatrix(e->transform) || !v2FiniteRect(e->bounds))return nil;
+    if(w[@"alpha"]!=NSNull.null) {
+        if(!isNumber(w[@"alpha"]) || !isfinite([w[@"alpha"]doubleValue]) || [w[@"alpha"]doubleValue]<0 || [w[@"alpha"]doubleValue]>1)return nil;
+        e->alpha=[w[@"alpha"]floatValue];e->hasAlpha=YES;
+    }
+    e->alphaTouched=[w[@"alpha_touched"]boolValue];
+    if(e->alphaTouched && (!e->hasAlpha || !setAlpha || !getAlpha))return nil;
+    return e;
+}
+static NSDictionary *v2DecodeJournal(NSData *data,NSMutableDictionary *active,NSMutableDictionary *released) {
+    NSDictionary *journal=[NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
+    NSArray *keys=[v2WriterKeys()arrayByAddingObjectsFromArray:@[@"v",@"generation",@"state",@"windows",@"released_windows",@"last_restore"]];
+    if(!v2Keys(journal,keys) || !v2Integer(journal[@"v"],3,3) || !v2WriterValid(journal) || !v2Integer(journal[@"generation"],0,UINT64_MAX-1)
+        || ![journal[@"windows"]isKindOfClass:NSArray.class] || ![journal[@"released_windows"]isKindOfClass:NSArray.class]
+        || [journal[@"windows"]count]+[journal[@"released_windows"]count]>DW2_MAX_TABLE || !v2LastRestoreValid(journal[@"last_restore"]))return nil;
+    BOOL restoring=NO;
+    for(NSDictionary *w in journal[@"windows"]) {
+        DW2Entry *e=v2DecodeEntry(w,NO);if(!e || active[@(e->who.wid)])return nil;
+        restoring|=![w[@"state"]isEqual:@"held"];active[@(e->who.wid)]=e;
+    }
+    for(NSDictionary *w in journal[@"released_windows"]) {
+        DW2Entry *e=v2DecodeEntry(w,YES);if(!e || active[@(e->who.wid)] || released[@(e->who.wid)])return nil;
+        released[@(e->who.wid)]=e;
+    }
+    NSString *state=!active.count ? @"empty" : restoring ? @"restoring" : @"holding";
+    return [journal[@"state"]isEqual:state] ? journal : nil;
+}
+static BOOL v2LoadJournal(NSDictionary *recovery) {
+    BOOL absent=NO;NSData *data=v2ReadJournal("v2-journal.json",&absent);
+    if(!data&&!absent)return NO;
+    BOOL sourceAbsent=NO;NSData *source=v2ReadJournal("recovery-source.json",&sourceAbsent);
+    if(recovery) {
+        if(!source || !v2RecoveryConfigValid(recovery))return NO;
+        unsigned char bytes[CC_SHA256_DIGEST_LENGTH];CC_SHA256(source.bytes,(CC_LONG)source.length,bytes);
+        NSMutableString *hash=[NSMutableString stringWithCapacity:64];for(unsigned i=0;i<sizeof(bytes);i++)[hash appendFormat:@"%02x",bytes[i]];
+        if(![hash isEqual:recovery[@"recovery_source_sha256"]])return NO;
+        NSDictionary *history=v2DecodeJournal(source,[NSMutableDictionary dictionary],[NSMutableDictionary dictionary]);if(!history)return NO;
+        for(NSString *key in v2WriterKeys())if(![history[key]isEqual:recovery[[@"recovery_"stringByAppendingString:key]]])return NO;
+        if(!v2RetiredWriter(history))return NO;
+        // After a second crash the newer committed journal is the sole active
+        // authority. Validate historical provenance, but never merge or fall
+        // back to it when a newer committed journal is malformed.
+        if(absent)data=source;
+    }else if(!sourceAbsent)return NO;
+    if(!data)return v2RemoveStaging();
+    NSMutableDictionary *active=[NSMutableDictionary dictionary],*released=[NSMutableDictionary dictionary];
+    NSDictionary *journal=v2DecodeJournal(data,active,released);if(!journal)return NO;
+    BOOL handoff=!v2WriterSame(journal,v2WriterIdentity);
+    if(handoff) {
+        if(!v2RetiredWriter(journal))return NO;
+        for(NSNumber *wid in released){DW2Entry *e=released[wid];e->reattaching=YES;active[wid]=e;}
+        [released removeAllObjects];
+    }
+    if(!v2RemoveStaging())return NO;
+    v2Generation=recovery && absent ? 0 : [journal[@"generation"]unsignedLongLongValue];
     v2LastRestore=journal[@"last_restore"]==NSNull.null ? nil : journal[@"last_restore"];
-    [v2Table addEntriesFromDictionary:loaded];
-    if(loaded.count)v2Restore(@"startup recovery",NO,nil,NULL);
+    [v2Table addEntriesFromDictionary:active];[v2Released addEntriesFromDictionary:released];v2Count();
+    // Commit the new writer's complete recovery obligation before any native
+    // setter. Reattaching records retain their stricter guard durably on retry.
+    if(handoff && !v2Persist())return NO;
+    if(active.count)v2Restore(handoff ? @"connection handoff" : @"startup recovery",NO,nil,NULL);
     return YES;
 }
 // The sole listener. A failure is startup failure, never a fallback server.
-static int v2Start(const char *directory,BOOL onMain) {
+static int v2Start(const char *directory,BOOL onMain,NSDictionary *recovery) {
+    v2WriterIdentity=v2CurrentWriterIdentity();if(!v2WriterIdentity)return -__LINE__;
     v2OnMain=onMain;
     v2q=onMain ? dispatch_get_main_queue() : dispatch_queue_create("dw.v2",dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,QOS_CLASS_USER_INTERACTIVE,0));
-    v2Table=[NSMutableDictionary dictionary];
+    v2Table=[NSMutableDictionary dictionary];v2Released=[NSMutableDictionary dictionary];
     struct sockaddr_un addr={.sun_family=AF_UNIX};
     if(snprintf(addr.sun_path,sizeof(addr.sun_path),"%s/" DW2_SOCKET,directory)>=(int)sizeof(addr.sun_path))return -__LINE__;
     int listener=socket(AF_UNIX,SOCK_STREAM,0);
@@ -720,8 +839,8 @@ static int v2Start(const char *directory,BOOL onMain) {
     // Recovery's first pass finishes before accepting clients. Readiness cannot
     // succeed on a malformed journal, and there is no other listener to fall back to.
     __block BOOL loaded=NO;
-    if(onMain)loaded=v2LoadJournal();
-    else dispatch_sync(v2q,^{loaded=v2LoadJournal();});
+    if(onMain)loaded=v2LoadJournal(recovery);
+    else dispatch_sync(v2q,^{loaded=v2LoadJournal(recovery);});
     if(!loaded){close(listener);unlinkat(directoryFD,DW2_SOCKET,0);return -__LINE__;}
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
         for(;;) {
