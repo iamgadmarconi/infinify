@@ -155,6 +155,19 @@ therefore insufficient evidence for safe Dock retirement. The historical schema-
 journals discarded restored originals and cannot reconstruct them. See the
 [helper lifecycle notes](../../native/privileged/README.md) for the recovery work.
 
+The schema-3 retained-original ledger was then exercised with ordinary Calculator
+using build `2d9c7d6`. After Dock retirement reset its transform to identity, the
+production launcher started a replacement helper, recovered the exact original
+translation (-510,-554), and admitted the window with that restored original.
+Normal quit again restored its original native and screen bounds
+(510,554,230,408), with no pending entries and the released original retained.
+This is one exact-geometry handoff check, not optical acceptance: the saved
+screenshot was black. A second retirement again reset the transform, but the VM
+rebooted during the subsequent sudo prompt before the recovery launcher ran.
+That second handoff is untested; the reboot cause remains undetermined and no
+fresh guest panic report was found. Evidence and hashes:
+`target/native-vm/retained-originals/receipt.json`.
+
 The same bundle passed one ordinary TextEdit selection at zoom 0.75: normal HID
 drag events selected the exact 22-character seed, with unchanged native bounds
 and transform throughout the drag and paired release. A Finder-to-TextEdit file

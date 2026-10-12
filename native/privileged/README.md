@@ -87,11 +87,12 @@ freshness, not native usability.
 
 The bundled launcher obtains Dock's exact PID, process birth, UID and stable
 boot-session UUID from the loader's read-only `--dock-identity` query. It pins
-the current Dock during the explicit loader step and binds the `pending`/`ready` launch
-record (schema 2) to the bundled payload SHA-256. Reuse also hashes the actual
-private runtime payload and requires it to match both the bundle and record. A
-ready record for the exact same Dock instance can be reused after the runtime
-payload checks pass.
+the current Dock during the explicit loader step and binds the `pending`/`ready`
+launch record (schema 3) to the Dock PID, process birth, boot-session UUID and
+bundled payload SHA-256. Reuse also hashes the actual private runtime payload
+and requires it to match both the bundle and record. A ready record for the
+exact same Dock instance and boot session can be reused after the runtime payload
+checks pass.
 
 The boot identity is the canonical uppercase `kern.bootsessionuuid`. XNU's
 [`kern_sysctl.c`](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/kern_sysctl.c)
@@ -103,8 +104,9 @@ no XNU implementation code is copied into Infinify.
 
 For a retired Dock, the launcher accepts only a committed schema-3 journal
 written by the recorded Dock process, same login UID and same
-`kern.bootsessionuuid`. The loader rechecks the journal's private file and directory, exact writer identity,
-positive old-process retirement and schema-3 header, then copies its bytes to
+`kern.bootsessionuuid`. The loader rechecks the journal's private file and
+directory, exact writer identity, positive old-process retirement and schema-3
+header, then copies its bytes to
 the new private runtime as `recovery-source.json`. The sidecar binds the copy by
 SHA-256 and recorded writer identity; the payload validates its complete schema
 and identities before any restore setter. On first import, the fresh runtime has
@@ -116,17 +118,24 @@ source. When that runtime is retired, its own current journal is the only handof
 input. Any retained `recovery-source.json` is hash-checked historical provenance,
 never merged or used as a fallback.
 
+When a ready schema-3 record belongs to a different boot session, the launcher
+archives its exact bytes and starts fresh without replaying the old journal;
+any remaining runtime and journal are left untouched. A missing runtime in the
+same boot session remains an error. Pending/unknown outcomes remain refused,
+including across a reboot. Schema-2 launch records lack the boot UUID and are
+preserved with an inspection error rather than inferred or upgraded.
+
 The launcher keeps the previous ready record until the recovery loader reports
 authenticated readiness. A private `launch.pending.plist` marker blocks any
 retry after an interrupted or uncertain recovery. On success, the old record is
 archived byte-for-byte and the new ready record is promoted. The old runtime and
 journal remain untouched. Schema-2 and unknown journals are refused because
 they lack the retained originals needed for safe connection handoff; the
-launcher never reconstructs transforms from native bounds. Unresolved recovery,
-a live or uncertain prior Dock, invalid payloads, or changed boot-session UUID also
-block startup and preserve all state. There is no compatibility fallback or
-automatic injection retry. The launcher runs only the loader through sudo and
-starts the app as the login user. The regular LaunchAgent remains the
+launcher never reconstructs transforms from native bounds. A same-boot journal
+with a mismatched boot-session UUID, unresolved recovery, a live or uncertain
+prior Dock, or invalid payloads blocks startup and preserves all state. There is
+no compatibility fallback or automatic injection retry. The launcher runs only
+the loader through sudo and starts the app as the login user. The regular LaunchAgent remains the
 capture-mode startup and does not invoke this explicit helper path.
 
 An earlier UTM run established that a new helper could start after an empty
@@ -134,9 +143,14 @@ schema-2 journal, but it did not cover a window whose transform had been touched
 by the retiring Dock. A later read-only receipt showed Calculator WID 183 at
 transform `[-510,-554]` with `windows: []` before Dock exit, then at identity
 transform before the replacement helper was injected. The old empty journal had
-already discarded the original transform. Schema-3 retained-original recovery
-is the source fix for that case; its production guest path remains unvalidated.
-Receipts are under `target/native-vm/pending-restore-inspect/`.
+already discarded the original transform. The schema-3 retained-original fix
+passed one production-launcher handoff with ordinary Calculator on build
+`2d9c7d6`: independent native geometry matched the exact original after recovery
+and again after normal quit. Its black screenshot provides no optical proof.
+A second handoff was interrupted by a guest reboot before the recovery launcher
+ran; the reboot cause is undetermined. Receipts are under
+`target/native-vm/pending-restore-inspect/` and
+`target/native-vm/retained-originals/receipt.json`.
 
 Direct loader invocation also requires explicit prepared-machine authorization:
 

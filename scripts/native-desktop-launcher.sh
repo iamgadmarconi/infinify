@@ -179,7 +179,13 @@ native_archive_retired_record() {
   /bin/chmod 600 "$native_archive_dir/launch.plist" || fail 'could not secure the archived launch record.'
   private_file "$native_archive_dir/launch.plist" || fail 'archived launch record is not a private regular file.'
   [ "$(native_digest "$native_archive_dir/launch.plist")" = "$native_record_sha256" ] || fail 'archived launch record bytes changed; preserve the archive and inspect it.'
-  printf 'Archived the retired Dock launch record at %s; its runtime and recovery journal were preserved.\n' "$native_archive_dir/launch.plist"
+  printf 'Archived the retired Dock launch record at %s; no runtime or recovery journal was changed.\n' "$native_archive_dir/launch.plist"
+}
+
+native_archive_and_remove_prior_boot_record() {
+  native_archive_retired_record
+  [ "$(native_digest "$native_record")" = "$native_record_sha256" ] || fail 'the launch record changed while archiving; preserve both copies and inspect them.'
+  /bin/rm "$native_record" || fail 'the prior-boot record was archived but could not be removed from the active launch path.'
 }
 
 native_validate_retired_journal() {
@@ -245,9 +251,15 @@ native_recovery=false
 
 if [ -e "$native_record" ] || [ -L "$native_record" ]; then
   private_file "$native_record" || fail 'the existing launch record is not a private regular file; inspect it before retrying.'
-  [ "$(record_value version integer)" = 2 ] || fail 'unknown launch-record format; inspect it before retrying.'
+  /usr/bin/plutil -lint "$native_record" >/dev/null || fail 'the existing launch record is not a valid property list.'
+  native_record_keys=$(/usr/bin/plutil -convert xml1 -o - "$native_record" | /usr/bin/sed -n 's/^[[:space:]]*<key>\([^<]*\)<\/key>$/\1/p' | /usr/bin/sort) || fail 'could not inspect launch-record keys.'
+  native_expected_record_keys=$(printf '%s\n' boot_uuid dock_birth_sec dock_birth_usec dock_pid nonce_file outcome payload_sha256 runtime version | /usr/bin/sort)
+  [ "$native_record_keys" = "$native_expected_record_keys" ] || fail 'unknown or incomplete launch-record shape; preserve it and inspect before retrying.'
+  [ "$(record_value version integer)" = 3 ] || fail 'unsupported launch-record format; preserve it and inspect before retrying.'
   native_outcome=$(record_value outcome string) || fail 'invalid launch-record outcome; inspect it before retrying.'
   [ "$native_outcome" = ready ] || fail 'a prior injection outcome is pending or unknown; retain its runtime and inspect it, do not inject again.'
+  native_record_boot_uuid=$(record_value boot_uuid string) || fail 'launch record has no exact boot-session UUID; preserve it and inspect it before retrying.'
+  native_valid_boot_uuid "$native_record_boot_uuid" || fail 'launch record has an invalid boot-session UUID; preserve it and inspect it before retrying.'
   native_old_dock_pid=$(record_value dock_pid integer) || fail 'launch record has no exact integer Dock PID; inspect it before retrying.'
   native_old_dock_sec=$(record_value dock_birth_sec integer) || fail 'launch record has no exact integer Dock birth time; inspect it before retrying.'
   native_old_dock_usec=$(record_value dock_birth_usec integer) || fail 'launch record has no exact integer Dock birth time; inspect it before retrying.'
@@ -262,25 +274,30 @@ if [ -e "$native_record" ] || [ -L "$native_record" ]; then
   native_runtime_suffix=${native_runtime##*.}
   case "$native_runtime_suffix" in *[!A-Za-z0-9]*|'') fail 'invalid recorded private runtime path.' ;; esac
   [ "$native_nonce_file" = "$native_runtime/nonce" ] || fail 'recorded nonce file does not belong to its runtime.'
-  [ -d "$native_runtime" ] && [ ! -L "$native_runtime" ] && [ "$(/usr/bin/stat -f '%u:%Lp' "$native_runtime")" = "$native_uid:700" ] || fail 'recorded runtime is missing or no longer private; do not inject again.'
-  private_file "$native_nonce_file" || fail 'recorded nonce file is missing or no longer private; do not inject again.'
-  native_runtime_payload="$native_runtime/payload-arm64e.dylib"
-  private_file "$native_runtime_payload" || fail 'recorded runtime payload is missing or no longer private; do not inject again.'
-  [ "$(native_digest "$native_runtime_payload")" = "$native_record_payload_sha256" ] || fail 'recorded runtime payload bytes differ from the launch record; do not reuse the old helper.'
-  /usr/bin/codesign --verify --strict "$native_runtime_payload" || fail 'recorded runtime payload signature verification failed; do not reuse the old helper.'
-  if [ "$native_old_dock_pid" = "$native_dock_pid" ] && [ "$native_old_dock_sec" = "$native_dock_sec" ] && [ "$native_old_dock_usec" = "$native_dock_usec" ]; then
-    [ "$native_record_payload_sha256" = "$native_payload_sha256" ] || fail 'the recorded helper payload differs from this bundle; inspect the old session and do not reuse it.'
-    native_reuse=true
+  if [ "$native_record_boot_uuid" != "$native_boot_uuid" ]; then
+    native_archive_and_remove_prior_boot_record
+    printf '%s\n' 'The ready record belongs to a previous boot session; its prior Dock cannot survive this boot. The record was archived, any remaining runtime was left untouched, and startup will be fresh without journal replay.'
   else
-    if native_prior_dock_gone; then
-      :
+    [ -d "$native_runtime" ] && [ ! -L "$native_runtime" ] && [ "$(/usr/bin/stat -f '%u:%Lp' "$native_runtime")" = "$native_uid:700" ] || fail 'recorded runtime is missing or no longer private in this boot session; do not inject again.'
+    private_file "$native_nonce_file" || fail 'recorded nonce file is missing or no longer private; do not inject again.'
+    native_runtime_payload="$native_runtime/payload-arm64e.dylib"
+    private_file "$native_runtime_payload" || fail 'recorded runtime payload is missing or no longer private; do not inject again.'
+    [ "$(native_digest "$native_runtime_payload")" = "$native_record_payload_sha256" ] || fail 'recorded runtime payload bytes differ from the launch record; do not reuse the old helper.'
+    /usr/bin/codesign --verify --strict "$native_runtime_payload" || fail 'recorded runtime payload signature verification failed; do not reuse the old helper.'
+    if [ "$native_old_dock_pid" = "$native_dock_pid" ] && [ "$native_old_dock_sec" = "$native_dock_sec" ] && [ "$native_old_dock_usec" = "$native_dock_usec" ]; then
+      [ "$native_record_payload_sha256" = "$native_payload_sha256" ] || fail 'the recorded helper payload differs from this bundle; inspect the old session and do not reuse it.'
+      native_reuse=true
     else
-      native_prior_status=$?
-      [ "$native_prior_status" -ne 1 ] || fail 'the recorded Dock PID is still present; preserve its launch record and runtime.'
-      fail 'could not prove the recorded Dock process is gone; preserve its launch record and runtime.'
+      if native_prior_dock_gone; then
+        :
+      else
+        native_prior_status=$?
+        [ "$native_prior_status" -ne 1 ] || fail 'the recorded Dock PID is still present; preserve its launch record and runtime.'
+        fail 'could not prove the recorded Dock process is gone; preserve its launch record and runtime.'
+      fi
+      native_validate_retired_journal
+      native_recovery=true
     fi
-    native_validate_retired_journal
-    native_recovery=true
   fi
 fi
 
@@ -309,10 +326,11 @@ else
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict/></plist>
 PLIST
-    /usr/bin/plutil -insert version -integer 2 "$native_record_tmp"
+    /usr/bin/plutil -insert version -integer 3 "$native_record_tmp"
     /usr/bin/plutil -insert dock_pid -integer "$native_dock_pid" "$native_record_tmp"
     /usr/bin/plutil -insert dock_birth_sec -integer "$native_dock_sec" "$native_record_tmp"
     /usr/bin/plutil -insert dock_birth_usec -integer "$native_dock_usec" "$native_record_tmp"
+    /usr/bin/plutil -insert boot_uuid -string "$native_boot_uuid" "$native_record_tmp"
     /usr/bin/plutil -insert runtime -string "$native_runtime" "$native_record_tmp"
     /usr/bin/plutil -insert nonce_file -string "$native_nonce_file" "$native_record_tmp"
     /usr/bin/plutil -insert payload_sha256 -string "$native_payload_sha256" "$native_record_tmp"
