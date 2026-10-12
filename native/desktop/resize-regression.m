@@ -40,13 +40,13 @@ static CMSampleBufferRef sample(CGRect native,NSDictionary *overrides){
 }
 static void drain(NSMutableArray *workers,NSMutableArray *mains){NSUInteger n=0;while(workers.count||mains.count){check(++n<30,@"bounded drain");if(workers.count){DWJob job=workers[0];[workers removeObjectAtIndex:0];job();}if(mains.count){DWJob job=mains[0];[mains removeObjectAtIndex:0];job();}}}
 static NSDictionary *snap(DriftDesktop *c){return call(c,@{@"op":@"snapshot"});}
-// Readback mode, what every normal run sets: no result invalidates a capture, an effect nobody
+// Native readback: no result invalidates a capture, an effect nobody
 // answers is discharged by the watchdog, and a result the controller refuses leaves no obligation. After every step the window is
 // settled and takes input.
 static void readback(void){
     DriftDesktop *c=driftwm_desktop_create();Driver *driver=[Driver new];driver.bounds=CGRectMake(10,20,200,150);
-    NSMutableArray *workers=[NSMutableArray array],*mains=[NSMutableArray array],*delays=[NSMutableArray array],*ops=[NSMutableArray array];__block BOOL deaf=NO;
-    DWResizeCoordinator *co=[[DWResizeCoordinator alloc]initWithCommand:^NSDictionary *(NSDictionary *command){[ops addObject:command[@"op"]];if(deaf&&[command[@"op"]isEqual:@"native_resize_result"])return nil;return call(c,command);}driver:driver worker:^(DWJob job){[workers addObject:[job copy]];}main:^(DWJob job){[mains addObject:[job copy]];}];
+    NSMutableArray *workers=[NSMutableArray array],*mains=[NSMutableArray array],*delays=[NSMutableArray array],*ops=[NSMutableArray array];__block BOOL deaf=NO;__block DWJob lateResult=nil;
+    DWResizeCoordinator *co=[[DWResizeCoordinator alloc]initWithCommand:^NSDictionary *(NSDictionary *command){[ops addObject:command[@"op"]];if([command[@"op"]isEqual:@"native_resize_result"]){if(deaf)return nil;if(lateResult){DWJob job=lateResult;lateResult=nil;job();}}return call(c,command);}driver:driver worker:^(DWJob job){[workers addObject:[job copy]];}main:^(DWJob job){[mains addObject:[job copy]];}];
     co.enabled=YES;co.timeout=3;co.delay=^(NSTimeInterval seconds,DWJob job){check(seconds==3,@"the watchdog waits the timeout");[delays addObject:[job copy]];};
     void (^expire)(void)=^{NSArray *due=[delays copy];[delays removeAllObjects];for(DWJob job in due)job();};
     void (^usable)(NSString *)=^(NSString *when){NSDictionary *source=snap(c)[@"windows"][0][@"source"];
@@ -57,8 +57,12 @@ static void readback(void){
     call(c,@{@"op":@"register_output",@"stable_id":@"one",@"screen_bounds":rect(0,0,1000,800)});
     call(c,@{@"op":@"attach",@"identity":identity(),@"bundle_id":@"test",@"title":@"source",@"buffer":@{@"width":@400,@"height":@300},@"source_rect":rect(10,20,200,150),@"world_rect":rect(100,100,200,150)});
     // An answered transaction: nothing is invalidated, the size is the window's, and the watchdogs find nothing left to do.
-    resize(300);check(co.obligations==1&&[[co busyWindow]isEqual:@1],@"readback: the window is busy while its effect is owed");usable(@"while the baseline is owed");
+    NSDictionary *first=resize(300);[co consume:first];check(workers.count==1&&co.obligations==1,@"readback: duplicate consume dispatches one worker");
+    check([[co busyWindow]isEqual:@1],@"readback: the window is busy while its effect is owed");usable(@"while the baseline is owed");
+    {DWJob job=workers[0];[workers removeObjectAtIndex:0];job();job();check(mains.count==1&&driver.performed==1,@"readback: a worker operation can start once");
+        job=mains[0];[mains removeObjectAtIndex:0];job();NSUInteger owed=workers.count;job();check(workers.count==owed&&co.obligations==1,@"readback: duplicate result cannot consume the next effect");}
     drain(workers,mains);check(co.obligations==0&&[co canRemove:@1]&&[co busyWindow]==nil,@"readback: answered transaction ends");
+    [co consume:first];check(workers.count==0&&co.obligations==0,@"readback: a completed effect is not dispatched again");
     check(![ops containsObject:@"invalidate_native_capture"],@"readback: no result invalidates a capture");
     check([snap(c)[@"windows"][0][@"world_rect"][@"size"]isEqual:@{@"width":@300,@"height":@200}]&&[snap(c)[@"native_resize"][@"phase"]isEqual:@"complete"],@"readback: the size the window took is committed");usable(@"after an applied size");
     NSDictionary *ended=snap(c);expire();check([ended isEqual:snap(c)]&&co.obligations==0,@"readback: a watchdog after the result changes nothing");
@@ -76,12 +80,16 @@ static void readback(void){
     driver.silent=YES;resize(360);drain(workers,mains);driver.silent=NO;check(co.obligations==0&&[co canRemove:@1],@"readback: no result is an unanswered effect");usable(@"after a driver without a result");[delays removeAllObjects];
     // A result the controller refuses is replaced by the unanswered one; when that is refused too the obligation is dropped.
     driver.garbled=YES;resize(380);drain(workers,mains);driver.garbled=NO;check(co.obligations==0&&[co canRemove:@1],@"readback: a refused result leaves no obligation");usable(@"after a refused result");[delays removeAllObjects];
-    resize(400);deaf=YES;drain(workers,mains);deaf=NO;check(co.obligations==0&&co.failure.length,@"readback: a result refused twice leaves no obligation");
+    NSDictionary *orphan=resize(400);{DWJob job=workers[0];[workers removeObjectAtIndex:0];job();}
+    check(mains.count==1,@"readback: the old driver's completion is delayed");deaf=YES;expire();deaf=NO;check(co.obligations==0&&co.failure.length,@"readback: a result refused twice leaves no obligation");
+    [co consume:orphan];check(workers.count==0&&co.obligations==0,@"readback: an orphaned same-ID effect is never performed twice");
     // That transaction is still live in the controller with nobody performing its effect: seen twice a second apart, it is ended.
-    check(![co canRemove:@1]&&[co busyWindow]==nil,@"readback: an orphaned transaction is live");[co reap];check(![co canRemove:@1],@"readback: an orphan is given one look");[co reap];
+    check(![co canRemove:@1]&&[co busyWindow]==nil,@"readback: an orphaned transaction is live");[co reap];check(![co canRemove:@1],@"readback: an orphan is given one look");
+    lateResult=mains[0];[mains removeObjectAtIndex:0];[ops removeAllObjects];[co reap];
+    check([[ops filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"SELF == %@",@"native_resize_result"]]count]==1,@"readback: an old callback cannot answer the same-ID orphan recovery");
     check(co.obligations==0&&[co canRemove:@1],@"readback: an orphaned transaction is reaped");usable(@"after an orphan");
     check(co.failure==nil,@"readback: a failure ends with the next result the controller takes");
-    // A resize grab. It begins without the acknowledged mode's check of the window's own extent (the first read is the check), and at
+    // A resize grab. Its first read checks the window's own extent, and at
     // rest it owes no effect: it is no orphan while the input that holds it is down, and is reaped like one when that input is gone.
     driver.skew=1;NSDictionary *grab=[co request:@{@"op":@"begin_native_resize",@"window":@1,@"output":@1,@"edges":@"right",@"start_screen":@{@"x":@50,@"y":@50}}];driver.skew=0;
     check(grab!=nil,@"readback: a grab begins on a window whose extent is not the one observed");drain(workers,mains);
@@ -90,7 +98,36 @@ static void readback(void){
     [co reap];[co reap];[co reap];check(![co canRemove:@1]&&[snap(c)[@"native_resize"][@"phase"]isEqual:@"dragging"],@"readback: a held grab at rest is not reaped");
     down=NO;[co reap];check(![co canRemove:@1],@"readback: a grab nobody holds is given one look");[co reap];drain(workers,mains);
     check(co.obligations==0&&[co canRemove:@1],@"readback: a grab nobody holds is reaped");usable(@"after a reaped grab");[delays removeAllObjects];
+    // Completed operation objects disappear while their watchdog jobs are still
+    // queued. The admission watermark remains one scalar across a long session.
+    for(int i=0;i<512;i++){
+        __weak id completed=nil;
+        @autoreleasepool{
+            resize(500+i%7);completed=[[co valueForKey:@"pending"]allValues].firstObject;
+            check(completed!=nil,@"readback: the pending operation is owned");drain(workers,mains);
+            check(co.obligations==0&&[co canRemove:@1],@"readback: a long sequence completes each transaction");[ops removeAllObjects];
+        }
+        check(completed==nil,@"readback: completed operation not retained by queued watchdogs");
+    }
+    ended=snap(c);expire();check([ended isEqual:snap(c)]&&co.obligations==0,@"readback: old watchdogs cannot affect the last completed transaction");
     [co shutdown];driftwm_desktop_destroy(c);
+}
+static void abandonedCoordinator(void){
+    DriftDesktop *c=driftwm_desktop_create();Driver *driver=[Driver new];driver.bounds=CGRectMake(10,20,200,150);
+    NSMutableArray *workers=[NSMutableArray array],*mains=[NSMutableArray array],*delays=[NSMutableArray array];
+    __weak DWResizeCoordinator *abandoned=nil;__weak id operation=nil;
+    @autoreleasepool{
+        DWResizeCoordinator *co=[[DWResizeCoordinator alloc]initWithCommand:^NSDictionary *(NSDictionary *command){return call(c,command);}driver:driver worker:^(DWJob job){[workers addObject:[job copy]];}main:^(DWJob job){[mains addObject:[job copy]];}];
+        co.enabled=YES;co.timeout=3;co.delay=^(NSTimeInterval seconds,DWJob job){check(seconds==3,@"abandoned watchdog timeout");[delays addObject:[job copy]];};
+        call(c,@{@"op":@"native_resize_capability",@"enabled":@YES});call(c,@{@"op":@"register_output",@"stable_id":@"one",@"screen_bounds":rect(0,0,1000,800)});
+        call(c,@{@"op":@"attach",@"identity":identity(),@"bundle_id":@"test",@"title":@"source",@"buffer":@{@"width":@400,@"height":@300},@"source_rect":rect(10,20,200,150),@"world_rect":rect(100,100,200,150)});
+        [co request:@{@"op":@"ipc",@"output":@1,@"request":@{@"Resize":@{@"window":@1,@"to":@[@300,@200]}}}];
+        abandoned=co;operation=[[co valueForKey:@"pending"]allValues].firstObject;
+        check(co.obligations==1&&operation!=nil,@"abandoned coordinator starts with a queued obligation");
+    }
+    check(abandoned==nil&&operation==nil,@"queued workers and watchdogs do not extend coordinator or operation lifetime");
+    for(DWJob job in delays)job();drain(workers,mains);check(driver.performed==0,@"a queued operation outliving its owner is never performed");
+    driftwm_desktop_destroy(c);
 }
 static BOOL number(id x) { return [x isKindOfClass:NSNumber.class] && CFGetTypeID((__bridge CFTypeRef)x)!=CFBooleanGetTypeID() && isfinite([x doubleValue]); }
 static NSString *text(CGRect r) { return [NSString stringWithFormat:@"{%g,%g,%g,%g}",r.origin.x,r.origin.y,r.size.width,r.size.height]; }
@@ -127,6 +164,6 @@ int main(void){@autoreleasepool{
     CGRect native=CGRectMake(10,20,200,150);CMSampleBufferRef s=sample(native,@{});NSDictionary *m=captureMetadata(s,100,native);check([m[@"buffer"][@"width"]intValue]==480&&[m[@"content_rect"][@"origin"][@"x"]intValue]==20,@"actual padded crop");CFRelease(s);
     NSArray *invalid=@[@{SCStreamFrameInfoDisplayTime:NSNull.null},@{SCStreamFrameInfoDisplayTime:@100},@{SCStreamFrameInfoDisplayTime:@(-1)},@{SCStreamFrameInfoDisplayTime:@100.5},@{SCStreamFrameInfoDisplayTime:@1e30},@{SCStreamFrameInfoStatus:NSNull.null},@{SCStreamFrameInfoStatus:@.5},@{SCStreamFrameInfoContentScale:@0},@{SCStreamFrameInfoScreenRect:NSNull.null},@{SCStreamFrameInfoContentRect:CFBridgingRelease(CGRectCreateDictionaryRepresentation(CGRectMake(100,100,200,150)))}];
     for(NSDictionary *override in invalid){s=sample(native,override);NSString *why=nil;check(captureMetadata(s,100,native)==nil,@"invalid metadata rejected");check(captureDescription(s,100,native,&why)==nil&&why.length,@"and every rejection says why");CFRelease(s);}
-    readback();
+    readback();abandonedCoordinator();
     puts("PASS: native readback coordinator + Rust C ABI; standalone synthetic CV/CMSampleBuffer metadata oracle; no native app/window/AX/capture started");return 0;
 }}
