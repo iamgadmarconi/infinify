@@ -13,7 +13,7 @@ typedef NS_ENUM(NSUInteger,DWWindowObservationState) {
 
 @interface DWWindowObservation : NSObject
 // Copied request: logical, generation, identity (PID/birth/WID), optional
-// prior_bounds and families. Family failure never makes the root absent.
+// prior_bounds, native_bounds and families. Family failure never makes the root absent.
 @property(nonatomic,copy,readonly) NSDictionary *request;
 @property(nonatomic,copy,readonly) NSDictionary *info;
 @property(nonatomic,copy,readonly) NSString *failure;
@@ -41,11 +41,14 @@ typedef NS_ENUM(NSUInteger,DWWindowObservationState) {
 // request returns NO rather than queueing another. No native API waits on main.
 @interface DWWindowObserver : NSObject
 @property(nonatomic,readonly) BOOL inFlight;
-// scope is PID -> [birth seconds, microseconds]. Each source has immutable
+// scope is PID -> [birth seconds, microseconds]; nil reads the full desktop's
+// window metadata without granting adoption or mutation authority. Each source has immutable
 // numeric logical/generation keys and an identity dictionary. Optional
 // prior_bounds is copied for the consumer's event/resize invalidation check.
-// families=YES requests the audited read-only native family adapter on the
-// worker. Omit it for ordinary cooperative fixtures to avoid extra queries.
+// native_bounds=YES reads the window's untransformed bounds for native presentation;
+// otherwise bounds come from the same CG record used by overlay capture. families=YES
+// requests the audited read-only native family adapter on the worker and requires
+// native_bounds=YES. Omit both for overlay capture to avoid extra queries.
 // Completion must revalidate request identity + binding generation, reject
 // stale sampledAt/finishedAt, and retain fresh synchronous event/input/resize
 // reads. A snapshot never establishes authority to deliver native input.

@@ -43,7 +43,9 @@ static NSDictionary *observedRequest(NSDictionary *source) {
     if(identity[@"owner"]){if(!observedNumber(identity[@"owner"]))return nil;copiedIdentity[@"owner"]=[identity[@"owner"]copy];}
     NSMutableDictionary *request=[@{@"logical":[source[@"logical"]copy],@"generation":[source[@"generation"]copy],@"identity":[copiedIdentity copy]}mutableCopy];
     if([source[@"prior_bounds"]isKindOfClass:NSDictionary.class])request[@"prior_bounds"]=[source[@"prior_bounds"]copy];
+    if(source[@"native_bounds"]){if(!observedNumber(source[@"native_bounds"]))return nil;request[@"native_bounds"]=@([source[@"native_bounds"]boolValue]);}
     if(source[@"families"]){if(!observedNumber(source[@"families"]))return nil;request[@"families"]=@([source[@"families"]boolValue]);}
+    if([request[@"families"]boolValue]&&![request[@"native_bounds"]boolValue])return nil;
     return [request copy];
 }
 
@@ -56,8 +58,8 @@ static DWWindowObservationSnapshot *observeWindows(uint64_t generation,NSArray<N
     snapshot.listSucceeded=list!=NULL;
     for(NSDictionary *info in (__bridge NSArray *)list){
         NSNumber *pid=info[(id)kCGWindowOwnerPID],*wid=info[(id)kCGWindowNumber];
-        if(!observedNumber(pid)||!observedNumber(wid))continue;NSArray *allowed=scope[pid];
-        if(!allowed||![observedBirth(pid.intValue,births)isEqual:allowed])continue;
+        if(!observedNumber(pid)||!observedNumber(wid))continue;
+        if(scope){NSArray *allowed=scope[pid];if(!allowed||![observedBirth(pid.intValue,births)isEqual:allowed])continue;}
         NSDictionary *copied=[info copy];onScreen[wid]=copied;[orderedOnScreen addObject:copied];
     }
     if(list)CFRelease(list);snapshot.onScreen=[onScreen copy];snapshot.orderedOnScreen=[orderedOnScreen copy];
@@ -69,7 +71,7 @@ static DWWindowObservationSnapshot *observeWindows(uint64_t generation,NSArray<N
         // on age, including any slow family queries in the same batch.
         source.sampledAt=snapshot.startedAt;
         NSDictionary *identity=request[@"identity"];NSNumber *wid=identity[@"wid"],*pid=identity[@"pid"];NSArray *expected=@[identity[@"birth_sec"],identity[@"birth_usec"]];
-        if(![scope[pid]isEqual:expected])source.failure=@"requested process is outside the observation scope";
+        if(scope&&![scope[pid]isEqual:expected])source.failure=@"requested process is outside the observation scope";
         else {
             NSArray *born=observedBirth(pid.intValue,births);
             if(!born)source.failure=@"process identity could not be read";
@@ -84,12 +86,14 @@ static DWWindowObservationSnapshot *observeWindows(uint64_t generation,NSArray<N
                 if(!read)source.failure=@"window information could not be read";
                 else if(!info){source.state=DWWindowObservationAbsent;source.failure=@"window server has no current window record";}
                 else if([info[(id)kCGWindowOwnerPID]intValue]!=pid.intValue){source.state=DWWindowObservationIdentityChanged;source.failure=@"window owner changed";}
-                else {source.info=info;CGRect own=CGRectZero;
-                    if(DWNativeBounds(wid.unsignedIntValue,&own)){
+                else {source.info=info;CGRect own=CGRectZero;BOOL nativeBounds=[request[@"native_bounds"]boolValue];
+                    NSDictionary *frame=info[(id)kCGWindowBounds];
+                    BOOL hasBounds=nativeBounds?DWNativeBounds(wid.unsignedIntValue,&own):([frame isKindOfClass:NSDictionary.class]&&CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)frame,&own));
+                    if(hasBounds){
                         source.bounds=own;source.hasBounds=YES;source.state=DWWindowObservationPresent;
                         if([request[@"families"]boolValue]){NSString *why=nil;source.family=DWNativeWindowFamily(identity,&why);if(!source.family)source.familyFailure=why?:@"native family could not be read";}
                     }
-                    else source.failure=@"untransformed native bounds could not be read";}
+                    else source.failure=nativeBounds?@"untransformed native bounds could not be read":@"window record bounds could not be read";}
             }
         }
         [sources addObject:source];
@@ -108,12 +112,12 @@ static DWWindowObservationSnapshot *observeWindows(uint64_t generation,NSArray<N
 }
 - (BOOL)inFlight { return _inFlight; }
 - (BOOL)requestSources:(NSArray<NSDictionary *> *)sources scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope completion:(void (^)(DWWindowObservationSnapshot *))completion {
-    if(!NSThread.isMainThread||_cancelled||_inFlight||_generation==UINT64_MAX||!completion||![sources isKindOfClass:NSArray.class]||![scope isKindOfClass:NSDictionary.class]||!scope.count)return NO;
+    if(!NSThread.isMainThread||_cancelled||_inFlight||_generation==UINT64_MAX||!completion||![sources isKindOfClass:NSArray.class]||(scope&&(![scope isKindOfClass:NSDictionary.class]||!scope.count)))return NO;
     NSMutableDictionary *allowed=[NSMutableDictionary dictionaryWithCapacity:scope.count];
     for(NSNumber *pid in scope){NSArray *born=scope[pid];if(!observedNumber(pid)||pid.intValue<=0||![born isKindOfClass:NSArray.class]||born.count!=2||!observedNumber(born[0])||!observedNumber(born[1]))return NO;allowed[[pid copy]]=[born copy];}
     NSMutableArray *requests=[NSMutableArray arrayWithCapacity:sources.count];
     for(NSDictionary *source in sources){NSDictionary *request=observedRequest(source);if(!request)return NO;[requests addObject:request];}
-    NSArray *copied=[requests copy];NSDictionary *scoped=[allowed copy];uint64_t generation=++_generation;_inFlight=YES;__weak DWWindowObserver *weak=self;
+    NSArray *copied=[requests copy];NSDictionary *scoped=scope?[allowed copy]:nil;uint64_t generation=++_generation;_inFlight=YES;__weak DWWindowObserver *weak=self;
     dispatch_async(_queue,^{@autoreleasepool{
         DWWindowObservationSnapshot *snapshot=observeWindows(generation,copied,scoped);
         dispatch_async(dispatch_get_main_queue(),^{DWWindowObserver *current=weak;if(!current||current->_cancelled||current->_generation!=generation)return;

@@ -47,27 +47,26 @@
 @end
 // DriftWM manages every toplevel; this is that rule for native Mac windows. Candidates
 // are the normal-layer windows of regular applications other than this process, at
-// least 40x40 and on screen, whose bounds held still from one poll to the next (for 50 ms,
-// counted from the event that announced the window when there was one).
+// least 40x40 and on screen, whose bounds held still between worker observations for 50 ms.
 // Of those only a real window is offered, as upstream manages toplevels and their
 // dialogs and never a popup or a helper surface: with Accessibility access, one whose
 // subrole is AXStandardWindow, AXDialog or AXSystemDialog; where Accessibility cannot
 // say (no access, an application that does not answer), any candidate but an untitled
 // one smaller than 200x150. Tested once per appearance, before adoption only.
 // Read-only: it lists windows and never moves, focuses, resizes or closes one. It owns
-// no timer or dispatch source: -poll drives it, and so do the observers it owns
+// no timer or dispatch source: the host's poll drives it, and so do the observers it owns
 // (window-events.h), which exist from +managerWithHost:scope: until -stop. Main thread only.
 //
 // Tracking is event-driven where Accessibility access allows. NSWorkspace and one
 // AXObserver per regular application say when an application launched or was shown and
-// when a window was created or came back from the Dock: the pass below then runs at
-// once, for that application, and -poll keeps the idle poll's own pace for a second,
+// when a window was created or came back from the Dock: discovery is then due on the
+// next idle poll. One worker read serves all such events, at the poll's own pace for a second,
 // because the window list can show a window a moment after its application reports it.
 // A window that moved, was resized, retitled, miniaturized or destroyed, and native
-// focus that moved, are handed to the host at once. -poll is then a reconciliation, one
+// focus that moved, are handed to the host at once. The poll is then a reconciliation, one
 // pass a second, that finds whatever no event announced. Without Accessibility access,
 // and while an application is not observed in full (it does not answer yet, or refused a
-// notification), every -poll is a pass, as it always was.
+// notification), every poll requests a pass, with at most one read in flight.
 //
 // `--only-pid` gives it a scope: pid → that process's start time as read at launch (DWInScope, window-events.h). A window of
 // any other process is then no candidate at all: it is not timed, not asked about through Accessibility, not read, not
@@ -90,22 +89,15 @@
 // Native presentation only: discover application utility panels. A positive
 // floating level alone is insufficient; AX must report a floating-window role.
 @property BOOL nativePanels;
-// Called at the idle poll's pace. One cheap pass over the on-screen window list, unless
-// the observers are in place and the reconciliation is not due. The shareable windows are
-// read only when the set of candidates not yet offered changed, once for the first pass
-// even when that set is empty, and again after a read that failed. YES when the host
-// should look at every bound window now too: on every call without the observers, once
-// a second with them.
-- (BOOL)poll;
-// The same poll, with the current on-screen WindowServer records indexed by
-// window number when a pass actually read them. nil otherwise. Records obey the
-// process scope and last only for this call's reconciliation; absence does not
-// mean closed (a parked/minimized window requires its own fresh lookup).
-- (BOOL)pollWithWindowInfo:(NSDictionary<NSNumber *,NSDictionary *> *__autoreleasing *)info;
-// Native presentation can fetch the scoped WindowServer list on a serial worker.
-// The caller must reject aged snapshots; adoption still validates identities
-// afresh. Event-driven passes retain their synchronous fresh read.
+// Called at the idle poll's pace to request a single-flight worker observation.
+// Creation/appearance hints mark discovery due; they never enumerate on main.
 - (BOOL)reconciliationDue;
+// Consume that worker's ordered on-screen records on main. The caller must reject
+// aged snapshots from the start of the read; adoption still validates identities
+// afresh. The shareable windows are read only for a changed candidate set, initial
+// discovery or retry. YES when bound windows also need reconciliation: each pass
+// without full observers, otherwise once a second. Bound-window event/input/resize
+// checks keep their immediate fresh reads, independent of this discovery batch.
 - (BOOL)pollWithWindowRecords:(NSArray<NSDictionary *> *)records;
 // YES while the observers report window changes: Accessibility access stands and every
 // regular application is observed in full.

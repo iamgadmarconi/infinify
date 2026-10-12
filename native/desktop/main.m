@@ -676,7 +676,7 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 @property CFTimeInterval lastPollTiming; // scoped debug: at most one slow-poll stage row per second
 @property DWWindowObserver *windowObserver;
 @property uint64_t observationEpoch;
-@property BOOL nativeObservationAgain; // one follow-up after a family hint during an in-flight read
+@property BOOL windowObservationAgain; // one follow-up after a native family hint during an in-flight read
 @property CFMachPortRef navigationTap;
 @property CFRunLoopSourceRef navigationTapSource;
 @property BOOL logicalFocus; // --no-native-focus: no native window is ever activated or raised
@@ -4054,7 +4054,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
             d.native=candidate;d.nativeResumeWanted=NO;d.nativeResumeFailures=0;d.nativeResumeNote=nil;
             d.navigation.enabled=YES;d.lastObservation=0;
             for(LiveSource *source in d.sources.allValues){source.observationToken=++d.observationEpoch;source.nativeButtons=nil;source.nativeButtonsNext=0;}
-            d.nativeObservationAgain=YES;[d requestNativeObservation];[d configureNativeInput];[d render];
+            d.windowObservationAgain=YES;[d requestWindowObservation];[d configureNativeInput];[d render];
         });
     });
 }
@@ -4106,13 +4106,13 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     [self stopKeys];[self stopViewKeys];
     [self openPanels];[self saveScene];
 }
-- (void)requestNativeObservation {
-    if(self.cleaning||self.sessionInactive||!self.native||self.native.ended||!self.manager)return;
+- (void)requestWindowObservation {
+    if(self.cleaning||self.sessionInactive||self.native.ended||!self.manager)return;
     if(!self.windowObserver)self.windowObserver=[DWWindowObserver new];if(self.windowObserver.inFlight)return;
-    self.nativeObservationAgain=NO;
+    self.windowObservationAgain=NO;
     NSMutableArray *requests=[NSMutableArray array];
     for(LiveSource *source in self.sources.allValues)if(!source.detached){
-        NSMutableDictionary *request=[@{@"logical":source.logical,@"generation":@(source.observationToken),@"identity":source.identity,@"families":@(self.native.familiesNeeded)}mutableCopy];
+        NSMutableDictionary *request=[@{@"logical":source.logical,@"generation":@(source.observationToken),@"identity":source.identity,@"native_bounds":@(self.native!=nil),@"families":@(self.native.familiesNeeded)}mutableCopy];
         if(source.router.bounds)request[@"prior_bounds"]=source.router.bounds;[requests addObject:request];
     }
     DWWindowManager *manager=self.manager;DWNativePresenter *presenter=self.native;uint64_t session=self.nativeSessionEpoch;__weak Desktop *weak=self;
@@ -4128,17 +4128,20 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
         }
         // Discovery consumes real WindowServer z-order and still performs its
         // existing fresh identity checks before binding a new native root.
-        [manager pollWithWindowRecords:snapshot.orderedOnScreen];
+        BOOL reconcile=[manager pollWithWindowRecords:snapshot.orderedOnScreen],describe=NO;
         for(DWWindowObservation *observation in snapshot.sources){
             NSDictionary *request=observation.request;LiveSource *source=d.sources[request[@"logical"]];
-            if(!source||source.detached||source.observationToken!=[request[@"generation"]unsignedLongLongValue]||![source.identity isEqual:request[@"identity"]]||![source.router.bounds isEqual:request[@"prior_bounds"]]||now-observation.sampledAt>.1)continue;
+            if(!source||source.detached||source.observationToken!=[request[@"generation"]unsignedLongLongValue]||![source.identity isEqual:request[@"identity"]]||![source.router.bounds isEqual:request[@"prior_bounds"]]||CACurrentMediaTime()-observation.sampledAt>.1)continue;
+            // Discovery can stay eager after an appearance hint without asking
+            // the controller to observe every unchanged overlay root again.
+            if(!presenter&&!reconcile&&!source.error&&!source.resize&&!source.destroyed)continue;
             if(observation.state==DWWindowObservationReadFailed){[d forgetNativeFamily:source];continue;}
-            if(observation.state!=DWWindowObservationPresent){[d track:source];continue;}
+            if(observation.state!=DWWindowObservationPresent){[d track:source];describe=YES;continue;}
             if(!DWInScope(d.scope,source.router.pid))continue;
-            [d track:source info:observation.info observation:observation];
+            [d track:source info:observation.info observation:observation];describe=YES;
         }
-        if(!d.frameFlying)[d render];
-        } @finally {if(!d.cleaning&&d.nativeObservationAgain)[d requestNativeObservation];}
+        if(!d.frameFlying&&(describe||d.sceneDirty))[d render];
+        } @finally {if(!d.cleaning&&d.windowObservationAgain)[d requestWindowObservation];}
     }];
 }
 - (void)poll {
@@ -4162,22 +4165,14 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     // Where the observers report native focus (-focusChanged) the focus poll is a reconciliation, once a second.
     if(self.navigation&&CACurrentMediaTime()-self.lastObservation>=(self.manager.live?1:.5)){self.lastObservation=CACurrentMediaTime();[self refreshFocusAccess];[self refreshStageManager];[self.navigation observe];}
     if(timing)stages[3]=CACurrentMediaTime();
-    // Discovery first: a window that appeared is attached before this tick observes and draws.
-    // Where the observers report window changes (-windowChanged:pid:) the windows are all looked at once a second, as a reconciliation;
-    // a source whose capture failed, and one under native resize, are looked at on every poll as before, and so is a window reported
-    // destroyed until the window list has said the same.
-    NSDictionary<NSNumber *,NSDictionary *> *windowRead=nil;
-    BOOL asyncNative=self.native&&self.manager;
-    BOOL reconcile=!self.manager||(!asyncNative&&[self.manager pollWithWindowInfo:&windowRead]);
-    if(asyncNative){BOOL due=[self.manager reconciliationDue];for(LiveSource *source in self.sources.allValues)if(source.destroyed)due=YES;if(due)[self requestNativeObservation];}
+    // Managed discovery and reconciliation share one bounded worker observation.
+    // Appearance storms can request at the idle poll's pace but never enumerate
+    // on the frame thread or queue more than one read. Event/input/resize paths
+    // retain their own fresh validation; unmanaged manual sources retain their poll.
+    BOOL reconcile=!self.manager;
+    if(self.manager){BOOL due=[self.manager reconciliationDue];for(LiveSource *source in self.sources.allValues)if(source.error||source.resize||source.destroyed)due=YES;if(due)[self requestWindowObservation];}
     BOOL describe=reconcile||!self.frameDriver;
-    for(LiveSource *source in self.sources.allValues)if(!asyncNative&&(reconcile||source.error||source.resize||source.destroyed)){
-        describe=YES;NSDictionary *info=windowRead[@(source.router.wid)];
-        // An on-screen read has no entry for parked/minimized windows. Nor may
-        // a mismatched owner stand in for a fresh identity-sensitive lookup.
-        if([info[(id)kCGWindowOwnerPID]intValue]!=source.router.pid)info=windowInfo(source.router.wid);
-        [self track:source info:info];
-    }
+    if(reconcile)for(LiveSource *source in self.sources.allValues)[self track:source];
     if(timing)stages[4]=CACurrentMediaTime();
     [self captureDemand];
     [self captureRecovery];
@@ -4192,7 +4187,9 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
         fprintf(stderr,"poll: total_ms=%.3f input_resize_ms=%.3f camera_ms=%.3f focus_ms=%.3f reconcile_track_ms=%.3f demand_save_ms=%.3f render_ms=%.3f reconcile=%d\n",(stages[6]-stages[0])*1000,(stages[1]-stages[0])*1000,(stages[2]-stages[1])*1000,(stages[3]-stages[2])*1000,(stages[4]-stages[3])*1000,(stages[5]-stages[4])*1000,(stages[6]-stages[5])*1000,reconcile);}}
 }
 // One look at one bound window: is it gone, was it retitled, where and how large is it now. The poll's look and an event's are this one
-// method, and each reads the window list afresh, so a second look that finds nothing new sends no window_closed and no retitle.
+// method. Events read afresh; poll observations carry a bounded worker read with
+// an unchanged source identity/generation/previous-bounds fence. A second look
+// that finds nothing new sends no window_closed and no retitle.
 - (void)track:(LiveSource *)source { [self track:source info:windowInfo(source.router.wid)]; }
 - (void)track:(LiveSource *)source info:(NSDictionary *)w { [self track:source info:w observation:nil]; }
 - (void)track:(LiveSource *)source info:(NSDictionary *)w observation:(DWWindowObservation *)observation {
@@ -4299,7 +4296,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     [self.nativeFamilies invalidatePID:pid];
     if(!self.native){[self captureDemand];[self render];return;}
     for(LiveSource *source in self.sources.allValues)if(!source.detached&&(!pid||source.router.pid==pid)){[self forgetNativeFamily:source];source.observationToken=++self.observationEpoch;source.nativeButtons=nil;source.nativeButtonsNext=0;[self refreshNativeButtons:source];changed=YES;}
-    if(changed){self.nativeObservationAgain=YES;[self requestNativeObservation];}
+    if(changed){self.windowObservationAgain=YES;[self requestWindowObservation];}
 }
 // Native focus may have moved (Command-Tab, a click on another window): read now, through the coordinator's own path.
 - (void)focusChanged { if(self.cleaning||!self.navigation)return;self.lastObservation=CACurrentMediaTime();[self refreshFocusAccess];[self.navigation observe]; }
