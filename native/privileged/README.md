@@ -171,6 +171,11 @@ An applied transform requires both native set success and readback equality afte
 float rounding, matching WindowServer transform storage. A failed or differing
 set remains journaled because it may have changed the window. A status or symbol
 alone is not evidence of usable native presentation.
+The helper revalidates exact process birth, owner connection, UID and scope
+after journal persistence and immediately before each transform or alpha write,
+then again before acknowledging the frame. Earlier batch admission cannot
+authorize a window number replaced during disk I/O or another record's work.
+Restoration also rechecks identity between its transform and alpha writes.
 
 One control `HELLO` creates the session and a random token. A second heartbeat
 connection uses that token; requests on either renew the 2000 ms lease. The C
@@ -250,10 +255,12 @@ newest-frame bursts, disconnect and lease restoration, client/helper loss, the
 C client, per-window release, process-scope audit, read-only inspection before
 first touch and after restoration, strict startup refusals with byte preservation,
 and a filesystem obstruction that leaves an empty table with a pending journal.
-`restore_identity_test.m` compiles the actual restore code with read-only query
-substitutes to check unavailable enumeration, owner/process lookup, changed
+`restore_identity_test.m` compiles the actual apply/restore code with native
+call substitutes to check unavailable enumeration, owner/process lookup, changed
 identity/scope, and retention of the original in the table and durable journal.
-This query-decision regression creates no window and is not native API evidence.
+It also replaces the simulated owner after journal fsync and between setters,
+checking that no later property write or successful frame acknowledgement reaches
+that replacement. This regression creates no window and is not native API evidence.
 The current tests do not inject into Dock, change policy or settings, enroll
 another user's applications, or prove third-party visual/input usability. Native
 restore API failure and startup restoration of a still-live foreign window remain

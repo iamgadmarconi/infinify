@@ -95,6 +95,14 @@ static BOOL v2Resolve(uint32_t wid,int *owner,struct dw2_identity *who,uid_t *ui
     *uid=b.pbi_uid;
     return YES;
 }
+// Journal I/O and preceding records can outlive a window. Recheck the exact
+// admission at each mutation boundary; the saved entry is restoration state,
+// not continuing authority over a reused window number.
+static BOOL v2EntryCurrent(DW2Entry *entry) {
+    int owner=0;struct dw2_identity current={0};uid_t uid=0;
+    return v2InScope(&entry->who) && v2Resolve(entry->who.wid,&owner,&current,&uid)
+        && owner==entry->owner && v2SameProcess(&current,&entry->who) && uid==getuid();
+}
 // Restore may discard an original only after a query positively establishes that
 // its window instance is absent/reused. Transient lookup failures or a changed
 // admission scope retain the obligation for a later authorized retry.
@@ -179,7 +187,7 @@ static void v2Restore(NSString *reason,BOOL retry,NSMutableData *results,struct 
             r.set_status=setTransform(mainConnection(),e->who.wid,e->transform);
             BOOL ok=r.set_status==0 && getTransform(mainConnection(),e->who.wid,&actual)==0 && v2SameTransform(actual,e->transform);
             if(e->alphaTouched) {
-                float alpha=-1;int status=setAlpha(mainConnection(),e->who.wid,e->alpha);
+                float alpha=-1;int status=v2EntryCurrent(e)?setAlpha(mainConnection(),e->who.wid,e->alpha):-1;
                 if(status && !r.set_status)r.set_status=status;
                 if(status || getAlpha(mainConnection(),e->who.wid,&alpha) || alpha!=e->alpha)ok=NO;
             }
@@ -281,13 +289,16 @@ static void v2Apply(const struct dw2_record *records,uint32_t count,uint8_t *sta
         DW2Entry *e=entries[i];
         if((id)e==NSNull.null)continue;
         const struct dw2_record *r=&records[i];
+        if(!v2EntryCurrent(e)){status[i]=DW2_IDENTITY;continue;}
         CGAffineTransform requested=CGAffineTransformMake(r->m[0],r->m[1],r->m[2],r->m[3],r->m[4],r->m[5]),actual=CGAffineTransformIdentity;
         BOOL ok=setTransform(mainConnection(),e->who.wid,requested)==0 && getTransform(mainConnection(),e->who.wid,&actual)==0 && v2SameTransform(actual,requested);
         if(r->flags&DW2_RECORD_HAS_ALPHA) {
+            if(!v2EntryCurrent(e)){status[i]=DW2_IDENTITY;continue;}
             float alpha=-1;
             if(setAlpha(mainConnection(),e->who.wid,r->alpha) || getAlpha(mainConnection(),e->who.wid,&alpha) || alpha!=r->alpha)ok=NO;
         }
-        if(!ok)status[i]=DW2_NOT_APPLIED;
+        if(!v2EntryCurrent(e))status[i]=DW2_IDENTITY;
+        else if(!ok)status[i]=DW2_NOT_APPLIED;
     }
     v2Count();
 }
