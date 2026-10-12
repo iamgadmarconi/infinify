@@ -18,9 +18,10 @@ static NSTextField *text(NSView *view,NSRect frame,NSFont *font) {
     NSTextField *_headline,*_capture,*_input,*_stage,*_note;
     NSButton *_allowCapture,*_allowInput,*_openStage,*_again;
     NSTimer *_timer;
+    BOOL _requiresScreenCapture;
 }
-- (instancetype)initWithProceed:(void (^)(void))proceed relaunch:(void (^)(void))relaunch quit:(void (^)(void))quit {
-    if((self=[super init])){_proceed=[proceed copy];_relaunch=[relaunch copy];_quit=[quit copy];}
+- (instancetype)initWithProceed:(void (^)(void))proceed relaunch:(void (^)(void))relaunch quit:(void (^)(void))quit requiresScreenCapture:(BOOL)requiresScreenCapture {
+    if((self=[super init])){_proceed=[proceed copy];_relaunch=[relaunch copy];_quit=[quit copy];_requiresScreenCapture=requiresScreenCapture;}
     return self;
 }
 - (NSButton *)button:(NSString *)title action:(SEL)action frame:(NSRect)frame {
@@ -46,7 +47,7 @@ static NSTextField *text(NSView *view,NSRect frame,NSFont *font) {
         _headline.stringValue=@"Infinify cannot start";_capture.frame=NSMakeRect(20,52,600,254);_capture.stringValue=error;_capture.selectable=YES;
         _input.hidden=_stage.hidden=_note.hidden=_allowCapture.hidden=_allowInput.hidden=_openStage.hidden=_again.hidden=YES;
     }else{
-        _headline.stringValue=@"Infinify is the desktop: it needs two permissions, and Stage Manager off";
+        _headline.stringValue=_requiresScreenCapture?@"Infinify is the desktop: it needs two permissions, and Stage Manager off":@"Native desktop needs Accessibility and Stage Manager off";
         // Accessibility is seen as soon as it is granted, and Stage Manager as soon as it is switched; so is Screen Recording wherever macOS lets a running process see it.
         __weak DWOnboarding *weak=self;_timer=[NSTimer timerWithTimeInterval:1 repeats:YES block:^(NSTimer *timer){(void)timer;[weak look];}];
         [NSRunLoop.mainRunLoop addTimer:_timer forMode:NSRunLoopCommonModes];
@@ -57,12 +58,12 @@ static NSTextField *text(NSView *view,NSRect frame,NSFont *font) {
 // What is granted and how Stage Manager is set now. YES when nothing is in the way: the window has closed and the canvas was asked for.
 - (BOOL)look {
     BOOL capture=CGPreflightScreenCaptureAccess(),input=AXIsProcessTrusted(),stage=DWStageManagerOn();
-    if(capture&&input&&!stage){void (^proceed)(void)=_proceed;[self close];if(proceed)proceed();return YES;}
-    _capture.stringValue=capture?@"Screen Recording: granted.":@"Screen Recording is missing: without it no application window can be shown on the canvas.";
+    if(DWDesktopAccessReady(_requiresScreenCapture,capture,input,stage)){void (^proceed)(void)=_proceed;[self close];if(proceed)proceed();return YES;}
+    _capture.stringValue=capture?@"Screen Recording: granted.":_requiresScreenCapture?@"Screen Recording is missing: without it no application window can be shown on the canvas.":@"Screen Recording is optional for native primary windows. Additional display views need it for captured copies.";
     _input.stringValue=input?@"Accessibility: granted.":@"Accessibility is missing: without it a click cannot reach a window on the canvas, and no window can be focused or closed from it.";
     _stage.stringValue=stage?@"Stage Manager is on: macOS shrinks every window outside the current stage into its strip, and such a window would show on the canvas blurred and still, out of reach of a click. Turn it off in Control Centre or under Desktop & Dock.":@"Stage Manager: off.";
-    _allowCapture.hidden=capture;_allowInput.hidden=input;_openStage.hidden=!stage;_again.hidden=capture;
-    _note.stringValue=capture?(input?@"The canvas opens by itself as soon as Stage Manager is off.":stage?@"The canvas opens by itself as soon as Accessibility is granted and Stage Manager is off.":@"The canvas opens by itself as soon as Accessibility is granted."):@"macOS gives Screen Recording only to an app started after it was granted. Enable Infinify under Screen & System Audio Recording, then click Relaunch.";
+    _allowCapture.hidden=capture||!_requiresScreenCapture;_allowInput.hidden=input;_openStage.hidden=!stage;_again.hidden=capture||!_requiresScreenCapture;
+    _note.stringValue=!_requiresScreenCapture?(input?@"Native windows appear as soon as Stage Manager is off.":stage?@"Native windows appear as soon as Accessibility is granted and Stage Manager is off.":@"Native windows appear as soon as Accessibility is granted."):capture?(input?@"The canvas opens by itself as soon as Stage Manager is off.":stage?@"The canvas opens by itself as soon as Accessibility is granted and Stage Manager is off.":@"The canvas opens by itself as soon as Accessibility is granted."):@"macOS gives Screen Recording only to an app started after it was granted. Enable Infinify under Screen & System Audio Recording, then click Relaunch.";
     return NO;
 }
 // The same two requests as the chooser's Allow button, one button each: the request to macOS, then the pane it is switched on in.

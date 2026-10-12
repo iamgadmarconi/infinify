@@ -87,10 +87,10 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
 }
 @end
 @implementation DWWindowManager
-+ (instancetype)managerWithHost:(id<DWWindowHost>)host scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope { return [self managerWithHost:host scope:scope pictures:YES]; }
-+ (instancetype)managerWithHost:(id<DWWindowHost>)host scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope pictures:(BOOL)pictures {
-    // Only a scope lets windows be managed without their pictures: without one this is the gate it always was.
-    BOOL capturing=pictures&&CGPreflightScreenCaptureAccess();if(!scope&&!capturing)return nil;
++ (instancetype)managerWithHost:(id<DWWindowHost>)host scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope mode:(DWWindowDiscoveryMode)mode {
+    if(mode!=DWWindowDiscoveryModeCaptureOverlay&&mode!=DWWindowDiscoveryModeNativePresentation)return nil;
+    BOOL native=mode==DWWindowDiscoveryModeNativePresentation;
+    BOOL capturing=!native&&CGPreflightScreenCaptureAccess();if(!scope&&!native&&!capturing)return nil;
     DWWindowManager *manager=[self new];manager.scope=[scope copy];manager.capturing=capturing;manager.host=host;manager.offered=[NSMutableSet set];manager.missed=[NSMutableSet set];manager.unlisted=[NSMutableSet set];manager.placed=[NSMutableDictionary dictionary];
     manager.events=[[DWWindowEvents alloc]initWithSink:manager scope:manager.scope];return manager;
 }
@@ -144,7 +144,7 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
     self.reading=YES;self.requested=ids;__weak DWWindowManager *weak=self;NSDictionary<NSNumber *,NSNumber *> *asked=[wanted copy];
     NSMutableDictionary *levels=[NSMutableDictionary dictionary];for(NSDictionary *row in list)if(asked[row[(id)kCGWindowNumber]])levels[row[(id)kCGWindowNumber]]=row[(id)kCGWindowLayer];
     if(self.capturing){[SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO completionHandler:^(SCShareableContent *content,NSError *error){NSDictionary<NSNumber *,id> *subroles=content?windowSubroles(asked,nil):nil;dispatch_async(dispatch_get_main_queue(),^{[weak read:content error:error asked:asked front:front subroles:subroles titles:nil frames:nil levels:levels];});}];return;}
-    // A scoped run without Screen Recording access: the shareable windows are not asked for at all, so nothing can prompt. What they
+    // Native presentation or a scoped overlay without Screen Recording access: shareable windows are not asked for, so nothing can prompt. What they
     // would have said of a candidate is read from the window list (this pass's bounds) and from Accessibility, off the main thread like the subroles.
     NSMutableDictionary<NSNumber *,NSDictionary *> *frames=[NSMutableDictionary dictionary];for(NSNumber *wid in asked)frames[wid]=bounds[wid];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{NSMutableDictionary<NSNumber *,NSString *> *titles=[NSMutableDictionary dictionary];NSDictionary<NSNumber *,id> *subroles=windowSubroles(asked,titles);dispatch_async(dispatch_get_main_queue(),^{[weak read:nil error:nil asked:asked front:front subroles:subroles titles:titles frames:frames levels:levels];});});

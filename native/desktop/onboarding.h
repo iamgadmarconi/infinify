@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import <AppKit/AppKit.h>
 // A normal run is the desktop and shows no chooser. This is the one small window it shows
-// in place of its canvas while it cannot open it: Screen Recording or Accessibility is
+// in place of its canvas while it cannot open it: required Screen Recording or Accessibility is
 // missing, Stage Manager is on, or the launch itself failed. It names what is in the way
 // and gives each grant an Allow button, which asks macOS for it only from the user's own
 // click and opens its pane in System Settings, as the chooser's Allow button does. Stage
@@ -20,10 +20,15 @@
 BOOL DWStageManagerOn(void);
 // What a run that is already the desktop says, on stderr, when Stage Manager comes on under it.
 extern NSString *const DWStageManagerNote;
+// Capture overlays require recording access. An authenticated native primary needs
+// Accessibility and Stage Manager off; extra captured display views remain optional.
+static inline BOOL DWDesktopAccessReady(BOOL requiresScreenCapture,BOOL capture,BOOL input,BOOL stage) {
+    return input&&!stage&&(!requiresScreenCapture||capture);
+}
 @interface DWOnboarding : NSObject
-// `proceed`: both grants are there, Stage Manager is off and the window has closed.
+// `proceed`: required grants are there, Stage Manager is off and the window has closed.
 // `relaunch`: start this run again. `quit`: the Quit button, or the window's own close button.
-- (instancetype)initWithProceed:(void (^)(void))proceed relaunch:(void (^)(void))relaunch quit:(void (^)(void))quit;
+- (instancetype)initWithProceed:(void (^)(void))proceed relaunch:(void (^)(void))relaunch quit:(void (^)(void))quit requiresScreenCapture:(BOOL)requiresScreenCapture;
 // Shows the window, in front. With `error`, a launch that cannot go on whatever is
 // granted, it shows that text and Quit alone, and looks nothing up again.
 - (void)show:(NSString *)error;

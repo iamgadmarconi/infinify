@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 // One window the manager offers: what the shell binds it by and names it with. Read from the shareable windows where the
-// run can capture; in an `--only-pid` run without Screen Recording access from the window list (pid, number, frame),
+// run can capture; in native presentation or an `--only-pid` run without Screen Recording access from the window list (pid, number, frame),
 // Accessibility (title) and the running application (bundle identifier, name), and `shareable` is then nil: such a window
-// is bound, focused and clicked like any other and has no picture.
+// is bound, focused and clicked like any other. Native presentation draws the actual window; a scoped overlay has no picture.
 @interface DWWindowCandidate : NSObject
 @property pid_t pid;
 @property CGWindowID window;
@@ -55,7 +55,7 @@
 // one smaller than 200x150. Tested once per appearance, before adoption only.
 // Read-only: it lists windows and never moves, focuses, resizes or closes one. It owns
 // no timer or dispatch source: the host's poll drives it, and so do the observers it owns
-// (window-events.h), which exist from +managerWithHost:scope: until -stop. Main thread only.
+// (window-events.h), which exist from +managerWithHost:scope:mode: until -stop. Main thread only.
 //
 // Tracking is event-driven where Accessibility access allows. NSWorkspace and one
 // AXObserver per regular application say when an application launched or was shown and
@@ -71,17 +71,23 @@
 // `--only-pid` gives it a scope: pid → that process's start time as read at launch (DWInScope, window-events.h). A window of
 // any other process is then no candidate at all: it is not timed, not asked about through Accessibility, not read, not
 // offered and not named as present, and no observer is put on its application. With a scope the manager also exists
-// without Screen Recording access (`capturing` NO): the shareable windows are then never read, so nothing can prompt, and
+// without Screen Recording access (`capturing` NO). Authenticated native presentation also uses metadata-only discovery
+// without a finite scope: the presenter's own scope checks authorize each adoption. The shareable windows are then never read, so nothing can prompt, and
 // its candidates come from the window list and Accessibility alone. Such a run names no window that is off screen
 // (-discoveryCompleted: is given none), so a saved slot is not kept waiting for one.
+typedef NS_ENUM(NSUInteger,DWWindowDiscoveryMode) {
+    DWWindowDiscoveryModeCaptureOverlay,
+    // Select only after the native presenter has authenticated its helper and scope.
+    // Discovery reads metadata; every native adoption still checks presenter authority.
+    DWWindowDiscoveryModeNativePresentation,
+};
 @interface DWWindowManager : NSObject
-// With no scope (nil): nil without Screen Recording access. It never asks for that access, scope or none.
-+ (instancetype)managerWithHost:(id<DWWindowHost>)host scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope;
-// pictures NO: a manager that never reads the shareable windows whatever access there is (`capturing` NO), for a run that
-// takes no picture of a window (native presentation). It needs a scope, as every manager without them does.
-+ (instancetype)managerWithHost:(id<DWWindowHost>)host scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope pictures:(BOOL)pictures;
+// Overlay with no scope: nil without Screen Recording access. Native presentation
+// never reads shareable windows, even if recording access is granted. Neither mode
+// requests permission. Unknown modes are refused.
++ (instancetype)managerWithHost:(id<DWWindowHost>)host scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope mode:(DWWindowDiscoveryMode)mode;
 // Whether this manager reads the shareable windows: Screen Recording access as it stood when the manager was made.
-// Always YES with no scope.
+// Always NO in native presentation.
 @property (readonly) BOOL capturing;
 // A disposable native benchmark may put its owned windows above the canvas.
 // Default 0; an extra level is considered only with an explicit process scope.
