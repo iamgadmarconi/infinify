@@ -580,6 +580,7 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 }
 @interface DesktopView : FlippedView
 - (NSDictionary *)hit:(CGPoint)point output:(NSNumber *)output;
+- (NSDictionary *)resizeBorderForButton:(NSInteger)button flags:(NSEventModifierFlags)flags hit:(NSDictionary *)hit at:(CGPoint)p output:(NSNumber *)output;
 @property (weak) Desktop *desktop;
 @property NSMutableArray<NSNumber *> *outputs;
 @property NSMutableDictionary<NSString *,CALayer *> *tiles;
@@ -1345,6 +1346,16 @@ static BOOL DWInputTrace(void) { static int on=-1;if(on<0)on=getenv("INFINIFY_DE
     NSString *refusal=[self.desktop.statusText isEqual:status]?nil:self.desktop.statusText;self.desktop.statusText=status;
     [self.desktop raiseFocus:window];if(refusal)[self.desktop flashStatus:[@"Window not resized: " stringByAppendingString:refusal]];
 }
+- (NSDictionary *)resizeBorderForButton:(NSInteger)button flags:(NSEventModifierFlags)flags hit:(NSDictionary *)hit at:(CGPoint)p output:(NSNumber *)output {
+    // Admission is shared by canvas presses and physical native-window presses.
+    // The controller owns the band and pick/widget/pin/fullscreen policy; a native
+    // child recipient and a modified window binding keep their existing input.
+    if(button!=0||hit[@"native_member"]||self.desktop.experimentalResize)return nil;
+    NSDictionary *border=asDict([self pointerCommand:@{@"op":@"resize_border",@"output":output,@"screen":pointJSON(p)} quiet:YES][@"border"]);
+    if(!border||(hit&&![hit[@"window"]isEqual:border[@"window"]]))return nil;
+    if((flags&(NSEventModifierFlagControl|NSEventModifierFlagOption|NSEventModifierFlagShift|NSEventModifierFlagCommand))&&[self.desktop mouseBinding:@"left" source:nil flags:flags window:YES under:asNumber(border[@"window"]) pick:NO])return nil;
+    return border;
+}
 // A normal run's press, dispatched as upstream's on_pointer_button does: the binding
 // for the held modifiers in the window or canvas context, else the native window
 // under the pointer. An unbound press on empty canvas means nothing to upstream either.
@@ -1360,8 +1371,8 @@ static BOOL DWInputTrace(void) { static int on=-1;if(on<0)on=getenv("INFINIFY_DE
     // held claims the press on that window (on_pointer_button asks modifier_button_binding first). The controller says where the band is.
     // A press it does not take goes on as the canvas press it is to -hit:, where upstream would still count the band as the window.
     // Not under --experimental-native-resize: that run resizes by its handles alone, and a band press there would begin a transaction that holds input.
-    NSDictionary *border=!button&&!hit[@"native_member"]&&!self.desktop.experimentalResize?asDict([self pointerCommand:@{@"op":@"resize_border",@"output":output,@"screen":pointJSON(p)} quiet:YES][@"border"]):nil;
-    if(border&&(!hit||[hit[@"window"]isEqual:border[@"window"]])&&!((e.modifierFlags&(NSEventModifierFlagControl|NSEventModifierFlagOption|NSEventModifierFlagShift|NSEventModifierFlagCommand))&&[self.desktop mouseBinding:@"left" source:nil flags:e.modifierFlags window:YES under:asNumber(border[@"window"]) pick:NO])){
+    NSDictionary *border=[self resizeBorderForButton:button flags:e.modifierFlags hit:hit at:p output:output];
+    if(border){
         if(DWInputTrace())fprintf(stderr,"debug: pointer down button=%ld trigger=left binding=none border=%s window=#%s\n",(long)button,asString(border[@"edges"]).UTF8String?:"?",[border[@"window"]description].UTF8String);
         [self beginResize:asNumber(border[@"window"]) edges:asString(border[@"edges"]) snapped:[asNumber(border[@"snapped"])boolValue] at:p output:output];[self.desktop render];return;}
     if(DWInputTrace())fprintf(stderr,"debug: pointer down button=%ld trigger=%s binding=%s window=%s\n",(long)button,button<(NSInteger)triggers.count?triggers[button].UTF8String:"?",kind.UTF8String?:"none",hit?[NSString stringWithFormat:@"#%@",hit[@"window"]].UTF8String:"none");
@@ -1779,7 +1790,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(self.nativeMagnifyView)[self cancelGestures];self.nativeMagnifyView=nil;self.nativeMagnifySource=nil;
 }
 // These are the actual window's events, observed before AppKit delivers them. Only
-// a binding or pick-mode policy takes a press; a plain click remains the app's.
+// a binding, pick-mode policy or normal resize border takes a press; a plain
+// interior click remains the app's.
 // Once taken, the matching drag and release stay with this view even as a pan
 // moves the window out from under the pointer. No global input is synthesized.
 - (void)deliverNative:(NSEvent *)event type:(CGEventType)type view:(DesktopView *)view at:(CGPoint)point {
@@ -2087,6 +2099,11 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
             NSString *kind=asString(binding[@"kind"]);
             claimed|=[@[@"pan_viewport",@"move_window",@"move_snapped_windows",@"resize_window",@"resize_window_snapped",@"center_nearest",@"action"]containsObject:kind?:@""];
             if([hit[@"widget"]boolValue]&&([kind hasPrefix:@"move_"]||[kind hasPrefix:@"resize_"]))claimed=NO;
+            // AppKit's own resize uses unscaled native coordinates. A transformed
+            // root's normal edge press must enter the same pointer-anchored
+            // transaction as the canvas, before the app owns its button pair.
+            // Family members keep their independent native controls and drags.
+            if(wid==source.router.wid&&[view resizeBorderForButton:button flags:event.modifierFlags hit:hit at:point output:output])claimed=YES;
             if(!claimed)return NO;
             self.nativeGestureView=view;self.nativeGestureButton=button;
         }else{
