@@ -100,6 +100,35 @@ large-window real-capture benchmarks reproduced substantial zoom stalls. The
 permission change and capture-size transitions are being measured separately;
 stable 120 Hz and native compositor performance have not been established.
 
+Screen-pinned native resizing now uses output-local points at every canvas zoom,
+keeps the opposite edge from an absolute anchor, and preserves independent pin
+movement before delayed readback. Fractional readbacks do not accumulate rounding
+drift. The signed `c571a2e` build passed the owned resize scenario's 58 grabs,
+including eight pinned edge/corner cases at zoom 0.5 and 0.8, native size limits,
+closure and unresponsive fixtures. `DebugPointer` invokes the production view
+handlers and the adapter changes real fixture sizes; it does not establish
+physical cursor or third-party acceptance. All nine children exited, every resize
+transaction ended, and the decoy retained its bounds and received no event.
+
+A native half-scale AppKit file session also passed between two independent
+owned processes, including the original file contents, outside-application drag
+context, destination callbacks and local drop coordinates. Independent reads
+confirmed exact restoration and empty journals for both helpers before all
+children exited. This covers two disposable AppKit applications; arbitrary
+third-party applications, file promises and captured replicas remain open. See
+[`NATIVE-DRAG-ROUTING.md`](../../native/desktop/NATIVE-DRAG-ROUTING.md).
+
+The root-only family ordering optimization is implemented, but its matched
+six-window capture run still presented about 47-58 frames/second and retained
+main-thread stalls. A further capture-demand change now waits for actual scale
+motion to settle before reducing resolution, while required upscales and native
+size changes remain immediate. In the matched six-window run this reduced
+reconfigurations from 36 to 12 and worst zoom main-thread work from 47.2 to
+8.6 ms, but zoom presentation fell from 47 to 41.25 frames/second while larger
+surfaces stayed allocated. This is a tradeoff, not an overall performance win.
+Finer resolution buckets are being evaluated; stable 120 Hz and native
+compositor parity remain unestablished.
+
 The application build now signs and verifies a staged bundle before replacing
 `target/app/Infinify.app`. Its adjacent `BUILD.json` records the source snapshot
 and signed executable hash; changed sources or failed packaging refuse promotion.

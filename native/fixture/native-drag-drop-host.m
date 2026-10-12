@@ -56,7 +56,10 @@ static NSURL *fileURLFromInfo(id<NSDraggingInfo> info) {
 }
 - (NSDragOperation)draggingSession:(NSDraggingSession *)session sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
     (void)session;
-    (void)context;
+    NSMutableArray *contexts = self.receipt[@"source_dragging_contexts"];
+    if (!contexts) self.receipt[@"source_dragging_contexts"] = contexts = [NSMutableArray array];
+    if (![contexts containsObject:@(context)]) [contexts addObject:@(context)];
+    writeReceipt(self.receiptPath, self.receipt);
     return NSDragOperationCopy;
 }
 - (void)draggingSession:(NSDraggingSession *)session endedAtPoint:(NSPoint)screenPoint operation:(NSDragOperation)operation {
@@ -158,15 +161,17 @@ static NSWindow *makeWindow(NSRect frame, NSString *title, NSView *content) {
 
 int main(int argc, char **argv) {
     @autoreleasepool {
-        if (argc != 6) {
-            fprintf(stderr, "usage: native-drag-drop-host payload.dylib runtime-dir nonce-file evidence-dir file-url-path\n");
+        if (argc != 7 || (strcmp(argv[1], "source") && strcmp(argv[1], "destination"))) {
+            fprintf(stderr, "usage: native-drag-drop-host source|destination payload.dylib runtime-dir nonce-file evidence-dir file-url-path\n");
             return 2;
         }
-        NSString *payload = [NSString stringWithUTF8String:argv[1]];
-        NSString *runtime = [NSString stringWithUTF8String:argv[2]];
+        NSString *role = [NSString stringWithUTF8String:argv[1]];
+        BOOL isSource = [role isEqualToString:@"source"];
+        NSString *payload = [NSString stringWithUTF8String:argv[2]];
+        NSString *runtime = [NSString stringWithUTF8String:argv[3]];
         // Read the private token by descriptor; never put it in process arguments
         // or observable window titles.
-        int fd = open(argv[3], O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+        int fd = open(argv[4], O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
         struct stat st = {0};
         char token[66] = {0};
         if (fd < 0 || fstat(fd, &st) || !S_ISREG(st.st_mode) || st.st_uid != getuid()
@@ -177,19 +182,25 @@ int main(int argc, char **argv) {
         close(fd);
         if (token[64] != '\n') return 2;
         token[64] = 0;
-        for (int i = 0; i < 64; i++) if (!strchr("0123456789abcdef", token[i])) return 2;
-        NSString *nonce = [NSString stringWithUTF8String:token];
-        NSString *evidence = [NSString stringWithUTF8String:argv[4]];
-        NSString *filePath = [NSString stringWithUTF8String:argv[5]];
-        if (!payload.isAbsolutePath || !runtime.isAbsolutePath || !evidence.isAbsolutePath || !filePath.isAbsolutePath || nonce.length < 32) {
+        for (int i = 0; i < 64; i++) if (!token[i] || !strchr("0123456789abcdef", token[i])) return 2;
+        NSString *authNonce = [NSString stringWithUTF8String:token];
+        NSString *evidence = [NSString stringWithUTF8String:argv[5]];
+        NSString *filePath = [NSString stringWithUTF8String:argv[6]];
+        if (!payload.isAbsolutePath || !runtime.isAbsolutePath || !evidence.isAbsolutePath || !filePath.isAbsolutePath) {
             fprintf(stderr, "fixture paths must be absolute and nonce must be fresh\n");
             return 2;
         }
-        NSString *fileContents = [NSString stringWithContentsOfFile:filePath encoding:NSUTF8StringEncoding error:nil];
-        if (![fileContents isEqualToString:nonce]) {
-            fprintf(stderr, "fixture file does not contain this run's nonce\n");
+        fd = open(filePath.fileSystemRepresentation, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+        memset(token, 0, sizeof(token));
+        if (fd < 0 || fstat(fd, &st) || !S_ISREG(st.st_mode) || st.st_uid != getuid()
+            || (st.st_mode & 0777) != 0600 || st.st_size != 64 || read(fd, token, 65) != 64) {
+            if (fd >= 0) close(fd);
+            fprintf(stderr, "fixture file must contain a private file nonce\n");
             return 2;
         }
+        close(fd);
+        for (int i = 0; i < 64; i++) if (!token[i] || !strchr("0123456789abcdef", token[i])) return 2;
+        NSString *nonce = [NSString stringWithUTF8String:token];
 
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
@@ -204,33 +215,34 @@ int main(int argc, char **argv) {
         CGFloat left = NSMinX(visible) + margin;
         CGFloat bottom = NSMinY(visible) + margin;
         NSMutableDictionary *receipt = [@{
-            @"nonce": nonce,
-            @"source_mouse_down": @NO,
-            @"source_session_started": @NO,
-            @"source_ended": @NO,
-            @"destination_events": [NSMutableArray array],
-            @"destination_prepared": @NO,
-            @"destination_performed": @NO,
-            @"destination_concluded": @NO
+            @"role": role, @"host_pid": @(getpid()), @"file_nonce": nonce
         } mutableCopy];
         NSString *receiptPath = [evidence stringByAppendingPathComponent:@"receipt.json"];
-        DWDragSourceView *source = [DWDragSourceView new];
-        source.filePath = filePath; source.nonce = nonce; source.receiptPath = receiptPath; source.receipt = receipt;
-        DWDragDestinationView *destination = [DWDragDestinationView new];
-        destination.filePath = filePath; destination.nonce = nonce; destination.receiptPath = receiptPath; destination.receipt = receipt;
-        [destination registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
-        NSWindow *sourceWindow = makeWindow(NSMakeRect(left, bottom, width, height), @"DriftWM Native Drag Source", source);
-        NSWindow *destinationWindow = makeWindow(NSMakeRect(left + width + margin, bottom, width, height), @"DriftWM Native Drag Destination", destination);
+        NSView *content;
+        if (isSource) {
+            DWDragSourceView *source = [DWDragSourceView new];
+            source.filePath = filePath; source.nonce = nonce; source.receiptPath = receiptPath; source.receipt = receipt;
+            content = source;
+        } else {
+            DWDragDestinationView *destination = [DWDragDestinationView new];
+            destination.filePath = filePath; destination.nonce = nonce; destination.receiptPath = receiptPath; destination.receipt = receipt;
+            [destination registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
+            content = destination;
+        }
+        NSWindow *window = makeWindow(NSMakeRect(left + (isSource ? 0 : width + margin), bottom, width, height),
+                                     isSource ? @"DriftWM Native Drag Source" : @"DriftWM Native Drag Destination", content);
+        receipt[@"wid"] = @(window.windowNumber);
+        writeReceipt(receiptPath, receipt);
         [NSApp finishLaunching];
         [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.2]];
 
         void *handle = dlopen(payload.fileSystemRepresentation, RTLD_LOCAL | RTLD_NOW);
         if (!handle) { fprintf(stderr, "dlopen: %s\n", dlerror()); return 1; }
         int (*start)(const char *, const char *, const uint32_t *, uint32_t, const char *, int) = dlsym(handle, "dw_privileged_fixture_start_windows");
-        uint32_t wids[2] = {(uint32_t)sourceWindow.windowNumber, (uint32_t)destinationWindow.windowNumber};
-        int status = start ? start(runtime.fileSystemRepresentation, nonce.UTF8String, wids, 2, NULL, -1) : -1;
+        uint32_t wid = (uint32_t)window.windowNumber;
+        int status = start ? start(runtime.fileSystemRepresentation, authNonce.UTF8String, &wid, 1, NULL, -1) : -1;
         if (status) { fprintf(stderr, "helper fixture start failed: %d\n", status); return 1; }
-        printf("READY %d %u %u\n", getpid(), wids[0], wids[1]);
+        printf("READY %s %d %u\n", role.UTF8String, getpid(), wid);
         fflush(stdout);
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)120 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ [NSApp terminate:nil]; });
         [NSApp run];

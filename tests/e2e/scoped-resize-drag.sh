@@ -550,4 +550,4 @@ launch --debug-pointer --only-pid "$A,$B,$C,$F,$N,$P,$K,$H"
 python3 "$evidence/driver.py" "$evidence" "$app"
 quit; [ "$gone" = yes ] || { echo 'FAIL: Infinify did not quit within 8 s of msg action quit'; exit 1; }
 echo 'ok: quit within 8 s'
-echo 'PASS: scoped resize drag: the nine cells, zoomed ordinary edges/corners, coalesced requests, a pointer at rest, minimum, maximum and increment, a window that takes no size, the snapped cluster, the resize border, preserve_aspect_ratio, a window closed and an application hung or stalled mid-grab; decoy untouched'
+echo 'PASS: scoped resize drag: the nine cells, zoomed ordinary and pinned edges/corners, coalesced requests, a pointer at rest, minimum, maximum and increment, a window that takes no size, the snapped cluster, the resize border, preserve_aspect_ratio, a window closed and an application hung or stalled mid-grab; decoy untouched'

@@ -26,6 +26,8 @@ PROBE = 5
 INSPECT = 7
 REPLY = 0x8000
 NS_DRAG_OPERATION_COPY = 1
+NS_DRAGGING_CONTEXT_OUTSIDE_APPLICATION = 0
+ROLES = ('source', 'destination')
 
 
 class Point(C.Structure):
@@ -258,7 +260,7 @@ class V2ReadOnly:
         self.sock.close()
 
 
-def identities(runtime, nonce, host_pid, wids):
+def identities(runtime, nonce, host_pid, wid):
     connection = V2ReadOnly(runtime, nonce)
     try:
         probe = connection.probe()
@@ -266,8 +268,8 @@ def identities(runtime, nonce, host_pid, wids):
               and probe['held'] == 0 and probe['restoring'] == 0 and probe['table_count'] == 0,
               'helper is a cooperative fresh host with no pending restoration', probe)
         fixtures = [tuple(value) for value in probe['fixtures']]
-        check(len(fixtures) == 2 and {value[1] for value in fixtures} == set(wids)
-              and all(value[0] == host_pid for value in fixtures), 'helper allowlist is exactly the two owned windows', fixtures)
+        check(len(fixtures) == 1 and fixtures[0][0] == host_pid and fixtures[0][1] == wid,
+              'helper allowlist is exactly this role’s owned window', fixtures)
         observed = {}
         for identity in fixtures:
             inspection = connection.inspect(identity)
@@ -281,13 +283,14 @@ def identities(runtime, nonce, host_pid, wids):
         connection.close()
 
 
-def read_ready(evidence, host_pid):
-    lines = (Path(evidence) / 'host.log').read_text().splitlines()
+def read_ready(evidence, role, host_pid):
+    lines = (Path(evidence) / role / 'host.log').read_text().splitlines()
     ready = [line.split() for line in lines if line.startswith('READY ')]
-    check(len(ready) == 1 and len(ready[0]) == 4, 'fixture host reports exactly two owned window IDs', lines)
-    _, pid, source, destination = ready[0]
-    check(int(pid) == host_pid and int(source) != int(destination), 'fixture READY process and window IDs are fresh', ready[0])
-    return int(source), int(destination)
+    check(len(ready) == 1 and len(ready[0]) == 4, 'role host reports exactly one owned window ID', lines)
+    _, reported_role, pid, wid = ready[0]
+    check(reported_role == role and int(pid) == host_pid and int(wid) > 0,
+          'fixture READY role, process and window ID are fresh', ready[0])
+    return int(wid)
 
 
 def preflight():
@@ -314,23 +317,28 @@ def save_json(path, value):
 def baseline(args):
     if preflight():
         return 3
-    source_wid, destination_wid = read_ready(args.evidence, args.host_pid)
-    probe, observed = identities(args.runtime, args.nonce, args.host_pid, [source_wid, destination_wid])
-    result = {
-        'host_pid': args.host_pid,
-        'source_wid': source_wid,
-        'destination_wid': destination_wid,
-        'identities': {str(wid): observed[wid]['identity'] for wid in observed},
-        'original': {str(wid): observed[wid]['independent'] for wid in observed},
-        'helper_probe': {'scope': probe['scope'], 'server_pid': probe['server_pid'], 'fixtures': probe['fixtures']},
-    }
-    for wid in (source_wid, destination_wid):
-        inspect = observed[wid]['inspection']
-        independent = observed[wid]['independent']
-        check(inspect['transform'] == independent['transform'] and inspect['bounds'] == independent['bounds']
-              and inspect['screen_rect'] == independent['screen_rect'], 'helper INSPECT matches independent original geometry', wid)
+    result = {'roles': {}, 'identities': {}, 'original': {}}
+    for role in ROLES:
+        host = args.hosts[role]
+        wid = read_ready(args.evidence, role, host['pid'])
+        probe, observed = identities(host['runtime'], host['nonce'], host['pid'], wid)
+        inspection, independent = observed[wid]['inspection'], observed[wid]['independent']
+        check(inspection['transform'] == independent['transform'] and inspection['bounds'] == independent['bounds']
+              and inspection['screen_rect'] == independent['screen_rect'],
+              'helper INSPECT matches independent original geometry', (role, wid))
+        result['roles'][role] = {
+            'host_pid': host['pid'], 'wid': wid,
+            'helper_probe': {'scope': probe['scope'], 'server_pid': probe['server_pid'], 'fixtures': probe['fixtures']},
+        }
+        result[role + '_wid'] = wid
+        result['identities'][str(wid)] = observed[wid]['identity']
+        result['original'][str(wid)] = independent
+    source, destination = (result['roles'][role] for role in ROLES)
+    check(source['host_pid'] != destination['host_pid'] and source['wid'] != destination['wid']
+          and result['original'][str(source['wid'])]['owner'] != result['original'][str(destination['wid'])]['owner'],
+          'source and destination are independent AppKit processes and native owners', result)
     save_json(Path(args.evidence) / 'native-before.json', result)
-    print(f"PASS: exact v2 identities and independent original transform/alpha recorded for {source_wid}, {destination_wid}")
+    print('PASS: both independent v2 hosts expose only their exact role window; original native geometry recorded')
     return 0
 
 
@@ -443,28 +451,33 @@ def topmost(point):
             'local': [local.x, local.y]}
 
 
-def validate_path(points, source_wid, destination_wid, host_pid, app_pid, panel_wid):
-    allowed = {source_wid, destination_wid, panel_wid}
+def owned_hit(point, targets):
+    row = topmost(point)
+    check(row is not None and row['wid'] in targets, 'input point is confined to this run’s native windows', (point, row))
+    expected = targets[row['wid']]
+    check(row['pid'] == expected['identity'][0] and row['owner'] == expected['owner'],
+          'event-eligible native window has the exact owned PID and connection', (point, row, expected))
+    return row
+
+
+def validate_path(points, source_wid, destination_wid, targets):
     observations = []
     for index, point in enumerate(points):
-        row = topmost(point)
-        check(row is not None, 'every planned drag sample has a topmost on-screen window', point)
-        check(row['wid'] in allowed and row['pid'] in {host_pid, app_pid},
-              'drag path is confined to the two fixture windows and this run’s canvas', (point, row))
+        row = owned_hit(point, targets)
         if index == 0:
             check(row['wid'] == source_wid, 'drag starts at the exact source window', row)
         if index == len(points) - 1:
             check(row['wid'] == destination_wid, 'drop ends at the exact destination window', row)
-        observations.append({'point': point, 'wid': row['wid'], 'pid': row['pid']})
+        observations.append({'point': point, **row})
     return observations
 
 
-def receipt_when_complete(path):
+def receipts_when_complete(evidence):
     try:
-        receipt = json.loads(Path(path).read_text())
+        receipts = {role: json.loads((Path(evidence) / role / 'receipt.json').read_text()) for role in ROLES}
     except (OSError, json.JSONDecodeError):
         return None
-    return receipt if receipt.get('source_ended') and receipt.get('destination_concluded') else None
+    return receipts if receipts['source'].get('source_ended') and receipts['destination'].get('destination_concluded') else None
 
 
 def run(args):
@@ -472,7 +485,8 @@ def run(args):
         return 3
     evidence = Path(args.evidence)
     before = json.loads((evidence / 'native-before.json').read_text())
-    check(before['host_pid'] == args.host_pid, 'baseline host PID matches live fixture')
+    check(all(before['roles'][role]['host_pid'] == args.hosts[role]['pid'] for role in ROLES),
+          'baseline role PIDs match both live fixtures')
     source_wid, destination_wid = before['source_wid'], before['destination_wid']
     app_pid = args.app_pid
     sock_path = args.socket
@@ -482,10 +496,11 @@ def run(args):
     check(bool(event_source), 'HID-state event source creation')
     pressed = False
     try:
-        try:
-            os.kill(args.host_pid, 0)
-        except OSError as error:
-            fail('owned fixture process remains live', str(error))
+        for role in ROLES:
+            try:
+                os.kill(args.hosts[role]['pid'], 0)
+            except OSError as error:
+                fail('both owned fixture processes remain live', (role, str(error)))
 
         def adopted():
             scene = state(sock_path)
@@ -544,10 +559,18 @@ def run(args):
         check('Ok' in native_reply and 'DebugNative' in native_reply['Ok'], 'native helper diagnostic is available', native_reply)
         native_state = native_reply['Ok']['DebugNative']
         records = {record['wid']: record for record in native_state.get('records', [])}
-        check(native_state.get('scope') == 1 and native_state.get('server_pid') == args.host_pid
-              and set(records) == {source_wid, destination_wid}
-              and records[source_wid]['window'] == src['id'] and records[destination_wid]['window'] == dst['id'],
-              'active helper frame names only the two exact fresh fixture windows', native_state)
+        sessions = native_state.get('sessions', [])
+        check(native_state.get('group') is True and not native_state.get('ended') and len(sessions) == 2
+              and set(records) == {source_wid, destination_wid},
+              'active presenter groups exactly the two independent fixture helpers', native_state)
+        for role, logical in (('source', src), ('destination', dst)):
+            host, wid = args.hosts[role], before['roles'][role]['wid']
+            matching = [session for session in sessions if session.get('server_pid') == host['pid']]
+            check(len(matching) == 1 and matching[0].get('scope') == 1 and not matching[0].get('ended')
+                  and len(matching[0].get('records', [])) == 1
+                  and matching[0]['records'][0]['wid'] == wid and matching[0]['records'][0]['window'] == logical['id'],
+                  'each scoped helper presents only its own exact role window', (role, native_state))
+        save_json(evidence / 'grouped-native.json', native_state)
 
         source_rect = actual[source_wid]['screen_rect']
         destination_rect = actual[destination_wid]['screen_rect']
@@ -555,7 +578,9 @@ def run(args):
         drop = [destination_rect[0] + destination_rect[2] * .65, destination_rect[1] + destination_rect[3] * .50]
         path = [[start[0] + (drop[0] - start[0]) * i / 16, start[1] + (drop[1] - start[1]) * i / 16] for i in range(17)]
         panel_wid = canvas_window(app_pid)['wid']
-        path_guard = validate_path(path, source_wid, destination_wid, args.host_pid, app_pid, panel_wid)
+        targets = {**actual, panel_wid: independent_snapshot(panel_wid)}
+        check(targets[panel_wid]['identity'][0] == app_pid, 'canvas belongs to this run’s exact app process')
+        path_guard = validate_path(path, source_wid, destination_wid, targets)
         save_json(evidence / 'path-guard.json', {'samples': path_guard, 'source': source_wid, 'destination': destination_wid, 'canvas': panel_wid})
 
         # Reconfirm both full identities and original geometry immediately before
@@ -569,68 +594,81 @@ def run(args):
             check(observed['transform'] != before['original'][str(wid)]['transform'], 'native helper has transformed this fixture window', wid)
             check(observed['alpha'] == before['original'][str(wid)]['alpha'], 'native test did not alter fixture alpha', wid)
 
-        def guarded_post(kind, point):
+        input_guard = []
+        def guarded_post(kind, point, expected_wid=None):
             # Recheck ownership and process births at each posted sample. No
             # input goes to a window that has appeared over the fixture path.
-            for wid in (source_wid, destination_wid):
+            for wid, target in targets.items():
                 current_native = independent_snapshot(wid)
-                check(current_native['identity'] == before['identities'][str(wid)]
-                      and current_native['owner'] == before['original'][str(wid)]['owner'],
-                      'exact fixture instance remains live immediately before input', wid)
-            row = topmost(point)
-            check(row is not None and row['wid'] in {source_wid, destination_wid, panel_wid}
-                  and row['pid'] in {args.host_pid, app_pid}, 'current input point remains test-owned', row)
+                check(current_native['identity'] == target['identity'] and current_native['owner'] == target['owner'],
+                      'exact fixture or canvas instance remains live immediately before input', wid)
+            row = owned_hit(point, targets)
+            check(expected_wid is None or row['wid'] == expected_wid,
+                  'mouse pair stays on its exact source and destination', (kind, row, expected_wid))
+            input_guard.append({'kind': kind, 'point': point, **row})
+            save_json(evidence / 'input-guard.json', {'samples': input_guard})
             post_mouse(event_source, kind, point)
 
-        guarded_post(5, start)  # kCGEventMouseMoved
+        guarded_post(5, start, source_wid)  # kCGEventMouseMoved
         time.sleep(.12)
-        guarded_post(1, start)  # kCGEventLeftMouseDown
+        guarded_post(1, start, source_wid)  # kCGEventLeftMouseDown
         pressed = True
         time.sleep(.12)
         for point in path[1:]:
             guarded_post(6, point)  # kCGEventLeftMouseDragged
             time.sleep(.025)
-        guarded_post(2, drop)  # kCGEventLeftMouseUp
+        guarded_post(2, drop, destination_wid)  # kCGEventLeftMouseUp
         pressed = False
 
-        receipt_path = evidence / 'receipt.json'
-        receipt = wait_for(10, lambda: receipt_when_complete(receipt_path), 'AppKit source and destination callbacks complete')
-        check(receipt.get('source_session_started') and receipt.get('source_mouse_down'), 'source began a real AppKit NSDraggingSession', receipt)
-        events = receipt.get('destination_events', [])
+        receipts = wait_for(10, lambda: receipts_when_complete(evidence), 'both independent AppKit callback paths complete')
+        for role, receipt in receipts.items():
+            check(receipt.get('role') == role and receipt.get('host_pid') == args.hosts[role]['pid']
+                  and receipt.get('wid') == before['roles'][role]['wid'] and receipt.get('file_nonce') == args.file_nonce,
+                  'callback receipt belongs to the exact role process, window and file', (role, receipt))
+        source_receipt, destination_receipt = (receipts[role] for role in ROLES)
+        check(source_receipt.get('source_session_started') and source_receipt.get('source_mouse_down')
+              and source_receipt.get('source_event_window') == source_wid,
+              'source began a real AppKit NSDraggingSession in its own window', source_receipt)
+        check(NS_DRAGGING_CONTEXT_OUTSIDE_APPLICATION in source_receipt.get('source_dragging_contexts', []),
+              'AppKit requested the source operation for an outside-application drag', source_receipt)
+        events = destination_receipt.get('destination_events', [])
         check('entered' in events and 'prepare' in events and 'perform' in events and 'conclude' in events,
               'registered NSDraggingDestination received a complete AppKit callback path', events)
-        check(receipt.get('destination_file_url_type_seen') and receipt.get('destination_prepared')
-              and receipt.get('destination_performed') and receipt.get('destination_concluded'),
-              'destination accepted the actual file URL and completed the drop', receipt)
-        check(receipt.get('destination_received_path') == str(evidence / 'drop.txt')
-              and receipt.get('destination_received_contents') == args.nonce,
-              'destination read the exact nonce-bearing file from NSDraggingInfo pasteboard', receipt)
-        check(receipt.get('source_end_operation') == NS_DRAG_OPERATION_COPY
-              and receipt.get('destination_source_operation_mask', 0) & NS_DRAG_OPERATION_COPY,
-              'AppKit source and destination agreed on copy operation', receipt)
-        local = receipt['destination_location']
-        bounds = receipt['destination_view_bounds']
+        check(destination_receipt.get('destination_file_url_type_seen') and destination_receipt.get('destination_prepared')
+              and destination_receipt.get('destination_performed') and destination_receipt.get('destination_concluded'),
+              'destination accepted the actual file URL and completed the drop', destination_receipt)
+        check(destination_receipt.get('destination_received_path') == str(evidence / 'drop.txt')
+              and destination_receipt.get('destination_received_contents') == args.file_nonce,
+              'destination read the exact nonce-bearing file from NSDraggingInfo pasteboard', destination_receipt)
+        check(source_receipt.get('source_end_operation') == NS_DRAG_OPERATION_COPY
+              and destination_receipt.get('destination_source_operation_mask', 0) & NS_DRAG_OPERATION_COPY,
+              'independent AppKit source and destination agreed on copy operation', receipts)
+        local = destination_receipt['destination_location']
+        bounds = destination_receipt['destination_view_bounds']
+        check(len(bounds) == 4 and bounds[2] > 0 and bounds[3] > 0, 'destination view has native bounds', bounds)
         expected_local = [actual[destination_wid]['bounds'][2] * .65, actual[destination_wid]['bounds'][3] * .5]
         check(abs(local[0] - expected_local[0]) <= 8 and abs(local[1] - expected_local[1]) <= 8,
               'destination AppKit local drop point matches the transformed native hit point', {'actual': local, 'expected': expected_local})
         check(all(abs(a - b) < 1e-6 for a, b in zip(independent_snapshot(source_wid)['transform'], actual[source_wid]['transform']))
               and all(abs(a - b) < 1e-6 for a, b in zip(independent_snapshot(destination_wid)['transform'], actual[destination_wid]['transform'])),
               'native transforms stayed fixed for the whole drag session')
-        print(json.dumps({'result': 'PASS', 'scope': 'two exact cooperative primary-native fixture windows',
+        print(json.dumps({'result': 'PASS', 'scope': 'two independent exact cooperative AppKit processes with primary-native windows',
                           'source_identity': before['identities'][str(source_wid)],
                           'destination_identity': before['identities'][str(destination_wid)],
                           'scaled_screen_rects': {str(wid): actual[wid]['screen_rect'] for wid in actual},
                           'path_guard_samples': len(path_guard), 'destination_location': local,
-                          'destination_events': events, 'file_path': receipt['destination_received_path']}, sort_keys=True))
+                          'destination_events': events, 'file_path': destination_receipt['destination_received_path']}, sort_keys=True))
         return 0
     finally:
         if pressed:
             try:
-                check(process_birth(args.host_pid) == before['identities'][str(source_wid)][2:],
-                      'cleanup release still targets the exact owned process')
+                current_source = independent_snapshot(source_wid)
+                check(current_source['identity'] == before['identities'][str(source_wid)]
+                      and current_source['owner'] == before['original'][str(source_wid)]['owner'],
+                      'cleanup release still targets the exact owned source instance')
                 event = event_at(event_source, 2, get_pointer())
                 try:
-                    cg.CGEventPostToPid(args.host_pid, event)
+                    cg.CGEventPostToPid(args.hosts['source']['pid'], event)
                 finally:
                     cf.CFRelease(event)
             except Exception as error:  # Cleanup must still warp the cursor back.
@@ -643,44 +681,59 @@ def run(args):
 def verify_restored(args):
     evidence = Path(args.evidence)
     before = json.loads((evidence / 'native-before.json').read_text())
-    source_wid, destination_wid = before['source_wid'], before['destination_wid']
-    end = time.monotonic() + args.timeout
-    seen = None
-    while time.monotonic() < end:
+    results, failures = {}, {}
+    # Audit both independent endpoints even if the first fails. Both children
+    # remain alive until the shell has completed this restoration audit.
+    for role in ROLES:
+        host = args.hosts[role]
+        wid = before['roles'][role]['wid']
+        original = before['original'][str(wid)]
+        identity = tuple(before['identities'][str(wid)])
+        connection = None
         try:
-            seen = {str(wid): independent_snapshot(wid) for wid in (source_wid, destination_wid)}
-            if all(seen[str(wid)]['transform'] == before['original'][str(wid)]['transform']
-                   and seen[str(wid)]['alpha'] == before['original'][str(wid)]['alpha']
-                   and seen[str(wid)]['screen_rect'] == before['original'][str(wid)]['screen_rect']
-                   for wid in (source_wid, destination_wid)):
-                break
-        except AssertionError:
-            seen = None
-        time.sleep(.05)
-    check(seen is not None and all(seen[str(wid)]['transform'] == before['original'][str(wid)]['transform']
-                                  and seen[str(wid)]['alpha'] == before['original'][str(wid)]['alpha']
-                                  and seen[str(wid)]['screen_rect'] == before['original'][str(wid)]['screen_rect']
-                                  for wid in (source_wid, destination_wid)),
-          'exact original transform, alpha and screen rectangle restored independently', seen)
-    connection = V2ReadOnly(args.runtime, args.nonce)
-    try:
-        probe = connection.probe()
-        check(probe['server_pid'] == args.host_pid and probe['journal_pending'] == 0
-              and probe['held'] == 0 and probe['restoring'] == 0 and probe['table_count'] == 0,
-              'helper journal has no pending native restoration', probe)
-        for identity in before['identities'].values():
-            identity = tuple(identity)
+            check(before['roles'][role]['host_pid'] == host['pid'], 'restoration uses the recorded role PID', role)
+            end, seen = time.monotonic() + args.timeout, None
+            while time.monotonic() < end:
+                seen = independent_snapshot(wid)
+                if seen == original:
+                    break
+                time.sleep(.05)
+            check(seen == original, 'exact original identity, owner, transform, bounds, alpha and screen rectangle restored', (role, seen, original))
+            connection = V2ReadOnly(host['runtime'], host['nonce'])
+            probe = connection.probe()
+            check(probe['server_pid'] == host['pid'] and probe['scope'] == 1 and probe['journal_pending'] == 0
+                  and probe['held'] == 0 and probe['restoring'] == 0 and probe['table_count'] == 0
+                  and probe['fixtures'] == [identity], 'role helper has exact scope and no pending native restoration', (role, probe))
             restored = connection.inspect(identity)
-            check(restored['status'] == 0 and restored['owner'] == before['original'][str(identity[1])]['owner']
-                  and seen[str(identity[1])]['identity'] == list(identity)
-                  and restored['bounds'] == before['original'][str(identity[1])]['bounds']
-                  and restored['transform'] == before['original'][str(identity[1])]['transform']
-                  and restored['screen_rect'] == before['original'][str(identity[1])]['screen_rect'],
-                  'protocol-v2 INSPECT confirms restored exact fixture identity', (identity, restored))
-    finally:
-        connection.close()
-    print('PASS: both owned windows independently restored transform, alpha and screen rectangle; v2 journal is clear')
+            check(restored['status'] == 0 and restored['owner'] == original['owner']
+                  and all(restored[key] == original[key] for key in ('bounds', 'transform', 'screen_rect')),
+                  'protocol-v2 INSPECT confirms restored exact role identity', (role, restored))
+            results[role] = {'independent': seen, 'inspect': restored, 'probe': probe}
+        except Exception as error:
+            failures[role] = str(error)
+        finally:
+            if connection:
+                connection.close()
+    save_json(evidence / 'restoration.json', {'roles': results, 'failures': failures})
+    check(not failures, 'both independent fixture restorations must succeed', failures)
+    print('PASS: both independent owned processes restored exact native geometry and alpha; both v2 journals are clear')
     return 0
+
+
+def private_token(path, newline):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        metadata = os.fstat(fd)
+        size = 65 if newline else 64
+        check(stat.S_ISREG(metadata.st_mode) and metadata.st_uid == os.getuid()
+              and stat.S_IMODE(metadata.st_mode) == 0o600 and metadata.st_size == size,
+              'nonce file is private and belongs to this user', str(path))
+        token = os.read(fd, size + 1)
+        check(len(token) == size and (not newline or token[-1:] == b'\n')
+              and all(chr(value) in '0123456789abcdef' for value in token[:64]), 'nonce file format', str(path))
+        return token[:64].decode()
+    finally:
+        os.close(fd)
 
 
 def main():
@@ -697,27 +750,24 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('mode', choices=('baseline', 'run', 'verify-restored'))
     parser.add_argument('evidence')
-    parser.add_argument('--runtime', required=True)
-    parser.add_argument('--nonce-file', required=True)
-    parser.add_argument('--host-pid', required=True, type=int)
+    for role in ROLES:
+        parser.add_argument('--' + role + '-runtime', required=True)
+        parser.add_argument('--' + role + '-nonce-file', required=True)
+        parser.add_argument('--' + role + '-pid', required=True, type=int)
     parser.add_argument('--timeout', type=float, default=5)
     parser.add_argument('--app-pid', type=int, default=0)
     parser.add_argument('--app', default='')
     parser.add_argument('--socket', default='')
     args = parser.parse_args()
     try:
-        fd = os.open(args.nonce_file, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
-        try:
-            metadata = os.fstat(fd)
-            check(stat.S_ISREG(metadata.st_mode) and metadata.st_uid == os.getuid()
-                  and stat.S_IMODE(metadata.st_mode) == 0o600 and metadata.st_size == 65,
-                  'nonce file is private and belongs to this user')
-            token = os.read(fd, 66)
-            check(len(token) == 65 and token[-1:] == b'\n'
-                  and all(chr(value) in '0123456789abcdef' for value in token[:-1]), 'nonce file format')
-            args.nonce = token[:-1].decode()
-        finally:
-            os.close(fd)
+        args.hosts = {role: {'pid': getattr(args, role + '_pid'), 'runtime': getattr(args, role + '_runtime'),
+                             'nonce': private_token(getattr(args, role + '_nonce_file'), True)} for role in ROLES}
+        check(args.hosts['source']['pid'] > 1 and args.hosts['destination']['pid'] > 1
+              and args.hosts['source']['pid'] != args.hosts['destination']['pid'], 'fixture role PIDs are distinct')
+        check(args.hosts['source']['runtime'] != args.hosts['destination']['runtime']
+              and args.hosts['source']['nonce'] != args.hosts['destination']['nonce'], 'helper endpoints and private auth tokens are distinct')
+        args.file_nonce = private_token(Path(args.evidence) / 'drop.txt', False)
+        check(all(host['nonce'] != args.file_nonce for host in args.hosts.values()), 'pasteboard file does not expose helper auth')
         if args.mode == 'baseline': return baseline(args)
         if args.mode == 'run': return run(args)
         return verify_restored(args)
