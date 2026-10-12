@@ -27,6 +27,25 @@ typedef struct {
     bool required;
 } DWNativeClipGeometry;
 bool DWNativeClipPlacement(CGRect native,CGRect rootNative,CGRect rootScreen,CGRect viewport,DWNativeClipGeometry *out);
+// Immutable receipt for one entire bound native family in one helper frame. The
+// helper acknowledged these requested matrices; this is not observed geometry,
+// an optical result, a native clipping receipt or authorization to send input.
+// Before admission, independently check current identity/ancestry, transform,
+// screen geometry and the exact event-eligible window, then recheck this token.
+@interface DWNativeAppliedPlacement : NSObject
+- (instancetype)init NS_UNAVAILABLE;
++ (instancetype)new NS_UNAVAILABLE;
+@property(nonatomic,readonly,copy) NSUUID *session;
+@property(nonatomic,readonly) uint64_t sequence,window,generation,output;
+@property(nonatomic,readonly,copy) NSDictionary *identity;
+// Identity uses the helper's exact PID/birth/window tuple. Controller sources
+// may serialize owner:null; a populated owner is refused, never silently dropped.
+@property(nonatomic,readonly) CGRect requestedScreenRect,requestedClipRect,requestedViewport;
+// Sorted complete family: identity, native_bounds, requested_transform,
+// requested_alpha (null when not set), and the exact wire flags. Bounds are the
+// cached native basis used to request the transform, not an independent read.
+@property(nonatomic,readonly,copy) NSArray<NSDictionary *> *members;
+@end
 // Main thread only, but for the library's two callbacks and the watchdog, which touch
 // only what is said of them in the implementation.
 @interface DWNativePresenter : NSObject
@@ -88,6 +107,17 @@ bool DWNativeClipPlacement(CGRect native,CGRect rootNative,CGRect rootScreen,CGR
 // Hands the described frame to the library's writer thread if it differs from the
 // last one handed over, or a window's own frame changed since. Never waits.
 - (void)submit;
+// Main-thread, read-only ACK lookup. nil until every family record in the exact
+// current submitted frame was acknowledged APPLIED. Generation/output/family or
+// requested geometry changes, a newer submission, unbinding and session loss
+// revoke earlier receipts. Desired placement never becomes acknowledged merely
+// because -describe or -submit succeeded. Grouped helpers retain separate session
+// IDs and sequences; a receipt belongs only to its original owning session.
+- (DWNativeAppliedPlacement *)acknowledgedPlacementForWindow:(NSNumber *)window identity:(NSDictionary *)identity generation:(NSNumber *)generation output:(NSNumber *)output;
+// Call after the independent admission checks, immediately before input. This
+// only fences the ACK against current presentation state; it performs no native
+// getters or event-hit queries and never establishes usable input by itself.
+- (BOOL)isAcknowledgedPlacementCurrent:(DWNativeAppliedPlacement *)placement;
 // Main-thread, read-only desired clip plan from the last -describe. Every entry
 // is tied to a still-bound full native identity, including family children.
 // Native clipping is unsupported until the helper can snapshot, persist, apply,
