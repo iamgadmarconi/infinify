@@ -61,3 +61,26 @@ pasteboard and posts no events. Its packet and decoded-contact substitutions
 remain within that test process; its already-admitted-contact case seeds prior
 ownership on the test object because no live tap exists. It does not establish usable cross-application
 drag-and-drop through either real helper surfaces or captured replicas.
+
+## Owned native session check
+
+`tests/e2e/native-drag-drop.sh --live-owned-fixture` creates two ordinary
+AppKit windows in one disposable process, enrolls exactly those windows with
+the cooperative binary-v2 helper, and presents both at half scale. Its source
+view accepts the first mouse click. A real `NSDraggingSession` carries a private
+file URL; the destination validates its contents and reports the complete
+entered/prepare/perform/conclude callback sequence and window-local location.
+The driver checks native event eligibility, window ownership and process birth
+before posting each input sample. It never substitutes destination callbacks or
+an open-file command. Existing scoped benchmark ordering keeps its own windows
+above unrelated apps; no other application is moved or configured.
+
+The 2026-10-12 run delivered the file and observed destination location
+`[208,131]` at the independently transformed half-scale hit point. After quitting
+Infinify, independent WindowServer reads and helper INSPECT confirmed original
+transform, bounds, alpha and screen rectangle, with no held/restoring entries
+or pending journal. The driver restores the cursor and bounds child cleanup.
+This establishes a native AppKit session between two fixture windows in the
+**same process**. Cross-process destinations, file promises, screenshots from
+other applications, and captured replicas remain unverified or unsupported as
+specified above; this check is not ordinary-application parity evidence.
