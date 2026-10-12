@@ -65,6 +65,14 @@ static NSDictionary *decorationTitle(AXUIElementRef window,CGRect own,uint32_t w
         AXUIElementRef child=(__bridge AXUIElementRef)value;CGRect frame;uint32_t childWindow=0;
         if(AXUIElementSetMessagingTimeout(child,.02)||getWindow(child,&childWindow)||childWindow!=wid||!decorationFrame(child,&frame))return nil;
         frame=CGRectIntersection(frame,own);if(CGRectIsNull(frame)||CGRectIsEmpty(frame))continue;
+        // AppKit document actions (for example TextEdit's title menu) are
+        // title-row siblings, not content. Preserve their native hit area
+        // without making the entire observed title strip non-draggable.
+        if([decorationAttribute(child,kAXRoleAttribute,NULL)isEqual:(__bridge NSString *)kAXMenuButtonRole]
+            &&CGRectGetMinY(frame)>=fmin(CGRectGetMinY(lights),CGRectGetMinY(title))-1
+            &&CGRectGetMaxY(frame)<=fmax(CGRectGetMaxY(lights),CGRectGetMaxY(title))+1){
+            [excluded addObject:decorationRect(decorationLocal(CGRectInset(frame,-1,-1),own))];continue;
+        }
         bottom=fmin(bottom,CGRectGetMinY(frame));content=YES;
         [excluded addObject:decorationRect(decorationLocal(CGRectInset(frame,-1,-1),own))];
     }

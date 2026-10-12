@@ -601,13 +601,15 @@ pub enum Command {
         buffer: BufferSize,
     },
     /// The source owner moved its unchanged-size window. The adapter supplies
-    /// displacement in unscaled window units, separately from native geometry.
+    /// displacement in unscaled window units, separately from current native
+    /// geometry. A deferred displacement is fenced against the world frame
+    /// which first observed it, so later canvas placement supersedes it.
     RelocateSource {
         window: WindowId,
         identity: SourceIdentity,
         generation: u64,
-        from_rect: Rect,
-        to_rect: Rect,
+        observed_rect: Rect,
+        expected_world_rect: Rect,
         delta: Point,
     },
     RemoveSource {
@@ -1388,12 +1390,18 @@ impl Controller {
                 window,
                 identity,
                 generation,
-                from_rect,
-                to_rect,
+                observed_rect,
+                expected_world_rect,
                 delta,
             } => {
-                return self
-                    .relocate_source(window, &identity, generation, from_rect, to_rect, delta);
+                return self.relocate_source(
+                    window,
+                    &identity,
+                    generation,
+                    observed_rect,
+                    expected_world_rect,
+                    delta,
+                );
             }
             Command::Observe {
                 window,

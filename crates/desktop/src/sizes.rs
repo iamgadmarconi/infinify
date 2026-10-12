@@ -273,6 +273,12 @@ impl Sizes {
     pub(crate) fn observation_idle(&self) -> bool {
         self.capability && self.pending.is_none() && self.asked.is_empty()
     }
+    pub(crate) fn observation_blocked(&self, window: WindowId) -> bool {
+        self.pending
+            .as_ref()
+            .is_some_and(|pending| pending.window == window)
+            || self.asked.contains_key(&window)
+    }
     /// Upstream window_mode, in the IPC inventory's spelling.
     pub(crate) fn mode(&self, window: WindowId) -> WindowMode {
         match self.restore.get(&window) {

@@ -9,39 +9,40 @@ impl Controller {
         window: WindowId,
         identity: &SourceIdentity,
         generation: u64,
-        from_rect: Rect,
-        to_rect: Rect,
+        observed_rect: Rect,
+        expected_world_rect: Rect,
         delta: Point,
     ) -> Result<Value, Error> {
         self.guard_resize_structure(Some(window))?;
         self.check_generation(window, identity, generation)?;
-        if !rect_valid(from_rect)
-            || !rect_valid(to_rect)
-            || from_rect.size != to_rect.size
-            || !point_valid(delta)
-        {
+        if !rect_valid(observed_rect) || !rect_valid(expected_world_rect) || !point_valid(delta) {
             return Err(Error::Invalid("invalid source displacement"));
         }
-        if self.fresh(window, identity)?.observed_rect != from_rect {
+        if self.fresh(window, identity)?.observed_rect != observed_rect {
             return Err(Error::Invalid("stale source displacement"));
-        }
-        // Owner movement cannot interfere with a compositor grab or a size
-        // restoration. Observe still adopts the latest source metadata.
-        if self.gesture.is_some()
-            || self.trackpad_gesture.is_some()
-            || self.is_fullscreen(window)
-            || !self.sizes.observation_idle()
-            || !self.fullscreen.observation_idle()
-        {
-            return Ok(json!({"moved":false}));
         }
         let mut rect = self
             .scene
             .window(window)
             .ok_or(Error::Invalid("unknown window"))?
             .world_rect;
-        if rect.size != from_rect.size || delta == Point::default() {
-            return Ok(json!({"moved":false}));
+        if rect != expected_world_rect
+            || rect.size != observed_rect.size
+            || delta == Point::default()
+            || !self.sizes.capability
+        {
+            return Ok(json!({"moved":false,"deferred":false}));
+        }
+        // Fullscreen and size restoration reserve their own window only.
+        // DriftWM 352333a8's fullscreen.rs locks its target output, not an
+        // unrelated ordinary window on another output. Live canvas gestures
+        // still reserve their anchors; the adapter retries after they end.
+        if self.gesture.is_some()
+            || self.trackpad_gesture.is_some()
+            || self.sizes.observation_blocked(window)
+            || self.fullscreen.observation_blocked(window)
+        {
+            return Ok(json!({"moved":false,"deferred":true}));
         }
         let pin = self
             .policy
@@ -78,13 +79,9 @@ impl Controller {
         if let Some(pin) = pin {
             self.policy.pins.insert(window, pin);
         }
-        // Consume the source transition in the same transaction: replaying a
-        // displaced observation cannot move the world window a second time.
-        self.sources
-            .get_mut(&window)
-            .ok_or(Error::Invalid("unbound source"))?
-            .observed_rect = to_rect;
-        Ok(json!({"moved":true}))
+        // Native observation has already advanced independently. Changing the
+        // expected world frame makes a repeated receipt harmless.
+        Ok(json!({"moved":true,"deferred":false}))
     }
     pub(crate) fn observation_current(
         &self,
@@ -241,5 +238,336 @@ mod tests {
         let (mut controller, window, identity) = setup();
         controller.sizes.capability = false;
         assert!(!current(&controller, window, &identity));
+    }
+
+    fn observe_move(
+        controller: &mut Controller,
+        window: WindowId,
+        identity: &SourceIdentity,
+    ) -> Rect {
+        let observed = Rect::new(30., 35., 200., 150.);
+        controller
+            .execute(Request {
+                version: ABI_VERSION,
+                command: Command::Observe {
+                    window,
+                    identity: identity.clone(),
+                    source_rect: observed,
+                    buffer: BufferSize {
+                        width: 400,
+                        height: 300,
+                    },
+                },
+            })
+            .unwrap();
+        observed
+    }
+
+    fn relocate(
+        controller: &mut Controller,
+        window: WindowId,
+        identity: &SourceIdentity,
+        observed_rect: Rect,
+        expected_world_rect: Rect,
+        delta: Point,
+    ) -> Result<Value, Error> {
+        controller.execute(Request {
+            version: ABI_VERSION,
+            command: Command::RelocateSource {
+                window,
+                identity: identity.clone(),
+                generation: controller.sources[&window].generation,
+                observed_rect,
+                expected_world_rect,
+                delta,
+            },
+        })
+    }
+
+    #[test]
+    fn deferred_owner_move_retries_after_gesture_without_replaying_native_observation() {
+        let (mut controller, window, identity) = setup();
+        let expected = controller.scene.window(window).unwrap().world_rect;
+        controller
+            .execute(Request {
+                version: ABI_VERSION,
+                command: Command::BeginDrag {
+                    window,
+                    output: OutputId(1),
+                    group: false,
+                },
+            })
+            .unwrap();
+        let observed = observe_move(&mut controller, window, &identity);
+        let delta = Point::new(20., 15.);
+        assert_eq!(
+            relocate(
+                &mut controller,
+                window,
+                &identity,
+                observed,
+                expected,
+                delta
+            )
+            .unwrap(),
+            json!({"moved":false,"deferred":true})
+        );
+        assert_eq!(controller.sources[&window].observed_rect, observed);
+        controller
+            .execute(Request {
+                version: ABI_VERSION,
+                command: Command::EndGesture {},
+            })
+            .unwrap();
+        assert_eq!(
+            relocate(
+                &mut controller,
+                window,
+                &identity,
+                observed,
+                expected,
+                delta
+            )
+            .unwrap(),
+            json!({"moved":true,"deferred":false})
+        );
+        assert_eq!(
+            controller.scene.window(window).unwrap().world_rect,
+            Rect::new(120., 115., 200., 150.)
+        );
+        assert_eq!(
+            relocate(
+                &mut controller,
+                window,
+                &identity,
+                observed,
+                expected,
+                delta
+            )
+            .unwrap(),
+            json!({"moved":false,"deferred":false})
+        );
+    }
+
+    #[test]
+    fn independent_canvas_move_supersedes_deferred_owner_move() {
+        let (mut controller, window, identity) = setup();
+        let expected = controller.scene.window(window).unwrap().world_rect;
+        let observed = observe_move(&mut controller, window, &identity);
+        controller
+            .execute(Request {
+                version: ABI_VERSION,
+                command: Command::BeginDrag {
+                    window,
+                    output: OutputId(1),
+                    group: false,
+                },
+            })
+            .unwrap();
+        controller
+            .execute(Request {
+                version: ABI_VERSION,
+                command: Command::GestureTo {
+                    screen_delta: Point::new(50., 0.),
+                    pointer: None,
+                },
+            })
+            .unwrap();
+        controller
+            .execute(Request {
+                version: ABI_VERSION,
+                command: Command::EndGesture {},
+            })
+            .unwrap();
+        let placed = controller.scene.window(window).unwrap().world_rect;
+        assert_ne!(placed, expected);
+        assert_eq!(
+            relocate(
+                &mut controller,
+                window,
+                &identity,
+                observed,
+                expected,
+                Point::new(20., 15.)
+            )
+            .unwrap(),
+            json!({"moved":false,"deferred":false})
+        );
+        assert_eq!(controller.scene.window(window).unwrap().world_rect, placed);
+    }
+
+    #[test]
+    fn unrelated_fullscreen_and_its_resize_do_not_discard_ordinary_owner_move() {
+        let (mut controller, fullscreen, _) = setup();
+        controller
+            .execute(Request {
+                version: ABI_VERSION,
+                command: Command::RegisterOutput {
+                    stable_id: "other".to_owned(),
+                    screen_bounds: Rect::new(1000., 0., 1000., 800.),
+                    usable_rect_local: None,
+                },
+            })
+            .unwrap();
+        let identity = SourceIdentity {
+            pid: 124,
+            birth_sec: 1800000000,
+            birth_usec: 6,
+            wid: 457,
+            owner: None,
+        };
+        let attached = controller.request(&serde_json::to_vec(&json!({"version":1,"command":{"op":"attach","identity":identity,"bundle_id":"other","title":"ordinary","buffer":{"width":400,"height":300},"source_rect":Rect::new(10.,20.,200.,150.),"world_rect":Rect::new(1200.,100.,200.,150.)}})).unwrap()).unwrap();
+        let window = WindowId(attached["window"].as_u64().unwrap());
+        controller
+            .execute(Request {
+                version: ABI_VERSION,
+                command: Command::Focus { window: fullscreen },
+            })
+            .unwrap();
+        controller
+            .execute(Request {
+                version: ABI_VERSION,
+                command: Command::Action {
+                    output: Some(OutputId(1)),
+                    action: "toggle-fullscreen".to_owned(),
+                    pointer: None,
+                    held: false,
+                },
+            })
+            .unwrap();
+        assert!(controller.is_fullscreen(fullscreen));
+        assert!(controller.resize_slot().unwrap().live);
+        let expected = controller.scene.window(window).unwrap().world_rect;
+        let observed = observe_move(&mut controller, window, &identity);
+        assert_eq!(
+            relocate(
+                &mut controller,
+                window,
+                &identity,
+                observed,
+                expected,
+                Point::new(20., 15.)
+            )
+            .unwrap(),
+            json!({"moved":true,"deferred":false})
+        );
+        assert_eq!(
+            controller.scene.window(window).unwrap().world_rect,
+            Rect::new(1220., 115., 200., 150.)
+        );
+    }
+
+    #[test]
+    fn own_native_resize_keeps_owner_movement_out_of_its_ax_result() {
+        let (mut controller, window, identity) = setup();
+        let expected = controller.scene.window(window).unwrap().world_rect;
+        controller
+            .execute(Request {
+                version: ABI_VERSION,
+                command: Command::BeginNativeResize {
+                    window,
+                    output: OutputId(1),
+                    edges: Some(Edges::Right),
+                    start_screen: Point::new(300., 175.),
+                    group: false,
+                },
+            })
+            .unwrap();
+        assert!(
+            relocate(
+                &mut controller,
+                window,
+                &identity,
+                Rect::new(10., 20., 200., 150.),
+                expected,
+                Point::new(20., 15.)
+            )
+            .is_err()
+        );
+        assert_eq!(
+            controller.scene.window(window).unwrap().world_rect,
+            expected
+        );
+    }
+
+    #[test]
+    fn net_zero_owner_move_has_nothing_to_defer() {
+        let (mut controller, window, identity) = setup();
+        let expected = controller.scene.window(window).unwrap().world_rect;
+        assert_eq!(
+            relocate(
+                &mut controller,
+                window,
+                &identity,
+                Rect::new(10., 20., 200., 150.),
+                expected,
+                Point::default()
+            )
+            .unwrap(),
+            json!({"moved":false,"deferred":false})
+        );
+    }
+
+    #[test]
+    fn unsupported_owner_move_is_a_terminal_refusal() {
+        let (mut controller, window, identity) = setup();
+        let expected = controller.scene.window(window).unwrap().world_rect;
+        let observed = observe_move(&mut controller, window, &identity);
+        controller.sizes.capability = false;
+        assert_eq!(
+            relocate(
+                &mut controller,
+                window,
+                &identity,
+                observed,
+                expected,
+                Point::new(20., 15.)
+            )
+            .unwrap(),
+            json!({"moved":false,"deferred":false})
+        );
+        assert_eq!(
+            controller.scene.window(window).unwrap().world_rect,
+            expected
+        );
+    }
+
+    #[test]
+    fn deferred_owner_move_rejects_stale_native_metadata_and_rebound_identity() {
+        let (mut controller, window, identity) = setup();
+        let expected = controller.scene.window(window).unwrap().world_rect;
+        let observed = observe_move(&mut controller, window, &identity);
+        assert!(
+            relocate(
+                &mut controller,
+                window,
+                &identity,
+                Rect::new(10., 20., 200., 150.),
+                expected,
+                Point::new(20., 15.)
+            )
+            .is_err()
+        );
+        controller
+            .sources
+            .get_mut(&window)
+            .unwrap()
+            .identity
+            .birth_sec += 1;
+        assert!(
+            relocate(
+                &mut controller,
+                window,
+                &identity,
+                observed,
+                expected,
+                Point::new(20., 15.)
+            )
+            .is_err()
+        );
+        assert_eq!(
+            controller.scene.window(window).unwrap().world_rect,
+            expected
+        );
     }
 }

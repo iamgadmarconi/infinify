@@ -116,6 +116,9 @@ impl Fullscreen {
     pub(crate) fn observation_idle(&self) -> bool {
         self.entries.is_empty() && self.restores.is_empty()
     }
+    pub(crate) fn observation_blocked(&self, window: WindowId) -> bool {
+        self.output_of(window).is_some() || self.restores.contains_key(&window)
+    }
     fn output_of(&self, window: WindowId) -> Option<OutputId> {
         self.entries
             .iter()

@@ -243,6 +243,9 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
 // Audited worker geometry for presentation discovery only; capture and input
 // still require their own fresh native identity/parent checks.
 @property NSDictionary *nativeFamily;
+// A same-size owner displacement not yet adopted by the world. Native bounds
+// keep advancing; the exact binding and unchanged world frame fence its retry.
+@property NSDictionary *nativeOwnerDisplacement;
 @property BOOL nativeTransferFamilyWanted; // exact audited family requested for a replica ownership handoff
 @property NSDictionary *nativeButtons;
 @property uint64_t nativeButtonsRevision;
@@ -266,6 +269,7 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
 @synthesize detached=_detached;
 - (void)setDetached:(BOOL)detached {
     NSAssert(NSThread.isMainThread,@"Capture retirement is main-only");
+    if(detached)self.nativeOwnerDisplacement=nil;
     if(detached)[_captureMailbox cancel];_detached=detached;
 }
 - (void)setStream:(SCStream *)stream {
@@ -4556,7 +4560,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     // bindings/shareable windows so normal demand can resume them on return.
     self.captureRecoveryGeneration++;self.captureRecoveryReading=NO;
     for(LiveSource *source in self.sources.allValues){source.replicaWanted=NO;[self stopCapture:source];}
-    if(self.native){[self.nativeViews reset];for(LiveSource *source in self.sources.allValues){source.observationToken=++self.observationEpoch;[self forgetNativeFamily:source];source.window=nil;[source clearSample];}}
+    if(self.native){[self.nativeViews reset];for(LiveSource *source in self.sources.allValues){source.nativeOwnerDisplacement=nil;source.observationToken=++self.observationEpoch;[self forgetNativeFamily:source];source.window=nil;[source clearSample];}}
     self.nativeSessionEpoch++;
     if(self.nativeEndpoints.count){
         // Keep the input bridge's physical button-pair bookkeeping alive: a
@@ -4778,6 +4782,9 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
         // it has one (bounded: the adapter's deadline, then the coordinator's watchdog), and the end of the transaction looks at the window
         // again (-configureResize). Its bounds are not read meanwhile either: the look that follows the transaction reports them.
         BOOL busy=[[self.resize busyWindow]isEqual:source.logical];
+        // Our AX sizing owns any origin adjustment while its effect drains.
+        // It must never become a later owner-origin displacement.
+        if(busy||[self grabbed:source])source.nativeOwnerDisplacement=nil;
         if(gone&&busy)return;
         // A resize grab of this window whose pointer rests: no result is owed that would find the window gone, so the grab is cancelled
         // here. The one read that follows fails, the transaction ends, and its end looks at the window again and finds it closed. While
@@ -4802,15 +4809,26 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
         else if(busy||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)frame,&bounds))return;
         if(self.native&&!self.native.ended&&!self.nativeResumeWanted){
             CGRect prior=CGRectZero;
-            if(CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)source.router.bounds,&prior)&&CGSizeEqualToSize(prior.size,bounds.size)&&!CGPointEqualToPoint(prior.origin,bounds.origin)){
-                // The helper changes transforms, never the window's own origin.
-                // An unchanged-size owner move is a displacement intent in the
-                // window's unscaled units, not a new native/world coordinate.
-                NSDictionary *binding=nil;for(NSDictionary *window in [self call:@{@"op":@"snapshot"}][@"windows"])if([window[@"window"]isEqual:source.logical])binding=asDict(window[@"source"]);
-                if(boundIdentity(source.identity,binding[@"identity"])&&binding[@"generation"]){
-                    NSString *status=self.statusText;NSDictionary *moved=[self call:@{@"op":@"relocate_source",@"window":source.logical,@"identity":source.identity,@"generation":binding[@"generation"],@"from_rect":rectJSON(prior),@"to_rect":rectJSON(bounds),@"delta":pointJSON(CGPointMake(bounds.origin.x-prior.origin.x,bounds.origin.y-prior.origin.y))}];self.statusText=status;
-                    if([moved[@"moved"]boolValue])self.sceneDirty=YES;
+            BOOL originChanged=CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)source.router.bounds,&prior)&&!CGPointEqualToPoint(prior.origin,bounds.origin);
+            if(source.nativeOwnerDisplacement||originChanged){
+                NSDictionary *record=nil;for(NSDictionary *window in [self call:@{@"op":@"snapshot"}][@"windows"])if([window[@"window"]isEqual:source.logical]){record=window;break;}
+                NSDictionary *binding=asDict(record[@"source"]),*pending=source.nativeOwnerDisplacement;
+                CGRect world=jsonRect(record[@"world_rect"]);
+                BOOL stale=pending&&(!boundIdentity(source.identity,pending[@"identity"])
+                    ||![pending[@"generation"]isEqual:binding[@"generation"]]
+                    ||!CGRectEqualToRect(jsonRect(pending[@"world_rect"]),world)
+                    ||!CGSizeEqualToSize(jsonRect(pending[@"native_rect"]).size,bounds.size));
+                BOOL current=boundIdentity(source.identity,binding[@"identity"])&&binding[@"generation"]
+                    &&CGSizeEqualToSize(world.size,bounds.size)&&![record[@"mode"]isEqual:@"fullscreen"];
+                if(stale||!current)pending=nil;
+                // A later canvas placement/size supersedes an old pending move.
+                // A genuinely new owner transition starts from today's basis.
+                if(!pending&&!stale&&current&&originChanged&&CGSizeEqualToSize(prior.size,bounds.size))
+                    pending=@{@"identity":source.identity,@"generation":binding[@"generation"],@"world_rect":record[@"world_rect"],@"native_rect":rectJSON(prior)};
+                if(pending){CGPoint start=jsonRect(pending[@"native_rect"]).origin;
+                    if(CGPointEqualToPoint(start,bounds.origin))pending=nil; // out and back is no world move
                 }
+                source.nativeOwnerDisplacement=pending;
             }
         }
         if(![source.router.bounds isEqual:frame]){
@@ -4825,6 +4843,23 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
         if(!current){
             NSDictionary *seen=[self call:@{@"op":@"observe",@"window":source.logical,@"identity":source.identity,@"source_rect":rectJSON(bounds),@"buffer":@{@"width":@(source.buffer.width),@"height":@(source.buffer.height)}}];
             if([asNumber(seen[@"resized"])boolValue])self.sceneDirty=YES;
+        }
+        if(self.native&&source.nativeOwnerDisplacement){
+            NSDictionary *pending=source.nativeOwnerDisplacement,*record=nil;
+            for(NSDictionary *window in [self call:@{@"op":@"snapshot"}][@"windows"])if([window[@"window"]isEqual:source.logical]){record=window;break;}
+            NSDictionary *binding=asDict(record[@"source"]);
+            if(!boundIdentity(source.identity,pending[@"identity"])||!boundIdentity(source.identity,binding[@"identity"])
+                ||![pending[@"generation"]isEqual:binding[@"generation"]]
+                ||!CGRectEqualToRect(jsonRect(pending[@"world_rect"]),jsonRect(record[@"world_rect"]))
+                ||[record[@"mode"]isEqual:@"fullscreen"])source.nativeOwnerDisplacement=nil;
+            else if(CGRectEqualToRect(jsonRect(binding[@"observed_rect"]),bounds)){
+                CGPoint start=jsonRect(pending[@"native_rect"]).origin;
+                NSString *status=self.statusText;NSDictionary *moved=[self call:@{@"op":@"relocate_source",@"window":source.logical,@"identity":source.identity,@"generation":binding[@"generation"],@"observed_rect":rectJSON(bounds),@"expected_world_rect":pending[@"world_rect"],@"delta":pointJSON(CGPointMake(bounds.origin.x-start.x,bounds.origin.y-start.y))}];self.statusText=status;
+                if([moved[@"moved"]boolValue]){source.nativeOwnerDisplacement=nil;self.sceneDirty=YES;}
+                // Only an explicit live conflict is retryable. A nil/error or
+                // terminal refusal must not retain an unfulfillable movement.
+                else if(![moved[@"deferred"]isEqual:@YES])source.nativeOwnerDisplacement=nil;
+            }
         }
         if(self.native){
             NSDictionary *binding=nil;for(NSDictionary *window in [self call:@{@"op":@"snapshot"}][@"windows"])if([window[@"window"]isEqual:source.logical]){binding=asDict(window[@"source"]);break;}
