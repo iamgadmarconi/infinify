@@ -56,23 +56,30 @@ int main(void) {@autoreleasepool {
     DWNativeInput *input=[[DWNativeInput alloc]initWithConsume:^BOOL(CGEventType type,CGEventRef event){(void)type;(void)event;consumed++;return take;}
         ignoreEvent:^BOOL(CGEventRef event){return CGEventGetIntegerValueField(event,kCGEventSourceUserData)==771;}
         cancelled:^{cancelled++;}];
+    __block NSUInteger observations=0;__block uint32_t observedButtons=0;__block CGPoint observedPoint=CGPointZero;
+    input.nativeMouse=^(CGEventType type,CGPoint point,uint32_t buttons){(void)type;observations++;observedPoint=point;observedButtons=buttons;};
     const int64_t foreign=(int64_t)getpid()+100000;
     CGEventRef down=packet(kCGEventLeftMouseDown,0,foreign),drag=packet(kCGEventLeftMouseDragged,0,getpid()),up=packet(kCGEventLeftMouseUp,0,getpid()),move=packet(kCGEventMouseMoved,0,getpid());
     CGEventRef taggedUp=packet(kCGEventLeftMouseUp,0,getpid()),taggedDown=packet(kCGEventLeftMouseDown,0,foreign);
     CGEventSetIntegerValueField(taggedUp,kCGEventSourceUserData,771);CGEventSetIntegerValueField(taggedDown,kCGEventSourceUserData,771);
     check(unchanged(down,^{return [input handle:kCGEventLeftMouseDown event:down];})&&consumed==1,@"native down reaches consumer once and remains original");
+    check(observations==1&&observedButtons==1&&CGPointEqualToPoint(observedPoint,CGEventGetLocation(down)),@"native observation supplies only current point and original held mask");
     take=YES;
     check(unchanged(drag,^{return [input handle:kCGEventLeftMouseDragged event:drag];})&&consumed==1,@"foreign drag crossing own canvas bypasses consumer with exact payload");
     check(unchanged(move,^{return [input handle:kCGEventMouseMoved event:move];})&&consumed==1,@"native tracking motion retains location, deltas, flags and pressure");
     check(unchanged(taggedUp,^{return [input handle:kCGEventLeftMouseUp event:taggedUp];})&&consumed==1,@"tagged synthetic release cannot end native physical pair");
+    check(observations==3&&observedButtons==1,@"tagged copies never notify native observation");
     check([input handle:kCGEventLeftMouseDragged event:drag]==drag&&consumed==1,@"native pair survives tagged release");
     check(unchanged(up,^{return [input handle:kCGEventLeftMouseUp event:up];})&&consumed==1,@"physical native release remains original");
     check([input handle:kCGEventMouseMoved event:move]==NULL&&consumed==2,@"physical release ends native reservation");
+    check(observations==5&&observedButtons==0,@"original release ends observation and canvas motion does not restart it");
 
     take=NO;[input handle:kCGEventLeftMouseDown event:down];NSUInteger before=consumed;take=YES;
     CGEventRef second=packet(kCGEventRightMouseDown,1,getpid()),secondDrag=packet(kCGEventRightMouseDragged,1,getpid()),secondUp=packet(kCGEventRightMouseUp,1,getpid());
     check([input handle:kCGEventRightMouseDown event:second]==second&&consumed==before,@"additional native button cannot begin canvas action during drag");
+    check(observedButtons==3,@"observer tracks both native buttons without claiming either");
     [input handle:kCGEventLeftMouseUp event:up];
+    check(observedButtons==2,@"one release leaves the other original pair observed");
     check([input handle:kCGEventRightMouseDragged event:secondDrag]==secondDrag&&consumed==before,@"each native button retains its own physical pair");
     [input handle:kCGEventRightMouseUp event:secondUp];
     check([input handle:kCGEventMouseMoved event:move]==NULL&&consumed==before+1,@"last native release retires reservation");
@@ -80,6 +87,7 @@ int main(void) {@autoreleasepool {
     take=NO;[input handle:kCGEventLeftMouseDown event:down];before=consumed;take=YES;
     CGEventRef own=packet(kCGEventLeftMouseDown,0,getpid());
     check([input handle:kCGEventLeftMouseDown event:own]==NULL&&consumed==before+1,@"fresh same-button down retires lost native release");
+    check(observedButtons==0,@"superseding canvas press retires stale native observation");
     take=NO;check([input handle:kCGEventLeftMouseUp event:up]==NULL,@"captured press keeps its matching up even when consumer declines");
     take=NO;[input handle:kCGEventLeftMouseDown event:down];before=consumed;
     [input handle:kCGEventTapDisabledByTimeout event:NULL];take=YES;
@@ -88,9 +96,10 @@ int main(void) {@autoreleasepool {
     [input handle:kCGEventTapDisabledByUserInput event:NULL];
     check(cancelled==2&&[input handle:kCGEventLeftMouseUp event:up]==NULL,@"tap cancellation retains suppression for an already captured down");
 
-    before=consumed;
+    before=consumed;NSUInteger observedBefore=observations;
     check([input handle:kCGEventLeftMouseDown event:taggedDown]==taggedDown&&consumed==before,@"tagged down bypasses physical bookkeeping");
     take=YES;check([input handle:kCGEventMouseMoved event:move]==NULL,@"tagged down creates no native reservation");
+    check(observations==observedBefore,@"tagged down and canvas-owned input create no observation");
 
     __block NSUInteger admissions=0;
     DWGlobalTrackpadInput *global=[[DWGlobalTrackpadInput alloc]initWithEnabled:^BOOL{return YES;}
