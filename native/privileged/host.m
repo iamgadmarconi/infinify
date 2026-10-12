@@ -10,8 +10,12 @@ int main(int argc,char **argv) { @autoreleasepool {
     // an application a window manager adopts (a regular one, whose windows have a
     // close, a miniaturize and a resize control) and `--watchdog` gives a longer test
     // its time; neither changes which windows there are or how the helper starts.
-    int count=1,v2Queue=-1,watchdog=90,level=NSNormalWindowLevel;double alpha=1;BOOL several=NO,bad=NO,regular=NO,opaque=YES,allSpaces=NO,floating=NO;NSString *family=@"none";
-    while(argc>=6 && (!strcmp(argv[argc-2],"--windows") || !strcmp(argv[argc-2],"--v2-queue") || !strcmp(argv[argc-2],"--activation") || !strcmp(argv[argc-2],"--watchdog") || !strcmp(argv[argc-2],"--level") || !strcmp(argv[argc-2],"--alpha") || !strcmp(argv[argc-2],"--opaque") || !strcmp(argv[argc-2],"--all-spaces") || !strcmp(argv[argc-2],"--family") || !strcmp(argv[argc-2],"--floating-panel"))) {
+    int count=1,v2Queue=-1,watchdog=90,level=NSNormalWindowLevel;double alpha=1;BOOL several=NO,bad=NO,regular=NO,opaque=YES,allSpaces=NO,floating=NO;NSString *family=@"none";NSSize contentSize=NSZeroSize;
+    while(argc>=6 && (!strcmp(argv[argc-2],"--windows") || !strcmp(argv[argc-2],"--size") || !strcmp(argv[argc-2],"--v2-queue") || !strcmp(argv[argc-2],"--activation") || !strcmp(argv[argc-2],"--watchdog") || !strcmp(argv[argc-2],"--level") || !strcmp(argv[argc-2],"--alpha") || !strcmp(argv[argc-2],"--opaque") || !strcmp(argv[argc-2],"--all-spaces") || !strcmp(argv[argc-2],"--family") || !strcmp(argv[argc-2],"--floating-panel"))) {
+        if(!strcmp(argv[argc-2],"--size")){char *end=NULL,*tail=NULL;double width=strtod(argv[argc-1],&end),height=0;
+            if(end==argv[argc-1]||*end!='x')bad=YES;
+            else {height=strtod(end+1,&tail);if(tail==end+1||*tail||!isfinite(width)||!isfinite(height)||width<40||height<40||width>8192||height>8192)bad=YES;else contentSize=NSMakeSize(width,height);}
+            argc-=2;continue;}
         if(!strcmp(argv[argc-2],"--floating-panel")){if(!strcmp(argv[argc-1],"yes"))floating=YES;else if(!strcmp(argv[argc-1],"no"))floating=NO;else bad=YES;argc-=2;continue;}
         if(!strcmp(argv[argc-2],"--family")){family=@(argv[argc-1]);if(![@[@"none",@"popup",@"sheet",@"both"]containsObject:family])bad=YES;argc-=2;continue;}
         if(!strcmp(argv[argc-2],"--activation")){if(!strcmp(argv[argc-1],"regular"))regular=YES;else if(strcmp(argv[argc-1],"accessory"))bad=YES;argc-=2;continue;}
@@ -27,7 +31,7 @@ int main(int argc,char **argv) { @autoreleasepool {
         several=YES;argc-=2;
     }
     BOOL popup=[family isEqual:@"popup"]||[family isEqual:@"both"],sheet=[family isEqual:@"sheet"]||[family isEqual:@"both"];
-    if((argc!=4 && argc!=5) || bad || count<1 || count+(popup?1:0)+(sheet?1:0)>16 || watchdog<1 || watchdog>900){fprintf(stderr,"usage: host payload.dylib private-runtime nonce [allowlist.json] [--windows 1..16] [--v2-queue own|main] [--activation accessory|regular] [--watchdog 1..900] [--level 0..4] [--alpha 0..1] [--opaque yes|no] [--all-spaces yes|no] [--family none|popup|sheet|both] [--floating-panel yes|no]\n");return 2;}
+    if((argc!=4 && argc!=5) || bad || count<1 || count+(popup?1:0)+(sheet?1:0)>16 || watchdog<1 || watchdog>900){fprintf(stderr,"usage: host payload.dylib private-runtime nonce [allowlist.json] [--windows 1..16] [--size WIDTHxHEIGHT (40..8192 points)] [--v2-queue own|main] [--activation accessory|regular] [--watchdog 1..900] [--level 0..4] [--alpha 0..1] [--opaque yes|no] [--all-spaces yes|no] [--family none|popup|sheet|both] [--floating-panel yes|no]\n");return 2;}
     [NSApplication sharedApplication];[NSApp setActivationPolicy:regular ? NSApplicationActivationPolicyRegular : NSApplicationActivationPolicyAccessory];
     NSWindowStyleMask style=regular ? NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable|NSWindowStyleMaskResizable : NSWindowStyleMaskTitled;
     NSMutableArray<NSWindow *> *windows=[NSMutableArray array];
@@ -35,6 +39,10 @@ int main(int argc,char **argv) { @autoreleasepool {
     for(int i=0;i<count;i++) {
         // One window where it always was; several as a grid of small ones.
         NSRect frame=several ? NSMakeRect(80+(i%4)*340,160+(i/4)*240,320,200) : NSMakeRect(80,160,480,320);
+        // Only explicitly requested disposable windows change size; protocol
+        // fixtures retain their original small defaults. Readback records the
+        // actual native frame before any helper transform is submitted.
+        if(contentSize.width>0)frame.size=contentSize;
         BOOL panel=floating&&i==count-1;
         NSWindow *window=[[(panel?NSPanel.class:NSWindow.class) alloc] initWithContentRect:frame styleMask:style|(panel?NSWindowStyleMaskUtilityWindow:0) backing:NSBackingStoreBuffered defer:NO];
         window.level=panel?NSFloatingWindowLevel:level;

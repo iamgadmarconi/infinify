@@ -8,6 +8,8 @@
 #include <math.h>
 #include <limits.h>
 #include <mach/mach_time.h>
+#include <libproc.h>
+#include <unistd.h>
 
 static CGRect familyRect(NSDictionary *r) {
     return CGRectMake([r[@"origin"][@"x"]doubleValue],[r[@"origin"][@"y"]doubleValue],
@@ -24,6 +26,11 @@ static BOOL familyBinding(NSDictionary *a,NSDictionary *b) {
 }
 static BOOL frameNumber(id value) {
     return [value isKindOfClass:NSNumber.class]&&CFGetTypeID((__bridge CFTypeRef)value)!=CFBooleanGetTypeID()&&isfinite([value doubleValue]);
+}
+static BOOL familyProcessMatches(NSDictionary *identity) {
+    pid_t pid=[identity[@"pid"]intValue];struct proc_bsdinfo process={0};
+    return pid>1&&proc_pidinfo(pid,PROC_PIDTBSDINFO,0,&process,sizeof(process))==sizeof(process)&&process.pbi_uid==getuid()
+        &&[identity[@"birth_sec"]isEqual:@(process.pbi_start_tvsec)]&&[identity[@"birth_usec"]isEqual:@(process.pbi_start_tvusec)];
 }
 static dispatch_queue_t familyQueue(const char *label) {
     dispatch_queue_attr_t attributes=dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,QOS_CLASS_USER_INITIATED,0);
@@ -398,7 +405,7 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
     // A request sequence is not a binding epoch: keep the last complete order
     // during an ordinary refresh, then replace the whole cohort atomically.
     self.reading=YES;self.requestPending=YES;NSUInteger sequence=++self.requestSequence,epoch=self.epoch;NSDictionary *roots=self.roots;NSInteger rate=self.rate;self.nextRead=CACurrentMediaTime()+1;
-    __weak DWNativeReplicaFamilies *weak=self;
+    dispatch_queue_t observer=self.observer;__weak DWNativeReplicaFamilies *weak=self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,2*NSEC_PER_SEC),dispatch_get_main_queue(),^{
         DWNativeReplicaFamilies *owner=weak;if(!owner||!owner.reading||owner.epoch!=epoch||owner.requestSequence!=sequence)return;
         [owner invalidatePID:0];owner.nextRead=CACurrentMediaTime()+1;
@@ -440,7 +447,20 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
             plans[window]=children.copy;
             if(rankedChildren&&familyRank(ranks,owners,roots[window][@"identity"]))[completeRoots addObject:window];
         }
-        void (^reconcile)(SCShareableContent *,NSError *)=^(SCShareableContent *content,NSError *error){dispatch_async(dispatch_get_main_queue(),^{
+        BOOL children=NO;for(NSNumber *window in plans)if([plans[window]count]&&![roots[window][@"capture"]isEqual:@NO]){children=YES;break;}
+        void (^reconcile)(SCShareableContent *,NSError *)=^(SCShareableContent *content,NSError *error){dispatch_async(observer,^{
+            // Root-only runs cannot change controller order. Only a cohort
+            // containing captured children needs other roots' ranks to place
+            // those children across families. Validate that geometry evidence
+            // on the observer too; it never grants input or native authority.
+            NSMutableDictionary *checkedRoots=[NSMutableDictionary dictionary];
+            if(children&&!error)for(NSNumber *logical in completeRoots)if(![plans[logical]count]){
+                CFTimeInterval began=CACurrentMediaTime();CGRect rootNow=CGRectZero;
+                if(DWNativeWindowBelongsToRoot(roots[logical][@"identity"],roots[logical][@"identity"])
+                   &&DWNativeBounds([roots[logical][@"identity"][@"wid"]unsignedIntValue],&rootNow)
+                   &&CGRectEqualToRect(rootNow,familyRect(roots[logical][@"native_bounds"])))checkedRoots[logical]=@(began);
+            }
+            dispatch_async(dispatch_get_main_queue(),^{
             DWNativeReplicaFamilies *owner=weak;if(!owner)return;owner.requestPending=NO;if(!owner.reading||owner.epoch!=epoch||owner.requestSequence!=sequence||![owner.roots isEqual:roots])return;owner.reading=NO;
             [owner beginChanges];
             NSMutableDictionary *windows=[NSMutableDictionary dictionary];for(SCWindow *window in content.windows)windows[@(window.windowID)]=window;
@@ -477,11 +497,15 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
                 for(DWReplicaMember *member in old)if(![installed containsObject:member])[member retire];
                 nextMembers[logical]=installed.copy;
                 if(![old isEqual:installed]){[owner.drawableAttachments removeObjectForKey:logical];[owner markOrderingChanged];[owner changedWindow:logical];}
-                BOOL complete=!error&&[completeRoots containsObject:logical]&&installed.count==[plans[logical]count];
-                if(complete&&!installed.count){CGRect rootNow=CGRectZero;
-                    complete=DWNativeWindowBelongsToRoot(roots[logical][@"identity"],roots[logical][@"identity"])
-                        &&DWNativeBounds([roots[logical][@"identity"][@"wid"]unsignedIntValue],&rootNow)
-                        &&CGRectEqualToRect(rootNow,familyRect(roots[logical][@"native_bounds"]));
+                BOOL complete=children&&!error&&[completeRoots containsObject:logical]&&installed.count==[plans[logical]count];
+                if(complete&&!installed.count){NSNumber *began=checkedRoots[logical];
+                    // Measure from the first validation read, including time
+                    // spent waiting on WindowServer and on this queue. A late
+                    // result falls back for the whole run; it is not made fresh
+                    // by its completion. Birth is still checked at publication.
+                    complete=began&&familyProcessMatches(roots[logical][@"identity"]);
+                    CFTimeInterval age=began?CACurrentMediaTime()-began.doubleValue:INFINITY;
+                    complete=complete&&age>=0&&age<=.1;
                 }
                 if(complete){NSMutableDictionary *children=[NSMutableDictionary dictionary];
                     for(DWReplicaMember *member in installed){NSString *key=member.image.key;NSNumber *rank=familyRank(ranks,owners,member.identity);
@@ -499,11 +523,10 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
             owner.orderingEpoch=owner.epoch;owner.orderingObservation=accepted.count?sequence:0;
             [owner replaceDescriptions:owner.epoch==epoch?descriptions.copy:@{}];
             [owner endChanges];
-        });};
+        });});};
         // A fresh empty family needs only retirement of prior children. Do not
         // ask ScreenCaptureKit to enumerate the desktop when no filter can be
         // created, but retain the same epoch/deadline/reconciliation path.
-        BOOL children=NO;for(NSNumber *window in plans)if([plans[window]count]&&![roots[window][@"capture"]isEqual:@NO]){children=YES;break;}
         if(children)[SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO completionHandler:reconcile];
         else reconcile(nil,nil);
     });

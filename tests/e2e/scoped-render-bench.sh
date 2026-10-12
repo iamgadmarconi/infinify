@@ -16,10 +16,11 @@
 # nothing is posted at the session level. Run it while nobody is using the machine: the canvas covers the visible screen.
 #
 # INFINIFY_BENCH_SIZE=WxH (1700x1100) is the fixture windows' content size, INFINIFY_BENCH_RATE (120) the frames a second.
-# INFINIFY_BENCH_WINDOWS selects 1..16 synthetic/capture fixture windows (default 4); native mode retains its four-window oracle.
+# INFINIFY_BENCH_WINDOWS selects 1..16 owned fixture windows (default 4).
 # INFINIFY_BENCH_MODE=capture uses real animated fixture captures and requires Screen Recording access; synthetic is the default.
-# INFINIFY_BENCH_MODE=native uses four cooperative helper windows and an animated background, with no capture streams.
-# Native mode measures background drawable times and independently samples window geometry; geometry samples do not prove optical FPS.
+# INFINIFY_BENCH_MODE=native uses cooperative helper windows at the requested size and an animated background, with no capture streams.
+# Native mode measures background drawable times, samples one root's geometry at the requested rate, and checks every root's restoration;
+# geometry samples and helper acknowledgements do not prove optical native-window FPS.
 # INFINIFY_BENCH_ZOOM selects a zoom no larger than the fitted one (e.g. 0.21 for capture pixel-budget comparisons).
 # INFINIFY_BENCH_VALIDATE_BUDGET=1 also checks reduced pixels, native/world geometry, zoom-in quality and full-resolution exports.
 # INFINIFY_BENCH_BASELINE=1 uses full 2x captures and synchronous drawables in the same build for a controlled comparison.
@@ -58,8 +59,8 @@ case "$mode" in synthetic) ;; capture) synth=0 ;; native) synth=0; nativebench=1
 fixture_count=${INFINIFY_BENCH_WINDOWS:-4}
 case "$fixture_count" in ''|*[!0-9]*) echo 'INFINIFY_BENCH_WINDOWS must be 1..16' >&2; exit 2 ;; esac
 [ "$fixture_count" -ge 1 ] && [ "$fixture_count" -le 16 ] || { echo 'INFINIFY_BENCH_WINDOWS must be 1..16' >&2; exit 2; }
-if [ "$fixture_count" -ne 4 ] && { [ "$mode" = native ] || [ "${INFINIFY_BENCH_VALIDATE_BUDGET:-0}" = 1 ]; }; then
-  echo 'Native geometry and capture-budget validation retain their four-window layout; use four windows for those checks.' >&2; exit 2
+if [ "$fixture_count" -ne 4 ] && [ "${INFINIFY_BENCH_VALIDATE_BUDGET:-0}" = 1 ]; then
+  echo 'Capture-budget export validation retains its four-window layout; use four windows for those checks.' >&2; exit 2
 fi
 INFINIFY_BENCH_WINDOWS=$fixture_count; export INFINIFY_BENCH_WINDOWS
 fixture_names=$(python3 -c 'import os; print(" ".join(chr(97+i) for i in range(int(os.environ["INFINIFY_BENCH_WINDOWS"]))))')
@@ -110,7 +111,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 1' INT TERM HUP
 
-# Native mode owns one cooperative process and its four small fixture windows.
+# Native mode owns one cooperative process and exactly the requested fixture windows.
 if [ "$mode" = native ]; then
   [ -x target/privileged/host ] && [ -f target/privileged/payload-arm64.dylib ] || ./scripts/build-privileged.sh
   bundle=$evidence/CooperativeHost.app; mkdir -p "$bundle/Contents/MacOS" "$evidence/h"; chmod 700 "$evidence/h"
@@ -121,14 +122,14 @@ if [ "$mode" = native ]; then
 <plist version="1.0"><dict><key>CFBundleIdentifier</key><string>org.infinify.cooperative-host</string><key>CFBundleName</key><string>CooperativeHost</string><key>CFBundleExecutable</key><string>CooperativeHost</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>
 PLIST
   nonce=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n'); (umask 077; printf '%s\n' "$nonce" > "$evidence/nonce")
-  "$bundle/Contents/MacOS/CooperativeHost" "$root/target/privileged/payload-arm64.dylib" "$evidence/h" "$nonce" --windows 4 --activation regular --watchdog 150 --level 4 --alpha "${INFINIFY_BENCH_HOST_ALPHA:-1}" --opaque "${INFINIFY_BENCH_HOST_OPAQUE:-yes}" --all-spaces "${INFINIFY_BENCH_HOST_ALL_SPACES:-yes}" >"$evidence/host.log" 2>&1 &
-  nativehost=$!; fixtures=$nativehost
+  "$bundle/Contents/MacOS/CooperativeHost" "$root/target/privileged/payload-arm64.dylib" "$evidence/h" "$nonce" --windows "$fixture_count" --size "$size" --activation regular --watchdog 150 --level 4 --alpha "${INFINIFY_BENCH_HOST_ALPHA:-1}" --opaque "${INFINIFY_BENCH_HOST_OPAQUE:-yes}" --all-spaces "${INFINIFY_BENCH_HOST_ALL_SPACES:-yes}" >"$evidence/host.log" 2>&1 &
+  nativehost=$!; fixtures=$nativehost; printf '%s\n' "$nativehost" > "$evidence/native-host.pid"
   n=0; while ! grep -q '^READY ' "$evidence/host.log" 2>/dev/null && [ "$n" -lt 80 ]; do sleep .1; n=$((n+1)); done
   grep -q '^READY ' "$evidence/host.log" || { echo 'FAIL: cooperative host did not start'; exit 1; }
   cat > "$evidence/native-observer.py" <<'PY'
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Independent readback, as in scoped-native.sh; never sends native mutations.
-import ctypes as C, json, pathlib, sys, time
+import ctypes as C, json, os, pathlib, sys, time
 class Point(C.Structure): _fields_ = [('x', C.c_double), ('y', C.c_double)]
 class Size(C.Structure): _fields_ = [('width', C.c_double), ('height', C.c_double)]
 class Rect(C.Structure): _fields_ = [('origin', Point), ('size', Size)]
@@ -174,10 +175,11 @@ if __name__ == '__main__':
     evidence = pathlib.Path(sys.argv[1]); mode = sys.argv[2]
     ready = next(l for l in (evidence / 'host.log').read_text().splitlines() if l.startswith('READY ')).split()
     wids = [int(x) for x in ready[2:]]
-    if len(wids) != 4: raise RuntimeError(f'expected four owned windows, got {wids}')
+    count = int(os.environ['INFINIFY_BENCH_WINDOWS'])
+    if len(wids) != count or len(set(wids)) != count: raise RuntimeError(f'expected {count} distinct owned windows, got {wids}')
     if mode == 'initial':
         initial = observe(wids); (evidence / 'native-original.json').write_text(json.dumps(initial))
-        for i, (name, wid) in enumerate(zip('abcd', wids), 1):
+        for i, (name, wid) in enumerate(zip((chr(97+i) for i in range(count)), wids), 1):
             folder = evidence / name; folder.mkdir()
             (folder / 'status.json').write_text(json.dumps({'title': f'DriftWM disposable fixture {i}', 'bounds': initial[str(wid)]['bounds'], 'visible': True, 'window': wid}))
     elif mode == 'restore':
@@ -267,16 +269,30 @@ def helper_counters():
     value = reply.get('Ok', {}).get('DebugNative', {})
     if not isinstance(value.get('stats'), dict): stop('native helper counters', reply)
     return (time.monotonic(), value['stats'])
-def process_snapshot():
-    # Outside the selected presentation windows: cumulative target-only CPU and
-    # resident memory. This is RSS, not physical footprint or capture allocation.
-    pid = (evidence / 'app.pid').read_text().strip()
-    result = subprocess.run(['ps', '-p', pid, '-o', 'time=,rss='], capture_output=True, text=True)
+server_pids = subprocess.run(['pgrep', '-x', 'WindowServer'], capture_output=True, text=True).stdout.split()
+server_pid = server_pids[0] if len(server_pids) == 1 else None
+def read_process(pid):
+    if pid is None: return None
+    result = subprocess.run(['ps', '-p', pid, '-o', 'lstart=,time=,rss='], capture_output=True, text=True)
     fields = result.stdout.split()
-    if result.returncode or len(fields) != 2: stop('benchmark process counters', result.stderr)
+    if result.returncode or len(fields) < 3: return None
     cpu = 0.0
-    for part in fields[0].split(':'): cpu = cpu * 60 + float(part)
-    return {'time': time.monotonic(), 'cpu_seconds': cpu, 'rss_kib': int(fields[1])}
+    for part in fields[-2].split(':'): cpu = cpu * 60 + float(part)
+    return {'pid': int(pid), 'started': ' '.join(fields[:-2]), 'time': time.monotonic(), 'cpu_seconds': cpu, 'rss_kib': int(fields[-1])}
+def process_snapshot():
+    # Outside selected presentation windows: cumulative CPU and RSS, not physical
+    # footprint or GPU allocations. The owned helper and whole-desktop WindowServer
+    # are separate costs; missing/ambiguous processes remain unavailable, not zero.
+    app_row = read_process((evidence / 'app.pid').read_text().strip())
+    if app_row is None: stop('benchmark process counters', 'owned Infinify process is unavailable')
+    helper_pid = (evidence / 'native-host.pid').read_text().strip() if mode == 'native' else None
+    return {'app': app_row, 'helper': read_process(helper_pid), 'window_server_whole_desktop': read_process(server_pid)}
+def process_interval(before, after):
+    if before is None or after is None or (before['pid'], before['started']) != (after['pid'], after['started']): return None
+    elapsed = after['time'] - before['time']; cpu = after['cpu_seconds'] - before['cpu_seconds']
+    if elapsed <= 0 or cpu < 0: return None
+    return {'pid': before['pid'], 'interval_seconds': elapsed, 'cpu_percent_one_core': 100 * cpu / elapsed,
+            'rss_start_kib': before['rss_kib'], 'rss_end_kib': after['rss_kib']}
 def visibility(name, pid=None):
     # No WindowServer API executes on the app's main queue, and these probes
     # remain outside the frame windows selected below.
@@ -327,7 +343,7 @@ if mode == 'native': time.sleep(1.1)
 first = state(); cx, cy = first['camera']; out = first['outputs'][0]['size']; gap = 40; swing = 120
 wide = max(w['size'][0] for w in adopted); high = max(w['size'][1] for w in adopted)
 columns = math.ceil(math.sqrt(fixture_count)); rows = math.ceil(fixture_count / columns)
-requested_zoom = float(os.environ['INFINIFY_BENCH_ZOOM']) if os.environ.get('INFINIFY_BENCH_ZOOM') else .5 if mode == 'native' else None
+requested_zoom = float(os.environ['INFINIFY_BENCH_ZOOM']) if os.environ.get('INFINIFY_BENCH_ZOOM') else None
 if requested_zoom is not None:
     if not math.isfinite(requested_zoom) or requested_zoom <= 0: stop('overview zoom must be finite and positive', requested_zoom)
     # The layout bounds set DriftWM's dynamic minimum zoom. Leave enough world space to permit the requested overview.
@@ -489,12 +505,14 @@ def measure(name, work):
     # The mean flush is weighted by the flushes of each line.
     flushes = sum(r[3] * r[0] for r in rows)
     sources = [min(s[i][1] for r in rows for s in [r[9]] if i < len(s)) for i in range(max(len(r[9]) for r in rows))]
-    process_after = process_snapshot(); process_seconds = process_after['time'] - process_before['time']
+    process_after = process_snapshot(); app_usage = process_interval(process_before['app'], process_after['app'])
+    if app_usage is None: stop('benchmark process interval', 'owned Infinify process identity or counters changed')
     # The CPU interval includes phase setup/alignment; the drawable metrics above
     # cover only whole two-second windows. Keep both intervals explicit.
-    return {'process_interval_seconds': process_seconds,
-            'cpu_percent_one_core': 100 * (process_after['cpu_seconds'] - process_before['cpu_seconds']) / process_seconds,
-            'rss_start_kib': process_before['rss_kib'], 'rss_end_kib': process_after['rss_kib'],
+    return {'process_interval_seconds': app_usage['interval_seconds'],
+            'cpu_percent_one_core': app_usage['cpu_percent_one_core'],
+            'rss_start_kib': app_usage['rss_start_kib'], 'rss_end_kib': app_usage['rss_end_kib'],
+            'related_processes': {key: process_interval(process_before[key], process_after[key]) for key in ('helper', 'window_server_whole_desktop')},
             'display': rows[0][1], 'redraws': mean(2), 'flushes': mean(3), 'drawn': mean(4), 'presented': mean(5),
             'flush_mean_ms': sum(r[6] * r[3] * r[0] for r in rows) / flushes if flushes else 0, 'flush_worst_ms': max(r[7] for r in rows), 'main_gap_worst_ms': max(r[8] for r in rows),
             'sources': len(sources), 'accepted_least': min(sources) if sources else 0,
@@ -640,6 +658,7 @@ for name, r in phases:
     print(f'{name}: acquire_worst_ms={r["acquire_worst_ms"]:.3f} acquire_queue_worst_ms={r["acquire_queue_worst_ms"]:.3f} publish_worst_ms={r["publish_worst_ms"]:.3f} notify_worst_ms={r["notify_worst_ms"]:.3f} completion_worst_ms={r["completion_worst_ms"]:.3f} acquire_timeouts={r["acquire_timeouts"]:.0f} not_presented={r["not_presented"]:.0f}', flush=True)
     print(f'{name}: panel_observations={r["panel_rows"]} occluded_observations={r["occluded_rows"]} hidden_observations={r["hidden_rows"]} hides_inactive_observations={r["hides_inactive_rows"]} inactive_space_observations={r["inactive_space_rows"]}', flush=True)
     print(f'{name}: cpu_percent_one_core={r["cpu_percent_one_core"]:.2f} cpu_interval_seconds={r["process_interval_seconds"]:.2f} rss_start_kib={r["rss_start_kib"]} rss_end_kib={r["rss_end_kib"]}', flush=True)
+    print(f'{name}: separate related-process intervals (WindowServer is whole desktop; RSS excludes GPU allocations): {json.dumps(r["related_processes"])}', flush=True)
 (evidence / 'summary.json').write_text(json.dumps({'mode': mode, 'fixture_count': fixture_count, 'requested_rate': rate,
     'fixture_points': [status(n)['bounds'][2:] for n in names], 'output_points': out,
     'selected_seconds_per_phase': windows * 2, 'phases': dict(phases)}, indent=2) + '\n')
@@ -692,9 +711,9 @@ driverpid=
 quit
 if [ "$mode" = native ] && [ -f "$evidence/final-state.json" ]; then
   python3 - "$evidence" <<'PY'
-import json, pathlib, sys
+import json, os, pathlib, sys
 folder = pathlib.Path(sys.argv[1]); final = json.loads((folder / 'final-state.json').read_text()); saved = json.loads((folder / 'state.json').read_text())
-assert saved['version'] == 1 and len(saved['scene']['windows']) == 4, 'final scene must contain the four fixture placeholders'
+assert saved['version'] == 1 and len(saved['scene']['windows']) == int(os.environ['INFINIFY_BENCH_WINDOWS']), 'final scene must contain exactly the owned fixture placeholders'
 view = next(iter(saved['outputs'].values()))['viewport']; size = view['screen_bounds']['size']; zoom = view['zoom']
 center = [view['camera']['x'] + size['width'] / zoom / 2, -view['camera']['y'] - size['height'] / zoom / 2]
 assert abs(zoom - final['zoom']) < 1e-10 and all(abs(a-b) < 1e-6 for a,b in zip(center, final['camera'])), f'final save differs: {center}, {zoom}'
