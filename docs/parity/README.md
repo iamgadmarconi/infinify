@@ -134,6 +134,17 @@ document was closed and removed, TextEdit was gracefully quit, and the original
 two-window scene was restored. Local evidence:
 `target/native-vm/automatic-placement-final/receipt.json`.
 
+The `7a57b32` bundle visually filled the guest display with the inherited default
+macOS wallpaper. `NSWorkspace` returned an empty options dictionary for that
+wallpaper, so the inheritance fallback uses cover; explicit layout options are
+still honored. The ordinary Calculator window also returned to its independently
+observed transform and screen rectangle after a native-mode launch and quit.
+Evidence: `target/native-vm/pending-restore-inspect/launch-recovery-live.png` and
+`launch-recovery-quit.jsonl`; executable SHA256
+`ad79a846b79773182d8f15641d3df1342d54dee7bb75f0db4a7bdda83834b3ad`.
+Earlier Terminal/Notes zero-translation restoration remains unresolved, as
+described in the [helper lifecycle notes](../../native/privileged/README.md).
+
 These checks establish standard Terminal title-drag and edge-resize routing for
 the sampled interactions, and free-space placement for that TextEdit window. They
 do not establish optical frame cadence, custom title-bar compatibility, all-app

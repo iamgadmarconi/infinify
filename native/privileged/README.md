@@ -101,7 +101,23 @@ still block startup and preserve the record and runtime for inspection. There is
 no compatibility fallback or automatic injection retry. The launcher runs
 only the loader through sudo and starts the app as the login user. The regular
 LaunchAgent remains the capture-mode startup and does not invoke this explicit
-helper path. Guest validation of the recovery behavior is pending.
+helper path.
+
+In the authorized arm64 macOS 27.0.1 UTM guest, build `7a57b32` archived a ready
+record after its Dock process had exited with an empty generation-7 journal,
+then authenticated a fresh helper and launched the app. The previous runtime
+remained in place. A fresh ordinary Calculator window retained its native
+position across Dock replacement, was admitted at its observed original
+transform, and returned to that transform and screen rectangle after normal
+app quit; the new journal was empty at generation 2. This is one successful
+recovery path, not validation of every refusal branch or crash-recovery case.
+Evidence is under `target/native-vm/pending-restore-inspect/`.
+
+An earlier Terminal/Notes session already had incorrect zero-translation
+originals by the time a new helper admitted it. Repeating Dock replacement did
+not reproduce that change. Its first failing boundary remains unresolved;
+equality with those later snapshots must not be reported as restoration of the
+earlier desktop positions.
 
 Direct loader invocation also requires explicit prepared-machine authorization:
 
