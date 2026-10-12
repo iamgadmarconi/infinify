@@ -81,6 +81,51 @@ The loader uses nonce files exclusively; its previous raw-argument interface was
 removed with all call sites migrated. This source milestone does not establish
 native clipping, cross-application drag-and-drop, performance or app acceptance.
 
+## 2026-10-12 ordinary application checks in the VM
+
+The owner subsequently authorized unrestricted testing inside the disposable UTM
+macOS guest, including its administrator operations and permissions, and confirmed
+the guest was idle. Host desktop input, windows and settings remain outside that
+scope; guest work runs over SSH with UTM left in the background.
+
+The native title-drag fix in `f7c9a21` passed bounded checks using guarded CGEvents
+posted into the guest's normal HID event path against ordinary Terminal on arm64
+macOS 27.0.1 (26A434), VirtualMac2,1. At zoom 1 and 0.75,
+a 40-by-30-point pointer movement produced the same WindowServer screen movement;
+the corresponding rounded world deltas were (40,-30) and (53,-40). The native
+frame stayed fixed after the down, every one of eight drag samples, and release.
+The swallowed session-stage press no longer triggers the AppKit lost-release
+watchdog. Each check restored the scene, camera, zoom, native transform/frame and
+guest cursor exactly. Signed executable SHA256:
+`bfab0a385f674b87c52b88608cb7fc04a330738285256f640a6cbbd71017cd43`.
+Local evidence: `target/native-vm/native-title/watchdog-fix/receipt.json`.
+
+The follow-up build `9483609` retained that title-drag behavior at 0.75. On the
+same ordinary Terminal, dragging the normal right edge inward by 42 screen points
+reduced the native width from 860 to 804 and displayed width from 646 to 604.
+All eight requested native sizes applied, the opposite edge and native origin
+stayed fixed, and the maximum enclosing screen-edge rounding difference was
+0.5 points. Release completed the resize transaction. The complete scene, native
+geometry and cursor were restored. Local evidence:
+`target/native-vm/native-edge-final/receipt.json`, executable SHA256
+`edf755d6cc60b6eead48673d035252a7e42572dd8743370e0aeec7f95f4175fc`.
+
+A newly opened TextEdit document also passed an automatic-placement check: its
+world rectangle cleared the existing Terminal and Notes by 13 and 12 points,
+respectively. Independent native geometry matched its active-camera projection.
+TextEdit restored five older documents at launch and the camera followed another
+restored window, leaving the unique document partly offscreen; this is not
+confirmation that launch navigation selects the intended document. The unique
+document was closed and removed, TextEdit was gracefully quit, and the original
+two-window scene was restored. Local evidence:
+`target/native-vm/automatic-placement-final/receipt.json`.
+
+These checks establish standard Terminal title-drag and edge-resize routing for
+the sampled interactions, and free-space placement for that TextEdit window. They
+do not establish optical frame cadence, custom title-bar compatibility, all-app
+input or native compositor parity. A 60 Hz virtual display cannot establish the
+120 Hz physical-display target.
+
 ## 2026-10-12 resize and capture responsiveness
 
 Interactive resizing now rebases the grabbed edge when a delayed native baseline

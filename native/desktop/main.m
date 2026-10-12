@@ -1581,7 +1581,16 @@ static BOOL DWInputTrace(void) { static int on=-1;if(on<0)on=getenv("INFINIFY_DE
     // Each drag event says where the pointer is; the controller asks one size at a time of the window and keeps only the latest while one
     // is out. A transaction that takes no more motion has ended by itself (its window will not be resized, closed, or stopped answering):
     // nothing more is sent for this press, which stays swallowed until its button lifts, as upstream's grab outlives a dead client.
-    if(self.gesture==4){if(self.resizeTransaction){NSString *status=self.desktop.statusText;if(![self.desktop.resize request:@{@"op":@"native_resize_to",@"transaction":self.resizeTransaction,@"screen":pointJSON(p)}]){self.resizeTransaction=nil;self.desktop.statusText=status;}}}
+    if(self.gesture==4){
+        if(self.resizeTransaction){NSString *status=self.desktop.statusText;
+            if([self.desktop.resize request:@{@"op":@"native_resize_to",@"transaction":self.resizeTransaction,@"screen":pointJSON(p)}]){
+                // Success is consumed synchronously: resize.changed has already
+                // described the current scene and arranged its frame flush.
+                self.lastPoint=p;return;
+            }
+            self.resizeTransaction=nil;self.desktop.statusText=status;
+        }
+    }
     else if(self.gesture==1){
         if(hypot(p.x-self.startPoint.x,p.y-self.startPoint.y)>=5)self.clearsFocus=NO;
         // A normal run's drag pan is timed, for the coast its release launches.
