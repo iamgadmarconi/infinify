@@ -110,6 +110,20 @@ geometry and cursor were restored. Local evidence:
 `target/native-vm/native-edge-final/receipt.json`, executable SHA256
 `edf755d6cc60b6eead48673d035252a7e42572dd8743370e0aeec7f95f4175fc`.
 
+The `581fa9a` build retained the 0.75 edge behavior on Terminal's subsequent
+860-by-649 frame. Fullscreen exit restored the pre-entry scene, transform and
+screen rectangle, and fit/unfit restored the saved extent and world center.
+Fullscreen coverage still fails the menu-only requirement: the requested
+1920-by-1170 area becomes 1917-by-1069 in Terminal. Its cell increments and the
+guest's 1920-by-1080 `NSScreen.visibleFrame` account for this clamp; centering it
+leaves 50 points above and 51 below. The current AXSize path has no established
+override of that application constraint. Final test cleanup restored reported
+scene/native frame/screen rectangle and foreground; fractional transform and
+cursor drift were 0.0234 and 0.84 points, respectively, rather than exact.
+Local evidence: `target/native-vm/native-fit-fullscreen-final/receipt.json`
+and `underfill-analysis.json`, executable SHA256
+`ab1d9231baf961824c1bd12307197c3bdcc33e844a59d546d767597e5fc65d81`.
+
 A newly opened TextEdit document also passed an automatic-placement check: its
 world rectangle cleared the existing Terminal and Notes by 13 and 12 points,
 respectively. Independent native geometry matched its active-camera projection.

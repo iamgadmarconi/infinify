@@ -3724,7 +3724,12 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     CFTimeInterval observedAt=CACurrentMediaTime();
     NSWorkspace *workspace=NSWorkspace.sharedWorkspace;NSURL *url=[workspace desktopImageURLForScreen:chosen];
     NSDictionary *options=[workspace desktopImageOptionsForScreen:chosen]?:@{};
-    NSNumber *scaling=asNumber(options[NSWorkspaceDesktopImageScalingKey])?:@(NSImageScaleProportionallyUpOrDown),*clipping=asNumber(options[NSWorkspaceDesktopImageAllowClippingKey])?:@NO;
+    // The system default wallpaper can expose a still URL but no options at
+    // all, while macOS displays it edge to edge. Keep the canvas's cover
+    // fallback for that unavailable metadata; an explicit fit/false remains
+    // authoritative, as do AppKit's defaults in a populated options record.
+    NSNumber *scaling=asNumber(options[NSWorkspaceDesktopImageScalingKey])?:@(NSImageScaleProportionallyUpOrDown);
+    NSNumber *clipping=asNumber(options[NSWorkspaceDesktopImageAllowClippingKey])?:@(options.count==0);
     NSColor *color=[options[NSWorkspaceDesktopImageFillColorKey]isKindOfClass:NSColor.class]?options[NSWorkspaceDesktopImageFillColorKey]:NSColor.blackColor;
     color=[color colorUsingColorSpace:NSColorSpace.sRGBColorSpace]?:NSColor.blackColor;NSArray *fill=@[@(color.redComponent),@(color.greenComponent),@(color.blueComponent),@1];
     NSDictionary *desktop=@{@"url":url.absoluteString?:@"",@"scaling":scaling,@"clipping":clipping,@"fill":fill,@"pixels":pixelKey};
