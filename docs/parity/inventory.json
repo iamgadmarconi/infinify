@@ -10275,7 +10275,7 @@
           "value": "exec brightnessctl set +5%"
         }
       ],
-      "implementation_note": "Commented example, unbound by default as upstream. A config line binds the named-direction swipe and its exec fires once at gestures.swipe_threshold (gesture_flow.rs; a scratch probe fired exec brightnessctl set +5%), but brightnessctl is a Linux program absent on macOS, so sh would fail, and no Mac brightness command is substituted. Not confirmed: any Mac command for this example; macOS sets brightness through its own keys and Control Center."
+      "implementation_note": "The upstream reference line is a commented brightnessctl example, not its runtime default. Infinify now supplies the owner-requested Mac default: an unmodified four-finger swipe up toggles overview (ZoomToFit), including over windows. Explicit configuration, explicit unbinding and disable_defaults take precedence (crates/desktop/src/gestures.rs, find). Brightness remains controlled by macOS as requested; no Linux command compatibility shim is supplied. Gesture dispatch has focused controller coverage, but physical trackpad and system-gesture interception acceptance remain unverified."
     },
     {
       "id": "config.gestures.anywhere.4-finger-swipe-down",
@@ -10301,7 +10301,7 @@
           "value": "exec brightnessctl set 5%-"
         }
       ],
-      "implementation_note": "Commented example, unbound by default as upstream. A config line binds the named-direction swipe and its exec fires once at gestures.swipe_threshold (gesture_flow.rs; a scratch probe fired exec brightnessctl set 5%-), but brightnessctl is a Linux program absent on macOS, so sh would fail, and no Mac brightness command is substituted. Not confirmed: any Mac command for this example; macOS sets brightness through its own keys and Control Center."
+      "implementation_note": "The upstream reference line is a commented brightnessctl example, not its runtime default. The unchanged generic four-finger swipe binding selects the nearest window in the swipe direction; an explicit directional binding or unbinding takes precedence. Brightness remains controlled by macOS as requested; no Linux command compatibility shim is supplied. Configured directional dispatch has focused controller coverage, but physical trackpad and system-gesture interception acceptance remain unverified."
     },
     {
       "id": "config.gestures.anywhere.4-finger-swipe-right",
@@ -13511,7 +13511,7 @@
       ],
       "acceptance": "Exercise the actual native equivalent from a focused own-fixture through the production app, including focus/placement and failure/cleanup; wire-protocol support is outside scope.",
       "evidence": [],
-      "implementation_note": "Status stays missing: a Mac has no layer surfaces, and the menu bar, the Dock and notifications are drawn by macOS. The port reserves nothing for them, and that is a deliberate difference decided by the owner on 2026-10-10, not a gap awaiting work: the canvas covers each display edge to edge, windows may sit beneath the menu bar and the Dock, and both stay visible on top. So the shell registers each output by its screen bounds and sends no usable area (native/desktop/main.m). The controller can hold one, upstream's output less its panels' exclusive zones: register_output takes an optional usable_rect_local, set_usable_area replaces it, and the rectangle is measured wherever upstream measures the usable area (crates/desktop/NAVIGATION.md, The usable area; exported-C-ABI/JSON controller scenarios in crates/desktop/tests/usable_tap_flow.rs). Nothing sends it one, so every output is usable whole. Still missing as work: any policy for panel or overlay windows (anchor, layer and order, keyboard interactivity, exclusive focus, canvas layers). State lists no layers, and layer_order is recorded and ignored (crates/desktop/RULES.md). 2026-10-11 native continuation: the missing status concerns complete native panel/overlay acceptance, not an absent panel policy. Independent AXFloatingWindow roots at the native floating level attach as display pins; popups/sheets follow their root. Panel arrival and native hover do not override application stacking/keyboard focus. Owned geometry/restoration evidence already exists; no new runtime experiment occurred, and third-party overlay/modal/Spaces behavior remains unverified."
+      "implementation_note": "The accepted Mac mapping keeps the menu bar, Dock, notifications and native application panel focus/stacking under macOS control. Each canvas output spans its display, while main.m screenUsableRect/outputUsableRect now register and refresh a menu-bar/notch exclusion for fit/fullscreen; Dock reservations are deliberately excluded. Independent AXFloatingWindow roots at the native floating level attach as display pins, and popups/sheets follow their parent. Panel arrival and native hover preserve application stacking and keyboard focus. Controller usable-area and owned geometry/restoration evidence cover narrower contracts; third-party overlay/modal/Spaces behavior, physical multi-display integration and native display-boundary clipping remain unverified or incomplete. No separate Wayland layer-shell wire implementation is required."
     },
     {
       "id": "protocol.shortcuts_inhibit",
