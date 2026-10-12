@@ -466,6 +466,22 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
         }
         BOOL children=NO;for(NSNumber *window in plans)if([plans[window]count]&&![roots[window][@"capture"]isEqual:@NO]){children=YES;break;}
         void (^reconcile)(SCShareableContent *,NSError *)=^(SCShareableContent *content,NSError *error){dispatch_async(observer,^{
+            NSMutableDictionary *windows=[NSMutableDictionary dictionary];for(SCWindow *window in content.windows)windows[@(window.windowID)]=window;
+            NSMutableDictionary *checkedMembers=[NSMutableDictionary dictionary];
+            if(!error)for(NSNumber *logical in roots)if(![roots[logical][@"capture"]isEqual:@NO]){
+                NSMutableDictionary *checked=[NSMutableDictionary dictionary];
+                for(NSDictionary *plan in plans[logical]){
+                    CFTimeInterval began=CACurrentMediaTime();
+                    NSDictionary *identity=plan[@"identity"];CGRect bounds=familyRect(plan[@"native_bounds"]);SCWindow *window=windows[identity[@"wid"]];
+                    CGRect rootNow=CGRectZero,memberNow=CGRectZero;
+                    if(window&&window.owningApplication.processID==[identity[@"pid"]intValue]&&familySize(bounds)
+                       &&DWNativeWindowBelongsToRoot(identity,roots[logical][@"identity"])
+                       &&DWNativeBounds([roots[logical][@"identity"][@"wid"]unsignedIntValue],&rootNow)
+                       &&DWNativeBounds([identity[@"wid"]unsignedIntValue],&memberNow)
+                       &&CGRectEqualToRect(rootNow,familyRect(roots[logical][@"native_bounds"]))&&CGRectEqualToRect(memberNow,bounds))checked[identity[@"wid"]]=@(began);
+                }
+                checkedMembers[logical]=checked.copy;
+            }
             // Root-only runs cannot change controller order. Only a cohort
             // containing captured children needs other roots' ranks to place
             // those children across families. Validate that geometry evidence
@@ -480,17 +496,19 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
             dispatch_async(dispatch_get_main_queue(),^{
             DWNativeReplicaFamilies *owner=weak;if(!owner)return;owner.requestPending=NO;if(!owner.reading||owner.epoch!=epoch||owner.requestSequence!=sequence||![owner.roots isEqual:roots])return;owner.reading=NO;
             [owner beginChanges];
-            NSMutableDictionary *windows=[NSMutableDictionary dictionary];for(SCWindow *window in content.windows)windows[@(window.windowID)]=window;
             NSMutableDictionary *nextMembers=[NSMutableDictionary dictionary],*nextOrdering=[NSMutableDictionary dictionary];
             for(NSNumber *logical in roots){NSMutableArray *installed=[NSMutableArray array];NSArray<DWReplicaMember *> *old=owner.members[logical]?:@[];
                 for(NSDictionary *plan in error||[roots[logical][@"capture"]isEqual:@NO]?@[]:plans[logical]){
                     NSDictionary *identity=plan[@"identity"];CGRect bounds=familyRect(plan[@"native_bounds"]);SCWindow *window=windows[identity[@"wid"]];
-                    CGRect rootNow=CGRectZero,memberNow=CGRectZero;
-                    if(!window||window.owningApplication.processID!=[identity[@"pid"]intValue]||!familySize(bounds)
-                       ||!DWNativeWindowBelongsToRoot(identity,roots[logical][@"identity"])
-                       ||!DWNativeBounds([roots[logical][@"identity"][@"wid"]unsignedIntValue],&rootNow)
-                       ||!DWNativeBounds([identity[@"wid"]unsignedIntValue],&memberNow)
-                       ||!CGRectEqualToRect(rootNow,familyRect(roots[logical][@"native_bounds"]))||!CGRectEqualToRect(memberNow,bounds))continue;
+                    // The observer proved this exact child/root binding. Its
+                    // deadline includes every native read and queue wait; a
+                    // stalled result never becomes fresh at completion. This
+                    // admits only stream setup/reuse: frames and input retain
+                    // their own fresh native validation before publication.
+                    NSNumber *began=checkedMembers[logical][identity[@"wid"]];
+                    if(!began||!familyProcessMatches(identity))continue;
+                    CFTimeInterval age=CACurrentMediaTime()-began.doubleValue;
+                    if(age<0||age>.1)continue;
                     double density=[roots[logical][@"density"]doubleValue];if(!isfinite(density)||density<=0)density=2;
                     density=MIN(2,MAX(1./32,density));DWReplicaMember *member=nil;
                     for(DWReplicaMember *candidate in old)if(atomic_load(&candidate->alive)&&[candidate.identity isEqual:identity]&&CGRectEqualToRect(candidate.bounds,bounds)&&familyBinding(candidate.root,roots[logical])){member=candidate;break;}
