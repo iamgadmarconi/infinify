@@ -40,7 +40,10 @@ fi
 architectures=arm64e
 [ "$mode" = production ] || architectures='arm64 arm64e'
 for arch in $architectures; do
+  # The install name is part of the signed payload bytes. Keep staging paths out
+  # of its identity so rebuilding unchanged source preserves helper reuse hashes.
   xcrun clang -arch "$arch" -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror -dynamiclib \
+    -Wl,-install_name,"@rpath/payload-$arch.dylib" \
     ${DW_V2_MAIN_QUEUE:+-DDW_V2_MAIN_QUEUE="$DW_V2_MAIN_QUEUE"} \
     native/privileged/payload.m -framework AppKit -o "$out/payload-$arch.dylib"
 done
