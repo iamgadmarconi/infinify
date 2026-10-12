@@ -1,5 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import <Foundation/Foundation.h>
+#import <CoreGraphics/CoreGraphics.h>
+@class DWNativeAppliedPlacement;
+
+// One explicit replica-to-native request. Immutable correspondence only: it
+// grants neither input nor optical/clipping authority. Every supersession and
+// cancellation uses a new token, even when the target geometry is unchanged.
+@interface DWNativeViewTransfer : NSObject
+- (instancetype)init NS_UNAVAILABLE;
++ (instancetype)new NS_UNAVAILABLE;
+@property(nonatomic,readonly,copy) NSUUID *requestID;
+@property(nonatomic,readonly) uint64_t window,generation,output;
+@property(nonatomic,readonly,copy) NSDictionary *identity;
+@property(nonatomic,readonly) CGRect screenRect,clipRect,viewport;
+// Complete sorted audited family, including the root, with exact identity,
+// native_bounds and parent. Absence of a report never means root-only.
+@property(nonatomic,readonly,copy) NSArray<NSDictionary *> *members;
+@end
+typedef BOOL (^DWNativeViewPlacementCheck)(DWNativeAppliedPlacement *placement);
 
 // Pure adapter projection for either capture-overlay or native presentation.
 // Normalizes output rectangles/cameras and exact root bindings, then adds only
@@ -41,5 +59,35 @@ NSDictionary *DWNativeFamilyPresentationSnapshot(NSDictionary *snapshot,
 - (BOOL)replica:(NSNumber *)window output:(NSNumber *)output;
 - (NSDictionary *)placement:(NSNumber *)window output:(NSNumber *)output;
 @property(nonatomic,readonly) NSSet<NSNumber *> *capturedWindows;
+// Initial/automatic selection and same-output camera motion retain ordinary
+// primary rendering. They are desired presentation, never input admission.
+// Only an explicit transfer covers both old/new sites with captured copies.
+- (NSNumber *)desiredOwnerForWindow:(NSNumber *)window;
+- (DWNativeViewTransfer *)requestTransferForWindow:(NSNumber *)window output:(NSNumber *)output;
+- (DWNativeViewTransfer *)currentTransferForWindow:(NSNumber *)window;
+@property(nonatomic,readonly,copy) NSArray<DWNativeViewTransfer *> *pendingTransfers;
+- (BOOL)isTransferCurrent:(DWNativeViewTransfer *)transfer;
+// Cancelling a pending request stages a NEW recovery token for a fully visible
+// ordinary primary (or another eligible site); copies stay until it settles.
+// Geometry verification can settle that recovery without the pointer there.
+// With no eligible full family, it stays unavailable until a later description.
+// Cancelling a completed transfer releases its admission, not its committed
+// ordinary primary. This method performs no native restoration or input.
+- (void)cancelTransfer:(DWNativeViewTransfer *)transfer;
+// current checks the presenter's exact ACK before and after validateGeometry,
+// which must freshly verify the full native family, transforms and screen.
+// Admission commits presentation ownership only. Before EACH input event,
+// separately verify its exact event-eligible recipient/point and recheck this
+// token + ACK; these callbacks establish no optical or native clip proof.
+- (BOOL)completeTransfer:(DWNativeViewTransfer *)transfer placement:(DWNativeAppliedPlacement *)placement current:(DWNativeViewPlacementCheck)current validateGeometry:(DWNativeViewPlacementCheck)validateGeometry;
+- (DWNativeAppliedPlacement *)admittedPlacementForWindow:(NSNumber *)window;
+- (NSNumber *)admittedOwnerForWindow:(NSNumber *)window;
+- (BOOL)isAdmissionCurrentForTransfer:(DWNativeViewTransfer *)transfer placement:(DWNativeAppliedPlacement *)placement;
+// Main must include this in its native-description cache key and render again
+// after a request/cancel/admission; ordinary describe alone does not increment.
+@property(nonatomic,readonly) uint64_t transferRevision;
+// Fresh presenter ACK is needed only for a new/recovery request, not the repaint
+// that completes it. Main invalidates readiness once when this revision changes.
+@property(nonatomic,readonly) uint64_t placementRequestRevision;
 - (void)reset;
 @end

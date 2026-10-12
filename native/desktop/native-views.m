@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import "native-views.h"
+#import "native-presenter.h"
 #import <CoreGraphics/CoreGraphics.h>
 #include <math.h>
 
@@ -37,6 +38,13 @@ static NSDictionary<NSNumber *,NSDictionary *> *viewBindings(NSDictionary *ident
 }
 static NSDictionary *viewRectJSON(CGRect rect) {
     return @{@"origin":@{@"x":@(rect.origin.x),@"y":@(rect.origin.y)},@"size":@{@"width":@(rect.size.width),@"height":@(rect.size.height)}};
+}
+// Presenter receipts serialize their frozen native basis as [x,y,w,h].
+static CGRect viewReceiptRect(id value) {
+    if(![value isKindOfClass:NSArray.class]||[value count]!=4)return CGRectNull;
+    for(id component in value)if(!viewNumber(component)||!isfinite([component doubleValue]))return CGRectNull;
+    CGRect result=CGRectMake([value[0]doubleValue],[value[1]doubleValue],[value[2]doubleValue],[value[3]doubleValue]);
+    return result.size.width>0&&result.size.height>0&&isfinite(CGRectGetMaxX(result))&&isfinite(CGRectGetMaxY(result))?result:CGRectNull;
 }
 static BOOL viewSameProcess(NSDictionary *a,NSDictionary *b) {
     return a&&b&&[a[@"pid"]isEqual:b[@"pid"]]&&[a[@"birth_sec"]isEqual:b[@"birth_sec"]]&&[a[@"birth_usec"]isEqual:b[@"birth_usec"]];
@@ -117,26 +125,146 @@ NSDictionary *DWNativeFamilyPresentationSnapshot(NSDictionary *snapshot,NSDictio
     NSMutableDictionary *presentation=[snapshot mutableCopy];presentation[@"placements"]=placements;return presentation.copy;
 }
 
+// Transfer admission is stricter than ordinary presentation. It must name a
+// complete audited family and every projected member must fit this display;
+// a partial clip cannot be made safe by a placement ACK.
+static NSDictionary *viewTransferSite(NSNumber *window,NSNumber *output,NSDictionary *placement,NSDictionary *viewport,NSDictionary *binding,NSDictionary *family) {
+    NSDictionary *source=viewDictionary(placement[@"source"]),*rawIdentity=viewDictionary(source[@"identity"]);
+    NSNumber *generation=viewNumber(source[@"generation"]);CGRect screen=viewRect(placement[@"screen_rect"]),clip=viewRect(placement[@"clip_rect"]),display=viewRect(viewport[@"screen_bounds"]),native=viewRect(family[@"native_bounds"]);
+    if(!family||!binding||![viewIdentity(rawIdentity)isEqual:binding]||![viewIdentity(family[@"identity"])isEqual:binding]
+        ||![family[@"generation"]isEqual:generation]||!CGRectEqualToRect(native,viewRect(source[@"observed_rect"]))||(rawIdentity[@"owner"]&&rawIdentity[@"owner"]!=NSNull.null)
+        ||!viewPositiveID(generation)||CFGetTypeID((__bridge CFTypeRef)generation)==CFBooleanGetTypeID()||![source[@"observation_known"]isEqual:@YES]
+        ||[viewNumber(placement[@"family_only"])boolValue]||CGRectIsNull(screen)||CGRectIsNull(clip)||CGRectIsNull(display)||CGRectIsNull(native)
+        ||screen.size.width<1||screen.size.height<1||!CGRectEqualToRect(screen,clip)||!CGRectContainsRect(display,screen))return nil;
+    NSArray *children=viewFamilyMembers(family,source,binding),*reported=viewList(family[@"members"]);
+    if(reported.count!=children.count+1)return nil;
+    NSMutableArray *members=[NSMutableArray array];BOOL rootSeen=NO;
+    for(id value in reported){NSDictionary *member=viewDictionary(value),*who=viewIdentity(member[@"identity"]);NSNumber *parent=viewNumber(member[@"parent"]);CGRect bounds=viewRect(member[@"native_bounds"]);
+        if(!who||!viewSameProcess(who,binding)||!parent||CFGetTypeID((__bridge CFTypeRef)parent)==CFBooleanGetTypeID()
+            ||!isfinite(parent.doubleValue)||floor(parent.doubleValue)!=parent.doubleValue||parent.doubleValue<0||parent.unsignedLongLongValue>UINT32_MAX||CGRectIsNull(bounds))return nil;
+        if([who[@"wid"]isEqual:binding[@"wid"]]){if(rootSeen||parent.unsignedIntValue||!CGRectEqualToRect(bounds,native))return nil;rootSeen=YES;}
+        CGRect projected=CGRectMake(screen.origin.x+(bounds.origin.x-native.origin.x)/native.size.width*screen.size.width,
+            screen.origin.y+(bounds.origin.y-native.origin.y)/native.size.height*screen.size.height,
+            bounds.size.width/native.size.width*screen.size.width,bounds.size.height/native.size.height*screen.size.height);
+        if(!isfinite(projected.origin.x)||!isfinite(projected.origin.y)||!isfinite(projected.size.width)||!isfinite(projected.size.height)
+            ||projected.size.width<1||projected.size.height<1||!CGRectContainsRect(display,projected))return nil;
+        [members addObject:@{@"identity":who,@"native_bounds":viewRectJSON(bounds),@"parent":parent}];
+    }
+    if(!rootSeen)return nil;
+    [members sortUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b){return [a[@"identity"][@"wid"]compare:b[@"identity"][@"wid"]];}];
+    return @{@"window":window,@"output":output,@"identity":binding,@"generation":generation,@"screen_rect":viewRectJSON(screen),@"clip_rect":viewRectJSON(clip),@"viewport":viewRectJSON(display),@"members":members.copy};
+}
+@interface DWNativeViewTransfer ()
+@property(nonatomic,readonly) NSDictionary *site;
+- (instancetype)initWithSite:(NSDictionary *)site;
+@end
+@implementation DWNativeViewTransfer {
+    NSUUID *_requestID;
+    NSDictionary *_site;
+}
+- (instancetype)initWithSite:(NSDictionary *)site { if((self=[super init])){_requestID=[NSUUID UUID];_site=[site copy];}return self; }
+- (NSUUID *)requestID { return _requestID; }
+- (NSDictionary *)site { return _site; }
+- (uint64_t)window { return [_site[@"window"]unsignedLongLongValue]; }
+- (uint64_t)generation { return [_site[@"generation"]unsignedLongLongValue]; }
+- (uint64_t)output { return [_site[@"output"]unsignedLongLongValue]; }
+- (NSDictionary *)identity { return _site[@"identity"]; }
+- (CGRect)screenRect { return viewRect(_site[@"screen_rect"]); }
+- (CGRect)clipRect { return viewRect(_site[@"clip_rect"]); }
+- (CGRect)viewport { return viewRect(_site[@"viewport"]); }
+- (NSArray<NSDictionary *> *)members { return _site[@"members"]; }
+@end
+@interface DWNativeViewAdmission : NSObject
+@property DWNativeAppliedPlacement *placement;
+@property(copy) DWNativeViewPlacementCheck current;
+@end
+@implementation DWNativeViewAdmission
+@end
+
 @implementation DWNativeViews {
     NSDictionary<NSNumber *,NSNumber *> *_owners;
     NSDictionary<NSNumber *,NSDictionary *> *_identities;
     NSDictionary<NSNumber *,NSSet<NSNumber *> *> *_replicas;
     NSDictionary<NSNumber *,NSDictionary<NSNumber *,NSDictionary *> *> *_placements;
     NSDictionary *_presentationSnapshot;
+    NSDictionary<NSNumber *,NSDictionary<NSNumber *,NSDictionary *> *> *_transferSites;
+    NSMutableDictionary<NSNumber *,DWNativeViewTransfer *> *_transfers;
+    NSMutableDictionary<NSNumber *,DWNativeViewAdmission *> *_admissions;
+    NSMutableSet<NSNumber *> *_covered;
+    uint64_t _transferRevision,_placementRequestRevision;
 }
-- (void)reset { _owners=@{};_identities=@{};_replicas=@{};_placements=@{};_presentationSnapshot=nil; }
+- (instancetype)init { if((self=[super init]))[self reset];return self; }
+- (void)reset { _owners=@{};_identities=@{};_replicas=@{};_placements=@{};_presentationSnapshot=nil;_transferSites=@{};_transfers=[NSMutableDictionary dictionary];_admissions=[NSMutableDictionary dictionary];_covered=[NSMutableSet set];++_transferRevision;++_placementRequestRevision; }
 - (NSDictionary *)presentationSnapshot { return _presentationSnapshot; }
 - (NSSet<NSNumber *> *)capturedWindows { return [NSSet setWithArray:_replicas.allKeys?:@[]]; }
 - (BOOL)replica:(NSNumber *)window output:(NSNumber *)output { return window&&output&&[_replicas[window]containsObject:output]; }
 - (NSDictionary *)placement:(NSNumber *)window output:(NSNumber *)output { return window&&output?_placements[window][output]:nil; }
+- (uint64_t)transferRevision { return _transferRevision; }
+- (uint64_t)placementRequestRevision { return _placementRequestRevision; }
+- (NSArray<DWNativeViewTransfer *> *)pendingTransfers {
+    NSMutableArray *pending=[NSMutableArray array];for(NSNumber *window in [_covered.allObjects sortedArrayUsingSelector:@selector(compare:)])if(_transfers[window])[pending addObject:_transfers[window]];return pending.copy;
+}
+- (void)refreshReplicas {
+    NSMutableDictionary *replicas=[NSMutableDictionary dictionary];
+    for(NSNumber *window in _placements){NSMutableSet *copies=[NSMutableSet setWithArray:_placements[window].allKeys];
+        NSNumber *owner=_owners[window];if(owner&&![_covered containsObject:window])[copies removeObject:owner];if(copies.count)replicas[window]=copies.copy;}
+    _replicas=replicas.copy;
+}
+- (NSNumber *)desiredOwnerForWindow:(NSNumber *)window { if(!window)return nil;DWNativeViewTransfer *transfer=_transfers[window];return transfer?@(transfer.output):_owners[window]; }
+- (DWNativeViewTransfer *)currentTransferForWindow:(NSNumber *)window { return window?_transfers[window]:nil; }
+- (BOOL)isTransferCurrent:(DWNativeViewTransfer *)transfer {
+    if(![transfer isKindOfClass:DWNativeViewTransfer.class])return NO;NSNumber *window=@(transfer.window);
+    return _transfers[window]==transfer&&[transfer.site isEqual:_transferSites[window][@(transfer.output)]];
+}
+- (DWNativeViewTransfer *)requestTransferForWindow:(NSNumber *)window output:(NSNumber *)output {
+    if(!window||!output)return nil;NSDictionary *site=_transferSites[window][output];if(!site)return nil;
+    DWNativeViewTransfer *transfer=[[DWNativeViewTransfer alloc]initWithSite:site];_transfers[window]=transfer;[_admissions removeObjectForKey:window];[_covered addObject:window];
+    ++_transferRevision;++_placementRequestRevision;[self refreshReplicas];return transfer;
+}
+- (void)recoverWindow:(NSNumber *)window {
+    NSDictionary *sites=_transferSites[window];NSNumber *output=_owners[window];if(!output||!sites[output])output=[sites.allKeys sortedArrayUsingSelector:@selector(compare:)].firstObject;
+    if(output)_transfers[window]=[[DWNativeViewTransfer alloc]initWithSite:sites[output]];
+}
+- (void)cancelTransfer:(DWNativeViewTransfer *)transfer {
+    if(![transfer isKindOfClass:DWNativeViewTransfer.class]||_transfers[@(transfer.window)]!=transfer)return;
+    NSNumber *window=@(transfer.window);[_transfers removeObjectForKey:window];[_admissions removeObjectForKey:window];
+    if([_covered containsObject:window]){[self recoverWindow:window];++_placementRequestRevision;}++_transferRevision;[self refreshReplicas];
+}
+- (BOOL)placement:(DWNativeAppliedPlacement *)placement matches:(DWNativeViewTransfer *)transfer {
+    if(![placement isKindOfClass:DWNativeAppliedPlacement.class]||placement.window!=transfer.window||placement.generation!=transfer.generation||placement.output!=transfer.output
+        ||![placement.identity isEqual:transfer.identity]||!CGRectEqualToRect(placement.requestedScreenRect,transfer.screenRect)
+        ||!CGRectEqualToRect(placement.requestedClipRect,transfer.clipRect)||!CGRectEqualToRect(placement.requestedViewport,transfer.viewport))return NO;
+    NSArray *members=placement.members;if(members.count!=transfer.members.count)return NO;
+    for(NSUInteger i=0;i<members.count;i++){NSDictionary *actual=members[i],*expected=transfer.members[i];
+        if(![actual[@"identity"]isEqual:expected[@"identity"]]||![actual[@"parent"]isEqual:expected[@"parent"]]
+            ||!CGRectEqualToRect(viewReceiptRect(actual[@"native_bounds"]),viewRect(expected[@"native_bounds"])))return NO;}
+    return YES;
+}
+- (BOOL)completeTransfer:(DWNativeViewTransfer *)transfer placement:(DWNativeAppliedPlacement *)placement current:(DWNativeViewPlacementCheck)current validateGeometry:(DWNativeViewPlacementCheck)validateGeometry {
+    if(![self isTransferCurrent:transfer]||![_covered containsObject:@(transfer.window)]||!current||!validateGeometry||![self placement:placement matches:transfer]
+        ||!current(placement)||!validateGeometry(placement)||![self isTransferCurrent:transfer]||!current(placement)||![self isTransferCurrent:transfer])return NO;
+    NSNumber *window=@(transfer.window);NSMutableDictionary *owners=[_owners mutableCopy];owners[window]=@(transfer.output);_owners=owners.copy;
+    DWNativeViewAdmission *admission=[DWNativeViewAdmission new];admission.placement=placement;admission.current=current;_admissions[window]=admission;[_covered removeObject:window];
+    ++_transferRevision;[self refreshReplicas];return YES;
+}
+- (BOOL)isAdmissionCurrentForTransfer:(DWNativeViewTransfer *)transfer placement:(DWNativeAppliedPlacement *)placement {
+    if(![self isTransferCurrent:transfer])return NO;DWNativeViewAdmission *admission=_admissions[@(transfer.window)];
+    return admission&&admission.placement==placement&&admission.current(placement)&&[self isTransferCurrent:transfer];
+}
+- (DWNativeAppliedPlacement *)admittedPlacementForWindow:(NSNumber *)window {
+    DWNativeViewTransfer *transfer=window?_transfers[window]:nil;DWNativeViewAdmission *admission=window?_admissions[window]:nil;
+    return [self isAdmissionCurrentForTransfer:transfer placement:admission.placement]?admission.placement:nil;
+}
+- (NSNumber *)admittedOwnerForWindow:(NSNumber *)window { DWNativeAppliedPlacement *placement=[self admittedPlacementForWindow:window];return placement?@(placement.output):nil; }
 - (NSDictionary *)describe:(NSDictionary *)snapshot bound:(NSDictionary<NSNumber *,NSDictionary *> *)identities {
     return [self describe:snapshot bound:identities families:@{}];
 }
 - (NSDictionary *)describe:(NSDictionary *)snapshot bound:(NSDictionary<NSNumber *,NSDictionary *> *)identities families:(NSDictionary<NSNumber *,NSDictionary *> *)families {
-    if(!viewDictionary(snapshot))return nil;
+    if(!viewDictionary(snapshot)){[self reset];return nil;}
+    NSDictionary *auditedFamilies=viewDictionary(families)?:@{};
     NSDictionary<NSNumber *,NSDictionary *> *outputs=viewOutputs(snapshot),*bindings=viewBindings(identities);
-    NSArray<NSDictionary *> *presented=viewFamilyPlacements(snapshot,outputs,bindings,viewDictionary(families)?:@{});NSMutableDictionary *presentation=[snapshot mutableCopy];presentation[@"placements"]=presented;_presentationSnapshot=presentation.copy;
-    NSMutableDictionary *choices=[NSMutableDictionary dictionary],*areas=[NSMutableDictionary dictionary],*copies=[NSMutableDictionary dictionary],*placements=[NSMutableDictionary dictionary];
+    NSArray<NSDictionary *> *presented=viewFamilyPlacements(snapshot,outputs,bindings,auditedFamilies);NSMutableDictionary *presentation=[snapshot mutableCopy];presentation[@"placements"]=presented;_presentationSnapshot=presentation.copy;
+    NSMutableDictionary *choices=[NSMutableDictionary dictionary],*areas=[NSMutableDictionary dictionary],*placements=[NSMutableDictionary dictionary];
     for(NSDictionary *placement in presented){
         NSNumber *window=viewNumber(placement[@"window"]),*output=viewNumber(placement[@"output"]);if(!viewPositiveID(window)||!viewPositiveID(output))continue;
         NSDictionary *viewport=outputs[output],*source=viewDictionary(placement[@"source"]);
@@ -153,7 +281,6 @@ NSDictionary *DWNativeFamilyPresentationSnapshot(NSDictionary *snapshot,NSDictio
         if(!isfinite(area)||area<=0)continue;
         NSMutableDictionary *views=placements[window];if(views[output])continue; // same first-record rule as the canvas
         if(!views)placements[window]=views=[NSMutableDictionary dictionary];views[output]=placement;
-        NSMutableSet *outputs=copies[window];if(!outputs)copies[window]=outputs=[NSMutableSet set];[outputs addObject:output];
         if(familyOnly)continue; // observed descendants cannot move or unpark the real root
         // The helper parks these sites. Suppressing their canvas image as a
         // native owner would make the window disappear on every display.
@@ -171,15 +298,27 @@ NSDictionary *DWNativeFamilyPresentationSnapshot(NSDictionary *snapshot,NSDictio
         }
         choices[window]=placement;areas[window]=@(area);
     }
-    NSMutableDictionary *owners=[NSMutableDictionary dictionary],*replicas=[NSMutableDictionary dictionary];
+    NSMutableDictionary *owners=[NSMutableDictionary dictionary],*transferSites=[NSMutableDictionary dictionary];
+    for(NSNumber *window in placements){NSMutableDictionary *sites=[NSMutableDictionary dictionary];for(NSNumber *output in placements[window]){
+        NSDictionary *site=viewTransferSite(window,output,placements[window][output],outputs[output],bindings[window],viewDictionary(auditedFamilies[window]));if(site)sites[output]=site;}
+        if(sites.count)transferSites[window]=sites.copy;}
+    _transferSites=transferSites.copy;
+    for(NSNumber *window in _transfers.allKeys)if(![self isTransferCurrent:_transfers[window]]){
+        [_transfers removeObjectForKey:window];[_admissions removeObjectForKey:window];if([_covered containsObject:window])++_placementRequestRevision;++_transferRevision;}
+    // Removal of the binding/site ends only this adapter state. Native release
+    // and restore obligations remain the presenter's responsibility.
+    for(NSNumber *window in _covered.allObjects)if(!placements[window]||![_identities[window]isEqual:bindings[window]]){[_covered removeObject:window];++_transferRevision;++_placementRequestRevision;}
+    for(NSNumber *window in choices)owners[window]=choices[window][@"output"];
+    _owners=owners.copy;_identities=bindings.copy;_placements=placements.copy;
+    for(NSNumber *window in _covered)if(!_transfers[window]){[self recoverWindow:window];if(_transfers[window]){++_transferRevision;++_placementRequestRevision;}}
     NSMutableArray *native=[NSMutableArray array];NSMutableSet *emitted=[NSMutableSet set];
     // Preserve the controller's order. The helper sorts its records separately.
     for(NSDictionary *placement in presented){NSNumber *window=viewNumber(placement[@"window"]);
-        if(!window||choices[window]!=placement||[emitted containsObject:window])continue;
-        NSNumber *owner=placement[@"output"];owners[window]=owner;[native addObject:placement];[emitted addObject:window];
+        NSNumber *desired=window?[self desiredOwnerForWindow:window]:nil;
+        if(!window||!desired||_placements[window][desired]!=placement||[emitted containsObject:window])continue;
+        [native addObject:placement];[emitted addObject:window];
     }
-    for(NSNumber *window in copies){NSMutableSet *views=copies[window];NSNumber *owner=owners[window];if(owner)[views removeObject:owner];if(views.count)replicas[window]=views.copy;}
-    _owners=owners.copy;_identities=bindings.copy;_replicas=replicas.copy;_placements=placements.copy;
+    [self refreshReplicas];
     NSMutableDictionary *result=[snapshot mutableCopy];result[@"placements"]=native.copy;return result;
 }
 @end
