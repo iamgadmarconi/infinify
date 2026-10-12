@@ -557,7 +557,7 @@ fn a_pan_without_a_time_never_coasts() {
         let tick = h.tick(frame * 16_666_667);
         assert_eq!(
             tick,
-            json!({"changed_outputs":[],"needs_frames":false,"needs_pointer":false})
+            json!({"changed_outputs":[],"needs_frames":false,"needs_pointer":false,"clock_only":false})
         );
     }
     assert_eq!(bits(h.camera(1)), bits(camera));
@@ -778,7 +778,7 @@ fn a_window_dragged_to_the_edge_pans_the_canvas_under_it() {
     assert_eq!(h.motion()["edge_pans"], json!({}));
     assert_eq!(
         h.tick(clock + 16_666_667),
-        json!({"changed_outputs":[],"needs_frames":false,"needs_pointer":false})
+        json!({"changed_outputs":[],"needs_frames":false,"needs_pointer":false,"clock_only":false})
     );
     assert_eq!((h.world(window), h.camera(1)), (world, camera));
 
@@ -951,7 +951,11 @@ fn a_move_nothing_holds_any_more_stops_with_the_end_the_shell_sends() {
     let scratch = Scratch::new();
     let flying = "navigation during active gesture";
     for lost in ["button", "touches"] {
-        let mut h = configured(&scratch, "");
+        // Exercise a move grab explicitly; the Mac default swipe pans.
+        let mut h = configured(
+            &scratch,
+            "[gestures.on-window]\n\"3-finger-doubletap-swipe\" = \"move-window\"\n",
+        );
         let window = attach(&mut h, 1, rect(100.0, 100.0, 400.0, 300.0));
         // A flick is coasting when the move begins: the grab stops it.
         throw(&mut h, Some("finger"), 1.5, 0.5, 0);
@@ -1010,7 +1014,7 @@ fn a_move_nothing_holds_any_more_stops_with_the_end_the_shell_sends() {
             clock += 8_333_333;
             assert_eq!(
                 h.tick(clock),
-                json!({"changed_outputs":[],"needs_frames":false,"needs_pointer":false}),
+                json!({"changed_outputs":[],"needs_frames":false,"needs_pointer":false,"clock_only":false}),
                 "{lost}"
             );
         }
@@ -1199,7 +1203,7 @@ fn cursor_edge_pan_follows_the_reported_pointer_and_the_toggle() {
         clock += 100_000_000;
         assert_eq!(
             h.tick(clock),
-            json!({"changed_outputs":[],"needs_frames":false,"needs_pointer":false})
+            json!({"changed_outputs":[],"needs_frames":false,"needs_pointer":false,"clock_only":false})
         );
         assert_eq!(
             h.pointer(0.0, 400.0),

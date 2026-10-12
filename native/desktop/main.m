@@ -785,7 +785,9 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 @property DWNativePointerGrab *pointerGrab;
 @property DWNativeRelativeMotion *relativeMotion;
 @property NSMutableSet<NSNumber *> *postingTags;
-@property NSDictionary *controllerSnapshot;
+@property NSDictionary *controllerSnapshot,*controllerVisualSnapshot,*renderedPresentation;
+@property (copy) NSString *renderedStatusText;
+- (NSDictionary *)visualSnapshot;
 - (BOOL)validateInputTarget:(NSDictionary *)target;
 - (BOOL)postInput:(CGEventRef)event target:(NSDictionary *)target local:(CGPoint)local;
 - (BOOL)forwardTabletTail:(CGEventRef)event;
@@ -1261,7 +1263,7 @@ static BOOL DWInputTrace(void) { static int on=-1;if(on<0)on=getenv("INFINIFY_DE
 }
 // Upstream's resize grab, begun by a press bound to resize-window or resize-window-snapped, or by a left press on the resize border
 // (`edges` is then the border's; nil lets the controller take them from where in the window the press fell, upstream's
-// edges_from_position). In a normal run the grab is a size transaction in readback mode (crates/desktop/NATIVE_RESIZE.md): each size
+// edges_from_position). In a normal run the grab is a native readback size transaction (crates/desktop/NATIVE_RESIZE.md): each size
 // the drag asks is asked of the real window, and the canvas shows the size the window then has.
 // Upstream raises and focuses the window first (raise_and_focus, then start_compositor_resize). A resize that begins carries that
 // focus request in its reply. A begin that is turned away, by the resize path before the controller is asked or by the controller
@@ -2042,14 +2044,14 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     // On the worker queue. The process named is the effect's, which the controller built from a source -attach: bound.
     if(DWInputTrace())driver.didPerform=^(NSDictionary *e,NSDictionary *r){NSDictionary *i=e[@"identity"],*asked=asDict(e[@"requested"]),*actual=r[@"actual_ax"][@"size"];
         fprintf(stderr,"debug: native %s pid=%d wid=%u requested=%gx%g outcome=%s observed=%d actual=%gx%g moved=%d\n",asked?"resize":"size read",[i[@"pid"]intValue],[i[@"wid"]unsignedIntValue],[asked[@"width"]doubleValue],[asked[@"height"]doubleValue],[r[@"outcome"]description].UTF8String,[r[@"observed"]boolValue],[actual[@"width"]doubleValue],[actual[@"height"]doubleValue],[r[@"moved"]boolValue]);};
-    self.resize=[[DWResizeCoordinator alloc]initWithCommand:^NSDictionary *(NSDictionary *c){return [weak resizeCall:c];} driver:driver clock:^uint64_t{return mach_absolute_time();} worker:^(DWJob job){dispatch_async(queue,job);} main:^(DWJob job){dispatch_async(dispatch_get_main_queue(),job);}];
+    self.resize=[[DWResizeCoordinator alloc]initWithCommand:^NSDictionary *(NSDictionary *c){return [weak resizeCall:c];} driver:driver worker:^(DWJob job){dispatch_async(queue,job);} main:^(DWJob job){dispatch_async(dispatch_get_main_queue(),job);}];
     self.resize.enabled=YES;
 
-    // Readback mode (crates/desktop/NATIVE_RESIZE.md): the size a window took is read back from it, no capture is acknowledged, no
+    // Native readback (crates/desktop/NATIVE_RESIZE.md): the size a window took is read back from it, no capture is acknowledged, no
     // picture is cleared and no input is held. An effect unanswered after three seconds is reported as timed out, which ends its
     // transaction. When a transaction has ended, the window is looked at as the poll looks at it: its bounds, its stream's size
     // and the controller's observation follow the size it has, or it is found closed. Then the scene is saved, once.
-    self.resize.acknowledges=NO;self.resize.timeout=3;
+    self.resize.timeout=3;
     // A resize grab whose pointer rests owes no effect and is no orphan: its press, or its swipe, ends it (-released:at:, gesture_end),
     // and a press or swipe whose end is lost is ended by -endLostInput.
     self.resize.held=^BOOL(NSNumber *transaction){Desktop *d=weak;for(DesktopView *view in d.views)if(view.gesture==4&&[view.resizeTransaction isEqual:transaction])return YES;return d.gestureOwner&&d.gestureResize;};
@@ -2070,7 +2072,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 - (void)resizeCapability {
     if(![self resizes])return;
     NSString *status=self.statusText;
-    if(![self call:@{@"op":@"native_resize_capability",@"enabled":@YES,@"readback":@YES}]){fprintf(stderr,"native_resize_capability: %s\n",self.statusText.UTF8String);self.statusText=status;}
+    if(![self call:@{@"op":@"native_resize_capability",@"enabled":@YES}]){fprintf(stderr,"native_resize_capability: %s\n",self.statusText.UTF8String);self.statusText=status;}
 }
 // Is the resize transaction on record one a sizing action began, and certain? That one is the controller's: an action or an IPC
 // request that arrives while it runs reaches the controller, which continues, coalesces or refuses it as upstream does for a
@@ -2879,11 +2881,23 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(snapshot&&!raw&&self.controllerSnapshot)return self.controllerSnapshot;
     NSString *operation=asString(command[@"op"]);
     BOOL query=snapshot||[operation isEqual:@"hit"]||[operation isEqual:@"input"]||[operation isEqual:@"resize_border"];
-    if(!query)self.controllerSnapshot=nil;
+    BOOL tick=[operation isEqual:@"tick_navigation"];
+    NSDictionary *before=tick?self.controllerSnapshot:nil,*visual=tick?self.controllerVisualSnapshot:nil;
+    if(!query){self.controllerSnapshot=nil;self.controllerVisualSnapshot=nil;}
     NSData *request=[NSJSONSerialization dataWithJSONObject:@{@"version":@1,@"command":command} options:0 error:nil];
     char *response=driftwm_desktop_request(self.controller,request.bytes,request.length);if(!response){self.statusText=@"Controller unavailable";return nil;}
     NSData *data=[NSData dataWithBytes:response length:strlen(response)];driftwm_desktop_response_free(response);if(raw)*raw=data;
-    NSDictionary *reply=[NSJSONSerialization JSONObjectWithData:data options:0 error:nil];if(![reply[@"ok"]boolValue]){self.statusText=reply[@"error"]?:@"Controller error";return nil;}if(snapshot)self.controllerSnapshot=reply[@"data"];return reply[@"data"];
+    NSDictionary *reply=[NSJSONSerialization JSONObjectWithData:data options:0 error:nil];if(![reply[@"ok"]boolValue]){self.statusText=reply[@"error"]?:@"Controller error";return nil;}
+    NSDictionary *result=reply[@"data"];
+    if(snapshot){self.controllerSnapshot=result;if(!self.controllerVisualSnapshot)self.controllerVisualSnapshot=result;}
+    else if(tick&&[result[@"clock_only"]isEqual:@YES]){
+        // This successful tick changed only clock_ns. Never mutate a retained
+        // dictionary: ordinary Snapshot readers see the current clock, while
+        // rendering/capture keep the same proven-unchanged geometry projection.
+        if(before){NSMutableDictionary *next=[before mutableCopy],*navigation=[asDict(before[@"navigation"])mutableCopy];navigation[@"clock_ns"]=command[@"timestamp_ns"];next[@"navigation"]=navigation.copy;self.controllerSnapshot=next.copy;}
+        self.controllerVisualSnapshot=visual;
+    }
+    return result;
 }
 // One upstream Request line from a client in, one upstream Reply line out, on the main
 // queue. Every refusal is an {"Err":…} line; an answer is the controller's own bytes.
@@ -3103,8 +3117,9 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     self.nativeViewSnapshot=snapshot;self.nativeViewPresenter=self.native;self.nativeViewFamilyRevision=self.nativeFamilyRevision;self.nativeViewEnabled=enabled;
     return self.nativeOwnerSnapshot;
 }
+- (NSDictionary *)visualSnapshot { return self.controllerVisualSnapshot?:[self call:@{@"op":@"snapshot"}]; }
 - (NSDictionary *)presentationSnapshot {
-    NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}];
+    NSDictionary *snapshot=[self visualSnapshot];
     if(!self.native){
         NSDictionary *families=self.nativeFamilies.descriptions;
         if(!families.count)return snapshot;
@@ -3116,7 +3131,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     [self nativeDescription:snapshot];return self.nativeViews.presentationSnapshot?:snapshot;
 }
 - (void)render {
-    NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}];
+    NSDictionary *snapshot=[self visualSnapshot];
     NSDictionary *nativeSnapshot=[self nativeDescription:snapshot];
     NSDictionary *presentation=self.native?(self.nativeViews.presentationSnapshot?:snapshot):[self presentationSnapshot];
     // The outputs the pointer is looked up on, and whether cursor edge pan wants it reported: on while the snapshot's navigation.cursor_pan.needs_pointer says so. See -pointerFrame.
@@ -3128,6 +3143,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     // The hot keys act only when it changed: the passed chords stop being hot keys and reach the focused application from macOS itself.
     if(self.configured){NSArray<NSString *> *refused=[self.hotKeys pass:snapshot[@"pass_keys"]];if(refused.count)[self flashStatus:summary(@"Shortcut unavailable",refused)];for(NSString *line in refused)[self say:[@"Shortcut unavailable: " stringByAppendingString:line]];}
     [self adoptRender:snapshot];for(DesktopView *view in self.views)[view render:presentation];
+    self.renderedPresentation=presentation;self.renderedStatusText=self.statusText;
     // Native presentation: the same snapshot as one frame of window records. It goes with the frame timer's flush of this refresh
     // when one is coming, as the canvas's own drawing does, and at once when none is: a move asked over IPC, the idle poll.
     if(self.native&&self.panels.count&&!self.cleaning&&!self.sessionInactive){
@@ -3829,7 +3845,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     if(asDict(reply[@"navigation"])){if(!self.navigation)self.flying=YES;[self ensureFrames];}
     if(![reply[@"dirty"]isEqual:@NO])self.sceneDirty=YES;
 }
-// Readback mode: is a size transaction of this window live with no effect owed? Only a resize grab is, between two sizes it asks: the
+// Native readback: is a size transaction of this window live with no effect owed? Only a resize grab is, between two sizes it asks: the
 // controller takes no close, removal or observation of the window meanwhile, exactly as while a result is owed.
 - (BOOL)grabbed:(LiveSource *)source { return self.resize&&![[self.resize busyWindow]isEqual:source.logical]&&![self.resize canRemove:source.logical]; }
 - (void)detach:(LiveSource *)source {
@@ -4066,18 +4082,29 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     // retain their own fresh validation; unmanaged manual sources retain their poll.
     BOOL reconcile=!self.manager;
     if(self.manager){BOOL due=[self.manager reconciliationDue];for(LiveSource *source in self.sources.allValues)if(source.error||source.destroyed)due=YES;if(due)[self requestWindowObservation];}
-    BOOL describe=reconcile||!self.frameDriver;
+    BOOL describe=reconcile;
     if(reconcile)for(LiveSource *source in self.sources.allValues)[self track:source];
     if(timing)stages[4]=CACurrentMediaTime();
     [self captureDemand];
     [self captureRecovery];
-    describe=describe||self.sceneDirty;
+    // A stopped display link is ordinary idle, not a reason to reserialize
+    // every window and rebuild every layer. Clock-only ticks retain this
+    // projection; any other command or native family/owner change replaces it.
+    NSDictionary *presentation=[self presentationSnapshot];
+    describe=describe||self.sceneDirty||!presentation||self.renderedPresentation!=presentation||![self.renderedStatusText?:@"" isEqual:self.statusText?:@""];
     if(self.sceneDirty)[self saveScene];
     if(timing)stages[5]=CACurrentMediaTime();
     // An active compositor already animates the current description at display
     // rate. Preserve reconciliation, exceptional sources and every scene change,
     // without copying/serializing the same idle controller on each poll.
-    if(!self.frameFlying&&describe)[self render];
+    if(!self.frameFlying){
+        if(describe)[self render];
+        else if(![self frameComing:NO]){
+            // Retry an owed drawable or native restore/rebind without making
+            // a new description. Each owner keeps its existing retry fence.
+            [self.compositor flushDescribed];[self.native submit];
+        }
+    }
     if(timing){stages[6]=CACurrentMediaTime();if(stages[6]-stages[0]>=.004&&stages[6]-self.lastPollTiming>=1){self.lastPollTiming=stages[6];
         fprintf(stderr,"poll: total_ms=%.3f input_resize_ms=%.3f camera_ms=%.3f focus_ms=%.3f reconcile_track_ms=%.3f demand_save_ms=%.3f render_ms=%.3f reconcile=%d\n",(stages[6]-stages[0])*1000,(stages[1]-stages[0])*1000,(stages[2]-stages[1])*1000,(stages[3]-stages[2])*1000,(stages[4]-stages[3])*1000,(stages[5]-stages[4])*1000,(stages[6]-stages[5])*1000,reconcile);}}
 }

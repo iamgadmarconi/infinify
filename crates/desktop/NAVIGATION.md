@@ -17,7 +17,7 @@ native operation is performed.
 | --- | --- | --- |
 | `navigate_window` | `window`, `output`, `zoom_policy: keep / reset` | focus `effect` plus `navigation` |
 | `cycle_navigate` | `output`, `backward`, `held` | existing frozen focus cycle plus Keep navigation; `{}` for empty cycle |
-| `tick_navigation` | `timestamp_ns` unsigned monotonic nanoseconds | `changed_outputs`, `needs_frames`, `needs_pointer` |
+| `tick_navigation` | `timestamp_ns` unsigned monotonic nanoseconds | `changed_outputs`, `needs_frames`, `needs_pointer`, `clock_only` |
 | `cancel_navigation` | `output` | `{}`; also stops that output's scroll momentum |
 | `set_navigation_context` | `output`, `usable_rect_local`, `focus_placement`, `camera_speed`, `outer_gap` | `{}`; cancels that output's flight |
 | `set_usable_area` | `output`, `usable_rect_local` | `{dirty}`; only the rectangle changes, see [The usable area](#the-usable-area) |
@@ -62,6 +62,16 @@ repeated timestamps use zero elapsed time, and decreasing timestamps reject
 atomically. Arrival checks still run on zero-time ticks, as upstream does. A
 native integration must schedule frames while `needs_frames` is true and apply
 the resulting Scene placements; there is no native scheduling/input loop here.
+
+`clock_only: true` conservatively guarantees that the successful tick and its
+settlement changed no snapshot field except `navigation.clock_ns`. Pending
+motion, pointer/trackpad grabs, hover requests, native sizing, fullscreen work,
+close marks and relaunches keep it false. An empty `changed_outputs` alone does
+not provide that guarantee. The normal transactional tick still runs. The Mac
+adapter can retain its visual projection across this result while shallow-copying
+the current clock into ordinary Snapshot replies; every other mutation drops
+both caches. Native family geometry is reconciled separately, and capture
+recovery, demand hysteresis and owed presentation retries still run while idle.
 
 The source multi-output order is scroll momentum, edge pan, zoom tick, then
 camera tick; a flight is the last two, with factor `1-(1-speed)^(dt*60)`.

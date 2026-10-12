@@ -250,7 +250,6 @@ impl Controller {
             active_bookmarks: BTreeMap::new(),
             native_resize: None,
             next_resize: 0,
-            retired_resize_identities: Vec::new(),
             settings: Arc::default(),
             configured: false,
             platform: Platform::default(),

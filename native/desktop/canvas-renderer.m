@@ -1003,7 +1003,7 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
         // neither constrain its order nor borrow pixels into this composition.
         if(alone&&![window isEqual:wanted])continue;
         if(pinnedOf(w)&&![window isEqual:wanted])continue;
-        if(!p){NSMutableDictionary *described=[w mutableCopy];BOOL settled=source&&[number(source[@"observation_known"])boolValue]&&[source[@"capture_revision"]isEqual:source[@"observation_revision"]];
+        if(!p){NSMutableDictionary *described=[w mutableCopy];BOOL settled=source&&[number(source[@"observation_known"])boolValue];
             described[@"presentation_settled"]=settled?@YES:@NO;if(!described[@"title"])described[@"title"]=text(metadata[@"title"])?:@"";if(!described[@"app_name"])described[@"app_name"]=text(metadata[@"bundle_id"])?:@"";p=described;}
         // Native presentation omits live pictures from the on-screen canvas, but
         // an export supplies separate one-shot pixels through the source provider.

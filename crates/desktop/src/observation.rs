@@ -95,7 +95,7 @@ impl Controller {
     ) -> bool {
         // A repeated physical observation may still adopt the world size after
         // a gesture, or settle pending structure. Leave every such case on the
-        // ordinary transactional path, including non-readback capture revisions.
+        // ordinary transactional path, including runs without native resize capability.
         if !self.sizes.observation_idle()
             || !self.fullscreen.observation_idle()
             || self.gesture.is_some()
@@ -139,7 +139,7 @@ mod tests {
         call(
             json!({"op":"register_output","stable_id":"observation-test","screen_bounds":Rect::new(0.,0.,1000.,800.)}),
         );
-        call(json!({"op":"native_resize_capability","enabled":true,"readback":true}));
+        call(json!({"op":"native_resize_capability","enabled":true}));
         let identity = SourceIdentity {
             pid: 123,
             birth_sec: 1800000000,
@@ -237,9 +237,9 @@ mod tests {
     }
 
     #[test]
-    fn capture_mode_never_skips_observation() {
+    fn disabled_native_resize_never_skips_observation() {
         let (mut controller, window, identity) = setup();
-        controller.sizes.readback = false;
+        controller.sizes.capability = false;
         assert!(!current(&controller, window, &identity));
     }
 }

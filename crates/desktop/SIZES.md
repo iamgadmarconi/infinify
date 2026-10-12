@@ -27,13 +27,13 @@ has said that it does. Every normal run says so; a demo, a probe and a
 controller nobody told anything do not.
 
 ```json
-{"op":"native_resize_capability","enabled":true,"readback":true}
+{"op":"native_resize_capability","enabled":true}
 ```
 
-answers `{}`. `readback` is required: the shipping shell explicitly sends
-`true`, settling a size by the native read alone without waiting for a capture
-([Readback mode](NATIVE_RESIZE.md#readback-mode)). Explicit `false` remains for
-isolated controller capture-contract fixtures. There is no alternate shipping
+answers `{}`. `enabled` is required and must be a boolean. Native readback
+settles every size without waiting for a capture
+([Readback mode](NATIVE_RESIZE.md#readback-mode)). The retired `readback` field
+and capture-acknowledgement commands are rejected. There is no alternate
 resize flag. On fixture windows of the test's own the readback path runs end
 to end in `tests/e2e/scoped-sizing.sh`
 ([native/desktop/README.md](../../native/desktop/README.md#window-sizing-actions));
@@ -411,7 +411,7 @@ asked for itself: [RULES.md](RULES.md#a-rules-size).
 - anything else, on that window or another, answers
   `a native resize of window N is still pending`: a step on other edges, a fit,
   a fill, a toggle, an IPC resize over a step. That includes every sizing
-  action while a transaction is uncertain (`needs_observation`).
+  action while a transaction awaits its one diagnostic read.
 
 ## Other interactions
 
@@ -434,16 +434,11 @@ asked for itself: [RULES.md](RULES.md#a-rules-size).
   close is accepted, and the next sizing action starts normally. The refused
   report logs no lifecycle event and the accepted one logs the close once
   ([EFFECTS.md](EFFECTS.md#beside-a-size-that-is-owed)).
-- **A window the adapter will not resize** (`unsupported`): nothing is written
-  and the source is marked `resize_disabled`, as the transaction marks it; later
-  sizing actions on it answer `source resize unsupported`. Entering fullscreen
-  is not one of them: it asks such a window nothing and centres it
-  ([FULLSCREEN.md](FULLSCREEN.md#a-size-that-is-owed)). In readback mode the
-  mark refuses nothing: the next request asks the window again, and the first
-  setter it takes clears the mark
-  ([NATIVE_RESIZE.md](NATIVE_RESIZE.md#readback-mode)).
-- **A baseline that differs** from the committed size fails the transaction, as
-  for a drag, and nothing is written.
+- **A window the adapter will not resize** (`unsupported`): the request ends
+  without a new size. Every later request asks again: the window may become
+  settable after a sheet closes.
+- **A baseline that differs** from the committed size is adopted with its
+  top-left kept; queued intent is measured from that native size.
 - **No focused window**, or a focused widget or screen-pinned window: the five
   actions do nothing, as upstream's do.
 

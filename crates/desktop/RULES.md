@@ -164,8 +164,7 @@ its `attach` reply carries no transaction, and `rule.not_applied` names
   under `transaction` and `effects`, if nothing is in the way by then. A
   window that waited out a drag is asked there, or when a later transaction
   ends, because nothing ends a gesture in a reply the shell hands to its
-  coordinator. So is one whose turn came as the transaction in the slot was
-  ended by `retire_native_resize_source`, which no result follows.
+  coordinator.
 
 The oldest is asked first. A window that closes or loses its source before
 its turn leaves the queue, and so does every window when the shell says it
@@ -189,9 +188,6 @@ Still not asked, with the capability on, and still named in `not_applied`:
 
 - a window that **takes over a slot**, which keeps the slot's frame as
   upstream's adopted window does;
-- a window whose application does not accept a size (`resize_disabled`); in
-  readback mode such a window is asked all the same, and `size` is then not
-  named, whatever its application answers;
 - a window the user sized while it waited its turn (above).
 
 A window that maps with the rule's size already is asked nothing, a widget

@@ -63,6 +63,93 @@ fn nav(h: &mut Host, window: u64, output: u64, policy: &str) -> Value {
 fn tick(h: &mut Host, ns: u64) -> Value {
     h.ok(json!({"op":"tick_navigation","timestamp_ns":ns}))
 }
+fn idle_host() -> Host {
+    let mut h = setup();
+    h.ok(json!({"op":"native_resize_capability","enabled":true}));
+    h
+}
+#[test]
+fn clock_only_ticks_change_only_the_snapshot_clock_and_keep_rejections_transactional() {
+    let mut h = idle_host();
+    let before = h.snapshot();
+    for now in [0, 80_000_000, 80_000_000, 20_000_000_000] {
+        assert_eq!(tick(&mut h, now)["clock_only"], true);
+        let mut expected = before.clone();
+        expected["navigation"]["clock_ns"] = json!(now);
+        assert_eq!(h.snapshot(), expected);
+    }
+    let before = h.snapshot();
+    assert_eq!(
+        h.call(json!({"op":"tick_navigation","timestamp_ns":1}))["ok"],
+        false
+    );
+    assert_eq!(h.snapshot(), before);
+}
+#[test]
+fn clock_only_excludes_first_flight_pending_pan_cursor_pan_and_pointer_grabs() {
+    let mut flight = idle_host();
+    nav(&mut flight, 1, 1, "keep");
+    let first = tick(&mut flight, 0);
+    assert_eq!(first["changed_outputs"], json!([]));
+    assert_eq!(first["clock_only"], false);
+    for command in [
+        json!({"op":"pan","output":1,"screen_delta":{"x":10,"y":0},"time_ms":100,"source":"finger"}),
+        json!({"op":"action","output":1,"action":"toggle-cursor-pan"}),
+        json!({"op":"begin_drag","window":1,"output":1}),
+        json!({"op":"begin_resize","window":1,"output":1,"edges":"right"}),
+    ] {
+        let mut h = idle_host();
+        h.ok(command.clone());
+        assert_eq!(tick(&mut h, 1)["clock_only"], false, "{command}");
+    }
+}
+#[test]
+fn clock_only_excludes_native_resize_and_fullscreen_settlement() {
+    let mut resize = idle_host();
+    resize.ok(json!({"op":"begin_native_resize","window":1,"output":1,"edges":"right","start_screen":{"x":50,"y":50}}));
+    assert_eq!(tick(&mut resize, 0)["clock_only"], false);
+
+    let mut fullscreen = idle_host();
+    fullscreen.ok(json!({"op":"focus","window":1}));
+    fullscreen.ok(json!({"op":"action","output":1,"action":"toggle-fullscreen"}));
+    assert_eq!(tick(&mut fullscreen, 0)["clock_only"], false);
+}
+#[test]
+fn clock_only_excludes_the_tick_that_expires_a_close_mark() {
+    let mut h = idle_host();
+    h.ok(json!({"op":"focus","window":1}));
+    tick(&mut h, 0);
+    h.ok(json!({"op":"action","output":1,"action":"close-window"}));
+    assert_eq!(h.snapshot()["lifecycle"]["marks"]["1"], "close");
+    assert_eq!(tick(&mut h, 9_000_000_000)["clock_only"], false);
+    assert_eq!(tick(&mut h, 10_000_000_000)["clock_only"], false);
+    assert_eq!(h.snapshot()["lifecycle"]["marks"], json!({}));
+    assert_eq!(tick(&mut h, 10_080_000_000)["clock_only"], true);
+}
+#[test]
+fn clock_only_excludes_pending_relaunch_expiry() {
+    let mut h = idle_host();
+    h.ok(json!({"op":"focus","window":1}));
+    tick(&mut h, 0);
+    h.ok(json!({"op":"action","output":1,"action":"suspend-window"}));
+    let snapshot = h.snapshot();
+    let identity = &snapshot["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|window| window["window"] == 1)
+        .unwrap()["source"]["identity"];
+    h.ok(json!({"op":"window_closed","window":1,"identity":identity,"output":1}));
+    for output in [1, 2] {
+        h.ok(json!({"op":"cancel_navigation","output":output}));
+    }
+    h.ok(json!({"op":"ipc","output":1,"request":{"Relaunch":1}}));
+    assert_eq!(h.snapshot()["lifecycle"]["relaunching"], json!([1]));
+    assert_eq!(tick(&mut h, 29_000_000_000)["clock_only"], false);
+    assert_eq!(tick(&mut h, 30_000_000_000)["clock_only"], false);
+    assert_eq!(h.snapshot()["lifecycle"]["relaunching"], json!([]));
+    assert_eq!(tick(&mut h, 30_080_000_000)["clock_only"], true);
+}
 fn pose(h: &mut Host, output: usize) -> Value {
     h.snapshot()["outputs"][output - 1].clone()
 }

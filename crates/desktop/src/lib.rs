@@ -130,9 +130,6 @@ pub struct Source {
     pub original_rect: Rect,
     pub observed_rect: Rect,
     pub observation_known: bool,
-    pub observation_revision: u64,
-    pub capture_revision: Option<u64>,
-    pub resize_disabled: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -221,7 +218,6 @@ pub struct Controller {
     active_bookmarks: BTreeMap<OutputId, String>,
     native_resize: Option<NativeResizeTransaction>,
     next_resize: u64,
-    retired_resize_identities: Vec<SourceIdentity>,
     /// Upstream's configuration, the built-in defaults until a file is loaded.
     settings: Arc<Settings>,
     /// False until the first `load_config`. Until then nothing is seeded from
@@ -348,32 +344,10 @@ pub enum Command {
         generation: u64,
         result: NativeResizeResult,
     },
-    RetireNativeResizeSource {
-        transaction: u64,
-        identity: SourceIdentity,
-        generation: u64,
-        lifetime_ended: bool,
-    },
-    /// Whether the shell can perform resize effects in this run. Sent once at
-    /// startup; false until then and never saved. See SIZES.md. `readback`:
-    /// the shell acknowledges no capture, and a size is settled by the native
-    /// read alone (NATIVE_RESIZE.md).
+    /// Whether the shell performs native readback resize effects in this run.
+    /// False until startup announces it; never saved. See SIZES.md.
     NativeResizeCapability {
         enabled: bool,
-        readback: bool,
-    },
-    InvalidateNativeCapture {
-        window: WindowId,
-        identity: SourceIdentity,
-        generation: u64,
-    },
-    NativeResizeCaptureReady {
-        window: WindowId,
-        identity: SourceIdentity,
-        generation: u64,
-        observation_revision: u64,
-        buffer: BufferSize,
-        content_rect: Rect,
     },
     NavigateWindow {
         window: WindowId,
@@ -997,68 +971,12 @@ impl Controller {
             } => {
                 return self.sizing_result(transaction, effect_id, identity, generation, result);
             }
-            Command::RetireNativeResizeSource {
-                transaction,
-                identity,
-                generation,
-                lifetime_ended,
-            } => {
-                return self.retire_native_resize_source(
-                    transaction,
-                    identity,
-                    generation,
-                    lifetime_ended,
-                );
-            }
-            Command::NativeResizeCapability { enabled, readback } => {
+            Command::NativeResizeCapability { enabled } => {
                 self.sizes.capability = enabled;
-                self.sizes.readback = enabled && readback;
-                // Nothing will acknowledge a capture from here on: no source
-                // waits for one.
-                if self.sizes.readback {
-                    for source in self.sources.values_mut() {
-                        source.observation_known = true;
-                        source.capture_revision = Some(source.observation_revision);
-                    }
-                }
                 // No size can be delivered: no rule's `size` waits for one.
                 if !enabled {
                     self.policy.sizing.clear();
                 }
-            }
-            Command::InvalidateNativeCapture {
-                window,
-                identity,
-                generation,
-            } => {
-                self.check_generation(window, &identity, generation)?;
-                let source = self.sources.get_mut(&window).expect("binding validated");
-                // Revisions also fence capture authority loss without changing geometry.
-                source.observation_revision = source
-                    .observation_revision
-                    .checked_add(1)
-                    .ok_or(Error::Invalid("observation revisions exhausted"))?;
-                // Readback mode has no capture authority to lose.
-                source.capture_revision =
-                    self.sizes.readback.then_some(source.observation_revision);
-                return Ok(json!({"observation_revision":source.observation_revision}));
-            }
-            Command::NativeResizeCaptureReady {
-                window,
-                identity,
-                generation,
-                observation_revision,
-                buffer,
-                content_rect,
-            } => {
-                return self.native_resize_capture_ready(
-                    window,
-                    identity,
-                    generation,
-                    observation_revision,
-                    buffer,
-                    content_rect,
-                );
             }
             Command::NavigateWindow {
                 window,
@@ -1319,14 +1237,6 @@ impl Controller {
                 screen_pin,
             } => {
                 identity.validate()?;
-                if self.retired_resize_identities.iter().any(|old| {
-                    old.pid == identity.pid
-                        && old.birth_sec == identity.birth_sec
-                        && old.birth_usec == identity.birth_usec
-                        && old.wid == identity.wid
-                }) {
-                    return Err(Error::Invalid("source lifetime was retired"));
-                }
                 buffer.validate()?;
                 if !rect_valid(source_rect)
                     || !text_valid(&bundle_id, 1024)
@@ -1418,9 +1328,6 @@ impl Controller {
                         original_rect: source_rect,
                         observed_rect: source_rect,
                         observation_known: true,
-                        observation_revision: 0,
-                        capture_revision: Some(0),
-                        resize_disabled: false,
                     },
                 );
                 self.map_rule(id, rule, arrival);
@@ -1498,24 +1405,7 @@ impl Controller {
                     .sources
                     .get_mut(&window)
                     .ok_or(Error::Invalid("unbound source"))?;
-                let capture_metadata_changed = source.buffer.width != buffer.width
-                    || source.buffer.height != buffer.height
-                    || source.observed_rect.size != source_rect.size;
-                let readback = self.sizes.readback;
-                let managed_capture = !readback
-                    && (source.observation_revision > 0
-                        || source.content_rect != source.buffer.full_rect());
-                if capture_metadata_changed && managed_capture {
-                    source.observation_revision = source
-                        .observation_revision
-                        .checked_add(1)
-                        .ok_or(Error::Invalid("observation revisions exhausted"))?;
-                    source.capture_revision = None;
-                }
-                // Unchanged observations retain the acknowledged crop. Legacy
-                // full-buffer captures may reset synchronously; managed/cropped
-                // captures require a new revision acknowledgement after change.
-                if capture_metadata_changed {
+                if source.buffer.width != buffer.width || source.buffer.height != buffer.height {
                     source.content_rect = buffer.full_rect();
                 }
                 source.observed_rect = source_rect;
@@ -1525,7 +1415,7 @@ impl Controller {
                 // the canvas has from here on, top-left kept: nobody knows
                 // which edge moved. A gesture places its windows from its own
                 // anchors; the next observation after it adopts.
-                if readback && self.gesture.is_none() {
+                if self.sizes.capability && self.gesture.is_none() {
                     let mut rect = self
                         .scene
                         .window(window)
@@ -1819,7 +1709,6 @@ impl Controller {
                 loaded.next_window = loaded.next_window.max(self.next_window);
                 loaded.next_output = loaded.next_output.max(self.next_output);
                 loaded.next_resize = self.next_resize;
-                loaded.retired_resize_identities = self.retired_resize_identities.clone();
                 loaded.next_effect = self.next_effect;
                 loaded.next_navigation = self.next_navigation;
                 loaded.next_generation = self.next_generation;
@@ -1838,7 +1727,6 @@ impl Controller {
                 loaded.motion.cursor_pan = self.motion.cursor_pan;
                 loaded.trackpad_override = self.trackpad_override;
                 loaded.sizes.capability = self.sizes.capability;
-                loaded.sizes.readback = self.sizes.readback;
                 if loaded.configured {
                     loaded.seed_bookmarks();
                 }
@@ -2115,8 +2003,7 @@ impl Controller {
             .sources
             .get(&window)
             .ok_or(Error::Invalid("unbound source"))?;
-        if !source.observation_known || source.capture_revision != Some(source.observation_revision)
-        {
+        if !source.observation_known {
             return Err(Error::Invalid("source presentation unsettled"));
         }
         if let Some(identity) = expected {
@@ -2160,7 +2047,7 @@ impl Controller {
         let placements: Vec<_> = self.layered_placements().iter().map(|(p, pinned)| {
             let source = self.sources.get(&p.window);
             let world_size = self.scene.window(p.window).expect("placement references scene window").world_rect.size;
-            let settled = source.is_some_and(|s| s.observation_known && s.capture_revision == Some(s.observation_revision));
+            let settled = source.is_some_and(|s| s.observation_known);
             let buffer_crop = source.filter(|_| settled).map(|s| { let mut crop = scale_rect(p.source_rect, world_size, s.content_rect.size); crop.origin = crop.origin + s.content_rect.origin; crop });
             let mut placement = json!({"window": p.window, "output": p.output, "screen_rect": p.screen_rect, "clip_rect": p.clip_rect, "world_local_crop": p.source_rect, "buffer_crop": buffer_crop, "presentation_settled": settled, "source": source, "pinned": pinned, "widget": self.is_widget(p.window), "opacity": self.opacity_of(p.window)});
             if self.fullscreen_on(p.output) == Some(p.window) { placement["fullscreen"] = json!(true); }

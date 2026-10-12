@@ -352,6 +352,22 @@ impl Controller {
                 .ok_or(Error::Invalid("navigation clock decreased"))?,
             None => 0,
         };
+        // Successful mutations and public load already settle the controller.
+        // With no motion or pending timed/structural state, this tick changes
+        // only navigation.clock_ns. The shell may reuse its visual projection,
+        // while ordinary snapshots must still report the new clock. Keep this
+        // conservative: a zero-displacement first flight or delayed edge pan
+        // is not an idle tick. The normal transaction and postlude still run.
+        let clock_only = self.flights.is_empty()
+            && self.motion.clock_idle()
+            && self.gesture.is_none()
+            && self.trackpad_gesture.is_none()
+            && self.focus.hover.is_empty()
+            && self.resize_slot().is_none_or(|slot| !slot.live)
+            && self.sizes.observation_idle()
+            && self.fullscreen.observation_idle()
+            && self.lifecycle.marks.is_empty()
+            && self.lifecycle.relaunching.is_empty();
         self.navigation_clock = Some(timestamp_ns);
         let dt = std::time::Duration::from_nanos(elapsed.min(33_000_000));
         // Upstream tick_all_animations: the cursor's edge pan is armed again
@@ -372,7 +388,7 @@ impl Controller {
             }
         }
         Ok(
-            json!({"changed_outputs":changed,"needs_frames":self.needs_frames(),"needs_pointer":self.motion.cursor_pan}),
+            json!({"changed_outputs":changed,"needs_frames":self.needs_frames(),"needs_pointer":self.motion.cursor_pan,"clock_only":clock_only}),
         )
     }
     /// One frame of the output's flight, if it has one.

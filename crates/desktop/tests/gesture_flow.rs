@@ -1856,7 +1856,7 @@ fn the_default_table_on_a_mac() {
 // native window or the shell performing a size request.
 fn readback() -> Host {
     let mut h = setup();
-    h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":true}));
+    h.ok(json!({"op":"native_resize_capability","enabled":true}));
     h
 }
 /// The adapter's answer to a size effect: what was read back from the window.

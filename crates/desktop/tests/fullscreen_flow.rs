@@ -160,11 +160,11 @@ fn fixture(toml: &str) -> Host {
     h.ok(json!({"op":"focus","window":1}));
     h
 }
-/// Explicit isolated capture-contract capability; the shipping shell uses readback.
+/// The supported native readback capability.
 fn capable(toml: &str) -> Host {
     let mut h = fixture(toml);
     assert_eq!(
-        h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":false})),
+        h.ok(json!({"op":"native_resize_capability","enabled":true})),
         json!({})
     );
     h
@@ -309,12 +309,6 @@ fn entered(h: &mut Host) {
         (USABLE.2, USABLE.3),
     );
 }
-/// The shell has fresh pixels for a window whose size changed, so `hit` and
-/// `input` answer for it again.
-fn ready(h: &mut Host, id: u64) {
-    let source = window(h, id)["source"].clone();
-    h.ok(json!({"op":"native_resize_capture_ready","window":id,"identity":source["identity"],"generation":source["generation"],"observation_revision":source["observation_revision"],"buffer":{"width":200,"height":100},"content_rect":rect(0.,0.,200.,100.)}));
-}
 /// Tick until every flight has landed. One clock serves every controller:
 /// each only needs its own timestamps to grow.
 fn settle(h: &mut Host) {
@@ -358,7 +352,7 @@ fn without_the_capability_fullscreen_answers_as_it_did_before() {
     // Sent or not, false is the default: a bare shell and one that says so.
     for explicit in [false, true] {
         if explicit {
-            h.ok(json!({"op":"native_resize_capability","enabled":false,"readback":false}));
+            h.ok(json!({"op":"native_resize_capability","enabled":false}));
         }
         let before = h.snapshot();
         assert_eq!(
@@ -583,7 +577,7 @@ fn a_window_that_takes_another_size_is_centred_as_upstream_centres_it() {
     // What is drawn is what is hit: the output's center reaches the window,
     // and the band it leaves reaches nothing, not even the window that lies
     // there on the canvas.
-    ready(&mut h, 1);
+
     assert_eq!(hit(&mut h, 1, (A.0 + 500.0, A.1 + 400.0)), 1);
     assert_eq!(hit(&mut h, 1, (A.0 + 20.0, A.1 + 20.0)), Value::Null);
     // The exit restores the place it had before, not the centred one.
@@ -646,55 +640,6 @@ fn a_window_that_takes_another_size_is_centred_as_upstream_centres_it() {
     assert_eq!(reply["dirty"], true);
     assert_eq!(world(&mut h, 1), of(START));
     assert_eq!(pose(&mut h, 1), view(CAMERA, 0.5));
-
-    // A window the adapter will not resize at all: the first enter learns it
-    // from the setter's answer, and every later one asks nothing. Each time
-    // it is fullscreen at its own size, centred.
-    let mut h = zoomed(CONFIG);
-    let reply = action(&mut h, 1, "toggle-fullscreen");
-    let read = began(&mut h, &reply);
-    let setter = answer(&mut h, &read, "observed", false, (400.0, 300.0))["effect"].clone();
-    let last = answer(&mut h, &setter, "unsupported", false, (400.0, 300.0))["effect"].clone();
-    answer(&mut h, &last, "observed", false, (400.0, 300.0));
-    let centred = rect(PARK.0 + 300.0, PARK.1 + 260.0, 400.0, 300.0);
-    assert_eq!(world(&mut h, 1), centred);
-    for _ in 0..2 {
-        let reply = action(&mut h, 1, "toggle-fullscreen");
-        assert!(reply.get("transaction").is_none(), "{reply}");
-        assert_eq!(fullscreen(&mut h, 1), Value::Null);
-        assert_eq!(world(&mut h, 1), of(START));
-        let reply = action(&mut h, 1, "toggle-fullscreen");
-        assert!(reply.get("transaction").is_none(), "{reply}");
-        assert_eq!(fullscreen(&mut h, 1)["window"], 1);
-        assert_eq!(world(&mut h, 1), centred);
-    }
-    // send-to-output carries it over, centred on that output too.
-    let reply = action(&mut h, 1, "send-to-output right");
-    assert!(reply.get("transaction").is_none(), "{reply}");
-    assert_eq!(fullscreen(&mut h, 1), Value::Null);
-    assert_eq!(fullscreen(&mut h, 2)["window"], 1);
-    assert_eq!(
-        placed(&mut h, 2)[0]["screen_rect"],
-        rect(B.0 + 200.0, B.1 + 150.0, 400.0, 300.0)
-    );
-    // Every other sizing of it is refused as before.
-    action(&mut h, 2, "toggle-fullscreen");
-    assert_eq!(world(&mut h, 1), of(START));
-    assert_eq!(
-        h.error(json!({"op":"action","output":1,"action":"grow-window right"})),
-        "source resize unsupported"
-    );
-    // One an earlier sizing action found unresizable enters all the same.
-    let mut h = capable(CONFIG);
-    let reply = action(&mut h, 1, "fill-window");
-    let read = began(&mut h, &reply);
-    let setter = answer(&mut h, &read, "observed", false, (400.0, 300.0))["effect"].clone();
-    let last = answer(&mut h, &setter, "unsupported", false, (400.0, 300.0))["effect"].clone();
-    answer(&mut h, &last, "observed", false, (400.0, 300.0));
-    let reply = action(&mut h, 1, "toggle-fullscreen");
-    assert!(reply.get("transaction").is_none(), "{reply}");
-    assert_eq!(fullscreen(&mut h, 1)["window"], 1);
-    assert_eq!(world(&mut h, 1), rect(300.0, 260.0, 400.0, 300.0));
 }
 
 // Upstream execute_action's guard, by its own list: what ends a fullscreen
@@ -1258,13 +1203,13 @@ fn a_new_window_is_tucked_behind_a_fullscreen_one_and_a_ruled_one_takes_its_outp
 
     // The launch pass applies no rule's fullscreen: nobody opened those.
     let mut h = fixture(CONFIG);
-    h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":false}));
+    h.ok(json!({"op":"native_resize_capability","enabled":true}));
     let mut early = Host {
         handle: driftwm_desktop_create(),
         scratch: Scratch::new(),
     };
     early.ok(json!({"op":"register_output","stable_id":"view-a","screen_bounds":of(A),"usable_rect_local":of(USABLE)}));
-    early.ok(json!({"op":"native_resize_capability","enabled":true,"readback":false}));
+    early.ok(json!({"op":"native_resize_capability","enabled":true}));
     let path = early.scratch.0.join("config.toml");
     std::fs::write(&path, CONFIG).unwrap();
     early.ok(json!({"op":"load_config","path":path}));
@@ -2022,22 +1967,6 @@ fn an_exit_while_the_enter_is_pending_does_not_strand_the_window() {
         (400.0, 300.0),
     );
     assert_eq!(world(&mut h, 1), of(START));
-    // A failure that repeats is asked three times in all and then left.
-    let mut h = zoomed(CONFIG);
-    entered(&mut h);
-    let mut reply = action(&mut h, 1, "toggle-fullscreen");
-    for _ in 0..3 {
-        let read = began(&mut h, &reply);
-        let failed = answer(&mut h, &read, "observed", false, (900.0, 700.0));
-        assert_eq!(
-            failed["failure"],
-            "baseline size differs from committed logical size"
-        );
-        reply = ipc(&mut h, json!("State"));
-    }
-    assert!(reply.get("transaction").is_none(), "{reply}");
-    assert_eq!(fullscreen(&mut h, 1), Value::Null);
-
     // Another window's transaction holds the slot: entering is refused like
     // any sizing action, and nothing changes.
     let mut h = capable(CONFIG);
@@ -2075,7 +2004,7 @@ fn the_pointer_reaches_only_the_fullscreen_window_on_its_output() {
     assert_eq!(hit(&mut h, 1, (A.0 + 250.0, A.1 + 540.0)), 3);
     assert_eq!(placed_ids(&mut h, 1), [2, 1, 3]);
     entered(&mut h);
-    ready(&mut h, 1);
+
     // During: the same points reach the fullscreen window, with the point in
     // its own frame, and nothing else is placed there.
     assert_eq!(placed_ids(&mut h, 1), [1]);
@@ -2323,7 +2252,7 @@ fn a_save_keeps_the_place_from_before_the_size_the_window_has_and_no_fullscreen(
     // The window that lived on at the output's size is adopted into a slot
     // of that size, so the next size transaction's first read finds the
     // size it is measured from.
-    h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":false}));
+    h.ok(json!({"op":"native_resize_capability","enabled":true}));
     let reply = h.ok(json!({"op":"attach","identity":identity(1),"bundle_id":"app.1","title":"fixture","buffer":{"width":200,"height":100},"source_rect":rect(4000.0,3000.0,USABLE.2,USABLE.3),"output":1}));
     assert_eq!(reply["adopted"], true, "{reply}");
     h.ok(json!({"op":"adoption_complete"}));
@@ -2385,7 +2314,7 @@ fn a_fullscreen_window_claims_its_bindings_and_passes_its_keys() {
         "applied",
         (USABLE.2, USABLE.3),
     );
-    ready(&mut h, 2);
+
     assert_eq!(h.snapshot()["pass_keys"], json!(true));
 
     // What `hit` reports on the fullscreen output is the fullscreen window,
@@ -2522,7 +2451,7 @@ fn a_grab_ends_the_fullscreen_then_focuses_the_window_and_then_takes_hold() {
     // request is the one entry of `effects`.
     let mut h = capable(CONFIG);
     entered(&mut h);
-    ready(&mut h, 1);
+
     let reply = h.ok(json!({"op":"begin_native_resize","window":1,"output":1,"edges":"right","start_screen":{"x":A.0 + 999.0,"y":A.1 + 400.0},"group":false}));
     assert_eq!(fullscreen(&mut h, 1), Value::Null);
     assert_eq!(reply["effect"]["op"], "observe_resize_source");
@@ -2554,7 +2483,7 @@ fn a_pinned_drag_stays_off_a_fullscreen_output() {
         h.ok(json!({"op":"focus","window":2}));
         let reply = action(h, 2, "toggle-fullscreen");
         deliver(h, &reply, (300.0, 200.0), (B.2, B.3), "applied", (B.2, B.3));
-        ready(h, 2);
+
         assert_eq!(fullscreen(h, 2)["window"], 2);
     };
     let drag_to = |h: &mut Host, delta: (f64, f64), pointer: (f64, f64)| {
@@ -2783,7 +2712,7 @@ fn a_ruled_size_waits_out_a_fullscreen_enter_and_is_placed_in_its_background() {
 fn readback(toml: &str) -> Host {
     let mut h = fixture(toml);
     assert_eq!(
-        h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":true})),
+        h.ok(json!({"op":"native_resize_capability","enabled":true})),
         json!({})
     );
     h.ok(json!({"op":"zoom","output":1,"zoom":0.5,"anchor":{"x":A.0,"y":A.1}}));
@@ -2798,10 +2727,6 @@ fn usable(h: &mut Host) {
         let source = &w["source"];
         if !source.is_null() {
             assert_eq!(source["observation_known"], true, "{w}");
-            assert_eq!(
-                source["capture_revision"], source["observation_revision"],
-                "{w}"
-            );
         }
     }
     for p in snapshot["placements"].as_array().unwrap() {

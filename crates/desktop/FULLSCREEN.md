@@ -254,13 +254,8 @@ There is one size transaction ([SIZES.md](SIZES.md#a-second-action-while-a-size-
   like any sizing action: `a native resize of window N is still pending`.
   During a drag or resize gesture: `a window is under an interactive move or
   resize`. Nothing else refuses an enter. A window the adapter will not
-  resize (`resize_disabled`: a setter of its was answered `unsupported`, in
-  a fullscreen or in any sizing action before) enters, and enters again,
-  with no transaction: it is fullscreen at the size it has, centred, and the
-  reply has no `transaction`. Every other sizing of such a window still
-  answers `source resize unsupported`. In readback mode nothing of this is
-  remembered: each enter asks, and the setter's answer centres the window
-  at the size it has or finds it settable by now
+  resize answers `unsupported` for that request. Each later enter asks again,
+  then centres the size it has or observes that it is settable by now
   ([NATIVE_RESIZE.md](NATIVE_RESIZE.md#readback-mode)).
 - **An exit is never refused.** It is a consequence of something that
   happened. Its size is *owed*, and delivered as soon as it can be.

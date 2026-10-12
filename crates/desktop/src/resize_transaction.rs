@@ -112,7 +112,6 @@ enum Phase {
     Preparing,
     Dragging,
     Settling,
-    NeedsObservation,
     Failed,
     Complete,
 }
@@ -142,7 +141,7 @@ pub struct NativeResizeTransaction {
     initial_size: Size,
     last_committed_size: Size,
     /// Upstream's cluster resize: the windows snapped to the moving edges
-    /// follow each committed size (`resize_settle`). Readback mode only.
+    /// follow each committed size (`resize_settle`). Native readback.
     group: bool,
     /// Upstream's locked_ratio: width / height at the start, for a window
     /// whose rule has `preserve_aspect_ratio`. Such a resize neither snaps
@@ -163,8 +162,7 @@ pub struct NativeResizeTransaction {
     baseline_observed: bool,
     released: bool,
     cancelled: bool,
-    /// A timed-out setter can still execute later. In the acknowledged mode no
-    /// read discharges this. In readback mode the one diagnostic read that
+    /// A timed-out setter can still execute later. The one diagnostic read that
     /// follows the setter does: a setter that lands after it is a native size
     /// change like any other, which `observe` adopts.
     uncertain_mutation: bool,
@@ -195,14 +193,6 @@ pub(crate) struct ResizeSlot {
     pub(crate) accepting: bool,
     /// A setter is in flight: the window is about to take another size.
     pub(crate) setting: bool,
-}
-/// A size was asked of the window, or its geometry is no longer what the
-/// picture shows. In the acknowledged mode the source is unsettled until a
-/// capture of the new revision is acknowledged. In readback mode nothing ever
-/// acknowledges one: the source stays settled at the revision it now has, so
-/// no tile goes blank and no input is refused for a size request.
-fn stale(source: &mut Source, readback: bool) {
-    source.capture_revision = readback.then_some(source.observation_revision);
 }
 impl Controller {
     pub(crate) fn resize_slot(&self) -> Option<ResizeSlot> {
@@ -243,7 +233,7 @@ impl Controller {
     /// read from a pointer, and no camera flight is cancelled: upstream's
     /// non-interactive resize cancels none. Capture authority is not required
     /// either: no pointer is mapped through the picture, and a held key must
-    /// not wait for a frame between two steps. In readback mode (sizes.rs) no
+    /// not wait for a frame between two steps. With native readback (sizes.rs) no
     /// capture exists to wait for at all, the baseline read adopts a size
     /// the window changed by itself, and every transaction ends in bounded
     /// time: NATIVE_RESIZE.md.
@@ -276,12 +266,6 @@ impl Controller {
             .sources
             .get(&window)
             .ok_or(Error::Invalid("unbound source"))?;
-        // Readback mode asks again: a window is not settable while it has a
-        // sheet up, or while its application says so, and nothing reports
-        // the day it is settable again. The answer costs one bounded read.
-        if source.resize_disabled && !self.sizes.readback {
-            return Err(Error::Invalid("source resize unsupported"));
-        }
         let size = self
             .scene
             .window(window)
@@ -385,8 +369,7 @@ impl Controller {
         group: bool,
     ) -> Result<Value, Error> {
         self.guard_resize_structure(None)?;
-        // The acknowledged mode commits one window against one picture.
-        if (group && !self.sizes.readback) || self.gesture.is_some() || !point_valid(start_screen) {
+        if self.gesture.is_some() || !point_valid(start_screen) {
             return Err(Error::Invalid(
                 "native resize requires one ordinary window and valid screen point",
             ));
@@ -401,16 +384,8 @@ impl Controller {
             .sources
             .get(&window)
             .ok_or(Error::Invalid("unbound source"))?;
-        // Readback mode asks again, as `begin_sized_resize` does: the answer
-        // costs one bounded setter, and a window that still refuses ends the
-        // grab there.
-        if (source.resize_disabled && !self.sizes.readback)
-            || !source.observation_known
-            || source.capture_revision != Some(source.observation_revision)
-        {
-            return Err(Error::Invalid(
-                "source resize unsupported or presentation unsettled",
-            ));
+        if !source.observation_known {
+            return Err(Error::Invalid("source mapping is unknown"));
         }
         let (identity, generation) = (source.identity.clone(), source.generation);
         let viewport = self
@@ -531,10 +506,6 @@ impl Controller {
         t.pending_effect = Some(effect.clone());
         if requested.is_some() {
             t.last_sent = requested;
-            stale(
-                self.sources.get_mut(&t.window).expect("bound source"),
-                self.sizes.readback,
-            );
         }
         Ok(json!({"transaction":t.transaction,"effect":effect}))
     }
@@ -748,7 +719,6 @@ impl Controller {
         }
         let preparing = !t.baseline_observed;
         let mut adopted = false;
-        let readback = self.sizes.readback;
         // Output removal cancels the grab, but its outstanding native result
         // must still drain. No pointer request uses this fallback snap scale.
         let zoom = self
@@ -761,73 +731,53 @@ impl Controller {
         t.last_result = Some(result.clone());
         let source = self.sources.get_mut(&t.window).expect("binding validated");
         if result.outcome == ResizeOutcome::Unsupported {
-            // In readback mode only Accessibility's own answer that the size
-            // is not settable is recorded, and only until a setter is taken
-            // (`begin_sized_resize` asks again). A settable query that failed
-            // (an application that did not answer) says nothing about the
-            // window.
-            if !readback || result.ax_error == 0 {
-                source.resize_disabled = true;
-            }
             t.cancelled = true;
-        } else if readback && result.mutation_attempted && result.observed {
-            source.resize_disabled = false;
         }
         if result.observed {
             source.observed_rect = result.actual_ax;
             source.observation_known = true;
             if preparing && result.actual_ax.size != t.initial_size {
-                if readback {
-                    // The window changed its size by itself and no `observe`
-                    // has said so yet, or a rebind kept the saved slot's size:
-                    // the size it has is the baseline. Nobody knows which
-                    // edge moved, so the top-left is kept. The queued target
-                    // is then asked of it as of any other baseline.
-                    let mut rect = self
-                        .scene
-                        .window(t.window)
-                        .expect("bound window")
-                        .world_rect;
-                    if t.interactive {
-                        // The press was on the displayed edge, not the size a
-                        // delayed baseline later found. Adoption keeps the
-                        // top-left, so right/bottom move by the observed size
-                        // difference. Rebase their anchor by that exact amount
-                        // to retain the original pointer-to-edge offset. Left
-                        // and top do not move during adoption.
-                        if t.edges.right() {
-                            t.pointer_anchor.offset.x +=
-                                result.actual_ax.size.width - rect.size.width;
-                        }
-                        if t.edges.bottom() {
-                            t.pointer_anchor.offset.y +=
-                                result.actual_ax.size.height - rect.size.height;
-                        }
+                // The window changed its size by itself and no `observe`
+                // has said so yet, or a rebind kept the saved slot's size:
+                // the size it has is the baseline. Nobody knows which
+                // edge moved, so the top-left is kept. The queued target
+                // is then asked of it as of any other baseline.
+                let mut rect = self
+                    .scene
+                    .window(t.window)
+                    .expect("bound window")
+                    .world_rect;
+                if t.interactive {
+                    // The press was on the displayed edge, not the size a
+                    // delayed baseline later found. Adoption keeps the
+                    // top-left, so right/bottom move by the observed size
+                    // difference. Rebase their anchor by that exact amount
+                    // to retain the original pointer-to-edge offset. Left
+                    // and top do not move during adoption.
+                    if t.edges.right() {
+                        t.pointer_anchor.offset.x += result.actual_ax.size.width - rect.size.width;
                     }
-                    rect.size = result.actual_ax.size;
-                    self.scene.set_window_rect(t.window, rect)?;
-                    t.initial_size = rect.size;
-                    t.last_committed_size = rect.size;
-                    // What the drag measures from is this size: its snap
-                    // state, its cluster and its ratio were taken from the
-                    // size the canvas had, and are taken again.
-                    t.snap_intent = self
-                        .scene
-                        .begin_resize(t.window, t.edges.into(), snap.options, t.group)?
-                        .with_break_force(snap.break_force)?
-                        .with_same_edge(snap.corners);
-                    if t.ratio.is_some() {
-                        t.ratio = Some(rect.size.width / rect.size.height);
+                    if t.edges.bottom() {
+                        t.pointer_anchor.offset.y +=
+                            result.actual_ax.size.height - rect.size.height;
                     }
-                    adopted = true;
-                } else {
-                    t.phase = Phase::Failed;
-                    t.coalesced_latest = None;
-                    stale(source, readback);
-                    return Ok(
-                        json!({"effect":null,"failure":"baseline size differs from committed logical size"}),
-                    );
                 }
+                rect.size = result.actual_ax.size;
+                self.scene.set_window_rect(t.window, rect)?;
+                t.initial_size = rect.size;
+                t.last_committed_size = rect.size;
+                // What the drag measures from is this size: its snap
+                // state, its cluster and its ratio were taken from the
+                // size the canvas had, and are taken again.
+                t.snap_intent = self
+                    .scene
+                    .begin_resize(t.window, t.edges.into(), snap.options, t.group)?
+                    .with_break_force(snap.break_force)?
+                    .with_same_edge(snap.corners);
+                if t.ratio.is_some() {
+                    t.ratio = Some(rect.size.width / rect.size.height);
+                }
+                adopted = true;
             }
             t.baseline_observed = true;
             let mut rect = self
@@ -836,13 +786,6 @@ impl Controller {
                 .expect("bound window")
                 .world_rect;
             let actual = result.actual_ax.size;
-            if effect.requested.is_some() || actual != t.last_committed_size {
-                source.observation_revision = source
-                    .observation_revision
-                    .checked_add(1)
-                    .ok_or(Error::Invalid("observation revisions exhausted"))?;
-                stale(source, readback);
-            }
             if actual != t.last_committed_size {
                 // Upstream handle_resize_commit: a left or top resize moves the
                 // window by what the committed size changed, so the opposite
@@ -928,13 +871,9 @@ impl Controller {
                     t.group = false;
                 }
                 t.last_committed_size = actual;
-                stale(source, readback);
             }
-        } else if !readback {
-            source.observation_known = false;
-            stale(source, readback);
         }
-        // Readback mode, unobserved: the last rectangle the window was seen
+        // An unobserved native readback: the last rectangle the window was seen
         // at stays what it is mapped by. The window is gone, which the shell
         // reports next, or did not answer, and is usable where it was.
         if result.mutation_attempted
@@ -944,7 +883,7 @@ impl Controller {
         {
             t.uncertain_mutation = true;
         }
-        if t.uncertain_mutation && readback && effect.requested.is_none() {
+        if t.uncertain_mutation && effect.requested.is_none() {
             // The diagnostic read's answer ends the transaction either way:
             // the size it found is committed above, and a setter that lands
             // after it is a native size change, which `observe` adopts.
@@ -962,11 +901,8 @@ impl Controller {
             });
         }
         if t.uncertain_mutation {
-            t.phase = Phase::NeedsObservation;
             t.coalesced_latest = None;
-            // Exactly one diagnostic read after the ambiguous setter. In the
-            // acknowledged mode its result never proves that a late setter
-            // cannot still run; in readback mode it ends the transaction.
+            // Exactly one diagnostic read follows an ambiguous setter.
             if effect.requested.is_some() {
                 return self.emit_resize(None);
             }
@@ -1014,73 +950,5 @@ impl Controller {
             t.phase = Phase::Dragging;
         }
         Ok(json!({"effect":null}))
-    }
-    /// Explicit host attestation of lifetime end, not a controller observation.
-    /// Results must first drain so no effect can later target a replacement.
-    pub(crate) fn retire_native_resize_source(
-        &mut self,
-        transaction: u64,
-        identity: SourceIdentity,
-        generation: u64,
-        lifetime_ended: bool,
-    ) -> Result<Value, Error> {
-        let t = self.resize_id(transaction)?;
-        if !lifetime_ended
-            || t.identity != identity
-            || t.generation != generation
-            || t.pending_effect.is_some()
-        {
-            return Err(Error::Invalid(
-                "retirement requires exact ended lifetime and drained effect",
-            ));
-        }
-        self.check_generation(t.window, &identity, generation)?;
-        let window = t.window;
-        self.retired_resize_identities.push(identity);
-        self.sources.remove(&window);
-        self.invalidate_focus(window);
-        let t = self.native_resize.as_mut().expect("resize exists");
-        t.uncertain_mutation = false;
-        t.coalesced_latest = None;
-        t.cancelled = true;
-        t.phase = Phase::Failed;
-        Ok(json!({"window":window,"retired":true,"evidence":"caller_reported_lifetime_end"}))
-    }
-    pub(crate) fn native_resize_capture_ready(
-        &mut self,
-        window: WindowId,
-        identity: SourceIdentity,
-        generation: u64,
-        observation_revision: u64,
-        buffer: BufferSize,
-        content_rect: Rect,
-    ) -> Result<Value, Error> {
-        self.check_generation(window, &identity, generation)?;
-        buffer.validate()?;
-        if !rect_valid(content_rect)
-            || content_rect.origin.x < 0.0
-            || content_rect.origin.y < 0.0
-            || content_rect.origin.x + content_rect.size.width > buffer.width as f64
-            || content_rect.origin.y + content_rect.size.height > buffer.height as f64
-        {
-            return Err(Error::Invalid("capture content rectangle outside buffer"));
-        }
-        if self.native_resize.as_ref().is_some_and(|t| {
-            t.window == window
-                && (t.uncertain_mutation
-                    || t.pending_effect
-                        .as_ref()
-                        .is_some_and(|e| e.requested.is_some()))
-        }) {
-            return Err(Error::Invalid("native resize mutation is unresolved"));
-        }
-        let source = self.sources.get_mut(&window).expect("binding validated");
-        if !source.observation_known || source.observation_revision != observation_revision {
-            return Err(Error::Invalid("stale resize capture observation"));
-        }
-        source.buffer = buffer;
-        source.content_rect = content_rect;
-        source.capture_revision = Some(observation_revision);
-        Ok(json!({}))
     }
 }

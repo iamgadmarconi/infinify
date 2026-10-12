@@ -1430,8 +1430,7 @@ or native size change updates immediately; a smaller budget waits for half a
 second of stable demand. Only one configuration update is outstanding per
 source. Buffer resolution does not change native bounds, world rectangles,
 input coordinates or crop geometry. Pinned windows retain their screen density.
-Manual capture and the capture-acknowledged experimental resize path retain
-their original resolution rules. Requested capture cadence follows the fastest
+Manual capture retains its original resolution rules. Requested capture cadence follows the fastest
 display and is not reduced to obtain pixel savings; actual source delivery can
 be slower and is measured separately.
 

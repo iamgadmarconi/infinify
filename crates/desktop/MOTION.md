@@ -24,7 +24,7 @@ and the navigation context's `usable_rect_local` only.
 | `gesture_to` | total `screen_delta`, optional global `pointer` point | `{needs_frames}` |
 | `pointer` | `output` or null, global `screen` point | `{needs_pointer, needs_frames}` |
 | `zoom_by` | `output`, global `anchor` point, `delta`, `source: wheel / pinch`, optional `phase: begin / update / end` | `{navigation, needs_frames}` |
-| `tick_navigation` | `timestamp_ns` | `changed_outputs`, `needs_frames`, `needs_pointer` |
+| `tick_navigation` | `timestamp_ns` | `changed_outputs`, `needs_frames`, `needs_pointer`, `clock_only` |
 | `action` `toggle-cursor-pan` | optional `output` | `{navigation: null, effects: [], dirty: false}` |
 
 Every other command keeps its shape. `pan` without `time_ms`, `gesture_to`
@@ -151,6 +151,8 @@ connected output, in output id order, through upstream's per-output order:
 pan armed (upstream's redraw loop asks the same of `edge_pan_velocity`), even
 while a latency holds that pan back. `needs_pointer` repeats the snapshot's
 `navigation.cursor_pan.needs_pointer`.
+`clock_only` is the conservative [unchanged snapshot guarantee](NAVIGATION.md)
+for an idle tick; it does not follow merely from an unchanged camera.
 
 The clock this command brings is also the one on which a close mark and a
 pending relaunch [lapse](LIFECYCLE.md#differences-from-upstream): they are

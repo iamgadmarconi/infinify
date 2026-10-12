@@ -211,10 +211,10 @@ fn settle(h: &mut Host) {
     }
     panic!("flight did not settle");
 }
-/// Explicit isolated capture-contract capability; the shipping shell uses readback.
+/// The supported native readback capability.
 fn capable(mut h: Host) -> Host {
     assert_eq!(
-        h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":false})),
+        h.ok(json!({"op":"native_resize_capability","enabled":true})),
         json!({})
     );
     h
@@ -247,7 +247,7 @@ fn without_the_capability_every_sizing_request_answers_as_it_did_before() {
     for explicit in [false, true] {
         if explicit {
             assert_eq!(
-                h.ok(json!({"op":"native_resize_capability","enabled":false,"readback":false})),
+                h.ok(json!({"op":"native_resize_capability","enabled":false})),
                 json!({})
             );
         }
@@ -341,7 +341,7 @@ fn without_the_capability_every_sizing_request_answers_as_it_did_before() {
     }
     // The capability is a real boolean: an Objective-C boxed comparison is not.
     assert_eq!(
-        h.call(json!({"op":"native_resize_capability","enabled":1,"readback":false}))["ok"],
+        h.call(json!({"op":"native_resize_capability","enabled":1}))["ok"],
         false
     );
 }
@@ -677,185 +677,6 @@ fn a_fit_the_window_clamps_commits_its_size_at_the_fit_place() {
 // snapped variant measures its neighbours from that frame. The size the
 // window took of the request plays no part. The usable center is (500, 410)
 // and the inset corner (28, 48), as above.
-#[test]
-fn a_fit_centers_on_the_frame_last_asked_for_not_the_one_the_window_took() {
-    // A step asks 430 x 300 from the right edge and the window takes 410.
-    // The frame asked for is (100, 100) 430 x 300, centered on (315, 250):
-    // the camera goes to round((315, 250) - (500, 410)) = (-185, -160) and the
-    // top-left to (-185 + 28, -160 + 48) = (-157, -112). The frame the window
-    // took is centered on (305, 250), 10 short of that.
-    let mut h = capable(one(CONFIG));
-    let reply = action(&mut h, "grow-window right");
-    deliver(
-        &mut h,
-        &reply,
-        (400.0, 300.0),
-        (430.0, 300.0),
-        "clamped",
-        (410.0, 300.0),
-    );
-    assert_eq!(world(&mut h, 1), rect(100.0, 100.0, 410.0, 300.0));
-    // Window 2 is one snap gap from the right edge of the frame asked for,
-    // x 530 + 12, and 32 from the frame the window took: a neighbour of the
-    // first only. The fit takes that edge from 530 to -157 + 944 = 787, and
-    // the neighbour follows it by 257 to 787 + 12.
-    attach(&mut h, 2, (542.0, 100.0, 200.0, 300.0));
-    let reply = action(&mut h, "fit-window-snapped");
-    assert_eq!(
-        reply["navigation"]["target_camera"],
-        json!({"x":-185.0,"y":-160.0})
-    );
-    deliver(
-        &mut h,
-        &reply,
-        (410.0, 300.0),
-        (944.0, 724.0),
-        "applied",
-        (944.0, 724.0),
-    );
-    assert_eq!(world(&mut h, 1), rect(-157.0, -112.0, 944.0, 724.0));
-    assert_eq!(world(&mut h, 2), rect(799.0, 100.0, 200.0, 300.0));
-    assert_eq!(mode(&mut h, 1), "fit");
-    // The unfit gives the 410 x 300 back around the fit frame's center
-    // (315, 250): the window comes back 10 from where the step left it, as
-    // upstream's does once its client has clamped the unfit's configure.
-    let reply = action(&mut h, "fit-window");
-    deliver(
-        &mut h,
-        &reply,
-        (944.0, 724.0),
-        (410.0, 300.0),
-        "applied",
-        (410.0, 300.0),
-    );
-    assert_eq!(world(&mut h, 1), rect(110.0, 100.0, 410.0, 300.0));
-
-    // An IPC resize asks 1000 x 600 around the center (300, 250) and the
-    // window takes 800 x 600 at the top-left written for the request,
-    // (-200, -50). The frame asked for is still centered on (300, 250), so
-    // the fit is the plain one: camera (-200, -160), top-left (-172, -112).
-    // The frame the window took is centered on (200, 250).
-    let mut h = capable(one(CONFIG));
-    let reply = ipc(&mut h, json!({"Resize":{"to":[1000,600]}}));
-    deliver(
-        &mut h,
-        &reply,
-        (400.0, 300.0),
-        (1000.0, 600.0),
-        "clamped",
-        (800.0, 600.0),
-    );
-    assert_eq!(world(&mut h, 1), rect(-200.0, -50.0, 800.0, 600.0));
-    let reply = action(&mut h, "fit-window");
-    assert_eq!(
-        reply["navigation"]["target_camera"],
-        json!({"x":-200.0,"y":-160.0})
-    );
-    deliver(
-        &mut h,
-        &reply,
-        (800.0, 600.0),
-        (944.0, 724.0),
-        "applied",
-        (944.0, 724.0),
-    );
-    assert_eq!(world(&mut h, 1), rect(-172.0, -112.0, 944.0, 724.0));
-    // And back: 800 x 600 around (300, 250).
-    let reply = action(&mut h, "fit-window");
-    deliver(
-        &mut h,
-        &reply,
-        (944.0, 724.0),
-        (800.0, 600.0),
-        "applied",
-        (800.0, 600.0),
-    );
-    assert_eq!(world(&mut h, 1), rect(-100.0, -50.0, 800.0, 600.0));
-
-    // A fill asks (240, 48) 732 x 724 and the window takes 700 x 700 there.
-    // The frame asked for is centered on (606, 410): camera
-    // round((606, 410) - (500, 410)) = (106, 0), top-left (134, 48). The
-    // frame the window took is centered on (590, 398). The fit saves the
-    // 300 x 200 from before the fill.
-    let mut h = capable(empty(CONFIG));
-    attach(&mut h, 1, (400.0, 300.0, 300.0, 200.0));
-    attach(&mut h, 2, (28.0, 48.0, 200.0, 724.0));
-    h.ok(json!({"op":"focus","window":1}));
-    let reply = action(&mut h, "fill-window");
-    deliver(
-        &mut h,
-        &reply,
-        (300.0, 200.0),
-        (732.0, 724.0),
-        "clamped",
-        (700.0, 700.0),
-    );
-    assert_eq!(world(&mut h, 1), rect(240.0, 48.0, 700.0, 700.0));
-    assert_eq!(mode(&mut h, 1), "fill");
-    let reply = action(&mut h, "fit-window");
-    assert_eq!(
-        reply["navigation"]["target_camera"],
-        json!({"x":106.0,"y":0.0})
-    );
-    deliver(
-        &mut h,
-        &reply,
-        (700.0, 700.0),
-        (944.0, 724.0),
-        "applied",
-        (944.0, 724.0),
-    );
-    assert_eq!(world(&mut h, 1), rect(134.0, 48.0, 944.0, 724.0));
-    assert_eq!(mode(&mut h, 1), "fit");
-    let reply = action(&mut h, "fit-window");
-    deliver(
-        &mut h,
-        &reply,
-        (944.0, 724.0),
-        (300.0, 200.0),
-        "applied",
-        (300.0, 200.0),
-    );
-    // Around (134 + 472, 48 + 362) = (606, 410).
-    assert_eq!(world(&mut h, 1), rect(456.0, 310.0, 300.0, 200.0));
-
-    // A fill grows from the frame last asked for as well (src/state/fill.rs,
-    // compute_fill_geometry). Alone on the canvas, a window at the inset
-    // corner (28, 48) is stepped from 914 to 944 wide, the whole inset
-    // width, and takes 930. The frame asked for already fills its space, so
-    // fill-window starts nothing; the frame the window took is 14 short.
-    let mut h = capable(empty(CONFIG));
-    attach(&mut h, 1, (28.0, 48.0, 914.0, 724.0));
-    h.ok(json!({"op":"focus","window":1}));
-    let reply = action(&mut h, "grow-window right");
-    deliver(
-        &mut h,
-        &reply,
-        (914.0, 724.0),
-        (944.0, 724.0),
-        "clamped",
-        (930.0, 724.0),
-    );
-    assert_eq!(world(&mut h, 1), rect(28.0, 48.0, 930.0, 724.0));
-    assert_eq!(action(&mut h, "fill-window"), nothing());
-    assert_eq!(mode(&mut h, 1), Value::Null);
-    assert_eq!(h.snapshot()["native_resize"]["phase"], "complete");
-    // A resize drag ends what was asked: the window is measured by the size
-    // it has again, and the same fill grows the 14 to the inset edge.
-    h.ok(json!({"op":"begin_resize","window":1,"output":1,"edges":"bottom"}));
-    h.ok(json!({"op":"end_gesture"}));
-    let reply = action(&mut h, "fill-window");
-    deliver(
-        &mut h,
-        &reply,
-        (930.0, 724.0),
-        (944.0, 724.0),
-        "applied",
-        (944.0, 724.0),
-    );
-    assert_eq!(world(&mut h, 1), rect(28.0, 48.0, 944.0, 724.0));
-    assert_eq!(mode(&mut h, 1), "fill");
-}
 
 // Upstream fit_window_snapped and shift_cluster_around_primary. Window 1 goes
 // from x 100..500, y 100..400 to the fit frame x -172..772, y -112..612: its
@@ -1353,71 +1174,6 @@ fn ipc_resize_keeps_the_center_and_follows_upstreams_refusals() {
     );
 }
 
-// Upstream requested_element_size: an absolute resize measures from the size
-// it last asked for while the window's size still reads as an answer to it.
-// From 400 x 300 at (100, 100), 1000 x 600 puts the top-left at (-200, -50).
-// The window grants 800 x 600 and keeps that top-left: upstream writes the
-// place for the size it asked for and does not re-center on what it got.
-#[test]
-fn an_absolute_resize_measures_from_the_size_it_last_asked_for() {
-    let mut h = capable(one(CONFIG));
-    let reply = ipc(&mut h, json!({"Resize":{"to":[1000,600]}}));
-    deliver(
-        &mut h,
-        &reply,
-        (400.0, 300.0),
-        (1000.0, 600.0),
-        "clamped",
-        (800.0, 600.0),
-    );
-    assert_eq!(world(&mut h, 1), rect(-200.0, -50.0, 800.0, 600.0));
-    // The same request again is a no-op: no second shift, nothing delivered.
-    let before = h.snapshot();
-    let reply = ipc(&mut h, json!({"Resize":{"to":[1000,600]}}));
-    assert_eq!(
-        reply,
-        json!({"reply":{"Ok":{"Size":{"width":1000,"height":600}}},"effects":[],"dirty":false,"navigation":null})
-    );
-    assert_eq!(h.snapshot(), before);
-    // Another size is measured from the 1000 asked for, not the 800 granted:
-    // (1000 - 1200) / 2 = -100.
-    let reply = ipc(&mut h, json!({"Resize":{"to":[1200,600]}}));
-    deliver(
-        &mut h,
-        &reply,
-        (800.0, 600.0),
-        (1200.0, 600.0),
-        "applied",
-        (1200.0, 600.0),
-    );
-    assert_eq!(world(&mut h, 1), rect(-300.0, -50.0, 1200.0, 600.0));
-    // And that request, repeated, is again nothing.
-    let before = h.snapshot();
-    ipc(&mut h, json!({"Resize":{"to":[1200,600]}}));
-    assert_eq!(h.snapshot(), before);
-
-    // Asking for the size the window settled on needs nothing delivered, but
-    // it is not the size last asked for, so upstream still shifts the frame by
-    // half the difference, (1000 - 800) / 2 = 100: a placement, applied at once.
-    let mut h = capable(one(CONFIG));
-    let reply = ipc(&mut h, json!({"Resize":{"to":[1000,600]}}));
-    deliver(
-        &mut h,
-        &reply,
-        (400.0, 300.0),
-        (1000.0, 600.0),
-        "clamped",
-        (800.0, 600.0),
-    );
-    let reply = ipc(&mut h, json!({"Resize":{"to":[800,600]}}));
-    assert_eq!(
-        reply,
-        json!({"reply":{"Ok":{"Size":{"width":800,"height":600}}},"effects":[],"dirty":true,"navigation":null})
-    );
-    assert_eq!(world(&mut h, 1), rect(-100.0, -50.0, 800.0, 600.0));
-    assert_eq!(h.snapshot()["native_resize"]["phase"], "complete");
-}
-
 // A stand-in has no native window. Upstream resizes a stand-in's own frame for
 // a step and for IPC resize; here that is refused (SIZES.md says why). Fit and
 // fill are upstream's own no-ops: its focused_window is a client.
@@ -1851,48 +1607,6 @@ fn a_gesture_a_hot_corner_and_ipc_carry_the_resize_effect() {
         .collect();
     assert!(!fullscreen.is_empty());
     assert!(fullscreen.iter().all(|k| k["implemented"] == true));
-}
-
-// The transaction's own uncertainty rules hold for a sizing action. A setter
-// that timed out unobserved is followed by one read; what that read finds is
-// committed and placed, and the fit is recorded, because the window did take
-// the size. The transaction stays unresolved, so nothing more is delivered.
-#[test]
-fn an_unresolved_setter_keeps_the_transactions_uncertainty() {
-    let mut h = capable(one(CONFIG));
-    let reply = action(&mut h, "fit-window");
-    let read = began(&mut h, &reply);
-    let setter = answer(&mut h, &read, "observed", false, (400.0, 300.0))["effect"].clone();
-    let timed_out = json!({"op":"native_resize_result","transaction":setter["transaction"],"effect_id":setter["effect_id"],"identity":setter["identity"],"generation":setter["generation"],"result":{"outcome":"timed_out","ax_error":0,"mutation_attempted":true,"observed":false,"requested":setter["requested"],"actual_ax":rect(0.0,0.0,1.0,1.0),"actual_cg":rect(0.0,0.0,1.0,1.0)}});
-    let diagnostic = h.ok(timed_out)["effect"].clone();
-    assert_eq!(diagnostic["op"], "observe_resize_source");
-    assert_eq!(mode(&mut h, 1), Value::Null);
-    answer(&mut h, &diagnostic, "observed", false, (944.0, 724.0));
-    assert_eq!(world(&mut h, 1), rect(-172.0, -112.0, 944.0, 724.0));
-    assert_eq!(mode(&mut h, 1), "fit");
-    let slot = h.snapshot()["native_resize"].clone();
-    assert_eq!(slot["phase"], "needs_observation");
-    assert_eq!(slot["uncertain_mutation"], true);
-    assert_eq!(
-        h.error(json!({"op":"action","output":1,"action":"fit-window"})),
-        BUSY
-    );
-
-    // A window the adapter will not resize: nothing is written, and the
-    // source is marked as the transaction marks it.
-    let mut h = capable(one(CONFIG));
-    let reply = action(&mut h, "fit-window");
-    let read = began(&mut h, &reply);
-    let setter = answer(&mut h, &read, "observed", false, (400.0, 300.0))["effect"].clone();
-    let last = answer(&mut h, &setter, "unsupported", false, (400.0, 300.0))["effect"].clone();
-    answer(&mut h, &last, "observed", false, (400.0, 300.0));
-    assert_eq!(world(&mut h, 1), rect(100.0, 100.0, 400.0, 300.0));
-    assert_eq!(mode(&mut h, 1), Value::Null);
-    assert_eq!(window(&mut h, 1)["source"]["resize_disabled"], true);
-    assert_eq!(
-        h.error(json!({"op":"action","output":1,"action":"grow-window right"})),
-        "source resize unsupported"
-    );
 }
 
 // The capability belongs to the run and the restore points to the session:
@@ -2483,7 +2197,7 @@ fn a_resize_drag_elsewhere_leaves_a_pinned_windows_fill() {
 // without a picture revision or refuse a press on it (NATIVE_RESIZE.md).
 fn readback(mut h: Host) -> Host {
     assert_eq!(
-        h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":true})),
+        h.ok(json!({"op":"native_resize_capability","enabled":true})),
         json!({})
     );
     h
@@ -2498,10 +2212,6 @@ fn usable(h: &mut Host) {
             continue;
         }
         assert_eq!(source["observation_known"], true, "{w}");
-        assert_eq!(
-            source["capture_revision"], source["observation_revision"],
-            "{w}"
-        );
     }
     for p in snapshot["placements"].as_array().unwrap() {
         assert_eq!(p["presentation_settled"], true, "{p}");
@@ -2699,7 +2409,7 @@ fn readback_fails_an_unanswered_transaction_and_the_window_stays_usable() {
 }
 #[test]
 fn readback_asks_again_a_window_accessibility_said_is_not_settable() {
-    for (ax_error, disabled) in [(0, true), (-25204, false)] {
+    for ax_error in [0, -25204] {
         let mut h = readback(one(CONFIG));
         let reply = action(&mut h, "grow-window right");
         let read = began(&mut h, &reply);
@@ -2708,11 +2418,6 @@ fn readback_asks_again_a_window_accessibility_said_is_not_settable() {
         let last = h.ok(json!({"op":"native_resize_result","transaction":setter["transaction"],"effect_id":setter["effect_id"],"identity":setter["identity"],"generation":setter["generation"],"result":{"outcome":"unsupported","ax_error":ax_error,"mutation_attempted":false,"observed":true,"requested":setter["requested"],"actual_ax":frame,"actual_cg":frame}}))["effect"].clone();
         answer(&mut h, &last, "observed", false, (400.0, 300.0));
         assert_eq!(h.snapshot()["native_resize"]["phase"], "failed");
-        assert_eq!(
-            window(&mut h, 1)["source"]["resize_disabled"],
-            disabled,
-            "{ax_error}"
-        );
         usable(&mut h);
         // Not settable then (a sheet was up) is no answer for now: the next
         // request is asked, and the size it is granted ends the record.
@@ -2725,7 +2430,6 @@ fn readback_asks_again_a_window_accessibility_said_is_not_settable() {
             "applied",
             (430.0, 300.0),
         );
-        assert_eq!(window(&mut h, 1)["source"]["resize_disabled"], false);
         assert_eq!(world(&mut h, 1), rect(100.0, 100.0, 430.0, 300.0));
     }
 }

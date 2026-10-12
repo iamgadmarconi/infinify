@@ -136,7 +136,7 @@ enum Plan {
     Absolute {
         loc: Px,
         by_hand: bool,
-        basis: Option<(Px, Px)>,
+        basis: (Px, Px),
     },
     Fit {
         loc: Px,
@@ -202,7 +202,7 @@ impl Plan {
                 ])
             }
             Self::Absolute {
-                basis: Some((position, current)),
+                basis: (position, current),
                 ..
             } => Some([
                 position[0] + (current[0] - actual[0]) / 2,
@@ -210,9 +210,7 @@ impl Plan {
             ]),
             // Upstream places for the size it asks for and does not re-derive
             // the place from what the client then commits.
-            Self::Absolute { loc, .. } | Self::Fit { loc, .. } | Self::Fill { loc, .. } => {
-                Some(*loc)
-            }
+            Self::Fit { loc, .. } | Self::Fill { loc, .. } => Some(*loc),
             Self::Unfullscreen {
                 place: Some(loc), ..
             } => Some([loc.x.round() as i64, loc.y.round() as i64]),
@@ -256,10 +254,6 @@ pub(crate) struct Sizes {
     /// The shell performs resize effects in this run: `native_resize_capability`.
     /// Every normal run's does.
     pub(crate) capability: bool,
-    /// A size is settled by the native read alone; this run acknowledges no
-    /// capture. Every normal run:
-    /// NATIVE_RESIZE.md, "Readback mode".
-    pub(crate) readback: bool,
     restore: BTreeMap<WindowId, Restore>,
     /// Upstream's per-entry `restore_size`: the size a window had before a fit
     /// or a fill changed it. A fit and a fill read it and never replace it; a
@@ -277,7 +271,7 @@ pub(crate) struct Sizes {
 }
 impl Sizes {
     pub(crate) fn observation_idle(&self) -> bool {
-        self.readback && self.pending.is_none() && self.asked.is_empty()
+        self.capability && self.pending.is_none() && self.asked.is_empty()
     }
     /// Upstream window_mode, in the IPC inventory's spelling.
     pub(crate) fn mode(&self, window: WindowId) -> WindowMode {
@@ -605,16 +599,8 @@ impl Controller {
         if !restoring {
             self.fullscreen.restored(window);
         }
-        // A window the adapter will not resize is asked nothing more: it is
-        // fullscreen at the size it has, upstream's fixed-size client, and
-        // fullscreen.rs centres it. Every other plan is still refused below.
-        // Readback mode asks every time (`begin_sized_resize`), and the
-        // setter's answer centres it as the first enter's does.
-        let fixed = matches!(plan, Plan::Fullscreen)
-            && !self.sizes.readback
-            && self.sources.get(&window).is_some_and(|s| s.resize_disabled);
         let requested = plan.requested_size(target);
-        if rect.size == requested || fixed {
+        if rect.size == requested {
             self.place(window, &plan);
             self.settle(window, &plan, asked);
             outcome.dirty = true;
@@ -756,11 +742,7 @@ impl Controller {
                     // the one the next request is measured from.
                     if let Ok((_, actual)) = frame(rect)
                         && let Some(at) = pending.plan.origin(actual)
-                        && let Plan::Absolute {
-                            loc,
-                            basis: Some(_),
-                            ..
-                        } = &mut pending.plan
+                        && let Plan::Absolute { loc, .. } = &mut pending.plan
                     {
                         *loc = at;
                         pending.asked.requested = actual;
@@ -775,7 +757,7 @@ impl Controller {
             // is written as `deliver` writes it for a window that has the
             // size asked for.
             let ended = !self.resize_slot().is_some_and(|slot| slot.live);
-            if self.sizes.readback && ended && !setter && !pending.settled && rect.size == asked {
+            if ended && !setter && !pending.settled && rect.size == asked {
                 pending.placed = self.place(pending.window, &pending.plan);
                 self.settle(pending.window, &pending.plan, pending.asked);
                 pending.settled = true;
@@ -1344,7 +1326,7 @@ impl Controller {
             position[1] + (current[1] - size[1]) / 2,
         ];
         readable(rect_at(to, size))?;
-        let basis = self.sizes.readback.then_some((position, current));
+        let basis = (position, current);
         let asked = Asked {
             requested: size,
             at_request: committed,

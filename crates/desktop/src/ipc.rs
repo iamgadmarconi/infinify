@@ -501,10 +501,6 @@ impl Controller {
             ("outputs", self.scene.outputs().len()),
             ("overview_returns", self.overview_returns.len()),
             ("pending_screenshots", self.pending_screenshots.len()),
-            (
-                "retired_resize_identities",
-                self.retired_resize_identities.len(),
-            ),
             ("saved_outputs", self.outputs.len()),
             ("sources", self.sources.len()),
             ("windows", self.scene.windows().len()),

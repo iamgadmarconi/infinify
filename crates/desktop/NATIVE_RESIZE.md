@@ -1,11 +1,10 @@
-# Native resize controller contract (ABI 1 additive)
+# Native resize controller protocol (ABI 1)
 
 This module coordinates one bound ordinary window and all eight edges. It emits
-requests for a future native shell; it does not call AX, capture pixels, resize
+requests for the native shell; it does not call AX, capture pixels, resize
 third-party windows, or establish usable compositing. Existing `begin_resize`
-remains the logical reducer API. Native group resize is rejected in the
-capture-acknowledged mode and carried in readback mode, where a rule's aspect
-ratio is kept too ([Pointer resize](#pointer-resize)). Fullscreen uses the
+remains the logical reducer API. Native group resize carries the snapped
+cluster, while a rule's aspect ratio is kept instead ([Pointer resize](#pointer-resize)). Fullscreen uses the
 same transaction ([FULLSCREEN.md](FULLSCREEN.md)); sizing actions and rules
 are described in [SIZES.md](SIZES.md). Widgets refuse manual resizing.
 
@@ -32,11 +31,11 @@ Logical `begin_resize` remains a canvas operation; native pinned resizing uses
   carries a size transaction keeps its focus request. A refused begin focuses
   nothing (the native shell then asks for the focus by itself, with
   `focus`). The host must supply a
-  fresh result before any setter; the actual frame size must exactly match
-  committed world size. Motion during this asynchronous baseline read is coalesced
+  fresh result before any setter. A different observed baseline is adopted
+  with the world top-left kept and the pointer anchor rebased. Motion during this asynchronous baseline read is coalesced
   into the existing latest-request slot without committing geometry. Release keeps
   that intent for baseline validation, setter, and final read; cancel drops it.
-  Failed or mismatched baselines never dispatch the queued setter. A scaled/mismatched baseline fails explicitly. Beginning cancels
+  Failed baselines never dispatch the queued setter. Beginning cancels
   camera flights on every output.
 - `native_resize_to {transaction, screen}` resolves the absolute screen point
   through the current output camera and zoom and measures it from the canvas
@@ -77,74 +76,51 @@ rejected by the adapter; they do not create committed geometry.
 
 ## Uncertainty and lifecycle
 
-An attempted setter without an observation enters `needs_observation`, disables
-setters and emits one read-only diagnostic effect. A timed-out attempted setter
-also stays uncertain even if a read succeeded: a late mutation remains possible.
-This includes AX CannotComplete (-25204), which the adapter preserves in ax_error
-even when its subsequent readback produces a settled outcome. The diagnostic
-read updates actual geometry when available but cannot establish future
-quiescence. There are no autonomous retries or arbitrary read-count completion.
-Old observed rectangles remain labelled `observation_known:false` after failed
-readback; they are historical data, not current input authority.
+An attempted setter without a trustworthy observation emits exactly one
+read-only diagnostic effect. Its result ends the transaction: complete when
+it observed the window, committing that actual size, otherwise failed with
+`the window did not answer the size request in time`. This includes AX
+CannotComplete (-25204). A setter may land later; that is an external native
+size change, adopted by the next `observe`, rather than a promise that a
+successful read proved future quiescence.
+
+The shell answers an effect after three seconds if its adapter did not. It
+reports `timed_out`, unobserved, and `mutation_attempted:true` for a setter.
+Late completions cannot answer a discharged effect. An invalid adapter result
+is replaced once with that unanswered result; if the controller rejects both,
+the obligation is discharged and the orphan watchdog resolves its transaction.
+A held grab resting without an effect is not an orphan.
 
 Forget, source removal, rebind through removal, and same-handle load are blocked
-while a transaction is active or uncertain. Normal recovery is cancel, consume
-every pending effect/result, then detach/load. For a genuinely ended native
-lifetime the host may call
-`retire_native_resize_source {transaction, identity, generation, lifetime_ended:true}`
-**after the pending effect drains**. This is an explicit caller attestation,
-not proof discovered by this controller. It detaches the source, retains the
-world placeholder, invalidates focus authority and records a retired identity.
-The same PID/birth/window tuple cannot reattach on this handle, including after
-load; a genuinely new process lifetime can bind. Do not use this command merely
-because a read timed out or because the UI stopped dragging. A lost result must
-still be reported with the correct effect boundary; it cannot be silently erased.
+while a transaction is live. Cancel drops unsent intent and drains every effect
+already sent. No lifetime attestation command or retired-identity cache remains.
 
-## Capture and input
+## Presentation and input
 
-Dispatching a setter invalidates capture authority. Observed setter results
-advance `observation_revision`, as do dimension changes on readback. Placements
-then have `presentation_settled:false` and no `buffer_crop`; hit/input reject.
-The shell must show an inert placeholder or otherwise withhold stale content.
-AX sizes never synthesize capture buffer dimensions. Fresh actual pixels are the
-host's responsibility, reported with
-`native_resize_capture_ready {window, identity, generation, observation_revision, buffer, content_rect}`.
-The acknowledgement requires `content_rect`, a finite, positive rectangle wholly
-inside `buffer`, expressed in actual buffer pixels. An unpadded image explicitly
-supplies the whole-buffer rectangle; omission or null rejects the command.
-`native_resize_capability` likewise requires its `readback` mode explicitly.
-These pre-release interfaces have no legacy-default conversion. Attach and rebind
-begin with the whole buffer. `Source.content_rect` is transient capture
-metadata. Placement `buffer_crop` and hit `buffer_local` apply its offset and
-scale; hit `local` and `native_screen` still map the full observed native frame,
-independently of buffer padding.
+Resizing does not acknowledge or invalidate captures. The last observed native
+rectangle remains the input mapping while a request is owed; observed actual
+sizes commit immediately, and unobserved results retain that mapping. A bound
+source carries `observation_known` as its mapping-validity marker. Placement
+`presentation_settled` derives from that marker; a detached source has no
+picture or input binding. The shell still validates current identity, process
+birth, generation, native membership and actual image geometry before native
+input or replica publication.
 
-The acknowledgement must match the current revision and a valid actual buffer,
-with no pending setter or uncertain mutation. The host may invalidate capture
-without changing any geometry using
-`invalidate_native_capture {window, identity, generation}`. It validates the exact
-binding (including owner), advances the checked `observation_revision`, clears
-capture authority, and returns `{observation_revision}`. Repeated invalidations
-advance again; callers should send them for actual state transitions. Revisions
-therefore fence capture invalidation as well as size observations. Earlier
-acknowledgements reject atomically.
-
-Legacy `observe` never grants lost capture authority. An unchanged buffer size
-and native frame size retain the acknowledged crop, including when native origin
-moves. A change to either size resets crop metadata to the new whole buffer.
-For a cropped capture or one already using observation revisions, that change
-also advances the revision and clears authority; the reset crop stays inactive
-until a new exact-revision acknowledgement. Original revision-zero whole-buffer
-callers retain their existing synchronous `observe` behavior. Neither path copies
-native coordinates into world geometry. Tests synthesize acknowledgements and do
-not establish native frame freshness.
+`observe` updates the observed native frame and buffer dimensions. With native
+resize capability enabled, it adopts a changed world size with the top-left
+kept, except during a gesture. Buffer coordinates stay independent of native
+coordinates. Actual ScreenCaptureKit pixel crop, timestamp and image-generation
+checks remain in the native capture adapters; no reducer acknowledgement
+establishes pixel freshness. The retired `native_resize_capture_ready` and
+`invalidate_native_capture` commands, and their revision handshake fields, are
+absent from the strict pre-release schema.
 
 ## Persistence and evidence
 
 Saves contain only committed scene geometry and existing metadata/output state,
 never effects, requests, transactions, capture authority or live source identity.
 Fresh loads are detached. Same-handle loads preserve monotonic window/output,
-transaction, effect and binding generation counters and retired identity guards.
+transaction, effect and binding generation counters.
 
 `tests/native_resize_flow.rs` crosses the exported C ABI. Its hash-verified
 original upstream request/clamp and ordinary settlement blocks come from
@@ -159,88 +135,34 @@ DriftWM/native macOS behavior parity is claimed.
 
 ## Readback mode
 
-`{"op":"native_resize_capability","enabled":true,"readback":true}` puts the
-controller in readback mode, which every normal shipping run sets.
-Everything above this section describes the isolated controller capture
-contract, selected explicitly with `"readback":false` in its fixtures. The
-shipping shell has no capture-acknowledged resize mode. Readback mode differs in exactly
-these points, and in no geometry or policy:
+`{"op":"native_resize_capability","enabled":true}` announces that the shell
+performs native readback effects. `enabled` must be a boolean. There is one
+supported resize protocol: the old `readback` field and alternate capture mode
+are rejected, with no default conversion or compatibility alias.
 
-- **The native window is the authority for its size.** The size a transaction
-  commits is the one its result read back (`actual_ax.size`), as before, and
-  nothing else is waited for. No command sets `capture_revision` to null:
-  where the acknowledged mode marks a source stale, readback mode sets
-  `capture_revision` to the source's `observation_revision`.
-- **Invariant.** After every command, every bound source has
-  `observation_known == true` and
-  `capture_revision == observation_revision`. So `hit` and `input` never
-  answer `source presentation unsettled`, a placement's
-  `presentation_settled` is always true and its `buffer_crop` never null. A
-  result that observed nothing leaves `observed_rect` and
-  `observation_known` as they were: the window is mapped by the last
-  rectangle it was seen at.
-- **A baseline that differs is adopted.** The first read of a transaction that
-  finds the window at another size than the scene has (the window changed it
-  by itself and no `observe` has said so yet, or a rebind kept a saved slot's
-  size) writes that size to the scene with the top-left kept, and the
-  transaction goes on to ask the queued target of it. When the window already
-  has the size asked for, the transaction ends complete without a setter and
-  the sizing plan is written as for a window that had it.
-  The adopted actual size can appear while the queued setter awaits its
-  readback; presentation does not substitute an unconfirmed requested size.
-- **`observe` adopts a size.** An `observe` whose `source_rect` has another
-  size than the window's world rectangle writes that size, top-left kept, and
-  answers `{"resized":true}`; the shell then saves the scene. It writes
-  nothing during a gesture; the next one after it does. This is the one place
-  the canvas follows a size the application or the user changed.
-- **Every transaction ends.** An attempted setter that timed out or was not
-  observed is still followed by exactly one diagnostic read, and that read's
-  result ends the transaction: complete when it observed the window, whose
-  size is then committed and the plan placed for it, else failed with
-  `"failure":"the window did not answer the size request in time"`.
-  `uncertain_mutation` is cleared either way and the phase is never left at
-  `needs_observation`. A setter that lands after that is a native size change
-  like any other, which `observe` adopts. The shell answers for an effect its
-  adapter did not: after three seconds it reports the effect as `timed_out`,
-  unobserved, with `mutation_attempted` true for a setter
-  (`-[DWResizeCoordinator finish:result:]`), so a transaction is at most a
-  baseline read, its setters and one more read, each bounded.
-- **`unsupported` never disables a window for good.** `resize_disabled` is
-  set when the result's `ax_error` is 0 (the size attribute is not settable)
-  and is a record only: a window is not settable while it has a sheet up or
-  while its application says so, and nothing reports when it is again, so
-  every later request begins a transaction and asks, fullscreen's enter
-  included, and the first setter the window takes clears the record. A
-  settable query that failed says nothing about the window and sets nothing.
-  The shell's driver applies no root-only family guard in this mode, so no
-  policy veto arrives as `unsupported`.
-- **An absolute size keeps the center for the size granted.** Upstream's
-  `cmd_resize` clamps the size to its client's declared limits, then computes
-  the center-preserving top-left and records the clamped size as the request
-  (`src/ipc/mod.rs`). Accessibility declares no limits; the size the window
-  took of the request is how they are learned. So for IPC `resize` and a
-  rule's `size` the top-left is `position + (current - granted) / 2`, as
-  upstream's for the clamped size, and the size granted is the one on record:
-  the next absolute request is measured from it. A request for more than a
-  window's maximum is therefore sent again when it is repeated (upstream's is
-  a no-op once clamped), and changes nothing. In the acknowledged mode the
-  place is still the one for the size asked.
-- `invalidate_native_capture` still advances `observation_revision` and keeps
-  the source settled. `native_resize_capture_ready` is accepted and changes
-  nothing a readback run reads. The shell sends neither.
+The native window is the authority for its size. A differing baseline is
+adopted, including when a window changed itself before a poll. A baseline that
+already has the requested size ends without a setter. `observe` similarly
+adopts a native size outside a gesture and answers `{"resized":true}`.
 
-While a transaction is live the controller still refuses `observe`,
-`window_closed`, `remove_source` and `forget` for its window; the shell sends
-none of them for that window until the transaction has ended
-(`-[DWResizeCoordinator busyWindow]`), which the points above bound. A second
-window's request during it is refused with `a native resize of window N is
-still pending`, as in the acknowledged mode: upstream has no such queue, and
-the refusal lasts as long as the first request does.
+Every new request asks a window again after `unsupported`: a sheet may have
+closed or its size attribute become settable. No persistent disabled cache
+blocks later requests. IPC `resize` and a rule's `size` preserve the center for
+the size actually granted: `position + (current - granted) / 2`. That granted
+size becomes the basis of the next request. Accessibility supplies no declared
+client limits, so a repeated request beyond a window's maximum may be sent
+again and leave the same actual geometry.
 
-Scenarios: `readback_*` in `tests/sizes_flow.rs`, `tests/fullscreen_flow.rs`
-and `tests/native_resize_flow.rs`, the `readback` case of
-`native/desktop/resize-regression.m`, and on real fixture windows
-`tests/e2e/scoped-sizing.sh`.
+While a transaction is live the controller refuses `observe`, `window_closed`,
+`remove_source` and `forget` for its window; another window's size request is
+refused while the first owns the slot. The shell's `busyWindow` and bounded
+watchdog enforce this lifecycle without waiting for a frame.
+
+Scenarios: the supported readback cases in `tests/sizes_flow.rs`,
+`tests/fullscreen_flow.rs`, `tests/native_resize_flow.rs`, the headless native
+coordinator and standalone metadata oracle in `native/desktop/resize-regression.m`,
+and real owned fixture paths `tests/e2e/scoped-sizing.sh`,
+`tests/e2e/scoped-resize-drag.sh`, and `tests/e2e/physical-resize-edge.sh`.
 
 ### Pointer resize
 
@@ -258,7 +180,7 @@ transaction above, so there is one at a time and each ends in bounded time.
   refusal stands ahead of every side effect, as upstream's bails do; then the
   window is raised and focused, every flight is cancelled, fit and fill end,
   and one baseline read is emitted. No size is asked before motion.
-  `resize_disabled` does not refuse: the window is asked again.
+  A previous unsupported result does not refuse: the window is asked again.
 - **Motion.** The pointer is held inside the grab's output,
   `[0, w-1] × [0, h-1]`. The delta is the pointer's current canvas point minus
   its canvas anchor at the press, each axis cut to a whole number toward zero
@@ -321,11 +243,11 @@ fixture windows `tests/e2e/scoped-resize-drag.sh`.
 
 ### Historical experimental desktop integration (headless evidence only)
 
-The flag, orange-handle UI and its executable live probe were removed on
-2026-10-12. The following account is historical; its frozen evidence and
+The flag, orange-handle UI, executable live probe and unused capture-ack
+protocol were removed on 2026-10-12. The following account is historical; its frozen evidence and
 source provenance remain unchanged. It did not establish completed native
-resize and independent pixel proof. Controller capture-metadata fixtures
-and the read-only saved-byte oracle remain.
+resize and independent pixel proof. The standalone synthetic frame-metadata oracle
+and read-only saved-byte oracle remain.
 
 The retired desktop flag `--experimental-native-resize` connects eight true-edge handles
 to the native resize transaction C ABI through a serial adapter coordinator, in

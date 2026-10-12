@@ -124,6 +124,16 @@ pub(crate) struct Motion {
     pinch: Option<Pinch>,
 }
 impl Motion {
+    /// No tick or delayed pointer handoff can advance this motion state.
+    pub(crate) fn clock_idle(&self) -> bool {
+        !self.cursor_pan
+            && self.edge_pans.is_empty()
+            && self.pinch.is_none()
+            && self
+                .momentum
+                .values()
+                .all(|coast| !coast.state.coasting && !coast.panning && coast.pending_ms.is_none())
+    }
     /// An output that was removed or registered again starts with none of it.
     pub(crate) fn forget(&mut self, output: OutputId) {
         self.momentum.remove(&output);

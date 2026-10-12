@@ -722,7 +722,7 @@ fn a_size_that_is_owed_neither_adds_nor_loses_a_lifecycle_event() {
     );
     h.ok(json!({"op":"adoption_complete"}));
     assert_eq!(
-        h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":false})),
+        h.ok(json!({"op":"native_resize_capability","enabled":true})),
         json!({})
     );
     let appear = |h: &mut Host, wid: u64| {
@@ -751,15 +751,15 @@ fn a_size_that_is_owed_neither_adds_nor_loses_a_lifecycle_event() {
     assert_eq!(slot["window"], window, "{slot}");
     assert_eq!(slot["pending_effect"], read, "{slot}");
     assert_eq!(settled(&mut h, &window), true);
-    // The baseline read is answered and the setter is owed: from here the
-    // placement is unsettled, and the shell is given no picture of it.
+    // The baseline read is answered and the setter is owed. Native readback
+    // retains the observed picture while this effect is outstanding.
     let setter = resized(&mut h, &read, "observed", false, (300.0, 200.0))["effect"].clone();
     assert_eq!(setter["op"], "resize_native_window", "{setter}");
     assert_eq!(setter["requested"], json!({"width":600.0,"height":400.0}));
     let slot = h.snapshot()["native_resize"].clone();
     assert_eq!(slot["window"], window, "{slot}");
     assert_eq!(slot["pending_effect"], setter, "{slot}");
-    assert_eq!(settled(&mut h, &window), false);
+    assert_eq!(settled(&mut h, &window), true);
     assert_eq!(h.events(), opened);
 
     // The window closes while its size is owed. The report is refused and

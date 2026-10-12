@@ -658,11 +658,11 @@ fn deliver(
     let slot = h.snapshot()["native_resize"].clone();
     assert_eq!(slot["phase"], "complete", "{slot}");
 }
-/// As `running`, with explicit isolated capture-contract capability.
+/// As `running`, with supported native readback capability.
 fn capable(toml: &str) -> Host {
     let mut h = running(toml);
     assert_eq!(
-        h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":false})),
+        h.ok(json!({"op":"native_resize_capability","enabled":true})),
         json!({})
     );
     h
@@ -1057,7 +1057,7 @@ fn bindings_lists_each_tap_with_the_macos_modifiers_a_key_binding_would_have() {
         "super is ctrl+cmd: it holds ctrl and Command, so nothing is left to stand for ctrl on its own"
     );
     // The capability makes the sizing tap run.
-    h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":false}));
+    h.ok(json!({"op":"native_resize_capability","enabled":true}));
     assert_eq!(
         by_combo(&h.bindings()["taps"])["shift"]["implemented"],
         true

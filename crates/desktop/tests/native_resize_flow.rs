@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Exported C ABI contract only. Synthetic observations/capture acknowledgements
+//! Exported C ABI contract only. Synthetic native observations
 //! do not prove native mutation, pixels, or usable compositing.
 use driftwm_desktop::*;
 use serde_json::{Value, json};
@@ -55,6 +55,7 @@ fn attach(h: &mut Host, logical: Option<u64>, id: Value) -> Value {
 }
 fn setup() -> Host {
     let mut h = Host::new();
+    h.ok(json!({"op":"native_resize_capability","enabled":true}));
     h.ok(json!({"op":"register_output","stable_id":"one","screen_bounds":rect(0.,0.,1000.,800.)}));
     attach(&mut h, None, identity());
     h
@@ -231,58 +232,9 @@ fn cancel_and_output_removal_drain_already_sent_mutation() {
     }
 }
 #[test]
-fn capture_ack_gates_placements_and_input_and_legacy_observe_cannot_bypass() {
-    let mut h = setup();
-    let t = ready(&mut h, "right");
-    let e = motion(&mut h, &t, 30., 0.);
-    assert_eq!(h.snap()["placements"][0]["presentation_settled"], false);
-    h.ok(reply(&e, "applied", true, true, 230., 150.));
-    let read = finish(&mut h, &t, false);
-    h.ok(reply(&read, "observed", false, true, 230., 150.));
-    h.ok(json!({"op":"observe","window":1,"identity":identity(),"source_rect":rect(700.,500.,230.,150.),"buffer":{"width":400,"height":300}}));
-    assert!(h.snap()["placements"][0]["buffer_crop"].is_null());
-    let hit = json!({"op":"input","output":1,"screen":{"x":120.,"y":120.},"identity":identity()});
-    h.rejects(hit.clone());
-    let mut ack = json!({"op":"native_resize_capture_ready","window":1,"identity":identity(),"generation":t["generation"],"observation_revision":0,"buffer":{"width":460,"height":300},"content_rect":rect(0.,0.,460.,300.)});
-    h.rejects(ack.clone());
-    ack["observation_revision"] = json!(1);
-    h.ok(ack);
-    assert_eq!(h.snap()["placements"][0]["presentation_settled"], true);
-    let input = h.ok(hit);
-    assert_eq!(input["hit"]["native_screen"], json!({"x":720.,"y":520.}));
-}
-#[test]
-fn unobserved_timeout_stays_uncertain_after_read_and_requires_ended_lifetime() {
-    let mut h = setup();
-    let t = ready(&mut h, "left");
-    let e = motion(&mut h, &t, 10., 0.);
-    let original = world(&mut h);
-    let read = h.ok(reply(&e, "timed_out", true, false, 0., 0.))["effect"].clone();
-    assert_eq!(world(&mut h), original);
-    assert_eq!(h.snap()["windows"][0]["source"]["observation_known"], false);
-    h.rejects(json!({"op":"retire_native_resize_source","transaction":t["transaction"],"identity":identity(),"generation":t["generation"],"lifetime_ended":true}));
-    h.ok(reply(&read, "observed", false, true, 190., 150.));
-    assert_eq!(world(&mut h), rect(110., 100., 190., 150.));
-    assert_eq!(h.snap()["native_resize"]["phase"], "needs_observation");
-    for c in [
-        json!({"op":"forget","window":1}),
-        json!({"op":"remove_source","window":1,"identity":identity(),"keep_placeholder":true}),
-        json!({"op":"native_resize_to","transaction":t["transaction"],"screen":{"x":20.,"y":30.}}),
-        json!({"op":"native_resize_capture_ready","window":1,"identity":identity(),"generation":t["generation"],"observation_revision":1,"buffer":{"width":380,"height":300},"content_rect":rect(0.,0.,380.,300.)}),
-    ] {
-        h.rejects(c);
-    }
-    h.ok(json!({"op":"retire_native_resize_source","transaction":t["transaction"],"identity":identity(),"generation":t["generation"],"lifetime_ended":true}));
-    h.rejects(json!({"op":"attach","identity":identity(),"bundle_id":"test","title":"window","buffer":{"width":400,"height":300},"source_rect":rect(0.,0.,200.,150.),"logical_id":1}));
-    let mut new_id = identity();
-    new_id["birth_sec"] = json!(1800000001);
-    attach(&mut h, Some(1), new_id);
-    h.rejects(reply(&read, "observed", false, true, 190., 150.));
-}
-#[test]
 fn stale_duplicate_and_invalid_commands_are_atomic() {
     let mut h = setup();
-    h.rejects(json!({"op":"begin_native_resize","window":1,"output":1,"edges":"right","group":true,"start_screen":{"x":0.,"y":0.}}));
+    h.rejects(json!({"op":"begin_native_resize","window":1,"output":2,"edges":"right","group":true,"start_screen":{"x":0.,"y":0.}}));
     let e = begin(&mut h, "right");
     let good = reply(&e, "observed", false, true, 200., 150.);
     for field in ["transaction", "effect_id", "generation"] {
@@ -310,7 +262,7 @@ fn stale_duplicate_and_invalid_commands_are_atomic() {
     h.rejects(invalid);
 }
 #[test]
-fn rejected_actual_size_is_authority_and_unsupported_disables_binding() {
+fn rejected_actual_size_is_authority_and_unsupported_ends_the_grab() {
     for outcome in ["rejected", "unsupported"] {
         let mut h = setup();
         let t = ready(&mut h, "left");
@@ -318,7 +270,6 @@ fn rejected_actual_size_is_authority_and_unsupported_disables_binding() {
         let result = h.ok(reply(&e, outcome, outcome == "rejected", true, 200., 150.));
         assert_eq!(world(&mut h), rect(100., 100., 200., 150.));
         if outcome == "unsupported" {
-            assert_eq!(h.snap()["windows"][0]["source"]["resize_disabled"], true);
             h.ok(reply(
                 &result["effect"],
                 "observed",
@@ -331,12 +282,7 @@ fn rejected_actual_size_is_authority_and_unsupported_disables_binding() {
     }
 }
 #[test]
-fn baseline_mismatch_rejects_and_motion_tracks_the_current_viewport() {
-    let mut h = setup();
-    let e = begin(&mut h, "right");
-    h.ok(reply(&e, "observed", false, true, 180., 150.));
-    assert_eq!(h.snap()["native_resize"]["phase"], "failed");
-    assert_eq!(world(&mut h), rect(100., 100., 200., 150.));
+fn motion_tracks_the_current_viewport() {
     let mut h = setup();
     h.ok(json!({"op":"zoom","output":1,"zoom":0.5,"anchor":{"x":0.,"y":0.}}));
     let t = h.ok(json!({"op":"begin_native_resize","window":1,"output":1,"edges":"right","start_screen":{"x":150.,"y":87.5}}))["effect"].clone();
@@ -388,7 +334,7 @@ fn save_committed_geometry_load_guard_and_monotonic_ids() {
 }
 
 #[test]
-fn timeout_error_with_observation_still_cannot_establish_quiescence() {
+fn timeout_error_with_observation_ends_after_diagnostic_read() {
     let mut h = setup();
     let t = ready(&mut h, "right");
     let e = motion(&mut h, &t, 20., 0.);
@@ -397,7 +343,7 @@ fn timeout_error_with_observation_still_cannot_establish_quiescence() {
     let read = h.ok(r)["effect"].clone();
     assert_eq!(read["op"], "observe_resize_source");
     h.ok(reply(&read, "observed", false, true, 220., 150.));
-    assert_eq!(h.snap()["native_resize"]["uncertain_mutation"], true);
+    assert_eq!(h.snap()["native_resize"]["uncertain_mutation"], false);
     assert_eq!(world(&mut h)["size"]["width"], 220.);
 }
 #[test]
@@ -555,212 +501,20 @@ fn adapter_outcome_flags_are_validated_atomically_for_reads_and_setters() {
     }
 }
 
-fn capture_ack(revision: u64, content: Value) -> Value {
-    json!({"op":"native_resize_capture_ready","window":1,"identity":identity(),"generation":1,"observation_revision":revision,"buffer":{"width":400,"height":300},"content_rect":content})
-}
-fn invalidate_capture(h: &mut Host) -> u64 {
-    h.ok(json!({"op":"invalidate_native_capture","window":1,"identity":identity(),"generation":1}))
-        ["observation_revision"]
-        .as_u64()
-        .unwrap()
-}
-fn capture_input() -> Value {
-    json!({"op":"input","output":1,"screen":{"x":150.,"y":175.},"identity":identity()})
-}
-fn observe_capture(source_rect: Value, width: u32, height: u32) -> Value {
-    json!({"op":"observe","window":1,"identity":identity(),"source_rect":source_rect,"buffer":{"width":width,"height":height}})
-}
 #[test]
-fn padded_capture_maps_clipped_pixels_without_changing_native_coordinates() {
+fn capability_and_retired_protocol_are_strict_and_atomic() {
     let mut h = setup();
-    h.ok(json!({"op":"register_output","stable_id":"one","screen_bounds":rect(0.,0.,250.,200.)}));
-    let world_before = world(&mut h);
-    let crop = rect(10.5, 20.25, 300.5, 201.75);
-    h.ok(capture_ack(0, crop.clone()));
-    let snapshot = h.snap();
-    assert_eq!(snapshot["windows"][0]["source"]["content_rect"], crop);
-    assert_eq!(
-        snapshot["placements"][0]["buffer_crop"],
-        rect(10.5, 20.25, 225.375, 134.5)
-    );
-    let hit = h.ok(capture_input())["hit"].clone();
-    assert_eq!(hit["buffer_local"], json!({"x":85.625,"y":121.125}));
-    assert_eq!(hit["local"], json!({"x":50.,"y":75.}));
-    assert_eq!(hit["native_screen"], json!({"x":60.,"y":95.}));
-    assert_eq!(world(&mut h), world_before);
-    h.ok(capture_ack(0, rect(0., 0., 400., 300.)));
-    assert_eq!(
-        h.snap()["windows"][0]["source"]["content_rect"],
-        rect(0., 0., 400., 300.)
-    );
-    assert_eq!(
-        h.ok(capture_input())["hit"]["buffer_local"],
-        json!({"x":100.,"y":150.})
-    );
-}
-#[test]
-fn capture_and_capability_commands_require_explicit_current_fields() {
-    let mut h = setup();
-    let mut missing = capture_ack(0, rect(0., 0., 400., 300.));
-    missing.as_object_mut().unwrap().remove("content_rect");
-    h.rejects(missing);
-    h.rejects(capture_ack(0, Value::Null));
-    h.rejects(json!({"op":"native_resize_capability","enabled":true}));
-    h.rejects(json!({"op":"native_resize_capability","enabled":true,"readback":null}));
-    h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":true}));
-    h.ok(capture_ack(0, rect(0., 0., 400., 300.)));
-}
-#[test]
-fn capture_content_validation_rejects_invalid_and_out_of_buffer_rectangles_atomically() {
-    let mut h = setup();
-    for crop in [
-        rect(-0.1, 0., 10., 10.),
-        rect(0., -0.1, 10., 10.),
-        rect(0., 0., 0., 10.),
-        rect(0., 0., 10., -1.),
-        rect(399.5, 0., 1., 10.),
-        rect(0., 299.5, 10., 1.),
-        rect(0., 0., 1e100, 10.),
-        json!({"origin":{"x":"NaN","y":0},"size":{"width":10,"height":10}}),
-        json!({"origin":{"x":null,"y":0},"size":{"width":10,"height":10}}),
+    for command in [
+        json!({"op":"native_resize_capability"}),
+        json!({"op":"native_resize_capability","enabled":null}),
+        json!({"op":"native_resize_capability","enabled":true,"readback":true}),
+        json!({"op":"native_resize_capability","enabled":true,"readback":false}),
+        json!({"op":"native_resize_capture_ready","window":1}),
+        json!({"op":"invalidate_native_capture","window":1}),
+        json!({"op":"retire_native_resize_source","transaction":1}),
     ] {
-        h.rejects(capture_ack(0, crop));
-    }
-    let mut bad_buffer = capture_ack(0, rect(0., 0., 10., 10.));
-    bad_buffer["buffer"]["width"] = json!(0);
-    h.rejects(bad_buffer);
-    h.ok(capture_ack(0, rect(0.25, 0.5, 399.75, 299.5)));
-}
-#[test]
-fn invalidation_fences_old_capture_ack_without_moving_geometry() {
-    let mut h = setup();
-    h.ok(capture_ack(0, rect(10., 10., 380., 280.)));
-    let before = h.snap();
-    let old = capture_ack(0, rect(0., 0., 400., 300.));
-    assert_eq!(invalidate_capture(&mut h), 1);
-    assert_eq!(invalidate_capture(&mut h), 2);
-    let invalidated = h.snap();
-    assert_eq!(invalidated["outputs"], before["outputs"]);
-    assert_eq!(
-        invalidated["windows"][0]["world_rect"],
-        before["windows"][0]["world_rect"]
-    );
-    assert_eq!(
-        invalidated["windows"][0]["source"]["observed_rect"],
-        before["windows"][0]["source"]["observed_rect"]
-    );
-    assert_eq!(
-        invalidated["windows"][0]["source"]["observation_known"],
-        true
-    );
-    assert_eq!(invalidated["placements"][0]["presentation_settled"], false);
-    assert!(invalidated["placements"][0]["buffer_crop"].is_null());
-    h.rejects(capture_input());
-    h.rejects(old);
-    h.rejects(capture_ack(1, rect(10., 10., 380., 280.)));
-    h.ok(capture_ack(2, rect(10., 10., 380., 280.)));
-    assert_eq!(h.snap()["placements"][0]["presentation_settled"], true);
-    h.ok(capture_input());
-}
-#[test]
-fn capture_binding_generation_and_owner_must_match_after_rebind() {
-    let mut h = setup();
-    let invalidation =
-        json!({"op":"invalidate_native_capture","window":1,"identity":identity(),"generation":1});
-    for mut command in [
-        capture_ack(0, rect(0., 0., 400., 300.)),
-        invalidation.clone(),
-    ] {
-        command["identity"]["owner"] = json!(900);
         h.rejects(command);
     }
-    h.ok(json!({"op":"remove_source","window":1,"identity":identity(),"keep_placeholder":true}));
-    attach(&mut h, Some(1), identity());
-    assert_eq!(
-        h.snap()["windows"][0]["source"]["content_rect"],
-        rect(0., 0., 400., 300.)
-    );
-    h.rejects(invalidation.clone());
-    h.rejects(capture_ack(0, rect(0., 0., 400., 300.)));
-    let mut current = invalidation;
-    current["generation"] = json!(2);
-    assert_eq!(h.ok(current)["observation_revision"], 1);
-    let mut ack = capture_ack(1, rect(20., 20., 360., 260.));
-    ack["generation"] = json!(2);
-    h.ok(ack);
-}
-#[test]
-fn legacy_observe_preserves_crop_but_changed_capture_metadata_requires_ack() {
-    let mut h = setup();
-    let crop = rect(10.5, 20.25, 300.5, 201.75);
-    h.ok(capture_ack(0, crop.clone()));
-    h.ok(observe_capture(rect(10., 20., 200., 150.), 400, 300));
-    assert_eq!(h.snap()["windows"][0]["source"]["content_rect"], crop);
-    h.ok(observe_capture(rect(30., 40., 200., 150.), 400, 300));
-    assert_eq!(
-        h.ok(capture_input())["hit"]["native_screen"],
-        json!({"x":80.,"y":115.})
-    );
-    assert_eq!(h.snap()["windows"][0]["source"]["content_rect"], crop);
-    h.ok(observe_capture(rect(30., 40., 200., 150.), 800, 600));
-    assert_eq!(h.snap()["windows"][0]["source"]["observation_revision"], 1);
-    assert_eq!(
-        h.snap()["windows"][0]["source"]["content_rect"],
-        rect(0., 0., 800., 600.)
-    );
-    h.rejects(capture_input());
-    h.rejects(capture_ack(0, crop));
-    h.ok(observe_capture(rect(30., 40., 200., 150.), 800, 600));
-    h.rejects(capture_input());
-    let mut ack = capture_ack(1, rect(0., 0., 800., 600.));
-    ack["buffer"] = json!({"width":800,"height":600});
-    h.ok(ack);
-    h.ok(observe_capture(rect(30., 40., 400., 300.), 800, 600));
-    assert_eq!(h.snap()["windows"][0]["source"]["observation_revision"], 2);
-    h.rejects(capture_input());
-    let mut ack = capture_ack(2, rect(20., 20., 760., 560.));
-    ack["buffer"] = json!({"width":800,"height":600});
-    h.ok(ack);
-    assert_eq!(
-        h.ok(capture_input())["hit"]["local"],
-        json!({"x":100.,"y":150.})
-    );
-    assert_eq!(world(&mut h), rect(100., 100., 200., 150.));
-    // Existing ABI callers that never opted into crop/revision authority retain
-    // whole-buffer observe semantics.
-    let mut legacy = setup();
-    legacy.ok(observe_capture(rect(30., 40., 400., 300.), 800, 600));
-    assert_eq!(
-        legacy.snap()["windows"][0]["source"]["observation_revision"],
-        0
-    );
-    assert_eq!(
-        legacy.ok(capture_input())["hit"]["buffer_local"],
-        json!({"x":200.,"y":300.})
-    );
-}
-#[test]
-fn capture_contract_is_transient_and_does_not_bypass_uncertain_setter() {
-    let mut h = setup();
-    let path =
-        std::env::temp_dir().join(format!("capture-contract-save-{}.json", std::process::id()));
-    h.ok(json!({"op":"save","path":path}));
-    let saved = std::fs::read(&path).unwrap();
-    let revision = invalidate_capture(&mut h);
-    h.ok(capture_ack(revision, rect(10., 20., 380., 270.)));
-    h.ok(json!({"op":"save","path":path}));
-    assert_eq!(std::fs::read(&path).unwrap(), saved);
-    let t = ready(&mut h, "right");
-    let e = motion(&mut h, &t, 20., 0.);
-    let revision = invalidate_capture(&mut h);
-    h.rejects(capture_ack(revision, rect(10., 20., 380., 270.)));
-    let read = h.ok(reply(&e, "timed_out", true, false, 0., 0.))["effect"].clone();
-    h.ok(reply(&read, "observed", false, true, 220., 150.));
-    let revision = h.snap()["windows"][0]["source"]["observation_revision"]
-        .as_u64()
-        .unwrap();
-    h.rejects(capture_ack(revision, rect(0., 0., 400., 300.)));
-    std::fs::remove_file(path).unwrap();
 }
 
 #[test]
@@ -798,9 +552,8 @@ fn cancellation_before_baseline_discards_unsent_motion() {
     assert_eq!(world(&mut h), rect(100., 100., 200., 150.));
 }
 #[test]
-fn failed_or_mismatched_baseline_never_dispatches_queued_motion() {
+fn failed_baseline_never_dispatches_queued_motion() {
     for (outcome, observed, width) in [
-        ("observed", true, 180.),
         ("timed_out", false, 0.),
         ("readback_failed", false, 0.),
         ("stale_identity", false, 0.),
@@ -857,7 +610,7 @@ fn queued_return_to_origin_skips_setter_after_baseline_for_held_and_released_dra
             if released { "complete" } else { "dragging" }
         );
         assert_eq!(world(&mut h), rect(100., 100., 200., 150.));
-        assert_eq!(h.snap()["windows"][0]["source"]["capture_revision"], 0);
+        assert_eq!(h.snap()["placements"][0]["presentation_settled"], true);
         if !released {
             let setter = motion(&mut h, &baseline, 30., 0.);
             assert_eq!(setter["requested"], json!({"width":230.,"height":150.}));
@@ -878,12 +631,10 @@ fn skipping_coalesced_size_already_observed_still_drains_final_read_after_setter
     assert_eq!(h.snap()["native_resize"]["phase"], "complete");
 }
 
-// Readback mode: what every normal run without the flag reports
+// Native readback is the supported resize protocol
 // (NATIVE_RESIZE.md). The native window is the authority for its size.
 fn readback() -> Host {
-    let mut h = setup();
-    h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":true}));
-    h
+    setup()
 }
 fn observe(size: (f64, f64)) -> Value {
     json!({"op":"observe","window":1,"identity":identity(),"source_rect":rect(10.,20.,size.0,size.1),"buffer":{"width":400,"height":300}})
@@ -891,10 +642,6 @@ fn observe(size: (f64, f64)) -> Value {
 fn settled(h: &mut Host) {
     let source = h.snap()["windows"][0]["source"].clone();
     assert_eq!(source["observation_known"], true, "{source}");
-    assert_eq!(
-        source["capture_revision"], source["observation_revision"],
-        "{source}"
-    );
     h.ok(json!({"op":"input","output":1,"screen":{"x":150.,"y":150.},"identity":identity()}));
 }
 #[test]
@@ -906,10 +653,6 @@ fn readback_observe_adopts_a_size_the_window_changed_and_says_so() {
     assert_eq!(world(&mut h), rect(100., 100., 260., 190.));
     settled(&mut h);
     assert_eq!(h.ok(observe((260., 190.))), json!({}));
-    // The acknowledged mode maps the picture again and leaves the world alone.
-    let mut h = setup();
-    assert_eq!(h.ok(observe((260., 190.))), json!({}));
-    assert_eq!(world(&mut h), rect(100., 100., 200., 150.));
 }
 #[test]
 fn readback_holds_structure_only_while_the_transaction_is_live() {
@@ -1181,7 +924,7 @@ fn distant_world_cameras_preserve_whole_and_fractional_native_resize_motion() {
         for base in [-900_000_000_000., 900_000_000_000.] {
             for fraction in [0., 0.01] {
                 let mut h = Host::new();
-                h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":true}));
+                h.ok(json!({"op":"native_resize_capability","enabled":true}));
                 h.ok(json!({"op":"register_output","stable_id":"one","screen_bounds":rect(37.,53.,1000.,800.)}));
                 h.ok(json!({"op":"attach","identity":identity(),"bundle_id":"test","title":"distant window","buffer":{"width":400,"height":300},"source_rect":rect(10.,20.,200.,150.),"world_rect":rect(base+100.,-base+100.,200.,150.)}));
                 h.ok(json!({"op":"pan","output":1,"screen_delta":{"x":base,"y":-base}}));
@@ -1264,9 +1007,6 @@ fn readback_grab_carries_its_cluster_by_the_size_the_window_took() {
     let e = to(&mut h, &t, 270.0, 175.0);
     h.ok(reply(&e, "applied", true, true, 180., 150.));
     assert_eq!(neighbour(&mut h), rect(292., 100., 200., 150.));
-    // The acknowledged mode commits one window against one picture.
-    let mut h = setup();
-    h.rejects(json!({"op":"begin_native_resize","window":1,"output":1,"start_screen":{"x":290.0,"y":175.0},"group":true}));
 }
 #[test]
 fn readback_grab_asks_again_of_a_window_that_was_not_settable() {
@@ -1283,7 +1023,6 @@ fn readback_grab_asks_again_of_a_window_that_was_not_settable() {
     assert_eq!(h.snap()["native_resize"]["phase"], "failed");
     h.rejects(json!({"op":"native_resize_to","transaction":t["transaction"],"screen":{"x":320.0,"y":260.0}}));
     h.rejects(json!({"op":"end_native_resize","transaction":t["transaction"]}));
-    assert_eq!(h.snap()["windows"][0]["source"]["resize_disabled"], true);
     // The next press asks again: a sheet may have closed since.
     let t = grab(&mut h, (290.0, 240.0), false);
     assert_eq!(t["op"], "observe_resize_source");

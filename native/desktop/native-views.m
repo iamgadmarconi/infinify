@@ -96,7 +96,7 @@ static NSArray<NSDictionary *> *viewFamilyPlacements(NSDictionary *snapshot,NSDi
             }
             if(CGRectIsNull(visible))continue;
             NSMutableDictionary *placement=[window mutableCopy];placement[@"output"]=outputID;placement[@"pinned"]=@(pin!=nil);placement[@"screen_rect"]=viewRectJSON(screen);placement[@"clip_rect"]=viewRectJSON(visible);placement[@"world_local_crop"]=NSNull.null;placement[@"buffer_crop"]=NSNull.null;placement[@"family_only"]=@YES;
-            NSNumber *observation=viewNumber(source[@"observation_revision"]),*capture=viewNumber(source[@"capture_revision"]);placement[@"presentation_settled"]=@([viewNumber(source[@"observation_known"])boolValue]&&observation&&capture&&[observation isEqual:capture]);
+            placement[@"presentation_settled"]=@([viewNumber(source[@"observation_known"])boolValue]);
             [placements addObject:placement.copy];[sites addObject:site];
         }
     }
