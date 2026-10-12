@@ -151,6 +151,14 @@ A second handoff was interrupted by a guest reboot before the recovery launcher
 ran; the reboot cause is undetermined. Receipts are under
 `target/native-vm/pending-restore-inspect/` and
 `target/native-vm/retained-originals/receipt.json`.
+On the following boot, build `5cee261` passed two consecutive handoffs with a
+fresh ordinary Calculator instance: exact originals were recovered before
+readmission and restored on quit, with awake-display screenshots confirming
+its restored position. See
+`target/native-vm/retained-originals/two-handoff-receipt.json`. This does not
+establish all-app or crash-during-frame recovery. Automatic prior-boot record
+archival has focused record validation but has not yet been exercised through
+another actual guest reboot.
 
 Direct loader invocation also requires explicit prepared-machine authorization:
 

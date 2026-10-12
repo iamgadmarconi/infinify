@@ -168,6 +168,15 @@ That second handoff is untested; the reboot cause remains undetermined and no
 fresh guest panic report was found. Evidence and hashes:
 `target/native-vm/retained-originals/receipt.json`.
 
+After that reboot, build `5cee261` passed two consecutive retirement/recovery
+cycles with a fresh ordinary Calculator instance. Each replacement helper
+recovered the independently saved original before readmission, and each normal
+quit restored native and screen bounds (510,554,230,408) with the original
+translation retained in the released ledger. Screenshots taken with the guest
+display awake visibly confirm the restored Calculator position after both
+cycles. This covers one ordinary window, not all-app or mid-frame crash recovery.
+Evidence: `target/native-vm/retained-originals/two-handoff-receipt.json`.
+
 The same bundle passed one ordinary TextEdit selection at zoom 0.75: normal HID
 drag events selected the exact 22-character seed, with unchanged native bounds
 and transform throughout the drag and paired release. A Finder-to-TextEdit file
@@ -186,6 +195,19 @@ input or native compositor parity. A 60 Hz virtual display cannot establish the
 120 Hz physical-display target.
 
 ## 2026-10-12 resize and capture responsiveness
+
+A native-primary VM profile on build `5cee261` used ordinary Calculator and
+five disposable TextEdit documents. Infinify used 4.49% of one guest CPU at rest
+(10.03 seconds, 128.8 MiB RSS); the sampled pan/zoom interval used 9.48%
+(7.80 seconds, 129.1 MiB RSS). The latter includes a two-second stack sample and
+is not an unprofiled benchmark. All six original native geometries and the saved
+scene were restored exactly afterward. Cursor routing accounted for 465 of 951
+sampled main-thread stacks, largely waiting synchronously on WindowServer.
+Native render-time cursor refresh now skips that query when no custom canvas
+cursor is needed; event-driven input, grabs, pick mode and resize borders retain
+fresh routing. Its improvement has not yet been measured. The VM exposes no
+comparable GPU utilization or physical-window presentation cadence.
+Evidence: `target/performance/native-six-window-20261012/receipt.json`.
 
 Interactive resizing now rebases the grabbed edge when a delayed native baseline
 differs from its displayed size. Subsequent motion uses the current camera and

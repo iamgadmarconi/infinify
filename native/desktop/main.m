@@ -1134,7 +1134,21 @@ static const NSInteger DWPolicyPress=9;
 - (BOOL)pointerHeld { return [DWCycleHold modifiersDown]!=0; }
 - (void)refreshCursor {
     NSPoint location=NSEvent.mouseLocation;CGPoint point=CGPointMake(location.x,screenTop()-location.y);
-    [self pointerCursor:point output:[self outputAt:point] reply:nil];
+    NSNumber *output=[self outputAt:point];Desktop *desktop=self.desktop;
+    if(desktop.native){
+        BOOL grab=NO;for(DesktopView *view in desktop.views)if(view.gesture==1||view.gesture==2||view.gesture==4){grab=YES;break;}
+        // Native camera frames move real windows over a stationary pointer.
+        // With no custom canvas cursor to claim, withdraw only our override;
+        // querying WindowServer just to choose its ordinary arrow would stall
+        // every frame. Actual motion/cursor events still take pointerCursor's
+        // fresh recipient check, as do render-time pick, border and grab states.
+        if(!grab&&(!output||[self pointerBusy]
+            ||(!DWPickOutput([desktop visualSnapshot],output)
+                &&!asDict([self pointerCommand:@{@"op":@"resize_border",@"output":output,@"screen":pointJSON(point)} quiet:YES][@"border"])))){
+            [desktop.canvasCursor releaseOwner:self];return;
+        }
+    }
+    [self pointerCursor:point output:output reply:nil];
 }
 // Only a canvas panel that would receive a physical click owns an override.
 // Real application windows, the menu bar, Dock and chooser keep their cursor.
@@ -1144,17 +1158,17 @@ static const NSInteger DWPolicyPress=9;
     if(!d.configured||d.cleaning||d.sessionInactive||!output||![self.outputs containsObject:output]||!self.window.visible||self.window.ignoresMouseEvents||!CGRectContainsPoint(self.globalBounds,p)){
         [d.canvasCursor releaseOwner:self];return;
     }
-    NSPoint appPoint=NSMakePoint(p.x,screenTop()-p.y);
-    if([NSWindow windowNumberAtPoint:appPoint belowWindowWithWindowNumber:0]!=self.window.windowNumber){[d.canvasCursor releaseOwner:self];return;}
     DesktopView *grab=nil;
     for(DesktopView *view in d.views)if(view.gesture==1||view.gesture==2||view.gesture==4){grab=view;break;}
+    if(!grab&&[self pointerBusy]){[d.canvasCursor releaseOwner:self];return;}
+    NSPoint appPoint=NSMakePoint(p.x,screenTop()-p.y);
+    if([NSWindow windowNumberAtPoint:appPoint belowWindowWithWindowNumber:0]!=self.window.windowNumber){[d.canvasCursor releaseOwner:self];return;}
     NSCursor *cursor=NSCursor.arrowCursor;
     if(grab.gesture==1||grab.gesture==2)cursor=NSCursor.closedHandCursor;
     else if(grab.gesture==4){
         NSDictionary *resize=asDict([d call:@{@"op":@"snapshot"}][@"native_resize"]);
         if([resize[@"transaction"]isEqual:grab.resizeTransaction])cursor=DWCanvasResizeCursor(asString(resize[@"edges"]))?:cursor;
-    }else if([self pointerBusy]){[d.canvasCursor releaseOwner:self];return;}
-    else {
+    }else {
         NSDictionary *hit=reply?asDict(reply[@"hit"]):[self hit:p output:output];
         BOOL pick=reply?[reply[@"pick"]boolValue]:[hit[@"pick"]boolValue];
         if(pick)cursor=NSCursor.pointingHandCursor;
