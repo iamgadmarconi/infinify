@@ -21,8 +21,17 @@
 // be swallowed as a physical tail or a synthetic press clear an owned pair.
 // The predicate receives ordinary packets only, before event classification.
 - (instancetype)initWithConsume:(BOOL (^)(CGEventType,CGEventRef))consume
+// Only a validated plain title press may be taken before destination annotation.
+// Owned drag/up packets then use consume; unclaimed input stays annotated.
+                   earlyConsume:(BOOL (^)(CGEventType,CGEventRef))earlyConsume
                     ignoreEvent:(BOOL (^)(CGEventRef))ignoreEvent
                       cancelled:(void (^)(void))cancelled;
+// The session tap's owned pair is authoritative even when suppression means
+// AppKit's combined-session button state never sees the down.
+@property (readonly) BOOL hasEarlyMousePress;
+// Bounds a lost release after 30 seconds without owned packets or a physically
+// held left button. Ends the logical grab while retaining its suppressed tails.
+- (void)cancelIdleEarlyMousePress;
 - (BOOL)start;
 - (void)stop;
 @end

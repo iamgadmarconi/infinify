@@ -8,6 +8,7 @@
 
 @interface DWNativeInput ()
 - (CGEventRef)handle:(CGEventType)type event:(CGEventRef)event;
+- (CGEventRef)handleEarly:(CGEventType)type event:(CGEventRef)event;
 @end
 
 // DockSwipe field/type/phase decoding adapted from joshuarli/iss, commit
@@ -201,6 +202,10 @@ static CGEventRef nativeInput(CGEventTapProxy proxy,CGEventType type,CGEventRef 
     DWNativeInput *input=(__bridge DWNativeInput *)context;
     return [input handle:type event:event];
 }
+static CGEventRef nativeEarlyInput(CGEventTapProxy proxy,CGEventType type,CGEventRef event,void *context) {
+    (void)proxy;
+    return [(__bridge DWNativeInput *)context handleEarly:type event:event];
+}
 // A native-recipient decision only authorizes leaving the original packet
 // alone. It never grants scope or permission to post to that process/window.
 // Our own panel's unclaimed down must still reach AppKit: AppKit may then admit
@@ -214,17 +219,28 @@ static BOOL DWForeignMouseRecipient(CGEventRef event) {
     return pid>0&&pid!=getpid();
 }
 @implementation DWNativeInput {
-    CFMachPortRef _tap;
-    CFRunLoopSourceRef _source;
+    CFMachPortRef _tap,_earlyTap;
+    CFRunLoopSourceRef _source,_earlySource;
     BOOL (^_consume)(CGEventType,CGEventRef);
+    BOOL (^_earlyConsume)(CGEventType,CGEventRef);
     BOOL (^_ignoreEvent)(CGEventRef);
     void (^_cancelled)(void);
     NSMutableIndexSet *_capturedButtons,*_nativeButtons;
     BOOL _capturedMagnify,_magnifyDecided;
+    BOOL _earlyCaptured,_earlyCancelled,_earlyHandling,_stopped;
+    NSUInteger _lifecycleEpoch,_cancellationEpoch;
+    NSTimeInterval _earlyLastPacket;
 }
-- (instancetype)initWithConsume:(BOOL (^)(CGEventType,CGEventRef))consume ignoreEvent:(BOOL (^)(CGEventRef))ignoreEvent cancelled:(void (^)(void))cancelled {
-    if((self=[super init])){_consume=[consume copy];_ignoreEvent=[ignoreEvent copy];_cancelled=[cancelled copy];_capturedButtons=[NSMutableIndexSet indexSet];_nativeButtons=[NSMutableIndexSet indexSet];}
+- (instancetype)initWithConsume:(BOOL (^)(CGEventType,CGEventRef))consume earlyConsume:(BOOL (^)(CGEventType,CGEventRef))earlyConsume ignoreEvent:(BOOL (^)(CGEventRef))ignoreEvent cancelled:(void (^)(void))cancelled {
+    if((self=[super init])){_consume=[consume copy];_earlyConsume=[earlyConsume copy];_ignoreEvent=[ignoreEvent copy];_cancelled=[cancelled copy];_capturedButtons=[NSMutableIndexSet indexSet];_nativeButtons=[NSMutableIndexSet indexSet];}
     return self;
+}
+- (BOOL)hasEarlyMousePress { return _earlyCaptured&&!_earlyCancelled&&!_stopped; }
+- (void)cancelIdleEarlyMousePress {
+    if(!self.hasEarlyMousePress||NSProcessInfo.processInfo.systemUptime-_earlyLastPacket<30
+        ||CGEventSourceButtonState(kCGEventSourceStateHIDSystemState,kCGMouseButtonLeft))return;
+    _earlyCancelled=YES;_cancellationEpoch++;
+    void (^cancelled)(void)=_cancelled;if(cancelled)cancelled();
 }
 - (BOOL)start {
     if(_tap)return YES;
@@ -240,11 +256,69 @@ static BOOL DWForeignMouseRecipient(CGEventRef event) {
     _source=CFMachPortCreateRunLoopSource(NULL,_tap,0);
     if(!_source){CFMachPortInvalidate(_tap);CFRelease(_tap);_tap=NULL;return NO;}
     CFRunLoopAddSource(CFRunLoopGetMain(),_source,kCFRunLoopCommonModes);
+    // The annotated tap is too late to prevent WindowServer's native title
+    // tracking from rebasing an already transformed window. Only title grabs
+    // have an earlier admission path; all other input keeps its annotated route.
+    // Created last at the head, this also precedes the global trackpad tap.
+    CGEventMask earlyMask=CGEventMaskBit(kCGEventLeftMouseDown)|CGEventMaskBit(kCGEventLeftMouseDragged)|CGEventMaskBit(kCGEventLeftMouseUp);
+    _earlyTap=CGEventTapCreate(kCGSessionEventTap,kCGHeadInsertEventTap,kCGEventTapOptionDefault,earlyMask,nativeEarlyInput,(__bridge void *)self);
+    if(!_earlyTap){[self stop];return NO;}
+    _earlySource=CFMachPortCreateRunLoopSource(NULL,_earlyTap,0);
+    if(!_earlySource){[self stop];return NO;}
+    CFRunLoopAddSource(CFRunLoopGetMain(),_earlySource,kCFRunLoopCommonModes);
+    _stopped=NO;_lifecycleEpoch++;
     return YES;
+}
+- (CGEventRef)handleEarly:(CGEventType)type event:(CGEventRef)event {
+    if(type==kCGEventTapDisabledByTimeout||type==kCGEventTapDisabledByUserInput){
+        _cancellationEpoch++;
+        if(_earlyCaptured)_earlyCancelled=YES;
+        void (^cancelled)(void)=_cancelled;if(cancelled)cancelled();
+        if(_earlyTap&&AXIsProcessTrusted())CGEventTapEnable(_earlyTap,true);
+        return event;
+    }
+    if(!event||_earlyHandling||_stopped)return event;
+    BOOL (^ignore)(CGEventRef)=_ignoreEvent;if(ignore&&ignore(event))return event;
+    BOOL down=type==kCGEventLeftMouseDown,tail=type==kCGEventLeftMouseDragged||type==kCGEventLeftMouseUp;
+    if((!down&&!tail)||CGEventGetIntegerValueField(event,kCGMouseEventButtonNumber)!=0)return event;
+    _earlyHandling=YES;
+    @try {
+        if(down){
+            // A new physical down retires a lost same-button release. Other
+            // native/canvas pairs still reserve their original interaction.
+            NSUInteger lifecycle=_lifecycleEpoch,cancellation=_cancellationEpoch;
+            BOOL replaced=_earlyCaptured||[_capturedButtons containsIndex:0];
+            _earlyCaptured=NO;_earlyCancelled=NO;
+            [_capturedButtons removeIndex:0];[_nativeButtons removeIndex:0];
+            if(replaced){void (^cancelled)(void)=_cancelled;if(cancelled)cancelled();}
+            if(_lifecycleEpoch!=lifecycle||_cancellationEpoch!=cancellation||_stopped)return event;
+            if(_capturedButtons.count||_nativeButtons.count||_capturedMagnify)return event;
+            BOOL (^earlyConsume)(CGEventType,CGEventRef)=_earlyConsume;
+            BOOL taken=earlyConsume&&earlyConsume(type,event);
+            // A synchronous consumer may stop this adapter or encounter a tap
+            // cancellation. Teardown cannot resurrect ownership; cancellation
+            // keeps only a tombstone for a down which was actually claimed.
+            if(_lifecycleEpoch!=lifecycle||_stopped)return event;
+            _earlyCaptured=taken;_earlyCancelled=taken&&_cancellationEpoch!=cancellation;
+            if(taken)_earlyLastPacket=NSProcessInfo.processInfo.systemUptime;
+            // A nested cancellation may precede the consumer's final gesture
+            // installation. Cancel that final state as well as owning its tails.
+            if(_earlyCancelled){void (^cancelled)(void)=_cancelled;if(cancelled)cancelled();}
+            return taken?NULL:event;
+        }
+        if(!_earlyCaptured)return event;
+        // Logical cancellation never gives an app a tail without its down.
+        // Tagged synthetic packets cannot retire this physical reservation.
+        if(!_earlyCancelled){_earlyLastPacket=NSProcessInfo.processInfo.systemUptime;BOOL (^consume)(CGEventType,CGEventRef)=_consume;if(consume)consume(type,event);}
+        if(type==kCGEventLeftMouseUp){_earlyCaptured=NO;_earlyCancelled=NO;}
+        return NULL;
+    } @finally {_earlyHandling=NO;}
 }
 - (CGEventRef)handle:(CGEventType)type event:(CGEventRef)event {
     if(type==kCGEventTapDisabledByTimeout||type==kCGEventTapDisabledByUserInput){
+        _cancellationEpoch++;
         [_nativeButtons removeAllIndexes];
+        if(_earlyCaptured)_earlyCancelled=YES;
         void (^cancelled)(void)=_cancelled;if(cancelled)cancelled();
         if(_tap&&AXIsProcessTrusted())CGEventTapEnable(_tap,true);
         return event;
@@ -269,6 +343,13 @@ static BOOL DWForeignMouseRecipient(CGEventRef event) {
     }
     NSInteger button=CGEventGetIntegerValueField(event,kCGMouseEventButtonNumber);
     BOOL validButton=button>=0&&button<32;
+    // If the earlier tap was disabled, its swallowed down still owns this pair.
+    // Cancel logical delivery and suppress the late-stage tail exactly once.
+    if(validButton&&button==0&&_earlyCaptured&&(down||drag||up)){
+        if(!_earlyCancelled){_earlyCancelled=YES;void (^cancelled)(void)=_cancelled;if(cancelled)cancelled();}
+        if(down||up){_earlyCaptured=NO;_earlyCancelled=NO;}
+        if(!down)return NULL;
+    }
     // A fresh press proves an earlier release was lost. It starts its own pair.
     if(down&&validButton){[_capturedButtons removeIndex:(NSUInteger)button];[_nativeButtons removeIndex:(NSUInteger)button];}
     BOOL captured=(drag||up)&&validButton&&[_capturedButtons containsIndex:(NSUInteger)button];
@@ -293,12 +374,17 @@ static BOOL DWForeignMouseRecipient(CGEventRef event) {
     return taken||captured?NULL:event;
 }
 - (void)stop {
+    _stopped=YES;_lifecycleEpoch++;
+    if(_earlyTap){CGEventTapEnable(_earlyTap,false);CFMachPortInvalidate(_earlyTap);}
+    if(_earlySource){CFRunLoopRemoveSource(CFRunLoopGetMain(),_earlySource,kCFRunLoopCommonModes);CFRelease(_earlySource);_earlySource=NULL;}
+    if(_earlyTap){CFRelease(_earlyTap);_earlyTap=NULL;}
     if(_tap){CGEventTapEnable(_tap,false);CFMachPortInvalidate(_tap);}
     if(_source){CFRunLoopRemoveSource(CFRunLoopGetMain(),_source,kCFRunLoopCommonModes);CFRelease(_source);_source=NULL;}
     if(_tap){CFRelease(_tap);_tap=NULL;}
     [_capturedButtons removeAllIndexes];
     [_nativeButtons removeAllIndexes];
     _capturedMagnify=NO;_magnifyDecided=NO;
+    _earlyCaptured=NO;_earlyCancelled=NO;
     void (^cancelled)(void)=_cancelled;if(cancelled)cancelled();
 }
 - (void)dealloc {

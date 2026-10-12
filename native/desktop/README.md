@@ -881,7 +881,14 @@ is a line on stderr ([Desktop mode](#desktop-mode)).
   faster the nearer the edge. A three-finger tap followed by a three-finger
   swipe on a window moves it the same way, edge pan included. Command-Shift with an arrow key
   (`nudge-window <direction>`) moves the focused logical window by
-  `navigation.nudge_step` world points. None of this moves a native window.
+  `navigation.nudge_step` world points. Capture mode moves the canvas tile;
+  native mode presents the real window at its world placement.
+- In native mode, an unmodified drag on recognized standard AppKit title chrome
+  uses the same world-move gesture, converting pointer motion by the view's zoom.
+  The app's underlying native frame stays fixed during that gesture. Traffic-light
+  controls, document proxies and content keep their native input. Title recognition
+  needs fresh Accessibility geometry; custom or ambiguous title layouts remain
+  with their application and have not been validated for transformed dragging.
 - Window sizing. Command-Shift-W (`zoom-to-fit-snapped`; also
   Command with a four-finger pinch in) frames the focused window's snap
   cluster and nothing else, and a second press returns, as Fit does for every

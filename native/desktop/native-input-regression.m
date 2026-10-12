@@ -54,6 +54,7 @@ static CGEventRef dockPacket(NSInteger phase) {
 int main(void) {@autoreleasepool {
     __block NSUInteger consumed=0,cancelled=0;__block BOOL take=NO;
     DWNativeInput *input=[[DWNativeInput alloc]initWithConsume:^BOOL(CGEventType type,CGEventRef event){(void)type;(void)event;consumed++;return take;}
+        earlyConsume:nil
         ignoreEvent:^BOOL(CGEventRef event){return CGEventGetIntegerValueField(event,kCGEventSourceUserData)==771;}
         cancelled:^{cancelled++;}];
     const int64_t foreign=(int64_t)getpid()+100000;
@@ -97,6 +98,43 @@ int main(void) {@autoreleasepool {
     before=consumed;
     check([input handle:kCGEventLeftMouseDown event:taggedDown]==taggedDown&&consumed==before,@"tagged down bypasses physical bookkeeping");
     take=YES;check([input handle:kCGEventMouseMoved event:move]==NULL,@"tagged down creates no native reservation");
+
+    __block NSUInteger earlyDowns=0,earlyTails=0,earlyCancels=0;
+    DWNativeInput *early=[[DWNativeInput alloc]initWithConsume:^BOOL(CGEventType type,CGEventRef event){(void)type;(void)event;earlyTails++;return NO;}
+        earlyConsume:^BOOL(CGEventType type,CGEventRef event){(void)type;(void)event;earlyDowns++;return YES;}
+        ignoreEvent:^BOOL(CGEventRef event){return CGEventGetIntegerValueField(event,kCGEventSourceUserData)==771;}
+        cancelled:^{earlyCancels++;}];
+    check(unchanged(taggedDown,^{return [early handleEarly:kCGEventLeftMouseDown event:taggedDown];})&&earlyDowns==0,@"tagged copies never enter early title admission");
+    check([early handleEarly:kCGEventLeftMouseDown event:down]==NULL&&earlyDowns==1&&early.hasEarlyMousePress,@"title down is owned before annotation independently of AppKit button state");
+    check(unchanged(taggedUp,^{return [early handleEarly:kCGEventLeftMouseUp event:taggedUp];}),@"tagged release cannot retire early physical ownership");
+    check([early handleEarly:kCGEventLeftMouseDragged event:drag]==NULL&&earlyTails==1,@"owned early tail reaches the consumer once despite refusal");
+    [early handleEarly:kCGEventTapDisabledByTimeout event:NULL];
+    check([early handleEarly:kCGEventLeftMouseDragged event:drag]==NULL&&earlyTails==1&&!early.hasEarlyMousePress,@"cancelled early tail stays swallowed without active ownership or logical redelivery");
+    check([early handle:kCGEventLeftMouseUp event:up]==NULL&&earlyTails==1,@"annotated fallback suppresses early pair after tap disable");
+    check(unchanged(up,^{return [early handleEarly:kCGEventLeftMouseUp event:up];}),@"matching fallback up retires early tombstone");
+    check([early handleEarly:kCGEventLeftMouseDown event:down]==NULL,@"early admission recovers for next physical pair");
+    NSUInteger cancellationCount=earlyCancels;
+    check([early handleEarly:kCGEventLeftMouseDown event:down]==NULL&&earlyCancels==cancellationCount+1,@"new down cancels a lost early pair before replacing it");
+    [early handleEarly:kCGEventLeftMouseUp event:up];
+    CGEventRef earlyNativeSecond=packet(kCGEventRightMouseDown,1,foreign);
+    [early handle:kCGEventRightMouseDown event:earlyNativeSecond];NSUInteger earlyCount=earlyDowns;
+    check(unchanged(down,^{return [early handleEarly:kCGEventLeftMouseDown event:down];})&&earlyDowns==earlyCount,@"a native other-button pair forbids early title admission");
+    [early handle:kCGEventRightMouseUp event:secondUp];CFRelease(earlyNativeSecond);[early stop];
+
+    __block __weak DWNativeInput *stoppingWeak;
+    DWNativeInput *stopping=[[DWNativeInput alloc]initWithConsume:^BOOL(CGEventType type,CGEventRef event){(void)type;(void)event;return NO;}
+        earlyConsume:^BOOL(CGEventType type,CGEventRef event){(void)type;(void)event;[stoppingWeak stop];return YES;}
+        ignoreEvent:nil cancelled:^{}];stoppingWeak=stopping;
+    check(unchanged(down,^{return [stopping handleEarly:kCGEventLeftMouseDown event:down];})
+        &&unchanged(up,^{return [stopping handleEarly:kCGEventLeftMouseUp event:up];}),@"consumer teardown cannot resurrect early ownership");
+    __block __weak DWNativeInput *cancellingWeak;__block NSUInteger cancelledTails=0;__block BOOL lateGesture=NO;
+    DWNativeInput *cancelling=[[DWNativeInput alloc]initWithConsume:^BOOL(CGEventType type,CGEventRef event){(void)type;(void)event;cancelledTails++;return NO;}
+        earlyConsume:^BOOL(CGEventType type,CGEventRef event){(void)type;(void)event;[cancellingWeak handleEarly:kCGEventTapDisabledByTimeout event:NULL];lateGesture=YES;return YES;}
+        ignoreEvent:nil cancelled:^{lateGesture=NO;}];cancellingWeak=cancelling;
+    check([cancelling handleEarly:kCGEventLeftMouseDown event:down]==NULL
+        &&[cancelling handleEarly:kCGEventLeftMouseDragged event:drag]==NULL
+        &&[cancelling handleEarly:kCGEventLeftMouseUp event:up]==NULL&&cancelledTails==0&&!lateGesture,@"nested cancellation clears late gesture installation and preserves only an early tombstone");
+    [cancelling stop];
 
     __block NSUInteger admissions=0;
     DWGlobalTrackpadInput *global=[[DWGlobalTrackpadInput alloc]initWithEnabled:^BOOL{return YES;}

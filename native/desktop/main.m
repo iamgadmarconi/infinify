@@ -245,8 +245,10 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
 @property NSDictionary *nativeFamily;
 @property BOOL nativeTransferFamilyWanted; // exact audited family requested for a replica ownership handoff
 @property NSDictionary *nativeButtons;
+@property uint64_t nativeButtonsRevision;
 @property BOOL nativeButtonsReading;
 @property CFTimeInterval nativeButtonsNext;
+- (void)invalidateNativeButtons;
 // INFINIFY_DEBUG_SYNTH under --only-pid: the frames this source is fed instead of waiting for a capture; nil otherwise.
 @property SynthLoad *synth;
 - (BOOL)installSample:(CMSampleBufferRef)sample;
@@ -259,6 +261,7 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
 - (NSDictionary *)captureConfigurationStatus;
 @end
 @implementation LiveSource
+- (void)invalidateNativeButtons { self.nativeButtonsRevision++;self.nativeButtons=nil;self.nativeButtonsNext=0; }
 @synthesize stream=_stream;
 @synthesize detached=_detached;
 - (void)setDetached:(BOOL)detached {
@@ -730,6 +733,10 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 // Only for a freshly validated native child recipient outside its root's tile.
 // This supplies the root's binding context, never synthetic app input.
 @property NSDictionary *nativeFamilyHit;
+// Only a positively identified native root drag region installs this intent.
+// It keeps the binding/output of the swallowed physical pair, never app input.
+@property NSDictionary *nativeTitlePress;
+- (BOOL)nativeTitlePressCurrent;
 @property CFTimeInterval lastScrollPan; // last finger scroll that panned, 0 for none
 @property BOOL clearsFocus; // a pan begun on empty canvas that has not moved 5 points yet: released so, it unfocuses
 @property NSNumber *clickWindow; // the window an unbound press focused: released within 5 points, it is a completed click
@@ -954,6 +961,9 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 @property NSInteger nativeGestureButton;
 @property NSTimeInterval nativeScrollTime;
 @property BOOL nativeInputNoted;
+// Set only while a fresh plain title down is evaluated at the session tap.
+// The copied annotations select the common admission path; nothing is posted.
+@property BOOL routingEarlyNativeTitle;
 @property NSDictionary *nativeDecorationPress;
 @property NSNumber *nativeButtonHover;
 @property CFTimeInterval nativeButtonMotion;
@@ -961,6 +971,7 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 @property BOOL screenshotBusy;
 - (void)configureNativeInput;
 - (void)cancelNativeInput;
+- (BOOL)earlyNativeTitle:(CGEventType)type event:(CGEventRef)event;
 - (BOOL)nativeInput:(CGEventType)type event:(CGEventRef)event;
 - (LiveSource *)nativeSource:(CGWindowID)window at:(CGPoint)point;
 - (void)refreshNativeButtons:(LiveSource *)source;
@@ -1459,6 +1470,22 @@ static BOOL DWInputTrace(void) { static int on=-1;if(on<0)on=getenv("INFINIFY_DE
     if((flags&(NSEventModifierFlagControl|NSEventModifierFlagOption|NSEventModifierFlagShift|NSEventModifierFlagCommand))&&[self.desktop mouseBinding:@"left" source:nil flags:flags window:YES under:asNumber(border[@"window"]) pick:NO])return nil;
     return border;
 }
+// A title grab cannot be lent to a rebound source or a replacement output.
+// Once cancelled, the tap still swallows this physical pair through its release.
+- (BOOL)nativeTitlePressCurrent {
+    NSDictionary *intent=self.nativeTitlePress;Desktop *d=self.desktop;LiveSource *source=intent?d.sources[intent[@"window"]]:nil;
+    if(!intent||!d.native||[d nativeUnavailable]||d.cleaning||d.sessionInactive||!d.configured
+        ||![d.views containsObject:self]||![self.outputs containsObject:intent[@"output"]]
+        ||![self.dragOutput isEqual:intent[@"output"]]
+        ||![[d.nativeViews desiredOwnerForWindow:intent[@"window"]]isEqual:intent[@"output"]]||!source||source.detached
+        ||!boundIdentity(source.identity,intent[@"identity"])||!DWInScope(d.scope,source.router.pid)
+        ||![birth(source.router.pid)isEqual:source.router.processBirth]
+        ||![[d.native rootWindowFor:source.router.wid]isEqual:@(source.router.wid)])return NO;
+    NSDictionary *snapshot=[d call:@{@"op":@"snapshot"}],*binding=nil;BOOL output=NO;
+    for(NSDictionary *window in snapshot[@"windows"])if([window[@"window"]isEqual:intent[@"window"]]){binding=asDict(window[@"source"]);break;}
+    for(NSDictionary *view in snapshot[@"outputs"])if([view[@"id"]isEqual:intent[@"output"]]){output=YES;break;}
+    return output&&boundIdentity(source.identity,binding[@"identity"])&&[binding[@"generation"]isEqual:intent[@"generation"]];
+}
 // A normal run's press, dispatched as upstream's on_pointer_button does: the binding
 // for the held modifiers in the window or canvas context, else the native window
 // under the pointer. An unbound press on empty canvas means nothing to upstream either.
@@ -1484,6 +1511,13 @@ static BOOL DWInputTrace(void) { static int on=-1;if(on<0)on=getenv("INFINIFY_DE
     if([self.hover pickPress:hit button:button claimed:binding!=nil at:p output:output]){self.gesture=DWPolicyPress;return;}
     // ⌃⌥-click still dismisses a detached placeholder while no binding claims that press.
     if(!binding&&!button&&hit&&!source&&(e.modifierFlags&NSEventModifierFlagControl)&&(e.modifierFlags&NSEventModifierFlagOption)){[self.desktop call:@{@"op":@"forget",@"window":hit[@"window"]}];[self.desktop render];[self.desktop saveScene];return;}
+    if(self.nativeTitlePress){
+        // This is an internal, already intercepted native chrome press. A
+        // refusal stays swallowed; it must not fall through to app forwarding.
+        if(binding||button!=0||[hit[@"pick"]boolValue]||[hit[@"widget"]boolValue]||hit[@"native_member"]
+            ||![hit[@"window"]isEqual:self.nativeTitlePress[@"window"]]||![self nativeTitlePressCurrent])return;
+        move=YES;
+    }
     // A widget ignores drags and resizes, as upstream's does: the bound press starts no gesture and goes to the widget as a plain click (upstream's move and resize arms fall through to click-to-focus and forward it).
     if((move||resize)&&[asNumber(hit[@"widget"])boolValue]){[self.desktop flashStatus:@"A widget stays where its rule puts it: drags and resizes are ignored"];move=resize=NO;}
     // Upstream on_pointer_button: raise_and_focus, then the move grab. The controller does both inside begin_drag, a pinned window's included, and its reply
@@ -1587,6 +1621,11 @@ static BOOL DWInputTrace(void) { static int on=-1;if(on<0)on=getenv("INFINIFY_DE
 // The end of a press, whatever it had become: at the global point and the event time of its release, or of the moment a release that never
 // arrived was noticed (-[Desktop endLostInput]).
 - (void)released:(CGPoint)p at:(NSTimeInterval)time { self.liftSeen=0;
+    // Native title movement never reaches AppKit. Apply an up farther than
+    // the last drag through the same pointer-to-world mapping before ending it.
+    if(self.nativeTitlePress&&self.gesture==2&&[self nativeTitlePressCurrent])
+        [self.desktop call:@{@"op":@"gesture_to",@"screen_delta":pointJSON(CGPointMake(p.x-self.startPoint.x,p.y-self.startPoint.y)),@"pointer":pointJSON(p)}];
+    self.nativeTitlePress=nil;
     // The release of a resize grab: the last size asked is let through, the window is read once more, and the canvas has the size it has.
     // A transaction that ended by itself meanwhile has nothing to release, and says so to nobody.
     if(self.gesture==4&&self.resizeTransaction){NSString *status=self.desktop.statusText;
@@ -1822,9 +1861,12 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 }
 - (void)configureNativeInput {
     [self configureGlobalTrackpad];
+    // The title session tap must be installed after the global session tap so
+    // a later global retry cannot observe its down before title admission.
+    if(self.native&&[self globalGesturesEnabled]&&!self.globalTrackpad.running)return;
     if(self.native.ended||self.sessionInactive||!self.configured||!self.panels.count||self.nativeInput)return;
     __weak Desktop *weak=self;
-    DWNativeInput *input=[[DWNativeInput alloc]initWithConsume:^BOOL(CGEventType type,CGEventRef event){return [weak nativeInput:type event:event];} ignoreEvent:^BOOL(CGEventRef event){
+    DWNativeInput *input=[[DWNativeInput alloc]initWithConsume:^BOOL(CGEventType type,CGEventRef event){return [weak nativeInput:type event:event];} earlyConsume:^BOOL(CGEventType type,CGEventRef event){return [weak earlyNativeTitle:type event:event];} ignoreEvent:^BOOL(CGEventRef event){
         int64_t tag=CGEventGetIntegerValueField(event,kCGEventSourceUserData);if(!tag)return NO;
         if([weak.postingTags containsObject:@(tag)])return YES;
         for(LiveSource *source in weak.sources.allValues)if(source.router.tag==tag)return YES;
@@ -1838,11 +1880,13 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(self.cleaning||self.sessionInactive||!self.configured||self.native.ended||!source||source.detached||source.nativeButtonsReading||source.nativeButtonsNext>now||!AXIsProcessTrusted()||!DWInScope(self.scope,source.router.pid))return;
     source.nativeButtonsReading=YES;source.nativeButtonsNext=now+.2;
     if(!self.nativeButtonQueue)self.nativeButtonQueue=dispatch_queue_create("org.infinify.native-decorations",dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,QOS_CLASS_USER_INITIATED,0));
-    NSDictionary *identity=[source.identity copy];uint64_t token=source.observationToken;__weak Desktop *weak=self;
+    // Routine, unchanged window observations must not starve an AX chrome read.
+    // Only source/chrome changes or a different native session invalidate it.
+    NSDictionary *identity=[source.identity copy];uint64_t revision=source.nativeButtonsRevision,session=self.nativeSessionEpoch;__weak Desktop *weak=self;
     dispatch_async(self.nativeButtonQueue,^{@autoreleasepool{
         NSDictionary *report=DWNativeDecorationButtons(identity);
         dispatch_async(dispatch_get_main_queue(),^{Desktop *d=weak;source.nativeButtonsReading=NO;
-            if(!d||d.cleaning||d.sessionInactive||d.sources[source.logical]!=source||source.detached||source.observationToken!=token||![source.identity isEqual:identity])return;
+            if(!d||d.cleaning||d.sessionInactive||!d.configured||d.native.ended||d.nativeSessionEpoch!=session||d.sources[source.logical]!=source||source.detached||source.nativeButtonsRevision!=revision||![source.identity isEqual:identity]||!DWInScope(d.scope,source.router.pid))return;
             source.nativeButtons=report&&CACurrentMediaTime()-[report[@"sampled_at"]doubleValue]<=.1?report:nil;
         });
     }});
@@ -1870,13 +1914,15 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     self.nativeButtonHover=nil;
     DesktopView *view=self.nativeGestureView;self.nativeGestureView=nil;
     if(view.gesture){view.clearsFocus=NO;view.lastDragPan=0;[view released:view.lastPoint at:NSProcessInfo.processInfo.systemUptime];}
+    view.nativeTitlePress=nil;
     self.nativeScrollView.scrollPan=nil;self.nativeScrollView.scrollPanTime=0;self.nativeScrollView.lastScrollPan=0;
     self.nativeScrollView=nil;self.nativeScrollTime=0;[self.panLaunch cancel];
     if(self.nativeMagnifyView)[self cancelGestures];self.nativeMagnifyView=nil;self.nativeMagnifySource=nil;
 }
 // These are the actual window's events, observed before AppKit delivers them. Only
-// a binding, pick-mode policy or normal resize border takes a press; a plain
-// interior click remains the app's.
+// a binding, pick-mode policy or normal resize border takes an annotated press;
+// a qualified title down arrives earlier through the session-stage path. A
+// plain interior click remains the app's.
 // Once taken, the matching drag and release stay with this view even as a pan
 // moves the window out from under the pointer. No global input is synthesized.
 - (void)deliverNative:(NSEvent *)event type:(CGEventType)type view:(DesktopView *)view at:(CGPoint)point {
@@ -1994,6 +2040,37 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         [self.pointerGrab cancelWithValidate:^BOOL(NSDictionary *target){return [weak validateInputTarget:target];} post:^BOOL(CGEventRef event,NSDictionary *target,CGPoint local){return [weak postInput:event target:target local:local];}];
         [self.relativeMotion reset];
     }
+}
+- (BOOL)earlyNativeTitle:(CGEventType)type event:(CGEventRef)cg {
+    if(!cg||type!=kCGEventLeftMouseDown||CGEventGetIntegerValueField(cg,kCGMouseEventButtonNumber)!=0
+        ||DWNativeTabletEvent(cg)||!self.native||[self nativeUnavailable]||!self.configured||self.cleaning||self.sessionInactive
+        ||self.routingEarlyNativeTitle||self.nativeGestureView||self.nativeScrollView||self.nativeMagnifyView||self.pointerGrab.active
+        ||self.gestureOwner||self.trackpad.engaged||self.globalGestureContact||self.globalTrackpad.ownsTouches
+        ||self.globalTrackpad.hasNativeMousePress||self.magnifying||(NSEvent.pressedMouseButtons&~1UL))return NO;
+    NSEvent *event=[NSEvent eventWithCGEvent:cg];
+    if(!event||event.subtype==NSEventSubtypeTouch
+        ||(event.modifierFlags&(NSEventModifierFlagCommand|NSEventModifierFlagControl|NSEventModifierFlagOption|NSEventModifierFlagShift)))return NO;
+    BOOL onView=NO;CGPoint point=CGEventGetLocation(cg);
+    for(DesktopView *view in self.views){
+        if(view.gesture||view.heldPress||view.pressedSource||view.pressedTablet||view.pressedPointerGrab)return NO;
+        if([view outputAt:point])onView=YES;
+    }
+    if(!onView)return NO;
+    NSDictionary *recipient=DWNativeEventRecipientAtPoint(point);CGWindowID wid=[recipient[@"wid"]unsignedIntValue];
+    LiveSource *source=[self nativeSource:wid at:point];
+    if(!source||wid!=source.router.wid||!boundIdentity(recipient,source.identity)
+        ||!DWNativeWindowDragHit(source.identity,source.nativeButtons,point))return NO;
+    // Session packets have no destination annotation yet. Only this private
+    // copy carries the independently checked recipient into normal admission.
+    CGEventRef routed=CGEventCreateCopy(cg);if(!routed)return NO;
+    CGEventSetIntegerValueField(routed,kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent,wid);
+    CGEventSetIntegerValueField(routed,kCGMouseEventWindowUnderMousePointer,wid);
+    CGEventSetIntegerValueField(routed,kCGEventTargetUnixProcessID,[recipient[@"pid"]intValue]);
+    BOOL claimed=NO;self.routingEarlyNativeTitle=YES;
+    @try {claimed=[self nativeInput:type event:routed];}
+    @finally {self.routingEarlyNativeTitle=NO;CFRelease(routed);}
+    if(DWInputTrace())fprintf(stderr,"debug: native title early window=#%s claimed=%d\n",source.logical.description.UTF8String,claimed);
+    return claimed;
 }
 - (BOOL)nativeInput:(CGEventType)type event:(CGEventRef)cg {
     int64_t tag=CGEventGetIntegerValueField(cg,kCGEventSourceUserData);
@@ -2116,6 +2193,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     DesktopView *captured=self.nativeGestureView;
     if(down&&captured&&button==self.nativeGestureButton){[self cancelNativeInput];captured=nil;}
     if(captured&&(drag||up)&&button==self.nativeGestureButton){
+        if(captured.nativeTitlePress&&![captured nativeTitlePressCurrent]){[self cancelNativeInput];return YES;}
         NSDictionary *press=self.nativeDecorationPress;
         if(press){
             CGPoint started=jsonPoint(press[@"start"]);if(drag&&hypot(point.x-started.x,point.y-started.y)>5)self.nativeDecorationPress=nil;
@@ -2136,7 +2214,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
             // started no drag. Never let its release become an app's lone mouse-up.
             if(captured.gesture)[self deliverNative:event type:type view:captured at:point];
         }else if(captured.gesture){captured.clearsFocus=NO;captured.lastDragPan=0;[captured released:captured.lastPoint at:event.timestamp];}
-        if(up)self.nativeGestureView=nil;
+        if(up){captured.nativeTitlePress=nil;self.nativeGestureView=nil;}
         return YES;
     }
     if(self.cleaning||self.sessionInactive||self.native.ended||(!down&&type!=kCGEventScrollWheel))return NO;
@@ -2165,6 +2243,10 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
             &&(covered||(candidate.pixels&&!candidate.error))&&!candidate.detached){source=candidate;replica=YES;break;}
     }
     if(!source)return NO;
+    // The session-stage copy may only install a title grab. Coverage refusal
+    // and ordinary input policies remain at the annotated destination tap.
+    if(self.routingEarlyNativeTitle&&(replica||wid!=source.router.wid
+        ||[self.nativeViews requiresPlacementAdmissionForWindow:source.logical]))return NO;
     if(self.native&&down&&[self.nativeViews requiresPlacementAdmissionForWindow:source.logical]){
         // Even a cancelled transfer with no eligible recovery token still has
         // coverage. Its physically addressed root/member must get no down.
@@ -2191,7 +2273,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
             if([recipient[@"wid"]unsignedIntValue]!=wid||!boundIdentity(recipient,identity)
                 ||![self.nativeViews isAdmissionCurrentForTransfer:transfer placement:placement]
                 ||!DWNativeValidateAppliedPlacementInput(self.native,placement,recipient,point,NULL)
-                ||![self.nativeViews isAdmissionCurrentForTransfer:transfer placement:placement])return YES;
+                ||![self.nativeViews isAdmissionCurrentForTransfer:transfer placement:placement])return !self.routingEarlyNativeTitle;
         }
     }
     for(DesktopView *view in self.views){
@@ -2209,11 +2291,15 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         BOOL pick=[hit[@"pick"]isEqual:@YES],claimed=pick;
         if(down){
             if(captured||view.gesture)return NO;
+            NSArray *triggers=@[@"left",@"right",@"middle",@"back",@"forward"];
+            NSDictionary *binding=button>=0&&button<(NSInteger)triggers.count?[self mouseBinding:triggers[button] source:nil flags:event.modifierFlags window:YES under:source.logical pick:pick]:nil;
+            if(self.routingEarlyNativeTitle&&(pick||replica||binding||[hit[@"widget"]boolValue]||hit[@"native_member"]
+                ||[view resizeBorderForButton:button flags:event.modifierFlags hit:hit at:point output:output]))return NO;
             if(replica&&[self queuedNativeHoverPress:event source:source hit:hit view:view output:output at:point]){
                 [self cancelNativeHoverForWindow:source.logical];return YES;
             }
             NSEventModifierFlags extra=event.modifierFlags&(NSEventModifierFlagCommand|NSEventModifierFlagControl|NSEventModifierFlagShift);
-            if(button==0&&!extra&&!pick&&!hit[@"native_member"]&&![hit[@"widget"]boolValue]&&(replica?[self replicaGreen:source at:point output:output]:(wid==source.router.wid&&[self nativeGreen:source at:point]))){
+            if(!self.routingEarlyNativeTitle&&button==0&&!extra&&!pick&&!hit[@"native_member"]&&![hit[@"widget"]boolValue]&&(replica?[self replicaGreen:source at:point output:output]:(wid==source.router.wid&&[self nativeGreen:source at:point]))){
                 NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}];
                 for(NSDictionary *window in snapshot[@"windows"])if([window[@"window"]isEqual:source.logical]){NSDictionary *binding=asDict(window[@"source"]);
                     if(!boundIdentity(source.identity,binding[@"identity"]))return NO;
@@ -2221,10 +2307,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
                     self.nativeGestureView=view;self.nativeGestureButton=button;return YES;
                 }
             }
-            [self refreshNativeButtons:source];
+            if(!self.routingEarlyNativeTitle)[self refreshNativeButtons:source];
             if(replica)return NO; // Canvas view owns ordinary replica input and bound gestures.
-            NSArray *triggers=@[@"left",@"right",@"middle",@"back",@"forward"];
-            NSDictionary *binding=button>=0&&button<(NSInteger)triggers.count?[self mouseBinding:triggers[button] source:nil flags:event.modifierFlags window:YES under:source.logical pick:pick]:nil;
             NSString *kind=asString(binding[@"kind"]);
             claimed|=[@[@"pan_viewport",@"move_window",@"move_snapped_windows",@"resize_window",@"resize_window_snapped",@"center_nearest",@"action"]containsObject:kind?:@""];
             if([hit[@"widget"]boolValue]&&([kind hasPrefix:@"move_"]||[kind hasPrefix:@"resize_"]))claimed=NO;
@@ -2232,7 +2316,24 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
             // root's normal edge press must enter the same pointer-anchored
             // transaction as the canvas, before the app owns its button pair.
             // Family members keep their independent native controls and drags.
-            if(wid==source.router.wid&&[view resizeBorderForButton:button flags:event.modifierFlags hit:hit at:point output:output])claimed=YES;
+            if(!self.routingEarlyNativeTitle&&wid==source.router.wid&&[view resizeBorderForButton:button flags:event.modifierFlags hit:hit at:point output:output])claimed=YES;
+            // No late title fallback: annotation follows native chrome tracking.
+            BOOL titleCandidate=self.routingEarlyNativeTitle&&!claimed&&!binding&&button==0&&!replica&&wid==source.router.wid&&!pick
+                &&![hit[@"widget"]boolValue]&&!hit[@"native_member"]
+                &&!(event.modifierFlags&(NSEventModifierFlagCommand|NSEventModifierFlagControl|NSEventModifierFlagOption|NSEventModifierFlagShift));
+            BOOL titleHit=titleCandidate&&DWNativeWindowDragHit(source.identity,source.nativeButtons,point);
+            if(DWInputTrace()&&titleCandidate)fprintf(stderr,"debug: native title window=#%s cached=%d age_ms=%.1f region=%d hit=%d\n",source.logical.description.UTF8String,source.nativeButtons!=nil,source.nativeButtons?(CACurrentMediaTime()-[source.nativeButtons[@"sampled_at"]doubleValue])*1000:-1,asDict(source.nativeButtons[@"title"][@"region"])!=nil,titleHit);
+            if(titleHit){
+                NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}],*current=nil;
+                for(NSDictionary *window in snapshot[@"windows"])if([window[@"window"]isEqual:source.logical]){current=asDict(window[@"source"]);break;}
+                // A recognized region is never given back as half an AppKit
+                // drag, including a binding which changed before installation.
+                self.nativeGestureView=view;self.nativeGestureButton=button;
+                if(!boundIdentity(source.identity,current[@"identity"])||!current[@"generation"]
+                    ||![[self.nativeViews desiredOwnerForWindow:source.logical]isEqual:output])return YES;
+                view.nativeTitlePress=@{@"window":source.logical,@"output":output,@"identity":current[@"identity"],@"generation":current[@"generation"]};
+                claimed=YES;
+            }
             if(!claimed)return NO;
             self.nativeGestureView=view;self.nativeGestureButton=button;
         }else{
@@ -2869,8 +2970,15 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // Probe, demo and owned-fixture runs drive presses no button backs and take no touches: they are left alone.
 - (void)endLostInput {
     if(!self.configured||self.cleaning||self.askingQueue)return;
+    [self.nativeInput cancelIdleEarlyMousePress];
     NSUInteger down=NSEvent.pressedMouseButtons;CFTimeInterval now=CACurrentMediaTime();
     for(DesktopView *view in self.views.copy){
+        // A title down swallowed before session annotation never enters
+        // AppKit's combined button state or its release queue. Its tap owns the
+        // pair and bounds silent lost input above, retaining cancelled tails.
+        if(view.gesture&&view==self.nativeGestureView&&view.nativeTitlePress&&self.nativeInput.hasEarlyMousePress){
+            view.liftSeen=0;continue;
+        }
         // A press the DebugPointer request made has no button behind it: its own request or its timer ends it.
         if(!view.gesture||view.injected||(down&(1UL<<view.gestureButton))){view.liftSeen=0;continue;}
         if(!view.liftSeen){view.liftSeen=now;continue;}
@@ -4461,7 +4569,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
             d.native=candidate;d.nativeResumeWanted=NO;d.nativeResumeFailures=0;d.nativeResumeNote=nil;
             [d say:@"Native presentation reconnected after authenticated restoration audit"];d.statusText=[d restingStatus];
             d.navigation.enabled=YES;d.lastObservation=0;
-            for(LiveSource *source in d.sources.allValues){source.observationToken=++d.observationEpoch;source.nativeButtons=nil;source.nativeButtonsNext=0;}
+            for(LiveSource *source in d.sources.allValues){source.observationToken=++d.observationEpoch;[source invalidateNativeButtons];}
             d.windowObservationAgain=YES;[d requestWindowObservation];[d configureNativeInput];[d render];
         });
     });
@@ -4631,7 +4739,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
         if(gone)[self forgetNativeFamily:source];
         // Titles follow in a managed run, under native resize too. A refused title is not offered again.
         NSString *title=self.manager&&!gone?asString(w[(id)kCGWindowName]):nil;
-        if(title&&![title isEqual:source.title]){source.title=title;NSString *status=self.statusText;NSDictionary *reply=[self call:@{@"op":@"retitle",@"window":source.logical,@"identity":source.identity,@"title":title}];if(reply)[self follow:reply];else self.statusText=status;}
+        if(title&&![title isEqual:source.title]){[source invalidateNativeButtons];source.title=title;NSString *status=self.statusText;NSDictionary *reply=[self call:@{@"op":@"retitle",@"window":source.logical,@"identity":source.identity,@"title":title}];if(reply)[self follow:reply];else self.statusText=status;}
 
         // A managed run tells a window that closed from a capture that failed: only the second keeps today's placeholder.
         // A manual run does so for a window close-window or suspend-window asked to close: the controller's mark decides what is left.
@@ -4675,6 +4783,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
             }
         }
         if(![source.router.bounds isEqual:frame]){
+            [source invalidateNativeButtons];
             source.router.bounds=frame;
         }
         // Manual sources retry the latest native size after an earlier configuration completes too.
@@ -4711,7 +4820,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     if(self.cleaning)return;BOOL changed=NO,matched=NO;
     for(LiveSource *source in self.sources.allValues)if(source.router.pid==pid&&(!window||source.router.wid==window)){
         matched=YES;
-        source.nativeButtons=nil;source.nativeButtonsNext=0;
+        [source invalidateNativeButtons];
         NSString *title=source.title;NSDictionary *bounds=source.router.bounds;[self track:source];[self refreshNativeButtons:source];if(source.title!=title||source.router.bounds!=bounds)changed=YES;}
     if(!matched)[self windowFamilyChanged:pid];
     // A window that closed was drawn by -closed:. A look that found nothing new draws nothing: the reports of one busy application come 12 times a second.
@@ -4719,14 +4828,14 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
 }
 - (void)windowDestroyed:(CGWindowID)window pid:(pid_t)pid {
     if(self.cleaning)return;BOOL matched=NO;
-    for(LiveSource *source in self.sources.allValues)if(source.router.pid==pid&&source.router.wid==window){matched=YES;source.destroyed=CACurrentMediaTime();[self track:source];}
+    for(LiveSource *source in self.sources.allValues)if(source.router.pid==pid&&source.router.wid==window){matched=YES;[source invalidateNativeButtons];source.destroyed=CACurrentMediaTime();[self track:source];}
     if(!matched)[self windowFamilyChanged:pid];
 }
 - (void)windowFamilyChanged:(pid_t)pid {
     if(self.cleaning||self.sessionInactive||(self.native&&!self.native.familiesNeeded)||self.native.ended||(pid&&!DWInScope(self.scope,pid)))return;BOOL changed=NO;
     [self.nativeFamilies invalidatePID:pid];
     if(!self.native){[self captureDemand];[self render];return;}
-    for(LiveSource *source in self.sources.allValues)if(!source.detached&&(!pid||source.router.pid==pid)){[self forgetNativeFamily:source];source.observationToken=++self.observationEpoch;source.nativeButtons=nil;source.nativeButtonsNext=0;[self refreshNativeButtons:source];changed=YES;}
+    for(LiveSource *source in self.sources.allValues)if(!source.detached&&(!pid||source.router.pid==pid)){[self forgetNativeFamily:source];source.observationToken=++self.observationEpoch;[source invalidateNativeButtons];[self refreshNativeButtons:source];changed=YES;}
     if(changed){self.windowObservationAgain=YES;[self requestWindowObservation];}
 }
 // Native focus may have moved (Command-Tab, a click on another window): read now, through the coordinator's own path.
