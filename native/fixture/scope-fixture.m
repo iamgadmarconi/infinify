@@ -16,6 +16,7 @@
 //   size WxH           the window's content opens at this size, or at what of it fits the screen's visible area, instead of 420x470
 //                      (tests/e2e/scoped-render-bench.sh: a window as large as a person keeps one)
 //   animate RATE       explicitly redraw a moving band in the plain view at RATE Hz, even under the canvas (capture benchmark only)
+//   report_ms 50|500    periodic status reporting at 50ms (default) or every tenth 50ms tick; watchdog/commands and animation are unchanged
 //   corner WxH         the window opens with its lower right corner W and H points inside the visible area's, instead of centred:
 //                      from there a larger size does not fit the screen
 // and it then also obeys, each a file in DIR removed once read: `frame` "W H" (set its own frame size, top left kept), `hang` SECONDS
@@ -41,6 +42,7 @@ static NSSize increment,base;
 static double stall;
 static NSUInteger snapped,resizes;
 static double animationRate;
+static NSUInteger reportEvery=1;
 static NSUInteger animationFrames;
 static BOOL exportStripes;
 static id pair(NSSize s) { return s.width>0&&s.height>0?@[@(s.width),@(s.height)]:(id)NSNull.null; }
@@ -128,6 +130,7 @@ int main(int argc,const char **argv) { @autoreleasepool {
         if(!strcmp(argv[i],"resizable")){resizable=YES;continue;}
         if(!strcmp(argv[i],"hidden")){hidden=YES;continue;}
         if(!strcmp(argv[i],"animate")){if(++i>=argc)return 64;animationRate=strtod(argv[i],&end);if(!end||*end||!isfinite(animationRate)||animationRate<1||animationRate>240)return 64;continue;}
+        if(!strcmp(argv[i],"report_ms")){if(++i>=argc)return 64;if(!strcmp(argv[i],"50"))reportEvery=1;else if(!strcmp(argv[i],"500"))reportEvery=10;else return 64;continue;}
         NSSize *into=!strcmp(argv[i],"min")?&least:!strcmp(argv[i],"max")?&most:!strcmp(argv[i],"increment")?&increment:!strcmp(argv[i],"size")?&opens:!strcmp(argv[i],"corner")?&corner:NULL;int w=0,h=0;
         if(!into||++i>=argc||sscanf(argv[i],"%dx%d",&w,&h)!=2||w<1||h<1)return 64;
         *into=NSMakeSize(w,h);
@@ -166,7 +169,7 @@ int main(int argc,const char **argv) { @autoreleasepool {
     __block BOOL waiting=hidden;BOOL commanded=argc>5;
     // A command of the sizing test: the file's text, and the file gone.
     NSString *(^command)(NSString *)=^NSString *(NSString *name){NSString *path=[directory stringByAppendingPathComponent:name],*text=[NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];if(text)[NSFileManager.defaultManager removeItemAtPath:path error:nil];return text;};
-    pid_t parent=getppid();NSDate *until=[NSDate dateWithTimeIntervalSinceNow:seconds];
+    pid_t parent=getppid();NSDate *until=[NSDate dateWithTimeIntervalSinceNow:seconds];__block NSUInteger reportTicks=0;
     [NSTimer scheduledTimerWithTimeInterval:.05 repeats:YES block:^(NSTimer *timer){(void)timer;if(getppid()!=parent||until.timeIntervalSinceNow<=0||(!waiting&&!window.visible))exit(0);
         if(commanded){NSString *text=nil;
             if(waiting&&command(@"show")){waiting=NO;[window orderFrontRegardless];}
@@ -177,7 +180,9 @@ int main(int argc,const char **argv) { @autoreleasepool {
         NSString *below=[directory stringByAppendingPathComponent:@"below"],*number=[NSString stringWithContentsOfFile:below encoding:NSUTF8StringEncoding error:nil];
         if(number.integerValue>0){[NSFileManager.defaultManager removeItemAtPath:below error:nil];[window orderWindow:NSWindowBelow relativeTo:number.integerValue];}
         if(animationRate>0&&command(@"stripes"))exportStripes=YES;
-        report();}];
+        // The first periodic tick still reports promptly. Only this diagnostic
+        // cadence changes; event-driven reports above stay immediate.
+        if(reportTicks++%reportEvery==0)report();}];
     if(animationRate>0){NSTimer *animation=[NSTimer timerWithTimeInterval:1/animationRate repeats:YES block:^(NSTimer *timer){(void)timer;animationFrames++;[plain display];}];[NSRunLoop.mainRunLoop addTimer:animation forMode:NSRunLoopCommonModes];}
     [NSApp run];return 0;
 } }

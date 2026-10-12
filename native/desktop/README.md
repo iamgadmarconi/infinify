@@ -2,19 +2,53 @@
 
 ## Current development evidence (2026-10-12)
 
-The six-window capture workload remains below the 120 Hz target. On the signed
-`c101550` app, six 1700×1132-point sources and a 2056×1290-point Retina output
-presented about 58 fps at rest, 49 while panning and 40 while zooming. These
-are actual canvas presentation rates, not capture callback counts. CPU/GPU
-encoding alone does not explain the gap: drawable acquisition also stalls.
-The same geometry with synthetic source surfaces reached 120/119.75/120 fps
-in short rest/pan/zoom samples, which does not establish real-capture parity.
+The signed `42d17f4` app (executable SHA256
+`395673e57097987081f4ee2cf806f26db97ae983e3ef9633772f9a40a6d83349`)
+was measured with six 1700×1132-point captured sources and a 2056×1290-point
+Retina output. Each phase below contains four selected seconds. FPS comes from
+actual canvas drawable presentation timestamps; source delivery is separate.
 
-Managed window discovery now uses one bounded worker observation instead of
-repeating synchronous global window-list reads on the main thread. Results
-must pass source identity, generation, previous bounds, session and 100 ms
-freshness checks. Bound-window input and resize paths retain fresh validation.
-Performance measurements of this change are pending.
+| Phase | Presented fps | Worst main-thread gap (ms) | Presentation p99 / worst gap (ms) |
+| --- | ---: | ---: | ---: |
+| Rest | 57.25 | 2.6 | 25 / 25 |
+| Pan | 51.00 | 2.0 | 25 / 25 |
+| Zoom | 52.00 | 10.9 | 25 / 25 |
+| Move one window | 58.00 | 2.5 | 25 / 25 |
+| Switch logical focus | 52.00 | 2.5 | 25 / 25 |
+
+The matching `0e47daa` phases had worst main-thread gaps of
+46.5/48.7/63.1/41.9/25.7 ms. The new build moves child ownership/bounds validation
+onto the bounded observer and caches inherited-wallpaper queries, alongside
+correctness changes; this one pair does not isolate each change's contribution.
+Worker results retain exact binding/session fences, fresh main-thread process
+birth and a 100 ms limit measured from the first native read. Input and frame
+acceptance still validate fresh native membership. The source/presentation
+120 Hz assertions still fail, and drawable acquisition still reaches 25 ms.
+The fixture requests 120 Hz redraws without proving 120 Hz source production.
+An unchanged unrelated level-24 surface overlaps the canvas's numeric bounds;
+that coverage alone does not establish optical occlusion.
+
+A separate six-second native idle interval used six static cooperative windows
+and a static background, with process/geometry reads only at the boundaries.
+Infinify used 3.99% of one core, 53.66 MiB ending RSS and 155.20 MiB charged
+physical footprint. The helper used 0.17%, 89.80 MiB RSS and 24.09 MiB footprint.
+Whole-desktop WindowServer CPU was 11.78% in the fixture-only interval and 2.33%
+in the managed interval; the former has overlapping originals, the latter a
+grid plus a canvas surface, so their difference is not attributable compositor
+overhead. RSS/footprint endpoints are not peaks or a complete GPU allocation
+account. All six exact identities, owners, bounds, screen rectangles, transforms
+and alpha values were restored, the journal was empty, and all children exited.
+Idle CPU and background drawables do not prove native-window presentation FPS.
+
+One opt-in fixture diagnostic reduced periodic status reporting from 50 to
+500 ms while keeping watchdog/commands, event reports and requested animation
+unchanged. On the same app it presented 48.25–56.75 fps with 25 ms worst gaps;
+it did not resolve the cadence deficit. Default reporting and assertions remain
+unchanged. Evidence is under
+`target/performance/20261012-window-scaling/child-observer/`, with the matched
+capture, idle and telemetry runs in `target/ipc/bench.J9FwIM`,
+`target/ipc/idle.60ssvst0` and `target/ipc/bench.n3BfOD`. These bounded owned runs
+do not establish stable 120 Hz or ordinary-application compositor parity.
 
 The native helper and Rust runtime now use only the current binary protocol.
 The legacy JSON listener/client and ignored navigation flag are removed.
@@ -359,8 +393,7 @@ changes for the config path, `exec-terminal`, `PATH` and relative paths.
   Recording is switched on, reopens the app through LaunchServices, outside
   the login item's job: it is then not restarted after a crash until the next
   login. The permission window's Relaunch stays inside the job.
-- **A moment with no display** ends every DriftWM fullscreen (only with
-  `--experimental-native-resize`): the controller is told that every output is
+- **A moment with no display** ends every DriftWM fullscreen: the controller is told that every output is
   gone ([FULLSCREEN.md](../../crates/desktop/FULLSCREEN.md)).
 - **Other applications' floating palettes.** The panels are put in front again
   at every Space change, which also puts them above another application's
@@ -793,9 +826,8 @@ is a line on stderr ([Desktop mode](#desktop-mode)).
   Accessibility report, or the reconciliation once a second) hands the
   controller its size, which becomes the window's size on the canvas with its
   top-left kept, and the scene is saved. Resizing a window by dragging its
-  edge on the canvas is the one thing still behind
-  `--experimental-native-resize`
-  ([Experimental native resizing](#experimental-native-resizing)).
+  edge on the canvas uses the same readback transaction
+  ([Resizing a window with the pointer](#resizing-a-window-with-the-pointer)).
 
 A click on a source asks for native focus of that one window only: in a normal
 run through the controller's focus request and the focus driver, which acts on
@@ -956,8 +988,7 @@ in view on some display. It stops about two seconds after the window left every
 view and starts again when it returns; a window that returns within those two
 seconds shows its last frame at once, and one that returns later shows its
 last picture, which the compositor keeps ([Rendering](#rendering)), until the
-restarted stream delivers. With `--experimental-native-resize`
-every stream runs continuously, as before.
+restarted stream delivers.
 
 **Capture rate.** A stream is asked for a frame at most once per refresh of
 the fastest display a canvas panel is on, and at least 60 times a second
@@ -969,12 +1000,7 @@ composited up to four times as often as before, which is its share of GPU
 and WindowServer time times four at most; every delivered frame redraws only
 the outputs that show that window. The rate is read when a stream is started
 or resized: after a display is added or removed, a running stream keeps the
-rate it has until then. Under `--experimental-native-resize` the rate stays
-30 a second: there every delivered frame is judged on the main thread before
-it is shown (a controller snapshot for every bound window and several more,
-and a native family query, a few milliseconds a frame), which the display's
-rate would multiply by four for every window that redraws, on the thread
-that also serves the hot keys and the frame callback.
+rate it has until then.
 
 **Closing, suspending and relaunching** are explicit actions only; nothing
 closes a window by itself.
@@ -1099,11 +1125,9 @@ particular a run without Screen Recording access still manages nothing.
 - Refused with exit status 64 and one line on stderr, before anything opens:
   a value that is not a list of process ids, a process that is not running or
   is not this user's, Infinify itself, a process named twice, a launch without
-  `--windowed` or without `--state`, and `--manual`,
-  `--experimental-native-resize` or a demo mode beside it. Without
+  `--windowed` or without `--state`, and `--manual` or a demo mode beside it. Without
   `--windowed` a launch that lacks a grant goes to the onboarding window; the
-  chooser attaches whatever is picked in it; the flag's pointer handles need
-  every window's capture. The sizing actions, `msg resize`, a rule's size and
+  chooser attaches whatever is picked in it. The sizing actions, `msg resize`, a rule's size and
   fullscreen need no flag and run in a scope like everything else: a size
   effect names the process of a source that was bound here, so no process
   outside the scope can be asked for a size
@@ -1389,13 +1413,19 @@ second of stable demand. Only one configuration update is outstanding per
 source. Buffer resolution does not change native bounds, world rectangles,
 input coordinates or crop geometry. Pinned windows retain their screen density.
 Manual capture and the capture-acknowledged experimental resize path retain
-their original resolution rules. Capture cadence follows the fastest display;
-it is not reduced to obtain the pixel savings.
+their original resolution rules. Requested capture cadence follows the fastest
+display and is not reduced to obtain pixel savings; actual source delivery can
+be slower and is measured separately.
 
 `INFINIFY_DEBUG_FAMILIES=1` logs up to 4096 child-capture lifecycle records:
 creation, first frame, configuration, retirement and fixed failure codes. These
 opt-in records contain numeric identities, density and cadence, without titles
 or image content. The default benchmark leaves this diagnostic disabled.
+
+`INFINIFY_BENCH_REPORT_MS=500` changes only the capture fixture's periodic
+status reports to every tenth existing 50 ms tick. The watchdog, command checks,
+event reports and animation timer keep their existing cadence; the default is
+50 ms. This is a separately labeled measurement diagnostic, not a product setting.
 
 Overlay exports request full-resolution one-shot ScreenCaptureKit samples when
 the live stream has a smaller raster, including a stopped source needed by the
@@ -2275,8 +2305,7 @@ windows: while every regular application is observed in full, new windows are
 looked for and every managed window is looked at once a second, and native
 focus is read once a second, as a reconciliation that finds whatever no event
 announced. A window whose capture failed, one reported destroyed and still on
-screen, and every window of a run with `--experimental-native-resize` are
-still looked at on every poll. Without Accessibility access, and while some
+screen are still looked at on every poll. Without Accessibility access, and while some
 application is not observed in full (it has not answered yet, or refused a
 notification), the poll runs exactly as before, every 80 ms and focus twice a
 second; without that access the `NSWorkspace` events are all that arrives
@@ -2732,13 +2761,8 @@ covered by its scenarios and not run in the app with a live window:
 - A rule that places a frame outside the 32-bit integer range refuses the
   window (`window geometry exceeds integer range`), and it is not offered
   again until it has left the screen and come back.
-- With `--experimental-native-resize` no handle is drawn or hit on a widget or
-  a pinned window, and a handle of the focused window that lies under a pinned
-  window is neither drawn nor hit. The [sizing actions](#window-sizing-actions)
-  that flag turns on leave both alone as well: with a widget or a pinned
-  window focused they do nothing and `msg resize WIDTH HEIGHT` answers
-  `this window has no canvas size to set: …`. The one size either is ever
-  asked for is its own rule's `size`, as it appears (the table above).
+- Widgets refuse pointer resizing. Screen-pinned windows use the current
+  screen-space readback transaction; window rules can request their native size.
 
 ### Passing keys and presses to an application
 
@@ -3067,6 +3091,9 @@ Not run, because it needs a captured window, a key or a pointer:
   in `main.m`, not seen.
 
 ### What was run for the pass rules with everything else built in
+
+Historical evidence: invocations of `--experimental-native-resize` in this
+subsection refer to the mode removed on 2026-10-12.
 
 On 2026-10-10 (macOS 27.2, Apple Silicon) the pass rules and the pinned drag
 were merged into the build that has the pointer policy, the sizing actions
@@ -3419,9 +3446,8 @@ What changes on screen against earlier builds:
   the window is not drawn at all, where earlier builds showed an empty frame.
   A window whose rule
   names a `size` is asked for that size as it appears
-  ([Window sizing actions](#window-sizing-actions)); under
-  `--experimental-native-resize` no picture of it is
-  drawn while that is in progress. Its opening waits for it too, as
+  ([Window sizing actions](#window-sizing-actions)); its opening waits
+  until the size request is answered. Its opening waits for it too, as
   upstream's window opens at the size its rule gave it: the second for its
   first picture starts when the resize has been answered, done or refused,
   and a picture that arrives earlier, of the size it is leaving, starts
@@ -3461,11 +3487,7 @@ What plays nothing, by upstream's rules or by this port's:
   here. Without Screen Recording access or with `--manual` nothing ever opens;
 - a close or a dismissal that no display was drawing, a window that never had
   a picture, and everything at `animation_speed = 1`;
-- under `--experimental-native-resize`, the close of a window whose picture
-  was being withheld when it went (its size was still owed, or the last
-  resize left it unsettled): there is nothing to fade from;
-- a move, a resize, a fit and fullscreen, which upstream also animates at
-  `animation_speed`: none of them exists here.
+
 
 Limits the owner will notice or should know of:
 
@@ -3834,6 +3856,9 @@ compositor, and every probe, demo and owned-fixture mode after this change
 (their code path is unchanged by construction, not by a run).
 
 ### What was run for rules and rendering together
+
+Historical evidence: invocations of `--experimental-native-resize` in this
+subsection refer to the mode removed on 2026-10-12.
 
 On 2026-10-10 (macOS 27.2, Apple Silicon), after the window rules and the
 renderer became one build: `./scripts/build-app.sh`; the controller scenarios,
@@ -4204,6 +4229,9 @@ closing through the controller; a second display; a native-resize source
 closing; a config error at launch; blur over an animated background.
 
 ### What was run for effects with the pointer policy and window sizing built in
+
+Historical evidence: invocations of `--experimental-native-resize` in this
+subsection refer to the mode removed on 2026-10-12.
 
 The effects were built on a tree that had rules and rendering and nothing
 later. Joined to the [pointer policy](#pointer-motion-sloppy-focus-and-pick-mode)
@@ -4992,10 +5020,8 @@ action first focuses the window under the pointer, a placeholder included, then
 runs the action. A press bound to move or resize a window raises and focuses
 it before the drag begins, as upstream's does, a screen-pinned window
 included, and the native focus follows as after a click. A resize press does
-so also where no resize can begin: without `--experimental-native-resize`,
-on a pinned window, and under the flag on a window whose resize is turned
-away (a detached placeholder, a window whose own extent no longer matches
-the canvas's, an application that takes no size). A move the controller
+so also where a resize is turned away (a detached placeholder or an
+application that takes no size). A move the controller
 refuses focuses nothing, where upstream has no such refusal. A move by
 [trackpad gesture](#trackpad-gestures) focuses and raises its window too, as
 upstream's. After a
@@ -5262,7 +5288,7 @@ Applied now:
 | `[zoom] step`, `mouse_speed` | a bound wheel zooms by `step ^ (lines / 2 × mouse_speed)`, animated |
 | `[zoom] trackpad_speed` | scales a pinch that zooms, of two fingers or more (1.0 by default) |
 | `[snap] enabled`, `gap`, `distance`, `break_force`, `corners`, `centers` | the logical window drag and its cluster |
-| `[snap] outer_gap`, `focus_placement`, `[[outputs]] focus_placement` | where window navigation and `send-to-output` park a window; an `[[outputs]]` entry is matched by display UUID, `windowed`, or `*`. With `--experimental-native-resize`, `outer_gap` is also the inset of `fit-window` and `fill-window`, and `[snap] gap` the clearance `fill-window` keeps from other windows |
+| `[snap] outer_gap`, `focus_placement`, `[[outputs]] focus_placement` | where window navigation and `send-to-output` park a window; an `[[outputs]]` entry is matched by display UUID, `windowed`, or `*`. `outer_gap` is also the inset of `fit-window` and `fill-window`, and `[snap] gap` the clearance `fill-window` keeps from other windows |
 | `[[outputs]] hot_corners` (`top_left`, `top_right`, `bottom_left`, `bottom_right`, `threshold`, `disable_while_dragging`) | [hot corners](#displays-hot-corners-layouts-and-autostart) |
 | `autostart` | commands run once at launch |
 | `[session] restore_camera`, `restore_bookmarks` | what a restart restores, see [Persistence](#persistence-and-lifecycle) |
@@ -6440,10 +6466,9 @@ fires.
 `center-window` is upstream's `RestoreFillElseReset`, and `focus-center` the
 same: a window still filled by `fill-window` is flown to at the camera and
 zoom its fill ran in, and any other at zoom 1. A pick-mode click does the same
-for a filled window whose fill view is at or above `[zoom] interact_min`. A window can only be filled in
-an app started with `--experimental-native-resize`
-([Window sizing actions](#window-sizing-actions)); in a default launch there
-is never a stored view to restore and both actions always reset the zoom to 1.
+for a filled window whose fill view is at or above `[zoom] interact_min`. A normal run supports
+[window sizing actions](#window-sizing-actions), including fill; a stored fill
+view is restored when present, otherwise the actions reset zoom to 1.
 
 ### Cycling and hold-to-commit
 
@@ -6543,8 +6568,8 @@ send none. The shell then does what the reply says:
   what a forwarded click costs (a snapshot, `hit`, `input` and the source's
   validation), at most 60 times a second while the pointer moves over a window,
   and once a frame while the frame timer runs (a flight, a coast, an
-  animation): 120 times a second on a ProMotion display. Under
-  `--experimental-native-resize` that validation is a native family query.
+  animation): 120 times a second on a ProMotion display. Native family input
+  keeps its own fresh identity and membership validation.
 - **Sloppy focus** (`focus_follows_mouse = true`): the window under the pointer
   takes the focus without being raised and without the camera moving. Its native
   focus request is performed like a click's, and answered as logical without
@@ -6616,11 +6641,8 @@ send none. The shell then does what the reply says:
   Infinify's; a pinned window's rule still gives its application the presses
   it lists ([Passing keys and presses](#passing-keys-and-presses-to-an-application)).
   A wheel notch bound to an action runs over a target as anywhere. The pick lands where
-  `focus_placement` says. With `--experimental-native-resize` the orange
-  handles are not drawn and take no press on a display in pick mode, as
-  upstream's pick sits ahead of every resize border: a press where one would
-  be is the window's pick-mode press, or a press on empty canvas where the
-  handle would hang outside the frame. The
+  `focus_placement` says. Pick mode takes precedence over the normal resize
+  border. The
   zoom-out action, `msg zoom`, the wheel and the pinch all stop at half the
   zoom that fits every window, as upstream's do, so a low `interact_min` is
   never reached with few windows close together, as upstream notes.
@@ -6642,6 +6664,9 @@ These shapes have not been exercised with a physical pointer. The captured
 application's own cursor image remains unavailable over its replica.
 
 ### What has been run for the pointer policy
+
+Historical evidence: invocations of `--experimental-native-resize` in this
+subsection refer to the mode removed on 2026-10-12.
 
 Automated, no window, no pointer and no native effect:
 `crates/desktop/tests/pointer_flow.rs` drives `hover`, sloppy focus and its
@@ -7030,13 +7055,12 @@ Recording access: `tests/e2e/scoped-sizing.sh`,
 No application of the owner's has been resized by it, and no key chord has
 been pressed by a test.
 
-### The flag
+### When resize runs
 
 | Launch | What runs |
 | --- | --- |
 | default | Everything in this section: `zoom-to-fit-snapped`, `fit-window`, `fit-window-snapped`, `fill-window`, `grow-window`, `shrink-window`, `msg resize WIDTH HEIGHT`, and a [window rule](#window-rules-widgets-and-pinned-windows)'s `size`, asked of a new window that matches it. Keys bound to those actions are registered where a run registers keys. A size is settled by reading the window back. |
-| `--experimental-native-resize` | The same, in the older capture-acknowledged mode: a window's picture is shown, and the window takes input, only once a capture of it at its new size has been acknowledged. Beside that the eight orange handles on the focused window, which is all the flag is for now and is legacy: a normal run resizes by pointer without it ([Resizing a window with the pointer](#resizing-a-window-with-the-pointer), [Experimental native resizing](#experimental-native-resizing)). On the owner's real windows no capture was ever acknowledged in this mode. |
-| `--demo*`, `--owned-resize-*` | As before: a demo and a probe are told nothing and answer `action not implemented on macOS yet: <name>`. |
+| `--demo*` | As before: a demo and a probe are told nothing and answer `action not implemented on macOS yet: <name>`. |
 
 All of them act on canvas windows. With a widget or a screen-pinned window
 focused the five sizing actions and `zoom-to-fit-snapped` do nothing, as
@@ -7166,6 +7190,9 @@ With the flag, by the code:
 
 ### What changes for someone who used the previous build
 
+Historical evidence: invocations of `--experimental-native-resize` in this
+subsection refer to the mode removed on 2026-10-12.
+
 In a default launch:
 
 - ⌃⌥⇧W is now a registered global hot key while a canvas panel is open
@@ -7178,8 +7205,7 @@ In a default launch:
   before, which a controller test compares against the replies captured from
   the previous tree.
 
-In every normal run (until 2026-10-11 only with
-`--experimental-native-resize`):
+In every normal run:
 
 - ⌃⌥M and ⌃⌥⇧M are registered global hot keys, and Option-middle-click or
   Option with a two-finger pinch on a window now asks that real window to
@@ -7305,6 +7331,9 @@ In every normal run (until 2026-10-11 only with
   limits: [Fullscreen](#fullscreen).
 
 ### What has been run for sizing without the flag
+
+Historical evidence: invocations of `--experimental-native-resize` in this
+subsection refer to the mode removed on 2026-10-12.
 
 On 2026-10-11, macOS 27.2, Apple Silicon, from a shell with Accessibility and
 no Screen Recording access, in the tree that made sizing run in every normal
@@ -7475,6 +7504,9 @@ ok: 22 after: a click on the tile of e lands once, within 2 points: {'delta': {'
 
 ### What has been run for sizing
 
+Historical evidence: invocations of `--experimental-native-resize` in this
+subsection refer to the mode removed on 2026-10-12.
+
 On 2026-10-10, macOS 27.2, Apple Silicon, in this tree:
 
 - `./scripts/build-app.sh`: built and ad-hoc signed; nothing launched.
@@ -7561,6 +7593,9 @@ gesture and hot corner that fires a sizing action, key repeat on
 and more than one display.
 
 ### What has been run for sizing with everything else built in
+
+Historical evidence: invocations of `--experimental-native-resize` in this
+subsection refer to the mode removed on 2026-10-12.
 
 The same day and machine (macOS 27.2, Apple Silicon), in one tree with window
 rules, widgets and pins, the Metal renderer and the pointer policy:
@@ -8027,7 +8062,7 @@ only ([What has been run for the closed gaps](#what-has-been-run-for-the-closed-
 
 | What | Before | Now |
 | --- | --- | --- |
-| A press bound to `move-window`, `move-snapped-windows`, `resize-window` or `resize-window-snapped` (⌥ left or right drag, with ⇧ for the cluster) | started its drag and focused nothing | raises and focuses the window under the pointer first, a screen-pinned window included, and the real window is then focused natively as after a click. A widget still refuses the drag and gets the press as a click. A resize press does this also where no resize can begin: without `--experimental-native-resize`, on a pinned window, and under the flag where the resize is turned away (a detached placeholder, a window whose own extent no longer matches the canvas's). Since 2026-10-11 a resize press begins a resize in every normal run ([Resizing a window with the pointer](#resizing-a-window-with-the-pointer)) |
+| A press bound to `move-window`, `move-snapped-windows`, `resize-window` or `resize-window-snapped` (⌥ left or right drag, with ⇧ for the cluster) | started its drag and focused nothing | raises and focuses the window under the pointer first, a screen-pinned window included, and the real window is then focused natively as after a click. A widget still refuses the drag and gets the press as a click. A resize press does this also where the resize is turned away (a detached placeholder or an application that takes no size). Since 2026-10-11 a resize press begins a resize in every normal run ([Resizing a window with the pointer](#resizing-a-window-with-the-pointer)) |
 | `Infinify msg resize WIDTH HEIGHT` (the flag only) | left the stacking alone | raises the window over the other canvas windows, without giving it the focus. Asking again for the size last asked changes nothing, the stacking included, as upstream's does |
 | A problem in the config file | shown in the error bar and again in the status line | shown in the error bar only; the status line keeps its own notes (bindings left out, a `--super` chord or a load the controller refuses). Every message still goes to stderr |
 | Several warnings in one file | the bar named the parser's first, which for unknown actions changed from one load to the next | the bar names the first in sorted order, the same at every load, and stderr lists them in that order |
@@ -8037,8 +8072,9 @@ only ([What has been run for the closed gaps](#what-has-been-run-for-the-closed-
 | A rule's `size` (the flag only) | the window was placed at its own size and then asked, a widget and a rule-pinned window never | the window is placed for the size its rule names and then asked, a widget and a rule-pinned window too |
 | `Infinify msg camera` printing `1950 -0` | as now | unchanged: upstream's own client prints a negative zero for a centre whose Y is 0, so nothing rewrites it |
 
-Flags and controls are unchanged: no new flag, no new binding, no new `msg`
-command. `--experimental-native-resize` gated exactly what it gated then; since 2026-10-11 it gates the orange edge handles only, and a press bound to `resize-window` resizes without it.
+A press bound to `resize-window` uses the normal readback path. The retired
+orange-handle resize flag is no longer accepted; no replacement flag, binding
+or `msg` command was added.
 
 What still differs from DriftWM in these nine places:
 
@@ -8071,6 +8107,9 @@ What still differs from DriftWM in these nine places:
   that shows in a fixture run has not been tried: no fixture was run.
 
 ### What has been run for the closed gaps
+
+Historical evidence: invocations of `--experimental-native-resize` in this
+subsection refer to the mode removed on 2026-10-12.
 
 On 2026-10-10, macOS 27.2, Apple Silicon, in this tree, which has every
 earlier milestone but fullscreen:
@@ -8183,7 +8222,6 @@ earlier, headless detail.
 | Launch | What happens |
 | --- | --- |
 | default | `toggle-fullscreen` runs, a rule's `fullscreen = true` is applied to a new window, and ⌃⌥F is registered as a global hot key while a canvas panel is open (never in `--windowed`). |
-| `--experimental-native-resize` | The same, in the capture-acknowledged mode of that flag: the window's picture and input wait for an acknowledged capture at each size. |
 
 There is no other switch and no config key for it. The fixture modes
 (`--demo*`, `--owned-resize-*`) get none of it: there `toggle-fullscreen`
@@ -8310,10 +8348,9 @@ the fit, the fill or the step.
 
 ### What changes with fullscreen
 
-In every normal run (until 2026-10-11 only with
-`--experimental-native-resize`; a controller that is told nothing still
+In every normal run (an isolated controller that is told nothing still
 answers byte for byte as before, which a controller test compares against
-replies captured from the tree before this work):
+replies captured from the earlier tree):
 
 - ⌃⌥F is taken from every application while a canvas panel is open. Unbind it
   in the config file (`"mod+f" = "none"`) to give it back.
@@ -8401,6 +8438,9 @@ replies captured from the tree before this work):
   applies the same rule itself.
 
 ### What has been run for fullscreen
+
+Historical evidence: invocations of `--experimental-native-resize` in this
+subsection refer to the mode removed on 2026-10-12.
 
 On 2026-10-10, macOS 27.2, Apple Silicon, in one tree with every milestone up
 to window sizing:
@@ -8542,6 +8582,9 @@ and more than one display, so also the outline a fullscreen display no
 longer projects.
 
 ### What has been run for fullscreen with everything else built in
+
+Historical evidence: invocations of `--experimental-native-resize` in this
+subsection refer to the mode removed on 2026-10-12.
 
 Fullscreen was written on a tree that ended at window sizing. On 2026-10-10
 (macOS 27.2, Apple Silicon) it was merged into this one, which also has the
@@ -8701,6 +8744,16 @@ fullscreen display.
 
 ## Experimental native resizing
 
+Historical evidence only: this mode and its executable UI-driving probe were
+removed on 2026-10-12. The following commands and descriptions record the old
+implementation; they are not current launch instructions. The source is
+recoverable from commit `42d17f4`, and frozen evidence remains unchanged.
+None of the recorded live attempts established completed native resize and
+independent pixel validation. Current owned runtime scenarios use
+`tests/e2e/physical-resize-edge.sh`, `tests/e2e/scoped-resize-drag.sh` and
+`tests/e2e/scoped-sizing.sh`. The standalone capture-metadata regression and
+read-only saved-byte oracle remain available.
+
 `--experimental-native-resize` enables eight orange handles on the
 selected ordinary source, and that is all it is for since 2026-10-11:
 DriftWM's [sizing actions](#window-sizing-actions), `msg resize`, a rule's
@@ -8818,7 +8871,12 @@ explicitly authorized owned-fixture gate must cross real handles, AX mutation, S
 renderer pixels, independent AX/CG observation, clamp behavior, static-frame refresh,
 Escape handling, and cleanup. No such integrated live proof has been run or claimed.
 
-## Prepared noninteractive owned resize gate — runtime UNRUN
+## Historical noninteractive owned resize gate — retired
+
+The executable harness described below was removed on 2026-10-12. Its attempted
+contracts and immutable receipts are retained as history. The current
+`tests/e2e/desktop-native-resize.sh` runs build/headless metadata checks and
+the offline saved-byte oracle; it has no live-owned-fixture dispatch.
 
 `tests/e2e/desktop-native-resize.sh` defaults to building the signed app, reading
 pre-AppKit help, the existing headless resize integration, and 66 offline PNG

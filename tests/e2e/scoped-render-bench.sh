@@ -32,6 +32,7 @@
 # INFINIFY_BENCH_ZOOM_MOTION=1 adds continuous zoom targets after the pan phase.
 # INFINIFY_BENCH_MOVE_MOTION=1 moves one owned logical window continuously over IPC (not physical pointer forwarding).
 # INFINIFY_BENCH_FOCUS_SWITCH=1 switches logical focus among owned windows over IPC (native activation remains disabled).
+# INFINIFY_BENCH_REPORT_MS=500 is a separate capture-only telemetry diagnostic: every tenth 50ms status report, unchanged watchdog/commands/redraws (default 50).
 # INFINIFY_BENCH_CV_CLOCK=1 selects the scoped separate display-thread clock candidate.
 # INFINIFY_BENCH_OPACITY sets only the owned fixture windows' scene opacity, to isolate native occlusion.
 # INFINIFY_BENCH_HOST_ALPHA sets native fixtures' initial AppKit alpha (default 1), before adoption.
@@ -56,6 +57,9 @@ size=${INFINIFY_BENCH_SIZE:-1700x1100}; rate=${INFINIFY_BENCH_RATE:-120}
 mode=${INFINIFY_BENCH_MODE:-synthetic}; synth=$rate; nativebench=0
 baseline=${INFINIFY_BENCH_BASELINE:-0}
 case "$mode" in synthetic) ;; capture) synth=0 ;; native) synth=0; nativebench=1; INFINIFY_BENCH_ANIMATION=1; export INFINIFY_BENCH_ANIMATION ;; *) echo 'INFINIFY_BENCH_MODE must be synthetic, capture or native' >&2; exit 2 ;; esac
+report_ms=${INFINIFY_BENCH_REPORT_MS:-50}
+case "$report_ms" in 50) ;; 500) [ "$mode" = capture ] || { echo '500ms reports are a capture-only diagnostic' >&2; exit 2; } ;; *) echo 'INFINIFY_BENCH_REPORT_MS must be 50 or 500' >&2; exit 2 ;; esac
+INFINIFY_BENCH_REPORT_MS=$report_ms; export INFINIFY_BENCH_REPORT_MS
 fixture_count=${INFINIFY_BENCH_WINDOWS:-4}
 case "$fixture_count" in ''|*[!0-9]*) echo 'INFINIFY_BENCH_WINDOWS must be 1..16' >&2; exit 2 ;; esac
 [ "$fixture_count" -ge 1 ] && [ "$fixture_count" -le 16 ] || { echo 'INFINIFY_BENCH_WINDOWS must be 1..16' >&2; exit 2; }
@@ -68,6 +72,7 @@ mkdir -p target/ipc
 # Short: a socket path has room for about a hundred bytes.
 evidence=$(mktemp -d "$root/target/ipc/bench.XXXXXX")
 printf 'Evidence: %s\n' "$evidence"
+if [ "$report_ms" = 500 ]; then echo 'DIAGNOSTIC: periodic fixture reports every tenth 50ms tick; command/watchdog checks and animation cadence unchanged'; fi
 state=$evidence/state.json; config=$evidence/config.toml; socket=$evidence/s; : > "$config"
 if [ "${INFINIFY_BENCH_ANIMATION:-0}" = 1 ]; then
   cat > "$evidence/motion.glsl" <<'GLSL'
@@ -204,7 +209,7 @@ PLIST
 xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror native/fixture/scope-fixture.m \
   -framework AppKit -framework WebKit -o "$bundle/Contents/MacOS/ScopeFixture"
 fixture=$bundle/Contents/MacOS/ScopeFixture
-start() { mkdir "$evidence/$1"; if [ "$mode" = capture ]; then "$fixture" "$evidence/$1" "Bench fixture $1 $$" "$2" 150 size "$size" animate "$rate" & else "$fixture" "$evidence/$1" "Bench fixture $1 $$" "$2" 150 size "$size" & fi; fixtures="$fixtures $!"; }
+start() { mkdir "$evidence/$1"; if [ "$mode" = capture ]; then "$fixture" "$evidence/$1" "Bench fixture $1 $$" "$2" 150 size "$size" animate "$rate" report_ms "$report_ms" & else "$fixture" "$evidence/$1" "Bench fixture $1 $$" "$2" 150 size "$size" & fi; fixtures="$fixtures $!"; }
 scope=; fixture_index=0
 for name in $fixture_names; do
   start "$name" "$((fixture_index % 4 * 20 - 30))"; fixture_pid=$!
@@ -665,6 +670,7 @@ for name, r in phases:
     print(f'{name}: cpu_percent_one_core={r["cpu_percent_one_core"]:.2f} cpu_interval_seconds={r["process_interval_seconds"]:.2f} rss_start_kib={r["rss_start_kib"]} rss_end_kib={r["rss_end_kib"]}', flush=True)
     print(f'{name}: separate related-process intervals (WindowServer is whole desktop; RSS excludes GPU allocations): {json.dumps(r["related_processes"])}', flush=True)
 (evidence / 'summary.json').write_text(json.dumps({'mode': mode, 'fixture_count': fixture_count, 'requested_rate': rate,
+    'fixture_report_interval_ms': int(os.environ['INFINIFY_BENCH_REPORT_MS']) if mode == 'capture' else None,
     'fixture_points': [status(n)['bounds'][2:] for n in names], 'output_points': out,
     'selected_seconds_per_phase': windows * 2, 'phases': dict(phases)}, indent=2) + '\n')
 for name, r in phases:

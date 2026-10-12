@@ -95,10 +95,11 @@ press. This preserves native drag ownership; it does not provide an AppKit file
 drop destination for captured or replica windows. That integration remains open.
 
 Capture-family permission preflight runs on the bounded observation worker,
-removing a measured synchronous TCC wait from the main-thread demand path. Six
-large-window real-capture benchmarks reproduced substantial zoom stalls. The
-permission change and capture-size transitions are being measured separately;
-stable 120 Hz and native compositor performance have not been established.
+removing a measured synchronous TCC wait from the main-thread demand path.
+Managed discovery and child ownership/bounds observations also run on bounded
+workers. Exact binding/session fences, fresh main-thread process birth and
+100 ms freshness from the first native read remain required; input and captured
+frame validation keep their fresh native membership checks.
 
 Screen-pinned native resizing now uses output-local points at every canvas zoom,
 keeps the opposite edge from an absolute anchor, and preserves independent pin
@@ -126,8 +127,33 @@ size changes remain immediate. In the matched six-window run this reduced
 reconfigurations from 36 to 12 and worst zoom main-thread work from 47.2 to
 8.6 ms, but zoom presentation fell from 47 to 41.25 frames/second while larger
 surfaces stayed allocated. This is a tradeoff, not an overall performance win.
-Finer resolution buckets are being evaluated; stable 120 Hz and native
-compositor parity remain unestablished.
+The subsequent sqrt(2) resolution buckets reduced over-allocation without
+lowering demanded quality, but one matched zoom sample improved presentation
+from 41.25 to 52.75 fps while its worst main-thread gap increased from 8.6 to
+63.1 ms. This was also a tradeoff, not stable 120 Hz.
+
+The latest signed `42d17f4` sample uses six 1700×1132-point captured windows and
+a 2056×1290-point Retina output. Actual canvas presentations were
+57.25/51/52/58/52 fps for rest/pan/zoom/window move/logical focus. Worst
+main-thread gaps were 2.6/2.0/10.9/2.5/2.5 ms, down from
+46.5/48.7/63.1/41.9/25.7 ms in the matching `0e47daa` run. Presentation p99 and
+worst gaps remained 25 ms in every latest phase, and the 120 Hz source and
+presentation assertions still failed. The new app includes both child observer
+and wallpaper-query improvements plus correctness changes; one pair does not
+isolate their contributions. A separately labeled 500 ms fixture-reporting
+diagnostic, with the same app and redraw request, did not resolve the deficit.
+
+A six-second static native idle comparison read counters only at the boundaries.
+Infinify used 3.99% of one core, ending at 53.66 MiB RSS and 155.20 MiB charged
+physical footprint; its cooperative helper used 0.17%, 89.80 MiB RSS and
+24.09 MiB footprint. Whole-desktop WindowServer used 11.78% fixture-only versus
+2.33% managed, with different window layouts and an extra canvas surface, so
+this is not isolated compositor overhead. Exact six-window identity, owner,
+geometry, transform and alpha restoration and empty journal checks passed;
+all children exited. These idle and capture measurements do not establish
+native-window optical FPS or third-party compositor parity. Full scope, hashes
+and evidence locations are in the native README's
+[current development evidence](../../native/desktop/README.md#current-development-evidence-2026-10-12).
 
 The application build now signs and verifies a staged bundle before replacing
 `target/app/Infinify.app`. Its adjacent `BUILD.json` records the source snapshot
