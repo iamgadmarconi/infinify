@@ -604,10 +604,15 @@ if mode == 'capture':
                     for i, w, h in re.findall(r'window=(\d+) pixels=(\d+)x(\d+)', line): result[int(i)] = [int(w), int(h)]
             return result
         native = {w['id']: status(n)['bounds'][2:] for w in adopted for n in names if status(n)['title'] == w['title']}
-        density = min(2, 2 ** math.ceil(math.log2(zoom * 2)))
+        demand = min(2, max(1 / 32, zoom * 2))
+        density = max(demand, 2 ** (math.ceil(2 * math.log2(demand)) / 2))
         reduced = {i: [math.ceil(v * density) for v in dims] for i, dims in native.items()}
         full = {i: [2 * v for v in dims] for i, dims in native.items()}
         until('captures match the overview pixel budget', 4, buffers, lambda b: b == reduced)
+        check('overview captures meet clamped demand within sqrt(2) density headroom before pixel rounding',
+              all(math.ceil(point * demand) <= pixel <= math.ceil(point * demand * math.sqrt(2))
+                  for i, dims in native.items() for point, pixel in zip(dims, buffers()[i])),
+              {'demand': demand, 'actual': buffers()})
         check('overview captures have fewer pixels', density < 2, {'actual': buffers(), 'full': full, 'pixel_ratio': (density / 2) ** 2})
         before = {w['id']: [w['position'], w['size']] for w in state()['windows']}
         native_before = {n: status(n)['bounds'] for n in names}

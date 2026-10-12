@@ -3652,7 +3652,8 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     SCStream *stream=source.stream;if(!stream)return;source.stream=nil;source.captureUpdating=NO;source.captureCandidateSince=0;if(!source.composited)[source clearSample];
     [self.pendingStops addObject:stream];[stream stopCaptureWithCompletionHandler:^(NSError *error){(void)error;dispatch_async(dispatch_get_main_queue(),^{[self.pendingStops removeObject:stream];});}];
 }
-// A larger tile needs sharper pixels immediately. Smaller tiles use power-of-two density buckets after half a second of
+// A larger tile needs sharper pixels immediately. Density buckets grow by sqrt(2), limiting their area slack to 2x
+// instead of 4x just above each power of two. Smaller tiles change buckets after half a second of
 // stable actual density as well as bucket demand. Continuous zoom may linger in a bucket longer than that; it must not
 // repeatedly shrink and regrow all streams while the scale is still moving. The largest placement across all outputs
 // wins, including pinned windows and widgets. Cropping does not lower density. Native ownership and world geometry are unchanged.
@@ -3662,7 +3663,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     for(NSDictionary *p in placements)if([p[@"window"]isEqual:source.logical]){CGRect r=jsonRect(p[@"screen_rect"]);if(CGRectIsNull(r))continue;double scale=[scales[p[@"output"]]doubleValue];density=fmax(density,fmax(r.size.width/native.width,r.size.height/native.height)*(scale>0?scale:2));}
     if(density<=0)density=source.captureNativeSize.width>0?source.captureSize.width/source.captureNativeSize.width:2;
     density=fmin(2,fmax(1.0/32,density));if(demand)*demand=density;
-    density=exp2(ceil(log2(density)));
+    density=fmax(density,exp2(ceil(2*log2(density))*.5));
     return CGSizeMake(MAX(2,ceil(native.width*density)),MAX(2,ceil(native.height*density)));
 }
 - (void)updateCapture:(LiveSource *)source size:(CGSize)pixels native:(CGSize)native {

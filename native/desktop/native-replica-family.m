@@ -5,6 +5,9 @@
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <QuartzCore/QuartzCore.h>
 #include <stdatomic.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <math.h>
 #include <limits.h>
 #include <mach/mach_time.h>
@@ -155,23 +158,37 @@ static void familyNormalizeOrder(NSDictionary<NSNumber *,DWReplicaOrder *> *orde
 @property uint64_t frameTime;
 - (void)retire;
 @end
+// Explicit diagnostic only: bounded lifecycle records, never titles, pixels or
+// unrestricted error text. It does not change capture or validation decisions.
+static void familyTrace(DWReplicaMember *member,const char *event,const char *reason,NSInteger error) {
+    static BOOL enabled;static dispatch_once_t once;static NSUInteger records;
+    dispatch_once(&once,^{const char *value=getenv("INFINIFY_DEBUG_FAMILIES");enabled=value&&!strcmp(value,"1");});
+    if(!enabled||records>=4096)return;
+    records++;
+    fprintf(stderr,"family_capture: event=%s window=%llu root=%u member=%u pid=%d generation=%llu density=%.5f rate=%ld reason=%s native_error=%ld\n",
+        event,[member.root[@"window"]unsignedLongLongValue],[member.root[@"identity"][@"wid"]unsignedIntValue],
+        [member.identity[@"wid"]unsignedIntValue],[member.identity[@"pid"]intValue],[member.root[@"generation"]unsignedLongLongValue],
+        member.density,(long)member.rate,reason,(long)error);
+    if(records==4096)fputs("family_capture: event=log_limit\n",stderr);
+}
 @implementation DWReplicaMember
 - (instancetype)init {
     if((self=[super init])){atomic_init(&alive,YES);atomic_init(&pending,NO);}
     return self;
 }
 - (void)retire {
+    if(atomic_load(&alive))familyTrace(self,"retire","none",0);
     atomic_store(&alive,NO);self.image.buffer=NULL;
     SCStream *stream=self.stream;if(!stream)return;self.stream=nil;
     [stream removeStreamOutput:self type:SCStreamOutputTypeScreen error:nil];
     [stream stopCaptureWithCompletionHandler:^(NSError *error){(void)error;}];
 }
-- (void)fail:(NSString *)failure {
-    if(!atomic_load(&alive))return;self.failure=failure;[self retire];
+- (void)fail:(NSString *)failure code:(const char *)code error:(NSInteger)error {
+    if(!atomic_load(&alive))return;familyTrace(self,"fail",code,error);self.failure=failure;[self retire];
     [self.owner memberFailed:self.root[@"window"]];
 }
 - (void)stream:(SCStream *)stream didStopWithError:(NSError *)error {
-    (void)stream;dispatch_async(dispatch_get_main_queue(),^{[self fail:error.localizedDescription?:@"Family capture stopped"];});
+    (void)stream;dispatch_async(dispatch_get_main_queue(),^{[self fail:error.localizedDescription?:@"Family capture stopped" code:"stream_stopped" error:error.code];});
 }
 - (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sample ofType:(SCStreamOutputType)type {
     (void)stream;
@@ -187,9 +204,9 @@ static void familyNormalizeOrder(NSDictionary<NSNumber *,DWReplicaOrder *> *orde
         &&DWNativeBounds([self.root[@"identity"][@"wid"]unsignedIntValue],&rootNow)
         &&DWNativeBounds([self.identity[@"wid"]unsignedIntValue],&ownNow)
         &&CGRectEqualToRect(rootNow,self.rootBounds)&&CGRectEqualToRect(ownNow,self.bounds);
-    if(!valid){dispatch_async(dispatch_get_main_queue(),^{atomic_store(&self->pending,NO);[self fail:@"Native family changed during capture"];});return;}
+    if(!valid){dispatch_async(dispatch_get_main_queue(),^{atomic_store(&self->pending,NO);[self fail:@"Native family changed during capture" code:"membership_changed" error:0];});return;}
     CGRect crop=CGRectNull;uint64_t timestamp=0;
-    if(!familyPixels(info,pixels,self.identity,self.bounds,self.frameTime,&crop,&timestamp)){dispatch_async(dispatch_get_main_queue(),^{atomic_store(&self->pending,NO);[self fail:@"Family capture metadata does not match its window"];});return;}
+    if(!familyPixels(info,pixels,self.identity,self.bounds,self.frameTime,&crop,&timestamp)){dispatch_async(dispatch_get_main_queue(),^{atomic_store(&self->pending,NO);[self fail:@"Family capture metadata does not match its window" code:"frame_metadata_mismatch" error:0];});return;}
     self.frameTime=timestamp;
     NSArray *dirty=info[SCStreamFrameInfoDirtyRects];BOOL unchanged=[dirty isKindOfClass:NSArray.class]&&!dirty.count;
     CVPixelBufferRetain(pixels);
@@ -198,7 +215,7 @@ static void familyNormalizeOrder(NSDictionary<NSNumber *,DWReplicaOrder *> *orde
             CVPixelBufferRef old=self.image.buffer;
             if(!unchanged||!old||!CGRectEqualToRect(self.image.contentRect,crop)||CVPixelBufferGetWidth(old)!=CVPixelBufferGetWidth(pixels)||CVPixelBufferGetHeight(old)!=CVPixelBufferGetHeight(pixels)){
                 self.image.buffer=pixels;self.image.contentRect=crop;self.image.generation++;
-                if(!old)[self.owner memberBecameDrawable:self.root[@"window"]];
+                if(!old){familyTrace(self,"first_frame","none",0);[self.owner memberBecameDrawable:self.root[@"window"]];}
                 else [self.owner changedWindow:self.root[@"window"]];
             }
         }
@@ -478,19 +495,21 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
                     density=MIN(2,MAX(1./32,density));DWReplicaMember *member=nil;
                     for(DWReplicaMember *candidate in old)if(atomic_load(&candidate->alive)&&[candidate.identity isEqual:identity]&&CGRectEqualToRect(candidate.bounds,bounds)&&familyBinding(candidate.root,roots[logical])){member=candidate;break;}
                     if(!member){member=[DWReplicaMember new];member.owner=owner;member.root=roots[logical];member.identity=identity;member.bounds=bounds;member.rootBounds=familyRect(roots[logical][@"native_bounds"]);member.density=density;member.rate=rate;member.frameTime=mach_absolute_time();
+                        familyTrace(member,"create","none",0);
                         DWCanvasAttachment *image=[DWCanvasAttachment new];image.key=[NSString stringWithFormat:@"%@:%@:%@:%@",identity[@"pid"],identity[@"birth_sec"],identity[@"birth_usec"],identity[@"wid"]];
                         image.unitRect=CGRectMake((bounds.origin.x-member.rootBounds.origin.x)/member.rootBounds.size.width,(bounds.origin.y-member.rootBounds.origin.y)/member.rootBounds.size.height,bounds.size.width/member.rootBounds.size.width,bounds.size.height/member.rootBounds.size.height);member.image=image;
                         SCStreamConfiguration *config=familyConfiguration(bounds,density,rate);
                         member.samples=familyQueue("org.infinify.native-family-frames");
                         member.stream=[[SCStream alloc]initWithFilter:[[SCContentFilter alloc]initWithDesktopIndependentWindow:window] configuration:config delegate:member];
                         NSError *failure=nil;
-                        if(![member.stream addStreamOutput:member type:SCStreamOutputTypeScreen sampleHandlerQueue:member.samples error:&failure]){[member fail:failure.localizedDescription?:@"Family capture output unavailable"];continue;}
-                        DWReplicaMember *started=member;[member.stream startCaptureWithCompletionHandler:^(NSError *failure){dispatch_async(dispatch_get_main_queue(),^{if(failure)[started fail:failure.localizedDescription];else started.started=YES;});}];
-                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,2*NSEC_PER_SEC),dispatch_get_main_queue(),^{if(atomic_load(&started->alive)&&!started.started)[started fail:@"Family capture start timed out"];});
+                        if(![member.stream addStreamOutput:member type:SCStreamOutputTypeScreen sampleHandlerQueue:member.samples error:&failure]){[member fail:failure.localizedDescription?:@"Family capture output unavailable" code:"output_unavailable" error:failure.code];continue;}
+                        DWReplicaMember *started=member;[member.stream startCaptureWithCompletionHandler:^(NSError *failure){dispatch_async(dispatch_get_main_queue(),^{if(failure)[started fail:failure.localizedDescription code:"start_failed" error:failure.code];else{started.started=YES;if(atomic_load(&started->alive))familyTrace(started,"started","none",0);}});}];
+                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,2*NSEC_PER_SEC),dispatch_get_main_queue(),^{if(atomic_load(&started->alive)&&!started.started)[started fail:@"Family capture start timed out" code:"start_timeout" error:0];});
                     }else if(member.started&&!member.updating&&(member.density!=density||member.rate!=rate)){
                         member.updating=YES;member.density=density;member.rate=rate;NSUInteger revision=++member.configuration;DWReplicaMember *updated=member;
-                        [member.stream updateConfiguration:familyConfiguration(bounds,density,rate) completionHandler:^(NSError *failure){dispatch_async(dispatch_get_main_queue(),^{if(!atomic_load(&updated->alive)||updated.configuration!=revision)return;updated.updating=NO;if(failure)[updated fail:failure.localizedDescription];});}];
-                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,2*NSEC_PER_SEC),dispatch_get_main_queue(),^{if(atomic_load(&updated->alive)&&updated.updating&&updated.configuration==revision)[updated fail:@"Family capture configuration timed out"];});
+                        familyTrace(member,"configure","none",0);
+                        [member.stream updateConfiguration:familyConfiguration(bounds,density,rate) completionHandler:^(NSError *failure){dispatch_async(dispatch_get_main_queue(),^{if(!atomic_load(&updated->alive)||updated.configuration!=revision)return;updated.updating=NO;if(failure)[updated fail:failure.localizedDescription code:"configuration_failed" error:failure.code];});}];
+                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,2*NSEC_PER_SEC),dispatch_get_main_queue(),^{if(atomic_load(&updated->alive)&&updated.updating&&updated.configuration==revision)[updated fail:@"Family capture configuration timed out" code:"configuration_timeout" error:0];});
                     }
                     [installed addObject:member];
                 }

@@ -1380,8 +1380,10 @@ is not in the test, which never starts Infinify without `--windowed`.
 ### Capture and rendering performance
 
 Managed overlay streams capture enough pixels for their largest placement on any
-output, using that output's backing scale. Density is rounded up to a power of
-two, between 1/32 and the original 2 pixels per native point. A larger placement
+output, using that output's backing scale. Density is rounded up in factors of
+sqrt(2), between 1/32 and the original 2 pixels per native point. This limits
+rounding overhead to twice the clamped demand's pixel area before integer-pixel rounding.
+A larger placement
 or native size change updates immediately; a smaller budget waits for half a
 second of stable demand. Only one configuration update is outstanding per
 source. Buffer resolution does not change native bounds, world rectangles,
@@ -1389,6 +1391,11 @@ input coordinates or crop geometry. Pinned windows retain their screen density.
 Manual capture and the capture-acknowledged experimental resize path retain
 their original resolution rules. Capture cadence follows the fastest display;
 it is not reduced to obtain the pixel savings.
+
+`INFINIFY_DEBUG_FAMILIES=1` logs up to 4096 child-capture lifecycle records:
+creation, first frame, configuration, retirement and fixed failure codes. These
+opt-in records contain numeric identities, density and cadence, without titles
+or image content. The default benchmark leaves this diagnostic disabled.
 
 Overlay exports request full-resolution one-shot ScreenCaptureKit samples when
 the live stream has a smaller raster, including a stopped source needed by the
