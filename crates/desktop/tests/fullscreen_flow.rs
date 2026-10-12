@@ -81,6 +81,7 @@ const A: (f64, f64, f64, f64) = (300.0, 200.0, 1000.0, 800.0);
 const B: (f64, f64, f64, f64) = (1300.0, 150.0, 800.0, 600.0);
 /// Output 1's usable rectangle in output-local points: asymmetric on purpose.
 const USABLE: (f64, f64, f64, f64) = (20.0, 40.0, 960.0, 740.0);
+const USABLE_SCREEN_A: (f64, f64, f64, f64) = (A.0 + USABLE.0, A.1 + USABLE.1, USABLE.2, USABLE.3);
 const CONFIG: &str = r#"focus_placement = "left"
 [snap]
 outer_gap = 8.0
@@ -146,7 +147,7 @@ fn fixture(toml: &str) -> Host {
         handle,
         scratch: Scratch::new(),
     };
-    h.ok(json!({"op":"register_output","stable_id":"view-a","screen_bounds":of(A)}));
+    h.ok(json!({"op":"register_output","stable_id":"view-a","screen_bounds":of(A),"usable_rect_local":of(USABLE)}));
     h.ok(json!({"op":"register_output","stable_id":"view-b","screen_bounds":of(B)}));
     h.ok(json!({"op":"set_navigation_context","output":1,"usable_rect_local":of(USABLE),"focus_placement":"center","camera_speed":0.3,"outer_gap":0.0}));
     let path = h.scratch.0.join("config.toml");
@@ -303,9 +304,9 @@ fn entered(h: &mut Host) {
         h,
         &reply,
         (START.2, START.3),
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         "applied",
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
     );
 }
 /// The shell has fresh pixels for a window whose size changed, so `hit` and
@@ -337,7 +338,9 @@ fn nothing() -> Value {
 // the C ABI returned then. First from c5dd6fb, the tree the milestone was
 // written on, and again from 6333dde, the tree it was merged into, which
 // answered every one of them the same but `KEY`: a key binding's entry had
-// gained `passable` there (pass-through), and the literal is that tree's.
+// gained `passable` there (pass-through). MOUSE and KEY now exercise the
+// accepted Command-based desktop `mod` chord; the fullscreen refusal contract
+// remains the historical one.
 #[test]
 fn without_the_capability_fullscreen_answers_as_it_did_before() {
     const ACTION: &str = r#"{"error":"action not implemented on macOS yet: toggle-fullscreen","ok":false,"version":1}"#;
@@ -347,7 +350,7 @@ fn without_the_capability_fullscreen_answers_as_it_did_before() {
     const UPDATE: &str = r#"{"data":{"dirty":false,"effects":[],"fired":{"action":"toggle-fullscreen","error":"action not implemented on macOS yet: toggle-fullscreen"},"gesture":{"output":1,"state":"pinch_threshold","window":null},"navigation":null,"needs_frames":false,"note":null,"trackpad":true},"ok":true,"version":1}"#;
     const END: &str = r#"{"data":{"dirty":false,"effects":[],"fired":null,"gesture":{"cancelled":false,"output":1,"state":"pinch_threshold","window":null},"navigation":null,"needs_frames":false,"note":null,"trackpad":true},"ok":true,"version":1}"#;
     const STATE: &str = r#"{"data":{"dirty":false,"effects":[],"navigation":null,"reply":{"Ok":{"State":{"active_bookmark":null,"camera":[500.0,-400.0],"canvas_layers":[],"fullscreen":[],"layers":[],"layout":"","layout_short":"","outputs":[{"active":true,"active_bookmark":null,"camera":[500.0,-400.0],"name":"view-a","size":[1000,800],"zoom":1.0},{"active":false,"active_bookmark":null,"camera":[400.0,-300.0],"name":"view-b","size":[800,600],"zoom":1.0}],"pinned":[],"windows":[{"app_id":"app.1","id":1,"is_focused":true,"is_widget":false,"mode":"Normal","position":[300,-250],"size":[400,300],"suspended":false,"title":"fixture"}],"zoom":1.0}}}},"ok":true,"version":1}"#;
-    const KEY: &str = r#"{"action":"toggle-fullscreen","character":"f","chord":"⌃⌥F","combo":"mod+f","implemented":false,"key_code":3,"modifiers":{"command":false,"control":true,"option":true,"shift":false},"passable":true,"repeat":false}"#;
+    const KEY: &str = r#"{"action":"toggle-fullscreen","character":"f","chord":"⌘F","combo":"mod+f","implemented":false,"key_code":3,"modifiers":{"command":true,"control":false,"option":false,"shift":false},"passable":true,"repeat":false}"#;
     const ATTACH: &str = r#"{"data":{"adopted":false,"dirty":true,"effect":{"effect_id":2,"generation":2,"identity":{"birth_sec":1800000000,"birth_usec":0,"owner":null,"pid":123,"wid":2},"op":"focus_native_window","window":2},"navigation":{"animating":true,"generation":1,"output":1,"target_camera":{"x":0.0,"y":0.0},"target_zoom":1.0},"window":2},"ok":true,"version":1}"#;
     const RULE: &str = r#"{"blur":false,"border_color":null,"border_color_focused":null,"border_width":null,"corner_radius":null,"decoration":null,"focus_on_open":null,"fullscreen":true,"layer_order":null,"not_applied":["fullscreen"],"opacity":null,"output":"view-b","pass_keys":"none","pass_mouse":"none","pinned_to_screen":false,"position":null,"preserve_aspect_ratio":false,"restore_windows":null,"shadow":null,"size":null,"suspend_on_close":null,"widget":false}"#;
     let mut h = fixture(CONFIG);
@@ -372,7 +375,7 @@ fn without_the_capability_fullscreen_answers_as_it_did_before() {
             ACTION
         );
         assert_eq!(
-            h.raw(json!({"op":"mouse_binding","trigger":"middle","modifiers":{"control":true,"option":true,"shift":false,"command":false},"context":"window"})),
+            h.raw(json!({"op":"mouse_binding","trigger":"middle","modifiers":{"control":false,"option":false,"shift":false,"command":true},"context":"window"})),
             MOUSE
         );
         assert_eq!(
@@ -445,29 +448,41 @@ fn a_toggle_fills_the_output_and_a_second_restores_everything_exactly() {
     assert_eq!(mode(&mut h, 1), "fullscreen");
     // Until the window answers it keeps its size, at the parked corner: an
     // unanswered offer is not centred.
-    assert_eq!(world(&mut h, 1), rect(PARK.0, PARK.1, 400.0, 300.0));
+    assert_eq!(
+        world(&mut h, 1),
+        rect(PARK.0 + USABLE.0, PARK.1 + USABLE.1, 400.0, 300.0)
+    );
     let alone = placed(&mut h, 1);
     assert_eq!(alone.len(), 1);
     assert_eq!(alone[0]["window"], 1);
     assert_eq!(alone[0]["fullscreen"], true);
-    assert_eq!(alone[0]["screen_rect"], rect(A.0, A.1, 400.0, 300.0));
-    // The shell performs the transaction: the output's whole size.
+    assert_eq!(
+        alone[0]["screen_rect"],
+        rect(A.0 + USABLE.0, A.1 + USABLE.1, 400.0, 300.0)
+    );
+    // The shell performs the transaction: the usable area below the menu.
     deliver(
         &mut h,
         &reply,
         (400.0, 300.0),
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         "applied",
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
     );
-    assert_eq!(world(&mut h, 1), rect(PARK.0, PARK.1, A.2, A.3));
+    assert_eq!(
+        world(&mut h, 1),
+        rect(PARK.0 + USABLE.0, PARK.1 + USABLE.1, USABLE.2, USABLE.3)
+    );
     let alone = placed(&mut h, 1);
     assert_eq!(alone.len(), 1);
     assert_eq!(alone[0]["fullscreen"], true);
     // The output's own rectangle in global screen points, at zoom 1.
-    assert_eq!(alone[0]["screen_rect"], of(A));
-    assert_eq!(alone[0]["clip_rect"], of(A));
-    assert_eq!(alone[0]["world_local_crop"], rect(0.0, 0.0, A.2, A.3));
+    assert_eq!(alone[0]["screen_rect"], of(USABLE_SCREEN_A));
+    assert_eq!(alone[0]["clip_rect"], of(USABLE_SCREEN_A));
+    assert_eq!(
+        alone[0]["world_local_crop"],
+        rect(0.0, 0.0, USABLE.2, USABLE.3)
+    );
     // Upstream's DrawnChrome for a fullscreen window: all of it shed.
     let bare = &alone[0]["decoration"];
     assert_eq!(bare["mode"], "none");
@@ -504,7 +519,10 @@ fn a_toggle_fills_the_output_and_a_second_restores_everything_exactly() {
             "{request}: {refused}"
         );
     }
-    assert_eq!(world(&mut h, 1), rect(PARK.0, PARK.1, A.2, A.3));
+    assert_eq!(
+        world(&mut h, 1),
+        rect(PARK.0 + USABLE.0, PARK.1 + USABLE.1, USABLE.2, USABLE.3)
+    );
 
     // The second press: place, camera and zoom are back at once, and the size
     // is asked back.
@@ -513,11 +531,11 @@ fn a_toggle_fills_the_output_and_a_second_restores_everything_exactly() {
     assert_eq!(fullscreen(&mut h, 1), Value::Null);
     assert_eq!(pose(&mut h, 1), view(CAMERA, 0.5));
     assert_eq!(mode(&mut h, 1), Value::Null);
-    assert_eq!(world(&mut h, 1), rect(START.0, START.1, A.2, A.3));
+    assert_eq!(world(&mut h, 1), rect(START.0, START.1, USABLE.2, USABLE.3));
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -537,25 +555,28 @@ fn a_toggle_fills_the_output_and_a_second_restores_everything_exactly() {
 // one that takes more is not moved, and the exit undoes it.
 #[test]
 fn a_window_that_takes_another_size_is_centred_as_upstream_centres_it() {
-    // A clamped answer: 800 x 600 on a 1000 x 800 output.
+    // A clamped answer: 800 x 600 inside the 960 x 740 usable area.
     let mut h = zoomed(CONFIG);
     attach(&mut h, 2, "app.2", (70.0, -30.0, 120.0, 90.0));
     let reply = action(&mut h, 1, "toggle-fullscreen");
     let read = began(&mut h, &reply);
     let setter = answer(&mut h, &read, "observed", false, (400.0, 300.0))["effect"].clone();
     // The baseline read is no answer to the offer: still at the parked corner.
-    assert_eq!(world(&mut h, 1), rect(PARK.0, PARK.1, 400.0, 300.0));
+    assert_eq!(
+        world(&mut h, 1),
+        rect(PARK.0 + USABLE.0, PARK.1 + USABLE.1, 400.0, 300.0)
+    );
     let last = answer(&mut h, &setter, "clamped", true, (800.0, 600.0))["effect"].clone();
     assert_eq!(
         world(&mut h, 1),
-        rect(PARK.0 + 100.0, PARK.1 + 100.0, 800.0, 600.0)
+        rect(PARK.0 + 100.0, PARK.1 + 110.0, 800.0, 600.0)
     );
     answer(&mut h, &last, "observed", false, (800.0, 600.0));
     let alone = placed(&mut h, 1);
     assert_eq!(alone.len(), 1);
     assert_eq!(
         alone[0]["screen_rect"],
-        rect(A.0 + 100.0, A.1 + 100.0, 800.0, 600.0)
+        rect(A.0 + 100.0, A.1 + 110.0, 800.0, 600.0)
     );
     // Under-fill alone conceals the canvas all the same.
     assert_eq!(fullscreen(&mut h, 1)["backdrop"], "black");
@@ -585,14 +606,20 @@ fn a_window_that_takes_another_size_is_centred_as_upstream_centres_it() {
         &mut h,
         &reply,
         (400.0, 300.0),
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         "clamped",
         (1200.0, 900.0),
     );
-    assert_eq!(world(&mut h, 1), rect(PARK.0, PARK.1, 1200.0, 900.0));
+    assert_eq!(
+        world(&mut h, 1),
+        rect(PARK.0 + USABLE.0, PARK.1 + USABLE.1, 1200.0, 900.0)
+    );
     let alone = placed(&mut h, 1);
-    assert_eq!(alone[0]["screen_rect"], rect(A.0, A.1, 1200.0, 900.0));
-    assert_eq!(alone[0]["clip_rect"], of(A));
+    assert_eq!(
+        alone[0]["screen_rect"],
+        rect(A.0 + USABLE.0, A.1 + USABLE.1, 1200.0, 900.0)
+    );
+    assert_eq!(alone[0]["clip_rect"], of(USABLE_SCREEN_A));
 
     // A window that refuses the size, upstream's fixed-size client, is centred
     // like any other, and the exit has no size to give back.
@@ -602,17 +629,17 @@ fn a_window_that_takes_another_size_is_centred_as_upstream_centres_it() {
         &mut h,
         &reply,
         (400.0, 300.0),
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         "rejected",
         (400.0, 300.0),
     );
     assert_eq!(
         world(&mut h, 1),
-        rect(PARK.0 + 300.0, PARK.1 + 250.0, 400.0, 300.0)
+        rect(PARK.0 + 300.0, PARK.1 + 260.0, 400.0, 300.0)
     );
     assert_eq!(
         placed(&mut h, 1)[0]["screen_rect"],
-        rect(A.0 + 300.0, A.1 + 250.0, 400.0, 300.0)
+        rect(A.0 + 300.0, A.1 + 260.0, 400.0, 300.0)
     );
     let reply = action(&mut h, 1, "toggle-fullscreen");
     assert!(reply.get("transaction").is_none(), "{reply}");
@@ -629,7 +656,7 @@ fn a_window_that_takes_another_size_is_centred_as_upstream_centres_it() {
     let setter = answer(&mut h, &read, "observed", false, (400.0, 300.0))["effect"].clone();
     let last = answer(&mut h, &setter, "unsupported", false, (400.0, 300.0))["effect"].clone();
     answer(&mut h, &last, "observed", false, (400.0, 300.0));
-    let centred = rect(PARK.0 + 300.0, PARK.1 + 250.0, 400.0, 300.0);
+    let centred = rect(PARK.0 + 300.0, PARK.1 + 260.0, 400.0, 300.0);
     assert_eq!(world(&mut h, 1), centred);
     for _ in 0..2 {
         let reply = action(&mut h, 1, "toggle-fullscreen");
@@ -667,7 +694,7 @@ fn a_window_that_takes_another_size_is_centred_as_upstream_centres_it() {
     let reply = action(&mut h, 1, "toggle-fullscreen");
     assert!(reply.get("transaction").is_none(), "{reply}");
     assert_eq!(fullscreen(&mut h, 1)["window"], 1);
-    assert_eq!(world(&mut h, 1), rect(300.0, 250.0, 400.0, 300.0));
+    assert_eq!(world(&mut h, 1), rect(300.0, 260.0, 400.0, 300.0));
 }
 
 // Upstream execute_action's guard, by its own list: what ends a fullscreen
@@ -690,7 +717,7 @@ fn an_action_ends_fullscreen_first_unless_upstream_runs_it_during_one() {
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -708,11 +735,11 @@ fn an_action_ends_fullscreen_first_unless_upstream_runs_it_during_one() {
     assert_eq!(reply["navigation"]["animating"], true);
     assert_eq!(reply["navigation"]["target_zoom"], 0.5);
     assert_eq!(h.snapshot()["focused"], 2);
-    assert_eq!(world(&mut h, 1), rect(START.0, START.1, A.2, A.3));
+    assert_eq!(world(&mut h, 1), rect(START.0, START.1, USABLE.2, USABLE.3));
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -742,7 +769,7 @@ fn an_action_ends_fullscreen_first_unless_upstream_runs_it_during_one() {
         deliver(
             &mut h,
             &reply,
-            (A.2, A.3),
+            (USABLE.2, USABLE.3),
             (400.0, 300.0),
             "applied",
             (400.0, 300.0),
@@ -785,13 +812,13 @@ fn a_pan_a_zoom_a_drag_and_a_swipe_end_fullscreen_and_nothing_else_moves_the_cam
     h.ok(json!({"op":"pan","output":1,"screen_delta":{"x":10.0,"y":0.0}}));
     assert_eq!(fullscreen(&mut h, 1), Value::Null);
     assert_eq!(pose(&mut h, 1), view((CAMERA.0 + 20.0, CAMERA.1), 0.5));
-    assert_eq!(world(&mut h, 1), rect(START.0, START.1, A.2, A.3));
+    assert_eq!(world(&mut h, 1), rect(START.0, START.1, USABLE.2, USABLE.3));
     assert_eq!(h.snapshot()["native_resize"]["pending_effect"], Value::Null);
     let reply = h.ok(json!({"op":"hover","output":2,"screen":{"x":B.0 + 790.0,"y":B.1 + 590.0}}));
     assert!(reply.get("transaction").is_none(), "{reply}");
     assert!(reply.get("effects").is_none(), "{reply}");
     assert_eq!(h.snapshot()["native_resize"]["pending_effect"], Value::Null);
-    assert_eq!(world(&mut h, 1), rect(START.0, START.1, A.2, A.3));
+    assert_eq!(world(&mut h, 1), rect(START.0, START.1, USABLE.2, USABLE.3));
     // The click that follows carries it. A reply that lists no `effects`
     // gains the list with the transaction's effect in it, which is where the
     // shell's size hook finds it.
@@ -802,7 +829,7 @@ fn a_pan_a_zoom_a_drag_and_a_swipe_end_fullscreen_and_nothing_else_moves_the_cam
     perform(
         &mut h,
         &effects[0].clone(),
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -831,13 +858,13 @@ fn a_pan_a_zoom_a_drag_and_a_swipe_end_fullscreen_and_nothing_else_moves_the_cam
     h.ok(json!({"op":"end_gesture"}));
     assert_eq!(
         world(&mut h, 1),
-        rect(START.0 + 100.0, START.1 + 50.0, A.2, A.3)
+        rect(START.0 + 100.0, START.1 + 50.0, USABLE.2, USABLE.3)
     );
     let reply = action(&mut h, 2, "spawn true");
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -903,7 +930,7 @@ fn a_close_an_activation_and_a_lost_output_end_fullscreen() {
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -953,7 +980,7 @@ fn a_close_an_activation_and_a_lost_output_end_fullscreen() {
     h.ok(json!({"op":"remove_source","window":1,"identity":identity(1),"keep_placeholder":true}));
     assert_eq!(fullscreen(&mut h, 1), Value::Null);
     assert_eq!(pose(&mut h, 1), view(CAMERA, 0.5));
-    assert_eq!(world(&mut h, 1), rect(START.0, START.1, A.2, A.3));
+    assert_eq!(world(&mut h, 1), rect(START.0, START.1, USABLE.2, USABLE.3));
 
     // Another window is activated on the fullscreen output: the fullscreen
     // ends first, and what is visible is judged by the restored camera.
@@ -971,7 +998,7 @@ fn a_close_an_activation_and_a_lost_output_end_fullscreen() {
     perform(
         &mut h,
         &effects[0],
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -997,35 +1024,35 @@ fn a_close_an_activation_and_a_lost_output_end_fullscreen() {
     assert_eq!(h.snapshot()["placements"], json!([]));
     h.ok(json!({"op":"register_output","stable_id":"view-b","screen_bounds":of(B)}));
     assert_eq!(placed_ids(&mut h, 2), Vec::<u64>::new());
-    h.ok(json!({"op":"register_output","stable_id":"view-a","screen_bounds":of(A)}));
+    h.ok(json!({"op":"register_output","stable_id":"view-a","screen_bounds":of(A),"usable_rect_local":of(USABLE)}));
     assert_eq!(
         h.ok(json!({"op":"outputs_settled"})),
         json!({"dirty":false})
     );
     assert_eq!(fullscreen(&mut h, 1)["window"], 1);
     assert_eq!(pose(&mut h, 1), view(PARK, 1.0));
-    assert_eq!(placed(&mut h, 1)[0]["screen_rect"], of(A));
+    assert_eq!(placed(&mut h, 1)[0]["screen_rect"], of(USABLE_SCREEN_A));
     // One that comes back at another size has its window asked again, and
     // meanwhile sits in the middle of it.
     h.ok(json!({"op":"remove_output","output":1}));
-    h.ok(json!({"op":"register_output","stable_id":"view-a","screen_bounds":rect(A.0, A.1, 1200.0, 900.0)}));
+    h.ok(json!({"op":"register_output","stable_id":"view-a","screen_bounds":rect(A.0, A.1, 1200.0, 900.0),"usable_rect_local":rect(USABLE.0,USABLE.1,1160.0,840.0)}));
     h.ok(json!({"op":"outputs_settled"}));
     assert_eq!(
         placed(&mut h, 1)[0]["screen_rect"],
-        rect(A.0 + 100.0, A.1 + 50.0, A.2, A.3)
+        rect(A.0 + 120.0, A.1 + 90.0, USABLE.2, USABLE.3)
     );
     let reply = action(&mut h, 1, "spawn true");
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
-        (1200.0, 900.0),
+        (USABLE.2, USABLE.3),
+        (1160.0, 840.0),
         "applied",
-        (1200.0, 900.0),
+        (1160.0, 840.0),
     );
     assert_eq!(
         placed(&mut h, 1)[0]["screen_rect"],
-        rect(A.0, A.1, 1200.0, 900.0)
+        rect(A.0 + USABLE.0, A.1 + USABLE.1, 1160.0, 840.0)
     );
     // One that does not come back ends its fullscreen once the shell has
     // said which outputs exist: the window is back on the canvas, and the
@@ -1036,18 +1063,18 @@ fn a_close_an_activation_and_a_lost_output_end_fullscreen() {
     assert_eq!(mode(&mut h, 1), "fullscreen");
     assert_eq!(h.ok(json!({"op":"outputs_settled"})), json!({"dirty":true}));
     assert_eq!(mode(&mut h, 1), Value::Null);
-    assert_eq!(world(&mut h, 1), rect(START.0, START.1, 1200.0, 900.0));
+    assert_eq!(world(&mut h, 1), rect(START.0, START.1, 1160.0, 840.0));
     let reply = action(&mut h, 2, "spawn true");
     deliver(
         &mut h,
         &reply,
-        (1200.0, 900.0),
+        (1160.0, 840.0),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
     );
     assert_eq!(world(&mut h, 1), of(START));
-    h.ok(json!({"op":"register_output","stable_id":"view-a","screen_bounds":of(A)}));
+    h.ok(json!({"op":"register_output","stable_id":"view-a","screen_bounds":of(A),"usable_rect_local":of(USABLE)}));
     assert_eq!(pose(&mut h, 1), view(CAMERA, 0.5));
     assert_eq!(fullscreen(&mut h, 1), Value::Null);
 }
@@ -1100,7 +1127,7 @@ fn a_new_window_is_tucked_behind_a_fullscreen_one_and_a_ruled_one_takes_its_outp
     perform(
         &mut h,
         &effects[0],
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -1206,22 +1233,22 @@ fn a_new_window_is_tucked_behind_a_fullscreen_one_and_a_ruled_one_takes_its_outp
     // It entered at its own size, the only one an observation committed,
     // and waits in no queue for its rule's: the one transaction is the
     // enter's, and it asks for the output's size.
-    assert_eq!(world(&mut sized, 2), rect(0.0, 0.0, 400.0, 300.0));
+    assert_eq!(world(&mut sized, 2), rect(USABLE.0, USABLE.1, 400.0, 300.0));
     let effects = reply["effects"].as_array().unwrap().clone();
     assert_eq!(effects.len(), 1, "{reply}");
     perform(
         &mut sized,
         &effects[0],
         (400.0, 300.0),
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         "applied",
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
     );
     let reply = action(&mut sized, 1, "toggle-fullscreen");
     deliver(
         &mut sized,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (600.0, 400.0),
         "applied",
         (600.0, 400.0),
@@ -1236,7 +1263,7 @@ fn a_new_window_is_tucked_behind_a_fullscreen_one_and_a_ruled_one_takes_its_outp
         handle: driftwm_desktop_create(),
         scratch: Scratch::new(),
     };
-    early.ok(json!({"op":"register_output","stable_id":"view-a","screen_bounds":of(A)}));
+    early.ok(json!({"op":"register_output","stable_id":"view-a","screen_bounds":of(A),"usable_rect_local":of(USABLE)}));
     early.ok(json!({"op":"native_resize_capability","enabled":true}));
     let path = early.scratch.0.join("config.toml");
     std::fs::write(&path, CONFIG).unwrap();
@@ -1277,7 +1304,7 @@ fn a_translucent_fullscreen_window_shows_the_canvas_behind_it() {
         &mut h,
         &reply,
         (300.0, 200.0),
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         "clamped",
         (800.0, 600.0),
     );
@@ -1327,7 +1354,7 @@ fn a_hot_corner_is_suppressed_on_a_fullscreen_output_unless_its_rule_says_otherw
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -1339,9 +1366,9 @@ fn a_hot_corner_is_suppressed_on_a_fullscreen_output_unless_its_rule_says_otherw
         &mut h,
         &reply,
         (400.0, 300.0),
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         "applied",
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
     );
     // `view-b` says `disable_when_fullscreen = false`: with its own window
     // fullscreen its corner still runs, and ends it.
@@ -1349,7 +1376,7 @@ fn a_hot_corner_is_suppressed_on_a_fullscreen_output_unless_its_rule_says_otherw
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -1395,15 +1422,15 @@ fn fit_and_fill_survive_fullscreen_and_a_sizing_action_runs_on_the_restored_wind
         &mut h,
         &reply,
         (944.0, 724.0),
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         "applied",
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
     );
     let reply = action(&mut h, 1, "toggle-fullscreen");
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (944.0, 724.0),
         "applied",
         (944.0, 724.0),
@@ -1445,16 +1472,16 @@ fn fit_and_fill_survive_fullscreen_and_a_sizing_action_runs_on_the_restored_wind
         &mut h,
         &reply,
         (944.0, 724.0),
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         "applied",
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
     );
     let reply = action(&mut h, 1, "fit-window");
     assert_eq!(fullscreen(&mut h, 1), Value::Null);
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -1481,16 +1508,16 @@ fn fit_and_fill_survive_fullscreen_and_a_sizing_action_runs_on_the_restored_wind
         &mut plain,
         &reply,
         (944.0, 724.0),
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         "applied",
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
     );
     assert_eq!(mode(&mut plain, 1), "fullscreen");
     let reply = action(&mut plain, 1, "toggle-fullscreen");
     deliver(
         &mut plain,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (944.0, 724.0),
         "applied",
         (944.0, 724.0),
@@ -1516,7 +1543,7 @@ fn fit_and_fill_survive_fullscreen_and_a_sizing_action_runs_on_the_restored_wind
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (944.0, 724.0),
         "applied",
         (944.0, 724.0),
@@ -1557,7 +1584,7 @@ fn fit_and_fill_survive_fullscreen_and_a_sizing_action_runs_on_the_restored_wind
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (944.0, 724.0),
         "applied",
         (944.0, 724.0),
@@ -1576,11 +1603,11 @@ fn fit_and_fill_survive_fullscreen_and_a_sizing_action_runs_on_the_restored_wind
     );
     let reply = action(&mut h, 1, "move-to-bookmark spot");
     assert_eq!(fullscreen(&mut h, 1), Value::Null);
-    assert_eq!(world(&mut h, 1), rect(300.0, 150.0, A.2, A.3));
+    assert_eq!(world(&mut h, 1), rect(300.0, 150.0, USABLE.2, USABLE.3));
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -1594,7 +1621,7 @@ fn fit_and_fill_survive_fullscreen_and_a_sizing_action_runs_on_the_restored_wind
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -1609,7 +1636,7 @@ fn fit_and_fill_survive_fullscreen_and_a_sizing_action_runs_on_the_restored_wind
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -1628,7 +1655,7 @@ fn fit_and_fill_survive_fullscreen_and_a_sizing_action_runs_on_the_restored_wind
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (420.0, 300.0),
         "applied",
         (420.0, 300.0),
@@ -1677,7 +1704,7 @@ fn fit_and_fill_survive_fullscreen_and_a_sizing_action_runs_on_the_restored_wind
         let mut h = capable(CONFIG);
         entered(&mut h);
         let reply = action(&mut h, 1, step);
-        deliver(&mut h, &reply, (A.2, A.3), asks, outcome, took);
+        deliver(&mut h, &reply, (USABLE.2, USABLE.3), asks, outcome, took);
         assert_eq!(world(&mut h, 1), rect(at.0, at.1, took.0, took.1), "{step}");
     }
     // A held key walks on from the size asked for, on the same transaction.
@@ -1690,7 +1717,7 @@ fn fit_and_fill_survive_fullscreen_and_a_sizing_action_runs_on_the_restored_wind
     perform(
         &mut h,
         &read,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (440.0, 300.0),
         "applied",
         (440.0, 300.0),
@@ -1746,18 +1773,22 @@ fn a_widget_and_a_stand_in_never_enter_and_a_pinned_window_is_pinned_again() {
         &mut h,
         &reply,
         (400.0, 300.0),
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         "applied",
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
     );
-    assert_eq!(placed(&mut h, 1)[0]["screen_rect"], of(A));
+    // Fullscreen fits the menu-excluded usable display area.
+    assert_eq!(
+        placed(&mut h, 1)[0]["screen_rect"],
+        rect(A.0 + USABLE.0, A.1 + USABLE.1, USABLE.2, USABLE.3)
+    );
     assert_eq!(placed(&mut h, 1)[0]["pinned"], false);
     let reply = action(&mut h, 1, "toggle-fullscreen");
     assert_eq!(window(&mut h, 1)["pinned"]["output"], 1);
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -1776,7 +1807,7 @@ fn a_widget_and_a_stand_in_never_enter_and_a_pinned_window_is_pinned_again() {
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (B.2, B.3),
         "applied",
         (B.2, B.3),
@@ -1831,11 +1862,14 @@ fn an_exit_while_the_enter_is_pending_does_not_strand_the_window() {
     let reply = action(&mut h, 1, "toggle-fullscreen");
     let read = began(&mut h, &reply);
     let setter = answer(&mut h, &read, "observed", false, (400.0, 300.0))["effect"].clone();
-    assert_eq!(setter["requested"], json!({"width":A.2,"height":A.3}));
+    assert_eq!(
+        setter["requested"],
+        json!({"width":USABLE.2,"height":USABLE.3})
+    );
     let reply = action(&mut h, 1, "toggle-fullscreen");
     assert!(reply.get("effect").is_none(), "{reply}");
     assert_eq!(fullscreen(&mut h, 1), Value::Null);
-    let again = answer(&mut h, &setter, "applied", true, (A.2, A.3))["effect"].clone();
+    let again = answer(&mut h, &setter, "applied", true, (USABLE.2, USABLE.3))["effect"].clone();
     assert_eq!(again["op"], "resize_native_window", "{again}");
     assert_eq!(again["requested"], json!({"width":400.0,"height":300.0}));
     let last = answer(&mut h, &again, "applied", true, (400.0, 300.0))["effect"].clone();
@@ -1854,34 +1888,40 @@ fn an_exit_while_the_enter_is_pending_does_not_strand_the_window() {
     let read = began(&mut h, &reply);
     let setter = answer(&mut h, &read, "observed", false, (400.0, 300.0))["effect"].clone();
     action(&mut h, 1, "toggle-fullscreen");
-    let back = answer(&mut h, &setter, "applied", true, (A.2, A.3))["effect"].clone();
+    let back = answer(&mut h, &setter, "applied", true, (USABLE.2, USABLE.3))["effect"].clone();
     assert_eq!(back["requested"], json!({"width":400.0,"height":300.0}));
     // Its size is still owed: it sits where the exit put it, and a save
     // writes that place.
-    assert_eq!(world(&mut h, 1), rect(START.0, START.1, A.2, A.3));
+    assert_eq!(world(&mut h, 1), rect(START.0, START.1, USABLE.2, USABLE.3));
     let path = h.scratch.0.join("scene.json");
     h.ok(json!({"op":"save","path":path}));
     let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(
         saved["scene"]["windows"][0]["world_rect"],
-        rect(START.0, START.1, A.2, A.3)
+        rect(START.0, START.1, USABLE.2, USABLE.3)
     );
     let reply = action(&mut h, 1, "toggle-fullscreen");
     assert!(reply.get("effect").is_none(), "{reply}");
     assert_eq!(fullscreen(&mut h, 1)["window"], 1);
     let again = answer(&mut h, &back, "applied", true, (400.0, 300.0))["effect"].clone();
-    assert_eq!(again["requested"], json!({"width":A.2,"height":A.3}));
-    let last = answer(&mut h, &again, "applied", true, (A.2, A.3))["effect"].clone();
     assert_eq!(
-        answer(&mut h, &last, "observed", false, (A.2, A.3))["effect"],
+        again["requested"],
+        json!({"width":USABLE.2,"height":USABLE.3})
+    );
+    let last = answer(&mut h, &again, "applied", true, (USABLE.2, USABLE.3))["effect"].clone();
+    assert_eq!(
+        answer(&mut h, &last, "observed", false, (USABLE.2, USABLE.3))["effect"],
         Value::Null
     );
-    assert_eq!(world(&mut h, 1), rect(PARK.0, PARK.1, A.2, A.3));
+    assert_eq!(
+        world(&mut h, 1),
+        rect(PARK.0 + USABLE.0, PARK.1 + USABLE.1, USABLE.2, USABLE.3)
+    );
     let reply = action(&mut h, 1, "toggle-fullscreen");
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -1898,16 +1938,19 @@ fn an_exit_while_the_enter_is_pending_does_not_strand_the_window() {
     assert!(reply.get("effect").is_none(), "{reply}");
     assert_eq!(fullscreen(&mut h, 1)["window"], 1);
     assert_eq!(
-        answer(&mut h, &read, "observed", false, (A.2, A.3))["effect"],
+        answer(&mut h, &read, "observed", false, (USABLE.2, USABLE.3))["effect"],
         Value::Null
     );
-    assert_eq!(world(&mut h, 1), rect(PARK.0, PARK.1, A.2, A.3));
+    assert_eq!(
+        world(&mut h, 1),
+        rect(PARK.0 + USABLE.0, PARK.1 + USABLE.1, USABLE.2, USABLE.3)
+    );
     // The size it comes back to is still the one from before the first.
     let reply = action(&mut h, 1, "toggle-fullscreen");
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -1922,15 +1965,15 @@ fn an_exit_while_the_enter_is_pending_does_not_strand_the_window() {
     let reply = action(&mut h, 1, "toggle-fullscreen");
     let read = began(&mut h, &reply);
     h.ok(json!({"op":"cancel_native_resize","transaction":read["transaction"]}));
-    answer(&mut h, &read, "observed", false, (A.2, A.3));
+    answer(&mut h, &read, "observed", false, (USABLE.2, USABLE.3));
     assert_eq!(h.snapshot()["native_resize"]["phase"], "failed");
     assert_eq!(fullscreen(&mut h, 1), Value::Null);
-    assert_eq!(world(&mut h, 1), rect(START.0, START.1, A.2, A.3));
+    assert_eq!(world(&mut h, 1), rect(START.0, START.1, USABLE.2, USABLE.3));
     let reply = ipc(&mut h, json!("State"));
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -1943,14 +1986,14 @@ fn an_exit_while_the_enter_is_pending_does_not_strand_the_window() {
     entered(&mut h);
     let reply = action(&mut h, 1, "toggle-fullscreen");
     let read = began(&mut h, &reply);
-    let setter = answer(&mut h, &read, "observed", false, (A.2, A.3))["effect"].clone();
+    let setter = answer(&mut h, &read, "observed", false, (USABLE.2, USABLE.3))["effect"].clone();
     unanswered(&mut h, &setter, "unavailable");
-    assert_eq!(world(&mut h, 1), rect(START.0, START.1, A.2, A.3));
+    assert_eq!(world(&mut h, 1), rect(START.0, START.1, USABLE.2, USABLE.3));
     let reply = action(&mut h, 1, "spawn true");
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -1965,15 +2008,15 @@ fn an_exit_while_the_enter_is_pending_does_not_strand_the_window() {
     let setter = answer(&mut h, &read, "observed", false, (400.0, 300.0))["effect"].clone();
     action(&mut h, 1, "toggle-fullscreen");
     h.ok(json!({"op":"cancel_native_resize","transaction":read["transaction"]}));
-    let last = answer(&mut h, &setter, "applied", true, (A.2, A.3))["effect"].clone();
-    answer(&mut h, &last, "observed", false, (A.2, A.3));
+    let last = answer(&mut h, &setter, "applied", true, (USABLE.2, USABLE.3))["effect"].clone();
+    answer(&mut h, &last, "observed", false, (USABLE.2, USABLE.3));
     assert_eq!(h.snapshot()["native_resize"]["phase"], "failed");
-    assert_eq!(world(&mut h, 1), rect(START.0, START.1, A.2, A.3));
+    assert_eq!(world(&mut h, 1), rect(START.0, START.1, USABLE.2, USABLE.3));
     let reply = ipc(&mut h, json!("State"));
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -2036,15 +2079,18 @@ fn the_pointer_reaches_only_the_fullscreen_window_on_its_output() {
     // During: the same points reach the fullscreen window, with the point in
     // its own frame, and nothing else is placed there.
     assert_eq!(placed_ids(&mut h, 1), [1]);
-    for at in [(750.0, 100.0), (250.0, 540.0), (5.0, 5.0), (995.0, 795.0)] {
+    for at in [(750.0, 100.0), (250.0, 540.0), (25.0, 45.0), (975.0, 775.0)] {
         let reply = h.ok(json!({"op":"hit","output":1,"screen":{"x":A.0 + at.0,"y":A.1 + at.1}}));
         assert_eq!(reply["hit"]["window"], 1, "{at:?}");
         assert_eq!(reply["pick"], false);
-        // 200 x 100 buffer pixels over the 1000 x 800 frame.
-        assert_eq!(
-            reply["hit"]["buffer_local"],
-            json!({"x":at.0 / 5.0,"y":at.1 / 8.0})
-        );
+        // 200 x 100 buffer pixels over the menu-excluded usable frame.
+        let local = &reply["hit"]["buffer_local"];
+        let expected = [
+            (at.0 - USABLE.0) * 200.0 / USABLE.2,
+            (at.1 - USABLE.1) * 100.0 / USABLE.3,
+        ];
+        assert!((local["x"].as_f64().unwrap() - expected[0]).abs() < 1e-12);
+        assert!((local["y"].as_f64().unwrap() - expected[1]).abs() < 1e-12);
     }
     let input = h.ok(json!({"op":"input","output":1,"screen":{"x":A.0 + 750.0,"y":A.1 + 100.0},"identity":identity(1)}));
     assert_eq!(input["hit"]["window"], 1);
@@ -2066,8 +2112,8 @@ fn the_pointer_reaches_only_the_fullscreen_window_on_its_output() {
     assert_eq!(reply["effect"]["window"], 1);
     assert_eq!(reply["dirty"], true);
     assert_eq!(h.snapshot()["focused"], 1);
-    // Already focused: nothing more is asked.
-    let reply = h.ok(json!({"op":"hover","output":1,"screen":{"x":A.0 + 10.0,"y":A.1 + 10.0}}));
+    // Already focused inside the usable area: nothing more is asked.
+    let reply = h.ok(json!({"op":"hover","output":1,"screen":{"x":A.0 + 25.0,"y":A.1 + 45.0}}));
     assert!(reply.get("effect").is_none(), "{reply}");
     assert_eq!(reply["dirty"], false);
 
@@ -2088,9 +2134,9 @@ fn the_pointer_reaches_only_the_fullscreen_window_on_its_output() {
         &mut h,
         &reply,
         (400.0, 300.0),
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         "applied",
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
     );
     assert_eq!(h.snapshot()["focus"]["history"], json!([1, 2]));
     let reply = action(&mut h, 2, "cycle-windows forward");
@@ -2138,7 +2184,7 @@ fn home_toggle_returns_into_fullscreen_and_send_to_output_carries_it_over() {
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -2154,9 +2200,9 @@ fn home_toggle_returns_into_fullscreen_and_send_to_output_carries_it_over() {
         &mut h,
         &reply,
         (400.0, 300.0),
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         "applied",
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
     );
     // Its exit still returns to the view from before the first fullscreen.
     let reply = action(&mut h, 1, "toggle-fullscreen");
@@ -2164,7 +2210,7 @@ fn home_toggle_returns_into_fullscreen_and_send_to_output_carries_it_over() {
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -2181,7 +2227,7 @@ fn home_toggle_returns_into_fullscreen_and_send_to_output_carries_it_over() {
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -2193,11 +2239,11 @@ fn home_toggle_returns_into_fullscreen_and_send_to_output_carries_it_over() {
         &mut h,
         &reply,
         (400.0, 300.0),
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         "applied",
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
     );
-    assert_eq!(placed(&mut h, 1)[0]["screen_rect"], of(A));
+    assert_eq!(placed(&mut h, 1)[0]["screen_rect"], of(USABLE_SCREEN_A));
 
     // send-to-output runs during fullscreen: the window becomes fullscreen
     // on the adjacent output, and the one it leaves has its view back. One
@@ -2212,7 +2258,7 @@ fn home_toggle_returns_into_fullscreen_and_send_to_output_carries_it_over() {
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (B.2, B.3),
         "applied",
         (B.2, B.3),
@@ -2243,14 +2289,17 @@ fn a_save_keeps_the_place_from_before_the_size_the_window_has_and_no_fullscreen(
     let mut h = zoomed(CONFIG);
     entered(&mut h);
     let path = h.scratch.0.join("scene.json");
-    let lives_on = rect(START.0, START.1, A.2, A.3);
+    let lives_on = rect(START.0, START.1, USABLE.2, USABLE.3);
     h.ok(json!({"op":"save","path":path}));
     let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(saved["scene"]["windows"][0]["world_rect"], lives_on);
     assert!(!saved.to_string().contains("fullscreen"));
     // The save changed nothing here.
     assert_eq!(fullscreen(&mut h, 1)["window"], 1);
-    assert_eq!(world(&mut h, 1), rect(PARK.0, PARK.1, A.2, A.3));
+    assert_eq!(
+        world(&mut h, 1),
+        rect(PARK.0 + USABLE.0, PARK.1 + USABLE.1, USABLE.2, USABLE.3)
+    );
     // A window still owed its size is saved as it stands: where the exit
     // put it, at the size it has until that one is delivered.
     h.ok(json!({"op":"pan","output":1,"screen_delta":{"x":0.0,"y":0.0}}));
@@ -2266,16 +2315,16 @@ fn a_save_keeps_the_place_from_before_the_size_the_window_has_and_no_fullscreen(
     h.ok(json!({"op":"remove_source","window":1,"identity":identity(1),"keep_placeholder":true}));
     h.ok(json!({"op":"load","path":path}));
     assert_eq!(h.snapshot()["outputs"], json!([]));
-    h.ok(json!({"op":"register_output","stable_id":"view-a","screen_bounds":of(A)}));
+    h.ok(json!({"op":"register_output","stable_id":"view-a","screen_bounds":of(A),"usable_rect_local":of(USABLE)}));
     assert_eq!(fullscreen(&mut h, 1), Value::Null);
-    assert_eq!(world(&mut h, 1), rect(START.0, START.1, A.2, A.3));
+    assert_eq!(world(&mut h, 1), rect(START.0, START.1, USABLE.2, USABLE.3));
     assert_eq!(mode(&mut h, 1), Value::Null);
     assert_eq!(state(&mut h)["fullscreen"], json!([]));
     // The window that lived on at the output's size is adopted into a slot
     // of that size, so the next size transaction's first read finds the
     // size it is measured from.
     h.ok(json!({"op":"native_resize_capability","enabled":true}));
-    let reply = h.ok(json!({"op":"attach","identity":identity(1),"bundle_id":"app.1","title":"fixture","buffer":{"width":200,"height":100},"source_rect":rect(4000.0,3000.0,A.2,A.3),"output":1}));
+    let reply = h.ok(json!({"op":"attach","identity":identity(1),"bundle_id":"app.1","title":"fixture","buffer":{"width":200,"height":100},"source_rect":rect(4000.0,3000.0,USABLE.2,USABLE.3),"output":1}));
     assert_eq!(reply["adopted"], true, "{reply}");
     h.ok(json!({"op":"adoption_complete"}));
     h.ok(json!({"op":"focus","window":1}));
@@ -2283,12 +2332,15 @@ fn a_save_keeps_the_place_from_before_the_size_the_window_has_and_no_fullscreen(
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
-        (A.2 + 20.0, A.3),
+        (USABLE.2, USABLE.3),
+        (USABLE.2 + 20.0, USABLE.3),
         "applied",
-        (A.2 + 20.0, A.3),
+        (USABLE.2 + 20.0, USABLE.3),
     );
-    assert_eq!(world(&mut h, 1), rect(START.0, START.1, A.2 + 20.0, A.3));
+    assert_eq!(
+        world(&mut h, 1),
+        rect(START.0, START.1, USABLE.2 + 20.0, USABLE.3)
+    );
 }
 
 // Fullscreen beside `pass_mouse` and `pass_keys` (RULES.md). Upstream's
@@ -2302,7 +2354,7 @@ fn a_fullscreen_window_claims_its_bindings_and_passes_its_keys() {
         "{CONFIG}[[window_rules]]\napp_id = \"app.claims\"\npass_mouse = true\npass_keys = true\n[mouse.on-window]\n\"alt+wheel-down\" = \"zoom-in\"\n"
     );
     let option = json!({"control":false,"option":true,"shift":false,"command":false});
-    let both = json!({"control":true,"option":true,"shift":false,"command":false});
+    let command = json!({"control":false,"option":false,"shift":false,"command":true});
     let lookup = |h: &mut Host,
                   trigger: &str,
                   source: Value,
@@ -2329,9 +2381,9 @@ fn a_fullscreen_window_claims_its_bindings_and_passes_its_keys() {
         &mut h,
         &reply,
         (300.0, 200.0),
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         "applied",
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
     );
     ready(&mut h, 2);
     assert_eq!(h.snapshot()["pass_keys"], json!(true));
@@ -2351,11 +2403,11 @@ fn a_fullscreen_window_claims_its_bindings_and_passes_its_keys() {
             passed
         );
         assert_eq!(
-            lookup(&mut h, "scroll", json!("wheel"), &both, pick, 2),
+            lookup(&mut h, "scroll", json!("wheel"), &command, pick, 2),
             passed
         );
         assert_eq!(
-            lookup(&mut h, "scroll", json!("finger"), &both, pick, 2),
+            lookup(&mut h, "scroll", json!("finger"), &command, pick, 2),
             passed
         );
         assert_eq!(
@@ -2380,12 +2432,12 @@ fn a_fullscreen_window_claims_its_bindings_and_passes_its_keys() {
         (json!("move_window"), json!("alt+left"))
     );
     assert_eq!(
-        found(&mut h, "scroll", json!("wheel"), &both),
+        found(&mut h, "scroll", json!("wheel"), &command),
         (json!("zoom"), json!("mod+wheel-scroll"))
     );
     assert_eq!(
-        found(&mut h, "scroll", json!("finger"), &both),
-        (json!("pan_viewport"), json!("mod+trackpad-scroll"))
+        found(&mut h, "scroll", json!("finger"), &command),
+        (json!("zoom"), json!("mod+trackpad-scroll"))
     );
     assert_eq!(
         found(&mut h, "wheel_down", Value::Null, &option),
@@ -2401,7 +2453,7 @@ fn a_fullscreen_window_claims_its_bindings_and_passes_its_keys() {
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -2448,7 +2500,7 @@ fn a_grab_ends_the_fullscreen_then_focuses_the_window_and_then_takes_hold() {
     h.ok(json!({"op":"end_gesture"}));
     assert_eq!(
         world(&mut h, 1),
-        rect(START.0 + 50.0, START.1 + 25.0, A.2, A.3)
+        rect(START.0 + 50.0, START.1 + 25.0, USABLE.2, USABLE.3)
     );
 
     // A resize drag answers with the same focus request, and ends what the
@@ -2464,7 +2516,7 @@ fn a_grab_ends_the_fullscreen_then_focuses_the_window_and_then_takes_hold() {
     h.ok(json!({"op":"end_gesture"}));
     let reply = action(&mut h, 2, "spawn true");
     assert!(reply.get("transaction").is_none(), "{reply}");
-    assert_eq!(world(&mut h, 1), rect(START.0, START.1, A.2, A.3));
+    assert_eq!(world(&mut h, 1), rect(START.0, START.1, USABLE.2, USABLE.3));
 
     // The native resize's reply is a size transaction's, so its focus
     // request is the one entry of `effects`.
@@ -2663,13 +2715,16 @@ fn a_ruled_size_waits_out_a_fullscreen_enter_and_is_placed_in_its_background() {
     // The enter's transaction ends, the slot is free, and the reply to its
     // last result carries the first effect of the waiting window's.
     let setter = answer(&mut h, &read, "observed", false, (400.0, 300.0))["effect"].clone();
-    let last = answer(&mut h, &setter, "applied", true, (A.2, A.3))["effect"].clone();
-    let ended = answer(&mut h, &last, "observed", false, (A.2, A.3));
+    let last = answer(&mut h, &setter, "applied", true, (USABLE.2, USABLE.3))["effect"].clone();
+    let ended = answer(&mut h, &last, "observed", false, (USABLE.2, USABLE.3));
     let next = ended["effect"].clone();
     assert_eq!(next["op"], "observe_resize_source", "{ended}");
     assert_eq!(next["window"], 2);
     assert_eq!(ended["transaction"], next["transaction"]);
-    assert_eq!(world(&mut h, 1), rect(0.0, 0.0, A.2, A.3));
+    assert_eq!(
+        world(&mut h, 1),
+        rect(USABLE.0, USABLE.1, USABLE.2, USABLE.3)
+    );
     perform(
         &mut h,
         &next,
@@ -2703,8 +2758,8 @@ fn a_ruled_size_waits_out_a_fullscreen_enter_and_is_placed_in_its_background() {
     // The enter's last result frees the slot, and nobody is waiting for it.
     let read = began(&mut h, &reply);
     let setter = answer(&mut h, &read, "observed", false, (400.0, 300.0))["effect"].clone();
-    let last = answer(&mut h, &setter, "applied", true, (A.2, A.3))["effect"].clone();
-    let ended = answer(&mut h, &last, "observed", false, (A.2, A.3));
+    let last = answer(&mut h, &setter, "applied", true, (USABLE.2, USABLE.3))["effect"].clone();
+    let ended = answer(&mut h, &last, "observed", false, (USABLE.2, USABLE.3));
     assert_eq!(ended["effect"], Value::Null, "{ended}");
     // It comes back at the size it had, where it stood, with `size` still
     // named: it was never asked.
@@ -2712,7 +2767,7 @@ fn a_ruled_size_waits_out_a_fullscreen_enter_and_is_placed_in_its_background() {
     deliver(
         &mut h,
         &reply,
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -2777,7 +2832,7 @@ fn readback_enters_and_leaves_with_a_smaller_answer_centred_and_hit_at_once() {
     usable(&mut h);
     assert_eq!(
         world(&mut h, 1),
-        rect(PARK.0 + 100.0, PARK.1 + 100.0, 800.0, 600.0)
+        rect(PARK.0 + 100.0, PARK.1 + 110.0, 800.0, 600.0)
     );
     // No acknowledgement is waited for: the window is hit where it is drawn
     // while its final read is still owed, and the band around it is not.
@@ -2786,7 +2841,7 @@ fn readback_enters_and_leaves_with_a_smaller_answer_centred_and_hit_at_once() {
     answer(&mut h, &last, "observed", false, (800.0, 600.0));
     assert_eq!(
         placed(&mut h, 1)[0]["screen_rect"],
-        rect(A.0 + 100.0, A.1 + 100.0, 800.0, 600.0)
+        rect(A.0 + 100.0, A.1 + 110.0, 800.0, 600.0)
     );
     assert_eq!(mode(&mut h, 1), "fullscreen");
     let reply = action(&mut h, 1, "toggle-fullscreen");
@@ -2816,7 +2871,7 @@ fn readback_asks_a_window_that_was_not_settable_again_at_the_next_enter() {
     answer(&mut h, &last, "observed", false, (400.0, 300.0));
     assert_eq!(
         world(&mut h, 1),
-        rect(PARK.0 + 300.0, PARK.1 + 250.0, 400.0, 300.0)
+        rect(PARK.0 + 300.0, PARK.1 + 260.0, 400.0, 300.0)
     );
     assert_eq!(fullscreen(&mut h, 1)["window"], 1);
     usable(&mut h);
@@ -2828,11 +2883,14 @@ fn readback_asks_a_window_that_was_not_settable_again_at_the_next_enter() {
         &mut h,
         &reply,
         (START.2, START.3),
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         "applied",
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
     );
-    assert_eq!(world(&mut h, 1), rect(PARK.0, PARK.1, A.2, A.3));
+    assert_eq!(
+        world(&mut h, 1),
+        rect(PARK.0 + USABLE.0, PARK.1 + USABLE.1, USABLE.2, USABLE.3)
+    );
     usable(&mut h);
 }
 #[test]
@@ -2845,7 +2903,7 @@ fn readback_an_exit_while_the_enter_is_pending_gives_the_size_back() {
     assert!(reply.get("effect").is_none(), "{reply}");
     assert_eq!(fullscreen(&mut h, 1), Value::Null);
     usable(&mut h);
-    let again = answer(&mut h, &setter, "applied", true, (A.2, A.3))["effect"].clone();
+    let again = answer(&mut h, &setter, "applied", true, (USABLE.2, USABLE.3))["effect"].clone();
     assert_eq!(again["requested"], json!({"width":400.0,"height":300.0}));
     usable(&mut h);
     let last = answer(&mut h, &again, "applied", true, (400.0, 300.0))["effect"].clone();
@@ -2865,9 +2923,9 @@ fn readback_a_close_after_the_enter_ended_restores_the_view() {
         &mut h,
         &reply,
         (START.2, START.3),
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         "applied",
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
     );
     assert_eq!(fullscreen(&mut h, 1)["window"], 1);
     h.ok(json!({"op":"window_closed","window":1,"identity":identity(1),"output":1}));
@@ -2884,9 +2942,9 @@ fn readback_an_exit_the_window_never_answers_leaves_the_slot_free() {
         &mut h,
         &reply,
         (START.2, START.3),
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
         "applied",
-        (A.2, A.3),
+        (USABLE.2, USABLE.3),
     );
     // The exit puts the view and the place back at once. Its size is asked
     // RESTORE_TRIES times at most, each try ended by the setter's timeout and
@@ -2899,7 +2957,8 @@ fn readback_an_exit_the_window_never_answers_leaves_the_slot_free() {
         tries += 1;
         assert!(tries <= 3, "{reply}");
         let read = began(&mut h, &reply);
-        let setter = answer(&mut h, &read, "observed", false, (A.2, A.3))["effect"].clone();
+        let setter =
+            answer(&mut h, &read, "observed", false, (USABLE.2, USABLE.3))["effect"].clone();
         assert_eq!(setter["requested"], json!({"width":400.0,"height":300.0}));
         let diagnostic = timed_out(&mut h, &setter)["effect"].clone();
         assert_eq!(diagnostic["op"], "observe_resize_source");
@@ -2919,7 +2978,7 @@ fn readback_an_exit_the_window_never_answers_leaves_the_slot_free() {
     assert_eq!(slot["pending_effect"], Value::Null);
     assert_eq!(slot["uncertain_mutation"], false);
     // The window is usable at the size it has, and another window sizes.
-    assert_eq!(world(&mut h, 1), rect(START.0, START.1, A.2, A.3));
+    assert_eq!(world(&mut h, 1), rect(START.0, START.1, USABLE.2, USABLE.3));
     h.ok(json!({"op":"focus","window":2}));
     let reply = action(&mut h, 1, "grow-window right");
     deliver(

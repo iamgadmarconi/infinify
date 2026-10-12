@@ -41,10 +41,22 @@ quit() {
   "$app" msg --socket "$socket" action quit >/dev/null 2>&1 || true
   n=0; while kill -0 "$infinify" 2>/dev/null && [ "$n" -lt 80 ]; do sleep .1; n=$((n+1)); done
   if kill -0 "$infinify" 2>/dev/null; then kill "$infinify" 2>/dev/null || true; gone=no; else gone=yes; fi
+  n=0; while kill -0 "$infinify" 2>/dev/null && [ "$n" -lt 30 ]; do sleep .1; n=$((n+1)); done
+  if kill -0 "$infinify" 2>/dev/null; then kill -KILL "$infinify" 2>/dev/null || true; fi
   wait "$infinify" 2>/dev/null || true; infinify=
 }
 # Only what this script started is ever signalled.
-cleanup() { quit; for pid in $fixtures; do kill "$pid" 2>/dev/null || true; done; for pid in $fixtures; do wait "$pid" 2>/dev/null || true; done; }
+cleanup() {
+  quit
+  for pid in $fixtures; do kill -TERM "$pid" 2>/dev/null || true; done
+  n=0; alive=yes
+  while [ "$alive" = yes ] && [ "$n" -lt 30 ]; do
+    alive=no; for pid in $fixtures; do if kill -0 "$pid" 2>/dev/null; then alive=yes; fi; done
+    if [ "$alive" = yes ]; then sleep .1; n=$((n+1)); fi
+  done
+  for pid in $fixtures; do if kill -0 "$pid" 2>/dev/null; then kill -KILL "$pid" 2>/dev/null || true; fi; done
+  for pid in $fixtures; do wait "$pid" 2>/dev/null || true; done
+}
 trap cleanup EXIT
 trap 'exit 1' INT TERM HUP
 
@@ -468,6 +480,44 @@ ok('10b: H\'s transaction ended', {'seconds': round(time.time() - stalled, 2), '
 clicked('a', '10b: after H\'s transaction ended')
 until('10b: H answers again', 8, lambda: time.time() - (evidence / 'h' / 'status.json').stat().st_mtime, lambda age: age < .3)
 agreed('10b: the canvas has the size H\'s window took', 'h', [h1[0] + 60, h1[1] + 60], seconds=5); clicked('h', '10b: H after it answers again')
+
+# 11b. A pinned native window keeps one display point per native point at every
+# canvas zoom. The real adapter settles the size; DebugPointer reads the visible
+# frame before/after and verifies the grabbed edge and opposite edge separately.
+away('h')
+for zoom in (.5, .8):
+    reply = ask({'Zoom': zoom}); check(f'11b zoom {zoom}: accepted', 'Ok' in reply, reply)
+    until(f'11b zoom {zoom}: settled', 5, State, lambda v: abs(v['zoom']-zoom)<1e-8)
+    for edges, fx, fy, dx, dy in [('right',1.,.5,24,0),('left',0.,.5,-24,0),
+                                  ('bottom_right',1.,1.,24,16),('top_left',0.,0.,-24,-16)]:
+        what=f'11b pinned {edges} zoom {zoom}'
+        sized('a',480,360,what); show('a')
+        done=msg('pin','on','--id',str(ids['a'])); check(f'{what}: pinned',done.returncode==0,done.stderr)
+        offset=[2 if 'left' in edges else -2 if 'right' in edges else 0,
+                2 if 'top' in edges else -2 if 'bottom' in edges else 0]
+        before=pointer(phase='probe',window=ids['a'],at=[fx,fy],offset=offset)['Ok']['DebugPointer']
+        since=down('a',[fx,fy],button='left',modifiers=(),offset=offset,what=what)
+        began=until(f'{what}: edge grab began',2,lambda:grab(since),bool)[0]
+        check(f'{what}: edge and no cluster',f' edges={edges} group=0 ' in began,began)
+        drag(dx,dy,what,steps=3,pause=.02);up(what)
+        until(f'{what}: native transaction completed',5,lambda:ended(since,'a'),bool)
+        want=[480+abs(dx),360+abs(dy)]
+        def pin(): return next((w for w in State()['pinned'] if w['id']==ids['a']),None)
+        settled=until(f'{what}: native size and pin agree',3,lambda:{'native':native('a'),'pin':pin()},
+                      lambda v:v['native']==want and v['pin'] and v['pin']['size']==want)
+        after=pointer(phase='probe',window=ids['a'],at=[fx,fy],offset=offset)['Ok']['DebugPointer']
+        a,b=before['screen'],after['screen']
+        check(f'{what}: edge tracks unscaled screen motion',
+              (not dx or abs(b[0]-a[0]-dx)<=1.1) and (not dy or abs(b[1]-a[1]-dy)<=1.1),
+              {'before':before,'after':after,'native':settled})
+        def box(r): return [r['origin']['x'],r['origin']['y'],r['size']['width'],r['size']['height']]
+        first,last=box(before['screen_rect']),box(after['screen_rect'])
+        check(f'{what}: opposite corner fixed',
+              abs((first[0]+(first[2] if dx<0 else 0))-(last[0]+(last[2] if dx<0 else 0)))<=1.1 and
+              abs((first[1]+(first[3] if dy<0 else 0))-(last[1]+(last[3] if dy<0 else 0)))<=1.1,
+              [first,last])
+        done=msg('pin','off','--id',str(ids['a']));check(f'{what}: unpinned',done.returncode==0,done.stderr)
+clicked('a','11b: click after pinned resizing')
 
 # 12. Nothing but the scope was acted on, nothing was refused as unsettled or gated, and no transaction is left.
 z = status('z')

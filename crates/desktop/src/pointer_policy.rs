@@ -96,8 +96,8 @@ impl Controller {
     /// adapted (POINTER.md). Among bands the walk is upstream's z-order walk:
     /// the topmost canvas window whose band holds the point ends it. A widget
     /// and a fullscreen window have
-    /// none (resize_margin_hit_for), a screen-pinned window is not resized
-    /// here (`movable`), and a stand-in has no window to ask a size of. Below
+    /// none (resize_margin_hit_for), and a stand-in has no native size to ask
+    /// for. Pinned borders are tested in screen space. Below
     /// `zoom.interact_min` a press is the pick's (try_pick_button stands
     /// ahead of the border), and a fullscreen output shows no canvas.
     pub(crate) fn resize_border(&self, output: OutputId, screen: Point) -> Value {
@@ -106,34 +106,59 @@ impl Controller {
             return Value::Null;
         };
         if !self.config().resize_on_border
-            || self.pick_mode(output)
             || self.fullscreen_on(output).is_some()
             || !viewport.screen_bounds.contains(screen)
         {
             return Value::Null;
         }
         let under = self.hit_window(output, screen).map(|(window, _)| window);
-        let at = viewport.screen_to_world(screen);
-        let reach = |rect: Rect| {
+        let inside_band = |at: Point, rect: Rect| {
             at.x >= rect.origin.x - band
                 && at.x < rect.right() + band
                 && at.y >= rect.origin.y - band
                 && at.y < rect.bottom() + band
         };
-        let Some(window) = self
-            .scene
-            .windows()
-            .iter()
-            .rev()
-            .filter(|w| self.on_canvas(w.id))
-            .find(|w| under.map_or_else(|| reach(w.world_rect), |id| w.id == id))
-        else {
-            return Value::Null;
+        // Pins are above the canvas and retain their one-point scale in
+        // overview. A widget can cover an edge but never acquires a resize.
+        let pinned = self.scene.windows().iter().rev().find_map(|window| {
+            let pin = self.policy.pins.get(&window.id)?;
+            if pin.output != output {
+                return None;
+            }
+            let rect = Rect {
+                origin: viewport.screen_bounds.origin
+                    + Point::new(f64::from(pin.screen_pos[0]), f64::from(pin.screen_pos[1])),
+                size: window.world_rect.size,
+            };
+            under
+                .map_or_else(|| inside_band(screen, rect), |id| id == window.id)
+                .then_some((window, rect))
+        });
+        let (window, rect, at, zoom, screen_space) = if let Some((window, rect)) = pinned {
+            if self.is_widget(window.id) {
+                return Value::Null;
+            }
+            (window, rect, screen, 1.0, true)
+        } else {
+            if self.pick_mode(output) {
+                return Value::Null;
+            }
+            let at = viewport.screen_to_world(screen);
+            let Some(window) = self
+                .scene
+                .windows()
+                .iter()
+                .rev()
+                .filter(|w| self.on_canvas(w.id))
+                .find(|w| under.map_or_else(|| inside_band(at, w.world_rect), |id| w.id == id))
+            else {
+                return Value::Null;
+            };
+            (window, window.world_rect, at, viewport.zoom, false)
         };
         let Some(source) = self.sources.get(&window.id) else {
             return Value::Null;
         };
-        let rect = window.world_rect;
         // Use the native frame actually observed, independently of the capture
         // buffer's pixel density. A window rebound to a differently sized
         // saved slot still has a native-point affordance. The visible minimum
@@ -142,10 +167,10 @@ impl Controller {
         // output clip never creates a resize edge in the middle of a window.
         let native = source.observed_rect.size;
         let inner_x = (5.0 * rect.size.width / native.width)
-            .max(3.0 / viewport.zoom)
+            .max(3.0 / zoom)
             .min(rect.size.width / 4.0);
         let inner_y = (5.0 * rect.size.height / native.height)
-            .max(3.0 / viewport.zoom)
+            .max(3.0 / zoom)
             .min(rect.size.height / 4.0);
         let (left, right) = (
             at.x < rect.origin.x + inner_x,
@@ -169,7 +194,7 @@ impl Controller {
         json!({
             "window":window.id,
             "edges":edges,
-            "snapped":self.config().decoration_resize_snapped,
+            "snapped":!screen_space && self.config().decoration_resize_snapped,
         })
     }
     /// `hit` and `input` with upstream's pick mode: `pick` says the hit is a

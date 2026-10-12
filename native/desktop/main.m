@@ -229,6 +229,8 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
 // Capture pixels are a presentation budget, never the native or world size. Configuration changes are serialized.
 @property CGSize captureSize,captureNativeSize,captureCandidate;
 @property CFTimeInterval captureCandidateSince;
+@property double captureDemandDensity;
+@property CFTimeInterval captureDemandSince;
 @property BOOL captureUpdating;
 // A system-interrupted capture keeps its logical binding and last picture.
 // Retries obtain a new shareable-window identity rather than reuse a stale filter.
@@ -1370,11 +1372,9 @@ static BOOL DWInputTrace(void) { static int on=-1;if(on<0)on=getenv("INFINIFY_DE
     if(!binding&&!button&&hit&&!source&&(e.modifierFlags&NSEventModifierFlagControl)&&(e.modifierFlags&NSEventModifierFlagOption)){[self.desktop call:@{@"op":@"forget",@"window":hit[@"window"]}];[self.desktop render];[self.desktop saveScene];return;}
     // A widget ignores drags and resizes, as upstream's does: the bound press starts no gesture and goes to the widget as a plain click (upstream's move and resize arms fall through to click-to-focus and forward it).
     if((move||resize)&&[asNumber(hit[@"widget"])boolValue]){[self.desktop flashStatus:@"A widget stays where its rule puts it: drags and resizes are ignored"];move=resize=NO;}
-    // Upstream drags and resizes a pinned window in screen space, raising and focusing it first (try_pinned_button). The move is the controller's begin_drag like any window's, which moves the pin by the pointer's screen delta; the resize is not adapted and the controller refuses it (a port decision, not a limit of a Mac window): the press raises and focuses the window and is swallowed.
-    if(resize&&[asNumber(hit[@"pinned"])boolValue]){[self.desktop raiseFocus:hit[@"window"]];[self.desktop flashStatus:@"A screen-pinned window is not resized: unpin it first (toggle-pin-to-screen)"];}
     // Upstream on_pointer_button: raise_and_focus, then the move grab. The controller does both inside begin_drag, a pinned window's included, and its reply
     // carries the focus request an activate reply carries: the coordinator's to perform on the native window, as a click's is and a move gesture's.
-    else if(move&&hit){NSDictionary *begun=[self.desktop call:@{@"op":@"begin_drag",@"window":hit[@"window"],@"output":output,@"group":[kind isEqual:@"move_snapped_windows"]?@YES:@NO}];if(begun){self.gesture=2;[self.desktop.navigation perform:asDict(begun)];}}
+    if(move&&hit){NSDictionary *begun=[self.desktop call:@{@"op":@"begin_drag",@"window":hit[@"window"],@"output":output,@"group":[kind isEqual:@"move_snapped_windows"]?@YES:@NO}];if(begun){self.gesture=2;[self.desktop.navigation perform:asDict(begun)];}}
     else if(resize&&hit)[self beginResize:hit[@"window"] edges:nil snapped:[kind isEqual:@"resize_window_snapped"] at:p output:output];
     // Upstream's pan grab remembers that it began on empty canvas: released without a drag, it unfocuses.
     else if([kind isEqual:@"pan_viewport"]){self.gesture=1;self.clearsFocus=!hit;}
@@ -3653,14 +3653,16 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     [self.pendingStops addObject:stream];[stream stopCaptureWithCompletionHandler:^(NSError *error){(void)error;dispatch_async(dispatch_get_main_queue(),^{[self.pendingStops removeObject:stream];});}];
 }
 // A larger tile needs sharper pixels immediately. Smaller tiles use power-of-two density buckets after half a second of
-// stable demand, so a zoom gesture does not reconfigure a stream on every tick. The largest placement across all outputs
+// stable actual density as well as bucket demand. Continuous zoom may linger in a bucket longer than that; it must not
+// repeatedly shrink and regrow all streams while the scale is still moving. The largest placement across all outputs
 // wins, including pinned windows and widgets. Cropping does not lower density. Native ownership and world geometry are unchanged.
-- (CGSize)capturePixels:(LiveSource *)source native:(CGSize)native placements:(NSArray *)placements scales:(NSDictionary *)scales {
-    if(self.scope&&getenv("INFINIFY_DEBUG_FULL_CAPTURE")&&atoi(getenv("INFINIFY_DEBUG_FULL_CAPTURE"))==1)return CGSizeMake(ceil(native.width*2),ceil(native.height*2));
+- (CGSize)capturePixels:(LiveSource *)source native:(CGSize)native placements:(NSArray *)placements scales:(NSDictionary *)scales demandDensity:(double *)demand {
+    if(self.scope&&getenv("INFINIFY_DEBUG_FULL_CAPTURE")&&atoi(getenv("INFINIFY_DEBUG_FULL_CAPTURE"))==1){if(demand)*demand=2;return CGSizeMake(ceil(native.width*2),ceil(native.height*2));}
     double density=0;
     for(NSDictionary *p in placements)if([p[@"window"]isEqual:source.logical]){CGRect r=jsonRect(p[@"screen_rect"]);if(CGRectIsNull(r))continue;double scale=[scales[p[@"output"]]doubleValue];density=fmax(density,fmax(r.size.width/native.width,r.size.height/native.height)*(scale>0?scale:2));}
     if(density<=0)density=source.captureNativeSize.width>0?source.captureSize.width/source.captureNativeSize.width:2;
-    density=fmin(2,fmax(1.0/32,exp2(ceil(log2(density)))));
+    density=fmin(2,fmax(1.0/32,density));if(demand)*demand=density;
+    density=exp2(ceil(log2(density)));
     return CGSizeMake(MAX(2,ceil(native.width*density)),MAX(2,ceil(native.height*density)));
 }
 - (void)updateCapture:(LiveSource *)source size:(CGSize)pixels native:(CGSize)native {
@@ -3699,7 +3701,9 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
         if(!source.window||source.synth)continue;
         if(source.error)continue;
         CGRect bounds=CGRectZero;if(!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)source.router.bounds,&bounds)||bounds.size.width<=0||bounds.size.height<=0)continue;
-        CGSize pixels=[self capturePixels:source native:bounds.size placements:pictures scales:scales];
+        double densityDemand=0;CGSize pixels=[self capturePixels:source native:bounds.size placements:pictures scales:scales demandDensity:&densityDemand];
+        CFTimeInterval demandTime=CACurrentMediaTime();
+        if(source.captureDemandDensity!=densityDemand){source.captureDemandDensity=densityDemand;source.captureDemandSince=demandTime;}
         NSDictionary *binding=bindings[source.logical];
         if(self.native&&[placed containsObject:source.logical]&&boundIdentity(source.identity,binding[@"identity"])&&binding[@"generation"]){
             double density=running&&source.captureSize.width>0?source.captureSize.width/bounds.size.width:pixels.width/bounds.size.width;
@@ -3710,7 +3714,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
         if(source.captureUpdating)continue;
         if(CGSizeEqualToSize(pixels,source.captureSize)){source.captureCandidateSince=0;continue;}
         BOOL immediate=pixels.width>source.captureSize.width||pixels.height>source.captureSize.height||!CGSizeEqualToSize(bounds.size,source.captureNativeSize);
-        if(!immediate){if(!source.captureCandidateSince||!CGSizeEqualToSize(pixels,source.captureCandidate)){source.captureCandidate=pixels;source.captureCandidateSince=CACurrentMediaTime();}if(CACurrentMediaTime()-source.captureCandidateSince<.5)continue;}
+        if(!immediate){if(!source.captureCandidateSince||!CGSizeEqualToSize(pixels,source.captureCandidate)){source.captureCandidate=pixels;source.captureCandidateSince=demandTime;}if(demandTime-source.captureCandidateSince<.5||demandTime-source.captureDemandSince<.5)continue;}
         [self updateCapture:source size:pixels native:bounds.size];
     }
     // Overlay roots need geometry observations even outside the current view:
@@ -3720,7 +3724,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
         NSDictionary *binding=bindings[source.logical];CGRect bounds=CGRectZero;
         if(source.detached||source.synth||source.error||!source.router.bounds||!boundIdentity(source.identity,binding[@"identity"])||!binding[@"generation"]
            ||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)source.router.bounds,&bounds)||CGRectIsEmpty(bounds)||CGRectIsInfinite(bounds))continue;
-        CGSize pixels=[self capturePixels:source native:bounds.size placements:pictures scales:scales];
+        CGSize pixels=[self capturePixels:source native:bounds.size placements:pictures scales:scales demandDensity:NULL];
         double density=pixels.width/bounds.size.width;
         [familyRoots addObject:@{@"window":source.logical,@"identity":source.identity,@"generation":binding[@"generation"],@"native_bounds":rectJSON(bounds),@"density":@(density),@"capture":@([placed containsObject:source.logical])}];
         double interval=CMTimeGetSeconds([self captureInterval:source]);if(interval>0)familyRate=MAX(familyRate,(NSInteger)llround(1/interval));

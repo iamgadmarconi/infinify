@@ -5,18 +5,22 @@ requests for a future native shell; it does not call AX, capture pixels, resize
 third-party windows, or establish usable compositing. Existing `begin_resize`
 remains the logical reducer API. Native group resize is rejected in the
 capture-acknowledged mode and carried in readback mode, where a rule's aspect
-ratio is kept too ([Pointer resize](#pointer-resize)). Pin is outside this
-contract; fullscreen runs this same
-transaction ([FULLSCREEN.md](FULLSCREEN.md)). Fit, fill, the step actions, IPC
-resize and a window rule's `size` run this same transaction without a drag:
-[SIZES.md](SIZES.md) has what they ask for and what they write when its results
-arrive. `begin_native_resize` takes no [widget and no screen-pinned
-window](RULES.md#navigation-activation-gestures-and-outputs): it answers
-`a widget is not moved or resized by hand` or
-`a screen-pinned window is not moved or resized by hand`. The sized
-transaction is begun for one of those by a single caller, the rule's `size`
-the window mapped with ([RULES.md](RULES.md#a-rules-size)); every other
-caller has passed it over or refused it first.
+ratio is kept too ([Pointer resize](#pointer-resize)). Fullscreen uses the
+same transaction ([FULLSCREEN.md](FULLSCREEN.md)); sizing actions and rules
+are described in [SIZES.md](SIZES.md). Widgets refuse manual resizing.
+
+Screen-pinned windows accept edge, bound-button and resize-gesture grabs in
+output-local points, independent of canvas pan and zoom. Their native observed
+size is authoritative. They neither snap nor carry a cluster, and left/top
+commits derive the pin from its original anchor and observed size to retain the
+opposite edge. Each result rounds the absolute position, avoiding accumulated
+fractional drift. Independent pin movement before a delayed result rebases that
+anchor and is preserved.
+A delayed baseline rebases the grabbed edge just as for a canvas window.
+The pin remains on its original output; another output cannot begin the grab.
+Output removal cancels input while outstanding native results still drain.
+Logical `begin_resize` remains a canvas operation; native pinned resizing uses
+`begin_native_resize`.
 
 ## Commands and effects
 

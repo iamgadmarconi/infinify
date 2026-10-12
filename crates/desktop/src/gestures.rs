@@ -9,7 +9,7 @@
 // (effective_send_events). The gesture table, the thresholds and
 // `direction_from_vector` are driftwm-core's, upstream's own code. Not
 // adapted: forwarding an unbound gesture to a client, the pointer warps, the
-// cross-output leg of a move, and the resize of a screen-pinned window. The
+// cross-output leg of a move. Pinned resizing uses screen points. The
 // resize grab is resize_transaction.rs's size transaction. The
 // fullscreen legs are adapted with fullscreen.rs: the window context of a
 // fullscreen output and the exit a continuous gesture makes first.
@@ -38,7 +38,6 @@ use driftwm_core::config::{
 };
 use driftwm_core::input::gestures::direction_from_vector;
 
-const PINNED_RESIZE_NOTE: &str = "a screen-pinned window is not resized: unpin it first";
 const LEGACY_RESIZE_NOTE: &str = "resize by gesture is not offered under --experimental-native-resize: that run resizes by its handles";
 
 /// The gesture libinput would have reported.
@@ -388,9 +387,8 @@ impl Controller {
     /// `None` when nothing resizable is there (empty canvas, a widget), when
     /// the shell performs no resize, or when the grab is refused, as
     /// upstream's `false`, and the caller falls back to pan: the refused begin ran on a copy, so nothing was focused,
-    /// cancelled or taken out of fit for it. A screen-pinned window is
-    /// claimed and not resized: upstream resizes it in screen space
-    /// (start_pinned_resize), which is not adapted.
+    /// cancelled or taken out of fit for it. A pinned window uses the same
+    /// native transaction in screen space (upstream start_pinned_resize).
     fn try_start_resize(
         &mut self,
         output: OutputId,
@@ -399,14 +397,6 @@ impl Controller {
         report: &mut Report,
     ) -> Option<GestureState> {
         let window = self.gesture_target(output, pointer)?;
-        if self.is_pinned(window) {
-            report.note = Some(PINNED_RESIZE_NOTE);
-            return Some(GestureState::SwipeResize {
-                window,
-                at: pointer,
-                transaction: None,
-            });
-        }
         // A shell that performs no resize effect (a demo, a probe) would
         // leave the transaction's first read unanswered for good.
         if !self.sizes.capability {

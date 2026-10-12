@@ -2816,7 +2816,7 @@ fn trackpad_gestures_grab_no_widget_and_move_a_pinned_window_in_screen_space() {
     let scratch = Scratch::new();
     let mut h = mixed_layers(
         &scratch,
-        "\n[[window_rules]]\ntitle = \"Clock\"\nwidget = true\n",
+        "\n[[window_rules]]\ntitle = \"Clock\"\nwidget = true\n[gestures.on-window]\n\"3-finger-doubletap-swipe\" = \"move-window\"\n",
     );
     let begin = |h: &mut Host, at: (f64, f64), option: bool, doubletap: bool| {
         h.ok(json!({"op":"gesture_begin","kind":"swipe","fingers":3,"modifiers":{"control":false,"option":option,"shift":false,"command":false},"context":"window","output":1,"pointer":point(at.0, at.1),"doubletap":doubletap,"time_ms":1000}))
@@ -2877,15 +2877,10 @@ fn trackpad_gestures_grab_no_widget_and_move_a_pinned_window_in_screen_space() {
     assert_eq!(h.pinned(4)["screen_rect"], rect(840.0, 500.0, 150.0, 100.0));
     assert_eq!(h.snapshot()["outputs"][0], camera);
     let before = h.snapshot();
-    // A resize over it is claimed and does nothing: upstream resizes a
-    // pinned window in screen space, which is not done here.
+    // This host has no resize capability. A resize gesture falls back to pan.
     let reply = begin(&mut h, ON_PIN, true, false);
-    assert_eq!(reply["gesture"]["state"], "swipe_resize", "{reply}");
-    assert_eq!(reply["gesture"]["window"], 4);
-    assert_eq!(
-        reply["note"],
-        "a screen-pinned window is not resized: unpin it first"
-    );
+    assert_eq!(reply["gesture"]["state"], "swipe_pan", "{reply}");
+    assert_eq!(reply["note"], Value::Null);
     end(&mut h);
     assert_eq!(h.snapshot(), before);
     h.observe_focus(1);

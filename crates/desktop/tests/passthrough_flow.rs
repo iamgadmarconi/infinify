@@ -626,6 +626,16 @@ fn pass_keys_is_resolved_against_the_title_and_the_config_of_the_moment() {
 fn the_exit_chord_and_quit_are_never_passable() {
     let scratch = Scratch::new();
     let mut h = key_passers(&scratch);
+    // The safety exit remains Control+Option+Escape independently of `mod`.
+    // Bind it explicitly while Command+Escape remains an ordinary binding.
+    load_config(
+        &mut h,
+        &scratch,
+        &PASS_KEYS.replace(
+            "\"mod+Escape\" = \"home-toggle\"",
+            "\"mod+Escape\" = \"home-toggle\"\n\"ctrl+alt+Escape\" = \"home-toggle\"",
+        ),
+    );
     let reply = h.ok(json!({"op":"bindings"}));
     let keys = h.keys();
     assert!(keys.len() > 20, "{reply}");
@@ -639,9 +649,9 @@ fn the_exit_chord_and_quit_are_never_passable() {
     // every binding that quits.
     assert_eq!(
         reply["reserved"],
-        json!([{"purpose":"exit","key_code":0x35,"modifiers":chord("⌃⌥"),"claimed_by":"mod+Escape"}])
+        json!([{"purpose":"exit","key_code":0x35,"modifiers":chord("⌃⌥"),"claimed_by":"ctrl+alt+Escape"}])
     );
-    let exit = by_combo("mod+Escape");
+    let exit = by_combo("ctrl+alt+Escape");
     assert_eq!(
         (&exit["action"], &exit["passable"]),
         (&json!("home-toggle"), &json!(false))
@@ -655,10 +665,10 @@ fn the_exit_chord_and_quit_are_never_passable() {
     // Every other key binding may be passed, the combos a rule lists here
     // among them: a list's combo is a binding's `combo`, letter for letter.
     for key in &keys {
-        let held = key["action"] == "quit" || key["combo"] == "mod+Escape";
+        let held = key["action"] == "quit" || key["combo"] == "ctrl+alt+Escape";
         assert_eq!(key["passable"], !held, "{key}");
     }
-    for combo in ["mod+q", "ctrl+q"] {
+    for combo in ["mod+q", "ctrl+q", "mod+Escape"] {
         assert_eq!(by_combo(combo)["passable"], true);
     }
     // A media key is a binding like any other.
@@ -733,7 +743,7 @@ fn a_listed_combo_is_the_window_s_and_every_other_stays_a_binding() {
         (&json!("move_snapped_windows"), &json!("alt+shift+left"))
     );
     // an_unclaimed_anywhere_binding_still_pans.
-    let pan = h.press("left", "⌃⌥", 1);
+    let pan = h.press("left", "⌘", 1);
     assert_eq!(kind(&pan), (&json!("pan_viewport"), &json!("mod+left")));
     // A press no binding takes is unbound, not passed: a claim is asked only
     // once a binding has matched.
@@ -773,7 +783,7 @@ fn passing_everything_claims_an_anywhere_binding_over_the_window_only() {
         ("left", "⌥"),
         ("right", "⌥"),
         ("middle", "⌥"),
-        ("left", "⌃⌥"),
+        ("left", "⌘"),
     ] {
         assert_eq!(
             h.press(trigger, modifiers, 1),
@@ -781,11 +791,11 @@ fn passing_everything_claims_an_anywhere_binding_over_the_window_only() {
             "{modifiers}{trigger}"
         );
     }
-    assert_eq!(h.press("left", "⌃⌥⌘", 1), PASSED());
-    assert_eq!(h.scroll("wheel", "⌃⌥", 1), PASSED());
-    assert_eq!(h.scroll("finger", "⌃⌥", 1), PASSED());
-    assert_eq!(kind(&h.press("left", "⌃⌥", 2)).0, "pan_viewport");
-    assert_eq!(kind(&h.scroll("wheel", "⌃⌥", 2)).0, "zoom");
+    assert_eq!(h.press("left", "⌘⌃", 1), PASSED());
+    assert_eq!(h.scroll("wheel", "⌘", 1), PASSED());
+    assert_eq!(h.scroll("finger", "⌘", 1), PASSED());
+    assert_eq!(kind(&h.press("left", "⌘", 2)).0, "pan_viewport");
+    assert_eq!(kind(&h.scroll("wheel", "⌘", 2)).0, "zoom");
     // Still nothing to pass where nothing is bound.
     assert_eq!(h.press("left", "", 1), UNBOUND());
     assert_eq!(h.scroll("finger", "", 1), UNBOUND());
@@ -815,19 +825,16 @@ pass_mouse = ["mod+trackpad-scroll"]
     );
     // Upstream a_claimed_scroll_reaches_the_client_without_zooming, and its
     // control over the window that lists the other trigger.
-    assert_eq!(h.scroll("wheel", "⌃⌥", 1), PASSED());
-    let zoom = h.scroll("wheel", "⌃⌥", 2);
+    assert_eq!(h.scroll("wheel", "⌘", 1), PASSED());
+    let zoom = h.scroll("wheel", "⌘", 2);
     assert_eq!(kind(&zoom), (&json!("zoom"), &json!("mod+wheel-scroll")));
     // Every source that is not a finger scrolls as the wheel.
-    assert_eq!(h.scroll("continuous", "⌃⌥", 1), PASSED());
-    assert_eq!(h.over("scroll", Value::Null, "⌃⌥", 1), PASSED());
-    // a_claimed_trackpad_scroll_reaches_the_client_without_panning.
-    assert_eq!(h.scroll("finger", "⌃⌥", 2), PASSED());
-    let pan = h.scroll("finger", "⌃⌥", 1);
-    assert_eq!(
-        kind(&pan),
-        (&json!("pan_viewport"), &json!("mod+trackpad-scroll"))
-    );
+    assert_eq!(h.scroll("continuous", "⌘", 1), PASSED());
+    assert_eq!(h.over("scroll", Value::Null, "⌘", 1), PASSED());
+    // A claimed Command-scroll reaches the client without zooming.
+    assert_eq!(h.scroll("finger", "⌘", 2), PASSED());
+    let zoom = h.scroll("finger", "⌘", 1);
+    assert_eq!(kind(&zoom), (&json!("zoom"), &json!("mod+trackpad-scroll")));
 }
 
 #[test]
@@ -868,8 +875,8 @@ pass_mouse = ["alt+wheel-down", "mod+wheel-down"]
     // The notch is a channel apart from the continuous scroll: a claim on
     // `mod+wheel-down` leaves the `mod+wheel-scroll` zoom a binding, and
     // claims nothing where no notch is bound.
-    assert_eq!(kind(&h.scroll("wheel", "⌃⌥", 1)).0, "zoom");
-    assert_eq!(h.over("wheel_down", Value::Null, "⌃⌥", 1), UNBOUND());
+    assert_eq!(kind(&h.scroll("wheel", "⌘", 1)).0, "zoom");
+    assert_eq!(h.over("wheel_down", Value::Null, "⌘", 1), UNBOUND());
 }
 
 #[test]
@@ -903,14 +910,14 @@ pass_mouse = true
     assert_eq!(kind(&h.press("left", "⌥", 1)).0, "move_window");
     h.retitle(1, "Blender 4");
     assert_eq!(h.press("left", "⌥", 1), PASSED());
-    // A physical chord can stand for two upstream combos. ⌃⌥ is `mod` and is
-    // `ctrl+alt`; the binding that matches is `mod+left`, and a claim is
-    // asked under the combo that matched, so listing `ctrl+alt+left` claims
-    // nothing here.
+    // An explicitly configured super chord can stand for two modifier sets.
+    // The binding matches `mod+left`, so the `ctrl+alt+left` claim leaves it live.
+    h.ok(json!({"op":"set_platform","super":"ctrl+alt"}));
     assert_eq!(
         kind(&h.press("left", "⌃⌥", 1)),
         (&json!("pan_viewport"), &json!("mod+left"))
     );
+    h.ok(json!({"op":"set_platform","super":"cmd"}));
     // Upstream a_claimed_press_on_a_pinned_window_reaches_the_client: a
     // pinned window claims like any other.
     pin(&mut h, 1);
@@ -983,9 +990,9 @@ fn below_interact_min_a_canvas_window_claims_nothing_and_a_pinned_one_keeps_its_
     assert_eq!(pick_of(&mut h, 500.0, 350.0), (json!(1), json!(false)));
     for window in [1, 3] {
         assert_eq!(h.press("left", "⌥", window), PASSED());
-        assert_eq!(h.press("left", "⌃⌥", window), PASSED());
-        assert_eq!(h.scroll("wheel", "⌃⌥", window), PASSED());
-        assert_eq!(h.scroll("finger", "⌃⌥", window), PASSED());
+        assert_eq!(h.press("left", "⌘", window), PASSED());
+        assert_eq!(h.scroll("wheel", "⌘", window), PASSED());
+        assert_eq!(h.scroll("finger", "⌘", window), PASSED());
         assert_eq!(h.over("wheel_down", Value::Null, "⌥", window), PASSED());
         assert_eq!(h.over("wheel_up", Value::Null, "", window), PASSED());
     }
@@ -1003,13 +1010,13 @@ fn below_interact_min_a_canvas_window_claims_nothing_and_a_pinned_one_keeps_its_
     // held stays the canvas's, as try_pick_button lets it win.
     let moved = h.picked("left", Value::Null, "⌥", 1);
     assert_eq!(kind(&moved), (&json!("move_window"), &json!("alt+left")));
-    let pan = h.picked("left", Value::Null, "⌃⌥", 1);
+    let pan = h.picked("left", Value::Null, "⌘", 1);
     assert_eq!(kind(&pan), (&json!("pan_viewport"), &json!("mod+left")));
     // A bare press is the pick's: unbound, and not passed to anyone.
     assert_eq!(h.picked("left", Value::Null, "", 1), UNBOUND());
     // A scroll: the bound one stays a binding, and the bare one, which no
     // window can receive, is looked up again as one on empty canvas.
-    let zoom = h.picked("scroll", json!("wheel"), "⌃⌥", 1);
+    let zoom = h.picked("scroll", json!("wheel"), "⌘", 1);
     assert_eq!(kind(&zoom), (&json!("zoom"), &json!("mod+wheel-scroll")));
     let pan = h.picked("scroll", json!("finger"), "", 1);
     assert_eq!(
@@ -1038,23 +1045,20 @@ fn below_interact_min_a_canvas_window_claims_nothing_and_a_pinned_one_keeps_its_
     // The pinned window keeps its button claims below the threshold, as
     // upstream's try_pinned_button asks them with no gate.
     assert_eq!(h.press("left", "⌥", 3), PASSED());
-    assert_eq!(h.press("left", "⌃⌥", 3), PASSED());
+    assert_eq!(h.press("left", "⌘", 3), PASSED());
     // Its scroll and notch claims go: both of upstream's axis sites ask
     // `!pick_mode()` whatever is under the pointer.
-    let zoom = h.scroll("wheel", "⌃⌥", 3);
+    let zoom = h.scroll("wheel", "⌘", 3);
     assert_eq!(kind(&zoom), (&json!("zoom"), &json!("mod+wheel-scroll")));
-    let pan = h.scroll("finger", "⌃⌥", 3);
-    assert_eq!(
-        kind(&pan),
-        (&json!("pan_viewport"), &json!("mod+trackpad-scroll"))
-    );
+    let zoom = h.scroll("finger", "⌘", 3);
+    assert_eq!(kind(&zoom), (&json!("zoom"), &json!("mod+trackpad-scroll")));
     let notch = h.over("wheel_down", Value::Null, "⌥", 3);
     assert_eq!(kind(&notch).0, "action");
     let notch = h.over("wheel_up", Value::Null, "", 3);
     assert_eq!(kind(&notch).0, "action");
     // It is the pin's own output that is asked: the window pinned on side,
     // which is above the threshold, claims its scroll as before.
-    assert_eq!(h.scroll("wheel", "⌃⌥", 4), PASSED());
+    assert_eq!(h.scroll("wheel", "⌘", 4), PASSED());
     assert_eq!(h.over("wheel_down", Value::Null, "⌥", 4), PASSED());
 
     // The pinned window is no pick target and its drag is the screen-space
@@ -1071,9 +1075,9 @@ fn below_interact_min_a_canvas_window_claims_nothing_and_a_pinned_one_keeps_its_
     // Back above the threshold every claim is back.
     h.ok(json!({"op":"zoom","output":1,"zoom":1.0,"anchor":point(200.0,100.0)}));
     assert_eq!(h.snapshot()["outputs"][0]["pick"], false);
-    assert_eq!(h.scroll("wheel", "⌃⌥", 3), PASSED());
+    assert_eq!(h.scroll("wheel", "⌘", 3), PASSED());
     assert_eq!(h.over("wheel_down", Value::Null, "⌥", 3), PASSED());
-    assert_eq!(h.scroll("wheel", "⌃⌥", 1), PASSED());
+    assert_eq!(h.scroll("wheel", "⌘", 1), PASSED());
 }
 
 const DRAG_RULES: &str = r#"
@@ -1350,14 +1354,18 @@ fn a_pinned_drag_whose_pointer_leaves_every_output_keeps_the_grabbed_point_on_on
 fn a_pinned_drag_is_one_gesture_among_the_others() {
     let scratch = Scratch::new();
     let mut h = one_pin(&scratch);
+    load_config(
+        &mut h,
+        &scratch,
+        &format!(
+            "{DRAG_RULES}\n[gestures.on-window]\n\"3-finger-doubletap-swipe\" = \"move-window\"\n"
+        ),
+    );
     put(&mut h, 2, "app.b", "B", rect(1400.0, 600.0, 200.0, 100.0));
-    // A resize of a pinned window needs native resize and stays refused.
+    // The logical canvas resize cannot resize a screen pin. Native resize
+    // uses an observed-size transaction (covered in native_resize_flow).
     assert_eq!(
         h.error(json!({"op":"begin_resize","window":1,"output":1,"edges":"bottom_right"})),
-        BY_HAND
-    );
-    assert_eq!(
-        h.error(json!({"op":"begin_native_resize","window":1,"output":1,"edges":"bottom_right","start_screen":point(690.0, 490.0)})),
         BY_HAND
     );
     // A pinned widget is a widget: upstream's move binding passes it over.
@@ -1431,6 +1439,13 @@ fn a_pinned_drag_is_one_gesture_among_the_others() {
 fn the_move_gesture_drags_a_pinned_window_in_screen_space() {
     let scratch = Scratch::new();
     let mut h = one_pin(&scratch);
+    load_config(
+        &mut h,
+        &scratch,
+        &format!(
+            "{DRAG_RULES}\n[gestures.on-window]\n\"3-finger-doubletap-swipe\" = \"move-window\"\n"
+        ),
+    );
     put(&mut h, 2, "app.b", "B", rect(1400.0, 600.0, 200.0, 100.0));
     h.observe_focus(2);
     let begin = |h: &mut Host, doubletap: bool| {
@@ -1442,7 +1457,7 @@ fn the_move_gesture_drags_a_pinned_window_in_screen_space() {
     let end = |h: &mut Host| h.ok(json!({"op":"gesture_end","cancelled":false,"time_ms":1020}));
     let camera = h.snapshot()["outputs"][0].clone();
 
-    // The default move gesture, begun on the pinned window at its point
+    // The explicitly configured move gesture, begun on the pinned window at its point
     // (50, 50): the same state as any move, the window raised and focused.
     let reply = begin(&mut h, true);
     assert_eq!(reply["gesture"]["state"], "swipe_move", "{reply}");

@@ -1317,3 +1317,171 @@ fn readback_grab_refuses_every_other_sizing_while_it_lasts() {
     h.ok(reply(&last, "observed", false, true, 200., 150.));
     h.ok(others[3].clone());
 }
+
+// Pinned sizes follow output-local pointer motion, never the canvas zoom.
+#[test]
+fn pinned_resize_tracks_all_edges_across_camera_changes_and_native_clamps() {
+    for zoom in [0.2, 0.8, 1.0] {
+        for (edges, x, y) in [
+            ("top_left", 100., 100.),
+            ("top", 200., 100.),
+            ("top_right", 300., 100.),
+            ("right", 300., 175.),
+            ("bottom_right", 300., 250.),
+            ("bottom", 200., 250.),
+            ("bottom_left", 100., 250.),
+            ("left", 100., 175.),
+        ] {
+            let mut h = readback();
+            h.ok(json!({"op":"focus","window":1}));
+            h.ok(json!({"op":"action","output":1,"action":"toggle-pin-to-screen"}));
+            h.ok(json!({"op":"register_output","stable_id":"one","screen_bounds":rect(37.,53.,1000.,800.)}));
+            h.ok(json!({"op":"zoom","output":1,"zoom":zoom,"anchor":{"x":37.,"y":53.}}));
+            let read = grab(&mut h, (37. + x, 53. + y), true);
+            assert_eq!(h.snap()["native_resize"]["edges"], edges);
+            assert_eq!(h.snap()["native_resize"]["screen_space"], true);
+            assert_eq!(h.snap()["native_resize"]["group"], false);
+            h.ok(reply(&read, "observed", false, true, 200., 150.));
+            // The viewport can move while another device holds the edge.
+            h.ok(json!({"op":"pan","output":1,"screen_delta":{"x":83.,"y":29.}}));
+            h.ok(json!({"op":"zoom","output":1,"zoom":0.4,"anchor":{"x":37.,"y":53.}}));
+            let left = edges.contains("left");
+            let right = edges.contains("right");
+            let top = edges.contains("top");
+            let bottom = edges.contains("bottom");
+            let dx = if left {
+                -30.
+            } else if right {
+                30.
+            } else {
+                0.
+            };
+            let dy = if top {
+                -20.
+            } else if bottom {
+                20.
+            } else {
+                0.
+            };
+            let set = to(&mut h, &read, 37. + x + dx, 53. + y + dy);
+            let (w, ht) = (200. + dx.abs(), 150. + dy.abs());
+            assert_eq!(set["requested"], size(w, ht), "{edges} zoom={zoom}");
+            // A native size limit moves only the grabbed edge by the observed amount.
+            let (w, ht) = (
+                if dx != 0. { w - 4. } else { w },
+                if dy != 0. { ht - 3. } else { ht },
+            );
+            h.ok(reply(&set, "clamped", true, true, w, ht));
+            let pinned = h.snap()["windows"][0]["pinned"]["screen_rect"].clone();
+            assert_eq!(
+                pinned,
+                rect(
+                    137. - if left { w - 200. } else { 0. },
+                    153. - if top { ht - 150. } else { 0. },
+                    w,
+                    ht
+                )
+            );
+            let end = finish(&mut h, &read, false);
+            h.ok(reply(&end, "observed", false, true, w, ht));
+        }
+    }
+}
+
+#[test]
+fn pinned_resize_rebases_a_delayed_baseline_and_refuses_other_outputs() {
+    let mut h = readback();
+    h.ok(json!({"op":"focus","window":1}));
+    h.ok(json!({"op":"action","output":1,"action":"toggle-pin-to-screen"}));
+    h.ok(
+        json!({"op":"register_output","stable_id":"two","screen_bounds":rect(1000.,0.,1000.,800.)}),
+    );
+    h.rejects(json!({"op":"begin_native_resize","window":1,"output":2,"start_screen":{"x":1200.,"y":200.}}));
+    let read = grab(&mut h, (298., 248.), false);
+    assert!(to(&mut h, &read, 328., 268.).is_null());
+    let set = h.ok(reply(&read, "observed", false, true, 260., 190.))["effect"].clone();
+    assert_eq!(set["requested"], size(230., 170.));
+    h.ok(reply(&set, "applied", true, true, 230., 170.));
+    assert_eq!(
+        h.snap()["windows"][0]["pinned"]["screen_rect"],
+        rect(100., 100., 230., 170.)
+    );
+    let end = finish(&mut h, &read, false);
+    h.ok(reply(&end, "observed", false, true, 230., 170.));
+}
+
+#[test]
+fn pinned_resize_fractional_readbacks_anchor_to_the_adopted_baseline() {
+    for (width, height) in [(200.0, 150.0), (260.6, 190.4)] {
+        let mut h = readback();
+        h.ok(json!({"op":"focus","window":1}));
+        h.ok(json!({"op":"action","output":1,"action":"toggle-pin-to-screen"}));
+        h.ok(json!({"op":"zoom","output":1,"zoom":0.4,"anchor":{"x":0.,"y":0.}}));
+        let read = grab(&mut h, (101., 101.), false);
+        // Queue top-left motion before a baseline that may differ from the
+        // displayed size. Adoption retains the pin's original top-left.
+        assert!(to(&mut h, &read, 99., 99.).is_null());
+        let mut set = h.ok(reply(&read, "observed", false, true, width, height))["effect"].clone();
+        assert_eq!(set["requested"], size(width + 2., height + 2.));
+        for (index, offset) in [0.6, 1.2, 1.8, 2.4, 3.0, 0.0].into_iter().enumerate() {
+            let (actual_width, actual_height) = (width + offset, height + offset);
+            h.ok(reply(
+                &set,
+                "clamped",
+                true,
+                true,
+                actual_width,
+                actual_height,
+            ));
+            let pinned = h.snap()["windows"][0]["pinned"]["screen_rect"].clone();
+            let position = (100.0_f64 - offset).round();
+            assert_eq!(
+                pinned,
+                rect(position, position, actual_width, actual_height)
+            );
+            // Integer pin positions allow at most half a point of rounding;
+            // fractional native observations cannot compound that error.
+            assert!((position + actual_width - (100. + width)).abs() <= 0.5);
+            assert!((position + actual_height - (100. + height)).abs() <= 0.5);
+            if index < 5 {
+                let at = 101. - 2. * (index + 2) as f64;
+                set = to(&mut h, &read, at, at);
+                assert!(!set.is_null());
+            }
+        }
+        let end = finish(&mut h, &read, false);
+        h.ok(reply(&end, "observed", false, true, width, height));
+        assert_eq!(
+            h.snap()["windows"][0]["pinned"]["screen_rect"],
+            rect(100., 100., width, height)
+        );
+    }
+}
+
+#[test]
+fn pinned_resize_final_readback_preserves_an_independent_drag() {
+    let mut h = readback();
+    h.ok(json!({"op":"focus","window":1}));
+    h.ok(json!({"op":"action","output":1,"action":"toggle-pin-to-screen"}));
+    let read = grab(&mut h, (101., 101.), false);
+    h.ok(reply(&read, "observed", false, true, 260.6, 190.4));
+    let set = to(&mut h, &read, 96., 96.);
+    h.ok(reply(&set, "clamped", true, true, 261.2, 191.0));
+    let end = finish(&mut h, &read, false);
+    assert_eq!(end["op"], "observe_resize_source");
+    // Pointer transactions allow a new move after release while their final
+    // observation is outstanding. This move must survive the late resize.
+    h.ok(json!({"op":"begin_drag","window":1,"output":1,"group":false}));
+    h.ok(json!({"op":"gesture_to","screen_delta":{"x":20.,"y":10.},"pointer":{"x":121.,"y":111.}}));
+    h.ok(json!({"op":"end_gesture"}));
+    assert_eq!(
+        h.snap()["windows"][0]["pinned"]["screen_rect"],
+        rect(119., 109., 261.2, 191.0)
+    );
+    h.ok(reply(&end, "observed", false, true, 262.4, 192.2));
+    assert_eq!(
+        h.snap()["windows"][0]["pinned"]["screen_rect"],
+        rect(118., 108., 262.4, 192.2)
+    );
+    assert_eq!(h.snap()["native_resize"]["phase"], "complete");
+}

@@ -167,7 +167,7 @@ fn attach(h: &mut Host, wid: u64, world: Value) {
 }
 /// Output 1, 1000 x 800 at global (300, 200), and window 1 at world
 /// (100, 100) 400 x 300 with window 2 far off at (2600, 1900) 300 x 200.
-/// Upstream's built-in defaults are in force: no config file is read.
+/// Desktop defaults are in force: no config file is read.
 fn setup() -> Host {
     let mut h = Host::new();
     h.ok(json!({"op":"register_output","stable_id":"view","screen_bounds":rect(LEFT,TOP,1000.0,800.0)}));
@@ -187,6 +187,17 @@ fn load(h: &mut Host, scratch: &Scratch, toml: &str) {
     assert_eq!(reply["errors"], json!([]), "{reply}");
     assert_eq!(reply["warnings"], json!([]), "{reply}");
 }
+// Movement scenarios configure the action they exercise; the desktop's
+// default three-finger doubletap swipe pans instead.
+const MOVE_GESTURE: &str = r#"
+[gestures.on-window]
+"3-finger-doubletap-swipe" = "move-window"
+"#;
+const DIRECTIONAL_SWIPE: &str = r#"
+[gestures.anywhere]
+"4-finger-swipe-up" = "none"
+"#;
+
 /// The bindings a `gesture_begin` reply resolved, as `combo = action` lines.
 fn bindings(reply: &Value) -> Vec<String> {
     reply["gesture"]["bindings"]
@@ -504,7 +515,8 @@ fn momentum_follows_drift_and_the_launch_delay_and_a_cancelled_swipe_still_coast
 }
 
 #[test]
-fn four_finger_swipe_fires_center_nearest_once_in_the_pan_direction() {
+fn a_configured_four_finger_swipe_fires_center_nearest_once_in_the_pan_direction() {
+    let scratch = Scratch::new();
     for (context, at) in [("canvas", ON_CANVAS), ("window", ON_WINDOW)] {
         // Three steps of each vector. Upstream's threshold is 12 points of
         // accumulated travel, reached on the third. Fingers left look right.
@@ -519,7 +531,7 @@ fn four_finger_swipe_fires_center_nearest_once_in_the_pan_direction() {
             (4.0, 4.0, "up-left"),
             (-5.0, -1.0, "right"),
         ] {
-            let mut h = setup();
+            let mut h = configured(&scratch, DIRECTIONAL_SWIPE);
             let reply = h.begin("swipe", 4, "", context, at);
             assert_eq!(reply["gesture"]["state"], "swipe_threshold", "{reply}");
             assert_eq!(bindings(&reply), ["4-finger-swipe = center-nearest"]);
@@ -567,7 +579,7 @@ fn four_finger_swipe_fires_center_nearest_once_in_the_pan_direction() {
             // The gesture ran the action command's own action: on a second
             // controller that command arms the same flight, asks for the same
             // focus and leaves the same scene.
-            let mut direct = setup();
+            let mut direct = configured(&scratch, DIRECTIONAL_SWIPE);
             let command =
                 direct.ok(json!({"op":"action","output":1,"action":action,"pointer":point(at)}));
             for key in ["navigation", "effects", "dirty"] {
@@ -577,7 +589,7 @@ fn four_finger_swipe_fires_center_nearest_once_in_the_pan_direction() {
         }
     }
     // A swipe that ends short of the threshold fires nothing.
-    let mut h = setup();
+    let mut h = configured(&scratch, DIRECTIONAL_SWIPE);
     h.begin("swipe", 4, "", "canvas", ON_CANVAS);
     assert_eq!(h.swipe(-11.0, 0.0, 1010)["fired"], Value::Null);
     assert_eq!(h.end(false, 1020)["fired"], Value::Null);
@@ -647,16 +659,15 @@ fn three_finger_pinch_zooms_around_the_pointer_and_snaps_near_one() {
 }
 
 #[test]
-fn two_finger_pinch_zooms_on_canvas_and_only_with_mod_over_a_window() {
+fn two_finger_pinch_zooms_on_canvas_and_window_with_or_without_command() {
     let mut h = setup();
-    // Upstream's default: a bare two-finger pinch over a window is the app's.
     let reply = h.begin("pinch", 2, "", "window", ON_WINDOW);
-    assert_eq!(reply["gesture"]["state"], "unbound", "{reply}");
-    assert_eq!(reply["gesture"]["bindings"], json!([]));
+    assert_eq!(reply["gesture"]["state"], "pinch_zoom", "{reply}");
+    assert_eq!(bindings(&reply), ["2-finger-pinch = zoom"]);
     h.pinch(0.6, 1010);
-    let reply = h.end(false, 1020);
-    assert_eq!(reply["dirty"], false);
-    assert_eq!(h.pose(1), ([0.0, 0.0], 1.0));
+    assert_eq!(h.end(false, 1020)["dirty"], true);
+    assert!((h.zoom() - 0.6).abs() < 1e-12);
+    h.ok(json!({"op":"zoom","output":1,"zoom":1.0,"anchor":point(ON_WINDOW)}));
 
     let reply = h.begin("pinch", 2, "", "canvas", ON_CANVAS);
     assert_eq!(bindings(&reply), ["2-finger-pinch = zoom"]);
@@ -664,8 +675,8 @@ fn two_finger_pinch_zooms_on_canvas_and_only_with_mod_over_a_window() {
     h.end(false, 1020);
     assert!((h.zoom() - 0.6).abs() < 1e-12);
 
-    // Control+Option is upstream's `mod`: mod+2-finger-pinch zooms anywhere.
-    let reply = h.begin("pinch", 2, "⌃⌥", "window", [LEFT + 100.0, TOP + 100.0]);
+    // Command is the desktop `mod`: mod+2-finger-pinch zooms anywhere.
+    let reply = h.begin("pinch", 2, "⌘", "window", [LEFT + 100.0, TOP + 100.0]);
     assert_eq!(reply["gesture"]["state"], "pinch_zoom", "{reply}");
     assert_eq!(bindings(&reply), ["mod+2-finger-pinch = zoom"]);
     h.pinch(0.5, 1010);
@@ -717,7 +728,7 @@ fn four_finger_pinch_in_and_out_fire_zoom_to_fit_and_home_toggle_once_each() {
     assert_eq!(h.end(false, 1060)["fired"], Value::Null);
 
     // The mod+ variants on three fingers, and the cluster's own fit.
-    let reply = h.begin("pinch", 3, "⌃⌥", "window", ON_WINDOW);
+    let reply = h.begin("pinch", 3, "⌘", "window", ON_WINDOW);
     assert_eq!(
         bindings(&reply),
         [
@@ -727,7 +738,7 @@ fn four_finger_pinch_in_and_out_fire_zoom_to_fit_and_home_toggle_once_each() {
     );
     assert_eq!(h.pinch(1.2, 1010)["fired"]["action"], "home-toggle");
     h.end(false, 1020);
-    let reply = h.begin("pinch", 4, "⌃⌥", "canvas", ON_CANVAS);
+    let reply = h.begin("pinch", 4, "⌘", "canvas", ON_CANVAS);
     assert_eq!(
         bindings(&reply),
         ["mod+4-finger-pinch-in = zoom-to-fit-snapped"]
@@ -756,7 +767,7 @@ fn four_finger_pinch_in_and_out_fire_zoom_to_fit_and_home_toggle_once_each() {
 #[test]
 fn hold_fires_on_release_and_not_when_cancelled() {
     let mut h = setup();
-    for (fingers, held, combo) in [(4, "", "4-finger-hold"), (3, "⌃⌥", "mod+3-finger-hold")] {
+    for (fingers, held, combo) in [(4, "", "4-finger-hold"), (3, "⌘", "mod+3-finger-hold")] {
         let reply = h.begin("hold", fingers, held, "canvas", ON_CANVAS);
         assert_eq!(reply["gesture"]["state"], "hold", "{reply}");
         assert_eq!(bindings(&reply), [format!("{combo} = center-window")]);
@@ -801,8 +812,9 @@ fn hold_fires_on_release_and_not_when_cancelled() {
 }
 
 #[test]
-fn doubletap_swipe_moves_the_window_under_the_pointer() {
-    let mut h = setup();
+fn a_configured_doubletap_swipe_moves_the_window_under_the_pointer() {
+    let scratch = Scratch::new();
+    let mut h = configured(&scratch, MOVE_GESTURE);
     let reply = h.ok(begin("swipe", 3, "", "window", ON_WINDOW, true));
     assert_eq!(reply["gesture"]["state"], "swipe_move", "{reply}");
     assert_eq!(reply["gesture"]["window"], 1);
@@ -856,7 +868,8 @@ fn doubletap_swipe_moves_the_window_under_the_pointer() {
 
 #[test]
 fn a_move_gesture_at_the_output_edge_pans_the_canvas_under_its_window() {
-    let mut h = setup();
+    let scratch = Scratch::new();
+    let mut h = configured(&scratch, MOVE_GESTURE);
     let mut clock = 0;
     h.tick(&mut clock);
     let edge_pans = |h: &mut Host| h.snapshot()["navigation"]["edge_pans"].clone();
@@ -912,7 +925,8 @@ fn a_window_that_closes_under_a_move_ends_its_drag_and_the_edge_pan_with_it() {
     };
     let edge_pans = |h: &mut Host| h.snapshot()["navigation"]["edge_pans"].clone();
     // A trackpad move rests at the output's edge: the canvas pans under it.
-    let mut h = setup();
+    let scratch = Scratch::new();
+    let mut h = configured(&scratch, MOVE_GESTURE);
     attach(&mut h, 3, rect(100.0, 500.0, 200.0, 100.0));
     let mut clock = 0;
     h.tick(&mut clock);
@@ -972,7 +986,8 @@ fn a_window_that_closes_under_a_move_ends_its_drag_and_the_edge_pan_with_it() {
 
 #[test]
 fn doubletap_swipe_without_a_window_to_grab_is_a_plain_swipe() {
-    let mut h = setup();
+    let scratch = Scratch::new();
+    let mut h = configured(&scratch, MOVE_GESTURE);
     // No tap before it: the three-finger swipe pans, over a window too.
     let reply = h.begin("swipe", 3, "", "window", ON_WINDOW);
     assert_eq!(reply["gesture"]["state"], "swipe_pan", "{reply}");
@@ -1016,8 +1031,8 @@ fn doubletap_swipe_without_a_window_to_grab_is_a_plain_swipe() {
 #[test]
 fn modifiers_select_the_mod_and_alt_variants() {
     let mut h = setup();
-    // mod+3-finger-swipe navigates as four fingers do. Control+Option is `mod`.
-    let reply = h.begin("swipe", 3, "⌃⌥", "window", ON_WINDOW);
+    // Command selects mod+3-finger-swipe directional navigation.
+    let reply = h.begin("swipe", 3, "⌘", "window", ON_WINDOW);
     assert_eq!(reply["gesture"]["state"], "swipe_threshold", "{reply}");
     assert_eq!(bindings(&reply), ["mod+3-finger-swipe = center-nearest"]);
     assert_eq!(reply["gesture"]["bindings"][0]["implemented"], true);
@@ -1048,25 +1063,26 @@ fn modifiers_select_the_mod_and_alt_variants() {
     h.end(false, 1020);
     assert_eq!(h.camera(), [0.0, 0.0]);
     // A chord no binding names is unbound, not the unmodified binding.
-    for held in ["⇧", "⌘", "⌃", "⌃⌥⇧"] {
+    for held in ["⇧", "⌃⌥", "⌃", "⌘⇧"] {
         let reply = h.begin("swipe", 3, held, "canvas", ON_CANVAS);
         assert_eq!(reply["gesture"]["state"], "unbound", "{held}: {reply}");
         h.end(false, 1020);
     }
 
     // Another super chord moves `mod` with it.
-    h.ok(json!({"op":"set_platform","super":"cmd"}));
-    let reply = h.begin("swipe", 3, "⌘", "canvas", ON_CANVAS);
+    h.ok(json!({"op":"set_platform","super":"ctrl+alt"}));
+    let reply = h.begin("swipe", 3, "⌃⌥", "canvas", ON_CANVAS);
     assert_eq!(bindings(&reply), ["mod+3-finger-swipe = center-nearest"]);
     h.end(false, 1020);
-    let reply = h.begin("swipe", 3, "⌃⌥", "canvas", ON_CANVAS);
+    let reply = h.begin("swipe", 3, "⌘", "canvas", ON_CANVAS);
     assert_eq!(reply["gesture"]["state"], "unbound", "{reply}");
     h.end(false, 1020);
 }
 
 #[test]
 fn a_cancelled_gesture_leaves_no_session_and_no_drag_behind() {
-    let mut h = setup();
+    let scratch = Scratch::new();
+    let mut h = configured(&scratch, MOVE_GESTURE);
     let idle = json!({"enabled":true,"gesture":null,"coasting":[]});
     // A move keeps what it did, as upstream's grab does, and lets go.
     h.ok(begin("swipe", 3, "", "window", ON_WINDOW, true));
@@ -1168,6 +1184,7 @@ pinch_out_threshold = 1.5
 [gestures.anywhere]
 "3-finger-swipe" = "none"
 "4-finger-swipe" = "pan-viewport"
+"4-finger-swipe-up" = "none"
 "5-finger-swipe" = "zoom-to-fit"
 "5-finger-swipe-left" = "home-toggle"
 "5-finger-swipe-up" = "zoom-reset"
@@ -1329,7 +1346,7 @@ pinch_out_threshold = 1.5
 #[test]
 fn set_trackpad_turns_gesture_dispatch_off_and_on() {
     let scratch = Scratch::new();
-    let mut h = setup();
+    let mut h = configured(&scratch, MOVE_GESTURE);
     assert_eq!(h.trackpad()["enabled"], true);
     // The action runs through the same dispatch as a key binding's.
     assert_eq!(
@@ -1739,30 +1756,30 @@ fn a_gesture_runs_window_navigation_with_its_pointer_and_the_modifiers_it_fires_
     }
 }
 
-/// GESTURES.md's default table, row by row: what upstream's default
-/// `[gestures]` resolves to under the default super chord, and whether each
-/// action runs in this build.
+/// Desktop defaults, row by row, including the adapter overrides and
+/// Command as the default super chord. Reports are controller evidence alone.
 #[test]
 fn the_default_table_on_a_mac() {
     // kind, fingers, physical modifiers, context, after a three-finger tap.
     let rows = [
         ("swipe", 3, "", "canvas", false),
         ("swipe", 4, "", "canvas", false),
-        ("swipe", 3, "⌃⌥", "canvas", false),
+        ("swipe", 3, "⌘", "canvas", false),
         ("swipe", 3, "", "window", true),
         ("swipe", 3, "⌥", "window", false),
         ("swipe", 3, "⌥⇧", "window", false),
         ("pinch", 2, "", "canvas", false),
-        ("pinch", 2, "⌃⌥", "window", false),
+        ("pinch", 2, "", "window", false),
+        ("pinch", 2, "⌘", "window", false),
         ("pinch", 3, "", "window", false),
         ("pinch", 4, "", "canvas", false),
-        ("pinch", 3, "⌃⌥", "canvas", false),
-        ("pinch", 4, "⌃⌥", "canvas", false),
+        ("pinch", 3, "⌘", "canvas", false),
+        ("pinch", 4, "⌘", "canvas", false),
         ("pinch", 2, "⌥", "window", false),
         ("pinch", 2, "⌥⇧", "window", false),
         ("pinch", 3, "⌥", "window", false),
         ("hold", 4, "", "canvas", false),
-        ("hold", 3, "⌃⌥", "canvas", false),
+        ("hold", 3, "⌘", "canvas", false),
     ];
     let mut seen = Vec::new();
     for (kind, fingers, held, context, doubletap) in rows {
@@ -1785,16 +1802,27 @@ fn the_default_table_on_a_mac() {
                 binding["action"].as_str().unwrap()
             ));
         }
+        if doubletap {
+            assert_eq!(reply["gesture"]["state"], "swipe_pan", "{reply}");
+            assert_eq!(reply["effects"], json!([]));
+            h.swipe(20.0, 10.0, 1010);
+            assert_eq!(h.camera(), [-30.0, -15.0]);
+            assert_eq!(h.origin(1), [100.0, 100.0]);
+            assert_eq!(h.origin(2), [2600.0, 1900.0]);
+            assert_eq!(h.snapshot()["focused"], Value::Null);
+        }
     }
     assert_eq!(
         seen,
         [
             "3-finger-swipe = pan-viewport: runs",
             "4-finger-swipe = center-nearest: runs",
+            "4-finger-swipe-up = zoom-to-fit: runs",
             "mod+3-finger-swipe = center-nearest: runs",
-            "3-finger-doubletap-swipe = move-window: runs",
+            "3-finger-swipe = pan-viewport: runs",
             "alt+3-finger-swipe = resize-window: runs",
             "alt+shift+3-finger-swipe = resize-window-snapped: runs",
+            "2-finger-pinch = zoom: runs",
             "2-finger-pinch = zoom: runs",
             "mod+2-finger-pinch = zoom: runs",
             "3-finger-pinch = zoom: runs",
@@ -1813,10 +1841,11 @@ fn the_default_table_on_a_mac() {
             "mod+3-finger-hold = center-window: runs",
         ]
     );
-    // Every default binding was reached: the rows above are the whole table.
+    // The adapter adds bare on-window pinch and four-finger swipe-up.
+    // Doubletap pan resolves through plain swipe, so the row count stays the same.
     let gestures = Config::default().gestures;
     assert_eq!(
-        gestures.on_window.len() + gestures.on_canvas.len() + gestures.anywhere.len(),
+        gestures.on_window.len() + gestures.on_canvas.len() + gestures.anywhere.len() + 2,
         seen.len()
     );
 }
@@ -1959,7 +1988,7 @@ fn a_snapped_resize_swipe_shifts_the_cluster_by_the_size_the_window_took() {
 // Upstream's `false` from try_start_gesture_resize: the swipe pans, and
 // nothing was raised, focused or begun for the resize that was refused.
 #[test]
-fn a_resize_swipe_that_cannot_begin_pans_and_a_pinned_window_is_claimed_and_inert() {
+fn a_resize_swipe_that_cannot_begin_pans_and_a_pinned_window_resizes() {
     let mut h = readback();
     // A stand-in has no window to ask a size of.
     h.ok(json!({"op":"remove_source","window":1,"identity":{"pid":123,"birth_sec":1800000000,"birth_usec":0,"wid":1},"keep_placeholder":true}));
@@ -1983,23 +2012,38 @@ fn a_resize_swipe_that_cannot_begin_pans_and_a_pinned_window_is_claimed_and_iner
     assert_eq!(reply["gesture"]["state"], "swipe_pan", "{reply}");
     assert_eq!(h.snapshot()["focused"], Value::Null);
     h.end(false, 1040);
-    // A screen-pinned window: upstream resizes it in screen space, which is
-    // not done here. The gesture is claimed, says so, and changes nothing.
+    // Pinned swipe resizing uses the same native transaction in screen points.
     let mut h = readback();
     h.ok(json!({"op":"focus","window":1}));
     h.action("toggle-pin-to-screen");
-    let before = h.snapshot();
     let reply = h.begin("swipe", 3, "⌥", "window", ON_WINDOW);
     assert_eq!(reply["gesture"]["state"], "swipe_resize", "{reply}");
-    assert_eq!(
-        reply["note"],
-        "a screen-pinned window is not resized: unpin it first"
+    assert_eq!(reply["note"], Value::Null);
+    let read = reply["effect"].clone();
+    assert_eq!(h.snapshot()["native_resize"]["screen_space"], true);
+    sized(&mut h, &read, "observed", [400., 300.]);
+    let set = h.swipe(40., 40., 1010)["effect"].clone();
+    let size = set["requested"].clone();
+    assert!(size["width"].as_f64().is_some());
+    sized(
+        &mut h,
+        &set,
+        "applied",
+        [
+            size["width"].as_f64().unwrap(),
+            size["height"].as_f64().unwrap(),
+        ],
     );
-    assert!(reply.get("transaction").is_none(), "{reply}");
-    assert_eq!(h.swipe(40.0, 40.0, 1010)["effect"], Value::Null);
-    let reply = h.end(false, 1020);
-    assert_eq!(reply["dirty"], false, "{reply}");
-    assert_eq!(h.snapshot(), before);
+    let end = h.end(false, 1020)["effect"].clone();
+    sized(
+        &mut h,
+        &end,
+        "observed",
+        [
+            size["width"].as_f64().unwrap(),
+            size["height"].as_f64().unwrap(),
+        ],
+    );
     // The capture-acknowledged mode of --experimental-native-resize: its
     // transactions are begun by the shell's handles alone. The gesture is
     // claimed, says so, and begins none.

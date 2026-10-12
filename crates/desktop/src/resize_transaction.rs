@@ -127,6 +127,12 @@ pub struct NativeResizeTransaction {
     /// Pointer grabs follow observed native sizes without a presentation tween.
     /// Action sizing may animate that observed geometry independently of AX.
     interactive: bool,
+    /// Pinned windows resize in output-local points, independent of the camera.
+    screen_space: bool,
+    /// Pin's output-local origin before the first native read. Its adopted
+    /// baseline size supplies the fixed far edge; commits round the absolute
+    /// position, so fractional readbacks never accumulate rounding drift.
+    pin_origin: Option<[i32; 2]>,
     /// Canvas point grabbed at the press. Motion resolves the pointer through
     /// the current viewport, so a changed camera/zoom cannot separate the edge
     /// from the pointer. A fresh baseline rebases this by its moving-edge shift.
@@ -300,6 +306,8 @@ impl Controller {
             output,
             edges,
             interactive: false,
+            screen_space: self.is_pinned(window),
+            pin_origin: self.policy.pins.get(&window).map(|pin| pin.screen_pos),
             pointer_anchor: ResizePointerAnchor::default(),
             pointer: None,
             initial_size: size,
@@ -383,7 +391,12 @@ impl Controller {
                 "native resize requires one ordinary window and valid screen point",
             ));
         }
-        self.movable(window)?;
+        let screen_space = self.is_pinned(window) && !self.is_widget(window);
+        if !screen_space {
+            self.movable(window)?;
+        } else if self.pin_output(window) != Some(output) {
+            return Err(Error::Invalid("pinned resize must use its own output"));
+        }
         let source = self
             .sources
             .get(&window)
@@ -404,9 +417,13 @@ impl Controller {
             .scene
             .output(output)
             .ok_or(Error::Invalid("unknown output"))?;
-        let zoom = viewport.zoom;
+        let zoom = if screen_space { 1.0 } else { viewport.zoom };
         let pointer_anchor = ResizePointerAnchor {
-            origin: viewport.camera,
+            origin: if screen_space {
+                Point::default()
+            } else {
+                viewport.camera
+            },
             offset: (start_screen - viewport.screen_bounds.origin) / zoom,
         };
         let rect = self
@@ -415,12 +432,20 @@ impl Controller {
             .ok_or(Error::Invalid("unknown window"))?
             .world_rect;
         let size = rect.size;
-        let edges = edges
-            .unwrap_or_else(|| edges_from_position(viewport.screen_to_world(start_screen), rect));
+        let edges = edges.unwrap_or_else(|| {
+            if screen_space {
+                let pin = self.policy.pins[&window];
+                let origin = viewport.screen_bounds.origin
+                    + Point::new(f64::from(pin.screen_pos[0]), f64::from(pin.screen_pos[1]));
+                edges_from_position(start_screen, Rect { origin, ..rect })
+            } else {
+                edges_from_position(viewport.screen_to_world(start_screen), rect)
+            }
+        });
         // Upstream locked_ratio_for. A locked resize is one window's.
         let ratio = (self.keeps_ratio(window) && size.width > 0.0 && size.height > 0.0)
             .then(|| size.width / size.height);
-        let group = group && ratio.is_none();
+        let group = group && ratio.is_none() && !screen_space;
         let snap = self.snap(zoom);
         let snap_intent = self
             .scene
@@ -445,6 +470,8 @@ impl Controller {
             output,
             edges,
             interactive: true,
+            screen_space,
+            pin_origin: self.policy.pins.get(&window).map(|pin| pin.screen_pos),
             pointer_anchor,
             pointer: None,
             initial_size: size,
@@ -520,7 +547,13 @@ impl Controller {
             .scene
             .output(t.output)
             .ok_or(Error::Invalid("unknown resize output"))?;
-        let (zoom, bounds, camera) = (viewport.zoom, viewport.screen_bounds, viewport.camera);
+        let (zoom, camera) = if t.screen_space {
+            (1.0, Point::default())
+        } else {
+            (viewport.zoom, viewport.camera)
+        };
+        let bounds = viewport.screen_bounds;
+        let outline_scale = if t.screen_space { viewport.zoom } else { 1.0 };
         let current = self
             .scene
             .window(t.window)
@@ -555,7 +588,7 @@ impl Controller {
             native_delta(delta.x, precision.x),
             native_delta(delta.y, precision.y),
         );
-        let outline = if let Some(ratio) = t.ratio {
+        let outline = if t.ratio.is_some() || t.screen_space {
             // Upstream: the ratio bends the size ahead of the client's bounds,
             // and a locked resize neither snaps nor carries a cluster. The
             // far edges are where the commits have kept them.
@@ -580,14 +613,18 @@ impl Controller {
             );
             // Bent first, floored after, as upstream clamps to the client's
             // bounds only once the ratio has chosen its driving axis.
-            let size = constrain_to_ratio(target, initial, ratio, t.edges);
+            let size = t.ratio.map_or(target, |ratio| {
+                constrain_to_ratio(target, initial, ratio, t.edges)
+            });
             let size = Size::new(size.width.max(1.0), size.height.max(1.0));
             let mut outline = Rect { size, ..current };
+            // The hint remains in canvas coordinates even when the pointer
+            // delta and pinned dimensions are in display points.
             if t.edges.left() {
-                outline.origin.x = current.right() - size.width;
+                outline.origin.x += (current.size.width - size.width) / outline_scale;
             }
             if t.edges.top() {
-                outline.origin.y = current.bottom() - size.height;
+                outline.origin.y += (current.size.height - size.height) / outline_scale;
             }
             outline
         } else {
@@ -811,11 +848,72 @@ impl Controller {
                 // window by what the committed size changed, so the opposite
                 // edge stays where it is on screen. On the canvas only: a size
                 // write keeps a native window's own top-left.
-                if t.edges.left() {
-                    rect.origin.x += t.last_committed_size.width - actual.width;
-                }
-                if t.edges.top() {
-                    rect.origin.y += t.last_committed_size.height - actual.height;
+                if t.screen_space {
+                    let pin = self
+                        .policy
+                        .pins
+                        .get_mut(&t.window)
+                        .ok_or(Error::Invalid("resize lost its screen pin"))?;
+                    let origin = t
+                        .pin_origin
+                        .ok_or(Error::Invalid("resize lost its pin anchor"))?;
+                    let position =
+                        |origin: i32, baseline: f64, actual: f64| -> Result<i32, Error> {
+                            // Round from the fixed baseline, never from an already
+                            // rounded previous commit. Delayed baseline adoption
+                            // retains this origin and replaces `initial_size`.
+                            let value = (f64::from(origin) + baseline - actual).round();
+                            if !(f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&value) {
+                                return Err(Error::Invalid("resized pin exceeds integer range"));
+                            }
+                            Ok(value as i32)
+                        };
+                    // After release an independent drag may move this pin
+                    // while the last native result is still owed. Rebase by
+                    // that translation, measured against our last rounded
+                    // position, without treating rounding as fresh movement.
+                    let translated = |axis: usize, moving: bool, baseline: f64, last: f64| {
+                        let previous = if moving {
+                            position(origin[axis], baseline, last)?
+                        } else {
+                            origin[axis]
+                        };
+                        i32::try_from(
+                            i64::from(origin[axis]) + i64::from(pin.screen_pos[axis])
+                                - i64::from(previous),
+                        )
+                        .map_err(|_| Error::Invalid("resized pin anchor exceeds integer range"))
+                    };
+                    let origin = [
+                        translated(
+                            0,
+                            t.edges.left(),
+                            t.initial_size.width,
+                            t.last_committed_size.width,
+                        )?,
+                        translated(
+                            1,
+                            t.edges.top(),
+                            t.initial_size.height,
+                            t.last_committed_size.height,
+                        )?,
+                    ];
+                    t.pin_origin = Some(origin);
+                    if t.edges.left() {
+                        pin.screen_pos[0] =
+                            position(origin[0], t.initial_size.width, actual.width)?;
+                    }
+                    if t.edges.top() {
+                        pin.screen_pos[1] =
+                            position(origin[1], t.initial_size.height, actual.height)?;
+                    }
+                } else {
+                    if t.edges.left() {
+                        rect.origin.x += t.last_committed_size.width - actual.width;
+                    }
+                    if t.edges.top() {
+                        rect.origin.y += t.last_committed_size.height - actual.height;
+                    }
                 }
                 rect.size = actual;
                 // A cluster follows the size the window took, not the one

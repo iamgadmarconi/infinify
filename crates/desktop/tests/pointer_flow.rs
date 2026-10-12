@@ -1818,11 +1818,18 @@ fn the_resize_border_is_the_band_outside_a_frame_and_names_its_edge() {
     // Off, the band takes no press.
     h.reload("[mouse]\nresize_on_border = false\n");
     assert_eq!(border(&mut h, 96.0, 150.0), Value::Null);
-    // A screen-pinned window is not resized here, and has no band.
+    // A pinned window has a screen-space band and never a resize cluster.
     h.reload("");
     h.focus(1);
     h.ok(json!({"op":"action","output":1,"action":"toggle-pin-to-screen"}));
-    assert_eq!(border(&mut h, 96.0, 150.0), Value::Null);
+    assert_eq!(border(&mut h, 96.0, 150.0), edge(1, "left"));
+    h.reload("[zoom]\ninteract_min = 0.5\n[mouse]\ndecoration_resize_snapped = true\n");
+    h.look(500., 300., 0.2);
+    let screen = point(ORIGIN.0 + 96., ORIGIN.1 + 150.);
+    assert_eq!(
+        h.ok(json!({"op":"resize_border","output":1,"screen":screen}))["border"],
+        edge(1, "left")
+    );
 }
 // The band is a canvas distance, as upstream's is: 8 units are 4.8 screen
 // points at zoom 0.6. Below `zoom.interact_min` a press is the pick's.

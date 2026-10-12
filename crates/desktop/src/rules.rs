@@ -10,7 +10,7 @@
 // (toggle_pin_to_screen, MoveToBookmark), src/input/pointer.rs (the move and
 // resize bindings pass over widgets; upstream drags and resizes a pinned
 // window in screen space through try_pinned_button: the drag is
-// passthrough.rs's, the resize is not adapted),
+// passthrough.rs's, the native resize is resize_transaction.rs's),
 // src/ipc/mod.rs (cmd_pin, cmd_opacity) and src/canvas.rs
 // (rule_to_screen_top_left, screen_top_left_to_rule). reassign_orphaned_pinned
 // runs when the shell reports its outputs settled, not at each removal: the
@@ -172,10 +172,8 @@ impl Controller {
         !self.is_widget(window) && !self.is_pinned(window)
     }
     /// Upstream's move and resize bindings pass over a widget. A
-    /// screen-pinned window is refused here too: this is the guard of a
-    /// resize, which upstream does in screen space
-    /// (start_compositor_resize_with_edge) and which needs native resize. A
-    /// move of one never asks: `install_drag` drags it in screen space instead.
+    /// screen-pinned window is refused by this canvas-only guard. Its native
+    /// resize and `install_drag` use their own screen-space paths instead.
     pub(crate) fn movable(&self, window: WindowId) -> Result<(), Error> {
         if self.is_widget(window) {
             return Err(Error::Invalid("a widget is not moved or resized by hand"));

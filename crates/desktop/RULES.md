@@ -274,9 +274,9 @@ drawn above every canvas window of that output and on no other output.
   settled: confirmed or observed natively, or answered `focus_logical`. No
   close hands it the focus, as for a widget.
 - **Dragged in screen space**, by the move binding and by the move gesture
-  ([below](#dragging-a-pinned-window)). Not resized by hand: `begin_resize` and
-  `begin_native_resize` refuse it, and its one size transaction is that of a
-  rule's `size` at its map. `nudge-window`, `move-to-bookmark` and the
+  ([below](#dragging-a-pinned-window)). Native edge and gesture resizing also
+  uses screen space, with no snapping or cluster. Logical `begin_resize`
+  remains a canvas operation. `nudge-window`, `move-to-bookmark` and the
   [sizing actions](SIZES.md#widgets-screen-pinned-windows-and-rules) pass it
   over, IPC `Move` and `Resize` refuse to write it. Reading still works.
 - **Out of snapping, clusters, zoom-to-fit and auto placement**, like a widget,
@@ -334,7 +334,7 @@ flies to, grabs or sends "a window" asks it.
 | the size transaction of its rule's `size`, as it maps ([A rule's `size`](#a-rules-size)) | begun | begun |
 | `grow-window`, `shrink-window`, `fit-window`, `fit-window-snapped`, `fill-window` (with the capability), `zoom-to-fit-snapped` ([SIZES.md](SIZES.md#widgets-screen-pinned-windows-and-rules)) | focused: nothing happens, without an error | the same; a fit or fill it had before it was pinned stays with it |
 | a move gesture ([GESTURES.md](GESTURES.md#dispatch)) | grab-proof: the gesture falls back to a pan and nothing is focused; a pinned widget too, and nothing beneath it is reached | state `swipe_move`: the same [screen-space drag](#dragging-a-pinned-window) is installed, then the window is raised and focused, as upstream's `GestureTarget::Pinned` arm does |
-| a resize gesture | falls back to a pan | a `swipe_resize` that is claimed and does nothing, with a note: a pinned window is not resized |
+| a resize gesture | falls back to a pan | a native `swipe_resize` in screen points, with no snapping or cluster |
 | a gesture in progress on a slot whose window maps as a widget | its drag ends at once, with its edge pan; the gesture goes on with nothing to move | a pinned slot whose window maps keeps its pin, and the [screen-space drag](#dragging-a-pinned-window) moving it goes on; mapped as a widget it keeps the pin and the drag ends |
 | `send-to-output` | nothing happens | the pin is bound to the output adjacent to its own, keeping its place on the screen, clamped until the whole frame is on that output (`send_pinned_to_output`); `dirty` when the pin changed; nothing is raised |
 | a hot corner, a gesture's threshold or hold action | runs the action it is bound to through the same dispatch, so every row above holds | the same |
@@ -599,11 +599,9 @@ are the commands of any drag:
   does. A `begin_drag` that is refused focuses nothing
   ([NAVIGATION.md](NAVIGATION.md#differences-from-upstream)).
 
-### What resizing one would need
+### Resizing a pinned window
 
-Not implemented: `begin_resize` and
-`begin_native_resize` refuse a pinned window with `a screen-pinned window is
-not moved or resized by hand`. Upstream's `apply_pinned_resize`
+`begin_native_resize` follows upstream's `apply_pinned_resize`
 (`src/grabs/resize_grab.rs`) takes the pointer in the pin's output, clamped to
 `[0, size - 1]` on each axis, and its screen-space displacement since the
 press as the size change, unscaled by the zoom: subtracted for a left or top
@@ -834,22 +832,11 @@ rule takes, sorted by output and position. `is_widget` is filled.
   lookup is the canvas context's and nobody claims, where upstream still asks
   the fullscreen window
   ([FULLSCREEN.md](FULLSCREEN.md#differences-from-upstream)).
-- **A pinned window is not resized, and not moved by a title bar.** Upstream's
-  `try_pinned_button` raises and focuses a pinned window and starts
-  `start_pinned_move` or `start_compositor_resize_with_edge`; its title bar,
-  a client move request and the move and resize gestures do the same. Here
-  the move binding's drag and the move gesture's are adapted
-  ([Dragging a pinned window](#dragging-a-pinned-window)). The resize is
-  refused: the shell reads `pinned` from the hit, starts no gesture,
-  withholds the press and says why on stderr (a normal run draws no status
-  line since 2026-10-10), and a resize gesture
-  over one is a `swipe_resize` that is claimed and does nothing. There is no compositor
-  title bar to drag. So of upstream's way to find a
-  rule's numbers (pin, drag and resize into place, copy `position` and
-  `size` from `msg state`) the drag and `position` work and the resize does
-  not. On a widget the shell starts no gesture, says why, and passes the
-  press on to the widget's application as a plain click, as upstream's move
-  and resize arms fall through to click-to-focus.
+- **A pinned window has no compositor title bar to drag.** Its move binding
+  and move gesture operate in screen space, as do normal edge and bound
+  resize grabs. A widget still rejects manual moves and resizes and keeps
+  its application-owned clicks. Native title-bar and third-party behavior
+  remain separate runtime acceptance obligations.
 - **A pinned drag's pointer is held in arithmetic, not on the screen.**
   Upstream confines the cursor itself to an output, and that is all that
   bounds its pinned move. macOS owns the cursor here: it goes out of a
