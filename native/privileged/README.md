@@ -90,12 +90,18 @@ read-only `--dock-identity` query. It pins these fields during the explicit load
 step and binds the `pending`/`ready` launch record (schema 2) to the bundled
 payload SHA-256. Reuse also hashes the actual private runtime payload and requires
 it to match both the bundle and record. It records `pending` before execution,
-then records `ready` only after an authenticated empty-helper audit. A prior
-schema or unknown/pending record, mismatching runtime, or changed Dock instance
-requires inspection and preserves its runtime; no compatibility fallback or
-automatic reinjection is provided. The launcher runs only the loader through
-sudo and starts the app as the login user. The regular LaunchAgent remains the
-capture-mode startup and does not invoke this explicit helper path.
+then records `ready` only after an authenticated empty-helper audit. A ready
+record for the exact same Dock instance can be reused after the runtime payload
+checks pass. For a changed Dock, the launcher may archive only the old record
+when the prior Dock is proven gone and its private v2 journal has `state=empty`
+and no windows; the prior runtime and journal remain untouched. Pending or
+unknown outcomes, a live or uncertain prior Dock, invalid payloads, unknown
+journal schemas, interrupted journal staging or any restoration obligation
+still block startup and preserve the record and runtime for inspection. There is
+no compatibility fallback or automatic injection retry. The launcher runs
+only the loader through sudo and starts the app as the login user. The regular
+LaunchAgent remains the capture-mode startup and does not invoke this explicit
+helper path. Guest validation of the recovery behavior is pending.
 
 Direct loader invocation also requires explicit prepared-machine authorization:
 

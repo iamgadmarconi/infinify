@@ -136,28 +136,102 @@ trap 'exit 129' HUP
 trap 'exit 143' TERM
 record_value() { /usr/bin/plutil -extract "$1" raw -expect "$2" -o - "$native_record"; }
 private_file() { [ -f "$1" ] && [ ! -L "$1" ] && [ "$(/usr/bin/stat -f '%u:%Lp' "$1")" = "$native_uid:600" ]; }
+native_decimal() { case "$1" in ''|*[!0-9]*) return 1 ;; esac; }
+native_pid_valid() { native_decimal "$1" && [ "$1" -ge 1 ] && [ "$1" -le 2147483647 ]; }
+
+native_prior_dock_gone() {
+  if [ "$native_old_dock_pid" = "$native_dock_pid" ]; then
+    [ "$native_old_dock_sec" != "$native_dock_sec" ] || [ "$native_old_dock_usec" != "$native_dock_usec" ]
+    return $?
+  fi
+  if native_kill_output=$(LC_ALL=C /bin/kill -0 "$native_old_dock_pid" 2>&1); then
+    return 1
+  else
+    native_kill_status=$?
+    [ "$native_kill_status" -eq 1 ] || return 2
+    case "$native_kill_output" in *"No such process"*) return 0 ;; *) return 2 ;; esac
+  fi
+}
+
+native_archive_retired_record() {
+  native_archive_dir=$(/usr/bin/mktemp -d "$native_state_dir/retired-launch.XXXXXX") || fail 'could not create a private archive for the retired launch record.'
+  [ "$(/usr/bin/stat -f '%u:%Lp' "$native_archive_dir")" = "$native_uid:700" ] || fail 'retired launch-record archive is not private.'
+  native_record_sha256=$(native_digest "$native_record") || fail 'could not hash the retired launch record.'
+  /bin/mv "$native_record" "$native_archive_dir/launch.plist" || fail 'could not preserve the retired launch record.'
+  private_file "$native_archive_dir/launch.plist" || fail 'archived launch record is not a private regular file.'
+  [ "$(native_digest "$native_archive_dir/launch.plist")" = "$native_record_sha256" ] || fail 'archived launch record bytes changed; preserve the archive and inspect it.'
+  printf 'Archived the retired Dock launch record at %s; its runtime and recovery journal were preserved.\n' "$native_archive_dir/launch.plist"
+}
+
+native_validate_retired_journal() {
+  native_journal="$native_runtime/v2-journal.json"
+  private_file "$native_journal" || fail 'the retired helper has no private committed v2 journal; preserve its state and inspect it.'
+  native_journal_size=$(/usr/bin/stat -f '%z' "$native_journal") || fail 'could not inspect the retired helper journal.'
+  native_decimal "$native_journal_size" && [ "$native_journal_size" -ge 1 ] && [ "$native_journal_size" -le 4194304 ] || fail 'the retired helper journal size is invalid; preserve it and inspect it.'
+  native_journal_version=$(/usr/bin/plutil -extract v raw -expect integer -o - "$native_journal") || fail 'the retired helper journal is not a valid v2 journal.'
+  [ "$native_journal_version" = 2 ] || fail 'the retired helper journal has an unknown schema; preserve it and inspect it.'
+  native_journal_pid=$(/usr/bin/plutil -extract server_pid raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no exact integer server PID.'
+  native_pid_valid "$native_journal_pid" && [ "$native_journal_pid" = "$native_old_dock_pid" ] || fail 'the retired helper journal does not identify its recorded Dock process.'
+  native_journal_generation=$(/usr/bin/plutil -extract generation raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no exact integer generation.'
+  native_decimal "$native_journal_generation" || fail 'the retired helper journal generation is invalid.'
+  native_journal_state=$(/usr/bin/plutil -extract state raw -expect string -o - "$native_journal") || fail 'the retired helper journal has no valid state.'
+  [ "$native_journal_state" = empty ] || fail 'the retired helper journal still records windows or an unknown state; preserve it and inspect it.'
+  native_journal_windows=$(/usr/bin/plutil -extract windows json -o - "$native_journal") || fail 'the retired helper journal has no valid window table.'
+  [ "$native_journal_windows" = '[]' ] || fail 'the retired helper journal still records windows; preserve it and inspect it.'
+  native_journal_restore_type=$(/usr/bin/plutil -type last_restore "$native_journal") || fail 'the retired helper journal has no valid restoration receipt.'
+  case "$native_journal_restore_type" in '(any)'|dictionary) ;; *) fail 'the retired helper journal has an unknown restoration receipt; preserve it and inspect it.' ;; esac
+  for native_artifact in v2-journal.next recovery.json recovery.next helper.sock; do
+    [ ! -e "$native_runtime/$native_artifact" ] && [ ! -L "$native_runtime/$native_artifact" ] || fail "the retired helper runtime contains $native_artifact; preserve it and inspect it."
+  done
+}
+
+native_reuse=false
 
 if [ -e "$native_record" ] || [ -L "$native_record" ]; then
   private_file "$native_record" || fail 'the existing launch record is not a private regular file; inspect it before retrying.'
   [ "$(record_value version integer)" = 2 ] || fail 'unknown launch-record format; inspect it before retrying.'
   native_outcome=$(record_value outcome string) || fail 'invalid launch-record outcome; inspect it before retrying.'
   [ "$native_outcome" = ready ] || fail 'a prior injection outcome is pending or unknown; retain its runtime and inspect it, do not inject again.'
-  [ "$(record_value dock_pid integer)" = "$native_dock_pid" ] && [ "$(record_value dock_birth_sec integer)" = "$native_dock_sec" ] && [ "$(record_value dock_birth_usec integer)" = "$native_dock_usec" ] || fail 'Dock changed since the recorded session; inspect and preserve the old runtime/recovery state before preparing another session.'
+  native_old_dock_pid=$(record_value dock_pid integer) || fail 'launch record has no exact integer Dock PID; inspect it before retrying.'
+  native_old_dock_sec=$(record_value dock_birth_sec integer) || fail 'launch record has no exact integer Dock birth time; inspect it before retrying.'
+  native_old_dock_usec=$(record_value dock_birth_usec integer) || fail 'launch record has no exact integer Dock birth time; inspect it before retrying.'
+  native_pid_valid "$native_old_dock_pid" || fail 'launch record has an invalid Dock PID; inspect it before retrying.'
+  native_decimal "$native_old_dock_sec" && [ "$native_old_dock_sec" != 0 ] || fail 'launch record has an invalid Dock birth time; inspect it before retrying.'
+  native_decimal "$native_old_dock_usec" && [ "$native_old_dock_usec" -le 999999 ] || fail 'launch record has an invalid Dock birth time; inspect it before retrying.'
   native_record_payload_sha256=$(record_value payload_sha256 string) || fail 'launch record has no payload digest; inspect it before retrying.'
   native_valid_hash "$native_record_payload_sha256" || fail 'launch record has an invalid payload digest; inspect it before retrying.'
-  [ "$native_record_payload_sha256" = "$native_payload_sha256" ] || fail 'the recorded helper payload differs from this bundle; inspect the old session and do not reuse it.'
   native_runtime=$(record_value runtime string) || fail 'invalid recorded runtime path.'
   native_nonce_file=$(record_value nonce_file string) || fail 'invalid recorded nonce-file path.'
-  case "$native_runtime" in /tmp/if-native.*) ;; *) fail 'invalid recorded private runtime path.' ;; esac
+  case "$native_runtime" in /tmp/if-native.??????) ;; *) fail 'invalid recorded private runtime path.' ;; esac
+  native_runtime_suffix=${native_runtime##*.}
+  case "$native_runtime_suffix" in *[!A-Za-z0-9]*|'') fail 'invalid recorded private runtime path.' ;; esac
   [ "$native_nonce_file" = "$native_runtime/nonce" ] || fail 'recorded nonce file does not belong to its runtime.'
   [ -d "$native_runtime" ] && [ ! -L "$native_runtime" ] && [ "$(/usr/bin/stat -f '%u:%Lp' "$native_runtime")" = "$native_uid:700" ] || fail 'recorded runtime is missing or no longer private; do not inject again.'
   private_file "$native_nonce_file" || fail 'recorded nonce file is missing or no longer private; do not inject again.'
   native_runtime_payload="$native_runtime/payload-arm64e.dylib"
   private_file "$native_runtime_payload" || fail 'recorded runtime payload is missing or no longer private; do not inject again.'
-  [ "$(native_digest "$native_runtime_payload")" = "$native_record_payload_sha256" ] || fail 'recorded runtime payload bytes differ from the bundle; do not reuse the old helper.'
+  [ "$(native_digest "$native_runtime_payload")" = "$native_record_payload_sha256" ] || fail 'recorded runtime payload bytes differ from the launch record; do not reuse the old helper.'
   /usr/bin/codesign --verify --strict "$native_runtime_payload" || fail 'recorded runtime payload signature verification failed; do not reuse the old helper.'
+  if [ "$native_old_dock_pid" = "$native_dock_pid" ] && [ "$native_old_dock_sec" = "$native_dock_sec" ] && [ "$native_old_dock_usec" = "$native_dock_usec" ]; then
+    [ "$native_record_payload_sha256" = "$native_payload_sha256" ] || fail 'the recorded helper payload differs from this bundle; inspect the old session and do not reuse it.'
+    native_reuse=true
+  else
+    if native_prior_dock_gone; then
+      :
+    else
+      native_prior_status=$?
+      [ "$native_prior_status" -ne 1 ] || fail 'the recorded Dock PID is still present; preserve its launch record and runtime.'
+      fail 'could not prove the recorded Dock process is gone; preserve its launch record and runtime.'
+    fi
+    native_validate_retired_journal
+    native_archive_retired_record
+  fi
+fi
+
+if [ "$native_reuse" = true ]; then
   printf '%s\n' 'Reusing the recorded same-Dock desktop helper with the payload hash bound to this bundle; the app will authenticate its scope and restoration capabilities.'
 else
+  [ ! -e "$native_record" ] && [ ! -L "$native_record" ] || fail 'launch record remains after the retired record check; preserve it and inspect it.'
   [ -t 0 ] || fail 'start this owner-run launcher in a terminal for the explicit sudo loader step.'
   native_runtime=$(/usr/bin/mktemp -d /tmp/if-native.XXXXXX)
   native_nonce_file="$native_runtime/nonce"
