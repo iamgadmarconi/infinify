@@ -37,6 +37,27 @@ process birth, binding generation, current member ancestry, native bounds,
 output clip and helper acknowledgement before release. Neither is implemented
 by the mouse-pair preservation change.
 
+The native adapter now implements a request-only destination handoff for a real
+AppKit drag over an additional display's captured copy. The canvas registers
+file URL, URL, image and file-promise types, but returns `NSDragOperationNone`
+and refuses `prepareForDragOperation:` / `performDragOperation:`. It reads no
+pasteboard contents. The exact rendered hit can request movement of the real
+window family to that output. This is restricted to a complete audited family
+wholly inside the output, since native clipping is still unsupported.
+
+Both sites retain captured coverage until a causally fresh complete helper ACK
+and independent identity, ancestry, bounds, transform, alpha and screen reads
+agree with the immutable request. Cancellation stages a new recovery request;
+it never assumes the previous native position has returned. Ordinary primary
+camera motion remains outside this admission path. The original physical drag
+and release remain untouched, and AppKit must rediscover the actual destination
+before a native drop can work. The canvas cannot accept a drop on its behalf.
+
+This implementation is not runtime acceptance evidence. Dragging *from* a
+captured source still needs its own native ownership handoff before the initial
+press; this destination path does not solve that case. The existing primary-site
+check below also does not establish replica behavior or file-promise support.
+
 `native-input.m` now leaves an unclaimed original press addressed to a foreign
 native window, its drag/motion packets and its release untouched even after
 the pointer crosses the canvas or another application. Each physical button

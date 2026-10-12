@@ -24,14 +24,6 @@
 - (instancetype)initWithConsume:(BOOL (^)(CGEventType,CGEventRef))consume
                     ignoreEvent:(BOOL (^)(CGEventRef))ignoreEvent
                       cancelled:(void (^)(void))cancelled;
-// Observe an original native mouse pair without taking or altering its events.
-// Only immutable values are supplied; buttons is the native-held mask AFTER
-// this packet (zero after its final release or a superseding canvas press).
-// Tagged copies never notify; canvas pairs cannot begin this observation.
-// This grants no application/window/input authority. Keep
-// the callback bounded; defer any native presentation work until after the tap
-// returns. The cancellation callback also ends this observation on tap loss/stop.
-@property (copy) void (^nativeMouse)(CGEventType type,CGPoint point,uint32_t buttons);
 - (BOOL)start;
 - (void)stop;
 @end

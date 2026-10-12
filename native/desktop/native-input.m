@@ -245,11 +245,6 @@ static BOOL DWForeignMouseRecipient(CGEventRef event) {
     CFRunLoopAddSource(CFRunLoopGetMain(),_source,kCFRunLoopCommonModes);
     return YES;
 }
-- (void)observeNativeMouse:(CGEventType)type event:(CGEventRef)event {
-    void (^observe)(CGEventType,CGPoint,uint32_t)=self.nativeMouse;if(!observe)return;
-    uint32_t buttons=0;for(NSUInteger i=_nativeButtons.firstIndex;i!=NSNotFound;i=[_nativeButtons indexGreaterThanIndex:i])buttons|=UINT32_C(1)<<i;
-    observe(type,CGEventGetLocation(event),buttons);
-}
 - (CGEventRef)handle:(CGEventType)type event:(CGEventRef)event {
     if(type==kCGEventTapDisabledByTimeout||type==kCGEventTapDisabledByUserInput){
         [_nativeButtons removeAllIndexes];
@@ -277,7 +272,6 @@ static BOOL DWForeignMouseRecipient(CGEventRef event) {
     }
     NSInteger button=CGEventGetIntegerValueField(event,kCGMouseEventButtonNumber);
     BOOL validButton=button>=0&&button<32;
-    BOOL replacedNative=down&&validButton&&[_nativeButtons containsIndex:(NSUInteger)button];
     // A fresh press proves an earlier release was lost. It starts its own pair.
     if(down&&validButton){[_capturedButtons removeIndex:(NSUInteger)button];[_nativeButtons removeIndex:(NSUInteger)button];}
     BOOL captured=(drag||up)&&validButton&&[_capturedButtons containsIndex:(NSUInteger)button];
@@ -289,13 +283,11 @@ static BOOL DWForeignMouseRecipient(CGEventRef event) {
     if(!captured&&(nativePair||(_nativeButtons.count&&down)||(_nativeButtons.count&&type==kCGEventMouseMoved))){
         if(down&&validButton)[_nativeButtons addIndex:(NSUInteger)button];
         if(up&&validButton)[_nativeButtons removeIndex:(NSUInteger)button];
-        [self observeNativeMouse:type event:event];
         return event;
     }
     BOOL taken=consume&&consume(type,event);
     if(down&&taken&&validButton)[_capturedButtons addIndex:(NSUInteger)button];
-    if(down&&!taken&&validButton&&DWForeignMouseRecipient(event)){[_nativeButtons addIndex:(NSUInteger)button];[self observeNativeMouse:type event:event];}
-    else if(replacedNative)[self observeNativeMouse:type event:event];
+    if(down&&!taken&&validButton&&DWForeignMouseRecipient(event))[_nativeButtons addIndex:(NSUInteger)button];
     if(up&&captured)[_capturedButtons removeIndex:(NSUInteger)button];
     // Cancellation may have ended the canvas grab while the physical button was
     // still down. Its remaining drag/release must not start input in an app which
