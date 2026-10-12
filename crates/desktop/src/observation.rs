@@ -180,7 +180,7 @@ mod tests {
         let (mut controller, window, identity) = setup();
         controller
             .execute(Request {
-                version: VERSION,
+                version: ABI_VERSION,
                 command: Command::BeginResize {
                     window,
                     output: OutputId(1),
@@ -192,7 +192,7 @@ mod tests {
         assert!(!current(&controller, window, &identity));
         controller
             .execute(Request {
-                version: VERSION,
+                version: ABI_VERSION,
                 command: Command::GestureTo {
                     screen_delta: Point::new(40., 30.),
                     pointer: None,
@@ -201,14 +201,14 @@ mod tests {
             .unwrap();
         controller
             .execute(Request {
-                version: VERSION,
+                version: ABI_VERSION,
                 command: Command::EndGesture {},
             })
             .unwrap();
         assert!(!current(&controller, window, &identity));
         let result = controller
             .execute(Request {
-                version: VERSION,
+                version: ABI_VERSION,
                 command: Command::Observe {
                     window,
                     identity: identity.clone(),

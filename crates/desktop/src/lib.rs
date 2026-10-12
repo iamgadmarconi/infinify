@@ -63,8 +63,6 @@ use std::sync::Arc;
 
 pub const ABI_VERSION: u32 = 1;
 pub const SAVE_VERSION: u32 = 1;
-/// Compatibility alias for JSON ABI callers.
-pub const VERSION: u32 = ABI_VERSION;
 pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
@@ -869,7 +867,7 @@ impl Controller {
         self.execute(request)
     }
     pub fn execute(&mut self, request: Request) -> Result<Value, Error> {
-        if request.version != VERSION {
+        if request.version != ABI_VERSION {
             return Err(Error::Invalid("unsupported desktop schema"));
         }
         // Construction and successful mutations leave state settled. These

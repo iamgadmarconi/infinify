@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use super::{
-    BufferSize, Controller, MAX_REQUEST_BYTES, Rect, SourceIdentity, VERSION, WindowId, ipc_client,
+    ABI_VERSION, BufferSize, Controller, MAX_REQUEST_BYTES, Rect, SourceIdentity, WindowId,
+    ipc_client,
 };
 use serde_json::json;
 use std::{
@@ -136,9 +137,9 @@ pub unsafe extern "C" fn driftwm_desktop_request(
     }));
     catch_unwind(AssertUnwindSafe(|| {
         let value = match result {
-            Ok(Ok(data)) => json!({"version": VERSION, "ok": true, "data": data}),
-            Ok(Err(error)) => json!({"version": VERSION, "ok": false, "error": error}),
-            Err(_) => json!({"version": VERSION, "ok": false, "error": "controller panic; request rejected"}),
+            Ok(Ok(data)) => json!({"version": ABI_VERSION, "ok": true, "data": data}),
+            Ok(Err(error)) => json!({"version": ABI_VERSION, "ok": false, "error": error}),
+            Err(_) => json!({"version": ABI_VERSION, "ok": false, "error": "controller panic; request rejected"}),
         };
         // JSON escaping guarantees no interior NUL bytes.
         CString::new(value.to_string()).map(CString::into_raw).unwrap_or(ptr::null_mut())
