@@ -261,6 +261,12 @@ identity/scope, and retention of the original in the table and durable journal.
 It also replaces the simulated owner after journal fsync and between setters,
 checking that no later property write or successful frame acknowledgement reaches
 that replacement. This regression creates no window and is not native API evidence.
+The `4063db2` helper also passed the existing `--release-window` scenario on
+2026-10-12: eight owned windows, transform/alpha writes, per-window release,
+rebind and exact restoration, with the host and client closed afterward.
+Local hashes and scope are in `target/helper-identity-readiness.json`; the log
+is `target/helper-identity-live-release.log`. This does not establish foreign-app
+or optical presentation behavior.
 The current tests do not inject into Dock, change policy or settings, enroll
 another user's applications, or prove third-party visual/input usability. Native
 restore API failure and startup restoration of a still-live foreign window remain
