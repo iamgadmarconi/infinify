@@ -86,8 +86,24 @@ native clipping, cross-application drag-and-drop, performance or app acceptance.
 Interactive resizing now rebases the grabbed edge when a delayed native baseline
 differs from its displayed size. Subsequent motion uses the current camera and
 zoom, retains fractional precision at distant world coordinates, and delivers
-the final release position. Focused resize and pointer scenarios pass; physical
-edge tracking and third-party acceptance still require runtime evidence.
+the final release position. Focused resize and pointer scenarios pass;
+third-party acceptance remains unverified.
+
+The signed `f7bdef71` app passed one physical right-edge shrink at zoom 0.5 in
+capture mode and one in scoped primary-native mode on arm64/macOS 27.2.
+`tests/e2e/physical-resize-edge.sh` posted nine guarded real CGEvent samples per
+case, rather than injecting `DebugPointer` presses. Both measured 0.0-point
+maximum settled edge error and changed native width 320→272 for a 24-point
+screen drag. Native edges came from independent WindowServer reads; capture
+edges came from reported placement after accepting real capture pixels. The
+fix shares normal border admission between canvas and native input, then
+refreshes the presenter's native-size basis at each accepted readback before
+rendering. Both exact originals and the cursor were restored, both journals
+were durably empty, and all four children exited. Exact executable hash and
+evidence paths are in the native desktop's
+[current evidence](../../native/desktop/README.md#current-development-evidence-2026-10-12).
+Optical pixel edges, fast/human input, other physical zooms and third-party
+applications remain unverified.
 
 Unclaimed native mouse presses now retain their original drag/release pair while
 crossing canvas panels. New trackpad contacts cannot steal an existing native

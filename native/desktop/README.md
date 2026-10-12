@@ -59,6 +59,24 @@ The scoped resize scenario passed all 24 edges/corners at zoom 0.5, 0.8 and 1,
 with 50 grabs ended. These checks do not establish physical third-party input,
 captured file drag/drop or native display-boundary clipping.
 
+Physical edge resizing passed on the signed `f7bdef71` app (executable SHA256
+`f8a4b942df4f356bdfa7d678ce6130335d625263b670f4cdbf20ce99acb5076c`),
+arm64/macOS 27.2. `tests/e2e/physical-resize-edge.sh --live-owned-fixture`
+performed one unmodified right-edge drag inward by 24 display points at zoom
+0.5 in capture mode and one in scoped primary-native mode. Each used nine real
+CGEvent samples through WindowServer, with exact owned identity/owner and event
+hit checks before every post. Both entered the production resize coordinator;
+native widths changed from 320 to 272 points, displayed widths from 160 to 136,
+and maximum sampled edge error was 0.0 points. Native matrix scale stayed 2 in
+both axes. Capture edges use compositor placement with real capture accepted;
+native edges use independent WindowServer rectangles. The cursor and both
+original native geometries, transforms, alpha and levels were restored, both
+helper journals were durably empty, and all four children exited. Evidence:
+`target/ipc/physical-edge.ry_2ms4_` and
+`target/physical-resize-edge-final2.log`. This covers two disposable fixture
+cases, not optical pixel-edge tracking, fast/human input, other physical zooms
+or third-party application acceptance.
+
 The sections below retain earlier implementation and validation history; dated
 fixture results describe their particular source revision and scope.
 
