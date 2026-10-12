@@ -316,6 +316,63 @@ fn no_file_is_upstreams_defaults_and_a_file_changes_what_commands_do() {
     assert_eq!(h.action("zoom-to-fit")["navigation"], Value::Null);
 }
 
+fn spawned_window_location(config: Option<&str>) -> Value {
+    let scratch = Scratch::new();
+    let mut h = Host::new();
+    register(&mut h);
+    let path = scratch.path("config.toml");
+    if let Some(contents) = config {
+        std::fs::write(&path, contents).unwrap();
+    }
+    let reply = h.load_config(&path);
+    assert_eq!(reply["errors"], json!([]), "{reply}");
+    assert_eq!(reply["warnings"], json!([]), "{reply}");
+
+    attach(&mut h, 1, rect(100.0, 100.0, 200.0, 150.0));
+    h.ok(json!({"op":"focus","window":1}));
+    h.ok(json!({
+        "op":"attach",
+        "identity":identity(2),
+        "bundle_id":"test",
+        "title":"fixture",
+        "buffer":{"width":200,"height":100},
+        "source_rect":rect(4000.0,3000.0,300.0,200.0),
+        "output":1,
+        "pointer":point(500.0,400.0)
+    }));
+    h.snapshot()["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|window| window["window"] == 2)
+        .unwrap()["world_rect"]
+        .clone()
+}
+
+#[test]
+fn mac_default_and_omitted_window_placement_use_auto_but_explicit_center_stays_center() {
+    let missing_file = spawned_window_location(None);
+    let omitted_in_file = spawned_window_location(Some(""));
+    let explicit_auto = spawned_window_location(Some("window_placement = \"auto\"\n"));
+    let explicit_center = spawned_window_location(Some("window_placement = \"center\"\n"));
+
+    assert_eq!(missing_file, explicit_auto);
+    assert_eq!(omitted_in_file, explicit_auto);
+    assert_ne!(explicit_center, explicit_auto);
+}
+
+#[test]
+fn invalid_explicit_window_placement_keeps_upstream_config_error() {
+    let scratch = Scratch::new();
+    let mut h = Host::new();
+    register(&mut h);
+    let invalid = "window_placement = 7\n";
+    let upstream = format!("config error: {}", Config::from_toml(invalid).unwrap_err());
+    let path = scratch.write("config.toml", invalid);
+
+    assert_eq!(h.load_config(&path)["errors"], json!([upstream]));
+}
+
 #[test]
 fn snap_settings_govern_the_logical_drag() {
     let scratch = Scratch::new();

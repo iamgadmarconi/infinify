@@ -243,7 +243,7 @@ fn focus_effect(reply: &Value, window: u64, wid: u64) {
 #[test]
 fn a_new_window_is_centered_under_the_focus_placement_point_and_cascades() {
     let scratch = Scratch::new();
-    let mut h = running(&scratch, "");
+    let mut h = running(&scratch, "window_placement = \"center\"\n");
     // The usable center is (500, 425) and the camera is at the origin: a
     // 400 x 300 frame centered there has its top-left at (300, 275).
     let a = appear(&mut h, 1, "app.a", "A", (400.0, 300.0));
@@ -283,13 +283,16 @@ fn center_placement_reads_the_current_pose_and_the_landing_zoom() {
     let scratch = Scratch::new();
     // Zoomed out, the usable center shows the world point (2000, 650). The
     // navigation that follows resets the zoom around the window's center.
-    let mut h = running(&scratch, "");
+    let mut h = running(&scratch, "window_placement = \"center\"\n");
     zoom_out(&mut h);
     let reply = appear(&mut h, 1, "app.a", "A", (400.0, 300.0));
     assert_eq!(h.world(1), rect(1800.0, 500.0, 400.0, 300.0));
     assert_eq!(armed(&reply), flight((1500.0, 225.0), 1.0));
     // With zoom.reset_on_new_window off the camera only has to stay.
-    let mut h = running(&scratch, "[zoom]\nreset_on_new_window = false\n");
+    let mut h = running(
+        &scratch,
+        "window_placement = \"center\"\n[zoom]\nreset_on_new_window = false\n",
+    );
     zoom_out(&mut h);
     let reply = appear(&mut h, 1, "app.a", "A", (400.0, 300.0));
     assert_eq!(h.world(1), rect(1800.0, 500.0, 400.0, 300.0));
@@ -297,7 +300,8 @@ fn center_placement_reads_the_current_pose_and_the_landing_zoom() {
 
     // focus_placement moves the spawn point with it: the top-left corner of
     // the usable area, 20 points in, is the world point (20, 70).
-    let corner = "focus_placement = \"top-left\"\n[snap]\nouter_gap = 20\n";
+    let corner =
+        "window_placement = \"center\"\nfocus_placement = \"top-left\"\n[snap]\nouter_gap = 20\n";
     let mut h = running(&scratch, corner);
     let reply = appear(&mut h, 1, "app.a", "A", (400.0, 300.0));
     assert_eq!(h.world(1), rect(20.0, 70.0, 400.0, 300.0));

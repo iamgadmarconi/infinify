@@ -1092,11 +1092,11 @@ when its application reports the window created, where
 [the events are in place](#event-driven-tracking), and by the poll otherwise;
 the later ones by the poll, which looks every 80 ms while a window is waiting.
 Its size is the native window's. Its place
-on the canvas is never where the native window sits on the desktop: it comes
-from `window_placement`, `center` (the default: under the `focus_placement`
-point, the centre of the view, of the display under the pointer), `cursor` or
-`auto` (beside the focused window's cluster), stepped down the diagonal while it
-would sit exactly on another window. It goes on top, takes the canvas's logical
+on the canvas is never where the native window sits on the desktop: the macOS
+default is `window_placement = "auto"`, beside the focused window's cluster;
+`center` places it under `focus_placement`, and `cursor` centers it on the
+pointer. Placement steps down the diagonal while the frame would sit exactly on
+another window. It goes on top, takes the canvas's logical
 focus, and the camera of that display flies to it, to 1:1 unless `[zoom]
 reset_on_new_window = false`; under `cursor` placement the camera stays.
 
@@ -4757,10 +4757,11 @@ caches; `./scripts/build-app.sh` compiles `background-tiff.m`,
 
 ## Configuration
 
-A normal run is configured exactly like DriftWM: one TOML file in upstream's
-grammar decides key bindings, mouse bindings and settings. The parser, defaults
-and binding tables are upstream's own code (`driftwm-core`); the controller maps
-them to a Mac keyboard and the shell registers what it reports.
+A normal run uses DriftWM's TOML grammar for key bindings, mouse bindings and
+settings. The parser, portable defaults and binding tables are upstream's own
+code (`driftwm-core`); Infinify's macOS settings default `window_placement` to
+`auto` when that field is omitted. Explicit `center`, `cursor` and `auto` values
+are handled by the upstream parser.
 [CONFIG.md](../../crates/desktop/CONFIG.md) is the controller's contract and has
 the complete default table.
 
@@ -4800,8 +4801,8 @@ logs the failure, and retries while idle without leaving an error bar onscreen.
   `$XDG_CONFIG_HOME/infinify/config.toml`, else `~/.config/infinify/config.toml`
   (upstream's own path logic with `infinify` as the directory name; its
   `DRIFTWM_CONFIG` variable still overrides the default path). A missing file is
-  not an error while the run has read no file: DriftWM's built-in defaults
-  apply. The app never writes the file.
+  not an error while the run has read no file: the macOS built-in defaults apply,
+  including automatic free-space placement. The app never writes the file.
 - **Problems.** A file that cannot be read or parsed leaves the previous
   configuration in force (at launch: the defaults). So does a file that goes
   missing after the run has read it, which is upstream's read failure
@@ -5483,7 +5484,7 @@ Applied now:
 | `[[outputs]] hot_corners` (`top_left`, `top_right`, `bottom_left`, `bottom_right`, `threshold`, `disable_while_dragging`) | [hot corners](#displays-hot-corners-layouts-and-autostart) |
 | `autostart` | commands run once at launch |
 | `[session] restore_camera`, `restore_bookmarks` | what a restart restores, see [Persistence](#persistence-and-lifecycle) |
-| `window_placement` | where a window that appears by itself is placed: `center`, `cursor` or `auto` |
+| `window_placement` | where a window that appears by itself is placed: macOS defaults to `auto` when omitted; set `center` or `cursor` explicitly |
 | `[zoom] reset_on_new_window` | whether the camera's flight to a new window lands at 1:1 |
 | `[navigation] auto_navigate_on_close` | whether the camera flies to the window that takes the focus after a close, when that window is docked to the closed one or overlaps it and is not wholly in view |
 | `[session] suspend_on_close`, `restore_windows`; the same two keys of a `[[window_rules]]` entry, matched by bundle identifier as `app_id` and by `title` | whether a window that closes by itself leaves a stand-in; whether a saved slot whose window is gone stays as one after a discovery pass, at launch or when the canvas reopens. See [Managed windows](#managed-windows) |

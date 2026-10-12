@@ -14,9 +14,9 @@
 use super::bindings::{Platform, key_known};
 use super::*;
 use driftwm_core::config::{
-    BindingContext, Config, GestureBinding, Modifiers, MouseBinding, config_path, parse_action,
-    parse_gesture_binding, parse_gesture_config_entry, parse_key_combo, parse_mouse_action,
-    parse_mouse_binding, parse_tap_combo,
+    BindingContext, Config, GestureBinding, Modifiers, MouseBinding, WindowPlacement, config_path,
+    parse_action, parse_gesture_binding, parse_gesture_config_entry, parse_key_combo,
+    parse_mouse_action, parse_mouse_binding, parse_tap_combo,
 };
 use std::io::Read;
 
@@ -40,7 +40,7 @@ impl Default for DesktopBackground {
 
 /// The configuration in force. Never saved: it is the file's, or the built-in
 /// defaults. Replaced whole by an accepted `load_config`.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct Settings {
     pub(crate) config: Config,
     pub(crate) desktop_background: DesktopBackground,
@@ -64,6 +64,27 @@ pub(crate) struct Settings {
     /// what the user wrote. An accepted load replaces it.
     pub(crate) refused: bool,
 }
+
+impl Default for Settings {
+    fn default() -> Self {
+        let mut config = Config::default();
+        config.window_placement = WindowPlacement::Auto;
+        Self {
+            config,
+            desktop_background: DesktopBackground::default(),
+            extra_keysyms: Vec::new(),
+            written_keys: Vec::new(),
+            written_gestures: Vec::new(),
+            written_mouse: Vec::new(),
+            default_keys_disabled: false,
+            default_gestures_disabled: false,
+            default_mouse_disabled: false,
+            from_file: false,
+            refused: false,
+        }
+    }
+}
+
 /// Where a saved output's viewport comes from. Never saved.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum CameraSeed {
@@ -91,6 +112,7 @@ impl Settings {
         let mut table = contents
             .parse::<toml::Table>()
             .map_err(|error| format!("config error: {error}"))?;
+        let has_window_placement = table.contains_key("window_placement");
         let mut desktop_background = DesktopBackground::default();
         let mut extracted = false;
         if let Some(background) = table
@@ -115,8 +137,11 @@ impl Settings {
         } else {
             contents
         };
-        let (config, warnings) = Config::from_toml_collect(upstream)
+        let (mut config, warnings) = Config::from_toml_collect(upstream)
             .map_err(|error| format!("config error: {error}"))?;
+        if !has_window_placement {
+            config.window_placement = WindowPlacement::Auto;
+        }
         let mut settings = Self::of_file(contents, config);
         settings.desktop_background = desktop_background;
         Ok((settings, warnings))

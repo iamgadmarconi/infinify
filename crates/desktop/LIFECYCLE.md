@@ -101,7 +101,7 @@ frame's size is rounded to whole points for the policy, positions are rounded,
 and halving a size truncates. Chrome is zero, because a native frame already
 includes its title bar.
 
-- `center`, the default: under the active output's `focus_placement` point, the
+- `center`: under the active output's `focus_placement` point, the
   usable center unless the config moves it. The point is taken at the zoom the
   navigation lands at and converted through the current camera and zoom. The
   [usable area](NAVIGATION.md#the-usable-area) is the rectangle the output's
@@ -117,6 +117,9 @@ includes its title bar.
   center, the topmost of equally near ones. Detached placeholders anchor like
   windows and every window is an obstacle. With nothing in view, or no free
   slot, this is `center`.
+
+The macOS adapter defaults an omitted `window_placement` to `auto`, including
+when no config file exists. An explicit value is parsed by upstream.
 
 Then upstream's cascade, for all three: while the spot is within two points of
 another window's top-left on both axes it moves down the diagonal by

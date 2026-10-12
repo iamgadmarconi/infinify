@@ -314,10 +314,10 @@ fn the_usable_rectangle_comes_with_the_registration_or_alone_and_must_fit_the_ou
 // viewport_center_canvas. The cascade measures nothing but other windows.
 #[test]
 fn a_new_window_is_placed_inside_the_usable_area_and_cascades_from_there() {
-    // `center`, the default: a 400 x 300 frame under the usable center
+    // Explicit `center`: a 400 x 300 frame under the usable center
     // (640, 415) has its top-left at (640 - 200, 415 - 150). The output's own
     // center (600, 400) would put it at (400, 250).
-    let mut h = running("");
+    let mut h = running("window_placement = \"center\"\n");
     let pointer = point(OUT1[0] + 700.0, OUT1[1] + 500.0);
     let first = appear(&mut h, 1, "app.1", (400.0, 300.0), 1, pointer.clone());
     assert_eq!(h.world(1), rect(440.0, 265.0, 400.0, 300.0));

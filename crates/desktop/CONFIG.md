@@ -1,14 +1,15 @@
 # Configuration, ABI 1
 
 The controller is configured by one TOML file in DriftWM's own grammar. The
-parser, the defaults, the action grammar and the binding tables are upstream's
+parser, portable defaults, action grammar and binding tables are upstream's
 code, carried in `driftwm-core` (malbiruk/driftwm at
 `352333a8fa1b22171492d4b71a54102045c9a19d`, `src/config/`); nothing here
-re-implements their grammar. The Mac adapter adds wallpaper policy and Super+Tab,
-F3 and Super+scroll defaults, while honoring explicit bindings and disabled
-defaults. What is new is the map from upstream's modifiers and keysyms
-to a Mac keyboard, and six additive ABI 1 commands. Existing commands, their
-shapes, `ABI_VERSION` and `SAVE_VERSION` are unchanged.
+re-implements their grammar. The Mac adapter defaults an omitted
+`window_placement` to `auto`; explicit values use upstream parsing. It also adds
+wallpaper policy and Super+Tab, F3 and Super+scroll defaults, while honoring
+explicit bindings and disabled defaults. What is new is the map from upstream's
+modifiers and keysyms to a Mac keyboard, and six additive ABI 1 commands.
+Existing commands, their shapes, `ABI_VERSION` and `SAVE_VERSION` are unchanged.
 
 | `command.op` | Fields | Result data |
 | --- | --- | --- |
@@ -32,8 +33,9 @@ is `driftwm`. Upstream's `DRIFTWM_CONFIG` environment override is kept by that
 code and wins over both.
 
 - A **missing file** is not an error while no file has been accepted in this
-  run: the built-in defaults apply, `exists` is false, and `errors` and
-  `warnings` are empty. This is upstream's startup.
+  run: the built-in defaults apply, including macOS `window_placement = "auto"`,
+  `exists` is false, and `errors` and `warnings` are empty. This is upstream's
+  startup with the macOS placement default.
 - A file that **cannot be read or parsed** leaves the configuration that was in
   force untouched. `errors` holds upstream's one message,
   `config: failed to read <path>: <io error>` or `config error: <toml error>`.
@@ -127,7 +129,7 @@ constants they replaced.
 | `focus_placement`, `[[outputs]] focus_placement` | where window navigation and `send-to-output` park the window, and with it where `window_placement = "center"` spawns one |
 | `[[outputs]] name`, `[outputs.hot_corners]` | which output an entry governs and its [hot corners](#hot-corners) |
 | `autostart` | `exec` effects of the launch load, see [Autostart](#autostart) |
-| `window_placement` | where a window that appears by itself is placed: `center`, `cursor` or `auto`, see [LIFECYCLE.md](LIFECYCLE.md#2-placement) |
+| `window_placement` | where a window that appears by itself is placed: macOS defaults to `auto` when omitted; explicit `center`, `cursor` or `auto` use upstream parsing, see [LIFECYCLE.md](LIFECYCLE.md#2-placement) |
 | `[decorations] title_bar_height` | the diagonal step of the placement cascade; also part of `render.chrome` below |
 | `[background] type`, `path`, `texture`, `mirror_tile`, `transparent_shader`, `animate_fps`, `cache_shader`, `cache_budget_mb`, `parallax` | reported as the snapshot's `render.background` for the shell's compositor, including the derived `inherit_macos` policy; see [macOS wallpaper](#macos-wallpaper) and [RENDER.md](RENDER.md#render). What the compositor does with each is described in `native/desktop/BACKGROUND-NOTES.md` |
 | `[decorations] bg_color`, `fg_color`, `corner_radius`, `title_bar_height`, `font`, `font_size`, `font_weight`, `title_align` | reported as `render.chrome`: what stand-ins and compositor title bars are rasterised from |
