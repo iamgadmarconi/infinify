@@ -21,8 +21,8 @@ static int ownerStatus,connectionStatus,ownerValue=7,processPID=123;
 static BOOL processAvailable=YES;
 static uint64_t seconds=100,microseconds=20;
 static uid_t processUID;
-static BOOL replaceOnSync,replaceAfterTransform,ignoreTransformWrites;
-static int transformReadStatus;
+static BOOL replaceOnSync,replaceAfterTransform,replaceAfterTransformRead,ignoreTransformWrites;
+static int transformReadStatus;static unsigned transformReadFailures;
 static unsigned transformWrites,alphaWrites,transformReads,identityReads;
 static CGAffineTransform nativeTransform;
 static float nativeAlpha=1;
@@ -32,7 +32,10 @@ static int journalSync(int fd) {
     return status;
 }
 static CGError readTransform(int cid,uint32_t wid,CGAffineTransform *value) {
-    (void)cid;(void)wid;transformReads++;*value=nativeTransform;return transformReadStatus;
+    (void)cid;(void)wid;transformReads++;*value=nativeTransform;
+    if(replaceAfterTransformRead){replaceAfterTransformRead=NO;ownerValue++;}
+    if(transformReadFailures){transformReadFailures--;return 1000;}
+    return transformReadStatus;
 }
 static CGError writeTransform(int cid,uint32_t wid,CGAffineTransform value) {
     (void)cid;(void)wid;transformWrites++;if(!ignoreTransformWrites)nativeTransform=value;
@@ -200,6 +203,45 @@ int main(void) { @autoreleasepool {
     assert([diagnostic[@"transform_matches"]isEqual:@YES] && [diagnostic[@"final_identity"]isEqual:@"gone"]);
     v2Restore(@"confirmed diagnostic replacement",YES,nil,&summary);
     assert(summary.pending==0 && !v2Table.count && transformWrites==1 && transformReads==1 && identityReads==3);
+
+    // Complete frames may contain an unchanged neighbour. First admission must
+    // still set it, even when the original getter already equals the request.
+    // Only a previously verified apply can avoid a later repeated setter.
+    ownerValue=7;frame.flags=0;nativeTransform=CGAffineTransformMake(2,0,0,2,-50,-70);
+    transformWrites=transformReads=identityReads=0;v2Apply(&frame,1,&status);
+    assert(status==DW2_APPLIED && transformWrites==1 && transformReads==2);
+    uint64_t generation=v2Generation;unsigned writes=transformWrites,reads=transformReads,identities=identityReads;
+    v2Apply(&frame,1,&status);
+    assert(status==DW2_APPLIED && transformWrites==writes && transformReads==reads+1 && identityReads==identities+3 && v2Generation==generation);
+
+    // A changed request retains one set/read pair; there is no speculative
+    // pre-read on the ordinary pan/zoom path where every transform changes.
+    frame.m[4]-=10;reads=transformReads;v2Apply(&frame,1,&status);
+    assert(status==DW2_APPLIED && transformWrites==writes+1 && transformReads==reads+1);
+
+    // A cached request is not authority over actual geometry: external drift or
+    // an unavailable verification read falls back to the guarded set/read pair.
+    nativeTransform.tx-=5;writes=transformWrites;reads=transformReads;identities=identityReads;
+    v2Apply(&frame,1,&status);
+    assert(status==DW2_APPLIED && transformWrites==writes+1 && transformReads==reads+2 && identityReads==identities+4);
+    transformReadFailures=1;writes=transformWrites;reads=transformReads;v2Apply(&frame,1,&status);
+    assert(status==DW2_APPLIED && transformWrites==writes+1 && transformReads==reads+2);
+
+    // A repeated transform does not suppress independently requested alpha.
+    frame.flags=DW2_RECORD_HAS_ALPHA;frame.alpha=.75f;writes=transformWrites;unsigned alphas=alphaWrites;
+    v2Apply(&frame,1,&status);
+    assert(status==DW2_APPLIED && transformWrites==writes && alphaWrites==alphas+1 && nativeAlpha==.75f);
+
+    // Replacement during a successful repeated read cannot receive alpha or a
+    // successful ACK. Replacement after a mismatched read cannot receive the
+    // corrective transform either.
+    replaceAfterTransformRead=YES;alphas=alphaWrites;v2Apply(&frame,1,&status);
+    assert(status==DW2_IDENTITY && transformWrites==writes && alphaWrites==alphas);
+    v2Restore(@"repeated read replacement",NO,nil,&summary);assert(summary.pending==0 && !v2Table.count);
+    ownerValue=7;frame.flags=0;v2Apply(&frame,1,&status);assert(status==DW2_APPLIED);
+    nativeTransform.tx-=5;replaceAfterTransformRead=YES;writes=transformWrites;v2Apply(&frame,1,&status);
+    assert(status==DW2_IDENTITY && transformWrites==writes);
+    v2Restore(@"corrective write replacement",NO,nil,&summary);assert(summary.pending==0 && !v2Table.count);
     assert(!unlinkat(directoryFD,"v2-journal.json",0));close(directoryFD);directoryFD=-1;assert(!rmdir(directory));
-    puts("PASS: restore identity decisions, uncertain journal retention, replacement boundaries and failed-readback diagnostics; no native window mutation");
+    puts("PASS: restore identity decisions, uncertain journal retention, replacement boundaries, failed-readback diagnostics and freshly verified repeated frames; no native window mutation");
 } }

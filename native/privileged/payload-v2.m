@@ -23,7 +23,10 @@ static uint32_t fixtureWids[16], fixtureCount;
 @implementation DW2Connection
 - (void)dealloc { close(fd);pthread_mutex_destroy(&writeLock); }
 @end
-@interface DW2Entry : NSObject { @public struct dw2_identity who; int owner; CGAffineTransform transform; CGRect bounds; float alpha; BOOL hasAlpha, alphaTouched, fresh, alphaFresh; uint32_t state; } @end
+@interface DW2Entry : NSObject { @public struct dw2_identity who; int owner; CGAffineTransform transform; CGRect bounds; float alpha; BOOL hasAlpha, alphaTouched, fresh, alphaFresh; uint32_t state;
+    // Apply-only state. Originals and restoration never depend on this hint.
+    CGAffineTransform appliedTransform; BOOL appliedTransformKnown;
+} @end
 @implementation DW2Entry
 @end
 
@@ -316,7 +319,18 @@ static void v2Apply(const struct dw2_record *records,uint32_t count,uint8_t *sta
         const struct dw2_record *r=&records[i];
         if(!v2EntryCurrent(e)){status[i]=DW2_IDENTITY;continue;}
         CGAffineTransform requested=CGAffineTransformMake(r->m[0],r->m[1],r->m[2],r->m[3],r->m[4],r->m[5]),actual=CGAffineTransformIdentity;
-        BOOL ok=setTransform(mainConnection(),e->who.wid,requested)==0 && getTransform(mainConnection(),e->who.wid,&actual)==0 && v2SameTransform(actual,requested);
+        // Frames stay complete, but moving one window need not rewrite every
+        // unchanged neighbour. Only a previously applied request is eligible,
+        // and it still needs a fresh native read and the final identity fence.
+        BOOL repeated=e->appliedTransformKnown && v2SameTransform(e->appliedTransform,requested);
+        BOOL ok=repeated && getTransform(mainConnection(),e->who.wid,&actual)==0 && v2SameTransform(actual,requested);
+        e->appliedTransformKnown=NO;
+        if(!ok){
+            // The extra read above may have outlived this window. Never use its
+            // cached request to authorize the corrective write to a replacement.
+            if(repeated && !v2EntryCurrent(e)){status[i]=DW2_IDENTITY;continue;}
+            ok=setTransform(mainConnection(),e->who.wid,requested)==0 && getTransform(mainConnection(),e->who.wid,&actual)==0 && v2SameTransform(actual,requested);
+        }
         if(r->flags&DW2_RECORD_HAS_ALPHA) {
             if(!v2EntryCurrent(e)){status[i]=DW2_IDENTITY;continue;}
             float alpha=-1;
@@ -324,6 +338,7 @@ static void v2Apply(const struct dw2_record *records,uint32_t count,uint8_t *sta
         }
         if(!v2EntryCurrent(e))status[i]=DW2_IDENTITY;
         else if(!ok)status[i]=DW2_NOT_APPLIED;
+        else {e->appliedTransform=requested;e->appliedTransformKnown=YES;}
     }
     v2Count();
 }
