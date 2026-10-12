@@ -187,6 +187,14 @@ nor an Infinify-specific failure. Local evidence:
 Finder windows were closed afterward. Terminal/Notes already had displaced
 transforms at that test's start, so restoring that baseline did not repair their
 older positions.
+A later unlocked-guest PNG-to-RTF baseline also produced no visible image with
+Infinify stopped. Actual pointer positions matched every posted drag point, the
+combined-session left button remained down through the drag and was released,
+and the destination was independently identified as TextEdit's text area. The
+source Finder window matched, but its exact source icon was not established by
+the AX helper. This remains an unsuccessful native baseline, not evidence of an
+Infinify-specific drop failure. The owned windows and temporary display-awake
+assertion were cleaned up. Evidence: `target/native-vm/png-drop-baseline/receipt.json`.
 
 These checks establish standard Terminal title-drag and edge-resize routing for
 the sampled interactions, and free-space placement for that TextEdit window. They
@@ -205,9 +213,17 @@ scene were restored exactly afterward. Cursor routing accounted for 465 of 951
 sampled main-thread stacks, largely waiting synchronously on WindowServer.
 Native render-time cursor refresh now skips that query when no custom canvas
 cursor is needed; event-driven input, grabs, pick mode and resize borders retain
-fresh routing. Its improvement has not yet been measured. The VM exposes no
-comparable GPU utilization or physical-window presentation cadence.
-Evidence: `target/performance/native-six-window-20261012/receipt.json`.
+fresh routing. A single repeat on build `a5e8355` contained zero cursor-routing
+frames among 1,078 main-thread samples. Rest CPU was 3.29%, while sampled motion
+CPU was 10.84%; motion-end RSS was 128.55 MiB and sampled footprint increased from
+192.7M to 227.2M. This confirms removal of the sampled blocking path, not an
+overall CPU or memory win: background WindowServer load differed, the repeated
+run reported different document titles, and pointer position was not matched.
+Fitted geometry, ordering, focus, camera and document bytes matched, and all six
+originals were again restored exactly. The VM exposes no comparable GPU
+utilization or physical-window presentation cadence. Evidence:
+`target/performance/native-six-window-20261012/receipt.json` and
+`after-cursor/comparison.json` in that directory.
 
 Interactive resizing now rebases the grabbed edge when a delayed native baseline
 differs from its displayed size. Subsequent motion uses the current camera and
