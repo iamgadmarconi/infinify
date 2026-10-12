@@ -1,5 +1,33 @@
 # Infinify native desktop shell
 
+## Current development evidence (2026-10-12)
+
+The six-window capture workload remains below the 120 Hz target. On the signed
+`c101550` app, six 1700×1132-point sources and a 2056×1290-point Retina output
+presented about 58 fps at rest, 49 while panning and 40 while zooming. These
+are actual canvas presentation rates, not capture callback counts. CPU/GPU
+encoding alone does not explain the gap: drawable acquisition also stalls.
+The same geometry with synthetic source surfaces reached 120/119.75/120 fps
+in short rest/pan/zoom samples, which does not establish real-capture parity.
+
+Managed window discovery now uses one bounded worker observation instead of
+repeating synchronous global window-list reads on the main thread. Results
+must pass source identity, generation, previous bounds, session and 100 ms
+freshness checks. Bound-window input and resize paths retain fresh validation.
+Performance measurements of this change are pending.
+
+The native helper and Rust runtime now use only the current binary protocol.
+The legacy JSON listener/client and ignored navigation flag are removed.
+The runtime's 14 focused owned-window/fault-peer cases passed, including
+independent native rectangle readback, heartbeat retention, explicit and
+crash-triggered restoration, and rejecting native drift before sending a frame.
+The scoped resize scenario passed all 24 edges/corners at zoom 0.5, 0.8 and 1,
+with 50 grabs ended. These checks do not establish physical third-party input,
+captured file drag/drop or native display-boundary clipping.
+
+The sections below retain earlier implementation and validation history; dated
+fixture results describe their particular source revision and scope.
+
 `./scripts/build-app.sh` builds and ad-hoc signs `target/app/Infinify.app` for
 Apple Silicon / macOS 26+, and `./scripts/install-app.sh` puts a signed copy in
 `~/Applications`. Neither launches anything. A normal run is the desktop, as
@@ -6357,10 +6385,8 @@ exact boundary.
 
 ### Flags
 
-- `--experimental-native-navigation` is still accepted and does nothing: what
-  it used to gate is now the default. It is still rejected (exit 64) together
-  with `--source`, `--demo-probe` and `--demo-probe-guard`, and no longer adds
-  anything to `--demo`.
+- Native navigation is part of every normal launch. Its former experimental
+  flag has been removed and is rejected as an unknown argument.
 - `--no-native-focus` keeps focus logical: the shell activates no application
   and raises no window, for navigation or for a click, and installs no input
   observer. What a forwarded click makes the application do itself was not

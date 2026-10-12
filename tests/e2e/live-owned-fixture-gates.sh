@@ -144,6 +144,6 @@ assert_line 'python3|- fixture.json'
 
 : > "$GATE_LOG"
 ./tests/e2e/privileged-fixture.sh --live-owned-fixture
-assert_line 'python3|native/privileged/fixture_test.py'
+assert_line 'python3|native/privileged/fixture_v2_test.py'
 
 echo 'PASS: seven launchers build only by default, reject malformed opt-in, and forward legacy live arguments'

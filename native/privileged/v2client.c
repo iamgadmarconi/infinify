@@ -5,6 +5,7 @@
 //   v2client hold  RUNTIME NONCE OFFSET       one frame, then only heartbeats; reports
 //                                             the loss of the helper and exits 3
 //   v2client enrollment RUNTIME NONCE         read-only finite process scope
+//   v2client inspect RUNTIME NONCE PID WID SEC USEC  read-only window geometry
 // stdin: one window per line, "pid wid birth_sec birth_usec x y w h" (its untouched
 // screen rectangle), then "go". Each frame draws every window at half size, moved
 // right by an offset in points (bench: the frame number modulo 200, and down by one
@@ -18,6 +19,8 @@
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
+#include <errno.h>
+#include <limits.h>
 
 struct window { struct dw2_identity id; double x, y, w, h; };
 static struct window windows[64];
@@ -52,11 +55,24 @@ static void print_stats(dw_client *client) {
         s.submitted,s.written,s.dropped_local,s.applied,s.superseded,s.discarded,s.records_applied,s.records_failed,s.heartbeats_sent,s.heartbeats_acked,s.last_applied_seq,
         atomic_load(&lostReason) ? "true" : "false",atomic_load(&lostReason),atomic_load(&lostAtMS));
 }
+static int decimal(const char *text,uint64_t maximum,uint64_t *value) {
+    if(!text || !*text)return 0;
+    for(const char *p=text;*p;p++)if(*p<'0'||*p>'9')return 0;
+    errno=0;char *end=NULL;unsigned long long number=strtoull(text,&end,10);
+    if(errno || *end || number>maximum)return 0;
+    *value=number;return 1;
+}
 int main(int argc, char **argv) {
-    int bench=argc==6 && !strcmp(argv[1],"bench"),hold=argc==5 && !strcmp(argv[1],"hold"),enrollment=argc==4 && !strcmp(argv[1],"enrollment");
-    if(!bench && !hold && !enrollment){fprintf(stderr,"usage: v2client bench RUNTIME NONCE HZ SECONDS | v2client hold RUNTIME NONCE OFFSET | v2client enrollment RUNTIME NONCE\n");return 2;}
+    int bench=argc==6 && !strcmp(argv[1],"bench"),hold=argc==5 && !strcmp(argv[1],"hold"),enrollment=argc==4 && !strcmp(argv[1],"enrollment"),inspect=argc==8 && !strcmp(argv[1],"inspect");
+    if(!bench && !hold && !enrollment && !inspect){fprintf(stderr,"usage: v2client bench RUNTIME NONCE HZ SECONDS | v2client hold RUNTIME NONCE OFFSET | v2client enrollment RUNTIME NONCE | v2client inspect RUNTIME NONCE PID WID SEC USEC\n");return 2;}
+    struct dw2_identity inspection={0};
+    if(inspect){
+        uint64_t pid=0,wid=0,sec=0,usec=0;
+        if(!decimal(argv[4],INT_MAX,&pid)||!pid||!decimal(argv[5],UINT32_MAX,&wid)||!wid||!decimal(argv[6],UINT64_MAX,&sec)||!sec||!decimal(argv[7],999999,&usec))return 2;
+        inspection=(struct dw2_identity){.pid=(int32_t)pid,.wid=(uint32_t)wid,.birth_sec=sec,.birth_usec=usec};
+    }
     char line[256];
-    while(!enrollment && fgets(line,sizeof(line),stdin) && strncmp(line,"go",2) && windowCount<64) {
+    while(!enrollment && !inspect && fgets(line,sizeof(line),stdin) && strncmp(line,"go",2) && windowCount<64) {
         struct window *w=&windows[windowCount];
         if(sscanf(line,"%d %u %llu %llu %lf %lf %lf %lf",&w->id.pid,&w->id.wid,&w->id.birth_sec,&w->id.birth_usec,&w->x,&w->y,&w->w,&w->h)!=8){fprintf(stderr,"bad window line\n");return 2;}
         windowCount++;
@@ -65,6 +81,16 @@ int main(int argc, char **argv) {
     struct dw_client_info info;dw_client *client=NULL;
     int opened=dw_client_open(argv[2],argv[3],&callbacks,3000,&client,&info);
     if(opened){fprintf(stderr,"open failed: %d\n",opened);return 1;}
+    if(inspect){
+        struct dw2_inspect_reply reply={0};
+        int result=dw_client_inspect(client,2000,&inspection,&reply);
+        if(result){fprintf(stderr,"inspection failed: %d\n",result);dw_client_close(client);return 1;}
+        printf("{\"status\":%u,\"owner\":%d,\"transform\":[",reply.status,reply.owner);
+        for(int i=0;i<6;i++)printf("%s%.17g",i?",":"",reply.transform[i]);
+        printf("],\"bounds\":[");for(int i=0;i<4;i++)printf("%s%.17g",i?",":"",reply.bounds[i]);
+        printf("],\"screen_rect\":[");for(int i=0;i<4;i++)printf("%s%.17g",i?",":"",reply.screen_rect[i]);
+        printf("]}\n");dw_client_close(client);return 0;
+    }
     if(enrollment){
         struct dw2_process processes[DW2_MAX_PROCESSES];uint32_t count=0;
         int result=dw_client_enrollment(client,2000,processes,DW2_MAX_PROCESSES,&count);
@@ -128,12 +154,17 @@ int main(int argc, char **argv) {
         hz,seconds,windowCount,frames,refused,lastSeq,lastOffset,lastDown,worst/1000.0,took[frames/2]/1000.0,took[frames*99/100]/1000.0,atomic_load(&worstReplyNS)/1000000.0,probed,table);
     print_stats(client);printf("}\n");fflush(stdout);
     // The windows stay where the last frame put them until the test has looked.
+    int exitStatus=0;
     if(fgets(line,sizeof(line),stdin) && !strncmp(line,"restore",7)) {
-        struct dw2_restore_result results[64];uint32_t count=0,pending=0,restored=0;
-        int result=dw_client_restore_all(client,3000,results,64,&count,&pending);
-        for(uint32_t i=0;i<count && i<64;i++)if(results[i].outcome==DW2_RESTORED)restored++;
-        printf("{\"restore_all\":%d,\"count\":%u,\"pending\":%u,\"restored\":%u}\n",result,count,pending,restored);fflush(stdout);
+        struct dw2_restore_result results[64];uint32_t count=0,pending=0,restored=0,journalPersisted=UINT32_MAX;
+        int result=dw_client_restore_all(client,3000,results,64,&count,&pending,&journalPersisted);
+        if(result==DW_CLIENT_OK || result==DW_CLIENT_UNDURABLE)
+            for(uint32_t i=0;i<count && i<64;i++)if(results[i].outcome==DW2_RESTORED)restored++;
+        printf("{\"restore_all\":%d,\"count\":%u,\"pending\":%u,\"journal_persisted\":",result,count,pending);
+        if(journalPersisted==UINT32_MAX)printf("null");else printf("%s",journalPersisted?"true":"false");
+        printf(",\"restored\":%u}\n",restored);fflush(stdout);
+        if(result!=DW_CLIENT_OK || pending || journalPersisted!=1)exitStatus=1;
     }
     dw_client_close(client);
-    return 0;
+    return exitStatus;
 }

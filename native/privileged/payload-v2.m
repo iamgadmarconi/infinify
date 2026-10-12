@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Protocol v2: many windows per frame, newest frame wins, journalled restoration.
 // Original implementation, compiled as part of payload.m (one translation unit, so
-// it shares v1's resolved symbols, scope and runtime directory). Wire format:
+// it shares resolved native symbols, scope and runtime directory). Wire format:
 // protocol2.h. Semantics: README.md "Protocol v2".
 #import <pthread.h>
 #import <stdatomic.h>
@@ -52,8 +52,8 @@ static BOOL v2Listed(const struct dw2_identity *who) {
         if([entry[@"pid"] longLongValue]==who->pid && [entry[@"birth_sec"] unsignedLongLongValue]==who->birth_sec && [entry[@"birth_usec"] unsignedLongLongValue]==who->birth_usec)return YES;
     return NO;
 }
-static uint32_t v2Caps(void) { return DW2_CAP_RESTORE_WINDOW|DW2_CAP_ENROLLMENT|(setAlpha&&getAlpha?DW2_CAP_ALPHA:0)|(fixtureOnly&&fixtureNativeFamilies?DW2_CAP_FIXTURE_FAMILY:0); }
-// Scope as v1 enforces it, allowlist first: decided from the record alone, before
+static uint32_t v2Caps(void) { return DW2_CAP_RESTORE_WINDOW|DW2_CAP_ENROLLMENT|DW2_CAP_INSPECT|(setAlpha&&getAlpha?DW2_CAP_ALPHA:0)|(fixtureOnly&&fixtureNativeFamilies?DW2_CAP_FIXTURE_FAMILY:0); }
+// Scope, allowlist first: decided from the record alone, before
 // any window-server lookup, and again for every record of every frame and restore.
 static BOOL v2InScope(const struct dw2_identity *who) {
     if(allowlist && !v2Listed(who))return NO;
@@ -62,26 +62,57 @@ static BOOL v2InScope(const struct dw2_identity *who) {
     for(uint32_t i=0;i<fixtureCount;i++)if(fixtureWids[i]==who->wid)return YES;
     return NO;
 }
-static int v2ListedPID(uint32_t wid) {
-    int pid=0;
+// A missing enumeration is uncertainty, not evidence a recorded window is gone.
+// A successful list can prove absence or a replacement owner PID.
+enum { DW2_WINDOW_UNKNOWN=-1, DW2_WINDOW_ABSENT=0, DW2_WINDOW_PRESENT=1 };
+static int v2ListedPID(uint32_t wid,int *pid) {
+    *pid=0;
     CFArrayRef rows=CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow,wid);
-    if(!rows)return 0;
-    for(NSDictionary *w in (__bridge NSArray *)rows)
-        if([w[(id)kCGWindowNumber] unsignedIntValue]==wid){pid=[w[(id)kCGWindowOwnerPID] intValue];break;}
+    if(!rows)return DW2_WINDOW_UNKNOWN;
+    int result=DW2_WINDOW_ABSENT;
+    for(id row in (__bridge NSArray *)rows) {
+        id windowNumber=[row isKindOfClass:NSDictionary.class] ? row[(id)kCGWindowNumber] : nil;
+        if(!isNumber(windowNumber) || CFNumberIsFloatType((__bridge CFNumberRef)windowNumber)
+            || [windowNumber longLongValue]<=0 || [windowNumber unsignedLongLongValue]>UINT32_MAX){result=DW2_WINDOW_UNKNOWN;break;}
+        if([windowNumber unsignedLongLongValue]!=wid)continue;
+        id ownerPID=row[(id)kCGWindowOwnerPID];
+        if(!isNumber(ownerPID) || CFNumberIsFloatType((__bridge CFNumberRef)ownerPID)
+            || [ownerPID longLongValue]<=0 || [ownerPID longLongValue]>INT_MAX){result=DW2_WINDOW_UNKNOWN;break;}
+        *pid=[ownerPID intValue];result=DW2_WINDOW_PRESENT;break;
+    }
     CFRelease(rows);
-    return pid;
+    return result;
 }
 // The window's current owner connection, process instance and user, from the window
 // server and the kernel. Nothing a client sent is trusted here.
 static BOOL v2Resolve(uint32_t wid,int *owner,struct dw2_identity *who,uid_t *uid) {
     int pid=0;
-    if(getOwner(mainConnection(),wid,owner))return NO;
-    if(!connectionPID || connectionPID(*owner,&pid) || pid<=0)pid=v2ListedPID(wid);
+    if(getOwner(mainConnection(),wid,owner) || *owner<=0)return NO;
+    if((!connectionPID || connectionPID(*owner,&pid) || pid<=0) && v2ListedPID(wid,&pid)!=DW2_WINDOW_PRESENT)return NO;
     struct proc_bsdinfo b={0};
     if(pid<=0 || proc_pidinfo(pid,PROC_PIDTBSDINFO,0,&b,sizeof(b))!=sizeof(b))return NO;
     *who=(struct dw2_identity){.pid=pid,.wid=wid,.birth_sec=b.pbi_start_tvsec,.birth_usec=b.pbi_start_tvusec};
     *uid=b.pbi_uid;
     return YES;
+}
+// Restore may discard an original only after a query positively establishes that
+// its window instance is absent/reused. Transient lookup failures or a changed
+// admission scope retain the obligation for a later authorized retry.
+enum { DW2_INSTANCE_CURRENT, DW2_INSTANCE_GONE, DW2_INSTANCE_UNCERTAIN };
+static int v2RestoreIdentity(const struct dw2_identity *recorded,int recordedOwner) {
+    int owner=0;struct dw2_identity current={0};uid_t uid=0;
+    if(v2Resolve(recorded->wid,&owner,&current,&uid)) {
+        if(!v2SameProcess(&current,recorded) || owner!=recordedOwner)return DW2_INSTANCE_GONE;
+        return uid==getuid() && v2InScope(recorded) ? DW2_INSTANCE_CURRENT : DW2_INSTANCE_UNCERTAIN;
+    }
+    int pid=0;
+    int listed=v2ListedPID(recorded->wid,&pid);
+    if(listed==DW2_WINDOW_ABSENT)return DW2_INSTANCE_GONE;
+    if(listed!=DW2_WINDOW_PRESENT)return DW2_INSTANCE_UNCERTAIN;
+    if(pid!=recorded->pid)return DW2_INSTANCE_GONE;
+    struct proc_bsdinfo process={0};
+    if(proc_pidinfo(pid,PROC_PIDTBSDINFO,0,&process,sizeof(process))!=sizeof(process))return DW2_INSTANCE_UNCERTAIN;
+    return process.pbi_start_tvsec!=recorded->birth_sec || process.pbi_start_tvusec!=recorded->birth_usec ? DW2_INSTANCE_GONE : DW2_INSTANCE_UNCERTAIN;
 }
 // The window server keeps transforms as 32-bit floats, so a request is applied when
 // it reads back equal after the same rounding.
@@ -92,10 +123,9 @@ static void v2Count(void) {
     uint32_t restoring=0;
     for(DW2Entry *e in v2Table.objectEnumerator)if(e->state==DW2_RESTORING)restoring++;
     atomic_store(&v2Held,(uint32_t)v2Table.count-restoring);atomic_store(&v2Restoring,restoring);
-    if(!v2Table.count)protocolRelease(2);
 }
 
-// v1's persist technique under v2's own names; recovery.json is never touched.
+// Durable no-follow staging and rename; original values survive every frame.
 static BOOL v2Persist(void) {
     NSMutableArray *windows=[NSMutableArray array];
     BOOL restoring=NO;
@@ -141,13 +171,10 @@ static void v2Restore(NSString *reason,BOOL retry,NSMutableData *results,struct 
     for(NSNumber *wid in [v2Table.allKeys sortedArrayUsingSelector:@selector(compare:)]) {
         DW2Entry *e=v2Table[wid];
         if(retry && e->state!=DW2_RESTORING)continue;
-        struct dw2_restore_result r={.id=e->who,.outcome=DW2_GONE,.set_status=0};
-        int owner=0;struct dw2_identity now={0};uid_t uid=0;
-        if(!v2Resolve(e->who.wid,&owner,&now,&uid)) {
-            // Unresolvable but still listed by the window server is not proof it is gone.
-            int listed=v2ListedPID(e->who.wid);struct proc_bsdinfo b={0};
-            if(listed==e->who.pid && proc_pidinfo(listed,PROC_PIDTBSDINFO,0,&b,sizeof(b))==sizeof(b) && b.pbi_start_tvsec==e->who.birth_sec && b.pbi_start_tvusec==e->who.birth_usec){r.outcome=DW2_PENDING;r.set_status=-1;}
-        } else if(v2SameProcess(&now,&e->who) && owner==e->owner && uid==getuid() && v2InScope(&e->who)) {
+        struct dw2_restore_result r={.id=e->who,.outcome=DW2_PENDING,.set_status=-1};
+        int observed=v2RestoreIdentity(&e->who,e->owner);
+        if(observed==DW2_INSTANCE_GONE){r.outcome=DW2_GONE;r.set_status=0;}
+        else if(observed==DW2_INSTANCE_CURRENT) {
             CGAffineTransform actual=CGAffineTransformIdentity;
             r.set_status=setTransform(mainConnection(),e->who.wid,e->transform);
             BOOL ok=r.set_status==0 && getTransform(mainConnection(),e->who.wid,&actual)==0 && v2SameTransform(actual,e->transform);
@@ -156,7 +183,7 @@ static void v2Restore(NSString *reason,BOOL retry,NSMutableData *results,struct 
                 if(status && !r.set_status)r.set_status=status;
                 if(status || getAlpha(mainConnection(),e->who.wid,&alpha) || alpha!=e->alpha)ok=NO;
             }
-            r.outcome=ok ? DW2_RESTORED : DW2_PENDING;
+            r.outcome=ok && v2RestoreIdentity(&e->who,e->owner)==DW2_INSTANCE_CURRENT ? DW2_RESTORED : DW2_PENDING;
         }
         if(r.outcome==DW2_PENDING){e->state=DW2_RESTORING;pending++;}
         else [v2Table removeObjectForKey:wid];
@@ -222,7 +249,6 @@ static void v2Apply(const struct dw2_record *records,uint32_t count,uint8_t *sta
         if(e && e->state==DW2_RESTORING){status[i]=DW2_RESTORE_PENDING;continue;}
         if(!e) {
             if(v2Table.count>=DW2_MAX_TABLE){status[i]=DW2_TABLE_FULL;continue;}
-            if(!protocolClaim(2)){status[i]=DW2_BUSY_V1;continue;}
             e=[DW2Entry new];e->who=now;e->owner=owner;e->state=DW2_HELD;e->fresh=YES;
             if(getTransform(mainConnection(),now.wid,&e->transform) || !finiteMatrix(e->transform) || getBounds(mainConnection(),now.wid,&e->bounds)){status[i]=DW2_SNAPSHOT;continue;}
             // The original alpha is captured with the window, whether or not this
@@ -270,7 +296,7 @@ static NSData *v2Enrollment(void) {
     struct dw2_enrollment_reply head={.scope=fixtureOnly ? DW2_SCOPE_COOPERATIVE : allowlist ? DW2_SCOPE_ALLOWLIST : DW2_SCOPE_SAME_USER,.server_pid=getpid()};
     NSMutableData *reply=[NSMutableData dataWithLength:sizeof(head)];
     if(fixtureOnly){
-        struct dw2_process own={.pid=getpid(),.birth_sec=[enrolled[@"birth_sec"]unsignedLongLongValue],.birth_usec=[enrolled[@"birth_usec"]unsignedLongLongValue]};
+        struct dw2_process own={.pid=getpid(),.birth_sec=[fixtureIdentity[@"birth_sec"]unsignedLongLongValue],.birth_usec=[fixtureIdentity[@"birth_usec"]unsignedLongLongValue]};
         [reply appendBytes:&own length:sizeof(own)];head.count=1;
     }else for(NSDictionary *entry in allowlist){
         struct dw2_process process={.pid=[entry[@"pid"]intValue],.birth_sec=[entry[@"birth_sec"]unsignedLongLongValue],.birth_usec=[entry[@"birth_usec"]unsignedLongLongValue]};
@@ -278,9 +304,35 @@ static NSData *v2Enrollment(void) {
     }
     memcpy(reply.mutableBytes,&head,sizeof(head));return reply;
 }
+static BOOL v2FiniteRect(CGRect r) {
+    return isfinite(r.origin.x)&&isfinite(r.origin.y)&&isfinite(r.size.width)&&isfinite(r.size.height)
+        && r.size.width>0 && r.size.height>0;
+}
+// Inspect is independent of the held-window table. It can read originals before
+// first touch and verify restoration after removal without claiming the window.
+static struct dw2_inspect_reply v2Inspect(struct dw2_identity requested) {
+    struct dw2_inspect_reply reply={.id=requested,.status=DW2_SCOPE};
+    if(!v2InScope(&requested))return reply;
+    reply.status=DW2_IDENTITY;
+    if(requested.pid<=0 || !requested.wid || !requested.birth_sec || requested.birth_usec>=1000000)return reply;
+    int owner=0;struct dw2_identity before={0},after={0};uid_t uid=0;
+    if(!v2Resolve(requested.wid,&owner,&before,&uid) || uid!=getuid() || !v2SameProcess(&before,&requested))return reply;
+    CGAffineTransform transform={0};CGRect bounds=CGRectZero,screen=CGRectZero;
+    reply.status=DW2_SNAPSHOT;
+    if(getTransform(mainConnection(),requested.wid,&transform) || getBounds(mainConnection(),requested.wid,&bounds)
+        || getScreenRect(mainConnection(),requested.wid,&screen) || !finiteMatrix(transform) || !v2FiniteRect(bounds) || !v2FiniteRect(screen))return reply;
+    int afterOwner=0;
+    reply.status=DW2_IDENTITY;
+    if(!v2Resolve(requested.wid,&afterOwner,&after,&uid) || uid!=getuid() || owner!=afterOwner || !v2SameProcess(&after,&requested) || !v2InScope(&after))return reply;
+    reply.status=DW2_APPLIED;reply.owner=owner;
+    memcpy(reply.transform,(double[]){transform.a,transform.b,transform.c,transform.d,transform.tx,transform.ty},sizeof(reply.transform));
+    memcpy(reply.bounds,(double[]){bounds.origin.x,bounds.origin.y,bounds.size.width,bounds.size.height},sizeof(reply.bounds));
+    memcpy(reply.screen_rect,(double[]){screen.origin.x,screen.origin.y,screen.size.width,screen.size.height},sizeof(reply.screen_rect));
+    return reply;
+}
 static NSData *v2Probe(void) {
     struct dw2_probe_reply head={.scope=fixtureOnly ? DW2_SCOPE_COOPERATIVE : allowlist ? DW2_SCOPE_ALLOWLIST : DW2_SCOPE_SAME_USER,.caps=v2Caps(),
-        .queue=v2OnMain ? DW2_QUEUE_MAIN : DW2_QUEUE_OWN,.lease_ms=DW2_LEASE_MS,.server_pid=getpid(),.held=atomic_load(&v2Held),.restoring=atomic_load(&v2Restoring),
+        .queue=v2OnMain ? DW2_QUEUE_MAIN : DW2_QUEUE_OWN,.lease_ms=DW2_LEASE_MS,.server_pid=getpid(),.held=atomic_load(&v2Held),.restoring=atomic_load(&v2Restoring),.journal_pending=v2JournalStale,
         .frames_received=atomic_load(&v2FramesReceived),.frames_applied=atomic_load(&v2FramesApplied),.frames_superseded=atomic_load(&v2FramesSuperseded),.journal_writes=atomic_load(&v2JournalWrites),
         .table_count=(uint32_t)v2Table.count,.fixture_count=fixtureOnly ? fixtureCount : 0};
     NSMutableData *reply=[NSMutableData dataWithBytes:&head length:sizeof(head)];
@@ -411,6 +463,15 @@ static BOOL v2Handle(DW2Connection *c,const struct dw2_header *h,const void *bod
     }
     if(c->role!=DW2_ROLE_CONTROL)return NO;
     uint64_t seq=h->seq;
+    if(h->type==DW2_INSPECT) {
+        if(h->length!=sizeof(struct dw2_identity))return NO;
+        struct dw2_identity requested;memcpy(&requested,body,sizeof(requested));
+        pthread_mutex_lock(&v2Lock);
+        atomic_store(&v2Deadline,v2Now()+DW2_LEASE_MS);
+        dispatch_async(v2q,^{struct dw2_inspect_reply reply=v2Inspect(requested);v2Send(c,DW2_INSPECT,seq,&reply,sizeof(reply));});
+        pthread_mutex_unlock(&v2Lock);
+        return YES;
+    }
     if(h->type==DW2_FRAME) {
         struct dw2_frame head;
         if(h->length<sizeof(head))return NO;
@@ -507,56 +568,106 @@ static void *v2Serve(void *argument) { @autoreleasepool {
 // restored only if its whole recorded identity still resolves to the same process
 // instance and passes this instance's scope; the value written is the one captured
 // before any helper touched it. A bare window number is never trusted.
+static BOOL v2Keys(NSDictionary *value,NSArray *keys) {
+    return [value isKindOfClass:NSDictionary.class] && [[NSSet setWithArray:value.allKeys]isEqual:[NSSet setWithArray:keys]];
+}
+static BOOL v2Integer(id value,uint64_t minimum,uint64_t maximum) {
+    return isNumber(value) && !CFNumberIsFloatType((__bridge CFNumberRef)value)
+        && [value compare:@(minimum)]!=NSOrderedAscending && [value compare:@(maximum)]!=NSOrderedDescending;
+}
+static BOOL v2Boolean(id value) { return [value isKindOfClass:NSNumber.class] && CFGetTypeID((__bridge CFTypeRef)value)==CFBooleanGetTypeID(); }
+static BOOL v2LastRestoreValid(id value) {
+    if(value==NSNull.null)return YES;
+    if(!v2Keys(value,@[@"reason",@"results"]) || ![value[@"reason"]isKindOfClass:NSString.class] || ![value[@"reason"]length]
+        || ![value[@"results"]isKindOfClass:NSArray.class] || [value[@"results"]count]>DW2_MAX_TABLE)return NO;
+    NSMutableSet *windows=[NSMutableSet set];
+    for(NSDictionary *r in value[@"results"]) {
+        if(!v2Keys(r,@[@"pid",@"birth_sec",@"birth_usec",@"wid",@"outcome",@"set_status"])
+            || !v2Integer(r[@"pid"],1,INT_MAX) || !v2Integer(r[@"birth_sec"],1,UINT64_MAX) || !v2Integer(r[@"birth_usec"],0,999999)
+            || !v2Integer(r[@"wid"],1,UINT32_MAX) || !isNumber(r[@"set_status"]) || CFNumberIsFloatType((__bridge CFNumberRef)r[@"set_status"])
+            || [r[@"set_status"]compare:@(INT_MIN)]==NSOrderedAscending || [r[@"set_status"]compare:@(INT_MAX)]==NSOrderedDescending
+            || ![@[@"restored",@"gone",@"pending"]containsObject:r[@"outcome"]] || [windows containsObject:r[@"wid"]])return NO;
+        [windows addObject:r[@"wid"]];
+    }
+    return YES;
+}
 static BOOL v2LoadJournal(void) {
-    // A staging file left by an instance that died between writing and renaming it
-    // would refuse every later write (it is opened exclusively). It was never the
-    // journal; a directory in its place is left alone.
-    unlinkat(directoryFD,"v2-journal.next",0);
     int fd=openat(directoryFD,"v2-journal.json",O_RDONLY|O_NOFOLLOW);
-    if(fd<0)return errno==ENOENT;
+    if(fd<0) {
+        if(errno!=ENOENT)return NO;
+        // No committed journal means no original could have been used to mutate.
+        // Remove only our interrupted regular private staging file, never a directory,
+        // symlink, foreign-owned file or any legacy recovery artifact.
+        struct stat stage;
+        if(fstatat(directoryFD,"v2-journal.next",&stage,AT_SYMLINK_NOFOLLOW)==0) {
+            if(!S_ISREG(stage.st_mode) || stage.st_uid!=getuid() || (stage.st_mode&0777)!=0600)return NO;
+            if(unlinkat(directoryFD,"v2-journal.next",0) || fsync(directoryFD))return NO;
+        } else if(errno!=ENOENT)return NO;
+        return YES;
+    }
+    struct stat stat;
+    if(fstat(fd,&stat) || !S_ISREG(stat.st_mode) || stat.st_uid!=getuid() || (stat.st_mode&0777)!=0600 || stat.st_size<=0 || stat.st_size>4*1024*1024){close(fd);return NO;}
     NSMutableData *data=[NSMutableData data];char chunk[4096];ssize_t n;
     while((n=read(fd,chunk,sizeof(chunk)))>0 && data.length<=4*1024*1024)[data appendBytes:chunk length:n];
     close(fd);
     NSDictionary *journal=n==0 ? [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL] : nil;
-    if(![journal isKindOfClass:NSDictionary.class] || ![journal[@"v"] isEqual:@2] || !isNumber(journal[@"generation"]) || ![journal[@"windows"] isKindOfClass:NSArray.class] || [journal[@"windows"] count]>DW2_MAX_TABLE)return NO;
-    NSMutableDictionary *loaded=[NSMutableDictionary dictionary];
+    if(!v2Keys(journal,@[@"v",@"server_pid",@"generation",@"state",@"windows",@"last_restore"])
+        || !v2Integer(journal[@"v"],2,2) || !v2Integer(journal[@"server_pid"],1,INT_MAX) || !v2Integer(journal[@"generation"],0,UINT64_MAX-1)
+        || ![journal[@"windows"]isKindOfClass:NSArray.class] || [journal[@"windows"]count]>DW2_MAX_TABLE || !v2LastRestoreValid(journal[@"last_restore"]))return NO;
+    NSMutableDictionary *loaded=[NSMutableDictionary dictionary];BOOL restoring=NO;
     for(NSDictionary *w in journal[@"windows"]) {
-        if(![w isKindOfClass:NSDictionary.class])return NO;
-        for(NSString *key in @[@"pid",@"birth_sec",@"birth_usec",@"wid",@"owner"])if(!isNumber(w[key]))return NO;
+        if(!v2Keys(w,@[@"pid",@"birth_sec",@"birth_usec",@"wid",@"owner",@"transform",@"alpha",@"alpha_touched",@"bounds",@"state"])
+            || !v2Integer(w[@"pid"],1,INT_MAX) || !v2Integer(w[@"birth_sec"],1,UINT64_MAX) || !v2Integer(w[@"birth_usec"],0,999999)
+            || !v2Integer(w[@"wid"],1,UINT32_MAX) || !v2Integer(w[@"owner"],1,INT_MAX) || !v2Boolean(w[@"alpha_touched"])
+            || ![@[@"held",@"restoring"]containsObject:w[@"state"]] || loaded[w[@"wid"]])return NO;
+        restoring|=[w[@"state"]isEqual:@"restoring"];
         NSArray *t=w[@"transform"],*b=w[@"bounds"];
         if(![t isKindOfClass:NSArray.class] || t.count!=6 || ![b isKindOfClass:NSArray.class] || b.count!=4)return NO;
-        for(id value in [t arrayByAddingObjectsFromArray:b])if(!isNumber(value))return NO;
+        for(id value in [t arrayByAddingObjectsFromArray:b])if(!isNumber(value) || !isfinite([value doubleValue]))return NO;
         DW2Entry *e=[DW2Entry new];
-        e->who=(struct dw2_identity){.pid=[w[@"pid"] intValue],.wid=[w[@"wid"] unsignedIntValue],.birth_sec=[w[@"birth_sec"] unsignedLongLongValue],.birth_usec=[w[@"birth_usec"] unsignedLongLongValue]};
-        e->owner=[w[@"owner"] intValue];e->state=DW2_RESTORING;
-        e->transform=CGAffineTransformMake([t[0] doubleValue],[t[1] doubleValue],[t[2] doubleValue],[t[3] doubleValue],[t[4] doubleValue],[t[5] doubleValue]);
-        e->bounds=CGRectMake([b[0] doubleValue],[b[1] doubleValue],[b[2] doubleValue],[b[3] doubleValue]);
-        if(!finiteMatrix(e->transform))return NO;
-        if(isNumber(w[@"alpha"])){e->alpha=[w[@"alpha"] floatValue];e->hasAlpha=YES;}
-        e->alphaTouched=e->hasAlpha && setAlpha && getAlpha && [w[@"alpha_touched"] isEqual:@YES];
+        e->who=(struct dw2_identity){.pid=[w[@"pid"]intValue],.wid=[w[@"wid"]unsignedIntValue],.birth_sec=[w[@"birth_sec"]unsignedLongLongValue],.birth_usec=[w[@"birth_usec"]unsignedLongLongValue]};
+        e->owner=[w[@"owner"]intValue];e->state=DW2_RESTORING;
+        e->transform=CGAffineTransformMake([t[0]doubleValue],[t[1]doubleValue],[t[2]doubleValue],[t[3]doubleValue],[t[4]doubleValue],[t[5]doubleValue]);
+        e->bounds=CGRectMake([b[0]doubleValue],[b[1]doubleValue],[b[2]doubleValue],[b[3]doubleValue]);
+        if(!finiteMatrix(e->transform) || !v2FiniteRect(e->bounds))return NO;
+        if(w[@"alpha"]!=NSNull.null) {
+            if(!isNumber(w[@"alpha"]) || !isfinite([w[@"alpha"]doubleValue]) || [w[@"alpha"]doubleValue]<0 || [w[@"alpha"]doubleValue]>1)return NO;
+            e->alpha=[w[@"alpha"]floatValue];e->hasAlpha=YES;
+        }
+        e->alphaTouched=[w[@"alpha_touched"]boolValue];
+        if(e->alphaTouched && (!e->hasAlpha || !setAlpha || !getAlpha))return NO;
         loaded[@(e->who.wid)]=e;
     }
-    v2Generation=[journal[@"generation"] unsignedLongLongValue];
-    if(loaded.count && !protocolClaim(2))return NO;
+    NSString *state=!loaded.count ? @"empty" : restoring ? @"restoring" : @"holding";
+    if(![journal[@"state"]isEqual:state])return NO;
+    // Validate the entire committed journal before removing an interrupted stage.
+    struct stat stage;
+    if(fstatat(directoryFD,"v2-journal.next",&stage,AT_SYMLINK_NOFOLLOW)==0) {
+        if(!S_ISREG(stage.st_mode) || stage.st_uid!=getuid() || (stage.st_mode&0777)!=0600 || unlinkat(directoryFD,"v2-journal.next",0) || fsync(directoryFD))return NO;
+    } else if(errno!=ENOENT)return NO;
+    v2Generation=[journal[@"generation"]unsignedLongLongValue];
+    v2LastRestore=journal[@"last_restore"]==NSNull.null ? nil : journal[@"last_restore"];
     [v2Table addEntriesFromDictionary:loaded];
     if(loaded.count)v2Restore(@"startup recovery",NO,nil,NULL);
     return YES;
 }
-// Started after v1's listener is up; a failure here leaves v1 serving as before.
+// The sole listener. A failure is startup failure, never a fallback server.
 static int v2Start(const char *directory,BOOL onMain) {
     v2OnMain=onMain;
     v2q=onMain ? dispatch_get_main_queue() : dispatch_queue_create("dw.v2",dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,QOS_CLASS_USER_INTERACTIVE,0));
     v2Table=[NSMutableDictionary dictionary];
-    // Recovery finishes its first pass before anyone can connect. This runs on the
-    // main thread, so with the main queue chosen the pass is made in place.
-    __block BOOL loaded=NO;
-    if(onMain)loaded=v2LoadJournal();
-    else dispatch_sync(v2q,^{loaded=v2LoadJournal();});
-    if(!loaded)return -__LINE__;
     struct sockaddr_un addr={.sun_family=AF_UNIX};
     if(snprintf(addr.sun_path,sizeof(addr.sun_path),"%s/" DW2_SOCKET,directory)>=(int)sizeof(addr.sun_path))return -__LINE__;
     int listener=socket(AF_UNIX,SOCK_STREAM,0);
-    if(listener<0 || bind(listener,(struct sockaddr *)&addr,sizeof(addr)) || chmod(addr.sun_path,0600) || listen(listener,DW2_MAX_CONNECTIONS)){if(listener>=0)close(listener);return -__LINE__;}
+    if(listener<0)return -__LINE__;
+    if(bind(listener,(struct sockaddr *)&addr,sizeof(addr))){close(listener);return -__LINE__;}
+    if(chmod(addr.sun_path,0600) || listen(listener,DW2_MAX_CONNECTIONS)){close(listener);unlinkat(directoryFD,DW2_SOCKET,0);return -__LINE__;}
+    // Recovery's first pass finishes before accepting clients. Readiness cannot
+    // succeed on a malformed journal, and there is no other listener to fall back to.
+    __block BOOL loaded=NO;
+    if(onMain)loaded=v2LoadJournal();
+    else dispatch_sync(v2q,^{loaded=v2LoadJournal();});
+    if(!loaded){close(listener);unlinkat(directoryFD,DW2_SOCKET,0);return -__LINE__;}
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
         for(;;) {
             int client=accept(listener,NULL,NULL);

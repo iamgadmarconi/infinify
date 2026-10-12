@@ -78,8 +78,7 @@ bool DWNativeClipPlacement(CGRect native,CGRect rootNative,CGRect rootScreen,CGR
 - (void)bound:(NSDictionary *)identity bounds:(CGRect)native family:(NSDictionary *)family;
 // Restore this identity's original transform and alpha through a negotiated
 // per-window release record. It remains queued until acknowledged; other bound
-// windows keep their placements. An older helper instead ends presentation and
-// restores the whole session, so no live window is left parked after unbinding.
+// windows keep their placements. Every admitted helper must support this contract.
 - (void)unbound:(NSDictionary *)identity;
 // The frame this snapshot asks for: one record for every bound window (`identities`,
 // logical id → identity), at its placement's screen_rect, or parked beyond every

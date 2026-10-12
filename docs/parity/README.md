@@ -316,8 +316,8 @@ device-specific behavior also need the corresponding hardware.
   controller commands for click-to-focus and the completed click's reveal,
   followed native focus, the empty-canvas click, and focus that stays logical.
   The navigation coordinator and native focus driver, until now behind
-  `--experimental-native-navigation`, run in every normal launch (the flag is
-  accepted and ignored; `--no-native-focus` keeps focus logical). Native focus
+  `--experimental-native-navigation`, run in every normal launch. The obsolete
+  flag has been removed; `--no-native-focus` keeps focus logical. Native focus
   needs Accessibility only; hold-to-commit samples the modifier state instead of
   using an event tap, and the hard-coded Option-Tab hot keys are replaced by the
   configured binding. Coverage is controller scenarios through the exported C ABI

@@ -210,7 +210,7 @@ static BOOL wait_for_helper(const char *runtime,const char *nonce,pid_t pid,
     int status=dw_client_open(runtime,nonce,NULL,5000,&client,&info);
     if(status!=DW_CLIENT_OK){fprintf(stderr,"protocol v2 readiness connection failed (%d)\n",status);return NO;}
     uint32_t scope=only ? DW2_SCOPE_ALLOWLIST : DW2_SCOPE_SAME_USER;
-    uint32_t required=DW2_CAP_ALPHA|DW2_CAP_RESTORE_WINDOW|DW2_CAP_ENROLLMENT;
+    uint32_t required=DW2_CAP_ALPHA|DW2_CAP_RESTORE_WINDOW|DW2_CAP_ENROLLMENT|DW2_CAP_INSPECT;
     BOOL ok=info.server_pid==pid && info.scope==scope && (info.caps&required)==required
         && !(info.caps&DW2_CAP_FIXTURE_FAMILY);
     struct dw2_process enrolled={0};uint32_t count=UINT32_MAX;
@@ -226,7 +226,7 @@ static BOOL wait_for_helper(const char *runtime,const char *nonce,pid_t pid,
     if(ok)ok=dw_client_probe(client,2000,&probe,sizeof(probe),&length)==DW_CLIENT_OK
         && length==sizeof(probe) && probe.scope==info.scope && probe.caps==info.caps
         && probe.queue==info.queue && probe.lease_ms==info.lease_ms && probe.server_pid==pid
-        && !probe.reserved && !probe.held && !probe.restoring && !probe.table_count && !probe.fixture_count
+        && !probe.journal_pending && !probe.held && !probe.restoring && !probe.table_count && !probe.fixture_count
         && !probe.frames_received && !probe.frames_applied && !probe.frames_superseded && !probe.journal_writes;
     // Closing an empty, never-submitted session leaves no windows to restore.
     dw_client_close(client);
@@ -298,7 +298,7 @@ int main(int argc, char **argv) { @autoreleasepool {
         allowlist=@[@{@"pid":@(only.pid),@"birth_sec":@(only.birth_sec),@"birth_usec":@(only.birth_usec)}];
     }
     char socketPath[sizeof(((struct sockaddr_un *)0)->sun_path)];
-    if(snprintf(socketPath,sizeof(socketPath),"%s/helper.sock",runtime)>=(int)sizeof(socketPath)){fprintf(stderr,"Unix socket path exceeds 103 bytes\n");return 1;}
+    if(snprintf(socketPath,sizeof(socketPath),"%s/" DW2_SOCKET,runtime)>=(int)sizeof(socketPath)){fprintf(stderr,"Unix socket path exceeds 103 bytes\n");return 1;}
     NSString *runtimeString=[NSString stringWithUTF8String:runtime],*payloadString=[NSString stringWithUTF8String:payload_path];
     if(!runtimeString || !payloadString)return usage();
     for(NSString *name in @[@"helper.sock",@DW2_SOCKET,@"recovery.json",@"recovery.next",@"v2-journal.json",@"v2-journal.next"]) {

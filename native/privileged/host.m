@@ -5,8 +5,8 @@
 #include <math.h>
 #import "protocol.h"
 int main(int argc,char **argv) { @autoreleasepool {
-    // Trailing flags give protocol v2 several windows to place; without them the
-    // host is exactly the one-window fixture it was. `--activation regular` makes it
+    // Trailing flags give the sole protocol v2 server several owned windows;
+    // without them the host creates one window. `--activation regular` makes it
     // an application a window manager adopts (a regular one, whose windows have a
     // close, a miniaturize and a resize control) and `--watchdog` gives a longer test
     // its time; neither changes which windows there are or how the helper starts.
@@ -60,19 +60,14 @@ int main(int argc,char **argv) { @autoreleasepool {
     if(sheet){NSWindow *child=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,220,170) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];child.title=@"DriftWM disposable child sheet";child.alphaValue=alpha;child.opaque=opaque;child.contentView.wantsLayer=YES;child.contentView.layer.backgroundColor=NSColor.systemBlueColor.CGColor;[windows[0]beginSheet:child completionHandler:nil];wids[count++]=(uint32_t)child.windowNumber;[windows addObject:child];}
     [NSApp finishLaunching];
     [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.2]];
-    // An optional allowlist file lets the cooperative e2e drive the spike refusal.
+    // An optional allowlist file exercises exact process-scope refusal.
     NSString *allowlist=argc==5 ? [NSString stringWithContentsOfFile:[NSString stringWithUTF8String:argv[4]] encoding:NSUTF8StringEncoding error:NULL] : nil;
     if(argc==5 && !allowlist){fprintf(stderr,"cannot read allowlist file %s\n",argv[4]);return 1;}
     void *handle=dlopen(argv[1],RTLD_LOCAL|RTLD_NOW);
     if(!handle){fprintf(stderr,"dlopen: %s\n",dlerror());return 1;}
     int status=-1;
-    if(several||popup||sheet) {
-        int (*start)(const char *,const char *,const uint32_t *,uint32_t,const char *,int)=dlsym(handle,popup||sheet?"dw_privileged_fixture_start_family_windows":"dw_privileged_fixture_start_windows");
-        if(start)status=start(argv[2],argv[3],wids,(uint32_t)count,allowlist ? allowlist.UTF8String : NULL,v2Queue);
-    } else {
-        int (*start)(const char *,const char *,uint32_t,const char *)=dlsym(handle,"dw_privileged_fixture_start");
-        if(start)status=start(argv[2],argv[3],wids[0],allowlist ? allowlist.UTF8String : NULL);
-    }
+    int (*start)(const char *,const char *,const uint32_t *,uint32_t,const char *,int)=dlsym(handle,popup||sheet?"dw_privileged_fixture_start_family_windows":"dw_privileged_fixture_start_windows");
+    if(start)status=start(argv[2],argv[3],wids,(uint32_t)count,allowlist ? allowlist.UTF8String : NULL,v2Queue);
     if(status){fprintf(stderr,"helper fixture start failed: %d\n",status);return 1;}
     printf("READY %d",getpid());for(int i=0;i<count;i++)printf(" %u",wids[i]);printf("\n");fflush(stdout);
     // Watchdog bounds fixture lifetime even if the test runner dies. Payload restores

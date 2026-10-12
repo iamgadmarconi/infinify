@@ -101,7 +101,7 @@ static const uint64_t DWStall=10000;
 @implementation DWNativeWindow @end
 static const char *lostName(int reason) { return reason==DW_LOST_EOF?"the helper closed the connection":reason==DW_LOST_WRITE_TIMEOUT?"the helper stopped reading":reason==DW_LOST_HEARTBEAT?"no heartbeat was answered for a whole lease":"the helper broke the protocol"; }
 static const char *statusName(uint8_t status) {
-    static const char *names[]={"applied","out of the helper's scope","no such window of that process","matrix refused","alpha refused","its original could not be read","the journal could not be written","the set failed or read back differently","a restore of it is pending","protocol v1 holds a window","the helper's table is full","malformed record"};
+    static const char *names[]={"applied","out of the helper's scope","no such window of that process","matrix refused","alpha refused","its original could not be read","the journal could not be written","the set failed or read back differently","a restore of it is pending","the helper's table is full","malformed record"};
     return status<sizeof(names)/sizeof(*names)?names[status]:"unknown status";
 }
 @interface DWNativePresenterGroup : DWNativePresenter
@@ -111,10 +111,11 @@ static const char *statusName(uint8_t status) {
 @end
 static void DWCloseNativeClient(dw_client *client) {
     if(!client)return;
-    struct dw2_restore_result *results=calloc(DW2_MAX_TABLE,sizeof(*results));uint32_t count=0,pending=0;
-    int result=results?dw_client_restore_all(client,2000,results,DW2_MAX_TABLE,&count,&pending):DW_CLIENT_INVALID;
+    struct dw2_restore_result *results=calloc(DW2_MAX_TABLE,sizeof(*results));uint32_t count=0,pending=0,journalPersisted=0;
+    int result=results?dw_client_restore_all(client,2000,results,DW2_MAX_TABLE,&count,&pending,&journalPersisted):DW_CLIENT_INVALID;
     free(results);
-    if(result!=DW_CLIENT_OK)fprintf(stderr,"Infinify: native restoration was not confirmed (%s); closing the session leaves restoration with the helper\n",result==DW_CLIENT_TIMEOUT?"no answer within 2 s":result==DW_CLIENT_LOST?"the helper is gone":"invalid reply");
+    if(result==DW_CLIENT_UNDURABLE)fprintf(stderr,"Infinify: the helper returned a valid restore summary (%u of %u still pending, journal_persisted=%u) but did not confirm the journal write; closing the session leaves restoration with the helper\n",pending,count,journalPersisted);
+    else if(result!=DW_CLIENT_OK)fprintf(stderr,"Infinify: native restoration was not confirmed (%s); closing the session leaves restoration with the helper\n",result==DW_CLIENT_TIMEOUT?"no answer within 2 s":result==DW_CLIENT_LOST?"the helper is gone":"invalid reply");
     else if(pending)fprintf(stderr,"Infinify: %u of %u native windows still restoring; the helper keeps retrying them\n",pending,count);
     dw_client_close(client);
 }
@@ -191,7 +192,7 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     int opened=dw_client_open(runtime.fileSystemRepresentation,nonce64.UTF8String,&callbacks,2000,&presenter->_client,&presenter->_info);
     if(opened!=DW_CLIENT_OK){
         atomic_store(&presenter->_preparing,false);
-        if(why)*why=opened==DW_CLIENT_TIMEOUT?@"no helper answered there within 2 s":opened==DW_CLIENT_REFUSED?@"the helper refused the session (wrong nonce or protocol version)":opened==DW_CLIENT_NO_V2?@"the helper there serves protocol v1 only: its protocol v2 did not start":@"the session could not be set up";
+        if(why)*why=opened==DW_CLIENT_TIMEOUT?@"no helper answered there within 2 s":opened==DW_CLIENT_REFUSED?@"the helper refused the session (wrong nonce or protocol version)":@"the session could not be set up";
         return nil;
     }
     NSString *refusal=nil;
@@ -205,14 +206,11 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
         if(!scope[@(presenter->_info.server_pid)])refusal=[NSString stringWithFormat:@"the helper there is process %d, which --only-pid does not name",presenter->_info.server_pid];
         else if(!subset&&scope.count!=1)refusal=@"a cooperative helper can present only its own process: --only-pid must name that process alone";
     }else if(presenter->_info.scope!=DW2_SCOPE_ALLOWLIST)refusal=@"the helper has no exact process allowlist; same-user presentation is refused";
-    else if(!(presenter->_info.caps&DW2_CAP_ENROLLMENT))refusal=@"the helper cannot report its enrolled process instances; its allowlist cannot be verified";
-    if(!refusal&&subset&&!(presenter->_info.caps&DW2_CAP_ENROLLMENT))refusal=@"every grouped helper must audit its exact enrolled process instances";
-    // An allowlist helper is accepted only after an authenticated, read-only
-    // report matches every PID and birth in --only-pid, with no extra process.
-    // New cooperative helpers use the same birth check; older ones retain their
-    // single-process guard and independently resolve every window before mutation.
+    if(!refusal&&(presenter->_info.caps&(DW2_CAP_ENROLLMENT|DW2_CAP_RESTORE_WINDOW|DW2_CAP_INSPECT))!=(DW2_CAP_ENROLLMENT|DW2_CAP_RESTORE_WINDOW|DW2_CAP_INSPECT))refusal=@"the native helper lacks the current scope audit, inspection or per-window restoration contract; rebuild it";
+    // Every finite helper must freshly audit its process instances before any
+    // window is admitted. Cooperative fixtures obey the same current contract.
     NSMutableDictionary *admitted=[NSMutableDictionary dictionary];
-    if(!refusal && (presenter->_info.caps&DW2_CAP_ENROLLMENT)){
+    if(!refusal){
         struct dw2_process *processes=calloc(DW2_MAX_PROCESSES,sizeof(*processes));uint32_t count=0;
         int result=processes?dw_client_enrollment(presenter->_client,2000,processes,DW2_MAX_PROCESSES,&count):DW_CLIENT_INVALID;
         if(result!=DW_CLIENT_OK)refusal=@"the helper's process enrollment could not be verified within 2 s";
@@ -228,7 +226,7 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     }
     // Relaunching through a saved launcher record is an initial constructor,
     // too: every desktop admission must wait for the prior restore table.
-    if(!refusal&&desktop&&![presenter restorationEmpty])refusal=@"the Dock helper's previous native restoration is not yet confirmed empty";
+    if(!refusal&&![presenter restorationEmpty])refusal=@"the helper's previous native restoration and journal are not yet confirmed empty";
     if(!refusal&&desktop&&![presenter->_dockBirth isEqual:DWNativeProcessBirth(presenter->_info.server_pid,presenter->_loginUID)])refusal=@"the Dock process instance changed during desktop admission";
     if(!refusal&&presenter.ended)refusal=@"the helper was lost during native scope admission";
     if(refusal){atomic_store(&presenter->_preparing,false);dw_client_close([presenter take]);if(why)*why=refusal;return nil;}
@@ -260,7 +258,6 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     for(NSDictionary *endpoint in endpoints){
         DWNativePresenter *session=[self presenterAt:endpoint[@"runtime"] nonce:endpoint[@"nonce"] scope:scope subset:YES watch:!recovering desktop:NO why:&failure];
         if(!session)break;[sessions addObject:session];
-        if(recovering&&![session restorationEmpty]){failure=@"the helper's previous native restoration is not yet confirmed empty";break;}
         for(NSNumber *pid in session->_scope){if(owners[pid]){failure=[NSString stringWithFormat:@"process %@ is enrolled in more than one helper",pid];break;}owners[pid]=session;}
         if(failure)break;
     }
@@ -274,7 +271,7 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     uint8_t *bytes=malloc(capacity);if(!bytes)return NO;struct dw2_probe_reply head={0};
     os_unfair_lock_lock(&_lock);int result=_client?dw_client_probe(_client,2000,bytes,capacity,&length):DW_CLIENT_LOST;os_unfair_lock_unlock(&_lock);
     if(result==DW_CLIENT_OK&&length>=sizeof(head))memcpy(&head,bytes,sizeof(head));free(bytes);
-    return result==DW_CLIENT_OK&&length>=sizeof(head)&&!head.held&&!head.restoring&&!head.table_count&&!self.ended;
+    return result==DW_CLIENT_OK&&length>=sizeof(head)&&head.scope==_info.scope&&head.caps==_info.caps&&head.queue==_info.queue&&head.lease_ms==_info.lease_ms&&head.server_pid==_info.server_pid&&!head.journal_pending&&!head.held&&!head.restoring&&!head.table_count&&head.fixture_count<=16&&length==sizeof(head)+(size_t)head.fixture_count*sizeof(struct dw2_identity)&&!self.ended;
 }
 - (BOOL)activate { if(self.ended||(_desktopWide&&![DWNativeProcessBirth(_info.server_pid,_loginUID)isEqual:_dockBirth]))return NO;if(!_observer)[self watch];return !self.ended; }
 - (void)suspendWithCompletion:(void (^)(void))completed {
@@ -410,7 +407,6 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
 }
 - (void)releaseWindow:(DWNativeWindow *)window {
     NSNumber *wid=@(window->identity.wid);[_windows removeObjectForKey:wid];if(self.ended)return;
-    if(!(_info.caps&DW2_CAP_RESTORE_WINDOW)){fprintf(stderr,"Infinify: native presentation ended: the helper cannot restore one unbound window; restoring the session\n");[self finish];return;}
     window->releaseSeq=0;_releases[wid]=window;atomic_store(&_releasing,true);_forced=YES;
 }
 - (void)unbound:(NSDictionary *)identity {

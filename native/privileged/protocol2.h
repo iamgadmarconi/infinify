@@ -2,7 +2,7 @@
 #ifndef DW_PRIVILEGED_PROTOCOL2_H
 #define DW_PRIVILEGED_PROTOCOL2_H
 #include <stdint.h>
-// Protocol v2: binary, little-endian, on RUNTIME/v2.sock beside v1's helper.sock.
+// The sole helper protocol: binary v2, little-endian, on RUNTIME/v2.sock.
 // Semantics and lifecycle: README.md "Protocol v2". Every struct here is laid out
 // without padding and is sent as it lies in memory on arm64.
 #define DW2_SOCKET "v2.sock"
@@ -16,10 +16,10 @@
 #define DW2_MAX_PROCESSES 1024
 #define DW2_REPLY 0x8000
 
-enum { DW2_HELLO=1, DW2_FRAME=2, DW2_HEARTBEAT=3, DW2_RESTORE_ALL=4, DW2_PROBE=5, DW2_ENROLLMENT=6 };
+enum { DW2_HELLO=1, DW2_FRAME=2, DW2_HEARTBEAT=3, DW2_RESTORE_ALL=4, DW2_PROBE=5, DW2_ENROLLMENT=6, DW2_INSPECT=7 };
 enum { DW2_ROLE_CONTROL=1, DW2_ROLE_HEARTBEAT=2 };
 enum { DW2_HELLO_OK=0, DW2_HELLO_AUTH=1, DW2_HELLO_VERSION=2, DW2_HELLO_BUSY=3, DW2_HELLO_TOKEN=4, DW2_HELLO_MALFORMED=5 };
-enum { DW2_CAP_ALPHA=1, DW2_CAP_RESTORE_WINDOW=2, DW2_CAP_ENROLLMENT=4, DW2_CAP_FIXTURE_FAMILY=8 };
+enum { DW2_CAP_ALPHA=1, DW2_CAP_RESTORE_WINDOW=2, DW2_CAP_ENROLLMENT=4, DW2_CAP_FIXTURE_FAMILY=8, DW2_CAP_INSPECT=16 };
 // FIXTURE_FAMILY asks a client to exercise native root/child presentation on
 // the host's finite, explicitly created window list. It expands no process or
 // window authority and says nothing about third-party family compositing.
@@ -33,7 +33,7 @@ enum { DW2_RECORD_HAS_ALPHA=1, DW2_RECORD_RESTORE=2 };
 // set failed or read back differently; the window stays in the table because it may
 // have been changed.
 enum { DW2_APPLIED=0, DW2_SCOPE=1, DW2_IDENTITY=2, DW2_MATRIX=3, DW2_ALPHA=4, DW2_SNAPSHOT=5, DW2_JOURNAL=6,
-       DW2_NOT_APPLIED=7, DW2_RESTORE_PENDING=8, DW2_BUSY_V1=9, DW2_TABLE_FULL=10, DW2_MALFORMED=11 };
+       DW2_NOT_APPLIED=7, DW2_RESTORE_PENDING=8, DW2_TABLE_FULL=9, DW2_MALFORMED=10 };
 enum { DW2_FRAME_APPLIED=0, DW2_FRAME_DROPPED=1 };
 enum { DW2_RESTORED=0, DW2_GONE=1, DW2_PENDING=2 };
 enum { DW2_HELD=0, DW2_RESTORING=1 };
@@ -52,13 +52,18 @@ struct dw2_heartbeat_reply { uint32_t status, lease_ms, held, restoring; };
 struct dw2_restore_result { struct dw2_identity id; uint32_t outcome; int32_t set_status; };
 struct dw2_restore_reply { uint32_t count, pending, journal_persisted, reserved; }; // then count results
 struct dw2_probe_entry { struct dw2_identity id; uint32_t state; float alpha; double transform[6], screen_rect[4]; };
-struct dw2_probe_reply { uint32_t scope, caps, queue, lease_ms; int32_t server_pid; uint32_t held, restoring, reserved;
+struct dw2_probe_reply { uint32_t scope, caps, queue, lease_ms; int32_t server_pid; uint32_t held, restoring, journal_pending;
                          uint64_t frames_received, frames_applied, frames_superseded, journal_writes;
                          uint32_t table_count, fixture_count; }; // then table entries, then fixture identities
 // Read-only scope audit, negotiated by CAP_ENROLLMENT. A process instance, never
 // a window lookup or an enrollment request. SAME_USER has no finite process list.
 struct dw2_process { int32_t pid; uint32_t reserved; uint64_t birth_sec, birth_usec; };
 struct dw2_enrollment_reply { uint32_t scope, count; int32_t server_pid; uint32_t reserved; }; // then count processes
+// Read-only, negotiated by CAP_INSPECT. Request body is one dw2_identity.
+// On refusal only id and status are populated; owner and all geometry are zero.
+// No table enrollment, mutation, journal write or visual evidence is implied.
+struct dw2_inspect_reply { struct dw2_identity id; uint32_t status; int32_t owner;
+                          double transform[6], bounds[4], screen_rect[4]; };
 
 _Static_assert(sizeof(struct dw2_header)==16,"header");
 _Static_assert(sizeof(struct dw2_hello)==88,"hello");
@@ -74,6 +79,7 @@ _Static_assert(sizeof(struct dw2_probe_entry)==112,"probe entry");
 _Static_assert(sizeof(struct dw2_probe_reply)==72,"probe reply");
 _Static_assert(sizeof(struct dw2_process)==24,"process instance");
 _Static_assert(sizeof(struct dw2_enrollment_reply)==16,"enrollment reply");
+_Static_assert(sizeof(struct dw2_inspect_reply)==144,"inspect reply");
 _Static_assert(sizeof(struct dw2_enrollment_reply)+DW2_MAX_PROCESSES*sizeof(struct dw2_process)<=DW2_MAX_BODY,"largest enrollment fits");
 _Static_assert(sizeof(struct dw2_frame)+DW2_MAX_RECORDS*sizeof(struct dw2_record)<=DW2_MAX_BODY,"largest frame fits");
 _Static_assert(sizeof(struct dw2_probe_reply)+DW2_MAX_TABLE*sizeof(struct dw2_probe_entry)+16*sizeof(struct dw2_identity)<=DW2_MAX_BODY,"largest probe fits");

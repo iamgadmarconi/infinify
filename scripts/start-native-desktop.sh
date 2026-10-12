@@ -63,8 +63,41 @@ done
 /usr/bin/codesign --verify --strict "$native_loader" || fail 'loader signature verification failed.'
 /usr/bin/codesign --verify --strict "$native_payload" || fail 'payload signature verification failed.'
 /usr/bin/codesign --verify --strict "$native_bundle" || fail 'standard app signature verification failed.'
-# This is an argument-compatibility guard, not evidence of native compositing.
-/usr/bin/strings "$native_app" | /usr/bin/grep -Fq -- '--native-desktop-helper' || fail 'the standard app predates desktop-helper support; use --build.'
+# Validate the delivered signed bytes and the complete current source snapshot.
+# This freshness check is read-only and happens before sudo or runtime creation.
+python3 - "$native_repo" "$native_repo/target/app/BUILD.json" "$native_app" <<'PYTHON' || fail 'the delivered app does not match its build manifest and current sources; rebuild with scripts/build-app.sh or --build before launching.'
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import sys
+
+sys.dont_write_bytecode = True
+os.environ['GIT_OPTIONAL_LOCKS'] = '0'
+try:
+    root, manifest_path, executable = map(Path, sys.argv[1:])
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        raise ValueError('BUILD.json is missing or is not a regular file')
+    manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+    if type(manifest.get('schema_version')) is not int or manifest['schema_version'] != 1:
+        raise ValueError('unsupported BUILD.json schema')
+    if manifest.get('executable') != 'Infinify.app/Contents/MacOS/Infinify':
+        raise ValueError('unexpected executable path in BUILD.json')
+    if manifest.get('executable_sha256') != hashlib.sha256(executable.read_bytes()).hexdigest():
+        raise ValueError('signed executable bytes differ from BUILD.json')
+    spec = importlib.util.spec_from_file_location('infinify_build_package', root / 'scripts/build-app-package.py')
+    package = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(package)
+    current = package.source_state(root)
+    if manifest.get('git_commit') != current['commit']:
+        raise ValueError('BUILD.json does not describe the current Git HEAD')
+    if manifest.get('source_fingerprint_sha256') != current['source_fingerprint_sha256']:
+        raise ValueError('tracked or nonignored source files changed after the app was built')
+except Exception as error:
+    print(f'Infinify app freshness: {error}', file=sys.stderr)
+    sys.exit(1)
+PYTHON
 if /usr/bin/pgrep -u "$native_uid" -x Infinify >/dev/null; then
   fail 'an Infinify instance is already running; quit it normally before starting native desktop mode.'
 else

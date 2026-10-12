@@ -15,6 +15,7 @@ import select
 import signal
 import socket
 import struct
+import stat
 import subprocess
 import sys
 import tempfile
@@ -25,11 +26,16 @@ BUILD = Path('target/privileged')
 HEADER = struct.Struct('<IHHQ')
 RECORD = struct.Struct('<iIQQ6dfI')
 IDENTITY = struct.Struct('<iIQQ')
-HELLO, FRAME, HEARTBEAT, RESTORE_ALL, PROBE, REPLY = 1, 2, 3, 4, 5, 0x8000
-APPLIED, SCOPE, IDENTITY_MISMATCH, JOURNAL, BUSY_V1 = 0, 1, 2, 6, 9
-OLD_PACKET_LIMIT = 4096
+HELLO, FRAME, HEARTBEAT, RESTORE_ALL, PROBE, INSPECT, REPLY = 1, 2, 3, 4, 5, 7, 0x8000
+APPLIED, SCOPE, IDENTITY_MISMATCH, JOURNAL = 0, 1, 2, 6
 results = []
 hosts = []
+clients = []
+
+def spawn_client(*args, **kwargs):
+    child = subprocess.Popen(*args, **kwargs)
+    clients.append(child)
+    return child
 
 class Point(C.Structure):
     _fields_ = [('x', C.c_double), ('y', C.c_double)]
@@ -106,7 +112,7 @@ def wait_rects(wids, expected, timeout):
     return time.monotonic() - start
 
 class Host:
-    def __init__(self, *flags, run=None, nonce=None, allow=None, ready='v2.sock'):
+    def __init__(self, *flags, run=None, nonce=None, allow=None):
         self.run = run or Path(tempfile.mkdtemp(prefix='v2-', dir=BUILD)).resolve().relative_to(Path.cwd())
         os.chmod(self.run, 0o700)
         self.nonce = nonce or secrets.token_hex(32)
@@ -118,11 +124,12 @@ class Host:
         self.child = subprocess.Popen([str(BUILD / 'host'), str((BUILD / 'payload-arm64.dylib').resolve()), str(self.run), self.nonce, *extra, *flags], stdout=self.log, stderr=self.log)
         hosts.append(self)
         deadline = time.monotonic() + 8
-        while not (self.run / ready).exists():
+        while not (self.run / 'v2.sock').exists() or f'READY {self.child.pid} ' not in self.text():
             assert self.child.poll() is None, self.text()
-            assert time.monotonic() < deadline, ready + ' not ready: ' + self.text()
+            assert time.monotonic() < deadline, 'sole v2 server not ready: ' + self.text()
             time.sleep(.04)
-        assert ((self.run / ready).stat().st_mode & 0o777) == 0o600
+        assert stat.S_ISSOCK((self.run / 'v2.sock').stat().st_mode) and ((self.run / 'v2.sock').stat().st_mode & 0o777) == 0o600
+        assert not (self.run / 'helper.sock').exists(), 'obsolete v1 listener exists'
     def text(self):
         return (self.run / 'host.log').read_text()
     def journal(self):
@@ -192,11 +199,21 @@ class Conn:
         kind, seq, body = self.recv()
         assert kind == HEARTBEAT and seq == want
         return dict(zip(('status', 'lease_ms', 'held', 'restoring'), struct.unpack('<4I', body)))
+    def inspect(self, who):
+        want = self.send(INSPECT, IDENTITY.pack(*who))
+        kind, seq, body = self.recv()
+        assert kind == INSPECT and seq == want and len(body) == 144
+        assert IDENTITY.unpack(body[:24]) == who
+        status, owner = struct.unpack('<Ii', body[24:32])
+        values = struct.unpack('<14d', body[32:])
+        if status:
+            assert owner == 0 and values == (0.0,) * 14, (status, owner, values)
+        return dict(status=status, owner=owner, transform=list(values[:6]), bounds=list(values[6:10]), screen_rect=list(values[10:]))
     def probe(self):
         want = self.send(PROBE)
         kind, seq, body = self.recv()
         assert kind == PROBE and seq == want
-        names = ('scope', 'caps', 'queue', 'lease_ms', 'server_pid', 'held', 'restoring', 'reserved', 'frames_received', 'frames_applied', 'frames_superseded', 'journal_writes', 'table_count', 'fixture_count')
+        names = ('scope', 'caps', 'queue', 'lease_ms', 'server_pid', 'held', 'restoring', 'journal_pending', 'frames_received', 'frames_applied', 'frames_superseded', 'journal_writes', 'table_count', 'fixture_count')
         value = dict(zip(names, struct.unpack('<4Ii3I4Q2I', body[:72])))
         value['table'] = []
         offset = 72
@@ -247,21 +264,12 @@ def record(who, target, original, a=None):
 def half(original, dx, dy=0.0):
     return [original[0] + dx, original[1] + dy, original[2] / 2, original[3] / 2]
 
-def v1(host, op, **fields):
-    s = socket.socket(socket.AF_UNIX); s.settimeout(4); s.connect(str(host.run / 'helper.sock'))
-    s.sendall(json.dumps(dict(v=1, nonce=host.nonce, op=op, **fields)).encode() + b'\n')
-    data = b''
-    while not data.endswith(b'\n'):
-        part = s.recv(4096)
-        if not part: break
-        data += part
-    return s, json.loads(data)
-
 def setup(host):
     """A control session, the host's eight windows and what they look like untouched."""
     c = Conn(host)
     assert c.status == 0, c.status
     probe = c.probe()
+    assert c.caps & 16 and probe['journal_pending'] == 0, probe
     who = probe['fixtures']
     assert len(who) == 8 and all(w[0] == host.child.pid for w in who), probe
     wids = [w[1] for w in who]
@@ -320,16 +328,16 @@ def frames_group():
     assert c.probe()['table_count'] == 8 and c.frame(good) == [APPLIED] * 8 and all_near(wids, target)
     results.append(dict(test='bad records fail alone', status=status, screen_rect=seen, untouched=before[6:]))
 
-    # 4. A frame larger than v1's packet limit: 60 records out of scope, 8 good.
+    # 4. A large frame: 60 records out of scope, 8 good.
     target = [half(o, 60 + 5 * i) for i, o in enumerate(original)]
     outside = [record((os.getpid(), 100 + i, 0, 0), target[0], original[0]) for i in range(60)]
     records = outside[:30] + [record(who[i], target[i], original[i]) for i in range(8)] + outside[30:]
     size = HEADER.size + 8 + sum(map(len, records))
-    assert size > OLD_PACKET_LIMIT
+    assert size > 4096
     status = c.frame(records)
     assert status == [SCOPE] * 30 + [APPLIED] * 8 + [SCOPE] * 30, status
     assert all_near(wids, target)
-    results.append(dict(test='frame over the old packet limit', bytes=size, records=len(records), applied=status.count(APPLIED), refused=status.count(SCOPE)))
+    results.append(dict(test='large frame, independently failing records', bytes=size, records=len(records), applied=status.count(APPLIED), refused=status.count(SCOPE)))
 
     # 5. A burst written faster than it can be applied. The windows end at the last
     # frame's rectangles (seen from here); that fewer frames were applied than sent
@@ -379,11 +387,6 @@ def frames_group():
         assert alpha_writes == 2 and host.journal()['generation'] == 2
     results.append(dict(test='journal at first touch only', frames_applied=frames_so_far, journal_writes_after_frames=1, journal_writes_after_first_alpha_of_a_third_window=alpha_writes))
 
-    # v1 cannot take a window while v2 holds any.
-    s, probe1 = v1(host, 'probe'); s.close()
-    s, refused = v1(host, 'enroll', identity=probe1['identity']); s.close()
-    assert not refused['ok'] and refused['error'] == 'protocol v2 holds windows', refused
-
     # 7. Restore-all: everything back, table empty, journal says so.
     generation = host.journal()['generation']
     restored = c.restore_all()
@@ -396,26 +399,10 @@ def frames_group():
     assert journal['last_restore']['reason'] == 'explicit' and [r['outcome'] for r in journal['last_restore']['results']] == ['restored'] * 8
     results.append(dict(test='restore-all', reply=restored, screen_rect=seen, journal_state=journal['state'], journal_generation=journal['generation']))
 
-    # With v2 holding nothing v1 works as before, and while v1 holds its window v2
-    # is refused per record.
-    s, enrolled = v1(host, 'enroll', identity=probe1['identity'])
-    assert enrolled['ok'], enrolled
-    s.sendall(json.dumps(dict(v=1, nonce=host.nonce, op='transform', identity=probe1['identity'], matrix=[2, 0, 0, 2, 0, 0])).encode() + b'\n')
-    assert json.loads(s.recv(4096))['ok']
-    status = c.frame([record(who[i], target[i], original[i]) for i in range(8)])
-    assert status == [BUSY_V1] * 8, status
-    s.close()
-    wait_rects(wids, original, 2)
-    results.append(dict(test='one protocol holds windows at a time', v1_enroll_while_v2_holds=refused, v2_frame_while_v1_holds=status))
-
     # 8. The session goes on after restore-all; closing the connection without
     # asking restores everything.
     target = [half(o, 30) for o in original]
-    deadline = time.monotonic() + 2
-    while True:
-        status = c.frame([record(who[i], target[i], original[i], .5 if can_alpha and i == 0 else None) for i in range(8)])
-        if status == [APPLIED] * 8 or time.monotonic() > deadline: break
-        time.sleep(.05)  # v1's own disconnect restore releases its claim a moment later
+    status = c.frame([record(who[i], target[i], original[i], .5 if can_alpha and i == 0 else None) for i in range(8)])
     assert status == [APPLIED] * 8 and all_near(wids, target), status
     assert host.journal()['state'] == 'holding'
     c.close()
@@ -468,7 +455,7 @@ def lease_group():
     # 10. The client library holding the windows with its heartbeat thread, then
     # killed outright: the windows are back at once, not a lease later.
     lines = ''.join(f'{w[0]} {w[1]} {w[2]} {w[3]} {o[0]} {o[1]} {o[2]} {o[3]}\n' for w, o in zip(who, original)) + 'go\n'
-    client = subprocess.Popen([str(BUILD / 'v2client'), 'hold', str(host.run), host.nonce, '70'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    client = spawn_client([str(BUILD / 'v2client'), 'hold', str(host.run), host.nonce, '70'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     client.stdin.write(lines); client.stdin.flush()
     held = read_json(client, 10)
     target = [half(o, 70) for o in original]
@@ -495,8 +482,11 @@ def lease_group():
     restored = c.restore_all()
     assert restored['outcomes'] == [0] * 8 and restored['journal_persisted'] == 0 and [screen(w) for w in wids] == original, restored
     assert host.journal()['state'] == 'holding'
+    probe = c.probe()
+    assert probe['table_count'] == 0 and probe['held'] == 0 and probe['restoring'] == 0 and probe['journal_pending'] == 1, probe
     obstruction.rmdir()
     host.wait_journal('empty')
+    assert c.probe()['journal_pending'] == 0
     results.append(dict(test='journal obstruction', frame_status_while_obstructed=status, restore_reply_while_obstructed=restored, journal_after_retry=host.journal()['state']))
     c.close()
     host.stop()
@@ -508,7 +498,7 @@ def bench_group():
     lines = ''.join(f'{w[0]} {w[1]} {w[2]} {w[3]} {o[0]} {o[1]} {o[2]} {o[3]}\n' for w, o in zip(who, original)) + 'go\n'
 
     # 11. The client library at 120 frames a second, eight records, five seconds.
-    client = subprocess.Popen([str(BUILD / 'v2client'), 'bench', str(host.run), host.nonce, '120', '5'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    client = spawn_client([str(BUILD / 'v2client'), 'bench', str(host.run), host.nonce, '120', '5'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     client.stdin.write(lines); client.stdin.flush()
     bench = read_json(client, 20)
     # No two frames of the run draw the same rectangle; nothing is allowed for.
@@ -521,7 +511,7 @@ def bench_group():
     assert bench['send_call_worst_us'] < 5000 and bench['probe'] == 0 and bench['probe_table'] == 8, bench
     client.stdin.write('restore\n'); client.stdin.flush()
     restored = read_json(client, 10)
-    assert restored == dict(restore_all=0, count=8, pending=0, restored=8), restored
+    assert restored == dict(restore_all=0, count=8, pending=0, journal_persisted=True, restored=8), restored
     assert [screen(w) for w in wids] == original
     assert client.wait(timeout=5) == 0
     results.append(dict(test='client library, 120 Hz, 8 records, 5 s', bench=bench, final_target=target, screen_rect=seen, restore_all=restored))
@@ -529,7 +519,7 @@ def bench_group():
     # 12. The helper's process stopped under a running sender: no send call waits
     # (the client's own timing), the loss is reported within the lease (the
     # client's own report), and the helper restores when it runs again.
-    client = subprocess.Popen([str(BUILD / 'v2client'), 'bench', str(host.run), host.nonce, '120', '6'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    client = spawn_client([str(BUILD / 'v2client'), 'bench', str(host.run), host.nonce, '120', '6'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     client.stdin.write(lines); client.stdin.flush()
     time.sleep(1.5)
     moved = [screen(w) for w in wids] != original
@@ -545,7 +535,7 @@ def bench_group():
 
     # The same with no frames in flight: only the heartbeat thread can notice, and
     # it reports the helper lost once a whole lease has gone unanswered.
-    client = subprocess.Popen([str(BUILD / 'v2client'), 'hold', str(host.run), host.nonce, '45'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    client = spawn_client([str(BUILD / 'v2client'), 'hold', str(host.run), host.nonce, '45'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     client.stdin.write(lines); client.stdin.flush()
     assert read_json(client, 10)['held'] and all_near(wids, [half(o, 45) for o in original])
     stopped_at = time.time()
@@ -559,6 +549,49 @@ def bench_group():
     results.append(dict(test='helper stopped under a 120 Hz sender', bench=stall, loss_reported_s_after_stop=round(after_loss, 3), windows_while_stopped=frozen, restored_s_after_resume=round(took, 3)))
     host.stop()
 
+def client_restore_group():
+    """C-driver exit status distinguishes durable restoration from native readback."""
+    host = Host('--windows', '8')
+    c, _, who, wids, original = setup(host)
+    matrices0, alpha0 = [transform(w) for w in wids], [alpha(w) for w in wids]
+    c.close()
+    lines = ''.join(f'{w[0]} {w[1]} {w[2]} {w[3]} {o[0]} {o[1]} {o[2]} {o[3]}\n' for w, o in zip(who, original)) + 'go\n'
+    client = None
+    obstruction = host.run / 'v2-journal.next'
+    try:
+        for obstructed in (False, True):
+            client = spawn_client([str(BUILD / 'v2client'), 'bench', str(host.run), host.nonce, '120', '1'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            client.stdin.write(lines); client.stdin.flush()
+            bench = read_json(client, 10)
+            assert not bench['lost'] and bench['records_failed'] == 0 and bench['probe_table'] == 8, bench
+            if obstructed: obstruction.mkdir()
+            client.stdin.write('restore\n'); client.stdin.flush()
+            restored = read_json(client, 5)
+            expected = dict(restore_all=-5 if obstructed else 0, count=8, pending=0, journal_persisted=not obstructed, restored=8)
+            assert restored == expected, restored
+            status = client.wait(timeout=5)
+            assert status == (1 if obstructed else 0), (status, restored)
+            assert [screen(w) for w in wids] == original and [transform(w) for w in wids] == matrices0 and [alpha(w) for w in wids] == alpha0
+            c = Conn(host); probe = c.probe()
+            assert probe['table_count'] == 0 and probe['journal_pending'] == int(obstructed), probe
+            if obstructed:
+                obstruction.rmdir(); host.wait_journal('empty')
+                assert c.probe()['journal_pending'] == 0
+            c.close()
+            results.append(dict(test='C driver durable restore exit' if not obstructed else 'C driver undurable native restore exits nonzero, then durable retry', exit=status, reply=restored, original_transform_preserved=8, journal_pending_at_exit=probe['journal_pending']))
+    finally:
+        c.close()
+        if client is not None and client.poll() is None:
+            client.terminate()
+            try: client.wait(timeout=3)
+            except subprocess.TimeoutExpired: client.kill(); client.wait()
+        if obstruction.is_dir(): obstruction.rmdir()
+        try:
+            if (host.run / 'v2-journal.json').exists(): host.wait_journal('empty')
+        finally:
+            host.stop()
+
+
 def crash_group():
     # 13. The helper's process killed while holding eight windows; a new one on the
     # same runtime reads the journal, finds none of the recorded windows (they died
@@ -570,11 +603,11 @@ def crash_group():
     before = host.journal()
     assert before['state'] == 'holding' and len(before['windows']) == 8
     host.child.kill(); host.child.wait(); host.log.close(); c.close()
-    for name in ('helper.sock', 'v2.sock'):
-        (host.run / name).unlink()
+    (host.run / 'v2.sock').unlink()
     # As if it had died while staging a journal write: the leftover must not stop
     # the next instance from writing its own.
     (host.run / 'v2-journal.next').write_text('{"v":2,"state":"hol')
+    os.chmod(host.run / 'v2-journal.next', 0o600)
     second = Host('--windows', '8', run=host.run, nonce=host.nonce)
     after = second.journal()
     assert after['state'] == 'empty' and after['windows'] == [] and after['server_pid'] == second.child.pid and after['generation'] == before['generation'] + 1, after
@@ -587,21 +620,78 @@ def crash_group():
     results.append(dict(test='helper killed holding windows; journal read at next start', journal_before=dict(state=before['state'], windows=len(before['windows'])), journal_after=dict(state=after['state'], last_restore=after['last_restore'])))
     c.close(); second.stop()
 
-def no_v2_group():
-    # A helper whose protocol v2 did not start (here: a journal it cannot read)
-    # still serves v1, and the client library says which of the two it found.
-    run = Path(tempfile.mkdtemp(prefix='v2-', dir=BUILD)).resolve().relative_to(Path.cwd())
-    (run / 'v2-journal.json').write_text('not a journal')
-    host = Host('--windows', '8', run=run, ready='helper.sock')
-    s, probe1 = v1(host, 'probe'); s.close()
-    assert probe1['ok'] and not (run / 'v2.sock').exists() and 'protocol v2 not started' in host.text(), (probe1, host.text())
-    client = subprocess.run([str(BUILD / 'v2client'), 'hold', str(run), host.nonce, '0'], input='go\n', capture_output=True, text=True, timeout=10)
-    assert client.returncode == 1 and client.stderr.strip() == 'open failed: -5', (client.returncode, client.stderr)
-    # A usage error is a usage error, whatever flags came before it.
-    bad = subprocess.run([str(BUILD / 'host'), str((BUILD / 'payload-arm64.dylib').resolve()), str(run), host.nonce, '--windows', '8', '--v2-queue', 'bogus'], capture_output=True, text=True, timeout=10)
-    assert bad.returncode == 2 and bad.stderr.startswith('usage:'), (bad.returncode, bad.stderr)
-    results.append(dict(test='v2 not started is told apart from no helper', v1_probe_ok=probe1['ok'], dw_client_open=-5, host_with_invalid_v2_queue_exit=bad.returncode))
-    host.stop()
+def startup_refusal_group():
+    """A startup error can never leave a working fallback protocol or erase recovery."""
+    source = Host('--windows', '8')
+    c, _, who, wids, original = setup(source)
+    assert c.frame([record(who[0], half(original[0], 15), original[0])]) == [APPLIED]
+    template = source.journal()
+    c.restore_all(); c.close(); source.stop()
+    variants = []
+    for name, alter in [
+        ('unknown root field', lambda j: j.update(unknown=True)),
+        ('fractional generation', lambda j: j.update(generation=1.5)),
+        ('inconsistent root state', lambda j: j.update(state='empty')),
+        ('duplicate window identity', lambda j: j['windows'].append(dict(j['windows'][0]))),
+        ('fractional owner', lambda j: j['windows'][0].update(owner=1.5)),
+        ('boolean window identity', lambda j: j['windows'][0].update(wid=True)),
+        ('invalid alpha', lambda j: j['windows'][0].update(alpha=2.0)),
+        ('missing original alpha', lambda j: j['windows'][0].update(alpha=None, alpha_touched=True)),
+        ('invalid bounds', lambda j: j['windows'][0].update(bounds=[0, 0, -1, 200])),
+        ('unknown window field', lambda j: j['windows'][0].update(unknown=True)),
+        ('malformed restoration receipt', lambda j: j.update(last_restore={'reason':'old','results':[{}]})),
+        ('overflowed restoration status', lambda j: j.update(last_restore={'reason':'old','results':[dict(pid=j['windows'][0]['pid'], wid=j['windows'][0]['wid'], birth_sec=j['windows'][0]['birth_sec'], birth_usec=j['windows'][0]['birth_usec'], outcome='pending', set_status=2**64-1)]})),
+    ]:
+        journal = json.loads(json.dumps(template)); alter(journal)
+        variants.append((name, {'v2-journal.json': json.dumps(journal).encode(), 'v2-journal.next': b'partial stage'}))
+    variants.extend([
+        ('invalid committed journal', {'v2-journal.json': b'not a journal', 'v2-journal.next': b'partial stage'}),
+        ('unknown legacy recovery', {'recovery.json': b'unknown recovery', 'recovery.next': b'partial legacy stage'}),
+        ('dirty legacy recovery', {'recovery.json': b'{"v":1,"state":"pending"}'}),
+        ('clean legacy recovery retained', {'recovery.json': b'{"v":1,"restored":true}'}),
+        ('stale legacy socket retained', {'helper.sock': b'legacy socket marker'}),
+        ('stale v2 socket retained', {'v2.sock': b'v2 socket marker'}),
+    ])
+    for name, files in variants:
+        run = Path(tempfile.mkdtemp(prefix='v2-refuse-', dir=BUILD)).resolve().relative_to(Path.cwd())
+        os.chmod(run, 0o700)
+        for filename, content in files.items():
+            (run / filename).write_bytes(content); os.chmod(run / filename, 0o600)
+        child = subprocess.run([str(BUILD / 'host'), str((BUILD / 'payload-arm64.dylib').resolve()), str(run), secrets.token_hex(32), '--windows', '8'], capture_output=True, text=True, timeout=8)
+        assert child.returncode == 1 and 'READY ' not in child.stdout and 'helper fixture start failed:' in child.stderr, (name, child)
+        assert {p.name for p in run.iterdir()} == set(files), (name, list(run.iterdir()))
+        assert all((run / filename).read_bytes() == content for filename, content in files.items()), name
+        results.append(dict(test='sole-v2 startup refuses and preserves ' + name, exit=child.returncode, retained=sorted(files)))
+    run = Path(tempfile.mkdtemp(prefix='v2-badqueue-', dir=BUILD)).resolve().relative_to(Path.cwd())
+    bad = subprocess.run([str(BUILD / 'host'), str((BUILD / 'payload-arm64.dylib').resolve()), str(run), secrets.token_hex(32), '--windows', '8', '--v2-queue', 'bogus'], capture_output=True, text=True, timeout=8)
+    assert bad.returncode == 2 and bad.stderr.startswith('usage:'), bad
+    results.append(dict(test='invalid queue is a usage error before startup', exit=bad.returncode))
+
+
+def inspect_group():
+    """Read unheld originals and post-release geometry through the sole v2 path."""
+    host = Host('--windows', '8')
+    c, _, who, wids, original = setup(host)
+    try:
+        before = c.inspect(who[0])
+        assert before['status'] == APPLIED and before['owner'] > 0 and before['transform'] == transform(wids[0]) and before['screen_rect'] == original[0], before
+        for refused, expected in [(tuple([who[0][0]+1, *who[0][1:]]), SCOPE), ((who[0][0], who[0][1], who[0][2]-1, who[0][3]), IDENTITY_MISMATCH)]:
+            assert c.inspect(refused)['status'] == expected
+        assert c.probe()['table_count'] == 0 and not (host.run / 'v2-journal.json').exists()
+        target = half(original[0], 35)
+        assert c.frame([record(who[0], target, original[0])]) == [APPLIED]
+        held = c.inspect(who[0]); assert near(held['screen_rect'], target) and held['transform'] == transform(wids[0]), held
+        assert c.restore_all()['outcomes'] == [0]
+        assert c.probe()['table_count'] == 0
+        after = c.inspect(who[0]); assert after == before and after['transform'] == transform(wids[0]), (before, after)
+        generation = host.journal()['generation']; c.close()
+        command = [str(BUILD / 'v2client'), 'inspect', str(host.run), host.nonce, *map(str, who[0])]
+        reply = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=6, check=True)
+        assert json.loads(reply.stdout) == before, reply
+        assert host.journal()['generation'] == generation and [screen(w) for w in wids] == original
+        results.append(dict(test='read-only inspect before touch and after release, including C client', original=before, post_release=after, table_entries=0, inspection_journal_writes=0))
+    finally:
+        c.close(); host.stop()
 
 def main_queue_group():
     # 14. The same calls on the main queue, the switch the README describes.
@@ -639,7 +729,7 @@ def release_window_group():
         release = RECORD.pack(*who[0], *([0.0] * 6), 0.0, 2)
         malformed = RECORD.pack(*who[0], *([0.0] * 6), 0.0, 3)
         outside = RECORD.pack(os.getpid(), wids[0], 0, 0, *([0.0] * 6), 0.0, 2)
-        assert c.frame([malformed, outside]) == [11, SCOPE]
+        assert c.frame([malformed, outside]) == [10, SCOPE]
         assert [transform(w) for w in wids] == placed and [alpha(w) for w in wids] == alpha1
         assert c.frame([release]) == [APPLIED]
         assert transform(wids[0]) == matrices0[0] and alpha(wids[0]) == alpha0[0]
@@ -678,15 +768,34 @@ def main():
     # Ended from outside, the test still resumes and ends every host it started.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     try:
-        if sys.argv[1:] not in ([], ['--release-window'], ['--enrollment']):
-            raise SystemExit('usage: fixture_v2_test.py [--release-window | --enrollment]')
-        groups = (enrollment_group,) if sys.argv[1:] == ['--enrollment'] else (release_window_group,) if sys.argv[1:] else (frames_group, lease_group, bench_group, crash_group, no_v2_group, main_queue_group, allowlist_group, release_window_group, enrollment_group)
+        choices = {
+            '--release-window': (release_window_group,),
+            '--enrollment': (enrollment_group,),
+            '--inspect': (inspect_group,),
+            '--startup': (startup_refusal_group,),
+            '--client-restore': (client_restore_group,),
+            '--recovery': (crash_group, startup_refusal_group, inspect_group, main_queue_group, allowlist_group, release_window_group, enrollment_group),
+            '--client-and-recovery': (bench_group, client_restore_group, crash_group, startup_refusal_group, inspect_group, main_queue_group, allowlist_group, release_window_group, enrollment_group),
+        }
+        args = sys.argv[1:]
+        if args and (len(args) != 1 or args[0] not in choices):
+            raise SystemExit('usage: fixture_v2_test.py [--release-window | --enrollment | --inspect | --startup | --client-restore | --recovery | --client-and-recovery]')
+        groups = choices[args[0]] if args else (frames_group, lease_group, bench_group, client_restore_group, crash_group, startup_refusal_group, inspect_group, main_queue_group, allowlist_group, release_window_group, enrollment_group)
         for group in groups:
             group()
         evidence = dict(status='PASS', tests=results, scope='only the cooperative host\'s own windows; screen rectangles, alpha and journal observed from the test process; no Dock, no foreign window, no other user')
         print(json.dumps(evidence, indent=2))
         print(f'PASS: protocol v2, {len(results)} cases')
     finally:
+        # Close every controller first, including failed-case clients, so each
+        # still-running owned host can restore before its windows are removed.
+        for client in clients:
+            if client.poll() is None:
+                client.terminate()
+                try: client.wait(timeout=3)
+                except subprocess.TimeoutExpired: client.kill(); client.wait()
+            for pipe in (client.stdin, client.stdout, client.stderr):
+                if pipe is not None: pipe.close()
         # Every window touched belongs to a host started here; ending it removes them.
         for host in hosts:
             host.stop()

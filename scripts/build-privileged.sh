@@ -45,13 +45,8 @@ xcrun clang -arch arm64e -mmacosx-version-min=26.0 -std=gnu11 -Wall -Wextra -Wer
 if [ "$mode" = all ]; then
   xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror \
     native/privileged/host.m -framework AppKit -o "$out/host"
-  xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror \
-    native/privileged/client.m -framework Foundation -o "$out/client"
   xcrun clang -arch arm64 -mmacosx-version-min=26.0 -std=gnu11 -Wall -Wextra -Werror \
     native/privileged/v2client.c "$out/dwclient.o" -o "$out/v2client"
-  # Disposable spike fixture; production builds neither compile nor launch it.
-  xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror \
-    native/privileged/spike-fixture.m -framework AppKit -o "$out/spike-fixture"
 fi
 xcrun clang -arch arm64e -mmacosx-version-min=26.0 -Wall -Wextra \
   native/privileged/loader.m "$out/dwclient-arm64e.o" -framework AppKit -o "$out/loader-arm64e"
@@ -64,5 +59,5 @@ codesign --force --sign - "$out/loader-arm64e"
 if [ "$mode" = production ]; then
   printf '%s\n' 'Built production Dock payload, client libraries, read-only doctor and opt-in loader; payload and loader ad-hoc signed; no fixtures built, nothing injected.'
 else
-  printf '%s\n' 'Built helper, cooperative host, client, v2 client library and driver, spike fixture, read-only doctor and opt-in loader; payload and loader ad-hoc signed; nothing injected.'
+  printf '%s\n' 'Built helper, cooperative host, v2 client library and driver, read-only doctor and opt-in loader; payload and loader ad-hoc signed; nothing injected.'
 fi

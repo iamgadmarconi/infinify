@@ -11,6 +11,5 @@ esac
 
 ./scripts/build-privileged.sh
 [ "$live" = true ] || { echo 'LIVE NOT RUN: pass --live-owned-fixture to launch the disposable native fixture.'; exit 0; }
-# Protocol v1's cases first, unchanged, then protocol v2's on a host with several windows.
-python3 native/privileged/fixture_test.py
+# The sole protocol v2 server, on hosts containing only owned fixture windows.
 exec python3 native/privileged/fixture_v2_test.py

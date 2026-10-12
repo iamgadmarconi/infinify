@@ -9,7 +9,8 @@
 // stated bound, whatever the helper does: a frame is handed to a writer thread and
 // the call returns; the lease is kept by a heartbeat thread on a second connection.
 typedef struct dw_client dw_client;
-enum { DW_CLIENT_OK=0, DW_CLIENT_LOST=-1, DW_CLIENT_TIMEOUT=-2, DW_CLIENT_REFUSED=-3, DW_CLIENT_INVALID=-4, DW_CLIENT_NO_V2=-5 };
+enum { DW_CLIENT_OK=0, DW_CLIENT_LOST=-1, DW_CLIENT_TIMEOUT=-2, DW_CLIENT_REFUSED=-3, DW_CLIENT_INVALID=-4,
+       DW_CLIENT_UNDURABLE=-5 };
 enum { DW_LOST_EOF=1, DW_LOST_WRITE_TIMEOUT=2, DW_LOST_HEARTBEAT=3, DW_LOST_PROTOCOL=4 };
 struct dw_client_info { uint32_t lease_ms, max_records, caps, scope, queue; int32_t server_pid; };
 // submitted = dropped_local + written (+ at most one still waiting to be written);
@@ -29,10 +30,8 @@ struct dw_client_callbacks {
 };
 // Connects both connections and starts the threads. Waits at most timeout_ms,
 // retrying while another session holds the helper. DW_CLIENT_REFUSED: the helper
-// answered and said no (wrong nonce or version). DW_CLIENT_NO_V2: nothing answered
-// and the runtime has v1's helper.sock but no v2.sock, so a helper is there whose
-// protocol v2 did not start. DW_CLIENT_TIMEOUT: nothing answered, for any other
-// reason (no helper yet; or a v2.sock left by a dead one). DW_CLIENT_INVALID: bad
+// answered and said no (wrong nonce or version). DW_CLIENT_TIMEOUT: no v2 helper
+// answered (including a stale socket left by a dead one). DW_CLIENT_INVALID: bad
 // arguments, or memory or a thread could not be had. nonce64 is 64 hexadecimal
 // characters.
 int dw_client_open(const char *runtime, const char *nonce64, const struct dw_client_callbacks *callbacks,
@@ -47,10 +46,18 @@ int dw_client_probe(dw_client *client, uint32_t timeout_ms, void *reply, size_t 
 // Count is written only on success. This does not enroll or mutate any window.
 int dw_client_enrollment(dw_client *client, uint32_t timeout_ms, struct dw2_process *processes,
                          uint32_t capacity, uint32_t *count);
+// Read fresh geometry for this exact in-scope identity, without holding it.
+// Transport success can still carry a refused reply.status with zero geometry.
+int dw_client_inspect(dw_client *client, uint32_t timeout_ms, const struct dw2_identity *identity,
+                      struct dw2_inspect_reply *reply);
 // Asks the helper to put every window back. A frame submitted and not yet written
-// is dropped. On DW_CLIENT_TIMEOUT the request may still be carried out.
+// is dropped. On DW_CLIENT_TIMEOUT the request may still be carried out. The
+// journal_persisted output is required. A structurally valid reply with pending
+// restores and a persisted journal returns DW_CLIENT_OK; when the reply is valid
+// but persistence is false, DW_CLIENT_UNDURABLE is returned and all outputs
+// (including count, pending, results and journal_persisted) remain valid.
 int dw_client_restore_all(dw_client *client, uint32_t timeout_ms, struct dw2_restore_result *results,
-                          uint32_t capacity, uint32_t *count, uint32_t *pending);
+                          uint32_t capacity, uint32_t *count, uint32_t *pending, uint32_t *journal_persisted);
 void dw_client_stats(dw_client *client, struct dw_client_stats *stats);
 // Closes both connections, which makes the helper restore everything, and joins
 // the threads (bounded: each is woken by the shutdown).

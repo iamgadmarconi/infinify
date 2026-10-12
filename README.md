@@ -19,26 +19,25 @@ From `/Users/gad/Documents/code/personal/infinify`:
 open target/app/Infinify.app
 ```
 
-A normal run is the desktop: one canvas panel covers each display whole, on every Space, under the menu bar and the Dock, with no toolbar, no status line and no chooser. With Screen Recording and Accessibility access the canvas opens at once and every real application window on screen (a standard window or a dialog, not a popup or a helper window) joins it by itself; while either is missing one small window names it and offers its Allow button, and the canvas opens once both are there. Stage Manager has to be off as well: it keeps every window outside the current stage as a thumbnail in its strip, which is then all a canvas could show of it, blurred and still, and a click meant for the window lands on the thumbnail. The same small window says so and offers a button that opens Desktop & Dock; Infinify reads the setting and never changes it, and the canvas opens as soon as it is off. Switched on under a running canvas, it is named once on stderr. With `--manual` the chooser comes first and only the windows chosen there are added, and `--windowed` opens the canvas in one ordinary window instead. Neither the whole-display run nor the managed launch has been run on real windows: no test launch had Screen Recording access, and every launch made was `--windowed`. See [Desktop mode](native/desktop/README.md#desktop-mode) and [Managed windows](native/desktop/README.md#managed-windows). With no config file, DriftWM's default bindings apply under the default super chord (Control-Option): drag blank canvas or Control-Option-drag anywhere to pan; use the mouse wheel on blank canvas, Control-Option-wheel anywhere, or pinch to zoom; and Option-drag a window to move it in the world (add Shift to move its snapped cluster). A DriftWM-grammar config file or `--super` changes these; see [Configuration](native/desktop/README.md#configuration). Unmodified clicks and scrolling on a window reach its native application; that application retains keyboard focus. Quit with Control-Option-Escape, Control-Option-Command-Shift-Q or `Infinify msg action quit`: quitting closes the canvas panels and returns the native desktop.
+A normal run is the desktop: one canvas panel covers each display whole, on every Space, under the menu bar and the Dock, with no toolbar, no status line and no chooser. With Screen Recording and Accessibility access the canvas opens at once and every real application window on screen (a standard window or a dialog, not a popup or a helper window) joins it by itself; while either is missing one small window names it and offers its Allow button, and the canvas opens once both are there. Stage Manager has to be off as well: it keeps every window outside the current stage as a thumbnail in its strip, which is then all a canvas could show of it, blurred and still, and a click meant for the window lands on the thumbnail. The same small window says so and offers a button that opens Desktop & Dock; Infinify reads the setting and never changes it, and the canvas opens as soon as it is off. Switched on under a running canvas, it is named once on stderr. With `--manual` the chooser comes first and only the windows chosen there are added, and `--windowed` opens the canvas in one ordinary window instead. Owned-fixture capture and native geometry checks have run with Screen Recording access; broad third-party acceptance remains open. See [Desktop mode](native/desktop/README.md#desktop-mode) and [Managed windows](native/desktop/README.md#managed-windows). With no config file, DriftWM's default bindings apply under the default super key (Command): drag blank canvas or Command-drag anywhere to pan; use the mouse wheel on blank canvas, Command-scroll anywhere, or pinch to zoom; and Option-drag a window to move it in the world (add Shift to move its snapped cluster). A DriftWM-grammar config file or `--super` changes these; see [Configuration](native/desktop/README.md#configuration). Unmodified clicks and scrolling on a window reach its native application; that application retains keyboard focus. Quit with Control-Option-Escape, Control-Command-Shift-Q or `Infinify msg action quit`: quitting closes the canvas panels and returns the native desktop.
 
 Screen Recording access is needed for capture and Accessibility access for native input. The permission window explains missing access. The build and tests do not change privacy settings or SIP. The capture-based app does not require disabling SIP; its private input path still needs validation on each supported macOS release.
 
 Saved scenes retain world positions. Display cameras are saved too, but are restored on restart only with `[session] restore_camera = true`; with DriftWM's default (off) each display starts with its top-left corner on the world origin at zoom 1. On restart a managed launch returns running windows to their saved slots, matched by application and title, places the others as new windows, and drops the slots nothing matched unless `[session] restore_windows = true` keeps them as stand-ins; with `--manual`, saved windows appear as detached placeholders and are rebound through its chooser. Without Screen Recording access a normal run shows the permission window instead of the canvas, and a `--windowed` run shows the placeholders with no way to rebind them. Native resizing, popovers, context menus and richer pointer interactions are unfinished. See the [desktop app guide](native/desktop/README.md) for the disposable demo, exact controls, persistence and limitations.
 
-Window navigation is part of every normal launch: Control-Option-arrows jump to the
-nearest window, Control-Option-C centres the focused one, Option-Tab cycles windows
+Window navigation is part of every normal launch: Command-arrows jump to the
+nearest window, Command-C centres the focused one, Option-Tab cycles windows
 most recently focused first, and a click focuses the window it lands on. With
 Accessibility access the focused window's real window is activated and raised;
-`--no-native-focus` keeps focus logical, and `--experimental-native-navigation` is
-accepted and ignored. The actions were driven live through the IPC socket on detached
+`--no-native-focus` keeps focus logical. The actions were driven live through the IPC socket on detached
 placeholders. Native focus and click forwarding now also pass on disposable
 scoped fixture windows; physical hot keys and event delivery still need desktop
 validation. See
 [Window navigation and native focus](native/desktop/README.md#window-navigation-and-native-focus).
 
-DriftWM's sizing actions (Control-Option-M fits the focused window,
+DriftWM's sizing actions (Command-M fits the focused window,
 `grow-window`, `shrink-window`, `fill-window`, `Infinify msg resize W H`), a
-window rule's `size` and fullscreen (Control-Option-F) act on the real window in
+window rule's `size` and fullscreen (Command-F) act on the real window in
 every normal run: the size is asked through Accessibility and read back, and the
 canvas takes the size the application allowed. They have been run end to end on
 disposable fixture windows and an Electron window
@@ -59,15 +58,18 @@ native resize and rendering path remains unproved. See the
 The [cooperative native presentation backend](native/desktop/README.md#native-presentation-through-a-cooperative-helper)
 can now present real fixture windows with pan, zoom, focus, resize and recovery.
 Its scoped end-to-end test passed three times on macOS 27.2, including independent
-transform and alpha restoration checks. It accepts only its helper's own process;
-third-party native compositing remains unvalidated.
+transform and alpha restoration checks. Finite helper scopes remain available for owned fixtures. The explicit
+`--native-desktop-helper` mode and `scripts/start-native-desktop.sh` prepare
+whole-desktop admission through an authenticated Dock helper; the app does not
+inject one itself. Third-party native compositing and native clipping remain
+unvalidated, and the current host has not passed injection preflight.
 
 DriftWM is the session, not an app one launches, and a normal run of Infinify is meant the same way: installed, started at login, and there until you quit it. These four steps are for you to run; no script or agent here installs, signs with your identity or registers a login item, and none of the four has been run yet.
 
 1. **Install.** `INFINIFY_SIGN_IDENTITY="<your signing identity>" ./scripts/install-app.sh` builds the app, copies it to `~/Applications/Infinify.app` and signs the copy. `security find-identity -v -p codesigning` lists identities. Without the variable the copy is signed ad hoc, with a loud warning: macOS ties the two grants below to the signature, so an ad hoc copy loses them at every reinstall.
 2. **Grant access once.** `open ~/Applications/Infinify.app`. A small window names what is missing: click Allow screen recording… and Allow input…, switch Infinify on in the two System Settings panes they open, then click Relaunch (macOS gives Screen Recording only to a newly started app). The canvas opens over the whole display, under the menu bar and the Dock, and takes the windows that are open. Quit it again with Control-Option-Escape before the next step.
 3. **Turn the login item on.** `~/Applications/Infinify.app/Contents/MacOS/Infinify login-item on` starts Infinify now, at every login, and again after a crash; macOS may ask you to allow it under System Settings > General > Login Items & Extensions. `login-item status` reports it and `login-item off` removes it and ends the instance it started.
-4. **Quit** with Control-Option-Escape, Control-Option-Command-Shift-Q or `~/Applications/Infinify.app/Contents/MacOS/Infinify msg action quit`. The scene is saved, the panels close and the native desktop is back; a quit is not restarted. Infinify starts again at the next login, or at once with `launchctl kickstart gui/$(id -u)/com.marengox.infinify.agent`.
+4. **Quit** with Control-Option-Escape, Control-Command-Shift-Q or `~/Applications/Infinify.app/Contents/MacOS/Infinify msg action quit`. The scene is saved, the panels close and the native desktop is back; a quit is not restarted. Infinify starts again at the next login, or at once with `launchctl kickstart gui/$(id -u)/com.marengox.infinify.agent`.
 
 There are no buttons and no status line: keys, pointer gestures and `Infinify msg` do everything, and status notes go to stderr, which a run started at login does not show. Windows may sit under the menu bar and the Dock, which both stay. The [desktop app guide](native/desktop/README.md#desktop-mode) lists what else changes and the known limits, among them that a window whose capture macOS stops across sleep is not captured again by itself, and that nothing prevents a second instance (which is why step 2 ends with a quit).
 

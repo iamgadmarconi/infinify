@@ -5,7 +5,7 @@ mod transport;
 use anyhow::{Context, Result, bail, ensure};
 use driftwm_canvas::{Rect, Scene, WindowId};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::{
     path::Path,
     sync::{Arc, Mutex, mpsc},
@@ -32,17 +32,6 @@ pub struct Readback {
     pub screen_rect: [f64; 4],
     /// Actual untransformed native bounds, observed independently of screen rect.
     pub bounds: [f64; 4],
-}
-impl Readback {
-    fn parse(value: &Value) -> Result<Self> {
-        let state: Self =
-            serde_json::from_value(value.clone()).context("native readback unavailable")?;
-        ensure!(state.readback_ok, "native readback unavailable");
-        valid_matrix(state.matrix)?;
-        valid_rect(state.screen_rect)?;
-        valid_rect(state.bounds)?;
-        Ok(state)
-    }
 }
 /// A revision acknowledged only after native matrix AND screen-rectangle readback.
 #[derive(Clone, Debug, Serialize)]
@@ -74,7 +63,7 @@ pub struct Session {
 impl Session {
     /// Probe an already-running helper without enrollment or native mutation.
     pub fn probe(directory: &Path, nonce: String) -> Result<Value> {
-        Client::connect(directory, nonce)?.request("probe", json!({}))
+        Client::connect(directory, nonce)?.probe()
     }
     /// Enroll only the caller's explicit fresh identity. Server revalidates full
     /// process birth time, owner connection, window ID and UID before snapshotting.
@@ -98,12 +87,9 @@ impl Session {
             "invalid complete native identity"
         );
         let mut client = Client::connect(directory, nonce)?;
-        let enrollment = client.request("enroll", json!({"identity":identity}))?;
-        ensure!(
-            enrollment["identity"] == serde_json::to_value(&identity)?,
-            "helper enrollment identity mismatch"
-        );
-        let original = Readback::parse(&enrollment["readback"])?;
+        client.probe()?;
+        let original = client.inspect(&identity)?;
+        let heartbeat_identity = identity.clone();
         let connection = Arc::new(Mutex::new(Connection {
             client,
             failure: None,
@@ -118,8 +104,8 @@ impl Session {
                 let Ok(mut state) = shared.lock() else {
                     break;
                 };
-                let result = state.client.request("heartbeat", json!({})).and_then(|v| {
-                    let observed = Readback::parse(&v["readback"])?;
+                let result = state.client.heartbeat().and_then(|()| {
+                    let observed = state.client.inspect(&heartbeat_identity)?;
                     verify(&observed, state.expected.matrix, state.expected.screen_rect)?;
                     ensure!(
                         near(&observed.bounds, &state.expected.bounds, 1.0),
@@ -209,25 +195,27 @@ impl Session {
         }
         // Once a request starts native state may change even if its reply is lost.
         self.presented = None;
-        let result = connection
-            .client
-            .request(
-                "transform",
-                json!({"identity":self.identity,"matrix":matrix}),
-            )
-            .and_then(|response| {
-                ensure!(
-                    response["readback_matches_requested"] == true,
-                    "helper did not acknowledge matrix readback"
-                );
-                let actual = Readback::parse(&response["readback"])?;
-                verify(&actual, matrix, desired)?;
-                ensure!(
-                    near(&actual.bounds, &self.original.bounds, 1.0),
-                    "native bounds changed while applying camera"
-                );
-                Ok(actual)
-            });
+        let result = (|| {
+            // A native move or transform since selection/last acknowledgment
+            // invalidates this camera basis before we overwrite any state.
+            let before = connection.client.inspect(&self.identity)?;
+            verify(
+                &before,
+                connection.expected.matrix,
+                connection.expected.screen_rect,
+            )?;
+            ensure!(
+                near(&before.bounds, &connection.expected.bounds, 1.0),
+                "native bounds changed before applying camera"
+            );
+            let actual = connection.client.apply(&self.identity, matrix)?;
+            verify(&actual, matrix, desired)?;
+            ensure!(
+                near(&actual.bounds, &self.original.bounds, 1.0),
+                "native bounds changed while applying camera"
+            );
+            Ok(actual)
+        })();
         match result {
             Ok(actual) => {
                 connection.expected = actual.clone();
@@ -237,7 +225,9 @@ impl Session {
                     screen_rect: desired,
                     readback: actual,
                 });
-                Ok(self.presented.as_ref().expect("just assigned"))
+                self.presented
+                    .as_ref()
+                    .context("presentation was not retained")
             }
             Err(error) => {
                 connection.failure = Some(error.to_string());
@@ -260,9 +250,8 @@ impl Session {
         }
         let result = connection
             .client
-            .request("probe", json!({}))
-            .and_then(|response| {
-                let actual = Readback::parse(&response["readback"])?;
+            .inspect(&self.identity)
+            .and_then(|actual| {
                 verify(
                     &actual,
                     connection.expected.matrix,
@@ -301,13 +290,8 @@ impl Session {
             .map_err(|_| anyhow::anyhow!("connection lock poisoned"))?;
         let result = connection
             .client
-            .request("restore", json!({}))
-            .and_then(|response| {
-                ensure!(
-                    response["restored"] == true,
-                    "helper did not confirm restoration"
-                );
-                let actual = Readback::parse(&response["readback"])?;
+            .restore(&self.identity)
+            .and_then(|actual| {
                 verify(&actual, self.original.matrix, self.original.screen_rect)?;
                 ensure!(
                     near(&actual.bounds, &self.original.bounds, 1.0),
