@@ -28,17 +28,32 @@ The fixture requests 120 Hz redraws without proving 120 Hz source production.
 An unchanged unrelated level-24 surface overlaps the canvas's numeric bounds;
 that coverage alone does not establish optical occlusion.
 
-A separate six-second native idle interval used six static cooperative windows
-and a static background, with process/geometry reads only at the boundaries.
-Infinify used 3.99% of one core, 53.66 MiB ending RSS and 155.20 MiB charged
-physical footprint. The helper used 0.17%, 89.80 MiB RSS and 24.09 MiB footprint.
-Whole-desktop WindowServer CPU was 11.78% in the fixture-only interval and 2.33%
-in the managed interval; the former has overlapping originals, the latter a
-grid plus a canvas surface, so their difference is not attributable compositor
-overhead. RSS/footprint endpoints are not peaks or a complete GPU allocation
-account. All six exact identities, owners, bounds, screen rectangles, transforms
-and alpha values were restored, the journal was empty, and all children exited.
-Idle CPU and background drawables do not prove native-window presentation FPS.
+A matched native idle pair compared `f7bdef71` with `ad0dd2fa`, using the same
+helper and harness, six static cooperative windows and a static background.
+Each managed interval lasted six seconds, with counter/geometry reads only at
+its boundaries and no sampling profiler. App CPU fell from 3.98% to 2.49% of one
+core (37.5% in this pair). Ending RSS was 53.58/53.64 MiB and charged physical
+footprint was 155.03/155.05 MiB, so memory was essentially unchanged. The helper
+used 0.17% in both intervals. The candidate retains visual snapshots after
+proven clock-only ticks and skips redundant idle descriptions; it also removes
+the unused capture-ack protocol, so this pair does not isolate each change.
+The candidate executable SHA256 is
+`e969c8818c75054fc2f9514462dfd242544a3412adddf256accfc8d1f25fb871`;
+both runs use helper payload SHA256
+`b6a4aab128af43654f192a6fa7f29a2d3f4000b0dfb930f93949644bcf68330f`.
+
+Whole-desktop WindowServer CPU was 2.32/3.15% in the managed intervals and
+13.29/13.78% in their fixture-only baselines. The baseline has overlapping
+originals; the managed phase has a grid plus a canvas surface. These whole-host
+figures do not isolate compositor overhead. RSS/footprint endpoints are not
+peaks or a complete GPU allocation account. Both runs restored all six exact
+identities, owners, bounds, screen rectangles, transforms and alpha values,
+emptied their journals, quit the app normally and exited every owned child.
+The pair is recorded in
+`target/performance/20261012-window-scaling/idle-cache-comparison.json`, with
+frozen inputs in `before-idle-cache/` and `after-idle-cache/` and runtime evidence
+in `target/ipc/idle.vv59m3th` and `target/ipc/idle.cpheuq30`. Idle CPU and
+background drawables do not prove native-window presentation FPS.
 
 One opt-in fixture diagnostic reduced periodic status reporting from 50 to
 500 ms while keeping watchdog/commands, event reports and requested animation

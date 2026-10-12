@@ -148,8 +148,8 @@ lowering demanded quality, but one matched zoom sample improved presentation
 from 41.25 to 52.75 fps while its worst main-thread gap increased from 8.6 to
 63.1 ms. This was also a tradeoff, not stable 120 Hz.
 
-The latest signed `42d17f4` sample uses six 1700×1132-point captured windows and
-a 2056×1290-point Retina output. Actual canvas presentations were
+The latest matched capture sample, signed `42d17f4`, uses six 1700×1132-point
+windows and a 2056×1290-point Retina output. Actual canvas presentations were
 57.25/51/52/58/52 fps for rest/pan/zoom/window move/logical focus. Worst
 main-thread gaps were 2.6/2.0/10.9/2.5/2.5 ms, down from
 46.5/48.7/63.1/41.9/25.7 ms in the matching `0e47daa` run. Presentation p99 and
@@ -159,15 +159,20 @@ and wallpaper-query improvements plus correctness changes; one pair does not
 isolate their contributions. A separately labeled 500 ms fixture-reporting
 diagnostic, with the same app and redraw request, did not resolve the deficit.
 
-A six-second static native idle comparison read counters only at the boundaries.
-Infinify used 3.99% of one core, ending at 53.66 MiB RSS and 155.20 MiB charged
-physical footprint; its cooperative helper used 0.17%, 89.80 MiB RSS and
-24.09 MiB footprint. Whole-desktop WindowServer used 11.78% fixture-only versus
-2.33% managed, with different window layouts and an extra canvas surface, so
-this is not isolated compositor overhead. Exact six-window identity, owner,
-geometry, transform and alpha restoration and empty journal checks passed;
-all children exited. These idle and capture measurements do not establish
-native-window optical FPS or third-party compositor parity. Full scope, hashes
+A matched six-second static native idle pair compared `f7bdef71` with `ad0dd2fa`
+using identical helper/harness bytes, boundary-only reads and no sampling
+profiler. Infinify CPU fell from 3.98% to 2.49% of one core (37.5% in this pair),
+with essentially unchanged ending RSS (53.58/53.64 MiB) and charged physical
+footprint (155.03/155.05 MiB). The helper used 0.17% in both intervals. The new
+app skips redundant clock-only snapshot/idle-description work and also removes
+the unused capture-ack protocol; the comparison does not isolate their effects.
+Whole-desktop WindowServer used 2.32/3.15% managed versus 13.29/13.78%
+fixture-only, with different layouts and an extra canvas surface, so these
+figures are not isolated compositor overhead. Exact six-window identity, owner,
+geometry, transform and alpha restoration and empty journal checks passed in
+both runs; both apps quit normally and all owned children exited. The memory
+endpoints are not peaks or complete GPU allocations. These measurements do not
+establish native-window optical FPS or third-party compositor parity. Full scope, hashes
 and evidence locations are in the native README's
 [current development evidence](../../native/desktop/README.md#current-development-evidence-2026-10-12).
 
