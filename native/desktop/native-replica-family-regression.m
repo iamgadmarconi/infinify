@@ -87,7 +87,8 @@ static void advance(CFTimeInterval target) {
 }
 static NSDictionary *identity(uint32_t wid) { return @{@"pid":@123,@"birth_sec":@100,@"birth_usec":@20,@"wid":@(wid)}; }
 static NSDictionary *rect(CGRect bounds) { return @{@"origin":@{@"x":@(bounds.origin.x),@"y":@(bounds.origin.y)},@"size":@{@"width":@(bounds.size.width),@"height":@(bounds.size.height)}}; }
-static NSDictionary *root(void) { return @{@"window":@7,@"identity":identity(42),@"generation":@3,@"native_bounds":rect(CGRectMake(100,100,320,232)),@"density":@2,@"capture":@YES}; }
+static NSDictionary *site(CGRect screen,CGRect viewport,double margin) { return @{@"screen_rect":rect(screen),@"viewport":rect(viewport),@"pixel_margin":@(margin)}; }
+static NSDictionary *root(void) { return @{@"window":@7,@"identity":identity(42),@"generation":@3,@"native_bounds":rect(CGRectMake(100,100,320,232)),@"density":@2,@"capture":@YES,@"capture_sites":@[site(CGRectMake(100,100,320,232),CGRectMake(0,0,1920,1080),1)],@"capture_all":@NO}; }
 static CGRect childBounds(void) { return CGRectMake(106,106,66,20); }
 static NSDictionary *plan(uint32_t wid) { return @{@"identity":identity(wid),@"native_bounds":rect(childBounds())}; }
 static DWNativeReplicaFamilies *provider(void) {
@@ -97,7 +98,7 @@ static DWNativeReplicaFamilies *provider(void) {
 static DWReplicaMember *attemptFor(DWNativeReplicaFamilies *owner,NSNumber *logical,uint32_t wid,NSUInteger *starting) {
     DWReplicaRecovery *record=[owner admitRecovery:identity(wid) root:owner.roots[logical] bounds:childBounds() starting:starting];if(!record)return nil;
     DWReplicaMember *member=[DWReplicaMember new];member.owner=owner;member.root=owner.roots[logical];member.identity=identity(wid);
-    member.bounds=childBounds();member.rootBounds=familyRect(member.root[@"native_bounds"]);member.image=[DWCanvasAttachment new];member.image.key=[@(wid)stringValue];
+    member.bounds=childBounds();member.rootBounds=familyRect(member.root[@"native_bounds"]);member.lastVisible=now;member.image=[DWCanvasAttachment new];member.image.key=[@(wid)stringValue];
     member.stream=(SCStream *)[RecoveryStream new];record.attempt=member;[owner.coldAttempts addObject:member];
     owner.members[logical]=[(owner.members[logical]?:@[]) arrayByAddingObject:member];return member;
 }
@@ -240,6 +241,69 @@ int main(void) {@autoreleasepool {
     DWReplicaMember *replacement=attempt(owner,43,&starting);started(replacement);validImage(replacement);advance(now+2);
     check(atomic_load(&replacement->alive)&&replacement.image.buffer,@"old weak watchdog cannot retire same-binding replacement");
     [owner reset];check(!owner.recoveries.count&&!owner.roots.count&&!owner.members.count,@"reset withdraws all capture/recovery state");
+
+    // Visibility suppresses only capture. Native audit membership, immutable
+    // identity epochs, current order and negative recovery history stay intact.
+    NSMutableDictionary *demand=[root()mutableCopy];CGRect viewport=CGRectMake(0,0,400,400);
+    demand[@"capture_sites"]=@[site(CGRectMake(1000,1000,320,232),viewport,1)];
+    check(!familyIntersectsCapture(demand,childBounds()),@"a child proven beyond every actual view starts no stream");
+    demand[@"capture_sites"]=@[site(CGRectMake(1000,1000,320,232),viewport,1),site(CGRectMake(100,100,160,116),viewport,.5)];
+    check(familyIntersectsCapture(demand,childBounds()),@"a smaller independent second view retains its visible child");
+    demand[@"capture_sites"]=@[site(CGRectMake(-320,100,320,232),viewport,1)];
+    check(familyIntersectsCapture(demand,CGRectMake(421,106,10,10)),@"a family-only placement captures a child protruding from a wholly offscreen root");
+    demand[@"capture_sites"]=@[site(CGRectMake(100,100,160,464),viewport,.5)];
+    check(familyIntersectsCapture(demand,CGRectMake(600,106,100,20)),@"nonuniform root projection retains a partially visible child");
+    check(!familyIntersectsCapture(demand,CGRectMake(702,106,100,20)),@"nonuniform projection outside the padded viewport is suppressed");
+    demand[@"capture_sites"]=@[site(CGRectMake(394.75,100,320,232),viewport,1)];
+    check(familyIntersectsCapture(demand,childBounds()),@"a subpixel raster fringe beyond the nominal edge is retained");
+    demand[@"capture_sites"]=@[site(CGRectMake(396,100,320,232),viewport,1)];
+    check(!familyIntersectsCapture(demand,childBounds()),@"a proven gap beyond the raster margin is suppressed");
+    demand[@"capture_sites"]=@[];check(!familyIntersectsCapture(demand,childBounds()),@"an explicit empty view set requests no new capture");
+    demand[@"capture_all"]=@YES;check(familyIntersectsCapture(demand,childBounds()),@"geometry/opening animation conservatively retains the family");
+    demand[@"capture"]=@NO;check(!familyIntersectsCapture(demand,childBounds()),@"capture loss remains authoritative even during animation");
+    demand[@"capture"]=@YES;demand[@"capture_all"]=@NO;demand[@"capture_sites"]=@[@{@"screen_rect":NSNull.null}];
+    check(familyIntersectsCapture(demand,childBounds()),@"unknown projection cannot prove absence");
+    [demand removeObjectForKey:@"capture_sites"];check(familyIntersectsCapture(demand,childBounds()),@"missing required sites conservatively retain capture");
+    demand[@"capture_sites"]=@[];[demand removeObjectForKey:@"capture_all"];check(familyIntersectsCapture(demand,childBounds()),@"unknown animation state cannot prove absence");demand[@"capture_all"]=@NO;
+    demand[@"capture_sites"]=@[site(CGRectMake(1e308,1e308,1e308,1e308),viewport,1)];
+    check(familyIntersectsCapture(demand,childBounds()),@"overflow geometry cannot prove absence");
+
+    owner=provider();owner.rate=120;owner.requestPending=YES;owner.reading=YES;owner.nextRead=now+.5;starting=0;
+    one=attempt(owner,43,&starting);two=attempt(owner,44,&starting);two.bounds=CGRectMake(200,106,66,20);owner.recoveries[@7][@44].bounds=two.bounds;validImage(one);validImage(two);
+    RecoveryStream *invisibleStream=(RecoveryStream *)two.stream;
+    NSArray *allPlans=@[plan(43),@{@"identity":identity(44),@"native_bounds":rect(two.bounds)}];
+    NSDictionary *audited=@{@"window":@7,@"identity":root()[@"identity"],@"generation":@3,@"native_bounds":root()[@"native_bounds"],@"members":allPlans};owner.descriptions=@{@7:audited};
+    DWReplicaOrder *nativeOrder=[DWReplicaOrder new];nativeOrder.root=root();nativeOrder.rank=@2;nativeOrder.members=@[one,two];nativeOrder.ranks=@{@"43":@0,@"44":@1};
+    owner.ordering=@{@7:nativeOrder};owner.orderingEpoch=owner.epoch;owner.orderingObservation=1;
+    epoch=owner.epoch;NSUInteger observation=owner.requestSequence;CFTimeInterval nextRead=owner.nextRead;
+    NSDictionary *requested=owner.roots;demand=[root()mutableCopy];demand[@"capture_sites"]=@[site(CGRectMake(1000,1000,320,232),viewport,1)];
+    [owner describe:@[demand] rate:120];
+    check(owner.epoch==epoch&&owner.reading&&owner.requestPending&&owner.requestSequence==observation&&owner.nextRead==nextRead,@"camera demand leaves the in-flight audit and observation schedule intact");
+    check(familyCohortMatches(owner.roots,requested),@"a same-binding audit completion accepts changed viewport demand");
+    check([owner capturePlans:@[plan(45)] root:demand].count==0,@"a new off-view member is not admitted during existing children's grace");
+    check([owner capturePlans:allPlans root:demand].count==2,@"brief off-view movement preserves exact installed streams");
+    CFTimeInterval hiddenAt=now;advance(hiddenAt+1.99);[owner describe:@[demand] rate:120];
+    check(atomic_load(&one->alive)&&atomic_load(&two->alive),@"no stream churn just before the two-second grace ends");
+    NSMutableDictionary *oneSite=[demand mutableCopy];oneSite[@"capture_sites"]=@[site(CGRectMake(388,100,320,232),viewport,1)];
+    [owner describe:@[oneSite] rate:120];
+    advance(hiddenAt+2.01);[owner describe:@[oneSite] rate:120];
+    check(atomic_load(&one->alive)&&!atomic_load(&two->alive)&&invisibleStream.stopped==1,@"only the persistently invisible exact child stops");
+    check([owner.members[@7]isEqual:@[one]]&&[owner attachments:@7].count==1,@"capture pruning removes only the expired attachment");
+    check(owner.descriptions[@7]==audited&&[audited[@"members"]count]==2&&owner.recoveries[@7].count==2,@"full audit membership and recovery history survive capture pruning");
+    check(owner.orderingObservation==1&&[owner.ordering[@7].members isEqual:@[one]]&&[owner.ordering[@7].ranks isEqual:@{@"43":@0}],@"retained child keeps the audited native ordering subset");
+    check(owner.epoch==epoch&&owner.reading&&familyCohortMatches(owner.roots,requested),@"expired demand still cannot invalidate a pending native audit");
+    check([owner capturePlans:allPlans root:oneSite].count==1,@"late reconciliation uses the latest demanded subset, not the request's old sites");
+    owner.nextRead=now+1;[owner describe:@[root()] rate:120];
+    check(owner.nextRead==0&&owner.epoch==epoch&&owner.reading&&owner.requestPending,@"known child reentry wakes a fresh audit without invalidating the pending one");
+    check([owner capturePlans:allPlans root:root()].count==2,@"a returning visible child becomes eligible on the existing observation path");
+    owner.nextRead=now+1;nextRead=owner.nextRead;
+    NSMutableDictionary *visibleMotion=[root()mutableCopy];visibleMotion[@"capture_sites"]=@[site(CGRectMake(101,101,320,232),viewport,1)];
+    [owner describe:@[visibleMotion] rate:120];
+    check(owner.nextRead==nextRead&&owner.epoch==epoch&&owner.reading,@"ordinary motion with a still-visible missing member cannot repeatedly wake discovery");
+    DWReplicaRecovery *retainedRecovery=owner.recoveries[@7][@44];retainedRecovery.failures=1;retainedRecovery.notBefore=now+4;
+    [owner describe:@[demand] rate:120];owner.nextRead=now+1;[owner describe:@[root()] rate:120];
+    check(owner.nextRead==0&&owner.recoveries[@7][@44]==retainedRecovery&&retainedRecovery.failures==1&&retainedRecovery.notBefore==now+4,@"another visibility edge preserves exact failure history and backoff");
+    [owner reset];drain();
     check(notified>0&&!queued.count,@"mutations notified and all queued completions drained");
     printf("PASS: %lu family capture recovery checks (headless substituted lifecycle only)\n",(unsigned long)checks);return 0;
 }}

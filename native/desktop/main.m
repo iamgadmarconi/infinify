@@ -2612,8 +2612,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         else if(!self.configured)continue;
         else if([op isEqual:@"exec"]&&asString(e[@"command"]))[self exec:e];
         // send-cursor-to-output, an explicit user action: the point is in the coordinates of screen_bounds.
-        // Re-associating lifts the pause macOS puts on pointer movement after a warp.
-        else if([op isEqual:@"warp_pointer"]){NSDictionary *screen=asDict(e[@"screen"]);CGPoint to=jsonPoint(screen);if(asNumber(screen[@"x"])&&asNumber(screen[@"y"])&&isfinite(to.x)&&isfinite(to.y)){CGWarpMouseCursorPosition(to);CGAssociateMouseAndMouseCursorPosition(true);}}
+        // Position only: this shell does not own an application's mouse/cursor association.
+        else if([op isEqual:@"warp_pointer"]){NSDictionary *screen=asDict(e[@"screen"]);CGPoint to=jsonPoint(screen);if(asNumber(screen[@"x"])&&asNumber(screen[@"y"])&&isfinite(to.x)&&isfinite(to.y)){CGWarpMouseCursorPosition(to);}}
         // The selection is reported at once; the input-source notification reports it again.
         else if([op isEqual:@"switch_layout"]){NSString *error=DWSwitchLayout(e);if(error)[self flashStatus:error];[self reportLayout];}
         // Deferred: a reload replaces the hot keys, and this may be running inside one of their handlers.
@@ -4032,9 +4032,22 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
         BOOL draining=NO;for(LiveSource *source in self.sources.allValues)if(source.stream||source.replicaWanted){draining=YES;break;}
         if(!draining){[self.nativeFamilies reset];return;}
     }
+    NSMutableDictionary *outputs=[NSMutableDictionary dictionary],*captureSites=[NSMutableDictionary dictionary],*scales=[NSMutableDictionary dictionary];
+    for(NSDictionary *output in snapshot[@"outputs"])if(output[@"id"])outputs[output[@"id"]]=output;
+    for(DesktopView *view in self.views)for(NSNumber *output in view.outputs)scales[output]=@(view.window.backingScaleFactor);
     NSMutableSet<NSNumber *> *placed=[NSMutableSet set];NSMutableArray *pictures=[NSMutableArray array];
-    for(NSDictionary *p in snapshot[@"placements"])if(!self.native||[self.nativeViews replica:p[@"window"] output:p[@"output"]]){[placed addObject:p[@"window"]];[pictures addObject:p];}
-    NSMutableDictionary *scales=[NSMutableDictionary dictionary];for(DesktopView *view in self.views)for(NSNumber *output in view.outputs)scales[output]=@(view.window.backingScaleFactor);
+    for(NSDictionary *p in snapshot[@"placements"])if(!self.native||[self.nativeViews replica:p[@"window"] output:p[@"output"]]){
+        NSNumber *window=p[@"window"];[placed addObject:window];[pictures addObject:p];
+        if(!captureSites[window])captureSites[window]=[NSMutableArray array];
+        // The viewport is the output, not the root's clip: a child may extend
+        // into it from outside its root, including family-only placements.
+        NSDictionary *output=outputs[p[@"output"]];double scale=[scales[p[@"output"]]doubleValue],zoom=[p[@"pinned"]boolValue]?1:[output[@"zoom"]doubleValue];
+        // Surface origin/extent round before zoom, then both final corners
+        // round again. Include that error plus a physical pixel of fringe.
+        NSNumber *margin=scale>0&&isfinite(scale)&&zoom>0&&isfinite(zoom)?@((MAX(1,zoom)+1)/scale):nil;
+        [captureSites[window]addObject:@{@"screen_rect":p[@"screen_rect"]?:NSNull.null,@"viewport":output[@"screen_bounds"]?:NSNull.null,@"pixel_margin":margin?:NSNull.null}];
+    }
+    BOOL captureAll=self.compositor.hasFamilyGeometryTransitions;
     NSMutableDictionary *bindings=[NSMutableDictionary dictionary];for(NSDictionary *window in snapshot[@"windows"])if(asDict(window[@"source"]))bindings[window[@"window"]]=window[@"source"];
     CMTime interval=[self captureInterval];
     NSMutableArray *familyRoots=[NSMutableArray array];NSInteger familyRate=(NSInteger)llround(1/CMTimeGetSeconds(interval));
@@ -4057,7 +4070,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
         NSDictionary *binding=bindings[source.logical];
         if(self.native&&[placed containsObject:source.logical]&&boundIdentity(source.identity,binding[@"identity"])&&binding[@"generation"]){
             double density=running&&source.captureSize.width>0?source.captureSize.width/bounds.size.width:pixels.width/bounds.size.width;
-            [familyRoots addObject:@{@"window":source.logical,@"identity":source.identity,@"generation":binding[@"generation"],@"native_bounds":rectJSON(bounds),@"density":@(density)}];
+            [familyRoots addObject:@{@"window":source.logical,@"identity":source.identity,@"generation":binding[@"generation"],@"native_bounds":rectJSON(bounds),@"density":@(density),@"capture_sites":[captureSites[source.logical]copy]?:@[],@"capture_all":@(captureAll)}];
         }
         if(!running){[self startCapture:source size:pixels interval:interval];continue;}
         if(source.captureUpdating)continue;
@@ -4081,7 +4094,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
            ||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)source.router.bounds,&bounds)||CGRectIsEmpty(bounds)||CGRectIsInfinite(bounds))continue;
         CGSize pixels=[self capturePixels:source native:bounds.size placements:pictures scales:scales demandDensity:NULL];
         double density=pixels.width/bounds.size.width;
-        [familyRoots addObject:@{@"window":source.logical,@"identity":source.identity,@"generation":binding[@"generation"],@"native_bounds":rectJSON(bounds),@"density":@(density),@"capture":@([placed containsObject:source.logical])}];
+        [familyRoots addObject:@{@"window":source.logical,@"identity":source.identity,@"generation":binding[@"generation"],@"native_bounds":rectJSON(bounds),@"density":@(density),@"capture":@(source.replicaWanted),@"capture_sites":[captureSites[source.logical]copy]?:@[],@"capture_all":@(captureAll)}];
     }
     if(!self.nativeFamilies){__weak Desktop *weak=self;self.nativeFamilies=[[DWNativeReplicaFamilies alloc]initWithChanged:^(NSNumber *window){Desktop *d=weak;if(!d||d.cleaning||d.sessionInactive)return;
         if(!d.native&&d.overlayFamilyDescriptions!=d.nativeFamilies.descriptions){[d render];return;}
@@ -4379,7 +4392,11 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     [self.frameDriver invalidate];self.frameDriver=nil;self.frameFlying=NO;self.flying=NO;self.pointerWanted=NO;
     self.sessionInactive=YES;[self stopNativeTransferTimer];self.nativeOwnershipTransfer=nil;[self.canvasCursor reset];[self saveScene];
     [self.nativeFamilies reset];self.overlayFamilySnapshot=self.overlayFamilyBase=self.overlayFamilyDescriptions=nil;
-    if(self.native){self.captureRecoveryGeneration++;self.captureRecoveryReading=NO;[self.nativeFamilies reset];[self.nativeViews reset];for(LiveSource *source in self.sources.allValues){source.observationToken=++self.observationEpoch;[self forgetNativeFamily:source];source.replicaWanted=NO;[self stopCapture:source];source.window=nil;[source clearSample];}}
+    // Capture work stops with presentation in both backends. Retain overlay
+    // bindings/shareable windows so normal demand can resume them on return.
+    self.captureRecoveryGeneration++;self.captureRecoveryReading=NO;
+    for(LiveSource *source in self.sources.allValues){source.replicaWanted=NO;[self stopCapture:source];}
+    if(self.native){[self.nativeViews reset];for(LiveSource *source in self.sources.allValues){source.observationToken=++self.observationEpoch;[self forgetNativeFamily:source];source.window=nil;[source clearSample];}}
     self.nativeSessionEpoch++;
     if(self.nativeEndpoints.count){
         // Keep the input bridge's physical button-pair bookkeeping alive: a
@@ -4420,7 +4437,15 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     if(self.cleaning||!self.desktopUp)return;
     self.sessionInactive=NO;self.navigation.enabled=!self.native||!self.native.ended;self.lastObservation=0;[self resumeNative];
     for(LiveSource *source in self.sources.allValues)if(source.captureRecovering)source.captureRetryAt=CACurrentMediaTime();
-    if(![self.panelScreens isEqual:physicalScreens()]){[self screensChanged:nil];return;}[self refreshOutputUsableAreas];[self refreshMacWallpapers];
+    BOOL screensChanged=![self.panelScreens isEqual:physicalScreens()];
+    if(screensChanged)[self screensChanged:nil];
+    // Unmanaged fixture canvases do not have captureDemand. Resume their
+    // existing sources explicitly, using the current screens' capture rate.
+    if(!self.native&&!self.manager)for(LiveSource *source in self.sources.allValues)if(!source.stream&&!source.detached&&!source.synth&&!source.error&&!source.captureRecovering&&source.window){
+        CGSize pixels=source.captureSize;if(pixels.width<1||pixels.height<1)pixels=source.buffer;
+        [self startCapture:source size:pixels interval:[self captureInterval]];
+    }
+    if(screensChanged)return;[self refreshOutputUsableAreas];[self refreshMacWallpapers];
     if(self.windowed){[self render];return;}
     for(NSUInteger i=0;i<self.panels.count&&i<self.views.count;i++){NSPanel *panel=self.panels[i];NSRect frame=topRect(self.views[i].globalBounds);if(!NSEqualRects(panel.frame,frame))[panel setFrame:frame display:YES];[panel orderFrontRegardless];}
     [self render];

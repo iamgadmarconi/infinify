@@ -232,6 +232,11 @@ Normal capture mode now observes each managed root's native descendants and
 captures positively parented popups/sheets as separate child images. They share
 the root's canvas transform, including a child visible beyond an offscreen root,
 and clicks use the rendered child order with fresh identity/ancestry checks.
+Child streams are requested only where the child can intersect a display view.
+An existing stream has a two-second absence grace, and geometry/opening
+animations retain captures conservatively. Full family descriptions and native
+ordering remain available for uncaptured children; camera changes do not
+invalidate an in-flight native membership observation.
 Child clicks preserve the application's native focus instead of raising its
 parent through Accessibility. Captured mouse drags retain the original child
 until all admitted buttons are released. Unparented application windows and
@@ -3484,6 +3489,10 @@ the compositor's frame description. What the snapshot carries is
   placement returns is not blank until its stream delivers again. A window
   that has never delivered a frame is the chrome background colour inside its
   border and shadow.
+  Leaving the desktop session stops root and child captures in both backends.
+  Overlay mode retains its bindings and current pictures; returning restarts
+  managed sources through visibility demand. Unmanaged canvases resume their
+  existing healthy sources directly, and failed sources use capture recovery.
 - **Frame pacing.** The scene is gone through once per refresh of the
   display, by the [frame timer](#rendering) below, and at no other moment
   while that timer runs. Every stream hands its frames to the main queue,
@@ -5088,8 +5097,12 @@ world so that it
 appears on the target display where window navigation would park it there
 (`focus_placement`), at that display's current zoom; its size and the cameras do
 not change, and the native window is not touched. The pointer is moved with
-`CGWarpMouseCursorPosition` to the centre of the target display's view. With one
-display both do nothing, as upstream.
+`CGWarpMouseCursorPosition` to the centre of the target display's usable area.
+An absent active display falls back to the first registered display before
+fullscreen restoration and momentum cancellation. No displays or no neighbour
+produces no warp. This
+action does not request a mouse/cursor association change; that state belongs
+to the requesting application. With one display both do nothing, as upstream.
 
 **Keyboard layouts.** DriftWM's layouts are xkb groups from its config. Here
 they are the keyboard input sources enabled in System Settings › Keyboard ›

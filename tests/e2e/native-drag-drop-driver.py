@@ -121,7 +121,6 @@ cg.CGEventPost.argtypes = [C.c_uint32, C.c_void_p]
 cg.CGEventPostToPid.argtypes = [C.c_int, C.c_void_p]
 cg.CGWarpMouseCursorPosition.argtypes = [Point]
 cg.CGWarpMouseCursorPosition.restype = C.c_int
-cg.CGAssociateMouseAndMouseCursorPosition.argtypes = [C.c_bool]
 cg.CGPreflightPostEventAccess.restype = C.c_bool
 cg.CGPreflightScreenCaptureAccess.restype = C.c_bool
 cf.CFArrayGetCount.argtypes = [C.c_void_p]
@@ -609,8 +608,8 @@ def restore_cursor(evidence):
         return
     value = json.loads(path.read_text())
     point = Point(*value['original'])
+    # Restore position only; this fixture never owns mouse/cursor association.
     cg.CGWarpMouseCursorPosition(point)
-    cg.CGAssociateMouseAndMouseCursorPosition(True)
 
 
 def event_at(source, kind, point):

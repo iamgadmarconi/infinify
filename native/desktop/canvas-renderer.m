@@ -699,6 +699,12 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
     state.geometryNeedsSettledDraw|=!state.geometryAnimating;
 }
 - (BOOL)hasGeometryTransitions {for(DWCanvasOutput *state in self.states.allValues)if(state.geometryAnimating||state.geometryNeedsSettledDraw)return YES;return NO;}
+- (BOOL)hasFamilyGeometryTransitions {
+    if(self.hasGeometryTransitions)return YES;
+    for(DWCanvasOutput *state in self.states.allValues)for(IFCompositorElement *root in state.elements.allValues)
+        if(root.kind==IFCompositorElementKindWindow&&root.lifecycle==IFCompositorLifecycleOpening&&![state.frame lifecycleFinishedForElement:root])return YES;
+    return NO;
+}
 - (void)finishGeometryTransitions {
     BOOL changed=NO;
     for(DWCanvasOutput *state in self.states.allValues){

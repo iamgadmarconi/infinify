@@ -3,7 +3,13 @@
 #import "canvas-renderer.h"
 
 // Capture only freshly parented members of roots already bound by the shell.
-// Each root is {window,identity,generation,native_bounds,density,capture?}.
+// Each root is {window,identity,generation,native_bounds,density,capture?,
+// capture_sites,capture_all}. Required sites are {screen_rect,viewport,pixel_margin}
+// in the same global screen points. Margin covers pre/post-zoom raster rounding.
+// Children need a positive conservatively padded projected viewport
+// intersection on some site, with two seconds of grace for installed streams.
+// capture_all conservatively retains children during family geometry animation.
+// Mutable demand never changes the audited binding epoch or full description.
 // capture:NO observes ancestry/geometry without starting child streams. Native
 // identities and bounds stay here; the renderer receives normalized images.
 // Main thread only. Observation and frame identity checks run on serial workers.

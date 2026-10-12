@@ -164,6 +164,9 @@ typedef struct { NSUInteger requests,flushes,drawn,presented;double flushSeconds
 // The shell suppresses hover while these run and finishes them before pointer
 // interaction, so ordinary hit/input always maps through the endpoint geometry.
 @property (readonly) BOOL hasGeometryTransitions;
+// Live children may move outside nominal placement bounds during an unfinished
+// root opening too. Closing families are baked images, not live captures.
+@property (readonly) BOOL hasFamilyGeometryTransitions;
 // Installs the current observed endpoints, updates whole-family geometry and
 // attempts a synchronous flush. If a drawable is unavailable, the property stays
 // YES until the endpoint is drawn; callers must defer input in that case. This
