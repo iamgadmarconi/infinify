@@ -107,6 +107,9 @@ static BOOL v2EntryCurrent(DW2Entry *entry) {
 // its window instance is absent/reused. Transient lookup failures or a changed
 // admission scope retain the obligation for a later authorized retry.
 enum { DW2_INSTANCE_CURRENT, DW2_INSTANCE_GONE, DW2_INSTANCE_UNCERTAIN };
+static NSString *v2RestoreIdentityName(int value) {
+    return value==DW2_INSTANCE_CURRENT ? @"current" : value==DW2_INSTANCE_GONE ? @"gone" : @"uncertain";
+}
 static int v2RestoreIdentity(const struct dw2_identity *recorded,int recordedOwner) {
     int owner=0;struct dw2_identity current={0};uid_t uid=0;
     if(v2Resolve(recorded->wid,&owner,&current,&uid)) {
@@ -180,25 +183,47 @@ static void v2Restore(NSString *reason,BOOL retry,NSMutableData *results,struct 
         DW2Entry *e=v2Table[wid];
         if(retry && e->state!=DW2_RESTORING)continue;
         struct dw2_restore_result r={.id=e->who,.outcome=DW2_PENDING,.set_status=-1};
+        BOOL transformSet=NO,transformRead=NO,transformMatches=NO,alphaChecked=NO,alphaCurrent=NO,alphaSet=NO,alphaRead=NO;
+        int transformSetStatus=0,transformGetStatus=0,alphaSetStatus=0,alphaGetStatus=0,finalIdentity=-1;
+        CGAffineTransform actual=CGAffineTransformIdentity;float alpha=-1;
         int observed=v2RestoreIdentity(&e->who,e->owner);
         if(observed==DW2_INSTANCE_GONE){r.outcome=DW2_GONE;r.set_status=0;}
         else if(observed==DW2_INSTANCE_CURRENT) {
-            CGAffineTransform actual=CGAffineTransformIdentity;
-            r.set_status=setTransform(mainConnection(),e->who.wid,e->transform);
-            BOOL ok=r.set_status==0 && getTransform(mainConnection(),e->who.wid,&actual)==0 && v2SameTransform(actual,e->transform);
+            transformSet=YES;r.set_status=transformSetStatus=setTransform(mainConnection(),e->who.wid,e->transform);
+            BOOL ok=r.set_status==0 && (transformRead=YES,transformGetStatus=getTransform(mainConnection(),e->who.wid,&actual))==0
+                && (transformMatches=v2SameTransform(actual,e->transform));
             if(e->alphaTouched) {
-                float alpha=-1;int status=v2EntryCurrent(e)?setAlpha(mainConnection(),e->who.wid,e->alpha):-1;
+                alphaChecked=YES;alphaCurrent=v2EntryCurrent(e);
+                int status=alphaCurrent ? (alphaSet=YES,alphaSetStatus=setAlpha(mainConnection(),e->who.wid,e->alpha)) : -1;
                 if(status && !r.set_status)r.set_status=status;
-                if(status || getAlpha(mainConnection(),e->who.wid,&alpha) || alpha!=e->alpha)ok=NO;
+                if(status || (alphaRead=YES,alphaGetStatus=getAlpha(mainConnection(),e->who.wid,&alpha)) || alpha!=e->alpha)ok=NO;
             }
-            r.outcome=ok && v2RestoreIdentity(&e->who,e->owner)==DW2_INSTANCE_CURRENT ? DW2_RESTORED : DW2_PENDING;
+            r.outcome=ok && (finalIdentity=v2RestoreIdentity(&e->who,e->owner))==DW2_INSTANCE_CURRENT ? DW2_RESTORED : DW2_PENDING;
         }
         if(r.outcome==DW2_PENDING){e->state=DW2_RESTORING;pending++;}
         else [v2Table removeObjectForKey:wid];
         count++;
         [results appendBytes:&r length:sizeof(r)];
-        [report addObject:@{@"pid":@(r.id.pid),@"birth_sec":@(r.id.birth_sec),@"birth_usec":@(r.id.birth_usec),@"wid":@(r.id.wid),
-            @"outcome":r.outcome==DW2_RESTORED ? @"restored" : r.outcome==DW2_GONE ? @"gone" : @"pending",@"set_status":@(r.set_status)}];
+        NSMutableDictionary *receipt=[@{@"pid":@(r.id.pid),@"birth_sec":@(r.id.birth_sec),@"birth_usec":@(r.id.birth_usec),@"wid":@(r.id.wid),
+            @"outcome":r.outcome==DW2_RESTORED ? @"restored" : r.outcome==DW2_GONE ? @"gone" : @"pending",@"set_status":@(r.set_status)} mutableCopy];
+        if(r.outcome==DW2_PENDING) {
+            // Record only calls already made above, including short-circuited
+            // checks. Null statuses mean not called, never success. This is
+            // explanatory journal/log metadata, not protocol or restore state.
+            receipt[@"diagnostic"]=@{@"initial_identity":v2RestoreIdentityName(observed),
+                @"transform_set_status":transformSet ? @(transformSetStatus) : (id)NSNull.null,
+                @"transform_get_status":transformRead ? @(transformGetStatus) : (id)NSNull.null,
+                @"saved_transform":matrix(e->transform),
+                @"actual_transform":transformRead && !transformGetStatus && finiteMatrix(actual) ? matrix(actual) : (id)NSNull.null,
+                @"transform_matches":transformRead && !transformGetStatus ? @(transformMatches) : (id)NSNull.null,
+                @"alpha":e->alphaTouched ? @{@"identity_current":alphaChecked ? @(alphaCurrent) : (id)NSNull.null,
+                    @"set_status":alphaSet ? @(alphaSetStatus) : (id)NSNull.null,
+                    @"get_status":alphaRead ? @(alphaGetStatus) : (id)NSNull.null,
+                    @"saved":e->hasAlpha ? @(e->alpha) : (id)NSNull.null,
+                    @"actual":alphaRead && !alphaGetStatus && isfinite(alpha) ? @(alpha) : (id)NSNull.null} : (id)NSNull.null,
+                @"final_identity":finalIdentity>=0 ? v2RestoreIdentityName(finalIdentity) : (id)NSNull.null};
+        }
+        [report addObject:receipt];
     }
     BOOL saved=YES;
     if(count || v2JournalStale) {
@@ -593,7 +618,11 @@ static BOOL v2LastRestoreValid(id value) {
         || ![value[@"results"]isKindOfClass:NSArray.class] || [value[@"results"]count]>DW2_MAX_TABLE)return NO;
     NSMutableSet *windows=[NSMutableSet set];
     for(NSDictionary *r in value[@"results"]) {
-        if(!v2Keys(r,@[@"pid",@"birth_sec",@"birth_usec",@"wid",@"outcome",@"set_status"])
+        if(![r isKindOfClass:NSDictionary.class])return NO;
+        // Diagnostics never authorize writes and cannot make valid originals
+        // unrecoverable. Keep validating the original restoration receipt only.
+        NSMutableDictionary *fields=[r mutableCopy];[fields removeObjectForKey:@"diagnostic"];
+        if(!v2Keys(fields,@[@"pid",@"birth_sec",@"birth_usec",@"wid",@"outcome",@"set_status"])
             || !v2Integer(r[@"pid"],1,INT_MAX) || !v2Integer(r[@"birth_sec"],1,UINT64_MAX) || !v2Integer(r[@"birth_usec"],0,999999)
             || !v2Integer(r[@"wid"],1,UINT32_MAX) || !isNumber(r[@"set_status"]) || CFNumberIsFloatType((__bridge CFNumberRef)r[@"set_status"])
             || [r[@"set_status"]compare:@(INT_MIN)]==NSOrderedAscending || [r[@"set_status"]compare:@(INT_MAX)]==NSOrderedDescending
