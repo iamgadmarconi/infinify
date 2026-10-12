@@ -4549,8 +4549,12 @@ them to a Mac keyboard and the shell registers what it reports.
 the complete default table.
 
 With no explicit background `type`, `path` or `texture`, each display inherits
-its macOS wallpaper still, scaling, clipping and fill color. Image decoding and
-upload happen away from the main thread and are cached across camera frames.
+its macOS wallpaper still, scaling, clipping and fill color. File metadata, image
+decoding and upload happen away from the main thread. Output rendering, exports
+and completed image loads reuse the cached observation; only host refreshes or
+changed configuration/display resolution query the Mac again. Those AppKit
+queries remain on the main thread, as required by the
+[desktop-image API](https://developer.apple.com/documentation/appkit/nsworkspace/desktopimageurl(for:)).
 Set the following in the config to enable or disable pan/zoom parallax (default
 `true`):
 

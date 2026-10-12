@@ -855,6 +855,7 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 @property NSTimer *wallpaperTimer;
 @property id wallpaperSpaceObserver;
 @property uint64_t wallpaperEpoch;
+@property uint64_t wallpaperRefreshGeneration;
 
 @property NSMutableArray<NSPanel *> *panels;
 @property NSMutableArray<DesktopView *> *views;
@@ -3231,41 +3232,57 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     CGRect bounds=jsonRect(description[@"screen_bounds"]);NSScreen *chosen=nil;CGFloat largest=0;
     for(NSScreen *screen in NSScreen.screens){CGRect overlap=CGRectIntersection(bounds,topRect(screen.frame));CGFloat area=CGRectIsNull(overlap)?0:overlap.size.width*overlap.size.height;if(area>largest){largest=area;chosen=screen;}}
     NSNumber *display=asNumber(chosen.deviceDescription[@"NSScreenNumber"]);if(!display)return base;
+    CGSize pixels=CGSizeMake(round(chosen.frame.size.width*chosen.backingScaleFactor),round(chosen.frame.size.height*chosen.backingScaleFactor));
+    NSArray *pixelKey=@[@(pixels.width),@(pixels.height)];
+    if(!self.macWallpapers)self.macWallpapers=[NSMutableDictionary dictionary];NSMutableDictionary *prior=self.macWallpapers[display];
+    // Rendering, exports and image-load completion reuse the last observation.
+    // Only a host refresh, changed config or changed display raster queries
+    // NSWorkspace. Repeated refreshes of the same display/config coalesce while
+    // its decoder is pending; a newer refresh stays due after publication.
+    BOOL sameBase=prior[@"base"]==base&&[prior[@"pixels"]isEqual:pixelKey];
+    if(sameBase&&([prior[@"checking"]boolValue]||[prior[@"refresh"]unsignedLongLongValue]==self.wallpaperRefreshGeneration))return prior[@"program"]?:base;
+    // AppKit requires these desktop-image queries on the main thread. File
+    // metadata, missing-source cache lookup and texture decoding stay off it.
     NSWorkspace *workspace=NSWorkspace.sharedWorkspace;NSURL *url=[workspace desktopImageURLForScreen:chosen];
     NSDictionary *options=[workspace desktopImageOptionsForScreen:chosen]?:@{};
     NSNumber *scaling=asNumber(options[NSWorkspaceDesktopImageScalingKey])?:@(NSImageScaleProportionallyUpOrDown),*clipping=asNumber(options[NSWorkspaceDesktopImageAllowClippingKey])?:@NO;
     NSColor *color=[options[NSWorkspaceDesktopImageFillColorKey]isKindOfClass:NSColor.class]?options[NSWorkspaceDesktopImageFillColorKey]:NSColor.blackColor;
     color=[color colorUsingColorSpace:NSColorSpace.sRGBColorSpace]?:NSColor.blackColor;NSArray *fill=@[@(color.redComponent),@(color.greenComponent),@(color.blueComponent),@1];
-    id modified=nil,size=nil;if(url.isFileURL){NSURL *file=[NSURL fileURLWithPath:url.path];[file getResourceValue:&modified forKey:NSURLContentModificationDateKey error:nil];[file getResourceValue:&size forKey:NSURLFileSizeKey error:nil];}
-    CGSize pixels=CGSizeMake(round(chosen.frame.size.width*chosen.backingScaleFactor),round(chosen.frame.size.height*chosen.backingScaleFactor));
-    NSDictionary *signature=@{@"url":url.absoluteString?:@"",@"scaling":scaling,@"clipping":clipping,@"fill":fill,@"modified":modified?:NSNull.null,@"bytes":size?:NSNull.null,
-        @"pixels":@[@(pixels.width),@(pixels.height)],@"retry":modified?@0:@((uint64_t)(CACurrentMediaTime()/60))};
-    if(!self.macWallpapers)self.macWallpapers=[NSMutableDictionary dictionary];NSMutableDictionary *record=self.macWallpapers[display];
-    if(record[@"base"]==base&&[record[@"signature"]isEqual:signature])return record[@"program"]?:base;
-    IFBackgroundProgram *previous=[asDict(record[@"signature"])[@"url"]isEqual:signature[@"url"]]?record[@"program"]:nil;
+    NSDictionary *desktop=@{@"url":url.absoluteString?:@"",@"scaling":scaling,@"clipping":clipping,@"fill":fill,@"pixels":pixelKey};
+    NSDictionary *priorSignature=prior[@"signature"];
+    IFBackgroundProgram *previous=[asDict(prior[@"desktop"])[@"url"]isEqual:desktop[@"url"]]?prior[@"program"]:nil;
     if(previous.errorText||!previous.config.inheritedWallpaper)previous=nil;
-    record=[@{@"base":base,@"signature":signature,@"program":previous?:base}mutableCopy];self.macWallpapers[display]=record;
-    if(!url.isFileURL||!url.path.length){fprintf(stderr,"background: macOS exposes no readable still wallpaper for display %s; using canvas default\n",display.stringValue.UTF8String);return record[@"program"];}
+    NSMutableDictionary *record=[@{@"base":base,@"desktop":desktop,@"pixels":pixelKey,@"refresh":@(self.wallpaperRefreshGeneration),@"checking":@YES,@"program":previous?:base}mutableCopy];self.macWallpapers[display]=record;
     IFBackgroundConfig *config=[base.config copy];config.type=IFBackgroundTypeWallpaper;config.path=url.path;config.inheritedWallpaper=YES;
     config.wallpaperScaling=scaling.integerValue;config.wallpaperClipping=clipping.boolValue;config.wallpaperFillColor=fill;
     if(!self.wallpaperWorker)self.wallpaperWorker=dispatch_queue_create("org.infinify.wallpaper",dispatch_queue_attr_make_with_autorelease_frequency(DISPATCH_QUEUE_SERIAL,DISPATCH_AUTORELEASE_FREQUENCY_WORK_ITEM));
     id<MTLDevice> device=base.device;uint64_t epoch=self.wallpaperEpoch;__weak Desktop *weak=self;
     dispatch_async(self.wallpaperWorker,^{
-        // A removed source can still be the active desktop image. Resolve only
-        // its exact path-hashed, display-sized macOS cache rendition off main.
-        if(access(config.path.fileSystemRepresentation,R_OK)!=0){NSURL *cached=DWMacCachedWallpaper(url,pixels);if(cached)config.path=cached.path;}
-        IFBackgroundProgram *loaded=[IFBackgroundProgram programWithConfig:config device:device];
+        id modified=nil,size=nil;if(url.isFileURL){NSURL *file=[NSURL fileURLWithPath:url.path];[file getResourceValue:&modified forKey:NSURLContentModificationDateKey error:nil];[file getResourceValue:&size forKey:NSURLFileSizeKey error:nil];}
+        NSMutableDictionary *signature=[desktop mutableCopy];signature[@"modified"]=modified?:NSNull.null;signature[@"bytes"]=size?:NSNull.null;signature[@"retry"]=modified?@0:@((uint64_t)(CACurrentMediaTime()/60));
+        BOOL unchanged=sameBase&&[priorSignature isEqual:signature],readable=url.isFileURL&&url.path.length;
+        IFBackgroundProgram *loaded=nil;
+        if(!unchanged&&readable){
+            // A removed source can still be the active desktop image. Resolve
+            // only its exact path-hashed, display-sized macOS cache rendition.
+            if(access(config.path.fileSystemRepresentation,R_OK)!=0){NSURL *cached=DWMacCachedWallpaper(url,pixels);if(cached)config.path=cached.path;}
+            loaded=[IFBackgroundProgram programWithConfig:config device:device];
+        }
+        NSDictionary *completedSignature=signature.copy;
         dispatch_async(dispatch_get_main_queue(),^{Desktop *d=weak;if(!d||d.cleaning||d.wallpaperEpoch!=epoch||d.macWallpapers[display]!=record)return;
+            record[@"signature"]=completedSignature;record[@"checking"]=@NO;
             // Failed inherited sources stay on the previous wallpaper or grid;
             // a missing macOS file must not become a permanent canvas error bar.
-            if(loaded.errorText)fprintf(stderr,"background: macOS wallpaper unavailable: %s\n",loaded.errorText.UTF8String);
-            else record[@"program"]=loaded;
+            if(!unchanged&&!readable)fprintf(stderr,"background: macOS exposes no readable still wallpaper for display %s; using canvas default\n",display.stringValue.UTF8String);
+            else if(loaded.errorText)fprintf(stderr,"background: macOS wallpaper unavailable: %s\n",loaded.errorText.UTF8String);
+            else if(loaded)record[@"program"]=loaded;
             [d.compositor refreshBackgrounds];});
     });
     return record[@"program"];
 }
 - (void)refreshMacWallpapers {
     if(!self.compositor.inheritsMacBackground||self.cleaning||self.sessionInactive)return;
+    self.wallpaperRefreshGeneration++;
     NSMutableSet *alive=[NSMutableSet set];for(NSScreen *screen in NSScreen.screens){NSNumber *display=asNumber(screen.deviceDescription[@"NSScreenNumber"]);if(display)[alive addObject:display];}
     for(NSNumber *display in self.macWallpapers.allKeys)if(![alive containsObject:display])[self.macWallpapers removeObjectForKey:display];
     [self.compositor refreshBackgrounds];
