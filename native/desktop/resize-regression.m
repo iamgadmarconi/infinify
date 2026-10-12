@@ -53,7 +53,7 @@ static void scenario(NSString *edge,NSString *outcome,BOOL cancel,BOOL timeout,B
     NSDictionary *sourceState=snap(c)[@"windows"][0][@"source"];
     [co invalidate:@1];
     CFArrayRef update=CMSampleBufferGetSampleAttachmentsArray(s,YES);CFDictionarySetValue((CFMutableDictionaryRef)CFArrayGetValueAtIndex(update,0),(__bridge CFStringRef)SCStreamFrameInfoDisplayTime,(__bridge CFNumberRef)@201);
-    check(!call(c,@{@"op":@"native_resize_capture_ready",@"window":@1,@"identity":identity(),@"generation":sourceState[@"generation"],@"observation_revision":sourceState[@"observation_revision"],@"buffer":@{@"width":@480,@"height":@360}}),@"stale capture ack rejected");
+    check(!call(c,@{@"op":@"native_resize_capture_ready",@"window":@1,@"identity":identity(),@"generation":sourceState[@"generation"],@"observation_revision":sourceState[@"observation_revision"],@"buffer":@{@"width":@480,@"height":@360},@"content_rect":rect(0,0,480,360)}),@"stale capture ack rejected");
     check([co accept:s window:@1 stream:stream install:^BOOL(CMSampleBufferRef x){(void)x;return YES;}],@"new token restores capture");
     CFDictionarySetValue((CFMutableDictionaryRef)CFArrayGetValueAtIndex(update,0),(__bridge CFStringRef)SCStreamFrameInfoDisplayTime,(__bridge CFNumberRef)@202);
     driver.family=NO;check(![co accept:s window:@1 stream:stream install:^BOOL(CMSampleBufferRef x){(void)x;return YES;}],@"family expansion invalidates");driver.family=YES;

@@ -214,7 +214,7 @@ fn settle(h: &mut Host) {
 /// The shell started with `--experimental-native-resize` says so once.
 fn capable(mut h: Host) -> Host {
     assert_eq!(
-        h.ok(json!({"op":"native_resize_capability","enabled":true})),
+        h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":false})),
         json!({})
     );
     h
@@ -247,7 +247,7 @@ fn without_the_capability_every_sizing_request_answers_as_it_did_before() {
     for explicit in [false, true] {
         if explicit {
             assert_eq!(
-                h.ok(json!({"op":"native_resize_capability","enabled":false})),
+                h.ok(json!({"op":"native_resize_capability","enabled":false,"readback":false})),
                 json!({})
             );
         }
@@ -314,15 +314,15 @@ fn without_the_capability_every_sizing_request_answers_as_it_did_before() {
         };
         assert_eq!(
             key("fill-window"),
-            r#"{"action":"fill-window","character":"g","chord":"⌃⌥G","combo":"mod+g","implemented":false,"key_code":5,"modifiers":{"command":false,"control":true,"option":true,"shift":false},"passable":true,"repeat":false}"#
+            r#"{"action":"fill-window","character":"g","chord":"⌘G","combo":"mod+g","implemented":false,"key_code":5,"modifiers":{"command":true,"control":false,"option":false,"shift":false},"passable":true,"repeat":false}"#
         );
         assert_eq!(
             key("fit-window"),
-            r#"{"action":"fit-window","character":"m","chord":"⌃⌥M","combo":"mod+m","implemented":false,"key_code":46,"modifiers":{"command":false,"control":true,"option":true,"shift":false},"passable":true,"repeat":false}"#
+            r#"{"action":"fit-window","character":"m","chord":"⌘M","combo":"mod+m","implemented":false,"key_code":46,"modifiers":{"command":true,"control":false,"option":false,"shift":false},"passable":true,"repeat":false}"#
         );
         assert_eq!(
             key("fit-window-snapped"),
-            r#"{"action":"fit-window-snapped","character":"m","chord":"⌃⌥⇧M","combo":"mod+shift+m","implemented":false,"key_code":46,"modifiers":{"command":false,"control":true,"option":true,"shift":true},"passable":true,"repeat":false}"#
+            r#"{"action":"fit-window-snapped","character":"m","chord":"⇧⌘M","combo":"mod+shift+m","implemented":false,"key_code":46,"modifiers":{"command":true,"control":false,"option":false,"shift":true},"passable":true,"repeat":false}"#
         );
         // A trackpad gesture bound to fit-window fires into the same refusal.
         h.ok(json!({"op":"gesture_begin","kind":"pinch","fingers":2,"modifiers":{"control":false,"option":true,"shift":false,"command":false},"context":"window","output":1,"pointer":{"x":ORIGIN.0+300.0,"y":ORIGIN.1+250.0},"doubletap":false,"time_ms":1000}));
@@ -341,7 +341,7 @@ fn without_the_capability_every_sizing_request_answers_as_it_did_before() {
     }
     // The capability is a real boolean: an Objective-C boxed comparison is not.
     assert_eq!(
-        h.call(json!({"op":"native_resize_capability","enabled":1}))["ok"],
+        h.call(json!({"op":"native_resize_capability","enabled":1,"readback":false}))["ok"],
         false
     );
 }

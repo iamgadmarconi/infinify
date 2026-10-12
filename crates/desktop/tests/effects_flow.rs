@@ -216,7 +216,10 @@ fn the_effects_block_is_cores_parsed_table_and_a_change_spends_a_revision() {
     open(&mut h);
     h.configure(&scratch, "[navigation]\npan_step = 123\n");
     assert_eq!(h.render()["effects"], block(&defaults));
-    assert_eq!(h.revision(), 0);
+    // The first Mac config activates inherited wallpaper/parallax and therefore
+    // changes render policy even though this effects table stays at its default.
+    assert_eq!(h.render()["background"]["inherit_macos"], true);
+    assert_eq!(h.revision(), 1);
 
     // A reload that sets every key: the block is the file's table, and the
     // reload spends a revision as every accepted one does.
@@ -225,7 +228,7 @@ fn the_effects_block_is_cores_parsed_table_and_a_change_spends_a_revision() {
     let table = json!({"blur_radius":4,"blur_strength":2.5,"animate_blur_fps":60,"animation_speed":0.25,"animation_scale":0.8});
     assert_eq!(h.render()["effects"], table);
     assert_eq!(block(&Config::from_toml(written).unwrap().effects), table);
-    assert_eq!(h.revision(), 1);
+    assert_eq!(h.revision(), 2);
     // One key changed, and the edges upstream's ranges include: a speed of 1
     // is instant, a scale of 1 fades without scaling, 0 turns the refresh off.
     let edges = "[effects]\nblur_radius = 0\nblur_strength = 0.0\nanimate_blur_fps = 0\nanimation_speed = 1.0\nanimation_scale = 1.0\n";
@@ -234,7 +237,7 @@ fn the_effects_block_is_cores_parsed_table_and_a_change_spends_a_revision() {
         h.render()["effects"],
         json!({"blur_radius":0,"blur_strength":0.0,"animate_blur_fps":0,"animation_speed":1.0,"animation_scale":1.0})
     );
-    assert_eq!(h.revision(), 2);
+    assert_eq!(h.revision(), 3);
 
     // Values outside upstream's ranges are the parser's to mend, and it says
     // so: a negative strength is 0, the refresh rate is capped at 144 without
@@ -252,7 +255,7 @@ fn the_effects_block_is_cores_parsed_table_and_a_change_spends_a_revision() {
     let table = json!({"blur_radius":9,"blur_strength":0.0,"animate_blur_fps":144,"animation_speed":0.5,"animation_scale":1.0});
     assert_eq!(h.render()["effects"], table);
     assert_eq!(block(&config.effects), table);
-    assert_eq!(h.revision(), 3);
+    assert_eq!(h.revision(), 4);
     // Not a number is no speed and no scale either: the defaults.
     let reply = h.load_config(
         &scratch,
@@ -260,7 +263,7 @@ fn the_effects_block_is_cores_parsed_table_and_a_change_spends_a_revision() {
     );
     assert_eq!(reply["warnings"].as_array().unwrap().len(), 2, "{reply}");
     assert_eq!(h.render()["effects"], block(&defaults));
-    assert_eq!(h.revision(), 4);
+    assert_eq!(h.revision(), 5);
     // The key upstream retired is accepted and warned about.
     let reply = h.load_config(
         &scratch,
@@ -268,9 +271,9 @@ fn the_effects_block_is_cores_parsed_table_and_a_change_spends_a_revision() {
     );
     assert_eq!(reply["warnings"].as_array().unwrap().len(), 1, "{reply}");
     assert_eq!(h.render()["effects"]["blur_radius"], 3);
-    assert_eq!(h.revision(), 5);
-    h.configure(&scratch, written);
     assert_eq!(h.revision(), 6);
+    h.configure(&scratch, written);
+    assert_eq!(h.revision(), 7);
 
     // A value of the wrong type and a key upstream does not have are parse
     // failures: the file is refused whole and the table in force stays.
@@ -294,8 +297,8 @@ fn the_effects_block_is_cores_parsed_table_and_a_change_spends_a_revision() {
     );
     assert_eq!(h.revision(), before + 1);
 
-    // A launch file whose only drawn table is [effects] spends the first
-    // revision; one that leaves it at the defaults spends none.
+    // Both launch files activate Mac background policy and spend one revision,
+    // whether the effects table changes or stays at its defaults.
     let mut launched = Host::new();
     launched.configure(&scratch, "[effects]\nanimation_speed = 1.0\n");
     assert_eq!(launched.render()["effects"]["animation_speed"], 1.0);
@@ -303,7 +306,7 @@ fn the_effects_block_is_cores_parsed_table_and_a_change_spends_a_revision() {
     let mut plain = Host::new();
     plain.configure(&scratch, "[effects]\nblur_radius = 2\n");
     assert_eq!(plain.render()["effects"], block(&defaults));
-    assert_eq!(plain.revision(), 0);
+    assert_eq!(plain.revision(), 1);
 }
 
 #[test]
@@ -382,13 +385,14 @@ fn the_config_error_is_the_error_bars_message_and_a_change_spends_a_revision() {
     let reload = json!({"op":"load_config","path":path});
     let mut h = Host::new();
     open(&mut h);
-    // No file is the defaults by choice, and no error.
+    // No file is the defaults by choice, and no error. The first load
+    // activates the Mac wallpaper policy and spends one render revision.
     assert_eq!(h.errors(), json!([]));
     assert_eq!(h.ok(reload.clone())["exists"], false);
-    assert_eq!((h.errors(), h.revision()), (json!([]), 0));
+    assert_eq!((h.errors(), h.revision()), (json!([]), 1));
     let good = "focus_follows_mouse = true\n[effects]\nblur_radius = 7\n";
     h.configure(&scratch, good);
-    assert_eq!((h.errors(), h.revision()), (json!([]), 1));
+    assert_eq!((h.errors(), h.revision()), (json!([]), 2));
 
     // A file that does not parse: its message is upstream's, the config in
     // force is the last good one, and the bar has something new to show.
@@ -397,7 +401,7 @@ fn the_config_error_is_the_error_bars_message_and_a_change_spends_a_revision() {
     let message = reply["errors"][0].as_str().unwrap().to_owned();
     assert!(message.starts_with("config error: "), "{message}");
     assert_eq!(reply["errors"], json!([message]));
-    assert_eq!((h.errors(), h.revision()), (json!([message]), 2));
+    assert_eq!((h.errors(), h.revision()), (json!([message]), 3));
     assert_eq!(h.render()["effects"]["blur_radius"], 7);
     // The reply is the one every load gives, the key pointer policy added
     // included (POINTER.md): the refused file's message is all it holds of
@@ -409,7 +413,7 @@ fn the_config_error_is_the_error_bars_message_and_a_change_spends_a_revision() {
     // The same failure again changes nothing, as upstream redraws nothing
     // for an unchanged message.
     assert_eq!(h.ok(reload.clone())["errors"], json!([message]));
-    assert_eq!((h.errors(), h.revision()), (json!([message]), 2));
+    assert_eq!((h.errors(), h.revision()), (json!([message]), 3));
     // Another failure replaces the message: one source, one line.
     std::fs::write(&path, "[effects]\nblur_radius = \"wide\"\n").unwrap();
     let other = h.ok(reload.clone())["errors"][0]
@@ -417,7 +421,7 @@ fn the_config_error_is_the_error_bars_message_and_a_change_spends_a_revision() {
         .unwrap()
         .to_owned();
     assert_ne!(other, message);
-    assert_eq!((h.errors(), h.revision()), (json!([other]), 3));
+    assert_eq!((h.errors(), h.revision()), (json!([other]), 4));
     // The file gone after one was accepted is upstream's read failure.
     std::fs::remove_file(&path).unwrap();
     let gone = h.ok(reload.clone())["errors"][0]
@@ -425,7 +429,7 @@ fn the_config_error_is_the_error_bars_message_and_a_change_spends_a_revision() {
         .unwrap()
         .to_owned();
     assert!(gone.starts_with("config: failed to read "), "{gone}");
-    assert_eq!((h.errors(), h.revision()), (json!([gone]), 4));
+    assert_eq!((h.errors(), h.revision()), (json!([gone]), 5));
     assert_eq!(h.render()["effects"]["blur_radius"], 7);
 
     // The message is not the scene's: a save holds none of it, and a scene
@@ -436,12 +440,12 @@ fn the_config_error_is_the_error_bars_message_and_a_change_spends_a_revision() {
     assert!(!saved.contains("failed to read"), "{saved}");
     assert!(!saved.contains("errors"), "{saved}");
     h.ok(json!({"op":"load","path":scene}));
-    assert_eq!((h.errors(), h.revision()), (json!([gone]), 4));
+    assert_eq!((h.errors(), h.revision()), (json!([gone]), 5));
 
     // A clean reload clears it, for the one revision an accepted reload
     // spends anyway.
     h.configure(&scratch, good);
-    assert_eq!((h.errors(), h.revision()), (json!([]), 5));
+    assert_eq!((h.errors(), h.revision()), (json!([]), 6));
 
     // A file that loads with warnings is accepted, and the bar shows them as
     // upstream sums them up: the first, and how many more.
@@ -451,7 +455,7 @@ fn the_config_error_is_the_error_bars_message_and_a_change_spends_a_revision() {
     assert_eq!(warnings.len(), 1);
     assert_eq!(reply["warnings"], json!(warnings));
     assert_eq!(reply["errors"], json!([]));
-    assert_eq!((h.errors(), h.revision()), (json!([warnings[0]]), 6));
+    assert_eq!((h.errors(), h.revision()), (json!([warnings[0]]), 7));
     let three =
         "[navigation]\ncamera_speed = 0\n[effects]\nblur_strength = -1.0\nanimation_scale = 2.0\n";
     let reply = h.load_config(&scratch, three);
@@ -459,16 +463,16 @@ fn the_config_error_is_the_error_bars_message_and_a_change_spends_a_revision() {
     assert_eq!(warnings.len(), 3);
     assert_eq!(reply["warnings"], json!(warnings));
     let summary = "config: effects.animation_scale 2 above maximum 1, using 1 (+2 more)";
-    assert_eq!((h.errors(), h.revision()), (json!([summary]), 7));
+    assert_eq!((h.errors(), h.revision()), (json!([summary]), 8));
     // Which warning stands for the rest is the least in byte order, not the
     // parser's first: here its third.
     assert_eq!(warnings[2], summary.trim_end_matches(" (+2 more)"));
     // A failure after it keeps the warned config and replaces the message.
     std::fs::write(&path, "[effects\n").unwrap();
     h.ok(reload.clone());
-    assert_eq!((h.errors(), h.revision()), (json!([message]), 8));
+    assert_eq!((h.errors(), h.revision()), (json!([message]), 9));
     h.configure(&scratch, good);
-    assert_eq!((h.errors(), h.revision()), (json!([]), 9));
+    assert_eq!((h.errors(), h.revision()), (json!([]), 10));
 
     // At launch the same messages: a refused file and a file with a warning
     // each spend the first revision for the bar, though the drawn tables are
@@ -718,7 +722,7 @@ fn a_size_that_is_owed_neither_adds_nor_loses_a_lifecycle_event() {
     );
     h.ok(json!({"op":"adoption_complete"}));
     assert_eq!(
-        h.ok(json!({"op":"native_resize_capability","enabled":true})),
+        h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":false})),
         json!({})
     );
     let appear = |h: &mut Host, wid: u64| {

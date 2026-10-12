@@ -243,7 +243,7 @@ fn capture_ack_gates_placements_and_input_and_legacy_observe_cannot_bypass() {
     assert!(h.snap()["placements"][0]["buffer_crop"].is_null());
     let hit = json!({"op":"input","output":1,"screen":{"x":120.,"y":120.},"identity":identity()});
     h.rejects(hit.clone());
-    let mut ack = json!({"op":"native_resize_capture_ready","window":1,"identity":identity(),"generation":t["generation"],"observation_revision":0,"buffer":{"width":460,"height":300}});
+    let mut ack = json!({"op":"native_resize_capture_ready","window":1,"identity":identity(),"generation":t["generation"],"observation_revision":0,"buffer":{"width":460,"height":300},"content_rect":rect(0.,0.,460.,300.)});
     h.rejects(ack.clone());
     ack["observation_revision"] = json!(1);
     h.ok(ack);
@@ -268,7 +268,7 @@ fn unobserved_timeout_stays_uncertain_after_read_and_requires_ended_lifetime() {
         json!({"op":"forget","window":1}),
         json!({"op":"remove_source","window":1,"identity":identity(),"keep_placeholder":true}),
         json!({"op":"native_resize_to","transaction":t["transaction"],"screen":{"x":20.,"y":30.}}),
-        json!({"op":"native_resize_capture_ready","window":1,"identity":identity(),"generation":t["generation"],"observation_revision":1,"buffer":{"width":380,"height":300}}),
+        json!({"op":"native_resize_capture_ready","window":1,"identity":identity(),"generation":t["generation"],"observation_revision":1,"buffer":{"width":380,"height":300},"content_rect":rect(0.,0.,380.,300.)}),
     ] {
         h.rejects(c);
     }
@@ -555,12 +555,8 @@ fn adapter_outcome_flags_are_validated_atomically_for_reads_and_setters() {
     }
 }
 
-fn capture_ack(revision: u64, content: Option<Value>) -> Value {
-    let mut command = json!({"op":"native_resize_capture_ready","window":1,"identity":identity(),"generation":1,"observation_revision":revision,"buffer":{"width":400,"height":300}});
-    if let Some(content) = content {
-        command["content_rect"] = content;
-    }
-    command
+fn capture_ack(revision: u64, content: Value) -> Value {
+    json!({"op":"native_resize_capture_ready","window":1,"identity":identity(),"generation":1,"observation_revision":revision,"buffer":{"width":400,"height":300},"content_rect":content})
 }
 fn invalidate_capture(h: &mut Host) -> u64 {
     h.ok(json!({"op":"invalidate_native_capture","window":1,"identity":identity(),"generation":1}))
@@ -580,7 +576,7 @@ fn padded_capture_maps_clipped_pixels_without_changing_native_coordinates() {
     h.ok(json!({"op":"register_output","stable_id":"one","screen_bounds":rect(0.,0.,250.,200.)}));
     let world_before = world(&mut h);
     let crop = rect(10.5, 20.25, 300.5, 201.75);
-    h.ok(capture_ack(0, Some(crop.clone())));
+    h.ok(capture_ack(0, crop.clone()));
     let snapshot = h.snap();
     assert_eq!(snapshot["windows"][0]["source"]["content_rect"], crop);
     assert_eq!(
@@ -592,7 +588,7 @@ fn padded_capture_maps_clipped_pixels_without_changing_native_coordinates() {
     assert_eq!(hit["local"], json!({"x":50.,"y":75.}));
     assert_eq!(hit["native_screen"], json!({"x":60.,"y":95.}));
     assert_eq!(world(&mut h), world_before);
-    h.ok(capture_ack(0, None));
+    h.ok(capture_ack(0, rect(0., 0., 400., 300.)));
     assert_eq!(
         h.snap()["windows"][0]["source"]["content_rect"],
         rect(0., 0., 400., 300.)
@@ -601,6 +597,18 @@ fn padded_capture_maps_clipped_pixels_without_changing_native_coordinates() {
         h.ok(capture_input())["hit"]["buffer_local"],
         json!({"x":100.,"y":150.})
     );
+}
+#[test]
+fn capture_and_capability_commands_require_explicit_current_fields() {
+    let mut h = setup();
+    let mut missing = capture_ack(0, rect(0., 0., 400., 300.));
+    missing.as_object_mut().unwrap().remove("content_rect");
+    h.rejects(missing);
+    h.rejects(capture_ack(0, Value::Null));
+    h.rejects(json!({"op":"native_resize_capability","enabled":true}));
+    h.rejects(json!({"op":"native_resize_capability","enabled":true,"readback":null}));
+    h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":true}));
+    h.ok(capture_ack(0, rect(0., 0., 400., 300.)));
 }
 #[test]
 fn capture_content_validation_rejects_invalid_and_out_of_buffer_rectangles_atomically() {
@@ -616,19 +624,19 @@ fn capture_content_validation_rejects_invalid_and_out_of_buffer_rectangles_atomi
         json!({"origin":{"x":"NaN","y":0},"size":{"width":10,"height":10}}),
         json!({"origin":{"x":null,"y":0},"size":{"width":10,"height":10}}),
     ] {
-        h.rejects(capture_ack(0, Some(crop)));
+        h.rejects(capture_ack(0, crop));
     }
-    let mut bad_buffer = capture_ack(0, Some(rect(0., 0., 10., 10.)));
+    let mut bad_buffer = capture_ack(0, rect(0., 0., 10., 10.));
     bad_buffer["buffer"]["width"] = json!(0);
     h.rejects(bad_buffer);
-    h.ok(capture_ack(0, Some(rect(0.25, 0.5, 399.75, 299.5))));
+    h.ok(capture_ack(0, rect(0.25, 0.5, 399.75, 299.5)));
 }
 #[test]
 fn invalidation_fences_old_capture_ack_without_moving_geometry() {
     let mut h = setup();
-    h.ok(capture_ack(0, Some(rect(10., 10., 380., 280.))));
+    h.ok(capture_ack(0, rect(10., 10., 380., 280.)));
     let before = h.snap();
-    let old = capture_ack(0, None);
+    let old = capture_ack(0, rect(0., 0., 400., 300.));
     assert_eq!(invalidate_capture(&mut h), 1);
     assert_eq!(invalidate_capture(&mut h), 2);
     let invalidated = h.snap();
@@ -649,8 +657,8 @@ fn invalidation_fences_old_capture_ack_without_moving_geometry() {
     assert!(invalidated["placements"][0]["buffer_crop"].is_null());
     h.rejects(capture_input());
     h.rejects(old);
-    h.rejects(capture_ack(1, Some(rect(10., 10., 380., 280.))));
-    h.ok(capture_ack(2, Some(rect(10., 10., 380., 280.))));
+    h.rejects(capture_ack(1, rect(10., 10., 380., 280.)));
+    h.ok(capture_ack(2, rect(10., 10., 380., 280.)));
     assert_eq!(h.snap()["placements"][0]["presentation_settled"], true);
     h.ok(capture_input());
 }
@@ -659,7 +667,10 @@ fn capture_binding_generation_and_owner_must_match_after_rebind() {
     let mut h = setup();
     let invalidation =
         json!({"op":"invalidate_native_capture","window":1,"identity":identity(),"generation":1});
-    for mut command in [capture_ack(0, None), invalidation.clone()] {
+    for mut command in [
+        capture_ack(0, rect(0., 0., 400., 300.)),
+        invalidation.clone(),
+    ] {
         command["identity"]["owner"] = json!(900);
         h.rejects(command);
     }
@@ -670,11 +681,11 @@ fn capture_binding_generation_and_owner_must_match_after_rebind() {
         rect(0., 0., 400., 300.)
     );
     h.rejects(invalidation.clone());
-    h.rejects(capture_ack(0, None));
+    h.rejects(capture_ack(0, rect(0., 0., 400., 300.)));
     let mut current = invalidation;
     current["generation"] = json!(2);
     assert_eq!(h.ok(current)["observation_revision"], 1);
-    let mut ack = capture_ack(1, Some(rect(20., 20., 360., 260.)));
+    let mut ack = capture_ack(1, rect(20., 20., 360., 260.));
     ack["generation"] = json!(2);
     h.ok(ack);
 }
@@ -682,7 +693,7 @@ fn capture_binding_generation_and_owner_must_match_after_rebind() {
 fn legacy_observe_preserves_crop_but_changed_capture_metadata_requires_ack() {
     let mut h = setup();
     let crop = rect(10.5, 20.25, 300.5, 201.75);
-    h.ok(capture_ack(0, Some(crop.clone())));
+    h.ok(capture_ack(0, crop.clone()));
     h.ok(observe_capture(rect(10., 20., 200., 150.), 400, 300));
     assert_eq!(h.snap()["windows"][0]["source"]["content_rect"], crop);
     h.ok(observe_capture(rect(30., 40., 200., 150.), 400, 300));
@@ -698,16 +709,16 @@ fn legacy_observe_preserves_crop_but_changed_capture_metadata_requires_ack() {
         rect(0., 0., 800., 600.)
     );
     h.rejects(capture_input());
-    h.rejects(capture_ack(0, Some(crop)));
+    h.rejects(capture_ack(0, crop));
     h.ok(observe_capture(rect(30., 40., 200., 150.), 800, 600));
     h.rejects(capture_input());
-    let mut ack = capture_ack(1, None);
+    let mut ack = capture_ack(1, rect(0., 0., 800., 600.));
     ack["buffer"] = json!({"width":800,"height":600});
     h.ok(ack);
     h.ok(observe_capture(rect(30., 40., 400., 300.), 800, 600));
     assert_eq!(h.snap()["windows"][0]["source"]["observation_revision"], 2);
     h.rejects(capture_input());
-    let mut ack = capture_ack(2, Some(rect(20., 20., 760., 560.)));
+    let mut ack = capture_ack(2, rect(20., 20., 760., 560.));
     ack["buffer"] = json!({"width":800,"height":600});
     h.ok(ack);
     assert_eq!(
@@ -736,19 +747,19 @@ fn capture_contract_is_transient_and_does_not_bypass_uncertain_setter() {
     h.ok(json!({"op":"save","path":path}));
     let saved = std::fs::read(&path).unwrap();
     let revision = invalidate_capture(&mut h);
-    h.ok(capture_ack(revision, Some(rect(10., 20., 380., 270.))));
+    h.ok(capture_ack(revision, rect(10., 20., 380., 270.)));
     h.ok(json!({"op":"save","path":path}));
     assert_eq!(std::fs::read(&path).unwrap(), saved);
     let t = ready(&mut h, "right");
     let e = motion(&mut h, &t, 20., 0.);
     let revision = invalidate_capture(&mut h);
-    h.rejects(capture_ack(revision, Some(rect(10., 20., 380., 270.))));
+    h.rejects(capture_ack(revision, rect(10., 20., 380., 270.)));
     let read = h.ok(reply(&e, "timed_out", true, false, 0., 0.))["effect"].clone();
     h.ok(reply(&read, "observed", false, true, 220., 150.));
     let revision = h.snap()["windows"][0]["source"]["observation_revision"]
         .as_u64()
         .unwrap();
-    h.rejects(capture_ack(revision, None));
+    h.rejects(capture_ack(revision, rect(0., 0., 400., 300.)));
     std::fs::remove_file(path).unwrap();
 }
 

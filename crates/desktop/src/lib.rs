@@ -360,7 +360,6 @@ pub enum Command {
     /// read alone (NATIVE_RESIZE.md).
     NativeResizeCapability {
         enabled: bool,
-        #[serde(default)]
         readback: bool,
     },
     InvalidateNativeCapture {
@@ -374,8 +373,7 @@ pub enum Command {
         generation: u64,
         observation_revision: u64,
         buffer: BufferSize,
-        #[serde(default)]
-        content_rect: Option<Rect>,
+        content_rect: Rect,
     },
     NavigateWindow {
         window: WindowId,

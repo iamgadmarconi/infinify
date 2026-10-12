@@ -662,16 +662,17 @@ fn deliver(
 fn capable(toml: &str) -> Host {
     let mut h = running(toml);
     assert_eq!(
-        h.ok(json!({"op":"native_resize_capability","enabled":true})),
+        h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":false})),
         json!({})
     );
     h
 }
 
 // Upstream compute_fit_geometry and compute_fill_geometry measure the usable
-// area less `snap.outer_gap` on every side; fullscreen is the whole output.
+// area less `snap.outer_gap` on every side. Mac fullscreen uses the usable
+// area without that gap so the menu/notch exclusion remains visible.
 #[test]
-fn fit_and_fill_take_the_usable_area_and_fullscreen_the_whole_output() {
+fn fit_fill_and_fullscreen_respect_the_usable_area() {
     // Fit: the size is (1120 - 24, 770 - 24). The window keeps its center
     // (300, 250), the camera goes to that less the usable center, and the
     // frame's top-left to the camera plus (80 + 12, 30 + 12).
@@ -744,10 +745,9 @@ fn fit_and_fill_take_the_usable_area_and_fullscreen_the_whole_output() {
     assert_eq!(armed(&plain, 1), view((0.0, 35.0), 1.0));
     assert_eq!(h.window(1)["mode"], "fill");
 
-    // Fullscreen asks for the output's own 1200 x 800, and a window that
-    // keeps its size is centered on the output: (1200 - 400) / 2 and
-    // (800 - 300) / 2 past the output's global origin. The usable area would
-    // have put it at (80 + 360, 30 + 235).
+    // Fullscreen asks for the usable1120x770 without the fit/fill gap. A
+    // window refusing that size is centered inside the same exclusion zone:
+    // (80 + 360, 30 + 235) relative to the output origin.
     let mut h = capable(GAP);
     put(&mut h, 1, "app.1", (100.0, 100.0, 400.0, 300.0));
     h.ok(json!({"op":"focus","window":1}));
@@ -756,7 +756,7 @@ fn fit_and_fill_take_the_usable_area_and_fullscreen_the_whole_output() {
         &mut h,
         &reply,
         (400.0, 300.0),
-        (1200.0, 800.0),
+        (1120.0, 770.0),
         "rejected",
         (400.0, 300.0),
     );
@@ -771,7 +771,7 @@ fn fit_and_fill_take_the_usable_area_and_fullscreen_the_whole_output() {
     assert_eq!(shown[0]["fullscreen"], true);
     assert_eq!(
         shown[0]["screen_rect"],
-        rect(OUT1[0] + 400.0, OUT1[1] + 250.0, 400.0, 300.0)
+        rect(OUT1[0] + 440.0, OUT1[1] + 265.0, 400.0, 300.0)
     );
 }
 
@@ -969,6 +969,9 @@ const TAPS: &str = r#"
 #[test]
 fn bindings_lists_each_tap_with_the_macos_modifiers_a_key_binding_would_have() {
     let mut h = Host::new();
+    // Exercise an explicit multi-key Super override before returning to the
+    // Mac's Command default below; this is no longer the default chord.
+    h.ok(json!({"op":"set_platform","super":"ctrl+alt"}));
     outputs(&mut h);
     let loaded = h.load_config(TAPS);
     assert_eq!(loaded["warnings"], json!([]));
@@ -1054,7 +1057,7 @@ fn bindings_lists_each_tap_with_the_macos_modifiers_a_key_binding_would_have() {
         "super is ctrl+cmd: it holds ctrl and Command, so nothing is left to stand for ctrl on its own"
     );
     // The capability makes the sizing tap run.
-    h.ok(json!({"op":"native_resize_capability","enabled":true}));
+    h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":false}));
     assert_eq!(
         by_combo(&h.bindings()["taps"])["shift"]["implemented"],
         true
@@ -1260,9 +1263,9 @@ fn a_tap_reply_carries_the_size_a_fullscreen_exit_owes() {
         &mut h,
         &reply,
         (400.0, 300.0),
-        (1200.0, 800.0),
+        (1120.0, 770.0),
         "applied",
-        (1200.0, 800.0),
+        (1120.0, 770.0),
     );
     // A scroll pan ends the fullscreen, and its reply is not one the shell
     // performs a size from: the size is owed.
@@ -1273,7 +1276,7 @@ fn a_tap_reply_carries_the_size_a_fullscreen_exit_owes() {
     deliver(
         &mut h,
         &reply,
-        (1200.0, 800.0),
+        (1120.0, 770.0),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),

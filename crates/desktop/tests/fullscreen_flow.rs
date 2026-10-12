@@ -164,7 +164,7 @@ fn fixture(toml: &str) -> Host {
 fn capable(toml: &str) -> Host {
     let mut h = fixture(toml);
     assert_eq!(
-        h.ok(json!({"op":"native_resize_capability","enabled":true})),
+        h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":false})),
         json!({})
     );
     h
@@ -313,7 +313,7 @@ fn entered(h: &mut Host) {
 /// `input` answer for it again.
 fn ready(h: &mut Host, id: u64) {
     let source = window(h, id)["source"].clone();
-    h.ok(json!({"op":"native_resize_capture_ready","window":id,"identity":source["identity"],"generation":source["generation"],"observation_revision":source["observation_revision"],"buffer":{"width":200,"height":100}}));
+    h.ok(json!({"op":"native_resize_capture_ready","window":id,"identity":source["identity"],"generation":source["generation"],"observation_revision":source["observation_revision"],"buffer":{"width":200,"height":100},"content_rect":rect(0.,0.,200.,100.)}));
 }
 /// Tick until every flight has landed. One clock serves every controller:
 /// each only needs its own timestamps to grow.
@@ -358,7 +358,7 @@ fn without_the_capability_fullscreen_answers_as_it_did_before() {
     // Sent or not, false is the default: a bare shell and one that says so.
     for explicit in [false, true] {
         if explicit {
-            h.ok(json!({"op":"native_resize_capability","enabled":false}));
+            h.ok(json!({"op":"native_resize_capability","enabled":false,"readback":false}));
         }
         let before = h.snapshot();
         assert_eq!(
@@ -1258,13 +1258,13 @@ fn a_new_window_is_tucked_behind_a_fullscreen_one_and_a_ruled_one_takes_its_outp
 
     // The launch pass applies no rule's fullscreen: nobody opened those.
     let mut h = fixture(CONFIG);
-    h.ok(json!({"op":"native_resize_capability","enabled":true}));
+    h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":false}));
     let mut early = Host {
         handle: driftwm_desktop_create(),
         scratch: Scratch::new(),
     };
     early.ok(json!({"op":"register_output","stable_id":"view-a","screen_bounds":of(A),"usable_rect_local":of(USABLE)}));
-    early.ok(json!({"op":"native_resize_capability","enabled":true}));
+    early.ok(json!({"op":"native_resize_capability","enabled":true,"readback":false}));
     let path = early.scratch.0.join("config.toml");
     std::fs::write(&path, CONFIG).unwrap();
     early.ok(json!({"op":"load_config","path":path}));
@@ -2323,7 +2323,7 @@ fn a_save_keeps_the_place_from_before_the_size_the_window_has_and_no_fullscreen(
     // The window that lived on at the output's size is adopted into a slot
     // of that size, so the next size transaction's first read finds the
     // size it is measured from.
-    h.ok(json!({"op":"native_resize_capability","enabled":true}));
+    h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":false}));
     let reply = h.ok(json!({"op":"attach","identity":identity(1),"bundle_id":"app.1","title":"fixture","buffer":{"width":200,"height":100},"source_rect":rect(4000.0,3000.0,USABLE.2,USABLE.3),"output":1}));
     assert_eq!(reply["adopted"], true, "{reply}");
     h.ok(json!({"op":"adoption_complete"}));

@@ -1421,7 +1421,7 @@ fullscreen = true
     );
     // Nor of a shell that says it cannot.
     assert_eq!(
-        h.ok(json!({"op":"native_resize_capability","enabled":false})),
+        h.ok(json!({"op":"native_resize_capability","enabled":false,"readback":false})),
         json!({})
     );
     let reply = appear(&mut h, 2, "app.sized", "S", (400.0, 300.0));
@@ -1545,7 +1545,7 @@ fn a_size_rule_is_asked_of_a_new_window_when_the_shell_can_deliver_a_size() {
     let scratch = Scratch::new();
     let mut h = running(&scratch, SIZED_RULES);
     assert_eq!(
-        h.ok(json!({"op":"native_resize_capability","enabled":true})),
+        h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":false})),
         json!({})
     );
     let reply = appear(&mut h, 1, "app.sized", "S", (401.0, 301.0));
@@ -1744,7 +1744,7 @@ fn a_size_rule_is_asked_of_a_new_window_when_the_shell_can_deliver_a_size() {
 fn a_ruled_size_that_waited_out_a_drag_is_asked_with_the_next_new_window() {
     let scratch = Scratch::new();
     let mut h = running(&scratch, SIZED_RULES);
-    h.ok(json!({"op":"native_resize_capability","enabled":true}));
+    h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":false}));
     put(
         &mut h,
         1,
@@ -1784,10 +1784,10 @@ fn a_ruled_size_that_waited_out_a_drag_is_asked_with_the_next_new_window() {
     h.ok(json!({"op":"begin_drag","window":1,"output":1}));
     appear(&mut h, 4, "app.sized", "S", (400.0, 300.0));
     h.ok(json!({"op":"end_gesture"}));
-    h.ok(json!({"op":"native_resize_capability","enabled":false}));
+    h.ok(json!({"op":"native_resize_capability","enabled":false,"readback":false}));
     let reply = appear(&mut h, 5, "app.plain", "P", (300.0, 200.0));
     assert!(reply.get("transaction").is_none() && reply.get("effects").is_none());
-    h.ok(json!({"op":"native_resize_capability","enabled":true}));
+    h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":false}));
     let reply = appear(&mut h, 6, "app.plain", "P", (300.0, 200.0));
     assert!(reply.get("transaction").is_none() && reply.get("effects").is_none());
     assert_eq!(h.snapshot()["native_resize"]["phase"], "complete");
@@ -1815,7 +1815,7 @@ fn a_ruled_size_that_waited_out_a_drag_is_asked_with_the_next_new_window() {
 fn a_ruled_window_the_user_sizes_before_its_turn_is_not_asked_its_rules_size() {
     let scratch = Scratch::new();
     let mut h = running(&scratch, SIZED_RULES);
-    h.ok(json!({"op":"native_resize_capability","enabled":true}));
+    h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":false}));
     put(
         &mut h,
         1,
@@ -1980,7 +1980,7 @@ fn a_ruled_window_the_user_sizes_before_its_turn_is_not_asked_its_rules_size() {
 fn ruled_windows_that_map_together_cascade_by_the_frames_asked_for() {
     let scratch = Scratch::new();
     let mut h = running(&scratch, SIZED_RULES);
-    h.ok(json!({"op":"native_resize_capability","enabled":true}));
+    h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":false}));
     let first = appear(&mut h, 1, "app.sized-free", "S", (401.0, 301.0));
     let read = sized_by_rule(&mut h, &first);
     assert_eq!(read["window"], 1);
@@ -2034,14 +2034,14 @@ fn auto_placement_reads_the_frame_a_ruled_window_is_becoming() {
     let scratch = Scratch::new();
     let config = format!("window_placement = \"auto\"\n{SIZED_RULES}");
     let mut plain = running(&scratch, &config);
-    plain.ok(json!({"op":"native_resize_capability","enabled":true}));
+    plain.ok(json!({"op":"native_resize_capability","enabled":true,"readback":false}));
     appear(&mut plain, 1, "app.plain", "P", (600.0, 400.0));
     appear(&mut plain, 2, "app.plain", "P", (600.0, 400.0));
     assert_eq!(plain.world(1), rect(200.0, 225.0, 600.0, 400.0));
     assert_ne!(plain.world(2), plain.world(1));
 
     let mut h = running(&scratch, &config);
-    h.ok(json!({"op":"native_resize_capability","enabled":true}));
+    h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":false}));
     let first = appear(&mut h, 1, "app.sized-free", "S", (400.0, 300.0));
     let read = sized_by_rule(&mut h, &first);
     appear(&mut h, 2, "app.sized-free", "S", (400.0, 300.0));

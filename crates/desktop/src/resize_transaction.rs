@@ -1053,11 +1053,10 @@ impl Controller {
         generation: u64,
         observation_revision: u64,
         buffer: BufferSize,
-        content_rect: Option<Rect>,
+        content_rect: Rect,
     ) -> Result<Value, Error> {
         self.check_generation(window, &identity, generation)?;
         buffer.validate()?;
-        let content_rect = content_rect.unwrap_or_else(|| buffer.full_rect());
         if !rect_valid(content_rect)
             || content_rect.origin.x < 0.0
             || content_rect.origin.y < 0.0

@@ -108,11 +108,13 @@ then have `presentation_settled:false` and no `buffer_crop`; hit/input reject.
 The shell must show an inert placeholder or otherwise withhold stale content.
 AX sizes never synthesize capture buffer dimensions. Fresh actual pixels are the
 host's responsibility, reported with
-`native_resize_capture_ready {window, identity, generation, observation_revision, buffer, content_rect?}`.
-The acknowledgement may also include `content_rect`, a finite, positive rectangle
-wholly inside `buffer`, expressed in actual buffer pixels. Omission (or null)
-means the whole buffer for compatibility with existing callers. Attach and rebind
-also begin with the whole buffer. `Source.content_rect` is transient capture
+`native_resize_capture_ready {window, identity, generation, observation_revision, buffer, content_rect}`.
+The acknowledgement requires `content_rect`, a finite, positive rectangle wholly
+inside `buffer`, expressed in actual buffer pixels. An unpadded image explicitly
+supplies the whole-buffer rectangle; omission or null rejects the command.
+`native_resize_capability` likewise requires its `readback` mode explicitly.
+These pre-release interfaces have no legacy-default conversion. Attach and rebind
+begin with the whole buffer. `Source.content_rect` is transient capture
 metadata. Placement `buffer_crop` and hit `buffer_local` apply its offset and
 scale; hit `local` and `native_screen` still map the full observed native frame,
 independently of buffer padding.
@@ -125,7 +127,7 @@ binding (including owner), advances the checked `observation_revision`, clears
 capture authority, and returns `{observation_revision}`. Repeated invalidations
 advance again; callers should send them for actual state transitions. Revisions
 therefore fence capture invalidation as well as size observations. Earlier
-acknowledgements reject atomically, including those omitting `content_rect`.
+acknowledgements reject atomically.
 
 Legacy `observe` never grants lost capture authority. An unchanged buffer size
 and native frame size retain the acknowledged crop, including when native origin
