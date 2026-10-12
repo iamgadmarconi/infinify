@@ -598,61 +598,56 @@ fn default_bindings_map_to_macos_chords() {
     let reply = h.ok(json!({"op":"bindings"}));
     let table = listing(&reply);
     let keys = by_combo(&reply["keys"]);
-    // logo is Control+Option; a modifier the chord already holds is displaced:
-    // ctrl to Command, alt to Command+Shift.
+    // The selected default is Command; the other upstream modifiers map to
+    // Control and Option independently.
     assert_keys(
         &reply,
-        "mod+a | 0x00 a ⌃⌥ once home-toggle
-        mod+ctrl+Right | 0x7C none ⌃⌥⌘ repeat pan-viewport right
-        mod+alt+Right | 0x7C none ⌃⌥⇧⌘ once send-to-output right
-        mod+shift+1 | 0x12 1 ⌃⌥⇧ once set-bookmark 1
+        "mod+a | 0x00 a ⌘ once home-toggle
+        mod+ctrl+Right | 0x7C none ⌃⌘ repeat pan-viewport right
+        mod+alt+Right | 0x7C none ⌥⌘ once send-to-output right
+        mod+shift+1 | 0x12 1 ⇧⌘ once set-bookmark 1
         alt+Tab | 0x30 none ⌥ repeat cycle-windows forward
         alt+shift+Tab | 0x30 none ⌥⇧ repeat cycle-windows backward
-        mod+equal | 0x18 = ⌃⌥ repeat zoom-in
-        mod+minus | 0x1B - ⌃⌥ repeat zoom-out
-        mod+ctrl+shift+q | 0x0C q ⌃⌥⇧⌘ once quit
-        mod+Return | 0x24 none ⌃⌥ once exec-terminal
-        mod+shift+Up | 0x7E none ⌃⌥⇧ repeat nudge-window up",
+        mod+equal | 0x18 = ⌘ repeat zoom-in
+        mod+minus | 0x1B - ⌘ repeat zoom-out
+        mod+ctrl+shift+q | 0x0C q ⌃⇧⌘ once quit
+        mod+Return | 0x24 none ⌘ once exec-terminal
+        mod+shift+Up | 0x7E none ⇧⌘ repeat nudge-window up",
     );
-    assert_eq!(keys["mod+a"]["chord"], "⌃⌥A", "{table}");
-    assert_eq!(keys["mod+alt+Right"]["chord"], "⌃⌥⇧⌘Right", "{table}");
-    // Upstream binds 57 keys by default: 45 on Mac keys, 8 on media keys, and 4
-    // on keys a Mac keyboard lacks. None collide and none warn. Their programs
-    // are on this config's PATH, so each is registered as upstream wrote it.
+    assert_eq!(keys["mod+a"]["chord"], "⌘A", "{table}");
+    assert_eq!(keys["mod+alt+Right"]["chord"], "⌥⌘Right", "{table}");
+    // Host-owned default system controls stay out of the registered table,
+    // even though this fixture puts every upstream Linux tool on PATH.
     assert_eq!(reply["warnings"], json!([]), "{table}");
-    assert_eq!(keys.len(), 45, "{table}");
+    assert_eq!(keys.len(), 46, "{table}");
+    assert!(!keys.contains_key("mod+l"), "{table}");
     let chords: BTreeSet<String> = keys
         .values()
         .map(|k| format!("{} {}", k["key_code"], k["modifiers"]))
         .collect();
-    assert_eq!(chords.len(), 45, "{table}");
-    let media = by_combo(&reply["media_keys"]);
+    assert_eq!(chords.len(), 46, "{table}");
+    assert_eq!(reply["media_keys"], json!([]), "{table}");
+    let skipped = by_combo(&reply["skipped"]);
+    assert_eq!(skipped.len(), 13, "{table}");
     assert_eq!(
-        media
-            .iter()
-            .map(|(combo, k)| (combo.as_str(), k["nx_key_type"].as_u64().unwrap()))
-            .collect::<Vec<_>>(),
-        [
-            ("XF86AudioLowerVolume", 1),
-            ("XF86AudioMute", 7),
-            ("XF86AudioNext", 17),
-            ("XF86AudioPlay", 16),
-            ("XF86AudioPrev", 18),
-            ("XF86AudioRaiseVolume", 0),
-            ("XF86MonBrightnessDown", 3),
-            ("XF86MonBrightnessUp", 2),
-        ],
+        skipped["mod+l"]["reason"],
+        "the default lock command is left to macOS and the foreground app",
         "{table}"
     );
-    assert!(media.values().all(|k| k.get("key_code").is_none()));
     assert_eq!(
-        reply["skipped"],
-        json!([
-            {"combo":"Print","action":"spawn grim - | wl-copy","reason":"the key has no macOS equivalent"},
-            {"combo":"XF86AudioPause","action":"spawn playerctl play-pause","reason":"the key has no macOS equivalent"},
-            {"combo":"XF86AudioStop","action":"spawn playerctl stop","reason":"the key has no macOS equivalent"},
-            {"combo":"shift+Print","action":"spawn grim -g \"$(slurp -d)\" - | wl-copy","reason":"the key has no macOS equivalent"}
-        ]),
+        skipped["XF86AudioLowerVolume"]["reason"], "macOS handles the volume keys itself",
+        "{table}"
+    );
+    assert_eq!(
+        skipped["XF86MonBrightnessUp"]["reason"], "macOS handles the brightness keys itself",
+        "{table}"
+    );
+    assert_eq!(
+        skipped["XF86AudioPlay"]["reason"], "macOS handles the media keys itself",
+        "{table}"
+    );
+    assert_eq!(
+        skipped["Print"]["reason"], "the key has no macOS equivalent",
         "{table}"
     );
     assert_eq!(
@@ -662,7 +657,7 @@ fn default_bindings_map_to_macos_chords() {
     assert_eq!(reply["layout_independent"], true);
     assert_eq!(reply["repeat_delay_ms"], 200);
     assert_eq!(reply["repeat_rate_hz"], 25);
-    assert_eq!(reply["super"], "ctrl+alt");
+    assert_eq!(reply["super"], "cmd");
     assert_eq!(
         reply["settings"],
         json!({"trackpad_speed":1.5,"mouse_speed":1.0,"zoom_step":1.1,"zoom_mouse_speed":1.0,"zoom_trackpad_speed":1.0})
@@ -735,7 +730,7 @@ fn the_super_chord_and_mod_key_choose_the_physical_modifiers() {
         mod+equal | 0x18 = ⌘ repeat zoom-in",
     );
     assert_eq!(reply["warnings"], json!([]), "{table}");
-    assert_eq!(keys.len(), 45, "{table}");
+    assert_eq!(keys.len(), 46, "{table}");
     assert_eq!(reply["super"], "cmd");
 
     // A chord that holds Command and Control leaves nothing to displace an
@@ -747,7 +742,7 @@ fn the_super_chord_and_mod_key_choose_the_physical_modifiers() {
     let reply = h.ok(json!({"op":"bindings"}));
     let table = listing(&reply);
     let keys = by_combo(&reply["keys"]);
-    assert_eq!(keys.len(), 40, "{table}");
+    assert_eq!(keys.len(), 41, "{table}");
     assert_keys(
         &reply,
         "mod+alt+Right | 0x7C none ⌃⌥⌘ once send-to-output right",
@@ -791,11 +786,11 @@ fn the_super_chord_and_mod_key_choose_the_physical_modifiers() {
         mod+equal | 0x18 = ⌥ repeat zoom-in",
     );
     assert!(!keys.contains_key("mod+alt+Right"), "{table}");
-    assert_eq!(keys.len(), 41, "{table}");
+    assert_eq!(keys.len(), 42, "{table}");
     assert_eq!(reply["warnings"], json!([]), "{table}");
 
-    // mod_key = "mod3": macOS has no such modifier, so only upstream's two
-    // alt+Tab bindings remain and each skipped binding says why.
+    // mod_key = "mod3": macOS has no such modifier, so the upstream F3 and
+    // super+Tab overview bindings remain alongside the two alt+Tab bindings.
     let mut h = Host::new();
     register(&mut h);
     h.load_config(&scratch.write("config.toml", "mod_key = \"mod3\"\n"));
@@ -803,12 +798,12 @@ fn the_super_chord_and_mod_key_choose_the_physical_modifiers() {
     let keys = by_combo(&reply["keys"]);
     assert_eq!(
         keys.keys().collect::<Vec<_>>(),
-        ["alt+Tab", "alt+shift+Tab"],
+        ["F3", "alt+Tab", "alt+shift+Tab", "super+Tab"],
         "{}",
         listing(&reply)
     );
     let warnings = reply["warnings"].as_array().unwrap();
-    assert_eq!(warnings.len(), 43);
+    assert_eq!(warnings.len(), 42);
     assert!(warnings.iter().all(|w| {
         w.as_str()
             .unwrap()
@@ -839,6 +834,12 @@ fn colliding_and_unreachable_bindings_are_reported_with_a_deterministic_winner()
     let loaded = h.load_config(&scratch.write("config.toml", &toml));
     assert_eq!(loaded["errors"], json!([]));
     assert_eq!(loaded["warnings"], json!([]));
+    // This scenario exercises the modifier-collision rules with their original
+    // Control+Option super chord, independent of the selected Command default.
+    assert_eq!(
+        h.ok(json!({"op":"set_platform","super":"ctrl+alt"})),
+        json!({"super":"ctrl+alt"})
+    );
     let reply = h.ok(json!({"op":"bindings"}));
     let table = listing(&reply);
     let keys = by_combo(&reply["keys"]);
@@ -872,7 +873,7 @@ fn colliding_and_unreachable_bindings_are_reported_with_a_deterministic_winner()
     let skipped = by_combo(&reply["skipped"]);
     assert!(!skipped.contains_key("shift+Print"), "{table}");
     assert!(!skipped.contains_key("alt+shift"), "{table}");
-    assert_eq!(skipped.len(), 7, "{table}");
+    assert_eq!(skipped.len(), 16, "{table}");
     // And the exit chord then belongs to that binding.
     assert_eq!(reply["reserved"][0]["claimed_by"], "mod+Escape");
     assert_eq!(h.ok(json!({"op":"bindings"})), reply);
@@ -1007,9 +1008,9 @@ scroll continuous - canvas | zoom wheel-scroll
 scroll - - canvas | zoom wheel-scroll
 scroll finger - window | -
 scroll wheel - window | -
-scroll finger ⌃⌥ window | pan_viewport mod+trackpad-scroll
+scroll finger ⌃⌥ window | zoom mod+trackpad-scroll
 scroll wheel ⌃⌥ window | zoom mod+wheel-scroll
-scroll finger ⌃⌥ canvas | pan_viewport mod+trackpad-scroll
+scroll finger ⌃⌥ canvas | zoom mod+trackpad-scroll
 scroll wheel ⌃⌥ canvas | zoom mod+wheel-scroll
 scroll finger ⌥ canvas | -
 back - - canvas | -
@@ -1020,6 +1021,10 @@ forward - ⌃⌥ window | -
 fn mouse_bindings_resolve_from_physical_chords() {
     let scratch = Scratch::new();
     let mut h = configured(&scratch, "");
+    assert_eq!(
+        h.ok(json!({"op":"set_platform","super":"ctrl+alt"})),
+        json!({"super":"ctrl+alt"})
+    );
     let bound = |kind: &str, action: Option<&str>, combo: &str, implemented: Option<bool>| json!({"kind":kind,"action":action,"combo":combo,"implemented":implemented});
     // A bare drag or scroll over a window is the app's; on the canvas it pans
     // or zooms. `mod` works anywhere, and mod+ctrl is displaced to Command.
@@ -1101,6 +1106,9 @@ trackpad_speed = 0.25
 "mod+alt+left" = "exec open ."
 "#,
     );
+    // Pin the test's physical meaning for `mod` while checking authored
+    // rebinding; the application's current default super is Command.
+    h.ok(json!({"op":"set_platform","super":"ctrl+alt"}));
     for (glyphs, context, kind) in [
         ("⌃⌥", "window", json!("move_window")),
         ("⌃⌥", "canvas", json!("pan_viewport")),
@@ -1140,6 +1148,7 @@ trackpad_speed = 0.25
         &scratch,
         "[mouse.on-window]\n\"mod+left\" = \"move-window\"\n[mouse.anywhere]\n\"ctrl+alt+left\" = \"zoom\"\n",
     );
+    h.ok(json!({"op":"set_platform","super":"ctrl+alt"}));
     assert_eq!(
         h.mouse("left", Value::Null, "⌃⌥", "window"),
         bound("move_window", None, "mod+left", None)

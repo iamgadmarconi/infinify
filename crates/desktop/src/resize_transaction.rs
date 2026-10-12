@@ -195,6 +195,16 @@ pub(crate) struct ResizeSlot {
     pub(crate) setting: bool,
 }
 impl Controller {
+    /// A pointer resize owns navigation until its button or touch releases,
+    /// not until the native effects finish draining. Action sizing never owns
+    /// that pointer, and a cancelled or failed transaction is no live grab.
+    pub(crate) fn native_resize_grab_output(&self) -> Option<OutputId> {
+        self.native_resize
+            .as_ref()
+            .filter(|t| t.interactive && !t.released && !t.cancelled && t.live())
+            .map(|t| t.output)
+    }
+
     pub(crate) fn resize_slot(&self) -> Option<ResizeSlot> {
         self.native_resize.as_ref().map(|t| ResizeSlot {
             transaction: t.transaction,
@@ -468,6 +478,10 @@ impl Controller {
             snap_intent,
         });
         self.cancel_animations_everywhere();
+        // The native grab cannot follow a camera edge pan between physical
+        // motions. Retire every old cursor request along with the flights;
+        // after release only a fresh pointer report may arm another one.
+        self.cancel_edge_pan_everywhere();
         // Upstream begin_client_resize: a resize drag ends fit and fill.
         self.sizes.resize_begun(window);
         // And a wait for a rule's `size`, as any sizing of the user's, and

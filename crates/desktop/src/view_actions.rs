@@ -65,7 +65,7 @@ impl Controller {
     /// The output's current pose and its output-local usable rectangle, whose
     /// center is upstream's usable_center_screen.
     pub(crate) fn view(&self, output: OutputId) -> Result<(Viewport, Rect), Error> {
-        if self.gesture.is_some() {
+        if self.gesture.is_some() || self.native_resize_grab_output().is_some() {
             return Err(Error::Invalid("navigation during active gesture"));
         }
         let usable = self.navigation_context(output)?.usable_rect_local;
@@ -122,6 +122,9 @@ impl Controller {
         zoom: f64,
         anchor: Option<Anchor>,
     ) -> Result<Value, Error> {
+        if self.gesture.is_some() || self.native_resize_grab_output().is_some() {
+            return Err(Error::Invalid("navigation during active gesture"));
+        }
         // The destination viewport's far corner must stay in the world as well: a
         // flight that cannot land would fail every later tick, for every output.
         let size = self

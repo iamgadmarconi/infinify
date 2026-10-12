@@ -561,14 +561,14 @@ fn a_configured_four_finger_swipe_fires_center_nearest_once_in_the_pan_direction
                     focus_effect(&reply, window);
                     assert_eq!(reply["needs_frames"], true);
                     assert_eq!(reply["dirty"], true);
-                    assert_eq!(h.snapshot()["focused"], window);
+                    assert_eq!(h.snapshot()["focus"]["intent"], window);
                 }
                 None => {
                     assert_eq!(reply["navigation"], Value::Null, "{reply}");
                     assert_eq!(reply["effects"], json!([]));
                     assert_eq!(reply["needs_frames"], false);
                     assert_eq!(reply["dirty"], false);
-                    assert_eq!(h.snapshot()["focused"], Value::Null);
+                    assert_eq!(h.snapshot()["focus"]["intent"], Value::Null);
                 }
             }
             // Once: the same gesture never fires again, however far it goes.
@@ -788,7 +788,7 @@ fn hold_fires_on_release_and_not_when_cancelled() {
         focus_effect(&reply, 1);
         assert_eq!(reply["needs_frames"], true);
         assert_eq!(reply["dirty"], true);
-        assert_eq!(h.snapshot()["focused"], 1);
+        assert_eq!(h.snapshot()["focus"]["intent"], 1);
         h.begin("hold", fingers, held, "window", ON_WINDOW);
         assert_eq!(h.end(true, 2000)["fired"], Value::Null);
     }
@@ -822,7 +822,7 @@ fn a_configured_doubletap_swipe_moves_the_window_under_the_pointer() {
     // Upstream focuses and raises what the gesture grabbed.
     assert_eq!(reply["effects"][0]["op"], "focus_native_window", "{reply}");
     assert_eq!(reply["effects"][0]["window"], 1);
-    assert_eq!(h.snapshot()["focused"], 1);
+    assert_eq!(h.snapshot()["focus"]["intent"], 1);
     // The window follows the fingers one to one in screen points: no
     // trackpad_speed, exactly as upstream warps its cursor.
     h.swipe(30.0, 20.0, 1010);
@@ -1007,7 +1007,7 @@ fn doubletap_swipe_without_a_window_to_grab_is_a_plain_swipe() {
     assert_eq!(reply["gesture"]["state"], "swipe_threshold", "{reply}");
     h.end(false, 2000);
     assert_eq!(h.origin(1), [100.0, 100.0]);
-    assert_eq!(h.snapshot()["focused"], Value::Null);
+    assert_eq!(h.snapshot()["focus"]["intent"], Value::Null);
     // A pointer drag already holds the one interactive move.
     h.ok(json!({"op":"begin_drag","window":2,"output":1,"group":false}));
     let reply = h.ok(begin("swipe", 3, "", "window", ON_WINDOW, true));
@@ -1626,7 +1626,7 @@ fn a_gesture_runs_window_navigation_with_its_pointer_and_the_modifiers_it_fires_
     assert_ran(&reply, "focus-center");
     assert_eq!(reply["navigation"], Value::Null, "{reply}");
     assert_eq!(reply["effects"], json!([]));
-    assert_eq!(h.snapshot()["focused"], Value::Null);
+    assert_eq!(h.snapshot()["focus"]["intent"], Value::Null);
     // The action a gesture fires stops the output's coast before it runs, as
     // every action does, also when it then finds nothing to do. A hold's
     // begin stops nothing, so the stop is the action's.
@@ -1809,7 +1809,7 @@ fn the_default_table_on_a_mac() {
             assert_eq!(h.camera(), [-30.0, -15.0]);
             assert_eq!(h.origin(1), [100.0, 100.0]);
             assert_eq!(h.origin(2), [2600.0, 1900.0]);
-            assert_eq!(h.snapshot()["focused"], Value::Null);
+            assert_eq!(h.snapshot()["focus"]["intent"], Value::Null);
         }
     }
     assert_eq!(
@@ -1886,7 +1886,7 @@ fn a_resize_swipe_asks_each_size_of_the_window_and_shows_the_size_it_took() {
     assert_eq!(reply["note"], Value::Null);
     // Raised and focused, and one read of the window before any size is asked.
     focus_effect(&reply, 1);
-    assert_eq!(h.snapshot()["focused"], 1);
+    assert_eq!(h.snapshot()["focus"]["intent"], 1);
     let read = reply["effect"].clone();
     assert_eq!(read["op"], "observe_resize_source", "{reply}");
     assert_eq!(h.snapshot()["native_resize"]["edges"], "left");
@@ -1996,7 +1996,7 @@ fn a_resize_swipe_that_cannot_begin_pans_and_a_pinned_window_resizes() {
     assert_eq!(reply["gesture"]["state"], "swipe_pan", "{reply}");
     assert_eq!(reply["effects"], json!([]));
     assert!(reply.get("transaction").is_none(), "{reply}");
-    assert_eq!(h.snapshot()["focused"], Value::Null);
+    assert_eq!(h.snapshot()["focus"]["intent"], Value::Null);
     assert_eq!(h.snapshot()["native_resize"], Value::Null);
     h.swipe(-30.0, 0.0, 1010);
     h.end(false, 1020);
@@ -2010,7 +2010,7 @@ fn a_resize_swipe_that_cannot_begin_pans_and_a_pinned_window_resizes() {
     h.ok(json!({"op":"ipc","output":1,"request":{"Resize":{"window":2,"to":[320,220]}}}));
     let reply = h.begin("swipe", 3, "⌥", "window", ON_WINDOW);
     assert_eq!(reply["gesture"]["state"], "swipe_pan", "{reply}");
-    assert_eq!(h.snapshot()["focused"], Value::Null);
+    assert_eq!(h.snapshot()["focus"]["intent"], Value::Null);
     h.end(false, 1040);
     // Pinned swipe resizing uses the same native transaction in screen points.
     let mut h = readback();

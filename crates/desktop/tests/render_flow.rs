@@ -210,7 +210,7 @@ fn zoom_out(h: &mut Host) {
     assert_eq!(output["zoom"], 0.5);
 }
 /// The block a configuration with upstream's default tables produces.
-fn default_block(revision: u64) -> Value {
+fn default_block(revision: u64, configured: bool) -> Value {
     // The expected values are driftwm-core's, upstream's own `Default` impls.
     let decorations = DecorationConfig::default();
     let outline = OutputOutlineSettings::default();
@@ -223,7 +223,7 @@ fn default_block(revision: u64) -> Value {
     let effects = EffectsConfig::default();
     assert_eq!(config.effects, effects);
     json!({
-        "background":{"type":"default","path":null,"texture":null,"mirror_tile":config.background.mirror_tile,"transparent_shader":config.background.transparent_shader,"animate_fps":config.background.animate_fps,"cache_shader":config.background.cache_shader,"cache_budget_mb":config.background.cache_budget_mb},
+        "background":{"type":"default","path":null,"texture":null,"mirror_tile":config.background.mirror_tile,"transparent_shader":config.background.transparent_shader,"animate_fps":config.background.animate_fps,"cache_shader":config.background.cache_shader,"cache_budget_mb":config.background.cache_budget_mb,"inherit_macos":configured,"parallax":configured},
         "chrome":{"background":rgba(decorations.bg_color),"foreground":rgba(decorations.fg_color),"corner_radius":decorations.corner_radius,"title_bar_height":decorations.title_bar_height,"font":decorations.font,"font_size":decorations.font_size,"font_weight":"medium","title_align":"center"},
         "outline":{"color":rgba(outline.color),"thickness":outline.thickness,"opacity":outline.opacity},
         "effects":{"blur_radius":effects.blur_radius,"blur_strength":effects.blur_strength,"animate_blur_fps":effects.animate_blur_fps,"animation_speed":effects.animation_speed,"animation_scale":effects.animation_scale},
@@ -249,15 +249,15 @@ fn the_default_render_block_is_upstreams_defaults() {
     let mut h = Host::new();
     // Before any output or config, with one, and with a launch config path
     // that names no file: the built-in defaults, and no revision spent.
-    assert_eq!(h.render(), default_block(0));
+    assert_eq!(h.render(), default_block(0, false));
     open(&mut h);
-    assert_eq!(h.render(), default_block(0));
+    assert_eq!(h.render(), default_block(0, false));
     let missing = h.ok(json!({"op":"load_config","path":scratch.path("absent.toml")}));
     assert_eq!(missing["exists"], false);
-    assert_eq!(h.render(), default_block(0));
+    assert_eq!(h.render(), default_block(1, true));
     // An empty file loaded after that is a reload: the same defaults, and a
     // revision, as every accepted reload spends one.
-    assert_eq!(h.configure(&scratch, ""), default_block(1));
+    assert_eq!(h.configure(&scratch, ""), default_block(2, true));
 
     // Every key the snapshot had is still there, next to the new one.
     let snapshot = h.snapshot();
@@ -274,7 +274,6 @@ fn the_default_render_block_is_upstreams_defaults() {
             "capabilities",
             "evidence",
             "focus",
-            "focused",
             "keyboard_layout",
             "lifecycle",
             "lifecycle_events",
@@ -311,28 +310,29 @@ fn a_reload_changes_the_block_and_every_accepted_one_spends_a_revision() {
     let scratch = Scratch::new();
     let mut h = Host::new();
     open(&mut h);
-    // The launch load of a file that leaves the drawn tables at their
-    // defaults spends nothing: there is nothing built to rebuild.
+    // The launch load activates the default Mac wallpaper policy in the
+    // renderer, so it spends one revision even though DriftWM's tables stay
+    // at their defaults.
     let unrelated = "[navigation]\npan_step = 123\n";
-    assert_eq!(h.configure(&scratch, unrelated), default_block(0));
+    assert_eq!(h.configure(&scratch, unrelated), default_block(1, true));
 
     // [decorations]: the chrome the compositor rasterises.
     let decorations = "[decorations]\nbg_color = \"#102030\"\nfg_color = \"#a0b0c080\"\ncorner_radius = 4\ntitle_bar_height = 30\nfont = \"Menlo\"\nfont_size = 13\nfont_weight = \"semi-bold\"\ntitle_align = \"left\"\n";
     let mut toml = format!("{unrelated}{decorations}");
     let block = h.configure(&scratch, &toml);
-    assert_eq!(block["revision"], 1);
+    assert_eq!(block["revision"], 2);
     assert_eq!(
         block["chrome"],
         json!({"background":rgba([0x10,0x20,0x30,0xff]),"foreground":rgba([0xa0,0xb0,0xc0,0x80]),"corner_radius":4,"title_bar_height":30,"font":"Menlo","font_size":13,"font_weight":"semibold","title_align":"left"})
     );
-    assert_eq!(block["background"], default_block(0)["background"]);
-    assert_eq!(block["outline"], default_block(0)["outline"]);
+    assert_eq!(block["background"], default_block(0, true)["background"]);
+    assert_eq!(block["outline"], default_block(0, true)["outline"]);
     let chrome = block["chrome"].clone();
 
     // [output.outline].
     toml += "[output.outline]\ncolor = \"#ff8000\"\nthickness = 3\nopacity = 0.25\n";
     let block = h.configure(&scratch, &toml);
-    assert_eq!(block["revision"], 2);
+    assert_eq!(block["revision"], 3);
     let outline = json!({"color":rgba([0xff,0x80,0x00,0xff]),"thickness":3,"opacity":0.25});
     assert_eq!(block["outline"], outline);
     assert_eq!(block["chrome"], chrome);
@@ -340,13 +340,13 @@ fn a_reload_changes_the_block_and_every_accepted_one_spends_a_revision() {
     // [effects]: the table itself, which tests/effects_flow.rs covers.
     toml += "[effects]\nblur_radius = 5\n";
     let block = h.configure(&scratch, &toml);
-    assert_eq!(block["revision"], 3);
-    let mut effects = default_block(0)["effects"].clone();
+    assert_eq!(block["revision"], 4);
+    let mut effects = default_block(0, true)["effects"].clone();
     effects["blur_radius"] = json!(5);
     assert_eq!(block["effects"], effects);
     assert_eq!(block["chrome"], chrome);
     assert_eq!(block["outline"], outline);
-    assert_eq!(block["background"], default_block(0)["background"]);
+    assert_eq!(block["background"], default_block(0, true)["background"]);
 
     // [background], every type. A leading `~/` arrives expanded from $HOME by
     // upstream's parser wherever that is set.
@@ -357,22 +357,22 @@ fn a_reload_changes_the_block_and_every_accepted_one_spends_a_revision() {
     let backgrounds = [
         (
             "type = \"shader\"\npath = \"/opt/shaders/smoke.glsl\"\ntexture = \"~/Pictures/photo.jpg\"\ntransparent_shader = true\nanimate_fps = 30\ncache_shader = true\ncache_budget_mb = 512\n",
-            json!({"type":"shader","path":"/opt/shaders/smoke.glsl","texture":home("Pictures/photo.jpg"),"mirror_tile":false,"transparent_shader":true,"animate_fps":30,"cache_shader":true,"cache_budget_mb":512}),
+            json!({"type":"shader","path":"/opt/shaders/smoke.glsl","texture":home("Pictures/photo.jpg"),"mirror_tile":false,"transparent_shader":true,"animate_fps":30,"cache_shader":true,"cache_budget_mb":512,"inherit_macos":false,"parallax":true}),
         ),
         (
             "type = \"tile\"\npath = \"~/Pictures/tile.png\"\nmirror_tile = true\n",
-            json!({"type":"tile","path":home("Pictures/tile.png"),"texture":null,"mirror_tile":true,"transparent_shader":false,"animate_fps":0,"cache_shader":false,"cache_budget_mb":128}),
+            json!({"type":"tile","path":home("Pictures/tile.png"),"texture":null,"mirror_tile":true,"transparent_shader":false,"animate_fps":0,"cache_shader":false,"cache_budget_mb":128,"inherit_macos":false,"parallax":true}),
         ),
         (
             "type = \"wallpaper\"\npath = \"/Library/Desktop Pictures/hill.heic\"\n",
-            json!({"type":"wallpaper","path":"/Library/Desktop Pictures/hill.heic","texture":null,"mirror_tile":false,"transparent_shader":false,"animate_fps":0,"cache_shader":false,"cache_budget_mb":128}),
+            json!({"type":"wallpaper","path":"/Library/Desktop Pictures/hill.heic","texture":null,"mirror_tile":false,"transparent_shader":false,"animate_fps":0,"cache_shader":false,"cache_budget_mb":128,"inherit_macos":false,"parallax":true}),
         ),
         (
             "type = \"none\"\n",
-            json!({"type":"none","path":null,"texture":null,"mirror_tile":false,"transparent_shader":false,"animate_fps":0,"cache_shader":false,"cache_budget_mb":128}),
+            json!({"type":"none","path":null,"texture":null,"mirror_tile":false,"transparent_shader":false,"animate_fps":0,"cache_shader":false,"cache_budget_mb":128,"inherit_macos":false,"parallax":true}),
         ),
     ];
-    let mut revision = 3;
+    let mut revision = 4;
     let mut last = String::new();
     for (background, expected) in backgrounds {
         revision += 1;
@@ -386,7 +386,7 @@ fn a_reload_changes_the_block_and_every_accepted_one_spends_a_revision() {
     }
     let toml = last;
     let settled = h.render();
-    assert_eq!(settled["revision"], 7);
+    assert_eq!(settled["revision"], 8);
 
     // The same file again, and a change elsewhere in it: the block is what it
     // was, and each reload spends a revision. Upstream reads the shader or
@@ -397,10 +397,10 @@ fn a_reload_changes_the_block_and_every_accepted_one_spends_a_revision() {
         block["revision"] = json!(revision);
         block
     };
-    assert_eq!(h.configure(&scratch, &toml), again(8));
+    assert_eq!(h.configure(&scratch, &toml), again(9));
     let elsewhere = toml.replace("pan_step = 123", "pan_step = 321");
     assert_ne!(elsewhere, toml);
-    assert_eq!(h.configure(&scratch, &elsewhere), again(9));
+    assert_eq!(h.configure(&scratch, &elsewhere), again(10));
     // A file that does not parse is not an accepted reload: every table
     // stays. Its message is the error bar's, which the shell draws from this
     // block, so the revision moves for it (EFFECTS.md). A scene loaded over
@@ -408,7 +408,7 @@ fn a_reload_changes_the_block_and_every_accepted_one_spends_a_revision() {
     std::fs::write(scratch.path("config.toml"), "[decorations\n").unwrap();
     let refused = h.ok(json!({"op":"load_config","path":scratch.path("config.toml")}));
     assert_eq!(refused["errors"].as_array().unwrap().len(), 1, "{refused}");
-    let mut failed = again(10);
+    let mut failed = again(11);
     failed["errors"] = refused["errors"].clone();
     assert_eq!(h.render(), failed);
     let scene = scratch.path("scene.json");
@@ -424,12 +424,12 @@ fn a_reload_changes_the_block_and_every_accepted_one_spends_a_revision() {
     assert_ne!(bordered, elsewhere);
     // The accepted file clears the message too, for the one revision.
     let block = h.configure(&scratch, &bordered);
-    assert_eq!(block["revision"], 11);
+    assert_eq!(block["revision"], 12);
     assert_eq!(block["errors"], json!([]));
     assert_eq!(block["chrome"], chrome);
 
     // Back to no tables at all: upstream's defaults, one more revision.
-    assert_eq!(h.configure(&scratch, unrelated), default_block(12));
+    assert_eq!(h.configure(&scratch, unrelated), default_block(13, true));
 
     // A launch file that names a shader spends the first revision, and the
     // same file loaded again the next: that is how an edited shader file
@@ -449,7 +449,7 @@ fn the_cache_budget_is_cores_parsed_value_and_a_change_spends_a_revision() {
     // The block with `[background] cache_budget_mb` at `budget` and every
     // other table at upstream's defaults.
     let budgeted = |budget: u32, revision: u64| {
-        let mut block = default_block(revision);
+        let mut block = default_block(revision, true);
         block["background"]["cache_budget_mb"] = json!(budget);
         block
     };
@@ -461,19 +461,19 @@ fn the_cache_budget_is_cores_parsed_value_and_a_change_spends_a_revision() {
     let mut h = Host::new();
     assert_eq!(h.render()["background"]["cache_budget_mb"], default);
     let unrelated = "[navigation]\npan_step = 123\n";
-    assert_eq!(h.configure(&scratch, unrelated), default_block(0));
+    assert_eq!(h.configure(&scratch, unrelated), default_block(1, true));
 
     // A reload that changes the budget alone: that key, and one revision.
     let toml = format!("{unrelated}[background]\ncache_budget_mb = 64\n");
-    assert_eq!(h.configure(&scratch, &toml), budgeted(64, 1));
+    assert_eq!(h.configure(&scratch, &toml), budgeted(64, 2));
     // A reload that changes something else leaves the budget where it was:
     // the same block, but for the revision every accepted reload spends.
     let elsewhere = toml.replace("pan_step = 123", "pan_step = 321");
     assert_ne!(elsewhere, toml);
-    assert_eq!(h.configure(&scratch, &elsewhere), budgeted(64, 2));
+    assert_eq!(h.configure(&scratch, &elsewhere), budgeted(64, 3));
     // The value is core's `u32` as parsed, in megabytes, and nothing here
     // clamps it: what a budget too small for one chunk draws is the shell's.
-    for (budget, revision) in [(0, 3), (u32::MAX, 4)] {
+    for (budget, revision) in [(0, 4), (u32::MAX, 5)] {
         let toml = format!("[background]\ncache_budget_mb = {budget}\n");
         assert_eq!(h.configure(&scratch, &toml), budgeted(budget, revision));
     }
@@ -486,11 +486,11 @@ fn the_cache_budget_is_cores_parsed_value_and_a_change_spends_a_revision() {
     .unwrap();
     let refused = h.ok(json!({"op":"load_config","path":scratch.path("config.toml")}));
     assert_eq!(refused["errors"].as_array().unwrap().len(), 1, "{refused}");
-    let mut failed = budgeted(u32::MAX, 5);
+    let mut failed = budgeted(u32::MAX, 6);
     failed["errors"] = refused["errors"].clone();
     assert_eq!(h.render(), failed);
     // A file without the key is upstream's default again.
-    assert_eq!(h.configure(&scratch, unrelated), default_block(6));
+    assert_eq!(h.configure(&scratch, unrelated), default_block(7, true));
 
     // The launch load spends a revision only for a file whose drawn tables
     // are not the defaults, and the budget is one of [background]'s keys: a
@@ -502,7 +502,10 @@ fn the_cache_budget_is_cores_parsed_value_and_a_change_spends_a_revision() {
     assert_eq!(launched.configure(&scratch, changed), budgeted(64, 1));
     let mut unchanged = Host::new();
     let written = format!("[background]\ncache_budget_mb = {default}\n");
-    assert_eq!(unchanged.configure(&scratch, &written), default_block(0));
+    assert_eq!(
+        unchanged.configure(&scratch, &written),
+        default_block(1, true)
+    );
 }
 
 /// The fields a placement gained, as one object.
@@ -645,7 +648,7 @@ fn placements_say_what_is_drawn_for_windows_placeholders_and_stand_ins() {
     // The focused flag and the focus-dependent opacity follow the focus; a
     // rule's opacity stays where it was pinned.
     h.observe_focus(notes);
-    assert_eq!(h.snapshot()["focused"], notes);
+    assert_eq!(h.snapshot()["focus"]["intent"], notes);
     let placement = h.placement(term);
     assert_eq!(placement["focused"], false);
     assert_eq!(placement["decoration"], global(false));

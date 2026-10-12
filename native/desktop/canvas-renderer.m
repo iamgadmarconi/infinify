@@ -51,6 +51,18 @@ static CGRect rectOf(id value) {
     NSDictionary *r=dict(value),*origin=dict(r[@"origin"]),*size=dict(r[@"size"]);if(!number(origin[@"x"])||!number(origin[@"y"])||!number(size[@"width"])||!number(size[@"height"]))return CGRectNull;
     return CGRectMake([number(origin[@"x"])doubleValue],[number(origin[@"y"])doubleValue],[number(size[@"width"])doubleValue],[number(size[@"height"])doubleValue]);
 }
+static BOOL currentDrawnPlacement(NSDictionary *p) {
+    NSString *kind=text(p[@"kind"]);
+    return ([kind isEqual:@"window"]||[kind isEqual:@"standin"])&&number(p[@"focused"])&&finiteImageRect(rectOf(p[@"world_rect"]));
+}
+static BOOL currentOutputPlacement(NSDictionary *p) {
+    return currentDrawnPlacement(p)&&number(p[@"window"])&&number(p[@"output"]);
+}
+static BOOL currentOutputPlacements(id value) {
+    if(![value isKindOfClass:NSArray.class])return NO;
+    for(id entry in value)if(!currentOutputPlacement(dict(entry)))return NO;
+    return YES;
+}
 static BOOL drawableOutput(NSDictionary *output) {
     NSDictionary *camera=dict(output[@"camera"]);NSNumber *zoom=number(output[@"zoom"]),*identifier=number(output[@"id"]);
     return identifier&&isfinite(identifier.doubleValue)&&identifier.doubleValue>0&&floor(identifier.doubleValue)==identifier.doubleValue&&identifier.unsignedLongLongValue>0&&finiteImageRect(rectOf(output[@"screen_bounds"]))&&number(camera[@"x"])&&number(camera[@"y"])&&isfinite([camera[@"x"]doubleValue])&&isfinite([camera[@"y"]doubleValue])&&isfinite(zoom.doubleValue)&&zoom.doubleValue>0;
@@ -346,20 +358,22 @@ static BOOL pinnedOf(NSDictionary *p) { return [number(p[@"pinned"])boolValue]||
 // element id. macOS platform rule: a native window carries its own title bar, so the
 // stand-in that replaces it is upstream's stand-in for a client-decorated window,
 // whose bar and body together cover exactly the window's rectangle.
-- (void)fill:(IFCompositorElement *)element window:(NSNumber *)window placement:(NSDictionary *)p snapshot:(NSDictionary *)snapshot rect:(CGRect)world onScreen:(BOOL)onScreen {
-    NSString *kind=text(p[@"kind"]),*title=text(p[@"title"]),*app=displayName(text(p[@"app_name"]));BOOL standin=kind?[kind isEqual:@"standin"]:!dict(p[@"source"]);
+- (BOOL)fill:(IFCompositorElement *)element window:(NSNumber *)window placement:(NSDictionary *)p rect:(CGRect)world onScreen:(BOOL)onScreen {
+    if(!currentDrawnPlacement(p))return NO;
+    NSString *kind=text(p[@"kind"]),*title=text(p[@"title"]),*app=displayName(text(p[@"app_name"]));BOOL standin=[kind isEqual:@"standin"];
     element.identifier=window.unsignedLongLongValue;element.kind=standin?IFCompositorElementKindStandIn:IFCompositorElementKindWindow;
     element.space=onScreen?IFCompositorSpacePinned:IFCompositorSpaceCanvas;
     element.layer=onScreen?IFCompositorStackLayerPinned:[number(p[@"widget"])boolValue]?IFCompositorStackLayerWidget:IFCompositorStackLayerNormal;
     // Upstream's dot at the left of a pinned window's title bar. The compositor draws it in a `server` bar only: a stand-in's bar and a client-decorated window show none.
     element.showsPinnedIndicator=pinnedOf(p);
-    element.focused=number(p[@"focused"])?[p[@"focused"]boolValue]:[snapshot[@"focused"]isEqual:window];
+    element.focused=[number(p[@"focused"])boolValue];
     element.decoration=decorationOf(dict(p[@"decoration"]),self.chrome.cornerRadius);
     element.appName=app;element.launching=[number(p[@"launching"])boolValue];
-    if(standin){element.title=title;element.rect=IFCompositorStandInBodyRect(world,YES,self.chrome.titleBarHeight);element.pixelBuffer=NULL;element.texture=nil;element.contentGeneration=0;element.contentRect=CGRectNull;return;}
+    if(standin){element.title=title;element.rect=IFCompositorStandInBodyRect(world,YES,self.chrome.titleBarHeight);element.pixelBuffer=NULL;element.texture=nil;element.contentGeneration=0;element.contentRect=CGRectNull;return YES;}
     // A server title bar shows the title, else the application's name, as upstream falls back to the app id.
     element.title=title.length?title:app?:@"";element.rect=world;
     [self content:element window:window placement:p];
+    return YES;
 }
 // When an animation that begins now began, on this output's clock. Upstream advances every animation before it draws, so the
 // first frame that shows one is already a tick in: the time of the last frame presented. This canvas draws on demand, so
@@ -446,6 +460,7 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
     return changed;
 }
 - (NSArray<NSDictionary *> *)appliedOrderForOutput:(NSNumber *)output snapshot:(NSDictionary *)snapshot {
+    if(!currentOutputPlacements(snapshot[@"placements"]))return nil;
     DWCanvasOutput *state=self.states[output];if(!state.orderApplied||!snapshot||state.orderDirty||state.geometryAnimating||state.geometryNeedsSettledDraw||state.orderProvider!=self.liveOrder||state.orderRevisionProvider!=self.liveOrderRevision)return nil;
     if(self.liveOrderRevision){if(state.orderRevision!=self.liveOrderRevision(output))return nil;}
     else if(![state.orderApplied isEqualToArray:validatedOrder(self.liveOrder?self.liveOrder(state.orderBase,output):nil,state.orderBase)])return nil;
@@ -697,7 +712,7 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
     if(changed)[self flush];
 }
 - (void)render:(NSDictionary *)snapshot outputs:(NSArray<NSNumber *> *)outputs host:(CALayer *)host origin:(CGPoint)origin scale:(CGFloat)scale decorationScale:(NSInteger)decorationScale {
-    if(!snapshot)return;
+    if(!snapshot||!currentOutputPlacements(snapshot[@"placements"]))return;
     // Reconcile against all snapshot outputs, not just this host's subset: a
     // separate host will describe the other displays in the same shell turn.
     NSMutableArray<NSDictionary *> *all=[NSMutableArray array];NSMutableSet<NSNumber *> *alive=[NSMutableSet set];
@@ -709,8 +724,6 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
     for(id entry in list(snapshot[@"lifecycle_events"])){NSDictionary *event=dict(entry);if(number(event[@"window"])&&number(event[@"serial"])&&[event[@"event"]isEqual:@"open"])opened[event[@"window"]]=event[@"serial"];}
     // The window the controller owes a size: its one size transaction, while an effect of it is outstanding. Null in a run that cannot deliver a size.
     NSDictionary *resize=dict(snapshot[@"native_resize"]);self.sizing=dict(resize[@"pending_effect"])?number(resize[@"window"]):nil;
-    NSMutableDictionary<NSNumber *,id> *worlds=[NSMutableDictionary dictionary];
-    for(NSDictionary *w in list(snapshot[@"windows"]))if(number(w[@"window"])&&w[@"world_rect"])worlds[w[@"window"]]=w[@"world_rect"];
     for(NSDictionary *o in all){
         NSNumber *output=number(o[@"id"]);CGRect bounds=rectOf(o[@"screen_bounds"]);if(![alive containsObject:output]||![outputs containsObject:output])continue;
         DWCanvasOutput *state=self.states[output];
@@ -737,21 +750,22 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
         NSMutableDictionary<NSNumber *,IFCompositorElement *> *elements=[NSMutableDictionary dictionary];NSMutableDictionary<NSNumber *,NSDictionary *> *placements=[NSMutableDictionary dictionary];[frame.elements removeAllObjects];
         NSMutableArray<NSDictionary *> *orderedPlacements=[NSMutableArray array];NSMutableSet<NSNumber *> *seenPlacements=[NSMutableSet set];
         NSMutableDictionary<NSNumber *,NSNumber *> *unseen=[NSMutableDictionary dictionary],*owed=[NSMutableDictionary dictionary];
-        for(NSDictionary *p in list(snapshot[@"placements"])){
+        for(id entry in list(snapshot[@"placements"])){
+            NSDictionary *p=dict(entry);if(!currentOutputPlacement(p))continue;
             NSNumber *window=number(p[@"window"]);if(!window||![p[@"output"]isEqual:output]||[seenPlacements containsObject:window])continue;
             // A screen-pinned placement has no canvas position to draw from: its screen_rect is its pin's, in
             // global screen points at the window's own size whatever the camera and the zoom, and the pinned
             // space takes it in this output's own points. Its world rectangle is bookkeeping and is not read.
             BOOL pinned=[number(p[@"pinned"])boolValue];CGRect world;
             if(pinned){world=rectOf(p[@"screen_rect"]);if(CGRectIsNull(world))continue;world=CGRectOffset(world,-bounds.origin.x,-bounds.origin.y);}
-            else {world=rectOf(p[@"world_rect"]);if(CGRectIsNull(world))world=rectOf(worlds[window]);if(CGRectIsNull(world))continue;}
+            else {world=rectOf(p[@"world_rect"]);if(CGRectIsNull(world))continue;}
             [seenPlacements addObject:window];[orderedPlacements addObject:p];
             // Preserve physical roots in the complete order as barriers even
             // though WindowServer, rather than this frame, draws their pixels.
-            NSString *kind=text(p[@"kind"]);BOOL standin=kind?[kind isEqual:@"standin"]:!dict(p[@"source"]);
+            BOOL standin=[text(p[@"kind"])isEqual:@"standin"];
             if(self.nativeWindows&&!standin&&!(self.nativeReplica&&self.nativeReplica(window,output)))continue;
             IFCompositorElement *element=state.elements[window]?:[IFCompositorElement new];
-            [self fill:element window:window placement:p snapshot:snapshot rect:world onScreen:pinned];
+            if(![self fill:element window:window placement:p rect:world onScreen:pinned])continue;
             if(element.kind==IFCompositorElementKindWindow){
                 // Upstream DrawnChrome::drawn: the chrome a window wears depends on how its visual
                 // frame covers the output. A stand-in is not subject to it. A pinned window's frame
@@ -979,10 +993,11 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
     NSString *path=text(effect[@"path"]),*refused=nil;double scale=number(effect[@"scale"])?[effect[@"scale"]doubleValue]:NAN;
     if(!path.isAbsolutePath)return refusal(@"screenshot path must be absolute");
     if(!snapshot)return refusal(@"no renderer available for capture");
+    if(!currentOutputPlacements(snapshot[@"placements"]))return refusal(@"snapshot placements do not match the current schema");
     [self configure:snapshot];
     // A window target is composed alone on transparency, its shadow included. The controller resolved the selector.
     id target=effect[@"target"];IFCompositorElement *isolate=nil;NSDictionary *alone=dict(dict(target)[@"Window"]);
-    NSNumber *wanted=alone?number(alone[@"window"])?:number(snapshot[@"focused"]):nil;
+    NSNumber *wanted=alone?number(alone[@"window"])?:number(dict(snapshot[@"focus"])[@"intent"]):nil;
     // Every world window bottom to top at its canvas rectangle, described by its placement on any
     // output; one that is on no output is described by its entry of the window list. Upstream
     // compose_capture_elements: a canvas capture never includes a screen-pinned window
@@ -990,12 +1005,16 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
     // other windows; only a window captured alone is drawn whatever it is, at its stage position,
     // which for a pinned window is the canvas frame its pin shows.
     NSMutableDictionary<NSNumber *,NSDictionary *> *placed=[NSMutableDictionary dictionary];
-    for(NSDictionary *p in list(snapshot[@"placements"]))if(number(p[@"window"])&&(!placed[p[@"window"]]||[p[@"output"]isEqual:effect[@"output"]]))placed[p[@"window"]]=p;
+    for(id entry in list(snapshot[@"placements"])){
+        NSDictionary *p=dict(entry);NSNumber *window=number(p[@"window"]);
+        if(currentOutputPlacement(p)&&(!placed[window]||[p[@"output"]isEqual:effect[@"output"]]))placed[window]=p;
+    }
     NSMutableArray<IFCompositorElement *> *elements=[NSMutableArray array];
     NSMutableDictionary<NSNumber *,NSArray<IFCompositorElement *> *> *attachments=[NSMutableDictionary dictionary];
     NSMutableArray<NSDictionary *> *exportTokens=self.exportOrder?[NSMutableArray array]:nil;
     NSMutableDictionary<NSDictionary *,IFCompositorElement *> *exportElements=self.exportOrder?[NSMutableDictionary dictionary]:nil;
-    for(NSDictionary *w in list(snapshot[@"windows"])){
+    for(id entry in list(snapshot[@"windows"])){
+        NSDictionary *w=dict(entry);if(!w)return refusal(@"snapshot window entries must be objects");
         NSNumber *window=number(w[@"window"]);CGRect world=rectOf(w[@"world_rect"]);NSDictionary *p=placed[window],*source=dict(w[@"source"]),*metadata=dict(w[@"metadata"]);
         // Upstream's windows are at least one pixel in each direction.
         if(!window||CGRectIsNull(world)||world.size.width<=0||world.size.height<=0)continue;
@@ -1005,9 +1024,10 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
         if(pinnedOf(w)&&![window isEqual:wanted])continue;
         if(!p){NSMutableDictionary *described=[w mutableCopy];BOOL settled=source&&[number(source[@"observation_known"])boolValue];
             described[@"presentation_settled"]=settled?@YES:@NO;if(!described[@"title"])described[@"title"]=text(metadata[@"title"])?:@"";if(!described[@"app_name"])described[@"app_name"]=text(metadata[@"bundle_id"])?:@"";p=described;}
+        if(!currentDrawnPlacement(p))return refusal(@"snapshot window entries do not match the current schema");
         // Native presentation omits live pictures from the on-screen canvas, but
         // an export supplies separate one-shot pixels through the source provider.
-        IFCompositorElement *element=[IFCompositorElement new];[self fill:element window:window placement:p snapshot:snapshot rect:world onScreen:NO];[elements addObject:element];
+        IFCompositorElement *element=[IFCompositorElement new];if(![self fill:element window:window placement:p rect:world onScreen:NO])return refusal(@"snapshot window entries do not match the current schema");[elements addObject:element];
         if(exportTokens){BOOL barrier=element.kind==IFCompositorElementKindStandIn||!self.exportOrderRoot||!self.exportOrderRoot(window);
             NSDictionary *token=barrier?@{@"window":window,@"bucket":@(element.layer),@"barrier":@YES}:@{@"window":window,@"bucket":@(element.layer)};
             [exportTokens addObject:token];exportElements[token]=element;}

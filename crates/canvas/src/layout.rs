@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Adapted from malbiruk/driftwm src/layout/{snap,cluster}.rs at 352333a8fa1b22171492d4b71a54102045c9a19d.
 // Retains strict perpendicular overlap and on-demand connected components.
-// The legacy incremental API remains stateless; gestures.rs adds grab hysteresis.
-use crate::{Error, Point, Rect, Scene, WindowId};
+// Movement and snapping use the gesture lifecycle in gestures.rs.
+use crate::{Error, Rect, Scene, WindowId};
 use std::collections::BTreeSet;
 
 /// World-unit parameters for edge docking and connected groups.
@@ -62,99 +62,8 @@ impl Scene {
         }
         Ok(visited.into_iter().collect())
     }
-    /// Translate the existing connected component rigidly. Returns moved IDs.
-    pub fn move_cluster(
-        &mut self,
-        id: WindowId,
-        delta: Point,
-        options: SnapOptions,
-    ) -> Result<Vec<WindowId>, Error> {
-        let members = self.cluster(id, options)?;
-        self.translate_members(&members, delta)?;
-        Ok(members)
-    }
-    /// Move a window (or its pre-move cluster) and dock its nearest edges.
-    /// The returned world displacement includes snap correction. Every member
-    /// receives exactly that displacement; failed validation moves none of them.
-    pub fn snap_move(
-        &mut self,
-        id: WindowId,
-        delta: Point,
-        options: SnapOptions,
-        move_group: bool,
-    ) -> Result<Point, Error> {
-        options.validate()?;
-        if !delta.valid() {
-            return Err(Error::Invalid("move delta"));
-        }
-        let members = if move_group {
-            self.cluster(id, options)?
-        } else {
-            if self.window(id).is_none() {
-                return Err(Error::UnknownWindow(id));
-            }
-            vec![id]
-        };
-        let mut actual = delta;
-        // Resolve X first, then use those final edges to determine Y eligibility.
-        // This avoids a diagonal correction docking to a corner without overlap.
-        for horizontal in [true, false] {
-            let mut correction: Option<(f64, f64)> = None;
-            for moving in self.windows().iter().filter(|w| w.id == id) {
-                let rect = moving.world_rect.translated(actual);
-                for fixed in self
-                    .windows()
-                    .iter()
-                    .filter(|w| !members.contains(&w.id) && self.snaps(w.id))
-                {
-                    for candidate in
-                        candidates(rect, fixed.world_rect, options, horizontal, false, false)
-                            .into_iter()
-                            .flatten()
-                    {
-                        if candidate.1 < options.threshold
-                            && correction.is_none_or(|old| candidate.1 < old.1)
-                        {
-                            correction = Some(candidate);
-                        }
-                    }
-                }
-            }
-            if let Some((correction, _)) = correction {
-                if horizontal {
-                    actual.x += correction;
-                } else {
-                    actual.y += correction;
-                }
-            }
-        }
-        self.translate_members(&members, actual)?;
-        Ok(actual)
-    }
-    fn translate_members(&mut self, members: &[WindowId], delta: Point) -> Result<(), Error> {
-        if !delta.valid() {
-            return Err(Error::Invalid("move delta"));
-        }
-        let updates: Result<Vec<_>, Error> = members
-            .iter()
-            .map(|&id| {
-                let rect = self
-                    .window(id)
-                    .ok_or(Error::UnknownWindow(id))?
-                    .world_rect
-                    .translated(delta);
-                if !rect.valid() {
-                    return Err(Error::Invalid("moved window geometry"));
-                }
-                Ok((id, rect))
-            })
-            .collect();
-        for (id, rect) in updates? {
-            self.set_window_rect(id, rect)?;
-        }
-        Ok(())
-    }
 }
+
 pub(crate) fn adjacent(a: Rect, b: Rect, options: SnapOptions) -> bool {
     let y_overlap = a.origin.y < b.bottom() && b.origin.y < a.bottom();
     let x_overlap = a.origin.x < b.right() && b.origin.x < a.right();

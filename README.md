@@ -57,18 +57,25 @@ have been removed. Their failed attempts remain as
 The [cooperative native presentation backend](native/desktop/README.md#native-presentation-through-a-cooperative-helper)
 can now present real fixture windows with pan, zoom, focus, resize and recovery.
 Its scoped end-to-end test passed three times on macOS 27.2, including independent
-transform and alpha restoration checks. Finite helper scopes remain available for owned fixtures. The explicit
-`--native-desktop-helper` mode and `scripts/start-native-desktop.sh` prepare
-whole-desktop admission through an authenticated Dock helper; the app does not
-inject one itself. Third-party native compositing and native clipping remain
-unvalidated, and the current host has not passed injection preflight.
+transform and alpha restoration checks. Finite helper scopes remain available for owned fixtures. The owner-run `native-desktop` command and `scripts/start-native-desktop.sh` prepare whole-desktop admission through an authenticated Dock helper; normal startup does not inject one. The installed command uses only signed files inside its `.app` bundle, while the repository script also checks that a selected bundle matches the current checkout. Third-party native compositing and native clipping remain unvalidated, and the current host has not passed injection preflight.
 
-DriftWM is the session, not an app one launches, and a normal run of Infinify is meant the same way: installed, started at login, and there until you quit it. These four steps are for you to run; no script or agent here installs, signs with your identity or registers a login item, and none of the four has been run yet.
+DriftWM is the session, not an app one launches, and a normal run of Infinify is meant the same way: installed, started at login, and there until you quit it. These four steps are for you to run; no script or agent here installs, signs with your identity or registers a login item, and none of the four has been run yet. The login item remains the regular capture-mode startup. Full-desktop helper mode is a separate explicit terminal action and is not started at login.
 
-1. **Install.** `INFINIFY_SIGN_IDENTITY="<your signing identity>" ./scripts/install-app.sh` builds the app, copies it to `~/Applications/Infinify.app` and signs the copy. `security find-identity -v -p codesigning` lists identities. Without the variable the copy is signed ad hoc, with a loud warning: macOS ties the two grants below to the signature, so an ad hoc copy loses them at every reinstall.
+1. **Install.** `INFINIFY_SIGN_IDENTITY="<your signing identity>" ./scripts/install-app.sh` builds the app with that identity, then copies the exact signed bundle to `~/Applications/Infinify.app`. The bundle carries the doctor, arm64e loader, payload, and standalone launcher; installation verifies the outer signature, executable hash, and helper hashes. `security find-identity -v -p codesigning` lists identities. Without the variable the build is signed ad hoc, and macOS drops both grants on each reinstall. With `--built`, the installer preserves the identity already used for that build.
 2. **Grant access once.** `open ~/Applications/Infinify.app`. A small window names what is missing: click Allow screen recording… and Allow input…, switch Infinify on in the two System Settings panes they open, then click Relaunch (macOS gives Screen Recording only to a newly started app). The canvas opens over the whole display, under the menu bar and the Dock, and takes the windows that are open. Quit it again with Control-Option-Escape before the next step.
 3. **Turn the login item on.** `~/Applications/Infinify.app/Contents/MacOS/Infinify login-item on` starts Infinify now, at every login, and again after a crash; macOS may ask you to allow it under System Settings > General > Login Items & Extensions. `login-item status` reports it and `login-item off` removes it and ends the instance it started.
 4. **Quit** with Control-Option-Escape, Control-Command-Shift-Q or `~/Applications/Infinify.app/Contents/MacOS/Infinify msg action quit`. The scene is saved, the panels close and the native desktop is back; a quit is not restarted. Infinify starts again at the next login, or at once with `launchctl kickstart gui/$(id -u)/com.marengox.infinify.agent`.
+
+To opt into full-desktop helper mode, first quit any regular Infinify instance,
+then run `~/Applications/Infinify.app/Contents/MacOS/Infinify native-desktop`
+from a terminal. Its `native-desktop --check` form verifies the bundle and runs
+the read-only doctor without sudo, runtime creation, helper loading, or app
+launch. The launch command may ask for the owner’s explicit sudo authorization
+for the loader; only that loader runs as root, and the app then runs as the login
+user. `scripts/start-native-desktop.sh --app /absolute/path/Infinify.app` is the
+checkout-aware alternative; it also requires the bundle to match the current
+source snapshot. Neither entrypoint establishes ordinary third-party compositing
+or native clipping readiness.
 
 There are no buttons and no status line: keys, pointer gestures and `Infinify msg` do everything, and status notes go to stderr, which a run started at login does not show. Windows may sit under the menu bar and the Dock, which both stay. The [desktop app guide](native/desktop/README.md#desktop-mode) lists what else changes and the known limits, among them that a window whose capture macOS stops across sleep is not captured again by itself, and that nothing prevents a second instance (which is why step 2 ends with a quit).
 

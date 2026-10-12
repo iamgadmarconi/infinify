@@ -19,6 +19,8 @@
 # INFINIFY_BENCH_WINDOWS selects 1..16 owned fixture windows (default 4).
 # INFINIFY_BENCH_MODE=capture uses real animated fixture captures and requires Screen Recording access; synthetic is the default.
 # INFINIFY_BENCH_MODE=native uses cooperative helper windows at the requested size and an animated background, with no capture streams.
+# INFINIFY_BENCH_NATIVE_PRODUCERS=1 adds six-window-compatible, real 120Hz-requested Metal content to the cooperative host.
+# Its own drawable presentation timestamps are separate from canvas/background timestamps and optical transformed pixels.
 # Native mode measures background drawable times, samples one root's geometry at the requested rate, and checks every root's restoration;
 # geometry samples and helper acknowledgements do not prove optical native-window FPS.
 # INFINIFY_BENCH_ZOOM selects a zoom no larger than the fitted one (e.g. 0.21 for capture pixel-budget comparisons).
@@ -57,6 +59,9 @@ size=${INFINIFY_BENCH_SIZE:-1700x1100}; rate=${INFINIFY_BENCH_RATE:-120}
 mode=${INFINIFY_BENCH_MODE:-synthetic}; synth=$rate; nativebench=0
 baseline=${INFINIFY_BENCH_BASELINE:-0}
 case "$mode" in synthetic) ;; capture) synth=0 ;; native) synth=0; nativebench=1; INFINIFY_BENCH_ANIMATION=1; export INFINIFY_BENCH_ANIMATION ;; *) echo 'INFINIFY_BENCH_MODE must be synthetic, capture or native' >&2; exit 2 ;; esac
+native_producers=${INFINIFY_BENCH_NATIVE_PRODUCERS:-0}
+case "$native_producers" in 0) ;; 1) [ "$mode" = native ] && [ "$rate" = 120 ] || { echo 'native producers require native mode at requested 120 Hz' >&2; exit 2; } ;; *) echo 'INFINIFY_BENCH_NATIVE_PRODUCERS must be 0 or 1' >&2; exit 2 ;; esac
+INFINIFY_BENCH_NATIVE_PRODUCERS=$native_producers; export INFINIFY_BENCH_NATIVE_PRODUCERS
 report_ms=${INFINIFY_BENCH_REPORT_MS:-50}
 case "$report_ms" in 50) ;; 500) [ "$mode" = capture ] || { echo '500ms reports are a capture-only diagnostic' >&2; exit 2; } ;; *) echo 'INFINIFY_BENCH_REPORT_MS must be 50 or 500' >&2; exit 2 ;; esac
 INFINIFY_BENCH_REPORT_MS=$report_ms; export INFINIFY_BENCH_REPORT_MS
@@ -127,7 +132,8 @@ if [ "$mode" = native ]; then
 <plist version="1.0"><dict><key>CFBundleIdentifier</key><string>org.infinify.cooperative-host</string><key>CFBundleName</key><string>CooperativeHost</string><key>CFBundleExecutable</key><string>CooperativeHost</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>
 PLIST
   nonce=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n'); (umask 077; printf '%s\n' "$nonce" > "$evidence/nonce")
-  "$bundle/Contents/MacOS/CooperativeHost" "$root/target/privileged/payload-arm64.dylib" "$evidence/h" "$nonce" --windows "$fixture_count" --size "$size" --activation regular --watchdog 150 --level 4 --alpha "${INFINIFY_BENCH_HOST_ALPHA:-1}" --opaque "${INFINIFY_BENCH_HOST_OPAQUE:-yes}" --all-spaces "${INFINIFY_BENCH_HOST_ALL_SPACES:-yes}" >"$evidence/host.log" 2>&1 &
+  set --; if [ "$native_producers" = 1 ]; then set -- --animate 120; fi
+  "$bundle/Contents/MacOS/CooperativeHost" "$root/target/privileged/payload-arm64.dylib" "$evidence/h" "$nonce" "$@" --windows "$fixture_count" --size "$size" --activation regular --watchdog 150 --level 4 --alpha "${INFINIFY_BENCH_HOST_ALPHA:-1}" --opaque "${INFINIFY_BENCH_HOST_OPAQUE:-yes}" --all-spaces "${INFINIFY_BENCH_HOST_ALL_SPACES:-yes}" >"$evidence/host.log" 2>&1 &
   nativehost=$!; fixtures=$nativehost; printf '%s\n' "$nativehost" > "$evidence/native-host.pid"
   n=0; while ! grep -q '^READY ' "$evidence/host.log" 2>/dev/null && [ "$n" -lt 80 ]; do sleep .1; n=$((n+1)); done
   grep -q '^READY ' "$evidence/host.log" || { echo 'FAIL: cooperative host did not start'; exit 1; }
@@ -292,6 +298,49 @@ def process_snapshot():
     if app_row is None: stop('benchmark process counters', 'owned Infinify process is unavailable')
     helper_pid = (evidence / 'native-host.pid').read_text().strip() if mode == 'native' else None
     return {'app': app_row, 'helper': read_process(helper_pid), 'window_server_whole_desktop': read_process(server_pid)}
+producer_report = {'sequence':0, 'birth':None}
+def producer_snapshot(label):
+    if os.environ['INFINIFY_BENCH_NATIVE_PRODUCERS'] != '1': return None
+    pid = int((evidence / 'native-host.pid').read_text())
+    expected = {status(n)['window'] for n in names}
+    # A private, existing request file wakes the owned host only at boundaries.
+    # No PID signal or measurement-time polling timer is involved.
+    request = producer_report['sequence'] + 1
+    fd = os.open(evidence / 'h' / 'producer-request', os.O_WRONLY | os.O_NOFOLLOW)
+    try:
+        if os.pwrite(fd, struct.pack('<Q', request), 0) != 8: stop('owned producer telemetry request', 'short write')
+    finally: os.close(fd)
+    deadline = time.monotonic() + 3; path = evidence / 'h' / 'producer-stats.json'
+    while time.monotonic() < deadline:
+        try: value = json.loads(path.read_text())
+        except (FileNotFoundError, json.JSONDecodeError): time.sleep(.01); continue
+        if value.get('report', 0) != request: time.sleep(.01); continue
+        birth = (value.get('birth_sec'), value.get('birth_usec'))
+        rows = value.get('windows', [])
+        if value.get('pid') != pid or len(rows) != len(expected) or {r.get('window') for r in rows} != expected:
+            stop('owned producer identity/window set', value)
+        if producer_report['birth'] is not None and birth != producer_report['birth']: stop('owned producer birth changed', value)
+        if not all(isinstance(x, int) and x >= 0 for x in birth): stop('owned producer birth missing', value)
+        producer_report.update(sequence=value['report'], birth=birth)
+        (evidence / (label + '-producer.json')).write_text(json.dumps(value, indent=2) + '\n')
+        return value
+    stop('owned producer boundary report', 'timed out')
+def producer_interval(before, after):
+    if before is None or after is None: return None
+    result = {}; prior = {row['window']:row for row in before['windows']}
+    for row in after['windows']:
+        old = prior[row['window']]; span = row['monotonic_s'] - old['monotonic_s']
+        samples = [sample for sample in row['samples'] if old['presented'] < sample[0] <= row['presented']]
+        count = row['presented'] - old['presented']; times = [sample[1] for sample in samples]
+        gaps = [(b-a)*1000 for a,b in zip(times,times[1:]) if b>a]; ordered = sorted(gaps)
+        result[str(row['window'])] = {'interval_seconds':span, 'presented':count, 'presented_fps':count/span if span>0 else None,
+            'offered':row['offered']-old['offered'], 'encoded':row['encoded']-old['encoded'], 'completed':row['completed']-old['completed'],
+            'errors':row['errors']-old['errors'], 'zero_presented_time':row['zero_presented_time']-old['zero_presented_time'],
+            'sample_count':len(samples), 'overflow':row['overflow'], 'gap_p99_ms':ordered[min(len(ordered)-1, math.ceil(.99*len(ordered))-1)] if ordered else None,
+            'gap_worst_ms':max(gaps) if gaps else None, 'duplicate_time':sum(a==b for a,b in zip(times,times[1:])),
+            'reordered_time':sum(b<a for a,b in zip(times,times[1:])), 'pixels':row['pixels'], 'points':row['points'],
+            'first_presented_time':times[0] if times else None, 'last_presented_time':times[-1] if times else None}
+    return result
 def process_interval(before, after):
     if before is None or after is None or (before['pid'], before['started']) != (after['pid'], after['started']): return None
     elapsed = after['time'] - before['time']; cpu = after['cpu_seconds'] - before['cpu_seconds']
@@ -419,6 +468,7 @@ windows = max(2, math.ceil(float(os.environ.get('INFINIFY_BENCH_SECONDS', '10'))
 def measure(name, work):
     # A helper probe can wait on its socket: take it outside the selected
     # presentation windows, with the first partial window still discarded.
+    producer_before = producer_snapshot(name.replace(' ', '-') + '-before')
     helper_before = helper_counters()
     process_before = process_snapshot()
     panel_ids = [p['wid'] for p in visibility(name + ' before')['panels']]
@@ -510,11 +560,13 @@ def measure(name, work):
     # The mean flush is weighted by the flushes of each line.
     flushes = sum(r[3] * r[0] for r in rows)
     sources = [min(s[i][1] for r in rows for s in [r[9]] if i < len(s)) for i in range(max(len(r[9]) for r in rows))]
+    producer_after = producer_snapshot(name.replace(' ', '-') + '-after')
+    producer_usage = producer_interval(producer_before, producer_after)
     process_after = process_snapshot(); app_usage = process_interval(process_before['app'], process_after['app'])
     if app_usage is None: stop('benchmark process interval', 'owned Infinify process identity or counters changed')
     # The CPU interval includes phase setup/alignment; the drawable metrics above
     # cover only whole two-second windows. Keep both intervals explicit.
-    return {'process_interval_seconds': app_usage['interval_seconds'],
+    return {'native_producers':producer_usage, 'process_interval_seconds': app_usage['interval_seconds'],
             'cpu_percent_one_core': app_usage['cpu_percent_one_core'],
             'rss_start_kib': app_usage['rss_start_kib'], 'rss_end_kib': app_usage['rss_end_kib'],
             'related_processes': {key: process_interval(process_before[key], process_after[key]) for key in ('helper', 'window_server_whole_desktop')},
@@ -668,13 +720,20 @@ for name, r in phases:
     print(f'{name}: acquire_worst_ms={r["acquire_worst_ms"]:.3f} acquire_queue_worst_ms={r["acquire_queue_worst_ms"]:.3f} publish_worst_ms={r["publish_worst_ms"]:.3f} notify_worst_ms={r["notify_worst_ms"]:.3f} completion_worst_ms={r["completion_worst_ms"]:.3f} acquire_timeouts={r["acquire_timeouts"]:.0f} not_presented={r["not_presented"]:.0f}', flush=True)
     print(f'{name}: panel_observations={r["panel_rows"]} occluded_observations={r["occluded_rows"]} hidden_observations={r["hidden_rows"]} hides_inactive_observations={r["hides_inactive_rows"]} inactive_space_observations={r["inactive_space_rows"]}', flush=True)
     print(f'{name}: cpu_percent_one_core={r["cpu_percent_one_core"]:.2f} cpu_interval_seconds={r["process_interval_seconds"]:.2f} rss_start_kib={r["rss_start_kib"]} rss_end_kib={r["rss_end_kib"]}', flush=True)
-    print(f'{name}: separate related-process intervals (WindowServer is whole desktop; RSS excludes GPU allocations): {json.dumps(r["related_processes"])}', flush=True)
+    print(f'{name}: separate related-process intervals (WindowServer is whole desktop; RSS excludes GPU allocations; helper includes producers when enabled): {json.dumps(r["related_processes"])}', flush=True)
+    if r['native_producers'] is not None: print(f'{name}: owned native producer presentations (not optical transformed pixels): {json.dumps(r["native_producers"])}', flush=True)
 (evidence / 'summary.json').write_text(json.dumps({'mode': mode, 'fixture_count': fixture_count, 'requested_rate': rate,
+    'native_producers_enabled':os.environ['INFINIFY_BENCH_NATIVE_PRODUCERS']=='1',
     'fixture_report_interval_ms': int(os.environ['INFINIFY_BENCH_REPORT_MS']) if mode == 'capture' else None,
     'fixture_points': [status(n)['bounds'][2:] for n in names], 'output_points': out,
     'selected_seconds_per_phase': windows * 2, 'phases': dict(phases)}, indent=2) + '\n')
 for name, r in phases:
     hz = r['display']
+    if r['native_producers'] is not None:
+        for wid, producer in r['native_producers'].items():
+            check(f'{name}: owned producer {wid} has complete positive presentation timestamps', producer['presented'] > 1 and producer['sample_count'] == producer['presented'] and not producer['overflow'] and not producer['zero_presented_time'] and not producer['duplicate_time'] and not producer['reordered_time'], producer)
+            check(f'{name}: owned producer {wid} has no GPU error', producer['errors'] == 0, producer['errors'])
+            check(f'{name}: owned producer {wid} presents within 10% of requested 120 Hz', producer['presented_fps'] is not None and .9*rate <= producer['presented_fps'] <= 1.1*rate, producer['presented_fps'])
     if mode == 'native': check(f'{name}: native scene has no captured frame delivery or acceptance', r['received_most'] == 0 and r['accepted_most'] == 0, {'bound_sources': r['sources'], 'received_most': r['received_most'], 'accepted_most': r['accepted_most']})
     else: check(f'{name}: {fixture_count} sources, each kept at least 90% of {rate:.0f} frames a second', r['sources'] == fixture_count and r['accepted_least'] >= .9 * rate, {'sources': r['sources'], 'least': r['accepted_least']})
     check(f'{name}: flushes a second do not exceed the display\'s {hz:.0f} by more than 3%', r['flushes'] <= hz * 1.03, round(r['flushes'], 1))

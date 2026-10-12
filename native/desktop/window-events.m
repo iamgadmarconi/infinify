@@ -8,6 +8,7 @@
 #include <errno.h>
 #import "../focus/focus.h"
 #include <dlfcn.h>
+#include <os/lock.h>
 // Signature provenance: yabai, same commit, src/misc/extern.h:8, as in window-manager.m.
 typedef AXError (*GetWindow)(AXUIElementRef,uint32_t *);
 // What an application is given to answer one Accessibility message. Asked on the worker only.
@@ -32,10 +33,126 @@ enum { windowCount=3 };
 // Every Accessibility message goes through this one serial queue, a stopped instance's removals ahead of its successor's
 // registrations. yabai sends them from its event-loop thread, likewise not the thread its observers call back on.
 static dispatch_queue_t worker(void) { static dispatch_queue_t queue;static dispatch_once_t once;dispatch_once(&once,^{queue=dispatch_queue_create("org.infinify.window-events",DISPATCH_QUEUE_SERIAL);});return queue; }
+// LaunchServices reads are serial too, but cannot hold up an application's AX work.
+static dispatch_queue_t applicationWorker(void) { static dispatch_queue_t queue;static dispatch_once_t once;dispatch_once(&once,^{queue=dispatch_queue_create("org.infinify.application-events",dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,QOS_CLASS_UTILITY,0));});return queue; }
+static void *applicationObservation=&applicationObservation;
+static NSArray<NSString *> *applicationProperties(void) { return @[@"processIdentifier",@"activationPolicy",@"terminated"]; }
+enum { applicationAppeared=1, applicationChanged=2, applicationActivated=4 };
+// NSRunningApplication documents these three properties as KVO-observable (including PID changes on automatic
+// termination). One record retains one canonical object, not a cached PID. Equal catalog wrappers can name the same
+// application; they never replace that object or its observer. Installation/removal and the registry
+// are main-only. KVO can arrive on any thread: it invalidates the revision under the lock and coalesces one weak main
+// notification. No LaunchServices property is read there, or while holding this lock.
+@interface DWApplicationWatch : NSObject {
+    os_unfair_lock _lock;
+    uint64_t _revision, _identityRevision;
+    BOOL _active, _queued, _observing;
+}
+@property (readonly) NSRunningApplication *running;
+@property (copy) void (^changed)(DWApplicationWatch *);
+@property BOOL pending, retry;
+@property NSUInteger hints;
+@property pid_t pid; // last accepted metadata; never native authority
+@property pid_t boundPID;
+@property uint64_t boundIdentityRevision, boundSeconds, boundMicroseconds;
+- (instancetype)initWithRunning:(NSRunningApplication *)running;
+- (uint64_t)revision;
+- (uint64_t)identityRevision;
+- (BOOL)matches:(uint64_t)revision;
+- (void)invalidateMetadata;
+- (void)invalidateIdentityMetadata;
+- (void)invalidate;
+@end
+@implementation DWApplicationWatch
+- (instancetype)initWithRunning:(NSRunningApplication *)running {
+    if((self=[super init])){_lock=OS_UNFAIR_LOCK_INIT;_running=running;_active=YES;_revision=1;_identityRevision=1;_pending=YES;
+        NSAssert(NSThread.isMainThread,@"application observation is installed on main");
+        for(NSString *key in applicationProperties())[running addObserver:self forKeyPath:key options:0 context:applicationObservation];
+        _observing=YES;
+    }return self;
+}
+- (uint64_t)revision { os_unfair_lock_lock(&_lock);uint64_t revision=_revision;os_unfair_lock_unlock(&_lock);return revision; }
+- (uint64_t)identityRevision { os_unfair_lock_lock(&_lock);uint64_t revision=_identityRevision;os_unfair_lock_unlock(&_lock);return revision; }
+- (BOOL)matches:(uint64_t)revision { os_unfair_lock_lock(&_lock);BOOL matches=_active&&_revision==revision;os_unfair_lock_unlock(&_lock);return matches; }
+- (void)invalidateIdentity:(BOOL)identity {
+    os_unfair_lock_lock(&_lock);BOOL schedule=_active&&!_queued;if(_active){_revision++;if(identity)_identityRevision++;_queued=YES;}os_unfair_lock_unlock(&_lock);
+    if(!schedule)return;__weak DWApplicationWatch *weak=self;
+    dispatch_async(dispatch_get_main_queue(),^{DWApplicationWatch *record=weak;if(!record)return;
+        os_unfair_lock_lock(&record->_lock);BOOL active=record->_active;record->_queued=NO;os_unfair_lock_unlock(&record->_lock);
+        if(active&&record.changed)record.changed(record);
+    });
+}
+- (void)invalidateMetadata { [self invalidateIdentity:NO]; }
+- (void)invalidateIdentityMetadata { [self invalidateIdentity:YES]; }
+- (void)observeValueForKeyPath:(NSString *)key ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
+    if(context==applicationObservation){[self invalidateIdentity:[key isEqualToString:@"processIdentifier"]||[key isEqualToString:@"terminated"]];return;}
+    [super observeValueForKeyPath:key ofObject:object change:change context:context];
+}
+- (void)invalidate {
+    os_unfair_lock_lock(&_lock);_active=NO;_revision++;os_unfair_lock_unlock(&_lock);
+    // Never remove an observer under the callback lock: removal may synchronize with an in-flight notification.
+    if(_observing){NSAssert(NSThread.isMainThread,@"application observation is removed on main");_observing=NO;for(NSString *key in applicationProperties())[_running removeObserver:self forKeyPath:key context:applicationObservation];}
+    _changed=nil;
+}
+- (void)dealloc { [self invalidate]; }
+@end
+static void *catalogObservation=&catalogObservation;
+// NSRunningApplication.h explicitly recommends KVO of NSWorkspace.runningApplications instead of polling. The
+// collection can change on any thread; one weak main notification carries its newest revision, not the array itself.
+@interface DWApplicationCatalogWatch : NSObject {
+    os_unfair_lock _lock;
+    uint64_t _revision;
+    BOOL _active, _queued, _observing;
+}
+@property (readonly) NSWorkspace *workspace;
+@property (copy) void (^changed)(DWApplicationCatalogWatch *);
+- (instancetype)initWithWorkspace:(NSWorkspace *)workspace;
+- (uint64_t)revision;
+- (BOOL)matches:(uint64_t)revision;
+- (void)invalidate;
+@end
+@implementation DWApplicationCatalogWatch
+- (instancetype)initWithWorkspace:(NSWorkspace *)workspace {
+    if((self=[super init])){_lock=OS_UNFAIR_LOCK_INIT;_workspace=workspace;_active=YES;_revision=1;
+        NSAssert(NSThread.isMainThread,@"application catalog observation is installed on main");
+        [workspace addObserver:self forKeyPath:@"runningApplications" options:0 context:catalogObservation];_observing=YES;
+    }return self;
+}
+- (uint64_t)revision { os_unfair_lock_lock(&_lock);uint64_t revision=_revision;os_unfair_lock_unlock(&_lock);return revision; }
+- (BOOL)matches:(uint64_t)revision { os_unfair_lock_lock(&_lock);BOOL matches=_active&&_revision==revision;os_unfair_lock_unlock(&_lock);return matches; }
+- (void)observeValueForKeyPath:(NSString *)key ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
+    if(context!=catalogObservation){[super observeValueForKeyPath:key ofObject:object change:change context:context];return;}
+    os_unfair_lock_lock(&_lock);BOOL schedule=_active&&!_queued;if(_active){_revision++;_queued=YES;}os_unfair_lock_unlock(&_lock);
+    if(!schedule)return;__weak DWApplicationCatalogWatch *weak=self;
+    dispatch_async(dispatch_get_main_queue(),^{DWApplicationCatalogWatch *watch=weak;if(!watch)return;
+        os_unfair_lock_lock(&watch->_lock);BOOL active=watch->_active;watch->_queued=NO;os_unfair_lock_unlock(&watch->_lock);
+        if(active&&watch.changed)watch.changed(watch);
+    });
+}
+- (void)invalidate {
+    os_unfair_lock_lock(&_lock);_active=NO;_revision++;os_unfair_lock_unlock(&_lock);
+    // As for application observers, removal is main-only and outside the callback lock.
+    if(_observing){NSAssert(NSThread.isMainThread,@"application catalog observation is removed on main");_observing=NO;[_workspace removeObserver:self forKeyPath:@"runningApplications" context:catalogObservation];}
+    _changed=nil;
+}
+- (void)dealloc { [self invalidate]; }
+@end
+@interface DWApplicationMetadata : NSObject
+@property DWApplicationWatch *watch;
+@property NSRunningApplication *running; // catalog wrapper; never replaces a verified canonical observer
+@property uint64_t revision, identityRevision, seconds, microseconds;
+@property pid_t pid;
+@property BOOL regular, terminated, born;
+@property NSUInteger hints;
+@property BOOL identityNotice;
+@end
+@implementation DWApplicationMetadata
+@end
 @class DWWindowEvents, DWObservedWindow;
 // One observed application: yabai's struct application. Main thread, but for what a block on the worker is handed by value.
 @interface DWObservedApplication : NSObject
 @property pid_t pid;
+@property uint64_t seconds, microseconds;
 @property NSRunningApplication *running;
 @property (weak) DWWindowEvents *events;
 @property AXUIElementRef element;
@@ -75,6 +192,13 @@ static dispatch_queue_t worker(void) { static dispatch_queue_t queue;static disp
 @property (weak) id<DWWindowEventSink> sink;
 @property NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope;
 @property NSMutableDictionary<NSNumber *,DWObservedApplication *> *applications;
+@property NSMapTable<NSRunningApplication *,DWApplicationWatch *> *applicationWatches;
+@property DWApplicationCatalogWatch *applicationCatalogWatch;
+@property NSNotificationCenter *workspaceNotifications;
+@property uint64_t catalogRevision, observationEpoch, appliedCatalogRevision;
+@property BOOL readingApplications, applicationReadQueued, hasApplicationCatalog, applicationCatalogDirty;
+@property NSMutableArray<DWApplicationMetadata *> *applicationNotices;
+@property BOOL resolvingApplicationNotices, applicationNoticeQueued;
 // Coalescing, by pid<<32|window (`appeared` for an application's set of windows, 0 for native focus): when each was last
 // reported, and which are owed one more report.
 @property NSMutableDictionary<NSNumber *,NSNumber *> *sent;
@@ -83,7 +207,7 @@ static dispatch_queue_t worker(void) { static dispatch_queue_t queue;static disp
 @property NSTimer *timer;
 @property NSTimeInterval checked;
 @property BOOL trusted, stopped;
-@property BOOL scanning; // the look through every running application is under way off the main thread (-reconcile)
+@property BOOL scanning; // one collection-KVO/initial catalog read is under way off the main thread
 - (void)notified:(CFStringRef)notification element:(AXUIElementRef)element application:(DWObservedApplication *)application window:(DWObservedWindow *)window;
 @end
 // yabai's application_notification_handler. On the main thread, from the observer's run-loop source. The context is the
@@ -117,9 +241,10 @@ BOOL DWInScope(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope,pid_t pid) 
 @implementation DWWindowEvents
 - (instancetype)initWithSink:(id<DWWindowEventSink>)sink scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope {
     if((self=[super init])){_sink=sink;_scope=[scope copy];_applications=[NSMutableDictionary dictionary];_sent=[NSMutableDictionary dictionary];_owed=[NSMutableSet set];
+        _applicationWatches=[NSMapTable mapTableWithKeyOptions:NSPointerFunctionsStrongMemory|NSPointerFunctionsObjectPointerPersonality valueOptions:NSPointerFunctionsStrongMemory];_applicationNotices=[NSMutableArray array];
         // yabai's workspace_context, less what a tiling window manager needs of the Dock, the menu bar and the displays, and with
         // launch, end and activation from NSWorkspace where yabai has them from its process manager's Carbon events.
-        NSNotificationCenter *center=NSWorkspace.sharedWorkspace.notificationCenter;
+        NSNotificationCenter *center=NSWorkspace.sharedWorkspace.notificationCenter;_workspaceNotifications=center;
         [center addObserver:self selector:@selector(launched:) name:NSWorkspaceDidLaunchApplicationNotification object:nil];
         [center addObserver:self selector:@selector(terminated:) name:NSWorkspaceDidTerminateApplicationNotification object:nil];
         [center addObserver:self selector:@selector(activated:) name:NSWorkspaceDidActivateApplicationNotification object:nil];
@@ -131,36 +256,31 @@ BOOL DWInScope(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope,pid_t pid) 
 }
 // An application that is not observed in full yet, or will never be, reports less than the poll would find: the poll then keeps its pace.
 - (BOOL)live {
-    if(!self.trusted||self.stopped)return NO;
+    if(!self.trusted||self.stopped||!self.hasApplicationCatalog||self.scanning||self.applicationCatalogDirty||self.readingApplications||self.applicationReadQueued||self.resolvingApplicationNotices||self.applicationNotices.count)return NO;
+    for(DWApplicationWatch *record in self.applicationWatches.objectEnumerator)if(record.retry)return NO;
     for(DWObservedApplication *application in self.applications.allValues)if(application.registered!=every)return NO;
     return YES;
 }
 - (void)reconcile {
     NSTimeInterval now=NSProcessInfo.processInfo.systemUptime;if(self.stopped||(self.checked&&now-self.checked<.5))return;self.checked=now;
     // Access withdrawn: nothing is delivered any more, so nothing is kept, and the poll is the only mechanism again.
-    if(!AXIsProcessTrusted()){self.trusted=NO;for(NSNumber *pid in self.applications.allKeys)[self remove:pid.intValue ended:NO];return;}
-    // yabai's window_manager_begin, made again at every reconciliation: an application that became a regular one since, which
-    // yabai learns from key-value observation of its activation policy, is found here within a second. The first look is made
-    // here and now, since the caller goes on to list windows. Every later one is made off the main thread: what an
-    // NSRunningApplication says of itself is fetched from LaunchServices, one synchronous round trip an application, and for
-    // the hundred or so that run that was 12 to 18 ms of the main thread once a second, a refresh or two of a 120 Hz display
-    // (sampled 2026-10-11 under four windows drawing: 35 of the 54 ms in -add: were that wait). The class is safe to read
-    // from any thread; only the applications found to be regular and running come back, with their process ids already read.
-    BOOL first=!self.trusted;self.trusted=YES;
-    if(first)for(NSRunningApplication *running in NSWorkspace.sharedWorkspace.runningApplications)[self add:running];
-    else if(!self.scanning){self.scanning=YES;__weak DWWindowEvents *weak=self;
-        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY,0),^{
-            NSMutableArray<NSRunningApplication *> *found=[NSMutableArray array];NSMutableArray<NSNumber *> *pids=[NSMutableArray array];
-            for(NSRunningApplication *running in NSWorkspace.sharedWorkspace.runningApplications){pid_t pid=running.processIdentifier;
-                if(pid>0&&!running.terminated&&running.activationPolicy==NSApplicationActivationPolicyRegular){[found addObject:running];[pids addObject:@(pid)];}}
-            dispatch_async(dispatch_get_main_queue(),^{DWWindowEvents *events=weak;if(!events)return;events.scanning=NO;if(events.stopped||!events.trusted)return;
-                // One it already observes costs a dictionary lookup; -add: asks a new one again, here, for what it is.
-                for(NSUInteger n=0;n<found.count;n++)if(!events.applications[pids[n]])[events add:found[n]];});
-        });}
+    if(!AXIsProcessTrusted()){self.trusted=NO;[self clearApplicationWatches];for(NSNumber *pid in self.applications.allKeys)[self remove:pid.intValue ended:NO];return;}
+    self.trusted=YES;
+    // Observe both the application collection and each member's PID, policy and termination. Catalog/metadata reads can
+    // synchronously wait for LaunchServices, so initial or invalidated records are read only on the serial worker.
+    // Collection KVO also discovers launches whose separate workspace notification was missed; there is no catalog poll.
+    [self observeApplicationCatalog];
+    [self scanApplications];
+    for(DWApplicationWatch *record in self.applicationWatches.objectEnumerator)if(record.retry){record.retry=NO;record.pending=YES;}
+    [self queueApplicationRead];
     for(DWObservedApplication *application in self.applications.allValues){
-        // Ended: by the process table, which costs nothing, and not by asking LaunchServices about each one every second.
-        // -terminated: has usually removed it by now.
-        if(kill(application.pid,0)&&errno==ESRCH){[self remove:application.pid ended:YES];continue;}
+        // Periodic native identity checks are limited to admitted AX applications. Collection equality only preserves
+        // observers; it cannot leave an old registration live when a numeric PID has been reused without a KVO update.
+        uint64_t seconds=0,microseconds=0;
+        if(!dw_focus_birth(application.pid,&seconds,&microseconds)||seconds!=application.seconds||microseconds!=application.microseconds){
+            DWApplicationWatch *record=[self.applicationWatches objectForKey:application.running];record.retry=YES;
+            BOOL ended=kill(application.pid,0)&&errno==ESRCH;[self remove:application.pid ended:ended];[self changed:0 pid:application.pid];continue;
+        }
         if(application.registered!=every&&!application.final&&!application.retry)[self observe:application];
         // A window it did not answer for, or gave no number for, is watched once it does: its windows are listed again until then.
         if(application.unanswered)[self list:application];
@@ -168,14 +288,169 @@ BOOL DWInScope(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope,pid_t pid) 
         for(DWObservedWindow *window in application.contexts.copy)if(window.destroyed&&now-window.destroyed>10)[application.contexts removeObjectIdenticalTo:window];
     }
 }
-- (void)add:(NSRunningApplication *)running {
-    pid_t pid=running.processIdentifier;
-    if(self.stopped||!self.trusted||pid<=0||pid==getpid()||running.terminated||running.activationPolicy!=NSApplicationActivationPolicyRegular||self.applications[@(pid)])return;
-    // Under --only-pid no other application is sent an Accessibility message from here: this is the only place an observer begins.
-    if(!DWInScope(self.scope,pid))return;
-    DWObservedApplication *application=[DWObservedApplication new];application.pid=pid;application.running=running;application.events=self;application.contexts=[NSMutableArray array];
-    application.windows=CFDictionaryCreateMutable(NULL,0,&kCFTypeDictionaryKeyCallBacks,&kCFTypeDictionaryValueCallBacks);application.asked=CFSetCreateMutable(NULL,0,&kCFTypeSetCallBacks);
-    self.applications[@(pid)]=application;[self observe:application];
+- (DWApplicationWatch *)watchApplication:(NSRunningApplication *)running {
+    if(self.stopped||!self.trusted||!running)return nil;
+    DWApplicationWatch *record=[self.applicationWatches objectForKey:running];if(record)return record;
+    record=[[DWApplicationWatch alloc]initWithRunning:running];__weak DWWindowEvents *weak=self;
+    record.changed=^(DWApplicationWatch *changed){DWWindowEvents *events=weak;if(!events||events.stopped||!events.trusted||[events.applicationWatches objectForKey:changed.running]!=changed)return;
+        changed.pending=YES;changed.retry=NO;[events queueApplicationRead];};
+    [self.applicationWatches setObject:record forKey:running];self.catalogRevision++;return record;
+}
+- (void)forgetApplication:(DWApplicationWatch *)record ended:(BOOL)ended {
+    if(!record||[self.applicationWatches objectForKey:record.running]!=record)return;
+    [record invalidate];[self.applicationWatches removeObjectForKey:record.running];self.catalogRevision++;
+    DWObservedApplication *application=self.applications[@(record.pid)];
+    if(application.running==record.running)[self remove:record.pid ended:ended];
+}
+- (void)clearApplicationWatches {
+    self.observationEpoch++;self.catalogRevision++;self.hasApplicationCatalog=NO;
+    [self.applicationCatalogWatch invalidate];self.applicationCatalogWatch=nil;self.appliedCatalogRevision=0;self.applicationCatalogDirty=NO;
+    for(DWApplicationWatch *record in self.applicationWatches.objectEnumerator)[record invalidate];
+    [self.applicationWatches removeAllObjects];[self.applicationNotices removeAllObjects];
+}
+- (void)observeApplicationCatalog {
+    if(self.applicationCatalogWatch||self.stopped||!self.trusted)return;
+    DWApplicationCatalogWatch *watch=[[DWApplicationCatalogWatch alloc]initWithWorkspace:NSWorkspace.sharedWorkspace];__weak DWWindowEvents *weak=self;
+    watch.changed=^(DWApplicationCatalogWatch *changed){DWWindowEvents *events=weak;if(!events||events.stopped||!events.trusted||events.applicationCatalogWatch!=changed)return;
+        if(events.appliedCatalogRevision!=changed.revision){events.applicationCatalogDirty=YES;[events scanApplications];}
+    };
+    self.applicationCatalogWatch=watch;self.applicationCatalogDirty=YES;
+}
+- (void)reconcileApplications:(NSArray<NSRunningApplication *> *)running {
+    self.hasApplicationCatalog=YES;
+    NSHashTable *current=[NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality|NSPointerFunctionsStrongMemory];
+    for(NSRunningApplication *application in running)[current addObject:application];
+    for(DWApplicationWatch *record in self.applicationWatches.objectEnumerator.allObjects)if(![current containsObject:record.running])[self forgetApplication:record ended:NO];
+    for(NSRunningApplication *application in running)[self watchApplication:application];
+    [self queueApplicationRead];
+}
+- (NSArray<DWApplicationMetadata *> *)applicationCatalogBindings {
+    NSMutableArray<DWApplicationMetadata *> *bindings=[NSMutableArray array];
+    for(DWApplicationWatch *record in self.applicationWatches.objectEnumerator){
+        DWApplicationMetadata *binding=[DWApplicationMetadata new];binding.watch=record;binding.revision=record.revision;binding.pid=record.pid;
+        binding.seconds=record.boundSeconds;binding.microseconds=record.boundMicroseconds;
+        binding.born=record.boundIdentityRevision==record.identityRevision&&record.boundPID==record.pid&&record.boundIdentityRevision!=0;
+        [bindings addObject:binding];
+    }return bindings;
+}
+- (BOOL)applicationBindingsCurrent:(NSArray<DWApplicationMetadata *> *)bindings {
+    for(DWApplicationMetadata *binding in bindings)if([self.applicationWatches objectForKey:binding.watch.running]!=binding.watch||![binding.watch matches:binding.revision])return NO;
+    return YES;
+}
+// NSRunningApplication.h tells callers to compare applications with isEqual:, not PID. runningApplications returns
+// fresh wrappers in practice: pointer-only membership recreated all observers every second (2026-10-12 idle profile).
+// Hashes are temporary numeric buckets, built off main on every pass; no mutable NSRunningApplication hash is a durable
+// dictionary key. A semantic match is only a candidate: its exact record revision and kernel birth still have to agree.
+static NSArray<DWApplicationMetadata *> *canonicalApplications(NSArray<NSRunningApplication *> *running,NSArray<DWApplicationMetadata *> *known) {
+    NSMutableDictionary<NSNumber *,NSMutableArray<DWApplicationMetadata *> *> *buckets=[NSMutableDictionary dictionary];
+    for(DWApplicationMetadata *binding in known)if([binding.watch matches:binding.revision]){
+        NSNumber *hash=@(binding.watch.running.hash);if(!buckets[hash])buckets[hash]=[NSMutableArray array];[buckets[hash]addObject:binding];
+    }
+    NSMutableArray<DWApplicationMetadata *> *result=[NSMutableArray arrayWithCapacity:running.count];
+    for(NSRunningApplication *application in running){
+        DWApplicationMetadata *entry=[DWApplicationMetadata new];entry.running=application;
+        for(DWApplicationMetadata *binding in buckets[@(application.hash)])if([binding.watch.running isEqual:application]&&[binding.watch matches:binding.revision]){
+            entry.watch=binding.watch;entry.revision=binding.revision;entry.pid=binding.pid;entry.seconds=binding.seconds;entry.microseconds=binding.microseconds;
+            uint64_t seconds=0,microseconds=0;
+            entry.born=binding.born&&binding.pid>0&&dw_focus_birth(binding.pid,&seconds,&microseconds)&&seconds==binding.seconds&&microseconds==binding.microseconds;
+            break;
+        }
+        [result addObject:entry];
+    }return result;
+}
+- (BOOL)acceptApplicationCatalog:(NSArray<DWApplicationMetadata *> *)catalog {
+    NSMutableArray<NSRunningApplication *> *running=[NSMutableArray arrayWithCapacity:catalog.count];
+    for(DWApplicationMetadata *entry in catalog){DWApplicationWatch *record=entry.watch;BOOL current=record&&[self.applicationWatches objectForKey:record.running]==record&&[record matches:entry.revision];
+        if(record&&!current){[self queueApplicationRead];return NO;}
+        uint64_t seconds=0,microseconds=0;
+        // An application without a PID has no native admission. Keep its semantic watcher so a later PID KVO can discover
+        // it. Every positive PID, including accessory/out-of-scope applications, carries independently checked birth.
+        BOOL born=current&&(entry.pid<=0||(entry.born&&dw_focus_birth(entry.pid,&seconds,&microseconds)&&seconds==entry.seconds&&microseconds==entry.microseconds));
+        if(current){
+            // Equality names the same application identity, even if the kernel fence now fails. Pointer freshness must
+            // not give that identity a new birth affinity. Keep its observer, retire stale AX admission, and reread it.
+            [running addObject:record.running];
+            if(!born){record.pending=YES;DWObservedApplication *application=self.applications[@(record.pid)];
+                if(application.running==record.running){record.retry=YES;[self remove:record.pid ended:NO];[self changed:0 pid:record.pid];}
+            }
+        }else [running addObject:entry.running];
+    }
+    [self reconcileApplications:running];return YES;
+}
+- (void)scanApplications {
+    if(self.scanning||self.stopped||!self.trusted||!self.applicationCatalogDirty)return;
+    DWApplicationCatalogWatch *watch=self.applicationCatalogWatch;if(!watch)return;
+    self.scanning=YES;self.applicationCatalogDirty=NO;uint64_t epoch=self.observationEpoch,revision=self.catalogRevision,collectionRevision=watch.revision;__weak DWWindowEvents *weak=self;
+    NSArray<DWApplicationMetadata *> *known=[self applicationCatalogBindings];
+    dispatch_async(applicationWorker(),^{@autoreleasepool {
+        NSArray<DWApplicationMetadata *> *running=[watch matches:collectionRevision]?canonicalApplications(watch.workspace.runningApplications,known):nil;
+        dispatch_async(dispatch_get_main_queue(),^{DWWindowEvents *events=weak;if(!events)return;events.scanning=NO;
+            if(events.stopped||!events.trusted)return;
+            // A notification arriving during a read must produce a successor read without waiting for another event.
+            BOOL current=events.observationEpoch==epoch&&events.applicationCatalogWatch==watch&&[watch matches:collectionRevision]&&events.catalogRevision==revision&&[events applicationBindingsCurrent:known];
+            BOOL accepted=current&&[events acceptApplicationCatalog:running];
+            if(accepted)events.appliedCatalogRevision=collectionRevision;
+            events.applicationCatalogDirty=!accepted||![watch matches:collectionRevision];
+            [events scanApplications];
+        });
+    }});
+}
+- (void)queueApplicationRead {
+    if(self.stopped||!self.trusted||self.readingApplications||self.applicationReadQueued)return;
+    BOOL pending=NO;for(DWApplicationWatch *record in self.applicationWatches.objectEnumerator)if(record.pending){pending=YES;break;}if(!pending)return;
+    self.applicationReadQueued=YES;__weak DWWindowEvents *weak=self;
+    dispatch_async(dispatch_get_main_queue(),^{DWWindowEvents *events=weak;if(!events)return;events.applicationReadQueued=NO;[events readApplications];});
+}
+- (void)readApplications {
+    if(self.stopped||!self.trusted||self.readingApplications)return;
+    NSMutableArray<DWApplicationMetadata *> *reads=[NSMutableArray array];
+    for(DWApplicationWatch *record in self.applicationWatches.objectEnumerator)if(record.pending){record.pending=NO;
+        DWApplicationMetadata *read=[DWApplicationMetadata new];read.watch=record;read.revision=record.revision;read.identityRevision=record.identityRevision;[reads addObject:read];}
+    if(!reads.count)return;self.readingApplications=YES;uint64_t epoch=self.observationEpoch;__weak DWWindowEvents *weak=self;
+    // One batch at a time, with one latest pending bit per live object. A notification storm cannot enqueue unbounded reads.
+    dispatch_async(applicationWorker(),^{@autoreleasepool {
+        for(DWApplicationMetadata *read in reads)if([read.watch matches:read.revision]){
+            NSRunningApplication *running=read.watch.running;read.pid=running.processIdentifier;read.terminated=running.terminated;read.regular=running.activationPolicy==NSApplicationActivationPolicyRegular;
+            uint64_t seconds=0,microseconds=0;read.born=read.pid>0&&!read.terminated&&dw_focus_birth(read.pid,&seconds,&microseconds);read.seconds=seconds;read.microseconds=microseconds;
+        }
+        dispatch_async(dispatch_get_main_queue(),^{DWWindowEvents *events=weak;if(!events)return;events.readingApplications=NO;
+            if(!events.stopped&&events.trusted&&events.observationEpoch==epoch)for(DWApplicationMetadata *read in reads)[events acceptApplication:read];
+            [events queueApplicationRead];
+        });
+    }});
+}
+- (void)acceptApplication:(DWApplicationMetadata *)read {
+    DWApplicationWatch *record=read.watch;if([self.applicationWatches objectForKey:record.running]!=record)return;
+    if(![record matches:read.revision]){record.pending=YES;return;}
+    uint64_t seconds=0,microseconds=0;BOOL eligible=read.pid>0&&read.pid!=getpid()&&!read.terminated&&read.regular&&(!self.scope||self.scope[@(read.pid)]);
+    // A failed worker/main identity fence cannot be repaired by silently assigning this unchanged object/PID a new
+    // kernel birth on the next poll. Only a different application identity/PID, or an observed PID/termination lifecycle change, can
+    // establish a new binding. Policy changes alone never do so.
+    BOOL identity=YES;
+    if(read.born){
+        if(record.boundIdentityRevision!=read.identityRevision||record.boundPID!=read.pid){record.boundIdentityRevision=read.identityRevision;record.boundPID=read.pid;record.boundSeconds=read.seconds;record.boundMicroseconds=read.microseconds;}
+        else identity=record.boundSeconds==read.seconds&&record.boundMicroseconds==read.microseconds;
+    }
+    // Metadata is discovery only. Admission rechecks the kernel birth now, as well as the caller's exact PID scope.
+    BOOL born=eligible&&identity&&read.born&&dw_focus_birth(read.pid,&seconds,&microseconds)&&seconds==read.seconds&&microseconds==read.microseconds;
+    BOOL admitted=born&&DWInScope(self.scope,read.pid);
+    if(![record matches:read.revision]){record.pending=YES;return;}
+    DWObservedApplication *old=self.applications[@(record.pid)];
+    if(old.running==record.running&&(!born||old.pid!=read.pid||old.seconds!=seconds||old.microseconds!=microseconds)){
+        [self remove:old.pid ended:read.terminated];[self changed:0 pid:old.pid];
+    }
+    record.pid=read.pid;record.retry=eligible&&!born;
+    if(admitted){
+        DWObservedApplication *application=self.applications[@(read.pid)];
+        if(application&&application.running!=record.running){[self forgetApplication:[self.applicationWatches objectForKey:application.running] ended:NO];[self remove:read.pid ended:NO];application=nil;}
+        if(!application){application=[DWObservedApplication new];application.pid=read.pid;application.seconds=seconds;application.microseconds=microseconds;
+            application.running=record.running;application.events=self;application.contexts=[NSMutableArray array];
+            application.windows=CFDictionaryCreateMutable(NULL,0,&kCFTypeDictionaryKeyCallBacks,&kCFTypeDictionaryValueCallBacks);application.asked=CFSetCreateMutable(NULL,0,&kCFTypeSetCallBacks);
+            self.applications[@(read.pid)]=application;[self observe:application];[self changed:appeared pid:read.pid];
+        }else if(record.hints&applicationActivated)[self list:application];
+    }
+    NSUInteger hints=record.hints;record.hints=0;
+    if(read.pid>0){if(hints&applicationAppeared)[self changed:appeared pid:read.pid];if(hints&applicationChanged)[self changed:0 pid:read.pid];}
 }
 // yabai's application_observe: one observer per application, every application notification with the application as its
 // context. Unlike yabai the messages are sent with a timeout and off the main thread, an observer that could register only
@@ -184,6 +459,16 @@ BOOL DWInScope(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope,pid_t pid) 
     if(self.stopped||application.gone||application.busy)return;application.busy=YES;application.retry=0;application.attempts++;
     pid_t pid=application.pid;uint8_t have=application.registered;AXObserverRef existing=application.observer;if(existing)CFRetain(existing);__weak DWWindowEvents *weak=self;
     dispatch_async(worker(),^{
+        uint64_t seconds=0,microseconds=0;
+        if(!dw_focus_birth(pid,&seconds,&microseconds)||seconds!=application.seconds||microseconds!=application.microseconds){
+            if(existing)CFRelease(existing);
+            dispatch_async(dispatch_get_main_queue(),^{DWWindowEvents *events=weak;application.busy=NO;
+                if(events.applications[@(pid)]==application){
+                    DWApplicationWatch *record=[events.applicationWatches objectForKey:application.running];record.retry=YES;
+                    [events remove:pid ended:YES];[events changed:0 pid:pid];
+                }
+            });return;
+        }
         AXObserverRef observer=existing;AXUIElementRef element=AXUIElementCreateApplication(pid);AXUIElementSetMessagingTimeout(element,answer);uint8_t mask=have;BOOL retry=NO,final=NO;
         if(observer||AXObserverCreate(pid,notified,&observer)==kAXErrorSuccess)for(int i=0;i<applicationCount;i++){
             if(mask&(1<<i))continue;
@@ -302,18 +587,72 @@ BOOL DWInScope(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope,pid_t pid) 
     [self changed:known?known.window:0 pid:pid];
 }
 // yabai's process manager has launch, end and front switch from Carbon; NSWorkspace says the same.
-- (void)launched:(NSNotification *)note { NSRunningApplication *running=note.userInfo[NSWorkspaceApplicationKey];if(self.stopped||!running||running.processIdentifier<=0)return;[self add:running];[self changed:appeared pid:running.processIdentifier]; }
+- (void)applyApplicationNotice:(DWApplicationMetadata *)notice {
+    DWApplicationWatch *record=notice.watch;
+    if(record&&([self.applicationWatches objectForKey:record.running]!=record||![record matches:notice.revision])){[self changed:appeared pid:0];return;}
+    if(!record)record=[self watchApplication:notice.running];
+    if(!record){[self changed:appeared pid:0];return;}
+    record.hints|=notice.hints;
+    if(notice.identityNotice)[record invalidateIdentityMetadata];else [record invalidateMetadata];
+}
+- (void)queueApplicationNotices {
+    if(self.stopped||!self.trusted||self.resolvingApplicationNotices||self.applicationNoticeQueued||!self.applicationNotices.count)return;
+    self.applicationNoticeQueued=YES;__weak DWWindowEvents *weak=self;
+    dispatch_async(dispatch_get_main_queue(),^{DWWindowEvents *events=weak;if(!events)return;events.applicationNoticeQueued=NO;[events resolveApplicationNotices];});
+}
+- (void)resolveApplicationNotices {
+    if(self.stopped||!self.trusted||self.resolvingApplicationNotices||!self.applicationNotices.count)return;
+    self.resolvingApplicationNotices=YES;NSArray<DWApplicationMetadata *> *notices=self.applicationNotices.copy;[self.applicationNotices removeAllObjects];
+    NSArray<DWApplicationMetadata *> *known=[self applicationCatalogBindings];uint64_t epoch=self.observationEpoch,revision=self.catalogRevision;__weak DWWindowEvents *weak=self;
+    dispatch_async(applicationWorker(),^{@autoreleasepool {
+        // Workspace notifications can contain fresh wrappers too. Coalesce equality on the worker; main uses only
+        // exact object pointers. At most 64 notices wait here and 64 more wait for this single batch to finish.
+        NSMutableDictionary<NSNumber *,NSMutableArray<DWApplicationMetadata *> *> *buckets=[NSMutableDictionary dictionary];
+        NSMutableArray<DWApplicationMetadata *> *unique=[NSMutableArray array];NSMutableArray<NSRunningApplication *> *running=[NSMutableArray array];
+        for(DWApplicationMetadata *notice in notices){NSNumber *hash=@(notice.running.hash);DWApplicationMetadata *same=nil;
+            for(DWApplicationMetadata *prior in buckets[hash])if([prior.running isEqual:notice.running]){same=prior;break;}
+            if(same){same.hints|=notice.hints;same.identityNotice|=notice.identityNotice;}
+            else {if(!buckets[hash])buckets[hash]=[NSMutableArray array];[buckets[hash]addObject:notice];[unique addObject:notice];[running addObject:notice.running];}
+        }
+        NSArray<DWApplicationMetadata *> *resolved=canonicalApplications(running,known);
+        for(NSUInteger i=0;i<resolved.count;i++){resolved[i].hints=unique[i].hints;resolved[i].identityNotice=unique[i].identityNotice;}
+        dispatch_async(dispatch_get_main_queue(),^{DWWindowEvents *events=weak;if(!events)return;events.resolvingApplicationNotices=NO;
+            if(!events.stopped&&events.trusted&&events.observationEpoch==epoch){
+                if(events.catalogRevision==revision&&[events applicationBindingsCurrent:known])for(DWApplicationMetadata *notice in resolved)[events applyApplicationNotice:notice];
+                else [events changed:appeared pid:0]; // A newer identity/catalog wins; the global hint still discovers windows.
+            }
+            [events queueApplicationNotices];
+        });
+    }});
+}
+- (void)applicationNotification:(NSNotification *)note hints:(NSUInteger)hints identity:(BOOL)identity {
+    NSRunningApplication *running=note.userInfo[NSWorkspaceApplicationKey];if(self.stopped||!running)return;
+    if(!self.trusted){[self changed:appeared pid:0];return;}
+    DWApplicationWatch *record=[self.applicationWatches objectForKey:running];
+    if(record){DWApplicationMetadata *notice=[DWApplicationMetadata new];notice.watch=record;notice.revision=record.revision;notice.hints=hints;notice.identityNotice=identity;[self applyApplicationNotice:notice];return;}
+    for(DWApplicationMetadata *pending in self.applicationNotices)if(pending.running==running){pending.hints|=hints;pending.identityNotice|=identity;return;}
+    if(self.applicationNotices.count>=64){[self changed:appeared pid:0];return;}
+    DWApplicationMetadata *notice=[DWApplicationMetadata new];notice.running=running;notice.hints=hints;notice.identityNotice=identity;[self.applicationNotices addObject:notice];[self queueApplicationNotices];
+}
+- (void)launched:(NSNotification *)note {
+    if(!self.stopped)self.catalogRevision++;
+    [self applicationNotification:note hints:applicationAppeared identity:YES];
+}
 // APPLICATION_TERMINATED: its observer is removed, and its windows are looked at, which finds their process gone.
-- (void)terminated:(NSNotification *)note { pid_t pid=[note.userInfo[NSWorkspaceApplicationKey]processIdentifier];if(self.stopped||pid<=0)return;[self remove:pid ended:YES];[self changed:0 pid:pid]; }
+- (void)terminated:(NSNotification *)note {
+    if(self.stopped)return;self.catalogRevision++;DWApplicationWatch *record=[self.applicationWatches objectForKey:note.userInfo[NSWorkspaceApplicationKey]];
+    pid_t pid=record.pid;[self forgetApplication:record ended:YES];
+    // A different object in a late notification cannot remove the new record at a reused PID. The global hint/poll will
+    // reconcile an unknown object without a synchronous main-thread LaunchServices read to guess which process it was.
+    if(pid>0)[self changed:0 pid:pid];else [self changed:appeared pid:0];
+}
 // APPLICATION_FRONT_SWITCHED: windows of it not yet resolved are looked for again, and native focus may have moved.
 - (void)activated:(NSNotification *)note {
-    NSRunningApplication *running=note.userInfo[NSWorkspaceApplicationKey];if(self.stopped||!running)return;
-    DWObservedApplication *application=self.applications[@(running.processIdentifier)];if(application)[self list:application];else [self add:running];
-    [self changed:0 pid:0];
+    if(self.stopped)return;[self applicationNotification:note hints:applicationActivated identity:NO];[self changed:0 pid:0];
 }
 // APPLICATION_HIDDEN, APPLICATION_VISIBLE.
-- (void)hidden:(NSNotification *)note { pid_t pid=[note.userInfo[NSWorkspaceApplicationKey]processIdentifier];if(self.stopped||pid<=0)return;[self changed:0 pid:pid]; }
-- (void)unhidden:(NSNotification *)note { pid_t pid=[note.userInfo[NSWorkspaceApplicationKey]processIdentifier];if(self.stopped||pid<=0)return;[self changed:appeared pid:pid];[self changed:0 pid:pid]; }
+- (void)hidden:(NSNotification *)note { [self applicationNotification:note hints:applicationChanged identity:NO]; }
+- (void)unhidden:(NSNotification *)note { [self applicationNotification:note hints:applicationAppeared|applicationChanged identity:NO]; }
 // SPACE_CHANGED: every application lists the windows of the Space that is active now.
 - (void)spaceChanged:(NSNotification *)note { (void)note;if(self.stopped)return;for(DWObservedApplication *application in self.applications.allValues)[self list:application];[self changed:appeared pid:0]; }
 - (void)deliver:(NSNumber *)key {
@@ -353,7 +692,8 @@ BOOL DWInScope(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope,pid_t pid) 
 // Nothing here forms a weak reference to self: -dealloc calls it.
 - (void)stop {
     if(self.stopped)return;self.stopped=YES;self.sink=nil;
-    [NSWorkspace.sharedWorkspace.notificationCenter removeObserver:self];[self.timer invalidate];self.timer=nil;
+    [self.workspaceNotifications removeObserver:self];self.workspaceNotifications=nil;[self.timer invalidate];self.timer=nil;
+    [self clearApplicationWatches];
     for(NSNumber *pid in self.applications.allKeys)[self remove:pid.intValue ended:NO];
     [self.owed removeAllObjects];[self.sent removeAllObjects];
 }

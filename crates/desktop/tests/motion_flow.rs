@@ -1302,6 +1302,51 @@ fn cursor_edge_pan_follows_the_reported_pointer_and_the_toggle() {
 }
 
 #[test]
+fn native_resize_retires_cursor_pan_and_needs_a_fresh_report_after_release() {
+    let scratch = Scratch::new();
+    let mut h = configured(&scratch, "[navigation.edge_pan]\ncursor_pan = true\n");
+    let window = attach(&mut h, 1, rect(400.0, 300.0, 300.0, 200.0));
+    h.ok(json!({"op":"native_resize_capability","enabled":true}));
+    h.pointer(5.0, 400.0);
+    assert!(h.motion()["edge_pans"].get("1").is_some());
+    let read = h.ok(json!({"op":"begin_native_resize","window":window,"output":1,"edges":"right","start_screen":global(700.,400.)}))["effect"].clone();
+    assert_eq!(h.motion()["edge_pans"], json!({}));
+    let observed = |effect: &Value, setter: bool, width: f64| {
+        json!({
+            "op":"native_resize_result","transaction":effect["transaction"],"effect_id":effect["effect_id"],
+            "identity":effect["identity"],"generation":effect["generation"],
+            "result":{"outcome":if setter {"applied"} else {"observed"},"ax_error":0,
+                "mutation_attempted":setter,"observed":true,
+                "requested":if setter {effect["requested"].clone()} else {json!({"width":0.,"height":0.})},
+                "actual_ax":rect(4000.,3000.,width,200.),"actual_cg":rect(4000.,3000.,width,200.)}
+        })
+    };
+    h.pointer(0.0, 400.0);
+    h.tick(16_666_667);
+    assert_eq!(h.camera(1), (0., 0.));
+    assert_eq!(h.motion()["edge_pans"], json!({}));
+    h.ok(observed(&read, false, 300.));
+    let setter = h.ok(json!({"op":"native_resize_to","transaction":read["transaction"],"screen":global(710.,400.)}))["effect"].clone();
+    assert_eq!(setter["requested"], json!({"width":310.,"height":200.}));
+    h.pointer(0.0, 400.0);
+    h.tick(5_000_000_000);
+    assert_eq!(h.camera(1), (0., 0.));
+    h.ok(json!({"op":"end_native_resize","transaction":read["transaction"]}));
+    assert_eq!(h.snapshot()["native_resize"]["pending_effect"], setter);
+    h.tick(5_016_666_667);
+    assert_eq!(h.camera(1), (0., 0.));
+    assert_eq!(h.motion()["edge_pans"], json!({}));
+    // No old request or elapsed-time catch-up resumes at release. A newly
+    // reported physical point can pan while the native setter still drains.
+    h.pointer(0.0, 400.0);
+    h.tick(5_033_333_334);
+    assert_eq!(h.camera(1), (-10., 0.));
+    let final_read = h.ok(observed(&setter, true, 310.))["effect"].clone();
+    h.ok(observed(&final_read, false, 310.));
+    assert_eq!(h.snapshot()["native_resize"]["phase"], "complete");
+}
+
+#[test]
 fn wheel_zoom_is_upstreams_animated_zoom_around_the_pointer() {
     let scratch = Scratch::new();
     // One 2000 x 1600 window: it fits at 0.4, so the dynamic minimum is 0.2.

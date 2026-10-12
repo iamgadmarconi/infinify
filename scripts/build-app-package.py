@@ -10,6 +10,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import plistlib
+import re
 import shutil
 import signal
 import stat
@@ -20,14 +22,43 @@ from contextlib import contextmanager
 from collections.abc import Iterator
 
 
+BUILD_SCHEMA_VERSION = 2
+NATIVE_MANIFEST_SCHEMA_VERSION = 1
+NATIVE_DESKTOP_RELATIVE = Path("Contents/Resources/NativeDesktop")
+NATIVE_ARTIFACTS = {
+    "doctor": "doctor",
+    "loader": "loader-arm64e",
+    "payload": "payload-arm64e.dylib",
+    "launcher": "launch.sh",
+}
+BUILD_MANIFEST_KEYS = {
+    "schema_version",
+    "git_commit",
+    "built_at_utc",
+    "dirty",
+    "dirty_paths",
+    "executable",
+    "executable_sha256",
+    "native_manifest_sha256",
+    "native_payload_sha256",
+    "source_fingerprint_sha256",
+    "source_file_count",
+    "source_sha256",
+}
+SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+
+
 def run(args: list[str], *, cwd: Path) -> str:
     return subprocess.check_output(args, cwd=cwd, text=True).strip()
 
 
 def source_state(root: Path) -> dict[str, object]:
+    git_env = os.environ.copy()
+    git_env["GIT_OPTIONAL_LOCKS"] = "0"
     paths = subprocess.check_output(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
         cwd=root,
+        env=git_env,
     ).split(b"\0")
     sources: dict[str, dict[str, object]] = {}
     for raw_path in paths:
@@ -58,8 +89,11 @@ def source_state(root: Path) -> dict[str, object]:
     status = subprocess.check_output(
         ["git", "status", "--porcelain=v1", "--untracked-files=all"],
         cwd=root,
+        env=git_env,
     ).decode("utf-8", errors="replace")
-    dirty_paths = [line[3:] for line in status.splitlines() if line]
+    # Git prints untracked paths after tracked changes. Staging an unchanged
+    # new source must not invalidate a package merely by reordering this list.
+    dirty_paths = sorted(line[3:] for line in status.splitlines() if line)
     commit = run(["git", "rev-parse", "HEAD"], cwd=root)
     serialized_sources = json.dumps(
         sources, sort_keys=True, separators=(",", ":"), ensure_ascii=True
@@ -78,12 +112,189 @@ def write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def regular_file_digest(path: Path, *, executable: bool = False) -> str:
+    try:
+        info = path.lstat()
+    except FileNotFoundError as error:
+        raise RuntimeError(f"required package file is missing: {path}") from error
+    if not stat.S_ISREG(info.st_mode):
+        raise RuntimeError(f"package file must be a regular non-symlink file: {path}")
+    if executable and not info.st_mode & 0o111:
+        raise RuntimeError(f"package executable is not executable: {path}")
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def native_desktop_dir(bundle: Path) -> Path:
+    return bundle / NATIVE_DESKTOP_RELATIVE
+
+
+def check_bundle_path(bundle: Path, relative: Path) -> Path:
+    if bundle.is_symlink():
+        raise RuntimeError(f"refusing an app bundle symlink: {bundle}")
+    path = bundle
+    for component in relative.parts:
+        path /= component
+        if path.is_symlink():
+            raise RuntimeError(f"refusing a symlink in the app bundle: {path}")
+    return path
+
+
+def create_native_manifest(bundle: Path, source: dict[str, object]) -> dict[str, object]:
+    directory = native_desktop_dir(bundle)
+    artifacts: dict[str, dict[str, str]] = {}
+    for name, filename in NATIVE_ARTIFACTS.items():
+        relative = NATIVE_DESKTOP_RELATIVE / filename
+        path = check_bundle_path(bundle, relative)
+        artifacts[name] = {
+            "path": str(Path("Contents/Resources/NativeDesktop") / filename),
+            "sha256": regular_file_digest(path, executable=True),
+        }
+    manifest: dict[str, object] = {
+        "schema_version": NATIVE_MANIFEST_SCHEMA_VERSION,
+        "git_commit": source["commit"],
+        "source_fingerprint_sha256": source["source_fingerprint_sha256"],
+        "artifacts": artifacts,
+    }
+    path = directory / "manifest.plist"
+    path.write_bytes(plistlib.dumps(manifest, fmt=plistlib.FMT_XML, sort_keys=True))
+    os.chmod(path, 0o644)
+    return manifest
+
+
+def validate_native_bundle(
+    bundle: Path,
+    *,
+    verify_signature: bool = True,
+    verify_bundle_signature: bool = True,
+) -> dict[str, object]:
+    bundle = bundle.absolute()
+    if not bundle.is_dir() or bundle.is_symlink():
+        raise RuntimeError(f"app bundle is missing or is a symlink: {bundle}")
+    manifest_path = check_bundle_path(bundle, NATIVE_DESKTOP_RELATIVE / "manifest.plist")
+    if not stat.S_ISREG(manifest_path.lstat().st_mode):
+        raise RuntimeError(f"native manifest must be a regular file: {manifest_path}")
+    try:
+        manifest = plistlib.loads(manifest_path.read_bytes())
+    except (plistlib.InvalidFileException, ValueError) as error:
+        raise RuntimeError(f"native manifest is invalid: {manifest_path}") from error
+    if not isinstance(manifest, dict) or set(manifest) != {
+        "schema_version",
+        "git_commit",
+        "source_fingerprint_sha256",
+        "artifacts",
+    }:
+        raise RuntimeError("native manifest has an unknown schema")
+    if type(manifest.get("schema_version")) is not int or manifest["schema_version"] != NATIVE_MANIFEST_SCHEMA_VERSION:
+        raise RuntimeError("native manifest has an unsupported schema version")
+    if not isinstance(manifest.get("git_commit"), str) or not manifest["git_commit"]:
+        raise RuntimeError("native manifest has no source commit")
+    if not isinstance(manifest.get("source_fingerprint_sha256"), str) or not SHA256_RE.fullmatch(manifest["source_fingerprint_sha256"]):
+        raise RuntimeError("native manifest has an invalid source fingerprint")
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, dict) or set(artifacts) != set(NATIVE_ARTIFACTS):
+        raise RuntimeError("native manifest artifact set is incomplete or unknown")
+    for name, filename in NATIVE_ARTIFACTS.items():
+        entry = artifacts[name]
+        expected_relative = NATIVE_DESKTOP_RELATIVE / filename
+        expected_path = str(Path("Contents/Resources/NativeDesktop") / filename)
+        if not isinstance(entry, dict) or set(entry) != {"path", "sha256"} or entry.get("path") != expected_path:
+            raise RuntimeError(f"native manifest has an invalid path entry for {name}")
+        expected_hash = entry.get("sha256")
+        if not isinstance(expected_hash, str) or not SHA256_RE.fullmatch(expected_hash):
+            raise RuntimeError(f"native manifest has an invalid SHA-256 for {name}")
+        artifact = check_bundle_path(bundle, expected_relative)
+        if not artifact.is_file() or regular_file_digest(artifact, executable=True) != expected_hash:
+            raise RuntimeError(f"native package bytes do not match the manifest: {artifact}")
+        if verify_signature and name in {"doctor", "loader", "payload"}:
+            subprocess.run(["codesign", "--verify", "--strict", str(artifact)], check=True)
+    executable = check_bundle_path(bundle, Path("Contents/MacOS/Infinify"))
+    regular_file_digest(executable, executable=True)
+    if verify_signature and verify_bundle_signature:
+        subprocess.run(["codesign", "--verify", "--deep", "--strict", str(bundle)], check=True)
+    return manifest
+
+
+def build_manifest_path(root: Path) -> Path:
+    return root / "target/app/BUILD.json"
+
+
+def load_build_manifest(path: Path) -> dict[str, object]:
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError(f"BUILD.json is missing or is not a regular file: {path}")
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise RuntimeError(f"BUILD.json is invalid: {path}") from error
+    if not isinstance(manifest, dict) or set(manifest) != BUILD_MANIFEST_KEYS:
+        raise RuntimeError("BUILD.json has an unknown schema")
+    if type(manifest.get("schema_version")) is not int or manifest["schema_version"] != BUILD_SCHEMA_VERSION:
+        raise RuntimeError("BUILD.json has an unsupported schema version")
+    if manifest.get("executable") != "Infinify.app/Contents/MacOS/Infinify":
+        raise RuntimeError("BUILD.json names an unexpected executable")
+    for key in ("executable_sha256", "native_manifest_sha256", "native_payload_sha256", "source_fingerprint_sha256"):
+        if not isinstance(manifest.get(key), str) or not SHA256_RE.fullmatch(manifest[key]):
+            raise RuntimeError(f"BUILD.json has an invalid {key}")
+    return manifest
+
+
+def verify_source(args: argparse.Namespace) -> None:
+    root = args.root.resolve()
+    manifest_path = args.build_manifest or build_manifest_path(root)
+    manifest = load_build_manifest(manifest_path)
+    current = source_state(root)
+    for manifest_key, source_key in (
+        ("git_commit", "commit"),
+        ("dirty", "dirty"),
+        ("dirty_paths", "dirty_paths"),
+        ("source_fingerprint_sha256", "source_fingerprint_sha256"),
+        ("source_file_count", "source_file_count"),
+        ("source_sha256", "source_sha256"),
+    ):
+        if manifest.get(manifest_key) != current[source_key]:
+            raise RuntimeError("BUILD.json does not describe the current Git/source state")
+
+    built_app = args.built_app or root / "target/app/Infinify.app"
+    built_executable = check_bundle_path(built_app, Path("Contents/MacOS/Infinify"))
+    if regular_file_digest(built_executable, executable=True) != manifest["executable_sha256"]:
+        raise RuntimeError("the built app executable differs from BUILD.json")
+    built_native = validate_native_bundle(built_app)
+    built_native_path = check_bundle_path(built_app, NATIVE_DESKTOP_RELATIVE / "manifest.plist")
+    if hashlib.sha256(built_native_path.read_bytes()).hexdigest() != manifest["native_manifest_sha256"]:
+        raise RuntimeError("the built app native manifest differs from BUILD.json")
+    if built_native["git_commit"] != current["commit"] or built_native["source_fingerprint_sha256"] != current["source_fingerprint_sha256"]:
+        raise RuntimeError("the built app native manifest does not describe the current source")
+    built_payload = check_bundle_path(built_app, NATIVE_DESKTOP_RELATIVE / NATIVE_ARTIFACTS["payload"])
+    if regular_file_digest(built_payload, executable=True) != manifest["native_payload_sha256"]:
+        raise RuntimeError("the built app payload differs from BUILD.json")
+
+    selected_app = args.bundle or built_app
+    selected_native = validate_native_bundle(selected_app)
+    selected_executable = check_bundle_path(selected_app, Path("Contents/MacOS/Infinify"))
+    if regular_file_digest(selected_executable, executable=True) != manifest["executable_sha256"]:
+        raise RuntimeError("selected app executable differs from BUILD.json")
+    selected_manifest_path = check_bundle_path(selected_app, NATIVE_DESKTOP_RELATIVE / "manifest.plist")
+    if hashlib.sha256(selected_manifest_path.read_bytes()).hexdigest() != manifest["native_manifest_sha256"]:
+        raise RuntimeError("selected app bundle does not match this build's native manifest")
+    if selected_native["git_commit"] != manifest["git_commit"] or selected_native["source_fingerprint_sha256"] != manifest["source_fingerprint_sha256"]:
+        raise RuntimeError("selected app bundle does not match this build's source identity")
+    print(f"Verified source-fresh native app: {selected_app}")
+
+
+def validate_package(args: argparse.Namespace) -> None:
+    manifest = validate_native_bundle(args.bundle)
+    if args.source_fingerprint and manifest["source_fingerprint_sha256"] != args.source_fingerprint:
+        raise RuntimeError("native app source fingerprint differs from the requested build")
+    print(f"Verified native app package: {args.bundle}")
+
+
 def snapshot(args: argparse.Namespace) -> None:
     root = args.root.resolve()
     write_json(args.output, source_state(root))
 
 
-def copy_resources(root: Path, app: Path) -> None:
+def copy_resources(root: Path, app: Path, privileged_dir: Path) -> None:
+    if privileged_dir.is_symlink() or not privileged_dir.is_dir():
+        raise RuntimeError(f"private production helper directory is missing or is a symlink: {privileged_dir}")
     resources = app / "Contents/Resources"
     launch_agents = app / "Contents/Library/LaunchAgents"
     resources.mkdir(parents=True, exist_ok=True)
@@ -99,6 +310,21 @@ def copy_resources(root: Path, app: Path) -> None:
         ),
     ):
         shutil.copy2(root / source, destination)
+
+    native = native_desktop_dir(app)
+    native.mkdir(parents=True, exist_ok=True)
+    for name, filename in NATIVE_ARTIFACTS.items():
+        if name == "launcher":
+            source = root / "scripts/native-desktop-launcher.sh"
+        else:
+            source = privileged_dir / filename
+        try:
+            info = source.lstat()
+        except FileNotFoundError as error:
+            raise RuntimeError(f"production native artifact is missing: {source}") from error
+        if not stat.S_ISREG(info.st_mode) or not info.st_mode & 0o111:
+            raise RuntimeError(f"production native artifact must be a regular executable: {source}")
+        shutil.copy2(source, native / filename)
 
 
 def remove_path(path: Path) -> None:
@@ -150,6 +376,7 @@ def rollback(
 def publish(args: argparse.Namespace) -> None:
     root = args.root.resolve()
     staged_app = args.staged_app.absolute()
+    privileged_dir = args.privileged_dir.absolute()
     app_dir = args.app_dir.absolute()
     destination_app = app_dir / "Infinify.app"
     destination_manifest = app_dir / "BUILD.json"
@@ -162,7 +389,9 @@ def publish(args: argparse.Namespace) -> None:
             raise RuntimeError(f"refusing to publish through an app directory symlink: {app_dir}")
 
         before = json.loads(args.snapshot.read_text(encoding="utf-8"))
-        copy_resources(root, staged_app)
+        copy_resources(root, staged_app, privileged_dir)
+        create_native_manifest(staged_app, before)
+        validate_native_bundle(staged_app, verify_bundle_signature=False)
         current = source_state(root)
         if current != before:
             raise RuntimeError("source files or Git state changed during the build; refusing to publish")
@@ -170,22 +399,30 @@ def publish(args: argparse.Namespace) -> None:
         executable = staged_app / "Contents/MacOS/Infinify"
         identity = os.environ.get("INFINIFY_SIGN_IDENTITY") or "-"
         subprocess.run(["codesign", "--force", "--sign", identity, str(staged_app)], check=True)
-        subprocess.run(["codesign", "--verify", "--strict", str(staged_app)], check=True)
+        validate_native_bundle(staged_app)
         if source_state(root) != before:
             raise RuntimeError("source files or Git state changed during signing; refusing to publish")
 
+        native_manifest = staged_app / NATIVE_DESKTOP_RELATIVE / "manifest.plist"
+        native_manifest_value = plistlib.loads(native_manifest.read_bytes())
+        native_payload = staged_app / NATIVE_DESKTOP_RELATIVE / NATIVE_ARTIFACTS["payload"]
+
         manifest = {
-            "schema_version": 1,
+            "schema_version": BUILD_SCHEMA_VERSION,
             "git_commit": before["commit"],
             "built_at_utc": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
             "dirty": before["dirty"],
             "dirty_paths": before["dirty_paths"],
             "executable": "Infinify.app/Contents/MacOS/Infinify",
             "executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+            "native_manifest_sha256": hashlib.sha256(native_manifest.read_bytes()).hexdigest(),
+            "native_payload_sha256": hashlib.sha256(native_payload.read_bytes()).hexdigest(),
             "source_fingerprint_sha256": before["source_fingerprint_sha256"],
             "source_file_count": before["source_file_count"],
             "source_sha256": before["source_sha256"],
         }
+        if native_manifest_value["git_commit"] != before["commit"] or native_manifest_value["source_fingerprint_sha256"] != before["source_fingerprint_sha256"]:
+            raise RuntimeError("native app manifest does not match the build source snapshot")
         write_json(staged_manifest, manifest)
 
         if os.stat(staged_app.parent).st_dev != os.stat(app_dir.parent).st_dev:
@@ -243,8 +480,21 @@ def main() -> int:
     publish_parser.add_argument("--root", type=Path, required=True)
     publish_parser.add_argument("--snapshot", type=Path, required=True)
     publish_parser.add_argument("--staged-app", type=Path, required=True)
+    publish_parser.add_argument("--privileged-dir", type=Path, required=True)
     publish_parser.add_argument("--app-dir", type=Path, required=True)
     publish_parser.set_defaults(function=publish)
+
+    verify_parser = subparsers.add_parser("verify-source")
+    verify_parser.add_argument("--root", type=Path, required=True)
+    verify_parser.add_argument("--build-manifest", type=Path)
+    verify_parser.add_argument("--built-app", type=Path)
+    verify_parser.add_argument("--bundle", type=Path)
+    verify_parser.set_defaults(function=verify_source)
+
+    validate_parser = subparsers.add_parser("validate-bundle")
+    validate_parser.add_argument("--bundle", type=Path, required=True)
+    validate_parser.add_argument("--source-fingerprint")
+    validate_parser.set_defaults(function=validate_package)
 
     args = parser.parse_args()
     try:
@@ -256,4 +506,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -672,21 +672,27 @@ typedef NS_ENUM(NSUInteger, IFCPipe) {
 }
 
 - (void)finished {
-    __attribute__((objc_precise_lifetime)) NSArray *released = nil;
-    os_unfair_lock_lock(&_lock);
-    _completed++;
-    NSUInteger count = 0;
-    while (count < _dead.count && _deadline[count].unsignedLongLongValue <= _completed) count++;
-    if (count) {
-        // Deadlines are appended in order. Remove the completed prefix once,
-        // rather than shifting both arrays for every retired window texture.
-        NSRange range = NSMakeRange(0, count);
-        released = [_dead subarrayWithRange:range];
-        [_dead removeObjectsInRange:range];
-        [_deadline removeObjectsInRange:range];
+    // Metal's completion queue need not drain an autorelease pool after each
+    // callback. Bound the lifetime of the temporary release array (and any
+    // autoreleases made by a retired CV wrapper) to this completed GPU fence,
+    // rather than leaving capture-pool surfaces held until a later queue drain.
+    @autoreleasepool {
+        __attribute__((objc_precise_lifetime)) NSArray *released = nil;
+        os_unfair_lock_lock(&_lock);
+        _completed++;
+        NSUInteger count = 0;
+        while (count < _dead.count && _deadline[count].unsignedLongLongValue <= _completed) count++;
+        if (count) {
+            // Deadlines are appended in order. Remove the completed prefix once,
+            // rather than shifting both arrays for every retired window texture.
+            NSRange range = NSMakeRange(0, count);
+            released = [_dead subarrayWithRange:range];
+            [_dead removeObjectsInRange:range];
+            [_deadline removeObjectsInRange:range];
+        }
+        os_unfair_lock_unlock(&_lock);
+        released = nil;  // dropped outside the lock
     }
-    os_unfair_lock_unlock(&_lock);
-    released = nil;  // dropped outside the lock
 }
 @end
 

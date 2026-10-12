@@ -57,7 +57,8 @@ static CGAffineTransform narrowed(uint32_t wid) {
 }
 static int validationProc(int pid,int flavor,uint64_t arg,void *buffer,int size) {
     (void)arg;reads++;if(pid!=123||flavor!=PROC_PIDTBSDINFO||size!=sizeof(struct proc_bsdinfo)||[fault isEqual:@"process_unavailable"])return 0;
-    struct proc_bsdinfo info={.pbi_uid=getuid(),.pbi_start_tvsec=100,.pbi_start_tvusec=20};
+    struct proc_bsdinfo info={.pbi_pid=(uint32_t)pid,.pbi_uid=getuid(),.pbi_start_tvsec=100,.pbi_start_tvusec=20};
+    if([fault isEqual:@"process_pid_changed"])info.pbi_pid++;
     if([fault isEqual:@"birth_changed"])info.pbi_start_tvusec++;
     if([fault isEqual:@"uid_changed"])info.pbi_uid++;
     memcpy(buffer,&info,sizeof(info));return sizeof(info);
@@ -102,6 +103,8 @@ static CGError hit(int cid,int first,int second,int third,const CGPoint *point,C
     (void)point;check(cid==12&&first==0&&second==1&&third==0,@"use established event-eligible query arguments");hitReads++;
     if([fault isEqual:@"hit_unavailable"])return kCGErrorFailure;
     *local=CGPointZero;*wid=[fault isEqual:@"wrong_hit"]?42:43;*outOwner=[fault isEqual:@"wrong_hit_owner"]?700:701;
+    if([fault isEqual:@"second_hit_changed"]&&hitReads>1){*wid=42;*outOwner=700;}
+    if([fault isEqual:@"birth_after_second_hit"]&&hitReads>1)fault=@"birth_changed";
     if([fault isEqual:@"family_after_hit"])fault=@"family_changed";
     if([fault isEqual:@"disconnect_after_hit"])presenter.current=NO;
     if([fault isEqual:@"birth_after_hit"])fault=@"birth_changed";
@@ -148,6 +151,12 @@ static void reject(NSString *name,BOOL pointer) {
     reset();fault=name;NSString *why=nil;check(!(pointer?input(CGPointMake(285,225),&why):geometry(&why))&&why.length>0,[NSString stringWithFormat:@"refuse %@",name]);
 }
 int main(void) {@autoreleasepool {
+    reset();check([DWNativeEventRecipientAtPoint(CGPointMake(285,225))isEqual:recipient]&&hitReads==2&&familyReads==0,
+        @"fresh discovery brackets exact recipient PID/birth/WID/owner without claiming placement or family admission");
+    reset();check(!DWNativeEventRecipientAtPoint(CGPointMake(NAN,225))&&reads==0&&hitReads==0,@"nonfinite point cannot query an event recipient");
+    for(NSString *name in @[@"process_unavailable",@"process_pid_changed",@"birth_after_second_hit",@"uid_changed",@"public_unavailable",@"public_pid_changed",@"owner_pid_changed",@"wrong_hit_owner",@"hit_unavailable",@"second_hit_changed"]){
+        reset();fault=name;check(!DWNativeEventRecipientAtPoint(CGPointMake(285,225)),[NSString stringWithFormat:@"recipient discovery refuses %@",name]);
+    }
     reset();check(geometry(NULL)&&hitReads==0&&presenter.fences==2,@"geometry checks complete family and final receipt without requiring a pointer");
     reset();check(input(CGPointMake(285,225),NULL)&&hitReads==1&&presenter.fences==2,@"fresh exact descendant event recipient is admitted only at this call");
     for(NSString *name in @[@"process_unavailable",@"birth_changed",@"uid_changed",@"public_unavailable",@"public_pid_changed",@"owner_pid_changed",@"bounds_unavailable",@"bounds_changed",@"nonfinite_bounds",@"transform_unavailable",@"transform_changed",@"nonfinite_transform",@"screen_unavailable",@"screen_changed",@"alpha_unavailable",@"hidden",@"nonfinite_alpha",@"public_alpha_changed",@"offscreen",@"family_unavailable",@"family_changed",@"family_identity_changed",@"ancestry_changed",@"parent_changed",@"parent_changed_before_read",@"second_pass_changed"])

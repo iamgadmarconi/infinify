@@ -25,10 +25,10 @@
 //! A tap binding, a bare modifier chord, takes the same mapping (taps.rs).
 //! Control+Option+Escape is the shell's exit chord unless a binding claims it.
 //!
-//! A default binding that runs a program this Mac does not have is replaced by
-//! its macOS equivalent or left out; see `default_commands`.
+//! Host-owned default system controls stay with macOS regardless of `PATH`;
+//! explicit config bindings keep their authored action.
 use super::actions::action_string;
-use super::default_commands::{Equivalent, SearchPath, equivalent, program};
+use super::command_lookup::{SearchPath, program};
 use super::passthrough::passable;
 use super::*;
 use driftwm_core::config::{
@@ -518,48 +518,50 @@ impl Controller {
         // (media key?, code, chord) to the combo that holds it.
         let mut claimed: BTreeMap<(bool, u16, MacModifiers), String> = BTreeMap::new();
         for bound in self.key_bindings() {
+            let is_default = !self.settings.wrote(&bound.modifiers, bound.sym)
+                && defaults.lookup(&state(&bound.modifiers), Keysym::from(bound.sym))
+                    == Some(bound.action);
             let (media_key, key) = match bound.place {
                 Place::Ansi(key, _) | Place::Code(key) => (None, key),
                 Place::Media(key_type) => (Some(key_type), u16::from(key_type)),
                 Place::Nowhere => {
                     // Upstream's own defaults on keys a Mac lacks are listed
                     // without a warning: the user did not ask for them.
-                    let default = defaults
-                        .lookup(&state(&bound.modifiers), Keysym::from(bound.sym))
-                        == Some(bound.action);
                     skip(
                         &bound.combo,
                         bound.action,
                         "the key has no macOS equivalent".to_owned(),
-                        !default,
+                        !is_default,
                     );
                     continue;
                 }
             };
-            // A program `sh` would not find: a default is then replaced by its
-            // macOS equivalent or left out, and what the file wrote stays as
-            // written, but must not start a failing shell at the repeat rate.
-            let missing = program(bound.action).filter(|program| !path.finds(program));
             let is_media = media_key.is_some();
-            let substitute = match missing {
-                Some(program) if !self.settings.wrote(&bound.modifiers, bound.sym) => {
-                    match equivalent(program, media_key) {
-                        Equivalent::Substitute(action) => Some(action),
-                        Equivalent::Platform(reason) => {
-                            skip(&bound.combo, bound.action, reason.to_owned(), false);
-                            continue;
-                        }
-                        Equivalent::Nothing => {
-                            let reason =
-                                format!("'{program}' is not installed and has no macOS equivalent");
-                            skip(&bound.combo, bound.action, reason, false);
-                            continue;
-                        }
-                    }
+            if is_default {
+                if let Some(key_type) = media_key {
+                    let reason = match key_type {
+                        0 | 1 | 7 => "macOS handles the volume keys itself",
+                        2 | 3 | 21 | 22 | 23 => "macOS handles the brightness keys itself",
+                        _ => "macOS handles the media keys itself",
+                    };
+                    skip(&bound.combo, bound.action, reason.to_owned(), false);
+                    continue;
                 }
-                _ => None,
-            };
-            let action = substitute.as_ref().unwrap_or(bound.action);
+                if program(bound.action) == Some("swaylock") {
+                    skip(
+                        &bound.combo,
+                        bound.action,
+                        "the default lock command is left to macOS and the foreground app"
+                            .to_owned(),
+                        false,
+                    );
+                    continue;
+                }
+            }
+            // Only user-authored commands need a PATH check: host-owned
+            // defaults were handled above without depending on installed tools.
+            let missing = program(bound.action).filter(|program| !path.finds(program));
+            let action = bound.action;
             let chord = match self.platform.physical(&bound.modifiers) {
                 Ok(chord) => chord,
                 Err(reason) => {
@@ -573,7 +575,7 @@ impl Controller {
                 continue;
             }
             claimed.insert((is_media, key, chord), bound.combo.clone());
-            let stalled = missing.filter(|_| substitute.is_none() && action.is_repeatable());
+            let stalled = missing.filter(|_| action.is_repeatable());
             if let Some(program) = stalled {
                 unrepeated.push(format!(
                     "binding '{}' = '{}': '{program}' was not found, so it will not repeat while held",
@@ -590,9 +592,6 @@ impl Controller {
                 "implemented":self.runs(action),
             });
             entry["passable"] = json!(passable(action, is_media, key, chord));
-            if substitute.is_some() {
-                entry["upstream"] = json!(action_string(bound.action));
-            }
             if is_media {
                 entry["nx_key_type"] = json!(key);
                 media_keys.push(entry);

@@ -4,7 +4,7 @@ The geometric adaptation targets DriftWM commit
 `352333a8fa1b22171492d4b71a54102045c9a19d` (GPL-3.0-or-later).
 `tests/upstream/README.md` records the executable oracle and exact file hashes.
 
-`SnapOptions` retains its three-field public shape. Defaults are gap 12 world
+`SnapOptions` has three fields. Defaults are gap 12 world
 points, distance 24 at zoom 1, and cluster adjacency tolerance 1. The controller
 uses distance `24 / current_zoom` and release force `32 / current_zoom` on every
 gesture update; the gap stays in world coordinates. The controller's total
@@ -13,9 +13,10 @@ screen displacement still uses the gesture-start zoom.
 Opposite-edge snapping requires strict perpendicular overlap. Engagement and
 ranking measure distance to the neighbor's edge **before** the gap is applied;
 engagement uses `< distance`, and equal candidates keep the first target in scene
-order. Only the primary window attracts during a group drag. The legacy
-`snap_move` API is stateless and supports opposite-edge docking; the gesture API
-adds latches, cooldown and optional alignment.
+order. Only the primary window attracts during a group drag. All movement uses
+`begin_drag` and `drag_to`, including latches, cooldown and optional alignment.
+A group drag freezes membership at the start; setting its threshold to zero
+translates the group without snapping.
 
 `Scene::set_snapping(id, false)` takes a window out of all of it, as upstream's
 snap rectangles leave out widgets and screen-pinned windows: it is no snap

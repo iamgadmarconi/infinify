@@ -299,6 +299,80 @@ fn motion_tracks_the_current_viewport() {
     assert_eq!((100. + 130. - 60.) * 1., 170.);
     assert_eq!(h.snap()["outputs"], outputs);
 }
+
+#[test]
+fn held_native_resize_rejects_navigation_and_release_unblocks_before_readback() {
+    for cancel in [false, true] {
+        for pinned in [false, true] {
+            let mut h = setup();
+            if pinned {
+                h.ok(json!({"op":"focus","window":1}));
+                h.ok(json!({"op":"action","output":1,"action":"toggle-pin-to-screen"}));
+            }
+            let t = begin(&mut h, "right");
+            let blocked = [
+                json!({"op":"zoom_by","output":1,"anchor":{"x":50.,"y":50.},"delta":15.,"source":"wheel"}),
+                json!({"op":"zoom_by","output":1,"anchor":{"x":50.,"y":50.},"delta":0.1,"source":"pinch","phase":"begin"}),
+                json!({"op":"pan_viewport","output":1,"direction":"right"}),
+                json!({"op":"zoom_in","output":1}),
+                json!({"op":"zoom_out","output":1}),
+                json!({"op":"zoom_reset","output":1}),
+                json!({"op":"zoom_to_fit","output":1}),
+                json!({"op":"home_toggle","output":1}),
+                json!({"op":"navigate_window","window":1,"output":1,"zoom_policy":"keep"}),
+            ];
+            for observed in [false, true] {
+                if observed {
+                    h.ok(reply(&t, "observed", false, true, 200., 150.));
+                }
+                for command in &blocked {
+                    // A pinned window's navigate command only requests focus;
+                    // there is no camera flight to refuse at that site.
+                    if pinned && command["op"] == "navigate_window" {
+                        continue;
+                    }
+                    let before = h.snap();
+                    let result = h.call(command.clone());
+                    assert_eq!(result["ok"], false, "{command}: {result}");
+                    assert_eq!(result["error"], "navigation during active gesture");
+                    assert_eq!(h.snap(), before);
+                }
+            }
+            let setter = motion(&mut h, &t, 10., 0.);
+            assert_eq!(setter["requested"], size(210., 150.));
+            assert!(finish(&mut h, &t, cancel).is_null());
+            assert_eq!(h.snap()["native_resize"]["pending_effect"], setter);
+            // The physical grab ended. Its queued setter and final read still
+            // drain, while a new navigation gesture can proceed immediately.
+            h.ok(blocked[0].clone());
+            let final_read =
+                h.ok(reply(&setter, "applied", true, true, 210., 150.))["effect"].clone();
+            assert_eq!(final_read["op"], "observe_resize_source");
+            h.ok(json!({"op":"zoom_reset","output":1}));
+            h.ok(reply(&final_read, "observed", false, true, 210., 150.));
+            assert_eq!(
+                h.snap()["native_resize"]["phase"],
+                if cancel { "failed" } else { "complete" }
+            );
+        }
+    }
+}
+
+#[test]
+fn action_size_readback_does_not_own_navigation() {
+    let mut h = setup();
+    let read = h.ok(json!({"op":"ipc","output":1,"request":{"Resize":{"window":1,"to":[300,200]}}}))["effect"].clone();
+    assert_eq!(read["op"], "observe_resize_source");
+    h.ok(
+        json!({"op":"zoom_by","output":1,"anchor":{"x":50.,"y":50.},"delta":15.,"source":"wheel"}),
+    );
+    let setter = h.ok(reply(&read, "observed", false, true, 200., 150.))["effect"].clone();
+    assert_eq!(setter["requested"], size(300., 200.));
+    h.ok(json!({"op":"navigate_window","window":1,"output":1,"zoom_policy":"keep"}));
+    let final_read = h.ok(reply(&setter, "applied", true, true, 300., 200.))["effect"].clone();
+    h.ok(reply(&final_read, "observed", false, true, 300., 200.));
+    assert_eq!(h.snap()["native_resize"]["phase"], "complete");
+}
 #[test]
 fn save_committed_geometry_load_guard_and_monotonic_ids() {
     let path = std::env::temp_dir().join(format!("native-resize-save-{}.json", std::process::id()));

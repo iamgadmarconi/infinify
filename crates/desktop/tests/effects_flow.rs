@@ -638,7 +638,7 @@ fn lifecycle_events_are_logged_for_what_upstream_animates_and_nothing_else() {
     h.ok(json!({"op":"focus","window":mail}));
     h.ok(json!({"op":"action","output":1,"action":"suspend-window"}));
     assert_eq!(h.closed(mail, json!(1))["standin"], true);
-    assert_eq!(h.snapshot()["focused"], mail);
+    assert_eq!(h.snapshot()["focus"]["intent"], mail);
     h.ok(json!({"op":"action","output":null,"action":"close-window"}));
     expected.push(event(13, mail, "open", json!(1)));
     expected.push(event(14, mail, "close_to_standin", json!(1)));

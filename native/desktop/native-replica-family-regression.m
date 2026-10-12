@@ -94,13 +94,15 @@ static DWNativeReplicaFamilies *provider(void) {
     DWNativeReplicaFamilies *owner=[[DWNativeReplicaFamilies alloc]initWithChanged:^(NSNumber *window){check([window isEqual:@7],@"callback names its logical root");notified++;}];
     owner.roots=@{@7:root()};return owner;
 }
-static DWReplicaMember *attempt(DWNativeReplicaFamilies *owner,uint32_t wid,NSUInteger *recovering) {
-    DWReplicaRecovery *record=[owner admitRecovery:identity(wid) root:owner.roots[@7] bounds:childBounds() recovering:recovering];if(!record)return nil;
-    DWReplicaMember *member=[DWReplicaMember new];member.owner=owner;member.root=owner.roots[@7];member.identity=identity(wid);
+static DWReplicaMember *attemptFor(DWNativeReplicaFamilies *owner,NSNumber *logical,uint32_t wid,NSUInteger *starting) {
+    DWReplicaRecovery *record=[owner admitRecovery:identity(wid) root:owner.roots[logical] bounds:childBounds() starting:starting];if(!record)return nil;
+    DWReplicaMember *member=[DWReplicaMember new];member.owner=owner;member.root=owner.roots[logical];member.identity=identity(wid);
     member.bounds=childBounds();member.rootBounds=familyRect(member.root[@"native_bounds"]);member.image=[DWCanvasAttachment new];member.image.key=[@(wid)stringValue];
-    member.stream=(SCStream *)[RecoveryStream new];record.attempt=member;
-    owner.members[@7]=[(owner.members[@7]?:@[]) arrayByAddingObject:member];return member;
+    member.stream=(SCStream *)[RecoveryStream new];record.attempt=member;[owner.coldAttempts addObject:member];
+    owner.members[logical]=[(owner.members[logical]?:@[]) arrayByAddingObject:member];return member;
 }
+static DWReplicaMember *attempt(DWNativeReplicaFamilies *owner,uint32_t wid,NSUInteger *starting) { return attemptFor(owner,@7,wid,starting); }
+static NSDictionary *logicalRoot(NSNumber *logical) { NSMutableDictionary *value=[root()mutableCopy];value[@"window"]=logical;value[@"identity"]=identity(42+logical.unsignedIntValue*100);return value; }
 static void started(DWReplicaMember *member) { RecoveryStream *stream=(RecoveryStream *)member.stream;[member start];stream.completion(nil);drain();check(member.started,@"current start completion marks only its attempt"); }
 static void validImage(DWReplicaMember *member) {
     CVPixelBufferRef pixels=NULL;check(CVPixelBufferCreate(kCFAllocatorDefault,2,2,kCVPixelFormatType_32BGRA,NULL,&pixels)==kCVReturnSuccess,@"allocate an in-memory image");
@@ -108,8 +110,8 @@ static void validImage(DWReplicaMember *member) {
 }
 int main(void) {@autoreleasepool {
     check(NSThread.isMainThread,@"lifecycle owner is main-thread only");queued=[NSMutableArray array];timers=[NSMutableArray array];
-    DWNativeReplicaFamilies *owner=provider();NSUInteger recovering=0;
-    DWReplicaMember *first=attempt(owner,43,&recovering);check(first&&recovering==0,@"a new binding is an initial attempt");RecoveryStream *stream=(RecoveryStream *)first.stream;
+    DWNativeReplicaFamilies *owner=provider();NSUInteger starting=0;
+    DWReplicaMember *first=attempt(owner,43,&starting);check(first&&starting==1,@"a new binding consumes the same bounded start allowance");RecoveryStream *stream=(RecoveryStream *)first.stream;
     [first start];check(first.startDeadline==102&&!first.firstFrameDeadline,@"start deadline precedes the separate first-image deadline");advance(101.999);
     check(atomic_load(&first->alive),@"no premature start timeout");advance(102);
     DWReplicaRecovery *record=owner.recoveries[@7][@43];
@@ -117,21 +119,21 @@ int main(void) {@autoreleasepool {
     check(record.failures==1&&record.notBefore>102.5&&record.notBefore<=102.75,@"first failure installs bounded jittered backoff");
     NSUInteger epoch=owner.epoch;stream.completion(nil);drain();
     check(!first.started&&owner.epoch==epoch,@"late successful start cannot resurrect a failed attempt");
-    check(!attempt(owner,43,&recovering),@"recovery waits for its exact backoff deadline");
+    check(!attempt(owner,43,&starting),@"recovery waits for its exact backoff deadline");
     NSMutableDictionary *density=[root()mutableCopy];density[@"density"]=@1;owner.roots=@{@7:density};
-    check(!attempt(owner,43,&recovering)&&owner.recoveries[@7][@43]==record,@"capture density changes preserve failed history");
+    check(!attempt(owner,43,&starting)&&owner.recoveries[@7][@43]==record,@"capture density changes preserve failed history");
 
-    advance(record.notBefore);DWReplicaMember *second=attempt(owner,43,&recovering);check(second&&recovering==1,@"due retry consumes one turn allowance");
+    advance(record.notBefore);starting=0;DWReplicaMember *second=attempt(owner,43,&starting);check(second&&starting==1,@"due retry consumes one turn allowance");
     started(second);advance(second.firstFrameDeadline);
     check(!atomic_load(&second->alive)&&[second.failure containsString:@"no valid image"]&&record.failures==2,@"successful start without a callback also expires");
     check(record.notBefore>now+1&&record.notBefore<=now+1.25,@"consecutive first-frame failure increases backoff");
-    advance(record.notBefore);recovering=0;DWReplicaMember *third=attempt(owner,43,&recovering);started(third);
+    advance(record.notBefore);starting=0;DWReplicaMember *third=attempt(owner,43,&starting);started(third);
     CMSampleBufferRef sample=NULL;check(CMSampleBufferCreate(kCFAllocatorDefault,NULL,true,NULL,NULL,NULL,0,0,NULL,0,NULL,&sample)==noErr,@"construct callback without image data");
     [third stream:third.stream didOutputSampleBuffer:sample ofType:SCStreamOutputTypeScreen];CFRelease(sample);
     check(atomic_load(&third->received)&&!third.image.buffer,@"an unusable callback is distinguished from no callback");advance(third.firstFrameDeadline);
     check(!atomic_load(&third->alive)&&record.failures==3,@"unusable callbacks do not satisfy the valid-image deadline");
 
-    advance(record.notBefore);recovering=0;DWReplicaMember *healthy=attempt(owner,43,&recovering);started(healthy);validImage(healthy);
+    advance(record.notBefore);starting=0;DWReplicaMember *healthy=attempt(owner,43,&starting);started(healthy);validImage(healthy);
     check(record.failures==0&&!record.notBefore,@"first validated image resets consecutive failure history");
     advance(healthy.firstFrameDeadline);check(atomic_load(&healthy->alive)&&healthy.image.buffer,@"valid current image survives its first-frame watchdog");
     epoch=owner.epoch;[owner memberFailed:third];[third expireFirstFrame];
@@ -150,12 +152,15 @@ int main(void) {@autoreleasepool {
     check(slow.firstFrameDeadline==began+2,@"first-image deadline includes start completion's main-queue wait");
     validImage(slow);advance(slow.firstFrameDeadline);check(atomic_load(&slow->alive),@"valid first image cancels timeout effect after queued completion");[slowOwner reset];
 
-    [owner reset];owner=provider();recovering=0;DWReplicaMember *one=attempt(owner,43,&recovering),*two=attempt(owner,44,&recovering),*three=attempt(owner,45,&recovering);
-    for(DWReplicaMember *member in @[one,two,three])[member fail:@"fixture failure" code:"start_failed" error:0];advance(now+1);recovering=0;
-    check([owner admitRecovery:identity(43) root:root() bounds:childBounds() recovering:&recovering]!=nil,@"first due retry admitted");
-    check([owner admitRecovery:identity(44) root:root() bounds:childBounds() recovering:&recovering]!=nil,@"second due retry admitted");
-    check(![owner admitRecovery:identity(45) root:root() bounds:childBounds() recovering:&recovering]&&recovering==2,@"third retry waits for another completed observation");
-    check([owner admitRecovery:identity(46) root:root() bounds:childBounds() recovering:&recovering]!=nil&&recovering==2,@"new distinct binding does not consume a recovery allowance");
+    [owner reset];owner=provider();starting=0;DWReplicaMember *one=attempt(owner,43,&starting),*two=attempt(owner,44,&starting);
+    check(one&&two&&!attempt(owner,45,&starting),@"two initial starts exhaust the same cohort budget as retries");
+    starting=0;check(!attempt(owner,45,&starting),@"another cohort cannot exceed two cold attempts for one root");
+    for(DWReplicaMember *member in @[one,two])[member fail:@"fixture failure" code:"start_failed" error:0];advance(now+1);starting=0;
+    DWReplicaRecovery *waiting=[owner recovery:identity(45) root:root() bounds:childBounds()];waiting.failures=1;waiting.notBefore=now;
+    check([owner admitRecovery:identity(43) root:root() bounds:childBounds() starting:&starting]!=nil,@"first due retry admitted");
+    check([owner admitRecovery:identity(44) root:root() bounds:childBounds() starting:&starting]!=nil,@"second due retry admitted");
+    check(![owner admitRecovery:identity(45) root:root() bounds:childBounds() starting:&starting]&&starting==2,@"third retry waits for another completed observation");
+    check(![owner admitRecovery:identity(46) root:root() bounds:childBounds() starting:&starting]&&starting==2,@"fresh WID replacement cannot bypass a spent cohort allowance");
     check(familyRecoveryDelay(identity(43),1)!=familyRecoveryDelay(identity(44),1),@"different bindings are staggered");
     for(NSUInteger failures=1;failures<=20;failures++){CFTimeInterval delay=familyRecoveryDelay(identity(43),failures);check(delay>.5&&delay<=30,@"retry delay remains bounded");}
     check(familyRecoveryDelay(identity(43),7)!=familyRecoveryDelay(identity(44),7),@"jitter survives the retry ceiling");
@@ -172,27 +177,67 @@ int main(void) {@autoreleasepool {
     [owner invalidatePID:0 discardRecovery:NO];check(owner.recoveries[@7][@43]==record,@"stalled observation retires streams but retains backoff");
     [owner invalidatePID:123];check(!owner.recoveries.count,@"explicit process/session invalidation discards history");
 
-    owner=provider();recovering=0;one=attempt(owner,43,&recovering);[one fail:@"fixture failure" code:"start_failed" error:0];record=owner.recoveries[@7][@43];
+    owner=provider();starting=0;one=attempt(owner,43,&starting);[one fail:@"fixture failure" code:"start_failed" error:0];record=owner.recoveries[@7][@43];
     CGRect changed=childBounds();changed.size.width++;
-    check([owner admitRecovery:identity(43) root:root() bounds:changed recovering:&recovering]!=record,@"freshly validated native size replacement resets old binding history");
+    check([owner recovery:identity(43) root:root() bounds:changed]!=record,@"freshly validated native size replacement resets old binding history");
     record=owner.recoveries[@7][@43];NSMutableDictionary *reused=[identity(43)mutableCopy];reused[@"birth_usec"]=@21;
-    check([owner admitRecovery:reused root:root() bounds:changed recovering:&recovering]!=record,@"same WID in another process birth is a distinct binding");
+    check([owner recovery:reused root:root() bounds:changed]!=record,@"same WID in another process birth is a distinct binding");
     owner.requestPending=YES;NSMutableDictionary *generation=[root()mutableCopy];generation[@"generation"]=@4;[owner describe:@[generation] rate:120];
     check(!owner.recoveries.count,@"root generation change retires old negative history");
-    check([owner admitRecovery:identity(43) root:generation bounds:changed recovering:&recovering]!=nil,@"new generation is eligible independently");
+    starting=0;check([owner admitRecovery:identity(43) root:generation bounds:changed starting:&starting]!=nil,@"new generation is eligible independently");
     NSMutableDictionary *hidden=[generation mutableCopy];hidden[@"capture"]=@NO;[owner describe:@[hidden] rate:120];
     check(!owner.recoveries.count,@"capture admission loss retires history");
 
-    owner=provider();recovering=0;
-    for(uint32_t wid=100;wid<164;wid++)check([owner admitRecovery:identity(wid) root:root() bounds:childBounds() recovering:&recovering]!=nil,@"bounded family record admitted");
-    check(![owner admitRecovery:identity(164) root:root() bounds:childBounds() recovering:&recovering]&&owner.recoveries[@7].count==64,@"stale unpruned families cannot grow negative history indefinitely");
+    owner=provider();starting=0;
+    for(uint32_t wid=100;wid<164;wid++)check([owner recovery:identity(wid) root:root() bounds:childBounds()]!=nil,@"bounded family record admitted");
+    check(![owner recovery:identity(164) root:root() bounds:childBounds()]&&owner.recoveries[@7].count==64,@"stale unpruned families cannot grow negative history indefinitely");
     [owner acceptRecoveryCohort:@[plan(163)] root:root() sampledAt:@(now)];
-    check(owner.recoveries[@7].count==1&&[owner admitRecovery:identity(164) root:root() bounds:childBounds() recovering:&recovering]!=nil,@"fresh absence frees bounded history slots");
+    check(owner.recoveries[@7].count==1&&[owner recovery:identity(164) root:root() bounds:childBounds()]!=nil,@"fresh absence frees bounded history slots");
 
-    owner=provider();recovering=0;__weak DWReplicaMember *released;
-    @autoreleasepool {DWReplicaMember *retired=attempt(owner,43,&recovering);released=retired;[retired start];[retired retire];[owner.members removeAllObjects];}
+    [owner reset];owner=provider();owner.changed=^(NSNumber *logical){check(logical.unsignedIntValue>=7&&logical.unsignedIntValue<=20,@"budget callback stays in declared roots");};
+    owner.roots=@{@7:logicalRoot(@7),@8:logicalRoot(@8),@9:logicalRoot(@9)};starting=0;
+    DWReplicaMember *a=attemptFor(owner,@7,743,&starting),*b=attemptFor(owner,@8,843,&starting);
+    check(a&&b&&!attemptFor(owner,@9,943,&starting),@"distinct roots share the two-start cohort bound");
+    starting=0;DWReplicaMember *c=attemptFor(owner,@7,744,&starting),*d=attemptFor(owner,@8,844,&starting);
+    check(c&&d&&owner.coldAttempts.count==4,@"two cohorts can occupy four cold slots across roots");
+    starting=0;check(!attemptFor(owner,@9,943,&starting)&&!starting,@"new root cannot bypass the live global cold bound");
+    validImage(a);DWReplicaMember *e=attemptFor(owner,@9,943,&starting);
+    check(e&&a.image.buffer&&atomic_load(&a->alive),@"first valid image frees capacity without retiring the healthy stream");
+    [b retire];DWReplicaMember *f=attemptFor(owner,@9,944,&starting);
+    check(f&&owner.coldAttempts.count==4,@"retirement immediately frees its weak cold slot");
+    starting=0;check(!attemptFor(owner,@9,945,&starting),@"fresh member identities still respect root saturation");
+    [owner reset];check(!owner.coldAttempts.count&&!owner.admissionRoots.count,@"reset clears cold attempts and scheduling history");
+
+    // Churn may replace every other WID, but cannot move a persistent waiting
+    // retry behind the tail forever. No stream is started in this policy check.
+    owner=provider();[owner acceptRecoveryCohort:@[plan(43)] root:root() sampledAt:@(now)];
+    record=owner.recoveries[@7][@43];record.failures=1;record.notBefore=now+4;uint64_t ticket=record.waiting;
+    for(unsigned wave=0;wave<6;wave++){
+        NSArray *plans=@[plan(43),plan(1000+wave)];[owner acceptRecoveryCohort:plans root:root() sampledAt:@(now)];
+        starting=0;DWReplicaMember *chosen=nil;
+        for(NSDictionary *candidate in [owner admissionPlans:plans root:root()]){chosen=attempt(owner,[candidate[@"identity"][@"wid"]unsignedIntValue],&starting);if(chosen)break;}
+        check(chosen!=nil,@"eligible waiting work progresses during continuous WID churn");
+        if(now<record.notBefore)check([chosen.identity[@"wid"]unsignedIntValue]==1000+wave&&record.waiting==ticket,@"backoff waits retain their FIFO place while a new child starts");
+        else {check([chosen.identity[@"wid"]isEqual:@43],@"due persistent retry is selected ahead of newer replacement WIDs");[chosen retire];break;}
+        [chosen retire];advance(now+1);
+    }
+    check(record.waiting>ticket,@"the admitted retry rotates behind other waiting children");[owner reset];
+
+    owner=provider();NSMutableDictionary *many=[NSMutableDictionary dictionary];for(unsigned logical=7;logical<=12;logical++)many[@(logical)]=logicalRoot(@(logical));owner.roots=many.copy;
+    NSArray *order=[owner admissionRootOrder];starting=0;
+    one=attemptFor(owner,order[0],701,&starting);two=attemptFor(owner,order[1],801,&starting);[one retire];[two retire];
+    many[@13]=logicalRoot(@13);owner.roots=many.copy;order=[owner admissionRootOrder];
+    check([order[0]isEqual:@9]&&[order[1]isEqual:@10]&&[order.lastObject isEqual:@13],@"new logical roots join after persistent waiting roots");
+    starting=0;one=attemptFor(owner,order[0],901,&starting);two=attemptFor(owner,order[1],1001,&starting);[one retire];[two retire];
+    many[@14]=logicalRoot(@14);owner.roots=many.copy;order=[owner admissionRootOrder];
+    check([order[0]isEqual:@11]&&[order[1]isEqual:@12]&&[order.lastObject isEqual:@14],@"root rotation reaches earlier waiters despite increasing new roots");
+    // Suppress only this multi-root fixture's callback assertion on teardown.
+    owner.changed=^(NSNumber *logical){(void)logical;};[owner reset];
+
+    owner=provider();starting=0;__weak DWReplicaMember *released;
+    @autoreleasepool {DWReplicaMember *retired=attempt(owner,43,&starting);released=retired;[retired start];[retired retire];[owner.members removeAllObjects];}
     check(!released,@"watchdog and start completion do not retain a retired attempt");
-    DWReplicaMember *replacement=attempt(owner,43,&recovering);started(replacement);validImage(replacement);advance(now+2);
+    DWReplicaMember *replacement=attempt(owner,43,&starting);started(replacement);validImage(replacement);advance(now+2);
     check(atomic_load(&replacement->alive)&&replacement.image.buffer,@"old weak watchdog cannot retire same-binding replacement");
     [owner reset];check(!owner.recoveries.count&&!owner.roots.count&&!owner.members.count,@"reset withdraws all capture/recovery state");
     check(notified>0&&!queued.count,@"mutations notified and all queued completions drained");

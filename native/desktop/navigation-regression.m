@@ -62,7 +62,7 @@ int main(void){__weak DWNavigationCoordinator *weak;@autoreleasepool{
     [nav interrupt];drain(worker);drain(main);check(live!=NSNull.null&&[snapshot()[@"focus"][@"cycle"]isEqual:live]&&[nav poll:1]&&driver.calls==before,@"unrelated input with no request in flight leaves a confirmed held cycle open");
     check(![nav poll:0]&&snapshot()[@"focus"][@"cycle"]==NSNull.null,@"confirmed held cycle commits on release");
     // A canvas press, as the shell sends it: the cycle is released, then focus work is withdrawn and flights stop.
-    [nav navigate:cycle];drain(worker);drain(main);[nav hold:1];NSNumber *chosen=snapshot()[@"focused"];[nav releaseCycle];[nav invalidate];
+    [nav navigate:cycle];drain(worker);drain(main);[nav hold:1];NSNumber *chosen=snapshot()[@"focus"][@"intent"];[nav releaseCycle];[nav invalidate];
     check(snapshot()[@"focus"][@"cycle"]==NSNull.null&&[snapshot()[@"focus"][@"history"][0]isEqual:chosen]&&![nav poll:1],@"canvas press commits a confirmed held cycle");
     [nav navigate:cycle];[nav hold:1];before=driver.calls;[nav releaseCycle];[nav invalidate];drain(worker);drain(main);
     check(driver.calls==before&&snapshot()[@"focus"][@"pending_effect"]==NSNull.null&&snapshot()[@"focus"][@"cycle"]==NSNull.null&&[snapshot()[@"focus"][@"history"][0]isEqual:chosen],@"canvas press drops a held cycle whose selection is still in flight");
@@ -91,7 +91,7 @@ int main(void){__weak DWNavigationCoordinator *weak;@autoreleasepool{
     check(driver.calls==before&&worker.count==0&&![logical[@"last_result"][@"success"]boolValue]&&[logical[@"last_result"][@"logical"]boolValue]&&logical[@"pending_effect"]==NSNull.null,@"logical-only focus never reaches the adapter");
     check([logical[@"history"][0]isEqual:windows[0]]&&[logical[@"observed_native"]isEqual:seen],@"logical-only focus enters the order and claims no native focus");
     NSArray *order=logical[@"history"];[nav navigate:cycle];[nav navigate:cycle];[nav hold:1];
-    check([snapshot()[@"focus"][@"cycle"]isEqual:@2]&&[snapshot()[@"focused"]isEqual:order[2]]&&[nav poll:1],@"logical-only held cycle steps past the second window");
+    check([snapshot()[@"focus"][@"cycle"]isEqual:@2]&&[snapshot()[@"focus"][@"intent"]isEqual:order[2]]&&[nav poll:1],@"logical-only held cycle steps past the second window");
     check(![nav poll:0]&&snapshot()[@"focus"][@"cycle"]==NSNull.null&&[snapshot()[@"focus"][@"history"][0]isEqual:order[2]]&&[snapshot()[@"focus"][@"observed_native"]isEqual:seen]&&driver.calls==before&&worker.count==0,@"logical-only held cycle commits on release");nav.focusAllowed=YES;
     [nav navigate:navigate(0,o1)];clock+=2000000000;drain(worker);drain(main);check(![snapshot()[@"focus"][@"last_result"][@"success"]boolValue],@"deadline cannot confirm");
     [nav navigate:navigate(0,o1)];NSDictionary *old=snapshot()[@"focus"][@"pending_effect"];[nav invalidate];call(host,@{@"op":@"remove_source",@"window":windows[0],@"identity":ids[0],@"keep_placeholder":@YES});

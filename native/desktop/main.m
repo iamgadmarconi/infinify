@@ -41,6 +41,8 @@
 #import "native-decorations.h"
 #import "native-input.h"
 #import "mac-wallpaper-cache.h"
+#include "mac-wallpaper-refresh.h"
+#include "capture-configuration.h"
 #include <mach/mach_time.h>
 #include <stdatomic.h>
 #include <os/lock.h>
@@ -183,8 +185,13 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
 // A distinct output object fences each stream lifetime. Only retained samples
 // and their metadata cross this worker; the source and renderer stay on main.
 @interface DWRootCaptureMailbox : NSObject <SCStreamOutput>
-- (instancetype)initWithSource:(LiveSource *)source stream:(SCStream *)stream;
+- (instancetype)initWithSource:(LiveSource *)source stream:(SCStream *)stream diagnostics:(BOOL)diagnostics;
 @property(readonly) dispatch_queue_t queue;
+// Transport availability of an actually published image in this exact stream.
+// This is not a pixel-quality, native placement or input-admission proof.
+@property(readonly) BOOL currentImageAvailable;
+- (NSDictionary *)diagnosticSnapshot;
+- (void)stream:(SCStream *)stream startCompleted:(BOOL)succeeded;
 - (void)cancel;
 @end
 @interface LiveSource : NSObject <SCStreamOutput,SCStreamDelegate>
@@ -223,7 +230,9 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
 @property CFTimeInterval captureCandidateSince;
 @property double captureDemandDensity;
 @property CFTimeInterval captureDemandSince;
-@property BOOL captureUpdating;
+@property(nonatomic) DWCaptureConfiguration captureConfiguration;
+@property BOOL captureConfigurationMeasured;
+@property(readonly) BOOL captureUpdating;
 // A system-interrupted capture keeps its logical binding and last picture.
 // Retries obtain a new shareable-window identity rather than reuse a stale filter.
 @property BOOL captureRecovering;
@@ -242,9 +251,12 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
 @property SynthLoad *synth;
 - (BOOL)installSample:(CMSampleBufferRef)sample;
 - (BOOL)installPixels:(CVPixelBufferRef)pixels;
-- (void)acceptCapturedSample:(CMSampleBufferRef)sample stream:(SCStream *)stream received:(NSUInteger)received forceInstall:(BOOL)force;
+- (BOOL)acceptCapturedSample:(CMSampleBufferRef)sample stream:(SCStream *)stream received:(NSUInteger)received forceInstall:(BOOL)force;
 - (void)clearSample;
 - (void)captureFailed:(NSError *)error;
+- (uint64_t)beginCaptureConfiguration:(SCStreamConfiguration *)configuration;
+- (BOOL)completeCaptureConfiguration:(uint64_t)serial success:(BOOL)success;
+- (NSDictionary *)captureConfigurationStatus;
 @end
 @implementation LiveSource
 @synthesize stream=_stream;
@@ -258,7 +270,28 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
     if(_stream==stream)return;
     [_captureMailbox cancel];
     if(_captureMailbox&&_stream)[_stream removeStreamOutput:_captureMailbox type:SCStreamOutputTypeScreen error:nil];
-    _captureMailbox=nil;_stream=stream;
+    _captureMailbox=nil;_stream=stream;DWCaptureConfigurationReset(&_captureConfiguration);
+}
+- (BOOL)captureUpdating { return _captureConfiguration.pending; }
+- (uint64_t)beginCaptureConfiguration:(SCStreamConfiguration *)configuration {
+    return DWCaptureConfigurationBegin(&_captureConfiguration,CGSizeMake(configuration.width,configuration.height),configuration.minimumFrameInterval);
+}
+- (BOOL)completeCaptureConfiguration:(uint64_t)serial success:(BOOL)success {
+    return DWCaptureConfigurationComplete(&_captureConfiguration,serial,success);
+}
+static id captureConfigurationJSON(uint64_t serial,CGSize pixels,CMTime interval) {
+    if(!serial||!CMTIME_IS_NUMERIC(interval)||interval.value<=0||interval.timescale<=0)return NSNull.null;
+    return @{@"serial":@(serial),@"pixels":@[@(pixels.width),@(pixels.height)],
+        @"minimum_frame_interval":@{@"value":@(interval.value),@"timescale":@(interval.timescale)},
+        @"maximum_requested_hz":@((double)interval.timescale/interval.value)};
+}
+- (NSDictionary *)captureConfigurationStatus {
+    if(!self.captureConfigurationMeasured)return nil;
+    DWCaptureConfiguration state=_captureConfiguration;
+    return @{@"state":self.error?@"failed":!self.stream?@"stopped":state.pending?@"pending":state.acknowledgedSerial?@"acknowledged":@"unconfigured",
+        @"requested":captureConfigurationJSON(state.serial,state.requestedPixels,state.requestedInterval),
+        @"acknowledged":captureConfigurationJSON(state.acknowledgedSerial,state.acknowledgedPixels,state.acknowledgedInterval),
+        @"note":@"Submitted and successfully completed configuration requests for this stream; not measured delivery or presentation cadence."};
 }
 static BOOL recoverableCaptureError(NSError *error) {
     if(![error.domain isEqual:SCStreamErrorDomain])return NO;
@@ -274,7 +307,7 @@ static BOOL recoverableCaptureError(NSError *error) {
 }
 - (void)captureFailed:(NSError *)error {
     [self.captureMailbox cancel];
-    self.error=error.localizedDescription?:@"Capture failed";self.captureUpdating=NO;
+    self.error=error.localizedDescription?:@"Capture failed";DWCaptureConfigurationReset(&_captureConfiguration);
     self.captureRecovering=recoverableCaptureError(error);
     if(self.captureRecovering){self.captureFailures=MIN(self.captureFailures+1,8u);self.captureRetryAt=CACurrentMediaTime()+MIN(30.,.25*exp2(self.captureFailures-1));}
     else self.captureRetryAt=0;
@@ -284,21 +317,21 @@ static BOOL recoverableCaptureError(NSError *error) {
     if(type!=SCStreamOutputTypeScreen)return;
     [self acceptCapturedSample:sample stream:stream received:1 forceInstall:NO];
 }
-- (void)acceptCapturedSample:(CMSampleBufferRef)sample stream:(SCStream *)stream received:(NSUInteger)received forceInstall:(BOOL)force {
+- (BOOL)acceptCapturedSample:(CMSampleBufferRef)sample stream:(SCStream *)stream received:(NSUInteger)received forceInstall:(BOOL)force {
     NSAssert(NSThread.isMainThread,@"Capture installation is main-only");
-    if(stream!=self.stream)return;
-    if(self.detached||self.error||!CMSampleBufferIsValid(sample)||!CMSampleBufferGetImageBuffer(sample))return;
+    if(stream!=self.stream)return NO;
+    if(self.detached||self.error||!CMSampleBufferIsValid(sample)||!CMSampleBufferGetImageBuffer(sample))return NO;
     self.delivered+=received;
     CFArrayRef a=CMSampleBufferGetSampleAttachmentsArray(sample,NO);
-    if(!a||!CFArrayGetCount(a))return;
-    NSDictionary *info=asDict((__bridge id)CFArrayGetValueAtIndex(a,0));if(!info)return;
-    if(![info[SCStreamFrameInfoStatus]isKindOfClass:NSNumber.class]||[info[SCStreamFrameInfoStatus]integerValue]!=SCFrameStatusComplete)return;
+    if(!a||!CFArrayGetCount(a))return NO;
+    NSDictionary *info=asDict((__bridge id)CFArrayGetValueAtIndex(a,0));if(!info)return NO;
+    if(![info[SCStreamFrameInfoStatus]isKindOfClass:NSNumber.class]||[info[SCStreamFrameInfoStatus]integerValue]!=SCFrameStatusComplete)return NO;
     // A complete frame that says nothing in it changed is the picture already kept: installing it would redraw the scene for
     // nothing. One that does not say (no dirty rectangles at all) is installed, and so is any frame while no picture is kept,
     // the first of a stream just started or resized, and one whose size is not the kept picture's.
     NSArray *dirty=info[SCStreamFrameInfoDirtyRects];CVImageBufferRef image=CMSampleBufferGetImageBuffer(sample);
-    if(!force&&self.composited&&self.pixels&&!self.restarted&&CVPixelBufferGetWidth(image)==CVPixelBufferGetWidth(self.pixels)&&CVPixelBufferGetHeight(image)==CVPixelBufferGetHeight(self.pixels)&&[dirty isKindOfClass:NSArray.class]&&!dirty.count){self.skipped++;return;}
-    [self installSample:sample];
+    if(!force&&self.composited&&self.pixels&&!self.restarted&&CVPixelBufferGetWidth(image)==CVPixelBufferGetWidth(self.pixels)&&CVPixelBufferGetHeight(image)==CVPixelBufferGetHeight(self.pixels)&&[dirty isKindOfClass:NSArray.class]&&!dirty.count){self.skipped++;return YES;}
+    return [self installSample:sample];
 }
 - (BOOL)installSample:(CMSampleBufferRef)sample {
     if(self.composited)return [self installPixels:CMSampleBufferGetImageBuffer(sample)];
@@ -324,31 +357,109 @@ static BOOL recoverableCaptureError(NSError *error) {
     os_unfair_lock _lock;
     CMSampleBufferRef _pending;
     BOOL _scheduled,_cancelled,_complete,_changed;
+    uint64_t _callbackSequence,_pendingSequence,_publishedSequence,_unavailableSequence;
     NSUInteger _received;
+    BOOL _diagnostics,_hasLastStatus,_startCompleted,_startSucceeded;
+    NSInteger _lastStatus;
+    uint64_t _callbacks,_invalidSamples,_withoutImages,_withImages,_completeMetadata,_idleMetadata,_blankMetadata,
+        _suspendedMetadata,_startedMetadata,_stoppedMetadata,_missingStatuses,_unknownStatuses,_staleCallbacks,
+        _queuedSamples,_dequeuedSamples,_forwardedSamples,_staleDrains,_drains;
 }
-- (instancetype)initWithSource:(LiveSource *)source stream:(SCStream *)stream {
-    if((self=[super init])){_source=source;_stream=stream;_lock=OS_UNFAIR_LOCK_INIT;
+- (instancetype)initWithSource:(LiveSource *)source stream:(SCStream *)stream diagnostics:(BOOL)diagnostics {
+    if((self=[super init])){_source=source;_stream=stream;_diagnostics=diagnostics;_lock=OS_UNFAIR_LOCK_INIT;
         dispatch_queue_attr_t attributes=dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,QOS_CLASS_USER_INITIATED,0);
         attributes=dispatch_queue_attr_make_with_autorelease_frequency(attributes,DISPATCH_AUTORELEASE_FREQUENCY_WORK_ITEM);
         _queue=dispatch_queue_create("org.infinify.root-capture",attributes);}
     return self;
 }
+- (BOOL)currentImageAvailable {
+    NSAssert(NSThread.isMainThread,@"Capture availability is main-only");
+    LiveSource *source=_source;SCStream *stream=_stream;
+    if(!source||!stream||source.captureMailbox!=self||source.stream!=stream||source.detached||source.error)return NO;
+    os_unfair_lock_lock(&_lock);BOOL available=!_cancelled&&_publishedSequence>_unavailableSequence;os_unfair_lock_unlock(&_lock);
+    return available;
+}
+// Only the current stream's callback order matters. Idle preserves a published
+// usable image; it cannot revive a revoked one. A new Complete needs publication,
+// not just receipt, before the image can authorize an ownership request again.
+- (uint64_t)observeAvailabilityLocked:(BOOL)valid image:(BOOL)image info:(NSDictionary *)info {
+    uint64_t sequence=_callbackSequence==UINT64_MAX?UINT64_MAX:++_callbackSequence;
+    NSNumber *status=[info[SCStreamFrameInfoStatus]isKindOfClass:NSNumber.class]?info[SCStreamFrameInfoStatus]:nil;
+    BOOL known=valid&&status&&CFGetTypeID((__bridge CFTypeRef)status)!=CFBooleanGetTypeID()
+        &&isfinite(status.doubleValue)&&floor(status.doubleValue)==status.doubleValue
+        &&status.doubleValue>=SCFrameStatusComplete&&status.doubleValue<=SCFrameStatusStopped;
+    if(sequence==UINT64_MAX||!known||(status.integerValue!=SCFrameStatusIdle&&!(status.integerValue==SCFrameStatusComplete&&image)))
+        _unavailableSequence=sequence;
+    return sequence;
+}
+// Instrumentation only, under the existing queue lock and explicitly enabled
+// for scoped DebugCapture. These counts do not claim frame acceptance or pixels.
+- (void)recordCallbackLocked:(BOOL)valid image:(BOOL)image info:(NSDictionary *)info {
+    _callbacks++;if(!valid)_invalidSamples++;else if(image)_withImages++;else _withoutImages++;
+    NSNumber *status=[info[SCStreamFrameInfoStatus]isKindOfClass:NSNumber.class]?info[SCStreamFrameInfoStatus]:nil;
+    _hasLastStatus=status&&isfinite(status.doubleValue)&&floor(status.doubleValue)==status.doubleValue
+        &&status.doubleValue>=-0x1p63&&status.doubleValue<0x1p63;
+    if(!_hasLastStatus){_missingStatuses++;return;}_lastStatus=status.integerValue;
+    switch(_lastStatus){
+        case SCFrameStatusComplete:_completeMetadata++;break;
+        case SCFrameStatusIdle:_idleMetadata++;break;
+        case SCFrameStatusBlank:_blankMetadata++;break;
+        case SCFrameStatusSuspended:_suspendedMetadata++;break;
+        case SCFrameStatusStarted:_startedMetadata++;break;
+        case SCFrameStatusStopped:_stoppedMetadata++;break;
+        default:_unknownStatuses++;break;
+    }
+}
+- (NSDictionary *)diagnosticSnapshot {
+    NSAssert(NSThread.isMainThread,@"Capture diagnostics are main-only");if(!_diagnostics)return nil;
+    LiveSource *source=_source;SCStream *stream=_stream;BOOL current=source&&stream&&source.captureMailbox==self&&source.stream==stream;
+    os_unfair_lock_lock(&_lock);
+    NSDictionary *report=@{@"instrumentation_only":@YES,@"current_proxy":@(current),@"cancelled":@(_cancelled),
+        @"start_completed":@(_startCompleted),@"start_succeeded":@(_startSucceeded),@"screen_callbacks":@(_callbacks),
+        @"invalid_samples":@(_invalidSamples),@"valid_samples_without_image":@(_withoutImages),@"valid_samples_with_image":@(_withImages),
+        @"last_status":_hasLastStatus?@(_lastStatus):NSNull.null,@"status_counts":@{@"complete":@(_completeMetadata),@"idle":@(_idleMetadata),
+            @"blank":@(_blankMetadata),@"suspended":@(_suspendedMetadata),@"started":@(_startedMetadata),@"stopped":@(_stoppedMetadata),
+            @"missing_or_invalid":@(_missingStatuses),@"unknown":@(_unknownStatuses)},
+        @"stale_callbacks":@(_staleCallbacks),@"queued_samples":@(_queuedSamples),@"dequeued_samples":@(_dequeuedSamples),
+        @"forwarded_to_source":@(_forwardedSamples),@"stale_drains":@(_staleDrains),@"drain_calls":@(_drains),
+        @"pending_sample":@(_pending!=NULL),@"drain_scheduled":@(_scheduled),@"pending_callbacks":@(_received)};
+    NSMutableDictionary *availability=[report mutableCopy];availability[@"image_available"]=@(current&&!_cancelled&&_publishedSequence>_unavailableSequence);
+    availability[@"callback_sequence"]=@(_callbackSequence);availability[@"published_callback_sequence"]=@(_publishedSequence);
+    availability[@"unavailable_callback_sequence"]=@(_unavailableSequence);report=availability.copy;
+    os_unfair_lock_unlock(&_lock);return report;
+}
+- (void)stream:(SCStream *)stream startCompleted:(BOOL)succeeded {
+    if(!_diagnostics)return;os_unfair_lock_lock(&_lock);
+    if(!_cancelled&&_stream==stream){_startCompleted=YES;_startSucceeded=succeeded;}
+    os_unfair_lock_unlock(&_lock);
+}
 - (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sample ofType:(SCStreamOutputType)type {
-    if(type!=SCStreamOutputTypeScreen||!CMSampleBufferIsValid(sample)||!CMSampleBufferGetImageBuffer(sample))return;
-    CFArrayRef attachments=CMSampleBufferGetSampleAttachmentsArray(sample,NO);
+    if(type!=SCStreamOutputTypeScreen)return;
+    BOOL valid=CMSampleBufferIsValid(sample),hasImage=valid&&CMSampleBufferGetImageBuffer(sample)!=NULL;
+    CFArrayRef attachments=valid?CMSampleBufferGetSampleAttachmentsArray(sample,NO):NULL;
     NSDictionary *info=attachments&&CFArrayGetCount(attachments)?asDict((__bridge id)CFArrayGetValueAtIndex(attachments,0)):nil;
+    if(!valid||!hasImage){
+        os_unfair_lock_lock(&_lock);
+        if(_diagnostics)[self recordCallbackLocked:valid image:hasImage info:info];
+        if(!_cancelled&&_stream==stream)[self observeAvailabilityLocked:valid image:hasImage info:info];
+        else if(_diagnostics)_staleCallbacks++;
+        os_unfair_lock_unlock(&_lock);
+        return;
+    }
     BOOL complete=[info[SCStreamFrameInfoStatus]isKindOfClass:NSNumber.class]&&[info[SCStreamFrameInfoStatus]integerValue]==SCFrameStatusComplete;
     NSArray *dirty=info[SCStreamFrameInfoDirtyRects];BOOL changed=complete&&(![dirty isKindOfClass:NSArray.class]||dirty.count);
     CMSampleBufferRef replaced=NULL;
     os_unfair_lock_lock(&_lock);
-    if(_cancelled||_stream!=stream){os_unfair_lock_unlock(&_lock);return;}
+    if(_diagnostics)[self recordCallbackLocked:valid image:hasImage info:info];
+    if(_cancelled||_stream!=stream){if(_diagnostics)_staleCallbacks++;os_unfair_lock_unlock(&_lock);return;}
+    uint64_t sequence=[self observeAvailabilityLocked:valid image:hasImage info:info];
     _received++;
     // An idle/incomplete callback cannot evict a complete picture. Dirty-empty
     // means unchanged from its predecessor, which may itself be coalesced here.
     if(!_pending||complete||!_complete){
         if(_pending&&complete&&_complete){CVPixelBufferRef before=CMSampleBufferGetImageBuffer(_pending),after=CMSampleBufferGetImageBuffer(sample);
             changed|=CVPixelBufferGetWidth(before)!=CVPixelBufferGetWidth(after)||CVPixelBufferGetHeight(before)!=CVPixelBufferGetHeight(after);}
-        replaced=_pending;_pending=(CMSampleBufferRef)CFRetain(sample);_complete=complete;_changed|=changed;
+        replaced=_pending;_pending=(CMSampleBufferRef)CFRetain(sample);_pendingSequence=sequence;_complete=complete;_changed|=changed;if(_diagnostics)_queuedSamples++;
     }
     BOOL schedule=!_scheduled;_scheduled=YES;
     os_unfair_lock_unlock(&_lock);
@@ -357,16 +468,22 @@ static BOOL recoverableCaptureError(NSError *error) {
 }
 - (void)drain {
     os_unfair_lock_lock(&_lock);
-    CMSampleBufferRef sample=_pending;_pending=NULL;NSUInteger received=_received;BOOL changed=_changed;
+    CMSampleBufferRef sample=_pending;_pending=NULL;uint64_t sequence=_pendingSequence;_pendingSequence=0;
+    NSUInteger received=_received;BOOL complete=_complete,changed=_changed||_publishedSequence<=_unavailableSequence;
+    if(_diagnostics){_drains++;if(sample)_dequeuedSamples++;}
     _received=0;_complete=NO;_changed=NO;BOOL cancelled=_cancelled;
     os_unfair_lock_unlock(&_lock);
     // The proxy is also the stream generation: a late old drain can neither
     // publish into nor remove a newer proxy's pending picture.
     LiveSource *source=_source;SCStream *stream=_stream;
-    if(sample&&!cancelled&&source.captureMailbox==self&&stream&&source.stream==stream&&!source.detached&&!source.error)
-        [source acceptCapturedSample:sample stream:stream received:received forceInstall:changed];
+    BOOL forward=sample&&!cancelled&&source.captureMailbox==self&&stream&&source.stream==stream&&!source.detached&&!source.error;
+    BOOL published=forward&&[source acceptCapturedSample:sample stream:stream received:received forceInstall:changed];
+    BOOL hadSample=sample!=NULL;
     if(sample)CFRelease(sample);
     os_unfair_lock_lock(&_lock);
+    if(published&&complete&&!_cancelled&&_stream==stream&&source.captureMailbox==self&&source.stream==stream
+        &&!source.detached&&!source.error)_publishedSequence=MAX(_publishedSequence,sequence);
+    if(_diagnostics&&hadSample){if(forward)_forwardedSamples++;else _staleDrains++;}
     BOOL again=!_cancelled&&_pending;if(!again)_scheduled=NO;
     os_unfair_lock_unlock(&_lock);
     // Keep the scheduled flag through installation, even if it enters a nested
@@ -374,11 +491,18 @@ static BOOL recoverableCaptureError(NSError *error) {
     if(again)dispatch_async(dispatch_get_main_queue(),^{[self drain];});
 }
 - (void)cancel {
-    os_unfair_lock_lock(&_lock);_cancelled=YES;CMSampleBufferRef sample=_pending;_pending=NULL;_received=0;_complete=NO;_changed=NO;os_unfair_lock_unlock(&_lock);
+    os_unfair_lock_lock(&_lock);_cancelled=YES;CMSampleBufferRef sample=_pending;_pending=NULL;_pendingSequence=0;_received=0;_complete=NO;_changed=NO;os_unfair_lock_unlock(&_lock);
     if(sample)CFRelease(sample);
 }
 - (void)dealloc {if(_pending)CFRelease(_pending);}
 @end
+// Production composited input requires a currently published capture image.
+// The separate AV fixture renderer has no worker mailbox; its existing native
+// binding checks still apply. Synthetic load pixels never authorize app input.
+static BOOL DWCapturedInputAvailable(LiveSource *source) {
+    return source&&!source.detached&&!source.error&&!source.synth
+        &&(!source.composited||(source.pixels&&source.captureMailbox.currentImageAvailable));
+}
 // A one-shot export completion may run on any queue. GCD transfers its retained
 // result to the main thread; an expired request never installs a late sample.
 @interface DWExportFrame : NSObject {
@@ -775,10 +899,26 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 @property NSTimer *nativeTransferTimer;
 @property CFTimeInterval nativeTransferUntil,nativeTransferNextCheck;
 @property NSUInteger nativeTransferCursor;
-@property DWNativeViewTransfer *nativeDropTransfer;
-@property CFTimeInterval nativeDropDeadline;
-- (void)requestNativeDropAt:(CGPoint)point view:(DesktopView *)view;
+@property DWNativeViewTransfer *nativeOwnershipTransfer;
+@property CFTimeInterval nativeOwnershipDeadline;
+// Physical hover observation is coalesced in the tap; staging happens later.
+@property NSDictionary *nativeHoverObservation;
+@property NSDictionary *nativeHoverPresentation;
+@property DWNativeViewTransfer *nativeHoverTransfer;
+@property (weak) DesktopView *nativeHoverView;
+@property BOOL nativeHoverQueued;
+@property uint64_t nativeHoverEpoch;
+@property CFTimeInterval nativeHoverUntil;
+- (void)queueNativeHover:(CGEventRef)event;
+- (void)updateNativeHover;
+- (void)cancelNativeHoverForWindow:(NSNumber *)window;
+- (BOOL)nativeHoverAllowed;
+- (BOOL)nativeOwnershipReady:(LiveSource *)source;
+- (BOOL)nativeHoverSite:(LiveSource *)source hit:(NSDictionary *)hit view:(DesktopView *)view output:(NSNumber *)output at:(CGPoint)point;
+- (BOOL)queuedNativeHoverPress:(NSEvent *)event source:(LiveSource *)source hit:(NSDictionary *)hit view:(DesktopView *)view output:(NSNumber *)output at:(CGPoint)point;
+- (DWNativeViewTransfer *)requestNativeOwnershipAt:(CGPoint)point view:(DesktopView *)view;
 - (void)advanceNativeTransfers;
+- (void)startNativeTransferTimer;
 - (void)stopNativeTransferTimer;
 - (NSDictionary *)nativeDescription:(NSDictionary *)snapshot;
 - (NSDictionary *)presentationSnapshot;
@@ -1033,7 +1173,8 @@ static BOOL sourceGone(LiveSource *source,NSDictionary *info) { return ![birth(s
 - (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender {
     if(sender.draggingDestinationWindow!=self.window||!self.desktop.native)return NSDragOperationNone;
     NSPoint point=[self convertPoint:sender.draggingLocation fromView:nil];
-    [self.desktop requestNativeDropAt:CGPointMake(point.x+self.globalBounds.origin.x,point.y+self.globalBounds.origin.y) view:self];
+    [self.desktop cancelNativeHoverForWindow:nil];
+    [self.desktop requestNativeOwnershipAt:CGPointMake(point.x+self.globalBounds.origin.x,point.y+self.globalBounds.origin.y) view:self];
     return NSDragOperationNone;
 }
 - (BOOL)wantsPeriodicDraggingUpdates { return YES; }
@@ -1100,12 +1241,12 @@ static BOOL sameInputTarget(NSDictionary *a,NSDictionary *b) {
 // the current hit, binding and native ancestry checks in -forwardCaptured:.
 - (NSDictionary *)inputIntentForHit:(NSDictionary *)hit output:(NSNumber *)output {
     NSNumber *windowID=liveHit(hit);if(!windowID)return nil;
-    LiveSource *source=self.desktop.sources[windowID];if(!source||source.detached||!output)return nil;
+    LiveSource *source=self.desktop.sources[windowID];if(!DWCapturedInputAvailable(source)||!output)return nil;
     NSDictionary *binding=nil;for(NSDictionary *window in [self.desktop presentationSnapshot][@"windows"])if([window[@"window"]isEqual:source.logical]){binding=asDict(window[@"source"]);break;}
     if(!binding[@"generation"]||!boundIdentity(source.identity,binding[@"identity"])||![binding[@"observation_known"]boolValue])return nil;
     NSDictionary *member=asDict(hit[@"native_member"]),*identity=member?asDict(member[@"identity"]):source.identity;
     if(!identity||(member&&![member[@"generation"]isEqual:binding[@"generation"]]))return nil;
-    return @{@"window":source.logical,@"output":output,@"generation":binding[@"generation"],@"identity":identity,@"root_identity":source.identity,@"native_member":@(member!=nil)};
+    return DWCapturedInputAvailable(source)?@{@"window":source.logical,@"output":output,@"generation":binding[@"generation"],@"identity":identity,@"root_identity":source.identity,@"native_member":@(member!=nil)}:nil;
 }
 - (NSDictionary *)hit:(CGPoint)p output:(NSNumber *)output {
     if(self.nativePointValid&&self.nativeFamilyHit)return self.nativeFamilyHit;
@@ -1239,6 +1380,7 @@ static BOOL DWInputTrace(void) { static int on=-1;if(on<0)on=getenv("INFINIFY_DE
     NSDictionary *hit=[self hit:p output:output];if(![hit isKindOfClass:NSDictionary.class]||[hit[@"pick"]boolValue])return NO;
     if(expected&&!sameInputTarget(expected,[self inputIntentForHit:hit output:output]))return NO;
     LiveSource *source=self.desktop.sources[hit[@"window"]];
+    if(!DWCapturedInputAvailable(source))return NO;
     // The actual native placement gets ordinary WindowServer input. Only an
     // extra display's visible, successfully captured copy can use this route.
     if(native&&(![self.desktop.nativeViews replica:source.logical output:output]||!source.pixels||source.error||source.detached||!DWInScope(self.desktop.scope,source.router.pid)||![[self.desktop.native rootWindowFor:source.router.wid]isEqual:@(source.router.wid)]))return NO;
@@ -1268,6 +1410,7 @@ static BOOL DWInputTrace(void) { static int on=-1;if(on<0)on=getenv("INFINIFY_DE
     if(member){target[@"identity"]=member[@"identity"];target[@"native_bounds"]=member[@"native_bounds"];target[@"native_member"]=@YES;local=jsonPoint(member[@"local"]);}
     if(expected&&!sameInputTarget(expected,target))return NO;
     if(self.pressedTarget&&(drag||up)&&![self.pressedTarget[@"identity"]isEqual:target[@"identity"]])return NO;
+    if(!DWCapturedInputAvailable(source))return NO;
     BOOL sent;
     if(DWNativeTabletEvent(e)){__weak Desktop *weak=self.desktop;sent=[self.desktop.tablet forwardEvent:e target:target local:local validate:^BOOL(NSDictionary *value){return [weak validateInputTarget:value];} post:^BOOL(CGEventRef packet,NSDictionary *value,CGPoint point){return [weak postInput:packet target:value local:point];}];}
     else if(native||member)sent=[self.desktop validateInputTarget:target]&&[self.desktop postInput:e target:target local:local];
@@ -1478,8 +1621,8 @@ static BOOL DWInputTrace(void) { static int on=-1;if(on<0)on=getenv("INFINIFY_DE
 // down and zooms out). A wheel zoom is a flight that later notches extend, so no flight is
 // cancelled first. A pinch is not sent here: it is a gesture, see -magnifyWithEvent:.
 - (void)wheelZoom:(double)delta at:(CGPoint)p output:(NSNumber *)output {
-    // The controller refuses a pointer zoom while it holds a window drag; the input is dropped, not sent to fail.
-    if(!isfinite(delta)||!delta||self.gesture==2)return;
+    // A held window move or resize owns the pointer; drop its zoom input quietly.
+    if(!isfinite(delta)||!delta||self.gesture==2||self.gesture==4)return;
     NSDictionary *reply=[self.desktop call:@{@"op":@"zoom_by",@"output":output,@"anchor":pointJSON(p),@"delta":@(delta),@"source":@"wheel"}];BOOL frames=[reply[@"needs_frames"]boolValue];
     // A zoom the limit swallows is no input for a focus request in flight either.
     if(asDict(reply[@"navigation"]))[self.desktop.navigation interrupt];
@@ -1708,15 +1851,16 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     return DWNativeDecorationHit(source.nativeButtons,source.identity,own,displayed,point);
 }
 - (BOOL)replicaGreen:(LiveSource *)source at:(CGPoint)point output:(NSNumber *)output {
-    if(!source||source.detached||!source.pixels||source.error||(self.native&&![self.nativeViews replica:source.logical output:output])||!source.nativeButtons||CACurrentMediaTime()-[source.nativeButtons[@"sampled_at"]doubleValue]>1||!DWInScope(self.scope,source.router.pid)||![birth(source.router.pid)isEqual:source.router.processBirth])return NO;
+    if(!DWCapturedInputAvailable(source)||!source.pixels||(self.native&&![self.nativeViews replica:source.logical output:output])||!source.nativeButtons||CACurrentMediaTime()-[source.nativeButtons[@"sampled_at"]doubleValue]>1||!DWInScope(self.scope,source.router.pid)||![birth(source.router.pid)isEqual:source.router.processBirth])return NO;
     NSDictionary *placement=nil;for(NSDictionary *item in [self presentationSnapshot][@"placements"])if([item[@"window"]isEqual:source.logical]&&[item[@"output"]isEqual:output]){placement=item;break;}
     if(!placement||[placement[@"family_only"]boolValue])return NO;CGRect own=CGRectZero;
     NSDictionary *info=windowInfo(source.router.wid);
     if([info[(id)kCGWindowOwnerPID]intValue]!=source.router.pid||!DWNativeBounds(source.router.wid,&own)||!CGRectContainsPoint(jsonRect(placement[@"clip_rect"]),point))return NO;
     if(!self.native||self.native.familiesNeeded){uint32_t parent=0;if(!DWNativeWindowParent(source.identity,&parent)||parent)return NO;}
-    return DWNativeDecorationHit(source.nativeButtons,source.identity,own,jsonRect(placement[@"screen_rect"]),point);
+    return DWCapturedInputAvailable(source)&&DWNativeDecorationHit(source.nativeButtons,source.identity,own,jsonRect(placement[@"screen_rect"]),point);
 }
 - (void)cancelNativeInput {
+    [self cancelNativeHoverForWindow:nil];
     self.nativeDecorationPress=nil;
     self.nativeButtonHover=nil;
     DesktopView *view=self.nativeGestureView;self.nativeGestureView=nil;
@@ -1782,7 +1926,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(![self validateInputTarget:target]||!isfinite(screen.x)||!isfinite(screen.y))return nil;
     NSDictionary *snapshot=[self presentationSnapshot],*placement=nil;
     LiveSource *source=self.sources[target[@"window"]];
-    if(!source.pixels||source.error||source.detached||(self.native&&![self.nativeViews replica:source.logical output:target[@"output"]]))return nil;
+    if(!DWCapturedInputAvailable(source)||!source.pixels||(self.native&&![self.nativeViews replica:source.logical output:target[@"output"]]))return nil;
     for(NSDictionary *item in snapshot[@"placements"])if([item[@"window"]isEqual:source.logical]&&[item[@"output"]isEqual:target[@"output"]]){placement=item;break;}
     NSDictionary *binding=nil;for(NSDictionary *window in [self call:@{@"op":@"snapshot"}][@"windows"])if([window[@"window"]isEqual:source.logical])binding=asDict(window[@"source"]);
     if(![binding[@"observation_known"]boolValue])return nil;
@@ -1801,7 +1945,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
                              (screen.y-site.origin.y)*scale.y+own.origin.y-recipient.origin.y);
     if(!isfinite(scale.x)||!isfinite(scale.y)||!isfinite(local.x)||!isfinite(local.y))return nil;
     NSMutableDictionary *updated=[target mutableCopy];updated[@"native_bounds"]=rectJSON(recipient);updated[@"motion_scale"]=pointJSON(scale);
-    return @{@"target":updated.copy,@"local":pointJSON(local)};
+    return DWCapturedInputAvailable(source)?@{@"target":updated.copy,@"local":pointJSON(local)}:nil;
 }
 - (BOOL)forwardCapturedPointer:(CGEventRef)event screen:(CGPoint)screen {
     __weak Desktop *weak=self;
@@ -1812,6 +1956,14 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 }
 - (BOOL)forwardTabletTail:(CGEventRef)event {
     if(![self.tablet ownsEvent:event])return NO;
+    __weak Desktop *weak=self;NSDictionary *captured=[self.tablet capturedTargetForEvent:event];
+    if(captured&&!DWCapturedInputAvailable(self.sources[captured[@"window"]])){
+        // Closing an admitted contact checks its original identity, not capture
+        // availability. Suppress its physical tail, including additional downs.
+        [self.tablet cancelTargetsMatching:^BOOL(NSDictionary *target){return sameInputTarget(target,captured);}
+            validate:^BOOL(NSDictionary *target){return [weak validateInputTarget:target];}
+            post:^BOOL(CGEventRef packet,NSDictionary *target,CGPoint local){return [weak postInput:packet target:target local:local];}];
+    }
     NSDictionary *resolved=nil;
     if(!DWNativeTabletProximityEvent(event)||CGEventGetIntegerValueField(event,kCGTabletProximityEventEnterProximity)){
         NSDictionary *target=[self.tablet capturedTargetForEvent:event];
@@ -1821,11 +1973,11 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     // placement supplies the camera mapping even outside that display's clip.
     // Missing/stale geometry suppresses motion; release/tool-out still closes
     // the admitted recipient at its last validated application point.
-    __weak Desktop *weak=self;
     return [self.tablet forwardEvent:event target:resolved[@"target"] local:resolved?jsonPoint(resolved[@"local"]):CGPointZero validate:^BOOL(NSDictionary *target){return [weak validateInputTarget:target];} post:^BOOL(CGEventRef packet,NSDictionary *target,CGPoint local){return [weak postInput:packet target:target local:local];}];
 }
 - (void)cancelCapturedInputForWindow:(NSNumber *)window {
     __weak Desktop *weak=self;
+    [self cancelNativeHoverForWindow:window];
     // A held down has not reached any native recipient. Cancel its entire
     // queued sequence without synthesizing a release or completed click.
     for(DesktopView *view in self.views)if(view.heldPress&&(!window||[view.heldWindow isEqual:window])){
@@ -1861,6 +2013,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         return YES;
     }
     if(DWNativeTabletEvent(cg)){
+        [self cancelNativeHoverForWindow:nil];
         if(!self.tablet)self.tablet=[DWNativeTabletRouter new];[self.tablet observeEvent:cg];
         if(self.cleaning||self.sessionInactive||self.native.ended){[self.tablet reset];return NO;}
         __weak Desktop *weak=self;
@@ -1935,6 +2088,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     }
     if(type==kCGEventMouseMoved){
         CFTimeInterval now=CACurrentMediaTime();if(self.cleaning||self.sessionInactive||self.native.ended)return NO;
+        [self queueNativeHover:cg];
         CGWindowID wid=(CGWindowID)CGEventGetIntegerValueField(cg,kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent);
         if(!wid)wid=(CGWindowID)CGEventGetIntegerValueField(cg,kCGMouseEventWindowUnderMousePointer);
         if(!wid)wid=(CGWindowID)[NSWindow windowNumberAtPoint:NSMakePoint(CGEventGetLocation(cg).x,screenTop()-CGEventGetLocation(cg).y) belowWindowWithWindowNumber:0];
@@ -2001,9 +2155,40 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     LiveSource *source=[self nativeSource:wid at:point];BOOL replica=NO;
     if(!source)for(DesktopView *view in self.views)if((CGWindowID)view.window.windowNumber==wid){
         NSNumber *output=[view outputAt:point];NSDictionary *hit=output?[view hit:point output:output]:nil;LiveSource *candidate=self.sources[hit[@"window"]];
-        if(candidate&&(!self.native||[self.nativeViews replica:candidate.logical output:output])&&candidate.pixels&&!candidate.error&&!candidate.detached){source=candidate;replica=YES;break;}
+        BOOL covered=self.native&&down&&[self.nativeViews requiresPlacementAdmissionForWindow:candidate.logical];
+        if(candidate&&(covered||!self.native||[self.nativeViews replica:candidate.logical output:output])
+            &&(covered||(candidate.pixels&&!candidate.error))&&!candidate.detached){source=candidate;replica=YES;break;}
     }
     if(!source)return NO;
+    if(self.native&&down&&[self.nativeViews requiresPlacementAdmissionForWindow:source.logical]){
+        // Even a cancelled transfer with no eligible recovery token still has
+        // coverage. Its physically addressed root/member must get no down.
+        pid_t expected=replica?getpid():source.router.pid;
+        BOOL addressedCanvas=replica&&CGEventGetIntegerValueField(cg,kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent)==wid
+            &&CGEventGetIntegerValueField(cg,kCGEventTargetUnixProcessID)==getpid();
+        // Refusing an already addressed canvas packet grants no input. A later
+        // hit mismatch must not send this down into its captured forwarder.
+        if(!addressedCanvas){NSDictionary *recipient=DWNativeEventRecipientAtPoint(point);
+            if(recipient){
+                if([recipient[@"wid"]unsignedIntValue]!=wid||[recipient[@"pid"]intValue]!=expected
+                    ||(!replica&&(![recipient[@"birth_sec"]isEqual:source.identity[@"birth_sec"]]
+                        ||![recipient[@"birth_usec"]isEqual:source.identity[@"birth_usec"]])))return NO;
+            }else if(CGEventGetIntegerValueField(cg,kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent)!=wid
+                ||CGEventGetIntegerValueField(cg,kCGEventTargetUnixProcessID)!=expected)return NO;
+        }
+        [self cancelNativeHoverForWindow:source.logical];return YES;
+    }
+    if(self.native&&down&&!replica){
+        DWNativeAppliedPlacement *placement=[self.nativeViews admittedPlacementForWindow:source.logical];
+        if(placement){DWNativeViewTransfer *transfer=[self.nativeViews currentTransferForWindow:source.logical];
+            NSDictionary *recipient=DWNativeEventRecipientAtPoint(point),*identity=nil;
+            for(NSDictionary *member in placement.members)if([member[@"identity"][@"wid"]unsignedIntValue]==wid){identity=member[@"identity"];break;}
+            if([recipient[@"wid"]unsignedIntValue]!=wid||!boundIdentity(recipient,identity)
+                ||![self.nativeViews isAdmissionCurrentForTransfer:transfer placement:placement]
+                ||!DWNativeValidateAppliedPlacementInput(self.native,placement,recipient,point,NULL)
+                ||![self.nativeViews isAdmissionCurrentForTransfer:transfer placement:placement])return YES;
+        }
+    }
     for(DesktopView *view in self.views){
         if(!CGRectContainsPoint(view.globalBounds,point))continue;
         NSNumber *output=[view outputAt:point];if(!output)return NO;
@@ -2019,6 +2204,9 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         BOOL pick=[hit[@"pick"]isEqual:@YES],claimed=pick;
         if(down){
             if(captured||view.gesture)return NO;
+            if(replica&&[self queuedNativeHoverPress:event source:source hit:hit view:view output:output at:point]){
+                [self cancelNativeHoverForWindow:source.logical];return YES;
+            }
             NSEventModifierFlags extra=event.modifierFlags&(NSEventModifierFlagCommand|NSEventModifierFlagControl|NSEventModifierFlagShift);
             if(button==0&&!extra&&!pick&&!hit[@"native_member"]&&![hit[@"widget"]boolValue]&&(replica?[self replicaGreen:source at:point output:output]:(wid==source.router.wid&&[self nativeGreen:source at:point]))){
                 NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}];
@@ -3047,12 +3235,17 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 - (NSData *)debugCapture:(NSDictionary *)request {
     NSNumber *window=asNumber(request[@"window"]);if(!window)return ipcError(@"DebugCapture needs a window id");
     LiveSource *source=self.sources[window];NSString *phase=asString(request[@"phase"]);
-    if(!source||source.detached||self.native||source.synth||!DWInScope(self.scope,source.router.pid)||sourceGone(source,windowInfo(source.router.wid)))return ipcError(@"DebugCapture requires a currently bound capture from --only-pid");
+    if(!source||source.detached||source.synth||!self.scope||!DWInScope(self.scope,source.router.pid)||sourceGone(source,windowInfo(source.router.wid)))return ipcError(@"DebugCapture requires a currently bound capture from --only-pid");
+    // A native replica can report its capture lifecycle, but interrupting it
+    // would change representation during an ownership transfer. Status is only
+    // a diagnostic snapshot, never native placement or input authorization.
+    if(self.native&&![phase isEqual:@"status"])return ipcError(@"Native replica DebugCapture is read-only; use phase status");
     if([phase isEqual:@"interrupt"]){
         if(!source.stream)return ipcError(@"that window has no active capture stream");
         [self stopCapture:source];[source captureFailed:[NSError errorWithDomain:SCStreamErrorDomain code:SCStreamErrorSystemStoppedStream userInfo:@{NSLocalizedDescriptionKey:@"Scoped diagnostic interrupted this capture stream"}]];
     }else if(![phase isEqual:@"status"])return ipcError(@"DebugCapture needs phase status or interrupt");
-    return [NSJSONSerialization dataWithJSONObject:@{@"Ok":@{@"DebugCapture":@{@"window":source.logical,@"stream":@(source.stream!=nil),@"recovering":@(source.captureRecovering),@"failures":@(source.captureFailures),@"accepted":@(source.accepted),@"retry_in":@(MAX(0,source.captureRetryAt-CACurrentMediaTime())),@"reading":@(self.captureRecoveryReading),@"error":source.error?:NSNull.null}}} options:0 error:nil];
+    NSMutableArray *replicas=[NSMutableArray array];for(NSDictionary *output in self.pointerOutputs)if([self.nativeViews replica:source.logical output:output[@"id"]])[replicas addObject:output[@"id"]];
+    return [NSJSONSerialization dataWithJSONObject:@{@"Ok":@{@"DebugCapture":@{@"window":source.logical,@"identity":source.identity,@"native_family":source.nativeFamily?:NSNull.null,@"stream":@(source.stream!=nil),@"shareable":@(source.window!=nil),@"pixels":@(source.pixels!=NULL),@"capture_restarted":@(source.restarted),@"captured_frames":@(source.frames),@"mailbox":source.captureMailbox.diagnosticSnapshot?:NSNull.null,@"session_inactive":@(self.sessionInactive),@"capture_updating":@(source.captureUpdating),@"configuration":source.captureConfigurationStatus?:NSNull.null,@"native_replica":@(source.nativeReplica),@"replica_wanted":@(source.replicaWanted),@"described_replica_outputs":replicas,@"screen_capture_access":@(CGPreflightScreenCaptureAccess()),@"recovering":@(source.captureRecovering),@"failures":@(source.captureFailures),@"accepted":@(source.accepted),@"retry_in":@(MAX(0,source.captureRetryAt-CACurrentMediaTime())),@"reading":@(self.captureRecoveryReading),@"error":source.error?:NSNull.null}}} options:0 error:nil];
 }
 - (NSData *)debugPointer:(NSDictionary *)request {
     NSString *phase=asString(request[@"phase"]),*status=self.statusText;NSNumber *window=asNumber(request[@"window"]);NSArray *at=asArray(request[@"at"]),*offset=request[@"offset"]?asArray(request[@"offset"]):nil,*to=asArray(request[@"to"]);
@@ -3148,42 +3341,164 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     }
     return self.nativeOwnerSnapshot;
 }
-// Request-only bridge for an actual AppKit session over a rendered replica.
+// Hover observes real mouse motion without taking it. Native reads, family
+// discovery, rendering and placement requests all happen after the tap returns.
+- (BOOL)nativeHoverAllowed {
+    if(!self.native||self.native.ended||!self.configured||self.cleaning||self.sessionInactive
+        ||NSEvent.pressedMouseButtons||self.globalTrackpad.hasNativeMousePress||self.globalTrackpad.ownsTouches
+        ||self.nativeGestureView||self.pointerGrab.active||self.gestureOwner||self.trackpad.engaged
+        ||self.globalGestureContact||self.magnifying||self.flying||self.frameFlying||self.compositor.hasGeometryTransitions)return NO;
+    for(DesktopView *view in self.views)if(view.gesture||view.heldPress||view.pressedTablet)return NO;
+    return YES;
+}
+- (BOOL)nativeOwnershipReady:(LiveSource *)source {
+    return DWCapturedInputAvailable(source)&&self.sources[source.logical]==source&&!source.captureRecovering
+        &&!source.restarted&&!source.captureUpdating&&source.stream&&source.pixels&&source.frames
+        &&DWInScope(self.scope,source.router.pid)&&[birth(source.router.pid)isEqual:source.router.processBirth]
+        &&[windowInfo(source.router.wid)[(id)kCGWindowOwnerPID]intValue]==source.router.pid;
+}
+- (BOOL)nativeHoverSite:(LiveSource *)source hit:(NSDictionary *)hit view:(DesktopView *)view output:(NSNumber *)output at:(CGPoint)point {
+    NSDictionary *intent=[view inputIntentForHit:hit output:output],*site=[self.nativeViews placement:source.logical output:output],*drawn=nil,*observed=nil;
+    for(NSDictionary *placement in self.renderedPresentation[@"placements"])if([placement[@"window"]isEqual:source.logical]&&[placement[@"output"]isEqual:output]){drawn=placement;break;}
+    for(NSDictionary *placement in self.nativeHoverPresentation[@"placements"])if([placement[@"window"]isEqual:source.logical]&&[placement[@"output"]isEqual:output]){observed=placement;break;}
+    return intent&&site&&drawn&&observed&&![site[@"family_only"]boolValue]&&![drawn[@"family_only"]boolValue]
+        &&boundIdentity(intent[@"identity"],source.identity)&&[drawn[@"source"]isEqual:site[@"source"]]
+        &&[observed[@"source"]isEqual:drawn[@"source"]]
+        &&CGRectEqualToRect(jsonRect(observed[@"screen_rect"]),jsonRect(drawn[@"screen_rect"]))
+        &&CGRectEqualToRect(jsonRect(observed[@"clip_rect"]),jsonRect(drawn[@"clip_rect"]))
+        &&CGRectEqualToRect(jsonRect(drawn[@"screen_rect"]),jsonRect(site[@"screen_rect"]))
+        &&CGRectEqualToRect(jsonRect(drawn[@"clip_rect"]),jsonRect(site[@"clip_rect"]))
+        &&CGRectEqualToRect(jsonRect(site[@"screen_rect"]),jsonRect(site[@"clip_rect"]))
+        &&CGRectContainsPoint(jsonRect(site[@"clip_rect"]),point);
+}
+- (void)cancelNativeHoverForWindow:(NSNumber *)window {
+    DWNativeViewTransfer *transfer=self.nativeHoverTransfer;
+    // A queued packet has no admitted binding yet. A source invalidation must
+    // invalidate it too, rather than let deferred work rediscover a replacement.
+    if(window&&transfer&&transfer.window!=window.unsignedLongLongValue)return;
+    self.nativeHoverEpoch++;self.nativeHoverQueued=NO;self.nativeHoverObservation=nil;self.nativeHoverPresentation=nil;
+    self.nativeHoverTransfer=nil;self.nativeHoverView=nil;self.nativeHoverUntil=0;
+    DWNativeAppliedPlacement *placed=transfer?[self.nativeViews admittedPlacementForWindow:@(transfer.window)]:nil;
+    if(transfer&&![self.nativeViews isAdmissionCurrentForTransfer:transfer placement:placed]
+        &&[self.nativeViews isTransferCurrent:transfer]){
+        [self.nativeViews cancelTransfer:transfer];
+        if(self.nativeOwnershipTransfer==transfer)self.nativeOwnershipTransfer=nil;
+    }
+    // Completed ownership persists on hover departure. Pending cancellation
+    // keeps both copies covered until existing geometry-only recovery settles.
+}
+- (void)queueNativeHover:(CGEventRef)event {
+    NSEvent *motion=[NSEvent eventWithCGEvent:event];CGPoint point=CGEventGetLocation(event);
+    int64_t eligible=CGEventGetIntegerValueField(event,kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent);
+    BOOL canvas=NO;for(DesktopView *view in self.views)if(view.window.windowNumber==eligible&&eligible>0){canvas=YES;break;}
+    if(!canvas&&!self.nativeHoverObservation&&!self.nativeHoverTransfer)return;
+    BOOL plain=self.native&&CGEventGetType(event)==kCGEventMouseMoved&&!DWNativeTabletEvent(event)
+        &&motion.subtype==NSEventSubtypeMouseEvent&&CGEventGetIntegerValueField(event,kCGEventSourceUnixProcessID)!=getpid()
+        &&!NSEvent.pressedMouseButtons&&isfinite(point.x)&&isfinite(point.y);
+    self.nativeHoverObservation=plain?@{@"point":pointJSON(point),@"flags":@(motion.modifierFlags),
+        @"eligible_window":@(eligible)}:nil;
+    self.nativeHoverPresentation=plain?self.renderedPresentation:nil;
+    self.nativeHoverUntil=plain?CACurrentMediaTime()+.75:0;
+    if(self.nativeHoverQueued)return;
+    self.nativeHoverQueued=YES;uint64_t epoch=self.nativeHoverEpoch;__weak Desktop *weak=self;
+    dispatch_async(dispatch_get_main_queue(),^{Desktop *desktop=weak;if(!desktop||desktop.nativeHoverEpoch!=epoch)return;
+        desktop.nativeHoverQueued=NO;[desktop updateNativeHover];});
+}
+- (BOOL)queuedNativeHoverPress:(NSEvent *)event source:(LiveSource *)source hit:(NSDictionary *)hit view:(DesktopView *)view output:(NSNumber *)output at:(CGPoint)point {
+    NSDictionary *observation=self.nativeHoverObservation;
+    NSArray *triggers=@[@"left",@"right",@"middle",@"back",@"forward"];NSInteger button=event.buttonNumber;
+    NSDictionary *binding=button>=0&&button<(NSInteger)triggers.count?[self mouseBinding:triggers[button] source:nil flags:event.modifierFlags window:YES under:source.logical pick:NO]:nil;
+    if(!observation||self.nativeHoverTransfer||CACurrentMediaTime()>=self.nativeHoverUntil
+        ||![observation[@"eligible_window"]isEqual:@(view.window.windowNumber)]
+        ||!CGPointEqualToPoint(point,jsonPoint(observation[@"point"]))||button<0||button>=32
+        ||event.subtype!=NSEventSubtypeMouseEvent||[hit[@"pick"]boolValue]||[hit[@"widget"]boolValue]
+        ||[hit[@"placeholder"]boolValue]||hit[@"native_member"]||![self nativeOwnershipReady:source]
+        ||CGEventGetIntegerValueField(event.CGEvent,kCGEventTargetUnixProcessID)!=getpid()
+        ||CGEventGetIntegerValueField(event.CGEvent,kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent)!=view.window.windowNumber
+        ||binding.count||[view resizeBorderForButton:button flags:event.modifierFlags hit:hit at:point output:output]
+        ||(button==0&&[self replicaGreen:source at:point output:output]))return NO;
+    return [self nativeHoverSite:source hit:hit view:view output:output at:point];
+}
+- (void)updateNativeHover {
+    NSDictionary *observation=self.nativeHoverObservation;CGPoint point=pointer();
+    if(!observation||CACurrentMediaTime()>=self.nativeHoverUntil||![self nativeHoverAllowed]
+        ||(([observation[@"flags"]unsignedLongLongValue]^NSEvent.modifierFlags)&NSEventModifierFlagDeviceIndependentFlagsMask)
+        ||!CGPointEqualToPoint(point,jsonPoint(observation[@"point"]))){[self cancelNativeHoverForWindow:nil];return;}
+    [self nativeDescription:[self visualSnapshot]];
+    NSDictionary *recipient=DWNativeEventRecipientAtPoint(point);
+    DWNativeViewTransfer *held=self.nativeHoverTransfer;
+    if(held){
+        DWNativeAppliedPlacement *placed=[self.nativeViews admittedPlacementForWindow:@(held.window)];
+        if([self.nativeViews isAdmissionCurrentForTransfer:held placement:placed]){[self cancelNativeHoverForWindow:nil];return;}
+        LiveSource *source=self.sources[@(held.window)];DesktopView *view=self.nativeHoverView;
+        BOOL atCanvas=recipient&&[recipient[@"pid"]intValue]==getpid()&&[recipient[@"wid"]longLongValue]==view.window.windowNumber;
+        BOOL atMember=NO;for(NSDictionary *member in held.members)if(boundIdentity(recipient,member[@"identity"]))atMember=YES;
+        if(!view||![self.views containsObject:view]||![view.outputs containsObject:@(held.output)]||![self nativeOwnershipReady:source]
+            ||![self.nativeViews isTransferCurrent:held]||!boundIdentity(source.identity,held.identity)
+            ||!CGRectContainsPoint(held.clipRect,point)||(!atCanvas&&!atMember)){[self cancelNativeHoverForWindow:nil];return;}
+        if(atCanvas){NSDictionary *hit=[view hit:point output:@(held.output)];
+            if(![hit[@"window"]isEqual:source.logical]||hit[@"native_member"]||[hit[@"pick"]boolValue]){[self cancelNativeHoverForWindow:nil];return;}}
+        return;
+    }
+    DesktopView *view=nil;for(DesktopView *candidate in self.views)if(candidate.window.windowNumber==[recipient[@"wid"]longLongValue]
+        &&[recipient[@"pid"]intValue]==getpid()){view=candidate;break;}
+    if(!view||![observation[@"eligible_window"]isEqual:@(view.window.windowNumber)]){[self cancelNativeHoverForWindow:nil];return;}
+    NSNumber *output=[view outputAt:point];NSDictionary *hit=output?[view hit:point output:output]:nil;
+    NSNumber *logical=liveHit(hit);LiveSource *source=logical?self.sources[logical]:nil;NSEventModifierFlags flags=[observation[@"flags"]unsignedLongLongValue];
+    if(!output||![self nativeOwnershipReady:source]||![self.nativeViews replica:source.logical output:output]
+        ||[hit[@"pick"]boolValue]||[hit[@"widget"]boolValue]||[hit[@"placeholder"]boolValue]||hit[@"native_member"]
+        ||self.nativeOwnershipTransfer||[self.nativeViews requiresPlacementAdmissionForWindow:source.logical]
+        ||[self mouseBinding:@"left" source:nil flags:flags window:YES under:source.logical pick:NO].count
+        ||[view resizeBorderForButton:0 flags:flags hit:hit at:point output:output]
+        ||[self replicaGreen:source at:point output:output]){[self cancelNativeHoverForWindow:nil];return;}
+    if(![self nativeHoverSite:source hit:hit view:view output:output at:point]){[self cancelNativeHoverForWindow:nil];return;}
+    DWNativeViewTransfer *transfer=[self requestNativeOwnershipAt:point view:view];
+    if(transfer){self.nativeHoverTransfer=transfer;self.nativeHoverView=view;}
+    else if(source.nativeFamily)[self cancelNativeHoverForWindow:nil];
+}
+// Canonical ownership request for hover and an actual AppKit drag destination.
 // No pasteboard access, source activation, synthetic mouse packet or global
 // window ordering is involved. Capture, identity and complete-family rules all
 // remain applicable to the prospective destination.
-- (void)requestNativeDropAt:(CGPoint)point view:(DesktopView *)view {
-    if(!self.native||self.native.ended||self.cleaning||self.sessionInactive||![self.views containsObject:view])return;
-    NSNumber *output=[view outputAt:point];if(!output)return;
+- (DWNativeViewTransfer *)requestNativeOwnershipAt:(CGPoint)point view:(DesktopView *)view {
+    if(!self.native||self.native.ended||self.cleaning||self.sessionInactive||![self.views containsObject:view])return nil;
+    NSNumber *output=[view outputAt:point];if(!output)return nil;
     NSDictionary *hit=[view hit:point output:output];NSNumber *window=liveHit(hit);
     LiveSource *source=window?self.sources[window]:nil;
-    if(!source||source.detached||!source.pixels||source.error||[hit[@"pick"]boolValue]
-        ||![self.nativeViews replica:window output:output]||!DWInScope(self.scope,source.router.pid))return;
+    if(![self nativeOwnershipReady:source]||[hit[@"pick"]boolValue]
+        ||![self.nativeViews replica:window output:output])return nil;
     // Cooperative singleton helpers normally need no family polling. A transfer
     // does; ask the existing bounded observation worker, never invent root-only.
-    if(!source.nativeFamily){source.nativeTransferFamilyWanted=YES;self.windowObservationAgain=YES;[self requestWindowObservation];return;}
+    if(!source.nativeFamily){if(!source.nativeTransferFamilyWanted){source.nativeTransferFamilyWanted=YES;self.windowObservationAgain=YES;[self requestWindowObservation];}
+        if(self.nativeHoverObservation){self.nativeTransferUntil=MAX(self.nativeTransferUntil,self.nativeHoverUntil);[self startNativeTransferTimer];}return nil;}
     DWNativeViewTransfer *current=[self.nativeViews currentTransferForWindow:window];
-    if(current&&[self.nativeViews isTransferCurrent:current]&&current.output==output.unsignedLongLongValue)return;
-    if(self.nativeDropTransfer&&[self.nativeViews isTransferCurrent:self.nativeDropTransfer])
-        [self.nativeViews cancelTransfer:self.nativeDropTransfer];
+    if(current&&[self.nativeViews isTransferCurrent:current]&&current.output==output.unsignedLongLongValue)return current;
+    if(self.nativeOwnershipTransfer&&[self.nativeViews isTransferCurrent:self.nativeOwnershipTransfer])
+        [self.nativeViews cancelTransfer:self.nativeOwnershipTransfer];
     DWNativeViewTransfer *transfer=[self.nativeViews requestTransferForWindow:window output:output];
-    if(!transfer){[self render];return;}self.nativeDropTransfer=transfer;self.nativeDropDeadline=CACurrentMediaTime()+.75;
+    if(!transfer)return nil;self.nativeOwnershipTransfer=transfer;self.nativeOwnershipDeadline=CACurrentMediaTime()+.75;
     self.nativeTransferUntil=CACurrentMediaTime()+2;self.nativeTransferNextCheck=0;
     [self render];[self captureDemand];
+    [self startNativeTransferTimer];return transfer;
+}
+- (void)startNativeTransferTimer {
     if(!self.nativeTransferTimer){__weak Desktop *weak=self;
         self.nativeTransferTimer=[NSTimer timerWithTimeInterval:.02 repeats:YES block:^(NSTimer *timer){Desktop *desktop=weak;if(!desktop){[timer invalidate];return;}[desktop advanceNativeTransfers];}];
         [NSRunLoop.mainRunLoop addTimer:self.nativeTransferTimer forMode:NSRunLoopCommonModes];}
 }
 - (void)stopNativeTransferTimer { [self.nativeTransferTimer invalidate];self.nativeTransferTimer=nil; }
 - (void)advanceNativeTransfers {
-    if(!self.native||self.native.ended||self.cleaning||self.sessionInactive){[self stopNativeTransferTimer];return;}
+    if(!self.native||self.native.ended||self.cleaning||self.sessionInactive){[self cancelNativeHoverForWindow:nil];[self stopNativeTransferTimer];return;}
     CFTimeInterval now=CACurrentMediaTime();if(now<self.nativeTransferNextCheck)return;
     self.nativeTransferNextCheck=now+.02;
     [self nativeDescription:[self visualSnapshot]];
+    if(self.nativeHoverObservation||self.nativeHoverTransfer)[self updateNativeHover];
     NSArray<DWNativeViewTransfer *> *pending=self.nativeViews.pendingTransfers;
-    if(!pending.count){[self stopNativeTransferTimer];self.nativeDropTransfer=nil;return;}
-    if(self.nativeDropTransfer&&now>=self.nativeDropDeadline&&[pending containsObject:self.nativeDropTransfer]){
-        [self.nativeViews cancelTransfer:self.nativeDropTransfer];self.nativeDropTransfer=nil;[self render];
+    if(!pending.count){if(!self.nativeHoverObservation)[self stopNativeTransferTimer];self.nativeOwnershipTransfer=nil;return;}
+    if(self.nativeOwnershipTransfer&&now>=self.nativeOwnershipDeadline&&[pending containsObject:self.nativeOwnershipTransfer]){
+        if(self.nativeOwnershipTransfer==self.nativeHoverTransfer)[self cancelNativeHoverForWindow:nil];
+        else [self.nativeViews cancelTransfer:self.nativeOwnershipTransfer];
+        self.nativeOwnershipTransfer=nil;[self render];
         pending=self.nativeViews.pendingTransfers;
     }
     // One synchronous geometry check per turn. Unlike camera frames this is a
@@ -3194,8 +3509,14 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         DWNativeAppliedPlacement *placement=[self.native acknowledgedPlacementForWindow:@(transfer.window) identity:transfer.identity generation:@(transfer.generation) output:@(transfer.output)];
         if(!placement)continue;self.nativeTransferCursor=slot+1;__weak Desktop *weak=self;
         BOOL complete=[self.nativeViews completeTransfer:transfer placement:placement current:^BOOL(DWNativeAppliedPlacement *receipt){return [weak.native isAcknowledgedPlacementCurrent:receipt];}
-            validateGeometry:^BOOL(DWNativeAppliedPlacement *receipt){return DWNativeValidateAppliedPlacementGeometry(weak.native,receipt,NULL);}];
-        if(complete){if(self.nativeDropTransfer==transfer)self.nativeDropTransfer=nil;[self render];[self captureDemand];}
+            validateGeometry:^BOOL(DWNativeAppliedPlacement *receipt){
+                if(!DWNativeValidateAppliedPlacementGeometry(weak.native,receipt,NULL))return NO;
+                if(weak.nativeHoverTransfer==transfer){[weak updateNativeHover];return weak.nativeHoverTransfer==transfer;}
+                return YES;
+            }];
+        if(complete){if(self.nativeOwnershipTransfer==transfer)self.nativeOwnershipTransfer=nil;
+            if(self.nativeHoverTransfer==transfer)[self cancelNativeHoverForWindow:nil];
+            [self render];[self captureDemand];}
         else self.nativeTransferNextCheck=now+.05;
         break;
     }
@@ -3262,6 +3583,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(sameBase&&([prior[@"checking"]boolValue]||[prior[@"refresh"]unsignedLongLongValue]==self.wallpaperRefreshGeneration))return prior[@"program"]?:base;
     // AppKit requires these desktop-image queries on the main thread. File
     // metadata, missing-source cache lookup and texture decoding stay off it.
+    CFTimeInterval observedAt=CACurrentMediaTime();
     NSWorkspace *workspace=NSWorkspace.sharedWorkspace;NSURL *url=[workspace desktopImageURLForScreen:chosen];
     NSDictionary *options=[workspace desktopImageOptionsForScreen:chosen]?:@{};
     NSNumber *scaling=asNumber(options[NSWorkspaceDesktopImageScalingKey])?:@(NSImageScaleProportionallyUpOrDown),*clipping=asNumber(options[NSWorkspaceDesktopImageAllowClippingKey])?:@NO;
@@ -3271,7 +3593,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     NSDictionary *priorSignature=prior[@"signature"];
     IFBackgroundProgram *previous=[asDict(prior[@"desktop"])[@"url"]isEqual:desktop[@"url"]]?prior[@"program"]:nil;
     if(previous.errorText||!previous.config.inheritedWallpaper)previous=nil;
-    NSMutableDictionary *record=[@{@"base":base,@"desktop":desktop,@"pixels":pixelKey,@"refresh":@(self.wallpaperRefreshGeneration),@"checking":@YES,@"program":previous?:base}mutableCopy];self.macWallpapers[display]=record;
+    NSMutableDictionary *record=[@{@"base":base,@"desktop":desktop,@"pixels":pixelKey,@"refresh":@(self.wallpaperRefreshGeneration),@"observed_at":@(observedAt),@"checking":@YES,@"program":previous?:base}mutableCopy];self.macWallpapers[display]=record;
     IFBackgroundConfig *config=[base.config copy];config.type=IFBackgroundTypeWallpaper;config.path=url.path;config.inheritedWallpaper=YES;
     config.wallpaperScaling=scaling.integerValue;config.wallpaperClipping=clipping.boolValue;config.wallpaperFillColor=fill;
     if(!self.wallpaperWorker)self.wallpaperWorker=dispatch_queue_create("org.infinify.wallpaper",dispatch_queue_attr_make_with_autorelease_frequency(DISPATCH_QUEUE_SERIAL,DISPATCH_AUTORELEASE_FREQUENCY_WORK_ITEM));
@@ -3309,9 +3631,24 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 - (void)watchMacWallpapers {
     if(self.wallpaperTimer)return;__weak Desktop *weak=self;
     self.wallpaperSpaceObserver=[NSWorkspace.sharedWorkspace.notificationCenter addObserverForName:NSWorkspaceActiveSpaceDidChangeNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *notification){(void)notification;[weak refreshMacWallpapers];}];
-    // Public AppKit has no wallpaper-change notification. A low-rate refresh
-    // notices file/options changes, deferring while the user moves the canvas.
-    self.wallpaperTimer=[NSTimer timerWithTimeInterval:5 repeats:YES block:^(NSTimer *timer){Desktop *d=weak;if(!d||d.wallpaperTimer!=timer||(!d.panels.count&&!d.desktopUp)||NSEvent.pressedMouseButtons||d.frameFlying||d.flying||d.magnifying||d.gestureOwner||d.trackpad.engaged)return;[d refreshMacWallpapers];}];
+    // Public AppKit has no wallpaper-change notification. Its synchronous
+    // queries can wait on WindowServer, so periodic checks also defer for video
+    // or background frames, not only camera/input motion. A continuous producer
+    // still gets an observation within thirty seconds; event refreshes above
+    // and display/session/config changes do not use this postponement.
+    self.wallpaperTimer=[NSTimer timerWithTimeInterval:5 repeats:YES block:^(NSTimer *timer){
+        Desktop *d=weak;if(!d||d.wallpaperTimer!=timer||(!d.panels.count&&!d.desktopUp)||!d.compositor.inheritsMacBackground||d.cleaning||d.sessionInactive)return;
+        CFTimeInterval now=CACurrentMediaTime();
+        BOOL frames=d.frameDriver&&now-d.frameDriver.lastFrame<.25;
+        BOOL busy=frames||NSEvent.pressedMouseButtons||d.frameFlying||d.flying||d.magnifying||d.gestureOwner||d.trackpad.engaged||d.compositor.hasGeometryTransitions;
+        // A changed raster on one display must not renew another display's
+        // deadline. This display-count scan occurs only on the fallback timer.
+        CFTimeInterval observedAt=0;BOOL first=YES;
+        for(NSDictionary *record in d.macWallpapers.allValues){double value=[record[@"observed_at"]doubleValue];if(!isfinite(value)||value<=0){observedAt=0;break;}observedAt=first?value:fmin(observedAt,value);first=NO;}
+        double delay=DWMacWallpaperRefreshDelay(now,observedAt,busy);
+        if(delay>0){timer.fireDate=[NSDate dateWithTimeIntervalSinceNow:fmax(.01,delay)];return;}
+        [d refreshMacWallpapers];timer.fireDate=[NSDate dateWithTimeIntervalSinceNow:5];
+    }];
     [NSRunLoop.mainRunLoop addTimer:self.wallpaperTimer forMode:NSRunLoopCommonModes];
 }
 - (void)stopMacWallpapers {
@@ -3625,29 +3962,31 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     if(placed)[self consumeSize:reply];
     // A managed run captures on demand: -captureDemand starts the stream once the window has a placement.
     if(self.manager)source.keepSample=YES;
-    else if(![self startCapture:source size:source.buffer]&&!source.captureRecovering){[self detach:source];return NO;}
+    else if(![self startCapture:source size:source.buffer interval:[self captureInterval]]&&!source.captureRecovering){[self detach:source];return NO;}
     if(!privateAvailable)self.statusText=@"Live view only: private per-window input is unavailable on this OS.";
     if(placed)[self follow:reply];
     [self render];return YES;
 }
 // How often a window's picture is asked for, at most: as often as the display it is shown on refreshes, the fastest screen a canvas panel is on,
-// and 60 times a second at least. One answer for every stream configuration, a size update's included. Frame-status and dirty-rectangle
+// and 60 times a second at least. Rate changes are reconciled independently of pixel-size changes. Frame-status and dirty-rectangle
 // checks skip frames that explicitly report no changed content; some streams still report complete frames at the full requested rate.
 - (CMTime)captureInterval {NSInteger rate=60;for(NSScreen *screen in [self canvasScreens])rate=MAX(rate,screen.maximumFramesPerSecond);return CMTimeMake(1,(int32_t)rate); }
 // One stream for a source at a pixel size. NO leaves the reason in source.error.
-- (BOOL)startCapture:(LiveSource *)source size:(CGSize)pixels {
+- (BOOL)startCapture:(LiveSource *)source size:(CGSize)pixels interval:(CMTime)interval {
     // An --only-pid run without Screen Recording access has no shareable window to make a filter of. -captureDemand never comes here for one.
     // The one NO that leaves source.error alone: a reason there would have -track: detach a source that nothing is wrong with.
     if(!source.window||source.detached||self.cleaning)return NO;
     source.error=nil;source.captureRecovering=NO;source.captureRetryAt=0;
-    source.captureSize=pixels;CGRect native=CGRectZero;CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)source.router.bounds,&native);source.captureNativeSize=native.size;source.captureUpdating=YES;source.captureCandidateSince=0;
-    SCStreamConfiguration *config=[SCStreamConfiguration new];config.width=(size_t)pixels.width;config.height=(size_t)pixels.height;config.pixelFormat=kCVPixelFormatType_32BGRA;config.minimumFrameInterval=[self captureInterval];config.queueDepth=3;config.showsCursor=NO;config.ignoreShadowsSingleWindow=YES;compositedStream(config,source);
+    const char *diagnostics=getenv("INFINIFY_DEBUG_CAPTURE_CONFIG");source.captureConfigurationMeasured=self.scope&&self.debugPointer&&diagnostics&&strcmp(diagnostics,"1")==0;
+    source.captureSize=pixels;CGRect native=CGRectZero;CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)source.router.bounds,&native);source.captureNativeSize=native.size;source.captureCandidateSince=0;
+    SCStreamConfiguration *config=[SCStreamConfiguration new];config.width=(size_t)pixels.width;config.height=(size_t)pixels.height;config.pixelFormat=kCVPixelFormatType_32BGRA;config.minimumFrameInterval=interval;config.queueDepth=3;config.showsCursor=NO;config.ignoreShadowsSingleWindow=YES;compositedStream(config,source);
     source.stream=[[SCStream alloc]initWithFilter:[[SCContentFilter alloc]initWithDesktopIndependentWindow:source.window] configuration:config delegate:source];source.restarted=YES;NSError *error=nil;
     id<SCStreamOutput> output=source;dispatch_queue_t samples=dispatch_get_main_queue();
-    if(source.composited){source.captureMailbox=[[DWRootCaptureMailbox alloc]initWithSource:source stream:source.stream];output=source.captureMailbox;samples=source.captureMailbox.queue;}
+    if(source.composited){const char *callbacks=getenv("INFINIFY_DEBUG_CAPTURE_CALLBACKS");source.captureMailbox=[[DWRootCaptureMailbox alloc]initWithSource:source stream:source.stream diagnostics:self.debugPointer&&self.scope!=nil&&callbacks&&strcmp(callbacks,"1")==0];output=source.captureMailbox;samples=source.captureMailbox.queue;}
     if(![source.stream addStreamOutput:output type:SCStreamOutputTypeScreen sampleHandlerQueue:samples error:&error]){source.stream=nil;[source captureFailed:error];return NO;}
-    SCStream *starting=source.stream;[starting startCaptureWithCompletionHandler:^(NSError *e){dispatch_async(dispatch_get_main_queue(),^{if(source.stream!=starting||source.detached||self.cleaning)return;source.captureUpdating=NO;if(e){source.stream=nil;[source captureFailed:e];if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"debug: capture start failed window=%s pid=%d wid=%u: %s (%ld)\n",source.logical.stringValue.UTF8String,source.router.pid,source.router.wid,e.localizedDescription.UTF8String,(long)e.code);}});}];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,2*NSEC_PER_SEC),dispatch_get_main_queue(),^{if(source.stream!=starting||source.detached||self.cleaning||!source.captureUpdating)return;[self stopCapture:source];[source captureFailed:[NSError errorWithDomain:SCStreamErrorDomain code:SCStreamErrorFailedToStart userInfo:@{NSLocalizedDescriptionKey:@"Capture start timed out"}]];});
+    uint64_t serial=[source beginCaptureConfiguration:config];
+    SCStream *starting=source.stream;[starting startCaptureWithCompletionHandler:^(NSError *e){dispatch_async(dispatch_get_main_queue(),^{if(source.stream!=starting||source.detached||self.cleaning||![source completeCaptureConfiguration:serial success:e==nil])return;[source.captureMailbox stream:starting startCompleted:e==nil];if(e){source.stream=nil;[source captureFailed:e];if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"debug: capture start failed window=%s pid=%d wid=%u: %s (%ld)\n",source.logical.stringValue.UTF8String,source.router.pid,source.router.wid,e.localizedDescription.UTF8String,(long)e.code);}});}];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,2*NSEC_PER_SEC),dispatch_get_main_queue(),^{if(source.stream!=starting||source.detached||self.cleaning||!DWCaptureConfigurationPending(source.captureConfiguration,serial))return;[self stopCapture:source];[source captureFailed:[NSError errorWithDomain:SCStreamErrorDomain code:SCStreamErrorFailedToStart userInfo:@{NSLocalizedDescriptionKey:@"Capture start timed out"}]];});
     return YES;
 }
 // An intentional stop is no error: the stream is forgotten first, so nothing it still
@@ -3655,7 +3994,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
 // the last picture, so a window whose placement returns is not blank until its stream
 // delivers again.
 - (void)stopCapture:(LiveSource *)source {
-    SCStream *stream=source.stream;if(!stream)return;source.stream=nil;source.captureUpdating=NO;source.captureCandidateSince=0;if(!source.composited)[source clearSample];
+    SCStream *stream=source.stream;if(!stream)return;source.stream=nil;source.captureCandidateSince=0;if(!source.composited)[source clearSample];
     [self.pendingStops addObject:stream];[stream stopCaptureWithCompletionHandler:^(NSError *error){(void)error;dispatch_async(dispatch_get_main_queue(),^{[self.pendingStops removeObject:stream];});}];
 }
 // A larger tile needs sharper pixels immediately. Density buckets grow by sqrt(2), limiting their area slack to 2x
@@ -3672,11 +4011,15 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     density=fmax(density,exp2(ceil(2*log2(density))*.5));
     return CGSizeMake(MAX(2,ceil(native.width*density)),MAX(2,ceil(native.height*density)));
 }
-- (void)updateCapture:(LiveSource *)source size:(CGSize)pixels native:(CGSize)native {
+- (void)updateCapture:(LiveSource *)source size:(CGSize)pixels native:(CGSize)native interval:(CMTime)interval {
     if(!source.stream||source.captureUpdating||source.error||source.detached)return;
-    source.captureSize=pixels;source.captureNativeSize=native;source.captureUpdating=YES;source.captureCandidateSince=0;source.restarted=YES;
-    SCStreamConfiguration *config=[SCStreamConfiguration new];config.width=(size_t)pixels.width;config.height=(size_t)pixels.height;config.pixelFormat=kCVPixelFormatType_32BGRA;config.minimumFrameInterval=[self captureInterval];config.queueDepth=3;config.showsCursor=NO;config.ignoreShadowsSingleWindow=YES;compositedStream(config,source);
-    SCStream *stream=source.stream;[stream updateConfiguration:config completionHandler:^(NSError *error){dispatch_async(dispatch_get_main_queue(),^{if(source.stream!=stream||source.detached||self.cleaning)return;source.captureUpdating=NO;if(error){[self stopCapture:source];[source captureFailed:error];}});}];
+    // A rate-only update preserves the current picture and a pending shrink's
+    // stability clock. Only a changed raster/native size needs a fresh image.
+    if(!CGSizeEqualToSize(pixels,source.captureSize)||!CGSizeEqualToSize(native,source.captureNativeSize)){source.captureCandidateSince=0;source.restarted=YES;}
+    source.captureSize=pixels;source.captureNativeSize=native;
+    SCStreamConfiguration *config=[SCStreamConfiguration new];config.width=(size_t)pixels.width;config.height=(size_t)pixels.height;config.pixelFormat=kCVPixelFormatType_32BGRA;config.minimumFrameInterval=interval;config.queueDepth=3;config.showsCursor=NO;config.ignoreShadowsSingleWindow=YES;compositedStream(config,source);
+    uint64_t serial=[source beginCaptureConfiguration:config];
+    SCStream *stream=source.stream;[stream updateConfiguration:config completionHandler:^(NSError *error){dispatch_async(dispatch_get_main_queue(),^{if(source.stream!=stream||source.detached||self.cleaning||![source completeCaptureConfiguration:serial success:error==nil])return;if(error){[self stopCapture:source];[source captureFailed:error];}});}];
 }
 // Capture on demand, in a managed run: a stream runs while its window has a placement
 // on some output and for two seconds after the last one went, and starts again when one
@@ -3693,7 +4036,8 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     for(NSDictionary *p in snapshot[@"placements"])if(!self.native||[self.nativeViews replica:p[@"window"] output:p[@"output"]]){[placed addObject:p[@"window"]];[pictures addObject:p];}
     NSMutableDictionary *scales=[NSMutableDictionary dictionary];for(DesktopView *view in self.views)for(NSNumber *output in view.outputs)scales[output]=@(view.window.backingScaleFactor);
     NSMutableDictionary *bindings=[NSMutableDictionary dictionary];for(NSDictionary *window in snapshot[@"windows"])if(asDict(window[@"source"]))bindings[window[@"window"]]=window[@"source"];
-    NSMutableArray *familyRoots=[NSMutableArray array];NSInteger familyRate=60;
+    CMTime interval=[self captureInterval];
+    NSMutableArray *familyRoots=[NSMutableArray array];NSInteger familyRate=(NSInteger)llround(1/CMTimeGetSeconds(interval));
     for(LiveSource *source in self.sources.allValues){
         if(source.error)[self cancelCapturedInputForWindow:source.logical];
         BOOL wanted=[self.manager capture:source.logical placed:[placed containsObject:source.logical]],running=source.stream!=nil;
@@ -3714,14 +4058,19 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
         if(self.native&&[placed containsObject:source.logical]&&boundIdentity(source.identity,binding[@"identity"])&&binding[@"generation"]){
             double density=running&&source.captureSize.width>0?source.captureSize.width/bounds.size.width:pixels.width/bounds.size.width;
             [familyRoots addObject:@{@"window":source.logical,@"identity":source.identity,@"generation":binding[@"generation"],@"native_bounds":rectJSON(bounds),@"density":@(density)}];
-            double interval=CMTimeGetSeconds([self captureInterval]);if(interval>0)familyRate=MAX(familyRate,(NSInteger)llround(1/interval));
         }
-        if(!running){[self startCapture:source size:pixels];continue;}
+        if(!running){[self startCapture:source size:pixels interval:interval];continue;}
         if(source.captureUpdating)continue;
-        if(CGSizeEqualToSize(pixels,source.captureSize)){source.captureCandidateSince=0;continue;}
-        BOOL immediate=pixels.width>source.captureSize.width||pixels.height>source.captureSize.height||!CGSizeEqualToSize(bounds.size,source.captureNativeSize);
-        if(!immediate){if(!source.captureCandidateSince||!CGSizeEqualToSize(pixels,source.captureCandidate)){source.captureCandidate=pixels;source.captureCandidateSince=demandTime;}if(demandTime-source.captureCandidateSince<.5||demandTime-source.captureDemandSince<.5)continue;}
-        [self updateCapture:source size:pixels native:bounds.size];
+        BOOL samePixels=CGSizeEqualToSize(pixels,source.captureSize),resizeReady=samePixels;
+        if(samePixels)source.captureCandidateSince=0;
+        else {
+            resizeReady=pixels.width>source.captureSize.width||pixels.height>source.captureSize.height||!CGSizeEqualToSize(bounds.size,source.captureNativeSize);
+            if(!resizeReady){if(!source.captureCandidateSince||!CGSizeEqualToSize(pixels,source.captureCandidate)){source.captureCandidate=pixels;source.captureCandidateSince=demandTime;}
+                resizeReady=demandTime-source.captureCandidateSince>=.5&&demandTime-source.captureDemandSince>=.5;}
+        }
+        CGSize configured;
+        if(DWCaptureConfigurationUpdate(source.captureConfiguration,pixels,interval,resizeReady,&configured))
+            [self updateCapture:source size:configured native:bounds.size interval:interval];
     }
     // Overlay roots need geometry observations even outside the current view:
     // a child can extend into a display while its root is offscreen. Only
@@ -3733,7 +4082,6 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
         CGSize pixels=[self capturePixels:source native:bounds.size placements:pictures scales:scales demandDensity:NULL];
         double density=pixels.width/bounds.size.width;
         [familyRoots addObject:@{@"window":source.logical,@"identity":source.identity,@"generation":binding[@"generation"],@"native_bounds":rectJSON(bounds),@"density":@(density),@"capture":@([placed containsObject:source.logical])}];
-        double interval=CMTimeGetSeconds([self captureInterval]);if(interval>0)familyRate=MAX(familyRate,(NSInteger)llround(1/interval));
     }
     if(!self.nativeFamilies){__weak Desktop *weak=self;self.nativeFamilies=[[DWNativeReplicaFamilies alloc]initWithChanged:^(NSNumber *window){Desktop *d=weak;if(!d||d.cleaning||d.sessionInactive)return;
         if(!d.native&&d.overlayFamilyDescriptions!=d.nativeFamilies.descriptions){[d render];return;}
@@ -3776,7 +4124,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
             if(!window||window.owningApplication.processID!=source.router.pid){[source captureFailed:[NSError errorWithDomain:SCStreamErrorDomain code:SCStreamErrorNoCaptureSource userInfo:@{NSLocalizedDescriptionKey:@"The capture window is not available yet"}]];continue;}
             source.window=window;CGSize pixels=source.captureSize;
             if(pixels.width<1||pixels.height<1)pixels=source.buffer;
-            [d startCapture:source size:pixels];
+            [d startCapture:source size:pixels interval:[d captureInterval]];
         }
     });}];
 }
@@ -3792,7 +4140,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     if(self.exportSources){completed(@"another screenshot is preparing");return;}
     if(!CGPreflightScreenCaptureAccess()){completed(@"Screen Recording access is unavailable; no snapshot requested");return;}
     if(self.native.ended){completed(@"native presentation has ended");return;}
-    NSDictionary *alone=asDict(asDict(effect[@"target"])[@"Window"]);NSNumber *wanted=alone?(asNumber(alone[@"window"])?:asNumber([self call:@{@"op":@"snapshot"}][@"focused"])):nil;
+    NSDictionary *alone=asDict(asDict(effect[@"target"])[@"Window"]);NSDictionary *focus=asDict([self call:@{@"op":@"snapshot"}][@"focus"]);NSNumber *wanted=alone?(asNumber(alone[@"window"])?:asNumber(focus[@"intent"])):nil;
     NSArray *windows=alone?(wanted?@[wanted]:@[]):self.sources.allKeys;self.exportSources=[NSMutableDictionary dictionary];self.exportAttachments=[NSMutableDictionary dictionary];self.exportOrdering=nil;
     DWExportFrame *request=[DWExportFrame new];
     void (^finish)(NSString *)=^(NSString *failure){if(atomic_exchange(&request->completed,YES))return;completed(failure);};
@@ -4029,7 +4377,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     if(![self sizing])[self.resize cancel];
     [self.navigation invalidate];self.navigation.enabled=NO;
     [self.frameDriver invalidate];self.frameDriver=nil;self.frameFlying=NO;self.flying=NO;self.pointerWanted=NO;
-    self.sessionInactive=YES;[self stopNativeTransferTimer];self.nativeDropTransfer=nil;[self.canvasCursor reset];[self saveScene];
+    self.sessionInactive=YES;[self stopNativeTransferTimer];self.nativeOwnershipTransfer=nil;[self.canvasCursor reset];[self saveScene];
     [self.nativeFamilies reset];self.overlayFamilySnapshot=self.overlayFamilyBase=self.overlayFamilyDescriptions=nil;
     if(self.native){self.captureRecoveryGeneration++;self.captureRecoveryReading=NO;[self.nativeFamilies reset];[self.nativeViews reset];for(LiveSource *source in self.sources.allValues){source.observationToken=++self.observationEpoch;[self forgetNativeFamily:source];source.replicaWanted=NO;[self stopCapture:source];source.window=nil;[source clearSample];}}
     self.nativeSessionEpoch++;
@@ -4241,9 +4589,13 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
         // frame is read instead, which no transform changes, and the presenter draws from it.
         if(self.native){
             if(busy)return;
+            // A deliberately unrequested family is different from a requested
+            // audit that failed. Only explicit families:false permits nil; a
+            // missing flag or failed requested report still revokes readiness.
+            BOOL familyRequested=observation?![observation.request[@"families"]isEqual:@NO]:(self.native.familiesNeeded||source.nativeTransferFamilyWanted);
             if(observation){if(!observation.hasBounds){[self forgetNativeFamily:source];return;}bounds=observation.bounds;family=observation.family;}
-            else {if(!DWNativeBounds(source.router.wid,&bounds)){[self forgetNativeFamily:source];return;}if(self.native.familiesNeeded||source.nativeTransferFamilyWanted)family=DWNativeWindowFamily(source.identity,NULL);}
-            frame=CFBridgingRelease(CGRectCreateDictionaryRepresentation(bounds));[self.native bound:source.identity bounds:bounds family:family?:@{}];
+            else {if(!DWNativeBounds(source.router.wid,&bounds)){[self forgetNativeFamily:source];return;}if(familyRequested)family=DWNativeWindowFamily(source.identity,NULL);}
+            frame=CFBridgingRelease(CGRectCreateDictionaryRepresentation(bounds));[self.native bound:source.identity bounds:bounds family:family?:(familyRequested?@{}:nil)];
         }
         else if(busy||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)frame,&bounds))return;
         if(self.native&&!self.native.ended&&!self.nativeResumeWanted){
@@ -4263,7 +4615,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
             source.router.bounds=frame;
         }
         // Manual sources retry the latest native size after an earlier configuration completes too.
-        if(!self.manager&&source.stream&&!CGSizeEqualToSize(source.captureNativeSize,bounds.size))[self updateCapture:source size:CGSizeMake(ceil(bounds.size.width*2),ceil(bounds.size.height*2)) native:bounds.size];
+        if(!self.manager&&source.stream&&!CGSizeEqualToSize(source.captureNativeSize,bounds.size))[self updateCapture:source size:CGSizeMake(ceil(bounds.size.width*2),ceil(bounds.size.height*2)) native:bounds.size interval:[self captureInterval]];
         // The native window is the authority for its size: one the application or the user changed is the canvas's from here on, and is saved.
         DriftDesktopObservation controllerObservation={.window=source.logical.unsignedLongLongValue,.birth_sec=[source.identity[@"birth_sec"]longLongValue],.x=bounds.origin.x,.y=bounds.origin.y,.width=bounds.size.width,.height=bounds.size.height,.pid=[source.identity[@"pid"]intValue],.birth_usec=[source.identity[@"birth_usec"]intValue],.wid=[source.identity[@"wid"]unsignedIntValue],.owner=[source.identity[@"owner"]unsignedIntValue],.buffer_width=(uint32_t)source.buffer.width,.buffer_height=(uint32_t)source.buffer.height};
         BOOL current=self.native&&driftwm_desktop_observation_current(self.controller,&controllerObservation);
@@ -4343,7 +4695,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     if(self.cleaning)return;
     [self stopMacWallpapers];
     [self cancelCapturedInputForWindow:nil];
-    self.cleaning=YES;[self stopNativeTransferTimer];self.nativeDropTransfer=nil;[self.canvasCursor reset];self.captureRecoveryGeneration++;self.captureRecoveryReading=NO;
+    self.cleaning=YES;[self stopNativeTransferTimer];self.nativeOwnershipTransfer=nil;[self.canvasCursor reset];self.captureRecoveryGeneration++;self.captureRecoveryReading=NO;
     [self.nativeFamilies reset];self.nativeFamilies=nil;self.nativeViewSnapshot=nil;self.nativeOwnerSnapshot=nil;self.nativeViewPresenter=nil;self.overlayFamilySnapshot=self.overlayFamilyBase=self.overlayFamilyDescriptions=nil;
     self.nativeSessionEpoch++;self.nativeResumeWanted=NO;
     [self.windowObserver cancel];self.windowObserver=nil;
@@ -4540,11 +4892,26 @@ static NSString *helperNonce(const char *path,const char **why) {
 }
 static int helperRefused(const char *why) { fprintf(stderr,"Infinify: native helper %s\n",why);return 64; }
 static int scopeRefused(const char *why,const char *value) { if(value)fprintf(stderr,"Infinify: --only-pid %s %s\n",value,why);else fprintf(stderr,"Infinify: --only-pid %s\n",why);return 64; }
+// An explicit terminal command starts the bundle's audited native bootstrap.
+// It runs before AppKit and replaces this process, so the ordinary-instance
+// guard cannot mistake this command for a running canvas. No checkout fallback.
+static int nativeDesktopCommand(int argc,const char **argv) {
+    if(argc>1||(argc==1&&strcmp(argv[0],"--check")&&strcmp(argv[0],"--help"))){
+        fputs("usage: Infinify native-desktop [--check | --help]\n",stderr);return 64;
+    }
+    NSString *launcher=[NSBundle.mainBundle pathForResource:@"launch" ofType:@"sh" inDirectory:@"NativeDesktop"];
+    if(!launcher||![NSFileManager.defaultManager isExecutableFileAtPath:launcher]){
+        fputs("Infinify: the bundled native launcher is missing; rebuild or reinstall the complete app.\n",stderr);return 69;
+    }
+    char *arguments[]={(char *)launcher.fileSystemRepresentation,argc?(char *)argv[0]:NULL,NULL};
+    execv(arguments[0],arguments);perror("Infinify: native desktop launcher");return 69;
+}
 int main(int argc,const char **argv) { @autoreleasepool {
     // The IPC client runs before any AppKit initialisation: no window, no privacy grant.
     if(argc>=2&&!strcmp(argv[1],"msg"))return driftwm_desktop_msg(argc-2,argv+2);
     // So does the login item: registered, unregistered or read, and nothing else of the app starts.
     if(argc>=2&&!strcmp(argv[1],"login-item"))return DWLoginItemCommand(argc-2,argv+2);
+    if(argc>=2&&!strcmp(argv[1],"native-desktop"))return nativeDesktopCommand(argc-2,argv+2);
     const char **launched=argv; // as given, for the onboarding window's Relaunch
     BOOL windowed=NO,logical=NO,manual=NO;const char *socket=NULL,*config=NULL,*chord=NULL;NSSize windowSize=NSMakeSize(1200,800);const char *filtered[argc+1];int count=0;
     BOOL undelivered=NO; // --no-hover-forwarding
@@ -4579,7 +4946,7 @@ int main(int argc,const char **argv) { @autoreleasepool {
         if(i>0&&!strcmp(argv[i],"--windowed")){if(windowed)return 64;windowed=YES;if(i+1<argc&&isdigit((unsigned char)argv[i+1][0])&&!parseWindowSize(argv[++i],&windowSize))return 64;continue;}
         filtered[count++]=argv[i];}filtered[count]=NULL;argc=count;argv=filtered;
 
-    if(argc==2&&!strcmp(argv[1],"--help")){puts("Infinify.app — macOS 26+ Apple Silicon: DriftWM's canvas as the desktop of native Mac windows\nDefault: the desktop. One canvas panel per display covers the whole display on every Space, under the menu bar and the Dock, which both stay; there is no toolbar, no status line and no chooser. Every real application window on screen (by Accessibility a standard window or a dialog, never a popup or a helper window; without Accessibility every window but an untitled one under 200x150) lives on the canvas: existing windows are adopted, a new one is placed by window_placement, a closed one leaves (or leaves a stand-in under session.suspend_on_close). This needs Screen Recording and Accessibility access, and Stage Manager off (it keeps every window outside the current stage as a thumbnail): while one is missing or Stage Manager is on a small window says so and offers the Allow buttons, a button that opens Desktop & Dock, Relaunch (Screen Recording reaches only a newly started app) and Quit, and the canvas opens once nothing is in the way.\nStatus notes go to stderr, one line each; what a config file has wrong is drawn in the error bar.\n--only-pid PID[,PID…] (may repeat): manage only the windows of these processes, each of which must be running and this user's; needs --windowed, and refuses --manual. It works without Screen Recording access too: the windows are then bound, focused and clicked as ever and their tiles have no picture.\n--debug-pointer: with --only-pid, serve the DebugPointer IPC request, by which a test presses and releases on a window without the pointer.\n--native-helper RUNTIME_DIR NONCE_FILE: with --only-pid, native presentation: the window server draws the managed windows themselves where the canvas places them, moved and scaled by the transform helper whose socket is in RUNTIME_DIR (its nonce is read from NONCE_FILE, mode 0600), and the canvas, behind them, draws live copies for additional independently zoomed display views when Screen Recording access is already available. Popup/sheet copies, metadata cropping and scoped member input are implemented but unverified; native display-boundary clipping remains incomplete. A cooperative helper inside its named process, or an authenticated exact helper allowlist of the named process instances, must match --only-pid. Repeat this pair for up to four explicit helpers: each must audit its own disjoint process subset, and their union must exactly match --only-pid. Same-user helpers and allowlists that cannot be audited are refused; nothing is looked for or loaded. Losing one grouped helper ends presentation and restores its siblings. Without a native helper flag every run is the overlay.\n--native-desktop-helper RUNTIME_DIR NONCE_FILE: explicit whole-desktop native presentation for this login user, including newly opened applications. Requires one authenticated Apple Dock-hosted SAME_USER helper with scope audit and per-window restoration; cannot combine with --only-pid, --windowed, --manual or fixture modes. This only connects to a helper you already started; nothing is injected or installed by the app. Independent extra display views use capture replicas. Native clipping and application compatibility still need validation.\n--manual: show the chooser first and capture only explicitly selected windows; no window is adopted automatically. Open canvas shows the saved world without adding one. The chooser stays open above the canvas; closed there, it is gone for the run.\n--demo EMPTY_DIRECTORY: disposable interactive fixture, bounded to 60 seconds\n--demo-probe EMPTY_DIRECTORY: automated own-fixture E2E, no permission prompts\n--demo-probe-guard EMPTY_DIRECTORY: own-fixture interruption regression (expected exit 2)\n--no-native-focus: window focus stays logical; no native window is activated or raised\n--no-hover-forwarding: pointer motion over a window is not delivered to its application; focus_follows_mouse and pick mode still follow the pointer\n--state ABSOLUTE_PATH: explicit persistent scene file (default Application Support/Infinify/scene.json)\n--socket ABSOLUTE_PATH: IPC socket of a normal run (default Application Support/Infinify/infinify.sock)\n--windowed [WIDTHxHEIGHT]: open the canvas at launch in one ordinary window instead, all of it canvas (default 1200x800, at least 960x480), with no global shortcuts and whatever access there is; with --manual the chooser comes up above it; msg action quit or Control-C in its terminal ends it\n--config ABSOLUTE_PATH: DriftWM config file of a normal run (default $XDG_CONFIG_HOME/infinify/config.toml, else ~/.config/infinify/config.toml; DriftWM's built-in defaults when it is missing); read again whenever it changes\n--super CHORD: the physical keys of DriftWM's super/mod, a +-joined subset of ctrl|alt|cmd (default cmd)\nmsg [--json] [--socket PATH] COMMAND ...: DriftWM-style IPC client for the running app; opens no window\nlogin-item on | off | status: register, unregister or report the login item, a LaunchAgent inside the bundle that starts Infinify at login and again after a crash, never after a quit. on starts it at once, off ends the instance it started, status only reads; opens no window. For the installed copy: scripts/install-app.sh puts a signed bundle in ~/Applications\n--source DIR SECONDS NONCE: internal disposable child only\nKeys and pointer gestures are DriftWM's bindings from the config file: ctrl is Control, alt is Option, super (mod) is the --super chord. With no config file and --super cmd the registered chords are:\n  Drag or two-finger scroll on empty canvas, Command-drag anywhere, three-finger swipe: pan; a released pan coasts (navigation.drift). Hold Super (Command by default) and scroll with a wheel or two fingers to zoom anywhere. Wheel or two-finger pinch on empty canvas, Command-pinch anywhere, three-finger pinch: anchored zoom (max 1x).\n  Option-drag on a window: world move/snap; add Shift: cluster. Held at the view's edge, a move pans the canvas under the window (navigation.edge_pan).\n  Trackpad gestures use DriftWM's [gestures] bindings with Mac defaults: four-finger swipe up toggles overview; other directions select the nearest window. Four-finger hold: center the focused window. Four-finger pinch in / out: zoom-to-fit / home toggle. Three-finger swipe or drag pans over windows as well as empty canvas. Two-finger pinch zooms over windows too.\n  Desktop mode intercepts recognized trackpad and Dock swipe streams for canvas navigation; stopping releases interception without changing System Settings. Unknown system gesture formats pass through; hardware behavior needs runtime validation. Windowed mode keeps local gestures only.\n  View actions animate one view's camera only (global shortcuts while the canvas is open, or msg action; held zoom, pan and nudge keys repeat):\n  Command-A: home toggle (origin at 1:1, again to return). Command-Tab or F3: overview toggle (again returns). Command-W: the same zoom-to-fit toggle. Command-Shift-W: the same over the focused window's snap cluster.\n  Command-Equals / Command-Minus: zoom in / out. Command-0 or Command-Z: zoom 1:1.\n  Control-Command-arrows: pan the view under the pointer. Command-Shift-arrows: nudge the focused window.\n  Command-1 to 4: fly to bookmark 1 to 4. Command-Shift-1 to 4: set it.\n  Window navigation flies the camera and focuses the window, natively when Infinify has Accessibility access:\n  Option-Tab / Option-Shift-Tab: cycle windows, most recently focused first; letting go of Option commits the choice.\n  Command-arrows: the nearest window in that direction. Command-C: center the focused window. Command-X: center the window under the pointer.\n  A click on a window gives it canvas focus and starts its native focus, then the click is forwarded; a click on empty canvas unfocuses. Focusing a canvas window in its own application is followed.\n  Pointer motion over a window is delivered to its application; with focus_follows_mouse = true it also focuses that window without raising it, a screen-pinned one before the canvas beneath it and never a widget.\n  Below [zoom] interact_min (off by default) a window on the canvas is one target: a click flies to it, a drag moves it, and no click, scroll or motion reaches its application. A screen-pinned window and a widget are not picked and keep their pointer.\n  Control-Command-drag: center-nearest by pointer, DriftWM's swipe; the direction is taken 16 points from the press.\n  Command-Return: exec-terminal ($TERMINAL, else a new Terminal window). Command-D: exec-launcher ($LAUNCHER, else Apps).\n  Command-Option-arrows: send-to-output, the focused window to the display on that side (a world move; nothing with one display).\n  Command-L: DriftWM's lock binding. Its swaylock is a Linux program: where that is not installed the displays are put to sleep instead, and macOS asks for the password as its Lock Screen setting says.\n  DriftWM's volume, brightness and media key defaults run Linux programs too: without those installed the keys stay with macOS.\n  Command-Q: close-window. The focused window's own close button is pressed through Accessibility; a focused placeholder is dismissed.\nThe fixture modes (--demo*) read no config and keep Option-drag pan, Command-wheel and pinch zoom and Control-Option-drag move; they take no trackpad touches. They keep their toolbar strip, status line and chooser, and their Resize status button explains unavailable native layout resizing.\nAn unbound click, drag or scroll on a window (left, right or middle button) is forwarded only to its selected, freshly validated source.\nNative keyboard/IME remain with the real app. Control-Option-Escape (until a binding takes that chord), Control-Command-Shift-Q (quit), msg action quit or SIGTERM ends the run with exit status 0 and returns the native desktop: fullscreens ended, scene saved, panels closed, capture stopped, hot keys released.\nNo SIP/settings changes.");return 0;}
+    if(argc==2&&!strcmp(argv[1],"--help")){puts("Infinify.app — macOS 26+ Apple Silicon: DriftWM's canvas as the desktop of native Mac windows\nDefault: the desktop. One canvas panel per display covers the whole display on every Space, under the menu bar and the Dock, which both stay; there is no toolbar, no status line and no chooser. Every real application window on screen (by Accessibility a standard window or a dialog, never a popup or a helper window; without Accessibility every window but an untitled one under 200x150) lives on the canvas: existing windows are adopted, a new one is placed by window_placement, a closed one leaves (or leaves a stand-in under session.suspend_on_close). This needs Screen Recording and Accessibility access, and Stage Manager off (it keeps every window outside the current stage as a thumbnail): while one is missing or Stage Manager is on a small window says so and offers the Allow buttons, a button that opens Desktop & Dock, Relaunch (Screen Recording reaches only a newly started app) and Quit, and the canvas opens once nothing is in the way.\nStatus notes go to stderr, one line each; what a config file has wrong is drawn in the error bar.\n--only-pid PID[,PID…] (may repeat): manage only the windows of these processes, each of which must be running and this user's; needs --windowed, and refuses --manual. It works without Screen Recording access too: the windows are then bound, focused and clicked as ever and their tiles have no picture.\n--debug-pointer: with --only-pid, serve the DebugPointer IPC request, by which a test presses and releases on a window without the pointer.\n--native-helper RUNTIME_DIR NONCE_FILE: with --only-pid, native presentation: the window server draws the managed windows themselves where the canvas places them, moved and scaled by the transform helper whose socket is in RUNTIME_DIR (its nonce is read from NONCE_FILE, mode 0600), and the canvas, behind them, draws live copies for additional independently zoomed display views when Screen Recording access is already available. Popup/sheet copies, metadata cropping and scoped member input are implemented but unverified; native display-boundary clipping remains incomplete. A cooperative helper inside its named process, or an authenticated exact helper allowlist of the named process instances, must match --only-pid. Repeat this pair for up to four explicit helpers: each must audit its own disjoint process subset, and their union must exactly match --only-pid. Same-user helpers and allowlists that cannot be audited are refused; nothing is looked for or loaded. Losing one grouped helper ends presentation and restores its siblings. Without a native helper flag every run is the overlay.\n--native-desktop-helper RUNTIME_DIR NONCE_FILE: explicit whole-desktop native presentation for this login user, including newly opened applications. Requires one authenticated Apple Dock-hosted SAME_USER helper with scope audit and per-window restoration; cannot combine with --only-pid, --windowed, --manual or fixture modes. This only connects to a helper you already started; nothing is injected or installed by the app. Independent extra display views use capture replicas. Native clipping and application compatibility still need validation.\n--manual: show the chooser first and capture only explicitly selected windows; no window is adopted automatically. Open canvas shows the saved world without adding one. The chooser stays open above the canvas; closed there, it is gone for the run.\n--demo EMPTY_DIRECTORY: disposable interactive fixture, bounded to 60 seconds\n--demo-probe EMPTY_DIRECTORY: automated own-fixture E2E, no permission prompts\n--demo-probe-guard EMPTY_DIRECTORY: own-fixture interruption regression (expected exit 2)\n--no-native-focus: window focus stays logical; no native window is activated or raised\n--no-hover-forwarding: pointer motion over a window is not delivered to its application; focus_follows_mouse and pick mode still follow the pointer\n--state ABSOLUTE_PATH: explicit persistent scene file (default Application Support/Infinify/scene.json)\n--socket ABSOLUTE_PATH: IPC socket of a normal run (default Application Support/Infinify/infinify.sock)\n--windowed [WIDTHxHEIGHT]: open the canvas at launch in one ordinary window instead, all of it canvas (default 1200x800, at least 960x480), with no global shortcuts and whatever access there is; with --manual the chooser comes up above it; msg action quit or Control-C in its terminal ends it\n--config ABSOLUTE_PATH: DriftWM config file of a normal run (default $XDG_CONFIG_HOME/infinify/config.toml, else ~/.config/infinify/config.toml; DriftWM's built-in defaults when it is missing); read again whenever it changes\n--super CHORD: the physical keys of DriftWM's super/mod, a +-joined subset of ctrl|alt|cmd (default cmd)\nmsg [--json] [--socket PATH] COMMAND ...: DriftWM-style IPC client for the running app; opens no window\nnative-desktop [--check | --help]: run the bundled native desktop launcher from a terminal. --check only verifies the package and reports policy; the explicit start authenticates or loads the helper through its sudo step, then starts native mode. It changes no SIP or settings and refuses an uncertain earlier load.\nlogin-item on | off | status: register, unregister or report the login item, a LaunchAgent inside the bundle that starts Infinify at login and again after a crash, never after a quit. on starts it at once, off ends the instance it started, status only reads; opens no window. For the installed copy: scripts/install-app.sh puts a signed bundle in ~/Applications\n--source DIR SECONDS NONCE: internal disposable child only\nKeys and pointer gestures are DriftWM's bindings from the config file: ctrl is Control, alt is Option, super (mod) is the --super chord. With no config file and --super cmd the registered chords are:\n  Drag or two-finger scroll on empty canvas, Command-drag anywhere, three-finger swipe: pan; a released pan coasts (navigation.drift). Hold Super (Command by default) and scroll with a wheel or two fingers to zoom anywhere. Wheel or two-finger pinch on empty canvas, Command-pinch anywhere, three-finger pinch: anchored zoom (max 1x).\n  Option-drag on a window: world move/snap; add Shift: cluster. Held at the view's edge, a move pans the canvas under the window (navigation.edge_pan).\n  Trackpad gestures use DriftWM's [gestures] bindings with Mac defaults: four-finger swipe up toggles overview; other directions select the nearest window. Four-finger hold: center the focused window. Four-finger pinch in / out: zoom-to-fit / home toggle. Three-finger swipe or drag pans over windows as well as empty canvas. Two-finger pinch zooms over windows too.\n  Desktop mode intercepts recognized trackpad and Dock swipe streams for canvas navigation; stopping releases interception without changing System Settings. Unknown system gesture formats pass through; hardware behavior needs runtime validation. Windowed mode keeps local gestures only.\n  View actions animate one view's camera only (global shortcuts while the canvas is open, or msg action; held zoom, pan and nudge keys repeat):\n  Command-A: home toggle (origin at 1:1, again to return). Command-Tab or F3: overview toggle (again returns). Command-W: the same zoom-to-fit toggle. Command-Shift-W: the same over the focused window's snap cluster.\n  Command-Equals / Command-Minus: zoom in / out. Command-0 or Command-Z: zoom 1:1.\n  Control-Command-arrows: pan the view under the pointer. Command-Shift-arrows: nudge the focused window.\n  Command-1 to 4: fly to bookmark 1 to 4. Command-Shift-1 to 4: set it.\n  Window navigation flies the camera and focuses the window, natively when Infinify has Accessibility access:\n  Option-Tab / Option-Shift-Tab: cycle windows, most recently focused first; letting go of Option commits the choice.\n  Command-arrows: the nearest window in that direction. Command-C: center the focused window. Command-X: center the window under the pointer.\n  A click on a window gives it canvas focus and starts its native focus, then the click is forwarded; a click on empty canvas unfocuses. Focusing a canvas window in its own application is followed.\n  Pointer motion over a window is delivered to its application; with focus_follows_mouse = true it also focuses that window without raising it, a screen-pinned one before the canvas beneath it and never a widget.\n  Below [zoom] interact_min (off by default) a window on the canvas is one target: a click flies to it, a drag moves it, and no click, scroll or motion reaches its application. A screen-pinned window and a widget are not picked and keep their pointer.\n  Control-Command-drag: center-nearest by pointer, DriftWM's swipe; the direction is taken 16 points from the press.\n  Command-Return: exec-terminal ($TERMINAL, else a new Terminal window). Command-D: exec-launcher ($LAUNCHER, else Apps).\n  Command-Option-arrows: send-to-output, the focused window to the display on that side (a world move; nothing with one display).\n  The default Command-L lock binding and default volume, brightness, media and screenshot program bindings are left to macOS; their Linux commands are never substituted or started.\n  macOS's Lock Screen and screenshot shortcuts stay available. Explicit config bindings still run exactly as authored.\n  Command-Q: close-window. The focused window's own close button is pressed through Accessibility; a focused placeholder is dismissed.\nThe fixture modes (--demo*) read no config and keep Option-drag pan, Command-wheel and pinch zoom and Control-Option-drag move; they take no trackpad touches. They keep their toolbar strip, status line and chooser, and their Resize status button explains unavailable native layout resizing.\nAn unbound click, drag or scroll on a window (left, right or middle button) is forwarded only to its selected, freshly validated source.\nNative keyboard/IME remain with the real app. Control-Option-Escape (until a binding takes that chord), Control-Command-Shift-Q (quit), msg action quit or SIGTERM ends the run with exit status 0 and returns the native desktop: fullscreens ended, scene saved, panels closed, capture stopped, hot keys released.\nNo SIP/settings changes.");return 0;}
     BOOL child=argc==5&&!strcmp(argv[1],"--source"),demo=argc==3&&!strcmp(argv[1],"--demo"),guard=argc==3&&!strcmp(argv[1],"--demo-probe-guard"),probe=argc==3&&!strcmp(argv[1],"--demo-probe"),state=argc==3&&!strcmp(argv[1],"--state");
     if(argc!=1&&!child&&!demo&&!probe&&!guard&&!state)return 64;
     if((windowed||socket||config||chord||logical||manual)&&(child||demo||probe||guard))return 64;

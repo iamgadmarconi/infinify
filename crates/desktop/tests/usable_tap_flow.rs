@@ -518,7 +518,7 @@ fn a_frame_partly_under_the_dock_is_not_wholly_in_view() {
     put(&mut h, 1, "app.1", frame);
     let reply = focus(&mut h, 2);
     assert_eq!(reply["navigation"], Value::Null, "{reply}");
-    assert_eq!(h.snapshot()["focused"], 1);
+    assert_eq!(h.snapshot()["focus"]["intent"], 1);
     // And so does output 1 once the Dock is hidden.
     let mut h = running("");
     put(&mut h, 1, "app.1", frame);
@@ -1158,7 +1158,7 @@ fn a_tap_runs_its_action_once_through_the_action_prelude() {
         armed(&reply, 1),
         view((150.0 - CENTER1.0, 200.0 - CENTER1.1), 1.0)
     );
-    assert_eq!(h.snapshot()["focused"], 1);
+    assert_eq!(h.snapshot()["focus"]["intent"], 1);
     h.observe_focus(1);
     h.ok(json!({"op":"cancel_navigation","output":1}));
     // Every modifier is up when a tap fires unless the shell says otherwise:

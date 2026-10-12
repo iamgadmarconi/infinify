@@ -132,6 +132,20 @@ static BOOL DWPlacementMemberCurrent(NSDictionary *who,int owner,NSDictionary **
         ||pid!=[who[@"pid"]intValue]||!DWPlacementProcessCurrent(who))return NO;
     if(rowOut)*rowOut=row;return YES;
 }
+NSDictionary *DWNativeEventRecipientAtPoint(CGPoint point) {
+    if(!NSThread.isMainThread||!isfinite(point.x)||!isfinite(point.y)||!DWPlacementLoadAPI()||!placementReadAPI.hit)return nil;
+    uint32_t wid=0,again=0;int owner=0,againOwner=0;pid_t pid=0;CGPoint local=CGPointZero;
+    if(placementReadAPI.hit(placementReadAPI.connection(),0,1,0,&point,&local,&wid,&owner)!=kCGErrorSuccess
+        ||!wid||owner<=0||placementReadAPI.connectionPID(owner,&pid)!=kCGErrorSuccess||pid<=1)return nil;
+    struct proc_bsdinfo info={0};
+    if(proc_pidinfo(pid,PROC_PIDTBSDINFO,0,&info,sizeof(info))!=sizeof(info)||info.pbi_pid!=(uint32_t)pid
+        ||info.pbi_uid!=getuid()||!info.pbi_start_tvsec||info.pbi_start_tvusec>=1000000)return nil;
+    NSDictionary *identity=@{@"pid":@(pid),@"wid":@(wid),@"birth_sec":@(info.pbi_start_tvsec),@"birth_usec":@(info.pbi_start_tvusec)};
+    if(!DWPlacementMemberCurrent(identity,owner,NULL)
+        ||placementReadAPI.hit(placementReadAPI.connection(),0,1,0,&point,&local,&again,&againOwner)!=kCGErrorSuccess
+        ||again!=wid||againOwner!=owner||!DWPlacementMemberCurrent(identity,owner,NULL))return nil;
+    NSMutableDictionary *recipient=[identity mutableCopy];recipient[@"owner"]=@(owner);return recipient.copy;
+}
 static NSDictionary<NSNumber *,NSDictionary *> *DWPlacementFamily(DWNativeAppliedPlacement *placement) {
     NSDictionary *family=DWNativeWindowFamily(placement.identity,NULL);
     if(!family||![DWPlacementIdentity(family[@"identity"],NO)isEqual:placement.identity]

@@ -79,7 +79,7 @@ back by an open cycle instead.
   Upstream's click on empty canvas (`clear_focus_to_empty_canvas`): no window
   holds logical focus afterwards.
   The cycle ends, a pending effect is dropped (its late `focus_result` is then
-  stale), stacking and history stay, and `snapshot.focused` is null. Nothing is
+  stale), stacking and history stay, and `snapshot.focus.intent` is null. Nothing is
   asked of the adapter, because there is no native "focus nothing" to ask for,
   and `observed_native` keeps saying what was last observed. `center-nearest`
   landing on an anchor clears focus the same way.
@@ -130,13 +130,15 @@ focus history when its request is answered, not when it is made.
 - Upstream's `raise_and_focus` redirects to a window's innermost modal child.
   No relationship between windows is known here, so nothing is redirected.
 
-`snapshot.focused` remains the logical-intent alias. `snapshot.focus` exposes
-`intent`, `observed_native`, `pending_effect`, `last_result`, `history`, `cycle`,
-and `release_pending`. `history` is the one focus history: the cycle walks it,
+`snapshot.focus` exposes `intent`, `observed_native`, `pending_effect`,
+`last_result`, `history`, `cycle`, and `release_pending`. `intent` is the logical
+focus; `history` is the one focus history: the cycle walks it,
 and so do the tiers that decide
 [who follows a closed window](LIFECYCLE.md#a-window-closes). Attached sources expose their generation. There is only
 one authoritative pending effect; an effect returned earlier becomes stale when
 superseded. Snapshot reads do not allocate or acknowledge effects.
+The redundant top-level `snapshot.focused` field is removed; consumers read
+logical focus from `snapshot.focus.intent`.
 
 Ordinary focus first ends the old cycle, committing only a current selection
 whose request was answered; its own promotion waits for its answer. Removing

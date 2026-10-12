@@ -289,7 +289,7 @@ fn snap_defaults_use_current_zoom_while_displacement_keeps_start_zoom() {
         assert_eq!(begun["effect"]["op"], "focus_native_window", "{begun}");
         assert_eq!(begun["effect"]["window"], window, "{begun}");
         let stacked = host.snapshot();
-        assert_eq!(stacked["focused"], window);
+        assert_eq!(stacked["focus"]["intent"], window);
         assert_eq!(stacked["focus"]["pending_effect"], begun["effect"]);
         assert_eq!(stacked["windows"][1]["window"], window);
         for (zoom, screen_delta, expected_delta) in [

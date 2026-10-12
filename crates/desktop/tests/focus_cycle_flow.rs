@@ -86,7 +86,7 @@ fn frozen_cycle_supersession_release_failure_and_external_focus() {
     assert_eq!(failed["window"], 3); // fresh backward is upstream index one
     host.ok(result(&failed, false));
     let state = host.snapshot();
-    assert_eq!(state["focused"], 3);
+    assert_eq!(state["focus"]["intent"], 3);
     assert_eq!(state["focus"]["observed_native"]["window"], 1);
     assert_eq!(state["focus"]["history"], json!([1, 3, 2]));
     assert!(state["focus"]["cycle"].is_null());
@@ -154,7 +154,7 @@ fn version_one_roundtrip_preserves_geometry_order_intent_and_clears_authority() 
     host.ok(json!({"op":"load","path":path}));
     std::fs::remove_file(path).unwrap();
     let after = host.snapshot();
-    assert_eq!(before["focused"], after["focused"]);
+    assert_eq!(before["focus"]["intent"], after["focus"]["intent"]);
     for (a, b) in before["windows"]
         .as_array()
         .unwrap()
@@ -202,7 +202,7 @@ fn native_focus_ownership_loss_cancels_without_fabricating_history() {
     let pending = cycle(&mut host, false, true);
     host.ok(json!({"op":"focus_lost"}));
     let snapshot = host.snapshot();
-    assert_eq!(snapshot["focused"], 2);
+    assert_eq!(snapshot["focus"]["intent"], 2);
     assert_eq!(snapshot["focus"]["history"], json!([3, 2, 1]));
     for key in ["observed_native", "pending_effect", "cycle"] {
         assert!(snapshot["focus"][key].is_null());

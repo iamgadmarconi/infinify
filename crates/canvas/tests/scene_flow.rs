@@ -131,19 +131,26 @@ fn docking_then_moving_a_group_excludes_corner_contact() {
         threshold: 8.0,
         adjacency_tolerance: 0.01,
     };
-    let displacement = scene
-        .snap_move(WindowId(1), Point::new(25.0, 0.0), options, false)
-        .unwrap();
+    let mut drag = scene.begin_drag(WindowId(1), options, 32.0, false).unwrap();
+    let displacement = scene.drag_to(&mut drag, Point::new(25.0, 0.0)).unwrap();
     assert_eq!(displacement, Point::new(30.0, 0.0));
     assert_eq!(
         scene.cluster(WindowId(1), options).unwrap(),
         vec![WindowId(1), WindowId(2)]
     );
     let corner_before = scene.window(WindowId(3)).unwrap().world_rect;
-    let moved = scene
-        .move_cluster(WindowId(1), Point::new(-50.0, 70.0), options)
+    let mut group = scene
+        .begin_drag(
+            WindowId(1),
+            SnapOptions {
+                threshold: 0.0,
+                ..options
+            },
+            32.0,
+            true,
+        )
         .unwrap();
-    assert_eq!(moved, vec![WindowId(1), WindowId(2)]);
+    scene.drag_to(&mut group, Point::new(-50.0, 70.0)).unwrap();
     assert_eq!(
         scene.window(WindowId(1)).unwrap().world_rect,
         Rect::new(-20.0, 70.0, 100.0, 100.0)
@@ -154,11 +161,9 @@ fn docking_then_moving_a_group_excludes_corner_contact() {
     );
     assert_eq!(scene.window(WindowId(3)).unwrap().world_rect, corner_before);
     let before = scene.clone();
-    assert!(
-        scene
-            .move_cluster(WindowId(1), Point::new(1e12, 0.0), options)
-            .is_err()
-    );
+    let gesture_before = group.clone();
+    assert!(scene.drag_to(&mut group, Point::new(1e12, 0.0)).is_err());
+    assert_eq!(group, gesture_before);
     assert_eq!(scene, before);
 }
 

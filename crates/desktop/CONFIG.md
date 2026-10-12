@@ -296,8 +296,8 @@ which the user did not ask for.
   `cycle-windows` and `spawn` repeat while held, after `repeat_delay_ms` and
   then `repeat_rate_hz` times a second. A `spawn` whose program is not found
   does not, see [Upstream's Linux commands](#upstreams-linux-commands).
-- `upstream` is present only on a default binding that was replaced by its
-  macOS equivalent, and holds the action upstream binds there.
+- Host-owned default bindings appear under `skipped` with their upstream action
+  and a platform-owned reason; explicit bindings are not rewritten.
 - `taps` lists the tap bindings, see [Tap bindings](#tap-bindings).
 - `hot_corners` lists every registered output, see [Hot corners](#hot-corners).
 - `implemented` is false when the `action` command would refuse the action with
@@ -335,9 +335,9 @@ as skipped instead of vanishing.
 
 With no config file, the default super chord and `mod_key = "super"`, on a Mac
 that has none of upstream's Linux programs. "Runs" is `implemented`. Upstream
-plus the Mac adapter binds 59 keys: 47 land on Mac keys and are registered, one of them with a
-substituted command; 8 are on media keys that macOS handles itself; and 4 have
-no Mac key.
+plus the Mac adapter leaves host-owned lock, volume, brightness, media and
+screenshot defaults to macOS regardless of whether their Linux programs happen
+to be on `PATH`. The table lists registered Mac-key defaults.
 
 | Upstream | macOS chord | `key_code` | Action | Repeats | Runs |
 | --- | --- | --- | --- | --- | --- |
@@ -368,7 +368,6 @@ no Mac key.
 | `mod+e` | ⌘E | 14 | `toggle-cursor-pan` |  | yes |
 | `mod+equal` | ⌘= | 24 | `zoom-in` | yes | yes |
 | `mod+f` | ⌘F | 3 | `toggle-fullscreen` |  | with the capability |
-| `mod+l` | ⌘L | 37 | `exec /usr/bin/pmset displaysleepnow`, for upstream's `spawn swaylock -f -c 000000 -kl` |  | yes |
 | `mod+m` | ⌘M | 46 | `fit-window` |  | with the capability |
 | `mod+minus` | ⌘- | 27 | `zoom-out` | yes | yes |
 | `mod+q` | ⌘Q | 12 | `close-window` |  | yes |
@@ -409,11 +408,11 @@ and the four with no Mac key, as `the key has no macOS equivalent`: `Print` and
 `shift+Print` (`spawn grim …`), `XF86AudioPause` (`spawn playerctl play-pause`)
 and `XF86AudioStop` (`spawn playerctl stop`).
 
-[Upstream's Linux commands](#upstreams-linux-commands) has the rule. On a
-machine where those programs are installed the table is upstream's own:
-`mod+l` runs `spawn swaylock -f -c 000000 -kl` and repeats, and the eight media
-keys are listed under `media_keys` with their `nx_key_type`. A media key is not
-a virtual key code, so nothing registers it as a hot key in either case.
+[Upstream's Linux commands](#upstreams-linux-commands) has the rule. The default
+`mod+l` lock command and eight media-key actions are listed under `skipped`,
+even if their Linux executables are installed. Explicit bindings in the config
+remain authored actions. A media key is not a virtual key code, so it is never
+registered as an ordinary key hot key.
 
 ## Tap bindings
 
@@ -890,47 +889,31 @@ the code.
 
 ## Upstream's Linux commands
 
-Thirteen of upstream's default key bindings run programs that do not exist on a
-Mac, nine on keys a Mac keyboard has and four on keys it lacks. A **default**
-binding (one the file's `[keybindings]` table does not bind or unbind) whose
-program is not found is not registered as written:
+Default system-control bindings are never run by this adapter. Lock, volume,
+brightness and media defaults are left to macOS and foreground applications;
+the screenshot defaults are left to macOS's system screenshot shortcuts. This
+does not depend on whether their Linux programs are installed:
 
 | Upstream default | On macOS |
 | --- | --- |
-| `mod+l` = `spawn swaylock -f -c 000000 -kl` | registered as `exec /usr/bin/pmset displaysleepnow` |
+| `mod+l` = `spawn swaylock -f -c 000000 -kl` | not registered; the lock chord stays with macOS and the foreground app |
 | `XF86AudioRaiseVolume`, `XF86AudioLowerVolume`, `XF86AudioMute` = `spawn wpctl …` | not registered: macOS handles the volume keys itself |
 | `XF86MonBrightnessUp`, `XF86MonBrightnessDown` = `spawn brightnessctl …` | not registered: macOS handles the brightness keys itself |
 | `XF86AudioPlay`, `XF86AudioNext`, `XF86AudioPrev` = `spawn playerctl …` | not registered: macOS handles the media keys itself |
 | `Print`, `shift+Print` = `spawn grim …`; `XF86AudioPause`, `XF86AudioStop` = `spawn playerctl …` | no such key on a Mac keyboard, as before; screenshots are the system's ⇧⌘3, ⇧⌘4 and ⇧⌘5 |
 
-- **Found** means an executable file of that name in a directory of `PATH`: the
-  `PATH` of the file's `[env]` when it sets one, else the controller's own.
-  That is the `PATH` an `exec` effect runs with. The program is the first word
-  of the command; a command that starts with anything but a plain word, with a
-  relative path or with a shell builtin is taken as found.
-- The substituted binding carries `"upstream"`, the action it stands for, and
-  is an `exec`, which does not repeat: a held chord must not ask for the lock at
-  the repeat rate.
-- A platform-handled binding moves from `media_keys` to `skipped` with the
-  reason above and no warning. Any other default whose program is missing would
-  be skipped with `'<program>' is not installed and has no macOS equivalent`;
-  none of upstream's is.
-- When the program is found, the default is registered exactly as upstream
-  wrote it.
 - A binding the **file** makes is always registered exactly as written. If it is
   a `spawn` whose program is not found, `repeat` is false, so a held chord does
   not start a failing shell at the repeat rate, and `warnings` says so:
   `binding '<combo>' = '<action>': '<program>' was not found, so it will not repeat while held`.
 - An entry upstream's loader rejects (an action that does not parse, reported in
   `load_config`'s `warnings` as `config: invalid action …`) binds nothing, as
-  upstream: the default on that combo is still a default, and is substituted or
-  skipped by the rules above.
+  upstream: the host-owned default on that combo remains omitted.
 
-`pmset displaysleepnow` turns the displays off. macOS then asks for the password
-according to System Settings › Lock Screen › "Require password after screen
-saver begins or display is turned off"; set to "Immediately", that is a locked
-session. No setting is read or changed here. macOS has no public command that
-locks the session regardless of that setting.
+An explicit command is checked against the configured `[env] PATH` (or the
+controller's `PATH`) only to prevent a missing repeatable `spawn` from
+relaunching a failing shell while held. No system command or setting is changed
+by default.
 
 ## Session
 
@@ -1037,8 +1020,9 @@ was restored too early back to a new output's pose.
 - Autostart effects are returned with the launch `load_config`, before any
   output is registered; the shell holds them until 100 ms after startup, which
   is when upstream starts them.
-- Upstream registers its Linux default commands whether or not they are
-  installed. See [Upstream's Linux commands](#upstreams-linux-commands).
+- The Mac adapter omits host-owned Linux system-control defaults regardless of
+  whether their programs are installed. See
+  [Upstream's Linux commands](#upstreams-linux-commands).
 
 ## Evidence and limits
 
@@ -1050,8 +1034,8 @@ command it governs; a `zoom.step` below 1 landing on the minimum zoom; broken
 and unreadable files with upstream's messages; a file that vanishes after it
 was accepted (the config and the runtime bookmarks kept, upstream's read
 failure, nothing dirty) and a missing file loaded again before any was
-accepted; the default key table (exact chords for a representative set, the 45 /
-8 / 4 split, no collision, no warning, and every listed action executed or
+accepted; the default key table (exact chords for a representative set, host-
+owned defaults omitted, no collision, no warning, and every listed action executed or
 refused according to `implemented`); `--super cmd`, a super chord holding
 Command, `mod_key = "alt"` and `mod_key = "mod3"`; collisions with their
 deterministic winner; one binding of every action through a config file and
@@ -1135,8 +1119,8 @@ move gesture, and `[input.trackpad] enable` with `set-trackpad`. See
   state, requests that do not, a change of active output, and every frame of a
   flight;
 - autostart effects on the launch load and on no later one;
-- the default key table with an empty `PATH`, with all five programs present,
-  with one present and two not executable; bindings the file wrote, the
+- the identical default key table with an empty `PATH` and with all five
+  programs present; bindings the file wrote, the
   two that repeat upstream's defaults word for word included; and two entries
   the loader rejects, whose defaults stay defaults.
 
@@ -1157,9 +1141,8 @@ process, that the config file is watched, or that anything is drawn. The key
 codes were read from the macOS SDK headers; none was pressed. Nor are they
 evidence that the pointer is watched or reaches a corner, that it is warped,
 that an input source is listed, selected or reported, or that an autostart
-command starts. `/usr/bin/pmset displaysleepnow` was not run: the file exists on
-the development machine (macOS 27.2), and what it does to the session there,
-and whether a key release wakes the display at once, was not observed.
+command starts. Host-owned system-control commands are omitted from the default
+table; none is executed by these controller scenarios.
 
 The shell's side is described in the
 [shell notes](../../native/desktop/README.md#configuration). Their

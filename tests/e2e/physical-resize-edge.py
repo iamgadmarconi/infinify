@@ -314,8 +314,9 @@ def main():
     (bundle / 'Contents/MacOS').mkdir(parents=True)
     (bundle / 'Contents/Info.plist').write_text('''<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>org.infinify.physical-edge-fixture</string><key>CFBundleName</key><string>EdgeFixture</string><key>CFBundleExecutable</key><string>EdgeFixture</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>''')
     executable = bundle / 'Contents/MacOS/EdgeFixture'
-    subprocess.run(['xcrun', 'clang', '-arch', 'arm64', '-mmacosx-version-min=26.0', '-fobjc-arc', '-Wall', '-Wextra', '-Werror', str(ROOT / 'native/privileged/host.m'), '-framework', 'AppKit', '-o', str(executable)], check=True)
+    subprocess.run(['xcrun', 'clang', '-arch', 'arm64', '-mmacosx-version-min=26.0', '-fobjc-arc', '-Wall', '-Wextra', '-Werror', str(ROOT / 'native/privileged/host.m'), '-framework', 'AppKit', '-framework', 'Metal', '-framework', 'QuartzCore', '-o', str(executable)], check=True)
     manifest = json.loads((ROOT / 'target/app/BUILD.json').read_text())
+    owned.check(manifest.get('schema_version') == 2, 'delivery manifest uses schema 2')
     app_hash = hashlib.sha256(APP.read_bytes()).hexdigest()
     owned.check(app_hash == manifest['executable_sha256'], 'tested app bytes match delivery manifest')
     owned.save_json(evidence / 'provenance.json', {'git_commit': manifest['git_commit'], 'app_sha256': app_hash, 'helper_sha256': hashlib.sha256(PAYLOAD.read_bytes()).hexdigest(), 'driver_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), 'fixture_sha256': hashlib.sha256(executable.read_bytes()).hexdigest()})

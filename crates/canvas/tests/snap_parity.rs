@@ -524,13 +524,14 @@ fn parity_equal_candidates_keep_target_order_and_group_attraction_uses_primary()
         for (i, target) in targets.into_iter().enumerate() {
             add(&mut scene, i as u64 + 2, target);
         }
-        scene
-            .snap_move(WindowId(1), Point::default(), SnapOptions::default(), false)
+        let mut drag = scene
+            .begin_drag(WindowId(1), SnapOptions::default(), 32.0, false)
             .unwrap();
+        scene.drag_to(&mut drag, Point::default()).unwrap();
         assert_rect(
             scene.window(WindowId(1)).unwrap().world_rect,
             expected,
-            "stateless candidate tie",
+            "gesture candidate tie",
         );
     }
 
@@ -547,9 +548,10 @@ fn parity_equal_candidates_keep_target_order_and_group_attraction_uses_primary()
         false,
         false,
     );
-    scene
-        .snap_move(WindowId(1), Point::default(), SnapOptions::default(), true)
+    let mut drag = scene
+        .begin_drag(WindowId(1), SnapOptions::default(), 32.0, true)
         .unwrap();
+    scene.drag_to(&mut drag, Point::default()).unwrap();
     assert_rect(
         scene.window(WindowId(1)).unwrap().world_rect,
         expected,

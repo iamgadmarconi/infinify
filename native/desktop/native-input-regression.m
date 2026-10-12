@@ -81,6 +81,12 @@ int main(void) {@autoreleasepool {
     CGEventRef own=packet(kCGEventLeftMouseDown,0,getpid());
     check([input handle:kCGEventLeftMouseDown event:own]==NULL&&consumed==before+1,@"fresh same-button down retires lost native release");
     take=NO;check([input handle:kCGEventLeftMouseUp event:up]==NULL,@"captured press keeps its matching up even when consumer declines");
+    take=YES;check([input handle:kCGEventLeftMouseDown event:own]==NULL,@"pending ownership refusal captures the physical canvas down");
+    take=NO;check([input handle:kCGEventLeftMouseDragged event:drag]==NULL&&[input handle:kCGEventLeftMouseUp event:up]==NULL,
+        @"cancelling hover placement still suppresses the entire refused physical pair without reposting");
+    check(unchanged(down,^{return [input handle:kCGEventLeftMouseDown event:down];})
+        &&unchanged(drag,^{return [input handle:kCGEventLeftMouseDragged event:drag];})
+        &&unchanged(up,^{return [input handle:kCGEventLeftMouseUp event:up];}),@"a subsequent admitted native pair retains all original physical payloads");
     take=NO;[input handle:kCGEventLeftMouseDown event:down];before=consumed;
     [input handle:kCGEventTapDisabledByTimeout event:NULL];take=YES;
     check(cancelled==1&&[input handle:kCGEventMouseMoved event:move]==NULL&&consumed==before+1,@"tap disable discards stale native reservation");

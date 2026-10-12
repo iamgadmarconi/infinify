@@ -148,7 +148,7 @@ lowering demanded quality, but one matched zoom sample improved presentation
 from 41.25 to 52.75 fps while its worst main-thread gap increased from 8.6 to
 63.1 ms. This was also a tradeoff, not stable 120 Hz.
 
-The latest matched capture sample, signed `42d17f4`, uses six 1700×1132-point
+An earlier matched capture sample, signed `42d17f4`, uses six 1700×1132-point
 windows and a 2056×1290-point Retina output. Actual canvas presentations were
 57.25/51/52/58/52 fps for rest/pan/zoom/window move/logical focus. Worst
 main-thread gaps were 2.6/2.0/10.9/2.5/2.5 ms, down from
@@ -158,6 +158,45 @@ presentation assertions still failed. The new app includes both child observer
 and wallpaper-query improvements plus correctness changes; one pair does not
 isolate their contributions. A separately labeled 500 ms fixture-reporting
 diagnostic, with the same app and redraw request, did not resolve the deficit.
+
+The later matched `ad0dd2fa` → `2461a220` pair remained below target in every
+phase: candidate rest/pan/zoom/move/focus presentation was
+58.25/57.00/47.25/54.50/56.50 fps, with 25 ms presentation p99/worst gaps.
+Pan and focus improved, but app CPU increased in every interval and final RSS
+rose from 156.20 to 183.19 MiB. The unchanged 120 Hz assertions failed for both
+builds. The first-image deadline is a resource-lifetime correction, not a proven
+overall performance win. The native README records exact hashes and evidence;
+separate diagnostic sampling is excluded from that comparison.
+
+The next matched pair uses clean `2461a220` and a frozen dirty-tree candidate
+with executable SHA256 `2ce30f3abd8769ce9496bdf69a041697e2e187d0145b3de0db183ac3c1580fef`.
+With the same six large sources, 50 ms fixture reports and no profiling or
+callback diagnostics, presented rest/pan/zoom/move/focus fps changed from
+59/59.75/47.25/58/59.45 to 60/58.75/53/58/58.5. Candidate main-thread gaps in the
+selected intervals stayed within 2.5 ms and final RSS fell from 188.42 to
+151.47 MiB. Pan/focus throughput did not improve, zoom CPU increased, and both
+builds failed the unchanged 120 Hz assertions. Presentation p99/worst gaps
+remained 25 ms, drawable acquisition reached 25.06 ms, and submission latency
+reached 65.67 ms despite a 120 Hz screen clock. Cold-child admission and
+periodic-wallpaper changes are combined with other fixes; their individual
+contributions are not isolated. All fourteen owned processes exited. Frozen
+inputs, manifests and records are in
+`target/performance/20261012-window-scaling/cold-admission/`; the native README
+records workload, CPU-interval and whole-desktop WindowServer limitations.
+
+The subsequent `2ce30f3a` → `61af1dba` pair tests completion-scoped release of
+retired capture surfaces. Actual rest/pan/zoom/move/focus presentation was
+56.45/59/52.5/58.5/57.5 → 59/59/54.25/59.25/59.5 fps, with unchanged 25 ms
+presentation p99/worst gaps, approximately 25 ms acquisition and 65.7 ms maximum
+submission latency. CPU and main-thread tails were mixed; candidate root
+acceptance at rest reached only 44.5 fps. Ending RSS was 156.66/151.66 MiB,
+while earlier baseline endpoints were lower. Both builds fail the same ten
+cadence assertions. The 43-check headless regression and failing old-code
+negative control establish the lifetime bound, not an overall performance win.
+The workload, 50 ms reports and assertions remain unchanged, no profiler or
+optional diagnostics ran, and all fourteen owned processes exited. Frozen
+binary hashes, CPU interval qualifications and exact records are in the native
+README and `target/performance/20261012-window-scaling/completion-lifetime/`.
 
 A matched six-second static native idle pair compared `f7bdef71` with `ad0dd2fa`
 using identical helper/harness bytes, boundary-only reads and no sampling
@@ -2290,8 +2329,8 @@ reference rows of `cache_shader` and `cache_budget_mb`. `protocol.layer_shell`
 stays `missing` and stays counted for full native panel/overlay acceptance.
 Independent floating panels now have an explicit display-pin policy and retain
 the application's stacking and keyboard focus; this does not establish full
-third-party overlay compatibility. Its reserved-area clause is not a gap: by the owner's
-decision of 2026-10-10 nothing is reserved for the menu bar and the Dock.
+third-party overlay compatibility. The owner subsequently selected menu-bar/notch
+exclusion for fit/fullscreen, while leaving the Dock outside that exclusion.
 On 2026-10-11 sizing and fullscreen began to run in every normal run, which
 moved 27 rows out of the gated group to `implemented_unverified`. Later that
 day resizing by pointer began to run in every normal run too, which moved 13
@@ -2347,16 +2386,17 @@ view decision):
 
 The 65 delegated missing rows remain integration/acceptance accounting, without
 duplicate Mac controls. All 67 questionnaire decisions are resolved; work remains
-on the implementation gaps above. Runtime acceptance stays deferred under the owner's current
-no-tests/no-launches instruction; the work order above is not authorization to
-resume it. No tests, fixture launches or application experiments were run for
-this scope update.
+on the implementation gaps above. On 2026-10-12 the owner authorized overnight
+benchmarks and tests while the laptop is idle. Native mutation remains limited
+to explicitly spawned disposable fixtures under `AGENTS.md`; broader application
+acceptance and SIP-off testing remain separate from those owned-fixture results.
+Earlier scope updates ran no tests or fixture launches.
 
 The `missing` rows, by group:
 
-- **Gated behind `--experimental-native-resize` (0).** Nothing is gated any
-  more. The flag still exists and enables the orange edge handles of the
-  capture-acknowledged path, which is legacy.
+- **Gated behind `--experimental-native-resize` (0).** The flag and its legacy
+  path have been removed. Normal edge/corner resizing uses the current native
+  resize coordinator; old invocations are rejected as unknown arguments.
 - **Resize by pointer in every normal run (13 rows moved on 2026-10-11).**
   `MouseAction.ResizeWindow` and `ResizeWindowSnapped` with their default
   bindings `config.mouse.on-window.alt+right` and `alt+shift+right`;

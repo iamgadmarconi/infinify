@@ -58,7 +58,7 @@ impl Host {
         self.focus_state()["history"].clone()
     }
     fn focused(&mut self) -> Value {
-        self.snapshot()["focused"].clone()
+        self.snapshot()["focus"]["intent"].clone()
     }
     /// Window ids bottom to top.
     fn stacking(&mut self) -> Vec<u64> {
@@ -1244,7 +1244,7 @@ fn clear_focus_and_the_reported_cycle_hold() {
     let mut h = empty(rebound);
     assert_eq!(
         h.ok(json!({"op":"bindings"}))["cycle_hold"],
-        json!({"control":true,"option":true,"shift":false,"command":false})
+        json!({"control":false,"option":false,"shift":false,"command":true})
     );
     h.ok(json!({"op":"set_platform","super":"cmd"}));
     assert_eq!(

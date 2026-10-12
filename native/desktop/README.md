@@ -2,7 +2,110 @@
 
 ## Current development evidence (2026-10-12)
 
-The signed `42d17f4` app (executable SHA256
+Two later controls used frozen executable `f52a7204` and six independently
+measured Metal producers. With real ScreenCaptureKit streams, the producers
+fell from about 120 actual positive presentation timestamps per second to 60,
+then recovered to 120 after the app exited; capture delivery and the canvas
+were also about 60. With the same canvas coverage and the existing synthetic
+source mode, no real root streams were requested and both producers and canvas
+stayed around 120. The selected rest/pan canvas intervals contained 480 positive
+presentations in four seconds, with 8.334 ms worst gaps and no missed intervals.
+Synthetic buffers and content differ from real capture, so this associates the
+slowdown with the capture path without isolating its mechanism or proving an
+OS-wide limit. Evidence is in `target/ipc/mp.ajz30co1/` and
+`target/ipc/ms.oo4d07w3/`; originals and cursor remained unchanged, helper state
+stayed empty without journal writes, and all owned children exited.
+
+Source review then found that unchanged pixel dimensions prevented capture-rate
+reconfiguration. Rate changes now reconcile independently, preserve current
+pixels during a rate-only update, and fence acknowledgements and startup
+deadlines by stream and request serial. All callers use the explicit interval;
+the old internal method wrappers were removed. The scoped
+`INFINIFY_DEBUG_CAPTURE_CONFIG=1` diagnostic reports requested and acknowledged
+configuration through `DebugCapture`, not delivered FPS. Its 38 focused
+headless checks passed. The earlier real-capture run did not record individual
+configuration requests, so this fix alone does not explain its 60 fps result.
+
+The subsequent instrumented run of executable `fb430cea` did record all six
+streams at both rest/pan boundaries: requested and acknowledged intervals were
+1/120 second, dimensions 1700×1132, and serial 3, unchanged across each phase.
+Actual canvas presentation still measured 240 positive timestamps in four
+seconds (60 fps) in both phases, with 25 ms p99/worst gaps. The producers went
+from 119.856 presentations per second before capture to about 60 during capture
+and 119.730 after it stopped. This rules out a stale 60 Hz configuration for
+this run, without establishing a universal ScreenCaptureKit limit. Native
+originals and cursor were unchanged, helper state had no writes, and both owned
+processes exited. Evidence: `target/ipc/mc.uq3tsb25/`. Stable 120 fps with real
+capture remains unresolved.
+
+An earlier matched pair compares frozen `2ce30f3a` with executable SHA256
+`61af1dba9f76438a7780a9a5abbb2af83001581a29246ea61c1d351c901ae14f`
+(source fingerprint `e3a26bec168b02e7cdf6bae419827d5d9dec90f80ce88e40fced77c34b547050`).
+The candidate bounds retired capture-surface autoreleases to the GPU completion
+callback; its focused headless lifetime regression passes 43 checks and the
+old-code negative control fails. In the unchanged six-window capture workload,
+actual rest/pan/zoom/move/focus presentation changed from
+56.45/59/52.5/58.5/57.5 to 59/59/54.25/59.25/59.5 fps. All phase presentation
+p99/worst gaps remain 25 ms; acquisition still reaches about 25 ms and
+submission-to-presentation latency about 65.7 ms. Both builds fail the same ten
+source/presentation cadence assertions, with no GPU errors. Candidate main
+maxima were 10.8/1.9/17.6/2.5/2.3 ms; CPU changes were mixed. Candidate root
+acceptance at rest fell as low as 44.5 fps even though the canvas presented
+59 fps. Ending RSS was 156.66/151.66 MiB, but the baseline's intermediate RSS
+was lower, so this pair does not show an overall memory or performance win.
+It used the same 50 ms reports, four selected drawable seconds per phase,
+arm64/macOS 27.2 and workload below, without profiling or optional diagnostics.
+CPU intervals include alignment outside those selected seconds; whole-host
+WindowServer used about 96–100% of a core and is not isolated Infinify cost.
+All fourteen owned processes exited and both binary hashes remained unchanged.
+Inputs and exact results are in
+`target/performance/20261012-window-scaling/completion-lifetime/comparison.json`
+(`target/ipc/bench.7psMCD` and `target/ipc/bench.6hOH2g`).
+
+The preceding matched six-window capture pair compares clean `2461a220`
+(executable SHA256 `c3dec73f036cc1d9aee7fab033f6aafb4d7800e433d210aa367f484444d6d64e`)
+with its later dirty-tree candidate (executable SHA256
+`2ce30f3abd8769ce9496bdf69a041697e2e187d0145b3de0db183ac3c1580fef`,
+source fingerprint `3abea296a0b11dbad2cc91889086a4e228e02ee3890d1cce57056634da63b49d`).
+Both used identical default harness/fixture bytes, six 1700×1132-point windows,
+a 2056×1290-point Retina output, 120 Hz requested redraws and four selected
+seconds per phase on arm64/macOS 27.2 (26B5091g). Periodic fixture reports
+remained at 50 ms; lifecycle/callback diagnostics and profiling were disabled.
+
+| Phase | Baseline / candidate presented fps | Baseline / candidate app CPU (% of one core) | Candidate worst main-thread gap (ms) |
+| --- | ---: | ---: | ---: |
+| Rest | 59.00 / 60.00 | 13.00 / 12.85 | 2.5 |
+| Pan | 59.75 / 58.75 | 25.37 / 25.22 | 2.2 |
+| Zoom | 47.25 / 53.00 | 25.46 / 26.51 | 1.8 |
+| Move one window | 58.00 / 58.00 | 21.17 / 20.55 | 2.5 |
+| Switch logical focus | 59.45 / 58.50 | 14.85 / 13.93 | 2.4 |
+
+Every candidate phase still had 25 ms presentation p99/worst gaps; both builds
+failed the unchanged 120 Hz source and presentation assertions. Candidate
+source acceptance was 52–60.5 fps, separate from canvas presentation. The screen
+clock remained 120 Hz, while drawable acquisition reached 25.06 ms and
+submission-to-presentation latency reached 65.67 ms. Final app RSS fell from
+188.42 to 151.47 MiB; these are endpoints, not peaks or total GPU memory.
+Worst main-thread gaps in the selected baseline intervals were
+10.4/1.8/2.4/4.8/11.9 ms. CPU intervals include phase setup/alignment beyond
+the four selected drawable seconds. The candidate combines bounded cold-child
+admission, deferred periodic wallpaper queries and correctness/diagnostic
+changes. This single pair improves zoom and several tails, but does not isolate
+their contributions or establish an overall throughput improvement.
+Whole-desktop WindowServer CPU was 92–101% of one core and is not attributable
+solely to Infinify. All fourteen owned processes exited; executable hashes
+remained unchanged. Exact inputs and phase records are in
+`target/performance/20261012-window-scaling/cold-admission/comparison.json`,
+with runtime evidence in `target/ipc/bench.sdIyfT` and `target/ipc/bench.mANYKZ`.
+
+The preceding `ad0dd2fa` → `2461a220` pair also had mixed results: candidate
+rest/pan/zoom/move/focus presentations were 58.25/57/47.25/54.5/56.5 fps, app CPU
+increased in every interval and ending RSS rose from 156.20 to 183.19 MiB.
+Its first-image deadline/backoff is a resource-lifetime correction, not an
+isolated performance win. Those frozen records remain in
+`target/performance/20261012-window-scaling/family-recovery/comparison.json`.
+
+The earlier signed `42d17f4` app (executable SHA256
 `395673e57097987081f4ee2cf806f26db97ae983e3ef9633772f9a40a6d83349`)
 was measured with six 1700×1132-point captured sources and a 2056×1290-point
 Retina output. Each phase below contains four selected seconds. FPS comes from
@@ -95,9 +198,10 @@ or third-party application acceptance.
 The sections below retain earlier implementation and validation history; dated
 fixture results describe their particular source revision and scope.
 
-`./scripts/build-app.sh` builds and ad-hoc signs `target/app/Infinify.app` for
-Apple Silicon / macOS 26+, and `./scripts/install-app.sh` puts a signed copy in
-`~/Applications`. Neither launches anything. A normal run is the desktop, as
+`./scripts/build-app.sh` signs `target/app/Infinify.app` with
+`INFINIFY_SIGN_IDENTITY` (ad hoc by default) for Apple Silicon / macOS 26+, and
+`./scripts/install-app.sh` copies those exact signed bytes to `~/Applications`.
+Neither launches anything. A normal run is the desktop, as
 DriftWM is the session: one canvas panel covers each display whole, on every
 Space, under the menu bar and the Dock, with no toolbar, no status line and no
 chooser, and every real application window (a standard window or a dialog, not
@@ -114,8 +218,9 @@ each: the app asks macOS for access only from that click, then opens the
 matching System Settings pane. Screen Recording takes effect after a relaunch,
 which the window offers. Automated probes and tests never request permissions or change privacy
 settings or SIP. An ad-hoc signature changes with every build, so macOS drops
-both grants on each rebuild and each reinstall; build and install with
-`INFINIFY_SIGN_IDENTITY="<stable signing identity>"` to keep them.
+both grants after each rebuild and reinstall; build with
+`INFINIFY_SIGN_IDENTITY="<stable signing identity>"` to keep them. The installer
+preserves the signature chosen during the build.
 
 The app links the actual Rust desktop static library. Every connected display
 gets a nonactivating panel and an independently persisted camera on the shared
@@ -284,17 +389,18 @@ status line and chooser unchanged.
 
 ### Installed, signed, started at login
 
-These are for the owner to run. No agent, script or test installs the app,
-registers the login item or signs with a real identity, and none of the three
+These are for the owner to run. No agent or test installed the app, registered
+the login item or built with a real signing identity, and none of the three
 steps below was run for this document.
 
 1. `./scripts/install-app.sh` builds the bundle (`--built` takes the one
-   already in `target/app`), copies it to `~/Applications/Infinify.app` and
-   signs the copy: with `$INFINIFY_SIGN_IDENTITY` when that names a
-   code-signing identity (`security find-identity -v -p codesigning`), else
-   (unset, empty or `-`, which is how `codesign` spells ad hoc) ad hoc with a
-   loud warning, because macOS ties both privacy grants to the signature and
-   an ad hoc one is new at every install. The bundle in place is moved aside
+   already in `target/app`), copies its exact signed bytes to
+   `~/Applications/Infinify.app`, and verifies the app and helper hashes. Set
+   `$INFINIFY_SIGN_IDENTITY` during the build to sign with a code-signing
+   identity (`security find-identity -v -p codesigning`); otherwise the build
+   is ad hoc, and macOS ties both privacy grants to that signature. With
+   `--built`, the installer preserves the identity already used for the build.
+   The bundle in place is moved aside
    whole and then removed, never overwritten file by file; an install that
    fails or is interrupted before the new copy is in place puts it back. It
    starts nothing and registers nothing.
@@ -1838,8 +1944,18 @@ Child capture keeps the existing two-second start-completion deadline and allows
 two further seconds from successful start for its first fully validated image.
 This uses the same bounded interval as existing capture requests; a successful
 start alone no longer leaves an image-less stream alive indefinitely. Failures
-back off from half a second to thirty seconds with per-binding jitter, with at
-most two recovery starts per completed observation. A valid first image resets
+back off from half a second to thirty seconds with per-binding jitter. At most
+two streams start per completed observation, including new identities and
+retries. At most four live attempts await a first valid image across the provider,
+and at most two belong to one root. These are live-attempt bounds, not a count
+of stopped ScreenCaptureKit objects whose asynchronous teardown is unfinished.
+FIFO waiting tickets and rotating roots keep persistent eligible children ahead
+of later replacements; native draw order is restored before publication. Healthy
+streams and configuration updates bypass admission. A lone new child starts
+immediately when observed with capacity available. Under saturation it can wait
+for occupied slots' two-second start and two-second image budgets, further
+observer turns and older eligible children. This tradeoff has not yet been
+measured in live popup behavior. A valid first image resets
 the failure count. Exact root/member identity, generation and bounds bind the
 history and weak attempt watchdogs; stale or missing observations cannot erase
 backoff. Only a fresh complete family observation prunes absent bindings, and
@@ -2360,6 +2476,22 @@ besides. Accessibility access is read again once a second, so a grant
 made while the app runs starts the observers and one withdrawn removes them
 (not tried). A run that manages no windows (`--manual`, no Screen Recording
 access, the probe, demo and owned modes) has no observers at all.
+
+Application discovery observes `NSWorkspace.runningApplications` and each
+application's PID, activation policy and termination through KVO. Initial and
+changed values are read on a separate serial worker, including the first
+catalog, without periodically enumerating unchanged applications. Pending reads
+are bounded and revision-checked, with a fresh process
+birth check before AX registration. Catalogs and workspace notifications can
+contain fresh wrappers for the same application; worker-side equality matching
+retains the canonical observer and its original process-birth affinity. An
+unchanged catalog scan keeps existing observers live. Periodic process-birth
+checks cover admitted AX applications; catalog changes during a read require a
+new read before discovery is considered current. Trust withdrawal, stop
+and application identity replacement retire their KVO records and reject stale
+results. `tests/e2e/window-events.sh` exercises this
+lifecycle in memory with substituted catalog, process and AX boundaries; it
+does not establish ordinary-application observation or a measured CPU saving.
 
 **A slow application does not hold the canvas.** Every Accessibility message
 the observers send is sent off the main thread with a quarter-second timeout;
@@ -4641,8 +4773,12 @@ parallax = false
 Explicit wallpapers also support this switch. Grid, tile and shader behavior
 is unchanged. macOS video/dynamic assets without a loadable single still use
 the canvas background fallback. Source changes refresh on display/Space/session
-events and a low-frequency check while navigation is idle. The app reads these
-settings; it never changes the Mac wallpaper.
+events and a periodic check: every five seconds at rest, deferred for up to
+thirty seconds during continuous camera, input, video or background frames.
+The bound runs from the oldest display's actual host query, so another display's
+refresh or decoder completion cannot keep postponing it.
+Space/display/session/config changes still refresh immediately. The app reads
+these settings; it never changes the Mac wallpaper.
 
 If macOS still names a deleted source file, the shell can reuse that source's
 path-hashed image-provider cache entry for the current display resolution. This
@@ -4749,15 +4885,16 @@ registered either, ⌃⌥Esc and `quit` excepted
 | ⇧⌘1 to ⇧⌘4 | `mod+shift+1` to `mod+shift+4` | `set-bookmark 1` to `4` |
 | ⌘Return | `mod+return` | `exec-terminal`: `$TERMINAL`, else `open -a Terminal "$HOME"` |
 | ⌘D | `mod+d` | `exec-launcher`: `$LAUNCHER`, else `open -a Apps` |
-| ⌘L | `mod+l` | `exec /usr/bin/pmset displaysleepnow`, standing in for upstream's `spawn swaylock -f -c 000000 -kl` (see [Linux-only default commands](#linux-only-default-commands)) |
 | ⌘Q | `mod+q` | `close-window`: close the focused window, or dismiss a focused placeholder |
 | ⌘E | `mod+e` | `toggle-cursor-pan` |
 | ⌘T | `mod+t` | `toggle-pin-to-screen`: pin the focused window to the screen, or return it to the canvas |
 | ⌃⇧⌘Q | `mod+ctrl+shift+q` | `quit` |
 | ⌃⌥Esc | none (the shell's own) | exit, until a binding takes the chord |
 
-Those are 42 of upstream's 57 default key bindings. ⌥Tab and ⌥⇧Tab are taken
-from every application while a canvas panel is open; rebind or unbind
+Those are 41 of upstream's 57 default key bindings. The default lock chord,
+system media controls and screenshot commands are left to macOS as described
+below. ⌥Tab and ⌥⇧Tab are taken from every application while a canvas panel is
+open; rebind or unbind
 `cycle-windows` in the config file to give them back. ⇧⌘W is newly taken the
 same way: `zoom-to-fit-snapped` used not to run, so its chord used to stay with
 the applications. The rest are not registered, so their chords stay with the
@@ -4862,34 +4999,28 @@ the chords, and the shell watches the modifiers and tells it when one completes
 
 ### Linux-only default commands
 
-Upstream's default bindings run `swaylock`, `wpctl`, `brightnessctl`,
-`playerctl` and `grim`, which a Mac does not have. A **default** binding whose
-program is not found on `PATH` (the config's `[env] PATH` when it sets one, else
-the app's own) is not registered as upstream wrote it:
+The Mac adapter leaves upstream's default lock, volume, brightness, media and
+screenshot commands to macOS regardless of whether `swaylock`, `wpctl`,
+`brightnessctl`, `playerctl` or `grim` happens to be on `PATH`:
 
 | Upstream default | On a Mac without that program |
 | --- | --- |
-| `mod+l` = `spawn swaylock -f -c 000000 -kl` | ⌃⌥L runs `exec /usr/bin/pmset displaysleepnow`: the displays go dark, and macOS asks for the password as System Settings › Lock Screen says. It does not repeat while held. |
+| `mod+l` = `spawn swaylock -f -c 000000 -kl` | not registered; the chord stays with macOS and the foreground app |
 | volume up, down and mute = `spawn wpctl …` | nothing registered: macOS handles the volume keys itself |
 | brightness up and down = `spawn brightnessctl …` | nothing registered: macOS handles the brightness keys itself |
 | play, next and previous = `spawn playerctl …` | nothing registered: macOS handles the media keys itself |
 | `Print`, `shift+Print` = `spawn grim …` | no such key on a Mac keyboard; screenshots stay the system's ⇧⌘3, ⇧⌘4 and ⇧⌘5 |
 
-Two default chords therefore behave differently from earlier builds, with no
-config file at all. ⌃⌥L used to start `swaylock`, which `sh` could not find, so
-nothing visible happened; it now puts the displays to sleep. And ⌃⌥⇧⌘ with an
-arrow key (`send-to-output`) used to be left with the applications because the
-action did not run; it is now a global hot key while a canvas panel is open.
-`"mod+l" = "none"` and `"mod+alt+Left" = "none"` (and the other three arrows)
-give them back.
+The default lock chord is left unregistered so the foreground application and
+macOS retain their own behavior. The `send-to-output` arrow chords remain
+registered when a canvas panel is open. A config can explicitly bind or unbind
+these chords.
 
 A binding **you** write in `[keybindings]` is always registered exactly as
 written, a missing program included (that one only loses its key repeat, and
-stderr and the status line say so once after the load). Where one of those five
-programs is installed, its default binding is upstream's own again. macOS has no
-public command that locks the session whatever the Lock Screen setting says, so
-"lock" here is as strong as that setting; to bind something else, write
-`"mod+l" = "exec <your command>"`, or `"mod+l" = "none"` to free the chord.
+stderr and the status line say so once after the load). Explicit commands can
+therefore opt into a system command; default behavior never substitutes or
+starts one.
 
 ### Displays, hot corners, layouts and autostart
 
@@ -5496,12 +5627,13 @@ runs is saved as evidence. Observed, each over the socket or in the file system:
 - `toggle-fullscreen` and `fit-window` were still refused as not implemented.
   `spawn` of a program that does not exist answered `ok` and the app went on
   answering; the status-line note for it was not looked at.
-- The config with the hot corner loaded with nothing on stderr. Read through
-  the same controller library with one output named `windowed`, that config
-  reports `"corners":{"top_left":"zoom-to-fit"}` with threshold 4, and with no
-  config file it reports ⌃⌥L as `exec /usr/bin/pmset displaysleepnow` with
-  `"upstream":"spawn swaylock -f -c 000000 -kl"`, 45 keys, no media key and 12
-  skipped. None of the five Linux programs is on that machine's `PATH`.
+- In the earlier controller snapshot used for those runs, the config with the
+  hot corner loaded with nothing on stderr. With one output named `windowed`,
+  it reported `"corners":{"top_left":"zoom-to-fit"}` with threshold 4; with no
+  config file it reported a `pmset` lock substitute, 45 keys, no media key and
+  12 skipped. None of the five Linux programs was on that machine's `PATH`.
+  The current adapter omits that default lock chord and all default media
+  controls regardless of `PATH`.
 
 Not run in those launches, and so compiled and reviewed only: any hot corner
 firing (no pointer was moved into a corner, and whether the shell had armed the
@@ -6395,8 +6527,8 @@ navigation and native focus have their own list of limits under
 [Window navigation and native focus](#window-navigation-and-native-focus):
 above all, native focus has never been exercised live, and a click reaches
 the application before its window has native focus. Upstream's lock binding
-puts the displays to sleep with `pmset`, which locks the session only as far
-as the Lock Screen setting does; that command has not been run from the app.
+is not registered by the current macOS adapter; explicit config commands are
+left as authored. No default system command is run.
 With the default bindings a detached placeholder
 cannot be dismissed with the pointer alone: a click focuses it, and
 `close-window` (⌃⌥Q, or `msg`) then dismisses it.

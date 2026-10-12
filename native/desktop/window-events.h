@@ -42,8 +42,10 @@
 // then that window's end is the poll's to find. A callback only looks its element up in a table and reports.
 // Main thread only.
 @interface DWWindowEvents : NSObject
-// The NSWorkspace observers are in place from here on. The Accessibility observers are too when access is granted, and
-// follow a grant made later at the next -reconcile. `scope`, when not nil, is `--only-pid`'s (DWInScope below): no
+// The NSWorkspace observers are in place from here on. Accessibility registration follows asynchronous application
+// discovery when access is granted, including a grant made later at the next -reconcile. Application membership, PID,
+// activation policy and termination changes are followed with KVO; catalog and dynamic metadata are read off main. `scope`, when not nil,
+// is `--only-pid`'s (DWInScope below): no
 // Accessibility observer is then created on any other application, and "every regular application" below reads "every
 // regular application in scope".
 - (instancetype)initWithSink:(id<DWWindowEventSink>)sink scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope;
@@ -54,8 +56,8 @@
 @property (readonly) BOOL live;
 // The poll's part, which the window manager calls once a second (at most twice a second however often it is called): reads
 // Accessibility access afresh (granted since: every regular application is observed; withdrawn: every observer is removed),
-// observes a regular application nothing announced, tries again one that did not answer, lists again the windows of one that
-// did not answer for a window or gave it no number, and forgets one that ended without a notification.
+// revalidates admitted process births, tries again one that did not answer, and lists again the windows of one that did not
+// answer for a window or gave it no number. Application membership is read initially/on collection KVO, not polled here.
 - (void)reconcile;
 // Removes every observer, run-loop source and timer; no report follows. Required before release.
 - (void)stop;

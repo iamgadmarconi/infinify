@@ -17,6 +17,8 @@ import socket
 import struct
 import sys
 import time
+import subprocess
+import zlib
 
 ROOT = Path(__file__).resolve().parents[2]
 HEADER = struct.Struct('<IHHQ')
@@ -63,6 +65,19 @@ sky.SLSConnectionGetPID.restype = C.c_int
 sky.SLSFindWindowAndOwner.argtypes = [C.c_int, C.c_int, C.c_int, C.c_int,
     C.POINTER(Point), C.POINTER(Point), C.POINTER(C.c_uint32), C.POINTER(C.c_int)]
 sky.SLSFindWindowAndOwner.restype = C.c_int
+# Existing read-only family ABI: native/families/window-server-family.h;
+# yabai dd845723416f5fe92af49fad5ebab00369e07edd, extern.h:9,66-72.
+sky.SLSCopyAssociatedWindows.argtypes = [C.c_int, C.c_uint32]
+sky.SLSCopyAssociatedWindows.restype = C.c_void_p
+sky.SLSWindowQueryWindows.argtypes = [C.c_int, C.c_void_p, C.c_int]
+sky.SLSWindowQueryWindows.restype = C.c_void_p
+sky.SLSWindowQueryResultCopyWindows.argtypes = [C.c_void_p]
+sky.SLSWindowQueryResultCopyWindows.restype = C.c_void_p
+for name in ('SLSWindowIteratorGetCount', 'SLSWindowIteratorGetParentID', 'SLSWindowIteratorGetWindowID'):
+    getattr(sky, name).argtypes = [C.c_void_p]
+    getattr(sky, name).restype = C.c_int if name.endswith('Count') else C.c_uint32
+sky.SLSWindowIteratorAdvance.argtypes = [C.c_void_p]
+sky.SLSWindowIteratorAdvance.restype = C.c_bool
 
 
 # SDK sys/proc_info.h, PROC_PIDTBSDINFO. Fixed-width native arm64 layout.
@@ -108,6 +123,7 @@ cg.CGWarpMouseCursorPosition.argtypes = [Point]
 cg.CGWarpMouseCursorPosition.restype = C.c_int
 cg.CGAssociateMouseAndMouseCursorPosition.argtypes = [C.c_bool]
 cg.CGPreflightPostEventAccess.restype = C.c_bool
+cg.CGPreflightScreenCaptureAccess.restype = C.c_bool
 cf.CFArrayGetCount.argtypes = [C.c_void_p]
 cf.CFArrayGetCount.restype = C.c_long
 cf.CFArrayGetValueAtIndex.argtypes = [C.c_void_p, C.c_long]
@@ -116,6 +132,16 @@ cf.CFDictionaryGetValue.argtypes = [C.c_void_p, C.c_void_p]
 cf.CFDictionaryGetValue.restype = C.c_void_p
 cf.CFNumberGetValue.argtypes = [C.c_void_p, C.c_long, C.c_void_p]
 cf.CFNumberGetValue.restype = C.c_bool
+cf.CFNumberCreate.argtypes = [C.c_void_p, C.c_long, C.c_void_p]
+cf.CFNumberCreate.restype = C.c_void_p
+cf.CFArrayCreate.argtypes = [C.c_void_p, C.POINTER(C.c_void_p), C.c_long, C.c_void_p]
+cf.CFArrayCreate.restype = C.c_void_p
+cf.CFGetTypeID.argtypes = [C.c_void_p]
+cf.CFGetTypeID.restype = C.c_ulong
+cf.CFArrayGetTypeID.restype = C.c_ulong
+cf.CFNumberGetTypeID.restype = C.c_ulong
+cf.CFNumberIsFloatType.argtypes = [C.c_void_p]
+cf.CFNumberIsFloatType.restype = C.c_bool
 cf.CFStringCreateWithCString.argtypes = [C.c_void_p, C.c_char_p, C.c_uint32]
 cf.CFStringCreateWithCString.restype = C.c_void_p
 cf.CFRelease.argtypes = [C.c_void_p]
@@ -293,7 +319,7 @@ def read_ready(evidence, role, host_pid):
     return int(wid)
 
 
-def preflight():
+def preflight(replica=False):
     if sys.platform != 'darwin' or os.uname().machine != 'arm64':
         print('NOT RUN: this focused native fixture requires Apple Silicon macOS; no fixture was started.')
         return 3
@@ -303,7 +329,77 @@ def preflight():
     if not cg.CGPreflightPostEventAccess():
         print('NOT RUN: existing event-post access is required for the bounded fixture mouse pair; no permission was requested.')
         return 3
+    if replica and not cg.CGPreflightScreenCaptureAccess():
+        print('NOT RUN: replica validation needs existing Screen Recording access; no permission was requested.')
+        return 3
     return 0
+
+
+def native_parent(wid):
+    value = C.c_longlong(wid)
+    number = cf.CFNumberCreate(None, 4, C.byref(value))
+    check(bool(number), 'native parent query number allocation')
+    elements = (C.c_void_p * 1)(number)
+    ids = cf.CFArrayCreate(None, elements, 1, None)
+    query = iterator = None
+    try:
+        check(bool(ids), 'native parent query array allocation')
+        query = sky.SLSWindowQueryWindows(sky.SLSMainConnectionID(), ids, 1)
+        check(bool(query), 'native parent query exists', wid)
+        iterator = sky.SLSWindowQueryResultCopyWindows(query)
+        check(bool(iterator) and sky.SLSWindowIteratorGetCount(iterator) == 1
+              and sky.SLSWindowIteratorAdvance(iterator), 'native parent iterator has one exact result', wid)
+        actual = sky.SLSWindowIteratorGetWindowID(iterator)
+        parent = sky.SLSWindowIteratorGetParentID(iterator)
+        check(actual == wid and not sky.SLSWindowIteratorAdvance(iterator), 'native parent iterator WID is exact', wid)
+        return parent
+    finally:
+        for item in (iterator, query, ids, number):
+            if item:
+                cf.CFRelease(item)
+
+
+def native_family(wid, expected):
+    before = independent_snapshot(wid)
+    check(before['identity'] == expected['identity'] and before['owner'] == expected['owner'], 'fresh exact family root')
+    raw = sky.SLSCopyAssociatedWindows(sky.SLSMainConnectionID(), wid)
+    check(bool(raw), 'native associated-window list exists', wid)
+    try:
+        check(cf.CFGetTypeID(raw) == cf.CFArrayGetTypeID(), 'native association getter returned a real array')
+        count = cf.CFArrayGetCount(raw)
+        check(0 <= count <= 64, 'native family list is bounded', count)
+        ids = [wid]
+        for index in range(count):
+            field = cf.CFArrayGetValueAtIndex(raw, index)
+            check(bool(field) and cf.CFGetTypeID(field) == cf.CFNumberGetTypeID() and not cf.CFNumberIsFloatType(field),
+                  'native family WID has exact integer CFNumber type')
+            number = C.c_longlong()
+            check(cf.CFNumberGetValue(field, 4, C.byref(number)), 'native family WID parses')
+            check(0 < number.value <= 0xffffffff and (number.value == wid or number.value not in ids), 'native family IDs are unique', number.value)
+            if number.value != wid:
+                ids.append(number.value)
+    finally:
+        cf.CFRelease(raw)
+    members = {}
+    for member in ids:
+        seen = independent_snapshot(member)
+        check(seen['identity'][0] == before['identity'][0] and seen['identity'][2:] == before['identity'][2:]
+              and seen['owner'] == before['owner'], 'native family has exact same process and owner', seen)
+        parent = native_parent(member)
+        after_member = independent_snapshot(member)
+        check(after_member['identity'] == seen['identity'] and after_member['owner'] == seen['owner']
+              and after_member['bounds'] == seen['bounds'], 'member instance/owner/basis remain exact after ancestry read')
+        members[str(member)] = {'identity': seen['identity'], 'owner': seen['owner'], 'bounds': seen['bounds'], 'parent': parent}
+    check(members[str(wid)]['parent'] == 0, 'audited native root has no parent')
+    for member in ids:
+        visited, cursor = set(), member
+        while cursor != wid:
+            check(cursor not in visited and str(cursor) in members, 'native family ancestry is complete and acyclic', members)
+            visited.add(cursor)
+            cursor = members[str(cursor)]['parent']
+    after = independent_snapshot(wid)
+    check(after['identity'] == before['identity'] and after['owner'] == before['owner'], 'family root remains exact after discovery')
+    return members
 
 
 def save_json(path, value):
@@ -315,7 +411,7 @@ def save_json(path, value):
 
 
 def baseline(args):
-    if preflight():
+    if preflight(args.replica_destination):
         return 3
     result = {'roles': {}, 'identities': {}, 'original': {}}
     for role in ROLES:
@@ -333,6 +429,12 @@ def baseline(args):
         result[role + '_wid'] = wid
         result['identities'][str(wid)] = observed[wid]['identity']
         result['original'][str(wid)] = independent
+        if args.replica_destination:
+            family = native_family(wid, independent)
+            save_json(Path(args.evidence) / (role + '-family.json'), family)
+            check(set(map(int, family)) == {entry[1] for entry in probe['fixtures']},
+                  'full audited family equals explicitly enrolled helper WIDs; no root-only fallback', (role, family, probe['fixtures']))
+            result['roles'][role]['family'] = family
     source, destination = (result['roles'][role] for role in ROLES)
     check(source['host_pid'] != destination['host_pid'] and source['wid'] != destination['wid']
           and result['original'][str(source['wid'])]['owner'] != result['original'][str(destination['wid'])]['owner'],
@@ -387,6 +489,97 @@ def expected_rect(window, panel, current):
     return [panel[0] + panel[2] / 2 + (left - cx) * zoom,
             panel[1] + panel[3] / 2 + (top + cy) * zoom,
             width * zoom, height * zoom]
+
+
+def split_outputs(scene, panel):
+    outputs = {output['name']: output for output in scene['outputs']}
+    check(set(outputs) == {'fixture-view-a', 'fixture-view-b'}, 'exact two owned logical view names', outputs)
+    width, height = panel[2] / 2, panel[3]
+    check(width == 550 and height == 700 and all(output['size'] == [550, 700] for output in outputs.values()),
+          'two disjoint full-height logical outputs fit the existing owned canvas', outputs)
+    return [(outputs[name], [panel[0] + index * width, panel[1], width, height])
+            for index, name in enumerate(('fixture-view-a', 'fixture-view-b'))]
+
+
+def native_at(seen, wanted):
+    mx, my = seen['bounds'][2] / wanted[2], seen['bounds'][3] / wanted[3]
+    expected = [mx, 0, 0, my, -wanted[0] * mx, -wanted[1] * my]
+    narrowed = [C.c_float(value).value for value in expected]
+    if seen['transform'] != narrowed:
+        return False
+    left, top = -narrowed[4] / narrowed[0], -narrowed[5] / narrowed[3]
+    right, bottom = left + seen['bounds'][2] / narrowed[0], top + seen['bounds'][3] / narrowed[3]
+    return seen['screen_rect'] == [math.floor(left), math.floor(top), math.ceil(right) - math.floor(left), math.ceil(bottom) - math.floor(top)]
+
+
+def png_rgb(path):
+    """Bounded 8-bit screenshot decoder; reject other formats, never infer pixels."""
+    data = Path(path).read_bytes()
+    check(data[:8] == b'\x89PNG\r\n\x1a\n' and len(data) <= 1024 * 1024, 'bounded actual PNG screenshot')
+    offset, compressed, dimensions = 8, bytearray(), None
+    while offset < len(data):
+        length = struct.unpack('>I', data[offset:offset + 4])[0]
+        kind, body = data[offset + 4:offset + 8], data[offset + 8:offset + 8 + length]
+        check(offset + 12 + length <= len(data), 'PNG chunk stays in file')
+        if kind == b'IHDR':
+            dimensions = struct.unpack('>IIBBBBB', body)
+        elif kind == b'IDAT':
+            compressed.extend(body)
+        offset += length + 12
+        if kind == b'IEND':
+            break
+    check(dimensions is not None, 'PNG has dimensions')
+    width, height, depth, color, compression, filtering, interlace = dimensions
+    check(0 < width <= 256 and 0 < height <= 256 and depth == 8 and color in (2, 6)
+          and (compression, filtering, interlace) == (0, 0, 0), 'supported bounded screenshot pixel format', dimensions)
+    channels, prior, pixels = (3 if color == 2 else 4), bytearray(width * (3 if color == 2 else 4)), []
+    stride = len(prior)
+    raw = zlib.decompress(bytes(compressed))
+    check(len(raw) == (stride + 1) * height, 'PNG pixel bytes match dimensions')
+    for y in range(height):
+        filter_type = raw[y * (stride + 1)]
+        row = bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
+        check(filter_type <= 4, 'PNG filter is known')
+        for x in range(stride):
+            left, up, corner = (row[x - channels] if x >= channels else 0), prior[x], (prior[x - channels] if x >= channels else 0)
+            predictor = left + up - corner
+            distances = [abs(predictor - value) for value in (left, up, corner)]
+            paeth = (left, up, corner)[distances.index(min(distances))]
+            row[x] = (row[x] + (0, left, up, (left + up) // 2, paeth)[filter_type]) & 255
+        pixels.extend(tuple(row[x:x + 3]) for x in range(0, stride, channels))
+        prior = row
+    return width, height, pixels
+
+
+def verify_replica_pixels(evidence, destination_copy, targets, canvas_wid):
+    # Below the title/text, inside the destination's displayed green content.
+    crop = [math.ceil(destination_copy[0] + destination_copy[2] * .45),
+            math.ceil(destination_copy[1] + destination_copy[3] * .65), 32, 20]
+    check(contains(destination_copy, crop[:2]) and contains(destination_copy, [crop[0] + crop[2], crop[1] + crop[3]]), 'capture rectangle lies inside replica')
+    points = [[crop[0] + x, crop[1] + y] for x, y in ((0, 0), (31, 0), (0, 19), (31, 19), (16, 10))]
+    path = evidence / 'destination-replica-before.png'
+    for attempt in range(8):
+        for point in points:
+            check(owned_hit(point, targets)['wid'] == canvas_wid, 'independent optical sample sees exact canvas at replica, not native destination')
+        done = subprocess.run(['/usr/sbin/screencapture', '-x', '-R' + ','.join(map(str, crop)), str(path)], capture_output=True, timeout=3)
+        check(done.returncode == 0, 'bounded owned-canvas screenshot succeeds', done.stderr.decode(errors='replace'))
+        width, height, pixels = png_rgb(path)
+        green = sum(g > r * 1.3 and g > b * 1.2 and g >= 55 for r, g, b in pixels)
+        for point in points:
+            check(owned_hit(point, targets)['wid'] == canvas_wid, 'replica optical sample remains exact owned canvas')
+        if green >= len(pixels) * .9:
+            save_json(evidence / 'replica-optical.json', {'crop': crop, 'width': width, 'height': height, 'green_pixels': green, 'total_pixels': len(pixels), 'canvas_wid': canvas_wid})
+            return
+        time.sleep(.15)
+    fail('independent owned-canvas pixels show the green destination replica before any physical drag', {'green': green, 'pixels': len(pixels)})
+
+
+def capture_status(sock_path, source, destination):
+    # Existing read-only diagnostics supplement the optical prerequisite;
+    # neither a stream flag nor an ACK can replace independent canvas pixels.
+    return {'captures': {role: ask(sock_path, {'DebugCapture': {'window': window, 'phase': 'status'}})
+                         for role, window in (('source', source), ('destination', destination))},
+            'native': ask(sock_path, {'DebugNative': {}})}
 
 
 def wait_for(timeout, condition, label):
@@ -481,7 +674,7 @@ def receipts_when_complete(evidence):
 
 
 def run(args):
-    if preflight():
+    if preflight(args.replica_destination):
         return 3
     evidence = Path(args.evidence)
     before = json.loads((evidence / 'native-before.json').read_text())
@@ -510,9 +703,30 @@ def run(args):
             return (scene, src, dst) if src and dst else None
         current, src, dst = wait_for(12, adopted, 'Infinify adopts both exact named fixture windows')
         check(src['id'] != dst['id'], 'source and destination have separate logical windows', (src, dst))
-        msg(args.app, sock_path, 'zoom', '0.5')
-        wait_for(5, lambda: state(sock_path)['zoom'] == .5, 'zoom flight settles')
-        msg(args.app, sock_path, 'camera', '0', '0')
+        if args.replica_destination:
+            panel_row = canvas_window(app_pid)
+            canvas_original = independent_snapshot(panel_row['wid'])
+            for output, viewport in split_outputs(current, panel_row['screen_rect']):
+                # IPC targets the real cursor's output. Warp only to an exact,
+                # currently event-eligible owned canvas corner; no fake handlers.
+                point = [viewport[0] + 20, viewport[1] + 20]
+                check(owned_hit(point, {panel_row['wid']: canvas_original})['wid'] == panel_row['wid'], 'output setup point is the owned canvas')
+                check(cg.CGWarpMouseCursorPosition(Point(*point)) == 0, 'cursor selects exact owned logical view')
+                msg(args.app, sock_path, 'zoom', '0.5')
+                wait_for(5, lambda: next(item for item in state(sock_path)['outputs'] if item['name'] == output['name'])['zoom'] == .5, 'per-output zoom flight settles')
+                def centered():
+                    # The final zoom anchor tick may consume the first camera
+                    # target even when State already reports the target zoom.
+                    # Repeat the explicit target, checking the selected view.
+                    check(owned_hit(point, {panel_row['wid']: canvas_original})['wid'] == panel_row['wid'], 'camera setup stays on the exact owned canvas')
+                    msg(args.app, sock_path, 'camera', '0', '0')
+                    seen = next(item for item in state(sock_path)['outputs'] if item['name'] == output['name'])
+                    return seen if seen['zoom'] == .5 and seen['camera'] == [0.0, 0.0] else None
+                wait_for(5, centered, 'selected output camera center settles after zoom')
+        else:
+            msg(args.app, sock_path, 'zoom', '0.5')
+            wait_for(5, lambda: state(sock_path)['zoom'] == .5, 'zoom flight settles')
+            wait_for(5, lambda: (msg(args.app, sock_path, 'camera', '0', '0'), state(sock_path))[1]['camera'] == [0.0, 0.0], 'camera center settles after zoom')
         msg(args.app, sock_path, 'move', '--id', str(src['id']), '-160', '0')
         msg(args.app, sock_path, 'move', '--id', str(dst['id']), '160', '0')
 
@@ -526,6 +740,8 @@ def run(args):
             target = (tuple(scene['camera']), scene['zoom'], tuple(pair or ()), tuple(other or ()))
             target_reached = (target[0] == (0.0, 0.0) and target[1] == .5
                               and target[2] == (-160.0, 0.0) and target[3] == (160.0, 0.0))
+            if args.replica_destination:
+                target_reached = target_reached and all(tuple(output['camera']) == (0.0, 0.0) and output['zoom'] == .5 for output in scene['outputs'])
             if target_reached and target == prior:
                 repeated += 1
             else:
@@ -548,7 +764,10 @@ def run(args):
         check(all(.48 <= actual[wid]['screen_rect'][2] / actual[wid]['bounds'][2] <= .52 for wid in (source_wid, destination_wid)),
               'both native windows are independently shown at half scale', actual)
         panel = canvas_window(app_pid)['screen_rect']
-        wanted = {src['id']: expected_rect(src, panel, current), dst['id']: expected_rect(dst, panel, current)}
+        view_a = split_outputs(current, panel)[0][1] if args.replica_destination else panel
+        wanted = {src['id']: expected_rect(src, view_a, current), dst['id']: expected_rect(dst, view_a, current)}
+        view_b = split_outputs(current, panel)[1][1] if args.replica_destination else None
+        destination_copy = expected_rect(dst, view_b, current) if view_b else None
         for wid, logical in ((source_wid, src), (destination_wid, dst)):
             seen = actual[wid]['screen_rect']
             expected = wanted[logical['id']]
@@ -573,14 +792,31 @@ def run(args):
         save_json(evidence / 'grouped-native.json', native_state)
 
         source_rect = actual[source_wid]['screen_rect']
-        destination_rect = actual[destination_wid]['screen_rect']
+        destination_rect = destination_copy or actual[destination_wid]['screen_rect']
         start = [source_rect[0] + source_rect[2] * .30, source_rect[1] + source_rect[3] * .50]
         drop = [destination_rect[0] + destination_rect[2] * .65, destination_rect[1] + destination_rect[3] * .50]
         path = [[start[0] + (drop[0] - start[0]) * i / 16, start[1] + (drop[1] - start[1]) * i / 16] for i in range(17)]
+        if args.replica_destination:
+            # Stay below both copies while crossing B; entering the source's
+            # replica would request an unintended source ownership transfer.
+            corridor = max(source_rect[1] + source_rect[3], destination_rect[1] + destination_rect[3]) + 30
+            check(corridor < panel[1] + panel[3] - 10, 'owned canvas has an unclipped drag corridor')
+            corners = [start, [start[0], corridor], [drop[0], corridor], drop]
+            path = [start]
+            for first, last in zip(corners, corners[1:]):
+                path.extend([[first[0] + (last[0] - first[0]) * i / 6, first[1] + (last[1] - first[1]) * i / 6] for i in range(1, 7)])
         panel_wid = canvas_window(app_pid)['wid']
         targets = {**actual, panel_wid: independent_snapshot(panel_wid)}
         check(targets[panel_wid]['identity'][0] == app_pid, 'canvas belongs to this run’s exact app process')
-        path_guard = validate_path(path, source_wid, destination_wid, targets)
+        path_guard = validate_path(path, source_wid, panel_wid if args.replica_destination else destination_wid, targets)
+        if args.replica_destination:
+            check(native_at(actual[source_wid], wanted[src['id']]) and native_at(actual[destination_wid], wanted[dst['id']]), 'both original native sites start exactly on output A')
+            check(all(contains(view_b, point) for point in (destination_copy[:2], [destination_copy[0] + destination_copy[2], destination_copy[1] + destination_copy[3]])), 'destination copy is wholly inside B with no unsupported native clip')
+            save_json(evidence / 'capture-before-optical.json', capture_status(sock_path, src['id'], dst['id']))
+            try:
+                verify_replica_pixels(evidence, destination_copy, targets, panel_wid)
+            finally:
+                save_json(evidence / 'capture-after-optical.json', capture_status(sock_path, src['id'], dst['id']))
         save_json(evidence / 'path-guard.json', {'samples': path_guard, 'source': source_wid, 'destination': destination_wid, 'canvas': panel_wid})
 
         # Reconfirm both full identities and original geometry immediately before
@@ -602,6 +838,11 @@ def run(args):
                 current_native = independent_snapshot(wid)
                 check(current_native['identity'] == target['identity'] and current_native['owner'] == target['owner'],
                       'exact fixture or canvas instance remains live immediately before input', wid)
+                if args.replica_destination and wid in (source_wid, destination_wid):
+                    role = 'source' if wid == source_wid else 'destination'
+                    check(native_family(wid, current_native) == before['roles'][role]['family'], 'complete authorized native family/basis remains exact before physical packet', role)
+                    check(native_at(current_native, wanted[src['id']] if wid == source_wid else wanted[dst['id']])
+                          or (wid == destination_wid and native_at(current_native, destination_copy)), 'fresh native geometry is at an exact full-viewport requested site', current_native)
             row = owned_hit(point, targets)
             check(expected_wid is None or row['wid'] == expected_wid,
                   'mouse pair stays on its exact source and destination', (kind, row, expected_wid))
@@ -617,6 +858,24 @@ def run(args):
         for point in path[1:]:
             guarded_post(6, point)  # kCGEventLeftMouseDragged
             time.sleep(.025)
+        if args.replica_destination:
+            initial_destination = actual[destination_wid]
+            promoted = None
+            for attempt in range(20):
+                observed = independent_snapshot(destination_wid)
+                if native_at(observed, destination_copy) and owned_hit(drop, targets)['wid'] == destination_wid:
+                    promoted = observed
+                    break
+                guarded_post(6, drop)  # Continue the original physical native pair.
+                time.sleep(.025)
+            check(promoted is not None, 'original AppKit session triggered real destination movement A to B and fresh event eligibility', observed)
+            check(independent_snapshot(source_wid)['transform'] == actual[source_wid]['transform'], 'source native placement stayed fixed during destination transfer')
+            actual[destination_wid] = promoted
+            save_json(evidence / 'destination-transfer.json', {'from': initial_destination, 'to': promoted, 'requested_copy': destination_copy, 'event_hit': owned_hit(drop, targets), 'physical_packets': len(input_guard)})
+            drop = [drop[0] + 8, drop[1]]
+            check(contains(destination_copy, drop), 'final continuation remains inside admitted destination')
+            guarded_post(6, drop, destination_wid)
+            time.sleep(.05)
         guarded_post(2, drop, destination_wid)  # kCGEventLeftMouseUp
         pressed = False
 
@@ -646,18 +905,20 @@ def run(args):
         local = destination_receipt['destination_location']
         bounds = destination_receipt['destination_view_bounds']
         check(len(bounds) == 4 and bounds[2] > 0 and bounds[3] > 0, 'destination view has native bounds', bounds)
-        expected_local = [actual[destination_wid]['bounds'][2] * .65, actual[destination_wid]['bounds'][3] * .5]
+        expected_local = [actual[destination_wid]['bounds'][2] * .65 + (16 if args.replica_destination else 0), actual[destination_wid]['bounds'][3] * .5]
         check(abs(local[0] - expected_local[0]) <= 8 and abs(local[1] - expected_local[1]) <= 8,
               'destination AppKit local drop point matches the transformed native hit point', {'actual': local, 'expected': expected_local})
         check(all(abs(a - b) < 1e-6 for a, b in zip(independent_snapshot(source_wid)['transform'], actual[source_wid]['transform']))
               and all(abs(a - b) < 1e-6 for a, b in zip(independent_snapshot(destination_wid)['transform'], actual[destination_wid]['transform'])),
-              'native transforms stayed fixed for the whole drag session')
-        print(json.dumps({'result': 'PASS', 'scope': 'two independent exact cooperative AppKit processes with primary-native windows',
+              'source transform stayed fixed and destination retained its settled target through release')
+        summary = {'result': 'PASS', 'scope': 'two independent exact cooperative AppKit processes, replica destination transferred A to B' if args.replica_destination else 'two independent exact cooperative AppKit processes with primary-native windows',
                           'source_identity': before['identities'][str(source_wid)],
                           'destination_identity': before['identities'][str(destination_wid)],
                           'scaled_screen_rects': {str(wid): actual[wid]['screen_rect'] for wid in actual},
                           'path_guard_samples': len(path_guard), 'destination_location': local,
-                          'destination_events': events, 'file_path': destination_receipt['destination_received_path']}, sort_keys=True))
+                          'destination_events': events, 'file_path': destination_receipt['destination_received_path']}
+        save_json(evidence / 'result.json', summary)
+        print(json.dumps(summary, sort_keys=True))
         return 0
     finally:
         if pressed:
@@ -742,7 +1003,7 @@ def main():
         return 2
     mode = sys.argv[1]
     if mode == 'preflight':
-        return preflight()
+        return preflight('--replica-destination' in sys.argv[2:])
     if mode == 'restore-cursor':
         restore_cursor(sys.argv[2])
         return 0
@@ -758,6 +1019,7 @@ def main():
     parser.add_argument('--app-pid', type=int, default=0)
     parser.add_argument('--app', default='')
     parser.add_argument('--socket', default='')
+    parser.add_argument('--replica-destination', action='store_true')
     args = parser.parse_args()
     try:
         args.hosts = {role: {'pid': getattr(args, role + '_pid'), 'runtime': getattr(args, role + '_runtime'),

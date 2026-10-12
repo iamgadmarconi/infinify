@@ -25,12 +25,14 @@ is the one the window mapped with: [RULES.md](RULES.md) is the contract for
 rules, widgets and screen-pinned windows, and this file says how each is drawn
 and captured.
 
-Everything here is additive. `ABI_VERSION`, `SAVE_VERSION`, the save file and
-every existing command shape and snapshot key are unchanged.
+`ABI_VERSION`, `SAVE_VERSION`, the durable save file and command shapes are
+unchanged. The snapshot no longer duplicates logical focus at top level:
+consumers read it from `focus.intent` (see [FOCUS.md](FOCUS.md)).
 
-| Addition | Where |
+| Change | Where |
 | --- | --- |
 | `render` | a new key of the snapshot |
+| `focused` | the duplicate top-level snapshot key is removed; use `focus.intent` |
 | `kind`, `focused`, `title`, `app_name`, `launching`, `world_rect`, `decoration` | new keys of every entry of the snapshot's `placements`; the same keys, less `world_rect` which was there, on every entry of `windows` |
 | `{"Screenshot":…}` | the `ipc` request is no longer refused: it answers `"reply": null` with one `screenshot` effect |
 | `screenshot_result` | a new command: the shell's answer to that effect |
@@ -120,7 +122,7 @@ its decoration is read then.
 | Key | Value |
 | --- | --- |
 | `kind` | `"window"` when a source is bound, `"standin"` when none is: a detached placeholder waiting for its window, or a suspended stand-in ([LIFECYCLE.md](LIFECYCLE.md#three-kinds-of-window)) |
-| `focused` | this window holds the logical focus, the snapshot's `focused` |
+| `focused` | this window holds the logical focus, `snapshot.focus.intent` |
 | `title` | the saved title |
 | `app_name` | the bundle identifier, see [Differences](#differences-from-upstream) |
 | `launching` | a relaunch is pending for this stand-in: it is in `lifecycle.relaunching` |

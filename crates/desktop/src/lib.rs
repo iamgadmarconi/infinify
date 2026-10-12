@@ -4,7 +4,7 @@
 //! birth immediately before and after event delivery.
 mod actions;
 mod bindings;
-mod default_commands;
+mod command_lookup;
 mod effects;
 mod ffi;
 mod fullscreen;
@@ -855,6 +855,12 @@ impl Controller {
             } => return self.pointer_hit(*output, *screen, Some(identity)),
             Command::ResizeBorder { output, screen } => {
                 return Ok(json!({"border":self.resize_border(*output, *screen)}));
+            }
+            Command::TickNavigation { timestamp_ns } if self.navigation_clock_only() => {
+                // No timed settlement or scene mutation is possible here.
+                // Validate the clock before its sole write, without cloning
+                // every window or revalidating an unchanged settled scene.
+                return self.tick_navigation_clock(*timestamp_ns);
             }
             _ => {}
         }
@@ -2062,7 +2068,7 @@ impl Controller {
             navigation[key] = value;
         }
         Ok(
-            json!({"evidence": "logical_controller_only", "capabilities": ["normal_window_navigation", "native_resize_controller_contract"], "render": self.render_block(), "native_resize": self.native_resize, "lifecycle": self.lifecycle, "lifecycle_events": self.lifecycle_events(), "navigation": navigation, "bookmarks": self.bookmarks, "keyboard_layout": self.layout, "trackpad": self.trackpad_snapshot(), "outputs": self.scene.outputs(), "windows": windows, "focused": self.scene.focused(), "pass_keys": self.pass_keys(), "focus": {"intent": self.scene.focused(), "observed_native": self.focus.observed_native, "pending_effect": self.focus.pending_effect, "last_result": self.focus.last_result, "history": self.scene.stage().focus_history(), "cycle": self.scene.stage().cycle_state(), "release_pending": self.focus.release_pending}, "placements": placements}),
+            json!({"evidence": "logical_controller_only", "capabilities": ["normal_window_navigation", "native_resize_controller_contract"], "render": self.render_block(), "native_resize": self.native_resize, "lifecycle": self.lifecycle, "lifecycle_events": self.lifecycle_events(), "navigation": navigation, "bookmarks": self.bookmarks, "keyboard_layout": self.layout, "trackpad": self.trackpad_snapshot(), "outputs": self.scene.outputs(), "windows": windows, "pass_keys": self.pass_keys(), "focus": {"intent": self.scene.focused(), "observed_native": self.focus.observed_native, "pending_effect": self.focus.pending_effect, "last_result": self.focus.last_result, "history": self.scene.stage().focus_history(), "cycle": self.scene.stage().cycle_state(), "release_pending": self.focus.release_pending}, "placements": placements}),
         )
     }
 }

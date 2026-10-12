@@ -43,6 +43,7 @@ int main(void) {@autoreleasepool {
     [presenter describe:desired bound:@{@7:root}];[presenter submit];ack(presenter);DWNativeAppliedPlacement *ordinary=receipt(presenter,root,1,1);
     DWNativeViewTransfer *transfer=[views requestTransferForWindow:@7 output:@2];
     check(transfer&&views.pendingTransfers.count==1&&[views replica:@7 output:@1]&&[views replica:@7 output:@2],@"explicit pending transfer preserves both captured sites");
+    check([views requiresPlacementAdmissionForWindow:@7]&&![views requiresPlacementAdmissionForWindow:@8],@"covered family requires admission; unrelated source does not");
     uint64_t requestRevision=views.placementRequestRevision;
     DWNativeViewPlacementCheck current=^BOOL(DWNativeAppliedPlacement *placement){return [presenter isAcknowledgedPlacementCurrent:placement];};
     __block NSUInteger validations=0;DWNativeViewPlacementCheck geometry=^BOOL(DWNativeAppliedPlacement *placement){(void)placement;validations++;return YES;};
@@ -53,6 +54,7 @@ int main(void) {@autoreleasepool {
         &&[views replica:@7 output:@2],@"ACK without fresh geometry keeps the destination captured");
     check([views completeTransfer:transfer placement:placed current:current validateGeometry:geometry]&&validations==1,@"exact ACK plus substituted geometry commits presentation only");
     check(!views.pendingTransfers.count&&! [views replica:@7 output:@2]&&[views replica:@7 output:@1]&&[views admittedOwnerForWindow:@7].unsignedLongLongValue==2,@"admission changes only this ordinary primary");
+    check(![views requiresPlacementAdmissionForWindow:@7],@"completed primary no longer suppresses a future physical press");
     check(views.placementRequestRevision==requestRevision&&[views isAdmissionCurrentForTransfer:transfer placement:placed],@"admission repaint does not demand or revoke another ACK");
     check(![views completeTransfer:transfer placement:placed current:current validateGeometry:geometry],@"completed transfer is never performed twice");
     first.origin.x+=10;second.origin.x+=10;state=transferSnapshot(root,1,native,first,second);transferDescribe(views,state,root,audit);
@@ -91,8 +93,10 @@ int main(void) {@autoreleasepool {
     transferDescribe(views,state,root,audit);transfer=[views requestTransferForWindow:@7 output:@2];
     NSDictionary *newState=transferSnapshot(root,2,native,first,CGRectMake(650,200,160,116));transferDescribe(views,newState,root,audit);
     check(![views isTransferCurrent:transfer]&&!views.pendingTransfers.count&&[views replica:@7 output:@1],@"generation change waits for a matching audited family");
+    check(![views currentTransferForWindow:@7]&&[views requiresPlacementAdmissionForWindow:@7],@"coverage without any eligible recovery token still refuses its family's press");
     transferDescribe(views,newState,root,transferFamily(root,2,native,child));recovery=[views currentTransferForWindow:@7];
     check(recovery&&recovery!=transfer&&recovery.generation==2&&recovery.output==1,@"fresh audit restages bounded recovery without resurrecting old generation");
     [views describe:nil bound:@{@7:root}families:@{@7:audit}];check(!views.pendingTransfers.count&&!views.capturedWindows.count&&![views isTransferCurrent:recovery],@"invalid snapshot/reset revokes all adapter transfer state");
+    check(![views requiresPlacementAdmissionForWindow:@7],@"session/reset removes stale coverage admission requirements");
     printf("PASS: %lu presenter + explicit transfer checks; substituted geometry only, no native input/optical proof\n",(unsigned long)checks);
 }return 0;}

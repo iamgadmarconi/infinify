@@ -16,7 +16,6 @@
 // native drag tracking; it does not forward a foreign NSDraggingSession into a
 // captured image or create a destination on the application's behalf.
 @interface DWNativeInput : NSObject
-- (instancetype)initWithConsume:(BOOL (^)(CGEventType,CGEventRef))consume cancelled:(void (^)(void))cancelled;
 // Application-posted events identified by a lifetime tag must bypass BOTH the
 // consumer and physical pair bookkeeping. Otherwise a synthetic release could
 // be swallowed as a physical tail or a synthetic press clear an owned pair.

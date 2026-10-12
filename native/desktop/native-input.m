@@ -222,9 +222,6 @@ static BOOL DWForeignMouseRecipient(CGEventRef event) {
     NSMutableIndexSet *_capturedButtons,*_nativeButtons;
     BOOL _capturedMagnify,_magnifyDecided;
 }
-- (instancetype)initWithConsume:(BOOL (^)(CGEventType,CGEventRef))consume cancelled:(void (^)(void))cancelled {
-    return [self initWithConsume:consume ignoreEvent:nil cancelled:cancelled];
-}
 - (instancetype)initWithConsume:(BOOL (^)(CGEventType,CGEventRef))consume ignoreEvent:(BOOL (^)(CGEventRef))ignoreEvent cancelled:(void (^)(void))cancelled {
     if((self=[super init])){_consume=[consume copy];_ignoreEvent=[ignoreEvent copy];_cancelled=[cancelled copy];_capturedButtons=[NSMutableIndexSet indexSet];_nativeButtons=[NSMutableIndexSet indexSet];}
     return self;

@@ -53,10 +53,46 @@ camera motion remains outside this admission path. The original physical drag
 and release remain untouched, and AppKit must rediscover the actual destination
 before a native drop can work. The canvas cannot accept a drop on its behalf.
 
-This implementation is not runtime acceptance evidence. Dragging *from* a
-captured source still needs its own native ownership handoff before the initial
-press; this destination path does not solve that case. The existing primary-site
-check below also does not establish replica behavior or file-promise support.
+Captured sources now use the same ownership request before a press. Unbuttoned
+physical hover over an eligible replica queues a coalesced main-thread check;
+the event tap leaves the original motion untouched. The check requires fresh
+real capture pixels, unchanged rendered identity and geometry, a complete family
+wholly inside the output, and an independently read event-eligible recipient.
+Active buttons, gestures, resizing and camera transitions prevent a new request.
+It neither activates the source nor posts a replacement press.
+
+Retaining a picture is insufficient evidence that its stream is still usable.
+The mailbox tracks callback order separately from successful image publication.
+Suspended, blank, stopped, invalid and otherwise unavailable callbacks revoke
+readiness, including callbacks without an image. Idle preserves an already usable
+picture but cannot revive one. An older queued Complete cannot undo a later
+revocation; a new Complete must actually publish before ownership can be requested.
+Status-only callbacks update the mailbox state without scheduling main-thread
+work. The headless mailbox regression exercises the actual production methods
+with sample storage and dispatch substituted; it is not live capture evidence.
+
+The same availability check gates captured clicks, scrolling, green-button
+actions, pointer mapping and tablet forwarding, including a second check after
+focus or geometry work. A click waiting for focus loses its entire unsent pair
+if capture becomes unavailable. Already admitted mouse and tablet contacts close
+through the original identity-validated recipient; their remaining physical
+events stay suppressed. This does not change ordinary input at the actual native
+window. Synthetic load images cannot authorize application input. Run
+`sh tests/e2e/root-capture-mailbox.sh` for the mailbox and extracted production
+consumer scenarios; native posting and capture transport are substituted.
+
+A press arriving while coverage still requires admission is refused as an entire
+button pair, including when a cancelled request has no eligible recovery token.
+After a fresh complete helper ACK and independent placement validation settle
+ownership, the next original press must still match the current native recipient
+and admitted placement. Completed ownership remains at that output when the
+pointer leaves; an unfinished hover request is cancelled and recovery stays
+covered. The former down-triggered source-observation hook has been removed.
+
+This is source implementation, not runtime acceptance evidence. Fresh replica
+capture remains blocked in the transformed fixture cases below. The existing
+primary-site check does not establish replica handoff, captured-source sessions,
+file promises or arbitrary third-party acceptance.
 
 `native-input.m` now leaves an unclaimed original press addressed to a foreign
 native window, its drag/motion packets and its release untouched even after
@@ -129,3 +165,89 @@ This establishes the route between two exact owned primary-native AppKit
 processes. File promises, arbitrary third-party applications and captured
 replicas remain unverified or unsupported as specified above; this check is not
 ordinary-application parity evidence.
+
+## Replica capture blocker observed on 2026-10-12
+
+The replica destination scenario stopped before physical input because its root
+streams supplied `SCFrameStatusSuspended` without image buffers. Opt-in callback
+counts showed that no complete frames reached the mailbox, rather than frames
+being discarded there. The scoped run is recorded at
+`target/ipc/native-drag.io0qil/`; both originals were restored and both journals
+were durably empty before cleanup.
+
+A separate one-process AppKit fixture isolated the capture behavior without
+Infinify running. The same continuous desktop-independent window stream delivered
+fresh green pixels at its original geometry, suspended while a root-only native
+transform displayed the window at half scale, and resumed after exact restoration.
+The window remained visible and nonminiaturized, and ScreenCaptureKit continued
+to report it active and on screen. Its capture-created child identified itself
+as `NSLocalWindowSharingWindow`; it was observed but never transformed. Thus this
+is evidence for the root-only fixture case, not every coherent family transform.
+The evidence is at `target/ipc/capture-transform.v91h47ub/`.
+
+A second run updated the existing stream's filter using a fresh exact window
+record after scaling. Its filter rectangle changed from 320×262 to 160×131 and
+the update completed, but the next two seconds delivered no new images. Restoring
+the native window resumed fresh complete frames. Refreshing the filter alone
+does not fix this case. That run is at `target/ipc/capture-transform.q6ow31n5/`.
+Both diagnostics preserved sequence/time provenance so retained pre-transform
+pixels could not pass as fresh output. Each independently restored the original
+root and verified the complete observed cohort, empty helper state and durable
+journal before its owned process exited. No physical input was posted.
+
+A display-style filter including only the exact owned root did produce fresh
+complete pixels after its source crop was updated to the transformed screen
+rectangle. The 640×524 image retained all four colored corner markers, but the
+original half-point stripe contrast fell from 255 to 0.4375: it enlarged the
+rendered half-size surface instead of preserving original backing detail. The
+capture-created child also changed identity after the crop update, so the
+scenario stopped before a restored-capture phase or any input. Cleanup verified
+the exact root restoration and empty durable journal, recorded the vanished old
+child separately, audited its replacement and reaped the owned process. The
+evidence is at `target/ipc/capture-transform.snezhdpr/`. This route has not been
+adopted for production replicas because its measured detail loss does not meet
+their original-resolution contract.
+
+Selecting `SCCaptureResolutionBest` on the desktop-independent stream also did
+not fix the suspension. The untouched root delivered complete marker/stripe
+images, its half-scale interval produced one suspended callback and no fresh
+image, and exact restoration resumed complete images at the original contrast.
+That case used no filter or configuration update and retained the same observed
+root/child cohort throughout. Independent restoration and the durable empty
+journal passed before the owned processes exited; no input was posted. Evidence:
+`target/ipc/capture-transform.elq7irri/`.
+
+A bounded private snapshot diagnostic used the existing four-argument
+`SLSHWCaptureWindowList` interface and the exact ignore-global-clip, best-resolution
+and full-size options used by
+[AltTab at eb63ac1](https://github.com/lwouis/alt-tab-macos/blob/eb63ac15209b754600bacd2f1676fbf870aa7d19/src/events/WindowCaptureEvents.swift).
+Installed-host disassembly corroborated the call shape and the CoreGraphics
+reexport before either read. The original owned root produced a 640×524 image;
+the half-scale read failed the diagnostic's image validation. That failure
+code groups several conditions, so it does not establish whether the API
+returned no image or another invalid result. The diagnostic stopped there,
+restored the exact root and complete surviving cohort, verified an empty durable
+journal and reaped every owned process. It posted no input. Evidence and this
+instrumentation limit are in `target/ipc/hw-capture-transform.86bsqkcd/`.
+No private capture path was added to the app, and this single-read interface
+has not established fresh backing pixels or sustained rendering performance.
+
+A subsequent diagnostic enrolled both the exact owned root and its stable
+`NSLocalWindowSharingWindow` child before applying a coherent half-scale family
+transform. Independent reads verified each member's matrix and screen rectangle.
+The continuous desktop-independent stream still delivered no fresh complete image
+and one suspended callback during the two-second transformed interval, including
+after an explicit orange marker redraw. Exact restoration resumed 65 complete
+images with the new violet marker, correct orientation and original stripe
+contrast of 255. This rules out the untransformed sharing child as the sole cause
+in this owned case; it does not establish behavior for arbitrary applications.
+Both members restored exactly, the durable helper journal was empty, capture
+stopped and every owned process exited, with no physical input or cursor change.
+Evidence: `target/ipc/family._uzx79v4/`. The earlier attempt stopped before native
+mutation because its Unix socket path was too long; the retry used a shorter path
+and a byte-length preflight. No production capture path changed.
+
+The production hover handoff requires actual fresh replica pixels. The old
+down-triggered observation probe has been retired. Neither these diagnostics nor
+successful capture startup validates a replica handoff or a captured-source drag
+session.

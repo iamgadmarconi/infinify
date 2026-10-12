@@ -316,7 +316,7 @@ impl Controller {
         output: OutputId,
         policy: ZoomPolicy,
     ) -> Result<Value, Error> {
-        if self.gesture.is_some() {
+        if self.gesture.is_some() || self.native_resize_grab_output().is_some() {
             return Err(Error::Invalid("navigation during active gesture"));
         }
         let (target, zoom, anchor) = self.navigation_target(window, output, policy)?;
@@ -345,20 +345,13 @@ impl Controller {
             json!({"output":output,"generation":self.next_navigation,"target_camera":target,"target_zoom":zoom,"animating":true}),
         )
     }
-    pub(crate) fn tick_navigation(&mut self, timestamp_ns: u64) -> Result<Value, Error> {
-        let elapsed = match self.navigation_clock {
-            Some(previous) => timestamp_ns
-                .checked_sub(previous)
-                .ok_or(Error::Invalid("navigation clock decreased"))?,
-            None => 0,
-        };
+    pub(crate) fn navigation_clock_only(&self) -> bool {
         // Successful mutations and public load already settle the controller.
-        // With no motion or pending timed/structural state, this tick changes
-        // only navigation.clock_ns. The shell may reuse its visual projection,
-        // while ordinary snapshots must still report the new clock. Keep this
-        // conservative: a zero-displacement first flight or delayed edge pan
-        // is not an idle tick. The normal transaction and postlude still run.
-        let clock_only = self.flights.is_empty()
+        // Without motion or pending timed/structural work, a tick changes only
+        // navigation.clock_ns and needs no transaction or settlement. Keep
+        // this conservative: a zero-displacement first flight or delayed edge
+        // pan is not idle. The shell uses the same proof for visual reuse.
+        self.flights.is_empty()
             && self.motion.clock_idle()
             && self.gesture.is_none()
             && self.trackpad_gesture.is_none()
@@ -367,7 +360,27 @@ impl Controller {
             && self.sizes.observation_idle()
             && self.fullscreen.observation_idle()
             && self.lifecycle.marks.is_empty()
-            && self.lifecycle.relaunching.is_empty();
+            && self.lifecycle.relaunching.is_empty()
+    }
+    fn navigation_elapsed(&self, timestamp_ns: u64) -> Result<u64, Error> {
+        match self.navigation_clock {
+            Some(previous) => timestamp_ns
+                .checked_sub(previous)
+                .ok_or(Error::Invalid("navigation clock decreased")),
+            None => Ok(0),
+        }
+    }
+    /// Called only after `navigation_clock_only` proved there is no other work.
+    pub(crate) fn tick_navigation_clock(&mut self, timestamp_ns: u64) -> Result<Value, Error> {
+        self.navigation_elapsed(timestamp_ns)?;
+        self.navigation_clock = Some(timestamp_ns);
+        Ok(
+            json!({"changed_outputs":[],"needs_frames":false,"needs_pointer":false,"clock_only":true}),
+        )
+    }
+    pub(crate) fn tick_navigation(&mut self, timestamp_ns: u64) -> Result<Value, Error> {
+        let elapsed = self.navigation_elapsed(timestamp_ns)?;
+        let clock_only = self.navigation_clock_only();
         self.navigation_clock = Some(timestamp_ns);
         let dt = std::time::Duration::from_nanos(elapsed.min(33_000_000));
         // Upstream tick_all_animations: the cursor's edge pan is armed again
@@ -449,6 +462,147 @@ impl Controller {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn command(controller: &mut Controller, command: Value) -> Value {
+        controller
+            .execute(serde_json::from_value(json!({"version":1,"command":command})).unwrap())
+            .unwrap()
+    }
+    fn idle_controller() -> Controller {
+        let mut controller = Controller::new();
+        for (name, x) in [("one", 0.0), ("two", 1000.0)] {
+            command(
+                &mut controller,
+                json!({"op":"register_output","stable_id":name,"screen_bounds":Rect::new(x,0.0,1000.0,800.0)}),
+            );
+        }
+        for wid in 1..=6 {
+            let frame = Rect::new(40.0 * wid as f64, 80.0, 300.0, 200.0);
+            command(
+                &mut controller,
+                json!({"op":"attach","identity":{"pid":123,"birth_sec":1800000000,"birth_usec":0,"wid":wid},"bundle_id":"test","title":"fixture","buffer":{"width":600,"height":400},"source_rect":frame,"world_rect":frame}),
+            );
+        }
+        command(
+            &mut controller,
+            json!({"op":"native_resize_capability","enabled":true}),
+        );
+        controller
+    }
+    fn compare_transaction(controller: &mut Controller, timestamp_ns: u64) -> Value {
+        // Retain the full reducer and settlement as an independent reference
+        // for the execute shortcut, including state omitted by Snapshot.
+        let mut reference = controller.clone();
+        let expected = reference
+            .apply(Command::TickNavigation { timestamp_ns })
+            .unwrap();
+        reference.settle_state().unwrap();
+        let actual = controller
+            .execute(Request {
+                version: ABI_VERSION,
+                command: Command::TickNavigation { timestamp_ns },
+            })
+            .unwrap();
+        assert_eq!(actual, expected);
+        assert_eq!(format!("{controller:?}"), format!("{reference:?}"));
+        actual
+    }
+    #[test]
+    fn clock_only_matches_full_transaction_with_pins_bookmarks_and_stopped_momentum() {
+        let mut controller = idle_controller();
+        command(
+            &mut controller,
+            json!({"op":"ipc","output":1,"request":{"Pin":{"window":1,"value":true}}}),
+        );
+        command(
+            &mut controller,
+            json!({"op":"action","output":1,"action":"set-bookmark desk"}),
+        );
+        command(
+            &mut controller,
+            json!({"op":"pan","output":2,"screen_delta":{"x":10,"y":0},"time_ms":100,"source":"finger"}),
+        );
+        command(
+            &mut controller,
+            json!({"op":"cancel_navigation","output":2}),
+        );
+        for timestamp in [0, 80_000_000, 80_000_000, u64::MAX] {
+            assert_eq!(
+                compare_transaction(&mut controller, timestamp)["clock_only"],
+                true
+            );
+        }
+    }
+    #[test]
+    fn clock_only_matches_full_transaction_after_loading_detached_pinned_state() {
+        let mut controller = idle_controller();
+        command(
+            &mut controller,
+            json!({"op":"ipc","output":1,"request":{"Pin":{"window":1,"value":true}}}),
+        );
+        let path = std::env::temp_dir().join(format!(
+            "infinify-clock-only-load-{}.json",
+            std::process::id()
+        ));
+        controller.save(&path).unwrap();
+        let loaded = Controller::load(&path);
+        std::fs::remove_file(path).unwrap();
+        let mut loaded = loaded.unwrap();
+        command(
+            &mut loaded,
+            json!({"op":"native_resize_capability","enabled":true}),
+        );
+        for timestamp in [0, 80_000_000, 20_000_000_000] {
+            assert_eq!(
+                compare_transaction(&mut loaded, timestamp)["clock_only"],
+                true
+            );
+        }
+    }
+    #[test]
+    fn pending_navigation_resize_and_lifecycle_keep_full_transactions() {
+        for pending in [
+            json!({"op":"native_resize_capability","enabled":false}),
+            json!({"op":"navigate_window","window":1,"output":1,"zoom_policy":"keep"}),
+            json!({"op":"pan","output":1,"screen_delta":{"x":10,"y":0},"time_ms":100,"source":"finger"}),
+            json!({"op":"action","output":1,"action":"toggle-cursor-pan"}),
+            json!({"op":"begin_drag","window":1,"output":1}),
+            json!({"op":"begin_native_resize","window":1,"output":1,"edges":"right","start_screen":{"x":340,"y":180}}),
+            json!({"op":"action","output":1,"action":"toggle-fullscreen"}),
+            json!({"op":"action","output":1,"action":"close-window"}),
+        ] {
+            let mut controller = idle_controller();
+            command(&mut controller, json!({"op":"focus","window":1}));
+            command(&mut controller, pending.clone());
+            for timestamp in [0, 16_666_667, 10_000_000_000] {
+                assert_eq!(
+                    compare_transaction(&mut controller, timestamp)["clock_only"],
+                    false,
+                    "{pending}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn clock_only_rejects_schema_and_backward_time_before_writing() {
+        let mut controller = idle_controller();
+        compare_transaction(&mut controller, 80_000_000);
+        let before = format!("{controller:?}");
+        for (version, timestamp_ns, message) in [
+            (ABI_VERSION, 79_999_999, "navigation clock decreased"),
+            (ABI_VERSION + 1, 160_000_000, "unsupported desktop schema"),
+            (ABI_VERSION + 1, 0, "unsupported desktop schema"),
+        ] {
+            let error = controller
+                .execute(Request {
+                    version,
+                    command: Command::TickNavigation { timestamp_ns },
+                })
+                .unwrap_err();
+            assert_eq!(error.to_string(), message);
+            assert_eq!(format!("{controller:?}"), before);
+        }
+    }
     // Pure boundary unreachable through ABI: native windows add no compositor border.
     #[test]
     fn negative_border_inset_and_exact_fit() {

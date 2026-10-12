@@ -104,7 +104,7 @@ impl Host {
             .clone()
     }
     fn focused(&mut self) -> Value {
-        self.snapshot()["focused"].clone()
+        self.snapshot()["focus"]["intent"].clone()
     }
     fn pass_keys(&mut self) -> Value {
         self.snapshot()["pass_keys"].clone()
@@ -1114,7 +1114,7 @@ fn begin_drag(h: &mut Host, window: u64) {
     let effect = reply["effect"].clone();
     assert_eq!(reply, json!({"effect":effect}));
     let snapshot = h.snapshot();
-    assert_eq!(snapshot["focused"], window);
+    assert_eq!(snapshot["focus"]["intent"], window);
     assert_eq!(snapshot["focus"]["pending_effect"], effect);
     assert_eq!(h.stack().last(), Some(&window));
     if source.is_null() {

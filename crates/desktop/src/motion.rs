@@ -352,6 +352,13 @@ impl Controller {
             coast.pending_ms = None;
         }
     }
+    /// Retire edge-pan requests and their pointer sample. A native resize
+    /// cannot carry its edge between events; after release only a fresh report
+    /// can arm cursor pan again, without resuming an old request or delay.
+    pub(crate) fn cancel_edge_pan_everywhere(&mut self) {
+        self.motion.edge_pans.clear();
+        self.motion.pointer = None;
+    }
     /// The gesture is over, however it ended. Upstream's move grab clears its
     /// output's edge pan on release and on unset, a pinned window's included.
     pub(crate) fn drop_gesture(&mut self) {
@@ -604,6 +611,10 @@ impl Controller {
     /// again, the drag's window is carried by that delta, so it stays under
     /// the held pointer, and the request becomes the drag's own.
     pub(crate) fn tick_edge_pan(&mut self, output: OutputId, now_ns: u64) -> Result<(), Error> {
+        if self.native_resize_grab_output() == Some(output) {
+            self.motion.clear_edge_pan(output);
+            return Ok(());
+        }
         let Some(velocity) = self.effective_edge_pan_velocity(output, now_ns) else {
             return Ok(());
         };
@@ -645,7 +656,10 @@ impl Controller {
     pub(crate) fn refresh_cursor_edge_pan(&mut self) {
         // A grab owns the request: a window move arms its own, and a resize
         // or a drag pan leaves it as it stood when the button went down.
-        if self.gesture.is_some() || self.motion.momentum.values().any(|c| c.panning) {
+        if self.gesture.is_some()
+            || self.native_resize_grab_output().is_some()
+            || self.motion.momentum.values().any(|c| c.panning)
+        {
             return;
         }
         if !self.motion.cursor_pan {
@@ -695,7 +709,13 @@ impl Controller {
             return Err(Error::Invalid("unknown output"));
         }
         if self.motion.cursor_pan {
-            self.motion.pointer = output.map(|output| (output, screen));
+            // A report while a native resize owns the pointer is not a future
+            // cursor-pan request. Its release needs a fresh physical report.
+            self.motion.pointer = if self.native_resize_grab_output().is_some() {
+                None
+            } else {
+                output.map(|output| (output, screen))
+            };
             self.refresh_cursor_edge_pan();
         }
         Ok(json!({"needs_pointer":self.motion.cursor_pan,"needs_frames":self.needs_frames()}))

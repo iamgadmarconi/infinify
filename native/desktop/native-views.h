@@ -65,6 +65,9 @@ NSDictionary *DWNativeFamilyPresentationSnapshot(NSDictionary *snapshot,
 - (NSNumber *)desiredOwnerForWindow:(NSNumber *)window;
 - (DWNativeViewTransfer *)requestTransferForWindow:(NSNumber *)window output:(NSNumber *)output;
 - (DWNativeViewTransfer *)currentTransferForWindow:(NSNumber *)window;
+// Coverage can outlive a request when no complete recovery site is eligible.
+// A press addressed to this exact family must still be refused as a whole pair.
+- (BOOL)requiresPlacementAdmissionForWindow:(NSNumber *)window;
 @property(nonatomic,readonly,copy) NSArray<DWNativeViewTransfer *> *pendingTransfers;
 - (BOOL)isTransferCurrent:(DWNativeViewTransfer *)transfer;
 // Cancelling a pending request stages a NEW recovery token for a fully visible

@@ -579,7 +579,8 @@ fn move_resize_and_focus_address_logical_windows() {
     }
     // Stacking and focus are untouched by a move.
     let snapshot = h.snapshot();
-    assert_eq!(snapshot["focused"], Value::Null);
+    assert_eq!(snapshot["focus"]["intent"], Value::Null);
+    assert!(!snapshot.as_object().unwrap().contains_key("focused"));
     let order: Vec<_> = snapshot["windows"]
         .as_array()
         .unwrap()
@@ -700,7 +701,7 @@ fn move_resize_and_focus_address_logical_windows() {
         json!({"Ok":{"Focused":{"id":1,"app_id":"com.example.Terminal"}}})
     );
     assert_eq!(data["effects"], json!([]));
-    assert_eq!(h.snapshot()["focused"], 1);
+    assert_eq!(h.snapshot()["focus"]["intent"], 1);
     // Upstream reveal_suspended: an off-screen stand-in is panned to at the
     // zoom in effect (0.5 here), its center (-7, -9) under the usable center.
     assert_eq!(pose(&mut h, 1)["zoom"], 0.5);
@@ -1204,7 +1205,7 @@ fn msg_client_reaches_a_controller_through_the_ipc_command() {
     );
     let (status, snapshot) = run(&["focus", "editor"]);
     assert_eq!(status, 0);
-    assert_eq!(snapshot["focused"], 2);
+    assert_eq!(snapshot["focus"]["intent"], 2);
     let (status, snapshot) = run(&["camera", "0", "0"]);
     assert_eq!(status, 0);
     assert_eq!(

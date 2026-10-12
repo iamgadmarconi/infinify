@@ -58,7 +58,7 @@ impl Host {
         self.focus_state()["history"].clone()
     }
     fn focused(&mut self) -> Value {
-        self.snapshot()["focused"].clone()
+        self.snapshot()["focus"]["intent"].clone()
     }
     /// Window ids bottom to top.
     fn stacking(&mut self) -> Vec<u64> {
@@ -336,7 +336,7 @@ fn unmoved(after: &Value, before: &Value) {
         let mut entries = snapshot[part].clone();
         for entry in entries.as_array_mut().unwrap() {
             let focused = entry.as_object_mut().unwrap().remove("focused");
-            let holds = entry["window"] == snapshot["focused"];
+            let holds = entry["window"] == snapshot["focus"]["intent"];
             assert_eq!(focused, Some(json!(holds)), "{part}: {entry}");
         }
         entries

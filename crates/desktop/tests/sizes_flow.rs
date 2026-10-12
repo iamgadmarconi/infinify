@@ -1117,7 +1117,7 @@ fn ipc_resize_keeps_the_center_and_follows_upstreams_refusals() {
     let raised = h.snapshot();
     assert_eq!(raised["windows"][0]["window"], 1);
     assert_eq!(raised["windows"][1]["window"], 2);
-    assert_eq!(raised["focused"], 1);
+    assert_eq!(raised["focus"]["intent"], 1);
     assert_eq!(raised["focus"], before["focus"]);
     deliver(
         &mut h,
@@ -1183,7 +1183,7 @@ fn a_sizing_action_on_a_stand_in_is_refused() {
     ipc(&mut h, json!({"Suspend":null}));
     h.ok(json!({"op":"window_closed","window":1,"identity":identity(1),"output":1}));
     assert_eq!(h.snapshot()["lifecycle"]["standins"], json!([1]));
-    assert_eq!(h.snapshot()["focused"], 1);
+    assert_eq!(h.snapshot()["focus"]["intent"], 1);
     for (sample, name) in [
         ("grow-window right", "grow-window"),
         ("shrink-window up", "shrink-window"),
@@ -1687,7 +1687,7 @@ fn every_sizing_action_passes_over_a_widget_and_a_screen_pinned_window() {
     for id in [widget, 3] {
         h.ok(json!({"op":"focus","window":id}));
         let before = h.snapshot();
-        assert_eq!(before["focused"], id);
+        assert_eq!(before["focus"]["intent"], id);
         for sample in [
             "grow-window right",
             "shrink-window up-left",
@@ -1893,7 +1893,7 @@ fn a_drag_is_refused_for_a_widget_and_for_a_pending_plan_in_pick_mode_too() {
         pinned_drag(&mut h, false);
         // The press that dragged the pinned window raised and focused it, as
         // upstream's does. Window 1 takes the focus back for its step.
-        assert_eq!(h.snapshot()["focused"], 4);
+        assert_eq!(h.snapshot()["focus"]["intent"], 4);
         h.ok(json!({"op":"focus","window":1}));
         // A sizing plan still owed its size: the window, and the cluster
         // drag that would carry it along, are refused in the plan's words.
@@ -1975,7 +1975,7 @@ fn a_size_still_owed_holds_the_pointer_as_a_resize_drag_does() {
     assert_eq!(held["forward"], false, "{held}");
     assert_eq!(held["dirty"], false);
     assert!(held.get("effect").is_none(), "{held}");
-    assert_eq!(h.snapshot()["focused"], 1);
+    assert_eq!(h.snapshot()["focus"]["intent"], 1);
     deliver(
         &mut h,
         &reply,
@@ -1988,7 +1988,7 @@ fn a_size_still_owed_holds_the_pointer_as_a_resize_drag_does() {
     assert_eq!(free["forward"], true, "{free}");
     assert_eq!(free["dirty"], true);
     assert_eq!(free["effect"]["window"], 2);
-    assert_eq!(h.snapshot()["focused"], 2);
+    assert_eq!(h.snapshot()["focus"]["intent"], 2);
 }
 
 // Upstream resolve_pick: a pick is `center-window`'s navigation, and a window
@@ -2118,7 +2118,7 @@ fn centering_restores_a_fill_view_past_a_pinned_window() {
         assert_eq!(moved["effects"][0]["window"], 1, "{sample}: {moved}");
         settle(&mut h);
         assert_eq!(pose(&mut h), view, "{sample}");
-        assert_eq!(h.snapshot()["focused"], 1);
+        assert_eq!(h.snapshot()["focus"]["intent"], 1);
     }
 }
 

@@ -84,7 +84,7 @@ impl Host {
             .collect()
     }
     fn focused(&mut self) -> Value {
-        self.snapshot()["focused"].clone()
+        self.snapshot()["focus"]["intent"].clone()
     }
     fn lifecycle(&mut self) -> Value {
         self.snapshot()["lifecycle"].clone()
@@ -488,7 +488,7 @@ fn windows_already_open_at_launch_are_placed_without_focus_or_flight() {
         assert_eq!(h.world(wid), rect(at.0, at.1, 400.0, 300.0));
     }
     let snapshot = h.snapshot();
-    assert_eq!(snapshot["focused"], Value::Null);
+    assert_eq!(snapshot["focus"]["intent"], Value::Null);
     assert_eq!(snapshot["focus"]["pending_effect"], Value::Null);
     assert_eq!(snapshot["navigation"]["flights"], json!({}));
     assert_eq!(
@@ -630,7 +630,7 @@ fn still_open_windows_take_their_saved_slots_back_and_the_rest_are_dropped() {
     // With no request to answer, the adopted window that holds the focus is
     // in the focus history at once; the others are not.
     let snapshot = h.snapshot();
-    assert_eq!(snapshot["focused"], 2);
+    assert_eq!(snapshot["focus"]["intent"], 2);
     assert_eq!(snapshot["focus"]["pending_effect"], Value::Null);
     assert_eq!(snapshot["focus"]["history"], json!([2]));
     assert_eq!(snapshot["navigation"]["flights"], json!({}));
@@ -659,7 +659,7 @@ fn still_open_windows_take_their_saved_slots_back_and_the_rest_are_dropped() {
     );
     let snapshot = h.snapshot();
     assert_eq!(snapshot["windows"], json!([]));
-    assert_eq!(snapshot["focused"], Value::Null);
+    assert_eq!(snapshot["focus"]["intent"], Value::Null);
     // A window rule turns restore_windows on for one app, as upstream's does.
     let rule = "[[window_rules]]\napp_id = \"app.notes\"\nrestore_windows = true\n";
     let mut h = relaunched(&scratch, &scene, rule);
@@ -958,7 +958,7 @@ fn a_lost_source_takes_its_own_slot_back() {
     );
     assert_eq!(h.world(2), world);
     let snapshot = h.snapshot();
-    assert_eq!(snapshot["focused"], Value::Null);
+    assert_eq!(snapshot["focus"]["intent"], Value::Null);
     assert_eq!(snapshot["focus"]["pending_effect"], Value::Null);
     assert_eq!(snapshot["navigation"]["flights"], json!({}));
     assert_eq!(
@@ -1028,7 +1028,7 @@ fn a_closed_window_leaves_the_scene_or_a_stand_in() {
     );
     assert_eq!(h.stack(), vec![3, 2, 1]);
     let snapshot = h.snapshot();
-    assert_eq!(snapshot["focused"], 1);
+    assert_eq!(snapshot["focus"]["intent"], 1);
     assert_eq!(snapshot["focus"]["history"], json!([2]));
     assert_eq!(snapshot["focus"]["observed_native"], Value::Null);
     assert_eq!(snapshot["lifecycle"]["standins"], json!([1]));
@@ -1293,7 +1293,6 @@ fn focus_follows_a_closed_window_through_upstreams_tiers() {
         json!({"standin":false,"effect":null,"navigation":null,"dirty":true})
     );
     let snapshot = h.snapshot();
-    assert_eq!(snapshot["focused"], Value::Null);
     assert_eq!(snapshot["focus"]["intent"], Value::Null);
     assert_eq!(snapshot["focus"]["pending_effect"], Value::Null);
     assert_eq!(snapshot["focus"]["history"], json!([4]));
@@ -1913,7 +1912,7 @@ fn a_drag_outlives_the_close_of_a_window_it_does_not_hold() {
     // The press that begins the drag raises and focuses Z, as upstream's
     // does; X then takes the focus back while Z is still held.
     focus_effect(&h.ok(drag(3, false)), 3, 3);
-    assert_eq!(h.snapshot()["focused"], 3);
+    assert_eq!(h.snapshot()["focus"]["intent"], 3);
     h.focus_logically(1);
     let reply = h.closed(1);
     focus_effect(&reply, 2, 2);
@@ -2385,7 +2384,7 @@ fn an_application_that_quits_closes_its_windows_in_a_burst() {
     // The survivor's request is still the one to answer.
     h.logical(&second["effect"]);
     let snapshot = h.snapshot();
-    assert_eq!(snapshot["focused"], 3);
+    assert_eq!(snapshot["focus"]["intent"], 3);
     assert_eq!(snapshot["focus"]["history"], json!([3]));
     assert_eq!(h.stack(), vec![3]);
     assert_eq!(
@@ -2422,7 +2421,7 @@ fn a_close_and_the_native_focus_that_follows_it_agree_in_either_order() {
         let snapshot = h.snapshot();
         let focus = &snapshot["focus"];
         json!([
-            snapshot["focused"],
+            snapshot["focus"]["intent"],
             focus["observed_native"]["window"],
             focus["pending_effect"],
             focus["history"],
@@ -2488,7 +2487,7 @@ fn a_close_and_the_native_focus_that_follows_it_agree_in_either_order() {
         json!({"effect":null,"navigation":null,"dirty":true})
     );
     let snapshot = h.snapshot();
-    assert_eq!(snapshot["focused"], 3);
+    assert_eq!(snapshot["focus"]["intent"], 3);
     assert_eq!(snapshot["focus"]["pending_effect"], Value::Null);
     assert_eq!(snapshot["navigation"]["flights"], flights);
     assert_eq!(

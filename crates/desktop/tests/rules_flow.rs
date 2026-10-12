@@ -141,7 +141,7 @@ impl Host {
             .clone()
     }
     fn focused(&mut self) -> Value {
-        self.snapshot()["focused"].clone()
+        self.snapshot()["focus"]["intent"].clone()
     }
     /// The focus history, which cycling walks and a close follows.
     fn history(&mut self) -> Value {

@@ -541,7 +541,7 @@ fn a_toggle_fills_the_output_and_a_second_restores_everything_exactly() {
     assert_eq!(placed_ids(&mut h, 2), [2, 1]);
     assert_eq!(output(&mut h, 2), other);
     assert_eq!(state(&mut h)["fullscreen"], json!([]));
-    assert_eq!(h.snapshot()["focused"], 1);
+    assert_eq!(h.snapshot()["focus"]["intent"], 1);
 }
 
 // Upstream src/tests/fullscreen_centering.rs: a window that takes another
@@ -679,7 +679,7 @@ fn an_action_ends_fullscreen_first_unless_upstream_runs_it_during_one() {
     assert_eq!(pose(&mut h, 1), view(CAMERA, 0.5));
     assert_eq!(reply["navigation"]["animating"], true);
     assert_eq!(reply["navigation"]["target_zoom"], 0.5);
-    assert_eq!(h.snapshot()["focused"], 2);
+    assert_eq!(h.snapshot()["focus"]["intent"], 2);
     assert_eq!(world(&mut h, 1), rect(START.0, START.1, USABLE.2, USABLE.3));
     deliver(
         &mut h,
@@ -840,7 +840,7 @@ fn a_pan_a_zoom_a_drag_and_a_swipe_end_fullscreen_and_nothing_else_moves_the_cam
     let reply = ipc(&mut h, json!({"Focus":2}));
     assert_eq!(reply["reply"]["Ok"]["Focused"]["id"], 2);
     assert_eq!(reply["navigation"], Value::Null);
-    assert_eq!(h.snapshot()["focused"], 2);
+    assert_eq!(h.snapshot()["focus"]["intent"], 2);
     let tick = h.ok(json!({"op":"tick_navigation","timestamp_ns":900_000_000_000u64}));
     assert_eq!(tick["needs_frames"], false);
     assert_eq!(tick["changed_outputs"], json!([]));
@@ -935,7 +935,7 @@ fn a_close_an_activation_and_a_lost_output_end_fullscreen() {
     let reply = h.ok(json!({"op":"activate","window":2,"output":1,"cause":"native"}));
     assert_eq!(fullscreen(&mut h, 1), Value::Null);
     assert_eq!(pose(&mut h, 1), view(CAMERA, 0.5));
-    assert_eq!(h.snapshot()["focused"], 2);
+    assert_eq!(h.snapshot()["focus"]["intent"], 2);
     // Wholly visible in the restored view: focus only.
     assert_eq!(reply["navigation"], Value::Null);
     let effects = reply["effects"].as_array().unwrap().clone();
@@ -957,7 +957,7 @@ fn a_close_an_activation_and_a_lost_output_end_fullscreen() {
     let reply = h.ok(json!({"op":"activate","window":1,"output":2,"cause":"native"}));
     assert_eq!(reply["navigation"], Value::Null);
     assert_eq!(fullscreen(&mut h, 1)["window"], 1);
-    assert_eq!(h.snapshot()["focused"], 1);
+    assert_eq!(h.snapshot()["focus"]["intent"], 1);
 
     // The shell removes every output on any screen change and registers the
     // present ones again. An output that comes back keeps its fullscreen.
@@ -1038,7 +1038,7 @@ fn a_new_window_is_tucked_behind_a_fullscreen_one_and_a_ruled_one_takes_its_outp
     assert_eq!(reply["navigation"], Value::Null);
     assert!(reply.get("transaction").is_none());
     assert_eq!(fullscreen(&mut h, 1)["window"], 1);
-    assert_eq!(h.snapshot()["focused"], 1);
+    assert_eq!(h.snapshot()["focus"]["intent"], 1);
     assert_eq!(placed_ids(&mut h, 1), [1]);
     let tucked = world(&mut h, 2);
     let (x, y) = (
@@ -1066,7 +1066,7 @@ fn a_new_window_is_tucked_behind_a_fullscreen_one_and_a_ruled_one_takes_its_outp
     let reply = h.ok(json!({"op":"activate","window":2,"output":1,"cause":"native"}));
     assert_eq!(fullscreen(&mut h, 1), Value::Null);
     assert_eq!(pose(&mut h, 1), view(CAMERA, 0.5));
-    assert_eq!(h.snapshot()["focused"], 2);
+    assert_eq!(h.snapshot()["focus"]["intent"], 2);
     let effects = reply["effects"].as_array().unwrap().clone();
     assert_eq!(effects.len(), 1, "{reply}");
     perform(
@@ -1105,7 +1105,7 @@ fn a_new_window_is_tucked_behind_a_fullscreen_one_and_a_ruled_one_takes_its_outp
     assert_eq!(fullscreen(&mut h, 1)["window"], 1);
     assert_eq!(window(&mut h, 3)["rule"]["not_applied"], json!([]));
     assert_eq!(mode(&mut h, 3), "fullscreen");
-    assert_eq!(h.snapshot()["focused"], 3);
+    assert_eq!(h.snapshot()["focus"]["intent"], 3);
     perform(
         &mut h,
         &effects[0],
@@ -2032,7 +2032,7 @@ fn the_pointer_reaches_only_the_fullscreen_window_on_its_output() {
     // Hover focus on the other output moves the focus to its window.
     let reply = h.ok(json!({"op":"hover","output":2,"screen":{"x":B.0 + 750.0,"y":B.1 + 100.0}}));
     assert_eq!(reply["effect"]["window"], 2);
-    assert_eq!(h.snapshot()["focused"], 2);
+    assert_eq!(h.snapshot()["focus"]["intent"], 2);
     // Back on the fullscreen output the window is given its focus back,
     // without a hover target being looked for, and without a raise.
     let reply = h.ok(json!({"op":"hover","output":1,"screen":{"x":A.0 + 250.0,"y":A.1 + 540.0}}));
@@ -2040,7 +2040,7 @@ fn the_pointer_reaches_only_the_fullscreen_window_on_its_output() {
     assert_eq!(reply["forward"], true);
     assert_eq!(reply["effect"]["window"], 1);
     assert_eq!(reply["dirty"], true);
-    assert_eq!(h.snapshot()["focused"], 1);
+    assert_eq!(h.snapshot()["focus"]["intent"], 1);
     // Already focused inside the usable area: nothing more is asked.
     let reply = h.ok(json!({"op":"hover","output":1,"screen":{"x":A.0 + 25.0,"y":A.1 + 45.0}}));
     assert!(reply.get("effect").is_none(), "{reply}");
@@ -2069,7 +2069,7 @@ fn the_pointer_reaches_only_the_fullscreen_window_on_its_output() {
     );
     assert_eq!(h.snapshot()["focus"]["history"], json!([1, 2]));
     let reply = action(&mut h, 2, "cycle-windows forward");
-    assert_eq!(h.snapshot()["focused"], 2);
+    assert_eq!(h.snapshot()["focus"]["intent"], 2);
     assert_eq!(reply["navigation"]["output"], 2);
     assert_eq!(fullscreen(&mut h, 1)["window"], 1);
     let request = reply["effects"][0].clone();
@@ -2083,7 +2083,7 @@ fn the_pointer_reaches_only_the_fullscreen_window_on_its_output() {
     let stacked = order(&mut h);
     let reply = action(&mut h, 2, "cycle-windows forward");
     assert_eq!(reply["effects"][0]["window"], 2);
-    assert_eq!(h.snapshot()["focused"], 2);
+    assert_eq!(h.snapshot()["focus"]["intent"], 2);
     assert_eq!(order(&mut h), stacked);
     assert_eq!(fullscreen(&mut h, 1)["window"], 1);
 }
@@ -2408,7 +2408,7 @@ fn a_grab_ends_the_fullscreen_then_focuses_the_window_and_then_takes_hold() {
     entered(&mut h);
     // Another window holds the focus behind the fullscreen one, above it.
     ipc(&mut h, json!({"Focus":2}));
-    assert_eq!(h.snapshot()["focused"], 2);
+    assert_eq!(h.snapshot()["focus"]["intent"], 2);
     assert_eq!(order(&mut h), [1, 2]);
     // A window that is fullscreen on another output is not this press's to
     // take. Nothing ended and nothing was focused for it.
@@ -2421,7 +2421,7 @@ fn a_grab_ends_the_fullscreen_then_focuses_the_window_and_then_takes_hold() {
     assert_eq!(reply["effect"]["op"], "focus_native_window");
     assert_eq!(reply["effect"]["window"], 1);
     assert!(reply.get("transaction").is_none(), "{reply}");
-    assert_eq!(h.snapshot()["focused"], 1);
+    assert_eq!(h.snapshot()["focus"]["intent"], 1);
     assert_eq!(order(&mut h), [2, 1]);
     // The drag has hold of the restored window, which still has the
     // output's size.
@@ -2681,7 +2681,7 @@ fn a_ruled_size_waits_out_a_fullscreen_enter_and_is_placed_in_its_background() {
     h.ok(json!({"op":"end_gesture"}));
     assert_eq!(world(&mut h, 2), rect(128.0, 260.0, 400.0, 300.0));
     assert_eq!(window(&mut h, 2)["rule"]["not_applied"], json!(["size"]));
-    assert_eq!(h.snapshot()["focused"], 2);
+    assert_eq!(h.snapshot()["focus"]["intent"], 2);
     let reply = action(&mut h, 1, "toggle-fullscreen");
     assert_eq!(fullscreen(&mut h, 1)["window"], 2);
     // The enter's last result frees the slot, and nobody is waiting for it.

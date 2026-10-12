@@ -212,6 +212,9 @@ static NSDictionary *viewTransferSite(NSNumber *window,NSNumber *output,NSDictio
 }
 - (NSNumber *)desiredOwnerForWindow:(NSNumber *)window { if(!window)return nil;DWNativeViewTransfer *transfer=_transfers[window];return transfer?@(transfer.output):_owners[window]; }
 - (DWNativeViewTransfer *)currentTransferForWindow:(NSNumber *)window { return window?_transfers[window]:nil; }
+- (BOOL)requiresPlacementAdmissionForWindow:(NSNumber *)window {
+    return window&&[_covered containsObject:window];
+}
 - (BOOL)isTransferCurrent:(DWNativeViewTransfer *)transfer {
     if(![transfer isKindOfClass:DWNativeViewTransfer.class])return NO;NSNumber *window=@(transfer.window);
     return _transfers[window]==transfer&&[transfer.site isEqual:_transferSites[window][@(transfer.output)]];

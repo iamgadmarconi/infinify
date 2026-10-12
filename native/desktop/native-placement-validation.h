@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import "native-presenter.h"
 
+// Fresh event-eligible recipient at a physical screen point: exact same-user
+// PID/birth/WID and positive native connection owner, or nil on uncertainty.
+// Read-only discovery; it grants no placement, optical or input admission.
+NSDictionary *DWNativeEventRecipientAtPoint(CGPoint physicalPoint);
+
 // Main-thread, read-only checks of an immutable requested/acknowledged placement.
 // A fresh, complete native family must retain its exact process instances,
 // ancestry, untransformed basis and independently observed placement. Every

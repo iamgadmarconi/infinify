@@ -1,20 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// New code. Upstream's default bindings (malbiruk/driftwm
-// 352333a8fa1b22171492d4b71a54102045c9a19d, src/config/defaults.rs) run
-// swaylock, wpctl, brightnessctl, playerctl and grim, which a Mac does not
-// have. Nothing upstream decides what stands for them; this does.
-//! What a default binding does when its Linux program is not installed.
+//! Identify simple commands so a user-authored `spawn` can avoid repeating a
+//! failing launch when its executable is absent.
 use driftwm_core::config::Action;
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
 
-/// What stands for upstream's `swaylock`: the displays go dark at once, and
-/// macOS asks for the password according to the user's own Lock Screen
-/// setting. macOS has no public command that locks whatever that setting says.
-const LOCK: &str = "/usr/bin/pmset displaysleepnow";
-/// `NX_KEYTYPE_*` of the keys macOS acts on by itself, by what they change.
-const VOLUME_KEYS: [u8; 3] = [0, 1, 7];
-const BRIGHTNESS_KEYS: [u8; 5] = [2, 3, 21, 22, 23];
 /// Where `sh` looks when there is no `PATH` at all.
 const DEFAULT_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 /// Words `sh` runs itself, so no file on `PATH` has to exist for them.
@@ -24,15 +14,6 @@ const SHELL_WORDS: &[&str] = &[
     "pwd", "read", "readonly", "return", "set", "shift", "test", "time", "times", "trap", "true",
     "type", "ulimit", "umask", "unalias", "unset", "until", "wait", "while",
 ];
-
-/// What takes the place of a default binding whose program is missing.
-pub(crate) enum Equivalent {
-    /// A macOS command that does the same job.
-    Substitute(Action),
-    /// macOS already does the job on that key: nothing is registered.
-    Platform(&'static str),
-    Nothing,
-}
 
 /// The program an `exec` or `spawn` action starts, when its command begins
 /// with a plain word: no assignment, quoting, expansion or shell syntax.
@@ -72,23 +53,5 @@ impl SearchPath {
         std::env::split_paths(&self.0)
             .filter(|directory| directory.is_absolute())
             .any(|directory| executable(&directory.join(program)))
-    }
-}
-
-/// What stands for a default binding that runs the missing `program`, on a
-/// media key of type `media_key` or on an ordinary key.
-pub(crate) fn equivalent(program: &str, media_key: Option<u8>) -> Equivalent {
-    match media_key {
-        Some(key) if VOLUME_KEYS.contains(&key) => {
-            Equivalent::Platform("macOS handles the volume keys itself")
-        }
-        Some(key) if BRIGHTNESS_KEYS.contains(&key) => {
-            Equivalent::Platform("macOS handles the brightness keys itself")
-        }
-        Some(_) => Equivalent::Platform("macOS handles the media keys itself"),
-        // `exec`, not upstream's `spawn`: a held chord must not ask for the
-        // lock again at the repeat rate.
-        None if program == "swaylock" => Equivalent::Substitute(Action::Exec(LOCK.to_owned())),
-        None => Equivalent::Nothing,
     }
 }

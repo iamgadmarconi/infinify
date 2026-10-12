@@ -822,9 +822,9 @@ fn with_path(directory: &Path, rest: &str) -> String {
 }
 
 #[test]
-fn default_bindings_on_missing_linux_programs_become_their_macos_equivalents() {
+fn host_owned_default_bindings_do_not_depend_on_path() {
     let scratch = Scratch::new();
-    // Nothing is installed: the PATH is one empty directory.
+    // Start with no Linux defaults on PATH.
     let empty = scratch.programs("empty", &[], 0o755);
     let mut h = Host::new();
     register(&mut h, 1);
@@ -833,128 +833,55 @@ fn default_bindings_on_missing_linux_programs_become_their_macos_equivalents() {
     assert_eq!(loaded["warnings"], json!([]));
     let reply = h.bindings();
     let keys = by_combo(&reply["keys"]);
-    // The lock is substituted, and does not repeat as upstream's spawn would.
-    assert_eq!(keys.len(), 45);
-    assert_eq!(
-        keys["mod+l"],
-        json!({
-            "key_code":0x25,"character":"l","combo":"mod+l","chord":"⌃⌥L",
-            "modifiers":{"control":true,"option":true,"shift":false,"command":false},
-            "action":"exec /usr/bin/pmset displaysleepnow",
-            "upstream":"spawn swaylock -f -c 000000 -kl",
-            "repeat":false,"implemented":true,"passable":true
-        })
-    );
-    // Every other default is untouched, and carries no `upstream`.
-    assert_eq!(
-        keys.values()
-            .filter(|key| key.get("upstream").is_some())
-            .count(),
-        1
-    );
+    assert_eq!(keys.len(), 46);
+    assert!(!keys.contains_key("mod+l"));
     assert_eq!(keys["mod+Return"]["action"], "exec-terminal");
     assert_eq!(keys["mod+ctrl+Right"]["repeat"], true);
-    // macOS owns the volume, brightness and media keys: nothing is registered
-    // on them. The four keys a Mac lacks stay skipped for that reason.
+    // The eight default media controls and the default lock chord stay out of
+    // the registered table; the four keys a Mac lacks remain skipped too.
     assert_eq!(reply["media_keys"], json!([]));
-    let skipped: Vec<(&str, &str, &str)> = reply["skipped"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|entry| {
-            (
-                entry["combo"].as_str().unwrap(),
-                entry["action"].as_str().unwrap(),
-                entry["reason"].as_str().unwrap(),
-            )
-        })
-        .collect();
-    let (absent, volume, brightness, media) = (
-        "the key has no macOS equivalent",
-        "macOS handles the volume keys itself",
-        "macOS handles the brightness keys itself",
-        "macOS handles the media keys itself",
+    let skipped = by_combo(&reply["skipped"]);
+    assert_eq!(skipped.len(), 13);
+    assert_eq!(
+        skipped["mod+l"]["reason"],
+        "the default lock command is left to macOS and the foreground app"
     );
     assert_eq!(
-        skipped,
-        [
-            ("Print", "spawn grim - | wl-copy", absent),
-            (
-                "XF86AudioLowerVolume",
-                "spawn wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-",
-                volume
-            ),
-            (
-                "XF86AudioMute",
-                "spawn wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle",
-                volume
-            ),
-            ("XF86AudioNext", "spawn playerctl next", media),
-            ("XF86AudioPause", "spawn playerctl play-pause", absent),
-            ("XF86AudioPlay", "spawn playerctl play-pause", media),
-            ("XF86AudioPrev", "spawn playerctl previous", media),
-            (
-                "XF86AudioRaiseVolume",
-                "spawn wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+",
-                volume
-            ),
-            ("XF86AudioStop", "spawn playerctl stop", absent),
-            (
-                "XF86MonBrightnessDown",
-                "spawn brightnessctl set 5%-",
-                brightness
-            ),
-            (
-                "XF86MonBrightnessUp",
-                "spawn brightnessctl set +5%",
-                brightness
-            ),
-            (
-                "shift+Print",
-                "spawn grim -g \"$(slurp -d)\" - | wl-copy",
-                absent
-            ),
-        ]
+        skipped["XF86AudioLowerVolume"]["reason"],
+        "macOS handles the volume keys itself"
     );
-    // The user asked for none of it, so none of it is a warning.
+    assert_eq!(
+        skipped["XF86MonBrightnessUp"]["reason"],
+        "macOS handles the brightness keys itself"
+    );
+    assert_eq!(
+        skipped["XF86AudioPlay"]["reason"],
+        "macOS handles the media keys itself"
+    );
+    assert_eq!(
+        skipped["Print"]["reason"],
+        "the key has no macOS equivalent"
+    );
     assert_eq!(reply["warnings"], json!([]));
-    // The substitute runs through the ordinary exec path.
-    let lock = h.action_on(Value::Null, keys["mod+l"]["action"].as_str().unwrap());
-    assert_eq!(lock["effects"][0]["op"], "exec");
-    assert_eq!(
-        lock["effects"][0]["command"],
-        "/usr/bin/pmset displaysleepnow"
-    );
-    assert_eq!(lock["effects"][0]["env"]["PATH"], empty.to_str().unwrap());
-
-    // With the programs installed the defaults are upstream's, as written.
+    // Installing every upstream Linux tool cannot alter the default table.
     let installed = scratch.programs("installed", &LINUX_PROGRAMS, 0o755);
     h.load_config(&scratch.write("config.toml", &with_path(&installed, "")));
-    let reply = h.bindings();
-    let keys = by_combo(&reply["keys"]);
-    assert_eq!(keys.len(), 45);
-    assert_eq!(keys["mod+l"]["action"], "spawn swaylock -f -c 000000 -kl");
-    assert_eq!(keys["mod+l"]["repeat"], true);
-    assert!(keys["mod+l"].get("upstream").is_none());
-    assert_eq!(reply["media_keys"].as_array().unwrap().len(), 8);
-    assert_eq!(reply["skipped"].as_array().unwrap().len(), 4);
-    assert_eq!(reply["warnings"], json!([]));
+    assert_eq!(h.bindings(), reply);
 
-    // Each program is looked up on its own, and a file that cannot be executed
-    // is not a program.
-    let some = scratch.programs("some", &["playerctl"], 0o755);
-    scratch.programs("some", &["swaylock", "wpctl"], 0o644);
-    h.load_config(&scratch.write("config.toml", &with_path(&some, "")));
+    // Explicit `none` removes a selected default from the skipped table too.
+    let config = r#"
+[keybindings]
+"mod+l" = "none"
+"XF86AudioPlay" = "none"
+"#;
+    let loaded = h.load_config(&scratch.write("config.toml", &with_path(&installed, config)));
+    assert_eq!(loaded["errors"], json!([]));
     let reply = h.bindings();
-    assert_eq!(
-        by_combo(&reply["media_keys"]).keys().collect::<Vec<_>>(),
-        ["XF86AudioNext", "XF86AudioPlay", "XF86AudioPrev"]
-    );
-    assert_eq!(
-        by_combo(&reply["keys"])["mod+l"]["action"],
-        "exec /usr/bin/pmset displaysleepnow"
-    );
-    assert_eq!(reply["skipped"].as_array().unwrap().len(), 9);
+    let skipped = by_combo(&reply["skipped"]);
+    assert!(!skipped.contains_key("mod+l"));
+    assert!(!skipped.contains_key("XF86AudioPlay"));
+    assert!(!by_combo(&reply["keys"]).contains_key("mod+l"));
+    assert_eq!(reply["media_keys"], json!([]));
 }
 
 #[test]
@@ -1027,9 +954,8 @@ fn a_binding_the_file_wrote_is_registered_as_written() {
         ])
     );
 
-    // An entry upstream's loader rejects binds nothing, so the default on its
-    // combo is still a default: substituted or left to macOS, not registered
-    // as if the user had written upstream's Linux command.
+    // An entry upstream's loader rejects binds nothing, so the host-owned
+    // default on its combo is still omitted rather than treated as authored.
     let toml = r#"
 [keybindings]
 "mod+l" = "lock-screen"
@@ -1048,14 +974,15 @@ fn a_binding_the_file_wrote_is_registered_as_written() {
     assert!(rejected[0].starts_with("config: invalid action 'lock-screen'"));
     assert!(rejected[1].starts_with("config: invalid action 'nope'"));
     let reply = h.bindings();
-    let lock = &by_combo(&reply["keys"])["mod+l"];
-    assert_eq!(lock["action"], "exec /usr/bin/pmset displaysleepnow");
-    assert_eq!(lock["upstream"], "spawn swaylock -f -c 000000 -kl");
-    assert_eq!(lock["repeat"], false);
+    assert!(!by_combo(&reply["keys"]).contains_key("mod+l"));
     assert_eq!(reply["media_keys"], json!([]));
     assert_eq!(
         by_combo(&reply["skipped"])["XF86AudioPlay"]["reason"],
         "macOS handles the media keys itself"
+    );
+    assert_eq!(
+        by_combo(&reply["skipped"])["mod+l"]["reason"],
+        "the default lock command is left to macOS and the foreground app"
     );
     assert_eq!(reply["warnings"], json!([]));
 }

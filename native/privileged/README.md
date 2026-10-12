@@ -24,10 +24,16 @@ native-window compositing.
 - `loader-arm64e`: an opt-in Mach loader with authenticated v2 readiness checks.
 
 `--doctor-only` builds only the doctor. `--production` omits the fixture payload,
-host and driver. Production builds ad-hoc sign the arm64e payload and loader;
-merely building never executes either. The prior v1 JSON client and Dock spike
-scripts, including their separate spike fixture, are retired. Supported workflows
-are the owner-run [native desktop launcher](../../scripts/start-native-desktop.sh)
+host and driver. Production builds ad-hoc sign the doctor, arm64e payload and
+loader; merely building never executes any of them. `scripts/build-app.sh`
+packages those files and the standalone launcher into
+`Infinify.app/Contents/Resources/NativeDesktop`, then signs and verifies the
+complete app. Its plist manifest binds the final helper and launcher bytes;
+`scripts/install-app.sh` checks the executable and helper hashes and deep app
+signature after copying the already-signed build; it does not re-sign the copy.
+The prior v1 JSON client and Dock spike
+scripts, including their separate spike fixture, are retired. Supported
+workflows are the owner-run [native desktop launcher](../../scripts/start-native-desktop.sh)
 and the v2 disposable-fixture scenarios below; the retired spike's historical
 receipts are not validation of this protocol or production compositing.
 
@@ -61,25 +67,35 @@ Read-only probe/inspection never enrolls ordinary applications automatically.
 
 ## Explicit production launcher
 
-`./scripts/start-native-desktop.sh --check` runs the doctor without sudo, runtime
-creation, loading or app launch. The normal owner-run launcher uses delivered
-artifacts. Its `--build` option explicitly rebuilds production artifacts after
-policy preflight. The launcher never changes SIP, permissions or settings,
-restarts Dock, or retries an uncertain injection automatically.
+The installed owner entrypoint is
+`~/Applications/Infinify.app/Contents/MacOS/Infinify native-desktop`, run from a
+terminal. Its `native-desktop --check` form validates the bundled manifest,
+artifact hashes and deep app signature, then runs the doctor without sudo,
+runtime creation, loading or app launch. The bundled launcher uses only macOS
+system tools and files inside its own app, so it does not need Python, Homebrew,
+or the checkout. It never changes SIP, permissions or settings, restarts Dock,
+or retries an uncertain injection automatically.
 
-Before sudo or runtime creation, it verifies signatures, helper source freshness,
-and the standard app's `target/app/BUILD.json`: schema 1, exact executable path,
-post-sign executable SHA-256, current Git HEAD, and the fingerprint of all tracked
-and nonignored source files. An outdated or altered bundle requires an explicit
-rebuild. This checks delivery freshness, not native usability.
+The repository wrapper `./scripts/start-native-desktop.sh` is checkout-aware.
+It verifies the selected bundle against current source and the standard app's
+`target/app/BUILD.json` schema 2 record before calling its bundled launcher.
+That record binds the post-sign app executable, native manifest, payload and
+complete tracked/nonignored source snapshot. Pass `--app /absolute/path/Infinify.app`
+to check an installed bundle; `--build` explicitly rebuilds production artifacts
+and the app first. A stale bundle requires a rebuild. This checks delivery
+freshness, not native usability.
 
-The launcher obtains Dock's exact PID, process birth and UID from the loader's
+The bundled launcher obtains Dock's exact PID, process birth and UID from the loader's
 read-only `--dock-identity` query. It pins these fields during the explicit loader
-step, records `pending` before execution, then records `ready` only after an
-authenticated empty-helper audit. A same-Dock recorded helper can be reused; a
-pending/unknown record or changed Dock instance requires inspection and preserves
-its runtime. The launcher runs only the loader through sudo and starts the app as
-the login user.
+step and binds the `pending`/`ready` launch record (schema 2) to the bundled
+payload SHA-256. Reuse also hashes the actual private runtime payload and requires
+it to match both the bundle and record. It records `pending` before execution,
+then records `ready` only after an authenticated empty-helper audit. A prior
+schema or unknown/pending record, mismatching runtime, or changed Dock instance
+requires inspection and preserves its runtime; no compatibility fallback or
+automatic reinjection is provided. The launcher runs only the loader through
+sudo and starts the app as the login user. The regular LaunchAgent remains the
+capture-mode startup and does not invoke this explicit helper path.
 
 Direct loader invocation also requires explicit prepared-machine authorization:
 

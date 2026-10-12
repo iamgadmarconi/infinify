@@ -1,15 +1,18 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Real AppKit file DnD between two independent owned AppKit processes presented
-# at half scale. Captured replicas do not have an NSDraggingDestination route.
+# at half scale, optionally through a captured destination on a second view.
 set -eu
 cd "$(dirname "$0")/../.."
+replica_destination=
 case ${1:-} in
   '') echo 'LIVE NOT RUN: pass --live-owned-fixture to exercise the disposable AppKit drag/drop fixture.'; exit 0 ;;
   --live-owned-fixture) ;;
-  *) echo "Usage: $0 [--live-owned-fixture]" >&2; exit 2 ;;
+  *) echo "Usage: $0 [--live-owned-fixture [--replica-destination]]" >&2; exit 2 ;;
 esac
-[ "$#" -eq 1 ] || { echo "Usage: $0 [--live-owned-fixture]" >&2; exit 2; }
+if [ "$#" -eq 2 ] && [ "$2" = --replica-destination ]; then replica_destination=--replica-destination
+elif [ "$#" -ne 1 ]; then echo "Usage: $0 [--live-owned-fixture [--replica-destination]]" >&2; exit 2
+fi
 
 root=$PWD
 driver=$root/tests/e2e/native-drag-drop-driver.py
@@ -27,12 +30,38 @@ if [ "$(defaults read com.apple.WindowManager GloballyEnabled 2>/dev/null || ech
   echo 'NOT RUN: Stage Manager is enabled; no fixture was started and no setting was changed.' >&2
   exit 3
 fi
-python3 "$driver" preflight || exit $?
+python3 "$driver" preflight ${replica_destination:+"$replica_destination"} || exit $?
 
 mkdir -p "$root/target/ipc"
 evidence=$(mktemp -d "$root/target/ipc/native-drag.XXXXXX")
 chmod 700 "$evidence"
 printf 'Evidence: %s\n' "$evidence"
+python3 - "$root" "$evidence" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+root, evidence = map(pathlib.Path, sys.argv[1:])
+manifest = json.loads((root / 'target/app/BUILD.json').read_text())
+if manifest.get('schema_version') != 2 or manifest.get('executable') != 'Infinify.app/Contents/MacOS/Infinify':
+    raise SystemExit('FAIL: packaged executable manifest schema/path is not current')
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+actual = digest(root / 'target/app' / manifest['executable'])
+if actual != manifest.get('executable_sha256'):
+    raise SystemExit('FAIL: packaged executable bytes differ from BUILD.json')
+lineage = {key: manifest[key] for key in ('schema_version', 'built_at_utc', 'git_commit', 'executable', 'executable_sha256', 'source_fingerprint_sha256')}
+lineage['actual_executable_sha256'] = actual
+lineage['harness_sha256'] = {
+    name: digest(root / name) for name in (
+        'tests/e2e/native-drag-drop-driver.py', 'tests/e2e/native-drag-drop.sh',
+        'native/fixture/native-drag-drop-host.m', 'target/privileged/payload-arm64.dylib')
+}
+(evidence / 'build-evidence.json').write_text(json.dumps(lineage, indent=2) + '\n')
+print('Candidate:', lineage['git_commit'], actual)
+print('Driver SHA256:', lineage['harness_sha256']['tests/e2e/native-drag-drop-driver.py'])
+PY
 mkdir -p -m 700 "$evidence/home" "$evidence/source/runtime" "$evidence/destination/runtime"
 socket=$evidence/infinify.sock
 state=$evidence/scene.json
@@ -92,7 +121,7 @@ driver_mode() {
   shift
   python3 "$driver" "$mode" "$evidence" \
     --source-runtime "$evidence/source/runtime" --source-nonce-file "$evidence/source/nonce" --source-pid "$source_pid" \
-    --destination-runtime "$evidence/destination/runtime" --destination-nonce-file "$evidence/destination/nonce" --destination-pid "$destination_pid" "$@"
+    --destination-runtime "$evidence/destination/runtime" --destination-nonce-file "$evidence/destination/nonce" --destination-pid "$destination_pid" ${replica_destination:+"$replica_destination"} "$@"
 }
 
 cleanup() {
@@ -127,9 +156,12 @@ done
 driver_mode baseline
 
 : > "$evidence/infinify.log"
-# Existing scoped benchmark ordering keeps only the owned canvas/windows above
-# unrelated apps. It changes panel ordering/discovery, not AppKit drag routing.
-INFINIFY_DEBUG=1 INFINIFY_DEBUG_BENCH=1 INFINIFY_DEBUG_NATIVE_BENCH=1 CFFIXED_USER_HOME="$evidence/home" "$app" \
+# The native scoped canvas remains interactive. In replica mode the same single
+# owned panel is split into two logical outputs; routing/transfer uses production
+# AppKit callbacks and presenter checks, with no direct destination invocation.
+fixture_views=1
+if [ -n "$replica_destination" ]; then fixture_views=2; fi
+INFINIFY_DEBUG=1 INFINIFY_DEBUG_BENCH=1 INFINIFY_DEBUG_NATIVE_BENCH=1 INFINIFY_DEBUG_NATIVE_VIEWS="$fixture_views" CFFIXED_USER_HOME="$evidence/home" "$app" \
   --windowed 1100x700 --state "$state" --config "$config" --socket "$socket" \
   --no-hover-forwarding --debug-pointer --only-pid "$source_pid,$destination_pid" \
   --native-helper "$evidence/source/runtime" "$evidence/source/nonce" \
@@ -147,4 +179,8 @@ stop_host "$source_pid"
 source_pid=
 stop_host "$destination_pid"
 destination_pid=
-echo 'PASS: native NSDraggingSession delivered the private file URL between two independent owned AppKit processes at half scale; both native originals and v2 journals were restored. Captured replicas remain unsupported.'
+if [ -n "$replica_destination" ]; then
+  echo 'PASS: original native NSDraggingSession entered a pictured destination replica on B, transferred its real window from A, and delivered the private file URL through ordinary AppKit callbacks; exact originals, both journals and cursor restored. Owned cross-process case only.'
+else
+  echo 'PASS: native NSDraggingSession delivered the private file URL between two independent owned AppKit processes at half scale; both native originals and v2 journals were restored. Primary-native case only.'
+fi

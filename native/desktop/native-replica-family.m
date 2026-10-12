@@ -88,6 +88,7 @@ static SCStreamConfiguration *familyConfiguration(CGRect bounds,double density,N
 @property(weak) DWReplicaMember *attempt;
 @property NSUInteger failures;
 @property CFTimeInterval notBefore;
+@property uint64_t waiting;
 @end
 @implementation DWReplicaRecovery @end
 static BOOL familyRecoveryMatches(DWReplicaRecovery *recovery,NSDictionary *root,NSDictionary *identity,CGRect bounds) {
@@ -134,6 +135,11 @@ static void familyNormalizeOrder(NSDictionary<NSNumber *,DWReplicaOrder *> *orde
 @property NSMutableDictionary<NSNumber *,NSArray<DWReplicaMember *> *> *members;
 @property NSMutableDictionary<NSNumber *,NSArray<DWCanvasAttachment *> *> *drawableAttachments;
 @property NSMutableDictionary<NSNumber *,NSMutableDictionary<NSNumber *,DWReplicaRecovery *> *> *recoveries;
+// Scheduling only, never native authority. Weak cold attempts survive a WID
+// replacement in the history until their actual retirement/first valid image.
+@property NSHashTable<DWReplicaMember *> *coldAttempts;
+@property NSMutableArray<NSNumber *> *admissionRoots;
+@property uint64_t admissionSequence;
 @property dispatch_queue_t observer;
 @property NSUInteger epoch;
 @property NSUInteger requestSequence;
@@ -157,7 +163,10 @@ static void familyNormalizeOrder(NSDictionary<NSNumber *,DWReplicaOrder *> *orde
 - (void)replaceDescriptions:(NSDictionary<NSNumber *,NSDictionary *> *)descriptions;
 - (void)memberFailed:(DWReplicaMember *)member;
 - (void)memberBecameDrawable:(DWReplicaMember *)member;
-- (DWReplicaRecovery *)admitRecovery:(NSDictionary *)identity root:(NSDictionary *)root bounds:(CGRect)bounds recovering:(NSUInteger *)recovering;
+- (DWReplicaRecovery *)recovery:(NSDictionary *)identity root:(NSDictionary *)root bounds:(CGRect)bounds;
+- (DWReplicaRecovery *)admitRecovery:(NSDictionary *)identity root:(NSDictionary *)root bounds:(CGRect)bounds starting:(NSUInteger *)starting;
+- (NSArray<NSNumber *> *)admissionRootOrder;
+- (NSArray<NSDictionary *> *)admissionPlans:(NSArray<NSDictionary *> *)plans root:(NSDictionary *)root;
 - (void)acceptRecoveryCohort:(NSArray<NSDictionary *> *)plans root:(NSDictionary *)root sampledAt:(NSNumber *)began;
 - (void)invalidatePID:(pid_t)pid discardRecovery:(BOOL)discard;
 @end
@@ -211,7 +220,7 @@ static void familyTrace(DWReplicaMember *member,const char *event,const char *re
 }
 - (void)retire {
     if(atomic_load(&alive))familyTrace(self,"retire","none",0);
-    atomic_store(&alive,NO);self.image.buffer=NULL;
+    atomic_store(&alive,NO);self.image.buffer=NULL;[self.owner.coldAttempts removeObject:self];
     SCStream *stream=self.stream;if(!stream)return;self.stream=nil;
     [stream removeStreamOutput:self type:SCStreamOutputTypeScreen error:nil];
     [stream stopCaptureWithCompletionHandler:^(NSError *error){(void)error;}];
@@ -292,6 +301,7 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
 @implementation DWNativeReplicaFamilies
 - (instancetype)initWithChanged:(void (^)(NSNumber *))changed {
     if((self=[super init])){_changed=[changed copy];_roots=@{};_members=[NSMutableDictionary dictionary];_drawableAttachments=[NSMutableDictionary dictionary];_recoveries=[NSMutableDictionary dictionary];
+        _coldAttempts=[NSHashTable weakObjectsHashTable];_admissionRoots=[NSMutableArray array];
         _observer=familyQueue("org.infinify.native-family-replicas");}
     return self;
 }
@@ -321,7 +331,7 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
     if(self.ordering.count)[self markOrderingChanged];
     self.ordering=nil;self.orderingEpoch=0;self.orderingObservation=0;
 }
-- (DWReplicaRecovery *)admitRecovery:(NSDictionary *)identity root:(NSDictionary *)root bounds:(CGRect)bounds recovering:(NSUInteger *)recovering {
+- (DWReplicaRecovery *)recovery:(NSDictionary *)identity root:(NSDictionary *)root bounds:(CGRect)bounds {
     NSNumber *logical=root[@"window"],*wid=identity[@"wid"];
     NSMutableDictionary<NSNumber *,DWReplicaRecovery *> *family=self.recoveries[logical];
     DWReplicaRecovery *recovery=family[wid];
@@ -330,17 +340,44 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
         // checked birth/freshness on main. Density/rate alone never reset it.
         if(!recovery&&family.count>=64)return nil;
         if(!family){family=[NSMutableDictionary dictionary];self.recoveries[logical]=family;}
-        recovery=[DWReplicaRecovery new];recovery.root=root;recovery.identity=identity;recovery.bounds=bounds;family[wid]=recovery;
-    }
-    if(recovery.failures){
-        if(CACurrentMediaTime()<recovery.notBefore||*recovering>=2)return nil;
-        (*recovering)++;
+        recovery=[DWReplicaRecovery new];recovery.root=root;recovery.identity=identity;recovery.bounds=bounds;recovery.waiting=++self.admissionSequence;family[wid]=recovery;
     }
     return recovery;
 }
+- (DWReplicaRecovery *)admitRecovery:(NSDictionary *)identity root:(NSDictionary *)root bounds:(CGRect)bounds starting:(NSUInteger *)starting {
+    DWReplicaRecovery *recovery=[self recovery:identity root:root bounds:bounds];
+    if(!recovery||*starting>=2||(recovery.failures&&CACurrentMediaTime()<recovery.notBefore))return nil;
+    NSUInteger all=0,family=0;
+    for(DWReplicaMember *attempt in self.coldAttempts.allObjects){
+        if(!atomic_load(&attempt->alive)||attempt.image.buffer){[self.coldAttempts removeObject:attempt];continue;}
+        all++;family+=[attempt.root[@"window"]isEqual:root[@"window"]];
+    }
+    if(all>=4||family>=2)return nil;
+    (*starting)++;recovery.waiting=++self.admissionSequence;
+    NSNumber *logical=root[@"window"];[self.admissionRoots removeObject:logical];[self.admissionRoots addObject:logical];
+    return recovery;
+}
+- (NSArray<NSNumber *> *)admissionRootOrder {
+    for(NSNumber *logical in self.admissionRoots.copy)if(!self.roots[logical])[self.admissionRoots removeObject:logical];
+    for(NSNumber *logical in [self.roots.allKeys sortedArrayUsingSelector:@selector(compare:)])if(![self.admissionRoots containsObject:logical])[self.admissionRoots addObject:logical];
+    return self.admissionRoots.copy;
+}
+- (NSArray<NSDictionary *> *)admissionPlans:(NSArray<NSDictionary *> *)plans root:(NSDictionary *)root {
+    if(plans.count<2)return plans;
+    // FIFO tickets, not numeric WID order or unconditional new-child priority:
+    // a due persistent child keeps its place despite endlessly replaced peers.
+    NSDictionary<NSNumber *,DWReplicaRecovery *> *family=self.recoveries[root[@"window"]];
+    return [plans sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b){
+        DWReplicaRecovery *left=family[a[@"identity"][@"wid"]],*right=family[b[@"identity"][@"wid"]];
+        uint64_t x=familyRecoveryMatches(left,root,a[@"identity"],familyRect(a[@"native_bounds"]))?left.waiting:UINT64_MAX;
+        uint64_t y=familyRecoveryMatches(right,root,b[@"identity"],familyRect(b[@"native_bounds"]))?right.waiting:UINT64_MAX;
+        return x<y?NSOrderedAscending:x>y?NSOrderedDescending:[a[@"identity"][@"wid"]compare:b[@"identity"][@"wid"]];
+    }];
+}
 - (void)acceptRecoveryCohort:(NSArray<NSDictionary *> *)plans root:(NSDictionary *)root sampledAt:(NSNumber *)began {
     NSMutableDictionary<NSNumber *,DWReplicaRecovery *> *family=self.recoveries[root[@"window"]];
-    if(!family.count||!began||!familyBinding(self.roots[root[@"window"]],root)||!familyProcessMatches(root[@"identity"]))return;
+    if(!plans.count&&!family.count)return;
+    if(!began||!familyBinding(self.roots[root[@"window"]],root)||!familyProcessMatches(root[@"identity"]))return;
     CFTimeInterval age=CACurrentMediaTime()-began.doubleValue;if(age<0||age>.1)return;
     NSMutableDictionary *current=[NSMutableDictionary dictionary];for(NSDictionary *plan in plans)current[plan[@"identity"][@"wid"]]=plan;
     for(NSNumber *wid in family.allKeys){NSDictionary *plan=current[wid];
@@ -348,6 +385,9 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
             [family removeObjectForKey:wid];
     }
     if(!family.count)[self.recoveries removeObjectForKey:root[@"window"]];
+    // A fresh complete observation gives waiting members a stable place before
+    // capacity is consulted. Merely waiting never consumes a start allowance.
+    for(NSDictionary *plan in plans)[self recovery:plan[@"identity"] root:root bounds:familyRect(plan[@"native_bounds"])];
 }
 - (void)memberFailed:(DWReplicaMember *)member {
     NSNumber *window=member.root[@"window"];
@@ -363,6 +403,7 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
     [self endChanges];
 }
 - (void)memberBecameDrawable:(DWReplicaMember *)member {
+    [self.coldAttempts removeObject:member];
     NSNumber *window=member.root[@"window"];
     DWReplicaRecovery *recovery=self.recoveries[window][member.identity[@"wid"]];
     if(recovery.attempt==member&&familyRecoveryMatches(recovery,member.root,member.identity,member.bounds)){
@@ -379,7 +420,7 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
     self.epoch++;self.reading=NO;self.nextRead=0;
     [self invalidateOrdering];
     for(NSArray<DWReplicaMember *> *family in self.members.allValues)for(DWReplicaMember *member in family)[member retire];
-    [self.members removeAllObjects];[self.drawableAttachments removeAllObjects];[self.recoveries removeAllObjects];self.roots=@{};
+    [self.members removeAllObjects];[self.drawableAttachments removeAllObjects];[self.recoveries removeAllObjects];[self.coldAttempts removeAllObjects];[self.admissionRoots removeAllObjects];self.admissionSequence=0;self.roots=@{};
     [self replaceDescriptions:@{}];
     for(NSNumber *window in changed)[self changedWindow:window];
     [self endChanges];
@@ -399,6 +440,7 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
         [self changedWindow:window];
     }
     for(NSNumber *window in self.recoveries.allKeys)if(!familyBinding(self.roots[window],wanted[window])||[wanted[window][@"capture"]isEqual:@NO])[self.recoveries removeObjectForKey:window];
+    for(NSNumber *window in self.admissionRoots.copy)if(!familyBinding(self.roots[window],wanted[window])||[wanted[window][@"capture"]isEqual:@NO])[self.admissionRoots removeObject:window];
     self.roots=wanted.copy;self.rate=hz;
     NSMutableDictionary *descriptions=[self.descriptions mutableCopy]?:[NSMutableDictionary dictionary];
     for(NSNumber *window in descriptions.allKeys)if(!familyBinding(descriptions[window],wanted[window]))[descriptions removeObjectForKey:window];
@@ -506,6 +548,7 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
         for(DWReplicaMember *member in self.members[window])[member retire];[self.members removeObjectForKey:window];[self.drawableAttachments removeObjectForKey:window];[self markOrderingChanged];[self changedWindow:window];
     }
     if(discard)for(NSNumber *window in self.recoveries.allKeys)if(!pid||[self.roots[window][@"identity"][@"pid"]intValue]==pid)[self.recoveries removeObjectForKey:window];
+    if(discard)for(NSNumber *window in self.admissionRoots.copy)if(!pid||[self.roots[window][@"identity"][@"pid"]intValue]==pid)[self.admissionRoots removeObject:window];
     NSMutableDictionary *descriptions=[self.descriptions mutableCopy]?:[NSMutableDictionary dictionary];
     for(NSNumber *window in descriptions.allKeys)if(!pid||[descriptions[window][@"identity"][@"pid"]intValue]==pid)[descriptions removeObjectForKey:window];
     [self replaceDescriptions:descriptions.copy];
@@ -600,13 +643,14 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
             DWNativeReplicaFamilies *owner=weak;if(!owner)return;owner.requestPending=NO;if(!owner.reading||owner.epoch!=epoch||owner.requestSequence!=sequence||![owner.roots isEqual:roots])return;owner.reading=NO;
             [owner beginChanges];
             NSMutableDictionary *nextMembers=[NSMutableDictionary dictionary],*nextOrdering=[NSMutableDictionary dictionary];
-            NSUInteger recovering=0;
-            for(NSNumber *logical in roots){NSMutableArray *installed=[NSMutableArray array];NSArray<DWReplicaMember *> *old=owner.members[logical]?:@[];
+            NSUInteger starting=0;
+            for(NSNumber *logical in [owner admissionRootOrder]){NSMutableArray *installed=[NSMutableArray array];NSArray<DWReplicaMember *> *old=owner.members[logical]?:@[];
                 // Only a fresh, complete native membership read may forget an
                 // absent failed binding. An error/stalled request cannot turn
                 // every old failure back into an unthrottled initial attempt.
                 if(owner.epoch==epoch&&descriptions[logical])[owner acceptRecoveryCohort:plans[logical] root:roots[logical] sampledAt:sampledAt[logical]];
-                for(NSDictionary *plan in error||[roots[logical][@"capture"]isEqual:@NO]?@[]:plans[logical]){
+                NSArray<NSDictionary *> *wanted=error||[roots[logical][@"capture"]isEqual:@NO]?@[]:plans[logical];
+                for(NSDictionary *plan in [owner admissionPlans:wanted root:roots[logical]]){
                     NSDictionary *identity=plan[@"identity"];CGRect bounds=familyRect(plan[@"native_bounds"]);SCWindow *window=windows[identity[@"wid"]];
                     // The observer proved this exact child/root binding. Its
                     // deadline includes every native read and queue wait; a
@@ -620,8 +664,9 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
                     double density=[roots[logical][@"density"]doubleValue];if(!isfinite(density)||density<=0)density=2;
                     density=MIN(2,MAX(1./32,density));DWReplicaMember *member=nil;
                     for(DWReplicaMember *candidate in old)if(atomic_load(&candidate->alive)&&[candidate.identity isEqual:identity]&&CGRectEqualToRect(candidate.bounds,bounds)&&familyBinding(candidate.root,roots[logical])){member=candidate;break;}
-                    if(!member){DWReplicaRecovery *recovery=[owner admitRecovery:identity root:roots[logical] bounds:bounds recovering:&recovering];if(!recovery)continue;
+                    if(!member){DWReplicaRecovery *recovery=[owner admitRecovery:identity root:roots[logical] bounds:bounds starting:&starting];if(!recovery)continue;
                         member=[DWReplicaMember new];member.owner=owner;member.root=roots[logical];member.identity=identity;member.bounds=bounds;member.rootBounds=familyRect(roots[logical][@"native_bounds"]);member.density=density;member.rate=rate;member.frameTime=mach_absolute_time();recovery.attempt=member;
+                        [owner.coldAttempts addObject:member];
                         familyTrace(member,"create","none",0);
                         DWCanvasAttachment *image=[DWCanvasAttachment new];image.key=[NSString stringWithFormat:@"%@:%@:%@:%@",identity[@"pid"],identity[@"birth_sec"],identity[@"birth_usec"],identity[@"wid"]];
                         image.unitRect=CGRectMake((bounds.origin.x-member.rootBounds.origin.x)/member.rootBounds.size.width,(bounds.origin.y-member.rootBounds.origin.y)/member.rootBounds.size.height,bounds.size.width/member.rootBounds.size.width,bounds.size.height/member.rootBounds.size.height);member.image=image;
@@ -639,6 +684,10 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
                     }
                     [installed addObject:member];
                 }
+                // Scheduling priority is not z-order. Publish the exact native
+                // observation's sequence (or its existing fallback sequence).
+                if(installed.count>1){NSMutableDictionary *byID=[NSMutableDictionary dictionary];for(DWReplicaMember *member in installed)byID[member.identity[@"wid"]]=member;
+                    [installed removeAllObjects];for(NSDictionary *plan in wanted){DWReplicaMember *member=byID[plan[@"identity"][@"wid"]];if(member)[installed addObject:member];}}
                 for(DWReplicaMember *member in old)if(![installed containsObject:member])[member retire];
                 nextMembers[logical]=installed.copy;
                 if(![old isEqual:installed]){[owner.drawableAttachments removeObjectForKey:logical];[owner markOrderingChanged];[owner changedWindow:logical];}

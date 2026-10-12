@@ -30,6 +30,7 @@ python3 scripts/build-app-package.py snapshot \
   --root "$root" \
   --output "$stage/source-before.json"
 
+./scripts/build-privileged.sh --production --output-dir "$stage/privileged"
 cargo build -p driftwm-desktop --release
 
 # The transform helper's client library is plain C; native presentation links it.
@@ -46,6 +47,7 @@ python3 scripts/build-app-package.py publish \
   --root "$root" \
   --snapshot "$stage/source-before.json" \
   --staged-app "$app" \
+  --privileged-dir "$stage/privileged" \
   --app-dir "$app_dir"
 
 printf '%s\n' "Built $app_dir/Infinify.app (arm64, macOS 26+); nothing launched. scripts/install-app.sh installs it as ~/Applications/Infinify.app."
