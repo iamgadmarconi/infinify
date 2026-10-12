@@ -182,22 +182,28 @@ static const char *statusName(uint8_t status) {
 @end
 @interface DWNativePresenter ()
 - (BOOL)placementDescriptionCurrent:(DWNativePlacementDescription *)description;
+- (dw_client *)takeActivity:(id __strong *)activity;
 @end
-static void DWCloseNativeClient(dw_client *client) {
-    if(!client)return;
+static void DWDisposeNativeClient(dw_client *client,id activity) {
+    dw_client_close(client);
+    if(activity)[NSProcessInfo.processInfo endActivity:activity];
+}
+static void DWCloseNativeClient(dw_client *client,id activity) {
+    if(!client){DWDisposeNativeClient(client,activity);return;}
     struct dw2_restore_result *results=calloc(DW2_MAX_TABLE,sizeof(*results));uint32_t count=0,pending=0,journalPersisted=0;
     int result=results?dw_client_restore_all(client,2000,results,DW2_MAX_TABLE,&count,&pending,&journalPersisted):DW_CLIENT_INVALID;
     free(results);
     if(result==DW_CLIENT_UNDURABLE)fprintf(stderr,"Infinify: the helper returned a valid restore summary (%u of %u still pending, journal_persisted=%u) but did not confirm the journal write; closing the session leaves restoration with the helper\n",pending,count,journalPersisted);
     else if(result!=DW_CLIENT_OK)fprintf(stderr,"Infinify: native restoration was not confirmed (%s); closing the session leaves restoration with the helper\n",result==DW_CLIENT_TIMEOUT?"no answer within 2 s":result==DW_CLIENT_LOST?"the helper is gone":"invalid reply");
     else if(pending)fprintf(stderr,"Infinify: %u of %u native windows still restoring; the helper keeps retrying them\n",pending,count);
-    dw_client_close(client);
+    DWDisposeNativeClient(client,activity);
 }
 @implementation DWNativePresenter {
     // Every call into the library is made under this lock and for that call only (each is bounded: two seconds at most), and the
     // pointer is cleared under it, so the watchdog's close on its own queue never meets a call on the main thread.
     os_unfair_lock _lock;
     dw_client *_client;
+    id _activity; // travels with the client to its final close, including asynchronous restoration
     struct dw_client_info _info;
     NSDictionary<NSNumber *,NSArray<NSNumber *> *> *_scope;
     BOOL _desktopWide;
@@ -271,11 +277,17 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
 + (instancetype)presenterAt:(NSString *)runtime nonce:(NSString *)nonce64 scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope subset:(BOOL)subset watch:(BOOL)watch desktop:(BOOL)desktop why:(NSString *__autoreleasing *)why {
     DWNativePresenter *presenter=[self new];
     atomic_store(&presenter->_preparing,true);
+    // Native windows stay placed while the canvas is quiet or covered. Its
+    // frame driver's activity ends at idle, but this user-requested session
+    // still needs timely heartbeats. Allow system/display sleep and keep the
+    // activity until client closure; no latency-critical or sleep assertion.
+    presenter->_activity=[NSProcessInfo.processInfo beginActivityWithOptions:NSActivityUserInitiatedAllowingIdleSystemSleep reason:@"Maintaining native window presentation"];
     // The caller retains this object until its client threads have been joined.
     struct dw_client_callbacks callbacks={.context=(__bridge void *)presenter,.frame_result=frameResult,.lost=lost};
     int opened=dw_client_open(runtime.fileSystemRepresentation,nonce64.UTF8String,&callbacks,2000,&presenter->_client,&presenter->_info);
     if(opened!=DW_CLIENT_OK){
         atomic_store(&presenter->_preparing,false);
+        id activity;dw_client *client=[presenter takeActivity:&activity];DWDisposeNativeClient(client,activity);
         if(why)*why=opened==DW_CLIENT_TIMEOUT?@"no helper answered there within 2 s":opened==DW_CLIENT_REFUSED?@"the helper refused the session (wrong nonce or protocol version)":@"the session could not be set up";
         return nil;
     }
@@ -313,11 +325,11 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     if(!refusal&&![presenter restorationEmpty])refusal=@"the helper's previous native restoration and journal are not yet confirmed empty";
     if(!refusal&&desktop&&![presenter->_dockBirth isEqual:DWNativeProcessBirth(presenter->_info.server_pid,presenter->_loginUID)])refusal=@"the Dock process instance changed during desktop admission";
     if(!refusal&&presenter.ended)refusal=@"the helper was lost during native scope admission";
-    if(refusal){atomic_store(&presenter->_preparing,false);dw_client_close([presenter take]);if(why)*why=refusal;return nil;}
+    if(refusal){atomic_store(&presenter->_preparing,false);id activity;dw_client *client=[presenter takeActivity:&activity];DWDisposeNativeClient(client,activity);if(why)*why=refusal;return nil;}
     presenter->_desktopWide=desktop;
     presenter->_scope=subset?admitted.copy:[scope copy];
     atomic_store(&presenter->_preparing,false);
-    if(presenter.ended){dw_client_close([presenter take]);if(why)*why=@"the helper was lost before native admission completed";return nil;}
+    if(presenter.ended){id activity;dw_client *client=[presenter takeActivity:&activity];DWDisposeNativeClient(client,activity);if(why)*why=@"the helper was lost before native admission completed";return nil;}
     if(watch)[presenter watch];
     return presenter;
 }
@@ -359,10 +371,10 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
 }
 - (BOOL)activate { if(self.ended||(_desktopWide&&![DWNativeProcessBirth(_info.server_pid,_loginUID)isEqual:_dockBirth]))return NO;if(!_observer)[self watch];return !self.ended; }
 - (void)suspendWithCompletion:(void (^)(void))completed {
-    dw_client *client=[self take];atomic_store(&_ended,true);[self unwatch];
+    id activity;dw_client *client=[self takeActivity:&activity];atomic_store(&_ended,true);[self unwatch];
     // Hold the callback context until the client's reader/writer/heartbeat join.
     DWNativePresenter *keep=self;
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{DWCloseNativeClient(client);
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{DWCloseNativeClient(client,activity);
         dispatch_async(dispatch_get_main_queue(),^{(void)keep;if(completed)completed();});});
 }
 // The library's heartbeat thread keeps the lease whatever the main thread does, which is what lets a slow frame keep its windows. A
@@ -378,20 +390,26 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     __weak DWNativePresenter *weak=self;
     dispatch_source_set_event_handler(_watchdog,^{DWNativePresenter *presenter=weak;if(!presenter)return;
         uint64_t away=uptime()-atomic_load(&presenter->_turned);if(away<DWStall)return;
-        dw_client *client=[presenter take];if(!client)return;
-        dw_client_close(client);
+        id activity;dw_client *client=[presenter takeActivity:&activity];if(!client)return;
+        DWDisposeNativeClient(client,activity);
         fprintf(stderr,"Infinify: native presentation ended: the main thread has not turned for %.0f s, so the session was closed and the helper puts every window back\n",away/1000.);});
     dispatch_resume(_watchdog);
 }
-// The session, taken from everything else for good: the caller closes it.
-- (dw_client *)take { os_unfair_lock_lock(&_lock);dw_client *client=_client;_client=NULL;if(client)atomic_store(&_ended,true);os_unfair_lock_unlock(&_lock);return client; }
+// Transfer the session and its activity together: only the closer owns either
+// after this lock. A concurrent loss/suspend cannot end an activity while the
+// first closer is still restoring windows or joining the heartbeat thread.
+- (dw_client *)takeActivity:(id __strong *)activity {
+    os_unfair_lock_lock(&_lock);dw_client *client=_client;_client=NULL;
+    *activity=_activity;_activity=nil;if(client)atomic_store(&_ended,true);
+    os_unfair_lock_unlock(&_lock);return client;
+}
 - (void)unwatch { if(_watchdog){dispatch_source_cancel(_watchdog);_watchdog=nil;}if(_observer){CFRunLoopRemoveObserver(CFRunLoopGetMain(),_observer,kCFRunLoopCommonModes);CFRelease(_observer);_observer=NULL;} }
 - (void)dealloc { [self unwatch]; }
 // The helper went away, or stopped answering. Said once; the library has closed its side already, so whatever helper is still
 // there restores, and one that died took its own windows with it.
 - (void)lost:(int)reason {
-    dw_client *client=[self take];if(!client)return;
-    [self unwatch];dw_client_close(client);
+    id activity;dw_client *client=[self takeActivity:&activity];if(!client)return;
+    [self unwatch];DWDisposeNativeClient(client,activity);
     fprintf(stderr,"Infinify: native presentation lost (%s): windows are where the helper's restore left them\n",lostName(reason));
 }
 // A record the helper did not apply: the window is not where the canvas shows it. Once per window and reason.
@@ -691,10 +709,10 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     _frames[@(seq)]=_sent;for(NSNumber *old in _frames.allKeys)if(old.unsignedLongLongValue+64<seq){[_frames removeObjectForKey:old];[_framePlacements removeObjectForKey:old];}
 }
 - (void)finish {
-    dw_client *client=[self take];[self unwatch];if(!client)return;
+    id activity;dw_client *client=[self takeActivity:&activity];[self unwatch];if(!client)return;
     // The session is this method's alone now. Restored by request and confirmed, so that the windows are back before the canvas
     // closes; the close that follows would restore them too, but says nothing of how that went.
-    DWCloseNativeClient(client);
+    DWCloseNativeClient(client,activity);
 }
 - (NSData *)debug:(NSDictionary *)request {
     NSNumber *stall=[request[@"stall"]isKindOfClass:NSNumber.class]?request[@"stall"]:nil;

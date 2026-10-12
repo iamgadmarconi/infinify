@@ -930,6 +930,8 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 @property NSUInteger nativeResumeFailures;
 @property CFTimeInterval nativeResumeAfter;
 @property NSString *nativeResumeNote;
+- (BOOL)nativeUnavailable;
+- (void)suspendPresentationLeavingSession:(BOOL)leaving;
 - (void)resumeNative;
 @property DWNativeInput *nativeInput;
 @property DWNativeTabletRouter *tablet;
@@ -1069,6 +1071,7 @@ static const NSInteger DWPolicyPress=9;
 // Hover asks once a frame, and what the controller refuses it is not news for the status line.
 - (NSDictionary *)pointerCommand:(NSDictionary *)command quiet:(BOOL)quiet {
     Desktop *d=self.desktop;NSDictionary *childHover=nil,*childBounds=nil;
+    if([d nativeUnavailable])return nil;
     if(d.configured&&[command[@"op"]isEqual:@"hover"]){
         if(d.native.ended||d.sessionInactive)return nil;
         CGPoint point=jsonPoint(command[@"screen"]);CGWindowID top=(CGWindowID)[NSWindow windowNumberAtPoint:NSMakePoint(point.x,screenTop()-point.y) belowWindowWithWindowNumber:0];
@@ -1501,7 +1504,7 @@ static BOOL DWInputTrace(void) { static int on=-1;if(on<0)on=getenv("INFINIFY_DE
     [self.desktop render];
 }
 - (void)mouseDown:(NSEvent *)e {
-    if(self.desktop.sessionInactive)return;
+    if(self.desktop.sessionInactive||[self.desktop nativeUnavailable])return;
     [self.desktop.compositor finishGeometryTransitions];
     if(self.desktop.compositor.hasGeometryTransitions)return;
     if(self.desktop.probe&&!self.desktop.probeDrivingGesture){self.desktop.probeHumanInput=YES;return;}
@@ -1535,6 +1538,7 @@ static BOOL DWInputTrace(void) { static int on=-1;if(on<0)on=getenv("INFINIFY_DE
 - (void)rightMouseUp:(NSEvent *)e { if(self.desktop.configured)[self mouseUp:e];else [super rightMouseUp:e]; }
 - (void)otherMouseUp:(NSEvent *)e { if(self.desktop.configured)[self mouseUp:e];else [super otherMouseUp:e]; }
 - (void)mouseDragged:(NSEvent *)e {
+    if([self.desktop nativeUnavailable])return;
     if(self.desktop.probe&&!self.desktop.probeDrivingGesture){self.desktop.probeHumanInput=YES;return;}
     if(self.desktop.configured&&e.buttonNumber!=self.gestureButton)return;
     CGPoint p=[self screenPoint:e];
@@ -1695,6 +1699,7 @@ static BOOL DWInputTrace(void) { static int on=-1;if(on<0)on=getenv("INFINIFY_DE
     }
 }
 - (void)scrollWheel:(NSEvent *)e {
+    if([self.desktop nativeUnavailable])return;
     [self.desktop.compositor finishGeometryTransitions];
     if(self.desktop.compositor.hasGeometryTransitions)return;
     if(self.desktop.sessionInactive)return;
@@ -1709,7 +1714,7 @@ static BOOL DWInputTrace(void) { static int on=-1;if(on<0)on=getenv("INFINIFY_DE
     else {CGEventRef cg=CGEventCreateCopy(e.CGEvent);[self forward:cg at:p output:output activate:NO];CFRelease(cg);}
 }
 - (void)magnifyWithEvent:(NSEvent *)e {
-    if(self.desktop.sessionInactive)return;
+    if(self.desktop.sessionInactive||[self.desktop nativeUnavailable])return;
     // A normal run's pinch is a gesture binding: the [gestures] table decides what it does.
     if(self.desktop.configured){[self.desktop magnify:e];return;}
     // Fixed gesture of probe, demo and owned-fixture runs.
@@ -2429,7 +2434,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // motion asks so: such frames come at the display's rate for as long as a window's pictures do, the idle poll goes on beside
 // them and reports a pointer at rest at its own pace, and a call into the controller per refresh would be for nothing.
 - (void)pointerFrame:(BOOL)moved {
-    if(self.cleaning||self.sessionInactive)return;
+    if(self.cleaning||self.sessionInactive||[self nativeUnavailable])return;
     BOOL report=self.pointerWanted,hover=NO;
     for(DesktopView *view in self.views){if(view.gesture)report=NO;if(self.frameDriver&&view.hover.pending)hover=YES;}
     if(!report&&!hover)return;
@@ -2442,7 +2447,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // run's coordinator owns the tick; probe, demo and owned-fixture runs tick the controller
 // themselves on the same clock.
 - (BOOL)cameraFrame {
-    if(self.cleaning||self.sessionInactive)return NO;
+    if(self.cleaning||self.sessionInactive||[self nativeUnavailable])return NO;
     [self pointerFrame];
     if(self.navigation)return [self.navigation frame];
     NSDictionary *result=[self call:@{@"op":@"tick_navigation",@"timestamp_ns":@((uint64_t)(CACurrentMediaTime()*1e9))}];
@@ -2479,7 +2484,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // that served the compositor and skipped the pointer would leave hover to the idle poll.
 // A frame that stopped the timer and started another (a quit, a screen change) leaves the new one alone.
 - (void)startFrames {
-    if(self.frameDriver||self.cleaning||self.sessionInactive)return;self.frameQuiet=0;
+    if(self.frameDriver||self.cleaning||self.sessionInactive||[self nativeUnavailable])return;self.frameQuiet=0;
     NSArray *screens=[self canvasScreens];NSScreen *clockScreen=nil;
     for(NSScreen *screen in screens)if(!clockScreen||screen.maximumFramesPerSecond>clockScreen.maximumFramesPerSecond)clockScreen=screen;
     IFCompositorLayer *clockLayer=nil;
@@ -2517,11 +2522,11 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 - (NSArray<NSScreen *> *)canvasScreens { NSMutableArray<NSScreen *> *screens=[NSMutableArray array];for(NSPanel *panel in self.panels)if(panel.screen&&![screens containsObject:panel.screen])[screens addObject:panel.screen];return screens; }
 // Something may be in motion: a frame per display refresh from the next one on. Only the
 // controller knows what is, so that frame asks it, and the timer stops serving motion when nothing is.
-- (void)ensureFrames { if(self.cleaning||self.sessionInactive)return;self.frameFlying=YES;[self startFrames]; }
+- (void)ensureFrames { if(self.cleaning||self.sessionInactive||[self nativeUnavailable])return;self.frameFlying=YES;[self startFrames]; }
 // The end of a burst of timed pans: upstream's launch_momentum_on. The clock is brought
 // up to now first, so the coast's first frame spans one frame and not the idle poll's gap.
 - (void)panEnd:(NSNumber *)output {
-    if(self.cleaning||!output)return;
+    if(self.cleaning||[self nativeUnavailable]||!output)return;
     if(!self.frameFlying)[self cameraFrame];
     [self call:@{@"op":@"pan_end",@"output":output}];[self ensureFrames];
 }
@@ -2724,7 +2729,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // So is a tap binding's, which the controller looks up by the chord: `tap` is the physical modifiers of the chord just completed, as the
 // bindings reply gave them. Upstream runs a tap's action as it runs a key's (keyboard.rs: pending_tap_action through execute_action).
 - (void)action:(NSString *)action output:(NSNumber *)output at:(CGPoint)point held:(BOOL)held corner:(NSString *)corner tap:(NSDictionary *)tap {
-    if(self.sessionInactive)return;
+    if(self.sessionInactive||([self nativeUnavailable]&&![action isEqual:@"quit"]))return;
     // An action cancels a resize the pointer began and is dropped while that is unresolved. A sizing action's own transaction is
     // not cancelled and drops nothing: the next action, a held grow-window's repeat among them, is the controller's to answer.
     if(self.cleaning||!output)return;
@@ -2750,7 +2755,11 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // as it does, as a hot key's action does. The reply is an action's, with what the
 // gesture fired and a note when it is refused (a resize of a screen-pinned window).
 - (void)gesture:(NSDictionary *)event owner:(NSInteger)owner {
-    NSString *op=event[@"op"];BOOL begin=[op isEqual:@"gesture_begin"],end=[op isEqual:@"gesture_end"],held=[DWCycleHold modifiersDown]!=0;NSMutableDictionary *command=[event mutableCopy];
+    NSString *op=event[@"op"];
+    // Cancellation receipts still drain the old gesture; no new/update event can
+    // move the logical scene while its native owner is unavailable.
+    if([self nativeUnavailable]&&(![op isEqual:@"gesture_end"]||![event[@"cancelled"]boolValue]))return;
+    BOOL begin=[op isEqual:@"gesture_begin"],end=[op isEqual:@"gesture_end"],held=[DWCycleHold modifiersDown]!=0;NSMutableDictionary *command=[event mutableCopy];
     if(begin){
         // Upstream: a gesture that begins on top of a held modifier chord makes it a binding prefix, not a tap, whatever becomes of the gesture.
         [self.tapKeys taint];
@@ -2897,7 +2906,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // That press released as a completed click. With auto_navigate_on_click the controller flies
 // to a window that still holds focus and is not wholly in view. The reply carries a flight or
 // nothing, never a focus request, so the press's request stays the coordinator's.
-- (void)clickReleased:(NSNumber *)window output:(NSNumber *)output { [self applyReply:[self call:@{@"op":@"activate",@"window":window,@"output":output?:NSNull.null,@"cause":@"click_release"}]]; }
+- (void)clickReleased:(NSNumber *)window output:(NSNumber *)output { if([self nativeUnavailable])return;[self applyReply:[self call:@{@"op":@"activate",@"window":window,@"output":output?:NSNull.null,@"cause":@"click_release"}]]; }
 // Upstream's raise_and_focus by itself, for a press bound to a resize that begins nothing: the gate is off or the begin was
 // turned away (-beginResize:…), or the window is screen-pinned (-press:…).
 - (void)raiseFocus:(NSNumber *)window { [self applyReply:[self call:@{@"op":@"focus",@"window":window}]]; }
@@ -3123,6 +3132,15 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(self.startupError)return ipcError(self.startupError);
     // A request that arrives during a sizing action's transaction is the controller's to answer, as an action is.
     id request=[NSJSONSerialization JSONObjectWithData:line options:NSJSONReadingFragmentsAllowed error:nil];
+    if([self nativeUnavailable]){
+        // Keep inspection/subscription and quitting available, but refuse scene
+        // mutations rather than answer success while no native frame can apply.
+        NSDictionary *object=asDict(request);
+        BOOL read=[request isEqual:@"State"]||[request isEqual:@"DebugCounters"]||[request isEqual:@"Subscribe"]||object[@"Layout"];
+        BOOL debug=self.debugPointer&&(asDict(object[@"DebugNative"])||asDict(object[@"DebugCapture"]));
+        BOOL quit=[object[@"Action"]isEqual:@"quit"];
+        if(!read&&!debug&&!quit)return ipcError(@"native presentation is restoring or reconnecting; retry when ready");
+    }
     if(self.screenshotBusy&&asDict(asDict(request)[@"Screenshot"]))return ipcError(@"another screenshot is preparing");
     // Without --debug-pointer the line goes on to the controller, which knows no such request and refuses it.
     if(self.debugPointer&&asDict(asDict(request)[@"DebugPointer"]))return [self debugPointer:asDict(request)[@"DebugPointer"]];
@@ -3920,6 +3938,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
 // only attach command sent. Under --only-pid a window of any other process is refused here before any of them exists, so
 // nothing that acts on a native window (native focus, a forwarded press or motion, close, native resize) has one to act on.
 - (BOOL)attach:(DWWindowCandidate *)window logical:(NSNumber *)logical world:(NSDictionary *)world placed:(BOOL)placed {
+    if([self nativeUnavailable]){self.statusText=@"Native presentation is reconnecting; window discovery will retry";return NO;}
     if(!placed)[self cancelNavigation];
     pid_t pid=window.pid;uint32_t wid=window.window;
     if(!DWInScope(self.scope,pid)){self.statusText=@"Not attached: its process is outside --only-pid";return NO;}
@@ -4379,18 +4398,20 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
 }
 // Did close-window or suspend-window ask this window to close? The controller's mark.
 - (BOOL)marked:(LiveSource *)source { return asDict([self call:@{@"op":@"snapshot"}][@"lifecycle"][@"marks"])[source.logical.stringValue]!=nil; }
-// Session departure cancels input and frame driving, then drains native helper
-// restoration. Return keeps the existing output layers where displays match,
-// prepares capture recovery, and independently re-audits any native sessions.
-- (void)leftSession {
-    if(self.cleaning||self.sessionInactive)return;
+// Session departure and unexpected native loss cancel the same input/frame
+// state and drain the existing helper. Outputs and world geometry stay in place.
+- (BOOL)nativeUnavailable { return self.native&&(self.native.ended||self.nativeResumeWanted||self.nativeRestoring||self.nativeResumeInFlight); }
+- (void)suspendPresentationLeavingSession:(BOOL)leaving {
     [self cancelCapturedInputForWindow:nil];
     [self cancelGestures];[self cancelNativeInput];[self.panLaunch cancel];
     for(DesktopView *view in self.views){view.scrollPan=nil;view.scrollPanTime=0;view.lastScrollPan=0;if(view.gesture){view.clearsFocus=NO;view.lastDragPan=0;[view released:view.lastPoint at:NSProcessInfo.processInfo.systemUptime];}}
     if(![self sizing])[self.resize cancel];
     [self.navigation invalidate];self.navigation.enabled=NO;
     [self.frameDriver invalidate];self.frameDriver=nil;self.frameFlying=NO;self.flying=NO;self.pointerWanted=NO;
-    self.sessionInactive=YES;[self stopNativeTransferTimer];self.nativeOwnershipTransfer=nil;[self.canvasCursor reset];[self saveScene];
+    // Held input is cancelled first; departure is inactive before any native
+    // drain/completion can ask to reconnect, even if that completion is immediate.
+    if(leaving)self.sessionInactive=YES;
+    [self stopNativeTransferTimer];self.nativeOwnershipTransfer=nil;[self.canvasCursor reset];[self saveScene];
     [self.nativeFamilies reset];self.overlayFamilySnapshot=self.overlayFamilyBase=self.overlayFamilyDescriptions=nil;
     // Capture work stops with presentation in both backends. Retain overlay
     // bindings/shareable windows so normal demand can resume them on return.
@@ -4406,8 +4427,19 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
             [self.native suspendWithCompletion:^{Desktop *d=weak;if(!d)return;d.nativeRestoring=NO;[d resumeNative];}];}
     }
 }
+- (void)leftSession {
+    if(self.cleaning||self.sessionInactive)return;
+    [self suspendPresentationLeavingSession:YES];
+}
 - (void)resumeNative {
-    if(self.cleaning||stopped||self.sessionInactive||!self.panels.count||!self.nativeResumeWanted||self.nativeRestoring||self.nativeResumeInFlight||CACurrentMediaTime()<self.nativeResumeAfter)return;
+    if(self.cleaning||stopped)return;
+    if(self.native.ended&&self.nativeEndpoints.count&&!self.nativeResumeWanted&&!self.sessionInactive){
+        // Loss can occur with the desktop still active. Enter the same drain and
+        // authenticated re-admission used after session return, once per loss.
+        self.statusText=@"Native presentation lost; restoring and reconnecting";[self say:self.statusText];
+        [self suspendPresentationLeavingSession:NO];[self render];
+    }
+    if(self.sessionInactive||!self.panels.count||!self.nativeResumeWanted||self.nativeRestoring||self.nativeResumeInFlight||CACurrentMediaTime()<self.nativeResumeAfter)return;
     // Preserve the endpoint, credentials and authority selected at launch.
     // Scoped recovery pins the original process births; desktop recovery
     // reaudits its Dock peer. Candidates stay inert until this main turn.
@@ -4427,6 +4459,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
                 if(![d.nativeResumeNote isEqual:note]){d.nativeResumeNote=note;[d say:note];}return;
             }
             d.native=candidate;d.nativeResumeWanted=NO;d.nativeResumeFailures=0;d.nativeResumeNote=nil;
+            [d say:@"Native presentation reconnected after authenticated restoration audit"];d.statusText=[d restingStatus];
             d.navigation.enabled=YES;d.lastObservation=0;
             for(LiveSource *source in d.sources.allValues){source.observationToken=++d.observationEpoch;source.nativeButtons=nil;source.nativeButtonsNext=0;}
             d.windowObservationAgain=YES;[d requestWindowObservation];[d configureNativeInput];[d render];
@@ -4530,9 +4563,14 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
 - (void)poll {
     if(self.cleaning||self.sessionInactive)return;
     [self resumeNative];
+    if([self nativeUnavailable]){
+        // Registered receipts/watchdogs run on main independently of this poll.
+        // Keep orphan settlement too, without allowing new input or camera work.
+        if(self.resize&&CACurrentMediaTime()-self.lastResizeObservation>=1){self.lastResizeObservation=CACurrentMediaTime();[self.resize reap];}
+        return;
+    }
     BOOL timing=self.scope&&getenv("INFINIFY_DEBUG")&&atoi(getenv("INFINIFY_DEBUG"))==1;
     CFTimeInterval stages[7]={0};if(timing)stages[0]=CACurrentMediaTime();
-    if(self.native.ended&&(self.nativeGestureView||self.nativeScrollView))[self cancelNativeInput];
     if(self.nativeButtonHover)[self refreshNativeButtons:self.sources[self.nativeButtonHover]];
     if(self.resize&&CACurrentMediaTime()-self.lastResizeObservation>=1){self.lastResizeObservation=CACurrentMediaTime();[self.resize reap];}
     [self endLostInput];
@@ -4692,7 +4730,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     if(changed){self.windowObservationAgain=YES;[self requestWindowObservation];}
 }
 // Native focus may have moved (Command-Tab, a click on another window): read now, through the coordinator's own path.
-- (void)focusChanged { if(self.cleaning||!self.navigation)return;self.lastObservation=CACurrentMediaTime();[self refreshFocusAccess];[self.navigation observe]; }
+- (void)focusChanged { if(self.cleaning||[self nativeUnavailable]||!self.navigation)return;self.lastObservation=CACurrentMediaTime();[self refreshFocusAccess];[self.navigation observe]; }
 // macOS platform rule: applications outlive Infinify, where upstream's clients end with the compositor. A window still fullscreen, or
 // still owed its size by a fullscreen that has ended, would keep the display's size after the canvas is gone, so each fullscreen is
 // ended and its size transaction performed to its end before anything is shut down, one at a time, the slot being one. Upstream's
