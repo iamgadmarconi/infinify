@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Independent saved-byte oracle for the disposable resize probe (no native APIs)."""
+"""Independent saved-byte oracle for historical resize-probe receipts (no native APIs)."""
 import hashlib
 import json
 import math

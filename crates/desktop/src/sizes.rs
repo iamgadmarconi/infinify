@@ -257,7 +257,7 @@ pub(crate) struct Sizes {
     /// Every normal run's does.
     pub(crate) capability: bool,
     /// A size is settled by the native read alone; this run acknowledges no
-    /// capture. Every normal run without `--experimental-native-resize`:
+    /// capture. Every normal run:
     /// NATIVE_RESIZE.md, "Readback mode".
     pub(crate) readback: bool,
     restore: BTreeMap<WindowId, Restore>,

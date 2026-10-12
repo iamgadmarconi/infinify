@@ -12,10 +12,10 @@
 @interface DWResizeCoordinator : NSObject
 - (instancetype)initWithCommand:(DWCommand)command driver:(id<DWResizeDriver>)driver clock:(uint64_t (^)(void))clock worker:(DWSchedule)worker main:(DWSchedule)main;
 @property BOOL enabled;
-// NO: readback mode, every normal run without --experimental-native-resize (crates/desktop/NATIVE_RESIZE.md). The size a window took is
+// NO: readback mode, every normal run (crates/desktop/NATIVE_RESIZE.md). The size a window took is
 // settled by the native read alone: no result invalidates a capture, none waits for a frame, and no obligation outlives its effect. An
 // effect the driver does not answer, or whose answer the controller refuses, is reported as timed out and unobserved, which the
-// controller ends its transaction on. YES, the default, is the capture-acknowledged mode every caller had before.
+// controller ends its transaction on. YES, the default, validates the isolated controller capture contract.
 @property BOOL acknowledges;
 // Readback mode: seconds after which an effect nobody has answered is reported as timed out. 0, the default, never.
 @property NSTimeInterval timeout;
@@ -52,5 +52,3 @@
 - (void)bind:(NSNumber *)window stream:(id)stream;
 - (BOOL)accept:(CMSampleBufferRef)sample window:(NSNumber *)window stream:(id)stream install:(BOOL (^)(CMSampleBufferRef))install;
 @end
-// Eight handles at actual world edges; never synthesize edges at viewport clips.
-NSArray<NSDictionary *> *DWResizeHandles(CGRect full,CGRect clip);

@@ -39,8 +39,9 @@ freshly checks ownership, sets the AX timeout, and allocates the size value. Fin
 authorization then runs; only a local monotonic deadline check follows before
 AXSize. It must not perform AX, family, or file work. The scoped path reserves the
 entire configured <=150 ms setter timeout and refuses if insufficient time remains.
-Frozen prior adapter evidence remains historical; the new owned desktop gate is
-live-unrun.
+Frozen prior adapter evidence remains historical. The former orange-handle
+desktop gate and its executable probe were retired on 2026-10-12; these adapter
+entry points remain available to independent, explicitly scoped fixtures.
 
 Results distinguish observed/applied/clamped/rejected/unsupported, invalid/stale,
 unavailable/missing/ambiguous, and readback failures/timeouts. `mutation_attempted`

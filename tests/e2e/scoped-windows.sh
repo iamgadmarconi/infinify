@@ -63,7 +63,7 @@ refused() {
 refused 'a process that does not exist' --state "$state" --only-pid 4194304
 refused "another user's process" --state "$state" --only-pid 1
 refused 'a scope with the chooser' --state "$state" --only-pid "$P" --manual
-refused 'a scope with native resize' --state "$state" --only-pid "$P" --experimental-native-resize
+refused 'the retired resize flag is an unknown argument' --state "$state" --only-pid "$P" --experimental-native-resize
 refused 'a process named twice' --state "$state" --only-pid "$P,$P"
 refused '--debug-pointer without a scope' --state "$state" --debug-pointer
 refused 'a scope on the default scene (no --state)' --only-pid "$P"

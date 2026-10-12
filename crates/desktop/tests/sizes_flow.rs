@@ -211,7 +211,7 @@ fn settle(h: &mut Host) {
     }
     panic!("flight did not settle");
 }
-/// The shell started with `--experimental-native-resize` says so once.
+/// Explicit isolated capture-contract capability; the shipping shell uses readback.
 fn capable(mut h: Host) -> Host {
     assert_eq!(
         h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":false})),

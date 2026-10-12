@@ -160,10 +160,10 @@ DriftWM/native macOS behavior parity is claimed.
 ## Readback mode
 
 `{"op":"native_resize_capability","enabled":true,"readback":true}` puts the
-controller in readback mode, which every normal run without
-`--experimental-native-resize` sets. Everything above this section describes
-the capture-acknowledged mode, which a controller that was told nothing, or
-told `"readback":false`, keeps unchanged. Readback mode differs in exactly
+controller in readback mode, which every normal shipping run sets.
+Everything above this section describes the isolated controller capture
+contract, selected explicitly with `"readback":false` in its fixtures. The
+shipping shell has no capture-acknowledged resize mode. Readback mode differs in exactly
 these points, and in no geometry or policy:
 
 - **The native window is the authority for its size.** The size a transaction
@@ -319,9 +319,15 @@ Scenarios: `readback_grab_*` in `tests/native_resize_flow.rs`, the resize
 swipes of `tests/gesture_flow.rs`, the ratio in `tests/rules_flow.rs`, and on
 fixture windows `tests/e2e/scoped-resize-drag.sh`.
 
-### Experimental desktop integration (headless evidence only)
+### Historical experimental desktop integration (headless evidence only)
 
-The desktop flag `--experimental-native-resize` connects eight true-edge handles
+The flag, orange-handle UI and its executable live probe were removed on
+2026-10-12. The following account is historical; its frozen evidence and
+source provenance remain unchanged. It did not establish completed native
+resize and independent pixel proof. Controller capture-metadata fixtures
+and the read-only saved-byte oracle remain.
+
+The retired desktop flag `--experimental-native-resize` connects eight true-edge handles
 to the native resize transaction C ABI through a serial adapter coordinator, in
 the capture-acknowledged mode. It gates only those handles: the sizing actions,
 IPC resize, a rule's size and fullscreen run without it, in

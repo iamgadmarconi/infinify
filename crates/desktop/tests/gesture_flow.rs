@@ -2044,22 +2044,4 @@ fn a_resize_swipe_that_cannot_begin_pans_and_a_pinned_window_resizes() {
             size["height"].as_f64().unwrap(),
         ],
     );
-    // The capture-acknowledged mode of --experimental-native-resize: its
-    // transactions are begun by the shell's handles alone. The gesture is
-    // claimed, says so, and begins none.
-    let mut h = setup();
-    h.ok(json!({"op":"native_resize_capability","enabled":true,"readback":false}));
-    let before = h.snapshot();
-    let reply = h.begin("swipe", 3, "⌥", "window", ON_WINDOW);
-    assert_eq!(reply["gesture"]["state"], "swipe_resize", "{reply}");
-    assert!(
-        reply["note"]
-            .as_str()
-            .is_some_and(|n| n.contains("--experimental-native-resize")),
-        "{reply}"
-    );
-    assert!(reply.get("transaction").is_none(), "{reply}");
-    assert_eq!(h.swipe(40.0, 40.0, 1010)["effect"], Value::Null);
-    h.end(false, 1020);
-    assert_eq!(h.snapshot(), before);
 }

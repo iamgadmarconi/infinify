@@ -7,12 +7,6 @@ static NSString *rtext(CGRect r){return [NSString stringWithFormat:@"{%g,%g,%g,%
 // Host-clock ticks, the unit of a frame's display time and of the production clock, as milliseconds.
 static double hostMilliseconds(uint64_t ticks){static mach_timebase_info_data_t base;static dispatch_once_t once;dispatch_once(&once,^{mach_timebase_info(&base);});return base.denom?(double)ticks*base.numer/base.denom/1e6:0;}
 static BOOL withinOnePoint(CGRect a,CGRect b){return fabs(a.origin.x-b.origin.x)<=1&&fabs(a.origin.y-b.origin.y)<=1&&fabs(a.size.width-b.size.width)<=1&&fabs(a.size.height-b.size.height)<=1;}
-NSArray<NSDictionary *> *DWResizeHandles(CGRect full,CGRect clip){
-    NSArray *edges=@[@"top_left",@"top",@"top_right",@"right",@"bottom_right",@"bottom",@"bottom_left",@"left"];
-    CGFloat x[]={CGRectGetMinX(full),CGRectGetMidX(full),CGRectGetMaxX(full),CGRectGetMaxX(full),CGRectGetMaxX(full),CGRectGetMidX(full),CGRectGetMinX(full),CGRectGetMinX(full)};
-    CGFloat y[]={CGRectGetMinY(full),CGRectGetMinY(full),CGRectGetMinY(full),CGRectGetMidY(full),CGRectGetMaxY(full),CGRectGetMaxY(full),CGRectGetMaxY(full),CGRectGetMidY(full)};
-    NSMutableArray *out=[NSMutableArray array];for(int i=0;i<8;i++)if(x[i]>=CGRectGetMinX(clip)&&x[i]<=CGRectGetMaxX(clip)&&y[i]>=CGRectGetMinY(clip)&&y[i]<=CGRectGetMaxY(clip))[out addObject:@{@"edge":edges[i],@"x":@(x[i]),@"y":@(y[i])}];return out;
-}
 @interface DWResizeCoordinator ()
 @property (copy) DWCommand command;
 @property id<DWResizeDriver> driver;

@@ -5,7 +5,11 @@ cd "$(dirname "$0")/../.."
 case "${1:-}" in
   '')
     ./scripts/build-app.sh
-    ./target/app/Infinify.app/Contents/MacOS/Infinify --help | rg -- '--owned-resize-probe'
+    help=$(./target/app/Infinify.app/Contents/MacOS/Infinify --help)
+    if printf '%s\n' "$help" | rg -- '--experimental-native-resize|--owned-resize-'; then
+      echo 'FAIL: retired resize modes remain in help'
+      exit 1
+    fi
     ./tests/e2e/desktop-resize.sh
     python3 native/desktop/resize-verify-regression.py
     python3 - <<'PYCODE'
@@ -14,7 +18,7 @@ from pathlib import Path
 files = list(Path('native/desktop').glob('*.m')) + list(Path('native/desktop').glob('*.h'))
 files += [Path('native/captured-windows/captured.m'), Path('native/resize/resize.m'),
           Path('native/resize/resize.h'), Path('native/families/window-server-family.h'),
-          Path('native/desktop/resize-live.py'), Path('native/desktop/resize-verify.py'),
+          Path('native/desktop/resize-verify.py'),
           Path('native/desktop/resize-verify-regression.py'), Path('scripts/build-app.sh'),
           Path('tests/e2e/desktop-native-resize.sh')]
 files += list(Path('native/focus').glob('*.m')) + list(Path('native/focus').glob('*.h'))
@@ -32,15 +36,9 @@ Path('target/resize/native-probe-headless.json').write_text(json.dumps(receipt, 
 PYCODE
     printf '%s\n' 'Safe build/headless checks passed. Native fixture, capture, AX resizing and live cleanup: UNRUN.'
     ;;
-  --live-owned-fixture)
-    shift
-    exec python3 native/desktop/resize-live.py --live-owned-fixture "$@"
-    ;;
   --help)
     printf '%s\n' 'Default: build, help, resize headless integration, offline PNG oracle only.' \
-      'Live (explicit authorization required): --live-owned-fixture [--scenario right-shrink] [--directory EMPTY_DIR]' \
-      'Scenarios: EDGE-grow|shrink|clamp (eight edges), static, family, sigint, sigterm, controller-death.' \
-      'One bounded session by default; --scenario matrix explicitly requests the full matrix.'
+      'Current owned live resize scenarios: tests/e2e/physical-resize-edge.sh and tests/e2e/scoped-resize-drag.sh.'
     ;;
   *) exit 64 ;;
 esac

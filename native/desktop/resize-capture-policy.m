@@ -41,7 +41,3 @@ NSDictionary *DWResizeCaptureDescription(CMSampleBufferRef sample,uint64_t cutof
         return refused(why,[NSString stringWithFormat:@"content rectangle %@ at scale factor %@ lies outside the %zux%zu buffer",text(rect),scale,width,height]);
     return @{ @"buffer":@{@"width":@(width),@"height":@(height)},@"content_rect":@{@"origin":@{@"x":@(crop.origin.x),@"y":@(crop.origin.y)},@"size":@{@"width":@(crop.size.width),@"height":@(crop.size.height)}} };
 }
-
-BOOL DWResizeConfigurationCurrent(id requestedStream,id currentStream,NSNumber *requestedRevision,NSNumber *currentRevision,BOOL detached) {
-    return !detached&&requestedStream&&requestedStream==currentStream&&requestedRevision&&[requestedRevision isEqual:currentRevision];
-}

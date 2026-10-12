@@ -30,16 +30,14 @@ controller nobody told anything do not.
 {"op":"native_resize_capability","enabled":true,"readback":true}
 ```
 
-answers `{}`. `readback` is optional and false when absent. With it, a size
-is settled by the native read alone and nothing waits for a capture
-([Readback mode](NATIVE_RESIZE.md#readback-mode)): what every normal run sends.
-A shell started with `--experimental-native-resize` sends `"readback":false`
-and keeps the capture-acknowledged mode, which the pointer's edge handles map
-through. The flag gates only those handles; it gates no sizing action, no IPC
-resize, no rule's `size` and no fullscreen. On fixture windows of the test's
-own the readback path is run end to end by `tests/e2e/scoped-sizing.sh`
+answers `{}`. `readback` is required: the shipping shell explicitly sends
+`true`, settling a size by the native read alone without waiting for a capture
+([Readback mode](NATIVE_RESIZE.md#readback-mode)). Explicit `false` remains for
+isolated controller capture-contract fixtures. There is no alternate shipping
+resize flag. On fixture windows of the test's own the readback path runs end
+to end in `tests/e2e/scoped-sizing.sh`
 ([native/desktop/README.md](../../native/desktop/README.md#window-sizing-actions));
-on the owner's real applications it has not been run.
+arbitrary application behavior remains unvalidated.
 
 The shell sends it at startup, `true`: once
 before it reads the config, because `bindings` marks the five actions, and
@@ -628,6 +626,9 @@ were read for the contract and are not executed here.
 
 ### Built together and run, 2026-10-10
 
+Historical evidence: invocations of `--experimental-native-resize` below
+refer to the mode removed on 2026-10-12 and are not current launch instructions.
+
 The controller and the shell were built into the app
 (`scripts/build-app.sh`, ad-hoc signed, macOS 27.2, Apple Silicon) and the app
 was launched twice as `--windowed 1100x700` on a private scene of three
@@ -662,6 +663,9 @@ capability and the reply paths those answers came back through.
 what else is unrun.
 
 ### Built with rules, rendering and the pointer policy, 2026-10-10
+
+Historical evidence: invocations of `--experimental-native-resize` below
+refer to the mode removed on 2026-10-12 and are not current launch instructions.
 
 After the sizing work was merged into the tree that has window rules, the
 renderer and the pointer policy, the same checks were repeated on the same

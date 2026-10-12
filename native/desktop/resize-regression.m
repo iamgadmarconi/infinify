@@ -140,7 +140,7 @@ static void disagreeing(void){
     CMSampleBufferRef rest=sample(native,@{SCStreamFrameInfoDisplayTime:@400});check([co accept:rest window:@1 stream:stream install:install]&&[co refusal:@1 detail:NULL]==nil,@"and its next frame is acknowledged");CFRelease(rest);
     [co shutdown];driftwm_desktop_destroy(c);
 }
-// Readback mode, what every normal run without --experimental-native-resize sets: no result invalidates a capture, an effect nobody
+// Readback mode, what every normal run sets: no result invalidates a capture, an effect nobody
 // answers is discharged by the watchdog, and a result the controller refuses leaves no obligation. After every step the window is
 // settled and takes input.
 static void readback(void){
@@ -193,15 +193,9 @@ static void readback(void){
     [co shutdown];driftwm_desktop_destroy(c);
 }
 int main(void){@autoreleasepool{
-    id configuredStream=[NSObject new];
-    check(DWResizeConfigurationCurrent(configuredStream,configuredStream,@2,@2,NO),@"current configuration error remains actionable");
-    check(!DWResizeConfigurationCurrent(configuredStream,configuredStream,@1,@2,NO),@"superseded configuration error ignored");
-    check(!DWResizeConfigurationCurrent(configuredStream,[NSObject new],@2,@2,NO),@"old stream configuration completion ignored");
-    check(!DWResizeConfigurationCurrent(configuredStream,configuredStream,@2,@2,YES),@"detached configuration completion ignored");
     CGRect native=CGRectMake(10,20,200,150);CMSampleBufferRef s=sample(native,@{});NSDictionary *m=DWResizeCaptureMetadata(s,100,native);check([m[@"buffer"][@"width"]intValue]==480&&[m[@"content_rect"][@"origin"][@"x"]intValue]==20,@"actual padded crop");CFRelease(s);
     NSArray *invalid=@[@{SCStreamFrameInfoDisplayTime:NSNull.null},@{SCStreamFrameInfoDisplayTime:@100},@{SCStreamFrameInfoDisplayTime:@(-1)},@{SCStreamFrameInfoDisplayTime:@100.5},@{SCStreamFrameInfoDisplayTime:@1e30},@{SCStreamFrameInfoStatus:NSNull.null},@{SCStreamFrameInfoStatus:@.5},@{SCStreamFrameInfoContentScale:@0},@{SCStreamFrameInfoScreenRect:NSNull.null},@{SCStreamFrameInfoContentRect:CFBridgingRelease(CGRectCreateDictionaryRepresentation(CGRectMake(100,100,200,150)))}];
     for(NSDictionary *override in invalid){s=sample(native,override);NSString *why=nil;check(DWResizeCaptureMetadata(s,100,native)==nil,@"invalid metadata rejected");check(DWResizeCaptureDescription(s,100,native,&why)==nil&&why.length,@"and every rejection says why");CFRelease(s);}
-    check(DWResizeHandles(CGRectMake(0,0,100,100),CGRectMake(0,0,100,100)).count==8,@"eight handles");check(DWResizeHandles(CGRectMake(-50,-50,200,200),CGRectMake(0,0,100,100)).count==0,@"no clipped-edge handles");
     for(NSString *edge in @[@"top_left",@"top",@"top_right",@"right",@"bottom_right",@"bottom",@"bottom_left",@"left"])scenario(edge,nil,NO,NO,NO);
     scenario(@"right",@"clamped",NO,NO,NO);scenario(@"right",@"rejected",YES,NO,NO);scenario(@"right",nil,YES,YES,NO);scenario(@"right",nil,NO,NO,YES);
     preparing(NO,NO);preparing(YES,NO);preparing(NO,YES);preparing(YES,YES);disagreeing();readback();

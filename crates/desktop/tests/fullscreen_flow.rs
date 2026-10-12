@@ -160,7 +160,7 @@ fn fixture(toml: &str) -> Host {
     h.ok(json!({"op":"focus","window":1}));
     h
 }
-/// The shell started with `--experimental-native-resize` says so once.
+/// Explicit isolated capture-contract capability; the shipping shell uses readback.
 fn capable(toml: &str) -> Host {
     let mut h = fixture(toml);
     assert_eq!(

@@ -27,9 +27,8 @@ or drawn fullscreen to verify any of this.** See
 A fullscreen window is resized to its output, and delivering a size to a real
 Mac window goes only through the size transaction of [SIZES.md](SIZES.md),
 which exists only when the shell reported `native_resize_capability`. Every
-normal run reports it, in [readback mode](NATIVE_RESIZE.md#readback-mode)
-unless it was started with `--experimental-native-resize`; a demo and a probe
-do not. There is no other switch.
+normal run reports it, in [readback mode](NATIVE_RESIZE.md#readback-mode); a
+demo and a probe do not. There is no alternate shipping resize mode.
 
 While the capability is `false`:
 
@@ -609,6 +608,9 @@ ends the fullscreen first).
 
 ### Built together and run, 2026-10-10
 
+Historical evidence: invocations of `--experimental-native-resize` below
+refer to the mode removed on 2026-10-12 and are not current launch instructions.
+
 The controller and the shell were written apart from this contract and then
 built into the app (`scripts/build-app.sh`, ad-hoc signed, macOS 27.2, Apple
 Silicon). Reading the two sides against each other found one mismatch, fixed
@@ -701,6 +703,9 @@ shell's shutdown path ran in the app with nothing fullscreen, where it does
 nothing. The outline change is compiled only.
 
 ### Merged with effects, pass-through and the polish pass, 2026-10-10
+
+Historical evidence: invocations of `--experimental-native-resize` below
+refer to the mode removed on 2026-10-12 and are not current launch instructions.
 
 This work was written on a tree that had window sizing and nothing after it.
 It was then merged into one that also had effects (the frost, the open and

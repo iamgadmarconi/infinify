@@ -38,8 +38,6 @@ use driftwm_core::config::{
 };
 use driftwm_core::input::gestures::direction_from_vector;
 
-const LEGACY_RESIZE_NOTE: &str = "resize by gesture is not offered under --experimental-native-resize: that run resizes by its handles";
-
 /// The gesture libinput would have reported.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -401,17 +399,6 @@ impl Controller {
         // leave the transaction's first read unanswered for good.
         if !self.sizes.capability {
             return None;
-        }
-        // The capture-acknowledged mode of --experimental-native-resize is
-        // begun by its handles alone, through the shell's own check of the
-        // window: a swipe there is claimed and does nothing, as before.
-        if !self.sizes.readback {
-            report.note = Some(LEGACY_RESIZE_NOTE);
-            return Some(GestureState::SwipeResize {
-                window,
-                at: pointer,
-                transaction: None,
-            });
         }
         let mut next = self.clone();
         let mut begun = next

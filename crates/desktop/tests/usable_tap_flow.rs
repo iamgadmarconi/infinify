@@ -658,7 +658,7 @@ fn deliver(
     let slot = h.snapshot()["native_resize"].clone();
     assert_eq!(slot["phase"], "complete", "{slot}");
 }
-/// As `running`, for a shell started with `--experimental-native-resize`.
+/// As `running`, with explicit isolated capture-contract capability.
 fn capable(toml: &str) -> Host {
     let mut h = running(toml);
     assert_eq!(

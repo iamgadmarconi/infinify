@@ -45,13 +45,12 @@ disposable fixture windows and an Electron window
 [Window sizing actions](native/desktop/README.md#window-sizing-actions) and
 [Fullscreen](native/desktop/README.md#fullscreen).
 
-The separate `--experimental-native-resize` flag connects eight resize handles to
-the native adapter, and is needed for nothing else. It commits observed sizes and withholds input and captured
-content until a fresh frame passes the capture checks. Focused headless checks
-cover the controller and coordinator. Live disposable-window attempts have reached
-capture enrollment but stop before resizing or pixel verification; the complete
-native resize and rendering path remains unproved. See the
-[resize integration guide](native/desktop/README.md#experimental-native-resizing).
+Pointer borders and configured resize gestures use the same readback path in
+every normal run. Owned physical and scoped resize scenarios cover the supported
+path; arbitrary application behavior and independent display-boundary clipping
+still need validation. The former orange-handle mode and its UI-driving probe
+have been removed. Their failed attempts remain as
+[historical resize evidence](native/desktop/README.md#experimental-native-resizing).
 
 ## Using Infinify as your desktop
 
