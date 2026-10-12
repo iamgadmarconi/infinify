@@ -41,7 +41,7 @@ bool DWNativeClipPlacement(CGRect native,CGRect rootNative,CGRect rootScreen,CGR
 // Identity uses the helper's exact PID/birth/window tuple. Controller sources
 // may serialize owner:null; a populated owner is refused, never silently dropped.
 @property(nonatomic,readonly) CGRect requestedScreenRect,requestedClipRect,requestedViewport;
-// Sorted complete family: identity, native_bounds, requested_transform,
+// Sorted complete family: identity, native_bounds, audited parent WID (root:0), requested_transform,
 // requested_alpha (null when not set), and the exact wire flags. Bounds are the
 // cached native basis used to request the transform, not an independent read.
 @property(nonatomic,readonly,copy) NSArray<NSDictionary *> *members;
@@ -107,6 +107,13 @@ bool DWNativeClipPlacement(CGRect native,CGRect rootNative,CGRect rootScreen,CGR
 // Hands the described frame to the library's writer thread if it differs from the
 // last one handed over, or a window's own frame changed since. Never waits.
 - (void)submit;
+// Main thread: supersede every receipt/pending ACK and require another eligible
+// -describe and a newly submitted frame/ACK, even when its geometry is identical.
+// Call once for each new consumer transfer/cancellation revision before describe.
+// Grouped helpers invalidate their separate sessions together. This never sends
+// prior records by itself; missing outputs/displays still leave the last frame
+// standing and cannot acknowledge a new transition.
+- (void)requireFreshPlacementAcknowledgement;
 // Main-thread, read-only ACK lookup. nil until every family record in the exact
 // current submitted frame was acknowledged APPLIED. Generation/output/family or
 // requested geometry changes, a newer submission, unbinding and session loss

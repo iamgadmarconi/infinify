@@ -102,7 +102,7 @@ typedef struct {
 typedef struct {
     struct dw2_record record;
     CGRect native;
-    uint32_t index,reserved;
+    uint32_t index,parent;
 } DWNativePlacementMember;
 @interface DWNativePlacementDescription : NSObject {
 @public DWNativePlacementBinding binding;NSData *members;
@@ -155,7 +155,7 @@ static BOOL DWNativePlacementInteger(id value,uint64_t *integer) {
     NSMutableArray *result=[NSMutableArray array];const DWNativePlacementMember *records=_placementDescription->members.bytes;
     for(NSUInteger i=0;i<_placementDescription->members.length/sizeof(*records);i++){
         const DWNativePlacementMember *member=&records[i];const struct dw2_record *record=&member->record;
-        [result addObject:@{@"identity":DWNativePlacementIdentity(record->id),@"native_bounds":DWNativeRectArray(member->native),
+        [result addObject:@{@"identity":DWNativePlacementIdentity(record->id),@"native_bounds":DWNativeRectArray(member->native),@"parent":@(member->parent),
             @"requested_transform":@[@(record->m[0]),@(record->m[1]),@(record->m[2]),@(record->m[3]),@(record->m[4]),@(record->m[5])],
             @"requested_alpha":record->flags&DW2_RECORD_HAS_ALPHA?@(record->alpha):NSNull.null,@"flags":@(record->flags)}];
     }
@@ -168,7 +168,7 @@ static uint64_t uptime(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW)/10
 // How long the main thread may stay away from its run loop before the session is closed for it.
 static const uint64_t DWStall=10000;
 // One bound window: who it is for the helper, its own frame, and whether an alpha was ever sent for it.
-@interface DWNativeWindow : NSObject { @public struct dw2_identity identity;CGRect bounds;BOOL alpha,familyKnown;NSNumber *logical;uint64_t releaseSeq;uint32_t root; } @end
+@interface DWNativeWindow : NSObject { @public struct dw2_identity identity;CGRect bounds;BOOL alpha,familyKnown;NSNumber *logical;uint64_t releaseSeq;uint32_t root,parent; } @end
 @implementation DWNativeWindow @end
 static const char *lostName(int reason) { return reason==DW_LOST_EOF?"the helper closed the connection":reason==DW_LOST_WRITE_TIMEOUT?"the helper stopped reading":reason==DW_LOST_HEARTBEAT?"no heartbeat was answered for a whole lease":"the helper broke the protocol"; }
 static const char *statusName(uint8_t status) {
@@ -432,6 +432,10 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
 - (void)invalidatePlacementReadiness {
     _acknowledgedPlacements=@{};_acknowledgedSequence=0;++_placementRevision;
 }
+- (void)requireFreshPlacementAcknowledgement {
+    if(!NSThread.isMainThread||self.ended)return;
+    [self invalidatePlacementReadiness];_described=NO;_forced=YES;
+}
 - (BOOL)placementDescriptionCurrent:(DWNativePlacementDescription *)description {
     if(!description||self.ended||description->binding.revision!=_placementRevision)return NO;
     const DWNativePlacementBinding *binding=&description->binding;
@@ -443,7 +447,7 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     for(NSUInteger i=0;i<count;i++){
         const DWNativePlacementMember *member=&members[i];DWNativeWindow *current=_windows[@(member->record.id.wid)];
         if(!current||![family containsObject:@(member->record.id.wid)]||current->root!=binding->identity.wid
-            ||memcmp(&current->identity,&member->record.id,sizeof(current->identity))||!CGRectEqualToRect(current->bounds,member->native))return NO;
+            ||current->parent!=member->parent||memcmp(&current->identity,&member->record.id,sizeof(current->identity))||!CGRectEqualToRect(current->bounds,member->native))return NO;
     }
     return YES;
 }
@@ -500,20 +504,31 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     if(!window){window=_windows[wid]=[DWNativeWindow new];window->identity=(struct dw2_identity){.pid=[identity[@"pid"]intValue],.wid=wid.unsignedIntValue,.birth_sec=[identity[@"birth_sec"]unsignedLongLongValue],.birth_usec=[identity[@"birth_usec"]unsignedLongLongValue]};window->bounds=CGRectNull;window->root=wid.unsignedIntValue;_families[wid]=[NSSet setWithObject:wid];}
     // A window that moved or took a new size by itself: what the window server then does to its transform is not known, so the frame is sent again.
     if(!CGRectEqualToRect(window->bounds,native)){[self invalidatePlacementReadiness];window->bounds=native;_forced=YES;}
-    if(!self.familiesNeeded){window->familyKnown=YES;return;}
+    // A cooperative helper's narrow scope does not supply native ancestry.
+    // Receipt readiness in every scope requires an actual audited family report.
+    // Without one, retain the existing ordinary placement rather than discovering
+    // additional windows outside that helper's explicitly enrolled WID scope.
+    if(!self.familiesNeeded&&!family){
+        if(window->familyKnown){window->familyKnown=NO;[self invalidatePlacementReadiness];}
+        return;
+    }
     NSString *why=nil;if(!family)family=DWNativeWindowFamily(identity,&why);
     if(!family||![family[@"identity"]isEqual:identity]||![family[@"root"]isEqual:wid]){
         [self forgetChildrenOf:wid reason:why?:@"identity changed"];return;
     }
     NSArray *report=[family[@"members"]isKindOfClass:NSArray.class]?family[@"members"]:nil;
     if(!report.count||report.count>64){[self forgetChildrenOf:wid reason:@"missing or unbounded family report"];return;}
-    NSMutableSet<NSNumber *> *members=[NSMutableSet set];BOOL sound=YES;
+    NSMutableSet<NSNumber *> *members=[NSMutableSet set];NSMutableDictionary<NSNumber *,NSNumber *> *parents=[NSMutableDictionary dictionary];BOOL sound=YES;
     // Validate the whole report before installing any child. A separately bound
     // root or a child already belonging to another root makes it ambiguous.
     for(id value in report){
         if(![value isKindOfClass:NSDictionary.class]){sound=NO;break;}NSDictionary *member=value,*who=member[@"identity"],*frame=member[@"native_bounds"];
         if(![who isKindOfClass:NSDictionary.class]||![frame isKindOfClass:NSDictionary.class]){sound=NO;break;}
-        NSNumber *child=who[@"wid"];if(![child isKindOfClass:NSNumber.class]||!child.unsignedIntValue){sound=NO;break;}DWNativeWindow *existing=_windows[child];
+        NSNumber *child=who[@"wid"];uint64_t childID=0,parent=0;
+        if(!DWNativePlacementInteger(child,&childID)||!childID||childID>UINT32_MAX
+            ||!DWNativePlacementInteger(member[@"parent"],&parent)||parent>UINT32_MAX
+            ||([child isEqual:wid]?parent!=0:parent==0)){sound=NO;break;}
+        DWNativeWindow *existing=_windows[child];
         NSDictionary *origin=frame[@"origin"],*size=frame[@"size"];
         if(![origin isKindOfClass:NSDictionary.class]||![size isKindOfClass:NSDictionary.class]){sound=NO;break;}
         for(id number in @[origin[@"x"]?:NSNull.null,origin[@"y"]?:NSNull.null,size[@"width"]?:NSNull.null,size[@"height"]?:NSNull.null])if(![number isKindOfClass:NSNumber.class])sound=NO;
@@ -524,16 +539,28 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
             ||(existing&&existing->root!=wid.unsignedIntValue)||[members containsObject:child]
             ||([child isEqual:wid]&&!CGRectEqualToRect(CGRectMake(x,y,w,h),native))
             ||(_desktopWide&&(![self admittedBirth:who]||!DWNativeWindowBelongsToRoot(who,identity)))){sound=NO;break;}
-        [members addObject:child];
+        [members addObject:child];parents[child]=@(parent);
+    }
+    // Preserve the reported topology, rather than treating missing parents as
+    // roots or trusting a root label without a complete acyclic parent chain.
+    if(sound)for(NSNumber *child in members){
+        NSNumber *cursor=child;NSMutableSet *seen=[NSMutableSet set];
+        while(![cursor isEqual:wid]){
+            if([seen containsObject:cursor]||!parents[cursor]||![members containsObject:parents[cursor]]){sound=NO;break;}
+            [seen addObject:cursor];cursor=parents[cursor];
+        }
+        if(!sound)break;
     }
     if(!sound||![members containsObject:wid]){[self forgetChildrenOf:wid reason:@"inconsistent, duplicate or changed family member"];return;}
     for(NSNumber *old in _families[wid])if(![members containsObject:old]){DWNativeWindow *removed=_windows[old];if(removed)[self releaseWindow:removed];}
     for(NSDictionary *member in report){
-        NSDictionary *who=member[@"identity"];NSNumber *child=who[@"wid"];if([child isEqual:wid])continue;
+        NSDictionary *who=member[@"identity"];NSNumber *child=who[@"wid"];
         NSDictionary *origin=member[@"native_bounds"][@"origin"],*size=member[@"native_bounds"][@"size"];
         CGRect frame=CGRectMake([origin[@"x"]doubleValue],[origin[@"y"]doubleValue],[size[@"width"]doubleValue],[size[@"height"]doubleValue]);
         DWNativeWindow *attached=_windows[child];if(!attached){attached=_windows[child]=[DWNativeWindow new];attached->identity=window->identity;attached->identity.wid=child.unsignedIntValue;attached->root=wid.unsignedIntValue;attached->bounds=CGRectNull;_forced=YES;}
         if(_releases[child]){[_releases removeObjectForKey:child];atomic_store(&_releasing,_releases.count!=0);_forced=YES;}
+        uint32_t parent=[parents[child]unsignedIntValue];
+        if(attached->parent!=parent){[self invalidatePlacementReadiness];attached->parent=parent;_forced=YES;}
         if(!CGRectEqualToRect(attached->bounds,frame)){[self invalidatePlacementReadiness];attached->bounds=frame;_forced=YES;}
     }
     _families[wid]=members.copy;if(!window->familyKnown){window->familyKnown=YES;[self invalidatePlacementReadiness];}
@@ -621,7 +648,7 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
         if(window->alpha){record.flags=DW2_RECORD_HAS_ALPHA;record.alpha=(float)opacity;}
         if(!nativePlaced){[desired removeObjectForKey:logicals[wid]];[memberData removeObjectForKey:logicals[wid]];}
         DWNativePlacementDescription *description=desired[logicals[wid]];
-        if(description){DWNativePlacementMember member={.record=record,.native=window->bounds,.index=(uint32_t)(_records.length/sizeof(record))};[memberData[logicals[wid]]appendBytes:&member length:sizeof(member)];}
+        if(description){DWNativePlacementMember member={.record=record,.native=window->bounds,.index=(uint32_t)(_records.length/sizeof(record)),.parent=window->parent};[memberData[logicals[wid]]appendBytes:&member length:sizeof(member)];}
         [_records appendBytes:&record length:sizeof(record)];[order addObject:logicals[wid]];
     }
     for(NSNumber *wid in [_releases.allKeys sortedArrayUsingSelector:@selector(compare:)]){
@@ -745,6 +772,10 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
         [session describe:snapshot bound:owned];}
 }
 - (void)submit { if(self.ended)return;for(DWNativePresenter *session in self.sessions){[session submit];if(self.ended)break;} }
+- (void)requireFreshPlacementAcknowledgement {
+    if(!NSThread.isMainThread||self.ended)return;
+    for(DWNativePresenter *session in self.sessions)[session requireFreshPlacementAcknowledgement];
+}
 - (DWNativeAppliedPlacement *)acknowledgedPlacementForWindow:(NSNumber *)window identity:(NSDictionary *)identity generation:(NSNumber *)generation output:(NSNumber *)output {
     if(!NSThread.isMainThread||self.ended)return nil;
     return [self.owners[identity[@"pid"]]acknowledgedPlacementForWindow:window identity:identity generation:generation output:output];

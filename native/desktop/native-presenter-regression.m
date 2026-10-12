@@ -57,6 +57,7 @@ bool dw_focus_birth(pid_t pid,uint64_t *seconds,uint64_t *microseconds) { (void)
 - (void)fixtureExpire;
 - (void)fixtureRetry;
 - (void)fixtureCorruptFrame;
+- (void)fixtureCooperative;
 @end
 @implementation DWNativePresenter (ReadinessFixture)
 + (instancetype)fixturePID:(NSNumber *)pid {
@@ -78,6 +79,7 @@ bool dw_focus_birth(pid_t pid,uint64_t *seconds,uint64_t *microseconds) { (void)
 - (void)fixtureCorruptFrame {
     NSMutableData *frame=[_frames[@(_submittedSeq)]mutableCopy];struct dw2_record *records=frame.mutableBytes;records[0].id.wid++;_frames[@(_submittedSeq)]=frame.copy;
 }
+- (void)fixtureCooperative { _info.scope=DW2_SCOPE_COOPERATIVE; }
 @end
 static NSDictionary *identity(int pid,uint32_t wid) { return @{@"pid":@(pid),@"wid":@(wid),@"birth_sec":@100,@"birth_usec":@20}; }
 static NSDictionary *rect(CGRect value) { return @{@"origin":@{@"x":@(value.origin.x),@"y":@(value.origin.y)},@"size":@{@"width":@(value.size.width),@"height":@(value.size.height)}}; }
@@ -110,8 +112,18 @@ int main(void) {@autoreleasepool {
     DWNativeAppliedPlacement *first=receipt(presenter,root,1,1);
     check(first&&first.sequence==presenter.fixtureSequence&&[presenter isAcknowledgedPlacementCurrent:first],@"complete current family ACK produces a revocable receipt");
     check(first.members.count==2&&[first.members[0][@"identity"]isEqual:root]&&[first.members[1][@"identity"]isEqual:identity(123,43)],@"receipt includes every sorted bound family member");
+    check([first.members[0][@"parent"]isEqual:@0]&&[first.members[1][@"parent"]isEqual:@42],@"receipt preserves the audited root and child parent IDs");
     check(CGRectEqualToRect(first.requestedScreenRect,screen)&&[first.members[0][@"requested_transform"]isEqual:@[@2,@0,@0,@2,@(-500),@(-400)]],@"receipt describes requested projection and exact emitted matrix");
     check(!receipt(presenter,identity(124,42),1,1)&&!receipt(presenter,root,2,1)&&!receipt(presenter,root,1,2),@"identity, generation and output are exact");
+
+    uint64_t superseded=presenter.fixtureSequence;NSData *sameRecords=presenter.fixtureRecords;
+    [presenter requireFreshPlacementAcknowledgement];[presenter submit];
+    check(![presenter isAcknowledgedPlacementCurrent:first]&&presenter.fixtureSequence==superseded,@"new transfer revision revokes receipts without sending stale previously described records");
+    [presenter fixtureAck:@[@0,@0] sequence:superseded];check(!receipt(presenter,root,1,1),@"previous ACK cannot settle a superseding same-geometry transfer");
+    describe(presenter,root,1,1,screen);[presenter submit];
+    check(presenter.fixtureSequence>superseded&&[presenter.fixtureRecords isEqual:sameRecords],@"superseding identical geometry requires a fresh submitted sequence");
+    check(!receipt(presenter,root,1,1),@"fresh same-geometry frame remains pending until its own ACK");ack(presenter);first=receipt(presenter,root,1,1);
+    check(first!=nil&&first.sequence>superseded,@"only a new complete ACK settles the same-geometry transfer");
 
     uint64_t old=presenter.fixtureSequence;CGRect moved=screen;moved.origin.x+=20;describe(presenter,root,1,1,moved);
     check(![presenter isAcknowledgedPlacementCurrent:first],@"desired geometry change revokes before submission");[presenter submit];
@@ -143,7 +155,7 @@ int main(void) {@autoreleasepool {
     [presenter fixtureAck:@[@0] sequence:presenter.fixtureSequence];check(!receipt(presenter,root,2,1),@"unavailable family is never an acknowledged complete family");
     [presenter bound:root bounds:native family:family(root,native,@[@43])];describe(presenter,root,2,1,moved);[presenter submit];ack(presenter);current=receipt(presenter,root,2,1);
     check(current!=nil,@"fresh complete family requires and accepts its new ACK");
-    old=presenter.fixtureSequence;[presenter describe:@{@"outputs":@[],@"placements":@[]} bound:@{@7:root}];[presenter submit];ack(presenter);
+    old=presenter.fixtureSequence;[presenter requireFreshPlacementAcknowledgement];[presenter describe:@{@"outputs":@[],@"placements":@[]} bound:@{@7:root}];[presenter submit];ack(presenter);
     check(![presenter isAcknowledgedPlacementCurrent:current]&&!receipt(presenter,root,2,1),@"output disappearance revokes receipts and pending ACKs");
     check(presenter.fixtureSequence==old,@"invalid output description never resubmits a stale placement");
     describe(presenter,root,2,1,moved);[presenter submit];ack(presenter);
@@ -166,6 +178,33 @@ int main(void) {@autoreleasepool {
     while(!receipt(presenter,root,2,1)&&deadline.timeIntervalSinceNow>0)[NSRunLoop.mainRunLoop runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:.005]];
     current=receipt(presenter,root,2,1);check(current!=nil,@"ordinary all-success callback reaches readiness state");
 
+    NSDictionary *twoChildren=family(root,native,@[@43,@44]);[presenter bound:root bounds:native family:twoChildren];describe(presenter,root,2,1,moved);[presenter submit];
+    [presenter fixtureAck:@[@0,@0,@0] sequence:presenter.fixtureSequence];current=receipt(presenter,root,2,1);
+    check(current.members.count==3,@"three-member audited topology produces a complete receipt");
+    NSMutableDictionary *reparented=[twoChildren mutableCopy];NSMutableArray *report=[twoChildren[@"members"]mutableCopy];NSMutableDictionary *reparentedChild=[report[1]mutableCopy];
+    reparentedChild[@"parent"]=@44;report[1]=reparentedChild;reparented[@"members"]=report;
+    old=presenter.fixtureSequence;sameRecords=presenter.fixtureRecords;[presenter bound:root bounds:native family:reparented];
+    check(![presenter isAcknowledgedPlacementCurrent:current],@"same-root reparenting revokes a receipt even with unchanged membership and bounds");describe(presenter,root,2,1,moved);[presenter submit];
+    check(presenter.fixtureSequence>old&&[presenter.fixtureRecords isEqual:sameRecords],@"parent-only topology change requires a new sequence despite identical helper records");
+    [presenter fixtureAck:@[@0,@0,@0] sequence:old];check(!receipt(presenter,root,2,1),@"old topology ACK cannot settle the reparented family");
+    [presenter fixtureAck:@[@0,@0,@0] sequence:presenter.fixtureSequence];current=receipt(presenter,root,2,1);
+    check([current.members[1][@"parent"]isEqual:@44],@"new receipt freezes the actual reported intermediate parent");
+    report=[twoChildren[@"members"]mutableCopy];reparentedChild=[report[1]mutableCopy];[reparentedChild removeObjectForKey:@"parent"];report[1]=reparentedChild;
+    [presenter bound:root bounds:native family:@{@"root":@42,@"identity":root,@"members":report}];
+    check(![presenter isAcknowledgedPlacementCurrent:current],@"missing parent metadata is refused rather than guessed");
+    [presenter bound:root bounds:native family:family(root,native,@[@43])];describe(presenter,root,2,1,moved);[presenter submit];
+    // The invalid report released both children; rebinding 43 cancels its release.
+    [presenter fixtureAck:@[@0,@0,@0] sequence:presenter.fixtureSequence];current=receipt(presenter,root,2,1);
+    check(current!=nil,@"fresh exact topology can recover after a refused report");
+
+    NSDictionary *cooperativeRoot=identity(126,92);DWNativePresenter *cooperative=[DWNativePresenter fixturePID:@126];[cooperative fixtureCooperative];
+    [cooperative bound:cooperativeRoot bounds:native family:nil];describe(cooperative,cooperativeRoot,2,1,moved);[cooperative submit];
+    [cooperative fixtureAck:@[@0] sequence:cooperative.fixtureSequence];
+    check(!receipt(cooperative,cooperativeRoot,2,1),@"cooperative scope without an audited report never guesses a root-only receipt");
+    [cooperative bound:cooperativeRoot bounds:native family:family(cooperativeRoot,native,@[])];describe(cooperative,cooperativeRoot,2,1,moved);[cooperative submit];
+    [cooperative fixtureAck:@[@0] sequence:cooperative.fixtureSequence];
+    check(receipt(cooperative,cooperativeRoot,2,1)!=nil,@"explicit audited root-only cooperative report can become acknowledged");[cooperative finish];
+
     NSDictionary *otherRoot=identity(124,82);DWNativePresenter *other=[DWNativePresenter fixturePID:@124];
     [other bound:otherRoot bounds:native family:family(otherRoot,native,@[@83])];describe(other,otherRoot,2,1,moved);[other submit];ack(other);
     DWNativeAppliedPlacement *otherReceipt=receipt(other,otherRoot,2,1);
@@ -173,8 +212,15 @@ int main(void) {@autoreleasepool {
     DWNativePresenterGroup *group=[DWNativePresenterGroup new];group.sessions=@[presenter,other];group.owners=@{@123:presenter,@124:other};
     check([group isAcknowledgedPlacementCurrent:current]&&[group isAcknowledgedPlacementCurrent:otherReceipt]
         &&[group acknowledgedPlacementForWindow:@7 identity:root generation:@2 output:@1]!=nil,@"group delegates readiness to the exact owning session");
+    uint64_t groupOld=presenter.fixtureSequence,otherOld=other.fixtureSequence;[group requireFreshPlacementAcknowledgement];[group submit];
+    check(![group isAcknowledgedPlacementCurrent:current]&&![group isAcknowledgedPlacementCurrent:otherReceipt]
+        &&presenter.fixtureSequence==groupOld&&other.fixtureSequence==otherOld,@"group supersession revokes both sessions without stale submission");
+    describe(presenter,root,2,1,moved);describe(other,otherRoot,2,1,moved);[group submit];
+    check(presenter.fixtureSequence>groupOld&&other.fixtureSequence>otherOld&&!receipt(presenter,root,2,1)&&!receipt(other,otherRoot,2,1),@"group sessions require their own fresh sequence and ACK");
+    ack(presenter);ack(other);current=receipt(presenter,root,2,1);otherReceipt=receipt(other,otherRoot,2,1);
+    check([group isAcknowledgedPlacementCurrent:current]&&[group isAcknowledgedPlacementCurrent:otherReceipt],@"new complete session ACKs settle the grouped supersession");
     [presenter unbound:root];check(![group isAcknowledgedPlacementCurrent:current],@"unbinding revokes a grouped receipt");
     [other fixtureExpire];check(!receipt(other,otherRoot,2,1)&&![group isAcknowledgedPlacementCurrent:otherReceipt],@"disconnect revokes receipt before main callback delivery");
-    [group finish];check(closed==2,@"both in-memory sessions drain and close");
+    [group finish];check(closed==3,@"all in-memory sessions drain and close");
     printf("PASS: %lu presenter readiness checks; no native mutation or input-usability claim\n",(unsigned long)checks);
 }return 0;}
