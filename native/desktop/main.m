@@ -2057,9 +2057,12 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     }
     if(!onView)return NO;
     NSDictionary *recipient=DWNativeEventRecipientAtPoint(point);CGWindowID wid=[recipient[@"wid"]unsignedIntValue];
-    LiveSource *source=[self nativeSource:wid at:point];
-    if(!source||wid!=source.router.wid||!boundIdentity(recipient,source.identity)
-        ||!DWNativeWindowDragHit(source.identity,source.nativeButtons,point))return NO;
+    // Select a candidate only; normal admission below revalidates the native
+    // source, placement and title hit before taking the press.
+    LiveSource *source=nil;
+    for(LiveSource *candidate in self.sources.allValues)
+        if(!candidate.detached&&candidate.router.wid==wid&&boundIdentity(recipient,candidate.identity)){source=candidate;break;}
+    if(!source)return NO;
     // Session packets have no destination annotation yet. Only this private
     // copy carries the independently checked recipient into normal admission.
     CGEventRef routed=CGEventCreateCopy(cg);if(!routed)return NO;
