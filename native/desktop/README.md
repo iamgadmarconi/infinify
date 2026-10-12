@@ -1834,6 +1834,21 @@ Permission loss, changed ancestry/bounds or retired generations withdraw child
 images. The renderer carries image geometry only, includes children in closing
 snapshots and window screenshots, and refuses invalid source crops.
 
+Child capture keeps the existing two-second start-completion deadline and allows
+two further seconds from successful start for its first fully validated image.
+This uses the same bounded interval as existing capture requests; a successful
+start alone no longer leaves an image-less stream alive indefinitely. Failures
+back off from half a second to thirty seconds with per-binding jitter, with at
+most two recovery starts per completed observation. A valid first image resets
+the failure count. Exact root/member identity, generation and bounds bind the
+history and weak attempt watchdogs; stale or missing observations cannot erase
+backoff. Only a fresh complete family observation prunes absent bindings, and
+history is bounded to 64 records per root. Failure withdraws pixels and child
+input eligibility. Diagnostic reasons distinguish no callback from callbacks
+without a valid image; metadata rejection remains separate. The focused
+`tests/e2e/native-family-recovery.sh` checks substituted lifecycle behavior,
+not live capture cadence or native presentation.
+
 Live captured families now share one validated ordering plan with pointer hit
 detection. A complete on-screen native stacking observation can interleave roots and
 children within one contiguous compositor bucket only when every captured
