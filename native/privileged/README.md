@@ -85,17 +85,25 @@ to check an installed bundle; `--build` explicitly rebuilds production artifacts
 and the app first. A stale bundle requires a rebuild. This checks delivery
 freshness, not native usability.
 
-The bundled launcher obtains Dock's exact PID, process birth, UID and boot
-identity from the loader's read-only `--dock-identity` query. It pins the current
-Dock during the explicit loader step and binds the `pending`/`ready` launch
+The bundled launcher obtains Dock's exact PID, process birth, UID and stable
+boot-session UUID from the loader's read-only `--dock-identity` query. It pins
+the current Dock during the explicit loader step and binds the `pending`/`ready` launch
 record (schema 2) to the bundled payload SHA-256. Reuse also hashes the actual
 private runtime payload and requires it to match both the bundle and record. A
 ready record for the exact same Dock instance can be reused after the runtime
 payload checks pass.
 
+The boot identity is the canonical uppercase `kern.bootsessionuuid`. XNU's
+[`kern_sysctl.c`](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/kern_sysctl.c)
+exposes that UUID read-only, while
+[`clock.c`](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/osfmk/kern/clock.c)
+shows that `clock_boottime` can change with calendar adjustment. The pinned
+source hashes and Apple license are recorded in the local XNU provenance receipt;
+no XNU implementation code is copied into Infinify.
+
 For a retired Dock, the launcher accepts only a committed schema-3 journal
-written by the recorded Dock process, same login UID and same boot. The loader
-rechecks the journal's private file and directory, exact writer identity,
+written by the recorded Dock process, same login UID and same
+`kern.bootsessionuuid`. The loader rechecks the journal's private file and directory, exact writer identity,
 positive old-process retirement and schema-3 header, then copies its bytes to
 the new private runtime as `recovery-source.json`. The sidecar binds the copy by
 SHA-256 and recorded writer identity; the payload validates its complete schema
@@ -115,7 +123,7 @@ archived byte-for-byte and the new ready record is promoted. The old runtime and
 journal remain untouched. Schema-2 and unknown journals are refused because
 they lack the retained originals needed for safe connection handoff; the
 launcher never reconstructs transforms from native bounds. Unresolved recovery,
-a live or uncertain prior Dock, invalid payloads, or changed boot identity also
+a live or uncertain prior Dock, invalid payloads, or changed boot-session UUID also
 block startup and preserve all state. There is no compatibility fallback or
 automatic injection retry. The launcher runs only the loader through sudo and
 starts the app as the login user. The regular LaunchAgent remains the

@@ -34,7 +34,6 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
-#include <sys/time.h>
 #include <libproc.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -168,11 +167,24 @@ static BOOL current_dock(pid_t pid,const struct proc_bsdinfo *expected) {
     return get_dock_pid()==pid && process_info(pid,&now) && now.pbi_uid==expected->pbi_uid
         && now.pbi_start_tvsec==expected->pbi_start_tvsec && now.pbi_start_tvusec==expected->pbi_start_tvusec;
 }
-static BOOL boot_identity(uint64_t *sec,uint64_t *usec) {
-    struct timeval value={0};size_t size=sizeof(value);
-    if(sysctlbyname("kern.boottime",&value,&size,NULL,0) || size!=sizeof(value)
-        || value.tv_sec<=0 || value.tv_usec<0 || value.tv_usec>=1000000)return NO;
-    *sec=(uint64_t)value.tv_sec;*usec=(uint64_t)value.tv_usec;return YES;
+static BOOL canonical_boot_uuid(id value) {
+    if(![value isKindOfClass:NSString.class] || [value length]!=36)return NO;
+    for(NSUInteger i=0;i<36;i++) {
+        unichar c=[value characterAtIndex:i];
+        if(i==8 || i==13 || i==18 || i==23) { if(c!='-')return NO; }
+        else if(!((c>='0'&&c<='9')||(c>='A'&&c<='F')))return NO;
+    }
+    return YES;
+}
+static BOOL boot_session_uuid(char output[37]) {
+    char value[37]={0};size_t size=sizeof(value);
+    if(sysctlbyname("kern.bootsessionuuid",value,&size,NULL,0) || size!=sizeof(value) || value[36]!='\0')return NO;
+    for(NSUInteger i=0;i<36;i++) {
+        char c=value[i];
+        if(i==8 || i==13 || i==18 || i==23) { if(c!='-')return NO; }
+        else if(!((c>='0'&&c<='9')||(c>='A'&&c<='F')))return NO;
+    }
+    memcpy(output,value,sizeof(value));return YES;
 }
 static BOOL exact_json_keys(NSDictionary *value,NSArray *keys) {
     return [value isKindOfClass:NSDictionary.class]
@@ -269,29 +281,30 @@ static BOOL recovery_journal(const char *sourcePath,const char *runtime,const st
 
     NSDictionary *journal=[NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
     if(![journal isKindOfClass:NSDictionary.class])return NO;
-    NSArray *keys=@[@"v",@"server_pid",@"server_birth_sec",@"server_birth_usec",@"server_uid",@"boot_sec",@"boot_usec",
+    NSArray *keys=@[@"v",@"server_pid",@"server_birth_sec",@"server_birth_usec",@"server_uid",@"boot_uuid",
         @"generation",@"state",@"windows",@"released_windows",@"last_restore"];
     NSArray *windows=journal[@"windows"],*released=journal[@"released_windows"];
-    uint64_t bootSec=0,bootUsec=0;
-    if(!boot_identity(&bootSec,&bootUsec) || !exact_json_keys(journal,keys)
+    char bootUUID[37];
+    if(!boot_session_uuid(bootUUID) || !exact_json_keys(journal,keys)
         || !json_integer(journal[@"v"],3,3) || !json_integer(journal[@"server_pid"],2,INT_MAX)
         || !json_integer(journal[@"server_birth_sec"],1,UINT64_MAX) || !json_integer(journal[@"server_birth_usec"],0,999999)
-        || !json_integer(journal[@"server_uid"],1,UINT32_MAX) || !json_integer(journal[@"boot_sec"],1,UINT64_MAX)
-        || !json_integer(journal[@"boot_usec"],0,999999) || !json_integer(journal[@"generation"],0,UINT64_MAX-1)
+        || !json_integer(journal[@"server_uid"],1,UINT32_MAX) || !canonical_boot_uuid(journal[@"boot_uuid"])
+        || !json_integer(journal[@"generation"],0,UINT64_MAX-1)
         || ![@[@"empty",@"holding",@"restoring"] containsObject:journal[@"state"]]
         || ![windows isKindOfClass:NSArray.class] || ![released isKindOfClass:NSArray.class]
         || windows.count>1024 || released.count>1024 || windows.count+released.count>1024
         || (journal[@"last_restore"]!=NSNull.null && ![journal[@"last_restore"] isKindOfClass:NSDictionary.class]))return NO;
     if([journal[@"server_pid"]intValue]!=expectedPID || [journal[@"server_birth_sec"]unsignedLongLongValue]!=expectedSec
         || [journal[@"server_birth_usec"]unsignedLongLongValue]!=expectedUsec
-        || [journal[@"server_uid"]unsignedIntValue]!=dock->pbi_uid || [journal[@"boot_sec"]unsignedLongLongValue]!=bootSec
-        || [journal[@"boot_usec"]unsignedLongLongValue]!=bootUsec || !retired_process(expectedPID,expectedSec,expectedUsec))return NO;
+        || [journal[@"server_uid"]unsignedIntValue]!=dock->pbi_uid
+        || ![journal[@"boot_uuid"]isEqual:[NSString stringWithUTF8String:bootUUID]]
+        || !retired_process(expectedPID,expectedSec,expectedUsec))return NO;
     NSString *digest=sha256_hex(data);
     if(!digest)return NO;
     *sourceBytes=data;
     *recoveryFields=@{@"recovery_source_sha256":digest,@"recovery_server_pid":journal[@"server_pid"],
         @"recovery_server_birth_sec":journal[@"server_birth_sec"],@"recovery_server_birth_usec":journal[@"server_birth_usec"],
-        @"recovery_server_uid":journal[@"server_uid"],@"recovery_boot_sec":journal[@"boot_sec"],@"recovery_boot_usec":journal[@"boot_usec"]};
+        @"recovery_server_uid":journal[@"server_uid"],@"recovery_boot_uuid":journal[@"boot_uuid"]};
     return YES;
 }
 static BOOL parse_decimal(const char *text,uint64_t maximum,uint64_t *value) {
@@ -376,10 +389,10 @@ int main(int argc, char **argv) { @autoreleasepool {
     if(argc==2 && !strcmp(argv[1],"--dock-identity")) {
         pid_t pid=get_dock_pid();struct proc_bsdinfo info;
         if(!process_info(pid,&info) || !current_dock(pid,&info)){fprintf(stderr,"could not locate stable Dock identity\n");return 1;}
-        uint64_t bootSec=0,bootUsec=0;
-        if(!boot_identity(&bootSec,&bootUsec)){fprintf(stderr,"could not identify current boot\n");return 1;}
-        printf("{\"pid\":%d,\"birth_sec\":%" PRIu64 ",\"birth_usec\":%" PRIu64 ",\"uid\":%u,\"boot_sec\":%" PRIu64 ",\"boot_usec\":%" PRIu64 "}\n",
-            pid,(uint64_t)info.pbi_start_tvsec,(uint64_t)info.pbi_start_tvusec,info.pbi_uid,bootSec,bootUsec);
+        char bootUUID[37];
+        if(!boot_session_uuid(bootUUID)){fprintf(stderr,"could not identify current boot session\n");return 1;}
+        printf("{\"pid\":%d,\"birth_sec\":%" PRIu64 ",\"birth_usec\":%" PRIu64 ",\"uid\":%u,\"boot_uuid\":\"%s\"}\n",
+            pid,(uint64_t)info.pbi_start_tvsec,(uint64_t)info.pbi_start_tvusec,info.pbi_uid,bootUUID);
         return 0;
     }
     if(argc<7 || strcmp(argv[1],"--inject-dock") || strcmp(argv[4],"--nonce-file"))return usage();

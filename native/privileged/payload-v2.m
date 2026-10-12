@@ -684,20 +684,33 @@ static BOOL v2LastRestoreValid(id value) {
 // Schema 3 preserves released originals for a later, explicitly authorized
 // connection handoff. No schema-2 journal can establish that missing obligation.
 static NSArray *v2WriterKeys(void) {
-    return @[@"server_pid",@"server_birth_sec",@"server_birth_usec",@"server_uid",@"boot_sec",@"boot_usec"];
+    return @[@"server_pid",@"server_birth_sec",@"server_birth_usec",@"server_uid",@"boot_uuid"];
+}
+static BOOL v2BootUUIDValid(id value) {
+    if(![value isKindOfClass:NSString.class] || [value length]!=36)return NO;
+    for(NSUInteger i=0;i<36;i++) {
+        unichar c=[value characterAtIndex:i];
+        if(i==8 || i==13 || i==18 || i==23){if(c!='-')return NO;}
+        else if(!((c>='0'&&c<='9')||(c>='A'&&c<='F')))return NO;
+    }
+    return YES;
 }
 static BOOL v2WriterValid(NSDictionary *value) {
     return v2Integer(value[@"server_pid"],1,INT_MAX) && v2Integer(value[@"server_birth_sec"],1,UINT64_MAX)
         && v2Integer(value[@"server_birth_usec"],0,999999) && v2Integer(value[@"server_uid"],0,UINT32_MAX)
-        && v2Integer(value[@"boot_sec"],1,UINT64_MAX) && v2Integer(value[@"boot_usec"],0,999999);
+        && v2BootUUIDValid(value[@"boot_uuid"]);
 }
 static NSDictionary *v2CurrentWriterIdentity(void) {
-    struct proc_bsdinfo process={0};struct timeval boot={0};size_t length=sizeof(boot);
+    struct proc_bsdinfo process={0};char boot[37]={0};size_t length=sizeof(boot);
     if(proc_pidinfo(getpid(),PROC_PIDTBSDINFO,0,&process,sizeof(process))!=sizeof(process)
-        || process.pbi_uid!=getuid() || sysctlbyname("kern.boottime",&boot,&length,NULL,0) || length!=sizeof(boot)
-        || boot.tv_sec<=0 || boot.tv_usec<0 || boot.tv_usec>=1000000 || !process.pbi_start_tvsec)return nil;
+        || process.pbi_uid!=getuid() || sysctlbyname("kern.bootsessionuuid",boot,&length,NULL,0) || length!=sizeof(boot)
+        || boot[36]!='\0' || !process.pbi_start_tvsec)return nil;
+    // Unlike calendar boottime, this kernel identity does not move when the
+    // wall clock changes. Persist only its exact canonical uppercase spelling.
+    NSString *bootUUID=[[NSString alloc]initWithBytes:boot length:36 encoding:NSASCIIStringEncoding];
+    if(!v2BootUUIDValid(bootUUID))return nil;
     return @{@"server_pid":@(getpid()),@"server_birth_sec":@(process.pbi_start_tvsec),@"server_birth_usec":@(process.pbi_start_tvusec),
-        @"server_uid":@(getuid()),@"boot_sec":@(boot.tv_sec),@"boot_usec":@(boot.tv_usec)};
+        @"server_uid":@(getuid()),@"boot_uuid":bootUUID};
 }
 static BOOL v2WriterSame(NSDictionary *a,NSDictionary *b) {
     for(NSString *key in v2WriterKeys())if(![a[key]isEqual:b[key]])return NO;
@@ -713,12 +726,12 @@ static BOOL v2OldWriterDead(NSDictionary *writer) {
 }
 static BOOL v2RetiredWriter(NSDictionary *writer) {
     return [writer[@"server_uid"]isEqual:v2WriterIdentity[@"server_uid"]]
-        && [writer[@"boot_sec"]isEqual:v2WriterIdentity[@"boot_sec"]] && [writer[@"boot_usec"]isEqual:v2WriterIdentity[@"boot_usec"]]
+        && [writer[@"boot_uuid"]isEqual:v2WriterIdentity[@"boot_uuid"]]
         && !v2WriterSame(writer,v2WriterIdentity) && v2OldWriterDead(writer);
 }
 static BOOL v2RecoveryConfigValid(NSDictionary *config) {
     NSArray *keys=@[@"recovery_source_sha256",@"recovery_server_pid",@"recovery_server_birth_sec",@"recovery_server_birth_usec",
-        @"recovery_server_uid",@"recovery_boot_sec",@"recovery_boot_usec"];
+        @"recovery_server_uid",@"recovery_boot_uuid"];
     NSUInteger count=0;
     for(NSString *key in config)if([key hasPrefix:@"recovery_"]){if(![keys containsObject:key])return NO;count++;}
     if(!count)return YES;

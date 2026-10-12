@@ -48,6 +48,17 @@ native_valid_hash() {
   case "$1" in *[!0-9a-f]*|'') return 1 ;; esac
   return 0
 }
+native_valid_boot_uuid() {
+  [ "${#1}" -eq 36 ] || return 1
+  case "$1" in
+    ????????-????-????-????-????????????) ;;
+    *) return 1 ;;
+  esac
+  native_compact_uuid=$(printf '%s' "$1" | /usr/bin/tr -d '-') || return 1
+  [ "${#native_compact_uuid}" -eq 32 ] || return 1
+  case "$native_compact_uuid" in *[!0-9A-F]*|'') return 1 ;; esac
+  return 0
+}
 
 native_regular_file "$native_launcher" || fail 'bundled launcher is missing or is a symlink.'
 native_regular_file "$native_manifest" || fail 'native helper manifest is missing or is a symlink.'
@@ -113,13 +124,13 @@ fi
 # The loader's read-only identity query and its later expected-Dock check use the
 # same exact libproc process birth fields. A PID alone must never authorize reuse.
 native_dock=$("$native_loader" --dock-identity) || fail 'could not resolve the current Dock process identity.'
-dock_value() { printf '%s\n' "$native_dock" | /usr/bin/plutil -extract "$1" raw -expect integer -o - -; }
-native_dock_pid=$(dock_value pid) || fail 'invalid Dock PID report.'
-native_dock_sec=$(dock_value birth_sec) || fail 'invalid Dock birth report.'
-native_dock_usec=$(dock_value birth_usec) || fail 'invalid Dock birth report.'
-native_dock_uid=$(dock_value uid) || fail 'invalid Dock user report.'
-native_boot_sec=$(dock_value boot_sec) || fail 'invalid boot identity report.'
-native_boot_usec=$(dock_value boot_usec) || fail 'invalid boot identity report.'
+dock_value() { printf '%s\n' "$native_dock" | /usr/bin/plutil -extract "$1" raw -expect "$2" -o - -; }
+native_dock_pid=$(dock_value pid integer) || fail 'invalid Dock PID report.'
+native_dock_sec=$(dock_value birth_sec integer) || fail 'invalid Dock birth report.'
+native_dock_usec=$(dock_value birth_usec integer) || fail 'invalid Dock birth report.'
+native_dock_uid=$(dock_value uid integer) || fail 'invalid Dock user report.'
+native_boot_uuid=$(dock_value boot_uuid string) || fail 'invalid boot identity report.'
+native_valid_boot_uuid "$native_boot_uuid" || fail 'invalid boot session UUID report.'
 [ "$native_dock_uid" = "$native_uid" ] || fail 'Dock belongs to another login user.'
 
 native_state_dir="$HOME/Library/Application Support/Infinify/native-desktop"
@@ -186,9 +197,8 @@ native_validate_retired_journal() {
   native_decimal "$native_journal_sec" && [ "$native_journal_sec" = "$native_old_dock_sec" ] || fail 'the retired helper journal birth time differs from the launch record.'
   native_decimal "$native_journal_usec" && [ "$native_journal_usec" = "$native_old_dock_usec" ] || fail 'the retired helper journal birth time differs from the launch record.'
   [ "$native_journal_uid" = "$native_uid" ] || fail 'the retired helper journal belongs to another login user.'
-  native_journal_boot_sec=$(/usr/bin/plutil -extract boot_sec raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no exact boot identity.'
-  native_journal_boot_usec=$(/usr/bin/plutil -extract boot_usec raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no exact boot identity.'
-  [ "$native_journal_boot_sec" = "$native_boot_sec" ] && [ "$native_journal_boot_usec" = "$native_boot_usec" ] || fail 'the retired helper journal belongs to a different boot; preserve it and inspect it.'
+  native_journal_boot_uuid=$(/usr/bin/plutil -extract boot_uuid raw -expect string -o - "$native_journal") || fail 'the retired helper journal has no exact boot session UUID.'
+  native_valid_boot_uuid "$native_journal_boot_uuid" && [ "$native_journal_boot_uuid" = "$native_boot_uuid" ] || fail 'the retired helper journal belongs to a different boot session; preserve it and inspect it.'
   native_journal_generation=$(/usr/bin/plutil -extract generation raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no exact integer generation.'
   native_decimal "$native_journal_generation" || fail 'the retired helper journal generation is invalid.'
   native_journal_state=$(/usr/bin/plutil -extract state raw -expect string -o - "$native_journal") || fail 'the retired helper journal has no valid state.'
@@ -209,13 +219,16 @@ native_validate_retired_journal() {
     native_valid_hash "$native_import_hash" || fail 'the retained recovery sidecar has an invalid source digest.'
     [ "$(native_digest "$native_import_source")" = "$native_import_hash" ] || fail 'the retained historical recovery source differs from its sidecar digest.'
     [ "$(/usr/bin/plutil -extract v raw -expect integer -o - "$native_import_source")" = 3 ] || fail 'the retained historical recovery source is not schema 3.'
-    for native_pair in 'server_pid recovery_server_pid' 'server_birth_sec recovery_server_birth_sec' 'server_birth_usec recovery_server_birth_usec' 'server_uid recovery_server_uid' 'boot_sec recovery_boot_sec' 'boot_usec recovery_boot_usec'; do
+    for native_pair in 'server_pid recovery_server_pid' 'server_birth_sec recovery_server_birth_sec' 'server_birth_usec recovery_server_birth_usec' 'server_uid recovery_server_uid'; do
       native_source_key=${native_pair%% *}
       native_sidecar_key=${native_pair#* }
       native_source_value=$(/usr/bin/plutil -extract "$native_source_key" raw -expect integer -o - "$native_import_source") || fail 'the retained historical recovery source is missing writer identity.'
       native_sidecar_value=$(/usr/bin/plutil -extract "$native_sidecar_key" raw -expect integer -o - "$native_sidecar") || fail 'the retained recovery sidecar is missing writer identity.'
       [ "$native_source_value" = "$native_sidecar_value" ] || fail 'the retained historical source identity differs from its sidecar.'
     done
+    native_source_boot_uuid=$(/usr/bin/plutil -extract boot_uuid raw -expect string -o - "$native_import_source") || fail 'the retained historical source has no boot session UUID.'
+    native_sidecar_boot_uuid=$(/usr/bin/plutil -extract recovery_boot_uuid raw -expect string -o - "$native_sidecar") || fail 'the retained recovery sidecar has no boot session UUID.'
+    native_valid_boot_uuid "$native_source_boot_uuid" && [ "$native_source_boot_uuid" = "$native_sidecar_boot_uuid" ] || fail 'the retained historical source boot identity differs from its sidecar.'
   else
     if /usr/bin/plutil -extract recovery_source_sha256 raw -expect string -o - "$native_sidecar" >/dev/null 2>&1; then
       fail 'the recovery sidecar names a historical source that is missing; preserve the runtime and inspect it.'

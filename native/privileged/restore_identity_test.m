@@ -3,21 +3,25 @@
 // actual payload with native call substitutes; no window, Dock load or fault API.
 #import <AppKit/AppKit.h>
 #import <libproc.h>
+#import <sys/sysctl.h>
 #include <unistd.h>
 #include <assert.h>
 static CFArrayRef queryWindows(CGWindowListOption option,CGWindowID wid);
 static int queryProcess(int pid,int flavor,uint64_t argument,void *buffer,int size);
 static int journalSync(int fd);
 static int queryKill(pid_t pid,int signal);
+static int querySysctl(const char *name,void *value,size_t *length,void *replacement,size_t replacementLength);
 #define CGWindowListCopyWindowInfo queryWindows
 #define proc_pidinfo queryProcess
 #define fsync journalSync
 #define kill queryKill
+#define sysctlbyname querySysctl
 #import "payload.m"
 #undef CGWindowListCopyWindowInfo
 #undef proc_pidinfo
 #undef fsync
 #undef kill
+#undef sysctlbyname
 
 static NSArray *rows;
 static int ownerStatus,connectionStatus,ownerValue=7,processPID=123;
@@ -35,6 +39,9 @@ static int boundsStatus;
 static uint32_t goneWID;
 static BOOL oldWriterAlive;
 static uint64_t oldWriterBirth=50;
+static char bootUUID[37]="48359692-C6EC-4E77-8BD8-B68CF839CB16";
+static size_t bootUUIDLength=sizeof(bootUUID);
+static int bootUUIDStatus;
 static NSString *journalDirectory;
 static int journalSync(int fd) {
     if(failNextSync){failNextSync=NO;errno=EIO;return -1;}
@@ -82,6 +89,11 @@ static int queryProcess(int pid,int flavor,uint64_t argument,void *buffer,int si
     memcpy(buffer,&process,sizeof(process));return size;
 }
 static int queryKill(pid_t pid,int signal) { assert(pid==456 && signal==0);if(oldWriterAlive)return 0;errno=ESRCH;return -1; }
+static int querySysctl(const char *name,void *value,size_t *length,void *replacement,size_t replacementLength) {
+    assert(!strcmp(name,"kern.bootsessionuuid") && value && *length==sizeof(bootUUID) && !replacement && !replacementLength);
+    if(bootUUIDStatus)return bootUUIDStatus;
+    memcpy(value,bootUUID,sizeof(bootUUID));*length=bootUUIDLength;return 0;
+}
 static int mainCID(void) { return 1; }
 static CGError windowOwner(int cid,uint32_t wid,int *owner) {
     (void)cid;identityReads++;*owner=ownerValue;return wid==goneWID ? 1000 : ownerStatus;
@@ -111,6 +123,16 @@ static void clearTables(void) { v2Table=[NSMutableDictionary dictionary];v2Relea
 int main(void) { @autoreleasepool {
     mainConnection=mainCID;getOwner=windowOwner;connectionPID=ownerPID;
     fixtureOnly=NO;processUID=getuid();
+    // The kernel boot-session string is a fixed canonical UUID, never a mutable
+    // wall-clock timestamp. Malformed/truncated system replies refuse startup.
+    NSDictionary *observedWriter=v2CurrentWriterIdentity();
+    assert(v2WriterValid(observedWriter) && [observedWriter[@"boot_uuid"]isEqual:@(bootUUID)]);
+    bootUUIDLength=36;assert(!v2CurrentWriterIdentity());bootUUIDLength=37;
+    bootUUID[36]='!';assert(!v2CurrentWriterIdentity());bootUUID[36]='\0';
+    bootUUID[9]='c';assert(!v2CurrentWriterIdentity());bootUUID[9]='C';
+    bootUUIDStatus=-1;assert(!v2CurrentWriterIdentity());bootUUIDStatus=0;
+    assert(!v2BootUUIDValid(nil) && !v2BootUUIDValid(@1) && !v2BootUUIDValid(@"48359692C6EC-4E77-8BD8-B68CF839CB16")
+        && !v2BootUUIDValid(@"48359692-C6EC-4E77-8BD8-B68CF839CB1G"));
     const struct dw2_identity recorded={.pid=123,.wid=42,.birth_sec=100,.birth_usec=20};
     expect(&recorded,DW2_INSTANCE_CURRENT);
     seconds=101;expect(&recorded,DW2_INSTANCE_GONE);seconds=100;
@@ -147,7 +169,7 @@ int main(void) { @autoreleasepool {
     assert(mkdtemp(directory));directoryFD=open(directory,O_RDONLY|O_DIRECTORY|O_NOFOLLOW);
     assert(directoryFD>=0);journalDirectory=@(directory);v2q=dispatch_queue_create("dw.restore.query.test",DISPATCH_QUEUE_SERIAL);
     v2RetryScheduled=YES; // This regression drives each retry explicitly on its sole test thread.
-    clearTables();v2WriterIdentity=@{@"server_pid":@(getpid()),@"server_birth_sec":@1000,@"server_birth_usec":@0,@"server_uid":@(getuid()),@"boot_sec":@1,@"boot_usec":@0};
+    clearTables();v2WriterIdentity=@{@"server_pid":@(getpid()),@"server_birth_sec":@1000,@"server_birth_usec":@0,@"server_uid":@(getuid()),@"boot_uuid":@(bootUUID)};
     DW2Entry *entry=[DW2Entry new];entry->who=recorded;entry->owner=7;
     entry->transform=CGAffineTransformMake(1,0,0,1,-25,-35);entry->bounds=CGRectMake(0,0,300,200);
     v2Table[@42]=entry;rows=nil;
@@ -305,6 +327,10 @@ int main(void) { @autoreleasepool {
     // silently lose the released-obligation collection during a migration.
     NSMutableDictionary *bad=[journal mutableCopy];bad[@"v"]=@2;
     assert(!v2DecodeJournal([NSJSONSerialization dataWithJSONObject:bad options:0 error:NULL],[NSMutableDictionary dictionary],[NSMutableDictionary dictionary]));
+    bad=[journal mutableCopy];[bad removeObjectForKey:@"boot_uuid"];bad[@"boot_sec"]=@1;bad[@"boot_usec"]=@0;
+    assert(!v2DecodeJournal([NSJSONSerialization dataWithJSONObject:bad options:0 error:NULL],[NSMutableDictionary dictionary],[NSMutableDictionary dictionary]));
+    bad=[journal mutableCopy];bad[@"boot_uuid"]=[bad[@"boot_uuid"]lowercaseString];
+    assert(!v2DecodeJournal([NSJSONSerialization dataWithJSONObject:bad options:0 error:NULL],[NSMutableDictionary dictionary],[NSMutableDictionary dictionary]));
     bad=[journal mutableCopy];bad[@"windows"]=@[[[journal[@"released_windows"][0]mutableCopy]copy]];
     assert(!v2DecodeJournal([NSJSONSerialization dataWithJSONObject:bad options:0 error:NULL],[NSMutableDictionary dictionary],[NSMutableDictionary dictionary]));
 
@@ -316,8 +342,9 @@ int main(void) { @autoreleasepool {
     assert(v2RecoveryConfigValid(config));assert(!unlinkat(directoryFD,"v2-journal.json",0));clearTables();
     oldWriterAlive=YES;assert(!v2LoadJournal(config) && transformWrites==writes+2);oldWriterAlive=NO;
     NSMutableDictionary *wrong=[config mutableCopy];wrong[@"recovery_source_sha256"]=[@"0"stringByPaddingToLength:64 withString:@"0" startingAtIndex:0];
-    assert(!v2LoadJournal(wrong));wrong=[config mutableCopy];wrong[@"recovery_boot_sec"]=@2;assert(!v2LoadJournal(wrong));
-    NSMutableDictionary *otherBoot=[v2WriterIdentity mutableCopy];otherBoot[@"boot_sec"]=@2;
+    assert(!v2LoadJournal(wrong));wrong=[config mutableCopy];wrong[@"recovery_boot_uuid"]=@"58359692-C6EC-4E77-8BD8-B68CF839CB16";assert(!v2LoadJournal(wrong));
+    wrong=[config mutableCopy];wrong[@"recovery_boot_sec"]=@1;assert(!v2RecoveryConfigValid(wrong));
+    NSMutableDictionary *otherBoot=[v2WriterIdentity mutableCopy];otherBoot[@"boot_uuid"]=@"58359692-C6EC-4E77-8BD8-B68CF839CB16";
     NSDictionary *currentWriter=v2WriterIdentity;v2WriterIdentity=otherBoot;assert(!v2LoadJournal(config));v2WriterIdentity=currentWriter;
     failNextSync=YES;writes=transformWrites;assert(!v2LoadJournal(config) && transformWrites==writes);clearTables();
 
