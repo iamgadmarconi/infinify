@@ -146,7 +146,8 @@ local clip state, invalidates visible-shape differences and schedules displays;
 separate `set_layer_clip_shape`/global-clip paths exist. The observed partial-clip
 failure is consistent with a drawing/visibility-region distinction, but the
 binary call chain alone does not identify the complete modern compositor mask.
-No additional shape, event-region, shadow or global-clip state has been mutated.
+That first probe did not mutate additional shape, event-region, shadow or
+global-clip state.
 
 ## Narrow redraw and transform-order retry
 
@@ -189,7 +190,7 @@ equality. `SLSCopySpecifiedWindowShape` at `0x1829ade40` uses four arguments
 Failed/null results still collapse to status 1000, so default absence cannot be
 classified from that error alone. Selector 10 does not establish the original
 global-clip setter state: global clipping combines separate stored inputs before
-producing derived layer state. No additional region writer was resolved/called.
+producing derived layer state. That retry did not call an additional region writer.
 
 All seven restored captures matched the original baseline exactly; final native
 clip bytes, transform, alpha and bounds matched the original. Both windows and
@@ -198,6 +199,104 @@ Saved source, binary, receipts, PNGs and a SHA-256 manifest preserve the retry.
 Complete shape/event/global-state restoration and a compositor-mask path still
 need their own owned validation. **Do not advertise native display clipping from
 the locally successful clip getter/setter/serialization contract.**
+
+## Owned base and raw-event experiment
+
+`target/native-clip-contract/shape-event-20261012T005538Z/` independently tested
+base shape and raw event shape with exact original bytes for base, local clip,
+raw event (selector 9) and derived layer clip (selector 10). Existing capture
+permission and the owned-only baseline passed before mutation. Only foreground
+WID 121236 was mutated; background WID 121235, PID 42692, birth
+`1791766538.512223`, owner connection 17147675. The source and binary remain
+ignored; no production writer or protocol capability was added.
+
+Installed `SLSSetWindowShape` at `0x1829adb38` takes
+`(cid, wid, float offsetX, float offsetY, region)`. Normal mode accepts the
+saved global base shape with zero float offsets. `SLSSetWindowEventShape` at
+`0x1829adbb8` takes `(cid, wid, region)`. Selector 9 reads its raw region field;
+a failed/null raw getter remains ineligible because the alternative event-path
+state cannot be reconstructed from it. Exact lengths/hashes, image UUIDs and
+pinned source provenance are retained in the run's `abi-evidence.json`.
+
+- Event-only crop to local `[0, 0, 176, 252]` changed removed-right event-eligible
+  hits to the owned background, preserving displayed pixels, shadow and geometry
+  exactly. Geometry-only hits still identified the foreground. This establishes
+  owned event-region set/restore and query behavior, not delivered-input parity.
+- Base crop removed foreground marker pixels outside the requested boundary and
+  retained the interior with zero changed pixels. It also changed native bounds
+  **and native screen rectangle** from `[280, 260, 320, 252]` to
+  `[280, 260, 176, 252]`. AppKit's frame/content geometry stayed unchanged. Base
+  alone still received event-eligible hits in the removed area; adding explicit
+  event crop routed those hits to the background. Redraw did not change pixels.
+- Base crop recomputed the rounded edge and shadow; 10,135 dark pixels extended
+  beyond the right boundary. It therefore fails a strict display boundary even
+  with the explicit event mask. Installed `shape_window` at `0x1829f2f68` can
+  resize backing storage; backing size was not measured directly in this run.
+
+The run finished in 3.735 seconds with ten native setter calls including restore.
+Original regions passed native equality and byte-for-byte reserialization after
+restore; exact original transform, alpha, native bounds/screen and AppKit geometry
+also matched. All three restored captures matched baseline with zero changed
+pixels, both windows and every capture child exited, and no pending journal
+remained. Saved source/binary, receipts, PNGs, interpretation and SHA-256 manifest
+preserve the result. Crash/startup recovery and foreign-window behavior remain
+unproved. **Visual clipping stays disabled: a base-shape writer changes native
+geometry and leaks shadow, even when its optical crop and event mask work.**
+
+## Foreign getter availability and remaining mask state
+
+The numeric-only read probe
+`target/native-clip-contract/foreign-getter-20261012T010847Z/` used an ordinary
+client's main connection 17547339, PID 44700. It selected at most three visible
+layer-0 windows whose owners had the same kernel UID, without reading titles or
+pixels. Native owner/PID and process-birth checks before and after each getter
+bound each read to its exact window instance:
+
+| WID | Owner PID | Owner connection |
+| --- | --- | --- |
+| 115974 | 30742 | 16459203 |
+| 118076 | 1329 | 569859 |
+| 118377 | 11590 | 15682107 |
+
+All twelve clip/base/raw-event-9/layer-10 reads returned status zero and nonnull
+36-byte nonempty regions. Retain equality, deep reconstruction, native equality,
+empty equality, byte-for-byte reserialization and repeated getter equality
+passed with stable identities. Only equality and numeric metadata were recorded;
+region bytes remained process-local. The supervised child exited normally in
+0.0602 seconds with no setters, input, windows, captures or permission requests.
+Saved source, receipt, supervisor and hash manifest retain the result.
+
+These getters are therefore not restricted to caller-owned windows on this
+installed host. The supplied CID is the **calling client's local connection**,
+not the target's owner connection: `_CGSGetConnectionPortById` at `0x1826994b0`
+resolves locally registered connections. Server handlers at `0x182b341bc`,
+`0x182b358ec` and `0x182b3ee3c` use global WID lookup rather than a local owned
+window cache. This result does not establish Dock-context execution, foreign
+writer authorization, restoration safety or behavior on another host/build.
+
+The separate global mask still lacks an exact readable original contract.
+Installed `WSWindowGetGlobalClipShape` at `0x182a03898` is an internal borrowed
+getter taking a server `CGXWindow *`; it returns combined field 288, not a client
+CID/WID getter. `update_global_clip_shape` at `0x1829f1d08` combines raw inputs
+344 and 368. The window-list global setter at `0x1829b7880` writes raw 368 through
+`set_window_list_global_clip_shape` at `0x1829f25ac`; the other input belongs to
+system-space clipping. A combined intersection cannot recover either original
+input. No global setter has been called.
+
+All twelve `SLSCopySpecifiedWindowShape` selectors were traced: selectors 0–8
+produce screen opaque/frame/content variants, 9 reads raw event field 272,
+10 reads derived layer field 296, and 11 reads field 224. Field 224's semantic
+contract remains unresolved; none reads raw 344 or 368. Layer clipping writes
+found so far are internal backing/Core Animation updates, not an established
+client writer with a lossless original restore path. `SLSSetWindowAlphaShape`
+and its copy getter are installed status-1006 stubs. Exact addresses, lengths,
+hashes and disassembly are saved in ignored
+`target/native-clip-contract/global-foreign-abi-evidence.json`.
+
+Do not substitute a derived layer/combined region for the original global-mask
+state, infer null/unrestricted from status 1000, or advertise visual clipping
+because foreign getters are readable. A native mask still needs unchanged
+geometry, bounded shadow and correct event behavior plus exact restoration.
 
 ## Required adapter contract
 
