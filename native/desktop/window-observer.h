@@ -52,8 +52,14 @@ typedef NS_ENUM(NSUInteger,DWWindowObservationState) {
 // Completion must revalidate request identity + binding generation, reject
 // stale sampledAt/finishedAt, and retain fresh synchronous event/input/resize
 // reads. A snapshot never establishes authority to deliver native input.
+// Optional discovery callback, also on main: immutable on-screen metadata is
+// delivered as soon as the list is read, before existing-source bounds/family
+// audits. Its sources array is empty and its own startedAt/finishedAt still
+// require the same freshness rejection. The batch stays in flight until the
+// final completion; this callback grants no native adoption/input authority.
 - (BOOL)requestSources:(NSArray<NSDictionary *> *)sources
                  scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope
+             discovery:(void (^)(DWWindowObservationSnapshot *snapshot))discovery
             completion:(void (^)(DWWindowObservationSnapshot *snapshot))completion;
 // Irreversible: pending native reads may finish, but their callbacks are dropped.
 - (void)cancel;

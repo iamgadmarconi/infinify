@@ -4674,8 +4674,15 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
         NSMutableDictionary *request=[@{@"logical":source.logical,@"generation":@(source.observationToken),@"identity":source.identity,@"native_bounds":@(self.native!=nil),@"families":@(self.native.familiesNeeded||source.nativeTransferFamilyWanted)}mutableCopy];
         if(source.router.bounds)request[@"prior_bounds"]=source.router.bounds;[requests addObject:request];
     }
-    DWWindowManager *manager=self.manager;DWNativePresenter *presenter=self.native;uint64_t session=self.nativeSessionEpoch;__weak Desktop *weak=self;
-    [self.windowObserver requestSources:requests scope:self.scope completion:^(DWWindowObservationSnapshot *snapshot){
+    DWWindowManager *manager=self.manager;DWNativePresenter *presenter=self.native;uint64_t session=self.nativeSessionEpoch;__weak Desktop *weak=self;__block BOOL reconcile=NO;
+    [self.windowObserver requestSources:requests scope:self.scope discovery:^(DWWindowObservationSnapshot *snapshot){
+        Desktop *d=weak;CFTimeInterval now=CACurrentMediaTime();
+        if(!d||d.cleaning||d.sessionInactive||d.manager!=manager||d.native!=presenter||d.native.ended||d.nativeSessionEpoch!=session
+            ||!snapshot.listSucceeded||now-snapshot.startedAt>.1||now-snapshot.finishedAt>.1)return;
+        // Timely discovery does not wait behind audits of already bound roots.
+        // Adoption still performs its fresh native identity/authority checks.
+        reconcile=[manager pollWithWindowRecords:snapshot.orderedOnScreen];
+    } completion:^(DWWindowObservationSnapshot *snapshot){
         Desktop *d=weak;CFTimeInterval now=CACurrentMediaTime();
         if(!d||d.cleaning||d.sessionInactive||d.manager!=manager||d.native!=presenter||d.native.ended||d.nativeSessionEpoch!=session)return;
         @try {
@@ -4685,9 +4692,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
                 if(source&&source.observationToken==[request[@"generation"]unsignedLongLongValue]&&[source.identity isEqual:request[@"identity"]]&&source.nativeFamily){[d forgetNativeFamily:source];changed=YES;}}
             if(changed&&!d.frameFlying)[d render];return;
         }
-        // Discovery consumes real WindowServer z-order and still performs its
-        // existing fresh identity checks before binding a new native root.
-        BOOL reconcile=[manager pollWithWindowRecords:snapshot.orderedOnScreen],describe=NO;
+        BOOL describe=NO;
         for(DWWindowObservation *observation in snapshot.sources){
             NSDictionary *request=observation.request;LiveSource *source=d.sources[request[@"logical"]];
             if(!source||source.detached||source.observationToken!=[request[@"generation"]unsignedLongLongValue]||![source.identity isEqual:request[@"identity"]]||![source.router.bounds isEqual:request[@"prior_bounds"]]||CACurrentMediaTime()-observation.sampledAt>.1)continue;
@@ -4898,11 +4903,19 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     if(!matched)[self windowFamilyChanged:pid];
 }
 - (void)windowFamilyChanged:(pid_t)pid {
-    if(self.cleaning||self.sessionInactive||(self.native&&!self.native.familiesNeeded)||self.native.ended||(pid&&!DWInScope(self.scope,pid)))return;BOOL changed=NO;
+    if(self.cleaning||self.sessionInactive||self.native.ended||(pid&&!DWInScope(self.scope,pid)))return;
+    if(self.native&&!self.native.familiesNeeded){[self windowDiscoveryRequested];return;}
     [self.nativeFamilies invalidatePID:pid];
     if(!self.native){[self captureDemand];[self render];return;}
-    for(LiveSource *source in self.sources.allValues)if(!source.detached&&(!pid||source.router.pid==pid)){[self forgetNativeFamily:source];source.observationToken=++self.observationEpoch;[source invalidateNativeButtons];[self refreshNativeButtons:source];changed=YES;}
-    if(changed){self.windowObservationAgain=YES;[self requestWindowObservation];}
+    for(LiveSource *source in self.sources.allValues)if(!source.detached&&(!pid||source.router.pid==pid)){[self forgetNativeFamily:source];source.observationToken=++self.observationEpoch;[source invalidateNativeButtons];[self refreshNativeButtons:source];}
+    // An application's first window has no bound source to invalidate. Its
+    // creation hint still requests discovery now, through the same single-flight
+    // observer; a hint during a read queues at most one fresh follow-up batch.
+    [self windowDiscoveryRequested];
+}
+- (void)windowDiscoveryRequested {
+    if(self.cleaning||self.sessionInactive||self.native.ended||!self.manager)return;
+    self.windowObservationAgain=YES;[self requestWindowObservation];
 }
 // Native focus may have moved (Command-Tab, a click on another window): read now, through the coordinator's own path.
 - (void)focusChanged { if(self.cleaning||[self nativeUnavailable]||!self.navigation)return;self.lastObservation=CACurrentMediaTime();[self refreshFocusAccess];[self.navigation observe]; }

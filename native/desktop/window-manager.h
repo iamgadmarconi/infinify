@@ -40,6 +40,9 @@
 // Native focus may have moved: an application was activated, or changed its focused window.
 - (void)focusChanged;
 @optional
+// A candidate's existing bounds-stability deadline is due. Request the host's
+// single-flight worker observation now; this callback performs no enumeration.
+- (void)windowDiscoveryRequested;
 // A creation/appearance hint can concern a child that is deliberately never
 // adopted as a toplevel. Native family presentation must reconcile its roots
 // without waiting for the regular one-second poll. 0 means all scoped roots.
@@ -54,13 +57,15 @@
 // say (no access, an application that does not answer), any candidate but an untitled
 // one smaller than 200x150. Tested once per appearance, before adoption only.
 // Read-only: it lists windows and never moves, focuses, resizes or closes one. It owns
-// no timer or dispatch source: the host's poll drives it, and so do the observers it owns
+// one candidate-stability timer: the host's poll drives reconciliation, and so do the observers it owns
 // (window-events.h), which exist from +managerWithHost:scope:mode: until -stop. Main thread only.
 //
 // Tracking is event-driven where Accessibility access allows. NSWorkspace and one
 // AXObserver per regular application say when an application launched or was shown and
-// when a window was created or came back from the Dock: discovery is then due on the
-// next idle poll. One worker read serves all such events, at the poll's own pace for a second,
+// when a window was created or came back from the Dock: native discovery requests
+// the host's single-flight worker immediately, including an application's first window.
+// A candidate-stability deadline requests another fresh observation after the existing
+// 50 ms hold, without waiting for the idle poll. Reconciliation stays eager for a second,
 // because the window list can show a window a moment after its application reports it.
 // A window that moved, was resized, retitled, miniaturized or destroyed, and native
 // focus that moved, are handed to the host at once. The poll is then a reconciliation, one
