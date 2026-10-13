@@ -184,7 +184,10 @@ DWResizeResult dw_resize_apply_scoped(DWResizeIdentity i, CGSize size, DWResizeG
     for (int n=0;n<5 && now()<deadline;n++) {
         if (n) usleep(30000);
         observed=readback(i,w,deadline,&r);
-        if (observed && (!same_size(before.size,r.actual_ax.size)||same_size(size,r.actual_ax.size))) break;
+        // An agreed AX/CG change can still be an intermediate owner animation
+        // frame. Only the requested size completes immediately; a non-exact
+        // size keeps the existing four delayed reads before it is classified.
+        if (observed && same_size(size,r.actual_ax.size)) break;
         if (r.outcome==DWResizeStaleIdentity) break;
     }
     if (observed) r.outcome=same_size(size,r.actual_ax.size)?DWResizeApplied:(!same_size(before.size,r.actual_ax.size)?DWResizeClamped:DWResizeRejected);

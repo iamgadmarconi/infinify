@@ -88,6 +88,39 @@ macOS guest, including its administrator operations and permissions, and confirm
 the guest was idle. Host desktop input, windows and settings remain outside that
 scope; guest work runs over SSH with UTM left in the background.
 
+On 2026-10-13, build `3db7693` corrected ordinary TextEdit title handling: its
+document-actions AX menu had been mistaken for the start of content, leaving
+the title drag to macOS beneath a transformed window. At zoom 0.5, a guarded
+40-by-24-point guest title drag moved the displayed window by exactly that
+endpoint delta without moving its native frame. Horizontal snapping held the
+first seven samples and released on the eighth; this is not a continuous-motion
+or frame-rate result. A normal right-edge drag of -24 screen points reduced
+native width from 610 to 562 and displayed width from 306 to 282. Each of eight
+edge samples moved by the requested three screen points with the opposite edge
+and native origin fixed. Input was released and the guest cursor restored; the
+user subsequently continued interacting with the resulting scene. Evidence is
+in `target/native-vm/live-workflow/fixed-{title,edge}-drag.json` and the matching
+state/native readbacks and screenshots. The signed executable SHA256 is
+`1a9fc435bb607365b4729c78301c013e95d2ddfd458a12f88e52e801d7b38cc4`.
+
+The same guest launch exercised the previous-boot launcher branch after a real
+guest reboot: the old ready record was archived and the new Dock helper started
+authenticated with an empty table. The preserved pre-launch and archived record
+both hash to `3c37696777244429bf33df25e0cbc066e601afc82cf6aa284fcedfc4cbc868b8`.
+This establishes that specific startup branch, not restoration of windows from
+the previous boot. Host desktop input and settings were untouched.
+
+The follow-up to the owner's menu/fullscreen and opening-delay reports changes
+three behaviors: smaller fullscreen answers align to the usable top-left;
+native fullscreen retains the configured background beneath the menu bar; and
+creation hints request discovery immediately, with a fresh observation scheduled
+at the existing 50 ms stability deadline. Discovery metadata no longer waits for
+existing windows' family audits. Size readback retains its bounded settling
+window for intermediate answers. These changes still need guest optical and
+latency validation. They do not establish that application size constraints are
+bypassed, that ordinary macOS menu material is changed, or that fullscreen fills
+the menu-only area for every application.
+
 The native title-drag fix in `f7c9a21` passed bounded checks using guarded CGEvents
 posted into the guest's normal HID event path against ordinary Terminal on arm64
 macOS 27.0.1 (26A434), VirtualMac2,1. At zoom 1 and 0.75,

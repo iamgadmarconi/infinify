@@ -334,7 +334,7 @@ static CGRect geometryFromScreen(CGRect rect,IFCompositorSpace space,IFComposito
     for(DWCanvasOutput *state in self.states.allValues){
         IFBackgroundProgram *prior=state.background;[self cache:state output:state.orderOutput];if(state.background==prior)continue;
         [prior shrinkChunkCache];NSDictionary *full=dict(state.orderOutput[@"fullscreen"]);
-        state.frame.background=full&&![text(full[@"backdrop"])isEqual:@"canvas"]?nil:state.background;
+        state.frame.background=!self.nativeWindows&&full&&![text(full[@"backdrop"])isEqual:@"canvas"]?nil:state.background;
         state.frame.errorMessages=[self backgroundErrors:state.background];state.dirty=YES;changed=YES;
     }
     if(changed)[self setNeedsFlush];
@@ -851,7 +851,11 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
     BOOL concealed=full&&![text(full[@"backdrop"])isEqual:@"canvas"],parked=NO;
     for(NSDictionary *other in all)if(other!=o&&dict(other[@"fullscreen"]))parked=YES;
     // Upstream shrinks a concealed output's chunk cache on every such frame: it frees its chunks, keeps its floor and has nothing pending.
-    frame.background=concealed?nil:state.background;if(concealed){[state.background shrinkChunkCache];[frame setOutlineRects:NULL count:0];}
+    // Native windows fill the usable desktop area while this canvas covers the
+    // entire display. Keep its background beneath the menu bar and uncovered
+    // desktop margins; only captured fullscreen pixels use upstream's black
+    // backdrop. A fullscreen still projects no other output's outline.
+    frame.background=concealed&&!self.nativeWindows?nil:state.background;if(concealed){if(!self.nativeWindows)[state.background shrinkChunkCache];[frame setOutlineRects:NULL count:0];}
     else if(parked){
         NSMutableData *outlines=[NSMutableData data];
         for(NSDictionary *other in all){

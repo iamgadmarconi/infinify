@@ -92,6 +92,10 @@ background and the outlines of the other outputs keep drawing under it. Either
 way no other window, no widget and no pinned window is drawn on that output.
 A window that under-fills its output conceals all the same.
 
+The native presenter retains the configured background behind physical windows,
+including during fullscreen, so the menu-bar band and any uncovered margins do
+not become black. Capture-mode fullscreen keeps the upstream backdrop policy.
+
 ## Entering
 
 `toggle-fullscreen` is upstream's arm:
@@ -128,17 +132,18 @@ A pinned window does enter: its pin is put away and the exit pins it again.
 While it is fullscreen IPC `Pin` reads `false` and a write answers
 `fullscreen windows can't be pinned`.
 
-### Centring
+### Alignment
 
 Until the window has answered the size it was offered it keeps its size at the
-parked corner: upstream centres nothing on an unacknowledged offer. The answer
+parked corner plus the usable-area inset. The answer
 is the first observation with an attempted setter behind it, or the end of the
-transaction without one. From then on a window smaller than its output sits in
-its middle, by half the shortfall on each axis in whole pixels, and one that
-is larger sits at the parked corner (upstream's `max(0)`): a `clamped` answer,
-a `rejected` one, and any later size alike. That is the window's world frame,
-so what is drawn and what is hit are one rectangle. The exit restores the
-place from before, not the centred one.
+transaction without one. All answers remain at that usable top-left, including
+clamped, rejected and later sizes. This deliberately differs from upstream's
+centering of smaller clients: the title bar stays directly below the menu/notch
+safe area without an added gap. The request uses the full display below that
+safe area, without a Dock inset. An application may still grant less space;
+its actual size is retained, so drawing and hit testing use the same rectangle.
+The exit restores the exact place from before fullscreen.
 
 ## Leaving
 
@@ -255,7 +260,7 @@ There is one size transaction ([SIZES.md](SIZES.md#a-second-action-while-a-size-
   During a drag or resize gesture: `a window is under an interactive move or
   resize`. Nothing else refuses an enter. A window the adapter will not
   resize answers `unsupported` for that request. Each later enter asks again,
-  then centres the size it has or observes that it is settable by now
+  then aligns the size it has or observes that it is settable by now
   ([NATIVE_RESIZE.md](NATIVE_RESIZE.md#readback-mode)).
 - **An exit is never refused.** It is a consequence of something that
   happened. Its size is *owed*, and delivered as soon as it can be.
@@ -421,7 +426,7 @@ gone, as for a pin ([RULES.md](RULES.md#wire-contract)):
 - `remove_output` keeps the fullscreen. Until the output is registered again
   the window is drawn nowhere and IPC `State` lists no fullscreen for it;
 - an output registered again keeps it, parked as it was; at another size its
-  window is asked for the new one and meanwhile centred in it;
+  window is asked for the new one and meanwhile aligned to its usable top-left;
 - `outputs_settled` ends the fullscreen of an output that is not connected:
   the window is back on the canvas, and the output's saved camera is the one
   from before, for when it returns. `dirty` is true.
@@ -480,8 +485,8 @@ its old place, and its size from before the fullscreen is not restored.
 - **The answer is a native result.** Upstream's client acks a configure; here
   the answer is the transaction's first observation behind an attempted
   setter. A window whose transaction fails, or that the adapter will not
-  resize, stays fullscreen at its own size, centred, as a client that keeps
-  its size does, at every enter. A failed enter is not asked again; an exit
+  resize, stays fullscreen at its own size, aligned to the usable top-left,
+  at every enter. A failed enter is not asked again; an exit
   whose window was never asked is, three transactions at most
   ([above](#a-size-that-is-owed)). Upstream's configure cannot fail.
 - **A new window that takes the keyboard ends the fullscreen.** Upstream

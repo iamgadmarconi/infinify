@@ -370,7 +370,9 @@ fn without_the_capability_fullscreen_answers_as_it_did_before() {
     const KEY: &str = r#"{"action":"toggle-fullscreen","character":"f","chord":"⌘F","combo":"mod+f","implemented":false,"key_code":3,"modifiers":{"command":true,"control":false,"option":false,"shift":false},"passable":true,"repeat":false}"#;
     const ATTACH: &str = r#"{"data":{"adopted":false,"dirty":true,"effect":{"effect_id":2,"generation":2,"identity":{"birth_sec":1800000000,"birth_usec":0,"owner":null,"pid":123,"wid":2},"op":"focus_native_window","window":2},"navigation":{"animating":true,"generation":1,"output":1,"target_camera":{"x":0.0,"y":0.0},"target_zoom":1.0},"window":2},"ok":true,"version":1}"#;
     const RULE: &str = r#"{"blur":false,"border_color":null,"border_color_focused":null,"border_width":null,"corner_radius":null,"decoration":null,"focus_on_open":null,"fullscreen":true,"layer_order":null,"not_applied":["fullscreen"],"opacity":null,"output":"view-b","pass_keys":"none","pass_mouse":"none","pinned_to_screen":false,"position":null,"preserve_aspect_ratio":false,"restore_windows":null,"shadow":null,"size":null,"suspend_on_close":null,"widget":false}"#;
-    let mut h = fixture(CONFIG);
+    // Freeze the historical placement policy behind the exact reply literals.
+    let config = format!("window_placement = \"center\"\n{CONFIG}");
+    let mut h = fixture(&config);
     let option = json!({"control":false,"option":true,"shift":false,"command":false});
     // Sent or not, false is the default: a bare shell and one that says so.
     for explicit in [false, true] {
@@ -567,11 +569,11 @@ fn a_toggle_fills_the_output_and_a_second_restores_everything_exactly() {
     assert_eq!(h.snapshot()["focus"]["intent"], 1);
 }
 
-// Upstream src/tests/fullscreen_centering.rs: a window that takes another
-// size than its output is moved off the parked corner by half the shortfall,
-// one that takes more is not moved, and the exit undoes it.
+// Adapted from upstream src/tests/fullscreen_centering.rs. macOS fullscreen
+// keeps the usable top-left even when the owner grants a different size;
+// the requested size and exact exit restoration are unchanged.
 #[test]
-fn a_window_that_takes_another_size_is_centred_as_upstream_centres_it() {
+fn a_window_that_takes_another_size_stays_at_the_usable_top_left() {
     // A clamped answer: 800 x 600 inside the 960 x 740 usable area.
     let mut h = zoomed(CONFIG);
     attach(&mut h, 2, "app.2", (70.0, -30.0, 120.0, 90.0));
@@ -586,14 +588,14 @@ fn a_window_that_takes_another_size_is_centred_as_upstream_centres_it() {
     let last = answer(&mut h, &setter, "clamped", true, (800.0, 600.0))["effect"].clone();
     assert_eq!(
         world(&mut h, 1),
-        rect(PARK.0 + 100.0, PARK.1 + 110.0, 800.0, 600.0)
+        rect(PARK.0 + USABLE.0, PARK.1 + USABLE.1, 800.0, 600.0)
     );
     answer(&mut h, &last, "observed", false, (800.0, 600.0));
     let alone = placed(&mut h, 1);
     assert_eq!(alone.len(), 1);
     assert_eq!(
         alone[0]["screen_rect"],
-        rect(A.0 + 100.0, A.1 + 110.0, 800.0, 600.0)
+        rect(A.0 + USABLE.0, A.1 + USABLE.1, 800.0, 600.0)
     );
     // Under-fill alone conceals the canvas all the same.
     assert_eq!(fullscreen(&mut h, 1)["backdrop"], "black");
@@ -602,8 +604,10 @@ fn a_window_that_takes_another_size_is_centred_as_upstream_centres_it() {
     // there on the canvas.
 
     assert_eq!(hit(&mut h, 1, (A.0 + 500.0, A.1 + 400.0)), 1);
+    assert_eq!(hit(&mut h, 1, (A.0 + 21.0, A.1 + 41.0)), 1);
+    assert_eq!(hit(&mut h, 1, (A.0 + 900.0, A.1 + 700.0)), Value::Null);
     assert_eq!(hit(&mut h, 1, (A.0 + 20.0, A.1 + 20.0)), Value::Null);
-    // The exit restores the place it had before, not the centred one.
+    // The exit restores the exact place it had before fullscreen.
     let reply = action(&mut h, 1, "toggle-fullscreen");
     assert_eq!(world(&mut h, 1), rect(START.0, START.1, 800.0, 600.0));
     deliver(
@@ -638,8 +642,8 @@ fn a_window_that_takes_another_size_is_centred_as_upstream_centres_it() {
     );
     assert_eq!(alone[0]["clip_rect"], of(USABLE_SCREEN_A));
 
-    // A window that refuses the size, upstream's fixed-size client, is centred
-    // like any other, and the exit has no size to give back.
+    // A window that refuses the size keeps the same usable top-left,
+    // and the exit has no size to give back.
     let mut h = zoomed(CONFIG);
     let reply = action(&mut h, 1, "toggle-fullscreen");
     deliver(
@@ -652,11 +656,11 @@ fn a_window_that_takes_another_size_is_centred_as_upstream_centres_it() {
     );
     assert_eq!(
         world(&mut h, 1),
-        rect(PARK.0 + 300.0, PARK.1 + 260.0, 400.0, 300.0)
+        rect(PARK.0 + USABLE.0, PARK.1 + USABLE.1, 400.0, 300.0)
     );
     assert_eq!(
         placed(&mut h, 1)[0]["screen_rect"],
-        rect(A.0 + 300.0, A.1 + 260.0, 400.0, 300.0)
+        rect(A.0 + USABLE.0, A.1 + USABLE.1, 400.0, 300.0)
     );
     let reply = action(&mut h, 1, "toggle-fullscreen");
     assert!(reply.get("transaction").is_none(), "{reply}");
@@ -1001,13 +1005,13 @@ fn a_close_an_activation_and_a_lost_output_end_fullscreen() {
     assert_eq!(pose(&mut h, 1), view(PARK, 1.0));
     assert_eq!(placed(&mut h, 1)[0]["screen_rect"], of(USABLE_SCREEN_A));
     // One that comes back at another size has its window asked again, and
-    // meanwhile sits in the middle of it.
+    // meanwhile keeps the same usable top-left.
     h.ok(json!({"op":"remove_output","output":1}));
     h.ok(json!({"op":"register_output","stable_id":"view-a","screen_bounds":rect(A.0, A.1, 1200.0, 900.0),"usable_rect_local":rect(USABLE.0,USABLE.1,1160.0,840.0)}));
     h.ok(json!({"op":"outputs_settled"}));
     assert_eq!(
         placed(&mut h, 1)[0]["screen_rect"],
-        rect(A.0 + 120.0, A.1 + 90.0, USABLE.2, USABLE.3)
+        rect(A.0 + USABLE.0, A.1 + USABLE.1, USABLE.2, USABLE.3)
     );
     let reply = action(&mut h, 1, "spawn true");
     deliver(
@@ -1192,7 +1196,7 @@ fn a_new_window_is_tucked_behind_a_fullscreen_one_and_a_ruled_one_takes_its_outp
     // 400 x 300 window of the gate scenario stands at (28, 260): the
     // 600 x 400 frame is (28, 210).
     let both = format!(
-        "{CONFIG}[[window_rules]]\napp_id = \"app.both\"\nsize = [600, 400]\nfullscreen = true\n"
+        "window_placement = \"center\"\n{CONFIG}[[window_rules]]\napp_id = \"app.both\"\nsize = [600, 400]\nfullscreen = true\n"
     );
     let mut sized = capable(&both);
     let reply = appear(&mut sized, 2, "app.both", (400.0, 300.0));
@@ -2637,7 +2641,10 @@ fn a_fullscreen_window_is_frosted_by_its_own_rule_alone_and_opens_and_closes_lik
 // order, standing at its own size inside the frame it was placed for.
 #[test]
 fn a_ruled_size_waits_out_a_fullscreen_enter_and_is_placed_in_its_background() {
-    let toml = format!("{CONFIG}[[window_rules]]\napp_id = \"app.sized\"\nsize = [600, 400]\n");
+    // The rule-size frame calculations below explicitly exercise centering.
+    let toml = format!(
+        "window_placement = \"center\"\n{CONFIG}[[window_rules]]\napp_id = \"app.sized\"\nsize = [600, 400]\n"
+    );
     let mut h = capable(&toml);
     let held = action(&mut h, 1, "toggle-fullscreen");
     let read = began(&mut h, &held);
@@ -2769,7 +2776,7 @@ fn timed_out(h: &mut Host, effect: &Value) -> Value {
     h.ok(json!({"op":"native_resize_result","transaction":effect["transaction"],"effect_id":effect["effect_id"],"identity":effect["identity"],"generation":effect["generation"],"result":{"outcome":"timed_out","ax_error":-25204,"mutation_attempted":attempted,"observed":false,"requested":requested,"actual_ax":none,"actual_cg":none}}))
 }
 #[test]
-fn readback_enters_and_leaves_with_a_smaller_answer_centred_and_hit_at_once() {
+fn readback_enters_and_leaves_with_a_smaller_answer_aligned_and_hit_at_once() {
     let mut h = readback(CONFIG);
     let reply = action(&mut h, 1, "toggle-fullscreen");
     usable(&mut h);
@@ -2780,16 +2787,18 @@ fn readback_enters_and_leaves_with_a_smaller_answer_centred_and_hit_at_once() {
     usable(&mut h);
     assert_eq!(
         world(&mut h, 1),
-        rect(PARK.0 + 100.0, PARK.1 + 110.0, 800.0, 600.0)
+        rect(PARK.0 + USABLE.0, PARK.1 + USABLE.1, 800.0, 600.0)
     );
     // No acknowledgement is waited for: the window is hit where it is drawn
     // while its final read is still owed, and the band around it is not.
     assert_eq!(hit(&mut h, 1, (A.0 + 500.0, A.1 + 400.0)), 1);
+    assert_eq!(hit(&mut h, 1, (A.0 + 21.0, A.1 + 41.0)), 1);
+    assert_eq!(hit(&mut h, 1, (A.0 + 900.0, A.1 + 700.0)), Value::Null);
     assert_eq!(hit(&mut h, 1, (A.0 + 20.0, A.1 + 20.0)), Value::Null);
     answer(&mut h, &last, "observed", false, (800.0, 600.0));
     assert_eq!(
         placed(&mut h, 1)[0]["screen_rect"],
-        rect(A.0 + 100.0, A.1 + 110.0, 800.0, 600.0)
+        rect(A.0 + USABLE.0, A.1 + USABLE.1, 800.0, 600.0)
     );
     assert_eq!(mode(&mut h, 1), "fullscreen");
     let reply = action(&mut h, 1, "toggle-fullscreen");
@@ -2808,7 +2817,7 @@ fn readback_enters_and_leaves_with_a_smaller_answer_centred_and_hit_at_once() {
     usable(&mut h);
 }
 // A window that was not settable once is asked again at every enter: the
-// answer centres it at its own size, or it takes the output's by now.
+// answer aligns it at its own size, or it takes the output's by now.
 #[test]
 fn readback_asks_a_window_that_was_not_settable_again_at_the_next_enter() {
     let mut h = readback(CONFIG);
@@ -2819,7 +2828,7 @@ fn readback_asks_a_window_that_was_not_settable_again_at_the_next_enter() {
     answer(&mut h, &last, "observed", false, (400.0, 300.0));
     assert_eq!(
         world(&mut h, 1),
-        rect(PARK.0 + 300.0, PARK.1 + 260.0, 400.0, 300.0)
+        rect(PARK.0 + USABLE.0, PARK.1 + USABLE.1, 400.0, 300.0)
     );
     assert_eq!(fullscreen(&mut h, 1)["window"], 1);
     usable(&mut h);

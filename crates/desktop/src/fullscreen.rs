@@ -72,12 +72,12 @@ struct Entry {
     // size is the upstream policy basis; the extent is the exact exit target.
     saved_extent: Size,
     /// The whole-pixel camera the output is parked at. The window's top-left
-    /// also includes the output-local menu/notch exclusion and any underfill.
+    /// also includes the output-local menu/notch exclusion.
     park: Px,
     /// The size last asked of the window: the output's as it was then.
     offered: Px,
     /// Upstream `awaiting_size`: the window has not answered the size it was
-    /// offered, so it is not centred yet.
+    /// offered, so its placement is still owned by that transaction.
     awaiting: bool,
     camera: Point,
     zoom: f64,
@@ -169,14 +169,6 @@ impl Fullscreen {
 
 fn point_of(px: Px) -> Point {
     Point::new(px[0] as f64, px[1] as f64)
-}
-/// Upstream recentre_fullscreen_window's offset: half the shortfall on each
-/// axis, and none for a window larger than its output.
-fn centre(viewport: Px, size: Px) -> Px {
-    [
-        ((viewport[0] - size[0]) / 2).max(0),
-        ((viewport[1] - size[1]) / 2).max(0),
-    ]
 }
 /// Does the shell pass this command's reply through the hook that performs a
 /// size transaction (`-consumeSize:`, the first step of `-applyReply:`)? A
@@ -560,10 +552,9 @@ impl Controller {
     /// What every command must leave true. A fullscreen window that is gone
     /// or has lost its source is reaped. Each fullscreen output is parked.
     /// A window that has answered the size it was offered, or whose
-    /// transaction ended without an answer, sits in the middle of its output
-    /// when it is smaller and at the parked corner when it is not: upstream
-    /// recentre_fullscreen_window, which moves the mapped position so that
-    /// what is drawn and what is hit are one rectangle.
+    /// transaction ended without an answer, sits at its output's usable top-left.
+    /// Adapted from upstream recentre_fullscreen_window: the mapped position
+    /// keeps what is drawn and what is hit in one rectangle.
     pub(crate) fn settle_fullscreen(&mut self) -> Result<(), Error> {
         let live = |controller: &Self, window: WindowId| {
             controller.scene.window(window).is_some() && controller.sources.contains_key(&window)
@@ -609,9 +600,6 @@ impl Controller {
         let outputs: Vec<OutputId> = self.fullscreen.entries.keys().copied().collect();
         for output in outputs {
             self.park(output)?;
-            let Some(view) = self.output_px(output) else {
-                continue;
-            };
             let Some(inset) = self.output_inset_px(output) else {
                 continue;
             };
@@ -625,21 +613,20 @@ impl Controller {
             let Some(rect) = self.scene.window(entry.window).map(|w| w.world_rect) else {
                 continue;
             };
-            let Ok((loc, size)) = frame(rect) else {
+            let Ok((loc, _)) = frame(rect) else {
                 continue;
             };
-            let offset = centre(view, size);
-            let at = [
-                entry.park[0] + inset[0] + offset[0],
-                entry.park[1] + inset[1] + offset[1],
-            ];
+            // macOS policy: keep the title bar directly below the menu/notch
+            // even when the application grants less than the requested size.
+            // Centering that shortfall would add a second top exclusion.
+            let at = [entry.park[0] + inset[0], entry.park[1] + inset[1]];
             if !awaiting && loc != at {
-                let centred = Rect {
+                let aligned = Rect {
                     origin: point_of(at),
                     size: rect.size,
                 };
-                if readable(centred).is_ok() {
-                    self.scene.set_window_rect(entry.window, centred)?;
+                if readable(aligned).is_ok() {
+                    self.scene.set_window_rect(entry.window, aligned)?;
                 }
             }
         }
