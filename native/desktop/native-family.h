@@ -12,3 +12,7 @@ BOOL DWNativeWindowParent(NSDictionary *identity,uint32_t *parent);
 // A fresh, bounded native parent chain, checked against the exact process
 // instance at every step. Cached family membership alone never authorizes input.
 BOOL DWNativeWindowBelongsToRoot(NSDictionary *member,NSDictionary *root);
+// Worker-only candidate stability basis, separately from animated CG screen
+// bounds. Exact same-user PID/birth/WID and on-screen ownership are read afresh
+// before/after native bounds and affine-transform getters. No authority or lease.
+NSDictionary *DWNativeWindowDiscoveryBasis(NSDictionary *identity);

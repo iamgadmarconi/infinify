@@ -51,6 +51,8 @@
 // DriftWM manages every toplevel; this is that rule for native Mac windows. Candidates
 // are the normal-layer windows of regular applications other than this process, at
 // least 40x40 and on screen, whose bounds held still between worker observations for 50 ms.
+// Native presentation uses the window's fresh untransformed bounds and original
+// affine basis; CG bounds include owner opening animations. Overlay uses CG bounds.
 // Of those only a real window is offered, as upstream manages toplevels and their
 // dialogs and never a popup or a helper surface: with Accessibility access, one whose
 // subrole is AXStandardWindow, AXDialog or AXSystemDialog; where Accessibility cannot
@@ -94,6 +96,9 @@ typedef NS_ENUM(NSUInteger,DWWindowDiscoveryMode) {
 // Whether this manager reads the shareable windows: Screen Recording access as it stood when the manager was made.
 // Always NO in native presentation.
 @property (readonly) BOOL capturing;
+// Already offered WIDs, for excluding redundant native candidate getter reads.
+// This is discovery bookkeeping and never native ownership/identity authority.
+@property (copy,readonly) NSSet<NSNumber *> *offeredWindows;
 // A disposable native benchmark may put its owned windows above the canvas.
 // Default 0; an extra level is considered only with an explicit process scope.
 @property NSInteger benchmarkWindowLevel;
@@ -105,11 +110,13 @@ typedef NS_ENUM(NSUInteger,DWWindowDiscoveryMode) {
 - (BOOL)reconciliationDue;
 // Consume that worker's ordered on-screen records on main. The caller must reject
 // aged snapshots from the start of the read; adoption still validates identities
-// afresh. The shareable windows are read only for a changed candidate set, initial
+// afresh. Native candidates require that batch's separately audited native bases;
+// a missing basis retains CG presence but withholds adoption and requests retry.
+// The shareable windows are read only for a changed candidate set, initial
 // discovery or retry. YES when bound windows also need reconciliation: each pass
 // without full observers, otherwise once a second. Bound-window event/input/resize
 // checks keep their immediate fresh reads, independent of this discovery batch.
-- (BOOL)pollWithWindowRecords:(NSArray<NSDictionary *> *)records;
+- (BOOL)pollWithWindowRecords:(NSArray<NSDictionary *> *)records nativeCandidateBases:(NSDictionary<NSNumber *,NSDictionary *> *)nativeCandidateBases sampledAt:(CFTimeInterval)sampledAt;
 // YES while the observers report window changes: Accessibility access stands and every
 // regular application is observed in full.
 @property (readonly) BOOL live;

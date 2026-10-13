@@ -33,6 +33,9 @@ typedef NS_ENUM(NSUInteger,DWWindowObservationState) {
 @property(nonatomic,copy,readonly) NSDictionary<NSNumber *,NSDictionary *> *onScreen;
 // Scoped rows in the actual front-to-back CG list order, for adoption order.
 @property(nonatomic,copy,readonly) NSArray<NSDictionary *> *orderedOnScreen;
+// Fresh native bases for unknown on-screen candidates only. CG discovery rows
+// retain their real visibility/order; missing bases withhold native adoption.
+@property(nonatomic,copy,readonly) NSDictionary<NSNumber *,NSDictionary *> *nativeCandidateBases;
 @property(nonatomic,copy,readonly) NSArray<DWWindowObservation *> *sources;
 @property(nonatomic,readonly) CFTimeInterval startedAt,finishedAt,deliveredAt;
 @end
@@ -57,8 +60,13 @@ typedef NS_ENUM(NSUInteger,DWWindowObservationState) {
 // audits. Its sources array is empty and its own startedAt/finishedAt still
 // require the same freshness rejection. The batch stays in flight until the
 // final completion; this callback grants no native adoption/input authority.
+// nativeDiscoveryExclusions=nil selects CG-only overlay discovery. A nonnil set
+// explicitly selects native candidate bounds/transform reads, even with no bound
+// sources; already offered/bound WIDs are excluded from these extra getters.
+// Exclusions are an enumeration optimization, never adoption/input authority.
 - (BOOL)requestSources:(NSArray<NSDictionary *> *)sources
                  scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope
+ nativeDiscoveryExclusions:(NSSet<NSNumber *> *)nativeDiscoveryExclusions
              discovery:(void (^)(DWWindowObservationSnapshot *snapshot))discovery
             completion:(void (^)(DWWindowObservationSnapshot *snapshot))completion;
 // Irreversible: pending native reads may finish, but their callbacks are dropped.

@@ -2,6 +2,7 @@
 #import "window-observer.h"
 #import "native-presenter.h"
 #import "native-family.h"
+#import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
 #include <libproc.h>
 
@@ -20,6 +21,7 @@
 @property(nonatomic,readwrite) BOOL listSucceeded;
 @property(nonatomic,copy,readwrite) NSDictionary<NSNumber *,NSDictionary *> *onScreen;
 @property(nonatomic,copy,readwrite) NSArray<NSDictionary *> *orderedOnScreen;
+@property(nonatomic,copy,readwrite) NSDictionary<NSNumber *,NSDictionary *> *nativeCandidateBases;
 @property(nonatomic,copy,readwrite) NSArray<DWWindowObservation *> *sources;
 @property(nonatomic,readwrite) CFTimeInterval startedAt,finishedAt,deliveredAt;
 @end
@@ -49,7 +51,7 @@ static NSDictionary *observedRequest(NSDictionary *source) {
     return [request copy];
 }
 
-static DWWindowObservationSnapshot *observeWindows(uint64_t generation,NSArray<NSDictionary *> *requests,NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope,void (^discovered)(DWWindowObservationSnapshot *)) {
+static DWWindowObservationSnapshot *observeWindows(uint64_t generation,NSArray<NSDictionary *> *requests,NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope,NSSet<NSNumber *> *nativeExclusions,void (^discovered)(DWWindowObservationSnapshot *)) {
     DWWindowObservationSnapshot *snapshot=[DWWindowObservationSnapshot new];snapshot.generation=generation;snapshot.startedAt=CACurrentMediaTime();
     NSMutableDictionary<NSNumber *,id> *births=[NSMutableDictionary dictionary];
     NSMutableDictionary<NSNumber *,NSDictionary *> *onScreen=[NSMutableDictionary dictionary];
@@ -63,9 +65,26 @@ static DWWindowObservationSnapshot *observeWindows(uint64_t generation,NSArray<N
         NSDictionary *copied=[info copy];onScreen[wid]=copied;[orderedOnScreen addObject:copied];
     }
     if(list)CFRelease(list);snapshot.onScreen=[onScreen copy];snapshot.orderedOnScreen=[orderedOnScreen copy];
+    NSMutableDictionary *nativeBases=[NSMutableDictionary dictionary],*regular=[NSMutableDictionary dictionary];
+    if(nativeExclusions){
+        NSMutableSet *known=[nativeExclusions mutableCopy];for(NSDictionary *request in requests)[known addObject:request[@"identity"][@"wid"]];
+        for(NSDictionary *row in orderedOnScreen){
+            // Reserve delivery/getter headroom inside the consumer's unchanged
+            // 100 ms limit. Timely partial bases can advance offered exclusions;
+            // never start another multi-getter audit at the acceptance boundary.
+            if(CACurrentMediaTime()-snapshot.startedAt>=.08)break;
+            NSNumber *wid=row[(id)kCGWindowNumber],*pid=row[(id)kCGWindowOwnerPID];NSInteger level=[row[(id)kCGWindowLayer]integerValue];
+            if([known containsObject:wid]||pid.intValue==getpid()||pid.intValue<=1||(level!=0&&level!=3&&!(scope&&level==4)))continue;
+            NSNumber *policy=regular[pid];if(!policy)policy=regular[pid]=@([NSRunningApplication runningApplicationWithProcessIdentifier:pid.intValue].activationPolicy==NSApplicationActivationPolicyRegular);if(!policy.boolValue)continue;
+            CGRect bounds=CGRectZero;if(!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)row[(id)kCGWindowBounds],&bounds)||bounds.size.width<40||bounds.size.height<40)continue;
+            NSArray *born=observedBirth(pid.intValue,births);if(born.count!=2)continue;
+            NSDictionary *basis=DWNativeWindowDiscoveryBasis(@{@"pid":pid,@"wid":wid,@"birth_sec":born[0],@"birth_usec":born[1]});if(basis)nativeBases[wid]=basis;
+        }
+    }
+    snapshot.nativeCandidateBases=nativeBases.copy;
     if(discovered){
         DWWindowObservationSnapshot *metadata=[DWWindowObservationSnapshot new];metadata.generation=generation;metadata.listSucceeded=snapshot.listSucceeded;
-        metadata.startedAt=snapshot.startedAt;metadata.finishedAt=CACurrentMediaTime();metadata.onScreen=snapshot.onScreen;metadata.orderedOnScreen=snapshot.orderedOnScreen;metadata.sources=@[];
+        metadata.startedAt=snapshot.startedAt;metadata.finishedAt=CACurrentMediaTime();metadata.onScreen=snapshot.onScreen;metadata.orderedOnScreen=snapshot.orderedOnScreen;metadata.nativeCandidateBases=snapshot.nativeCandidateBases;metadata.sources=@[];
         discovered(metadata);
     }
     NSMutableArray<DWWindowObservation *> *sources=[NSMutableArray arrayWithCapacity:requests.count];
@@ -116,15 +135,17 @@ static DWWindowObservationSnapshot *observeWindows(uint64_t generation,NSArray<N
     _queue=dispatch_queue_create("org.infinify.window-observation",dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,QOS_CLASS_USER_INITIATED,0));return self;
 }
 - (BOOL)inFlight { return _inFlight; }
-- (BOOL)requestSources:(NSArray<NSDictionary *> *)sources scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope discovery:(void (^)(DWWindowObservationSnapshot *))discovery completion:(void (^)(DWWindowObservationSnapshot *))completion {
+- (BOOL)requestSources:(NSArray<NSDictionary *> *)sources scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope nativeDiscoveryExclusions:(NSSet<NSNumber *> *)nativeDiscoveryExclusions discovery:(void (^)(DWWindowObservationSnapshot *))discovery completion:(void (^)(DWWindowObservationSnapshot *))completion {
     if(!NSThread.isMainThread||_cancelled||_inFlight||_generation==UINT64_MAX||!completion||![sources isKindOfClass:NSArray.class]||(scope&&(![scope isKindOfClass:NSDictionary.class]||!scope.count)))return NO;
     NSMutableDictionary *allowed=[NSMutableDictionary dictionaryWithCapacity:scope.count];
     for(NSNumber *pid in scope){NSArray *born=scope[pid];if(!observedNumber(pid)||pid.intValue<=0||![born isKindOfClass:NSArray.class]||born.count!=2||!observedNumber(born[0])||!observedNumber(born[1]))return NO;allowed[[pid copy]]=[born copy];}
     NSMutableArray *requests=[NSMutableArray arrayWithCapacity:sources.count];
     for(NSDictionary *source in sources){NSDictionary *request=observedRequest(source);if(!request)return NO;[requests addObject:request];}
-    NSArray *copied=[requests copy];NSDictionary *scoped=scope?[allowed copy]:nil;uint64_t generation=++_generation;_inFlight=YES;__weak DWWindowObserver *weak=self;
+    if(nativeDiscoveryExclusions&&![nativeDiscoveryExclusions isKindOfClass:NSSet.class])return NO;
+    for(id wid in nativeDiscoveryExclusions)if(!observedNumber(wid)||![wid unsignedIntValue])return NO;
+    NSArray *copied=[requests copy];NSDictionary *scoped=scope?[allowed copy]:nil;NSSet *excluded=nativeDiscoveryExclusions.copy;uint64_t generation=++_generation;_inFlight=YES;__weak DWWindowObserver *weak=self;
     dispatch_async(_queue,^{@autoreleasepool{
-        DWWindowObservationSnapshot *snapshot=observeWindows(generation,copied,scoped,discovery?^(DWWindowObservationSnapshot *metadata){
+        DWWindowObservationSnapshot *snapshot=observeWindows(generation,copied,scoped,excluded,discovery?^(DWWindowObservationSnapshot *metadata){
             dispatch_async(dispatch_get_main_queue(),^{DWWindowObserver *current=weak;if(!current||current->_cancelled||current->_generation!=generation)return;
                 metadata.deliveredAt=CACurrentMediaTime();discovery(metadata);});
         }:nil);

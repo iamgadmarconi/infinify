@@ -4675,13 +4675,13 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
         if(source.router.bounds)request[@"prior_bounds"]=source.router.bounds;[requests addObject:request];
     }
     DWWindowManager *manager=self.manager;DWNativePresenter *presenter=self.native;uint64_t session=self.nativeSessionEpoch;__weak Desktop *weak=self;__block BOOL reconcile=NO;
-    [self.windowObserver requestSources:requests scope:self.scope discovery:^(DWWindowObservationSnapshot *snapshot){
+    [self.windowObserver requestSources:requests scope:self.scope nativeDiscoveryExclusions:self.native?manager.offeredWindows:nil discovery:^(DWWindowObservationSnapshot *snapshot){
         Desktop *d=weak;CFTimeInterval now=CACurrentMediaTime();
         if(!d||d.cleaning||d.sessionInactive||d.manager!=manager||d.native!=presenter||d.native.ended||d.nativeSessionEpoch!=session
             ||!snapshot.listSucceeded||now-snapshot.startedAt>.1||now-snapshot.finishedAt>.1)return;
         // Timely discovery does not wait behind audits of already bound roots.
         // Adoption still performs its fresh native identity/authority checks.
-        reconcile=[manager pollWithWindowRecords:snapshot.orderedOnScreen];
+        reconcile=[manager pollWithWindowRecords:snapshot.orderedOnScreen nativeCandidateBases:snapshot.nativeCandidateBases sampledAt:snapshot.startedAt];
     } completion:^(DWWindowObservationSnapshot *snapshot){
         Desktop *d=weak;CFTimeInterval now=CACurrentMediaTime();
         if(!d||d.cleaning||d.sessionInactive||d.manager!=manager||d.native!=presenter||d.native.ended||d.nativeSessionEpoch!=session)return;

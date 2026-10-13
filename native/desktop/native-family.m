@@ -12,6 +12,25 @@ static NSArray *birth(pid_t pid){struct proc_bsdinfo info={0};if(proc_pidinfo(pi
 static NSDictionary *cg(uint32_t wid){CFArrayRef a=CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow,wid);NSArray *rows=CFBridgingRelease(a);for(NSDictionary *row in rows)if([row[(id)kCGWindowNumber]unsignedIntValue]==wid)return row;return nil;}
 #include "../families/window-server-family.h"
 
+NSDictionary *DWNativeWindowDiscoveryBasis(NSDictionary *identity){
+    pid_t pid=[identity[@"pid"]intValue];uint32_t wid=[identity[@"wid"]unsignedIntValue];
+    id seconds=identity[@"birth_sec"],microseconds=identity[@"birth_usec"];
+    if(pid<=1||!wid||![seconds isKindOfClass:NSNumber.class]||![microseconds isKindOfClass:NSNumber.class])return nil;
+    NSArray *enrolled=@[seconds,microseconds];NSDictionary *before=ownedCGWindow(wid,pid,enrolled);
+    if(![before[(id)kCGWindowIsOnscreen]boolValue])return nil;
+    // Getter ABI: yabai dd845723416f5fe92af49fad5ebab00369e07edd,
+    // src/osax/payload.m:54,606; the same reader as native/backend/bridge.m.
+    static int (*connection)(void);static CGError (*transform)(int,uint32_t,CGAffineTransform *);static dispatch_once_t once;
+    dispatch_once(&once,^{void *sky=dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight",RTLD_NOW|RTLD_LOCAL);if(!sky)return;connection=dlsym(sky,"SLSMainConnectionID");transform=dlsym(sky,"SLSGetWindowTransform");});
+    CGRect bounds=CGRectZero,afterBounds=CGRectZero;CGAffineTransform matrix=CGAffineTransformIdentity;
+    if(!connection||!transform||!DWNativeBounds(wid,&bounds)||transform(connection(),wid,&matrix)!=kCGErrorSuccess||!DWNativeBounds(wid,&afterBounds)||!CGRectEqualToRect(bounds,afterBounds))return nil;
+    for(NSNumber *value in @[@(matrix.a),@(matrix.b),@(matrix.c),@(matrix.d),@(matrix.tx),@(matrix.ty)])if(!isfinite(value.doubleValue))return nil;
+    double determinant=matrix.a*matrix.d-matrix.b*matrix.c;if(!isfinite(determinant)||fabs(determinant)<1e-8)return nil;
+    NSDictionary *after=ownedCGWindow(wid,pid,enrolled);if(![after[(id)kCGWindowIsOnscreen]boolValue])return nil;
+    return @{@"identity":[identity copy],@"native_bounds":CFBridgingRelease(CGRectCreateDictionaryRepresentation(bounds)),
+        @"transform":@[@(matrix.a),@(matrix.b),@(matrix.c),@(matrix.d),@(matrix.tx),@(matrix.ty)]};
+}
+
 BOOL DWNativeWindowParent(NSDictionary *identity,uint32_t *parent){
     id seconds=identity[@"birth_sec"],microseconds=identity[@"birth_usec"];
     if(![seconds isKindOfClass:NSNumber.class]||![microseconds isKindOfClass:NSNumber.class])return NO;
