@@ -128,6 +128,11 @@ typedef struct { NSUInteger requests,flushes,drawn,presented;double flushSeconds
 // Exports include actual one-shot pixels for native windows. The background, outlines, stand-ins with their fades and the
 // error bar are drawn as ever. Set before the first frame.
 @property BOOL nativeWindows;
+// Native desktop panels only: an input-transparent background strip above
+// ordinary windows and below the system menu bar covers the controller's top
+// menu/notch exclusion. Uses the output's background, camera and full viewport;
+// never changes a native window's shape. Disable while presentation is suspended.
+@property(nonatomic) BOOL nativeMenuBackground;
 // In native mode only these extra output placements draw live pixels. The
 // single real-window placement keeps ordinary WindowServer presentation.
 @property(copy) BOOL (^nativeReplica)(NSNumber *window,NSNumber *output);

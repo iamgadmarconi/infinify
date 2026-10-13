@@ -3705,7 +3705,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     // a focus request's answer and a native focus report (the coordinator's `changed`), a size transaction's tail, each frame of a flight.
     // The hot keys act only when it changed: the passed chords stop being hot keys and reach the focused application from macOS itself.
     if(self.configured){NSArray<NSString *> *refused=[self.hotKeys pass:snapshot[@"pass_keys"]];if(refused.count)[self flashStatus:summary(@"Shortcut unavailable",refused)];for(NSString *line in refused)[self say:[@"Shortcut unavailable: " stringByAppendingString:line]];}
-    [self adoptRender:snapshot];for(DesktopView *view in self.views)[view render:presentation];
+    [self adoptRender:snapshot];self.compositor.nativeMenuBackground=self.native&&!self.windowed&&!self.sessionInactive&&!self.cleaning&&![self nativeUnavailable];
+    for(DesktopView *view in self.views)[view render:presentation];
     self.renderedPresentation=presentation;self.renderedStatusText=self.statusText;
     // Native presentation: the same snapshot as one frame of window records. It goes with the frame timer's flush of this refresh
     // when one is coming, as the canvas's own drawing does, and at once when none is: a move asked over IPC, the idle poll.
@@ -4545,6 +4546,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
 // state and drain the existing helper. Outputs and world geometry stay in place.
 - (BOOL)nativeUnavailable { return self.native&&(self.native.ended||self.nativeResumeWanted||self.nativeRestoring||self.nativeResumeInFlight); }
 - (void)suspendPresentationLeavingSession:(BOOL)leaving {
+    self.compositor.nativeMenuBackground=NO;
     [self cancelCapturedInputForWindow:nil];
     [self cancelGestures];[self cancelNativeInput];[self.panLaunch cancel];
     for(DesktopView *view in self.views){view.scrollPan=nil;view.scrollPanTime=0;view.lastScrollPan=0;if(view.gesture){view.clearsFocus=NO;view.lastDragPan=0;[view released:view.lastPoint at:NSProcessInfo.processInfo.systemUptime];}}
@@ -4944,6 +4946,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
 }
 - (void)cleanup {
     if(self.cleaning)return;
+    self.compositor.nativeMenuBackground=NO;
     [self stopMacWallpapers];
     [self cancelCapturedInputForWindow:nil];
     self.cleaning=YES;[self stopNativeTransferTimer];self.nativeOwnershipTransfer=nil;[self.canvasCursor reset];self.captureRecoveryGeneration++;self.captureRecoveryReading=NO;

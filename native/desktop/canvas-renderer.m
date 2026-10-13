@@ -174,11 +174,53 @@ static CGRect geometryFromScreen(CGRect rect,IFCompositorSpace space,IFComposito
     return rect;
 }
 
+// AppKit's owned exclusion plane is independent of real-window ownership. Its
+// content cannot take focus or input, and AppKit must not move this deliberate
+// menu-band frame into the screen's visibleFrame below the menu bar.
+@interface DWCanvasMenuPanel : NSPanel
+@end
+@implementation DWCanvasMenuPanel
+- (BOOL)canBecomeKeyWindow {return NO;}
+- (BOOL)canBecomeMainWindow {return NO;}
+- (NSRect)constrainFrameRect:(NSRect)frame toScreen:(NSScreen *)screen {(void)screen;return frame;}
+@end
+@interface DWCanvasMenuView : NSView
+@end
+@implementation DWCanvasMenuView
+- (BOOL)isFlipped {return YES;}
+@end
+// The ordinary compositor layer supplies asynchronous drawables, pacing and
+// retirement. Only its background-only renderer differs: a W x T target clips
+// a W x H viewport. Background shaders use absolute fragment pixels, and cached
+// chunks use full-output vertex coordinates, so both sample the same top rows
+// as the canvas without allocating another full-display framebuffer.
+@interface DWCanvasMenuRenderer : IFCompositorRenderer
+@property CGSize outputSize;
+@end
+@implementation DWCanvasMenuRenderer
+- (BOOL)encodeFrame:(IFCompositorFrame *)frame intoTexture:(id<MTLTexture>)target commandBuffer:(id<MTLCommandBuffer>)commandBuffer {
+    double width=round(round(self.outputSize.width)*frame.scale),height=round(round(self.outputSize.height)*frame.scale);
+    if(!isfinite(width)||!isfinite(height)||width<=0||height<=0||width>16384||height>16384||target.width!=(NSUInteger)width||target.height>(NSUInteger)height)return NO;
+    MTLRenderPassDescriptor *pass=[MTLRenderPassDescriptor renderPassDescriptor];
+    pass.colorAttachments[0].texture=target;pass.colorAttachments[0].loadAction=MTLLoadActionClear;
+    pass.colorAttachments[0].clearColor=MTLClearColorMake(0,0,0,1);pass.colorAttachments[0].storeAction=MTLStoreActionStore;
+    id<MTLRenderCommandEncoder> encoder=[commandBuffer renderCommandEncoderWithDescriptor:pass];if(!encoder)return NO;
+    [encoder setViewport:(MTLViewport){0,0,width,height,0,1}];
+    [encoder setScissorRect:(MTLScissorRect){0,0,target.width,target.height}];
+    IFBackgroundFrame background={frame.cameraX,frame.cameraY,frame.zoom,self.outputSize.width,self.outputSize.height,frame.scale,frame.time};
+    [frame.background encodeFrame:background inEncoder:encoder];[encoder endEncoding];return YES;
+}
+@end
+
 // One output on screen: its layer, the frame description refilled in place, and the
 // elements and placements of the windows it shows.
 @interface DWCanvasOutput : NSObject
 @property IFCompositorLayer *layer;
 @property IFCompositorFrame *frame;
+@property DWCanvasMenuPanel *menuPanel;
+@property IFCompositorLayer *menuLayer;
+@property IFCompositorFrame *menuFrame;
+@property BOOL menuDirty;
 // The background as this output draws it: its own chunk cache when the program has one, else the program itself.
 @property IFBackgroundProgram *background;
 @property NSMutableDictionary<NSNumber *,IFCompositorElement *> *elements;
@@ -272,6 +314,45 @@ static CGRect geometryFromScreen(CGRect rect,IFCompositorSpace space,IFComposito
     if((self=[super init])){_source=[source copy];_states=[NSMutableDictionary dictionary];canvasTime();}
     return self;
 }
+- (void)stopMenuBackground:(DWCanvasOutput *)state {
+    [state.menuLayer stopDrawing];[state.menuLayer removeFromSuperlayer];state.menuFrame.background=nil;
+    [state.menuLayer.renderer purge];[state.menuPanel orderOut:nil];[state.menuPanel close];
+    state.menuPanel=nil;state.menuLayer=nil;state.menuFrame=nil;state.menuDirty=NO;
+}
+- (void)setNativeMenuBackground:(BOOL)enabled {
+    if(_nativeMenuBackground==enabled)return;_nativeMenuBackground=enabled;
+    if(!enabled)for(DWCanvasOutput *state in self.states.allValues)[self stopMenuBackground:state];
+}
+- (void)describeMenuBackground:(DWCanvasOutput *)state output:(NSDictionary *)output snapshot:(NSDictionary *)snapshot {
+    NSNumber *identifier=number(output[@"id"]);CGRect bounds=rectOf(output[@"screen_bounds"]);
+    NSDictionary *context=dict(dict(dict(snapshot[@"navigation"])[@"contexts"])[identifier.stringValue]);
+    CGRect usable=rectOf(context[@"usable_rect_local"]);double top=usable.origin.y;
+    if(!self.nativeWindows||!self.nativeMenuBackground||CGRectIsNull(usable)||!isfinite(top)||top<=0||top>=bounds.size.height){[self stopMenuBackground:state];return;}
+    top=ceil(top);if(top>=bounds.size.height){[self stopMenuBackground:state];return;}
+    NSRect place=NSMakeRect(bounds.origin.x,NSMaxY(NSScreen.screens.firstObject.frame)-bounds.origin.y-top,bounds.size.width,top);
+    if(!state.menuPanel){
+        DWCanvasMenuRenderer *renderer=[DWCanvasMenuRenderer rendererWithDevice:state.layer.renderer.device];if(!renderer)return;
+        state.menuLayer=[[IFCompositorLayer alloc]initWithRenderer:renderer];state.menuLayer.asynchronousDrawables=!self.synchronousDrawables;
+        state.menuFrame=[IFCompositorFrame new];state.menuFrame.clear=IFCompositorClearOpaqueBlack;
+        state.menuPanel=[[DWCanvasMenuPanel alloc]initWithContentRect:place styleMask:NSWindowStyleMaskBorderless|NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO];
+        state.menuPanel.releasedWhenClosed=NO;state.menuPanel.level=NSMainMenuWindowLevel-1;state.menuPanel.ignoresMouseEvents=YES;
+        state.menuPanel.hidesOnDeactivate=NO;state.menuPanel.canHide=NO;state.menuPanel.hasShadow=NO;state.menuPanel.opaque=YES;
+        state.menuPanel.backgroundColor=NSColor.blackColor;state.menuPanel.animationBehavior=NSWindowAnimationBehaviorNone;
+        state.menuPanel.collectionBehavior=NSWindowCollectionBehaviorCanJoinAllSpaces|NSWindowCollectionBehaviorStationary|NSWindowCollectionBehaviorIgnoresCycle|NSWindowCollectionBehaviorFullScreenAuxiliary;
+        DWCanvasMenuView *view=[[DWCanvasMenuView alloc]initWithFrame:NSMakeRect(0,0,place.size.width,place.size.height)];view.wantsLayer=YES;view.layer=state.menuLayer;state.menuPanel.contentView=view;
+        __weak DWCanvasRenderer *weak=self;__weak IFCompositorLayer *layer=state.menuLayer;
+        state.menuLayer.drawableReady=^{DWCanvasRenderer *shown=weak;DWCanvasOutput *current=shown.states[identifier];if(shown.nativeMenuBackground&&current.menuLayer==layer&&current.menuDirty)[shown setNeedsFlush];};
+    }
+    DWCanvasMenuRenderer *renderer=(DWCanvasMenuRenderer *)state.menuLayer.renderer;
+    if(!CGSizeEqualToSize(renderer.outputSize,bounds.size)){renderer.outputSize=bounds.size;[state.menuLayer setNeedsRedraw];}
+    if(!NSEqualRects(state.menuPanel.frame,place)){[state.menuPanel setFrame:place display:NO];[state.menuLayer setNeedsRedraw];self.placed=YES;}
+    state.menuLayer.frame=CGRectMake(0,0,place.size.width,place.size.height);
+    IFCompositorFrame *frame=state.menuFrame;frame.size=CGSizeMake(bounds.size.width,top);frame.scale=state.frame.scale;
+    frame.cameraX=state.frame.cameraX;frame.cameraY=state.frame.cameraY;frame.zoom=state.frame.zoom;frame.background=state.background;state.menuDirty=YES;
+    // Like the canvas panel, order before acquisition: a hidden Metal surface
+    // must not be required to deliver the drawable that would first show it.
+    if(!state.menuPanel.isVisible)[state.menuPanel orderFrontRegardless];
+}
 - (BOOL)configure:(NSDictionary *)snapshot {
     NSDictionary *render=dict(snapshot[@"render"]);NSNumber *revision=number(render[@"revision"]);
     // An unanswered snapshot changes nothing; the first call builds upstream's defaults at least.
@@ -327,7 +408,7 @@ static CGRect geometryFromScreen(CGRect rect,IFCompositorSpace space,IFComposito
     IFBackgroundProgram *base=self.backgroundForOutput?self.backgroundForOutput(number(description[@"id"]),description,self.program):nil;
     base=base?:self.program;state.background=[base programForOutput];if(state.background==base)return;
     __weak DWCanvasRenderer *weak=self;__weak DWCanvasOutput *output=state;
-    state.background.chunkReadyHandler=^{DWCanvasOutput *shown=output;if(!shown.frame.background){[shown.background shrinkChunkCache];return;}shown.dirty=YES;[shown.layer setNeedsRedraw];[weak setNeedsFlush];};
+    state.background.chunkReadyHandler=^{DWCanvasOutput *shown=output;if(!shown.frame.background){[shown.background shrinkChunkCache];return;}shown.dirty=YES;[shown.layer setNeedsRedraw];shown.menuDirty=shown.menuLayer!=nil;[shown.menuLayer setNeedsRedraw];[weak setNeedsFlush];};
 }
 - (void)refreshBackgrounds {
     if(!self.program||!self.backgroundForOutput)return;BOOL changed=NO;
@@ -335,6 +416,7 @@ static CGRect geometryFromScreen(CGRect rect,IFCompositorSpace space,IFComposito
         IFBackgroundProgram *prior=state.background;[self cache:state output:state.orderOutput];if(state.background==prior)continue;
         [prior shrinkChunkCache];NSDictionary *full=dict(state.orderOutput[@"fullscreen"]);
         state.frame.background=!self.nativeWindows&&full&&![text(full[@"backdrop"])isEqual:@"canvas"]?nil:state.background;
+        state.menuFrame.background=state.background;state.menuDirty=state.menuLayer!=nil;
         state.frame.errorMessages=[self backgroundErrors:state.background];state.dirty=YES;changed=YES;
     }
     if(changed)[self setNeedsFlush];
@@ -647,6 +729,7 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
 // Stop its drawable worker and release every root/family image and closing bake,
 // including cached wrappers after commands already encoded have finished.
 - (void)stopOutput:(DWCanvasOutput *)state {
+    [self stopMenuBackground:state];
     [state.layer stopDrawing];[state.layer removeFromSuperlayer];state.frame.background=nil;[state.background shrinkChunkCache];
     for(IFCompositorElement *element in state.frame.elements){element.pixelBuffer=NULL;element.texture=nil;}
     [state.frame.elements removeAllObjects];[state.elements removeAllObjects];[state.placements removeAllObjects];[state.attachments removeAllObjects];[state.geometry removeAllObjects];state.geometryAnimating=NO;[state.leaving removeAllObjects];[state.adopted removeAllObjects];[state.unseen removeAllObjects];[state.owed removeAllObjects];
@@ -809,6 +892,7 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
         if(!dict(o[@"fullscreen"]))[frame.elements addObjectsFromArray:state.leaving];
         state.elements=elements;state.placements=placements;state.unseen=unseen;state.owed=owed;state.serial=self.played;state.dirty=YES;
         state.orderPlacements=orderedPlacements.copy;state.orderOutput=o;state.orderSnapshot=snapshot;state.orderMatchedSnapshot=nil;state.orderBinding=orderBinding(snapshot,output);state.orderDirty=YES;
+        [self describeMenuBackground:state output:o snapshot:snapshot];
         [self fullscreen:o among:all state:state];
         [self describeGeometry:snapshot state:state now:now];
         // With the root's final space and rectangle known, insert each family
@@ -904,7 +988,7 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
         // the last tick (a description the shell flushed by itself, as for a layer that moved) has had this tick's frame: forcing another would spend
         // them twice a tick, and on a 120 Hz display link draw the output twice in 8 ms. A flight's camera frame is described before this is asked and
         // drawn after it, by the tick's one flush, forced or not.
-        any=YES;if(draw){BOOL had=state.drawn;state.drawn=NO;state.dirty=YES;if(filling&&!had){state.forced=YES;[state.layer setNeedsRedraw];}[self setNeedsFlush];}
+        any=YES;if(draw){BOOL had=state.drawn;state.drawn=NO;state.dirty=YES;if(filling&&!had){state.forced=YES;[state.layer setNeedsRedraw];state.menuDirty=state.menuLayer!=nil;[state.menuLayer setNeedsRedraw];}[self setNeedsFlush];}
     }
     return any;
 }
@@ -934,13 +1018,22 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
 // callout (the launch's first frame, the quit-pending loop) has no pool of its own to end them.
 - (void)flushFrame {[self flushFrameAtTime:0 refreshRate:0];}
 - (void)flushFrameAtTime:(CFTimeInterval)time refreshRate:(NSInteger)rate {
-    self.frameTarget=time;self.paced=YES;for(DWCanvasOutput *state in self.states.allValues){state.layer.presentationTime=time;state.layer.presentationInterval=rate>0?1.0/rate:0;}[self flush];self.paced=NO;
+    self.frameTarget=time;self.paced=YES;for(DWCanvasOutput *state in self.states.allValues){state.layer.presentationTime=time;state.layer.presentationInterval=rate>0?1.0/rate:0;state.menuLayer.presentationTime=time;state.menuLayer.presentationInterval=state.layer.presentationInterval;}[self flush];self.paced=NO;
+}
+- (void)flushMenuBackground:(DWCanvasOutput *)state {
+    if(!state.menuLayer)return;
+    IFCompositorFrame *frame=state.menuFrame;
+    // Reuse the canvas's exact frame instant as well as its coordinates. The
+    // shared output cache spends its bake/upload allowance once for that frame,
+    // even when either layer's drawable becomes ready later than the other's.
+    frame.time=state.frame.time;state.menuLayer.paced=self.paced;
+    @autoreleasepool{[state.menuLayer updateWithFrame:frame];}state.menuDirty=state.menuLayer.missed;
 }
 - (void)flush {
     BOOL placed=self.placed;self.pending=NO;self.placed=NO;double now=canvasTime();CFTimeInterval began=self.measured?CACurrentMediaTime():0;BOOL any=NO;
     for(DWCanvasOutput *state in self.states.allValues){
-        if(!state.dirty)continue;
-        if(self.paced&&!placed&&state.layer.drawablePending){state.awaitingDrawable=YES;continue;}
+        if(!state.dirty){if(state.menuDirty)[self flushMenuBackground:state];continue;}
+        if(self.paced&&!placed&&state.layer.drawablePending){state.awaitingDrawable=YES;if(state.menuDirty)[self flushMenuBackground:state];continue;}
         state.awaitingDrawable=NO;state.dirty=NO;any=YES;IFCompositorFrame *frame=state.frame;frame.time=now;[self advanceGeometry:state now:now];
         for(NSNumber *window in state.attachments)[self geometryForFamily:state.attachments[window] root:state.elements[window] frame:frame];
         if(state.geometryNeedsSettledDraw)[state.layer setNeedsRedraw];
@@ -948,6 +1041,7 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
             for(NSNumber *window in state.geometry){DWCanvasGeometry *geometry=state.geometry[window];IFCompositorElement *element=state.elements[window];geometry.screen=geometryScreen(element.rect,element.space,frame);geometry.drawn=YES;}}}
         // A frame that had no drawable is still owed: the output stays marked, and what was owed inside the layer's transaction stays so.
         if(state.layer.missed){state.dirty=YES;if(forced)state.forced=YES;if(placed)self.placed=YES;}
+        [self flushMenuBackground:state];
         // An animation that has run out at this frame's time, which the frame no longer showed: upstream drops the snapshot or the fade, and a window that has opened is the plain window.
         for(IFCompositorElement *element in state.leaving.count?state.leaving.copy:nil)if([frame lifecycleFinishedForElement:element]){[state.leaving removeObject:element];[frame.elements removeObject:element];state.orderDirty=YES;}
         if(state.orderDirty)[self applyOrderForOutput:state.orderOutput[@"id"] state:state];
