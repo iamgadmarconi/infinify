@@ -174,7 +174,7 @@ static CGRect geometryFromScreen(CGRect rect,IFCompositorSpace space,IFComposito
     return rect;
 }
 
-// AppKit's owned exclusion plane is independent of real-window ownership. Its
+// AppKit's owned fullscreen exclusion plane is independent of real-window ownership. Its
 // content cannot take focus or input, and AppKit must not move this deliberate
 // menu-band frame into the screen's visibleFrame below the menu bar.
 @interface DWCanvasMenuPanel : NSPanel
@@ -327,7 +327,7 @@ static CGRect geometryFromScreen(CGRect rect,IFCompositorSpace space,IFComposito
     NSNumber *identifier=number(output[@"id"]);CGRect bounds=rectOf(output[@"screen_bounds"]);
     NSDictionary *context=dict(dict(dict(snapshot[@"navigation"])[@"contexts"])[identifier.stringValue]);
     CGRect usable=rectOf(context[@"usable_rect_local"]);double top=usable.origin.y;
-    if(!self.nativeWindows||!self.nativeMenuBackground||CGRectIsNull(usable)||!isfinite(top)||top<=0||top>=bounds.size.height){[self stopMenuBackground:state];return;}
+    if(!self.nativeWindows||!self.nativeMenuBackground||!dict(output[@"fullscreen"])||CGRectIsNull(usable)||!isfinite(top)||top<=0||top>=bounds.size.height){[self stopMenuBackground:state];return;}
     top=ceil(top);if(top>=bounds.size.height){[self stopMenuBackground:state];return;}
     NSRect place=NSMakeRect(bounds.origin.x,NSMaxY(NSScreen.screens.firstObject.frame)-bounds.origin.y-top,bounds.size.width,top);
     if(!state.menuPanel){
