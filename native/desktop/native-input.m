@@ -226,7 +226,7 @@ static BOOL DWForeignMouseRecipient(CGEventRef event) {
     BOOL (^_ignoreEvent)(CGEventRef);
     void (^_cancelled)(void);
     NSMutableIndexSet *_capturedButtons,*_nativeButtons;
-    BOOL _capturedMagnify,_magnifyDecided;
+    BOOL _capturedMagnify,_magnifyDecided,_magnifyCancelled;
     BOOL _earlyCaptured,_earlyCancelled,_earlyHandling,_stopped;
     NSUInteger _lifecycleEpoch,_cancellationEpoch;
     NSTimeInterval _earlyLastPacket;
@@ -273,6 +273,7 @@ static BOOL DWForeignMouseRecipient(CGEventRef event) {
     if(type==kCGEventTapDisabledByTimeout||type==kCGEventTapDisabledByUserInput){
         _cancellationEpoch++;
         if(_earlyCaptured)_earlyCancelled=YES;
+        if(_capturedMagnify)_magnifyCancelled=YES;
         void (^cancelled)(void)=_cancelled;if(cancelled)cancelled();
         if(_earlyTap&&AXIsProcessTrusted())CGEventTapEnable(_earlyTap,true);
         return event;
@@ -319,6 +320,7 @@ static BOOL DWForeignMouseRecipient(CGEventRef event) {
         _cancellationEpoch++;
         [_nativeButtons removeAllIndexes];
         if(_earlyCaptured)_earlyCancelled=YES;
+        if(_capturedMagnify)_magnifyCancelled=YES;
         void (^cancelled)(void)=_cancelled;if(cancelled)cancelled();
         if(_tap&&AXIsProcessTrusted())CGEventTapEnable(_tap,true);
         return event;
@@ -333,12 +335,23 @@ static BOOL DWForeignMouseRecipient(CGEventRef event) {
     if(!down&&!up&&!drag&&type!=kCGEventScrollWheel&&type!=kCGEventMouseMoved){
         NSEvent *appkit=[NSEvent eventWithCGEvent:event];if(appkit.type!=NSEventTypeMagnify)return event;
         NSEventPhase phase=appkit.phase;
-        if(phase&(NSEventPhaseBegan|NSEventPhaseMayBegin)){_capturedMagnify=NO;_magnifyDecided=NO;}
+        if(phase&(NSEventPhaseBegan|NSEventPhaseMayBegin)){_capturedMagnify=NO;_magnifyDecided=NO;_magnifyCancelled=NO;}
         if(phase&NSEventPhaseMayBegin)return event;
-        BOOL captured=_capturedMagnify,taken=(!_magnifyDecided||captured)&&consume&&consume(type,event);
+        BOOL captured=_capturedMagnify;
+        NSUInteger lifecycle=_lifecycleEpoch,cancellation=_cancellationEpoch;
+        // A disabled tap cancelled the logical pinch. Its already claimed
+        // physical tail stays swallowed, but cannot begin another pinch in the
+        // consumer after that consumer has cleared its gesture state.
+        BOOL taken=!_magnifyCancelled&&(!_magnifyDecided||captured)&&consume&&consume(type,event);
+        if(_lifecycleEpoch!=lifecycle||_stopped)return captured||taken?NULL:event;
         _magnifyDecided=YES;
         if(taken)_capturedMagnify=YES;
-        if(phase==NSEventPhaseNone||(phase&(NSEventPhaseEnded|NSEventPhaseCancelled))){_capturedMagnify=NO;_magnifyDecided=NO;}
+        if(_cancellationEpoch!=cancellation&&_capturedMagnify){
+            _magnifyCancelled=YES;
+            // A nested cancellation may precede final gesture installation.
+            void (^cancelled)(void)=_cancelled;if(cancelled)cancelled();
+        }
+        if(phase==NSEventPhaseNone||(phase&(NSEventPhaseEnded|NSEventPhaseCancelled))){_capturedMagnify=NO;_magnifyDecided=NO;_magnifyCancelled=NO;}
         return captured||taken?NULL:event;
     }
     NSInteger button=CGEventGetIntegerValueField(event,kCGMouseEventButtonNumber);
@@ -383,7 +396,7 @@ static BOOL DWForeignMouseRecipient(CGEventRef event) {
     if(_tap){CFRelease(_tap);_tap=NULL;}
     [_capturedButtons removeAllIndexes];
     [_nativeButtons removeAllIndexes];
-    _capturedMagnify=NO;_magnifyDecided=NO;
+    _capturedMagnify=NO;_magnifyDecided=NO;_magnifyCancelled=NO;
     _earlyCaptured=NO;_earlyCancelled=NO;
     void (^cancelled)(void)=_cancelled;if(cancelled)cancelled();
 }

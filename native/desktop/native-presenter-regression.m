@@ -58,6 +58,8 @@ bool dw_focus_birth(pid_t pid,uint64_t *seconds,uint64_t *microseconds) { (void)
 - (void)fixtureRetry;
 - (void)fixtureCorruptFrame;
 - (void)fixtureCooperative;
+- (NSUInteger)fixtureRetainedFrames;
+- (NSUInteger)fixtureRetainedPlacements;
 @end
 @implementation DWNativePresenter (ReadinessFixture)
 + (instancetype)fixturePID:(NSNumber *)pid {
@@ -80,6 +82,8 @@ bool dw_focus_birth(pid_t pid,uint64_t *seconds,uint64_t *microseconds) { (void)
     NSMutableData *frame=[_frames[@(_submittedSeq)]mutableCopy];struct dw2_record *records=frame.mutableBytes;records[0].id.wid++;_frames[@(_submittedSeq)]=frame.copy;
 }
 - (void)fixtureCooperative { _info.scope=DW2_SCOPE_COOPERATIVE; }
+- (NSUInteger)fixtureRetainedFrames { return _frames.count; }
+- (NSUInteger)fixtureRetainedPlacements { return _framePlacements.count; }
 @end
 static NSDictionary *identity(int pid,uint32_t wid) { return @{@"pid":@(pid),@"wid":@(wid),@"birth_sec":@100,@"birth_usec":@20}; }
 static NSDictionary *rect(CGRect value) { return @{@"origin":@{@"x":@(value.origin.x),@"y":@(value.origin.y)},@"size":@{@"width":@(value.size.width),@"height":@(value.size.height)}}; }
@@ -177,6 +181,26 @@ int main(void) {@autoreleasepool {
     NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:.2];
     while(!receipt(presenter,root,2,1)&&deadline.timeIntervalSinceNow>0)[NSRunLoop.mainRunLoop runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:.005]];
     current=receipt(presenter,root,2,1);check(current!=nil,@"ordinary all-success callback reaches readiness state");
+
+    for(NSUInteger i=0;i<100;i++){
+        moved.origin.x+=1;describe(presenter,root,2,1,moved);[presenter submit];
+        check(presenter.fixtureRetainedFrames==1&&presenter.fixtureRetainedPlacements==1,@"a complete-frame history retains only the unresolved frame");ack(presenter);
+        check(presenter.fixtureRetainedFrames==0&&presenter.fixtureRetainedPlacements==0&&receipt(presenter,root,2,1)!=nil,
+            @"a final ACK releases immutable history while its current receipt remains valid");
+    }
+    moved.origin.y+=1;describe(presenter,root,2,1,moved);[presenter submit];uint64_t coalesced=presenter.fixtureSequence;
+    moved.origin.y+=1;describe(presenter,root,2,1,moved);[presenter submit];uint64_t resolved=presenter.fixtureSequence;
+    moved.origin.y+=1;describe(presenter,root,2,1,moved);[presenter submit];uint64_t outstanding=presenter.fixtureSequence;
+    check(presenter.fixtureRetainedFrames==3&&presenter.fixtureRetainedPlacements==3,@"newer outstanding descriptions remain until a result accounts for them");
+    [presenter fixtureAck:@[@0] sequence:resolved];[presenter fixtureAck:@[@0,@0] sequence:outstanding+50];
+    check(presenter.fixtureRetainedFrames==3&&presenter.fixtureRetainedPlacements==3&&!receipt(presenter,root,2,1),@"short and unknown replies cannot retire pending correspondence");
+    [presenter fixtureAck:@[@0,@0] sequence:resolved];
+    check(presenter.fixtureRetainedFrames==1&&presenter.fixtureRetainedPlacements==1&&!receipt(presenter,root,2,1),@"a complete older reply retires its accounted prefix while preserving the newest pending frame");
+    [presenter fixtureAck:@[@0,@0] sequence:coalesced];
+    check(presenter.fixtureRetainedFrames==1&&!receipt(presenter,root,2,1),@"a retired superseded result cannot settle newer placement readiness");ack(presenter);current=receipt(presenter,root,2,1);
+    check(current&&presenter.fixtureRetainedFrames==0&&presenter.fixtureRetainedPlacements==0,@"the newest complete ACK retains its receipt without frame history");
+    [presenter fixtureAck:@[@(DW2_NOT_APPLIED),@(DW2_NOT_APPLIED)] sequence:outstanding];
+    check([presenter isAcknowledgedPlacementCurrent:current],@"a repeated retired result cannot revoke an already settled receipt");
 
     NSDictionary *twoChildren=family(root,native,@[@43,@44]);[presenter bound:root bounds:native family:twoChildren];describe(presenter,root,2,1,moved);[presenter submit];
     [presenter fixtureAck:@[@0,@0,@0] sequence:presenter.fixtureSequence];current=receipt(presenter,root,2,1);

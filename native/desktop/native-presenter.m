@@ -226,7 +226,7 @@ static void DWCloseNativeClient(dw_client *client,id activity) {
     NSData *_sent;                                              // the frame last handed over
     NSArray<NSNumber *> *_order,*_sentOrder;                    // the world window of each of their records, for -debug:
     BOOL _described,_forced;
-    // The window numbers of the frames handed over, by sequence number, for a record status that comes back; and what was said of one.
+    // Unanswered frames, by sequence number, for a record status that comes back; and what was said of one.
     NSMutableDictionary<NSNumber *,NSData *> *_frames;
     NSMutableSet<NSString *> *_said;
     NSUUID *_placementSession;
@@ -446,6 +446,15 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     // retrying the latest complete frame until that restore no longer blocks it.
     // Old acknowledgements must not clear a newer frame's retry requirement.
     if(frame&&seq==_submittedSeq)atomic_store(&_retrying,retry);
+    // The client accepts a complete reply only for a written frame and accounts
+    // for every older unanswered write as superseded before calling us. Those
+    // frames can never receive another result. Keep the acknowledged placement
+    // descriptions through _acknowledgedPlacements, but release their duplicate
+    // history and locally coalesced frames now, rather than after 65 submissions.
+    // A missing or short substituted reply does not settle any history.
+    if(frame&&statuses.length==frame.length/sizeof(*records))for(NSNumber *resolved in _frames.allKeys)if(resolved.unsignedLongLongValue<=seq){
+        [_frames removeObjectForKey:resolved];[_framePlacements removeObjectForKey:resolved];
+    }
 }
 - (void)invalidatePlacementReadiness {
     _acknowledgedPlacements=@{};_acknowledgedSequence=0;++_placementRevision;
