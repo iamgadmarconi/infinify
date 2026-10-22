@@ -3087,6 +3087,12 @@ and the rest of the file applies.
   release. The drag is the same below `[zoom] interact_min`: a pinned window
   is never a pick target, and it moves by the pointer's own distance at any
   zoom.
+  When a native-owned mouse gesture ends, adopting its displayed displacement
+  also preserves a partially offscreen pin. Initial arrival still clamps a
+  new pin fully inside its display; reusing that clamp on release made an
+  existing pin jump inward. Relocation still requires the same source identity,
+  generation, observed native frame and expected canvas frame, and rejects a
+  repeated receipt after the frame changes.
 - The trackpad move gesture drags it the same way: a three-finger double-tap
   and drag over it (or whatever `[gestures]` binds to `move-window` or
   `move-snapped-windows`) moves it point for point with the fingers and

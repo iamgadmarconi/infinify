@@ -89,24 +89,10 @@ impl Controller {
             .policy
             .pins
             .get(&window)
-            .map(|pin| {
-                self.screen_pin_arrival(
-                    &SourceScreenPin {
-                        output: pin.output,
-                        screen_pos: Point::new(
-                            f64::from(pin.screen_pos[0]) + delta.x,
-                            f64::from(pin.screen_pos[1]) + delta.y,
-                        ),
-                    },
-                    rect.size,
-                )
-            })
+            .map(|pin| self.screen_pin_relocation(*pin, delta, rect.size))
             .transpose()?;
         let pin = match pin {
-            Some(Arrival::Pin {
-                rect: placement,
-                pin,
-            }) => {
+            Some((placement, pin)) => {
                 rect = placement;
                 Some(pin)
             }
@@ -114,7 +100,6 @@ impl Controller {
                 rect.origin = rect.origin + delta;
                 None
             }
-            _ => return Err(Error::Invalid("invalid pin relocation")),
         };
         self.scene.set_window_rect(window, rect)?;
         if let Some(pin) = pin {
@@ -454,6 +439,173 @@ mod tests {
                 delta,
             },
         })
+    }
+
+    #[test]
+    fn native_owner_relocation_keeps_a_pin_partly_outside_its_output() {
+        for (at, pointer, delta) in [
+            (
+                Point::new(-50., 100.),
+                Point::new(50., 150.),
+                Point::new(5., 0.),
+            ),
+            (
+                Point::new(900., 100.),
+                Point::new(950., 150.),
+                Point::new(5., 0.),
+            ),
+            (
+                Point::new(100., -50.),
+                Point::new(150., 50.),
+                Point::new(0., 5.),
+            ),
+            (
+                Point::new(100., 750.),
+                Point::new(150., 775.),
+                Point::new(0., 5.),
+            ),
+        ] {
+            let (mut controller, window, identity) = setup();
+            controller
+                .execute(Request {
+                    version: ABI_VERSION,
+                    command: Command::Zoom {
+                        output: OutputId(1),
+                        zoom: 0.5,
+                        anchor: Point::default(),
+                    },
+                })
+                .unwrap();
+            controller.pin_window(window, Some(OutputId(1))).unwrap();
+            let pin = controller.policy.pins[&window];
+            let start = Point::new(f64::from(pin.screen_pos[0]), f64::from(pin.screen_pos[1]));
+            for command in [
+                Command::BeginDrag {
+                    window,
+                    output: OutputId(1),
+                    group: false,
+                },
+                Command::GestureTo {
+                    screen_delta: at - start,
+                    pointer: Some(pointer),
+                },
+                Command::EndGesture {},
+            ] {
+                controller
+                    .execute(Request {
+                        version: ABI_VERSION,
+                        command,
+                    })
+                    .unwrap();
+            }
+            assert_eq!(
+                controller.policy.pins[&window].screen_pos,
+                [at.x as i32, at.y as i32]
+            );
+            // A native-owned pair subsequently settles five screen points
+            // farther along the edge. Adoption must preserve its release site,
+            // just as the managed pin drag does, regardless of camera zoom.
+            let observed = observe_move(&mut controller, window, &identity);
+            let expected = controller.scene.window(window).unwrap().world_rect;
+            let camera = controller.scene.output(OutputId(1)).unwrap().camera;
+            assert_eq!(
+                relocate(
+                    &mut controller,
+                    window,
+                    &identity,
+                    observed,
+                    expected,
+                    delta
+                )
+                .unwrap(),
+                json!({"moved":true,"deferred":false})
+            );
+            let released = at + delta;
+            assert_eq!(
+                controller.policy.pins[&window].screen_pos,
+                [released.x as i32, released.y as i32]
+            );
+            let placed = controller.scene.window(window).unwrap().world_rect;
+            assert_eq!(placed.origin, expected.origin + delta / 0.5);
+            assert_eq!(placed.size, expected.size);
+            assert_eq!(controller.scene.output(OutputId(1)).unwrap().camera, camera);
+            assert_eq!(
+                relocate(
+                    &mut controller,
+                    window,
+                    &identity,
+                    observed,
+                    expected,
+                    delta
+                )
+                .unwrap(),
+                json!({"moved":false,"deferred":false})
+            );
+            assert_eq!(controller.scene.window(window).unwrap().world_rect, placed);
+        }
+    }
+
+    #[test]
+    fn native_screen_pin_arrival_still_clamps_the_whole_frame() {
+        let (controller, _, _) = setup();
+        let Arrival::Pin { rect, pin } = controller
+            .screen_pin_arrival(
+                &SourceScreenPin {
+                    output: OutputId(1),
+                    screen_pos: Point::new(-50., 900.),
+                },
+                Size::new(200., 150.),
+            )
+            .unwrap()
+        else {
+            panic!("expected screen pin arrival");
+        };
+        assert_eq!(pin.screen_pos, [0, 650]);
+        assert_eq!(rect, Rect::new(0., 650., 200., 150.));
+    }
+
+    #[test]
+    fn native_owner_pin_relocation_refuses_unrepresentable_positions_atomically() {
+        let (mut controller, window, identity) = setup();
+        controller
+            .execute(Request {
+                version: ABI_VERSION,
+                command: Command::Zoom {
+                    output: OutputId(1),
+                    zoom: 0.5,
+                    anchor: Point::default(),
+                },
+            })
+            .unwrap();
+        controller.pin_window(window, Some(OutputId(1))).unwrap();
+        let observed = observe_move(&mut controller, window, &identity);
+        let expected = controller.scene.window(window).unwrap().world_rect;
+        let pin = controller.policy.pins[&window];
+        for delta in [
+            Point::new(f64::from(i32::MAX) + 1., 0.),
+            Point::new(f64::NAN, 0.),
+            // Screen coordinates still fit, but the corresponding canvas
+            // origin at zoom .5 cannot be represented by later IPC requests.
+            Point::new(f64::from(i32::MAX) / 2. + 1., 0.),
+        ] {
+            assert!(
+                relocate(
+                    &mut controller,
+                    window,
+                    &identity,
+                    observed,
+                    expected,
+                    delta
+                )
+                .is_err()
+            );
+            assert_eq!(controller.policy.pins[&window], pin);
+            assert_eq!(
+                controller.scene.window(window).unwrap().world_rect,
+                expected
+            );
+            assert_eq!(controller.sources[&window].observed_rect, observed);
+        }
     }
 
     #[test]

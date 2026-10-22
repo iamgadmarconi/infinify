@@ -521,6 +521,40 @@ impl Controller {
             pin,
         })
     }
+    /// A native-owned move adopts an existing pin's release position. Like
+    /// `drag_pinned`, it may leave part of the frame outside the output; only
+    /// initial arrival and output reassignment clamp the whole frame inside.
+    pub(crate) fn screen_pin_relocation(
+        &self,
+        pin: Pin,
+        delta: Point,
+        size: Size,
+    ) -> Result<(Rect, Pin), Error> {
+        let viewport = self
+            .scene
+            .output(pin.output)
+            .ok_or(Error::Invalid("unknown output"))?;
+        let coordinate = |value: f64| {
+            let value = value.round();
+            (f64::from(i32::MIN)..=f64::from(i32::MAX))
+                .contains(&value)
+                .then_some(value as i32)
+                .ok_or(Error::Invalid("pin coordinates exceed integer range"))
+        };
+        let pin = Pin {
+            output: pin.output,
+            screen_pos: [
+                coordinate(f64::from(pin.screen_pos[0]) + delta.x)?,
+                coordinate(f64::from(pin.screen_pos[1]) + delta.y)?,
+            ],
+        };
+        let rect = Rect {
+            origin: pin_canvas(viewport, pin.screen_pos),
+            size,
+        };
+        readable(rect).map_err(Error::Refused)?;
+        Ok((rect, pin))
+    }
     /// Upstream pin_window: pin the window where it is drawn right now, on
     /// the output showing its center, else the active one. Its top-left keeps
     /// its place on the screen; its size becomes its own at every zoom. A
