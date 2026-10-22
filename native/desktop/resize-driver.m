@@ -60,10 +60,46 @@ static DWResizeResult withMutation(DWResizeResult result,DWResizeResult previous
     if(result.mutation_attempted&&(result.outcome==DWResizeUnavailable||result.outcome==DWResizeMissingWindow||result.outcome==DWResizeAmbiguousWindow||result.outcome==DWResizeInvalidRequest||result.outcome==DWResizeUnsupported)){result.outcome=DWResizeReadbackFailed;result.observed=false;}
     return result;
 }
+@interface DWPreparedBaselineAdmission : NSObject
+@property NSDictionary *effect;
+@property (copy) BOOL (^validate)(void);
+@property double deadline;
+@property BOOL cancelled;
+@end
+@implementation DWPreparedBaselineAdmission
+@end
+typedef NS_ENUM(NSInteger,DWResizeAdmission) {
+    DWResizeAdmissionAllowed,
+    DWResizeAdmissionOwnerDenied,
+    DWResizeAdmissionPreparedCancelled,
+    DWResizeAdmissionPreparedRefused,
+    DWResizeAdmissionExpired,
+};
 @interface DWNativeResizeDriver ()
 @property NSMutableDictionary<NSNumber *,NSDictionary *> *filled;
+@property DWPreparedBaselineAdmission *preparedBaseline;
 @end
 @implementation DWNativeResizeDriver
+- (void)prepareBaseline:(NSDictionary *)effect validate:(BOOL (^)(void))validate {
+    NSAssert(NSThread.isMainThread,@"baseline preparation is main-only");
+    [self clearPreparedBaseline];
+    double deadline=monotonic()+2.5;
+    if(!validate||![effect[@"op"]isEqual:@"observe_resize_source"]||[effect[@"requested"]isKindOfClass:NSDictionary.class])return;
+    // Effects are JSON. Copy all nested containers so caller mutation cannot
+    // turn a prepared baseline into a different identity, generation or action.
+    NSData *json=[NSJSONSerialization dataWithJSONObject:effect options:0 error:nil];
+    NSDictionary *pinned=json?[NSJSONSerialization JSONObjectWithData:json options:0 error:nil]:nil;
+    if(![pinned isKindOfClass:NSDictionary.class])return;
+    DWPreparedBaselineAdmission *prepared=[DWPreparedBaselineAdmission new];
+    prepared.effect=pinned;prepared.validate=validate;prepared.deadline=deadline;
+    @synchronized(self){self.preparedBaseline=prepared;}
+}
+- (void)clearPreparedBaseline {
+    NSAssert(NSThread.isMainThread,@"baseline cancellation is main-only");
+    // Keep one revoked ticket: a worker that has not entered perform yet must
+    // not fall back to ordinary admission for this same cancelled effect.
+    @synchronized(self){self.preparedBaseline.cancelled=YES;self.preparedBaseline.validate=nil;}
+}
 - (BOOL)hasNativeFillForEffect:(NSDictionary *)effect {
     NSNumber *window=effect[@"window"],*generation=effect[@"generation"];NSDictionary *who=effect[@"identity"];
     if(![window isKindOfClass:NSNumber.class]||![generation isKindOfClass:NSNumber.class]||![who isKindOfClass:NSDictionary.class])return NO;
@@ -131,8 +167,31 @@ static DWResizeResult withMutation(DWResizeResult result,DWResizeResult previous
     NSDictionary *s=e[@"requested"];BOOL setter=[s isKindOfClass:NSDictionary.class];
     DWResizeResult r;NSString *method=setter?@"resize":@"size read";
     BOOL (^allowed)(NSDictionary *)=self.canPerform;
-    NSNumber *permission=allowed?onMain(monotonic()+.25,nil,^id{return @(allowed(e));}):@YES;
-    if(!permission.boolValue){r=(DWResizeResult){.outcome=DWResizeUnavailable,.requested=setter?CGSizeMake([s[@"width"]doubleValue],[s[@"height"]doubleValue]):CGSizeZero};method=@"native owner refused";}
+    DWPreparedBaselineAdmission *prepared=nil;
+    @synchronized(self){if(!setter&&[self.preparedBaseline.effect isEqual:e])prepared=self.preparedBaseline;}
+    double admissionStarted=monotonic();
+    double admissionDeadline=prepared?prepared.deadline:admissionStarted+.25;
+    NSNumber *permission=(prepared||allowed)?onMain(admissionDeadline,nil,^id{
+        if(prepared){
+            @synchronized(self){if(self.preparedBaseline!=prepared||prepared.cancelled)return @(DWResizeAdmissionPreparedCancelled);}
+            BOOL valid=prepared.validate&&prepared.validate();
+            if(monotonic()>=admissionDeadline)return @(DWResizeAdmissionExpired);
+            @synchronized(self){if(self.preparedBaseline!=prepared||prepared.cancelled)return @(DWResizeAdmissionPreparedCancelled);}
+            if(!valid)return @(DWResizeAdmissionPreparedRefused);
+        }
+        BOOL permitted=!allowed||allowed(e);
+        if(prepared){
+            if(monotonic()>=admissionDeadline)return @(DWResizeAdmissionExpired);
+            @synchronized(self){if(self.preparedBaseline!=prepared||prepared.cancelled)return @(DWResizeAdmissionPreparedCancelled);}
+        }
+        return @(permitted?DWResizeAdmissionAllowed:DWResizeAdmissionOwnerDenied);
+    }):@(DWResizeAdmissionAllowed);
+    DWResizeAdmission admission=permission?permission.integerValue:DWResizeAdmissionExpired;
+    if(prepared&&monotonic()>=admissionDeadline)admission=DWResizeAdmissionExpired;
+    BOOL timedOut=admission==DWResizeAdmissionExpired;
+    const char *admissionName=!permission?"queue_timeout":admission==DWResizeAdmissionAllowed?"allowed":admission==DWResizeAdmissionOwnerDenied?"owner_denied":admission==DWResizeAdmissionPreparedCancelled?"prepared_cancelled":admission==DWResizeAdmissionPreparedRefused?"prepared_refused":"admission_expired";
+    if(self.didPerform)fprintf(stderr,"debug: native resize admission transaction=%llu effect=%llu window=%llu result=%s wait_ms=%.3f setter=%d prepared=%d\n",[e[@"transaction"]unsignedLongLongValue],[e[@"effect_id"]unsignedLongLongValue],[e[@"window"]unsignedLongLongValue],admissionName,(monotonic()-admissionStarted)*1000,setter,prepared!=nil);
+    if(admission!=DWResizeAdmissionAllowed){r=(DWResizeResult){.outcome=timedOut?DWResizeTimedOut:DWResizeUnavailable,.ax_error=timedOut?kAXErrorCannotComplete:kAXErrorSuccess,.requested=setter?CGSizeMake([s[@"width"]doubleValue],[s[@"height"]doubleValue]):CGSizeZero};method=timedOut?@"native admission timed out":admission==DWResizeAdmissionOwnerDenied?@"native owner refused":@"prepared baseline refused";}
     else if(!setter)r=dw_resize_observe(identity(e[@"identity"]));
     else {
         CGSize size=CGSizeMake([s[@"width"]doubleValue],[s[@"height"]doubleValue]);

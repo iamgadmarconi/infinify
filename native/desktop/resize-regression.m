@@ -31,6 +31,67 @@ DWResizeResult dw_resize_apply_frame(DWResizeIdentity target,CGRect frame){(void
 DWResizeResult dw_resize_fill(DWResizeIdentity target,CGSize size){(void)target;nativeFills++;nativeEvent(@"fill");DWResizeResult result=nativeFillResult;result.requested=size;return result;}
 DWResizeResult dw_resize_unfill(DWResizeIdentity target,CGRect saved){(void)target;nativeUnfills++;nativeEvent(@"unfill");DWResizeResult result=nativeUnfillResult;result.requested=saved.size;return result;}
 const char *dw_resize_outcome_name(DWResizeOutcome value){const char *names[]={"observed","applied","clamped","rejected","invalid_request","stale_identity","unavailable","missing_window","ambiguous_window","unsupported","readback_failed","timed_out"};return names[value];}
+// The real admission gate runs on main while its worker waits. Adapter counters
+// establish dispatch only; this does not exercise a native application.
+static NSDictionary *admissionWhileMainBusy(DWNativeResizeDriver *driver,NSDictionary *effect,NSTimeInterval busy,void (^beforePump)(void)){
+    dispatch_semaphore_t started=dispatch_semaphore_create(0),completed=dispatch_semaphore_create(0);
+    __block NSDictionary *result=nil;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+        dispatch_semaphore_signal(started);result=[driver perform:effect];dispatch_semaphore_signal(completed);
+    });
+    check(!dispatch_semaphore_wait(started,dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC)),@"admission worker starts");
+    [NSThread sleepForTimeInterval:busy];if(beforePump)beforePump();
+    NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:3];BOOL done=NO;
+    do{[NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.01]];
+        done=!dispatch_semaphore_wait(completed,DISPATCH_TIME_NOW);
+    }while(!done&&deadline.timeIntervalSinceNow>0);
+    check(done,@"admission worker returns within its bound");return result;
+}
+static void nativeBaselineAdmission(void){
+    DWNativeResizeDriver *driver=[DWNativeResizeDriver new];
+    NSDictionary *effect=@{@"op":@"observe_resize_source",@"transaction":@1,@"effect_id":@2,@"window":@3,@"generation":@4,@"identity":identity(),@"requested":NSNull.null};
+    __block NSUInteger validated=0,allowed=0;
+    __block BOOL permitted=YES,valid=YES;
+    driver.canPerform=^BOOL(NSDictionary *e){check(NSThread.isMainThread&&[e isEqual:effect],@"baseline ownership check stays on main for its exact effect");allowed++;return permitted;};
+    BOOL (^validate)(void)=^BOOL{check(NSThread.isMainThread,@"baseline validity stays on main");validated++;return valid;};
+    [driver prepareBaseline:effect validate:validate];
+    NSUInteger reads=nativeReads;NSDictionary *result=admissionWhileMainBusy(driver,effect,.35,nil);
+    check([result[@"outcome"]isEqual:@"observed"]&&nativeReads==reads+1&&validated==1&&allowed==1,@"exact prepared baseline survives a 350ms busy main queue and reads once");
+    reads=nativeReads;validated=allowed=0;
+    [driver prepareBaseline:effect validate:validate];
+    result=admissionWhileMainBusy(driver,effect,.05,^{[driver clearPreparedBaseline];});
+    check([result[@"outcome"]isEqual:@"unavailable"]&&! [result[@"mutation_attempted"]boolValue]&&nativeReads==reads&&!validated&&!allowed,@"clearing a queued prepared admission refuses before validation or native read");
+    result=[driver perform:effect];
+    check([result[@"outcome"]isEqual:@"unavailable"]&&nativeReads==reads&&!validated&&!allowed,@"cleared baseline cannot fall back to ordinary admission when worker starts late");
+    [driver prepareBaseline:effect validate:validate];valid=NO;
+    result=admissionWhileMainBusy(driver,effect,0,nil);
+    check([result[@"outcome"]isEqual:@"unavailable"]&&nativeReads==reads&&validated==1&&!allowed,@"invalid prepared handoff refuses without ownership admission or native read");
+    validated=allowed=0;valid=YES;permitted=NO;[driver prepareBaseline:effect validate:validate];
+    result=admissionWhileMainBusy(driver,effect,0,nil);
+    check([result[@"outcome"]isEqual:@"unavailable"]&&nativeReads==reads&&validated==1&&allowed==1,@"prepared baseline still requires ownership permission");
+    validated=allowed=0;permitted=YES;[driver prepareBaseline:effect validate:validate];
+    result=admissionWhileMainBusy(driver,effect,2.6,nil);
+    check([result[@"outcome"]isEqual:@"timed_out"]&&[result[@"ax_error"]intValue]==kAXErrorCannotComplete&&! [result[@"mutation_attempted"]boolValue]&&nativeReads==reads&&!validated&&!allowed,@"expired queued admission reports unattempted timeout and its late callback does no work");
+    [driver prepareBaseline:effect validate:^BOOL{validated++;[NSThread sleepForTimeInterval:2.55];return YES;}];
+    result=admissionWhileMainBusy(driver,effect,0,nil);
+    check([result[@"outcome"]isEqual:@"timed_out"]&&nativeReads==reads&&validated==1&&!allowed,@"validation cannot admit a baseline after its absolute deadline");
+    validated=allowed=0;[driver prepareBaseline:effect validate:validate];
+    NSMutableDictionary *other=[effect mutableCopy];other[@"effect_id"]=@3;
+    result=admissionWhileMainBusy(driver,other,.35,nil);
+    check([result[@"outcome"]isEqual:@"timed_out"]&&nativeReads==reads&&!validated&&!allowed,@"another read does not inherit the prepared baseline deadline");
+    NSMutableDictionary *setter=[effect mutableCopy];setter[@"op"]=@"resize_native_window";setter[@"requested"]=@{@"width":@300,@"height":@200};setter[@"native_origin"]=NSNull.null;
+    NSUInteger sizes=nativeSizes;[driver prepareBaseline:effect validate:validate];
+    result=admissionWhileMainBusy(driver,setter,.35,nil);
+    check([result[@"outcome"]isEqual:@"timed_out"]&&! [result[@"mutation_attempted"]boolValue]&&nativeSizes==sizes&&nativeReads==reads&&!validated&&!allowed,@"setter keeps .25s admission and cannot inherit a prepared read's deadline");
+    NSMutableDictionary *mutableEffect=[effect mutableCopy],*mutableIdentity=[identity()mutableCopy];mutableEffect[@"identity"]=mutableIdentity;
+    [driver prepareBaseline:mutableEffect validate:validate];mutableIdentity[@"wid"]=@99;
+    result=admissionWhileMainBusy(driver,effect,.35,nil);
+    check([result[@"outcome"]isEqual:@"observed"]&&nativeReads==reads+1&&validated==1&&allowed==1,@"prepared effect pins nested identity independently of caller mutation");
+    reads=nativeReads;validated=allowed=0;[driver prepareBaseline:effect validate:validate];
+    result=admissionWhileMainBusy(driver,effect,.05,^{[driver prepareBaseline:other validate:validate];});
+    check([result[@"outcome"]isEqual:@"unavailable"]&&nativeReads==reads&&!validated&&!allowed,@"replacement cancels an old prepared callback instead of admitting it against the new ticket");
+    [driver clearPreparedBaseline];
+}
 static void nativeFillDispatch(void){
     DWNativeResizeDriver *driver=[DWNativeResizeDriver new];
     NSMutableDictionary *effect=[@{@"identity":identity(),@"requested":@{@"width":@1000,@"height":@770},@"native_origin":NSNull.null,@"native_action":@"fill"}mutableCopy];
@@ -362,6 +423,6 @@ int main(void){@autoreleasepool{
     CGRect native=CGRectMake(10,20,200,150);CMSampleBufferRef s=sample(native,@{});NSDictionary *m=captureMetadata(s,100,native);check([m[@"buffer"][@"width"]intValue]==480&&[m[@"content_rect"][@"origin"][@"x"]intValue]==20,@"actual padded crop");CFRelease(s);
     NSArray *invalid=@[@{SCStreamFrameInfoDisplayTime:NSNull.null},@{SCStreamFrameInfoDisplayTime:@100},@{SCStreamFrameInfoDisplayTime:@(-1)},@{SCStreamFrameInfoDisplayTime:@100.5},@{SCStreamFrameInfoDisplayTime:@1e30},@{SCStreamFrameInfoStatus:NSNull.null},@{SCStreamFrameInfoStatus:@.5},@{SCStreamFrameInfoContentScale:@0},@{SCStreamFrameInfoScreenRect:NSNull.null},@{SCStreamFrameInfoContentRect:CFBridgingRelease(CGRectCreateDictionaryRepresentation(CGRectMake(100,100,200,150)))}];
     for(NSDictionary *override in invalid){s=sample(native,override);NSString *why=nil;check(captureMetadata(s,100,native)==nil,@"invalid metadata rejected");check(captureDescription(s,100,native,&why)==nil&&why.length,@"and every rejection says why");CFRelease(s);}
-    readback();abandonedCoordinator();fullscreenFrameRestore();nativeFillDispatch();nativeFillRebase();nativeFillAtomicPreparation();nativeRestoreDispatch();
+    readback();abandonedCoordinator();fullscreenFrameRestore();nativeFillDispatch();nativeFillRebase();nativeFillAtomicPreparation();nativeRestoreDispatch();nativeBaselineAdmission();
     puts("PASS: native readback coordinator + Rust C ABI; standalone synthetic CV/CMSampleBuffer metadata oracle; no native app/window/AX/capture started");return 0;
 }}

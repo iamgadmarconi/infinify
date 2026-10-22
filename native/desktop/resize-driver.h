@@ -24,6 +24,12 @@ typedef NS_ENUM(NSInteger,DWNativeFillReadiness) {
 // Optional main-thread ownership gate. Refusal returns an ordinary unattempted
 // unavailable result, so the controller still completes its pending effect.
 @property (copy) BOOL (^canPerform)(NSDictionary *effect);
+// Main-only. Pin one exact initial read for an explicit snapshot handoff. Its
+// main-queue admission may wait until 2.5s after preparation; ordinary reads and
+// every setter keep .25s. Validation and canPerform must both still allow it.
+- (void)prepareBaseline:(NSDictionary *)effect validate:(BOOL (^)(void))validate;
+// Main-only. Revoke the pinned read, including a callback already queued.
+- (void)clearPreparedBaseline;
 // Explicit snapshot handoffs may extend preparation to 2.5s. Zero keeps the
 // ordinary .75s budget; the screen-update lease remains independently capped.
 @property (atomic) NSTimeInterval fillPreparationTimeout;

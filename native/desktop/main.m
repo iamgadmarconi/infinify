@@ -3441,7 +3441,13 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     __weak Desktop *weak=self;dispatch_queue_t queue=dispatch_queue_create("org.infinify.resize",DISPATCH_QUEUE_SERIAL);
     DWNativeResizeDriver *driver=[DWNativeResizeDriver new];self.nativeResizeDriver=driver;
     driver.nativeFill=self.nativeDesktopMode&&self.native!=nil;
-    driver.canPerform=^BOOL(NSDictionary *effect){Desktop *d=weak;return d&&!d.sources[effect[@"window"]].nativeMouseOwnership;};
+    driver.canPerform=^BOOL(NSDictionary *effect){
+        Desktop *d=weak;LiveSource *source=d.sources[effect[@"window"]];
+        if(!source||source.detached||source.nativeMouseOwnership||!boundIdentity(source.identity,effect[@"identity"]))return NO;
+        // A worker may start after a newer handoff replaced its prepared read.
+        // Only the controller's still-pending effect can enter native code.
+        return [asDict([d call:@{@"op":@"snapshot"}][@"native_resize"])[@"pending_effect"]isEqual:effect];
+    };
     driver.fillReady=^DWNativeFillReadiness(NSDictionary *effect){
         Desktop *d=weak;NSDictionary *held=d.nativeFillHandoff;
         if(!held||d.nativeFillResuming||d.cleaning||d.sessionInactive||d.native.ended
@@ -3961,6 +3967,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // owns the handoff; identity loss, cancellation and quit preserve normal restore.
 - (void)clearNativeFillPresentation {
     [self retireDeferredNativeRestore];
+    [self.nativeResizeDriver clearPreparedBaseline];
     // A cancelled prepared transaction must not become an unprepared fallback
     // when its already queued worker next consults readiness.
     if(self.nativeFillHandoff&&!self.nativeFillResuming){if(!self.nativeFillRefusedTransactions)self.nativeFillRefusedTransactions=[NSMutableSet set];[self.nativeFillRefusedTransactions addObject:self.nativeFillHandoff[@"transaction"]];}
@@ -4013,6 +4020,15 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         BOOL (^valid)(void)=^BOOL{Desktop *d=weak;return d&&d.nativeFillRoot==root&&!d.nativeFillResuming
             &&[d.nativeFillHandoff[@"transaction"]isEqual:held[@"transaction"]]
             &&[d nativeFillCurrent:held snapshot:[d call:@{@"op":@"snapshot"}]];};
+        // Snapshot preparation can occupy main longer than the ordinary
+        // setter admission budget. Only this exact, read-only baseline may
+        // wait for it; its effect, session and handoff are checked again then.
+        [self.nativeResizeDriver prepareBaseline:effect validate:^BOOL{
+            Desktop *d=weak;if(!valid())return NO;
+            NSDictionary *current=asDict([d call:@{@"op":@"snapshot"}][@"native_resize"]);
+            return ![current[@"cancelled"]boolValue]&&[current[@"pending_effect"]isEqual:effect]
+                &&![d.nativeFillRefusedTransactions containsObject:effect[@"transaction"]];
+        }];
         self.nativeFillCapture=[DWNativeTransitionCapture captureIdentity:root.identity nativeBounds:root.nativeBounds screenRect:root.screenRect validate:valid completion:^(DWNativeTransitionCaptureResult *result,NSString *failure){
             Desktop *d=weak;if(!valid())return;d.nativeFillCapture=nil;
             DWNativeTransition *picture=result?[[DWNativeTransition alloc]initWithImage:result.image screenRect:result.screenRect]:nil;
@@ -4729,6 +4745,16 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     NSData *data=[NSData dataWithBytes:response length:strlen(response)];driftwm_desktop_response_free(response);if(raw)*raw=data;
     NSDictionary *reply=[NSJSONSerialization JSONObjectWithData:data options:0 error:nil];if(![reply[@"ok"]boolValue]){self.statusText=reply[@"error"]?:@"Controller error";return nil;}
     NSDictionary *result=reply[@"data"];
+    if(DWInputTrace()){
+        NSMutableArray *effects=[asArray(result[@"effects"])mutableCopy]?:[NSMutableArray array];
+        if(asDict(result[@"effect"]))[effects addObject:result[@"effect"]];
+        for(NSDictionary *effect in effects)if([effect[@"op"]isEqual:@"observe_resize_source"]||[effect[@"op"]isEqual:@"resize_native_window"]){
+            id ipc=command[@"request"];NSString *variant=asString(ipc)?:asDict(ipc).allKeys.firstObject?:@"none";
+            NSString *action=asString(command[@"action"])?:asString(asDict(ipc)[@"Action"]);
+            if(![@[@"toggle-fullscreen",@"fullscreen",@"fill",@"restore",@"center",@"fit"]containsObject:action?:@""])action=@"other";
+            fprintf(stderr,"debug: native resize origin operation=%s ipc=%s action=%s transaction=%llu effect=%llu window=%llu\n",operation.UTF8String,variant.UTF8String,action.UTF8String,[effect[@"transaction"]unsignedLongLongValue],[effect[@"effect_id"]unsignedLongLongValue],[effect[@"window"]unsignedLongLongValue]);
+        }
+    }
     if(snapshot){self.controllerSnapshot=result;if(!self.controllerVisualSnapshot)self.controllerVisualSnapshot=result;}
     else if(tick&&[result[@"clock_only"]isEqual:@YES]){
         // This successful tick changed only clock_ns. Never mutate a retained
