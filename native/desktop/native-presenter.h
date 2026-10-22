@@ -153,6 +153,12 @@ bool DWNativeClipPlacement(CGRect native,CGRect rootNative,CGRect rootScreen,CGR
 - (BOOL)isTransitionHidden:(DWNativeHiddenRoot *)transition;
 - (BOOL)revealTransition:(DWNativeHiddenRoot *)transition screen:(CGRect)screen alpha:(double)alpha;
 - (BOOL)isTransitionRevealed:(DWNativeHiddenRoot *)transition;
+// Optional main-thread wakeup after a complete ACK of the current submitted
+// frame has updated transition/placement state. Subscribe only for an active
+// handoff, then clear it. Old, duplicate, short and ended-session ACKs do not
+// notify. A callback is a scheduling hint, never placement/input authority;
+// the consumer must revalidate its handoff and read the ordinary exact receipt.
+@property(nonatomic,copy) void (^transitionFrameAcknowledged)(void);
 // The frame this snapshot asks for: one record for every bound window (`identities`,
 // logical id → identity), at its placement's screen_rect, or parked beyond every
 // display when it has none. Nothing is sent. A snapshot without outputs (a display

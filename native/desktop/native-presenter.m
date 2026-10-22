@@ -542,7 +542,8 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
 // A record the helper did not apply: the window is not where the canvas shows it. Once per window and reason.
 - (void)refused:(NSData *)statuses frame:(uint64_t)seq {
     NSData *frame=_frames[@(seq)];const struct dw2_record *records=frame.bytes;const uint8_t *status=statuses.bytes;
-    if(!self.ended&&seq==_submittedSeq&&frame&&statuses.length==frame.length/sizeof(*records)){
+    BOOL currentFrame=!self.ended&&seq==_submittedSeq&&frame&&statuses.length==frame.length/sizeof(*records);
+    if(currentFrame){
         NSMutableDictionary *acknowledged=[NSMutableDictionary dictionary];
         for(NSNumber *logical in _framePlacements[@(seq)]){
             DWNativePlacementDescription *description=_framePlacements[@(seq)][logical];
@@ -605,6 +606,9 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     if(frame&&statuses.length==frame.length/sizeof(*records))for(NSNumber *resolved in _frames.allKeys)if(resolved.unsignedLongLongValue<=seq){
         [_frames removeObjectForKey:resolved];[_framePlacements removeObjectForKey:resolved];
     }
+    // The callback can describe/submit the next transition frame. Finish all
+    // ACK bookkeeping first so a reentrant submission retains its own history.
+    if(currentFrame&&!self.ended&&self.transitionFrameAcknowledged)self.transitionFrameAcknowledged();
 }
 - (void)invalidatePlacementReadiness {
     _acknowledgedPlacements=@{};_acknowledgedSequence=0;++_placementRevision;
@@ -1239,6 +1243,10 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
 - (BOOL)isTransitionHidden:(DWNativeHiddenRoot *)transition { return !self.ended&&[self.owners[transition.identity[@"pid"]]isTransitionHidden:transition]; }
 - (BOOL)revealTransition:(DWNativeHiddenRoot *)transition screen:(CGRect)screen alpha:(double)alpha { return !self.ended&&[self.owners[transition.identity[@"pid"]]revealTransition:transition screen:screen alpha:alpha]; }
 - (BOOL)isTransitionRevealed:(DWNativeHiddenRoot *)transition { return !self.ended&&[self.owners[transition.identity[@"pid"]]isTransitionRevealed:transition]; }
+- (void)setTransitionFrameAcknowledged:(void (^)(void))callback {
+    [super setTransitionFrameAcknowledged:callback];
+    for(DWNativePresenter *session in self.sessions)session.transitionFrameAcknowledged=callback;
+}
 - (void)describe:(NSDictionary *)snapshot bound:(NSDictionary<NSNumber *,NSDictionary *> *)identities {
     if(self.ended)return;
     for(DWNativePresenter *session in self.sessions){NSMutableDictionary *owned=[NSMutableDictionary dictionary];

@@ -129,10 +129,19 @@ int main(void) {@autoreleasepool {
     check(NSThread.isMainThread,@"run fixture on the main thread");NSDictionary *root=identity(123,42);
     CGRect native=CGRectMake(100,100,320,232),screen=CGRectMake(250,200,160,116);
     DWNativePresenter *presenter=[DWNativePresenter fixturePID:@123];
+    __block NSUInteger transitionWakeups=0;
+    __weak DWNativePresenter *notifiedPresenter=presenter;
+    presenter.transitionFrameAcknowledged=^{
+        check(NSThread.isMainThread&&[notifiedPresenter fixtureRetainedFrames]==0,@"transition wakeup follows completed main-thread ACK bookkeeping");
+        transitionWakeups++;
+    };
     [presenter bound:root bounds:native family:family(root,native,@[@43])];describe(presenter,root,1,1,screen);
     check(!receipt(presenter,root,1,1),@"describe is desired state, never an ACK");[presenter submit];
     check(!receipt(presenter,root,1,1),@"queueing a frame is not an ACK");ack(presenter);
     DWNativeAppliedPlacement *first=receipt(presenter,root,1,1);
+    check(transitionWakeups==1,@"a complete current ACK wakes the active handoff immediately");
+    ack(presenter);[presenter fixtureAck:@[@0,@0] sequence:presenter.fixtureSequence+50];
+    check(transitionWakeups==1,@"duplicate and unknown ACKs do not wake a handoff");
     check(first&&first.sequence==presenter.fixtureSequence&&[presenter isAcknowledgedPlacementCurrent:first],@"complete current family ACK produces a revocable receipt");
     check(first.members.count==2&&[first.members[0][@"identity"]isEqual:root]&&[first.members[1][@"identity"]isEqual:identity(123,43)],@"receipt includes every sorted bound family member");
     check([first.members[0][@"parent"]isEqual:@0]&&[first.members[1][@"parent"]isEqual:@42],@"receipt preserves the audited root and child parent IDs");
@@ -147,12 +156,17 @@ int main(void) {@autoreleasepool {
     describe(presenter,root,1,1,screen);[presenter submit];
     check(presenter.fixtureRecords.length==0,@"Fill omits both root and child rather than releasing or parking either");
     [presenter fixtureAck:@[@0,@0] sequence:beforeFill];check(![presenter isWindowWithheld:root],@"an old placement ACK cannot start Fill");
+    [presenter fixtureAck:@[@0] sequence:presenter.fixtureSequence];
+    check(transitionWakeups==1,@"old and incomplete omission ACKs cannot wake a handoff");
     [presenter fixtureAck:@[] sequence:presenter.fixtureSequence];
+    check(transitionWakeups==2,@"an exact empty omission ACK wakes the same handoff");
     check([presenter isWindowWithheld:root]&&!receipt(presenter,root,1,1),@"omission ACK drains prior placement but grants no input receipt");
     [presenter resumeWindow:identity(124,42)];check([presenter isWindowWithheld:root],@"foreign resume cannot release the handoff");
     [presenter resumeWindow:root];check(![presenter isWindowWithheld:root]&&!receipt(presenter,root,1,1),@"resume requires a new placement ACK");
     describe(presenter,root,1,1,screen);[presenter submit];check(presenter.fixtureRecords.length==2*sizeof(struct dw2_record),@"resume reinstates the complete family");
     ack(presenter);first=receipt(presenter,root,1,1);check(first!=nil,@"fresh family ACK alone restores placement eligibility");
+    check(transitionWakeups==3,@"resumed placement ACK wakes final handoff cleanup");
+    presenter.transitionFrameAcknowledged=nil;
 
     // A separate root-only family exercises the real temporary neutral wire
     // record, its exact ACK, and the second omission barrier without native calls.
@@ -551,6 +565,7 @@ int main(void) {@autoreleasepool {
     DWNativeAppliedPlacement *otherReceipt=receipt(other,otherRoot,2,1);
     check(otherReceipt&&! [other isAcknowledgedPlacementCurrent:current]&&![presenter isAcknowledgedPlacementCurrent:otherReceipt],@"different helper sessions cannot reuse receipts or sequence values");
     DWNativePresenterGroup *group=[DWNativePresenterGroup new];group.sessions=@[presenter,other];group.owners=@{@123:presenter,@124:other};
+    __block NSUInteger groupedWakeups=0;group.transitionFrameAcknowledged=^{groupedWakeups++;};
     check([group isAcknowledgedPlacementCurrent:current]&&[group isAcknowledgedPlacementCurrent:otherReceipt]
         &&[group acknowledgedPlacementForWindow:@7 identity:root generation:@2 output:@1]!=nil,@"group delegates readiness to the exact owning session");
     guardedDescriptor[@"generation"]=@2;[group setGuardedParking:guardedDescriptor];
@@ -563,6 +578,9 @@ int main(void) {@autoreleasepool {
     describe(presenter,root,2,1,moved);describe(other,otherRoot,2,1,moved);[group submit];
     check(presenter.fixtureSequence>groupOld&&other.fixtureSequence>otherOld&&!receipt(presenter,root,2,1)&&!receipt(other,otherRoot,2,1),@"group sessions require their own fresh sequence and ACK");
     ack(presenter);ack(other);current=receipt(presenter,root,2,1);otherReceipt=receipt(other,otherRoot,2,1);
+    check(groupedWakeups==3,@"group handoff wakeup follows each current member-session ACK");
+    group.transitionFrameAcknowledged=nil;
+    check(!presenter.transitionFrameAcknowledged&&!other.transitionFrameAcknowledged,@"clearing a grouped handoff unsubscribes every session");
     check([group isAcknowledgedPlacementCurrent:current]&&[group isAcknowledgedPlacementCurrent:otherReceipt],@"new complete session ACKs settle the grouped supersession");
     [presenter unbound:root];check(![group isAcknowledgedPlacementCurrent:current],@"unbinding revokes a grouped receipt");
     [other fixtureExpire];check(!receipt(other,otherRoot,2,1)&&![group isAcknowledgedPlacementCurrent:otherReceipt],@"disconnect revokes receipt before main callback delivery");

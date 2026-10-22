@@ -9,6 +9,10 @@ typedef NS_ENUM(NSInteger,DWNativeFillReadiness) {
     // Restore-only: the root is hidden behind a prepared snapshot. Apply the
     // exact saved frame directly, without starting a second native animation.
     DWNativeFillReadyForFrameRestore=3,
+    // Enter-only: a fresh snapshot covers the root and the helper has ACKed
+    // hiding it. Resize directly; the snapshot owns the visible animation and
+    // no AppKit Fill state is created for Restore to unwind later.
+    DWNativeFillReadyForSnapshotFill=4,
 };
 // Main-thread callbacks for one withheld, root-only family. None grants input.
 @interface DWNativeFillRebase : NSObject
@@ -18,8 +22,10 @@ typedef NS_ENUM(NSInteger,DWNativeFillReadiness) {
 @property (copy) void (^cancel)(void);
 @end
 @interface DWNativeResizeDriver : NSObject <DWResizeDriver>
-// Desktop native presentation elects app-owned Fill. The main-thread gate must
+// Desktop native presentation elects a guarded Fill. The main-thread gate must
 // confirm that the helper has acknowledged withholding the entire native family.
+// ReadyForSnapshotFill selects direct sizing behind the prepared picture;
+// ordinary Ready preserves the legacy app-owned Fill/Unfill pair.
 @property BOOL nativeFill;
 // Optional main-thread ownership gate. Refusal returns an ordinary unattempted
 // unavailable result, so the controller still completes its pending effect.

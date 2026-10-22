@@ -11,12 +11,28 @@
 
 static NSDictionary *decorationRect(CGRect r){return @{ @"origin":@{@"x":@(r.origin.x),@"y":@(r.origin.y)},@"size":@{@"width":@(r.size.width),@"height":@(r.size.height)}};}
 static BOOL decorationFrame(AXUIElementRef element,CGRect *out){
-    CFTypeRef position=NULL,size=NULL;CGPoint p;CGSize s;BOOL valid=NO;
-    if(!AXUIElementCopyAttributeValue(element,kAXPositionAttribute,&position)&&position&&CFGetTypeID(position)==AXValueGetTypeID()
-        &&!AXUIElementCopyAttributeValue(element,kAXSizeAttribute,&size)&&size&&CFGetTypeID(size)==AXValueGetTypeID()
+    // Chrome refresh visits several elements every 200 ms. Fetch each frame in
+    // one AX message instead of two; no geometry or freshness result is cached.
+    static CFArrayRef attributes;static dispatch_once_t once;
+    dispatch_once(&once,^{const void *names[]={kAXPositionAttribute,kAXSizeAttribute};attributes=CFArrayCreate(NULL,names,2,&kCFTypeArrayCallBacks);});
+    CFArrayRef values=NULL;CFTypeRef position=NULL,size=NULL;CGPoint p;CGSize s;BOOL valid=NO;
+    AXError error=AXUIElementCopyMultipleAttributeValues(element,attributes,kAXCopyMultipleAttributeOptionStopOnError,&values);
+    if(!error&&values&&CFGetTypeID(values)==CFArrayGetTypeID()&&CFArrayGetCount(values)==2){position=CFArrayGetValueAtIndex(values,0);size=CFArrayGetValueAtIndex(values,1);}
+    // A provider may implement individual attributes without implementing the
+    // batch API. Preserve that compatibility, but never retry failed/timed-out
+    // batches or mix partial observations into a successful frame.
+    if(error==kAXErrorNotImplemented){
+        if(values){CFRelease(values);values=NULL;}
+        if(AXUIElementCopyAttributeValue(element,kAXPositionAttribute,&position)){if(position)CFRelease(position);position=NULL;}
+        if(position&&CFGetTypeID(position)==AXValueGetTypeID()&&AXValueGetType(position)==kAXValueCGPointType
+            &&AXUIElementCopyAttributeValue(element,kAXSizeAttribute,&size)){if(size)CFRelease(size);size=NULL;}
+    }
+    if(position&&size&&CFGetTypeID(position)==AXValueGetTypeID()&&CFGetTypeID(size)==AXValueGetTypeID()
+        &&AXValueGetType(position)==kAXValueCGPointType&&AXValueGetType(size)==kAXValueCGSizeType
         &&AXValueGetValue(position,kAXValueCGPointType,&p)&&AXValueGetValue(size,kAXValueCGSizeType,&s)
         &&isfinite(p.x)&&isfinite(p.y)&&isfinite(s.width)&&isfinite(s.height)&&s.width>0&&s.height>0){*out=CGRectMake(p.x,p.y,s.width,s.height);valid=YES;}
-    if(position)CFRelease(position);if(size)CFRelease(size);return valid;
+    if(error==kAXErrorNotImplemented){if(position)CFRelease(position);if(size)CFRelease(size);}
+    if(values)CFRelease(values);return valid;
 }
 static BOOL decorationNear(CGRect a,CGRect b){return fabs(a.origin.x-b.origin.x)<=1&&fabs(a.origin.y-b.origin.y)<=1&&fabs(a.size.width-b.size.width)<=1&&fabs(a.size.height-b.size.height)<=1;}
 static id decorationAttribute(AXUIElementRef element,CFStringRef name,AXError *error){

@@ -219,7 +219,8 @@ typedef NS_ENUM(NSInteger,DWResizeAdmission) {
                 allowed=ready?DWNativeFillReady:DWNativeFillPending;
             }
             method=allowed==DWNativeFillReady?(normalized.mutation_attempted?@"fill rebased":@"fill"):@"fill gate refused";
-            if(allowed==DWNativeFillUnsupportedGeometry){method=@"fill transformed, resize fallback";r=dw_resize_apply(identity(e[@"identity"]),size);}
+            if(allowed==DWNativeFillReadyForSnapshotFill){method=@"snapshot fill";r=dw_resize_apply(identity(e[@"identity"]),size);}
+            else if(allowed==DWNativeFillUnsupportedGeometry){method=@"fill transformed, resize fallback";r=dw_resize_apply(identity(e[@"identity"]),size);}
             else r=allowed==DWNativeFillReady?dw_resize_fill(identity(e[@"identity"]),size):(DWResizeResult){.outcome=DWResizeUnavailable,.requested=size};
             if(allowed==DWNativeFillReady&&r.observed&&r.mutation_attempted&&r.ax_error==kAXErrorSuccess&&(r.outcome==DWResizeApplied||r.outcome==DWResizeClamped))[self rememberFill:e];
             // Only a positively unsupported, unattempted menu action permits

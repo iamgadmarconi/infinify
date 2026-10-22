@@ -24,7 +24,9 @@ NS_ASSUME_NONNULL_BEGIN
 // Orders only this noninteractive panel above normal app windows, below Dock and
 // menu levels, without making it key. Holds the initial picture until animated.
 - (BOOL)show;
-// One AppKit frame animation, with AppKit's resize duration and default curve.
+// One 100 ms AppKit frame animation with an ease-out curve. The underlying app
+// is already sized while hidden; only this picture animates. An unchanged frame
+// completes without a visual hold.
 // YES accepts the request and calls completion exactly once on the main thread:
 // YES at the final frame, NO if cancelled/finished/released before completion.
 // NO refuses the request without invoking completion. The image stays visible

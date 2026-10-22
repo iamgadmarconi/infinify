@@ -14,6 +14,7 @@ static BOOL validRect(CGRect rect) {
     return isfinite(rect.origin.x)&&isfinite(rect.origin.y)&&isfinite(rect.size.width)&&isfinite(rect.size.height)
         &&rect.size.width>0&&rect.size.height>0&&isfinite(CGRectGetMaxX(rect))&&isfinite(CGRectGetMaxY(rect));
 }
+static BOOL transitionTiming(void) {const char *value=getenv("INFINIFY_DEBUG");return value&&atoi(value)==1;}
 // Flip about the main display's top, not the union's top: a display above the
 // main display has negative CG y but positive AppKit y. Preserve negative x too.
 static BOOL screenBasis(CGPoint *basis) {
@@ -143,7 +144,7 @@ static BOOL captureRootCurrent(NSDictionary *identity,CGRect native,CGRect scree
     atomic_bool _completed;
     NSDictionary *_identity;
     CGRect _native,_screen,_observedScreen;
-    CFTimeInterval _deadline;
+    CFTimeInterval _startedAt,_deadline;
     dispatch_queue_t _queue;
     BOOL (^_validate)(void);
     void (^_completion)(DWNativeTransitionCaptureResult *,NSString *);
@@ -152,12 +153,15 @@ static BOOL captureRootCurrent(NSDictionary *identity,CGRect native,CGRect scree
 + (instancetype)captureIdentity:(NSDictionary *)identity nativeBounds:(CGRect)nativeBounds screenRect:(CGRect)screenRect validate:(BOOL (^)(void))validate completion:(void (^)(DWNativeTransitionCaptureResult *,NSString *))completion {
     NSAssert(NSThread.isMainThread,@"Native capture requires the main thread");
     DWNativeTransitionCapture *request=[[self alloc]initPrivate];request->_identity=captureIdentity(identity);request->_native=nativeBounds;request->_screen=screenRect;
-    request->_validate=[validate copy];request->_completion=[completion copy];request->_deadline=CACurrentMediaTime()+2;
+    request->_validate=[validate copy];request->_completion=[completion copy];request->_startedAt=CACurrentMediaTime();request->_deadline=request->_startedAt+2;
     request->_queue=dispatch_queue_create("org.infinify.native-transition-capture",DISPATCH_QUEUE_SERIAL);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,2*NSEC_PER_SEC),dispatch_get_main_queue(),^{[request complete:nil failure:@"Native transition capture timed out"];});
     dispatch_async(dispatch_get_main_queue(),^{[request begin];});return request;
 }
 - (BOOL)isCompleted {return atomic_load(&_completed);}
+- (void)tracePhase:(const char *)phase {
+    if(transitionTiming())fprintf(stderr,"debug: native transition capture pid=%d wid=%u phase=%s elapsed_ms=%.3f time=%.6f\n",[_identity[@"pid"]intValue],[_identity[@"wid"]unsignedIntValue],phase,(CACurrentMediaTime()-_startedAt)*1000,CACurrentMediaTime());
+}
 - (BOOL)active {return !atomic_load(&_completed)&&CACurrentMediaTime()<_deadline;}
 - (BOOL)callerCurrent {
     if(![self active]){[self complete:nil failure:@"Native transition capture timed out"];return NO;}
@@ -168,6 +172,7 @@ static BOOL captureRootCurrent(NSDictionary *identity,CGRect native,CGRect scree
     NSAssert(NSThread.isMainThread,@"Native capture completion requires the main thread");
     if(atomic_exchange(&_completed,true))return;
     if(result&&CACurrentMediaTime()>=_deadline){result=nil;failure=@"Native transition capture timed out";}
+    [self tracePhase:result?"complete":"refused"];
     void (^done)(DWNativeTransitionCaptureResult *,NSString *)=_completion;_completion=nil;_validate=nil;if(done)done(result,failure);
 }
 - (void)cancel {NSAssert(NSThread.isMainThread,@"Native capture requires the main thread");[self complete:nil failure:@"Native transition capture cancelled"];}
@@ -188,12 +193,14 @@ static BOOL captureRootCurrent(NSDictionary *identity,CGRect native,CGRect scree
     });
 }
 - (void)enumerate {
+    [self tracePhase:"enumerate"];
     [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO completionHandler:^(SCShareableContent *content,NSError *error){
         dispatch_async(dispatch_get_main_queue(),^{if(![self callerCurrent])return;
             if(error||!content){[self complete:nil failure:error.localizedDescription?:@"Native transition capture has no window list"];return;}[self capture:content];});
     }];
 }
 - (void)capture:(SCShareableContent *)content {
+    [self tracePhase:"enumerated"];
     SCWindow *window=nil;NSUInteger matches=0;
     for(SCWindow *candidate in content.windows)if(candidate.windowID==[_identity[@"wid"]unsignedIntValue]&&candidate.owningApplication.processID==[_identity[@"pid"]intValue]){window=candidate;matches++;}
     if(matches!=1){[self complete:nil failure:@"Native transition root is unavailable or ambiguous for capture"];return;}
@@ -207,8 +214,10 @@ static BOOL captureRootCurrent(NSDictionary *identity,CGRect native,CGRect scree
         if(!CGPreflightScreenCaptureAccess()||!captureRootCurrent(self->_identity,self->_native,self->_observedScreen,NULL)){
             dispatch_async(dispatch_get_main_queue(),^{[self complete:nil failure:@"Native transition capture permission, root or geometry changed"];});return;}
         if(![self active])return;
+        [self tracePhase:"screenshot"];
         [SCScreenshotManager captureScreenshotWithFilter:filter configuration:config completionHandler:^(SCScreenshotOutput *output,NSError *error){
             if(![self active])return;
+            [self tracePhase:"screenshot_completed"];
             CGImageRef image=output.sdrImage;
             DWNativeTransitionCaptureResult *result=!error&&image&&CGImageGetWidth(image)==(size_t)width&&CGImageGetHeight(image)==(size_t)height
                 ?[[DWNativeTransitionCaptureResult alloc]initWithImage:image screenRect:self->_screen nativeBounds:self->_native]:nil;
@@ -274,16 +283,18 @@ static BOOL captureRootCurrent(NSDictionary *identity,CGRect native,CGRect scree
     NSAssert(NSThread.isMainThread,@"Native transition requires the main thread");
     if(_closed||_animating||_animated||!self.visible||!validRect(rect)||!completion||![self basisCurrent])return NO;
     NSRect frame=appKitRect(rect,_basis);_animating=YES;_animated=YES;_completion=[completion copy];NSUInteger serial=++_serial;
+    CFTimeInterval started=CACurrentMediaTime();NSTimeInterval duration=NSEqualRects(_panel.frame,frame)?0:.1;
+    if(transitionTiming())fprintf(stderr,"debug: native transition animation start duration_ms=%.3f time=%.6f\n",duration*1000,started);
     __weak DWNativeTransition *weak=self;
     [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context){
-        context.duration=[self->_panel animationResizeTime:frame];
+        context.duration=duration;context.timingFunction=[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
         [[self->_panel animator]setFrame:frame display:YES];
     } completionHandler:^{
         DWNativeTransition *strong=weak;if(!strong||strong->_closed||strong->_serial!=serial)return;
         strong->_animating=NO;void (^done)(BOOL)=strong->_completion;strong->_completion=nil;
         NSRect actual=strong->_panel.frame;BOOL visible=strong.visible,basis=[strong basisCurrent];
         BOOL rounded=validRect(NSRectToCGRect(actual))&&roundedEdgesMatch(NSRectToCGRect(frame),NSRectToCGRect(actual));
-        if(getenv("INFINIFY_DEBUG")&&atoi(getenv("INFINIFY_DEBUG"))==1)fprintf(stderr,"debug: native transition panel completed actual=%s target=%s visible=%d basis=%d rounded_match=%d\n",NSStringFromRect(actual).UTF8String,NSStringFromRect(frame).UTF8String,visible,basis,rounded);
+        if(transitionTiming())fprintf(stderr,"debug: native transition panel completed actual=%s target=%s visible=%d basis=%d rounded_match=%d animation_ms=%.3f time=%.6f\n",NSStringFromRect(actual).UTF8String,NSStringFromRect(frame).UTF8String,visible,basis,rounded,(CACurrentMediaTime()-started)*1000,CACurrentMediaTime());
         if(done)done(basis&&visible&&rounded);
     }];return YES;
 }

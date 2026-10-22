@@ -3461,7 +3461,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
             ||!boundIdentity(held[@"identity"],effect[@"identity"]))return DWNativeFillPending;
         if(![d nativeFillCurrent:held snapshot:[d call:@{@"op":@"snapshot"}]])return DWNativeFillPending;
         if([held[@"bridge_failed"]boolValue])return DWNativeFillUnsupportedGeometry;
-        if(d.nativeFillRoot)return [d.native isTransitionHidden:d.nativeFillRoot]?DWNativeFillReady:DWNativeFillPending;
+        if(d.nativeFillRoot)return [d.native isTransitionHidden:d.nativeFillRoot]?DWNativeFillReadyForSnapshotFill:DWNativeFillPending;
         if(![d.native isWindowWithheld:held[@"identity"]])return DWNativeFillPending;
         // Fresh native/displayed geometry separates an aligned source, a
         // translation-only rebase, and unsupported scaling. Missing evidence
@@ -3979,6 +3979,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(self.nativeFillHandoff&&!self.nativeFillResuming){if(!self.nativeFillRefusedTransactions)self.nativeFillRefusedTransactions=[NSMutableSet set];[self.nativeFillRefusedTransactions addObject:self.nativeFillHandoff[@"transaction"]];}
     // Invalidate the callbacks before cancellation can synchronously complete.
     DWNativeTransitionCapture *capture=self.nativeFillCapture;DWNativeTransition *picture=self.nativeFillPicture;
+    DWNativePresenter *presenter=self.nativeFillHandoff[@"presenter"];presenter.transitionFrameAcknowledged=nil;
     self.nativeFillHandoff=nil;self.nativeFillCapture=nil;self.nativeFillPicture=nil;self.nativeFillRoot=nil;
     self.nativeFillResuming=NO;self.nativeFillHiding=NO;self.nativeFillAnimating=NO;self.nativeFillAnimated=NO;self.nativeFillRevealing=NO;self.nativeFillPresentationDeadline=0;
     self.nativeResizeDriver.fillPreparationTimeout=.75;self.resize.timeout=3;
@@ -4011,13 +4012,19 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     NSDictionary *window=windowInfo(source.router.wid);CGRect native=CGRectZero,displayed=CGRectZero;
     BOOL geometry=DWNativeBounds(source.router.wid,&native)&&[window[(id)kCGWindowBounds]isKindOfClass:NSDictionary.class]
         &&CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)window[(id)kCGWindowBounds],&displayed);
-    BOOL scaled=geometry&&(fabs(native.size.width-displayed.size.width)>1||fabs(native.size.height-displayed.size.height)>1);
-    DWNativeHiddenRoot *root=(restoring||scaled)?[self.native beginTransitionForWindow:source.identity]:nil;
+    // Infinify owns this transition at every zoom. A covered direct resize
+    // avoids starting AppKit Fill and later waiting for its Unfill animation.
+    // Unsupported families retain the existing withheld native fallback.
+    DWNativeHiddenRoot *root=geometry?[self.native beginTransitionForWindow:source.identity]:nil;
     if(!root&&![self.native withholdWindow:source.identity])return;
     if(restoring)[self.nativeFillHistory removeObjectForKey:source.logical];
     else if(root){if(!self.nativeFillHistory)self.nativeFillHistory=[NSMutableDictionary dictionary];self.nativeFillHistory[source.logical]=@{@"identity":source.identity.copy,@"generation":effect[@"generation"]};}
     self.nativeFillRoot=root;self.nativeFillHiding=NO;self.nativeFillAnimating=NO;self.nativeFillAnimated=NO;self.nativeFillRevealing=NO;self.nativeFillPresentationDeadline=0;
     self.nativeFillHandoff=@{@"window":effect[@"window"],@"transaction":effect[@"transaction"],@"identity":source.identity.copy,@"generation":effect[@"generation"],@"restoring":@(restoring),@"presenter":self.native,@"session":@(self.nativeSessionEpoch),@"output":output,@"camera":view[@"camera"],@"zoom":view[@"zoom"],@"screen_bounds":view[@"screen_bounds"]};self.nativeFillResuming=NO;
+    __weak Desktop *handoffDesktop=self;__weak DWNativePresenter *handoffPresenter=self.native;NSNumber *handoffTransaction=effect[@"transaction"];
+    self.native.transitionFrameAcknowledged=^{Desktop *d=handoffDesktop;
+        if(!d||d.cleaning||d.sessionInactive||d.native!=handoffPresenter||![d.nativeFillHandoff[@"transaction"]isEqual:handoffTransaction])return;
+        [d render];};
     self.nativeResizeDriver.fillPreparationTimeout=root?2.5:.75;self.resize.timeout=root?7:3;
     [self cancelNativeHoverForWindow:nil];[self cancelCapturedInputForWindow:nil];self.nativeViewSnapshot=nil;
     if(DWInputTrace())fprintf(stderr,"debug: native fill handoff window=#%s native=%g,%g %gx%g displayed=%g,%g %gx%g snapshot=%d restore=%d\n",source.logical.description.UTF8String,native.origin.x,native.origin.y,native.size.width,native.size.height,displayed.origin.x,displayed.origin.y,displayed.size.width,displayed.size.height,root!=nil,restoring);

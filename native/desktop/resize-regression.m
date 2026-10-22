@@ -115,6 +115,22 @@ static void nativeFillDispatch(void){
     check(nativeFrames==1&&nativeFills==fills,@"exact frame restoration ignores Fill metadata and gate");
     effect[@"requested"]=NSNull.null;[driver perform:effect];check(nativeReads==1&&nativeFills==fills,@"baseline and final reads never press Fill");
 }
+static void nativeSnapshotFillDispatch(void){
+    DWNativeResizeDriver *driver=[DWNativeResizeDriver new];driver.nativeFill=YES;
+    NSDictionary *enter=@{@"window":@1,@"generation":@7,@"identity":identity(),@"requested":@{@"width":@1000,@"height":@770},@"native_origin":NSNull.null,@"native_action":@"fill"};
+    NSDictionary *exit=@{@"window":@1,@"generation":@7,@"identity":identity(),@"requested":@{@"width":@320,@"height":@232},@"native_origin":@{@"x":@20,@"y":@30}};
+    NSUInteger fills=nativeFills,sizes=nativeSizes,unfills=nativeUnfills,frames=nativeFrames;
+    driver.fillReady=^DWNativeFillReadiness(NSDictionary *effect){(void)effect;return DWNativeFillReadyForSnapshotFill;};
+    NSDictionary *result=[driver perform:enter];
+    check(nativeSizes==sizes+1&&nativeFills==fills&&[result[@"mutation_attempted"]boolValue]&&[result[@"outcome"]isEqual:@"applied"],@"hidden snapshot Fill sizes directly instead of starting a second AppKit animation");
+    check(![driver hasNativeFillForEffect:enter],@"snapshot Fill cannot create app Fill eligibility");
+    driver.restoreReady=^DWNativeFillReadiness(NSDictionary *effect){(void)effect;return DWNativeFillReady;};
+    result=[driver perform:exit];
+    check(nativeFrames==frames+1&&nativeUnfills==unfills&&[result[@"actual_ax"]isEqual:rect(20,30,320,232)],@"snapshot Fill restores the exact original frame without AppKit Unfill delay");
+    driver.fillReady=^DWNativeFillReadiness(NSDictionary *effect){(void)effect;return DWNativeFillPending;};
+    result=[driver perform:enter];
+    check(nativeSizes==sizes+1&&nativeFills==fills&&! [result[@"mutation_attempted"]boolValue],@"a pending snapshot handoff cannot reach either size or Fill mutation");
+}
 // The real driver, substituted adapter and update callbacks. No native calls.
 static void nativeFillRebase(void){
     DWNativeResizeDriver *driver=[DWNativeResizeDriver new];driver.nativeFill=YES;
@@ -423,6 +439,6 @@ int main(void){@autoreleasepool{
     CGRect native=CGRectMake(10,20,200,150);CMSampleBufferRef s=sample(native,@{});NSDictionary *m=captureMetadata(s,100,native);check([m[@"buffer"][@"width"]intValue]==480&&[m[@"content_rect"][@"origin"][@"x"]intValue]==20,@"actual padded crop");CFRelease(s);
     NSArray *invalid=@[@{SCStreamFrameInfoDisplayTime:NSNull.null},@{SCStreamFrameInfoDisplayTime:@100},@{SCStreamFrameInfoDisplayTime:@(-1)},@{SCStreamFrameInfoDisplayTime:@100.5},@{SCStreamFrameInfoDisplayTime:@1e30},@{SCStreamFrameInfoStatus:NSNull.null},@{SCStreamFrameInfoStatus:@.5},@{SCStreamFrameInfoContentScale:@0},@{SCStreamFrameInfoScreenRect:NSNull.null},@{SCStreamFrameInfoContentRect:CFBridgingRelease(CGRectCreateDictionaryRepresentation(CGRectMake(100,100,200,150)))}];
     for(NSDictionary *override in invalid){s=sample(native,override);NSString *why=nil;check(captureMetadata(s,100,native)==nil,@"invalid metadata rejected");check(captureDescription(s,100,native,&why)==nil&&why.length,@"and every rejection says why");CFRelease(s);}
-    readback();abandonedCoordinator();fullscreenFrameRestore();nativeFillDispatch();nativeFillRebase();nativeFillAtomicPreparation();nativeRestoreDispatch();nativeBaselineAdmission();
+    readback();abandonedCoordinator();fullscreenFrameRestore();nativeFillDispatch();nativeFillRebase();nativeFillAtomicPreparation();nativeRestoreDispatch();nativeBaselineAdmission();nativeSnapshotFillDispatch();
     puts("PASS: native readback coordinator + Rust C ABI; standalone synthetic CV/CMSampleBuffer metadata oracle; no native app/window/AX/capture started");return 0;
 }}
