@@ -16,3 +16,9 @@ BOOL DWNativeWindowBelongsToRoot(NSDictionary *member,NSDictionary *root);
 // bounds. Exact same-user PID/birth/WID and on-screen ownership are read afresh
 // before/after native bounds and affine-transform getters. No authority or lease.
 NSDictionary *DWNativeWindowDiscoveryBasis(NSDictionary *identity);
+// Experimental capture-control classification, read-only on an observation
+// worker. Requires a freshly verified same-process direct child, contained
+// unchanged native bounds, and one exact AXWindow/AXDialog with one same-process
+// AXButton titled WindowSharingSessionButton. Missing/ambiguous/timed-out reads
+// return NO. Never removes native family membership or restoration obligations.
+BOOL DWNativeWindowIsCaptureControl(NSDictionary *member,NSDictionary *root,CGRect rootBounds,CGRect memberBounds);

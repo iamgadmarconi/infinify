@@ -1723,14 +1723,16 @@ fn slots_of_windows_that_exist_off_screen_keep_waiting_for_them() {
         {"bundle_id":"app.files","title":"docs"},
         {"bundle_id":"","title":"alpha"},
     ]);
+    // Placement is incidental here. macOS defaults omitted placement to auto;
+    // pin center so these assertions continue to isolate saved-slot matching.
     for (toml, ended, later) in [
         (
-            "",
+            "window_placement = \"center\"\n",
             json!({"dropped":[1,3],"standins":[],"dirty":true}),
             json!({"dropped":[4],"standins":[],"dirty":true}),
         ),
         (
-            "[session]\nrestore_windows = true\n",
+            "window_placement = \"center\"\n[session]\nrestore_windows = true\n",
             json!({"dropped":[],"standins":[1,3],"dirty":true}),
             json!({"dropped":[],"standins":[4],"dirty":true}),
         ),

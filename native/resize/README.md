@@ -14,10 +14,13 @@ unavailable readback fail closed. No permission prompt is issued.
 
 `dw_resize_apply` sets only AXSize after checking settable. Requests must have
 finite dimensions in [1, 32768] points. Each AX message has a <=150 ms timeout;
-resolution/readback retries share a two-second deadline. Synchronous WindowServer
+resolution and all readback attempts share a two-second deadline. Synchronous WindowServer
 and process-info calls are OS calls without a cancellable timeout. The remaining
 AX timeout is refreshed per message. No activation, input posting, camera state,
 UI loop, or background observer is owned by this adapter.
+An `AXCannotComplete` during position/size observation retries the complete
+read with fresh ownership checks within that same deadline. Other errors,
+invalid geometry and AX/CG disagreement fail closed. This never repeats a setter.
 
 One native position write may precede the size. macOS grants no Accessibility size
 that would carry a window past the visible frame of its screen: asked from an
@@ -60,6 +63,83 @@ it never puts an origin back or changes camera state. Compare returned origin wi
 the snapshot and reconcile any native movement. The owned test fixture also saves
 and restores its full original frames locally during teardown, including signals,
 parent death and a 30-second deadline. Decoys must remain unchanged.
+
+Fullscreen uses the separate `dw_resize_apply_frame` operation to return the
+original native origin alongside its saved exact extent. It shares a two-second
+deadline across size/position/size writes, checks fresh ownership before each
+setter, and requires AX and native CG geometry to agree afterward. A successful
+setter with another origin is clamped or rejected, never applied. This operation
+does not bypass the owner's size or position constraints. An already matching
+extent needs only the position write, so restoration still works when the
+application no longer permits resizing; any size change caused by positioning
+is read back and corrected through the size path. The fullscreen reducer
+saves the first fresh AX/CG baseline separately from its world/camera return;
+`native_origin` is null on ordinary size effects and contains that original point
+on a fullscreen restoration. Cancellation drains an already sent operation before
+dispatching the frame restore. Existing size-only snapshot restoration is unchanged.
+Full-frame results count preparatory position writes as mutations, and preserve
+an AX timeout from any setter even if later stages return matching geometry. A
+position write that exhausts the deadline returns an unresolved timeout; it
+cannot report an unobserved success. The controller retains the saved frame
+until a final fresh read confirms restoration, including after cancellation or
+an application-driven relocation.
+
+`sh tests/e2e/native-frame-restore.sh` exercises the actual adapter and desktop
+driver with substituted AX/WindowServer calls: frame ordering, fractional origin,
+unchanged-size restoration, ignored position, unavailable positioning, replaced
+owner, inconsistent readback, deadline exhaustion, transient and persistent query
+timeouts, multi-stage setter timeouts, strict effect dispatch, and the size-only legacy
+contract. It creates no native window and establishes no third-party or optical
+runtime capability.
+
+`sh tests/e2e/native-frame-restore-live.sh` builds the separate real-AX probe and
+owned AppKit fixture without launching them. Its explicit
+`--live-owned-fixture [evidence-directory]` form first checks existing
+Accessibility authority without requesting it, plus read-only session/display
+metadata, then creates one fixture process. It refuses known screen lock, an
+unavailable/inactive console login, display query failure, no active awake display,
+or an inactive/asleep main display. The private `CGSSessionScreenIsLocked` key is
+only a negative gate: missing/malformed lock metadata stays `unknown`, never
+usable-session proof. The supervisor preserves preflight metadata and refusal
+reasons and checks again before starting the mutation probe; the probe also checks
+immediately before each expansion. Restoration and child cleanup remain unconditional
+if session state changes. The build-only command runs substituted metadata checks
+without launching a native fixture.
+The probe asks a fullscreen-sized frame, demonstrates the displaced origin left
+by size-only restoration, and exercises both origin-only and full-frame recovery.
+Independent CG and WindowServer reads must match the original native bounds and
+transform exactly; both same-title decoys must remain unchanged. The supervisor
+checks restoration before fixture cleanup, reaps the child, and records source
+and executable hashes alongside OS, build, architecture and hardware. It does
+not exercise the whole desktop app, capture, native presentation, or optical
+fullscreen coverage.
+
+The 2026-10-21 run passed on the disposable UTM guest, arm64 macOS 27.0.1
+(26A434), VirtualMac2,1. The selected fixture started at `(90,798,460,332)`;
+the fullscreen-sized request produced `(0,30,900,700)`. Size-only restoration
+left `(0,30,460,332)`, reproducing the lost native origin. Both the subsequent
+origin-only restore and a second full-frame restore returned exactly to
+`(90,798,460,332)`, including the independently read original transform.
+Both decoys were unchanged, and the fixture was already restored before its
+own cleanup and was reaped. No settings or permissions changed. The receipt is
+`target/native-vm/fullscreen-frame-restore-20261021/evidence/run-83i1716z/receipt.json`,
+SHA-256 `20470cd8c9bce86c4d4af6b51cbf4b36de986a75f345cdd202dc79c7e9c417b8`;
+it records the final adapter/probe source and executable hashes. This is owned
+adapter evidence, not third-party or whole-app fullscreen acceptance.
+
+Whole-app validation remains open. A later owned-fixture replay failed during
+fullscreen exit on a pre-mutation `AXCannotComplete` observation
+(`target/native-vm/fullscreen-and-move-diagnostic-20261021/run-y2qm062x/receipt.json`).
+The bounded readback retry above addresses that error and passes substituted-AX
+regressions, including a query timeout after a setter without repeating writes.
+The next app replay instead failed earlier, during window resolution with
+`AXIllegalArgument`, before any resize setter
+(`target/native-vm/fullscreen-and-move-read-retry-20261021/run-r11debyk/receipt.json`).
+Its initial CG bounds differed from native bounds; the guest was confirmed locked
+and asleep afterward, which does not establish its state during the test.
+Both failed runs restored all original fixture geometry and reaped the children.
+Window resolution and settable queries still fail immediately on an AX error;
+this change retries only position/size observations.
 
 `./tests/e2e/native-resize.sh` builds only this adapter. An explicit
 `./tests/e2e/native-resize.sh --live-owned-fixture [evidence-directory]` runs an

@@ -36,6 +36,15 @@ static NSDictionary<NSNumber *,NSDictionary *> *viewBindings(NSDictionary *ident
     for(id window in identities){NSDictionary *identity=viewIdentity(identities[window]);if(viewPositiveID(viewNumber(window))&&identity)bindings[window]=identity;}
     return bindings.copy;
 }
+static BOOL viewNativeExtentFits(NSDictionary *placement,NSDictionary *viewport,NSDictionary *binding) {
+    NSDictionary *source=viewDictionary(placement[@"source"]),*identity=viewDictionary(source[@"identity"]);
+    NSNumber *generation=viewNumber(source[@"generation"]);
+    CGRect native=viewRect(source[@"observed_rect"]),display=viewRect(viewport[@"screen_bounds"]);
+    return binding&&[viewIdentity(identity)isEqual:binding]&&(!identity[@"owner"]||identity[@"owner"]==NSNull.null)
+        &&viewPositiveID(generation)&&CFGetTypeID((__bridge CFTypeRef)generation)!=CFBooleanGetTypeID()
+        &&[source[@"observation_known"]isEqual:@YES]&&!CGRectIsNull(native)&&!CGRectIsNull(display)
+        &&native.size.width<=display.size.width&&native.size.height<=display.size.height;
+}
 static NSDictionary *viewRectJSON(CGRect rect) {
     return @{@"origin":@{@"x":@(rect.origin.x),@"y":@(rect.origin.y)},@"size":@{@"width":@(rect.size.width),@"height":@(rect.size.height)}};
 }
@@ -192,8 +201,11 @@ static NSDictionary *viewTransferSite(NSNumber *window,NSNumber *output,NSDictio
     NSMutableDictionary<NSNumber *,DWNativeViewAdmission *> *_admissions;
     NSMutableSet<NSNumber *> *_covered;
     uint64_t _transferRevision,_placementRequestRevision;
+    BOOL _requiresNativeExtentFit;
 }
 - (instancetype)init { if((self=[super init]))[self reset];return self; }
+- (BOOL)requiresNativeExtentFit { return _requiresNativeExtentFit; }
+- (void)setRequiresNativeExtentFit:(BOOL)required { if(_requiresNativeExtentFit==required)return;_requiresNativeExtentFit=required;[self reset]; }
 - (void)reset { _owners=@{};_identities=@{};_replicas=@{};_placements=@{};_presentationSnapshot=nil;_transferSites=@{};_transfers=[NSMutableDictionary dictionary];_admissions=[NSMutableDictionary dictionary];_covered=[NSMutableSet set];++_transferRevision;++_placementRequestRevision; }
 - (NSDictionary *)presentationSnapshot { return _presentationSnapshot; }
 - (NSSet<NSNumber *> *)capturedWindows { return [NSSet setWithArray:_replicas.allKeys?:@[]]; }
@@ -219,8 +231,18 @@ static NSDictionary *viewTransferSite(NSNumber *window,NSNumber *output,NSDictio
     if(![transfer isKindOfClass:DWNativeViewTransfer.class])return NO;NSNumber *window=@(transfer.window);
     return _transfers[window]==transfer&&[transfer.site isEqual:_transferSites[window][@(transfer.output)]];
 }
+- (BOOL)canTransferWindow:(NSNumber *)window output:(NSNumber *)output { return window&&output&&_transferSites[window][output]!=nil; }
+- (BOOL)completeParkingForWindow:(NSNumber *)window identity:(NSDictionary *)identity generation:(NSNumber *)generation current:(BOOL (^)(void))current {
+    NSDictionary *sites=window?_placements[window]:nil;uint64_t revision=_transferRevision;
+    if(!window||!_requiresNativeExtentFit||!current||![_covered containsObject:window]||!sites.count||_owners[window]||_transfers[window]||[_transferSites[window]count]
+        ||![viewIdentity(identity)isEqual:_identities[window]]||!viewPositiveID(generation))return NO;
+    for(NSDictionary *site in sites.objectEnumerator){NSDictionary *source=viewDictionary(site[@"source"]);
+        if(![source[@"generation"]isEqual:generation]||![source[@"observation_known"]isEqual:@YES]||![viewIdentity(source[@"identity"])isEqual:_identities[window]])return NO;}
+    if(!current()||revision!=_transferRevision||sites!=_placements[window])return NO;
+    [_covered removeObject:window];++_transferRevision;[self refreshReplicas];return YES;
+}
 - (DWNativeViewTransfer *)requestTransferForWindow:(NSNumber *)window output:(NSNumber *)output {
-    if(!window||!output)return nil;NSDictionary *site=_transferSites[window][output];if(!site)return nil;
+    if(![self canTransferWindow:window output:output])return nil;NSDictionary *site=_transferSites[window][output];
     DWNativeViewTransfer *transfer=[[DWNativeViewTransfer alloc]initWithSite:site];_transfers[window]=transfer;[_admissions removeObjectForKey:window];[_covered addObject:window];
     ++_transferRevision;++_placementRequestRevision;[self refreshReplicas];return transfer;
 }
@@ -288,6 +310,7 @@ static NSDictionary *viewTransferSite(NSNumber *window,NSNumber *output,NSDictio
         // The helper parks these sites. Suppressing their canvas image as a
         // native owner would make the window disappear on every display.
         if(screen.size.width<1||screen.size.height<1)continue;
+        if(_requiresNativeExtentFit&&!viewNativeExtentFits(placement,viewport,bindings[window]))continue;
         // Keep the existing native site while it is visible. Crossing an area
         // tie during a pan must not move the real window to another display.
         NSNumber *owner=[_identities[window]isEqual:bindings[window]]?_owners[window]:nil;
@@ -303,6 +326,7 @@ static NSDictionary *viewTransferSite(NSNumber *window,NSNumber *output,NSDictio
     }
     NSMutableDictionary *owners=[NSMutableDictionary dictionary],*transferSites=[NSMutableDictionary dictionary];
     for(NSNumber *window in placements){NSMutableDictionary *sites=[NSMutableDictionary dictionary];for(NSNumber *output in placements[window]){
+        if(_requiresNativeExtentFit&&!viewNativeExtentFits(placements[window][output],outputs[output],bindings[window]))continue;
         NSDictionary *site=viewTransferSite(window,output,placements[window][output],outputs[output],bindings[window],viewDictionary(auditedFamilies[window]));if(site)sites[output]=site;}
         if(sites.count)transferSites[window]=sites.copy;}
     _transferSites=transferSites.copy;

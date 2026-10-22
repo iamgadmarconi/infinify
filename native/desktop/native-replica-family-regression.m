@@ -9,7 +9,7 @@
 
 static NSUInteger checks,notified;
 static CFTimeInterval now=100,birthReadAdvance;
-static BOOL birthMatches=YES;
+static BOOL birthMatches=YES,captureCallbacks,invalidCaptureSample;
 static NSMutableArray<dispatch_block_t> *queued;
 static NSMutableArray<NSDictionary *> *timers;
 static void check(BOOL condition,NSString *message) {
@@ -29,6 +29,9 @@ static int recoveryProcess(int pid,int flavor,uint64_t argument,void *buffer,int
     process->pbi_uid=getuid();process->pbi_start_tvsec=birthMatches?100:101;process->pbi_start_tvusec=20;return size;
 }
 static CFArrayRef recoveryWindows(CGWindowListOption options,CGWindowID window) {
+    if(captureCallbacks){check(options==kCGWindowListOptionIncludingWindow&&window==43,@"capture metadata reads only the declared child");
+        NSDictionary *bounds=CFBridgingRelease(CGRectCreateDictionaryRepresentation(CGRectMake(106,106,66,20)));
+        return CFRetain((__bridge CFArrayRef)@[@{(id)kCGWindowNumber:@43,(id)kCGWindowOwnerPID:@123,(id)kCGWindowBounds:bounds}]);}
     (void)options;(void)window;check(NO,@"headless recovery must not enumerate windows");return NULL;
 }
 static bool recoveryPermission(void) { check(NO,@"headless recovery must not query permissions");return false; }
@@ -52,9 +55,16 @@ NSDictionary *DWNativeWindowFamily(NSDictionary *identity,NSString *__autoreleas
     (void)identity;(void)why;check(NO,@"headless recovery must not read native families");return nil;
 }
 BOOL DWNativeWindowBelongsToRoot(NSDictionary *member,NSDictionary *root) {
+    if(captureCallbacks)return [member[@"wid"]isEqual:@43]&&[root[@"wid"]isEqual:@42]&&[member[@"pid"]isEqual:root[@"pid"]];
     (void)member;(void)root;check(NO,@"headless recovery must not read native parentage");return NO;
 }
-bool DWNativeBounds(uint32_t wid,CGRect *out) { (void)wid;(void)out;check(NO,@"headless recovery must not read native bounds");return false; }
+BOOL DWNativeWindowIsCaptureControl(NSDictionary *member,NSDictionary *root,CGRect rootBounds,CGRect memberBounds) {
+    (void)member;(void)root;(void)rootBounds;(void)memberBounds;return NO;
+}
+bool DWNativeBounds(uint32_t wid,CGRect *out) {
+    if(captureCallbacks){check(wid==42||wid==43,@"capture validates only declared root/child bounds");*out=wid==42?CGRectMake(100,100,320,232):CGRectMake(106,106,66,20);return true;}
+    (void)wid;(void)out;check(NO,@"headless recovery must not read native bounds");return false;
+}
 
 // Only the generic retained image holder is substituted; recovery and stream
 // membership, ordering, deadlines and callbacks above are the production code.
@@ -107,10 +117,89 @@ static NSDictionary *logicalRoot(NSNumber *logical) { NSMutableDictionary *value
 static void started(DWReplicaMember *member) { RecoveryStream *stream=(RecoveryStream *)member.stream;[member start];stream.completion(nil);drain();check(member.started,@"current start completion marks only its attempt"); }
 static void validImage(DWReplicaMember *member) {
     CVPixelBufferRef pixels=NULL;check(CVPixelBufferCreate(kCFAllocatorDefault,2,2,kCVPixelFormatType_32BGRA,NULL,&pixels)==kCVReturnSuccess,@"allocate an in-memory image");
-    member.image.buffer=pixels;CVPixelBufferRelease(pixels);[member.owner memberBecameDrawable:member];
+    member.image.buffer=pixels;member.hadImage=YES;atomic_store(&member->publishedSequence,atomic_fetch_add(&member->callbackSequence,1)+1);
+    CVPixelBufferRelease(pixels);[member.owner memberBecameDrawable:member];
+}
+static void callback(DWReplicaMember *member,SCStream *stream,id status,BOOL image,BOOL dirty) {
+    static uint64_t timestamp;CMSampleBufferRef sample=NULL;
+    if(image){
+        CVPixelBufferRef pixels=NULL;CMVideoFormatDescriptionRef format=NULL;
+        check(CVPixelBufferCreate(kCFAllocatorDefault,66,20,kCVPixelFormatType_32BGRA,NULL,&pixels)==kCVReturnSuccess,@"allocate callback pixels");
+        check(CMVideoFormatDescriptionCreateForImageBuffer(kCFAllocatorDefault,pixels,&format)==noErr,@"describe callback pixels");
+        CMSampleTimingInfo timing={.duration=kCMTimeInvalid,.presentationTimeStamp=CMTimeMake(++timestamp,60),.decodeTimeStamp=kCMTimeInvalid};
+        check(CMSampleBufferCreateReadyWithImageBuffer(kCFAllocatorDefault,pixels,format,&timing,&sample)==noErr,@"construct complete callback");
+        CFRelease(format);CVPixelBufferRelease(pixels);
+    }else check(CMSampleBufferCreate(kCFAllocatorDefault,NULL,true,NULL,NULL,NULL,1,0,NULL,0,NULL,&sample)==noErr,@"construct status-only callback");
+    CFArrayRef attachments=CMSampleBufferGetSampleAttachmentsArray(sample,YES);check(attachments&&CFArrayGetCount(attachments)==1,@"callback has one metadata dictionary");
+    NSMutableDictionary *info=(__bridge NSMutableDictionary *)CFArrayGetValueAtIndex(attachments,0);
+    if(status)info[SCStreamFrameInfoStatus]=status;
+    info[SCStreamFrameInfoDirtyRects]=dirty?@[@1]:@[];info[SCStreamFrameInfoDisplayTime]=@(++timestamp);
+    info[SCStreamFrameInfoScaleFactor]=@1;info[SCStreamFrameInfoContentScale]=@1;
+    info[SCStreamFrameInfoScreenRect]=CFBridgingRelease(CGRectCreateDictionaryRepresentation(childBounds()));
+    info[SCStreamFrameInfoContentRect]=CFBridgingRelease(CGRectCreateDictionaryRepresentation(CGRectMake(0,0,66,20)));
+    if(invalidCaptureSample)CMSampleBufferInvalidate(sample);
+    [member stream:stream didOutputSampleBuffer:sample ofType:SCStreamOutputTypeScreen];CFRelease(sample);
 }
 int main(void) {@autoreleasepool {
     check(NSThread.isMainThread,@"lifecycle owner is main-thread only");queued=[NSMutableArray array];timers=[NSMutableArray array];
+    captureCallbacks=YES;DWNativeReplicaFamilies *captures=provider();NSUInteger captureStarts=0;
+    DWReplicaMember *captured=attempt(captures,43,&captureStarts);started(captured);
+    callback(captured,captured.stream,@(SCFrameStatusComplete),YES,YES);
+    check(![captures hit:@7 key:@"43" local:CGPointMake(8,8)],@"received Complete needs main publication before child input");drain();
+    check([captures attachments:@7].count==1&&[captures hit:@7 key:@"43" local:CGPointMake(8,8)],@"published child authorizes its exact hit");
+    callback(captured,captured.stream,@(SCFrameStatusIdle),NO,NO);
+    check(!queued.count&&[captures hit:@7 key:@"43" local:CGPointMake(8,8)],@"image-less Idle preserves a current child without work");
+    callback(captured,captured.stream,@(SCFrameStatusSuspended),NO,NO);
+    check(![captures hit:@7 key:@"43" local:CGPointMake(8,8)],@"image-less suspension immediately revokes child input");
+    check(![captures contains:@7 identity:captured.identity generation:@3 bounds:captured.bounds]&&![captures attachments:@7].count,@"revocation also gates retained target validation and cached drawing");drain();
+    check(!captured.image.buffer&&atomic_load(&captured->alive),@"suspension withdraws pixels without retiring or retrying the stream");
+    callback(captured,captured.stream,@(SCFrameStatusIdle),YES,NO);
+    check(!queued.count&&![captures hit:@7 key:@"43" local:CGPointMake(8,8)],@"Idle with pixels cannot revive suspended capture");
+    callback(captured,captured.stream,@(SCFrameStatusComplete),YES,NO);
+    check(![captures hit:@7 key:@"43" local:CGPointMake(8,8)],@"new Complete receipt cannot revive before publication");drain();
+    check(captured.image.buffer&&[captures attachments:@7].count==1,@"post-revocation dirty-empty Complete installs usable child pixels");
+    callback(captured,captured.stream,@(SCFrameStatusComplete),YES,YES);
+    callback(captured,captured.stream,@(SCFrameStatusBlank),NO,NO);drain();
+    check(!captured.image.buffer&&![captures hit:@7 key:@"43" local:CGPointMake(8,8)],@"queued pre-Blank Complete cannot publish stale pixels or revive input");
+    callback(captured,captured.stream,@(SCFrameStatusComplete),YES,NO);drain();
+    check([captures hit:@7 key:@"43" local:CGPointMake(8,8)]!=nil,@"only a later published Complete repairs revocation after a queued stale frame");
+    invalidCaptureSample=YES;callback(captured,captured.stream,@(SCFrameStatusComplete),YES,YES);invalidCaptureSample=NO;
+    check(![captures hit:@7 key:@"43" local:CGPointMake(8,8)],@"invalid sample revokes despite apparent Complete metadata");drain();
+    callback(captured,captured.stream,@(SCFrameStatusComplete),YES,YES);drain();
+    callback(captured,captured.stream,@(SCFrameStatusComplete),NO,NO);
+    check(![captures hit:@7 key:@"43" local:CGPointMake(8,8)],@"Complete without pixels revokes");drain();
+    for(id status in @[@(SCFrameStatusStarted),@(SCFrameStatusStopped),@99,@YES,@0.5,NSNull.null]){
+        callback(captured,captured.stream,@(SCFrameStatusComplete),YES,YES);drain();
+        callback(captured,captured.stream,status==NSNull.null?nil:status,NO,NO);
+        check(![captures hit:@7 key:@"43" local:CGPointMake(8,8)],@"unavailable or invalid child status revokes immediately");drain();
+    }
+    callback(captured,captured.stream,@(SCFrameStatusComplete),YES,YES);drain();
+    SCStream *unrelated=(SCStream *)[RecoveryStream new];callback(captured,unrelated,@(SCFrameStatusSuspended),NO,NO);
+    check(!queued.count&&[captures hit:@7 key:@"43" local:CGPointMake(8,8)],@"another stream's callback cannot revoke current child");
+    NSError *stoppedError=[NSError errorWithDomain:@"capture-policy" code:1 userInfo:nil];
+    [captured stream:unrelated didStopWithError:stoppedError];
+    check(!queued.count&&[captures hit:@7 key:@"43" local:CGPointMake(8,8)],@"another stream's stop error cannot revoke current child");
+    callback(captured,captured.stream,@(SCFrameStatusSuspended),NO,NO);
+    for(unsigned i=0;i<20;i++)callback(captured,captured.stream,@(SCFrameStatusBlank),NO,NO);
+    check(queued.count==1,@"repeated unavailable callbacks coalesce one withdrawal");drain();
+    advance(captured.firstFrameDeadline);check(atomic_load(&captured->alive)&&!captured.failure,@"first-image watchdog does not restart a previously published suspended stream");
+    SCStream *retiredStream=captured.stream;callback(captured,captured.stream,@(SCFrameStatusComplete),YES,YES);[captures reset];drain();
+    callback(captured,retiredStream,@(SCFrameStatusComplete),YES,YES);
+    check(!queued.count,@"retired stream callbacks schedule no publication");
+    check(!captured.image.buffer&&!captures.members.count,@"retirement invalidates an already queued Complete");
+    captures=provider();captureStarts=0;captured=attempt(captures,43,&captureStarts);started(captured);
+    callback(captured,captured.stream,@(SCFrameStatusComplete),YES,YES);drain();
+    NSUInteger imageGeneration=captured.image.generation;
+    callback(captured,captured.stream,@(SCFrameStatusComplete),YES,YES);
+    [captured stream:captured.stream didStopWithError:stoppedError];
+    check(![captures hit:@7 key:@"43" local:CGPointMake(8,8)]&&![captures contains:@7 identity:captured.identity generation:@3 bounds:captured.bounds]&&![captures attachments:@7].count,@"stop error revokes pixels and input before main failure runs");
+    check(queued.count==2,@"stop error leaves only earlier publication and lifecycle failure queued");
+    dispatch_block_t earlierComplete=queued.firstObject;[queued removeObjectAtIndex:0];earlierComplete();
+    check(captured.image.generation==imageGeneration&&![captured imageAvailable],@"queued Complete cannot publish after a definitive stop error");
+    callback(captured,captured.stream,@(SCFrameStatusComplete),YES,YES);
+    check(queued.count==1,@"new samples from a stopped stream cannot schedule publication");drain();
+    check(!atomic_load(&captured->alive)&&captured.failure&&!captured.image.buffer,@"stop error still retires through normal failure accounting");
+    [captures reset];drain();captureCallbacks=NO;now=100;[timers removeAllObjects];
     DWNativeReplicaFamilies *owner=provider();NSUInteger starting=0;
     DWReplicaMember *first=attempt(owner,43,&starting);check(first&&starting==1,@"a new binding consumes the same bounded start allowance");RecoveryStream *stream=(RecoveryStream *)first.stream;
     [first start];check(first.startDeadline==102&&!first.firstFrameDeadline,@"start deadline precedes the separate first-image deadline");advance(101.999);

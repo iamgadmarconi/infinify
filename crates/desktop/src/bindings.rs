@@ -12,7 +12,7 @@
 //! `mod` when `mod_key = "super"`, the default) and `mod3`. On macOS:
 //!
 //! - `ctrl` is Control, `alt` is Option, `shift` is Shift.
-//! - `logo` is a physical chord, Command unless `set_platform` chooses
+//! - `logo` is a physical chord, Control+Option unless `set_platform` chooses
 //!   another subset of Control, Option and Command.
 //! - A binding that holds `logo` together with a modifier the chord already
 //!   contains would vanish into the chord, so that modifier is displaced:
@@ -108,8 +108,10 @@ pub(crate) struct Platform {
 impl Default for Platform {
     fn default() -> Self {
         Self {
+            // Command remains the native application's editing modifier.
             chord: MacModifiers {
-                command: true,
+                control: true,
+                option: true,
                 ..MacModifiers::default()
             },
         }

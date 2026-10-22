@@ -21,14 +21,20 @@
 // be swallowed as a physical tail or a synthetic press clear an owned pair.
 // The predicate receives ordinary packets only, before event classification.
 - (instancetype)initWithConsume:(BOOL (^)(CGEventType,CGEventRef))consume
-// Only a validated plain title press may be taken before destination annotation.
-// Owned drag/up packets then use consume; unclaimed input stays annotated.
+// Only positively identified managed chrome may be taken before destination
+// annotation. A refused chrome action still reserves the entire pair. Owned
+// drag/up packets use consume; unrecognized content stays annotated. Additional
+// buttons cannot start another owner until the physical chrome pair is released.
                    earlyConsume:(BOOL (^)(CGEventType,CGEventRef))earlyConsume
                     ignoreEvent:(BOOL (^)(CGEventRef))ignoreEvent
                       cancelled:(void (^)(void))cancelled;
 // The session tap's owned pair is authoritative even when suppression means
 // AppKit's combined-session button state never sees the down.
 @property (readonly) BOOL hasEarlyMousePress;
+// Observation only, after an unclaimed native pair changes ownership or drags. The
+// borrowed packet stays untouched; nil reports cancellation/lost-pair reset.
+// The first down identifies the owner; later buttons/tails never retarget it.
+@property (copy) void (^nativeMouseOwnershipChanged)(CGEventRef event,NSIndexSet *buttons);
 // Bounds a lost release after 30 seconds without owned packets or a physically
 // held left button. Ends the logical grab while retaining its suppressed tails.
 - (void)cancelIdleEarlyMousePress;

@@ -396,6 +396,8 @@ typedef struct IFCompositorTransform {
 /// 1 px body and grows by the shortfall. `windowRect` is in the pre-zoom
 /// units of `IFCompositorSpaceCanvas` or `IFCompositorSpacePinned`.
 FOUNDATION_EXPORT CGRect IFCompositorStandInBodyRect(CGRect windowRect, BOOL clientDecorated, NSInteger titleBarHeight);
+/// Body-local label rectangle from the same text fitting used for drawing; null when no label fits.
+FOUNDATION_EXPORT CGRect IFCompositorStandInLabelRect(NSString *name, BOOL launching, CGSize body, NSInteger scale, IFCompositorChromeStyle *style);
 
 // MARK: - Frame
 

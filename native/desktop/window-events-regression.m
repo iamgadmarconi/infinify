@@ -125,6 +125,56 @@ static EventEvents *events(NSArray *catalog,NSDictionary *scope) {
 }
 static NSNotification *note(EventApplication *application) { return [NSNotification notificationWithName:@"test" object:nil userInfo:@{NSWorkspaceApplicationKey:application}]; }
 
+@interface EventDeliverySink : NSObject <DWWindowEventSink>
+@property NSMutableArray<NSArray *> *reports;
+@end
+@implementation EventDeliverySink
+- (instancetype)init { if((self=[super init]))_reports=[NSMutableArray array];return self; }
+- (void)windowsChanged:(pid_t)pid { [self.reports addObject:@[@"appeared",@0,@(pid)]]; }
+- (void)windowMoved:(CGWindowID)window pid:(pid_t)pid { [self.reports addObject:@[@"moved",@(window),@(pid)]]; }
+- (void)windowChanged:(CGWindowID)window pid:(pid_t)pid { [self.reports addObject:@[@"changed",@(window),@(pid)]]; }
+- (void)windowDestroyed:(CGWindowID)window pid:(pid_t)pid { [self.reports addObject:@[@"destroyed",@(window),@(pid)]]; }
+- (void)focusChanged { [self.reports addObject:@[@"focus",@0,@0]]; }
+@end
+// Advance only the coalescer's saved deadlines. No run-loop delay or native read.
+static void deliveryDue(DWWindowEvents *events) {
+    [events.timer invalidate];events.timer=nil;
+    for(NSNumber *key in events.owed)events.sent[key]=@(NSProcessInfo.processInfo.systemUptime-1);
+    [events due];
+}
+static void moveProvenance(void) {
+    EventWorkspace.sharedWorkspace.catalog=@[];EventDeliverySink *sink=[EventDeliverySink new];
+    DWWindowEvents *events=[[DWWindowEvents alloc]initWithSink:sink scope:nil];drain();
+    DWObservedApplication *application=[DWObservedApplication new];application.pid=123;
+    application.windows=CFDictionaryCreateMutable(NULL,0,&kCFTypeDictionaryKeyCallBacks,NULL);
+    DWObservedWindow *window=[DWObservedWindow new];window.window=42;window.application=application;
+    window.element=(AXUIElementRef)CFRetain(CFSTR("known window"));
+    CFDictionarySetValue(application.windows,window.element,(__bridge void *)window);
+    void (^notify)(CFStringRef)=^(CFStringRef name){[events notified:name element:window.element application:application window:nil];};
+    notify(kAXWindowMovedNotification);
+    check([sink.reports isEqual:@[@[@"moved",@42,@123]]],@"known AXMoved is delivered separately at once");
+    notify(kAXWindowMovedNotification);deliveryDue(events);
+    check(sink.reports.count==2&&[sink.reports.lastObject isEqual:@[@"moved",@42,@123]],@"move-only storm retains provenance in its single trailing report");
+    [sink.reports removeAllObjects];notify(kAXWindowMovedNotification);notify(kAXWindowResizedNotification);notify(kAXWindowMovedNotification);deliveryDue(events);
+    check([sink.reports isEqual:@[@[@"changed",@42,@123]]],@"resize dominates later moves in the same pending batch");
+    [sink.reports removeAllObjects];notify(kAXTitleChangedNotification);notify(kAXWindowMovedNotification);deliveryDue(events);
+    check([sink.reports isEqual:@[@[@"changed",@42,@123]]],@"retitle cannot be narrowed into origin-only movement");
+    [sink.reports removeAllObjects];notify(kAXWindowMovedNotification);deliveryDue(events);
+    check([sink.reports isEqual:@[@[@"moved",@42,@123]]],@"a later pure move batch recovers provenance after generic delivery");
+    [sink.reports removeAllObjects];notify(kAXWindowMovedNotification);
+    [events notified:kAXWindowMovedNotification element:(AXUIElementRef)CFSTR("unknown window") application:application window:nil];
+    notify(kAXWindowMovedNotification);deliveryDue(events);
+    check([sink.reports containsObject:@[@"changed",@0,@123]]&&[sink.reports containsObject:@[@"changed",@42,@123]]
+        &&![sink.reports containsObject:@[@"moved",@42,@123]],@"unknown AXMoved invalidates the PID and downgrades its pending known moves");
+    [sink.reports removeAllObjects];[events changed:0 pid:123];notify(kAXWindowMovedNotification);deliveryDue(events);
+    check([sink.reports containsObject:@[@"changed",@42,@123]]&&![sink.reports containsObject:@[@"moved",@42,@123]],@"pending application-wide changes also dominate newly arriving moves");
+    [sink.reports removeAllObjects];notify(kAXWindowMovedNotification);
+    [events notified:kAXUIElementDestroyedNotification element:window.element application:application window:window];deliveryDue(events);
+    check([sink.reports isEqual:@[@[@"destroyed",@42,@123],@[@"changed",@42,@123]]],@"destroyed remains immediate and its trailing report is generic");
+    [events stop];NSUInteger count=sink.reports.count;notify(kAXWindowMovedNotification);deliveryDue(events);
+    check(sink.reports.count==count&&!events.moveOnly.count&&!events.owed.count,@"stop clears move provenance and fences late callbacks");drain();
+}
+
 int main(void) {@autoreleasepool {
     check(NSThread.isMainThread,@"registry ownership is main-thread only");mainBlocks=[NSMutableArray array];workerBlocks=[NSMutableArray array];births=[NSMutableDictionary dictionary];birthReads=[NSMutableDictionary dictionary];
     EventApplication *regular=application(101,NSApplicationActivationPolicyRegular);
@@ -292,5 +342,6 @@ int main(void) {@autoreleasepool {
     [owner stop];drain();EventWorkspace.sharedWorkspace.catalog=@[];drain();
     check(!owner.applicationWatches.count&&!owner.applications.count&&catalogReads==catalogs,@"stop fences a queued catalog result and removes future collection callbacks");
     check(EventWorkspace.sharedWorkspace.installed==EventWorkspace.sharedWorkspace.removed,@"every installed collection observer was removed exactly once");
+    moveProvenance();
     printf("window-events registry: %lu checks passed\n",(unsigned long)checks);return 0;
 }}

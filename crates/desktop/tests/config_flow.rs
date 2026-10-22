@@ -655,24 +655,46 @@ fn default_bindings_map_to_macos_chords() {
     let reply = h.ok(json!({"op":"bindings"}));
     let table = listing(&reply);
     let keys = by_combo(&reply["keys"]);
-    // The selected default is Command; the other upstream modifiers map to
-    // Control and Option independently.
+    // Keep native Command editing shortcuts free. Extra upstream modifiers
+    // retain distinct chords through the existing displacement mapping.
     assert_keys(
         &reply,
-        "mod+a | 0x00 a ⌘ once home-toggle
-        mod+ctrl+Right | 0x7C none ⌃⌘ repeat pan-viewport right
-        mod+alt+Right | 0x7C none ⌥⌘ once send-to-output right
-        mod+shift+1 | 0x12 1 ⇧⌘ once set-bookmark 1
+        "mod+a | 0x00 a ⌃⌥ once home-toggle
+        mod+ctrl+Right | 0x7C none ⌃⌥⌘ repeat pan-viewport right
+        mod+alt+Right | 0x7C none ⌃⌥⇧⌘ once send-to-output right
+        mod+shift+1 | 0x12 1 ⌃⌥⇧ once set-bookmark 1
         alt+Tab | 0x30 none ⌥ repeat cycle-windows forward
         alt+shift+Tab | 0x30 none ⌥⇧ repeat cycle-windows backward
-        mod+equal | 0x18 = ⌘ repeat zoom-in
-        mod+minus | 0x1B - ⌘ repeat zoom-out
-        mod+ctrl+shift+q | 0x0C q ⌃⇧⌘ once quit
-        mod+Return | 0x24 none ⌘ once exec-terminal
-        mod+shift+Up | 0x7E none ⇧⌘ repeat nudge-window up",
+        mod+equal | 0x18 = ⌃⌥ repeat zoom-in
+        mod+minus | 0x1B - ⌃⌥ repeat zoom-out
+        mod+ctrl+shift+q | 0x0C q ⌃⌥⇧⌘ once quit
+        mod+Return | 0x24 none ⌃⌥ once exec-terminal
+        mod+shift+Up | 0x7E none ⌃⌥⇧ repeat nudge-window up",
     );
-    assert_eq!(keys["mod+a"]["chord"], "⌘A", "{table}");
-    assert_eq!(keys["mod+alt+Right"]["chord"], "⌥⌘Right", "{table}");
+    assert_eq!(keys["mod+a"]["chord"], "⌃⌥A", "{table}");
+    assert_eq!(keys["mod+alt+Right"]["chord"], "⌃⌥⇧⌘Right", "{table}");
+    for combo in [
+        "mod+c", "mod+a", "mod+z", "mod+f", "mod+w", "mod+t", "mod+q", "mod+Tab",
+    ] {
+        assert_eq!(keys[combo]["modifiers"], chord("⌃⌥"), "{combo}: {table}");
+    }
+    assert!(
+        keys.values().all(|key| key["modifiers"] != chord("⌘")),
+        "{table}"
+    );
+    assert_eq!(keys["F3"]["modifiers"], chord(""));
+    assert_eq!(
+        h.mouse("left", Value::Null, "⌥", "window")["kind"],
+        "move_window"
+    );
+    assert_eq!(
+        h.mouse("left", Value::Null, "⌃⌥", "window")["kind"],
+        "pan_viewport"
+    );
+    assert_eq!(
+        h.mouse("scroll", json!("finger"), "⌃⌥", "window")["kind"],
+        "zoom"
+    );
     // Host-owned default system controls stay out of the registered table,
     // even though this fixture puts every upstream Linux tool on PATH.
     assert_eq!(reply["warnings"], json!([]), "{table}");
@@ -714,7 +736,7 @@ fn default_bindings_map_to_macos_chords() {
     assert_eq!(reply["layout_independent"], true);
     assert_eq!(reply["repeat_delay_ms"], 200);
     assert_eq!(reply["repeat_rate_hz"], 25);
-    assert_eq!(reply["super"], "cmd");
+    assert_eq!(reply["super"], "ctrl+alt");
     assert_eq!(
         reply["settings"],
         json!({"trackpad_speed":1.5,"mouse_speed":1.0,"zoom_step":1.1,"zoom_mouse_speed":1.0,"zoom_trackpad_speed":1.0})
@@ -892,7 +914,7 @@ fn colliding_and_unreachable_bindings_are_reported_with_a_deterministic_winner()
     assert_eq!(loaded["errors"], json!([]));
     assert_eq!(loaded["warnings"], json!([]));
     // This scenario exercises the modifier-collision rules with their original
-    // Control+Option super chord, independent of the selected Command default.
+    // Control+Option super chord, explicitly selected for this scenario.
     assert_eq!(
         h.ok(json!({"op":"set_platform","super":"ctrl+alt"})),
         json!({"super":"ctrl+alt"})
@@ -1164,7 +1186,7 @@ trackpad_speed = 0.25
 "#,
     );
     // Pin the test's physical meaning for `mod` while checking authored
-    // rebinding; the application's current default super is Command.
+    // rebinding; the platform selection remains explicit in this scenario.
     h.ok(json!({"op":"set_platform","super":"ctrl+alt"}));
     for (glyphs, context, kind) in [
         ("⌃⌥", "window", json!("move_window")),

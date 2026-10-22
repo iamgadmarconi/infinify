@@ -104,6 +104,16 @@ Then, once mapped:
   position is not a cursor placement: it navigates.
 - During the launch pass nothing is focused or revealed, as before.
 
+For an explicit `focus_on_open = false` rule after startup, `attach` also
+returns `focus_on_open_suppressed: true`. With its existing physical-input
+observer installed, the macOS shell can correct the new root's initial native
+activation once within 1.5 seconds, preserving the exact previously confirmed
+live focus. Input, a dialog, a changed binding, or expiry cancels that correction;
+later deliberate selection works normally. A widget alone does not grant this
+correction, nor does startup adoption. A nil or stand-in prior focus cannot be
+restored through the native focus driver and receives no correction. This is
+bounded arrival handling, not a permanent prohibition on activating the app.
+
 An `attach` that names its `logical_id` or its `world_rect` has decided the
 frame itself: the window gets its rule less the placement (no `position`, no
 pin, no `size`).

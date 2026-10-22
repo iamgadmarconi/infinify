@@ -25,6 +25,7 @@ static BOOL familySize(CGRect r) {
 static BOOL familyBinding(NSDictionary *a,NSDictionary *b) {
     if(!a||!b)return NO;
     for(NSString *key in @[@"window",@"identity",@"generation",@"native_bounds"])if(!a[key]||![a[key]isEqual:b[key]])return NO;
+    if([a[@"capture_controls"]isEqual:@YES]!=[b[@"capture_controls"]isEqual:@YES])return NO;
     return YES;
 }
 static BOOL frameNumber(id value) {
@@ -200,6 +201,7 @@ static void familyNormalizeOrder(NSDictionary<NSNumber *,DWReplicaOrder *> *orde
 - (void)replaceDescriptions:(NSDictionary<NSNumber *,NSDictionary *> *)descriptions;
 - (void)memberFailed:(DWReplicaMember *)member;
 - (void)memberBecameDrawable:(DWReplicaMember *)member;
+- (void)memberBecameUnavailable:(DWReplicaMember *)member;
 - (DWReplicaRecovery *)recovery:(NSDictionary *)identity root:(NSDictionary *)root bounds:(CGRect)bounds;
 - (DWReplicaRecovery *)admitRecovery:(NSDictionary *)identity root:(NSDictionary *)root bounds:(CGRect)bounds starting:(NSUInteger *)starting;
 - (NSArray<NSNumber *> *)admissionRootOrder;
@@ -218,6 +220,9 @@ static void familyNormalizeOrder(NSDictionary<NSNumber *,DWReplicaOrder *> *orde
     _Atomic BOOL alive;
     _Atomic BOOL pending;
     _Atomic BOOL received;
+    _Atomic BOOL stopped;
+    _Atomic BOOL withdrawalPending;
+    _Atomic uint64_t callbackSequence,publishedSequence,unavailableSequence;
 }
 @property NSDictionary *root,*identity;
 @property CGRect rootBounds,bounds;
@@ -228,6 +233,7 @@ static void familyNormalizeOrder(NSDictionary<NSNumber *,DWReplicaOrder *> *orde
 @property(copy) NSString *failure;
 @property double density;
 @property BOOL started;
+@property BOOL hadImage;
 @property BOOL updating;
 @property NSInteger rate;
 @property NSUInteger configuration;
@@ -239,6 +245,7 @@ static void familyNormalizeOrder(NSDictionary<NSNumber *,DWReplicaOrder *> *orde
 - (void)start;
 - (void)expireStart;
 - (void)expireFirstFrame;
+- (BOOL)imageAvailable;
 @end
 // Explicit diagnostic only: bounded lifecycle records, never titles, pixels or
 // unrestricted error text. It does not change capture or validation decisions.
@@ -255,9 +262,11 @@ static void familyTrace(DWReplicaMember *member,const char *event,const char *re
 }
 @implementation DWReplicaMember
 - (instancetype)init {
-    if((self=[super init])){atomic_init(&alive,YES);atomic_init(&pending,NO);atomic_init(&received,NO);}
+    if((self=[super init])){atomic_init(&alive,YES);atomic_init(&pending,NO);atomic_init(&received,NO);atomic_init(&stopped,NO);atomic_init(&withdrawalPending,NO);
+        atomic_init(&callbackSequence,0);atomic_init(&publishedSequence,0);atomic_init(&unavailableSequence,0);}
     return self;
 }
+- (BOOL)imageAvailable { return atomic_load(&alive)&&!atomic_load(&stopped)&&atomic_load(&publishedSequence)>atomic_load(&unavailableSequence); }
 - (void)retire {
     if(atomic_load(&alive))familyTrace(self,"retire","none",0);
     atomic_store(&alive,NO);self.image.buffer=NULL;[self.owner.coldAttempts removeObject:self];
@@ -279,7 +288,7 @@ static void familyTrace(DWReplicaMember *member,const char *event,const char *re
         DWReplicaMember *started=weak;if(!started||!atomic_load(&started->alive))return;
         if(failure)[started fail:failure.localizedDescription code:"start_failed" error:failure.code];
         else{started.started=YES;familyTrace(started,"started","none",0);started.firstFrameDeadline=completed+2;
-            if(!started.image.buffer)dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(MAX(0,started.firstFrameDeadline-CACurrentMediaTime())*NSEC_PER_SEC)),dispatch_get_main_queue(),^{[weak expireFirstFrame];});
+            if(!started.hadImage)dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(MAX(0,started.firstFrameDeadline-CACurrentMediaTime())*NSEC_PER_SEC)),dispatch_get_main_queue(),^{[weak expireFirstFrame];});
         }
     });}];
 }
@@ -289,42 +298,71 @@ static void familyTrace(DWReplicaMember *member,const char *event,const char *re
 }
 - (void)expireFirstFrame {
     if(!atomic_load(&alive)||!self.started||CACurrentMediaTime()<self.firstFrameDeadline)return;
-    if(!self.image.buffer)[self fail:@"Family capture produced no valid image within two seconds"
+    if(!self.hadImage)[self fail:@"Family capture produced no valid image within two seconds"
         code:atomic_load(&received)?"first_frame_timeout_no_valid_frame":"first_frame_timeout_no_callback" error:0];
 }
 - (void)stream:(SCStream *)stream didStopWithError:(NSError *)error {
-    (void)stream;dispatch_async(dispatch_get_main_queue(),^{[self fail:error.localizedDescription?:@"Family capture stopped" code:"stream_stopped" error:error.code];});
+    if(!atomic_load(&alive)||stream!=self.stream)return;
+    // The delegate need not run on the serial sample queue. Revoke immediately
+    // without changing that queue's sequence or bypassing main's failure path.
+    if(atomic_exchange(&stopped,YES))return;
+    dispatch_async(dispatch_get_main_queue(),^{if(stream==self.stream)[self fail:error.localizedDescription?:@"Family capture stopped" code:"stream_stopped" error:error.code];});
 }
 - (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sample ofType:(SCStreamOutputType)type {
-    (void)stream;
-    if(!atomic_load(&alive)||type!=SCStreamOutputTypeScreen)return;
+    if(!atomic_load(&alive)||atomic_load(&stopped)||stream!=self.stream||type!=SCStreamOutputTypeScreen)return;
     atomic_store(&received,YES);
-    if(!CMSampleBufferIsValid(sample))return;
-    CVPixelBufferRef pixels=CMSampleBufferGetImageBuffer(sample);if(!pixels)return;
-    CFArrayRef attachments=CMSampleBufferGetSampleAttachmentsArray(sample,NO);
-    if(!attachments||CFArrayGetCount(attachments)!=1)return;
-    id value=(__bridge id)CFArrayGetValueAtIndex(attachments,0);if(![value isKindOfClass:NSDictionary.class])return;NSDictionary *info=value;
-    if(![info[SCStreamFrameInfoStatus]isKindOfClass:NSNumber.class]||[info[SCStreamFrameInfoStatus]integerValue]!=SCFrameStatusComplete)return;
+    BOOL valid=CMSampleBufferIsValid(sample);CVPixelBufferRef pixels=valid?CMSampleBufferGetImageBuffer(sample):NULL;
+    CFArrayRef attachments=valid?CMSampleBufferGetSampleAttachmentsArray(sample,NO):NULL;
+    id value=attachments&&CFArrayGetCount(attachments)==1?(__bridge id)CFArrayGetValueAtIndex(attachments,0):nil;
+    NSDictionary *info=[value isKindOfClass:NSDictionary.class]?value:nil;id status=info[SCStreamFrameInfoStatus];
+    BOOL known=valid&&frameNumber(status)&&floor([status doubleValue])==[status doubleValue]
+        &&[status doubleValue]>=SCFrameStatusComplete&&[status doubleValue]<=SCFrameStatusStopped;
+    // This member's serial sample queue defines callback order. Availability is
+    // atomic so a status-only callback revokes input before main can run. Idle
+    // preserves a published image, but never repairs a previous revocation.
+    uint64_t sequence=atomic_load(&callbackSequence);if(sequence!=UINT64_MAX)sequence++;
+    atomic_store(&callbackSequence,sequence);
+    BOOL complete=known&&[status integerValue]==SCFrameStatusComplete&&pixels;
+    if(sequence==UINT64_MAX||!known||(!complete&&[status integerValue]!=SCFrameStatusIdle)){
+        uint64_t previous=atomic_exchange(&unavailableSequence,sequence);
+        if(atomic_load(&publishedSequence)>previous&&!atomic_exchange(&withdrawalPending,YES)){
+            dispatch_async(dispatch_get_main_queue(),^{
+                if(atomic_load(&self->alive)&&stream==self.stream&&![self imageAvailable]&&self.image.buffer){
+                    self.image.buffer=NULL;[self.owner memberBecameUnavailable:self];
+                }
+                atomic_store(&self->withdrawalPending,NO);
+            });
+        }
+        return;
+    }
+    if(!complete)return;
     BOOL expected=NO;if(!atomic_compare_exchange_strong(&pending,&expected,YES))return;
     CGRect rootNow=CGRectZero,ownNow=CGRectZero;
-    BOOL valid=DWNativeWindowBelongsToRoot(self.identity,self.root[@"identity"])
+    BOOL current=DWNativeWindowBelongsToRoot(self.identity,self.root[@"identity"])
         &&DWNativeBounds([self.root[@"identity"][@"wid"]unsignedIntValue],&rootNow)
         &&DWNativeBounds([self.identity[@"wid"]unsignedIntValue],&ownNow)
         &&CGRectEqualToRect(rootNow,self.rootBounds)&&CGRectEqualToRect(ownNow,self.bounds);
-    if(!valid){dispatch_async(dispatch_get_main_queue(),^{atomic_store(&self->pending,NO);[self fail:@"Native family changed during capture" code:"membership_changed" error:0];});return;}
+    if(!current){dispatch_async(dispatch_get_main_queue(),^{atomic_store(&self->pending,NO);[self fail:@"Native family changed during capture" code:"membership_changed" error:0];});return;}
     CGRect crop=CGRectNull;uint64_t timestamp=0;
     if(!familyPixels(info,pixels,self.identity,self.bounds,self.frameTime,&crop,&timestamp)){dispatch_async(dispatch_get_main_queue(),^{atomic_store(&self->pending,NO);[self fail:@"Family capture metadata does not match its window" code:"frame_metadata_mismatch" error:0];});return;}
     self.frameTime=timestamp;
     NSArray *dirty=info[SCStreamFrameInfoDirtyRects];BOOL unchanged=[dirty isKindOfClass:NSArray.class]&&!dirty.count;
     CVPixelBufferRetain(pixels);
     dispatch_async(dispatch_get_main_queue(),^{
-        if(atomic_load(&self->alive)&&familyBinding(self.owner.roots[self.root[@"window"]],self.root)){
+        if(atomic_load(&self->alive)&&!atomic_load(&self->stopped)&&stream==self.stream&&sequence>atomic_load(&self->unavailableSequence)
+            &&familyBinding(self.owner.roots[self.root[@"window"]],self.root)){
             CVPixelBufferRef old=self.image.buffer;
-            if(!unchanged||!old||!CGRectEqualToRect(self.image.contentRect,crop)||CVPixelBufferGetWidth(old)!=CVPixelBufferGetWidth(pixels)||CVPixelBufferGetHeight(old)!=CVPixelBufferGetHeight(pixels)){
+            BOOL newlyAvailable=![self imageAvailable];
+            BOOL changed=!unchanged||!old||newlyAvailable||!CGRectEqualToRect(self.image.contentRect,crop)||CVPixelBufferGetWidth(old)!=CVPixelBufferGetWidth(pixels)||CVPixelBufferGetHeight(old)!=CVPixelBufferGetHeight(pixels);
+            if(changed){
                 self.image.buffer=pixels;self.image.contentRect=crop;self.image.generation++;
-                if(!old){familyTrace(self,"first_frame","none",0);[self.owner memberBecameDrawable:self];}
-                else [self.owner changedWindow:self.root[@"window"]];
             }
+            self.hadImage=YES;atomic_store(&self->publishedSequence,sequence);
+            // A later status may arrive while the main queue installs pixels.
+            // Its revocation must win even over this successful publication.
+            if(![self imageAvailable]){self.image.buffer=NULL;[self.owner memberBecameUnavailable:self];}
+            else if(!old||newlyAvailable){familyTrace(self,"first_frame","none",0);[self.owner memberBecameDrawable:self];}
+            else if(changed)[self.owner changedWindow:self.root[@"window"]];
         }
         CVPixelBufferRelease(pixels);atomic_store(&self->pending,NO);
     });
@@ -332,7 +370,7 @@ static void familyTrace(DWReplicaMember *member,const char *event,const char *re
 @end
 
 static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoint local) {
-    if(!atomic_load(&member->alive)||!member.image.buffer||!familyBinding(member.root,root))return nil;
+    if(![member imageAvailable]||!member.image.buffer||!familyBinding(member.root,root))return nil;
     CGPoint own=CGPointMake(local.x+member.rootBounds.origin.x-member.bounds.origin.x,local.y+member.rootBounds.origin.y-member.bounds.origin.y);
     if(!CGRectContainsPoint(CGRectMake(0,0,member.bounds.size.width,member.bounds.size.height),own))return nil;
     return @{@"identity":member.identity,@"generation":member.root[@"generation"],@"native_bounds":@{@"origin":@{@"x":@(member.bounds.origin.x),@"y":@(member.bounds.origin.y)},@"size":@{@"width":@(member.bounds.size.width),@"height":@(member.bounds.size.height)}},@"local":@{@"x":@(own.x),@"y":@(own.y)}};
@@ -453,6 +491,13 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
     // observed family. Later pixel frames leave ordering/revision untouched.
     [self beginChanges];[self.drawableAttachments removeObjectForKey:window];[self markOrderingChanged];[self changedWindow:window];[self endChanges];
 }
+- (void)memberBecameUnavailable:(DWReplicaMember *)member {
+    NSNumber *window=member.root[@"window"];
+    if(![self.members[window]containsObject:member]||!familyBinding(self.roots[window],member.root))return;
+    // Availability changes drawing/input only: the stream, immutable audit and
+    // retry history remain intact until a real lifecycle failure occurs.
+    [self beginChanges];[self.drawableAttachments removeObjectForKey:window];[self markOrderingChanged];[self changedWindow:window];[self endChanges];
+}
 - (void)reset {
     [self beginChanges];
     NSArray<NSNumber *> *changed=self.members.allKeys;
@@ -536,11 +581,14 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
 }
 - (NSArray<DWCanvasAttachment *> *)attachments:(NSNumber *)window {
     NSArray<DWReplicaMember *> *members=self.members[window];if(!members.count)return @[];
-    NSArray<DWCanvasAttachment *> *cached=self.drawableAttachments[window];if(cached)return cached;
+    NSArray<DWCanvasAttachment *> *cached=self.drawableAttachments[window];
+    // Revoke cached drawing immediately even before the queued withdrawal runs.
+    for(DWReplicaMember *member in members)if(member.image.buffer&&![member imageAvailable]){cached=nil;[self.drawableAttachments removeObjectForKey:window];break;}
+    if(cached)return cached;
     // Pixel frames update these same attachment objects. Materialize only when
     // capture membership or first-image availability changes, on the main queue.
     NSMutableArray *images=[NSMutableArray array];
-    for(DWReplicaMember *member in members)if(atomic_load(&member->alive)&&member.image.buffer)[images addObject:member.image];
+    for(DWReplicaMember *member in members)if([member imageAvailable]&&member.image.buffer)[images addObject:member.image];
     cached=images.copy;self.drawableAttachments[window]=cached;return cached;
 }
 - (NSArray<NSDictionary *> *)orderedRun:(NSArray<NSDictionary *> *)tokens range:(NSRange)range {
@@ -576,7 +624,7 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
     for(NSNumber *window in families){DWReplicaOrder *order=families[window];
         if(![roots containsObject:window]||keys[window].count!=order.members.count)return nil;
         for(DWReplicaMember *member in order.members){
-            if(!atomic_load(&member->alive)||!member.image.buffer||!familyBinding(member.root,self.roots[window])
+            if(![member imageAvailable]||!member.image.buffer||!familyBinding(member.root,self.roots[window])
                ||!member.image.key||![keys[window]containsObject:member.image.key]||!order.ranks[member.image.key])return nil;
         }
     }
@@ -615,7 +663,7 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
     return found?familyHit(found,self.roots[window],local):nil;
 }
 - (BOOL)contains:(NSNumber *)window identity:(NSDictionary *)identity generation:(NSNumber *)generation bounds:(CGRect)bounds {
-    for(DWReplicaMember *member in self.members[window])if(atomic_load(&member->alive)&&member.image.buffer&&[member.identity isEqual:identity]&&[member.root[@"generation"]isEqual:generation]&&CGRectEqualToRect(member.bounds,bounds)&&familyBinding(member.root,self.roots[window])){
+    for(DWReplicaMember *member in self.members[window])if([member imageAvailable]&&member.image.buffer&&[member.identity isEqual:identity]&&[member.root[@"generation"]isEqual:generation]&&CGRectEqualToRect(member.bounds,bounds)&&familyBinding(member.root,self.roots[window])){
         CGRect rootNow=CGRectZero,memberNow=CGRectZero;
         return DWNativeBounds([member.root[@"identity"][@"wid"]unsignedIntValue],&rootNow)&&DWNativeBounds([member.identity[@"wid"]unsignedIntValue],&memberNow)
             &&CGRectEqualToRect(rootNow,member.rootBounds)&&CGRectEqualToRect(memberNow,member.bounds);
@@ -682,14 +730,21 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
             ranks[wid]=@(i);owners[wid]=pid;
         }
         for(NSNumber *window in roots){CFTimeInterval began=CACurrentMediaTime();NSString *why=nil;NSDictionary *family=DWNativeWindowFamily(roots[window][@"identity"],&why);
-            NSMutableArray *children=[NSMutableArray array];CGRect rootBounds=familyRect(roots[window][@"native_bounds"]);NSUInteger rootCount=0;BOOL rankedChildren=YES;
+            NSMutableArray *children=[NSMutableArray array],*members=[NSMutableArray array];CGRect rootBounds=familyRect(roots[window][@"native_bounds"]);NSUInteger rootCount=0;BOOL rankedChildren=YES;
+            BOOL captureControls=[roots[window][@"capture_controls"]isEqual:@YES];
             for(NSDictionary *member in family[@"members"]){
-                if([member[@"identity"][@"wid"]isEqual:roots[window][@"identity"][@"wid"]]){rootCount++;if(!CGRectEqualToRect(familyRect(member[@"native_bounds"]),rootBounds))family=nil;continue;}
+                if([member[@"identity"][@"wid"]isEqual:roots[window][@"identity"][@"wid"]]){rootCount++;if(!CGRectEqualToRect(familyRect(member[@"native_bounds"]),rootBounds))family=nil;[members addObject:member];continue;}
+                // Membership/restoration remain complete. Capturing this OS
+                // capture companion again can itself create another companion.
+                if(captureControls&&DWNativeWindowIsCaptureControl(member[@"identity"],roots[window][@"identity"],rootBounds,familyRect(member[@"native_bounds"]))){
+                    NSMutableDictionary *control=[member mutableCopy];control[@"capture_control"]=@YES;[members addObject:control.copy];continue;
+                }
+                [members addObject:member];
                 [children addObject:member];if(!familyRank(ranks,owners,member[@"identity"]))rankedChildren=NO;
             }
             if(!family||rootCount!=1){plans[window]=@[];continue;}
             sampledAt[window]=@(began);
-            NSMutableDictionary *description=[family mutableCopy];description[@"window"]=window;description[@"generation"]=roots[window][@"generation"];description[@"native_bounds"]=roots[window][@"native_bounds"];descriptions[window]=description.copy;
+            NSMutableDictionary *description=[family mutableCopy];description[@"window"]=window;description[@"generation"]=roots[window][@"generation"];description[@"native_bounds"]=roots[window][@"native_bounds"];description[@"capture_controls"]=@(captureControls);description[@"members"]=members.copy;descriptions[window]=description.copy;
             if(rankedChildren)[children sortUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b){return [ranks[b[@"identity"][@"wid"]]compare:ranks[a[@"identity"][@"wid"]]];}];
             plans[window]=children.copy;
             if(rankedChildren&&familyRank(ranks,owners,roots[window][@"identity"]))[completeRoots addObject:window];

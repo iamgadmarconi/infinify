@@ -214,9 +214,10 @@ matches the reported helper PID with the kernel socket peer PID.
 | 5 `PROBE` | empty | 72-byte summary, table entries, then explicit cooperative fixture identities |
 | 6 `ENROLLMENT` | empty | scope, count, server PID, zero, count × 24-byte process instance |
 | 7 `INSPECT` | one 24-byte window identity | one 144-byte inspection result |
+| 8 `FRAME_SPACE` | u32 count, u32 zero, count × 88-byte Space record | same frame reply, matching opcode |
 
 Capabilities are alpha=1, per-window restoration=2, enrollment audit=4, explicit
-fixture family=8, and inspection=16. Scopes are cooperative=1, allowlist=2, and
+fixture family=8, inspection=16, and Space migration=32. Scopes are cooperative=1, allowlist=2, and
 same user=3. Queue is own=0 or main=1. Current clients require the relevant current
 capabilities and refuse unsupported helpers; there is no old-capability bypass.
 
@@ -256,7 +257,8 @@ matrix/alpha are ignored. Combining flags is malformed. Restoration wins over a
 transform of the same window in the same frame.
 
 Record statuses are applied=0, scope=1, identity=2, matrix=3, alpha=4,
-snapshot=5, journal=6, not applied=7, restore pending=8, table full=9, malformed=10.
+snapshot=5, journal=6, not applied=7, restore pending=8, table full=9, malformed=10,
+Space admission=11 (retryable without a setter).
 An applied transform requires both native set success and readback equality after
 float rounding, matching WindowServer transform storage. A failed or differing
 set remains journaled because it may have changed the window. A status or symbol
@@ -266,6 +268,40 @@ after journal persistence and immediately before each transform or alpha write,
 then again before acknowledging the frame. Earlier batch admission cannot
 authorize a window number replaced during disk I/O or another record's work.
 Restoration also rechecks identity between its transform and alpha writes.
+
+`FRAME_SPACE` adds `u64 target_space` after each unchanged 80-byte record.
+Zero leaves membership untouched; legacy `FRAME` bytes remain unchanged.
+`dw_client_submit_space_frame` requires capability 32. Forward migration requires
+singleton ordinary source membership and an ordinary target currently active on
+a different active, awake physical display. It cannot gather windows from an
+inactive Space or another Space on the same display. Already-on-target windows
+receive no Space setter or new Space restoration obligation. Duplicate WIDs in
+an extended frame, or a nonzero target on a restoration record, are malformed.
+
+Before a Space write, schema-3 entries optionally persist
+`original_space: {id, display, pending_target}`; old entries remain valid. The
+original singleton and display UUID never change. The void move API is accepted
+only after exact membership readback; an unobserved pending target cannot be
+superseded. Restoration returns to the original existing ordinary Space even if
+inactive, and cannot report `RESTORED` with unconfirmed forward debt or differing
+membership. Uncertain obligations survive lease loss and crash recovery. A root
+move that carries a child preserves that child's independently journaled original.
+Restoration may durably clear a deleted forward target only when a complete,
+valid managed-Space inventory covers every active display, the target is absent,
+and the exact window is back on its original Space on the saved display. A failed
+per-Space getter alone does not establish deletion.
+
+Real TextEdit at 1x and Finder at .5 scale appeared on a temporary second display
+in the macOS 27.0.1 guest, with independent native hits reaching each exact window.
+The Finder successor preserved all six canvas world frames, and recovery cleared
+the retained request to deleted Space 128. The final Finder handoff-and-quit run
+verified all six original memberships and transforms before display removal and
+again compared original transforms afterward. Evidence is under
+`target/native-vm/space-handoff-20261021/`, in `textedit-observed-1`,
+`finder-reflow-1`, `recovery-deployment` and `finder-quit-settle-1`.
+Finder's native extent still reflowed from `2056x1130` to `1280x770` on the smaller
+display. These runs do not establish native content-extent/detail preservation,
+general child-family transfer, physical-display or macOS 26 acceptance.
 
 One control `HELLO` creates the session and a random token. A second heartbeat
 connection uses that token; requests on either renew the 2000 ms lease. The C
@@ -304,14 +340,20 @@ before setting it. Persistence uses exclusive no-follow mode-0600
 blocks unjournaled mutation and leaves `journal_pending=1` until a durable retry.
 
 Restoration re-resolves the exact identity, owner, UID and scope, sets the captured
-original transform/alpha, and requires exact float readback. Confirmed restored
-or gone windows leave the table; uncertain windows remain restoring. Failed owner,
-window enumeration or process-birth queries cannot establish absence. A still-live
+original transform/alpha, and requires exact float readback. A real cross-display
+quit exposed late AppKit reflow after an immediate successful readback. Entries
+with a Space obligation now remain pending for at least two seconds from the
+start of restoration and until native bounds, original membership and exact
+transform/owed alpha stay stable for 500 ms. Samples precede corrective writes;
+settlement checks run every 250 ms, and their transient timing evidence is never
+imported from a journal. This waits for native reflow without promising to restore
+the original native bounds. Confirmed restored or gone windows leave the table;
+uncertain windows remain restoring. Failed owner, window enumeration or
+process-birth queries cannot establish absence. A still-live
 matching original outside the new helper's scope is retained as pending too.
-Retries run
-after 250 ms, 500 ms, 1 second and then every 2 seconds without an abandonment
-deadline. If native restoration completes but its journal update fails, the table
-can be empty while `journal_pending=1`. Controllers must require both native
+Other retries run after 250 ms, 500 ms, 1 second and then every 2 seconds without
+an abandonment deadline. If native restoration completes but its journal update
+fails, the table can be empty while `journal_pending=1`. Controllers must require both native
 emptiness and a durable receipt before admitting new presentation. Removing the
 persistence obstruction permits autonomous retry without another request.
 

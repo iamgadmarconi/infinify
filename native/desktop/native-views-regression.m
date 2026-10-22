@@ -31,6 +31,76 @@ static DWNativeAppliedPlacement *transferAck(DWNativePresenter *presenter,DWNati
     [presenter requireFreshPlacementAcknowledgement];[presenter describe:transferDescribe(views,state,root,audit)bound:@{@7:root}];[presenter submit];ack(presenter);
     return [presenter acknowledgedPlacementForWindow:@7 identity:root generation:@(transfer.generation)output:@(transfer.output)];
 }
+static void extentFitPolicy(void) {
+    NSDictionary *root=identity(123,42);CGRect native=CGRectMake(100,100,1600,1000),child=CGRectMake(150,125,90,60);
+    CGRect first=CGRectMake(50,50,800,500),second=CGRectMake(100,100,800,500);
+    NSDictionary *state=transferSnapshot(root,1,native,first,second),*audit=transferFamily(root,1,native,child);
+    DWNativeViews *views=[DWNativeViews new];transferDescribe(views,state,root,audit);
+    DWNativeViewTransfer *old=[views requestTransferForWindow:@7 output:@2];uint64_t revision=views.transferRevision;
+    check(!views.requiresNativeExtentFit&&old!=nil,@"extent restriction is opt-in; legacy projected-fit transfers remain available");
+    views.requiresNativeExtentFit=YES;
+    check(views.transferRevision>revision&&!views.presentationSnapshot&&![views isTransferCurrent:old],@"policy change invalidates same-snapshot cache and existing transfer tokens");
+    revision=views.transferRevision;views.requiresNativeExtentFit=YES;
+    check(views.transferRevision==revision,@"unchanged fit policy does not continually reset presentation");
+    NSDictionary *desired=transferDescribe(views,state,root,audit);
+    check(![views desiredOwnerForWindow:@7]&&![desired[@"placements"]count]&&[views replica:@7 output:@1]&&[views replica:@7 output:@2],@"oversized native source retains both canvas copies without a native owner");
+    check([views.presentationSnapshot isEqual:state]&&![views canTransferWindow:@7 output:@1]&&![views canTransferWindow:@7 output:@2]
+        &&![views requestTransferForWindow:@7 output:@1]&&![views requestTransferForWindow:@7 output:@2],@"fit policy changes neither canvas geometry nor permits explicit oversized transfers");
+    DWNativePresenter *presenter=[DWNativePresenter fixturePID:@123];[presenter bound:root bounds:native family:audit];[presenter fixtureSpaceFrames];readinessSpace=10;
+    [presenter describe:desired bound:@{@7:root}];[presenter submit];ack(presenter);
+    const struct dw2_space_record *parked=lastSpaceFrame.bytes;
+    check(lastSpaceFrame.length==2*sizeof(*parked)&&parked[0].target_space==0&&parked[1].target_space==0
+        &&parked[0].record.m[0]==1&&parked[0].record.m[3]==1&&parked[0].record.m[4]<-1200&&parked[0].record.m[5]<-900,
+        @"no-owner projection uses existing unit-scale parking with no Space request");
+    check(!receipt(presenter,root,1,1)&&!receipt(presenter,root,1,2),@"parking ACK does not impersonate native placement on either output");[presenter finish];
+
+    NSMutableDictionary *mixed=[state mutableCopy],*large=[state[@"outputs"][0]mutableCopy];large[@"screen_bounds"]=rect(CGRectMake(0,0,1800,1100));mixed[@"outputs"]=@[large.copy,state[@"outputs"][1]];
+    transferDescribe(views,mixed,root,audit);
+    check([[views desiredOwnerForWindow:@7]isEqual:@1]&&[views canTransferWindow:@7 output:@1]&&![views canTransferWindow:@7 output:@2]
+        &&![views requestTransferForWindow:@7 output:@2],@"fit primary remains native while undersized destination stays captured");
+    old=[views requestTransferForWindow:@7 output:@1];mixed[@"placements"]=@[state[@"placements"][1]];desired=transferDescribe(views,mixed,root,audit);
+    check(old&&![views isTransferCurrent:old]&&!views.pendingTransfers.count&&![views desiredOwnerForWindow:@7]&&![desired[@"placements"]count],@"loss of fitting primary cannot recover a transfer through the undersized destination");
+    check([views requiresPlacementAdmissionForWindow:@7]&&![views completeParkingForWindow:@7 identity:root generation:@1 current:^BOOL{return NO;}],@"replica coverage persists until parking is acknowledged");
+    DWNativePresenter *parking=[DWNativePresenter fixturePID:@123];[parking bound:root bounds:native family:audit];[parking fixtureSpaceFrames];
+    [parking describe:desired bound:@{@7:root}];[parking submit];
+    BOOL (^parkedCurrent)(void)=^BOOL{return [parking isParkingAcknowledgedForWindow:@7 identity:root generation:@1];};
+    check(!parkedCurrent(),@"parking submission alone does not settle replica coverage");
+    [parking fixtureAck:@[@0,@(DW2_NOT_APPLIED)] sequence:parking.fixtureSequence];
+    check(!parkedCurrent()&&![views completeParkingForWindow:@7 identity:root generation:@1 current:parkedCurrent],@"one refused parked child withholds complete-family readiness");
+    uint64_t refused=parking.fixtureSequence;[parking fixtureRetry];[parking submit];
+    [parking fixtureAck:@[@0,@0] sequence:refused];check(!parkedCurrent(),@"old parking ACK cannot settle a newer submission");ack(parking);
+    check(parkedCurrent()&&![parking isParkingAcknowledgedForWindow:@7 identity:root generation:@2]
+        &&![parking isParkingAcknowledgedForWindow:@7 identity:identity(123,99) generation:@1],@"parking ACK retains exact generation and native identity");
+    check(![parking acknowledgedPlacementForWindow:@7 identity:root generation:@1 output:@0]&&!receipt(parking,root,1,2)
+        &&![parking beginTransitionForWindow:root],@"parking readiness cannot become an output placement or visible snapshot transition");
+    check([views completeParkingForWindow:@7 identity:root generation:@1 current:parkedCurrent]
+        &&![views requiresPlacementAdmissionForWindow:@7]&&[views replica:@7 output:@2]&&![views desiredOwnerForWindow:@7],@"genuine parking ACK ends obsolete transfer coverage while retaining only replicas");
+    check(![views completeParkingForWindow:@7 identity:root generation:@1 current:parkedCurrent],@"parking coverage completion is idempotent");
+    [parking withholdWindow:root];check(!parkedCurrent(),@"withheld family revokes parking readiness");[parking resumeWindow:root];
+    [parking describe:desired bound:@{@7:root}];[parking submit];ack(parking);
+    CGRect moved=native;moved.origin.x++;[parking fixtureBound:root bounds:moved family:transferFamily(root,1,moved,child)];
+    check(!parkedCurrent(),@"changed native basis revokes parking readiness");[parking finish];
+    [views reset];check(views.requiresNativeExtentFit,@"session reset preserves configured extent policy");
+    for(NSValue *extent in @[[NSValue valueWithSize:CGSizeMake(1201,800)],[NSValue valueWithSize:CGSizeMake(1000,901)],[NSValue valueWithSize:CGSizeMake(1200,900)]]){
+        native.size=extent.sizeValue;state=transferSnapshot(root,1,native,first,second);audit=transferFamily(root,1,native,child);[views reset];transferDescribe(views,state,root,audit);
+        BOOL fits=native.size.width<=1200&&native.size.height<=900;
+        check(([views desiredOwnerForWindow:@7]!=nil)==fits&&([views requestTransferForWindow:@7 output:@2]!=nil)==fits,@"both native dimensions must fit; exact equality is eligible");
+    }
+    for(NSString *invalid in @[@"unknown",@"missing",@"malformed",@"generation",@"identity"]){
+        NSMutableDictionary *broken=[state mutableCopy],*source=[state[@"windows"][0][@"source"]mutableCopy];
+        if([invalid isEqual:@"unknown"])source[@"observation_known"]=@NO;
+        else if([invalid isEqual:@"missing"])[source removeObjectForKey:@"observed_rect"];
+        else if([invalid isEqual:@"malformed"])source[@"observed_rect"]=rect(CGRectMake(0,0,0,900));
+        else if([invalid isEqual:@"generation"])source[@"generation"]=@0;
+        else source[@"identity"]=identity(123,99);
+        NSMutableArray *placements=[NSMutableArray array];for(NSDictionary *placement in state[@"placements"]){NSMutableDictionary *copy=[placement mutableCopy];copy[@"source"]=source.copy;[placements addObject:copy.copy];}broken[@"placements"]=placements.copy;
+        [views reset];transferDescribe(views,broken,root,audit);
+        check(![views desiredOwnerForWindow:@7]&&![views requestTransferForWindow:@7 output:@2],@"unknown, malformed or stale binding cannot certify native extent fit");
+        if(![invalid isEqual:@"identity"])check([views replica:@7 output:@2],@"unavailable native size retains authorized canvas replica placement");
+    }
+    views.requiresNativeExtentFit=NO;transferDescribe(views,transferSnapshot(root,1,CGRectMake(100,100,1600,1000),first,second),root,nil);
+    check([views desiredOwnerForWindow:@7]!=nil,@"disabling candidate restores legacy automatic ownership");
+}
 int main(void) {@autoreleasepool {
     check(DWPresenterReadinessFixtureMain()==0,@"existing presenter correspondence oracle passes");
     NSDictionary *root=identity(123,42);CGRect native=CGRectMake(100,100,320,232),child=CGRectMake(150,125,90,60);
@@ -98,5 +168,6 @@ int main(void) {@autoreleasepool {
     check(recovery&&recovery!=transfer&&recovery.generation==2&&recovery.output==1,@"fresh audit restages bounded recovery without resurrecting old generation");
     [views describe:nil bound:@{@7:root}families:@{@7:audit}];check(!views.pendingTransfers.count&&!views.capturedWindows.count&&![views isTransferCurrent:recovery],@"invalid snapshot/reset revokes all adapter transfer state");
     check(![views requiresPlacementAdmissionForWindow:@7],@"session/reset removes stale coverage admission requirements");
+    extentFitPolicy();
     printf("PASS: %lu presenter + explicit transfer checks; substituted geometry only, no native input/optical proof\n",(unsigned long)checks);
 }return 0;}

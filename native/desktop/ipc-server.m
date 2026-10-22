@@ -8,20 +8,85 @@
 // it holds at most the unwritten tail of one event and the newest event behind it,
 // and a half-written event is finished before any reply on its connection. Whether
 // an event repeats the last one is the controller's to say. New GCD code.
-// Unlike upstream a socket that answers a connect is never replaced (the probe and
-// the bind are not serialized between instances, so that is no lock), peers are
+// Unlike upstream a socket that answers a connect is never replaced. Normal app
+// launches additionally hold DWRunOwnership across probe/bind and cleanup. Peers are
 // checked by uid, connections are bounded and idle ones time out. Subscribers are
 // bounded as well, and where upstream keeps one that stopped reading, one that
 // takes nothing of an owed event for the idle time is hung up on.
 #import "ipc-server.h"
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/file.h>
 #include <sys/un.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <stdatomic.h>
 #include <time.h>
 #include <unistd.h>
+
+static BOOL sameInode(struct stat a,struct stat b) { return a.st_dev==b.st_dev&&a.st_ino==b.st_ino; }
+static BOOL privateDirectory(struct stat st) { return S_ISDIR(st.st_mode)&&st.st_uid==geteuid()&&!(st.st_mode&0022); }
+// Canonicalize only the parent: resolving a leaf symlink would conceal that an
+// atomic scene save replaces it, rather than the file its owner locked.
+static NSString *ownedPath(NSString *path,BOOL socket,NSString **error) {
+    if(!path.isAbsolutePath||[path.lastPathComponent isEqual:@"."]||[path.lastPathComponent isEqual:@".."]){*error=@"run paths must be absolute file paths";return nil;}
+    if([path.lastPathComponent.lowercaseString hasSuffix:@".infinify-lock"]){*error=@"run paths cannot use the reserved .infinify-lock suffix";return nil;}
+    char parent[PATH_MAX];if(!realpath(path.stringByDeletingLastPathComponent.fileSystemRepresentation,parent)){*error=[NSString stringWithFormat:@"cannot resolve run directory for %@: %s",path,strerror(errno)];return nil;}
+    struct stat directory;if(lstat(parent,&directory)||!privateDirectory(directory)){*error=[NSString stringWithFormat:@"run directory must be yours and not group/world writable: %s",parent];return nil;}
+    NSString *canonical=[@(parent)stringByAppendingPathComponent:path.lastPathComponent];struct stat st;
+    if(!lstat(canonical.fileSystemRepresentation,&st)){
+        if(st.st_uid!=geteuid()||(st.st_mode&0022)||(socket?!S_ISSOCK(st.st_mode):(!S_ISREG(st.st_mode)||st.st_nlink!=1))){*error=[NSString stringWithFormat:@"unsafe %@ path (type, owner, mode or link count): %@",socket?@"socket":@"scene",canonical];return nil;}
+    }else if(errno!=ENOENT){*error=[NSString stringWithFormat:@"cannot inspect run path %@: %s",canonical,strerror(errno)];return nil;}
+    if(socket&&strlen(canonical.fileSystemRepresentation)>=sizeof(((struct sockaddr_un *)0)->sun_path)){*error=@"socket path is too long";return nil;}
+    return canonical;
+}
+static int runLock(NSString *path,BOOL *duplicate,NSString **error) {
+    NSString *parent=path.stringByDeletingLastPathComponent,*leaf=[path.lastPathComponent stringByAppendingString:@".infinify-lock"];
+    int directory=open(parent.fileSystemRepresentation,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);struct stat dir,now;
+    if(directory<0||fstat(directory,&dir)||!privateDirectory(dir)){if(directory>=0)close(directory);*error=[NSString stringWithFormat:@"cannot open private run directory: %@",parent];return -1;}
+    int fd=openat(directory,leaf.fileSystemRepresentation,O_RDWR|O_CREAT|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC,0600);struct stat st;
+    BOOL valid=fd>=0&&!fstat(fd,&st)&&S_ISREG(st.st_mode)&&st.st_uid==geteuid()&&(st.st_mode&0777)==0600&&st.st_nlink==1;
+    if(!valid){if(fd>=0)close(fd);close(directory);*error=[NSString stringWithFormat:@"unsafe or inaccessible run lock: %@/%@",parent,leaf];return -1;}
+    if(flock(fd,LOCK_EX|LOCK_NB)){
+        int failure=errno;close(fd);close(directory);*duplicate=failure==EWOULDBLOCK||failure==EAGAIN;
+        *error=[NSString stringWithFormat:*duplicate?@"another Infinify already owns %@":@"cannot lock %@",path];return -1;
+    }
+    // Refuse a replaced directory/lock inode; never unlink a lock, even on exit.
+    valid=!fstatat(directory,leaf.fileSystemRepresentation,&now,AT_SYMLINK_NOFOLLOW)&&sameInode(st,now)&&
+        !lstat(parent.fileSystemRepresentation,&now)&&sameInode(dir,now)&&privateDirectory(now);
+    close(directory);if(!valid){close(fd);*error=[NSString stringWithFormat:@"run lock changed during admission: %@",path];return -1;}return fd;
+}
+// A bounded, read-only compatibility check for running releases without leases.
+// Unknown probe errors are failures, never evidence that an old owner is absent.
+static int existingServer(NSString *path,NSString **error) {
+    struct stat st;if(lstat(path.fileSystemRepresentation,&st)){if(errno==ENOENT)return 0;*error=@"cannot inspect existing socket";return -1;}
+    int fd=socket(AF_UNIX,SOCK_STREAM,0);if(fd<0){*error=@"cannot create socket probe";return -1;}
+    if(fcntl(fd,F_SETFL,O_NONBLOCK)||fcntl(fd,F_SETFD,FD_CLOEXEC)){close(fd);*error=@"cannot configure socket probe";return -1;}
+    struct sockaddr_un address={.sun_family=AF_UNIX};strlcpy(address.sun_path,path.fileSystemRepresentation,sizeof(address.sun_path));
+    int failure=connect(fd,(struct sockaddr *)&address,sizeof(address))?errno:0;
+    if(failure==EINPROGRESS||failure==EAGAIN){struct pollfd ready={fd,POLLOUT,0};int result=poll(&ready,1,250);socklen_t size=sizeof(failure);
+        if(result>0){if(getsockopt(fd,SOL_SOCKET,SO_ERROR,&failure,&size))failure=errno;}else failure=result==0?ETIMEDOUT:errno;}
+    if(!failure){uid_t uid;gid_t gid;if(getpeereid(fd,&uid,&gid)||uid!=geteuid())failure=EACCES;}
+    close(fd);if(!failure){*error=[NSString stringWithFormat:@"another running Infinify already answers on %@",path];return 1;}
+    if(failure==ECONNREFUSED||failure==ENOENT)return 0;
+    *error=[NSString stringWithFormat:@"existing socket could not be checked: %s (%@)",strerror(failure),path];return -1;
+}
+@implementation DWRunOwnership { int _firstFD,_secondFD; }
+- (instancetype)init { if((self=[super init])){_firstFD=-1;_secondFD=-1;}return self; }
++ (instancetype)acquireSocket:(NSString *)socket state:(NSString *)state duplicate:(BOOL *)duplicate error:(NSString **)error {
+    *duplicate=NO;*error=nil;DWRunOwnership *owner=[self new];
+    owner->_socketPath=ownedPath(socket,YES,error);if(!owner.socketPath)return nil;
+    owner->_statePath=ownedPath(state,NO,error);if(!owner.statePath)return nil;
+    if([owner.socketPath isEqual:owner.statePath]){*error=@"socket and scene must be different paths";return nil;}
+    NSArray<NSString *> *paths=[@[owner.socketPath,owner.statePath]sortedArrayUsingSelector:@selector(compare:)];
+    owner->_firstFD=runLock(paths[0],duplicate,error);if(owner->_firstFD<0)return nil;
+    owner->_secondFD=runLock(paths[1],duplicate,error);if(owner->_secondFD<0)return nil;
+    if(!ownedPath(owner.socketPath,YES,error)||!ownedPath(owner.statePath,NO,error))return nil;
+    int live=existingServer(owner.socketPath,error);if(live){*duplicate=live>0;return nil;}return owner;
+}
+- (void)dealloc { if(_secondFD>=0)close(_secondFD);if(_firstFD>=0)close(_firstFD); }
+@end
+
 enum { DWIPCMaxLine=64*1024,DWIPCMaxConnections=16,DWIPCMaxSubscribers=8,DWIPCIdleSeconds=30,DWIPCBacklog=16 };
 @interface DWIPCConnection : NSObject
 @property int fd;

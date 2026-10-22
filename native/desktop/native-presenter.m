@@ -7,6 +7,7 @@
 // helper's, asked for through its socket.
 #import "native-presenter.h"
 #import "native-family.h"
+#import "native-display-space.h"
 #import "../focus/focus.h"
 #import <AppKit/AppKit.h>
 #import <Security/Security.h>
@@ -24,6 +25,17 @@ bool DWNativeBounds(uint32_t wid,CGRect *out) {
     CGRect r=CGRectZero;if(!connection||!bounds||!wid||bounds(connection(),wid,&r)!=kCGErrorSuccess)return false;
     if(!isfinite(r.origin.x)||!isfinite(r.origin.y)||!isfinite(r.size.width)||!isfinite(r.size.height)||r.size.width<=0||r.size.height<=0)return false;
     if(out)*out=r;return true;
+}
+
+// yabai dd845723416f5fe92af49fad5ebab00369e07edd src/misc/extern.h:23-24;
+// src/window_manager.c:618-699 brackets AX writes plus its own proxy swap.
+// This app-connection bracket still requires independent live observation.
+CGError DWNativeScreenUpdates(BOOL enabled) {
+    static int (*connection)(void);static CGError (*disable)(int),(*enable)(int);static dispatch_once_t once;
+    dispatch_once(&once,^{void *sky=dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight",RTLD_NOW|RTLD_LOCAL);if(!sky)return;
+        connection=dlsym(sky,"SLSMainConnectionID");disable=dlsym(sky,"SLSDisableUpdate");enable=dlsym(sky,"SLSReenableUpdate");});
+    if(!connection||!disable||!enable)return kCGErrorNotImplemented;
+    return enabled?enable(connection()):disable(connection());
 }
 
 static bool DWNativeFiniteRect(CGRect r) {
@@ -101,11 +113,22 @@ typedef struct {
 } DWNativePlacementBinding;
 typedef struct {
     struct dw2_record record;
+    uint64_t targetSpace;
     CGRect native;
     uint32_t index,parent;
 } DWNativePlacementMember;
+@interface DWNativeHiddenRoot () {
+@public NSUUID *session;struct dw2_record record;NSInteger phase;
+}
+@property(nonatomic,readwrite,copy) NSDictionary *identity;
+@property(nonatomic,readwrite) CGRect nativeBounds,screenRect;
+- (instancetype)initWithSession:(NSUUID *)value;
+@end
+@implementation DWNativeHiddenRoot
+- (instancetype)initWithSession:(NSUUID *)value { if((self=[super init]))session=value;return self; }
+@end
 @interface DWNativePlacementDescription : NSObject {
-@public DWNativePlacementBinding binding;NSData *members;
+@public DWNativePlacementBinding binding;NSData *members;NSArray<NSDictionary *> *guardMembers;BOOL parked;uint64_t guardEpoch;
 }
 @end
 @implementation DWNativePlacementDescription
@@ -113,7 +136,8 @@ typedef struct {
     if(object==self)return YES;
     if(![object isKindOfClass:DWNativePlacementDescription.class])return NO;
     DWNativePlacementDescription *other=object;
-    return !memcmp(&binding,&other->binding,sizeof(binding))&&[members isEqualToData:other->members];
+    return parked==other->parked&&guardEpoch==other->guardEpoch&&(guardMembers==other->guardMembers||[guardMembers isEqual:other->guardMembers])
+        &&!memcmp(&binding,&other->binding,sizeof(binding))&&[members isEqualToData:other->members];
 }
 - (NSUInteger)hash { return members.hash; }
 @end
@@ -131,6 +155,93 @@ static BOOL DWNativePlacementInteger(id value,uint64_t *integer) {
         ||CFNumberIsFloatType((__bridge CFNumberRef)value)||[value compare:@0]==NSOrderedAscending)return NO;
     *integer=[value unsignedLongLongValue];return [value isEqual:@(*integer)];
 }
+static NSDictionary *DWNativeGuardRect(CGRect r) {
+    return @{ @"origin":@{@"x":@(r.origin.x),@"y":@(r.origin.y)},@"size":@{@"width":@(r.size.width),@"height":@(r.size.height)} };
+}
+// Snapshot caller-owned dictionaries rather than retaining mutable identities
+// or geometry. Malformed descriptors never affect ordinary parking policy.
+static NSDictionary *DWNativeGuardedParkingDescriptor(id value) {
+    if(![value isKindOfClass:NSDictionary.class])return nil;
+    id identity=value[@"identity"];if(![identity isKindOfClass:NSDictionary.class])return nil;
+    id owner=identity[@"owner"];if(owner&&owner!=NSNull.null)return nil;
+    uint64_t window=0,generation=0,epoch=0,pid=0,wid=0,sec=0,usec=0;
+    if(!DWNativePlacementInteger(value[@"window"],&window)||!window
+        ||!DWNativePlacementInteger(value[@"generation"],&generation)||!generation
+        ||!DWNativePlacementInteger(value[@"guard_epoch"],&epoch)||!epoch
+        ||!DWNativePlacementInteger(identity[@"pid"],&pid)||pid<=1||pid>INT32_MAX
+        ||!DWNativePlacementInteger(identity[@"wid"],&wid)||!wid||wid>UINT32_MAX
+        ||!DWNativePlacementInteger(identity[@"birth_sec"],&sec)||!sec
+        ||!DWNativePlacementInteger(identity[@"birth_usec"],&usec)||usec>=1000000)return nil;
+    CGRect native=DWNativeJSONRect(value[@"native_bounds"]),screen=DWNativeJSONRect(value[@"screen_rect"]);
+    if(CGRectIsNull(native)||CGRectIsNull(screen)||!CGSizeEqualToSize(native.size,screen.size)
+        ||fabs(screen.origin.x)>1e6||fabs(screen.origin.y)>1e6)return nil;
+    for(NSString *key in @[@"native_bounds",@"screen_rect"]){
+        NSDictionary *r=value[key];
+        for(NSNumber *n in @[r[@"origin"][@"x"],r[@"origin"][@"y"],r[@"size"][@"width"],r[@"size"][@"height"]])
+            if(CFGetTypeID((__bridge CFTypeRef)n)==CFBooleanGetTypeID())return nil;
+    }
+    NSArray *members=[value[@"members"]isKindOfClass:NSArray.class]?value[@"members"]:nil;
+    if(members.count<1||members.count>2)return nil;
+    NSDictionary *rootMember=nil,*childMember=nil;
+    for(id member in members){
+        if(![member isKindOfClass:NSDictionary.class])return nil;
+        id who=member[@"identity"];if(![who isKindOfClass:NSDictionary.class])return nil;
+        id memberOwner=who[@"owner"];if(memberOwner&&memberOwner!=NSNull.null)return nil;
+        uint64_t memberPID=0,memberWID=0,memberSec=0,memberUsec=0,parent=0;
+        if(!DWNativePlacementInteger(who[@"pid"],&memberPID)||memberPID!=pid
+            ||!DWNativePlacementInteger(who[@"wid"],&memberWID)||!memberWID||memberWID>UINT32_MAX
+            ||!DWNativePlacementInteger(who[@"birth_sec"],&memberSec)||memberSec!=sec
+            ||!DWNativePlacementInteger(who[@"birth_usec"],&memberUsec)||memberUsec!=usec
+            ||!DWNativePlacementInteger(member[@"parent"],&parent)||parent>UINT32_MAX)return nil;
+        CGRect bounds=DWNativeJSONRect(member[@"native_bounds"]);if(CGRectIsNull(bounds))return nil;
+        NSDictionary *r=member[@"native_bounds"];
+        for(NSNumber *n in @[r[@"origin"][@"x"],r[@"origin"][@"y"],r[@"size"][@"width"],r[@"size"][@"height"]])
+            if(CFGetTypeID((__bridge CFTypeRef)n)==CFBooleanGetTypeID())return nil;
+        id control=member[@"capture_control"];
+        if(control&&(![control isKindOfClass:NSNumber.class]||CFGetTypeID((__bridge CFTypeRef)control)!=CFBooleanGetTypeID()))return nil;
+        double x=screen.origin.x+(bounds.origin.x-native.origin.x),y=screen.origin.y+(bounds.origin.y-native.origin.y);
+        if(!isfinite(x)||!isfinite(y)||fabs(x)>1e6||fabs(y)>1e6)return nil;
+        NSDictionary *memberIdentity=@{@"pid":@(pid),@"wid":@(memberWID),@"birth_sec":@(sec),@"birth_usec":@(usec)};
+        if(memberWID==wid){
+            if(rootMember||parent||[control boolValue]||!CGRectEqualToRect(bounds,native))return nil;
+            rootMember=@{@"identity":memberIdentity,@"native_bounds":DWNativeGuardRect(bounds),@"parent":@0};
+        }else{
+            if(childMember||parent!=wid||![control isEqual:@YES]||!CGRectContainsRect(native,bounds))return nil;
+            childMember=@{@"identity":memberIdentity,@"native_bounds":DWNativeGuardRect(bounds),@"parent":@(parent),@"capture_control":@YES};
+        }
+    }
+    if(!rootMember)return nil;
+    return @{@"window":@(window),@"generation":@(generation),@"guard_epoch":@(epoch),
+        @"identity":@{@"pid":@(pid),@"wid":@(wid),@"birth_sec":@(sec),@"birth_usec":@(usec)},
+        @"native_bounds":DWNativeGuardRect(native),@"screen_rect":DWNativeGuardRect(screen),
+        @"members":childMember?@[rootMember,childMember]:@[rootMember]};
+}
+static BOOL DWNativeGuardedParkingMatches(NSDictionary *guard,const DWNativePlacementBinding *binding,CGRect native) {
+    return guard&&[guard[@"window"]isEqual:@(binding->window)]&&[guard[@"generation"]isEqual:@(binding->generation)]
+        &&[guard[@"identity"]isEqual:DWNativePlacementIdentity(binding->identity)]
+        &&CGRectEqualToRect(DWNativeJSONRect(guard[@"native_bounds"]),native);
+}
+@interface DWNativeAppliedParking ()
+- (instancetype)initWithSession:(NSUUID *)session sequence:(uint64_t)sequence description:(DWNativePlacementDescription *)description;
+@property(nonatomic,readonly) DWNativePlacementDescription *placementDescription;
+@end
+@implementation DWNativeAppliedParking {
+    NSUUID *_session;uint64_t _sequence;DWNativePlacementDescription *_placementDescription;
+}
+- (instancetype)initWithSession:(NSUUID *)session sequence:(uint64_t)sequence description:(DWNativePlacementDescription *)description {
+    if((self=[super init])){_session=session;_sequence=sequence;_placementDescription=description;}return self;
+}
+- (NSUUID *)session { return _session; }
+- (uint64_t)sequence { return _sequence; }
+- (uint64_t)window { return _placementDescription->binding.window; }
+- (uint64_t)generation { return _placementDescription->binding.generation; }
+- (uint64_t)guardEpoch { return _placementDescription->guardEpoch; }
+- (NSDictionary *)identity { return DWNativePlacementIdentity(_placementDescription->binding.identity); }
+- (CGRect)screenRect { return _placementDescription->binding.screen; }
+- (CGRect)nativeBounds { return DWNativeJSONRect(_placementDescription->guardMembers.firstObject[@"native_bounds"]); }
+- (NSArray<NSDictionary *> *)members { return _placementDescription->guardMembers; }
+- (DWNativePlacementDescription *)placementDescription { return _placementDescription; }
+@end
 @interface DWNativeAppliedPlacement ()
 - (instancetype)initWithSession:(NSUUID *)session sequence:(uint64_t)sequence description:(DWNativePlacementDescription *)description;
 @property(nonatomic,readonly) DWNativePlacementDescription *placementDescription;
@@ -157,7 +268,8 @@ static BOOL DWNativePlacementInteger(id value,uint64_t *integer) {
         const DWNativePlacementMember *member=&records[i];const struct dw2_record *record=&member->record;
         [result addObject:@{@"identity":DWNativePlacementIdentity(record->id),@"native_bounds":DWNativeRectArray(member->native),@"parent":@(member->parent),
             @"requested_transform":@[@(record->m[0]),@(record->m[1]),@(record->m[2]),@(record->m[3]),@(record->m[4]),@(record->m[5])],
-            @"requested_alpha":record->flags&DW2_RECORD_HAS_ALPHA?@(record->alpha):NSNull.null,@"flags":@(record->flags)}];
+            @"requested_alpha":record->flags&DW2_RECORD_HAS_ALPHA?@(record->alpha):NSNull.null,@"flags":@(record->flags),
+            @"requested_space":member->targetSpace?@(member->targetSpace):NSNull.null}];
     }
     return result.copy;
 }
@@ -169,10 +281,17 @@ static uint64_t uptime(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW)/10
 static const uint64_t DWStall=10000;
 // One bound window: who it is for the helper, its own frame, and whether an alpha was ever sent for it.
 @interface DWNativeWindow : NSObject { @public struct dw2_identity identity;CGRect bounds;BOOL alpha,familyKnown;NSNumber *logical;uint64_t releaseSeq;uint32_t root,parent; } @end
+@interface DWNativeSpaceReflow : NSObject { @public
+    struct dw2_identity identity;
+    CGRect original,before,observed;
+    uint64_t target,submittedAt,changedAt,acknowledgedSequence;
+    BOOL settled,changed,nativeInput;
+} @end
+@implementation DWNativeSpaceReflow @end
 @implementation DWNativeWindow @end
 static const char *lostName(int reason) { return reason==DW_LOST_EOF?"the helper closed the connection":reason==DW_LOST_WRITE_TIMEOUT?"the helper stopped reading":reason==DW_LOST_HEARTBEAT?"no heartbeat was answered for a whole lease":"the helper broke the protocol"; }
 static const char *statusName(uint8_t status) {
-    static const char *names[]={"applied","out of the helper's scope","no such window of that process","matrix refused","alpha refused","its original could not be read","the journal could not be written","the set failed or read back differently","a restore of it is pending","the helper's table is full","malformed record"};
+    static const char *names[]={"applied","out of the helper's scope","no such window of that process","matrix refused","alpha refused","its original could not be read","the journal could not be written","the set failed or read back differently","a restore of it is pending","the helper's table is full","malformed record","the window and destination do not have eligible display Spaces","the helper cannot safely read or change the native sublevel"};
     return status<sizeof(names)/sizeof(*names)?names[status]:"unknown status";
 }
 @interface DWNativePresenterGroup : DWNativePresenter
@@ -217,11 +336,17 @@ static void DWCloseNativeClient(dw_client *client,id activity) {
     CFRunLoopObserverRef _observer;
     NSMutableDictionary<NSNumber *,DWNativeWindow *> *_windows; // by window number
     NSMutableDictionary<NSNumber *,DWNativeWindow *> *_releases; // originals to restore after unbinding
+    NSMutableDictionary<NSNumber *,DWNativeSpaceReflow *> *_spaceReflows;
     NSMutableDictionary<NSNumber *,NSSet<NSNumber *> *> *_families;
+    NSMutableDictionary<NSNumber *,NSDictionary *> *_withheld;
+    NSMutableDictionary<NSNumber *,NSData *> *_rebases; // exact temporary neutral records
+    NSMutableDictionary<NSNumber *,DWNativeHiddenRoot *> *_transitions;
+    NSMutableSet<NSNumber *> *_rebased; // neutral ACK received; awaiting omission ACK
     _Atomic bool _releasing;
     _Atomic bool _retrying;
     uint64_t _lastSent,_submittedSeq;
     NSMutableData *_records;                                    // the frame last described
+    NSData *_recordSpaces,*_sentSpaces;                         // parallel uint64 targets; zero preserves membership
     NSMutableData *_clips;                                      // desired geometry; never sent as a native clip
     NSData *_sent;                                              // the frame last handed over
     NSArray<NSNumber *> *_order,*_sentOrder;                    // the world window of each of their records, for -debug:
@@ -230,6 +355,7 @@ static void DWCloseNativeClient(dw_client *client,id activity) {
     NSMutableDictionary<NSNumber *,NSData *> *_frames;
     NSMutableSet<NSString *> *_said;
     NSUUID *_placementSession;
+    NSDictionary<NSNumber *,NSDictionary *> *_guardedParkings;
     NSDictionary<NSNumber *,DWNativePlacementDescription *> *_desiredPlacements,*_acknowledgedPlacements;
     NSMutableDictionary<NSNumber *,NSDictionary<NSNumber *,DWNativePlacementDescription *> *> *_framePlacements;
     uint64_t _acknowledgedSequence,_placementRevision;
@@ -237,9 +363,10 @@ static void DWCloseNativeClient(dw_client *client,id activity) {
 - (instancetype)init {
     if((self=[super init])){
         _lock=OS_UNFAIR_LOCK_INIT;
-        _windows=[NSMutableDictionary dictionary];_releases=[NSMutableDictionary dictionary];_families=[NSMutableDictionary dictionary];
+        _windows=[NSMutableDictionary dictionary];_releases=[NSMutableDictionary dictionary];_families=[NSMutableDictionary dictionary];_withheld=[NSMutableDictionary dictionary];_rebases=[NSMutableDictionary dictionary];_rebased=[NSMutableSet set];_transitions=[NSMutableDictionary dictionary];
+        _spaceReflows=[NSMutableDictionary dictionary];
         _records=[NSMutableData data];_clips=[NSMutableData data];_frames=[NSMutableDictionary dictionary];_said=[NSMutableSet set];
-        _placementSession=[NSUUID UUID];_desiredPlacements=@{};_acknowledgedPlacements=@{};_framePlacements=[NSMutableDictionary dictionary];
+        _placementSession=[NSUUID UUID];_guardedParkings=@{};_desiredPlacements=@{};_acknowledgedPlacements=@{};_framePlacements=[NSMutableDictionary dictionary];
     }
     return self;
 }
@@ -428,6 +555,29 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
             if(applied)acknowledged[logical]=description;
         }
         _acknowledgedPlacements=acknowledged.copy;_acknowledgedSequence=seq;
+        for(DWNativePlacementDescription *description in acknowledged.objectEnumerator){
+            DWNativeSpaceReflow *reflow=_spaceReflows[@(description->binding.identity.wid)];
+            const DWNativePlacementMember *members=description->members.bytes;
+            if(reflow&&description->members.length>=sizeof(*members)&&!memcmp(&reflow->identity,&description->binding.identity,sizeof(reflow->identity)))
+                for(NSUInteger i=0;i<description->members.length/sizeof(*members);i++)if(members[i].record.id.wid==reflow->identity.wid&&members[i].targetSpace==reflow->target)
+                    reflow->acknowledgedSequence=seq;
+        }
+        BOOL drained=NO;
+        for(NSNumber *wid in _rebases.allKeys){NSData *expected=_rebases[wid];
+            for(NSUInteger i=0;i<statuses.length;i++)if(records[i].id.wid==wid.unsignedIntValue&&status[i]==DW2_APPLIED
+                &&expected.length==sizeof(*records)&&!memcmp(expected.bytes,&records[i],sizeof(*records))){
+                [_rebases removeObjectForKey:wid];[_rebased addObject:wid];drained=YES;break;}
+        }
+        for(DWNativeHiddenRoot *transition in _transitions.objectEnumerator){
+            if(transition->phase!=1&&transition->phase!=2&&transition->phase!=4)continue;
+            for(NSUInteger i=0;i<statuses.length;i++)if(status[i]==DW2_APPLIED&&!memcmp(&transition->record,&records[i],sizeof(*records))){
+                if(transition->phase==1){CGRect own=transition.nativeBounds;transition->record=(struct dw2_record){.id=transition->record.id,.flags=DW2_RECORD_HAS_ALPHA,.alpha=0,.m={1,0,0,1,-own.origin.x,-own.origin.y}};transition->phase=2;drained=YES;}
+                else if(transition->phase==2){transition->phase=3;drained=YES;}
+                else transition->phase=5;
+                break;
+            }
+        }
+        if(drained)[self requireFreshPlacementAcknowledgement];
     }
     BOOL retry=NO;
     for(NSUInteger i=0;i<statuses.length&&i<frame.length/sizeof(*records);i++){
@@ -437,7 +587,7 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
             if(release&&pending&&pending->releaseSeq&&seq>=pending->releaseSeq){[_releases removeObjectForKey:wid];_forced=YES;}
             continue;
         }
-        if(status[i]==DW2_NOT_APPLIED||status[i]==DW2_RESTORE_PENDING||status[i]==DW2_SNAPSHOT||status[i]==DW2_JOURNAL)retry=YES;
+        if(status[i]==DW2_NOT_APPLIED||status[i]==DW2_RESTORE_PENDING||status[i]==DW2_SNAPSHOT||status[i]==DW2_JOURNAL||status[i]==DW2_SPACE)retry=YES;
         NSString *key=[NSString stringWithFormat:@"%@:%u:%d",wid,status[i],release];if([_said containsObject:key])continue;[_said addObject:key];
         fprintf(stderr,"Infinify: native presentation: window %u of process %d not %s: %s\n",wid.unsignedIntValue,records[i].id.pid,release?"restored":"placed",statusName(status[i]));
     }
@@ -463,6 +613,46 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     if(!NSThread.isMainThread||self.ended)return;
     [self invalidatePlacementReadiness];_described=NO;_forced=YES;
 }
+- (void)setGuardedParking:(NSDictionary *)descriptor {
+    NSDictionary *next=DWNativeGuardedParkingDescriptor(descriptor);
+    [self setGuardedParkings:next?@{next[@"window"]:next}:@{}];
+}
+- (void)setGuardedParkings:(NSDictionary<NSNumber *,NSDictionary *> *)descriptors {
+    if(!NSThread.isMainThread||self.ended)return;
+    NSMutableDictionary *next=[NSMutableDictionary dictionary];
+    if([descriptors isKindOfClass:NSDictionary.class])for(id logical in descriptors){
+        uint64_t identifier=0;NSDictionary *descriptor=DWNativeGuardedParkingDescriptor(descriptors[logical]);
+        if(DWNativePlacementInteger(logical,&identifier)&&identifier&&[descriptor[@"window"]isEqual:logical])next[logical]=descriptor;
+    }
+    if([_guardedParkings isEqualToDictionary:next])return;
+    NSMutableSet *changed=[NSMutableSet setWithArray:_guardedParkings.allKeys];[changed addObjectsFromArray:next.allKeys];
+    for(NSNumber *logical in changed.allObjects)if([_guardedParkings[logical]isEqual:next[logical]])[changed removeObject:logical];
+    // Caller cancels input for changed roots first. Do not erase another root's
+    // descriptor or immediate receipt. Old in-flight ACKs cannot resurrect a
+    // changed root even if its descriptor changes back before the next frame.
+    NSMutableDictionary *desired=[_desiredPlacements mutableCopy],*acknowledged=[_acknowledgedPlacements mutableCopy];
+    for(NSNumber *logical in changed){[desired removeObjectForKey:logical];[acknowledged removeObjectForKey:logical];}
+    _desiredPlacements=desired.copy;_acknowledgedPlacements=acknowledged.copy;
+    for(NSNumber *sequence in _framePlacements.allKeys){
+        NSMutableDictionary *placements=[_framePlacements[sequence]mutableCopy];
+        for(NSNumber *logical in changed)[placements removeObjectForKey:logical];
+        _framePlacements[sequence]=placements.copy;
+    }
+    _guardedParkings=next.copy;_described=NO;_forced=YES;
+}
+- (BOOL)guardedParkingFamilyCurrent:(const DWNativePlacementBinding *)binding {
+    DWNativeWindow *root=_windows[@(binding->identity.wid)];NSSet *family=_families[@(binding->identity.wid)];
+    NSDictionary *guard=_guardedParkings[@(binding->window)];NSArray *members=guard[@"members"];
+    if(!root||!root->familyKnown||root->parent||root->root!=binding->identity.wid||family.count!=members.count
+        ||!DWNativeGuardedParkingMatches(guard,binding,root->bounds))return NO;
+    for(NSDictionary *member in members){
+        NSNumber *wid=member[@"identity"][@"wid"];DWNativeWindow *current=_windows[wid];
+        if(!current||![family containsObject:wid]||current->root!=root->root||current->parent!=[member[@"parent"]unsignedIntValue]
+            ||![DWNativePlacementIdentity(current->identity)isEqual:member[@"identity"]]
+            ||!CGRectEqualToRect(current->bounds,DWNativeJSONRect(member[@"native_bounds"])))return NO;
+    }
+    return YES;
+}
 - (BOOL)placementDescriptionCurrent:(DWNativePlacementDescription *)description {
     if(!description||self.ended||description->binding.revision!=_placementRevision)return NO;
     const DWNativePlacementBinding *binding=&description->binding;
@@ -470,6 +660,11 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     NSUInteger count=description->members.length/sizeof(DWNativePlacementMember);
     if(!root||!root->familyKnown||memcmp(&root->identity,&binding->identity,sizeof(root->identity))||root->root!=binding->identity.wid
         ||!family.count||family.count!=count||![root->logical isEqual:@(binding->window)])return NO;
+    NSDictionary *guard=_guardedParkings[@(binding->window)];
+    if(description->guardEpoch&&(!description->parked||![self guardedParkingFamilyCurrent:binding]
+        ||![description->guardMembers isEqual:guard[@"members"]]
+        ||description->guardEpoch!=[guard[@"guard_epoch"]unsignedLongLongValue]
+        ||!CGRectEqualToRect(binding->screen,DWNativeJSONRect(guard[@"screen_rect"]))))return NO;
     const DWNativePlacementMember *members=description->members.bytes;
     for(NSUInteger i=0;i<count;i++){
         const DWNativePlacementMember *member=&members[i];DWNativeWindow *current=_windows[@(member->record.id.wid)];
@@ -482,17 +677,53 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     uint64_t wantedWindow=0,wantedGeneration=0,wantedOutput=0;
     if(!NSThread.isMainThread||self.ended||!_acknowledgedSequence||_acknowledgedSequence!=_submittedSeq||!DWNativePlacementInteger(window,&wantedWindow))return nil;
     DWNativePlacementDescription *description=_acknowledgedPlacements[window];
-    if(!description||description->binding.window!=wantedWindow||!DWNativePlacementInteger(generation,&wantedGeneration)||!DWNativePlacementInteger(output,&wantedOutput)
+    if(!description||description->parked||description->binding.window!=wantedWindow||!DWNativePlacementInteger(generation,&wantedGeneration)||!DWNativePlacementInteger(output,&wantedOutput)
         ||description->binding.generation!=wantedGeneration||description->binding.output!=wantedOutput
         ||![DWNativePlacementIdentity(description->binding.identity)isEqual:identity]
         ||![description isEqual:_desiredPlacements[window]]||![self placementDescriptionCurrent:description])return nil;
     return [[DWNativeAppliedPlacement alloc]initWithSession:_placementSession sequence:_acknowledgedSequence description:description];
 }
+- (BOOL)isParkingAcknowledgedForWindow:(NSNumber *)window identity:(NSDictionary *)identity generation:(NSNumber *)generation {
+    uint64_t wantedWindow=0,wantedGeneration=0;
+    if(!NSThread.isMainThread||self.ended||!_acknowledgedSequence||_acknowledgedSequence!=_submittedSeq
+        ||!DWNativePlacementInteger(window,&wantedWindow)||!DWNativePlacementInteger(generation,&wantedGeneration))return NO;
+    DWNativePlacementDescription *description=_acknowledgedPlacements[window];
+    if(!description||!description->parked||description->binding.window!=wantedWindow||description->binding.generation!=wantedGeneration
+        ||description->binding.output||_withheld[@(description->binding.identity.wid)]
+        ||![DWNativePlacementIdentity(description->binding.identity)isEqual:identity]
+        ||![description isEqual:_desiredPlacements[window]]||![self placementDescriptionCurrent:description])return NO;
+    const DWNativePlacementMember *members=description->members.bytes;
+    for(NSUInteger i=0;i<description->members.length/sizeof(*members);i++){
+        const struct dw2_record *record=&members[i].record;
+        if(members[i].targetSpace||(record->flags&DW2_RECORD_RESTORE)||record->m[0]!=1||record->m[1]!=0||record->m[2]!=0||record->m[3]!=1)return NO;
+    }
+    return YES;
+}
 - (BOOL)isAcknowledgedPlacementCurrent:(DWNativeAppliedPlacement *)placement {
     if(!NSThread.isMainThread||self.ended||![placement isKindOfClass:DWNativeAppliedPlacement.class]
         ||placement.session!=_placementSession||!_acknowledgedSequence||placement.sequence!=_acknowledgedSequence||placement.sequence!=_submittedSeq)return NO;
     DWNativePlacementDescription *description=placement.placementDescription;
-    return description==_acknowledgedPlacements[@(placement.window)]&&[description isEqual:_desiredPlacements[@(placement.window)]]&&[self placementDescriptionCurrent:description];
+    return description&&!description->parked&&description==_acknowledgedPlacements[@(placement.window)]&&[description isEqual:_desiredPlacements[@(placement.window)]]&&[self placementDescriptionCurrent:description];
+}
+- (DWNativeAppliedParking *)acknowledgedGuardedParkingForWindow:(NSNumber *)window identity:(NSDictionary *)identity generation:(NSNumber *)generation guardEpoch:(uint64_t)epoch {
+    if(!epoch||![self isParkingAcknowledgedForWindow:window identity:identity generation:generation])return nil;
+    DWNativePlacementDescription *description=_acknowledgedPlacements[window];
+    if(!description||description->guardEpoch!=epoch)return nil;
+    CGRect rootNative=DWNativeJSONRect(description->guardMembers.firstObject[@"native_bounds"]);
+    const DWNativePlacementMember *members=description->members.bytes;
+    for(NSUInteger i=0;i<description->members.length/sizeof(*members);i++){
+        double x=description->binding.screen.origin.x+(members[i].native.origin.x-rootNative.origin.x);
+        double y=description->binding.screen.origin.y+(members[i].native.origin.y-rootNative.origin.y);
+        if(members[i].record.m[4]!=-x||members[i].record.m[5]!=-y)return nil;
+    }
+    return [[DWNativeAppliedParking alloc]initWithSession:_placementSession sequence:_acknowledgedSequence description:description];
+}
+- (BOOL)isAcknowledgedGuardedParkingCurrent:(DWNativeAppliedParking *)parking {
+    if(!NSThread.isMainThread||self.ended||![parking isKindOfClass:DWNativeAppliedParking.class]
+        ||parking.session!=_placementSession||!_acknowledgedSequence||parking.sequence!=_acknowledgedSequence||parking.sequence!=_submittedSeq)return NO;
+    DWNativePlacementDescription *description=parking.placementDescription;
+    return description&&description->guardEpoch&&description==_acknowledgedPlacements[@(parking.window)]
+        &&[self isParkingAcknowledgedForWindow:@(parking.window) identity:parking.identity generation:@(parking.generation)];
 }
 - (NSArray<NSNumber *> *)admittedBirth:(NSDictionary *)identity {
     if(!_desktopWide)return _scope[identity[@"pid"]];
@@ -594,13 +825,114 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
 }
 - (void)releaseWindow:(DWNativeWindow *)window {
     [self invalidatePlacementReadiness];
+    NSMutableDictionary *guarded=[_guardedParkings mutableCopy];
+    for(NSNumber *logical in _guardedParkings)if([_guardedParkings[logical][@"identity"]isEqual:DWNativePlacementIdentity(window->identity)])[guarded removeObjectForKey:logical];
+    _guardedParkings=guarded.copy;
+    [_spaceReflows removeObjectForKey:@(window->identity.wid)];
     NSNumber *wid=@(window->identity.wid);[_windows removeObjectForKey:wid];if(self.ended)return;
     window->releaseSeq=0;_releases[wid]=window;atomic_store(&_releasing,true);_forced=YES;
+}
+- (BOOL)observeSpaceReflow:(NSDictionary *)identity bounds:(CGRect)native nativeInput:(BOOL)nativeInput {
+    if(!NSThread.isMainThread||self.ended)return NO;
+    DWNativeSpaceReflow *reflow=_spaceReflows[identity[@"wid"]];
+    if(!reflow||![DWNativePlacementIdentity(reflow->identity)isEqual:identity])return NO;
+    if(reflow->settled)return NO;
+    uint64_t now=uptime();
+    if(!CGRectEqualToRect(reflow->observed,native)){
+        reflow->observed=native;reflow->changedAt=now;reflow->changed=YES;
+        if(!reflow->settled)reflow->acknowledgedSequence=0;
+    }
+    if(nativeInput){reflow->nativeInput=YES;reflow->settled=YES;return NO;}
+    // Space membership ACK can precede AppKit's asynchronous reflow. Keep a
+    // two-second settling window and require a quiet frame plus a fresh ACK
+    // after every observed geometry change. The final observation is still
+    // basis-only; later equal observations must not resize the world again.
+    if(reflow->acknowledgedSequence&&now-reflow->submittedAt>=2000&&now-reflow->changedAt>=250)reflow->settled=YES;
+    return YES;
 }
 - (void)unbound:(NSDictionary *)identity {
     NSNumber *wid=identity[@"wid"];DWNativeWindow *window=wid?_windows[wid]:nil;if(!window)return;
     if(window->identity.pid!=[identity[@"pid"]intValue]||window->identity.birth_sec!=[identity[@"birth_sec"]unsignedLongLongValue]||window->identity.birth_usec!=[identity[@"birth_usec"]unsignedLongLongValue])return;
+    [_withheld removeObjectForKey:wid];[_transitions removeObjectForKey:wid];[_rebases removeObjectForKey:wid];[_rebased removeObject:wid];
     NSSet *members=_families[wid]?:[NSSet setWithObject:wid];for(NSNumber *child in members){DWNativeWindow *attached=_windows[child];if(attached)[self releaseWindow:attached];}[_families removeObjectForKey:wid];
+}
+- (BOOL)withholdWindow:(NSDictionary *)identity {
+    if(!NSThread.isMainThread||self.ended)return NO;
+    NSNumber *wid=identity[@"wid"];DWNativeWindow *root=wid?_windows[wid]:nil;
+    if(!root||root->root!=wid.unsignedIntValue||![DWNativePlacementIdentity(root->identity)isEqual:identity])return NO;
+    if(![_withheld[wid]isEqual:identity]){_withheld[wid]=identity.copy;[self requireFreshPlacementAcknowledgement];}
+    return YES;
+}
+- (BOOL)isWindowWithheld:(NSDictionary *)identity {
+    if(!NSThread.isMainThread||self.ended||![_withheld[identity[@"wid"]]isEqual:identity]
+        ||!_acknowledgedSequence||_acknowledgedSequence!=_submittedSeq)return NO;
+    const struct dw2_record *records=_sent.bytes;
+    NSSet *family=_families[identity[@"wid"]];if(!family.count)return NO;
+    for(NSUInteger i=0;i<_sent.length/sizeof(*records);i++)if([family containsObject:@(records[i].id.wid)])return NO;
+    return YES;
+}
+- (void)resumeWindow:(NSDictionary *)identity {
+    if(!NSThread.isMainThread||![_withheld[identity[@"wid"]]isEqual:identity])return;
+    [_withheld removeObjectForKey:identity[@"wid"]];[_transitions removeObjectForKey:identity[@"wid"]];[_rebases removeObjectForKey:identity[@"wid"]];[_rebased removeObject:identity[@"wid"]];[self requireFreshPlacementAcknowledgement];
+}
+- (BOOL)canRebaseWindow:(NSDictionary *)identity {
+    NSNumber *wid=identity[@"wid"];DWNativeWindow *root=_windows[wid];
+    return [self isWindowWithheld:identity]&&root&&root->familyKnown&&root->root==wid.unsignedIntValue
+        &&[DWNativePlacementIdentity(root->identity)isEqual:identity]&&_families[wid].count==1&&!_rebases[wid]&&![_rebased containsObject:wid];
+}
+- (BOOL)rebaseWindow:(NSDictionary *)identity bounds:(CGRect)native {
+    if(![self canRebaseWindow:identity]||!DWNativeFiniteRect(native)||fabs(native.origin.x)>1e6||fabs(native.origin.y)>1e6)return NO;
+    NSNumber *wid=identity[@"wid"];DWNativeWindow *root=_windows[wid];
+    if(fabs(root->bounds.size.width-native.size.width)>1||fabs(root->bounds.size.height-native.size.height)>1)return NO;
+    struct dw2_record record={.id=root->identity,.m={1,0,0,1,-native.origin.x,-native.origin.y}};
+    root->bounds=native;_rebases[wid]=[NSData dataWithBytes:&record length:sizeof(record)];[self requireFreshPlacementAcknowledgement];return YES;
+}
+- (BOOL)isWindowRebased:(NSDictionary *)identity {
+    return NSThread.isMainThread&&[_rebased containsObject:identity[@"wid"]]&&_families[identity[@"wid"]].count==1&&[self isWindowWithheld:identity];
+}
+- (void)cancelRebaseWindow:(NSDictionary *)identity {
+    if(!NSThread.isMainThread||![_withheld[identity[@"wid"]]isEqual:identity])return;
+    [_rebases removeObjectForKey:identity[@"wid"]];[_rebased removeObject:identity[@"wid"]];[self requireFreshPlacementAcknowledgement];
+}
+- (DWNativeHiddenRoot *)beginTransitionForWindow:(NSDictionary *)identity {
+    if(!NSThread.isMainThread||self.ended||!(_info.caps&DW2_CAP_ALPHA))return nil;
+    NSNumber *wid=identity[@"wid"];DWNativeWindow *root=_windows[wid];
+    if(!root||!root->familyKnown||root->root!=wid.unsignedIntValue||_families[wid].count!=1||_withheld[wid]
+        ||![DWNativePlacementIdentity(root->identity)isEqual:identity]||!_acknowledgedSequence||_acknowledgedSequence!=_submittedSeq)return nil;
+    DWNativePlacementDescription *found=nil;
+    for(DWNativePlacementDescription *description in _acknowledgedPlacements.objectEnumerator)
+        if(!description->parked&&description->binding.identity.wid==wid.unsignedIntValue&&[description isEqual:_desiredPlacements[@(description->binding.window)]]&&[self placementDescriptionCurrent:description]){found=description;break;}
+    if(!found||found->members.length!=sizeof(DWNativePlacementMember))return nil;
+    const DWNativePlacementMember *member=found->members.bytes;
+    DWNativeHiddenRoot *transition=[[DWNativeHiddenRoot alloc]initWithSession:_placementSession];transition.identity=identity;transition.nativeBounds=member->native;transition.screenRect=found->binding.screen;transition->record=member->record;
+    if(![self withholdWindow:identity])return nil;_transitions[wid]=transition;return transition;
+}
+- (BOOL)transitionCurrent:(DWNativeHiddenRoot *)transition {
+    if(!transition)return NO;
+    NSNumber *wid=transition.identity[@"wid"];DWNativeWindow *root=_windows[wid];
+    return NSThread.isMainThread&&!self.ended&&transition&&transition->session==_placementSession&&_transitions[wid]==transition
+        &&[_withheld[wid]isEqual:transition.identity]&&root&&root->familyKnown&&_families[wid].count==1&&[DWNativePlacementIdentity(root->identity)isEqual:transition.identity];
+}
+- (BOOL)hideTransition:(DWNativeHiddenRoot *)transition {
+    if(![self transitionCurrent:transition]||transition->phase!=0||![self isWindowWithheld:transition.identity])return NO;
+    transition->record.flags=(transition->record.flags&~DW2_RECORD_PINNED)|DW2_RECORD_HAS_ALPHA;transition->record.alpha=0;transition->phase=1;
+    // Normal frames must explicitly restore alpha after this temporary write.
+    _windows[transition.identity[@"wid"]]->alpha=YES;[self requireFreshPlacementAcknowledgement];return YES;
+}
+- (BOOL)isTransitionHidden:(DWNativeHiddenRoot *)transition {
+    return [self transitionCurrent:transition]&&transition->phase==3&&[self isWindowWithheld:transition.identity];
+}
+- (BOOL)revealTransition:(DWNativeHiddenRoot *)transition screen:(CGRect)screen alpha:(double)alpha {
+    if(![self isTransitionHidden:transition]||!DWNativeFiniteRect(screen)||!isfinite(alpha)||alpha<0||alpha>1)return NO;
+    DWNativeWindow *root=_windows[transition.identity[@"wid"]];CGRect native=root->bounds;
+    if(!DWNativeFiniteRect(native))return NO;
+    double mx=native.size.width/screen.size.width,my=native.size.height/screen.size.height;
+    struct dw2_record record={.id=root->identity,.flags=DW2_RECORD_HAS_ALPHA,.alpha=(float)alpha,.m={mx,0,0,my,-screen.origin.x*mx,-screen.origin.y*my}};
+    for(NSUInteger i=0;i<6;i++)if(!isfinite(record.m[i])||fabs(record.m[i])>1e6)return NO;
+    transition->record=record;transition->phase=4;[self requireFreshPlacementAcknowledgement];return YES;
+}
+- (BOOL)isTransitionRevealed:(DWNativeHiddenRoot *)transition {
+    return [self transitionCurrent:transition]&&transition->phase==5&&_acknowledgedSequence&&_acknowledgedSequence==_submittedSeq;
 }
 - (void)describe:(NSDictionary *)snapshot bound:(NSDictionary<NSNumber *,NSDictionary *> *)identities {
     atomic_store(&_turned,uptime());
@@ -609,8 +941,13 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     // One placement per window: where it is shown on several outputs, the one that shows most of it. A transform has one target.
     NSMutableDictionary<NSNumber *,NSDictionary *> *placed=[NSMutableDictionary dictionary];NSMutableDictionary<NSNumber *,NSNumber *> *shown=[NSMutableDictionary dictionary];
     NSMutableDictionary<NSNumber *,NSValue *> *viewports=[NSMutableDictionary dictionary];
+    BOOL spaceFrames=_desktopWide&&(_info.caps&DW2_CAP_SPACE);
+    NSMutableDictionary<NSNumber *,NSNumber *> *outputSpaces=[NSMutableDictionary dictionary],*windowSpaces=[NSMutableDictionary dictionary];
     for(NSDictionary *output in snapshot[@"outputs"]){CGRect viewport=DWNativeJSONRect(output[@"screen_bounds"]);NSNumber *identifier=output[@"id"];
-        if([identifier isKindOfClass:NSNumber.class]&&!CGRectIsNull(viewport))viewports[identifier]=[NSValue valueWithRect:NSRectFromCGRect(viewport)];}
+        if([identifier isKindOfClass:NSNumber.class]&&!CGRectIsNull(viewport)){
+            viewports[identifier]=[NSValue valueWithRect:NSRectFromCGRect(viewport)];
+            if(spaceFrames)outputSpaces[identifier]=@(DWNativeDisplaySpace(viewport));
+        }}
     for(NSDictionary *p in snapshot[@"placements"]){
         NSNumber *logical=p[@"window"];NSDictionary *clip=p[@"clip_rect"][@"size"];if(!logical||!identities[logical])continue;
         double area=[clip[@"width"]doubleValue]*[clip[@"height"]doubleValue];if(placed[logical]&&area<=shown[logical].doubleValue)continue;
@@ -631,7 +968,7 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
         NSDictionary *p=placed[logical],*source=[p[@"source"]isKindOfClass:NSDictionary.class]?p[@"source"]:nil;
         uint64_t identifier=0,generation=0,output=0;CGRect screen=DWNativeJSONRect(p[@"screen_rect"]),clip=DWNativeJSONRect(p[@"clip_rect"]);
         NSValue *viewport=viewports[p[@"output"]];DWNativeWindow *root=_windows[identities[logical][@"wid"]];
-        if(!root||!root->familyKnown||![DWNativePlacementIdentity(root->identity)isEqual:identities[logical]]||!DWNativePlacementSourceMatches(source[@"identity"],identities[logical])
+        if(!root||_withheld[@(root->root)]||!root->familyKnown||![DWNativePlacementIdentity(root->identity)isEqual:identities[logical]]||!DWNativePlacementSourceMatches(source[@"identity"],identities[logical])
             ||![source[@"observation_known"]isEqual:@YES]||!DWNativePlacementInteger(logical,&identifier)
             ||!DWNativePlacementInteger(source[@"generation"],&generation)||!DWNativePlacementInteger(p[@"output"],&output)
             ||!viewport||CGRectIsNull(screen)||CGRectIsNull(clip)||screen.size.width<1||screen.size.height<1)continue;
@@ -640,9 +977,39 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
             .revision=_placementRevision,.screen=screen,.clip=clip,.viewport=NSRectToCGRect(viewport.rectValue)};
         desired[logical]=description;memberData[logical]=[NSMutableData data];
     }
+    // An omitted placement still has a controller source binding. Retain a
+    // separate kind of ACK correspondence for its complete parked family;
+    // never manufacture an output/placement receipt for that backing source.
+    for(NSDictionary *row in snapshot[@"windows"]){
+        if(![row isKindOfClass:NSDictionary.class])continue;
+        NSNumber *logical=row[@"window"];NSDictionary *identity=logical?identities[logical]:nil,*source=[row[@"source"]isKindOfClass:NSDictionary.class]?row[@"source"]:nil;
+        DWNativeWindow *root=identity?_windows[identity[@"wid"]]:nil;uint64_t identifier=0,generation=0;
+        if(!root||placed[logical]||desired[logical]||root->root!=root->identity.wid||!root->familyKnown||_withheld[@(root->root)]
+            ||![DWNativePlacementIdentity(root->identity)isEqual:identity]||!DWNativePlacementSourceMatches(source[@"identity"],identity)
+            ||![source[@"observation_known"]isEqual:@YES]||!DWNativeFiniteRect(root->bounds)||!CGRectEqualToRect(DWNativeJSONRect(source[@"observed_rect"]),root->bounds)
+            ||!DWNativePlacementInteger(logical,&identifier)||!identifier||!DWNativePlacementInteger(source[@"generation"],&generation)||!generation)continue;
+        DWNativePlacementDescription *description=[DWNativePlacementDescription new];description->parked=YES;
+        description->binding=(DWNativePlacementBinding){.identity=root->identity,.window=identifier,.generation=generation,.revision=_placementRevision};
+        if([self guardedParkingFamilyCurrent:&description->binding]){
+            NSDictionary *guard=_guardedParkings[logical];
+            description->guardEpoch=[guard[@"guard_epoch"]unsignedLongLongValue];
+            description->guardMembers=guard[@"members"];
+            description->binding.screen=DWNativeJSONRect(guard[@"screen_rect"]);
+        }
+        desired[logical]=description;memberData[logical]=[NSMutableData data];
+    }
     // In the order of the window numbers: the same scene is then the same bytes, and is not sent twice.
     for(NSNumber *wid in [logicals.allKeys sortedArrayUsingSelector:@selector(compare:)]){
         DWNativeWindow *window=_windows[wid];NSDictionary *p=placed[logicals[wid]];CGSize own=window->bounds.size;
+        if(_withheld[@(window->root)]){
+            DWNativeHiddenRoot *transition=_transitions[wid];
+            if(transition&&[self transitionCurrent:transition]&&(transition->phase==1||transition->phase==2||transition->phase==4||transition->phase==5)){
+                [_records appendBytes:&transition->record length:sizeof(transition->record)];[order addObject:logicals[wid]];
+            }
+            NSData *neutral=_rebases[wid];
+            if(neutral&&window->root==wid.unsignedIntValue&&window->familyKnown&&_families[wid].count==1){[_records appendData:neutral];[order addObject:logicals[wid]];}
+            continue;
+        }
         window->logical=logicals[wid];
         struct dw2_record record={.id=window->identity,.m={1,0,0,1,-parkX,-parkY}};
         NSDictionary *origin=p[@"screen_rect"][@"origin"],*size=p[@"screen_rect"][@"size"];
@@ -650,13 +1017,18 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
         DWNativeWindow *root=_windows[@(window->root)];CGSize rootSize=root?root->bounds.size:own;BOOL nativePlaced=NO;
         if(p&&sw>=1&&sh>=1&&own.width>0&&own.height>0&&rootSize.width>0&&rootSize.height>0){
             // Screen to window-local (protocol2.h): the window's own width and height are drawn across the placement's.
+            uint64_t targetSpace=spaceFrames?[outputSpaces[p[@"output"]]unsignedLongLongValue]:0;
             double mx=rootSize.width/sw,my=rootSize.height/sh;
             double dx=root?window->bounds.origin.x-root->bounds.origin.x:0,dy=root?window->bounds.origin.y-root->bounds.origin.y:0;
-            double m[6]={mx,0,0,my,-sx*mx-dx,-sy*my-dy};BOOL sound=YES;
+            double m[6]={mx,0,0,my,-sx*mx-dx,-sy*my-dy};
+            // Space ownership belongs to the complete audited family. Losing
+            // that report must not move a root while its children are restored.
+            BOOL sound=!spaceFrames||(targetSpace!=0&&root&&root->familyKnown);
             // The helper's bounds on a matrix; a placement they cannot express (a window a million points off, a zoom of a thousandth) is parked.
             for(int i=0;i<6;i++)if(!isfinite(m[i])||fabs(m[i])>1e6)sound=NO;
             if(sound){
                 memcpy(record.m,m,sizeof(m));nativePlaced=YES;
+                if(targetSpace)windowSpaces[wid]=@(targetSpace);
                 NSValue *viewport=viewports[p[@"output"]];DWNativeClipGeometry geometry={0};
                 if(viewport&&root&&DWNativeClipPlacement(window->bounds,root->bounds,CGRectMake(sx,sy,sw,sh),NSRectToCGRect(viewport.rectValue),&geometry)){
                     DWNativeClipRecord clip={.identity=window->identity,.logical=logicals[wid].unsignedLongLongValue,.output=[p[@"output"]unsignedLongLongValue],.root=window->root,.viewport=NSRectToCGRect(viewport.rectValue),.geometry=geometry};
@@ -673,16 +1045,39 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
         double opacity=[p[@"opacity"]isKindOfClass:NSNumber.class]?fmax(0,fmin(1,[p[@"opacity"]doubleValue])):1;
         if(p&&opacity!=1&&(_info.caps&DW2_CAP_ALPHA))window->alpha=YES;
         if(window->alpha){record.flags=DW2_RECORD_HAS_ALPHA;record.alpha=(float)opacity;}
-        if(!nativePlaced){[desired removeObjectForKey:logicals[wid]];[memberData removeObjectForKey:logicals[wid]];}
         DWNativePlacementDescription *description=desired[logicals[wid]];
-        if(description){DWNativePlacementMember member={.record=record,.native=window->bounds,.index=(uint32_t)(_records.length/sizeof(record)),.parent=window->parent};[memberData[logicals[wid]]appendBytes:&member length:sizeof(member)];}
+        if(!p&&description&&description->parked&&description->guardEpoch){
+            record.m[4]=-(description->binding.screen.origin.x+(window->bounds.origin.x-root->bounds.origin.x));
+            record.m[5]=-(description->binding.screen.origin.y+(window->bounds.origin.y-root->bounds.origin.y));
+        }
+        if(!nativePlaced&&(!description||!description->parked)){[desired removeObjectForKey:logicals[wid]];[memberData removeObjectForKey:logicals[wid]];description=nil;}
+        if(description){DWNativePlacementMember member={.record=record,.targetSpace=[windowSpaces[wid]unsignedLongLongValue],.native=window->bounds,.index=(uint32_t)(_records.length/sizeof(record)),.parent=window->parent};[memberData[logicals[wid]]appendBytes:&member length:sizeof(member)];}
         [_records appendBytes:&record length:sizeof(record)];[order addObject:logicals[wid]];
     }
     for(NSNumber *wid in [_releases.allKeys sortedArrayUsingSelector:@selector(compare:)]){
         DWNativeWindow *window=_releases[wid];struct dw2_record record={.id=window->identity,.flags=DW2_RECORD_RESTORE};
         [_records appendBytes:&record length:sizeof(record)];[order addObject:window->logical?:wid];
     }
-    for(NSNumber *logical in desired){DWNativePlacementDescription *description=desired[logical];description->members=[memberData[logical]copy];}
+    NSMutableData *spaceRequests=[NSMutableData dataWithLength:(_records.length/sizeof(struct dw2_record))*sizeof(uint64_t)];
+    const struct dw2_record *described=_records.bytes;uint64_t *spaces=spaceRequests.mutableBytes;
+    for(NSUInteger i=0;i<_records.length/sizeof(*described);i++)spaces[i]=[windowSpaces[@(described[i].id.wid)]unsignedLongLongValue];
+    _recordSpaces=spaceRequests.copy;
+    for(NSNumber *logical in desired){
+        DWNativePlacementDescription *description=desired[logical];NSMutableData *data=memberData[logical];
+        NSDictionary *placement=placed[logical];
+        // Apply the pin policy only after every member has a valid placement.
+        // Parking, hidden transitions and ordinary frames omit the bit, asking
+        // the helper to restore the journalled sublevel without changing focus.
+        if(!description->parked&&[placement[@"pinned"]isEqual:@YES]
+            &&(![placement[@"opacity"]isKindOfClass:NSNumber.class]||[placement[@"opacity"]doubleValue]>0)){
+            DWNativePlacementMember *members=data.mutableBytes;struct dw2_record *records=_records.mutableBytes;
+            for(NSUInteger i=0;i<data.length/sizeof(*members);i++){
+                members[i].record.flags|=DW2_RECORD_PINNED;
+                records[members[i].index].flags|=DW2_RECORD_PINNED;
+            }
+        }
+        description->members=data.copy;
+    }
     if(![_desiredPlacements isEqualToDictionary:desired]){
         [self invalidatePlacementReadiness];_forced=YES;for(DWNativePlacementDescription *description in desired.objectEnumerator)description->binding.revision=_placementRevision;
     }
@@ -704,14 +1099,45 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
 }
 - (void)submit {
     BOOL retry=_releases.count||atomic_load(&_retrying);
-    if(self.ended||!_described||(!_forced&&[_records isEqualToData:_sent]&&(!retry||uptime()-_lastSent<250)))return;
+    if(self.ended||!_described||(!_forced&&[_records isEqualToData:_sent]&&[_recordSpaces isEqualToData:_sentSpaces]&&(!retry||uptime()-_lastSent<250)))return;
     NSUInteger count=_records.length/sizeof(struct dw2_record);
-    // A frame describes every bound window. Sending a prefix would leave the omitted
-    // windows at an old placement while pretending the full snapshot was submitted.
+    // A frame describes every bound window except an explicitly withheld family,
+    // which has no placement receipt. Never truncate the remaining frame.
     if(count>_info.max_records){fprintf(stderr,"Infinify: native presentation ended: %lu windows exceed the helper's frame limit of %u; restoring all windows\n",(unsigned long)count,_info.max_records);[self finish];return;}
-    uint64_t seq=0;os_unfair_lock_lock(&_lock);int result=_client?dw_client_submit_frame(_client,_records.bytes,(uint32_t)count,&seq):DW_CLIENT_LOST;os_unfair_lock_unlock(&_lock);
+    if(!(_info.caps&DW2_CAP_PINNED)){
+        const struct dw2_record *records=_records.bytes;
+        for(NSUInteger i=0;i<count;i++)if(records[i].flags&DW2_RECORD_PINNED){
+            fprintf(stderr,"Infinify: native presentation ended: pinned windows require the helper's journalled sublevel capability; restoring all windows\n");
+            [self finish];return;
+        }
+    }
+    BOOL spaceFrames=_desktopWide&&(_info.caps&DW2_CAP_SPACE);
+    NSMutableData *extended=nil;
+    if(spaceFrames){
+        if(_recordSpaces.length!=count*sizeof(uint64_t))return;
+        extended=[NSMutableData dataWithLength:count*sizeof(struct dw2_space_record)];
+        struct dw2_space_record *out=extended.mutableBytes;const struct dw2_record *in=_records.bytes;const uint64_t *spaces=_recordSpaces.bytes;
+        for(NSUInteger i=0;i<count;i++)out[i]=(struct dw2_space_record){.record=in[i],.target_space=spaces[i]};
+    }
+    uint64_t seq=0;os_unfair_lock_lock(&_lock);
+    int result=!_client?DW_CLIENT_LOST:spaceFrames?dw_client_submit_space_frame(_client,extended.bytes,(uint32_t)count,&seq):dw_client_submit_frame(_client,_records.bytes,(uint32_t)count,&seq);
+    os_unfair_lock_unlock(&_lock);
     if(result!=DW_CLIENT_OK)return;
-    _sent=[_records copy];_sentOrder=_order;_forced=NO;_lastSent=uptime();_submittedSeq=seq;
+    if(spaceFrames){
+        const struct dw2_space_record *records=extended.bytes;uint64_t now=uptime();
+        for(NSUInteger i=0;i<count;i++){
+            const struct dw2_space_record *record=&records[i];if(!record->target_space||record->record.flags&DW2_RECORD_RESTORE)continue;
+            NSNumber *wid=@(record->record.id.wid);DWNativeWindow *window=_windows[wid];
+            if(!window||window->root!=record->record.id.wid)continue;
+            DWNativeSpaceReflow *prior=_spaceReflows[wid];
+            if(prior&&!memcmp(&prior->identity,&record->record.id,sizeof(prior->identity))&&prior->target==record->target_space)continue;
+            DWNativeSpaceReflow *reflow=[DWNativeSpaceReflow new];reflow->identity=record->record.id;
+            reflow->original=prior&&prior->changed&&!memcmp(&prior->identity,&record->record.id,sizeof(prior->identity))?prior->original:window->bounds;
+            reflow->before=reflow->observed=window->bounds;reflow->target=record->target_space;reflow->submittedAt=reflow->changedAt=now;
+            reflow->changed=prior&&prior->changed;_spaceReflows[wid]=reflow;
+        }
+    }
+    _sent=[_records copy];_sentSpaces=[_recordSpaces copy];_sentOrder=_order;_forced=NO;_lastSent=uptime();_submittedSeq=seq;
     _framePlacements[@(seq)]=_desiredPlacements;_acknowledgedPlacements=@{};_acknowledgedSequence=0;
     if(_releases.count)for(DWNativeWindow *window in _releases.objectEnumerator)if(!window->releaseSeq)window->releaseSeq=seq;
     // A frame the next one replaced is never answered: what is kept is bounded by age.
@@ -746,8 +1172,17 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     } else reply[@"probe"]=NSNull.null;
     free(bytes);
     NSMutableArray *records=[NSMutableArray array];const struct dw2_record *sent=_sent.bytes;
-    for(NSUInteger i=0;i<_sent.length/sizeof(*sent);i++)[records addObject:@{@"window":i<_sentOrder.count?_sentOrder[i]:NSNull.null,@"wid":@(sent[i].id.wid),@"m":@[@(sent[i].m[0]),@(sent[i].m[1]),@(sent[i].m[2]),@(sent[i].m[3]),@(sent[i].m[4]),@(sent[i].m[5])],@"alpha":sent[i].flags&DW2_RECORD_HAS_ALPHA?@(sent[i].alpha):NSNull.null}];
+    const uint64_t *sentSpaces=_sentSpaces.bytes;
+    for(NSUInteger i=0;i<_sent.length/sizeof(*sent);i++)[records addObject:@{@"window":i<_sentOrder.count?_sentOrder[i]:NSNull.null,@"wid":@(sent[i].id.wid),@"m":@[@(sent[i].m[0]),@(sent[i].m[1]),@(sent[i].m[2]),@(sent[i].m[3]),@(sent[i].m[4]),@(sent[i].m[5])],@"alpha":sent[i].flags&DW2_RECORD_HAS_ALPHA?@(sent[i].alpha):NSNull.null,
+        @"requested_space":i<_sentSpaces.length/sizeof(*sentSpaces)&&sentSpaces[i]?@(sentSpaces[i]):NSNull.null,@"requested_pinned":@((sent[i].flags&DW2_RECORD_PINNED)!=0)}];
     reply[@"records"]=records;
+    NSMutableArray *reflows=[NSMutableArray array];
+    for(NSNumber *wid in [_spaceReflows.allKeys sortedArrayUsingSelector:@selector(compare:)]){DWNativeSpaceReflow *reflow=_spaceReflows[wid];
+        [reflows addObject:@{@"identity":DWNativePlacementIdentity(reflow->identity),@"target_space":@(reflow->target),
+            @"original_native_frame":DWNativeRectArray(reflow->original),@"before_native_frame":DWNativeRectArray(reflow->before),@"observed_native_frame":DWNativeRectArray(reflow->observed),
+            @"frame_changed":@(reflow->changed),@"settled":@(reflow->settled),@"ended_by_native_input":@(reflow->nativeInput),
+            @"acknowledged_sequence":@(reflow->acknowledgedSequence),@"native_frame_restored":@(CGRectEqualToRect(reflow->original,reflow->observed)),@"native_frame_restore_owned":@NO}];}
+    reply[@"space_reflows"]=reflows;
     reply[@"clipping"]=@{@"native_supported":@NO,@"planning_only":@YES,@"basis":@"last described placement and cached native family bounds; content rectangles only",
         @"remaining":@"exact original native shape, event and shadow region snapshot/persistence, apply/readback and restoration support",@"plan":[self clippingPlan]};
     return [NSJSONSerialization dataWithJSONObject:@{@"Ok":@{@"DebugNative":reply}} options:0 error:nil];
@@ -792,6 +1227,18 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     if(!self.ended)[self.owners[identity[@"pid"]]bound:identity bounds:native family:family];
 }
 - (void)unbound:(NSDictionary *)identity { [self.owners[identity[@"pid"]]unbound:identity]; }
+- (BOOL)withholdWindow:(NSDictionary *)identity { return !self.ended&&[self.owners[identity[@"pid"]]withholdWindow:identity]; }
+- (BOOL)isWindowWithheld:(NSDictionary *)identity { return !self.ended&&[self.owners[identity[@"pid"]]isWindowWithheld:identity]; }
+- (void)resumeWindow:(NSDictionary *)identity { [self.owners[identity[@"pid"]]resumeWindow:identity]; }
+- (BOOL)canRebaseWindow:(NSDictionary *)identity { return !self.ended&&[self.owners[identity[@"pid"]]canRebaseWindow:identity]; }
+- (BOOL)rebaseWindow:(NSDictionary *)identity bounds:(CGRect)native { return !self.ended&&[self.owners[identity[@"pid"]]rebaseWindow:identity bounds:native]; }
+- (BOOL)isWindowRebased:(NSDictionary *)identity { return !self.ended&&[self.owners[identity[@"pid"]]isWindowRebased:identity]; }
+- (void)cancelRebaseWindow:(NSDictionary *)identity { [self.owners[identity[@"pid"]]cancelRebaseWindow:identity]; }
+- (DWNativeHiddenRoot *)beginTransitionForWindow:(NSDictionary *)identity { return self.ended?nil:[self.owners[identity[@"pid"]]beginTransitionForWindow:identity]; }
+- (BOOL)hideTransition:(DWNativeHiddenRoot *)transition { return !self.ended&&[self.owners[transition.identity[@"pid"]]hideTransition:transition]; }
+- (BOOL)isTransitionHidden:(DWNativeHiddenRoot *)transition { return !self.ended&&[self.owners[transition.identity[@"pid"]]isTransitionHidden:transition]; }
+- (BOOL)revealTransition:(DWNativeHiddenRoot *)transition screen:(CGRect)screen alpha:(double)alpha { return !self.ended&&[self.owners[transition.identity[@"pid"]]revealTransition:transition screen:screen alpha:alpha]; }
+- (BOOL)isTransitionRevealed:(DWNativeHiddenRoot *)transition { return !self.ended&&[self.owners[transition.identity[@"pid"]]isTransitionRevealed:transition]; }
 - (void)describe:(NSDictionary *)snapshot bound:(NSDictionary<NSNumber *,NSDictionary *> *)identities {
     if(self.ended)return;
     for(DWNativePresenter *session in self.sessions){NSMutableDictionary *owned=[NSMutableDictionary dictionary];
@@ -803,6 +1250,26 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     if(!NSThread.isMainThread||self.ended)return;
     for(DWNativePresenter *session in self.sessions)[session requireFreshPlacementAcknowledgement];
 }
+- (void)setGuardedParkings:(NSDictionary<NSNumber *,NSDictionary *> *)descriptors {
+    if(!NSThread.isMainThread||self.ended)return;
+    for(DWNativePresenter *session in self.sessions){
+        NSMutableDictionary *owned=[NSMutableDictionary dictionary];
+        if([descriptors isKindOfClass:NSDictionary.class])for(id logical in descriptors){
+            uint64_t identifier=0;NSDictionary *descriptor=DWNativeGuardedParkingDescriptor(descriptors[logical]);
+            if(DWNativePlacementInteger(logical,&identifier)&&identifier&&[descriptor[@"window"]isEqual:logical]
+                &&self.owners[descriptor[@"identity"][@"pid"]]==session)owned[logical]=descriptor;
+        }
+        [session setGuardedParkings:owned];
+    }
+}
+- (DWNativeAppliedParking *)acknowledgedGuardedParkingForWindow:(NSNumber *)window identity:(NSDictionary *)identity generation:(NSNumber *)generation guardEpoch:(uint64_t)epoch {
+    if(!NSThread.isMainThread||self.ended||![identity isKindOfClass:NSDictionary.class])return nil;
+    return [self.owners[identity[@"pid"]]acknowledgedGuardedParkingForWindow:window identity:identity generation:generation guardEpoch:epoch];
+}
+- (BOOL)isAcknowledgedGuardedParkingCurrent:(DWNativeAppliedParking *)parking {
+    return NSThread.isMainThread&&!self.ended&&[parking isKindOfClass:DWNativeAppliedParking.class]
+        &&[self.owners[parking.identity[@"pid"]]isAcknowledgedGuardedParkingCurrent:parking];
+}
 - (DWNativeAppliedPlacement *)acknowledgedPlacementForWindow:(NSNumber *)window identity:(NSDictionary *)identity generation:(NSNumber *)generation output:(NSNumber *)output {
     if(!NSThread.isMainThread||self.ended)return nil;
     return [self.owners[identity[@"pid"]]acknowledgedPlacementForWindow:window identity:identity generation:generation output:output];
@@ -810,6 +1277,9 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
 - (BOOL)isAcknowledgedPlacementCurrent:(DWNativeAppliedPlacement *)placement {
     return NSThread.isMainThread&&!self.ended&&[placement isKindOfClass:DWNativeAppliedPlacement.class]
         &&[self.owners[placement.identity[@"pid"]]isAcknowledgedPlacementCurrent:placement];
+}
+- (BOOL)isParkingAcknowledgedForWindow:(NSNumber *)window identity:(NSDictionary *)identity generation:(NSNumber *)generation {
+    return NSThread.isMainThread&&!self.ended&&[self.owners[identity[@"pid"]]isParkingAcknowledgedForWindow:window identity:identity generation:generation];
 }
 - (NSArray<NSDictionary *> *)clippingPlan {
     if(self.ended)return @[];NSMutableArray *result=[NSMutableArray array];for(DWNativePresenter *session in self.sessions)[result addObjectsFromArray:[session clippingPlan]];return result;

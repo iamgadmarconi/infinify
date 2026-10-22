@@ -106,6 +106,80 @@ int main(void){__weak DWNavigationCoordinator *weak;@autoreleasepool{
     NSNumber *unsupported=call(host,@{@"op":@"attach",@"identity":owned,@"bundle_id":@"test",@"title":@"unsupported owner",@"buffer":@{@"width":@200,@"height":@100},@"source_rect":rect(0,0,200,100)})[@"window"];
     before=driver.calls;[nav navigate:@{@"op":@"navigate_window",@"window":unsupported,@"output":o1,@"zoom_policy":@"reset"}];check(worker.count==0&&driver.calls==before,@"unsupported owner authority never dispatches");
     driver.observation=ident(30,4);unchanged=snapshot();[nav observe];drain(worker);drain(main);check([snapshot()isEqual:unchanged],@"unvalidated owner observation stays unknown");
+    // The native tap observes a real root press; no synthetic click or focus
+    // setter is involved. This uses the actual coordinator and controller.
+    NSDictionary *(^view)(void)=^NSDictionary *{for(NSDictionary *o in snapshot()[@"outputs"])if([o[@"id"]isEqual:o1])return o;return nil;};
+    NSDictionary *(^clickBinding)(void)=^NSDictionary *{for(NSDictionary *w in snapshot()[@"windows"])if([w[@"window"]isEqual:windows[0]])return @{@"window":windows[0],@"identity":w[@"source"][@"identity"],@"generation":w[@"source"][@"generation"]};return nil;};
+    void (^partialView)(void)=^{
+        [nav invalidate];call(host,@{@"op":@"zoom",@"output":o1,@"zoom":@.5,@"anchor":@{@"x":@0,@"y":@64}});
+        NSDictionary *camera=view()[@"camera"];call(host,@{@"op":@"pan",@"output":o1,@"screen_delta":@{@"x":@((1600-[camera[@"x"]doubleValue])*.5),@"y":@(-[camera[@"y"]doubleValue]*.5)}});
+    };
+    partialView();NSDictionary *click=clickBinding(),*pose=view();before=driver.calls;
+    NSDictionary *other=nil;for(NSDictionary *w in snapshot()[@"windows"])if([w[@"window"]isEqual:windows[1]])other=@{@"op":@"observe_focus",@"window":windows[1],@"identity":w[@"source"][@"identity"],@"generation":w[@"source"][@"generation"]};
+    call(host,other);driver.observation=ids[1];[nav beginNativeClick:click output:o1];drain(worker);drain(main);
+    check([view()isEqual:pose]&&[snapshot()[@"navigation"][@"flights"]count]==0,@"pre-delivery old focus does not consume the native click");
+    driver.observation=ids[0];[nav observe];drain(worker);drain(main);
+    check([snapshot()[@"focus"][@"observed_native"][@"window"]isEqual:windows[0]]&&[view()isEqual:pose]&&[snapshot()[@"navigation"][@"flights"]count]==0&&driver.calls==before,@"native root click confirms actual focus without activation pan, zoom or native setter");
+    [nav endNativeClick:click completed:YES];drain(worker);drain(main);
+    check([snapshot()[@"navigation"][@"flights"]count]==0,@"default click release leaves a clipped native window and camera alone");
+    NSString *clickConfig=[NSTemporaryDirectory()stringByAppendingPathComponent:NSUUID.UUID.UUIDString];
+    check([@"[navigation]\nauto_navigate_on_click = true\n" writeToFile:clickConfig atomically:YES encoding:NSUTF8StringEncoding error:nil],@"write owned click config");
+    call(host,@{@"op":@"load_config",@"path":clickConfig});[NSFileManager.defaultManager removeItemAtPath:clickConfig error:nil];
+    __block BOOL resumed=NO;nav.nativeClickReleaseReady=^BOOL(NSDictionary *binding){return resumed&&[binding[@"window"]isEqual:windows[0]];};
+    partialView();[nav beginNativeClick:click output:o1];[nav endNativeClick:click completed:YES];drain(worker);drain(main);
+    check([snapshot()[@"navigation"][@"flights"]count]==0,@"completed already-focused click waits for native ownership release and placement ACK");
+    resumed=YES;[nav frame];drain(worker);drain(main);
+    NSDictionary *flight=snapshot()[@"navigation"][@"flights"][o1.stringValue];
+    check(flight&&[flight[@"zoom_target"]doubleValue]==.5&&driver.calls==before,@"acknowledged completed click navigates at current zoom without a native focus setter");
+    partialView();[nav beginNativeClick:click output:o1];[nav endNativeClick:click completed:NO];drain(worker);drain(main);
+    check([snapshot()[@"navigation"][@"flights"]count]==0,@"a native drag or cancelled pair never becomes release navigation");
+    partialView();resumed=NO;[nav beginNativeClick:click output:o1];[nav endNativeClick:click completed:YES];drain(worker);drain(main);
+    call(host,@{@"op":@"pan",@"output":o1,@"screen_delta":@{@"x":@10,@"y":@0}});pose=view();resumed=YES;[nav frame];drain(worker);drain(main);
+    check([view()isEqual:pose]&&[snapshot()[@"navigation"][@"flights"]count]==0,@"deferred click cannot overwrite a newer camera pose");
+    partialView();resumed=NO;[nav beginNativeClick:click output:o1];[nav endNativeClick:click completed:YES];drain(worker);drain(main);clock+=2000000000;[nav frame];resumed=YES;[nav frame];drain(worker);drain(main);
+    check([snapshot()[@"navigation"][@"flights"]count]==0,@"expired placement wait cannot navigate later");
+    partialView();call(host,other);[nav beginNativeClick:click output:o1];drain(worker);clock+=200000000;drain(main);
+    check([snapshot()[@"focus"][@"observed_native"][@"window"]isEqual:windows[1]],@"aged root readback cannot confirm a click");
+    [nav endNativeClick:click completed:NO];drain(worker);drain(main);check([snapshot()[@"focus"][@"observed_native"][@"window"]isEqual:windows[0]]&&[snapshot()[@"navigation"][@"flights"]count]==0,@"fresh readback after rejected aged result stays focus-only");
+    // A real app can become key while its new root is deliberately placed
+    // behind Fill. Correct that launch observation once; later input wins.
+    [nav invalidate];call(host,@{@"op":@"adoption_complete"});call(host,@{@"op":@"native_resize_capability",@"enabled":@YES});
+    [nav navigate:@{@"op":@"focus",@"window":windows[0]}];drain(worker);drain(main);
+    NSDictionary * (^full)(void)=^NSDictionary *{return snapshot()[@"outputs"][0][@"fullscreen"];};
+    void (^enter)(void)=^{[nav navigate:@{@"op":@"focus",@"window":windows[0]}];drain(worker);drain(main);[nav navigate:@{@"op":@"action",@"output":o1,@"action":@"toggle-fullscreen"}];drain(worker);drain(main);check([full()[@"window"]isEqual:windows[0]],@"enter Fill for arrival policy");};
+    enter();NSDictionary *arrival=call(host,@{@"op":@"attach",@"identity":ident(40,5),@"bundle_id":@"new",@"title":@"arriving",@"buffer":@{@"width":@200,@"height":@100},@"source_rect":rect(0,0,200,100),@"output":o1});
+    check([arrival[@"background"]boolValue],@"attach exposes actual background placement provenance");
+    NSDictionary *filled=snapshot()[@"outputs"];[nav preserveBackgroundArrival:arrival];before=driver.calls;
+    driver.observation=ident(40,5);[nav observe];drain(worker);drain(main);
+    check([full()[@"window"]isEqual:windows[0]]&&[snapshot()[@"outputs"]isEqual:filled]&&driver.calls==before,@"launch focus leaves Fill and camera unchanged and queues one actual refocus");
+    drain(worker);drain(main);check(driver.calls==before+1&&[snapshot()[@"focus"][@"observed_native"][@"window"]isEqual:windows[0]],@"background correction uses the driver, not newcomer readback, to confirm Fill focus");
+    [nav observe];drain(worker);drain(main);check(full()==(id)NSNull.null&&[snapshot()[@"focus"][@"intent"]isEqual:arrival[@"window"]],@"later native activation is not suppressed after the one correction");
+    enter();[nav preserveBackgroundArrival:arrival];[nav cancelBackgroundArrival];before=driver.calls;[nav observe];drain(worker);drain(main);
+    check(full()==(id)NSNull.null&&driver.calls==before,@"physical keyboard or Dock input retires launch correction before native activation");
+    enter();[nav preserveBackgroundArrival:arrival];clock+=1600000000;before=driver.calls;[nav observe];drain(worker);drain(main);
+    check(full()==(id)NSNull.null&&driver.calls==before,@"expired arrival cannot override later native focus");
+    enter();[nav preserveBackgroundArrival:arrival];before=driver.calls;
+    nav.observationBinding=^DWObservedBinding{NSDictionary *binding=nil;for(NSDictionary *w in snapshot()[@"windows"])if([w[@"window"]isEqual:windows[0]])binding=@{@"window":w[@"window"],@"identity":w[@"source"][@"identity"],@"generation":w[@"source"][@"generation"]};return ^NSDictionary *(NSDictionary *actual){(void)actual;return binding;};};
+    driver.observation=ident(10,99);[nav observe];drain(worker);drain(main);
+    check([full()[@"window"]isEqual:windows[0]]&&driver.calls==before,@"Fill parent's verified native dialog keeps focus without corrective root selection");nav.observationBinding=nil;
+    [nav preserveBackgroundArrival:arrival];driver.observation=ident(40,5);before=driver.calls;[nav observe];drain(worker);drain(main);
+    driver.observation=ident(40,99);drain(worker);drain(main);check(driver.calls==before&&snapshot()[@"focus"][@"pending_effect"]==NSNull.null,@"new arrival's dialog supersedes a queued root refocus before any native setter");
+    // An authored quiet rule has the same launch-only correction outside Fill.
+    // The real app may activate itself despite the controller requesting no focus.
+    if(full()!=(id)NSNull.null)[nav navigate:@{@"op":@"action",@"output":o1,@"action":@"toggle-fullscreen"}];
+    [nav navigate:@{@"op":@"focus",@"window":windows[0]}];drain(worker);drain(main);[nav invalidate];
+    NSString *quietConfig=[NSTemporaryDirectory()stringByAppendingPathComponent:NSUUID.UUID.UUIDString];
+    check([@"[[window_rules]]\napp_id = \"quiet\"\nfocus_on_open = false\n" writeToFile:quietConfig atomically:YES encoding:NSUTF8StringEncoding error:nil],@"write owned quiet config");
+    call(host,@{@"op":@"load_config",@"path":quietConfig});[NSFileManager.defaultManager removeItemAtPath:quietConfig error:nil];
+    NSDictionary *quietArrival=call(host,@{@"op":@"attach",@"identity":ident(50,6),@"bundle_id":@"quiet",@"title":@"quiet arrival",@"buffer":@{@"width":@200,@"height":@100},@"source_rect":rect(0,0,200,100),@"output":o1});
+    check(![quietArrival[@"background"]boolValue]&&quietArrival[@"effect"]==NSNull.null,@"quiet rule keeps ordinary arrival unfocused outside Fill");
+    NSDictionary *quietViews=snapshot()[@"outputs"];[nav preserveBackgroundArrival:quietArrival];before=driver.calls;driver.observation=ident(50,6);
+    [nav observe];drain(worker);drain(main);
+    check([snapshot()[@"focus"][@"intent"]isEqual:windows[0]]&&[snapshot()[@"outputs"]isEqual:quietViews]&&driver.calls==before,@"quiet launch native activation preserves exact prior live focus and camera");
+    drain(worker);drain(main);check(driver.calls==before+1&&[snapshot()[@"focus"][@"observed_native"][@"window"]isEqual:windows[0]],@"quiet correction confirms only the actual driver result");
+    [nav observe];drain(worker);drain(main);check([snapshot()[@"focus"][@"intent"]isEqual:quietArrival[@"window"]],@"quiet rule does not suppress later native selection");
+    [nav navigate:@{@"op":@"focus",@"window":windows[0]}];drain(worker);drain(main);[nav preserveBackgroundArrival:quietArrival];[nav cancelBackgroundArrival];before=driver.calls;
+    [nav observe];drain(worker);drain(main);check([snapshot()[@"focus"][@"intent"]isEqual:quietArrival[@"window"]]&&driver.calls==before,@"physical input cancels quiet launch correction");
     [nav navigate:navigate(1,o1)];weak=nav;[nav shutdown];nav=nil;drain(worker);drain(main);
     driftwm_desktop_destroy(host);}
     check(weak==nil,@"queued closures safely retain until shutdown completion");puts("PASS: headless Objective-C coordinator with actual Rust ABI; no native focus or UI proof.");return 0;

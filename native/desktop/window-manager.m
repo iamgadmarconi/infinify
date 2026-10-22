@@ -17,6 +17,7 @@
 #import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
 #include <dlfcn.h>
+#include <libproc.h>
 // A candidate is offered once its bounds have held this long. The idle poll comes
 // every 80 ms, so successive completed observations normally satisfy this delay.
 static const NSTimeInterval still=.05;
@@ -83,6 +84,56 @@ static NSDictionary<NSNumber *,id> *windowSubroles(NSDictionary<NSNumber *,NSNum
         if(complete)for(NSNumber *wid in asked)if([asked[wid]isEqual:pid]&&![listed containsObject:wid])subroles[wid]=NSNull.null;
     }
     return subroles;
+}
+// Startup preservation is not discovery/admission: these records can only keep
+// an existing exact bundle/title slot waiting. In particular, the all-window
+// list never supplies native candidate bases or calls windowAppeared:. Read on
+// the worker, with the same login UID and exact process instance checked around
+// the metadata read. Missing titles cannot be guessed from application names.
+static NSArray<NSNumber *> *preservationBirth(pid_t pid) {
+    struct proc_bsdinfo process={0};
+    if(pid<=1||pid==getpid()||proc_pidinfo(pid,PROC_PIDTBSDINFO,0,&process,sizeof(process))!=sizeof(process)||process.pbi_uid!=getuid()||
+       !process.pbi_start_tvsec||process.pbi_start_tvusec>=1000000)return nil;
+    return @[@(process.pbi_start_tvsec),@(process.pbi_start_tvusec)];
+}
+static NSArray<NSDictionary *> *nativePreservedWindows(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope,NSSet<NSNumber *> *offered,NSInteger benchmark,NSString *__autoreleasing *why) {
+    NSArray *rows=CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionAll|kCGWindowListExcludeDesktopElements,kCGNullWindowID));
+    if(!rows){if(why)*why=@"the all-window metadata for saved slots is unavailable";return nil;}
+    NSMutableDictionary *births=[NSMutableDictionary dictionary],*bundles=[NSMutableDictionary dictionary],*candidates=[NSMutableDictionary dictionary],*asked=[NSMutableDictionary dictionary],*titles=[NSMutableDictionary dictionary];
+    for(NSDictionary *row in rows){
+        NSNumber *wid=row[(id)kCGWindowNumber],*pid=row[(id)kCGWindowOwnerPID],*level=row[(id)kCGWindowLayer];CGRect frame=CGRectZero;
+        if(![wid isKindOfClass:NSNumber.class]||!wid.unsignedIntValue||![pid isKindOfClass:NSNumber.class]||pid.intValue<=1||pid.intValue==getpid()||[offered containsObject:wid]||(scope&&!scope[pid]))continue;
+        if(![level isKindOfClass:NSNumber.class]||(level.integerValue!=0&&!(scope&&benchmark>0&&level.integerValue==benchmark)))continue;
+        NSDictionary *bounds=row[(id)kCGWindowBounds];
+        if(![bounds isKindOfClass:NSDictionary.class]||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)bounds,&frame)||
+           !isfinite(frame.origin.x)||!isfinite(frame.origin.y)||!isfinite(frame.size.width)||!isfinite(frame.size.height)||frame.size.width<40||frame.size.height<40)continue;
+        id born=births[pid];if(!born){born=preservationBirth(pid.intValue)?:NSNull.null;births[pid]=born;}
+        if(born==NSNull.null||(scope&&![scope[pid]isEqual:born]))continue;
+        id bundle=bundles[pid];if(!bundle){NSRunningApplication *app=[NSRunningApplication runningApplicationWithProcessIdentifier:pid.intValue];
+            bundle=app&&app.activationPolicy==NSApplicationActivationPolicyRegular&&app.bundleIdentifier.length?app.bundleIdentifier:NSNull.null;bundles[pid]=bundle;}
+        if(bundle==NSNull.null)continue;
+        candidates[wid]=@{@"pid":pid,@"birth":born,@"bundle_id":bundle};
+        NSString *title=row[(id)kCGWindowName];if([title isKindOfClass:NSString.class]&&title.length)titles[wid]=title;
+        else asked[wid]=pid;
+    }
+    // AX can name a minimized window when the public list omits its title.
+    // This is the existing read-only lookup, never a raise or a Space change.
+    if(asked.count)windowSubroles(asked,titles);
+    NSArray *current=CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionAll|kCGWindowListExcludeDesktopElements,kCGNullWindowID));
+    if(!current){if(why)*why=@"the saved-slot window metadata could not be revalidated";return nil;}
+    NSMutableDictionary *owners=[NSMutableDictionary dictionary],*freshBirths=[NSMutableDictionary dictionary];
+    for(NSDictionary *row in current){NSNumber *wid=row[(id)kCGWindowNumber],*pid=row[(id)kCGWindowOwnerPID];
+        if([wid isKindOfClass:NSNumber.class]&&[pid isKindOfClass:NSNumber.class])owners[wid]=pid;}
+    NSMutableArray *present=[NSMutableArray array];
+    for(NSNumber *wid in candidates){NSDictionary *candidate=candidates[wid];NSNumber *pid=candidate[@"pid"];NSString *title=titles[wid];
+        if(!title.length||![owners[wid]isEqual:pid])continue;
+        id born=freshBirths[pid];if(!born){born=preservationBirth(pid.intValue)?:NSNull.null;freshBirths[pid]=born;}
+        if(![born isEqual:candidate[@"birth"]])continue;
+        // Keep WID/PID only until the main-thread bound/offered check. The
+        // controller receives no native identity and cannot adopt from this.
+        [present addObject:@{@"window":wid,@"pid":pid,@"bundle_id":candidate[@"bundle_id"],@"title":title}];
+    }
+    return present.copy;
 }
 // A real window by that reading: a standard window or a dialog.
 static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)kAXStandardWindowSubrole,(__bridge NSString *)kAXDialogSubrole,(__bridge NSString *)kAXSystemDialogSubrole]containsObject:subrole]; }
@@ -166,18 +217,23 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
     // The first pass waits, two seconds at most, until every window holds still, so that one read offers them all.
     if(!self.completed&&moving&&now-self.began<2)return;
     if(self.reading){if(wanted.count)self.eager=now+1;return;}
+    if(self.native&&self.retry&&now<self.retry)return;
     // A read that failed is tried again after about two seconds, while access still stands: this never asks for it.
-    if(self.retry&&now>=self.retry){self.retry=0;if(CGPreflightScreenCaptureAccess())self.requested=nil;}
+    if(self.retry&&now>=self.retry){self.retry=0;if(self.native||CGPreflightScreenCaptureAccess())self.requested=nil;}
     // The first pass reads the shareable windows even with nothing to offer: it must name the windows that are not on screen.
     if(!wanted.count&&(self.completed||self.requested))return;
     NSSet<NSNumber *> *ids=[NSSet setWithArray:wanted.allKeys];if(self.requested&&[ids isEqualToSet:self.requested])return;
     self.reading=YES;self.requested=ids;__weak DWWindowManager *weak=self;NSDictionary<NSNumber *,NSNumber *> *asked=[wanted copy];
-    NSMutableDictionary *levels=[NSMutableDictionary dictionary];for(NSDictionary *row in list)if(asked[row[(id)kCGWindowNumber]])levels[row[(id)kCGWindowNumber]]=row[(id)kCGWindowLayer];
+    NSMutableDictionary *levels=[NSMutableDictionary dictionary],*listedTitles=[NSMutableDictionary dictionary];
+    for(NSDictionary *row in list){NSNumber *wid=row[(id)kCGWindowNumber];if(![asked[wid]isEqual:row[(id)kCGWindowOwnerPID]])continue;
+        levels[wid]=row[(id)kCGWindowLayer];NSString *title=row[(id)kCGWindowName];
+        if([title isKindOfClass:NSString.class])listedTitles[wid]=title;
+    }
     NSMutableDictionary<NSNumber *,NSDictionary *> *requestedBounds=[NSMutableDictionary dictionary],*requestedBases=[NSMutableDictionary dictionary];for(NSNumber *wid in asked){requestedBounds[wid]=bounds[wid];requestedBases[wid]=bases[wid];}NSDictionary *frames=requestedBounds.copy,*basis=requestedBases.copy;
     if(self.capturing){[SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO completionHandler:^(SCShareableContent *content,NSError *error){NSDictionary<NSNumber *,id> *subroles=content?windowSubroles(asked,nil):nil;dispatch_async(dispatch_get_main_queue(),^{[weak read:content error:error asked:asked front:front subroles:subroles titles:nil frames:nil levels:levels basis:basis];});}];return;}
     // Native presentation or a scoped overlay without Screen Recording access: shareable windows are not asked for, so nothing can prompt. What they
     // would have said of a candidate is read from the window list (this pass's bounds) and from Accessibility, off the main thread like the subroles.
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{NSMutableDictionary<NSNumber *,NSString *> *titles=[NSMutableDictionary dictionary];NSDictionary<NSNumber *,id> *subroles=windowSubroles(asked,titles);dispatch_async(dispatch_get_main_queue(),^{[weak read:nil error:nil asked:asked front:front subroles:subroles titles:titles frames:frames levels:levels basis:basis];});});
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{NSMutableDictionary<NSNumber *,NSString *> *titles=[listedTitles mutableCopy];NSDictionary<NSNumber *,id> *subroles=windowSubroles(asked,titles);dispatch_async(dispatch_get_main_queue(),^{[weak read:nil error:nil asked:asked front:front subroles:subroles titles:titles frames:frames levels:levels basis:basis];});});
 }
 // `front` is the window list's own order, front to back. `subroles` is windowSubroles' answer for `asked`, read before this turn of the main queue.
 // `titles` and `frames` stand in for the shareable windows in a run that does not read them (`capturing` NO): `content` is then nil and no failure.
@@ -220,6 +276,13 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
         // Utility panels have an explicit AX role and keep their native window
         // level. Do not guess a panel from a title, size or failed AX response.
         BOOL real=floating?window.displayFixed:([subrole isKindOfClass:NSString.class]?toplevelSubrole(subrole):window.title.length||(window.frame.size.width>=200&&window.frame.size.height>=150));
+        // An unavailable title is not an authored "Untitled" document. During
+        // startup that invented name could bind a different same-app saved slot.
+        // Keep an otherwise eligible native candidate unoffered until CG or AX
+        // supplies a string; a successfully read empty string is still known.
+        if(self.native&&real&&window.title==nil){
+            again=YES;self.retry=NSProcessInfo.processInfo.systemUptime+2;[self requestDiscoveryAfter:2];continue;
+        }
         [self.offered addObject:wid];
         if(!real){
             // A window of a size a person would call a window is named, so that one this rule leaves out can be found and added by hand.
@@ -240,9 +303,22 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
 // A window that exists but was not offered is named, so that the controller keeps its
 // slot waiting instead of taking the window for closed. Titled windows only, and by
 // their exact title: the full list carries helper windows no slot should be kept for.
-// Under --only-pid only the scope's own: another process's window is none of this run's. A run that does not read the
-// shareable windows has no `content` and names none, so the controller keeps no slot waiting for a window off screen.
+// Under --only-pid only the scope's own: another process's window is none of this run's. Native mode uses a separate
+// metadata-only pass; it neither widens on-screen discovery nor requests capture permission.
 - (void)complete:(SCShareableContent *)content {
+    if(self.native){
+        self.reading=YES;NSDictionary *scope=self.scope;NSSet *offered=self.offered.copy;NSInteger benchmark=self.benchmarkWindowLevel;__weak DWWindowManager *weak=self;
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+            NSString *why=nil;NSArray *records=nativePreservedWindows(scope,offered,benchmark,&why);
+            dispatch_async(dispatch_get_main_queue(),^{DWWindowManager *manager=weak;if(!manager||manager.stopped)return;manager.reading=NO;
+                if(!records){manager.retry=NSProcessInfo.processInfo.systemUptime+2;manager.requested=[NSSet set];[manager.host discoveryFailed:why];return;}
+                NSMutableArray *present=[NSMutableArray array];
+                for(NSDictionary *record in records)if(![manager.offered containsObject:record[@"window"]]&&![manager.host managesWindow:[record[@"window"]unsignedIntValue] pid:[record[@"pid"]intValue]])
+                    [present addObject:@{@"bundle_id":record[@"bundle_id"],@"title":record[@"title"]}];
+                manager.completed=YES;[manager.host discoveryCompleted:present];
+            });
+        });return;
+    }
     NSMutableArray<NSDictionary *> *present=[NSMutableArray array];id<DWWindowHost> host=self.host;
     for(SCWindow *w in content.windows){
         pid_t pid=w.owningApplication.processID;NSString *bundle=w.owningApplication.bundleIdentifier;
@@ -263,6 +339,11 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
 // DWWindowEventSink. Creation/appearance hints coalesce into the host's next
 // worker observation. Bound-window and family invalidations still arrive now.
 - (void)windowsChanged:(pid_t)pid { if(self.stopped)return;self.eager=NSProcessInfo.processInfo.systemUptime+1;if([self.host respondsToSelector:@selector(windowFamilyChanged:)])[self.host windowFamilyChanged:pid]; }
+- (void)windowMoved:(CGWindowID)window pid:(pid_t)pid {
+    if(self.stopped)return;
+    if(window&&![self.offered containsObject:@(window)])self.eager=NSProcessInfo.processInfo.systemUptime+1;
+    [self.host windowMoved:window pid:pid];
+}
 - (void)windowChanged:(CGWindowID)window pid:(pid_t)pid {
     if(self.stopped)return;
     // A candidate not offered yet needs a discovery pass. A bound window is the host's to look at now.
@@ -280,9 +361,19 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
 // The Accessibility element of exactly one window: the lookup of resolve() in
 // native/focus/focus.m, which is private to that file. Every window of the process
 // is asked for its window number; one match owned by that process is required, and
-// any window that does not answer refuses the whole lookup. Signature provenance as
+// any unknown window that does not answer refuses the whole lookup. Signature provenance as
 // there: yabai dd845723416f5fe92af49fad5ebab00369e07edd, src/misc/extern.h:8.
 typedef AXError (*GetWindow)(AXUIElementRef,uint32_t *);
+// Finder's AXWindows includes its same-process desktop AXScrollArea, which
+// has no WindowServer ID. Match the narrow exception in focus/resize: only
+// IllegalArgument with this verified PID and exact role is a non-window.
+static BOOL windowlessScrollArea(AXUIElementRef element,pid_t expectedPID) {
+    pid_t pid=0;if(AXUIElementGetPid(element,&pid)!=kAXErrorSuccess||pid!=expectedPID)return NO;
+    CFTypeRef role=NULL;AXError error=AXUIElementSetMessagingTimeout(element,.1);
+    if(error==kAXErrorSuccess)error=AXUIElementCopyAttributeValue(element,kAXRoleAttribute,&role);
+    BOOL known=error==kAXErrorSuccess&&role&&CFGetTypeID(role)==CFStringGetTypeID()&&CFEqual(role,kAXScrollAreaRole);
+    if(role)CFRelease(role);return known;
+}
 static AXUIElementRef copyWindow(DWFocusIdentity i) {
     GetWindow get=(GetWindow)dlsym(RTLD_DEFAULT,"_AXUIElementGetWindow");if(!get)return NULL;
     AXUIElementRef app=AXUIElementCreateApplication(i.pid);AXUIElementSetMessagingTimeout(app,.1);CFTypeRef list=NULL;
@@ -291,7 +382,10 @@ static AXUIElementRef copyWindow(DWFocusIdentity i) {
     AXUIElementRef found=NULL;int matches=0;BOOL valid=YES;
     for(CFIndex n=0;n<CFArrayGetCount(list);n++){
         AXUIElementRef w=(AXUIElementRef)CFArrayGetValueAtIndex(list,n);uint32_t wid=0;pid_t pid=0;
-        if(CFGetTypeID(w)!=AXUIElementGetTypeID()||AXUIElementSetMessagingTimeout(w,.1)||get(w,&wid)){valid=NO;break;}
+        if(CFGetTypeID(w)!=AXUIElementGetTypeID()||AXUIElementSetMessagingTimeout(w,.1)){valid=NO;break;}
+        AXError windowError=get(w,&wid);
+        if(windowError==kAXErrorIllegalArgument&&windowlessScrollArea(w,i.pid))continue;
+        if(windowError){valid=NO;break;}
         if(wid!=i.window)continue;
         if(AXUIElementGetPid(w,&pid)||pid!=i.pid){valid=NO;break;}
         matches++;if(!found)found=(AXUIElementRef)CFRetain(w);

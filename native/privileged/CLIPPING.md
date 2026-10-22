@@ -298,6 +298,27 @@ state, infer null/unrestricted from status 1000, or advertise visual clipping
 because foreign getters are readable. A native mask still needs unchanged
 geometry, bounded shadow and correct event behavior plus exact restoration.
 
+## Current-build restoration audit, 2026-10-21
+
+The host now runs macOS 27.2 build **26B118**, SkyLight UUID
+`1ad26afb-b313-3086-95f0-43fc18b8fbca`, base `0x182693000`. The earlier
+26B5091g addresses above remain historical evidence, not this build's ABI.
+Read-only cache inspection confirmed that the global-list mask still replaces
+raw field 368 and releases the displaced region (`0x1829f13ac–0x1829f13c8`).
+`RemoveWindowListGlobalClipShape` and the tracked connection-override callback
+both call that replacement routine with a null region. They clear the mask;
+neither recovers its previous contents. A dedicated connection therefore does
+not provide lossless rollback. The combined getter still exposes field 288,
+derived from raw 368 and system-space 344.
+
+The exact current functions, hashes and limits are frozen in
+`target/native-clip-contract/global-restore-audit-20261021/summary.json` and
+`remove-cleanup-disassembly.json` (SHA-256
+`cbef95e69816796305d0c7bb56460ce53c30cbaa521774d6b219048b3522b677`).
+This audit loaded no SkyLight API and sent no WindowServer request. It rules
+out removal/connection cleanup as a substitute for the missing original-mask
+snapshot; it does not establish that every other clipping mechanism is impossible.
+
 ## Required adapter contract
 
 Before adding a writer or negotiating a protocol capability, establish:

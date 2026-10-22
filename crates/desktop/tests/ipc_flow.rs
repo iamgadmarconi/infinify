@@ -535,9 +535,92 @@ fn bookmarks_round_trip_through_actions_ipc_and_the_save_file() {
 }
 
 #[test]
+fn move_raises_a_live_window_without_changing_focus_or_cameras() {
+    let mut h = setup();
+    h.ipc(json!({"Focus":3}));
+    let before = h.snapshot();
+    let hit = |h: &mut Host| {
+        h.ok(json!({"op":"hit","output":1,"screen":{"x":450.0,"y":300.0}}))["hit"]["window"].clone()
+    };
+    assert_eq!(hit(&mut h), 3);
+
+    // Moving an off-screen client over the focused one raises it without
+    // handing it focus. Repeating the same position after a focus raise must
+    // raise it again even though its geometry no longer changes.
+    for _ in 0..2 {
+        h.ipc(json!({"Focus":3}));
+        let focused = h.snapshot()["focus"].clone();
+        assert_eq!(
+            h.ipc_on(Value::Null, json!({"Move":{"window":2,"to":[1000,-700]}})),
+            json!({"reply":{"Ok":{"Position":{"x":1000,"y":-700}}},"effects":[],"dirty":true,"navigation":null})
+        );
+        let snapshot = h.snapshot();
+        let order: Vec<_> = snapshot["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w["window"].as_u64().unwrap())
+            .collect();
+        assert_eq!(order, [1, 3, 2]);
+        assert_eq!(hit(&mut h), 2);
+        assert_eq!(snapshot["focus"], focused);
+        assert_eq!(snapshot["outputs"], before["outputs"]);
+        for window in snapshot["windows"].as_array().unwrap() {
+            let original = before["windows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|w| w["window"] == window["window"])
+                .unwrap();
+            assert_eq!(window["source"], original["source"]);
+        }
+        let after = h.snapshot();
+        assert_eq!(
+            h.read(json!({"Move":{"window":3}})),
+            json!({"Position":{"x":1000,"y":-700}})
+        );
+        assert_eq!(h.snapshot(), after, "a position read never raises");
+    }
+}
+
+#[test]
+fn move_preserves_a_detached_placeholders_stacking() {
+    let mut h = setup();
+    let before = h.snapshot();
+    assert_eq!(
+        h.ipc_on(Value::Null, json!({"Move":{"window":1,"to":[1000,-700]}})),
+        json!({"reply":{"Ok":{"Position":{"x":1000,"y":-700}}},"effects":[],"dirty":true,"navigation":null})
+    );
+    let after = h.snapshot();
+    assert_eq!(after["windows"][0]["window"], 1);
+    assert_eq!(
+        after["windows"][0]["world_rect"],
+        rect(850.0, 600.0, 300.0, 200.0)
+    );
+    assert_eq!(
+        after["windows"].as_array().unwrap()[1..],
+        before["windows"].as_array().unwrap()[1..]
+    );
+    assert_eq!(after["focus"], before["focus"]);
+    assert_eq!(after["outputs"], before["outputs"]);
+    assert_eq!(
+        h.ok(json!({"op":"hit","output":1,"screen":{"x":450.0,"y":300.0}}))["hit"]["window"],
+        3
+    );
+}
+
+#[test]
 fn move_resize_and_focus_address_logical_windows() {
     let mut h = setup();
-    let world = |h: &mut Host, window: usize| h.snapshot()["windows"][window]["world_rect"].clone();
+    let world = |h: &mut Host, window: u64| {
+        h.snapshot()["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["window"] == window)
+            .unwrap()["world_rect"]
+            .clone()
+    };
 
     // Nothing is focused, so the selector-less forms have no target.
     assert_eq!(h.read(json!({"Focus":null})), json!({"Focused":null}));
@@ -558,10 +641,10 @@ fn move_resize_and_focus_address_logical_windows() {
         json!({"Size":{"width":601,"height":401}})
     );
     // Write: a logical world move the shell must save. No output is needed.
-    for (window, index, to, origin, size) in [
-        (2, 1, [100, -50], (-200.0, -150.0), (600.0, 400.0)),
-        (3, 2, [0, 0], (-300.0, -200.0), (601.0, 401.0)),
-        (1, 0, [-7, 9], (-157.0, -109.0), (300.0, 200.0)),
+    for (window, to, origin, size) in [
+        (2, [100, -50], (-200.0, -150.0), (600.0, 400.0)),
+        (3, [0, 0], (-300.0, -200.0), (601.0, 401.0)),
+        (1, [-7, 9], (-157.0, -109.0), (300.0, 200.0)),
     ] {
         let data = h.ipc_on(Value::Null, json!({"Move":{"window":window,"to":to}}));
         assert_eq!(
@@ -569,7 +652,7 @@ fn move_resize_and_focus_address_logical_windows() {
             json!({"reply":{"Ok":{"Position":{"x":to[0],"y":to[1]}}},"effects":[],"dirty":true,"navigation":null})
         );
         assert_eq!(
-            world(&mut h, index),
+            world(&mut h, window),
             rect(origin.0, origin.1, size.0, size.1)
         );
         assert_eq!(
@@ -577,7 +660,8 @@ fn move_resize_and_focus_address_logical_windows() {
             json!({"Position":{"x":to[0],"y":to[1]}})
         );
     }
-    // Stacking and focus are untouched by a move.
+    // Bound windows 2 then 3 were raised; the placeholder kept its order.
+    // Moving never transfers focus.
     let snapshot = h.snapshot();
     assert_eq!(snapshot["focus"]["intent"], Value::Null);
     assert!(!snapshot.as_object().unwrap().contains_key("focused"));
@@ -973,11 +1057,24 @@ fn action_strings_follow_upstream_grammar() {
         "cycle-windows forward",
         "cycle-windows backward",
         "focus-center",
-        "send-cursor-to-output up",
     ] {
         assert_eq!(refuse(Value::Null, action), "no active output", "{action}");
         assert_eq!(refuse(json!(99), action), "unknown output", "{action}");
     }
+    assert_eq!(
+        refuse(json!(99), "send-cursor-to-output up"),
+        "unknown output"
+    );
+    // Cursor output selection falls back to the first display. It has no
+    // neighbour above it, so parsing succeeds without a warp or mutation.
+    let before = h.snapshot();
+    let response = h.action_on(Value::Null, "send-cursor-to-output up");
+    assert_eq!(response["ok"], true, "{response}");
+    assert_eq!(
+        response["data"],
+        json!({"effects":[],"dirty":false,"navigation":null})
+    );
+    assert_eq!(h.snapshot(), before);
     // Flights are refused during a gesture exactly as the direct commands are.
     h.ok(json!({"op":"begin_drag","window":2,"output":1}));
     let response = h.action_on(json!(1), "zoom-in");
@@ -1199,10 +1296,14 @@ fn msg_client_reaches_a_controller_through_the_ipc_command() {
     assert_eq!(run(&["action", "toggle-fullscreen"]).0, 1);
     let (status, snapshot) = run(&["move", "-7", "9", "--id", "2"]);
     assert_eq!(status, 0);
-    assert_eq!(
-        snapshot["windows"][1]["world_rect"],
-        rect(-307.0, -209.0, 600.0, 400.0)
-    );
+    let moved = snapshot["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["window"] == 2)
+        .unwrap();
+    assert_eq!(moved["world_rect"], rect(-307.0, -209.0, 600.0, 400.0));
+    assert_eq!(snapshot["windows"].as_array().unwrap().last(), Some(moved));
     let (status, snapshot) = run(&["focus", "editor"]);
     assert_eq!(status, 0);
     assert_eq!(snapshot["focus"]["intent"], 2);

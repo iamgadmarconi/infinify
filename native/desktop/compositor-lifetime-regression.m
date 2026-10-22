@@ -4,6 +4,7 @@
 // This file uses manual reference counting to model an explicitly autoreleased
 // framework dependency without ARC's return-value autorelease elision.
 #import <Foundation/Foundation.h>
+#import "compositor.h"
 #include <unistd.h>
 
 @interface IFCGraveyard : NSObject
@@ -54,6 +55,12 @@ static void bury(IFCGraveyard *graveyard) {
 int main(void) {
     alarm(10); // A future release-under-lock regression must fail, not hang.
     @autoreleasepool {
+        IFCompositorChromeStyle *style=[IFCompositorChromeStyle new];
+        style.titleBarHeight=30;style.fontSize=12;
+        CGRect label=IFCompositorStandInLabelRect(@"Terminal",NO,CGSizeMake(860,469),2,style);
+        check(!CGRectIsNull(label)&&CGRectContainsPoint(label,CGPointMake(430,219)),"stand-in centered label uses its actual fitted text bounds");
+        check(!CGRectContainsPoint(label,CGPointMake(20,219)),"stand-in body outside text cannot relaunch");
+        check(CGRectIsNull(IFCompositorStandInLabelRect(@"",NO,CGSizeMake(860,469),2,style)),"empty label has no relaunch target");
         IFCGraveyard *graveyard=[IFCGraveyard new];
         [graveyard began];bury(graveyard);
         check(retiredReleased==0&&dependenciesReleased==0,"GPU still using a retired image retains it");

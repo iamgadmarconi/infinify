@@ -14,6 +14,13 @@
 - (instancetype)initWithFire:(void (^)(NSString *action))fire;
 // The keyboard input source changed: ask the controller again and call -setBindings:.
 @property (copy) void (^changed)(void);
+// Main-thread admission of an unbound Return/keypad Enter. A returned job owns
+// this physical pair; it must revalidate its exact canvas target when dispatched.
+@property (copy) dispatch_block_t (^standinEnter)(void);
+// Optional native-window Fn-F / Control-Command-F route, after authored bindings and
+// pass-all policy. Admission must prove the exact current native focus; nil
+// leaves the original pair native. A returned job revalidates its pinned target.
+@property (copy) dispatch_block_t (^nativeFullscreen)(void);
 // Unregisters, then resolves every key against the current layout. A key the reply
 // marks "implemented": false is left out silently, its chord untouched.
 - (void)setBindings:(NSDictionary *)bindings;

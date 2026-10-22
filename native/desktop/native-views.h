@@ -38,6 +38,13 @@ NSDictionary *DWNativeFamilyPresentationSnapshot(NSDictionary *snapshot,
 // No world/camera state is changed here. This plan is not an acknowledgement of
 // native clipping or capture readiness. Main thread only.
 @interface DWNativeViews : NSObject
+// Opt-in candidate: a known, exactly bound native extent must fit the output's
+// full screen extent before it can own a native placement or transfer site.
+// Unknown observations stay replicas. With no eligible owner the presenter
+// uses its existing unit-scale parking path; this does not restore a Space or
+// certify capture availability. Default NO. Changing it resets adapter state
+// and advances transferRevision so the caller's description cache is invalid.
+@property(nonatomic) BOOL requiresNativeExtentFit;
 - (NSDictionary *)describe:(NSDictionary *)snapshot bound:(NSDictionary<NSNumber *,NSDictionary *> *)identities;
 // Current audited geometry, independent of capture demand: logical root ->
 // {identity,generation,native_bounds,members:[{identity,native_bounds,parent}]}.
@@ -63,6 +70,13 @@ NSDictionary *DWNativeFamilyPresentationSnapshot(NSDictionary *snapshot,
 // primary rendering. They are desired presentation, never input admission.
 // Only an explicit transfer covers both old/new sites with captured copies.
 - (NSNumber *)desiredOwnerForWindow:(NSNumber *)window;
+// Current description has an eligible audited transfer site. This is policy
+// eligibility only, not capture availability or native placement admission.
+- (BOOL)canTransferWindow:(NSNumber *)window output:(NSNumber *)output;
+// End old transfer coverage only after a distinct current parking/family ACK.
+// No owner/site is created. The callback must check the presenter's exact
+// identity/generation parking correspondence; captured input has its own gates.
+- (BOOL)completeParkingForWindow:(NSNumber *)window identity:(NSDictionary *)identity generation:(NSNumber *)generation current:(BOOL (^)(void))current;
 - (DWNativeViewTransfer *)requestTransferForWindow:(NSNumber *)window output:(NSNumber *)output;
 - (DWNativeViewTransfer *)currentTransferForWindow:(NSNumber *)window;
 // Coverage can outlive a request when no complete recovery site is eligible.

@@ -117,6 +117,9 @@ typedef struct { NSUInteger requests,flushes,drawn,presented;double flushSeconds
 // a placement's focused flag); exact source bindings and generations must match.
 // Callers must block stale replica input rather than regroup the drawn families.
 - (NSArray<NSDictionary *> *)appliedOrderForOutput:(NSNumber *)output snapshot:(NSDictionary *)snapshot;
+// Current stand-in chrome in global screen points: label, close, title or body.
+// nil for stale layout, a non-stand-in or a point outside its current clip.
+- (NSString *)standInPart:(NSNumber *)window output:(NSNumber *)output screen:(CGPoint)point snapshot:(NSDictionary *)snapshot;
 // Counts for -takeCounts. Set before the first frame is described; without it nothing is counted or timed.
 @property BOOL measured;
 // Scoped benchmark baseline only: retain the previous synchronous drawable acquisition. Set before the first frame.
@@ -212,8 +215,8 @@ typedef struct { NSUInteger requests,flushes,drawn,presented;double flushSeconds
 // a widget like any other; every other target draws the widgets below the other
 // windows and no pinned window, as upstream's; a wallpaper lies only over the
 // footprint of the output the region's centre is on, as upstream's.
-// Returns {path,width,height}, or {error} with upstream's refusal. Nothing but that
-// file is written.
+// Creates missing parent directories, then writes exactly that file. Returns
+// {path,width,height}, or {error} with the create/write failure stage.
 - (NSDictionary *)screenshot:(NSDictionary *)effect snapshot:(NSDictionary *)snapshot;
 // Same export with compression and file writes on a serial worker. Call on main;
 // offscreen rendering prepares independent pixels before returning. Completion

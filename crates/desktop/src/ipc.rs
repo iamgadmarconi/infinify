@@ -721,8 +721,9 @@ impl Controller {
         }
     }
     /// A logical world move: the frame's top-left lands on whole pixels and its
-    /// size is kept. Stacking is untouched, unlike upstream's raising map. A
-    /// destination outside the `i32` range is refused, as an unreadable frame is.
+    /// size is kept. A bound source is raised without changing focus; a detached
+    /// placeholder keeps its stacking. A destination outside the `i32` range is
+    /// refused, as an unreadable frame is.
     /// A pinned window reads and is not moved; a widget is moved by nothing else.
     fn cmd_move(
         &mut self,
@@ -761,6 +762,12 @@ impl Controller {
             size: rect.size,
         };
         self.place_window(window, moved)?;
+        // Upstream's live-client map raises even at the same position; its
+        // stand-in set_position does not. settle_policy keeps widgets below
+        // ordinary windows after every command, including this raise.
+        if self.sources.contains_key(&window) {
+            self.scene.raise(window).map_err(|e| e.to_string())?;
+        }
         self.fullscreen
             .reaimed(window, [origin.x as i64, origin.y as i64]);
         outcome.dirty = true;

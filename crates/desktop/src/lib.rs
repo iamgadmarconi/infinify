@@ -600,6 +600,14 @@ pub enum Command {
         source_rect: Rect,
         buffer: BufferSize,
     },
+    /// Refresh the native presentation basis after an adapter-owned handoff
+    /// without adopting its native size as a canvas resize.
+    ObservePresentation {
+        window: WindowId,
+        identity: SourceIdentity,
+        source_rect: Rect,
+        buffer: BufferSize,
+    },
     /// The source owner moved its unchanged-size window. The adapter supplies
     /// displacement in unscaled window units, separately from current native
     /// geometry. A deferred displacement is fenced against the world frame
@@ -1409,38 +1417,15 @@ impl Controller {
                 source_rect,
                 buffer,
             } => {
-                self.guard_resize_structure(Some(window))?;
-                self.fresh(window, &identity)?;
-                buffer.validate()?;
-                if !rect_valid(source_rect) {
-                    return Err(Error::Invalid("invalid observed source rectangle"));
-                }
-                let source = self
-                    .sources
-                    .get_mut(&window)
-                    .ok_or(Error::Invalid("unbound source"))?;
-                if source.buffer.width != buffer.width || source.buffer.height != buffer.height {
-                    source.content_rect = buffer.full_rect();
-                }
-                source.observed_rect = source_rect;
-                source.buffer = buffer;
-                // Readback mode: the native window is the authority for its
-                // size. One the application or the user changed is the size
-                // the canvas has from here on, top-left kept: nobody knows
-                // which edge moved. A gesture places its windows from its own
-                // anchors; the next observation after it adopts.
-                if self.sizes.capability && self.gesture.is_none() {
-                    let mut rect = self
-                        .scene
-                        .window(window)
-                        .ok_or(Error::Invalid("unknown window"))?
-                        .world_rect;
-                    if rect.size != source_rect.size {
-                        rect.size = source_rect.size;
-                        self.scene.set_window_rect(window, rect)?;
-                        return Ok(json!({"resized": true}));
-                    }
-                }
+                return self.observe_source(window, &identity, source_rect, buffer, true);
+            }
+            Command::ObservePresentation {
+                window,
+                identity,
+                source_rect,
+                buffer,
+            } => {
+                return self.observe_source(window, &identity, source_rect, buffer, false);
             }
             Command::RemoveSource {
                 window,

@@ -15,8 +15,8 @@ typedef enum {
 typedef struct {
     DWResizeOutcome outcome;
     AXError ax_error;
-    // mutation_attempted is the size setter's alone. moved: a position write was sent first, to make room for the size on the
-    // window's screen, and the window was then read at another origin than before.
+    // Size-only calls report the size setter in mutation_attempted. Full-frame
+    // calls include position setters. moved reports an observed origin change.
     bool mutation_attempted, observed, moved;
     CGSize requested;
     CGRect actual_ax, actual_cg;
@@ -33,6 +33,27 @@ DWResizeResult dw_resize_observe(DWResizeIdentity identity);
 // A size that does not fit the visible frame of the window's screen from where the window sits is preceded by one native
 // position write, the least that makes room (resize.m, room()); under a scoped final authorization nothing is moved.
 DWResizeResult dw_resize_apply(DWResizeIdentity identity, CGSize size);
+// Same-Space app-owned Fill, resolved by its observed menu identifier. Requires
+// the exact target to be the frontmost app's focused window; never activates it.
+// Unsupported before any attempt may use the ordinary size path. A press, even
+// one returning an error, must never fall back or be replayed. A qualified
+// native Restore still owes verification of the entire saved frame below.
+DWResizeResult dw_resize_fill(DWResizeIdentity identity, CGSize requested);
+// App-owned Return to Previous Size. Same one-press rules as Fill; requires the
+// exact app-local focused window but permits a background app, without activating
+// it. Applied requires the entire saved frame; a different settled frame is Clamped.
+// The caller owns any Unsupported fallback or later exact-frame correction.
+DWResizeResult dw_resize_unfill(DWResizeIdentity identity, CGRect saved_frame);
+// Short position-only preparation for an externally held display update.
+// absolute_deadline is CLOCK_MONOTONIC seconds, shared with the caller's lease.
+// A 350ms shared budget and 50ms per AX call; one position write only after the
+// native frame still exactly equals expected_before. Extent must stay unchanged.
+DWResizeResult dw_resize_reposition(DWResizeIdentity identity, CGRect expected_before, CGPoint origin, double absolute_deadline);
+// Explicit full-frame request for fullscreen restoration. Uses size/position/size
+// when the extent differs; an unchanged extent needs only a position write.
+// rechecks ownership before every setter, and verifies AX against native CG bounds.
+// Owner constraints remain applied/clamped/rejected; this does not bypass them.
+DWResizeResult dw_resize_apply_frame(DWResizeIdentity identity, CGRect frame);
 typedef bool (*DWResizeGuard)(DWResizeIdentity identity, void *context);
 DWResizeResult dw_resize_apply_guarded(DWResizeIdentity identity, CGSize size, DWResizeGuard guard, void *context);
 // Additive scoped path: guard is slow preparation; final_authorize runs after

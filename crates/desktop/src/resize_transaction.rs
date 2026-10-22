@@ -5,7 +5,7 @@
 // src/input/pointer.rs (edges_from_position). The grab itself is this file's
 // transaction: upstream configures a client and draws what it commits, and
 // here a size is asked of a native window and the size read back is drawn.
-//! Size-only native transactions. Effects are obligations, not native evidence.
+//! Native resize transactions. Effects are obligations, not native evidence.
 use super::*;
 
 /// Upstream edges_from_position: a 3×3 grid over the window, corners resizing
@@ -105,6 +105,12 @@ pub struct ResizeEffect {
     pub identity: SourceIdentity,
     pub generation: u64,
     pub requested: Option<Size>,
+    /// Native screen coordinates, used only when restoring a fullscreen frame.
+    pub native_origin: Option<Point>,
+    /// Optional app-owned same-Space Fill, elected only by a capable native shell.
+    /// Reads and exact frame restoration never carry this intent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_action: Option<&'static str>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -157,9 +163,18 @@ pub struct NativeResizeTransaction {
     last_sent: Option<Size>,
     requested_outline: Option<Rect>,
     coalesced_latest: Option<Size>,
+    native_origin: Option<Point>,
+    #[serde(skip)]
+    native_fill: bool,
     pending_effect: Option<ResizeEffect>,
     phase: Phase,
     baseline_observed: bool,
+    /// A later read/refusal must not erase an earlier setter attempt.
+    #[serde(skip)]
+    mutation_attempted: bool,
+    // The enter's initial read may arrive after its fullscreen already ended.
+    #[serde(skip)]
+    capture_fullscreen_baseline: bool,
     released: bool,
     cancelled: bool,
     /// A timed-out setter can still execute later. The one diagnostic read that
@@ -195,6 +210,27 @@ pub(crate) struct ResizeSlot {
     pub(crate) setting: bool,
 }
 impl Controller {
+    /// An unobserved refusal ended the transaction before any native mutation.
+    pub(crate) fn resize_failed_without_mutation(&self, transaction: u64) -> bool {
+        self.native_resize.as_ref().is_some_and(|resize| {
+            resize.transaction == transaction
+                && resize.phase == Phase::Failed
+                && !resize.mutation_attempted
+                && (!resize.baseline_observed
+                    || (!resize.cancelled
+                        && resize
+                            .last_result
+                            .as_ref()
+                            .is_some_and(|result| !result.observed)))
+                && !resize.live()
+        })
+    }
+    pub(crate) fn cancelled_resize_window(&self) -> Option<WindowId> {
+        self.native_resize
+            .as_ref()
+            .filter(|resize| resize.cancelled)
+            .map(|resize| resize.window)
+    }
     /// A pointer resize owns navigation until its button or touch releases,
     /// not until the native effects finish draining. Action sizing never owns
     /// that pointer, and a cancelled or failed transaction is no live grab.
@@ -313,9 +349,13 @@ impl Controller {
             last_sent: None,
             requested_outline: None,
             coalesced_latest: Some(target),
+            native_origin: None,
+            native_fill: false,
             pending_effect: None,
             phase: Phase::Preparing,
             baseline_observed: false,
+            mutation_attempted: false,
+            capture_fullscreen_baseline: self.is_fullscreen(window),
             released: true,
             cancelled: false,
             uncertain_mutation: false,
@@ -335,9 +375,22 @@ impl Controller {
             .filter(|_| accepting)
             .ok_or(Error::Invalid("resize is not accepting a new size"))?;
         t.latest_requested = Some(target);
-        let sent = t.pending_effect.as_ref().and_then(|e| e.requested);
-        t.coalesced_latest = (sent != Some(target)).then_some(target);
+        let sent = t.pending_effect.as_ref();
+        t.coalesced_latest = (!sent.is_some_and(|effect| {
+            effect.requested == Some(target) && effect.native_origin == t.native_origin
+        }))
+        .then_some(target);
         Ok(())
+    }
+    pub(crate) fn set_resize_native_origin(&mut self, origin: Option<Point>) {
+        if let Some(resize) = self.native_resize.as_mut() {
+            resize.native_origin = origin;
+        }
+    }
+    pub(crate) fn set_resize_native_fill(&mut self, fill: bool) {
+        if let Some(resize) = self.native_resize.as_mut() {
+            resize.native_fill = fill;
+        }
     }
     pub(crate) fn guard_resize_structure(&self, window: Option<WindowId>) -> Result<(), Error> {
         if self
@@ -468,9 +521,13 @@ impl Controller {
             last_sent: None,
             requested_outline: None,
             coalesced_latest: None,
+            native_origin: None,
+            native_fill: false,
             pending_effect: None,
             phase: Phase::Preparing,
             baseline_observed: false,
+            mutation_attempted: false,
+            capture_fullscreen_baseline: false,
             released: false,
             cancelled: false,
             uncertain_mutation: false,
@@ -516,6 +573,9 @@ impl Controller {
             identity: t.identity.clone(),
             generation: t.generation,
             requested,
+            native_origin: requested.and(t.native_origin),
+            native_action: (requested.is_some() && t.native_fill && t.native_origin.is_none())
+                .then_some("fill"),
         };
         t.pending_effect = Some(effect.clone());
         if requested.is_some() {
@@ -660,6 +720,12 @@ impl Controller {
         if !t.live() {
             return Err(Error::Invalid("resize already ended"));
         }
+        if cancel {
+            let window = t.window;
+            if let Some(output) = self.fullscreen_output_of(window) {
+                self.exit_fullscreen_on(output);
+            }
+        }
         let t = self.native_resize.as_mut().expect("resize exists");
         t.released = true;
         t.cancelled |= cancel;
@@ -728,20 +794,46 @@ impl Controller {
             || (effect.requested.is_none() && result.mutation_attempted)
             || (result.observed && (!rect_valid(result.actual_ax) || !rect_valid(result.actual_cg)))
             || effect.requested.is_some_and(|s| s != result.requested)
+            || (result.outcome == ResizeOutcome::Applied
+                && effect.native_origin.is_some_and(|origin| {
+                    (origin.x - result.actual_ax.origin.x).abs() > 1.0
+                        || (origin.y - result.actual_ax.origin.y).abs() > 1.0
+                }))
         {
             return Err(Error::Invalid("invalid resize result contract"));
         }
         let preparing = !t.baseline_observed;
+        let capture_fullscreen_baseline = t.capture_fullscreen_baseline;
+        let window = t.window;
+        let output = t.output;
+        if preparing && result.observed {
+            self.fullscreen.capture_native(
+                window,
+                result.actual_ax,
+                capture_fullscreen_baseline,
+            )?;
+            if let Some(origin) = self.fullscreen.restore_native_origin(window) {
+                self.set_resize_native_origin(Some(origin));
+            }
+            if capture_fullscreen_baseline
+                && let Some(extent) = self.fullscreen.restore_extent(window)
+                && let Some(resize) = self.native_resize.as_mut()
+            {
+                resize.latest_requested = Some(extent);
+                resize.coalesced_latest = Some(extent);
+            }
+        }
         let mut adopted = false;
         // Output removal cancels the grab, but its outstanding native result
         // must still drain. No pointer request uses this fallback snap scale.
         let zoom = self
             .scene
-            .output(t.output)
+            .output(output)
             .map_or(1.0, |viewport| viewport.zoom);
         let snap = self.snap(zoom);
         let t = self.native_resize.as_mut().expect("resize exists");
         t.pending_effect = None;
+        t.mutation_attempted |= result.mutation_attempted;
         t.last_result = Some(result.clone());
         let source = self.sources.get_mut(&t.window).expect("binding validated");
         if result.outcome == ResizeOutcome::Unsupported {
@@ -939,7 +1031,11 @@ impl Controller {
             t.coalesced_latest = None;
         }
         if let Some(size) = t.coalesced_latest.take()
-            && size != t.last_committed_size
+            && (size != t.last_committed_size
+                || t.native_origin.is_some_and(|origin| {
+                    (origin.x - result.actual_ax.origin.x).abs() > 1.0
+                        || (origin.y - result.actual_ax.origin.y).abs() > 1.0
+                }))
         {
             // Baseline validation may release motion queued during Preparing.
             // Continue accepting motion only while the pointer remains held.

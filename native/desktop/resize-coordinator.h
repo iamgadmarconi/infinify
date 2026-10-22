@@ -25,6 +25,13 @@
 // Once a second: a live transaction whose effect nobody is performing (a reply whose effect never reached -consume:)
 // is answered as unanswered the second time it is seen, so that it ends like any other.
 - (void)reap;
+// An exact pending baseline may wait for navigation before any worker/watchdog
+// starts. The owner must eventually consume it or discard it; ordinary orphans
+// and held pointer transactions keep their existing recovery policy.
+@property (copy) BOOL (^deferred)(NSDictionary *effect);
+// Retire only an exact, never-admitted pending baseline without native work.
+// Setters, superseded effects and effects with running obligations are refused.
+- (void)discardDeferredEffect:(NSDictionary *)effect;
 // Is this transaction held by input that is still down (a resize press whose button is down, a resize swipe whose fingers
 // are)? A pointer at rest sends nothing and no effect is owed for it: such a transaction is no orphan, and -reap leaves it alone. Whoever
 // answers YES ends the transaction itself when that input ends or is lost. Unset, nothing is held.

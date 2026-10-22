@@ -34,6 +34,11 @@ typedef NSDictionary *(^DWObservedBinding)(NSDictionary *observed);
 // focusAllowed NO is answered focus_logical at once. A reply without one withdraws work
 // in flight only if the controller has dropped that request.
 - (void)perform:(NSDictionary *)reply;
+// An attach placed behind Fill, or explicitly suppressed by a post-launch
+// focus_on_open=false rule, may still activate natively. Correct that first
+// root activation once; quiet rules require a previously confirmed live focus.
+- (void)preserveBackgroundArrival:(NSDictionary *)reply;
+- (void)cancelBackgroundArrival;
 // One command and -perform: of its reply; nil when the controller refused it.
 - (NSDictionary *)navigate:(NSDictionary *)command;
 // Hold-to-commit. -hold: opens it with the modifiers that keep a cycle session open, as
@@ -51,5 +56,14 @@ typedef NSDictionary *(^DWObservedBinding)(NSDictionary *observed);
 // what it reads is compared with what the controller already has, so a repeated call sends nothing. One read at a time: a
 // call during a read makes one more read follow it.
 - (void)observe;
+// Observation-only native root press. The shell pins a current binding/output;
+// no event is posted and no driver focus request is made. Actual focus readback
+// uses click policy, then a completed physical click may navigate on release.
+- (void)beginNativeClick:(NSDictionary *)binding output:(NSNumber *)output;
+- (void)endNativeClick:(NSDictionary *)binding completed:(BOOL)completed;
+- (void)cancelNativeClick;
+// Main-thread proof that geometry ownership ended and the unchanged native
+// placement is acknowledged. Missing hook is ready (non-native hosts).
+@property (copy) BOOL (^nativeClickReleaseReady)(NSDictionary *binding);
 - (BOOL)frame;
 @end

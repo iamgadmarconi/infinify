@@ -17,10 +17,10 @@ Which action ends a fullscreen first is driftwm-core's
 `Action::runs_during_fullscreen`, upstream's own code. The controller code is
 `src/fullscreen.rs`, with hooks where the other modules meet it.
 
-This is DriftWM's fullscreen, not macOS native fullscreen: the window stays on
-the canvas's Space and is resized to its output. **No native window was resized
-or drawn fullscreen to verify any of this.** See
-[Verification boundary](#verification-boundary).
+The window stays on the canvas's Space and is resized to its output. Same-Space
+Fill and restoration have been exercised with real TextEdit and Safari windows
+in the macOS 27 VM. These checks do not establish every policy or application's
+behavior; see [Verification boundary](#verification-boundary).
 
 ## The gate
 
@@ -120,13 +120,69 @@ Entering does, at once and in upstream's order:
   request is in the reply's `effects`);
 - asks the output's whole size of it, through a size transaction.
 
-The size it comes back to is upstream's: for a fit window the size its fit
-asked for and for a filled one the size its fill asked for (upstream's
-`configured_window_size` for both, whatever the window took of it:
-[SIZES.md](SIZES.md#the-size-a-window-was-last-asked-for)), otherwise its
-`restore_size`, else the size it has. A saved size under 100 on either axis is taken for a
-throwaway first frame and replaced by half the output, centred in the view, as
-upstream's `MIN_RESTORE_FLOOR` does. Fit and fill both survive a fullscreen.
+The enter's setter carries an optional `native_action:"fill"` preference for
+a capable native shell to use the application's same-Space Fill action. It is
+absent on reads and restores. The baseline, application-granted size handling
+and exact native-frame restoration remain the same; emitting this preference
+is not evidence that an app's Fill action or animation is available.
+In desktop native mode the shell uses the verified `_zoomFill:` menu action,
+withholds helper placement during the native transaction, then rebinds the
+observed native bounds and requires a fresh placement ACK. The original helper
+restore journal stays enrolled throughout. A verified unmodified title-bar
+double click invokes this same fullscreen toggle; its complete second button
+pair is consumed, while the first click retains ordinary canvas drag behavior.
+This binding does not read or change the user's global double-click preference.
+Actual animation quality remains a live-app acceptance check.
+Native Fill accepts aligned native/displayed frames and now attempts a bounded
+translation-only rebase for a freshly audited root-only family at unchanged
+extent. It preserves the original native restore frame, uses one position write
+inside a screen-update hold, acknowledges a neutral helper transform and its
+subsequent omission, then releases the hold before Fill.
+For scaled root-only windows and their restores, the shell captures a fresh raw
+window image and holds it in a noninteractive AppKit panel. It acknowledges
+alpha-zero, a neutral transform, and omission before changing the hidden native
+frame. The panel uses AppKit's frame animator and resize duration, then remains
+visible until the native reveal and normal placement are acknowledged. Restore
+sets the saved native frame directly: a second native Unfill animation can finish
+after its readback and overwrite a corrective frame write. Attached families or
+unavailable capture retain the ordinary size path. Session, binding, output or
+camera changes cancel the handoff. Headless checks do not prove visual quality;
+animation and restoration require real-app validation.
+
+When an exit also starts a camera flight to another window, the shell defers the
+initial native read until that exact flight lands and its placement is
+acknowledged. The wait retains the original transaction and validates the live
+source, output and session throughout. No capture or native worker starts during
+the flight. Replacement or cancellation retires the unstarted read; after
+landing, placement readiness and native work retain their bounded deadlines.
+Presenter lookup uses the shell's bound identity, while the controller effect
+remains unchanged (its serialized identity also contains `owner:null`).
+
+The 2026-10-22 real TextEdit-to-Terminal check completed Restore on its first
+attempt at both default and slower camera speed. The default run reached the
+restored world frame in 1.34 seconds, versus 3.68 seconds before the ordering
+fix; these are single workflow timings including IPC and polling, not animation
+frame-rate measurements. Evidence is in
+`target/native-vm/ux-flow-20261022/RESULT-v16.json`.
+
+If an unobserved refusal ends that transaction before any native mutation,
+including a successful baseline followed by a Fill handoff refusal, the provisional
+fullscreen is undone: the saved world position, camera, zoom
+and pin return, other windows become visible again, and the result reports the
+failure. No new native resize is owed by that failed enter. A native frame still
+owed from an earlier fullscreen exit, or a size owed by the window's rule,
+remains owed. This differs from a window
+that was successfully observed and then grants or rejects the requested size;
+that answer retains fullscreen at the size the application actually has.
+
+The exit keeps the exact world top-left from before entry. The enter's fresh
+native baseline supplies the original native origin and extent, including
+fractional dimensions; a size change that the shell has not yet published replaces
+the stale extent in the restore record. An explicit rule's deferred `size` remains
+the exit target instead of the baseline extent. Fit and fill state survive a
+fullscreen, but their requested sizes do not replace the native size actually
+observed before entry. No minimum-size substitute or whole-pixel rounding is
+applied to the restore extent.
 
 A pinned window does enter: its pin is put away and the exit pins it again.
 While it is fullscreen IPC `Pin` reads `false` and a write answers
@@ -150,14 +206,24 @@ The exit restores the exact place from before fullscreen.
 Whatever ends it, the exit is upstream's `exit_fullscreen_on` and happens at
 once: the window's top-left is back where it was saved, its pin is back, and
 the output has its camera and zoom back with every animation aimed at the
-parked view dropped. The size it had before is then owed to it and asked back
-through a size transaction. When the window takes another size than that, it
-is placed again around the center of the frame it was restored to, as
-upstream's `establish_exit_placement` does. If something else has placed the
+parked view dropped. The native frame it had before is then owed to it and asked
+back through a size transaction. The size and native global origin travel as
+separate `requested` and `native_origin` fields; neither is derived from the
+restored camera or the world top-left. Even an unchanged size needs a native
+position write if its origin moved. The saved world top-left remains exact when
+the application grants a different size. If something else has placed the
 window in between, a drag or a nudge, it keeps that top-left (upstream
 `drop_owed_recenter`); a placement that is itself a center, IPC `Move` and
 `move-to-bookmark`, centers the restored size on its point instead (upstream
 `map_window_to_rule_point`).
+
+The restore obligation survives the setter's result until the transaction's
+final read confirms its native origin. If the application relocates the window
+between those reads, or the final read fails, the frame stays owed for a retry.
+Each retry begins with a fresh read even when cached geometry matches; a matching
+frame needs no setter. AX/CG agreement and origin tolerance are specified in
+[the resize protocol](NATIVE_RESIZE.md#commands-and-effects). These observations
+do not establish that an application will keep the frame after the final read.
 
 What ends a fullscreen is upstream's list:
 
@@ -267,7 +333,8 @@ There is one size transaction ([SIZES.md](SIZES.md#a-second-action-while-a-size-
 - **An exit while the enter is pending** takes that transaction over: the
   restore size replaces the output's in the transaction's one latest-request
   slot, so the window is never left at the output's size. Before anything was
-  sent, the request is walked back and no setter is ever dispatched; with the
+  sent, the enter's baseline still supplies the original native frame and the
+  request is walked back without a setter; with the
   setter already sent, the same transaction asks for the old size next. The
   reply has no `effect` then: nothing new is dispatched. The answer to a
   setter that asked for the other size is none to the request now in force:
@@ -275,13 +342,14 @@ There is one size transaction ([SIZES.md](SIZES.md#a-second-action-while-a-size-
   that request's own setter has answered. An enter pressed while the exit is
   pending takes it over the same way, at any point of it, and still comes
   back to the size and the place from before the first.
-- **An exit whose transaction ends before the window was asked** leaves the
-  size owed: cancelled before its setter (Escape, a screen change that
+- **An exit whose frame is not confirmed** leaves the frame owed: cancelled
+  before its setter (Escape, a screen change that
   removes the transaction's output, a detach elsewhere), a read that failed,
-  an adapter that was not available. The next reply that can carry it begins
-  another transaction, three in all at most for one exit. A failure that
-  repeats, a baseline that differs from the committed size for one, ends
-  there, and the window is then on the canvas at the size it has.
+  an adapter that was not available, or a final read that found the wrong
+  origin. The next reply that can carry it begins another transaction, three
+  in all at most for one exit. A cancelled fullscreen transaction drains its
+  sent work and carries the restore's first effect as soon as its slot is free.
+  Repeated failure ends at that limit; the canvas uses the size actually observed.
 - **A window that was asked to close** (it carries a close mark:
   `close-window`, `suspend-window`, IPC `Close` and `Suspend`) keeps the
   frame it is owed until it is gone or the mark lapses. `suspend-window` on
@@ -487,18 +555,28 @@ its old place, and its size from before the fullscreen is not restored.
   setter. A window whose transaction fails, or that the adapter will not
   resize, stays fullscreen at its own size, aligned to the usable top-left,
   at every enter. A failed enter is not asked again; an exit
-  whose window was never asked is, three transactions at most
+  whose native frame is not confirmed is, three transactions at most
   ([above](#a-size-that-is-owed)). Upstream's configure cannot fail.
-- **A new window that takes the keyboard ends the fullscreen.** Upstream
-  keeps the fullscreen window focused and on top and never activates a window
-  it placed in the background (`src/handlers/compositor.rs`). Here the attach
-  asks for nothing either, but macOS gives a new window the keyboard by
-  itself, and the shell follows native focus as an activation
-  ([A new window](#a-new-window)). Holding upstream's rule would mean asking
-  the fullscreen window for the native focus again at every such attach,
-  which would also push an application's own dialogs behind it: the shell
-  reports no parent, where upstream does activate a child placed on its
-  parent.
+- **Background arrival focus is corrected once.** The attach reports its
+  background placement. With the existing native input observer enabled, the
+  shell briefly pins that new root and the current Fill binding. Its initial
+  native activation requests the Fill root's focus once, without moving the
+  camera or changing either world frame. The ticket expires after 1.5 seconds;
+  physical key/down/scroll, explicit navigation, binding/Fill changes, or a
+  different native focus retire it. A fresh worker read must still name the
+  arriving root: a sheet or dialog never authorizes that correction. Without
+  the cancellation observer, native activation follows the ordinary policy.
+  Later deliberate native activation exits Fill and carries native restoration.
+  In the macOS 27.0.1 UTM guest, v12 retained TextEdit Fill through a real
+  Terminal launch. IPC focus followed by `center-window` restored TextEdit's
+  exact native frame and world position while Terminal kept focus. Focus alone
+  intentionally leaves Fill active, as described under the parked camera.
+  The background app's menu actions were disabled, so this exit used the
+  existing exact-frame fallback. After refocus, Return to Previous Size was
+  still enabled; a foreground native Unfill cleared it. The geometry result
+  does not establish complete AppKit tiling-state restoration or smoothness.
+  Evidence: `target/native-vm/ux-flow-20261022/RESULT-v12.json`, the
+  `v12b-background-*` readbacks, and `v12b-intentional-switch.png`.
 - **A saved fullscreen window keeps the size it has**, at the place from
   before, where upstream saves the frame from before: [Saving](#saving).
 - **What is hit is what is drawn.** Upstream's canvas walk on a fullscreen
@@ -560,8 +638,8 @@ its old place, and its size from before the fullscreen is not restored.
 `tests/fullscreen_flow.rs` crosses the exported C ABI and JSON decoder on two
 outputs, neither at the global origin and of different sizes, one of them
 zoomed out at a fractional camera. The test plays the shell's part: it answers
-every resize effect with a synthetic `native_resize_result`. Its twenty
-scenarios cover the gate (against literals captured from the tree before this
+every resize effect with a synthetic `native_resize_result`. Its scenarios
+cover the gate (against literals captured from the tree before this
 work), enter and exit by toggle, centring, each way out, the parked camera, a
 new window and a rule's `fullscreen` and `output`, the translucent rule, hot
 corners, fit and fill and the sizing actions out of fullscreen (a step on
@@ -576,6 +654,13 @@ save, load and the adoption that follows; and, since
 a fullscreen window's `pass_mouse` claims and `pass_keys`, the order of a
 grab, the pinned drag beside a fullscreen output, the frost and the open and
 close events, and a ruled size that waits out an enter.
+
+Native-frame restoration scenarios also cover independent native/world origins,
+fractional baseline sizes, stale source dimensions, an exit before the enter's
+baseline arrives, origin-only restoration, cancelled setters, rejected origin
+writes, relocation between setter and final read, and a failed final read followed
+by fresh confirmation. These remain C ABI/controller evidence with synthetic
+native results.
 
 It establishes the controller's policy and wire behaviour. It does **not**
 establish that:

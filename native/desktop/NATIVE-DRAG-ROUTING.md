@@ -99,9 +99,52 @@ native window, its drag/motion packets and its release untouched even after
 the pointer crosses the canvas or another application. Each physical button
 has its own ownership; a second button cannot start a canvas action in that
 native drag. Known lifetime-tagged posted copies bypass bookkeeping, and a tap
-disable or stop retires stale native reservations. A swallowed canvas down
+disable retains physically held native buttons and retires only released ones;
+stop clears reservations. A swallowed canvas down
 still suppresses its physical release after cancellation, so another
 application cannot receive an unpaired up.
+
+The desktop also withholds that window from helper placement for the entire
+native-owned pair. Frame reconciliation and native resize do not write to it
+while macOS owns the gesture. After physical release, it waits for settled
+geometry and adopts the displayed displacement into world coordinates before
+resuming helper placement. A captured titlebar pair remains canvas-owned from
+down through up. Tap cancellation cannot start the release deadline while a
+physical button is still held, or admit a competing second-button canvas action.
+In the macOS 27 VM, the owner manually dragged TextEdit and
+Finder repeatedly, including after zooming out, and reported stable dragging.
+That confirms those real-app gestures; it does not establish every native
+fallback drag or cross-display transfer.
+
+Managed root chrome now has a separate session-stage ownership decision.
+An independently recognized titlebar or green button, or a controller-qualified
+resize border at the exact native recipient, reserves the entire mouse pair
+before AppKit receives its down. Controller movement uses the current source
+identity, generation, output and displayed frame; it does not wait for captured
+pixels or renderer ordering. A refused chrome action stays swallowed through
+release instead of becoming a native drag. Secondary buttons cannot start a
+competing action during that pair. Titlebar double-click and green-button
+presses use the existing Infinify Fill path.
+
+Only a separately reported, validated AX move may translate a recent titlebar
+map without discarding it. Its original age and local control exclusions remain
+unchanged; size, title, mixed and unknown changes still invalidate the map.
+Control-Command-F and Fn-F use the same canvas Fill path when a fresh bounded
+native focus read identifies a currently managed root. Admission starts with the
+actual focused window rather than the asynchronous logical focus observation;
+the deferred action rechecks its identity, binding, session and output. Authored
+bindings and explicit F-key passthrough retain precedence. Unknown chrome,
+green hover popovers, application menus and other keyboard window commands
+remain separate native paths. These changes do not claim blanket suppression of
+every application's window controls. Physical gesture acceptance must be checked
+in the running VM; policy checks and compilation alone are insufficient.
+
+Native-origin changes alone never move a canvas window: macOS can reflow an
+application's frame when displays change. Observations still refresh the native
+basis and size. Output rebuilds cancel stale observations but retain the session
+tap's physical button ownership; an existing native pair settles without
+adopting displacement across the topology change. This leaves the helper's saved
+transform and alpha obligations intact and does not restore native bounds.
 
 The earlier global trackpad tap records unowned original buttons and refuses a
 new touch, Dock or magnify contact during them. An already admitted three-finger
@@ -167,6 +210,15 @@ replicas remain unverified or unsupported as specified above; this check is not
 ordinary-application parity evidence.
 
 ## Replica capture blocker observed on 2026-10-12
+
+The 2026-10-21 real-app follow-up also failed to obtain scaled content. In the
+macOS 27.0.1 UTM guest, a signed Infinify diagnostic captured the exact TextEdit
+window at 65% scale for 15 seconds through the reviewed raw capture route with
+ignore-deformation enabled. Typing visibly changed the test document, but the
+stream delivered zero Complete callbacks or images. It stopped and drained
+cleanly. The diagnostic was removed from the app build; local evidence is in
+`target/native-content-stream-contract/raw-real-app-20261021/`. It establishes
+another negative capture result, not a working replica fallback.
 
 The replica destination scenario stopped before physical input because its root
 streams supplied `SCFrameStatusSuspended` without image buffers. Opt-in callback

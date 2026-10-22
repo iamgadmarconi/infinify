@@ -23,7 +23,7 @@
 #define DW_CLIENT_MAX_PENDING_FRAMES 1024u
 _Static_assert((DW_CLIENT_MAX_PENDING_FRAMES&(DW_CLIENT_MAX_PENDING_FRAMES-1))==0,"pending frame ring size");
 
-struct dw_client_pending_frame { uint64_t seq; uint32_t count; };
+struct dw_client_pending_frame { uint64_t seq; uint32_t count; uint16_t type; };
 
 struct dw_client {
     int control, beat;
@@ -37,8 +37,10 @@ struct dw_client {
     uint64_t next;
     // The one frame waiting for the writer. Two buffers of the largest frame are
     // allocated at open and swapped, so submitting never allocates or writes.
-    struct dw2_record *slot, *writing;
+    void *slot, *writing;
     uint32_t slotCount;
+    uint16_t slotType;
+    size_t slotBytes;
     uint64_t slotSeq;
     bool slotFull;
     struct dw_client_pending_frame *pendingFrames;
@@ -120,7 +122,7 @@ static void lose(dw_client *c, int reason) {
 // handed to the socket, and the server's superseded count must account for
 // exactly the older sent frames that have no reply. Locally coalesced frames
 // never enter this queue.
-static bool accept_frame_reply_locked(dw_client *c, uint64_t seq, const struct dw2_frame_reply *reply,
+static bool accept_frame_reply_locked(dw_client *c, uint16_t type, uint64_t seq, const struct dw2_frame_reply *reply,
                                       const uint8_t *status) {
     uint32_t offset=0;
     while(offset<c->pendingCount) {
@@ -131,7 +133,7 @@ static bool accept_frame_reply_locked(dw_client *c, uint64_t seq, const struct d
     if(offset==c->pendingCount || offset!=reply->superseded)return false;
     uint32_t index=(c->pendingHead+offset)&(DW_CLIENT_MAX_PENDING_FRAMES-1);
     struct dw_client_pending_frame frame=c->pendingFrames[index];
-    if((reply->disposition==DW2_FRAME_APPLIED && reply->count!=frame.count)
+    if(type!=frame.type || (reply->disposition==DW2_FRAME_APPLIED && reply->count!=frame.count)
         || (reply->disposition==DW2_FRAME_DROPPED && reply->count))return false;
 
     c->pendingHead=(c->pendingHead+offset+1)&(DW_CLIENT_MAX_PENDING_FRAMES-1);
@@ -160,17 +162,17 @@ static void *writer_main(void *argument) {
         struct iovec parts[3];int count=1,reason=0;
         // In the order they were asked for, so frame sequence numbers only rise.
         if(frameWanted) {
-            struct dw2_record *records=c->slot;c->slot=c->writing;c->writing=records;
+            void *records=c->slot;c->slot=c->writing;c->writing=records;
             frame.count=c->slotCount;c->slotFull=false;
-            header=(struct dw2_header){.length=(uint32_t)(sizeof(frame)+frame.count*sizeof(*records)),.type=DW2_FRAME,.seq=c->slotSeq};
-            parts[1]=(struct iovec){&frame,sizeof(frame)};parts[2]=(struct iovec){records,frame.count*sizeof(*records)};count=3;
+            header=(struct dw2_header){.length=(uint32_t)(sizeof(frame)+c->slotBytes),.type=c->slotType,.seq=c->slotSeq};
+            parts[1]=(struct iovec){&frame,sizeof(frame)};parts[2]=(struct iovec){records,c->slotBytes};count=3;
         } else {
             header=(struct dw2_header){.length=(uint32_t)c->requestLength,.type=c->request,.seq=c->requestSeq};c->requestWritten=true;
             if(c->requestLength){requestIdentity=c->requestIdentity;parts[1]=(struct iovec){&requestIdentity,sizeof(requestIdentity)};count=2;}
         }
         if(count==3) {
             uint32_t index=(c->pendingHead+c->pendingCount)&(DW_CLIENT_MAX_PENDING_FRAMES-1);
-            c->pendingFrames[index]=(struct dw_client_pending_frame){.seq=header.seq,.count=frame.count};
+            c->pendingFrames[index]=(struct dw_client_pending_frame){.seq=header.seq,.count=frame.count,.type=header.type};
             c->pendingCount++;
         }
         parts[0]=(struct iovec){&header,sizeof(header)};
@@ -194,17 +196,19 @@ static void *reader_main(void *argument) {
         if(header.length>DW2_MAX_BODY || header.flags || !(header.type&DW2_REPLY) || !header.seq){reason=DW_LOST_PROTOCOL;break;}
         if(!read_all(c->control,body,header.length))break;
         uint16_t type=header.type&~DW2_REPLY;
-        if(type==DW2_FRAME) {
+        if(type==DW2_FRAME || type==DW2_FRAME_SPACE) {
             struct dw2_frame_reply head;
-            if(header.length<sizeof(head)){reason=DW_LOST_PROTOCOL;break;}
+            if(header.length<sizeof(head) || (type==DW2_FRAME_SPACE && !(c->info.caps&DW2_CAP_SPACE))){reason=DW_LOST_PROTOCOL;break;}
             memcpy(&head,body,sizeof(head));
             if(head.count>c->info.max_records || head.reserved || head.disposition>DW2_FRAME_DROPPED
                 || (head.disposition==DW2_FRAME_DROPPED && head.count) || header.length!=sizeof(head)+head.count){reason=DW_LOST_PROTOCOL;break;}
             const uint8_t *status=body+sizeof(head);
-            bool valid=true;for(uint32_t i=0;i<head.count;i++)if(status[i]>DW2_MALFORMED){valid=false;break;}
+            bool valid=true;for(uint32_t i=0;i<head.count;i++)if(status[i]>DW2_SUBLEVEL
+                || (status[i]==DW2_SPACE && !(c->info.caps&DW2_CAP_SPACE))
+                || (status[i]==DW2_SUBLEVEL && !(c->info.caps&DW2_CAP_PINNED))){valid=false;break;}
             if(!valid){reason=DW_LOST_PROTOCOL;break;}
             pthread_mutex_lock(&c->lock);
-            valid=accept_frame_reply_locked(c,header.seq,&head,status);
+            valid=accept_frame_reply_locked(c,type,header.seq,&head,status);
             if(valid)pthread_cond_signal(&c->wake);
             pthread_mutex_unlock(&c->lock);
             if(!valid){reason=DW_LOST_PROTOCOL;break;}
@@ -314,7 +318,8 @@ static int hello(const struct sockaddr_un *address, uint16_t role, const char *n
     bool nonzeroToken=false;for(size_t i=0;i<sizeof(reply->token);i++)nonzeroToken|=reply->token[i]!=0;
     if(reply->server_pid!=peer || !reply->lease_ms || reply->lease_ms>60000
         || !reply->max_records || reply->max_records>DW2_MAX_RECORDS || reply->max_body>DW2_MAX_BODY
-        || reply->max_body<sizeof(struct dw2_frame)+(size_t)reply->max_records*sizeof(struct dw2_record)
+        || reply->max_body<sizeof(struct dw2_frame)+(size_t)reply->max_records
+            *(reply->caps&DW2_CAP_SPACE ? sizeof(struct dw2_space_record) : sizeof(struct dw2_record))
         || reply->scope<DW2_SCOPE_COOPERATIVE || reply->scope>DW2_SCOPE_SAME_USER || reply->queue>DW2_QUEUE_MAIN
         || !nonzeroToken || (token && memcmp(token,reply->token,sizeof(reply->token)))) {
         reply->status=DW2_HELLO_MALFORMED;close(fd);return -1;
@@ -346,7 +351,10 @@ int dw_client_open(const char *runtime, const char *nonce64, const struct dw_cli
     beat=hello(&address,DW2_ROLE_HEARTBEAT,nonce64,reply.token,deadline,&beatReply);
     if(beat>=0 && memcmp(&reply,&beatReply,sizeof(reply))){close(beat);beat=-1;beatReply.status=DW2_HELLO_MALFORMED;}
     dw_client *c=beat>=0 ? calloc(1,sizeof(*c)) : NULL;
-    if(c){c->slot=malloc(reply.max_records*sizeof(*c->slot));c->writing=malloc(reply.max_records*sizeof(*c->writing));c->pendingFrames=calloc(DW_CLIENT_MAX_PENDING_FRAMES,sizeof(*c->pendingFrames));}
+    if(c){
+        size_t bytes=reply.max_records*(reply.caps&DW2_CAP_SPACE ? sizeof(struct dw2_space_record) : sizeof(struct dw2_record));
+        c->slot=malloc(bytes);c->writing=malloc(bytes);c->pendingFrames=calloc(DW_CLIENT_MAX_PENDING_FRAMES,sizeof(*c->pendingFrames));
+    }
     if(!c || !c->slot || !c->writing || !c->pendingFrames) {
         if(c){free(c->slot);free(c->writing);free(c->pendingFrames);free(c);}
         close(control);if(beat>=0)close(beat);
@@ -363,19 +371,31 @@ int dw_client_open(const char *runtime, const char *nonce64, const struct dw_cli
     *out=c;
     return DW_CLIENT_OK;
 }
-int dw_client_submit_frame(dw_client *c, const struct dw2_record *records, uint32_t count, uint64_t *seq) {
+static int submit_frame(dw_client *c, const void *records, uint32_t count, uint16_t type, size_t recordSize, uint64_t *seq) {
     if(!c || (count && !records) || count>c->info.max_records)return DW_CLIENT_INVALID;
+    if(type==DW2_FRAME_SPACE && !(c->info.caps&DW2_CAP_SPACE))return DW_CLIENT_INVALID;
+    if(!(c->info.caps&DW2_CAP_PINNED))for(uint32_t i=0;i<count;i++){
+        struct dw2_record record;memcpy(&record,(const uint8_t *)records+i*recordSize,sizeof(record));
+        if(record.flags&DW2_RECORD_PINNED)return DW_CLIENT_INVALID;
+    }
     pthread_mutex_lock(&c->lock);
     int result=c->lost || c->closing ? DW_CLIENT_LOST : DW_CLIENT_OK;
     if(result==DW_CLIENT_OK) {
-        memcpy(c->slot,records,count*sizeof(*records));
+        if(count)memcpy(c->slot,records,count*recordSize);
         if(c->slotFull)c->stats.dropped_local++;
-        c->slotCount=count;c->slotSeq=++c->next;c->slotFull=true;c->stats.submitted++;
+        c->slotCount=count;c->slotType=type;c->slotBytes=count*recordSize;
+        c->slotSeq=++c->next;c->slotFull=true;c->stats.submitted++;
         if(seq)*seq=c->slotSeq;
         pthread_cond_signal(&c->wake);
     }
     pthread_mutex_unlock(&c->lock);
     return result;
+}
+int dw_client_submit_frame(dw_client *c, const struct dw2_record *records, uint32_t count, uint64_t *seq) {
+    return submit_frame(c,records,count,DW2_FRAME,sizeof(*records),seq);
+}
+int dw_client_submit_space_frame(dw_client *c, const struct dw2_space_record *records, uint32_t count, uint64_t *seq) {
+    return submit_frame(c,records,count,DW2_FRAME_SPACE,sizeof(*records),seq);
 }
 // Waits on a condition for at most timeout_ms; the request itself is written by
 // the writer thread.

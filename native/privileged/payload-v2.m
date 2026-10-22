@@ -29,6 +29,15 @@ static uint32_t fixtureWids[16], fixtureCount;
     BOOL reattaching;
     // Apply-only state. Originals and restoration never depend on this hint.
     CGAffineTransform appliedTransform; BOOL appliedTransformKnown;
+    // Optional pin obligation, immutable after first durable admission.
+    int originalSublevel; BOOL sublevelTouched, sublevelFresh;
+    // Optional Space obligation. Original membership is immutable. A void
+    // forward request remains uncertain until its target is actually observed.
+    uint64_t originalSpace, pendingSpace; NSString *originalSpaceDisplay;
+    BOOL spaceFresh, pendingSpaceFresh, pendingSpaceObserved;
+    // Transient settlement evidence is never imported from a journal.
+    uint64_t restoreSpaceStarted, restoreSpaceQuiet; CGRect restoreSpaceBounds;
+    BOOL restoreSpaceSample;
 } @end
 @implementation DW2Entry
 @end
@@ -36,6 +45,7 @@ static uint32_t fixtureWids[16], fixtureCount;
 // Session, lease and the one-frame slot, shared between connection threads and v2q.
 static pthread_mutex_t v2Lock=PTHREAD_MUTEX_INITIALIZER;
 static uint64_t v2Session, v2Sessions, v2Barrier, v2SlotSeq;
+static uint16_t v2SlotType;
 static uint32_t v2SupersededPending;
 static uint8_t v2Token[16];
 static NSMutableArray<DW2Connection *> *v2Beats;
@@ -52,6 +62,25 @@ static NSDictionary *v2LastRestore;
 static uint64_t v2Generation;
 static BOOL v2JournalStale, v2RetryScheduled;
 static unsigned v2RetryDelayMS=250;
+// Optional deletion evidence only; this getter is not needed for forward moves.
+// ABI/schema: yabai dd845723416f5fe92af49fad5ebab00369e07edd,
+// src/misc/extern.h:60 and src/display.c:203-234 (MIT).
+static CFArrayRef (*v2CopyManagedSpaces)(int);
+static BOOL v2ManagedSpacesResolved;
+// ABI and nonactivating layer use: yabai dd845723416f5fe92af49fad5ebab00369e07edd,
+// src/misc/extern.h:14-15,36 and src/osax/payload.m:749-758 (MIT).
+// Resolve once before journal recovery/listener startup; no native calls here.
+static CGError (*v2GetWindowLevel)(int,uint32_t,int *);
+static int (*v2GetWindowSublevel)(int,uint32_t);
+static CGError (*v2SetWindowSublevel)(int,uint32_t,int);
+static BOOL v2SublevelAPI(void) { return v2GetWindowLevel&&v2GetWindowSublevel&&v2SetWindowSublevel; }
+static void v2ResolveSublevels(void) {
+    void *sky=dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight",RTLD_LAZY|RTLD_LOCAL);
+    if(!sky)return;
+    v2GetWindowLevel=dlsym(sky,"SLSGetWindowLevel");
+    v2GetWindowSublevel=dlsym(sky,"SLSGetWindowSubLevel");
+    v2SetWindowSublevel=dlsym(sky,"SLSSetWindowSubLevel");
+}
 
 static uint64_t v2Now(void) { return (uint64_t)nowMS(); }
 static BOOL v2SameProcess(const struct dw2_identity *a,const struct dw2_identity *b) { return a->pid==b->pid && a->birth_sec==b->birth_sec && a->birth_usec==b->birth_usec; }
@@ -60,7 +89,39 @@ static BOOL v2Listed(const struct dw2_identity *who) {
         if([entry[@"pid"] longLongValue]==who->pid && [entry[@"birth_sec"] unsignedLongLongValue]==who->birth_sec && [entry[@"birth_usec"] unsignedLongLongValue]==who->birth_usec)return YES;
     return NO;
 }
-static uint32_t v2Caps(void) { return DW2_CAP_RESTORE_WINDOW|DW2_CAP_ENROLLMENT|DW2_CAP_INSPECT|(setAlpha&&getAlpha?DW2_CAP_ALPHA:0)|(fixtureOnly&&fixtureNativeFamilies?DW2_CAP_FIXTURE_FAMILY:0); }
+static BOOL v2SpaceAPI(void) { return copyWindowSpaces&&copySpaceDisplay&&displayCurrentSpace&&getSpaceType&&moveWindowsToSpace&&createDisplayUUID; }
+static uint32_t v2Caps(void) { return DW2_CAP_RESTORE_WINDOW|DW2_CAP_ENROLLMENT|DW2_CAP_INSPECT|(setAlpha&&getAlpha?DW2_CAP_ALPHA:0)|(fixtureOnly&&fixtureNativeFamilies?DW2_CAP_FIXTURE_FAMILY:0)|(v2SpaceAPI()?DW2_CAP_SPACE:0)|(v2SublevelAPI()?DW2_CAP_PINNED:0); }
+static uint64_t v2WindowSpace(uint32_t wid) {
+    if(!v2SpaceAPI())return 0;
+    CFArrayRef raw=copyWindowSpaces(mainConnection(),7,(__bridge CFArrayRef)@[@(wid)]);
+    if(!raw)return 0;uint64_t result=0;
+    if(CFGetTypeID(raw)==CFArrayGetTypeID()&&CFArrayGetCount(raw)==1){
+        id value=(__bridge id)CFArrayGetValueAtIndex(raw,0);
+        if(isNumber(value)&&!CFNumberIsFloatType((__bridge CFNumberRef)value)&&[value compare:@0]==NSOrderedDescending)result=[value unsignedLongLongValue];
+    }
+    CFRelease(raw);return result;
+}
+// Targets must be the current ordinary Space of an active, awake display.
+// Restoration only requires the original ordinary Space/display still exists;
+// it must not substitute a different current Space when the original is hidden.
+static NSString *v2SpaceDisplay(uint64_t space,BOOL target) {
+    if(!space||!v2SpaceAPI()||getSpaceType(mainConnection(),space)!=0)return nil;
+    CFStringRef raw=copySpaceDisplay(mainConnection(),space);
+    if(!raw)return nil;
+    if(CFGetTypeID(raw)!=CFStringGetTypeID()){CFRelease(raw);return nil;}
+    NSString *uuid=CFBridgingRelease(raw);if(!uuid.length)return nil;
+    if(!target)return uuid;
+    CGDirectDisplayID displays[32];uint32_t count=0;
+    if(CGGetActiveDisplayList(32,displays,&count)||!count||count>32)return nil;
+    for(uint32_t i=0;i<count;i++) {
+        CGDirectDisplayID display=displays[i];
+        if(!CGDisplayIsOnline(display)||CGDisplayIsAsleep(display)||CGDisplayMirrorsDisplay(display))continue;
+        CFUUIDRef id=createDisplayUUID(display);if(!id)continue;
+        NSString *candidate=CFBridgingRelease(CFUUIDCreateString(NULL,id));CFRelease(id);
+        if([uuid isEqual:candidate]&&displayCurrentSpace(mainConnection(),(__bridge CFStringRef)uuid)==space)return uuid;
+    }
+    return nil;
+}
 // Scope, allowlist first: decided from the record alone, before
 // any window-server lookup, and again for every record of every frame and restore.
 static BOOL v2InScope(const struct dw2_identity *who) {
@@ -118,20 +179,39 @@ enum { DW2_INSTANCE_CURRENT, DW2_INSTANCE_GONE, DW2_INSTANCE_UNCERTAIN };
 static NSString *v2RestoreIdentityName(int value) {
     return value==DW2_INSTANCE_CURRENT ? @"current" : value==DW2_INSTANCE_GONE ? @"gone" : @"uncertain";
 }
-static int v2RestoreIdentity(const struct dw2_identity *recorded,int recordedOwner) {
+// IncludingWindow can return NULL for a destroyed WID while a cached owner
+// connection still resolves. Only a complete, valid all-window enumeration can
+// independently establish absence; it includes hidden and offscreen windows.
+static NSDictionary<NSNumber *,NSNumber *> *v2RestoreOwners(void) {
+    CFArrayRef rows=CGWindowListCopyWindowInfo(kCGWindowListOptionAll,kCGNullWindowID);
+    if(!rows)return nil;
+    if(CFGetTypeID(rows)!=CFArrayGetTypeID() || CFArrayGetCount(rows)>65536){CFRelease(rows);return nil;}
+    NSMutableDictionary *owners=[NSMutableDictionary dictionary];BOOL valid=YES;
+    for(id row in (__bridge NSArray *)rows) {
+        id wid=[row isKindOfClass:NSDictionary.class] ? row[(id)kCGWindowNumber] : nil;
+        id pid=[row isKindOfClass:NSDictionary.class] ? row[(id)kCGWindowOwnerPID] : nil;
+        if(!isNumber(wid) || CFNumberIsFloatType((__bridge CFNumberRef)wid) || [wid longLongValue]<=0
+            || [wid unsignedLongLongValue]>UINT32_MAX || !isNumber(pid) || CFNumberIsFloatType((__bridge CFNumberRef)pid)
+            || [pid longLongValue]<=0 || [pid longLongValue]>INT_MAX || owners[wid]){valid=NO;break;}
+        owners[wid]=pid;
+    }
+    CFRelease(rows);return valid ? owners : nil;
+}
+static int v2RestoreIdentityWithOwners(const struct dw2_identity *recorded,int recordedOwner,NSDictionary<NSNumber *,NSNumber *> *owners) {
+    if(!owners)return DW2_INSTANCE_UNCERTAIN;
+    NSNumber *listedPID=owners[@(recorded->wid)];
+    if(!listedPID || listedPID.intValue!=recorded->pid)return DW2_INSTANCE_GONE;
     int owner=0;struct dw2_identity current={0};uid_t uid=0;
     if(v2Resolve(recorded->wid,&owner,&current,&uid)) {
         if(!v2SameProcess(&current,recorded) || owner!=recordedOwner)return DW2_INSTANCE_GONE;
         return uid==getuid() && v2InScope(recorded) ? DW2_INSTANCE_CURRENT : DW2_INSTANCE_UNCERTAIN;
     }
-    int pid=0;
-    int listed=v2ListedPID(recorded->wid,&pid);
-    if(listed==DW2_WINDOW_ABSENT)return DW2_INSTANCE_GONE;
-    if(listed!=DW2_WINDOW_PRESENT)return DW2_INSTANCE_UNCERTAIN;
-    if(pid!=recorded->pid)return DW2_INSTANCE_GONE;
     struct proc_bsdinfo process={0};
-    if(proc_pidinfo(pid,PROC_PIDTBSDINFO,0,&process,sizeof(process))!=sizeof(process))return DW2_INSTANCE_UNCERTAIN;
+    if(proc_pidinfo(recorded->pid,PROC_PIDTBSDINFO,0,&process,sizeof(process))!=sizeof(process))return DW2_INSTANCE_UNCERTAIN;
     return process.pbi_start_tvsec!=recorded->birth_sec || process.pbi_start_tvusec!=recorded->birth_usec ? DW2_INSTANCE_GONE : DW2_INSTANCE_UNCERTAIN;
+}
+static int v2RestoreIdentity(const struct dw2_identity *recorded,int recordedOwner) {
+    return v2RestoreIdentityWithOwners(recorded,recordedOwner,v2RestoreOwners());
 }
 // The window server keeps transforms as 32-bit floats, so a request is applied when
 // it reads back equal after the same rounding.
@@ -139,12 +219,34 @@ static BOOL v2SameTransform(CGAffineTransform a,CGAffineTransform b) {
     return (float)a.a==(float)b.a && (float)a.b==(float)b.b && (float)a.c==(float)b.c && (float)a.d==(float)b.d && (float)a.tx==(float)b.tx && (float)a.ty==(float)b.ty;
 }
 static BOOL v2FiniteRect(CGRect r);
+// The sublevel getter has a direct int return, not a status. Fence it with
+// a successful base-level read and exact current identity on both sides.
+static BOOL v2ReadSublevel(DW2Entry *e,int *value) {
+    int level=0;
+    if(!v2SublevelAPI()||!v2EntryCurrent(e)||v2GetWindowLevel(mainConnection(),e->who.wid,&level))return NO;
+    *value=v2GetWindowSublevel(mainConnection(),e->who.wid);
+    return v2EntryCurrent(e);
+}
+static BOOL v2SublevelMatches(DW2Entry *e,int expected) {
+    int actual=0;return v2ReadSublevel(e,&actual)&&actual==expected;
+}
+static BOOL v2ApplySublevel(DW2Entry *e,int requested,int *setStatus) {
+    int actual=0;*setStatus=0;
+    if(!v2ReadSublevel(e,&actual))return NO;
+    if(actual!=requested){
+        if(!v2EntryCurrent(e))return NO;
+        *setStatus=v2SetWindowSublevel(mainConnection(),e->who.wid,requested);
+        if(*setStatus)return NO;
+    }
+    return v2SublevelMatches(e,requested);
+}
 static BOOL v2ReattachCurrent(DW2Entry *e) {
     CGRect bounds=CGRectZero;CGAffineTransform actual=CGAffineTransformIdentity;float alpha=-1;
     return v2EntryCurrent(e) && !getBounds(mainConnection(),e->who.wid,&bounds) && v2FiniteRect(bounds)
         && CGRectEqualToRect(bounds,e->bounds) && !getTransform(mainConnection(),e->who.wid,&actual) && finiteMatrix(actual)
         && (v2SameTransform(actual,e->transform) || v2SameTransform(actual,CGAffineTransformIdentity))
-        && (!e->alphaTouched || (getAlpha && !getAlpha(mainConnection(),e->who.wid,&alpha) && alpha==e->alpha)) && v2EntryCurrent(e);
+        && (!e->alphaTouched || (getAlpha && !getAlpha(mainConnection(),e->who.wid,&alpha) && alpha==e->alpha))
+        && (!e->sublevelTouched || v2SublevelMatches(e,e->originalSublevel)) && v2EntryCurrent(e);
 }
 static void v2Count(void) {
     uint32_t restoring=0;
@@ -154,9 +256,12 @@ static void v2Count(void) {
 
 // Durable no-follow staging and rename; original values survive every frame.
 static NSDictionary *v2JournalEntry(DW2Entry *e,NSString *state) {
-    return @{@"pid":@(e->who.pid),@"birth_sec":@(e->who.birth_sec),@"birth_usec":@(e->who.birth_usec),@"wid":@(e->who.wid),@"owner":@(e->owner),
+    NSMutableDictionary *row=[@{@"pid":@(e->who.pid),@"birth_sec":@(e->who.birth_sec),@"birth_usec":@(e->who.birth_usec),@"wid":@(e->who.wid),@"owner":@(e->owner),
         @"transform":matrix(e->transform),@"alpha":e->hasAlpha ? @(e->alpha) : (id)NSNull.null,@"alpha_touched":@(e->alphaTouched),
-        @"bounds":@[@(e->bounds.origin.x),@(e->bounds.origin.y),@(e->bounds.size.width),@(e->bounds.size.height)],@"state":state};
+        @"bounds":@[@(e->bounds.origin.x),@(e->bounds.origin.y),@(e->bounds.size.width),@(e->bounds.size.height)],@"state":state}mutableCopy];
+    if(e->sublevelTouched)row[@"original_sublevel"]=@(e->originalSublevel);
+    if(e->originalSpace)row[@"original_space"]=@{@"id":@(e->originalSpace),@"display":e->originalSpaceDisplay,@"pending_target":@(e->pendingSpace)};
+    return row;
 }
 static BOOL v2Persist(void) {
     if(!v2WriterIdentity || v2Table.count+v2Released.count>DW2_MAX_TABLE)return NO;
@@ -183,6 +288,126 @@ static BOOL v2Persist(void) {
     return YES;
 }
 
+static BOOL v2CanMoveSpace(uint32_t wid,uint64_t target,uint64_t *source,NSString **display) {
+    NSString *targetDisplay=v2SpaceDisplay(target,YES);
+    uint64_t current=v2WindowSpace(wid);NSString *sourceDisplay=v2SpaceDisplay(current,YES);
+    if(!targetDisplay||!sourceDisplay||(current!=target&&[sourceDisplay isEqual:targetDisplay]))return NO;
+    if(source)*source=current;if(display)*display=sourceDisplay;return YES;
+}
+// Confirm an earlier void request before allowing any replacement request.
+// A failed durability fence keeps the old pending target in memory and on retry.
+static uint8_t v2ConfirmSpace(DW2Entry *e) {
+    if(!e->pendingSpace)return DW2_APPLIED;
+    if(!v2EntryCurrent(e))return DW2_IDENTITY;
+    if(!e->pendingSpaceObserved) {
+        if(v2WindowSpace(e->who.wid)!=e->pendingSpace)return DW2_NOT_APPLIED;
+    }
+    if(!v2EntryCurrent(e))return DW2_IDENTITY;
+    e->pendingSpaceObserved=YES;
+    uint64_t pending=e->pendingSpace;e->pendingSpace=0;
+    if(!v2Persist()){e->pendingSpace=pending;v2JournalStale=YES;return DW2_JOURNAL;}
+    e->pendingSpaceObserved=NO;
+    return DW2_APPLIED;
+}
+static void v2ForgetUnsentSpace(DW2Entry *e) {
+    if(!e->pendingSpaceFresh)return;
+    uint64_t pending=e->pendingSpace,original=e->originalSpace;NSString *display=e->originalSpaceDisplay;
+    e->pendingSpace=0;
+    if(e->spaceFresh){e->originalSpace=0;e->originalSpaceDisplay=nil;}
+    if(!v2Persist()){e->pendingSpace=pending;e->originalSpace=original;e->originalSpaceDisplay=display;v2JournalStale=YES;}
+    e->pendingSpaceFresh=e->spaceFresh=NO;
+}
+// A removed display may destroy an unobserved forward target and return its
+// windows to the original Space. A failed per-Space getter is not deletion
+// evidence: require a complete, valid inventory with the original on its saved
+// display and the pending target absent, including every current active display.
+static BOOL v2PendingSpaceDeleted(DW2Entry *e) {
+    if(!v2CopyManagedSpaces&&!v2ManagedSpacesResolved){
+        v2ManagedSpacesResolved=YES;
+        void *sky=dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight",RTLD_LOCAL|RTLD_NOW);
+        if(sky)v2CopyManagedSpaces=dlsym(sky,"SLSCopyManagedDisplaySpaces");
+    }
+    if(!v2CopyManagedSpaces)return NO;
+    CFArrayRef raw=v2CopyManagedSpaces(mainConnection());if(!raw)return NO;
+    BOOL valid=CFGetTypeID(raw)==CFArrayGetTypeID()&&CFArrayGetCount(raw)>0&&CFArrayGetCount(raw)<=32;
+    NSMutableSet *displays=[NSMutableSet set],*spaces=[NSMutableSet set];BOOL originalFound=NO;
+    if(valid)for(id row in (__bridge NSArray *)raw){
+        id display=[row isKindOfClass:NSDictionary.class]?row[@"Display Identifier"]:nil;
+        id list=[row isKindOfClass:NSDictionary.class]?row[@"Spaces"]:nil;
+        if(![display isKindOfClass:NSString.class]||![[NSUUID alloc]initWithUUIDString:display]
+            ||[displays containsObject:display]||![list isKindOfClass:NSArray.class]||![list count]||[list count]>1024){valid=NO;break;}
+        [displays addObject:display];
+        for(id item in list){
+            id value=[item isKindOfClass:NSDictionary.class]?item[@"id64"]:nil;
+            if(!isNumber(value)||CFNumberIsFloatType((__bridge CFNumberRef)value)||[value compare:@0]!=NSOrderedDescending
+                ||[spaces containsObject:value]){valid=NO;break;}
+            [spaces addObject:value];
+            if([value unsignedLongLongValue]==e->originalSpace&&[display isEqual:e->originalSpaceDisplay])originalFound=YES;
+        }
+        if(!valid)break;
+    }
+    CFRelease(raw);
+    if(!valid||!originalFound||[spaces containsObject:@(e->pendingSpace)])return NO;
+    CGDirectDisplayID active[32];uint32_t count=0;
+    if(CGGetActiveDisplayList(32,active,&count)||!count||count>=32)return NO;
+    for(uint32_t i=0;i<count;i++){
+        if(CGDisplayMirrorsDisplay(active[i]))continue;
+        CFUUIDRef uuid=createDisplayUUID(active[i]);if(!uuid)return NO;
+        NSString *display=CFBridgingRelease(CFUUIDCreateString(NULL,uuid));CFRelease(uuid);
+        if(!display||![displays containsObject:display])return NO;
+    }
+    return YES;
+}
+static void v2ForgetDeletedSpace(DW2Entry *e) {
+    if(!e->pendingSpace||!v2EntryCurrent(e)||v2WindowSpace(e->who.wid)!=e->originalSpace
+        ||![v2SpaceDisplay(e->originalSpace,NO)isEqual:e->originalSpaceDisplay]||!v2PendingSpaceDeleted(e)
+        ||v2WindowSpace(e->who.wid)!=e->originalSpace||!v2EntryCurrent(e))return;
+    uint64_t pending=e->pendingSpace;e->pendingSpace=0;
+    if(!v2Persist()){e->pendingSpace=pending;v2JournalStale=YES;}
+    else e->pendingSpaceObserved=NO;
+}
+static BOOL v2RestoreSpace(DW2Entry *e) {
+    if(!e->originalSpace)return YES;
+    if(![v2SpaceDisplay(e->originalSpace,NO)isEqual:e->originalSpaceDisplay]||!v2EntryCurrent(e))return NO;
+    // Confirmation failure must not block an inverse already owed. It does
+    // prevent reporting RESTORED while an unobserved forward remains possible.
+    (void)v2ConfirmSpace(e);
+    v2ForgetDeletedSpace(e);
+    uint64_t current=v2WindowSpace(e->who.wid);
+    if(current!=e->originalSpace) {
+        if(![v2SpaceDisplay(e->originalSpace,NO)isEqual:e->originalSpaceDisplay]||!v2EntryCurrent(e))return NO;
+        e->restoreSpaceStarted=v2Now();e->restoreSpaceQuiet=0;e->restoreSpaceSample=NO;
+        moveWindowsToSpace(mainConnection(),(__bridge CFArrayRef)@[@(e->who.wid)],e->originalSpace);
+    }
+    return !e->pendingSpace&&v2WindowSpace(e->who.wid)==e->originalSpace
+        &&[v2SpaceDisplay(e->originalSpace,NO)isEqual:e->originalSpaceDisplay]&&v2EntryCurrent(e);
+}
+// Space membership can read back before AppKit finishes a cross-display reflow.
+// Sample before corrective writes so those writes cannot hide continued drift.
+// Each retry is nonblocking; crashes discard these transient timing witnesses.
+static void v2SpaceRestoreSample(DW2Entry *e) {
+    if(!e->originalSpace)return;
+    if(!e->restoreSpaceStarted)e->restoreSpaceStarted=v2Now();
+    CGRect bounds=CGRectZero;CGAffineTransform actual=CGAffineTransformIdentity;float alpha=-1;
+    BOOL stable=e->restoreSpaceSample&&!e->pendingSpace&&v2EntryCurrent(e)
+        &&v2WindowSpace(e->who.wid)==e->originalSpace
+        &&!getBounds(mainConnection(),e->who.wid,&bounds)&&v2FiniteRect(bounds)&&CGRectEqualToRect(bounds,e->restoreSpaceBounds)
+        &&!getTransform(mainConnection(),e->who.wid,&actual)&&v2SameTransform(actual,e->transform)
+        &&(!e->alphaTouched||(getAlpha&&!getAlpha(mainConnection(),e->who.wid,&alpha)&&alpha==e->alpha))
+        &&(!e->sublevelTouched||v2SublevelMatches(e,e->originalSublevel))
+        &&v2EntryCurrent(e);
+    if(!stable)e->restoreSpaceQuiet=0;
+}
+static BOOL v2SpaceRestoreSettled(DW2Entry *e,CGRect bounds,BOOL exact) {
+    if(!e->originalSpace)return exact;
+    if(!exact){e->restoreSpaceQuiet=0;e->restoreSpaceSample=NO;return NO;}
+    uint64_t now=v2Now();
+    if(!e->restoreSpaceQuiet||!e->restoreSpaceSample||!CGRectEqualToRect(bounds,e->restoreSpaceBounds))e->restoreSpaceQuiet=now;
+    e->restoreSpaceBounds=bounds;e->restoreSpaceSample=YES;
+    return now>=e->restoreSpaceStarted&&now-e->restoreSpaceStarted>=2000
+        &&now>=e->restoreSpaceQuiet&&now-e->restoreSpaceQuiet>=500;
+}
+
 static void v2Restore(NSString *reason,BOOL retry,NSMutableData *results,struct dw2_restore_reply *summary);
 static void v2ScheduleRetry(void) {
     if(v2RetryScheduled)return;
@@ -201,6 +426,9 @@ static void v2ScheduleRetry(void) {
 static void v2Restore(NSString *reason,BOOL retry,NSMutableData *results,struct dw2_restore_reply *summary) {
     NSMutableArray *report=[NSMutableArray array];
     uint32_t count=0,pending=0;
+    // Share the initial enumeration across this bounded table pass. Successful
+    // restoration still takes a fresh enumeration at its final identity fence.
+    NSDictionary *owners=v2Table.count ? v2RestoreOwners() : nil;
     for(NSNumber *wid in [v2Table.allKeys sortedArrayUsingSelector:@selector(compare:)]) {
         DW2Entry *e=v2Table[wid];
         if(retry && e->state!=DW2_RESTORING)continue;
@@ -208,9 +436,16 @@ static void v2Restore(NSString *reason,BOOL retry,NSMutableData *results,struct 
         BOOL transformSet=NO,transformRead=NO,transformMatches=NO,alphaChecked=NO,alphaCurrent=NO,alphaSet=NO,alphaRead=NO;
         int transformSetStatus=0,transformGetStatus=0,alphaSetStatus=0,alphaGetStatus=0,finalIdentity=-1;
         CGAffineTransform actual=CGAffineTransformIdentity;float alpha=-1;CGRect releasedBounds=CGRectZero;
-        int observed=v2RestoreIdentity(&e->who,e->owner);
+        int observed=v2RestoreIdentityWithOwners(&e->who,e->owner,owners);
+        BOOL admitted=observed==DW2_INSTANCE_CURRENT&&(!e->reattaching||v2ReattachCurrent(e));
+        if(e->originalSpace&&!admitted){e->restoreSpaceQuiet=0;e->restoreSpaceSample=NO;}
         if(observed==DW2_INSTANCE_GONE){r.outcome=DW2_GONE;r.set_status=0;}
-        else if(observed==DW2_INSTANCE_CURRENT && (!e->reattaching || v2ReattachCurrent(e))) {
+        else if(admitted) {
+            BOOL spaceRestored=v2RestoreSpace(e);
+            v2SpaceRestoreSample(e);
+            // Space calls and their readbacks can outlive the window as well.
+            if(e->originalSpace&&!v2EntryCurrent(e)){e->restoreSpaceQuiet=0;e->restoreSpaceSample=NO;e->state=DW2_RESTORING;pending++;count++;[results appendBytes:&r length:sizeof(r)];
+                [report addObject:@{@"pid":@(r.id.pid),@"birth_sec":@(r.id.birth_sec),@"birth_usec":@(r.id.birth_usec),@"wid":@(r.id.wid),@"outcome":@"pending",@"set_status":@(-1)}];continue;}
             transformSet=YES;r.set_status=transformSetStatus=setTransform(mainConnection(),e->who.wid,e->transform);
             BOOL ok=r.set_status==0 && (transformRead=YES,transformGetStatus=getTransform(mainConnection(),e->who.wid,&actual))==0
                 && (transformMatches=v2SameTransform(actual,e->transform));
@@ -220,11 +455,18 @@ static void v2Restore(NSString *reason,BOOL retry,NSMutableData *results,struct 
                 if(status && !r.set_status)r.set_status=status;
                 if(status || (alphaRead=YES,alphaGetStatus=getAlpha(mainConnection(),e->who.wid,&alpha)) || alpha!=e->alpha)ok=NO;
             }
+            if(e->sublevelTouched){
+                int sublevelStatus=0;
+                if(!v2ApplySublevel(e,e->originalSublevel,&sublevelStatus))ok=NO;
+                if(sublevelStatus&&!r.set_status)r.set_status=sublevelStatus;
+            }
             // The retained release describes the geometry at restoration, not
             // the possibly resized geometry from first admission.
-            ok=ok && !getBounds(mainConnection(),e->who.wid,&releasedBounds) && v2FiniteRect(releasedBounds)
+            ok=ok && spaceRestored && (!e->originalSpace||v2WindowSpace(e->who.wid)==e->originalSpace)
+                && !getBounds(mainConnection(),e->who.wid,&releasedBounds) && v2FiniteRect(releasedBounds)
                 && (!e->reattaching || CGRectEqualToRect(releasedBounds,e->bounds));
-            r.outcome=ok && (finalIdentity=v2RestoreIdentity(&e->who,e->owner))==DW2_INSTANCE_CURRENT ? DW2_RESTORED : DW2_PENDING;
+            ok=ok && (finalIdentity=v2RestoreIdentity(&e->who,e->owner))==DW2_INSTANCE_CURRENT;
+            r.outcome=v2SpaceRestoreSettled(e,releasedBounds,ok) ? DW2_RESTORED : DW2_PENDING;
         }
         if(r.outcome==DW2_PENDING){e->state=DW2_RESTORING;pending++;}
         else {
@@ -251,6 +493,10 @@ static void v2Restore(NSString *reason,BOOL retry,NSMutableData *results,struct 
                     @"saved":e->hasAlpha ? @(e->alpha) : (id)NSNull.null,
                     @"actual":alphaRead && !alphaGetStatus && isfinite(alpha) ? @(alpha) : (id)NSNull.null} : (id)NSNull.null,
                 @"final_identity":finalIdentity>=0 ? v2RestoreIdentityName(finalIdentity) : (id)NSNull.null};
+            if(e->originalSpace){NSMutableDictionary *diagnostic=[receipt[@"diagnostic"]mutableCopy];
+                diagnostic[@"space"]=@{@"original":@(e->originalSpace),@"pending_target":@(e->pendingSpace),
+                    @"settle_started_ms":@(e->restoreSpaceStarted),@"quiet_since_ms":@(e->restoreSpaceQuiet),
+                    @"sample_current":@(e->restoreSpaceSample)};receipt[@"diagnostic"]=diagnostic;}
         }
         [report addObject:receipt];
     }
@@ -260,6 +506,7 @@ static void v2Restore(NSString *reason,BOOL retry,NSMutableData *results,struct 
         saved=v2Persist();v2JournalStale=!saved;
     }
     v2Count();
+    for(DW2Entry *e in v2Table.objectEnumerator)if(e->originalSpace&&e->restoreSpaceSample){v2RetryDelayMS=250;break;}
     if(atomic_load(&v2Restoring) || v2JournalStale)v2ScheduleRetry();
     else v2RetryDelayMS=250;
     if(summary)*summary=(struct dw2_restore_reply){.count=count,.pending=pending,.journal_persisted=saved};
@@ -272,36 +519,55 @@ static void v2Restore(NSString *reason,BOOL retry,NSMutableData *results,struct 
 // One frame. A record that cannot be applied fails alone. Windows not yet in the
 // table are captured first and journalled together, once, before any of them is
 // changed; a frame of known windows writes nothing to disk.
-static void v2Apply(const struct dw2_record *records,uint32_t count,uint8_t *status) {
+static void v2ApplyWithSpaces(const struct dw2_record *records,const uint64_t *targets,uint32_t count,uint8_t *status) {
     NSMutableArray *entries=[NSMutableArray arrayWithCapacity:count];
     NSMutableDictionary *replacedReleases=[NSMutableDictionary dictionary];
     NSMutableSet<NSNumber *> *releasing=[NSMutableSet set];
+    NSMutableData *sourceData=[NSMutableData dataWithLength:count*sizeof(uint64_t)];uint64_t *sources=sourceData.mutableBytes;
     for(uint32_t i=0;i<count;i++)if(records[i].flags==DW2_RECORD_RESTORE)[releasing addObject:@(records[i].id.wid)];
+    NSMutableSet *seen=[NSMutableSet set],*duplicates=[NSMutableSet set];
+    if(targets)for(uint32_t i=0;i<count;i++){NSNumber *wid=@(records[i].id.wid);if([seen containsObject:wid])[duplicates addObject:wid];[seen addObject:wid];}
+    // Finish releases and confirmations of prior requests before staging any
+    // new Space intent. Their journal writes must never commit another record's
+    // not-yet-admitted pending target halfway through this frame.
+    NSMutableData *priorData=[NSMutableData dataWithLength:count];uint8_t *prior=priorData.mutableBytes;
+    for(uint32_t i=0;i<count;i++) {
+        const struct dw2_record *r=&records[i];
+        if(r->flags!=DW2_RECORD_RESTORE||!v2InScope(&r->id)||[duplicates containsObject:@(r->id.wid)]||(targets&&targets[i]))continue;
+        DW2Entry *entry=v2Table[@(r->id.wid)];
+        if(entry&&!v2SameProcess(&entry->who,&r->id)){prior[i]=DW2_IDENTITY;continue;}
+        if(entry)entry->state=DW2_RESTORING;
+        if(entry||v2JournalStale){struct dw2_restore_reply summary={0};v2Restore(@"window released",YES,nil,&summary);
+            prior[i]=v2Table[@(r->id.wid)]?DW2_RESTORE_PENDING:summary.journal_persisted?DW2_APPLIED:DW2_JOURNAL;}
+    }
+    for(uint32_t i=0;i<count;i++) {
+        const struct dw2_record *r=&records[i];DW2Entry *entry=v2Table[@(r->id.wid)];
+        if(r->flags!=DW2_RECORD_RESTORE&&![releasing containsObject:@(r->id.wid)]&&v2InScope(&r->id)
+            &&entry&&entry->pendingSpace&&v2SameProcess(&entry->who,&r->id))prior[i]=v2ConfirmSpace(entry);
+    }
     BOOL changed=NO;
     for(uint32_t i=0;i<count;i++) {
         const struct dw2_record *r=&records[i];
         [entries addObject:NSNull.null];
-        if((r->flags&~(uint32_t)(DW2_RECORD_HAS_ALPHA|DW2_RECORD_RESTORE))||r->flags==(DW2_RECORD_HAS_ALPHA|DW2_RECORD_RESTORE)){status[i]=DW2_MALFORMED;continue;}
+        uint64_t target=targets?targets[i]:0;
+        if([duplicates containsObject:@(r->id.wid)]||(target&&r->flags==DW2_RECORD_RESTORE)){status[i]=DW2_MALFORMED;continue;}
+        if((r->flags&~(uint32_t)(DW2_RECORD_HAS_ALPHA|DW2_RECORD_RESTORE|DW2_RECORD_PINNED))
+            ||((r->flags&DW2_RECORD_RESTORE)&&r->flags!=DW2_RECORD_RESTORE)){status[i]=DW2_MALFORMED;continue;}
         if(!v2InScope(&r->id)){status[i]=DW2_SCOPE;continue;}
-        if(r->flags==DW2_RECORD_RESTORE){
-            DW2Entry *entry=v2Table[@(r->id.wid)];
-            if(entry&&!v2SameProcess(&entry->who,&r->id)){status[i]=DW2_IDENTITY;continue;}
-            // No entry means this identity was never changed or already restored.
-            // Retry only marked entries; every other held window stays untouched.
-            if(entry)entry->state=DW2_RESTORING;
-            if(entry||v2JournalStale){struct dw2_restore_reply summary={0};v2Restore(@"window released",YES,nil,&summary);
-                status[i]=v2Table[@(r->id.wid)]?DW2_RESTORE_PENDING:summary.journal_persisted?DW2_APPLIED:DW2_JOURNAL;}
-            else status[i]=DW2_APPLIED;
-            continue;
-        }
+        if(r->flags==DW2_RECORD_RESTORE){status[i]=prior[i];continue;}
+        if(prior[i]!=DW2_APPLIED){status[i]=prior[i];continue;}
         // A malformed frame cannot both release and transform the same number.
         // Restoration wins, regardless of its position in that frame.
         if([releasing containsObject:@(r->id.wid)]){status[i]=DW2_RESTORE_PENDING;continue;}
         if(!finiteMatrix(CGAffineTransformMake(r->m[0],r->m[1],r->m[2],r->m[3],r->m[4],r->m[5]))){status[i]=DW2_MATRIX;continue;}
-        BOOL wantsAlpha=(r->flags&DW2_RECORD_HAS_ALPHA)!=0;
+        BOOL wantsAlpha=(r->flags&DW2_RECORD_HAS_ALPHA)!=0,wantsPin=(r->flags&DW2_RECORD_PINNED)!=0;
+        if(wantsPin&&!v2SublevelAPI()){status[i]=DW2_SUBLEVEL;continue;}
         if(wantsAlpha && (!setAlpha || !getAlpha || !isfinite(r->alpha) || r->alpha<0 || r->alpha>1)){status[i]=DW2_ALPHA;continue;}
         int owner=0;struct dw2_identity now={0};uid_t uid=0;
         if(!v2Resolve(r->id.wid,&owner,&now,&uid) || !v2SameProcess(&now,&r->id) || uid!=getuid()){status[i]=DW2_IDENTITY;continue;}
+        uint64_t source=0;NSString *sourceDisplay=nil;
+        if(target&&!v2CanMoveSpace(r->id.wid,target,&source,&sourceDisplay)){status[i]=DW2_SPACE;continue;}
+        sources[i]=source;
         NSNumber *key=@(r->id.wid);
         DW2Entry *e=v2Table[key];
         if(e && !v2SameProcess(&e->who,&now)) {
@@ -314,8 +580,9 @@ static void v2Apply(const struct dw2_record *records,uint32_t count,uint8_t *sta
             // Live released originals remain obligations across connection death.
             // Make room only by proving a recorded instance is gone, never age.
             if(!v2Released[key] && v2Table.count+v2Released.count>=DW2_MAX_TABLE) {
+                NSDictionary *owners=v2RestoreOwners();
                 for(NSNumber *releasedKey in v2Released.allKeys){DW2Entry *old=v2Released[releasedKey];
-                    if(v2RestoreIdentity(&old->who,old->owner)==DW2_INSTANCE_GONE){[v2Released removeObjectForKey:releasedKey];changed=YES;}}
+                    if(v2RestoreIdentityWithOwners(&old->who,old->owner,owners)==DW2_INSTANCE_GONE){[v2Released removeObjectForKey:releasedKey];changed=YES;}}
             }
             if(v2Table.count+v2Released.count-(v2Released[key]?1:0)>=DW2_MAX_TABLE){status[i]=DW2_TABLE_FULL;continue;}
             e=[DW2Entry new];e->who=now;e->owner=owner;e->state=DW2_HELD;e->fresh=YES;
@@ -330,6 +597,19 @@ static void v2Apply(const struct dw2_record *records,uint32_t count,uint8_t *sta
             if(v2Released[key]){replacedReleases[key]=v2Released[key];[v2Released removeObjectForKey:key];}
             v2Table[key]=e;changed=YES;
         }
+        if(wantsPin&&!e->sublevelTouched){
+            int original=0;
+            if(!v2ReadSublevel(e,&original)){
+                status[i]=DW2_SNAPSHOT;
+                if(e->fresh){[v2Table removeObjectForKey:key];if(replacedReleases[key])v2Released[key]=replacedReleases[key];}
+                continue;
+            }
+            e->originalSublevel=original;e->sublevelTouched=e->sublevelFresh=YES;changed=YES;
+        }
+        if(target&&source!=target){
+            if(!e->originalSpace){e->originalSpace=source;e->originalSpaceDisplay=sourceDisplay;e->spaceFresh=YES;}
+            e->pendingSpace=target;e->pendingSpaceFresh=YES;e->pendingSpaceObserved=NO;changed=YES;
+        }
         if(wantsAlpha && !e->alphaTouched){e->alphaTouched=e->alphaFresh=YES;changed=YES;}
         entries[i]=e;status[i]=DW2_APPLIED;
     }
@@ -337,22 +617,40 @@ static void v2Apply(const struct dw2_record *records,uint32_t count,uint8_t *sta
         BOOL saved=v2Persist();
         for(uint32_t i=0;i<count;i++) {
             DW2Entry *e=entries[i];
-            if((id)e==NSNull.null || !(e->fresh || e->alphaFresh))continue;
+            if((id)e==NSNull.null || !(e->fresh || e->alphaFresh || e->sublevelFresh || e->pendingSpaceFresh))continue;
             if(!saved) {
                 // Nothing of this window (or of its alpha) is changed without a record on disk.
                 status[i]=DW2_JOURNAL;entries[i]=NSNull.null;
                 if(e->fresh){NSNumber *key=@(e->who.wid);[v2Table removeObjectForKey:key];if(replacedReleases[key])v2Released[key]=replacedReleases[key];}
-                else e->alphaTouched=NO;
+                else {if(e->alphaFresh)e->alphaTouched=NO;
+                    if(e->sublevelFresh)e->sublevelTouched=NO;
+                    if(e->spaceFresh){e->originalSpace=0;e->originalSpaceDisplay=nil;}
+                    if(e->pendingSpaceFresh)e->pendingSpace=0;}
             }
         }
-        for(DW2Entry *e in v2Table.objectEnumerator)e->fresh=e->alphaFresh=NO;
+        for(DW2Entry *e in v2Table.objectEnumerator)e->fresh=e->alphaFresh=e->sublevelFresh=NO;
         if(!saved){v2JournalStale=YES;v2ScheduleRetry();}
     }
+    BOOL spaceAttempted=NO;
     for(uint32_t i=0;i<count;i++) {
         DW2Entry *e=entries[i];
         if((id)e==NSNull.null)continue;
         const struct dw2_record *r=&records[i];
-        if(!v2EntryCurrent(e)){status[i]=DW2_IDENTITY;continue;}
+        if(!v2EntryCurrent(e)){if(!spaceAttempted)v2ForgetUnsentSpace(e);status[i]=DW2_IDENTITY;continue;}
+        uint64_t target=targets?targets[i]:0;
+        if(target){
+            uint64_t current=0;
+            if(!v2CanMoveSpace(e->who.wid,target,&current,NULL)){if(!spaceAttempted)v2ForgetUnsentSpace(e);status[i]=DW2_SPACE;continue;}
+            if(current!=target){
+                if(current!=sources[i]||e->pendingSpace!=target||!v2EntryCurrent(e)){if(!spaceAttempted)v2ForgetUnsentSpace(e);status[i]=DW2_IDENTITY;continue;}
+                e->pendingSpaceFresh=e->spaceFresh=NO;spaceAttempted=YES;
+                moveWindowsToSpace(mainConnection(),(__bridge CFArrayRef)@[@(e->who.wid)],target);
+            } // A preceding root move may have carried this member already.
+              // Its observed target confirms, but never erases, its original.
+            uint8_t confirmed=v2ConfirmSpace(e);
+            if(confirmed!=DW2_APPLIED){status[i]=confirmed;continue;}
+            if(v2WindowSpace(e->who.wid)!=target||!v2EntryCurrent(e)){status[i]=DW2_NOT_APPLIED;continue;}
+        }
         CGAffineTransform requested=CGAffineTransformMake(r->m[0],r->m[1],r->m[2],r->m[3],r->m[4],r->m[5]),actual=CGAffineTransformIdentity;
         // Frames stay complete, but moving one window need not rewrite every
         // unchanged neighbour. Only a previously applied request is eligible,
@@ -371,12 +669,21 @@ static void v2Apply(const struct dw2_record *records,uint32_t count,uint8_t *sta
             float alpha=-1;
             if(setAlpha(mainConnection(),e->who.wid,r->alpha) || getAlpha(mainConnection(),e->who.wid,&alpha) || alpha!=r->alpha)ok=NO;
         }
+        if(e->sublevelTouched){
+            int requestedSublevel=(r->flags&DW2_RECORD_PINNED)?CGWindowLevelForKey(kCGFloatingWindowLevelKey):e->originalSublevel;
+            int sublevelStatus=0;if(!v2ApplySublevel(e,requestedSublevel,&sublevelStatus))ok=NO;
+        }
+        BOOL spaceOK=!target||(v2WindowSpace(e->who.wid)==target&&v2SpaceDisplay(target,YES));
         if(!v2EntryCurrent(e))status[i]=DW2_IDENTITY;
+        else if(!spaceOK)status[i]=DW2_NOT_APPLIED;
         else if(!ok)status[i]=DW2_NOT_APPLIED;
         else {e->appliedTransform=requested;e->appliedTransformKnown=YES;}
     }
+    for(DW2Entry *e in v2Table.objectEnumerator)e->spaceFresh=e->pendingSpaceFresh=NO;
     v2Count();
 }
+
+static void v2Apply(const struct dw2_record *records,uint32_t count,uint8_t *status) { v2ApplyWithSpaces(records,NULL,count,status); }
 
 static NSData *v2Enrollment(void) {
     struct dw2_enrollment_reply head={.scope=fixtureOnly ? DW2_SCOPE_COOPERATIVE : allowlist ? DW2_SCOPE_ALLOWLIST : DW2_SCOPE_SAME_USER,.server_pid=getpid()};
@@ -477,28 +784,36 @@ static void v2Drain(uint64_t barrier) {
     NSData *frame=barrier==v2Barrier ? v2Slot : nil;
     DW2Connection *c=v2SlotOwner;
     uint64_t seq=v2SlotSeq;
+    uint16_t type=v2SlotType;
     struct dw2_frame_reply head={.disposition=DW2_FRAME_APPLIED,.superseded=v2SupersededPending};
     if(frame){v2Slot=nil;v2SlotOwner=nil;v2SupersededPending=0;}
     pthread_mutex_unlock(&v2Lock);
     if(!frame)return;
-    head.count=(uint32_t)(frame.length/sizeof(struct dw2_record));
+    BOOL spaces=type==DW2_FRAME_SPACE;
+    head.count=(uint32_t)(frame.length/(spaces?sizeof(struct dw2_space_record):sizeof(struct dw2_record)));
     NSMutableData *reply=[NSMutableData dataWithLength:sizeof(head)+head.count];
-    v2Apply(frame.bytes,head.count,(uint8_t *)reply.mutableBytes+sizeof(head));
+    if(spaces){
+        NSMutableData *base=[NSMutableData dataWithLength:head.count*sizeof(struct dw2_record)];
+        NSMutableData *targets=[NSMutableData dataWithLength:head.count*sizeof(uint64_t)];
+        const struct dw2_space_record *extended=frame.bytes;
+        for(uint32_t i=0;i<head.count;i++){((struct dw2_record *)base.mutableBytes)[i]=extended[i].record;((uint64_t *)targets.mutableBytes)[i]=extended[i].target_space;}
+        v2ApplyWithSpaces(base.bytes,targets.bytes,head.count,(uint8_t *)reply.mutableBytes+sizeof(head));
+    }else v2Apply(frame.bytes,head.count,(uint8_t *)reply.mutableBytes+sizeof(head));
     head.frames_applied=atomic_fetch_add(&v2FramesApplied,1)+1;
     memcpy(reply.mutableBytes,&head,sizeof(head));
-    v2Send(c,DW2_FRAME,seq,reply.bytes,reply.length);
+    v2Send(c,type,seq,reply.bytes,reply.length);
 }
 // Called with v2Lock held. The frame in the slot will never be applied.
-static BOOL v2Discard(uint64_t *seq,uint32_t *superseded) {
+static BOOL v2Discard(uint64_t *seq,uint32_t *superseded,uint16_t *type) {
     BOOL had=v2Slot!=nil;
-    *seq=v2SlotSeq;*superseded=v2SupersededPending;
+    *seq=v2SlotSeq;*superseded=v2SupersededPending;if(type)*type=v2SlotType;
     v2Slot=nil;v2SlotOwner=nil;v2SupersededPending=0;v2Barrier++;
     if(had)atomic_fetch_add(&v2FramesSuperseded,1);
     return had;
 }
-static void v2SendDropped(DW2Connection *c,uint64_t seq,uint32_t superseded) {
+static void v2SendDropped(DW2Connection *c,uint64_t seq,uint32_t superseded,uint16_t type) {
     struct dw2_frame_reply head={.disposition=DW2_FRAME_DROPPED,.superseded=superseded,.frames_applied=atomic_load(&v2FramesApplied)};
-    v2Send(c,DW2_FRAME,seq,&head,sizeof(head));
+    v2Send(c,type,seq,&head,sizeof(head));
 }
 
 static BOOL v2Hello(DW2Connection *c,const struct dw2_header *h,const void *body) {
@@ -558,11 +873,14 @@ static BOOL v2Handle(DW2Connection *c,const struct dw2_header *h,const void *bod
         pthread_mutex_unlock(&v2Lock);
         return YES;
     }
-    if(h->type==DW2_FRAME) {
+    if(h->type==DW2_FRAME||h->type==DW2_FRAME_SPACE) {
+        BOOL spaces=h->type==DW2_FRAME_SPACE;
+        if(spaces&&!v2SpaceAPI())return NO;
         struct dw2_frame head;
         if(h->length<sizeof(head))return NO;
         memcpy(&head,body,sizeof(head));
-        if(head.reserved || head.count>DW2_MAX_RECORDS || h->length!=sizeof(head)+(size_t)head.count*sizeof(struct dw2_record) || seq<=c->lastFrame)return NO;
+        size_t stride=spaces?sizeof(struct dw2_space_record):sizeof(struct dw2_record);
+        if(head.reserved || head.count>DW2_MAX_RECORDS || h->length!=sizeof(head)+(size_t)head.count*stride || seq<=c->lastFrame)return NO;
         c->lastFrame=seq;
         NSData *frame=[NSData dataWithBytes:(const char *)body+sizeof(head) length:h->length-sizeof(head)];
         atomic_fetch_add(&v2FramesReceived,1);
@@ -570,7 +888,7 @@ static BOOL v2Handle(DW2Connection *c,const struct dw2_header *h,const void *bod
         atomic_store(&v2Deadline,v2Now()+DW2_LEASE_MS);
         // Newest wins: a frame not yet taken is replaced, never queued behind.
         if(v2Slot){v2SupersededPending++;atomic_fetch_add(&v2FramesSuperseded,1);}
-        v2Slot=frame;v2SlotSeq=seq;v2SlotOwner=c;
+        v2Slot=frame;v2SlotSeq=seq;v2SlotOwner=c;v2SlotType=h->type;
         uint64_t barrier=v2Barrier;
         dispatch_async(v2q,^{v2Drain(barrier);});
         pthread_mutex_unlock(&v2Lock);
@@ -583,10 +901,10 @@ static BOOL v2Handle(DW2Connection *c,const struct dw2_header *h,const void *bod
     else if(h->type==DW2_ENROLLMENT)dispatch_async(v2q,^{NSData *reply=v2Enrollment();v2Send(c,DW2_ENROLLMENT,seq,reply.bytes,reply.length);});
     else {
         // A frame still waiting is older than this request and must not follow it.
-        uint64_t droppedSeq;uint32_t superseded;
-        BOOL dropped=v2Discard(&droppedSeq,&superseded);
+        uint64_t droppedSeq;uint32_t superseded;uint16_t droppedType;
+        BOOL dropped=v2Discard(&droppedSeq,&superseded,&droppedType);
         dispatch_async(v2q,^{
-            if(dropped)v2SendDropped(c,droppedSeq,superseded);
+            if(dropped)v2SendDropped(c,droppedSeq,superseded,droppedType);
             struct dw2_restore_reply summary;
             NSMutableData *reply=[NSMutableData dataWithLength:sizeof(summary)];
             v2Restore(@"explicit",NO,reply,&summary);
@@ -639,7 +957,7 @@ static void *v2Serve(void *argument) { @autoreleasepool {
         // under the lock, so no request of a later session can precede the restore.
         NSArray<DW2Connection *> *beats=v2Beats;
         uint64_t droppedSeq;uint32_t superseded;
-        v2Discard(&droppedSeq,&superseded);
+        v2Discard(&droppedSeq,&superseded,NULL);
         v2Beats=nil;v2Session=0;
         for(DW2Connection *beat in beats)if(!atomic_exchange(&beat->closed,true))shutdown(beat->fd,SHUT_RDWR);
         dispatch_async(v2q,^{v2Restore(reason,NO,nil,NULL);});
@@ -762,7 +1080,10 @@ static BOOL v2RemoveStaging(void) {
     return errno==ENOENT;
 }
 static DW2Entry *v2DecodeEntry(NSDictionary *w,BOOL released) {
-    if(!v2Keys(w,@[@"pid",@"birth_sec",@"birth_usec",@"wid",@"owner",@"transform",@"alpha",@"alpha_touched",@"bounds",@"state"])
+    NSArray *keys=@[@"pid",@"birth_sec",@"birth_usec",@"wid",@"owner",@"transform",@"alpha",@"alpha_touched",@"bounds",@"state"];
+    if([w isKindOfClass:NSDictionary.class]&&w[@"original_space"])keys=[keys arrayByAddingObject:@"original_space"];
+    if([w isKindOfClass:NSDictionary.class]&&w[@"original_sublevel"])keys=[keys arrayByAddingObject:@"original_sublevel"];
+    if(!v2Keys(w,keys)
         || !v2Integer(w[@"pid"],1,INT_MAX) || !v2Integer(w[@"birth_sec"],1,UINT64_MAX) || !v2Integer(w[@"birth_usec"],0,999999)
         || !v2Integer(w[@"wid"],1,UINT32_MAX) || !v2Integer(w[@"owner"],1,INT_MAX) || !v2Boolean(w[@"alpha_touched"])
         || !(released ? [w[@"state"]isEqual:@"released"] : [@[@"held",@"restoring",@"reattaching"]containsObject:w[@"state"]]))return nil;
@@ -781,6 +1102,21 @@ static DW2Entry *v2DecodeEntry(NSDictionary *w,BOOL released) {
     }
     e->alphaTouched=[w[@"alpha_touched"]boolValue];
     if(e->alphaTouched && (!e->hasAlpha || !setAlpha || !getAlpha))return nil;
+    id sublevel=w[@"original_sublevel"];
+    if(sublevel){
+        // Unlike identity fields, a signed sublevel can be negative.
+        if(!isNumber(sublevel)||CFNumberIsFloatType((__bridge CFNumberRef)sublevel)
+            ||[sublevel compare:@(INT_MIN)]==NSOrderedAscending||[sublevel compare:@(INT_MAX)]==NSOrderedDescending||!v2SublevelAPI())return nil;
+        e->originalSublevel=[sublevel intValue];e->sublevelTouched=YES;
+    }
+    NSDictionary *space=w[@"original_space"];
+    if(space) {
+        if(!v2Keys(space,@[@"id",@"display",@"pending_target"])||!v2Integer(space[@"id"],1,UINT64_MAX)
+            ||!v2Integer(space[@"pending_target"],0,UINT64_MAX)||!v2BootUUIDValid(space[@"display"])
+            ||(released&&[space[@"pending_target"]unsignedLongLongValue]))return nil;
+        e->originalSpace=[space[@"id"]unsignedLongLongValue];e->originalSpaceDisplay=space[@"display"];
+        e->pendingSpace=[space[@"pending_target"]unsignedLongLongValue];
+    }
     return e;
 }
 static NSDictionary *v2DecodeJournal(NSData *data,NSMutableDictionary *active,NSMutableDictionary *released) {
@@ -839,6 +1175,7 @@ static BOOL v2LoadJournal(NSDictionary *recovery) {
 }
 // The sole listener. A failure is startup failure, never a fallback server.
 static int v2Start(const char *directory,BOOL onMain,NSDictionary *recovery) {
+    v2ResolveSublevels();
     v2WriterIdentity=v2CurrentWriterIdentity();if(!v2WriterIdentity)return -__LINE__;
     v2OnMain=onMain;
     v2q=onMain ? dispatch_get_main_queue() : dispatch_queue_create("dw.v2",dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,QOS_CLASS_USER_INTERACTIVE,0));

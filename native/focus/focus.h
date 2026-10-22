@@ -29,6 +29,13 @@ bool dw_focus_owner(DWFocusIdentity identity, CGRect *bounds);
 // helper draws the window, not the window's own frame, and the shell sets a reader of the latter; a window it cannot read is
 // then no owner. Set once, before any other call here.
 void dw_focus_set_bounds(bool (*read)(uint32_t window, CGRect *bounds));
+// Read-only physical shortcut target, independently of cached logical focus.
+// Reads only the frontmost application's focused AX window with one shared
+// 50 ms deadline. Pins process birth before the AX read and validates its exact
+// PID/WID native ownership, birth and foreground afterward. No AXWindows
+// enumeration, geometry agreement, retry or activation. False zeroes out and
+// includes unknown/expired reads; revalidate before executing a queued action.
+bool dw_focus_frontmost(DWFocusIdentity *out);
 DWFocusResult dw_focus_observe(DWFocusIdentity identity);
 DWFocusResult dw_focus_select(DWFocusIdentity identity, DWFocusGuard guard, void *context);
 const char *dw_focus_outcome_name(DWFocusOutcome outcome);

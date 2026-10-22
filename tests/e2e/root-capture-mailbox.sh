@@ -25,10 +25,16 @@ for marker, name in (
 start = source.index("- (BOOL)acceptCapturedSample:", source.index("@implementation LiveSource"))
 end = source.index("\n- (BOOL)installSample:", start)
 (output / "root-capture-source-acceptance.inc").write_text(source[start:end] + "\n")
+start = source.index("static BOOL DWRootCaptureCrop(")
+end = source.index("\n}\n", start) + len("\n}\n")
+(output / "root-capture-crop.inc").write_text(source[start:end])
 start = source.index("static BOOL DWCapturedInputAvailable(")
 end = source.index("\n}", start) + len("\n}")
 (output / "root-capture-input-availability.inc").write_text(source[start:end] + "\n")
-start = source.index("static NSNumber *liveHit(")
+start = source.index("static BOOL DWNativeChromeFrameMatches(")
+end = source.index("// A child press may activate", start)
+(output / "native-chrome-geometry.inc").write_text(source[start:end])
+start = source.index("static NSDictionary *DWFocusedStandIn(")
 end = source.index("// A provisional click recipient", start)
 (output / "captured-input-target-functions.inc").write_text(source[start:end])
 def method(marker):
@@ -40,19 +46,21 @@ def method(marker):
     "- (BOOL)forward:(CGEventRef)e at:(CGPoint)p output:(NSNumber *)output activate:(BOOL)activate {",
     "- (BOOL)forward:(CGEventRef)e at:(CGPoint)p output:(NSNumber *)output activate:(BOOL)activate expected:",
     "- (BOOL)forwardCaptured:", "- (void)releasePressed {",
+    "- (void)released:(CGPoint)p at:(NSTimeInterval)time",
 )))
 (output / "captured-input-desktop-consumers.inc").write_text("\n".join(method(marker) for marker in (
     "- (NSDictionary *)resolveCapturedPointer:", "- (BOOL)forwardCapturedPointer:", "- (BOOL)forwardTabletTail:",
+    "- (void)cancelNativeTitleClick {", "- (void)deferNativeTitleClick:", "- (void)fireNativeTitleClick:",
 )))
 PY
 xcrun clang -arch arm64 -mmacosx-version-min=26.0 -O2 -fobjc-arc -Wall -Wextra -Werror \
   -I"$task_dir" native/desktop/root-capture-mailbox-regression.m \
-  -framework Foundation -framework ScreenCaptureKit -framework CoreMedia -framework CoreVideo \
+  -framework Foundation -framework ScreenCaptureKit -framework CoreMedia -framework CoreVideo -framework CoreGraphics \
   -o "$task_dir/root-capture-mailbox"
 "$task_dir/root-capture-mailbox"
 xcrun clang -arch arm64 -mmacosx-version-min=26.0 -O2 -fobjc-arc -Wall -Wextra -Werror \
   -I"$task_dir" native/desktop/captured-input-regression.m \
-  native/desktop/native-pointer-grab.m native/desktop/native-tablet.m \
-  -framework AppKit -framework ScreenCaptureKit -framework CoreMedia -framework CoreVideo -framework QuartzCore \
+  native/desktop/native-pointer-grab.m native/desktop/native-tablet.m native/desktop/hotkeys.m \
+  -framework AppKit -framework Carbon -framework ScreenCaptureKit -framework CoreMedia -framework CoreVideo -framework QuartzCore \
   -o "$task_dir/captured-input"
 "$task_dir/captured-input"

@@ -344,7 +344,7 @@ status line and chooser unchanged.
   ([Blur, window animations and the error bar](#blur-window-animations-and-the-error-bar)).
 - **Quitting returns the native desktop.** Control-Option-Escape (until a
   binding takes that chord), a key bound to `quit` (DriftWM's default is
-  Control-Command-Shift-Q), `Infinify msg action quit`, SIGTERM and a
+  Control-Option-Command-Shift-Q), `Infinify msg action quit`, SIGTERM and a
   log out all end the same way: fullscreens ended, the scene saved, panels
   closed, capture stopped, hot keys released, exit status 0. There is no Quit
   button and no Return to desktop. `msg quit` is not a command: the action is
@@ -426,16 +426,17 @@ steps below was run for this document.
    the usage line.
 
 Because `login-item on` starts an instance at once, quit one that was started
-by hand first (`Infinify msg action quit`): nothing stops two from running, and
-the second has no socket and its own set of panels. After a quit the login item
-stays registered and starts again at the next login, or at once with
+by hand first (`Infinify msg action quit`) to let the agent take over. A second
+launch that shares either its socket or saved scene now exits cleanly before
+helper admission, scene loading, panels or autostart; it does not save the scene.
+After a quit the login item stays registered and starts again at the next login, or at once with
 `launchctl kickstart gui/$(id -u)/com.marengox.infinify.agent`.
 
 Exit status: 0 for the quit action, `msg action quit`, the exit chord, a
 signal, a log out, and Quit in the permission window. An abnormal end is not 0,
 so launchd starts the app again: a crash, a relaunch whose `exec` failed (1),
-and the Application Support directory that could not be created (2), which
-therefore loops at launchd's restart interval until the directory can be made.
+and a run path that could not be created or safely owned (73), which
+therefore retries at launchd's restart interval until the path is usable.
 A run started by launchd has launchd's environment and no terminal:
 [CONFIG.md](../../crates/desktop/CONFIG.md#started-at-login) says what that
 changes for the config path, `exec-terminal`, `PATH` and relative paths.
@@ -478,10 +479,13 @@ changes for the config path, `exec-terminal`, `PATH` and relative paths.
 - **A click reaches a window only once its application is in front.** An
   event posted to an inactive application is dropped by everything but a
   control that takes a first click (measured on a WKWebView and an Electron
-  window). An unbound press therefore waits until the native focus its
-  click asked for is answered, at most half a second, with its drags and
-  release queued behind it; on the window that already has native focus it
-  goes at once. `INFINIFY_DEBUG=1` in the environment prints one stderr
+  window). An unbound root press therefore waits for its exact native focus
+  request to succeed, within the focus driver's 1.5-second budget, with its
+  drags and release queued behind it. Delivery also requires the same observed
+  window and foreground application. Failed, superseded or expired requests
+  discard the unsent pair. Child activation retains its half-second wait;
+  explicit `--no-native-focus` retains logical click delivery.
+  `INFINIFY_DEBUG=1` in the environment prints one stderr
   line for each such press and each native focus request, and one every two
   seconds that says how the canvas is keeping up
   ([the frame line](#managing-only-named-processes)).
@@ -749,7 +753,7 @@ is a line on stderr ([Desktop mode](#desktop-mode)).
   canvas opened this way manages no window. The chooser stays open above the
   canvas. A run that manages windows by itself has no chooser: a window it did
   not take, or one whose capture failed, cannot be added by hand there.
-- Close and suspend: Command-Q (`close-window`) asks the focused window's
+- Close and suspend: Control-Option-Q (`close-window`) asks the focused window's
   application to close it, by pressing that window's own close button through
   Accessibility; on a focused placeholder it dismisses the placeholder.
   `suspend-window` (no default key) does the same and leaves a stand-in behind.
@@ -759,7 +763,7 @@ is a line on stderr ([Desktop mode](#desktop-mode)).
   grammar; [Configuration](#configuration) has the file, the modifier mapping
   and the default tables. With no file, DriftWM's default bindings apply. The
   chords named in this list are those defaults under the default super chord
-  (Command). Nothing on screen lists the chords the running app
+  (Control-Option). Nothing on screen lists the chords the running app
   resolved, now that the status line and the toolbar's tooltips are gone:
   `Infinify --help` and the default table under
   [Configuration](#configuration) have them, three of which start a program.
@@ -770,22 +774,22 @@ is a line on stderr ([Desktop mode](#desktop-mode)).
   [Tap bindings](#tap-bindings) has the rule, what it needs of macOS, and that
   no chord has yet been pressed against it.
 - Pan a display's camera: drag or two-finger scroll on empty canvas,
-  Command-drag anywhere, or a three-finger swipe
+  Control-Option-drag anywhere, or a three-finger swipe
   anywhere. A pan that is still moving when the fingers lift or the button is
   released keeps drifting until friction stops it (`navigation.drift`; 0 turns
   that off). Zoom, pointer-anchored, up to 1.0 and down to half the zoom that
-  fits every window: mouse wheel on empty canvas, Command-wheel or
-  Command-two-finger-scroll anywhere, a two-finger pinch anywhere,
+  fits every window: mouse wheel on empty canvas, Control-Option-wheel or
+  Control-Option-two-finger-scroll anywhere, a two-finger pinch anywhere,
   or a three-finger pinch anywhere. The view actions below are the animated
   keyboard equivalents; [Camera motion](#camera-motion) has the
   details of drift, edge pan and the pointer speeds, and
   [Trackpad gestures](#trackpad-gestures) the rest of the gesture table and
   what macOS must be told first.
 - View actions: while panels are open, the global hot keys bound to
-  `zoom-to-fit` (Command-Tab or F3, again to return), `home-toggle` (Command-A), `zoom-to-fit` (Command-W; press
-  again to return), `zoom-in` (Command-=), `zoom-out`
-  (Command--), `zoom-reset` (Command-0 or Command-Z) and
-  `pan-viewport <direction>` (Control-Command with an arrow key, one
+  `zoom-to-fit` (Control-Option-Tab or F3, again to return), `home-toggle` (Control-Option-A), `zoom-to-fit` (Control-Option-W; press
+  again to return), `zoom-in` (Control-Option-=), `zoom-out`
+  (Control-Option--), `zoom-reset` (Control-Option-0 or Control-Option-Z) and
+  `pan-viewport <direction>` (Control-Option-Command with an arrow key, one
   `navigation.pan_step`). Hot keys act on the display under the pointer, or
   the first display when the pointer is over no panel. The toolbar buttons
   Home, Fit, −, 1:1 and + exist in the demo panel only, where they act on the
@@ -807,10 +811,10 @@ is a line on stderr ([Desktop mode](#desktop-mode)).
 - Window navigation, in every normal run (the hot keys only while panels are
   open and not with `--windowed`, where `Infinify msg action` runs the same
   actions):
-  Command with an arrow key (`center-nearest <direction>`) focuses the
+  Control-Option with an arrow key (`center-nearest <direction>`) focuses the
   nearest window in that direction and flies the camera to it at the current
-  zoom; Command-C (`center-window`) centres the focused window, or the
-  one nearest the middle of the view, at 1:1; Command-X (`focus-center`)
+  zoom; Control-Option-C (`center-window`) centres the focused window, or the
+  one nearest the middle of the view, at 1:1; Control-Option-X (`focus-center`)
   does the same for the window under the pointer; Option-Tab and
   Option-Shift-Tab (`cycle-windows forward` / `backward`) step through the
   windows most recently focused first, and letting go of Option commits the
@@ -835,15 +839,15 @@ is a line on stderr ([Desktop mode](#desktop-mode)).
   window on the canvas is one target: a click flies to it at 1:1, a drag moves
   it, and no click, scroll or motion reaches its application; a screen-pinned
   window and a widget are not picked and stay as they are.
-  Control-Command-drag
+  Control-Option-Command-drag
   (`center-nearest` as a mouse binding) steps to the nearest window the way the
   drag pulls the canvas: drag left to go right. Both settings are off by
   default. None of this has been tried with a real pointer:
   [Pointer motion, sloppy focus and pick mode](#pointer-motion-sloppy-focus-and-pick-mode)
   has the rules and the exact boundary.
-- Bookmarks: Command-1 to 4 (`go-to-bookmark N`) fly the camera of the
+- Bookmarks: Control-Option-1 to 4 (`go-to-bookmark N`) fly the camera of the
   display under the pointer to bookmark 1 to 4 (zoom is left alone and any Fit
-  return is forgotten); Command-Shift-1 to 4 (`set-bookmark N`) save the
+  return is forgotten); Control-Option-Shift-1 to 4 (`set-bookmark N`) save the
   usable-area centre of the current view as that bookmark. Pressed while a pan
   step or a bookmark jump is still flying, they save where it is heading. During
   a Home, Fit or zoom flight the saved point is not reliably the destination,
@@ -870,7 +874,7 @@ is a line on stderr ([Desktop mode](#desktop-mode)).
   depends on the controller or on an active output. Control-Option-Escape stays
   the exit chord unless a config binding resolves to that chord, which then
   takes it. DriftWM's own `quit` binding, `mod+ctrl+shift+q`, is
-  Control-Command-Shift-Q. The experimental resize controls below keep
+  Control-Option-Command-Shift-Q. The experimental resize controls below keep
   their own gate.
 - Option-drag on a window: move the logical world window, using Rust snapping
   and hysteresis with the `[snap]` settings. Add Shift to move its connected
@@ -879,7 +883,7 @@ is a line on stderr ([Desktop mode](#desktop-mode)).
   ([Upstream behaviour gaps closed](#upstream-behaviour-gaps-closed)). Held within `navigation.edge_pan.zone` (100 points) of the edge of
   the display the drag began on, the drag pans the canvas under the window,
   faster the nearer the edge. A three-finger tap followed by a three-finger
-  swipe on a window moves it the same way, edge pan included. Command-Shift with an arrow key
+  swipe on a window moves it the same way, edge pan included. Control-Option-Shift with an arrow key
   (`nudge-window <direction>`) moves the focused logical window by
   `navigation.nudge_step` world points. Capture mode moves the canvas tile;
   native mode presents the real window at its world placement.
@@ -889,12 +893,12 @@ is a line on stderr ([Desktop mode](#desktop-mode)).
   controls, document proxies and content keep their native input. Title recognition
   needs fresh Accessibility geometry; custom or ambiguous title layouts remain
   with their application and have not been validated for transformed dragging.
-- Window sizing. Command-Shift-W (`zoom-to-fit-snapped`; also
-  Command with a four-finger pinch in) frames the focused window's snap
+- Window sizing. Control-Option-Shift-W (`zoom-to-fit-snapped`; also
+  Control-Option with a four-finger pinch in) frames the focused window's snap
   cluster and nothing else, and a second press returns, as Fit does for every
   window. It moves a camera only and runs in every normal run. DriftWM's
   actions that give a window a new size are a different matter: `fit-window`
-  (Command-M, Option-middle-click, Option with a two-finger pinch on a
+  (Control-Option-M, Option-middle-click, Option with a two-finger pinch on a
   window), `fit-window-snapped` (the same with Shift), and `fill-window`,
   `grow-window <direction>` and `shrink-window <direction>` (no default
   binding), with `Infinify msg resize WIDTH HEIGHT`, run in every normal run, with
@@ -903,7 +907,7 @@ is a line on stderr ([Desktop mode](#desktop-mode)).
   [Window sizing actions](#window-sizing-actions) has what each does, and what
   has been run: disposable fixture windows and an Electron window, not yet any
   application of the owner's.
-- Fullscreen, DriftWM's and not macOS's: Command-F, Command with
+- Fullscreen, DriftWM's and not macOS's: Control-Option-F, Control-Option with
   a middle click on a window, or Option with a three-finger pinch in or out on
   a window (`toggle-fullscreen`) gives the focused window its whole display,
   alone, on the canvas's own Space; a second press puts the window, the camera
@@ -912,13 +916,13 @@ is a line on stderr ([Desktop mode](#desktop-mode)).
   [Fullscreen](#fullscreen) has the rules, how it differs from macOS's own
   full screen, and what has been run: fixture windows, not yet any application
   of the owner's.
-- Cursor edge pan, off by default: Command-E (`toggle-cursor-pan`)
+- Cursor edge pan, off by default: Control-Option-E (`toggle-cursor-pan`)
   turns it on or off for the run, and `navigation.edge_pan.cursor_pan = true`
   starts with it on. While it is on, a bare pointer resting within
   `cursor_zone` (20 points) of a display's edge pans that display's view,
   except under the menu bar and the Dock ([Desktop mode](#limits-of-desktop-mode)).
   The toggle writes no status note.
-- Command-Option with an arrow key (`send-to-output <direction>`)
+- Control-Option-Shift-Command with an arrow key (`send-to-output <direction>`)
   moves the focused logical window into the view of the display on that side,
   where a navigation on that display would park it. `send-cursor-to-output
   <direction>` (no default key) moves the pointer to the centre of that display.
@@ -944,7 +948,7 @@ is a line on stderr ([Desktop mode](#desktop-mode)).
   that is bound to pan (the default left button) and is released within 5
   points of where it went down leaves no window focused, as upstream's pan
   grab does.
-- Pin to screen: Command-T (`toggle-pin-to-screen`) fixes the focused
+- Pin to screen: Control-Option-T (`toggle-pin-to-screen`) fixes the focused
   window to its display, where it ignores pan and zoom and is drawn above the
   canvas windows; pressed again it returns the window to the canvas at the same
   place. Option-drag (the move binding) moves a pinned window about its
@@ -1040,7 +1044,11 @@ of regular (Dock) applications other than Infinify, at least 40x40 points. Of
 those, with Accessibility access, a window is adopted when its application
 reports it as a standard window or a dialog (Accessibility subrole
 `AXStandardWindow`, `AXDialog` or `AXSystemDialog`), whatever its size or
-title. One reported as anything else (a floating panel, a sheet, which
+title. Native discovery retains a readable WindowServer title when Accessibility
+cannot supply one. If neither supplies a string, adoption waits and retries at
+the existing two-second cadence; an unavailable title must not be invented as
+"Untitled" and matched to the wrong saved document. A successfully read empty
+title remains valid. One reported as anything else (a floating panel, a sheet, which
 belongs to its window, an unknown kind) is left on the desktop. Without
 Accessibility access, for an application that does not answer, or for a
 window its application does not list (it lists only the windows of the active
@@ -1168,6 +1176,10 @@ named, after the identity checks the focus driver makes (process id, process
 birth, window number, and that the controller still binds that window), once
 before looking the window up and again immediately before pressing. Without
 Accessibility access the status line says so and nothing is pressed. The window
+lookup skips Finder's desktop scroll area only when its process and exact
+Accessibility role identify it as a non-window; unknown errors and duplicate
+window matches still refuse the close.
+The window
 stays on the canvas until it has really gone, so an application that asks about
 unsaved changes keeps its window. The command is remembered for ten seconds, as
 upstream remembers it: a window that goes later than that, because the
@@ -1907,7 +1919,8 @@ The canvas panel sits behind native windows and draws the background, stand-ins
 and canvas overlays. A root visible on several displays keeps one real native
 placement; additional placements use a shared live capture with each output's
 camera, zoom and clip. The protocol v2 client sends the selected placements as transforms
-and alpha values. Windows outside every output are parked beyond the union of
+and alpha values, plus the destination display's current ordinary Space when
+the helper advertises that capability. Windows outside every output are parked beyond the union of
 the physical displays. Native bounds are read independently of the transform,
 so camera movement does not change world geometry, focus bounds or resize
 readback. A helper frame limit is enforced before submission: exceeding it ends
@@ -1933,13 +1946,224 @@ press retains its original source for release, and tagged forwarded events bypas
 the native gesture bridge. The green-button bridge also hit-tests extra display
 placements and dispatches the existing canvas-fullscreen/Option-fit command.
 
-This is source implementation, not complete native multi-display acceptance.
-Live popup/sheet replicas are now implemented through separate member streams;
-clipping the real native window at its output's boundary remains open: the helper
-currently changes a transform and alpha, not
-the window's clip. Additional-display interaction, capture sharpness at different
-native scales and frame pacing have not been exercised. The no-launch app build
-and strict compiler checks passed; no tests, fixtures or applications were launched.
+This is not complete native multi-display acceptance. On 2026-10-21, real Finder
+and TextEdit in the macOS 27.0.1 guest exposed a display-association failure:
+choosing another output changed the transform and reported screen rectangle,
+but the native window was invisible there and native hit queries reached the
+canvas. A guarded TextEdit native-origin move changed its Space membership and
+made the same displayed rectangle visible and hit-eligible, without changing
+its world geometry. All six original windows were restored. That native-origin
+move was diagnostic; production handoff does not write native origins.
+
+The handoff implementation adds negotiated `FRAME_SPACE` requests. The presenter
+resolves each exact physical viewport to its active ordinary Space, includes it
+in placement acknowledgement correspondence, and parks roots whose display or
+complete family audit is unavailable. Withheld, parked and released records do
+not request a Space move. The helper admits transfers only between active
+ordinary Spaces on distinct physical displays, journals original membership
+before moving, and checks membership before acknowledging placement. It retains
+the original Space for restoration, including when a parent move carries a
+child. Moving between desktops on the same display is refused. In the first
+guest deployment, TextEdit's real `Live-check.txt` window appeared on the
+temporary second display at 1x, and two independent native hit queries resolved
+to that exact window. Its native frame was unchanged; all six original Space
+memberships and the primary camera were returned before display removal.
+Evidence is in `target/native-vm/space-handoff-20261021/textedit-observed-1`.
+This establishes that one transfer, not general multi-display acceptance.
+
+The first guest deployment exposed AppKit reflow during a handoff: Safari's
+native frame changed from `0,30,2056,1130` to `366,115,1324,940`, and an ordinary
+size observation incorrectly changed its world frame. A submitted new Space
+target now qualifies presentation-only source observations until a matching
+family ACK and stable native frame settle (at least two seconds from submission
+and 250 ms without an observed frame change). Native input ends that guard.
+The observed native basis still updates; equal later observations cannot adopt
+the same reflowed size into the world. A subsequent actual application size
+change adopts normally. `DebugNative.space_reflows` retains the native before/
+after frames and explicitly reports that native frame restoration is not owned:
+restoring Space, transform and alpha does not promise to undo AppKit's reflow.
+
+The production Finder handoff at .5 scale preserved all six canvas world frames.
+Finder's native extent nevertheless changed from `2056x1130` to `1280x770` on the
+smaller display, then returned to its previous native extent on the primary
+display. Two independent native hit queries reached Finder on the secondary
+display. Evidence is in `target/native-vm/space-handoff-20261021/finder-reflow-1`.
+Preserved world geometry does not establish preserved native content extent or
+detail.
+
+Two further live Finder trials did not preserve the larger native extent.
+Pre-scaling before transfer had a verified SkyLight matrix diagonal of 2 and
+native size `2056x1130`, but transfer still produced `1280x770`. An ordinary
+product AX resize request for `2055x1129` on the secondary display also remained
+`1280x770` through the two-second readback; the world size reflected that clamp.
+Both trials returned to the primary display and restored all six original world
+and native frames, Space memberships, camera/zoom and original display inventory.
+The app stayed running, so final transforms remained owned presentation values,
+not quit-restoration results. Evidence is under
+`target/native-vm/space-handoff-20261021/`, in `finder-prescaled-1` and
+`finder-oversize-1`. Neither scale ordering nor this ordinary oversized AX resize
+is a demonstrated fix for the observed reflow.
+
+A full-size captured replica remained live while Finder stayed visible on the
+primary display: a temporary folder appeared and disappeared on the secondary
+copy (`finder-replica-2`). The next real-app trial kept Finder at `2056x1130`,
+unit scale and Space 1, but parked it beyond both displays. Its secondary image
+then failed to show that folder change; all three saved images were identical.
+The extent-fit ownership policy therefore remains disabled by default, including
+in the app. Its separate whole-family parking ACK is not capture-freshness or
+native-input proof. Evidence is in `finder-parked-replica-1`; this trial failed.
+Display removal shifted TextEdit 663's native x coordinate from -240 to 0, and a
+later read found a Safari world-frame/camera change of unestablished cause.
+Explicit recovery restored all six baseline native/world frames, Spaces and
+camera/zoom, then normal quit verified original transforms. The disabled-policy
+build was relaunched and independently checked in `extent-disabled-deployment`.
+
+A second parked Finder run recorded the callback path directly
+(`finder-parked-callbacks-1`). While a new folder existed for six seconds and
+after its removal, the current capture stream delivered no additional callbacks:
+238 total, 207 Complete and 31 Idle stayed unchanged, as did 172 installed
+frames. Capture demand stayed enabled, the stream reported no error, and the
+mailbox had no pending sample or drain. All three secondary screenshots were
+identical. This is a failure before frame filtering; accepting more dirty-empty
+frames cannot recover callbacks that never arrive. The run returned all six
+native/world frames, Space memberships, camera/zoom and display inventory to
+its baseline. Its running-app transforms were still owned presentation values.
+
+Ordinary primary-camera panning then left a one-point-wide intersection of
+Finder on the primary display: screen `-2055,75,2056,1130`, native
+`0,75,2056,1130`, unit scale and Space 1. Its secondary .5-scale replica showed
+both the temporary folder's appearance and removal; the removed image was
+identical to the baseline (`finder-visible-edge-1`). All six native/world frames,
+Space memberships, camera/zoom and display inventory returned to baseline.
+This establishes fresh full-size capture for that nearly offscreen placement.
+It does not establish invisible backing or replica input, and this run did not
+enable callback diagnostics. No production placement policy was changed.
+
+The next real Finder check covered that same exposed point with an owned,
+nonactivating panel at alpha .999 (`finder-guarded-edge-1`). A read-only
+WindowServer hit query at `.5,650` resolved to that guard: layer 19, bounds
+`0,0,1,1250`, alpha `0.9990000129`. Finder remained at its full native extent
+and unit-scale placement. Its secondary replica again showed folder appearance
+and removal, and callback/installed-frame counts continued increasing throughout
+the change interval. All six native/world frames, Space memberships, camera/zoom
+and display inventory returned to baseline.
+
+The experimental cover requires both `INFINIFY_DEBUG=1` and
+`INFINIFY_DEBUG_CAPTURE_EDGE_GUARD=1` in native desktop mode. It changes no source
+placement policy. It pins the main-display basis, supports only that display
+alone or one separate display to its right. Existing input ownership precedes fresh guard admission; tagged
+replica posts bypass it. The hit query proves the recipient at that point, not
+physical click suppression. Mouse automation failed with `noWindowsAvailable`,
+so that behavior, optical/shadow concealment and automatic backing remain
+unverified. The experimental cover is disabled in normal launches.
+
+An additional `INFINIFY_DEBUG_CAPTURE_BACKING=1` opt-in connects this cover to
+automatic unit-scale parking for audited roots with no eligible native output.
+Each root gets a separate guarded edge lane, ordered from the existing native
+window order; focus does not limit capture to one root. It accepts each root
+alone or with one verified macOS screen-sharing control, exact native extent and
+current ordinary main-display Space. Roots that fail those checks remain
+placeholders without replica input. Sources keep their world geometry and Space
+membership. Each root's current guarded-parking ACK fences its capture mailbox:
+a later published
+Complete or a newly requested screenshot is required before displaying the
+replica or admitting input. A single bounded screenshot request after the ACK
+initializes unchanged content; its result cannot replace a newer stream frame
+or survive a changed backing, capture configuration or revocation fence. Losing
+the guard, family or binding revokes input before changing the source mapping.
+An old guard remains until a successor placement ACK and independent geometry
+read establish removal, or a new guard covers it. A mouse-recipient query checks
+the guard; visual visibility below it uses the ordered on-screen window bounds,
+because native resize hit regions can extend beyond those bounds. This is not
+per-pixel or shadow-concealment proof. This integration remains experimental and
+all flags remain off in normal launches. Physical replica input and shadows are
+still unvalidated.
+
+Three real Finder attempts of that automatic path did not pass
+(`finder-automatic-guarded-1` through `-3`). The source remained in ordinary
+off-screen parking and no guarded placement was requested. Admission diagnostics
+in the successor build showed an audited attached Finder child, `66x20` points,
+beside the root; the singleton check correctly refused that family. A later
+read identified the child's sole AXButton as `WindowSharingSessionButton` in
+an AXWindow/AXDialog. The worker now classifies that exact direct-child structure
+with process/window identity and native parent/bounds checks before and after
+the AX reads. The complete family remains in native placement and restoration;
+the sharing control is excluded from separate application-content capture/input.
+This AX title is an observed macOS implementation detail, not a documented API.
+Moving the pointer to the secondary through the normal
+output action did not remove the child during the check. These trials therefore
+do not demonstrate automatic backing freshness or input. Final native/world
+frames, Spaces, focus, camera and display inventory returned to baseline. The
+first harness also failed an overly broad intermediate native-origin assertion:
+smaller windows legitimately migrated between outputs; the successor records
+those intermediate changes while keeping final six-window checks strict.
+
+The successor real Finder run `finder-capture-control-3` passed automatic
+placement and the quiet initial-image check on macOS 27.0.1 in UTM. The native
+root stayed at `0,75,2056,1130`, unit scale and Space 1, with its .5-scale replica
+on the temporary right display. The initial replica showed Finder before any
+folder change; a temporary folder appeared and disappeared, and the final Finder
+image region was pixel-identical to the initial region. Stream Complete counts
+continued increasing. Two screenshot requests were superseded by live frames;
+the run does not claim that screenshot seed pixels were published. All six native
+and world frames, Spaces, identities, focus, camera/zoom and the original display
+inventory returned to baseline. The preceding successor had shown both content
+changes but remained blank until the first change, which prompted the initial
+image fix. These are real-app observations under the experimental flags, not
+acceptance of normal-launch behavior, physical input or macOS 26.
+
+The two-root successor was checked with the existing Finder and Safari windows
+on a temporary right display at .25 scale in the same macOS 27.0.1 UTM guest
+(`two-capture-v4-selection`). Both initially displayed real app content. Finder's
+captured selection changed from Applications to Desktop and back through guest
+keyboard input while both sources retained their distinct unit-scale backing
+lanes, native frames and original Space. All six native/world frames, Spaces,
+focus, camera/zoom and display inventory returned to baseline. Safari's unchanged
+content establishes simultaneous rendering, not its response to content changes.
+This check does not establish mouse forwarding or modifier-key routing through
+UTM; mouse automation still failed and the preceding shortcut attempt did not
+navigate Finder.
+
+This run followed fixes for stale ACK lookup and observation-driven backing
+churn. Readiness now obtains the current exact presenter receipt. The 100 ms
+worker limit rejects new observations; it is not a TTL on an already-audited
+family. A late successful read of the same identity, bounds and complete family
+leaves that cache unchanged without installing the stale result. Failed or
+changed reads and explicit invalidations still revoke it. The diagnostic VM run
+confirmed that the previous path discarded valid families on late successful
+reads and temporarily sent the captured sources back to off-screen parking.
+
+The first helper's quit check found another recovery defect: TextEdit window 664
+had its original membership and transform, but an unconfirmed forward request
+to the already removed Space 128 kept the journal pending. Recovery now clears
+that debt only when a complete display-Space inventory proves the target absent
+and the exact window is back on its original Space on the saved display. The
+successor recovered that retained obligation; evidence is in
+`target/native-vm/space-handoff-20261021/recovery-deployment`.
+
+A later quit exposed late AppKit reflow: immediate original-matrix readback
+passed, but the matrices drifted after the helper had released its obligations.
+Space restoration now remains pending for at least two seconds and until native
+bounds, membership and original transform/owed alpha stay stable for 500 ms.
+Samples precede corrective writes so those writes cannot conceal continued
+drift. The final real Finder handoff-and-quit run verified all six original
+memberships and transforms while both displays still existed; final transform
+comparisons also passed after display removal. Visual inspection showed actual
+Finder content on the secondary display and its normal original presentation
+after quit. The subsequent relaunch verified the original camera, all six world
+frames, one original display and no pending Space debt. Evidence is in
+`target/native-vm/space-handoff-20261021/finder-quit-settle-1`, including
+`relaunch-verification.json`. Native frame changes remain separately recorded;
+this does not establish whole-desktop native-frame restoration.
+
+Real Finder boundary checks excluded its root from the adjacent virtual output
+at the tested right, left, above and below edges. These observations do not prove
+arbitrary viewport clipping, child-family behavior, physical displays or macOS
+26 compatibility. Actual pixels, native hit results and restoration checks are
+recorded in `target/native-vm/two-output-20261021/all-edges/RESULT.json`. Popup and
+sheet replicas use separate member streams; general clipping, broader native
+transfer coverage, full-detail capture at different scales and frame pacing
+remain incomplete.
 
 `native-replica-family.m` captures each freshly parented child independently and
 orders children by observed WindowServer stacking. Frame metadata supplies the
@@ -2195,14 +2419,15 @@ logical source and binding generation, instead of trusting canvas stacking.
 continues to the application directly; the canvas never reposts it. Independent
 floating panels keep their application's focus and stacking.
 
-An unchanged-size move of the native root's own frame is an owner movement,
-distinct from the helper's transform. The adapter submits its unscaled
-displacement with the previous and current source rectangles and binding
-generation. The controller consumes that transition once, moves a canvas root
-without changing its camera or focus, and moves a display pin within its existing
-output bounds. Compositor grabs, fullscreen and pending size restoration retain
-their own geometry. Physical titlebar behavior and displacement units at
-different zooms are unverified.
+The native root's origin is a presentation basis, not a canvas position.
+Application moves and macOS display reflow update that basis without relocating
+the logical window. Native size observations still update its world size.
+Canvas gestures and explicitly owned native mouse pairs supply movement intent;
+after a native pair settles, its displayed displacement is converted through the
+unchanged output and zoom. A display rebuild invalidates old observations and
+prevents an existing pair from adopting across the topology change, while its
+physical buttons and tails retain their original ownership. Native transform
+and alpha restoration remain separate from application-owned native bounds.
 
 Native session watching now includes native windowed runs. Leaving the user
 session or sleeping cancels gestures and frame driving, ends helper placement
@@ -2214,8 +2439,19 @@ disjoint enrolled scope again, and its probe must report an empty restore table.
 Only then does main-thread admission start a fresh watchdog and re-observe
 bindings. Retry backoff is bounded at 30 seconds; a stale completion or shutdown
 discards its inert candidate. No helper is loaded or process implicitly enrolled.
-Windowed canvas panels retain ordinary application ordering on return. Actual
-sleep, session switching and recovery have not been exercised.
+Windowed canvas panels retain ordinary application ordering on return. Startup
+also checks the current console/login state and active, awake main display before
+creating outputs, input or discovery. A blocked launch keeps its saved scene and
+autostart effects until admission; quitting before admission does not rewrite the
+scene. Early wake readiness retries at most twice per second, while notification
+holds still require their matching return.
+
+The macOS 27.0.1 UTM run of 2026-10-22 checked two asleep starts, quit before wake,
+and display sleep/wake with Finder, Safari, Calculator and three TextEdit windows.
+Asleep startup admitted no native windows; quit preserved the saved scene bytes;
+wake restored the six correct document bindings and world frames. Running sleep
+restored all six original native transforms before wake resumed their saved view.
+Fast user switching and macOS 26 recovery remain unverified.
 
 Native one-shot screenshot capture now retries selected transient
 ScreenCaptureKit setup/connection failures twice, after 80 and 160 milliseconds,
@@ -2269,6 +2505,11 @@ bound windows, then compose those pixels into the canvas export. The PNG uses
 the requested canvas scale, but native images have the pixel density of the
 transformed window: zoomed-out images contain less detail. No transform is
 temporarily undone to obtain sharper pixels.
+The real TextEdit check on 2026-10-21 also requested the full native 1312×844
+pixel extent at 65% zoom. The returned image contained only 853×549 pixels of
+window content plus padding; typing markers proved freshness, not full detail.
+Increasing the requested screenshot dimensions therefore does not fix replica
+sharpness (`target/native-vm/oneshot-native-size-20261021/RESULT.json`).
 This requires existing Screen Recording access, checks ownership and native size,
 and has the same two-second deadline as overlay exports. Preparation returns the
 IPC handler immediately and continues through callbacks, so cold capture setup
@@ -4844,11 +5085,14 @@ logs the failure, and retries while idle without leaving an error bar onscreen.
 | `ctrl` | Control ⌃ |
 | `alt` | Option ⌥ |
 | `shift` | Shift ⇧ |
-| `super`, and `mod` while `mod_key = "super"` (the default) | the super chord: Command ⌘ unless `--super` says otherwise |
+| `super`, and `mod` while `mod_key = "super"` (the default) | the super chord: Control-Option ⌃⌥ unless `--super` says otherwise |
 | `mod3` | none; such a binding is skipped with a warning |
 
 `--super CHORD` picks the super chord at launch: a `+`-joined subset of `ctrl`,
-`alt` and `cmd`. `--super cmd` gives upstream-literal chords (`mod+a` is ⌘A,
+`alt` and `cmd`. The default is `ctrl+alt`, leaving Command editing shortcuts and
+Command-Tab with native applications. Configured `super`/`mod` follows this
+selected chord; `mod_key`, authored bindings, unbindings and pass rules are
+unchanged. `--super cmd` restores the previous Command mapping and gives upstream-literal chords (`mod+a` is ⌘A,
 `mod+ctrl+Right` is ⌃⌘→), which takes ⌘A, ⌘W, ⌘Z, ⌘0 to ⌘4 and others away from
 every application while the canvas is open. A chord the controller rejects is
 reported in the status line and the default stays.
@@ -4885,52 +5129,49 @@ registered either, ⌃⌥Esc and `quit` excepted
 
 | Chord | DriftWM binding | Action |
 | --- | --- | --- |
-| ⌘Tab / F3 | `mod+Tab` / `F3` (Mac defaults) | `zoom-to-fit` toggle |
-| ⌘A | `mod+a` | `home-toggle` |
-| ⌘W | `mod+w` | `zoom-to-fit` |
-| ⇧⌘W | `mod+shift+w` | `zoom-to-fit-snapped` |
-| ⌘= / ⌘- | `mod+equal` / `mod+minus` | `zoom-in` / `zoom-out` (repeat) |
-| ⌘0, ⌘Z | `mod+0`, `mod+z` | `zoom-reset` |
-| ⌃⌘ arrows | `mod+ctrl+<arrow>` | `pan-viewport <direction>` (repeat) |
-| ⇧⌘ arrows | `mod+shift+<arrow>` | `nudge-window <direction>` (repeat) |
-| ⌥⌘ arrows | `mod+alt+<arrow>` | `send-to-output <direction>` |
-| ⌘ arrows | `mod+<arrow>` | `center-nearest <direction>` |
-| ⌘C | `mod+c` | `center-window` |
-| ⌘X | `mod+x` | `focus-center` |
+| ⌃⌥Tab / F3 | `mod+Tab` / `F3` (Mac defaults) | `zoom-to-fit` toggle |
+| ⌃⌥A | `mod+a` | `home-toggle` |
+| ⌃⌥W | `mod+w` | `zoom-to-fit` |
+| ⌃⌥⇧W | `mod+shift+w` | `zoom-to-fit-snapped` |
+| ⌃⌥= / ⌃⌥- | `mod+equal` / `mod+minus` | `zoom-in` / `zoom-out` (repeat) |
+| ⌃⌥0, ⌃⌥Z | `mod+0`, `mod+z` | `zoom-reset` |
+| ⌃⌥⌘ arrows | `mod+ctrl+<arrow>` | `pan-viewport <direction>` (repeat) |
+| ⌃⌥⇧ arrows | `mod+shift+<arrow>` | `nudge-window <direction>` (repeat) |
+| ⌃⌥⇧⌘ arrows | `mod+alt+<arrow>` | `send-to-output <direction>` |
+| ⌃⌥ arrows | `mod+<arrow>` | `center-nearest <direction>` |
+| ⌃⌥C | `mod+c` | `center-window` |
+| ⌃⌥X | `mod+x` | `focus-center` |
 | ⌥Tab / ⌥⇧Tab | `alt+Tab` / `alt+shift+Tab` | `cycle-windows forward` / `backward` (repeat) |
-| ⌘1 to ⌘4 | `mod+1` to `mod+4` | `go-to-bookmark 1` to `4` |
-| ⇧⌘1 to ⇧⌘4 | `mod+shift+1` to `mod+shift+4` | `set-bookmark 1` to `4` |
-| ⌘Return | `mod+return` | `exec-terminal`: `$TERMINAL`, else `open -a Terminal "$HOME"` |
-| ⌘D | `mod+d` | `exec-launcher`: `$LAUNCHER`, else `open -a Apps` |
-| ⌘Q | `mod+q` | `close-window`: close the focused window, or dismiss a focused placeholder |
-| ⌘E | `mod+e` | `toggle-cursor-pan` |
-| ⌘T | `mod+t` | `toggle-pin-to-screen`: pin the focused window to the screen, or return it to the canvas |
-| ⌃⇧⌘Q | `mod+ctrl+shift+q` | `quit` |
+| ⌃⌥1 to ⌃⌥4 | `mod+1` to `mod+4` | `go-to-bookmark 1` to `4` |
+| ⌃⌥⇧1 to ⌃⌥⇧4 | `mod+shift+1` to `mod+shift+4` | `set-bookmark 1` to `4` |
+| ⌃⌥Return | `mod+return` | `exec-terminal`: `$TERMINAL`, else `open -a Terminal "$HOME"` |
+| ⌃⌥D | `mod+d` | `exec-launcher`: `$LAUNCHER`, else `open -a Apps` |
+| ⌃⌥Q | `mod+q` | `close-window`: close the focused window, or dismiss a focused placeholder |
+| ⌃⌥E | `mod+e` | `toggle-cursor-pan` |
+| ⌃⌥T | `mod+t` | `toggle-pin-to-screen`: pin the focused window to the screen, or return it to the canvas |
+| ⌃⌥⇧⌘Q | `mod+ctrl+shift+q` | `quit` |
 | ⌃⌥Esc | none (the shell's own) | exit, until a binding takes the chord |
 
 Those are 41 of upstream's 57 default key bindings. The default lock chord,
 system media controls and screenshot commands are left to macOS as described
 below. ⌥Tab and ⌥⇧Tab are taken from every application while a canvas panel is
 open; rebind or unbind
-`cycle-windows` in the config file to give them back. ⇧⌘W is newly taken the
+`cycle-windows` in the config file to give them back. ⌃⌥⇧W is taken the
 same way: `zoom-to-fit-snapped` used not to run, so its chord used to stay with
 the applications. The rest are not registered, so their chords stay with the
 applications:
 
-- Until 2026-10-11, 3 whose action did not run in a default launch: ⌘F
-  (`toggle-fullscreen`), and ⌘M and ⇧⌘M (`fit-window`,
-  `fit-window-snapped`). All three run in every normal run now, so ⌘F, ⌘M
-  and ⇧⌘M are registered as well (45 of 57, which the bindings trace of
-  `tests/e2e/scoped-sizing.sh` lists as the 45 key bindings that run), and so
-  is any key a config binds to `fill-window`, `grow-window` or
-  `shrink-window`; see [Window sizing actions](#window-sizing-actions) and
-  [Fullscreen](#fullscreen). No test has pressed one: a windowed run
-  registers no hot key.
+- Fullscreen and fitting run in every normal launch: ⌃⌥F
+  (`toggle-fullscreen`), ⌃⌥M (`fit-window`) and ⌃⌥⇧M
+  (`fit-window-snapped`). Configured bindings for `fill-window`, `grow-window`
+  and `shrink-window` run too. The historical scoped sizing receipt used the
+  former Command default; it is not evidence of physical delivery for these
+  new default chords.
 - 8 on media keys (volume, mute, brightness, play, next, previous), which macOS
   handles itself, and 4 on keys a Mac keyboard lacks (`Print`, `shift+Print`,
   `XF86AudioPause`, `XF86AudioStop`).
 
-The two Mac overview defaults bring the total to 47 registered bindings. Explicit config bindings, unbindings and `disable_defaults = ["keys"]` take precedence. Command-Tab and F3 use a session event filter while desktop mode is active; the known Mission Control keycode 160 aliases F3. Other hardware packet formats remain unverified. No system shortcut preferences are changed.
+The two Mac overview defaults bring the total to 47 registered bindings. Explicit config bindings, unbindings and `disable_defaults = ["keys"]` take precedence. F3 uses a session event filter while desktop mode is active; Command-Tab does too only when explicitly selected (for example with `--super cmd`); the known Mission Control keycode 160 aliases F3. Other hardware packet formats remain unverified. No system shortcut preferences are changed.
 
 **Key repeat.** A held hot key whose action upstream marks repeatable
 (`zoom-in`, `zoom-out`, `pan-viewport`, `nudge-window`, `cycle-windows` and
@@ -5199,7 +5440,7 @@ context before `anywhere`.
 | ⌥ / ⌥⇧ middle | `fit-window` / `fit-window-snapped` ([Window sizing actions](#window-sizing-actions)) | nothing |
 | ⌃⌥ middle | `toggle-fullscreen` ([Fullscreen](#fullscreen)) | nothing |
 | ⌃⌥ left drag | pan (`mod+left`) | pan |
-| ⌃⌥ two-finger scroll / wheel | pan / zoom (`mod+trackpad-scroll`, `mod+wheel-scroll`) | pan / zoom |
+| ⌃⌥ two-finger scroll / wheel | zoom (`mod+trackpad-scroll`, `mod+wheel-scroll`) | zoom |
 | ⌃⌥⌘ left drag | `center-nearest` by pointer swipe (`mod+ctrl+left`): one step to the nearest window the way the drag pulls the canvas, taken 16 points from the press | the same |
 | anything else | the application's; a press focuses the window first | nothing |
 
@@ -6203,15 +6444,20 @@ user ID is hung up on. A request is one line of at most 64 KiB (a longer one is
 hung up on without a reply), at most 16 connections are served at once, and one
 that completes no request for 30 seconds is closed, unless it has subscribed
 (see [Event stream](#event-stream)). A stale socket file is removed
-only after connecting to it fails. Nothing serializes that check and the bind
-between instances, so two started on one path at the same moment can both find it
-stale, and the later one then replaces the earlier one's socket; give instances
-their own paths rather than rely on the check. If another running Infinify
-answers, or the
-path is unusable (longer than 103 bytes, a directory that fails the checks above,
-a file that is not a socket), this app keeps running without IPC and says so in
-its status line and on stderr rather than taking the socket over. The socket is
-removed on quit. The server runs in normal runs only, never in `--source`,
+only after connecting to it fails with connection refused. Normal launches hold
+exclusive process-lifetime locks for both the socket and saved scene, before
+helper admission or loading state. Separate instances need both separate socket
+and scene paths. Parent-directory aliases resolve to the same ownership; leaf
+symlinks and hard-linked scene files are refused. The adjacent mode-0600
+`.infinify-lock` files remain after exit so every contender locks the same inode;
+that filename suffix is reserved, and the descriptors close on exit or exec
+after cleanup. A live socket from an older
+release also causes a clean duplicate exit without opening panels or saving.
+An unsafe path, failed probe or socket setup error instead refuses startup with
+a diagnostic and nonzero status. Socket and scene directories must already exist,
+be owned by the current user and not be group/world writable; the default
+Application Support directory is created when needed. The socket is removed on
+quit. The server runs in normal runs only, never in `--source`,
 `--demo`, `--demo-probe`, `--demo-probe-guard` or owned-resize modes. As
 upstream's does, the socket is a full control surface (`msg action quit` quits the
 app), guarded only by those checks.

@@ -71,6 +71,12 @@ struct Entry {
     // Native frames may contain fractional logical dimensions. The integer
     // size is the upstream policy basis; the extent is the exact exit target.
     saved_extent: Size,
+    /// A rule's deferred size takes precedence over the observed native size.
+    rule_size: bool,
+    /// Fresh AX/CG baseline, independent of the saved canvas frame.
+    saved_native: Option<Rect>,
+    /// The fresh baseline alone does not create restoration debt if enter fails.
+    restore_owed_before_enter: bool,
     /// The whole-pixel camera the output is parked at. The window's top-left
     /// also includes the output-local menu/notch exclusion.
     park: Px,
@@ -91,6 +97,8 @@ struct Restore {
     loc: Point,
     size: Px,
     extent: Size,
+    rule_size: bool,
+    native: Option<Rect>,
     /// The window still sits where the exit put it. Upstream
     /// drop_owed_recenter: a later placement keeps its own top-left.
     placed: bool,
@@ -113,6 +121,48 @@ pub(crate) struct Fullscreen {
     ruled: BTreeSet<WindowId>,
 }
 impl Fullscreen {
+    pub(crate) fn capture_native(
+        &mut self,
+        window: WindowId,
+        native: Rect,
+        enter_baseline: bool,
+    ) -> Result<(), Error> {
+        let size = enter_baseline
+            .then(|| pixel_size(native.size))
+            .transpose()?;
+        for entry in self
+            .entries
+            .values_mut()
+            .filter(|entry| entry.window == window)
+        {
+            if entry.saved_native.is_none() {
+                entry.saved_native = Some(native);
+                if let Some(size) = size.filter(|_| !entry.rule_size) {
+                    entry.saved_size = [size.w.into(), size.h.into()];
+                    entry.saved_extent = native.size;
+                }
+            }
+        }
+        if let Some(restore) = self.restores.get_mut(&window)
+            && restore.native.is_none()
+        {
+            restore.native = Some(native);
+            if let Some(size) = size.filter(|_| !restore.rule_size) {
+                restore.size = [size.w.into(), size.h.into()];
+                restore.extent = native.size;
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn restore_native_origin(&self, window: WindowId) -> Option<Point> {
+        self.restores.get(&window)?.native.map(|rect| rect.origin)
+    }
+    pub(crate) fn restore_native_frame(&self, window: WindowId) -> Option<Rect> {
+        self.restores.get(&window)?.native
+    }
+    pub(crate) fn restore_extent(&self, window: WindowId) -> Option<Size> {
+        self.restores.get(&window).map(|restore| restore.extent)
+    }
     pub(crate) fn observation_idle(&self) -> bool {
         self.entries.is_empty() && self.restores.is_empty()
     }
@@ -339,7 +389,7 @@ impl Controller {
         // A size an exit still owes the window is the one it comes back to.
         // User policy overrides upstream's configured-size/floor substitute:
         // fullscreen returns to the frame that was actually visible before it.
-        let (saved_location, saved_size, saved_extent) =
+        let (saved_location, saved_size, saved_extent, saved_native, rule_size) =
             match self.fullscreen.restores.remove(&window) {
                 Some(restore) => (
                     if restore.placed {
@@ -349,8 +399,10 @@ impl Controller {
                     },
                     restore.size,
                     restore.extent,
+                    restore.native,
+                    restore.rule_size,
                 ),
-                None => (rect.origin, committed, rect.size),
+                None => (rect.origin, committed, rect.size, None, false),
             };
         let park = [
             i64::from(pixel(viewport.camera.x.round())?),
@@ -370,6 +422,9 @@ impl Controller {
                 saved_location,
                 saved_size,
                 saved_extent,
+                saved_native,
+                restore_owed_before_enter: saved_native.is_some() || rule_size,
+                rule_size,
                 park,
                 offered: view,
                 awaiting: true,
@@ -434,6 +489,8 @@ impl Controller {
                     loc: entry.saved_location,
                     size: entry.saved_size,
                     extent: entry.saved_extent,
+                    native: entry.saved_native,
+                    rule_size: entry.rule_size,
                     placed: true,
                     delivered: false,
                     tries: 0,
@@ -448,6 +505,20 @@ impl Controller {
         }
         self.restore_fullscreen_view(output, entry.camera, entry.zoom);
         Some(window)
+    }
+    /// Undo a provisional enter that ended before any native mutation. An
+    /// earlier exit or a window rule may still owe a size.
+    pub(crate) fn abort_unmutated_fullscreen(&mut self, window: WindowId) -> bool {
+        let Some(output) = self.fullscreen.output_of(window) else {
+            return false;
+        };
+        let entry = &self.fullscreen.entries[&output];
+        let owed = entry.restore_owed_before_enter;
+        self.exit_fullscreen_on(output);
+        if !owed {
+            self.fullscreen.restored(window);
+        }
+        true
     }
     /// Upstream restore_fullscreen_view: the camera and zoom from before, and
     /// nothing aimed at the parked view survives. An output the shell has
@@ -644,7 +715,7 @@ impl Controller {
     /// fullscreen window (upstream resize_fullscreen_for_output). One
     /// transaction at most, the slot being one. Returns its `transaction` and
     /// `effect`, and whether saved geometry was written.
-    fn flush_owed(&mut self) -> (Option<Value>, bool) {
+    pub(crate) fn flush_owed(&mut self) -> (Option<Value>, bool) {
         let mut outcome = Outcome::default();
         // A gesture places its windows itself; what is owed waits for its end.
         if self.gesture.is_some() {
@@ -663,6 +734,7 @@ impl Controller {
             let screen = Screen::Restore {
                 at: restore.placed.then_some(restore.loc),
                 extent: restore.extent,
+                native: restore.native,
             };
             match next.fullscreen_resize(window, None, restore.size, screen, &mut outcome) {
                 Ok(true) => {
@@ -881,6 +953,8 @@ impl Controller {
                 loc,
                 size,
                 extent: Size::new(size[0] as f64, size[1] as f64),
+                native: None,
+                rule_size: true,
                 placed: true,
                 delivered: false,
                 tries: 0,

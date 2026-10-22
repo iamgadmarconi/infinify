@@ -26,13 +26,17 @@
 // Once. `present` names, as {bundle_id,title}, the titled candidates that exist but
 // were not offered: minimized, hidden, on another Space, or still being moved.
 - (void)discoveryCompleted:(NSArray<NSDictionary *> *)present;
-// The shareable windows could not be read. Nothing was offered. The read is tried
-// again about two seconds later, and at once when the candidates on screen change.
+// Startup metadata could not be read. Completion is withheld so unknown offscreen
+// presence does not discard saved slots. Retry about two seconds later; already
+// offered native windows stay bound. Capture-mode candidate changes may retry sooner.
 - (void)discoveryFailed:(NSString *)reason;
 // With the observers of window-events.h. Each is a hint to look now at what the poll would look at later, never the change
 // itself, and may be repeated, late or about a window nothing binds.
-// This native window moved, was resized, retitled, miniaturized or shown again, or its application was hidden, shown or
-// ended. `window` 0: some window of the application, which one is not known.
+// Only AXMoved named this known window in the coalesced batch. Fresh identity and
+// unchanged native extent must be verified before reusing any local chrome data.
+- (void)windowMoved:(CGWindowID)window pid:(pid_t)pid;
+// This native window was resized, retitled, miniaturized or shown again, its application was hidden, shown or ended,
+// or the change is mixed/unknown. `window` 0: some window of the application, which one is not known.
 - (void)windowChanged:(CGWindowID)window pid:(pid_t)pid;
 // Its application reported the window destroyed. The window list may still have it at this moment, and keeps it when
 // the application keeps the window object.
@@ -80,8 +84,10 @@
 // offered and not named as present, and no observer is put on its application. With a scope the manager also exists
 // without Screen Recording access (`capturing` NO). Authenticated native presentation also uses metadata-only discovery
 // without a finite scope: the presenter's own scope checks authorize each adoption. The shareable windows are then never read, so nothing can prompt, and
-// its candidates come from the window list and Accessibility alone. Such a run names no window that is off screen
-// (-discoveryCompleted: is given none), so a saved slot is not kept waiting for one.
+// its candidates come from the window list and Accessibility alone. At startup a separate all-window metadata read
+// preserves exact titled saved slots for existing same-login windows, including offscreen ones, after process-birth
+// and WID-owner revalidation. Those names only reach -discoveryCompleted:; they are never offered for adoption,
+// capture or placement. Unknown titles are not guessed; duplicate titles retain one entry per existing window.
 typedef NS_ENUM(NSUInteger,DWWindowDiscoveryMode) {
     DWWindowDiscoveryModeCaptureOverlay,
     // Select only after the native presenter has authenticated its helper and scope.

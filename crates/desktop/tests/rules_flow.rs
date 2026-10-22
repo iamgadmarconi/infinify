@@ -405,6 +405,7 @@ focus_on_open = false
     // Mapped as any new window: focused, and navigated to at zoom 1, which
     // parks its center (100.5, -49.5) on the usable center (500, 425). Cursor
     // placement would have stayed put; the rule did not place it at the cursor.
+    assert_eq!(a["focus_on_open_suppressed"], Value::Null);
     assert_eq!(a["effect"]["op"], "focus_native_window");
     assert_eq!(a["effect"]["window"], 1);
     assert_eq!(a["navigation"]["target_camera"], point(-399.5, -474.5));
@@ -420,7 +421,7 @@ focus_on_open = false
     // neither focused nor navigated to.
     assert_eq!(
         appear(&mut h, 3, "app.quiet", "Q", (200.0, 100.0)),
-        json!({"window":3,"adopted":false,"effect":null,"navigation":null,"dirty":true})
+        json!({"window":3,"adopted":false,"background":false,"focus_on_open_suppressed":true,"effect":null,"navigation":null,"dirty":true})
     );
     assert_eq!(h.world(3), rect(-400.0, -50.0, 200.0, 100.0));
     assert_eq!(h.focused(), 2);
@@ -434,6 +435,36 @@ focus_on_open = false
     zoom_out(&mut h);
     appear(&mut h, 5, "app.pos", "A", (400.0, 300.0));
     assert_eq!(h.world(5), rect(-100.0, -200.0, 400.0, 300.0));
+}
+
+#[test]
+fn an_ipc_move_raises_a_widget_only_within_the_widget_stack() {
+    let scratch = Scratch::new();
+    let mut h = running(
+        &scratch,
+        "[[window_rules]]\napp_id = \"app.widget\"\nwidget = true\n",
+    );
+    for (id, app) in [(1, "app.widget"), (2, "app.widget"), (3, "app.normal")] {
+        put(&mut h, id, app, "Overlap", rect(300.0, 275.0, 400.0, 300.0));
+    }
+    h.observe_focus(3);
+    assert_eq!(h.stack(), [1, 2, 3]);
+    let before = h.snapshot();
+    assert_eq!(
+        h.wrote(json!({"Move":{"window":1,"to":[500,-425]}})),
+        json!({"Position":{"x":500,"y":-425}})
+    );
+    assert_eq!(h.stack(), [2, 1, 3]);
+    assert_eq!(
+        h.drawn(1),
+        [(2, false, true), (1, false, true), (3, false, false)]
+    );
+    assert_eq!(h.hit(1, 700.0, 525.0)["window"], 3);
+    let after = h.snapshot();
+    assert_eq!(after["focus"], before["focus"]);
+    assert_eq!(after["outputs"], before["outputs"]);
+    h.ok(json!({"op":"remove_source","window":3,"identity":identity(3),"keep_placeholder":false}));
+    assert_eq!(h.hit(1, 700.0, 525.0)["window"], 1);
 }
 
 #[test]
@@ -1979,7 +2010,9 @@ fn a_ruled_window_the_user_sizes_before_its_turn_is_not_asked_its_rules_size() {
 #[test]
 fn ruled_windows_that_map_together_cascade_by_the_frames_asked_for() {
     let scratch = Scratch::new();
-    let mut h = running(&scratch, SIZED_RULES);
+    // This scenario exercises center cascades; the macOS default is auto.
+    let config = format!("window_placement = \"center\"\n{SIZED_RULES}");
+    let mut h = running(&scratch, &config);
     h.ok(json!({"op":"native_resize_capability","enabled":true}));
     let first = appear(&mut h, 1, "app.sized-free", "S", (401.0, 301.0));
     let read = sized_by_rule(&mut h, &first);

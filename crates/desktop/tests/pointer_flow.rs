@@ -1164,7 +1164,7 @@ fn at_or_above_interact_min_and_with_it_off_nothing_is_a_pick() {
 fn a_binding_lookup_over_a_pick_target_follows_upstreams_pick_rules() {
     let mut h = empty("[mouse.on-window]\n\"left\" = \"move-window\"\n");
     let (none, option) = (json!({}), json!({"option":true}));
-    let mods = json!({"command":true});
+    let mods = json!({"control":true,"option":true});
     // A bare scroll over a window is the application's. Over a pick target it
     // could reach nobody, so the canvas binding answers: pan, or wheel zoom.
     for (source, kind, combo) in [
@@ -1178,7 +1178,7 @@ fn a_binding_lookup_over_a_pick_target_follows_upstreams_pick_rules() {
         let found = h.binding("scroll", json!(source), none.clone(), true);
         assert_eq!(json!([found["kind"], found["combo"]]), json!([kind, combo]));
     }
-    // Command-scroll zooms with wheel or finger input, including over a pick.
+    // Control-Option-scroll zooms with wheel or finger input, including over a pick.
     for pick in [false, true] {
         for source in ["wheel", "finger"] {
             let found = h.binding("scroll", json!(source), mods.clone(), pick);

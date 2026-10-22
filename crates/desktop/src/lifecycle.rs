@@ -418,6 +418,8 @@ impl Controller {
         // taking the focus or moving the camera.
         let rule = self.policy.applied.get(&window);
         let quiet = rule.is_some_and(|r| r.widget || r.focus_on_open == Some(false));
+        let focus_on_open_suppressed =
+            self.lifecycle.settled && rule.is_some_and(|r| r.focus_on_open == Some(false));
         let reveal = self.lifecycle.settled && !quiet;
         match arrival {
             Arrival::Adopt(_) => {
@@ -470,9 +472,21 @@ impl Controller {
             }
         }
         let adopted = matches!(arrival, Arrival::Adopt(_));
-        Ok(
-            json!({"window":window,"adopted":adopted,"effect":effect,"navigation":navigation,"dirty":true}),
-        )
+        let background = matches!(
+            arrival,
+            Arrival::Place {
+                background: true,
+                ..
+            }
+        );
+        let mut reply = json!({"window":window,"adopted":adopted,"background":background,"effect":effect,"navigation":navigation,"dirty":true});
+        // Native applications may activate themselves while opening. Only an
+        // explicit post-launch rule supplies authority for the shell to correct
+        // that initial activation; widgets and startup adoption do not.
+        if focus_on_open_suppressed {
+            reply["focus_on_open_suppressed"] = json!(true);
+        }
+        Ok(reply)
     }
 
     /// The window's frame on the output's screen, and the usable rectangle.

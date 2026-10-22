@@ -33,7 +33,7 @@
 #import "compositor.h"
 #import <AppKit/AppKit.h>
 #import <ImageIO/ImageIO.h>
-#include <fcntl.h>
+#import "screenshot-writer.h"
 
 static NSDictionary *dict(id value) { return [value isKindOfClass:NSDictionary.class]?value:nil; }
 static NSArray *list(id value) { return [value isKindOfClass:NSArray.class]?value:@[]; }
@@ -112,22 +112,6 @@ static NSString *displayName(NSString *app) {
 // One clock for every output and every screenshot: seconds since the first frame was described.
 static double canvasTime(void) { static CFTimeInterval start;static dispatch_once_t once;dispatch_once(&once,^{start=CACurrentMediaTime();});return CACurrentMediaTime()-start; }
 static NSDictionary *refusal(NSString *message) { return @{@"error":message}; }
-
-// The offscreen render owns these immutable pixels independently of the canvas.
-// Compression and filesystem writes need no renderer, source or native window.
-static NSDictionary *writeScreenshotPixels(NSDictionary *pixels) {
-    if(pixels[@"error"])return pixels;
-    NSString *path=pixels[@"path"];CGImageRef image=(__bridge CGImageRef)pixels[@"image"];
-    // Write only the client's path, preserving the synchronous export contract.
-    NSMutableData *png=[NSMutableData data];CGImageDestinationRef destination=CGImageDestinationCreateWithData((__bridge CFMutableDataRef)png,CFSTR("public.png"),1,NULL);
-    BOOL encoded=NO;if(destination){CGImageDestinationAddImage(destination,image,NULL);encoded=CGImageDestinationFinalize(destination);CFRelease(destination);}
-    if(!encoded)return refusal([NSString stringWithFormat:@"cannot write %@: the image could not be encoded",path]);
-    int file=open(path.fileSystemRepresentation,O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC,0666),failure=file<0?errno:0;const char *bytes=png.bytes;
-    for(size_t left=png.length;!failure&&left;){ssize_t n=write(file,bytes,left);if(n>0){bytes+=n;left-=(size_t)n;}else if(n==0||errno!=EINTR)failure=n?errno:EIO;}
-    if(file>=0&&close(file)&&!failure)failure=errno;
-    if(failure)return refusal([NSString stringWithFormat:@"cannot write %@: %s (os error %d)",path,strerror(failure),failure]);
-    return @{@"path":path,@"width":pixels[@"width"],@"height":pixels[@"height"]};
-}
 
 // Generic family image geometry and stable compositor elements. The shell owns
 // the provider's opaque key; this cache knows only its root and output placement.
@@ -957,6 +941,23 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
         element.decoration=IFCompositorDecorationDrawn(element.decoration,YES,IFCompositorCoverageNone);
     }
 }
+- (NSString *)standInPart:(NSNumber *)window output:(NSNumber *)output screen:(CGPoint)point snapshot:(NSDictionary *)snapshot {
+    if(![self appliedOrderForOutput:output snapshot:snapshot])return nil;
+    DWCanvasOutput *state=self.states[output];IFCompositorElement *element=state.elements[window];NSDictionary *p=state.placements[window];
+    if(!element||element.kind!=IFCompositorElementKindStandIn||!CGRectContainsPoint(rectOf(p[@"clip_rect"]),point))return nil;
+    CGRect screen=rectOf(p[@"screen_rect"]),body=element.rect;
+    double total=body.size.height+self.chrome.titleBarHeight;
+    if(screen.size.width<=0||screen.size.height<=0||body.size.width<=0||total<=0)return nil;
+    CGPoint local=CGPointMake((point.x-screen.origin.x)*body.size.width/screen.size.width,(point.y-screen.origin.y)*total/screen.size.height);
+    if(local.y<self.chrome.titleBarHeight){
+        double bar=self.chrome.titleBarHeight;
+        return local.x>=body.size.width-bar-8&&local.x<body.size.width-8?@"close":@"title";
+    }
+    local.y-=self.chrome.titleBarHeight;
+    NSString *name=element.appName.length?element.appName:element.title?:@"";
+    CGRect label=IFCompositorStandInLabelRect(name,element.launching,body.size,state.frame.decorationScale,self.chrome);
+    return !CGRectIsNull(label)&&CGRectContainsPoint(label,local)?@"label":@"body";
+}
 - (CALayer *)layerForOutput:(NSNumber *)output { return self.states[output].layer; }
 - (BOOL)contentChanged:(NSNumber *)window {
     BOOL opening=NO;
@@ -1233,14 +1234,14 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
     return @{@"image":CFBridgingRelease(image),@"path":path,@"width":@(pixelsWide),@"height":@(pixelsHigh)};
 }
 - (NSDictionary *)screenshot:(NSDictionary *)effect snapshot:(NSDictionary *)snapshot {
-    return writeScreenshotPixels([self screenshotPixels:effect snapshot:snapshot]);
+    return DWWriteScreenshotPixels([self screenshotPixels:effect snapshot:snapshot]);
 }
 - (void)screenshot:(NSDictionary *)effect snapshot:(NSDictionary *)snapshot completed:(void (^)(NSDictionary *))completed {
     NSDictionary *pixels=[self screenshotPixels:effect snapshot:snapshot];
     if(pixels[@"error"]){completed(pixels);return;}
     if(!_exportWorker)_exportWorker=dispatch_queue_create("org.infinify.screenshot-writer",dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,QOS_CLASS_UTILITY,0));
     dispatch_async(_exportWorker,^{@autoreleasepool{
-        NSDictionary *result=writeScreenshotPixels(pixels);
+        NSDictionary *result=DWWriteScreenshotPixels(pixels);
         dispatch_async(dispatch_get_main_queue(),^{completed(result);});
     }});
 }

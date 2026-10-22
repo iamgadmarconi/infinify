@@ -87,12 +87,25 @@
 - (void)reap {
     if(self.pending.count||[self canRemove:nil]){self.orphan=nil;return;}
     id t=self.command(@{@"op":@"snapshot"})[@"native_resize"],e=[t isKindOfClass:NSDictionary.class]?t[@"pending_effect"]:nil;id mark=[e isKindOfClass:NSDictionary.class]?e:t;
+    if([e isKindOfClass:NSDictionary.class]&&self.deferred&&self.deferred(e)){self.orphan=nil;return;}
     if(![e isKindOfClass:NSDictionary.class]&&[t isKindOfClass:NSDictionary.class]&&self.held&&self.held(t[@"transaction"])){self.orphan=nil;return;}
     if(![self.orphan isEqual:mark]){self.orphan=mark;return;}
     self.orphan=nil;
     if([e isKindOfClass:NSDictionary.class]){NSNumber *key=e[@"effect_id"];self.lastAdmittedEffectID=MAX(self.lastAdmittedEffectID,key.unsignedLongLongValue);
         DWResizeOperation *operation=[[DWResizeOperation alloc]initWithEffect:e];self.pending[key]=operation;[self finish:operation result:[self unanswered:e]];}
     else [self cancel];
+}
+- (void)discardDeferredEffect:(NSDictionary *)effect {
+    NSAssert(NSThread.isMainThread,@"Rust controller is main-only");
+    if(self.pending.count||![effect[@"op"]isEqual:@"observe_resize_source"]
+        ||[effect[@"requested"]isKindOfClass:NSDictionary.class])return;
+    NSDictionary *transaction=self.command(@{@"op":@"snapshot"})[@"native_resize"];
+    NSNumber *key=effect[@"effect_id"];uint64_t effectID=key.unsignedLongLongValue;
+    if(![transaction isKindOfClass:NSDictionary.class]||![transaction[@"pending_effect"]isEqual:effect]
+        ||effectID<=self.lastAdmittedEffectID)return;
+    self.orphan=nil;self.lastAdmittedEffectID=effectID;
+    DWResizeOperation *operation=[[DWResizeOperation alloc]initWithEffect:effect];self.pending[key]=operation;
+    [self finish:operation result:[self unanswered:effect]];
 }
 - (NSDictionary *)request:(NSDictionary *)c {
     if(!self.enabled||self.stopping)return nil;

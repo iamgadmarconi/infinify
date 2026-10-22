@@ -18,6 +18,11 @@ static BOOL readinessNoScreens;
 
 struct dw_client { uint64_t sequence; };
 static NSUInteger checks,closed;
+static uint64_t readinessSpace;
+static NSData *lastSpaceFrame;
+uint64_t DWNativeDisplaySpace(CGRect viewport) {
+    return CGRectEqualToRect(viewport,CGRectMake(0,0,1200,900))?readinessSpace:0;
+}
 static void check(BOOL condition,NSString *message) {
     checks++;if(!condition){fprintf(stderr,"FAIL: %s\n",message.UTF8String);exit(1);}
 }
@@ -25,7 +30,11 @@ int dw_client_open(const char *runtime,const char *nonce,const struct dw_client_
     (void)runtime;(void)nonce;(void)callbacks;(void)timeout;(void)client;(void)info;return DW_CLIENT_INVALID;
 }
 int dw_client_submit_frame(dw_client *client,const struct dw2_record *records,uint32_t count,uint64_t *sequence) {
-    check(client&&records&&count<=DW2_MAX_RECORDS,@"in-memory submission has a bounded complete frame");*sequence=++client->sequence;return DW_CLIENT_OK;
+    check(client&&(!count||records)&&count<=DW2_MAX_RECORDS,@"in-memory submission has a bounded complete frame");*sequence=++client->sequence;return DW_CLIENT_OK;
+}
+int dw_client_submit_space_frame(dw_client *client,const struct dw2_space_record *records,uint32_t count,uint64_t *sequence) {
+    check(client&&(!count||records)&&count<=DW2_MAX_RECORDS,@"Space submission has a bounded complete frame");
+    lastSpaceFrame=[NSData dataWithBytes:records length:count*sizeof(*records)];*sequence=++client->sequence;return DW_CLIENT_OK;
 }
 int dw_client_probe(dw_client *client,uint32_t timeout,void *reply,size_t capacity,size_t *length) {
     (void)client;(void)timeout;(void)reply;(void)capacity;(void)length;return DW_CLIENT_LOST;
@@ -58,6 +67,10 @@ bool dw_focus_birth(pid_t pid,uint64_t *seconds,uint64_t *microseconds) { (void)
 - (void)fixtureRetry;
 - (void)fixtureCorruptFrame;
 - (void)fixtureCooperative;
+- (void)fixtureSpaceFrames;
+- (void)fixturePinned;
+- (DWNativeSpaceReflow *)fixtureSpaceReflow:(NSNumber *)wid;
+- (void)fixtureBound:(NSDictionary *)identity bounds:(CGRect)native family:(NSDictionary *)family;
 - (NSUInteger)fixtureRetainedFrames;
 - (NSUInteger)fixtureRetainedPlacements;
 @end
@@ -82,6 +95,12 @@ bool dw_focus_birth(pid_t pid,uint64_t *seconds,uint64_t *microseconds) { (void)
     NSMutableData *frame=[_frames[@(_submittedSeq)]mutableCopy];struct dw2_record *records=frame.mutableBytes;records[0].id.wid++;_frames[@(_submittedSeq)]=frame.copy;
 }
 - (void)fixtureCooperative { _info.scope=DW2_SCOPE_COOPERATIVE; }
+- (void)fixtureSpaceFrames { _desktopWide=YES;_info.caps|=DW2_CAP_SPACE; }
+- (void)fixturePinned { _info.caps|=DW2_CAP_PINNED|DW2_CAP_ALPHA; }
+- (DWNativeSpaceReflow *)fixtureSpaceReflow:(NSNumber *)wid { return _spaceReflows[wid]; }
+- (void)fixtureBound:(NSDictionary *)identity bounds:(CGRect)native family:(NSDictionary *)family {
+    BOOL desktop=_desktopWide;_desktopWide=NO;[self bound:identity bounds:native family:family];_desktopWide=desktop;
+}
 - (NSUInteger)fixtureRetainedFrames { return _frames.count; }
 - (NSUInteger)fixtureRetainedPlacements { return _framePlacements.count; }
 @end
@@ -119,6 +138,43 @@ int main(void) {@autoreleasepool {
     check([first.members[0][@"parent"]isEqual:@0]&&[first.members[1][@"parent"]isEqual:@42],@"receipt preserves the audited root and child parent IDs");
     check(CGRectEqualToRect(first.requestedScreenRect,screen)&&[first.members[0][@"requested_transform"]isEqual:@[@2,@0,@0,@2,@(-500),@(-400)]],@"receipt describes requested projection and exact emitted matrix");
     check(!receipt(presenter,identity(124,42),1,1)&&!receipt(presenter,root,2,1)&&!receipt(presenter,root,1,2),@"identity, generation and output are exact");
+
+    uint64_t beforeFill=presenter.fixtureSequence;
+    check(![presenter withholdWindow:identity(124,42)],@"Fill cannot withhold a recycled or foreign identity");
+    check([presenter withholdWindow:root],@"Fill withholds the exact native root");
+    [presenter submit];check(presenter.fixtureSequence==beforeFill&&!receipt(presenter,root,1,1),@"withholding revokes prior input without resending an old frame");
+    check(![presenter isWindowWithheld:root],@"withholding is not ready before a new helper ACK");
+    describe(presenter,root,1,1,screen);[presenter submit];
+    check(presenter.fixtureRecords.length==0,@"Fill omits both root and child rather than releasing or parking either");
+    [presenter fixtureAck:@[@0,@0] sequence:beforeFill];check(![presenter isWindowWithheld:root],@"an old placement ACK cannot start Fill");
+    [presenter fixtureAck:@[] sequence:presenter.fixtureSequence];
+    check([presenter isWindowWithheld:root]&&!receipt(presenter,root,1,1),@"omission ACK drains prior placement but grants no input receipt");
+    [presenter resumeWindow:identity(124,42)];check([presenter isWindowWithheld:root],@"foreign resume cannot release the handoff");
+    [presenter resumeWindow:root];check(![presenter isWindowWithheld:root]&&!receipt(presenter,root,1,1),@"resume requires a new placement ACK");
+    describe(presenter,root,1,1,screen);[presenter submit];check(presenter.fixtureRecords.length==2*sizeof(struct dw2_record),@"resume reinstates the complete family");
+    ack(presenter);first=receipt(presenter,root,1,1);check(first!=nil,@"fresh family ACK alone restores placement eligibility");
+
+    // A separate root-only family exercises the real temporary neutral wire
+    // record, its exact ACK, and the second omission barrier without native calls.
+    DWNativePresenter *rebasing=[DWNativePresenter fixturePID:@123];CGRect rebasedFrame=CGRectMake(816,382,320,232);
+    [rebasing bound:root bounds:native family:family(root,native,@[])];describe(rebasing,root,1,1,native);[rebasing submit];
+    [rebasing fixtureAck:@[@(DW2_APPLIED)] sequence:rebasing.fixtureSequence];[rebasing withholdWindow:root];
+    describe(rebasing,root,1,1,native);[rebasing submit];[rebasing fixtureAck:@[] sequence:rebasing.fixtureSequence];
+    check([rebasing canRebaseWindow:root],@"only a drained known root-only family can rebase");
+    [presenter withholdWindow:root];describe(presenter,root,1,1,screen);[presenter submit];[presenter fixtureAck:@[] sequence:presenter.fixtureSequence];
+    check(![presenter canRebaseWindow:root],@"attached children keep translated rebase unsupported");
+    [presenter resumeWindow:root];describe(presenter,root,1,1,screen);[presenter submit];ack(presenter);first=receipt(presenter,root,1,1);
+    check([rebasing rebaseWindow:root bounds:rebasedFrame],@"observed same-size native frame queues neutral placement");
+    describe(rebasing,root,1,1,native);[rebasing submit];uint64_t neutral=rebasing.fixtureSequence;
+    const struct dw2_record *neutralRecord=rebasing.fixtureRecords.bytes;
+    check(rebasing.fixtureRecords.length==sizeof(*neutralRecord)&&neutralRecord->m[0]==1&&neutralRecord->m[3]==1&&neutralRecord->m[4]==-816&&neutralRecord->m[5]==-382&&!(neutralRecord->flags&DW2_RECORD_RESTORE),@"neutral wire placement preserves original journal and uses observed origin");
+    [rebasing fixtureAck:@[@(DW2_NOT_APPLIED)] sequence:neutral];check(![rebasing isWindowRebased:root],@"refused neutral record never starts Fill");
+    [rebasing fixtureRetry];[rebasing submit];neutral=rebasing.fixtureSequence;[rebasing fixtureAck:@[@(DW2_APPLIED)] sequence:neutral];check(![rebasing isWindowRebased:root]&&!receipt(rebasing,root,1,1),@"neutral ACK alone neither starts Fill nor grants input");
+    describe(rebasing,root,1,1,native);[rebasing submit];check(rebasing.fixtureRecords.length==0,@"neutral ACK queues omission to prevent animation transform replay");
+    [rebasing fixtureAck:@[@(DW2_APPLIED)] sequence:neutral];check(![rebasing isWindowRebased:root],@"old neutral ACK cannot satisfy newer omission");
+    [rebasing fixtureAck:@[] sequence:rebasing.fixtureSequence];check([rebasing isWindowRebased:root]&&!receipt(rebasing,root,1,1),@"only drained neutral plus omission ACK permits native animation");
+    [rebasing cancelRebaseWindow:identity(124,42)];check([rebasing isWindowRebased:root],@"foreign cancellation cannot alter rebase");
+    [rebasing cancelRebaseWindow:root];check(![rebasing isWindowRebased:root],@"cancellation revokes rebase without granting input");
 
     uint64_t superseded=presenter.fixtureSequence;NSData *sameRecords=presenter.fixtureRecords;
     [presenter requireFreshPlacementAcknowledgement];[presenter submit];
@@ -229,6 +285,267 @@ int main(void) {@autoreleasepool {
     [cooperative fixtureAck:@[@0] sequence:cooperative.fixtureSequence];
     check(receipt(cooperative,cooperativeRoot,2,1)!=nil,@"explicit audited root-only cooperative report can become acknowledged");[cooperative finish];
 
+    // A Space change alone must supersede a transform receipt, even when all
+    // legacy wire bytes and camera geometry are identical. This exercises the
+    // actual description/submission/ACK path with the read-only lookup replaced.
+    DWNativePresenter *migrating=[DWNativePresenter fixturePID:@123];
+    [migrating bound:root bounds:native family:family(root,native,@[@43])];[migrating fixtureSpaceFrames];
+    readinessSpace=10;describe(migrating,root,1,1,screen);[migrating submit];
+    const struct dw2_space_record *spaceFrame=lastSpaceFrame.bytes;
+    check(lastSpaceFrame.length==2*sizeof(*spaceFrame)&&spaceFrame[0].target_space==10&&spaceFrame[1].target_space==10,@"root and audited child share the exact output Space request");
+    ack(migrating);DWNativeAppliedPlacement *oldSpace=receipt(migrating,root,1,1);uint64_t oldSpaceSeq=migrating.fixtureSequence;
+    NSData *legacySpaceBytes=migrating.fixtureRecords;
+    check(oldSpace&&[oldSpace.members[0][@"requested_space"]isEqual:@10],@"acknowledged membership is frozen alongside the transform correspondence");
+    readinessSpace=20;describe(migrating,root,1,1,screen);
+    check(![migrating isAcknowledgedPlacementCurrent:oldSpace],@"membership-only change revokes prior receipt before submission");
+    [migrating submit];check(migrating.fixtureSequence>oldSpaceSeq&&[legacySpaceBytes isEqual:migrating.fixtureRecords],@"identical transforms still submit a changed Space request");
+    [migrating fixtureAck:@[@0,@0] sequence:oldSpaceSeq];check(!receipt(migrating,root,1,1),@"old Space ACK cannot acknowledge new membership");
+    [migrating fixtureAck:@[@0,@(DW2_NOT_APPLIED)] sequence:migrating.fixtureSequence];check(!receipt(migrating,root,1,1),@"one pending family Space move withholds the whole placement receipt");
+    [migrating fixtureRetry];[migrating submit];
+    [migrating fixtureAck:@[@0,@(DW2_SPACE)] sequence:migrating.fixtureSequence];
+    uint64_t refusedSpaceSeq=migrating.fixtureSequence;
+    [migrating fixtureRetry];[migrating submit];
+    check(migrating.fixtureSequence>refusedSpaceSeq&&!receipt(migrating,root,1,1),@"temporarily ineligible Space retries without granting readiness");ack(migrating);
+    check([receipt(migrating,root,1,1).members[0][@"requested_space"]isEqual:@20],@"complete new frame ACK records current target Space");
+    readinessSpace=0;describe(migrating,root,1,1,screen);[migrating submit];ack(migrating);
+    spaceFrame=lastSpaceFrame.bytes;
+    check(spaceFrame[0].target_space==0&&!receipt(migrating,root,1,1),@"unresolved display correspondence parks without inventing a Space or granting readiness");
+    readinessSpace=20;[migrating forgetChildrenOf:@42 reason:@"family audit lost before display handoff"];
+    describe(migrating,root,1,1,screen);[migrating submit];spaceFrame=lastSpaceFrame.bytes;
+    check(lastSpaceFrame.length==2*sizeof(*spaceFrame)&&spaceFrame[0].target_space==0&&spaceFrame[1].target_space==0
+        &&spaceFrame[1].record.flags==DW2_RECORD_RESTORE,@"unknown family parks its root without changing Space while the prior child restores");
+    ack(migrating);check(!receipt(migrating,root,1,1),@"unknown family cannot acquire a Space placement receipt");
+    [migrating finish];
+
+    // Pin-only changes use the existing exact record/whole-family ACK path.
+    // This checks policy and transport correspondence, not WindowServer stacking.
+    DWNativePresenter *pinning=[DWNativePresenter fixturePID:@123];[pinning fixturePinned];
+    [pinning bound:root bounds:native family:family(root,native,@[@43])];
+    describe(pinning,root,1,1,screen);[pinning submit];ack(pinning);
+    DWNativeAppliedPlacement *normalPinReceipt=receipt(pinning,root,1,1);uint64_t normalPinSeq=pinning.fixtureSequence;
+    NSMutableDictionary *pinSnapshot=[snapshot(root,1,1,screen,YES)mutableCopy];
+    NSMutableDictionary *pinPlacement=[pinSnapshot[@"placements"][0]mutableCopy];pinPlacement[@"pinned"]=@YES;pinPlacement[@"opacity"]=@0.75;
+    pinSnapshot[@"placements"]=@[pinPlacement];
+    [pinning describe:pinSnapshot bound:@{@7:root}];
+    check(![pinning isAcknowledgedPlacementCurrent:normalPinReceipt],@"pin-only desired change revokes the ordinary receipt");
+    [pinning submit];const struct dw2_record *pinRecords=pinning.fixtureRecords.bytes;
+    check(pinning.fixtureSequence>normalPinSeq&&pinning.fixtureRecords.length==2*sizeof(*pinRecords)
+        &&pinRecords[0].flags==(DW2_RECORD_PINNED|DW2_RECORD_HAS_ALPHA)&&pinRecords[1].flags==pinRecords[0].flags,
+        @"visible pin requests floating sublevel for every audited family member alongside alpha");
+    [pinning fixtureAck:@[@0,@(DW2_SUBLEVEL)] sequence:pinning.fixtureSequence];
+    check(!receipt(pinning,root,1,1),@"one sublevel refusal cannot acknowledge a pinned family");
+    [pinning requireFreshPlacementAcknowledgement];[pinning describe:pinSnapshot bound:@{@7:root}];[pinning submit];ack(pinning);
+    DWNativeAppliedPlacement *pinReceipt=receipt(pinning,root,1,1);uint64_t pinnedSeq=pinning.fixtureSequence;
+    check(pinReceipt&&[pinReceipt.members[0][@"flags"]unsignedIntValue]&DW2_RECORD_PINNED,@"receipt retains exact requested pin policy");
+    [pinning describe:pinSnapshot bound:@{@7:root}];[pinning submit];
+    check(pinning.fixtureSequence==pinnedSeq,@"unchanged complete pin does not submit another frame");
+    pinPlacement[@"pinned"]=@NO;[pinning describe:pinSnapshot bound:@{@7:root}];[pinning submit];pinRecords=pinning.fixtureRecords.bytes;
+    check(pinning.fixtureSequence>pinnedSeq&&!([pinning isAcknowledgedPlacementCurrent:pinReceipt])
+        &&!(pinRecords[0].flags&DW2_RECORD_PINNED)&&!(pinRecords[1].flags&DW2_RECORD_PINNED),@"unpin-only change explicitly requests original sublevel and fresh ACK");
+    ack(pinning);pinPlacement[@"pinned"]=@YES;[pinning describe:pinSnapshot bound:@{@7:root}];[pinning submit];ack(pinning);
+    NSMutableDictionary *hiddenPin=[pinSnapshot mutableCopy];hiddenPin[@"placements"]=@[];
+    [pinning describe:hiddenPin bound:@{@7:root}];[pinning submit];pinRecords=pinning.fixtureRecords.bytes;
+    check(!(pinRecords[0].flags&DW2_RECORD_PINNED)&&!(pinRecords[1].flags&DW2_RECORD_PINNED),@"omitted fullscreen-hidden family parks with original sublevels");
+    [pinning forgetChildrenOf:@42 reason:@"pin family audit lost"];
+    [pinning describe:pinSnapshot bound:@{@7:root}];[pinning submit];pinRecords=pinning.fixtureRecords.bytes;
+    check(!(pinRecords[0].flags&DW2_RECORD_PINNED)&&pinRecords[1].flags==DW2_RECORD_RESTORE&&!receipt(pinning,root,1,1),@"unknown family cannot keep pin authority while its old child restores");
+    ack(pinning);[pinning bound:root bounds:native family:family(root,native,@[])];
+    [pinning describe:pinSnapshot bound:@{@7:root}];[pinning submit];[pinning fixtureAck:@[@0] sequence:pinning.fixtureSequence];
+    DWNativeHiddenRoot *pinnedTransition=[pinning beginTransitionForWindow:root];
+    [pinning describe:pinSnapshot bound:@{@7:root}];[pinning submit];[pinning fixtureAck:@[] sequence:pinning.fixtureSequence];
+    check(pinnedTransition&&[pinning hideTransition:pinnedTransition],@"acknowledged pinned root can begin the existing snapshot handoff");
+    [pinning describe:pinSnapshot bound:@{@7:root}];[pinning submit];pinRecords=pinning.fixtureRecords.bytes;
+    check(pinning.fixtureRecords.length==sizeof(*pinRecords)&&pinRecords[0].flags==DW2_RECORD_HAS_ALPHA&&pinRecords[0].alpha==0,
+        @"hidden snapshot transition restores original sublevel instead of retaining pin intent");
+    [pinning finish];
+    DWNativePresenter *legacyPin=[DWNativePresenter fixturePID:@123];
+    [legacyPin bound:root bounds:native family:family(root,native,@[])];describe(legacyPin,root,1,1,screen);[legacyPin submit];
+    check(!legacyPin.ended&&legacyPin.fixtureSequence>0,@"legacy helper still accepts ordinary unpinned traffic");
+    [legacyPin describe:pinSnapshot bound:@{@7:root}];[legacyPin submit];
+    check(legacyPin.ended&&!receipt(legacyPin,root,1,1),@"missing pin capability restores and ends instead of falsely acknowledging pinning");
+
+    // A helper membership ACK can precede an asynchronous application reflow.
+    // Its updated native basis must not become an unrelated canvas resize.
+    DWNativePresenter *reflowing=[DWNativePresenter fixturePID:@123];
+    [reflowing bound:root bounds:native family:family(root,native,@[])];[reflowing fixtureSpaceFrames];
+    readinessSpace=10;describe(reflowing,root,1,1,screen);[reflowing submit];
+    DWNativeSpaceReflow *guard=[reflowing fixtureSpaceReflow:@42];
+    check(guard&&CGRectEqualToRect(guard->before,native)&&guard->target==10,@"submitted Space target retains its exact cached native baseline");
+    CGRect reflowed=CGRectMake(140,110,280,190);
+    check([reflowing observeSpaceReflow:root bounds:reflowed nativeInput:NO]&&!guard->settled,@"pending Space request classifies changed native geometry as presentation only");
+    [reflowing fixtureBound:root bounds:reflowed family:family(root,reflowed,@[])];describe(reflowing,root,1,1,screen);[reflowing submit];
+    [reflowing fixtureAck:@[@0] sequence:reflowing.fixtureSequence];
+    guard->submittedAt=uptime()-2001;guard->changedAt=uptime()-251;
+    check([reflowing observeSpaceReflow:root bounds:reflowed nativeInput:NO]&&guard->settled,@"fresh matching target ACK and quiet native frame settle with one final basis-only observation");
+    check(![reflowing observeSpaceReflow:root bounds:reflowed nativeInput:NO],@"settled migration does not suppress subsequent genuine application resize observations");
+    readinessSpace=20;describe(reflowing,root,1,1,screen);[reflowing submit];guard=[reflowing fixtureSpaceReflow:@42];
+    check(guard&&!guard->settled&&CGRectEqualToRect(guard->original,native)&&CGRectEqualToRect(guard->before,reflowed),@"new target retains prior reflow diagnostic and freezes its current baseline");
+    check(![reflowing observeSpaceReflow:identity(124,42) bounds:reflowed nativeInput:NO],@"replacement identity cannot consume migration qualification");
+    check(![reflowing observeSpaceReflow:root bounds:reflowed nativeInput:YES]&&guard->settled&&guard->nativeInput,@"explicit native input ends incidental-reflow suppression");
+    [reflowing unbound:root];check(![reflowing fixtureSpaceReflow:@42],@"unbinding retires migration observation authority");[reflowing finish];
+
+    // Caller-guarded backing remains parking, with its own exact ACK authority.
+    // No guard window, source capture or posted input is exercised here.
+    DWNativePresenter *backing=[DWNativePresenter fixturePID:@123];
+    [backing bound:root bounds:native family:family(root,native,@[])];[backing fixtureSpaceFrames];
+    NSDictionary *parkedSnapshot=@{@"outputs":@[@{@"id":@1,@"screen_bounds":rect(CGRectMake(0,0,1200,900))}],@"placements":@[],
+        @"windows":@[@{@"window":@7,@"source":@{@"identity":root,@"generation":@1,@"observation_known":@YES,@"observed_rect":rect(native)}}]};
+    CGRect edge=CGRectMake(1-native.size.width,100,native.size.width,native.size.height);
+    NSMutableDictionary *guardedDescriptor=[@{@"window":@7,@"identity":[root mutableCopy],@"generation":@1,
+        @"guard_epoch":@1,@"native_bounds":rect(native),@"screen_rect":rect(edge),@"members":family(root,native,@[])[@"members"]}mutableCopy];
+    [backing describe:parkedSnapshot bound:@{@7:root}];[backing submit];[backing fixtureAck:@[@0] sequence:backing.fixtureSequence];
+    check([backing isParkingAcknowledgedForWindow:@7 identity:root generation:@1]
+        &&![backing acknowledgedGuardedParkingForWindow:@7 identity:root generation:@1 guardEpoch:1],@"default parking has no guarded backing authority");
+    [backing setGuardedParking:guardedDescriptor];guardedDescriptor[@"identity"][@"wid"]=@999;
+    check(![backing isParkingAcknowledgedForWindow:@7 identity:root generation:@1],@"descriptor admission revokes prior parking ACK before describing");
+    [backing describe:parkedSnapshot bound:@{@7:root}];[backing submit];
+    spaceFrame=lastSpaceFrame.bytes;
+    check(lastSpaceFrame.length==sizeof(*spaceFrame)&&spaceFrame[0].target_space==0&&spaceFrame[0].record.m[0]==1
+        &&spaceFrame[0].record.m[3]==1&&spaceFrame[0].record.m[4]==-edge.origin.x&&spaceFrame[0].record.m[5]==-edge.origin.y,
+        @"guarded root sends exact unit translation and no Space request despite caller dictionary mutation");
+    check(![backing acknowledgedGuardedParkingForWindow:@7 identity:root generation:@1 guardEpoch:1],@"submission cannot manufacture guarded readiness");
+    [backing fixtureAck:@[@0] sequence:backing.fixtureSequence];
+    DWNativeAppliedParking *parking=[backing acknowledgedGuardedParkingForWindow:@7 identity:root generation:@1 guardEpoch:1];
+    check(parking&&parking.sequence==backing.fixtureSequence&&parking.window==7&&parking.generation==1&&parking.guardEpoch==1
+        &&CGRectEqualToRect(parking.nativeBounds,native)&&CGRectEqualToRect(parking.screenRect,edge)
+        &&[backing isAcknowledgedGuardedParkingCurrent:parking]&&[backing isParkingAcknowledgedForWindow:@7 identity:root generation:@1]
+        &&!receipt(backing,root,1,1),@"complete ACK exposes exact guarded parking without native placement authority");
+    guardedDescriptor[@"identity"]=root;[backing setGuardedParking:guardedDescriptor];
+    check([backing isAcknowledgedGuardedParkingCurrent:parking],@"identical descriptor does not revoke the current receipt");
+    guardedDescriptor[@"guard_epoch"]=@2;[backing setGuardedParking:guardedDescriptor];
+    check(![backing isAcknowledgedGuardedParkingCurrent:parking],@"guard replacement revokes prior epoch immediately");
+    [backing describe:parkedSnapshot bound:@{@7:root}];[backing submit];
+    [backing fixtureAck:@[@0] sequence:parking.sequence];
+    check(![backing acknowledgedGuardedParkingForWindow:@7 identity:root generation:@1 guardEpoch:2],@"old sequence cannot authorize an identical transform under a new guard");
+    [backing fixtureAck:@[@0] sequence:backing.fixtureSequence];
+    parking=[backing acknowledgedGuardedParkingForWindow:@7 identity:root generation:@1 guardEpoch:2];
+    check(parking&&![backing acknowledgedGuardedParkingForWindow:@7 identity:root generation:@1 guardEpoch:1],@"fresh ACK authorizes only its exact guard epoch");
+    guardedDescriptor[@"generation"]=@2;[backing setGuardedParking:guardedDescriptor];[backing describe:parkedSnapshot bound:@{@7:root}];[backing submit];
+    spaceFrame=lastSpaceFrame.bytes;
+    check(spaceFrame[0].record.m[4]==-1456&&spaceFrame[0].record.m[5]==-1156,@"stale generation falls back to ordinary far-offscreen parking");
+    [backing fixtureAck:@[@0] sequence:backing.fixtureSequence];
+    check(![backing acknowledgedGuardedParkingForWindow:@7 identity:root generation:@1 guardEpoch:2],@"fallback ACK does not qualify the stale guard");
+    guardedDescriptor[@"generation"]=@1;guardedDescriptor[@"native_bounds"]=rect(CGRectOffset(native,1,0));[backing setGuardedParking:guardedDescriptor];
+    [backing describe:parkedSnapshot bound:@{@7:root}];[backing submit];[backing fixtureAck:@[@0] sequence:backing.fixtureSequence];
+    spaceFrame=lastSpaceFrame.bytes;
+    check(spaceFrame[0].record.m[4]==-1456&&![backing acknowledgedGuardedParkingForWindow:@7 identity:root generation:@1 guardEpoch:2],@"changed native basis cannot reuse the guarded descriptor");
+    guardedDescriptor[@"native_bounds"]=rect(native);guardedDescriptor[@"guard_epoch"]=@YES;[backing setGuardedParking:guardedDescriptor];
+    [backing describe:parkedSnapshot bound:@{@7:root}];[backing submit];[backing fixtureAck:@[@0] sequence:backing.fixtureSequence];
+    check(![backing acknowledgedGuardedParkingForWindow:@7 identity:root generation:@1 guardEpoch:1],@"boolean epoch is refused rather than treated as integer one");
+    guardedDescriptor[@"guard_epoch"]=@3;[backing setGuardedParking:guardedDescriptor];
+    [backing fixtureBound:root bounds:native family:family(root,native,@[@43])];[backing describe:parkedSnapshot bound:@{@7:root}];[backing submit];ack(backing);
+    spaceFrame=lastSpaceFrame.bytes;
+    check(lastSpaceFrame.length==2*sizeof(*spaceFrame)&&spaceFrame[0].record.m[4]==-1456&&spaceFrame[1].record.m[4]==-1456
+        &&![backing acknowledgedGuardedParkingForWindow:@7 identity:root generation:@1 guardEpoch:3],@"attached child revokes guarded root-only placement and both members use ordinary parking");
+    NSMutableDictionary *companion=[family(root,native,@[@43])[@"members"][1]mutableCopy];companion[@"capture_control"]=@YES;
+    NSArray *companionMembers=@[family(root,native,@[])[@"members"][0],companion];
+    guardedDescriptor[@"members"]=companionMembers;[backing setGuardedParking:guardedDescriptor];
+    [backing describe:parkedSnapshot bound:@{@7:root}];[backing submit];spaceFrame=lastSpaceFrame.bytes;
+    check(lastSpaceFrame.length==2*sizeof(*spaceFrame)&&spaceFrame[0].target_space==0&&spaceFrame[1].target_space==0
+        &&spaceFrame[0].record.m[0]==1&&spaceFrame[0].record.m[3]==1&&spaceFrame[1].record.m[0]==1&&spaceFrame[1].record.m[3]==1
+        &&spaceFrame[0].record.m[4]==-edge.origin.x&&spaceFrame[0].record.m[5]==-edge.origin.y
+        &&spaceFrame[1].record.m[4]==-edge.origin.x-50&&spaceFrame[1].record.m[5]==-edge.origin.y-25,
+        @"classified capture companion preserves its root-relative unit geometry with no Space requests");
+    [backing fixtureAck:@[@0,@(DW2_NOT_APPLIED)] sequence:backing.fixtureSequence];
+    check(![backing acknowledgedGuardedParkingForWindow:@7 identity:root generation:@1 guardEpoch:3],@"a refused companion prevents whole-family guarded authority");
+    [backing fixtureRetry];[backing submit];ack(backing);
+    parking=[backing acknowledgedGuardedParkingForWindow:@7 identity:root generation:@1 guardEpoch:3];
+    check(parking&&[backing isAcknowledgedGuardedParkingCurrent:parking]&&!receipt(backing,root,1,1)
+        &&[parking.members isEqual:companionMembers],@"complete companion ACK grants parking only and exposes exact immutable members");
+    companion[@"capture_control"]=@NO;
+    check([parking.members[1][@"capture_control"]isEqual:@YES]&&[backing isAcknowledgedGuardedParkingCurrent:parking],@"caller mutation cannot rewrite an admitted companion receipt");
+    companion[@"capture_control"]=@YES;
+    for(NSDictionary *badMember in @[
+        family(root,native,@[@43])[@"members"][1],
+        @{@"identity":identity(123,43),@"native_bounds":companion[@"native_bounds"],@"parent":@99,@"capture_control":@YES},
+        @{@"identity":identity(123,43),@"native_bounds":rect(CGRectMake(151,125,90,60)),@"parent":@42,@"capture_control":@YES},
+        @{@"identity":identity(124,43),@"native_bounds":companion[@"native_bounds"],@"parent":@42,@"capture_control":@YES},
+        @{@"identity":identity(123,43),@"native_bounds":rect(CGRectMake(90,125,90,60)),@"parent":@42,@"capture_control":@YES},
+        @{@"identity":identity(123,43),@"native_bounds":companion[@"native_bounds"],@"parent":@42,@"capture_control":@1}]){
+        guardedDescriptor[@"members"]=@[companionMembers[0],badMember];[backing setGuardedParking:guardedDescriptor];
+        [backing describe:parkedSnapshot bound:@{@7:root}];[backing submit];ack(backing);spaceFrame=lastSpaceFrame.bytes;
+        check(spaceFrame[0].record.m[4]==-1456&&spaceFrame[1].record.m[4]==-1456
+            &&![backing acknowledgedGuardedParkingForWindow:@7 identity:root generation:@1 guardEpoch:3],@"unknown, reparented, changed, foreign, uncontained or nonboolean companion falls back to ordinary parking");
+    }
+    guardedDescriptor[@"members"]=@[companionMembers[0]];[backing setGuardedParking:guardedDescriptor];
+    [backing describe:parkedSnapshot bound:@{@7:root}];[backing submit];ack(backing);
+    check(![backing acknowledgedGuardedParkingForWindow:@7 identity:root generation:@1 guardEpoch:3],@"omitting a current family member cannot authorize backing");
+    [guardedDescriptor removeObjectForKey:@"members"];[backing setGuardedParking:guardedDescriptor];
+    [backing describe:parkedSnapshot bound:@{@7:root}];[backing submit];ack(backing);
+    check(![backing acknowledgedGuardedParkingForWindow:@7 identity:root generation:@1 guardEpoch:3],@"implicit or missing descriptor members cannot authorize backing");
+    guardedDescriptor[@"members"]=companionMembers;[backing setGuardedParking:guardedDescriptor];
+    [backing fixtureBound:root bounds:native family:family(root,native,@[@43,@44])];
+    [backing describe:parkedSnapshot bound:@{@7:root}];[backing submit];[backing fixtureAck:@[@0,@0,@0] sequence:backing.fixtureSequence];
+    check(![backing acknowledgedGuardedParkingForWindow:@7 identity:root generation:@1 guardEpoch:3],@"a newly audited third member invalidates the two-member backing descriptor");
+    guardedDescriptor[@"members"]=companionMembers;
+    [backing setGuardedParking:nil];[backing finish];
+
+    // Several guarded roots share the existing complete helper frame, while
+    // descriptor supersession and immutable receipt identity stay per root.
+    DWNativePresenter *many=[DWNativePresenter fixturePID:@123];[many fixtureSpaceFrames];
+    NSDictionary *secondRoot=identity(123,62),*thirdRoot=identity(124,82);
+    CGRect secondNative=CGRectMake(400,100,200,160),secondEdge=CGRectMake(-198,100,200,160);
+    [many fixtureBound:root bounds:native family:family(root,native,@[@43])];
+    [many fixtureBound:secondRoot bounds:secondNative family:family(secondRoot,secondNative,@[])];
+    NSMutableDictionary *firstGuard=[guardedDescriptor mutableCopy];firstGuard[@"generation"]=@1;
+    NSMutableDictionary *secondGuard=[@{@"window":@8,@"identity":secondRoot,@"generation":@1,@"guard_epoch":@4,
+        @"native_bounds":rect(secondNative),@"screen_rect":rect(secondEdge),@"members":family(secondRoot,secondNative,@[])[@"members"]}mutableCopy];
+    NSDictionary *secondRow=@{@"window":@8,@"source":@{@"identity":secondRoot,@"generation":@1,@"observation_known":@YES,@"observed_rect":rect(secondNative)}};
+    NSDictionary *manySnapshot=@{@"outputs":parkedSnapshot[@"outputs"],@"placements":@[],@"windows":@[parkedSnapshot[@"windows"][0],secondRow]};
+    NSDictionary *manyBound=@{@7:root,@8:secondRoot};
+    [many setGuardedParkings:@{@7:firstGuard,@8:secondGuard}];
+    [many describe:manySnapshot bound:manyBound];[many submit];spaceFrame=lastSpaceFrame.bytes;
+    check(lastSpaceFrame.length==3*sizeof(*spaceFrame)&&spaceFrame[0].target_space==0&&spaceFrame[1].target_space==0&&spaceFrame[2].target_space==0
+        &&spaceFrame[0].record.m[4]==-edge.origin.x&&spaceFrame[1].record.m[4]==-edge.origin.x-50&&spaceFrame[2].record.m[4]==-secondEdge.origin.x,
+        @"multiple same-session backing roots retain independent unit lanes and complete child records");
+    [many fixtureAck:@[@0,@0,@0] sequence:many.fixtureSequence];
+    DWNativeAppliedParking *firstParking=[many acknowledgedGuardedParkingForWindow:@7 identity:root generation:@1 guardEpoch:3];
+    DWNativeAppliedParking *secondParking=[many acknowledgedGuardedParkingForWindow:@8 identity:secondRoot generation:@1 guardEpoch:4];
+    check(firstParking&&secondParking&&firstParking.sequence==secondParking.sequence,@"one complete frame grants distinct per-root parking receipts");
+    [many setGuardedParkings:@{@8:secondGuard}];
+    check(![many isAcknowledgedGuardedParkingCurrent:firstParking]&&[many isAcknowledgedGuardedParkingCurrent:secondParking],@"clearing one root preserves another same-session immediate receipt");
+    [many setGuardedParkings:@{@7:firstGuard,@8:secondGuard}];
+    [many fixtureAck:@[@0,@0,@0] sequence:many.fixtureSequence];
+    check(![many acknowledgedGuardedParkingForWindow:@7 identity:root generation:@1 guardEpoch:3]
+        &&[many isAcknowledgedGuardedParkingCurrent:secondParking],@"an old in-flight ACK cannot resurrect a removed and re-added descriptor");
+    [many describe:manySnapshot bound:manyBound];[many submit];
+    check(![many isAcknowledgedGuardedParkingCurrent:secondParking],@"a new complete submission retains the existing latest-frame ACK fence");
+    [many fixtureAck:@[@0,@(DW2_NOT_APPLIED),@0] sequence:many.fixtureSequence];
+    secondParking=[many acknowledgedGuardedParkingForWindow:@8 identity:secondRoot generation:@1 guardEpoch:4];
+    check(![many acknowledgedGuardedParkingForWindow:@7 identity:root generation:@1 guardEpoch:3]&&secondParking,
+        @"one refused companion withholds its whole family without rejecting an independently applied root");
+    [many fixtureRetry];[many submit];[many fixtureAck:@[@0,@0,@0] sequence:many.fixtureSequence];
+    firstParking=[many acknowledgedGuardedParkingForWindow:@7 identity:root generation:@1 guardEpoch:3];
+    secondParking=[many acknowledgedGuardedParkingForWindow:@8 identity:secondRoot generation:@1 guardEpoch:4];
+    secondGuard[@"screen_rect"]=rect(CGRectOffset(secondEdge,1,0));
+    check([many isAcknowledgedGuardedParkingCurrent:secondParking],@"mutating an input map descriptor cannot rewrite its immutable receipt");
+    secondGuard[@"screen_rect"]=rect(secondEdge);
+    [many setGuardedParkings:@{@99:firstGuard,@8:secondGuard}];
+    check(![many isAcknowledgedGuardedParkingCurrent:firstParking]&&[many isAcknowledgedGuardedParkingCurrent:secondParking],@"a key/descriptor mismatch drops only that invalid entry");
+    [many describe:manySnapshot bound:manyBound];[many submit];[many fixtureAck:@[@0,@0,@0] sequence:many.fixtureSequence];spaceFrame=lastSpaceFrame.bytes;
+    check(spaceFrame[0].record.m[4]==-1456&&spaceFrame[1].record.m[4]==-1456&&spaceFrame[2].record.m[4]==-secondEdge.origin.x,
+        @"one invalid descriptor uses ordinary parking without clearing another guarded root");
+
+    DWNativePresenter *third=[DWNativePresenter fixturePID:@124];[third fixtureSpaceFrames];
+    [third fixtureBound:thirdRoot bounds:secondNative family:family(thirdRoot,secondNative,@[])];
+    NSDictionary *thirdGuard=@{@"window":@9,@"identity":thirdRoot,@"generation":@1,@"guard_epoch":@5,@"native_bounds":rect(secondNative),
+        @"screen_rect":rect(CGRectOffset(secondEdge,1,0)),@"members":family(thirdRoot,secondNative,@[])[@"members"]};
+    NSDictionary *thirdRow=@{@"window":@9,@"source":@{@"identity":thirdRoot,@"generation":@1,@"observation_known":@YES,@"observed_rect":rect(secondNative)}};
+    NSDictionary *groupSnapshot=@{@"outputs":parkedSnapshot[@"outputs"],@"placements":@[],@"windows":@[parkedSnapshot[@"windows"][0],secondRow,thirdRow]};
+    DWNativePresenterGroup *manyGroup=[DWNativePresenterGroup new];manyGroup.sessions=@[many,third];manyGroup.owners=@{@123:many,@124:third};
+    [manyGroup setGuardedParkings:@{@7:firstGuard,@8:secondGuard,@9:thirdGuard}];
+    [manyGroup describe:groupSnapshot bound:@{@7:root,@8:secondRoot,@9:thirdRoot}];[manyGroup submit];
+    [many fixtureAck:@[@0,@0,@0] sequence:many.fixtureSequence];[third fixtureAck:@[@0] sequence:third.fixtureSequence];
+    firstParking=[manyGroup acknowledgedGuardedParkingForWindow:@7 identity:root generation:@1 guardEpoch:3];
+    secondParking=[manyGroup acknowledgedGuardedParkingForWindow:@8 identity:secondRoot generation:@1 guardEpoch:4];
+    DWNativeAppliedParking *thirdParking=[manyGroup acknowledgedGuardedParkingForWindow:@9 identity:thirdRoot generation:@1 guardEpoch:5];
+    check(firstParking&&secondParking&&thirdParking&&firstParking.session==secondParking.session&&firstParking.session!=thirdParking.session,
+        @"group routes every guarded root to its exact helper session");
+    [manyGroup setGuardedParkings:@{@7:firstGuard,@8:secondGuard}];
+    check([manyGroup isAcknowledgedGuardedParkingCurrent:firstParking]&&[manyGroup isAcknowledgedGuardedParkingCurrent:secondParking]
+        &&![manyGroup isAcknowledgedGuardedParkingCurrent:thirdParking],@"clearing one grouped session preserves the other session's multiple backing roots");
+    [manyGroup finish];
+
     NSDictionary *otherRoot=identity(124,82);DWNativePresenter *other=[DWNativePresenter fixturePID:@124];
     [other bound:otherRoot bounds:native family:family(otherRoot,native,@[@83])];describe(other,otherRoot,2,1,moved);[other submit];ack(other);
     DWNativeAppliedPlacement *otherReceipt=receipt(other,otherRoot,2,1);
@@ -236,6 +553,10 @@ int main(void) {@autoreleasepool {
     DWNativePresenterGroup *group=[DWNativePresenterGroup new];group.sessions=@[presenter,other];group.owners=@{@123:presenter,@124:other};
     check([group isAcknowledgedPlacementCurrent:current]&&[group isAcknowledgedPlacementCurrent:otherReceipt]
         &&[group acknowledgedPlacementForWindow:@7 identity:root generation:@2 output:@1]!=nil,@"group delegates readiness to the exact owning session");
+    guardedDescriptor[@"generation"]=@2;[group setGuardedParking:guardedDescriptor];
+    check(![group isAcknowledgedPlacementCurrent:current]&&[group isAcknowledgedPlacementCurrent:otherReceipt],@"guard descriptor change revokes only its owning helper session");
+    [group setGuardedParking:nil];describe(presenter,root,2,1,moved);[presenter submit];ack(presenter);current=receipt(presenter,root,2,1);
+    check(current&&[group isAcknowledgedPlacementCurrent:otherReceipt],@"clearing another session's guard preserves unrelated acknowledged placement");
     uint64_t groupOld=presenter.fixtureSequence,otherOld=other.fixtureSequence;[group requireFreshPlacementAcknowledgement];[group submit];
     check(![group isAcknowledgedPlacementCurrent:current]&&![group isAcknowledgedPlacementCurrent:otherReceipt]
         &&presenter.fixtureSequence==groupOld&&other.fixtureSequence==otherOld,@"group supersession revokes both sessions without stale submission");
@@ -245,6 +566,6 @@ int main(void) {@autoreleasepool {
     check([group isAcknowledgedPlacementCurrent:current]&&[group isAcknowledgedPlacementCurrent:otherReceipt],@"new complete session ACKs settle the grouped supersession");
     [presenter unbound:root];check(![group isAcknowledgedPlacementCurrent:current],@"unbinding revokes a grouped receipt");
     [other fixtureExpire];check(!receipt(other,otherRoot,2,1)&&![group isAcknowledgedPlacementCurrent:otherReceipt],@"disconnect revokes receipt before main callback delivery");
-    [group finish];check(closed==3,@"all in-memory sessions drain and close");
+    [group finish];check(closed==10,@"all in-memory sessions drain and close");
     printf("PASS: %lu presenter readiness checks; no native mutation or input-usability claim\n",(unsigned long)checks);
 }return 0;}

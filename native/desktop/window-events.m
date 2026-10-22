@@ -203,6 +203,9 @@ static void *catalogObservation=&catalogObservation;
 // reported, and which are owed one more report.
 @property NSMutableDictionary<NSNumber *,NSNumber *> *sent;
 @property NSMutableSet<NSNumber *> *owed;
+// Subset of owed: every event in this pending batch was an exact known AXMoved.
+// Generic changes only remove membership; a later move cannot narrow the batch.
+@property NSMutableSet<NSNumber *> *moveOnly;
 // The one timer: armed for the earliest report owed or quick attempt due.
 @property NSTimer *timer;
 @property NSTimeInterval checked;
@@ -240,7 +243,7 @@ BOOL DWInScope(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope,pid_t pid) 
 }
 @implementation DWWindowEvents
 - (instancetype)initWithSink:(id<DWWindowEventSink>)sink scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope {
-    if((self=[super init])){_sink=sink;_scope=[scope copy];_applications=[NSMutableDictionary dictionary];_sent=[NSMutableDictionary dictionary];_owed=[NSMutableSet set];
+    if((self=[super init])){_sink=sink;_scope=[scope copy];_applications=[NSMutableDictionary dictionary];_sent=[NSMutableDictionary dictionary];_owed=[NSMutableSet set];_moveOnly=[NSMutableSet set];
         _applicationWatches=[NSMapTable mapTableWithKeyOptions:NSPointerFunctionsStrongMemory|NSPointerFunctionsObjectPointerPersonality valueOptions:NSPointerFunctionsStrongMemory];_applicationNotices=[NSMutableArray array];
         // yabai's workspace_context, less what a tiling window manager needs of the Dock, the menu bar and the displays, and with
         // launch, end and activation from NSWorkspace where yabai has them from its process manager's Carbon events.
@@ -547,7 +550,7 @@ static NSArray<DWApplicationMetadata *> *canonicalApplications(NSArray<NSRunning
 - (void)remove:(pid_t)pid ended:(BOOL)ended {
     DWObservedApplication *application=self.applications[@(pid)];if(!application)return;
     application.gone=YES;application.retry=0;[self.applications removeObjectForKey:@(pid)];
-    for(NSNumber *key in self.sent.allKeys)if((pid_t)(key.unsignedLongLongValue>>32)==pid){[self.sent removeObjectForKey:key];[self.owed removeObject:key];}
+    for(NSNumber *key in self.sent.allKeys)if((pid_t)(key.unsignedLongLongValue>>32)==pid){[self.sent removeObjectForKey:key];[self.owed removeObject:key];[self.moveOnly removeObject:key];}
     AXObserverRef observer=application.observer;if(!observer)return;application.observer=NULL;
     CFRunLoopSourceRef source=AXObserverGetRunLoopSource(observer);CFRunLoopRemoveSource(CFRunLoopGetMain(),source,kCFRunLoopCommonModes);CFRunLoopSourceInvalidate(source);
     AXUIElementRef element=ended?NULL:(AXUIElementRef)CFRetain(application.element);uint8_t mask=application.registered;NSArray<DWObservedWindow *> *windows=ended?nil:[application.contexts copy];
@@ -569,7 +572,7 @@ static NSArray<DWApplicationMetadata *> *canonicalApplications(NSArray<NSRunning
         if(CFEqual(notification,kAXUIElementDestroyedNotification)){
             // WINDOW_DESTROYED. Reported at once, and the window is looked at once more a moment later.
             NSTimeInterval now=NSProcessInfo.processInfo.systemUptime;window.destroyed=now;CFDictionaryRemoveValue(application.windows,window.element);[self unwatch:window observer:application.observer];
-            NSNumber *key=@((uint64_t)(uint32_t)pid<<32|window.window);self.sent[key]=@(now);[self.owed addObject:key];[self arm:coalesce];
+            NSNumber *key=@((uint64_t)(uint32_t)pid<<32|window.window);self.sent[key]=@(now);[self.owed addObject:key];[self.moveOnly removeObject:key];[self arm:coalesce];
             [sink windowDestroyed:window.window pid:pid];return;
         }
         // WINDOW_DEMINIMIZED: the window comes back on screen, where it may be a candidate again. WINDOW_MINIMIZED: it left.
@@ -584,7 +587,8 @@ static NSArray<DWApplicationMetadata *> *canonicalApplications(NSArray<NSRunning
     // WINDOW_MOVED, WINDOW_RESIZED, WINDOW_TITLE_CHANGED. A title change is reported for elements that are no window too.
     DWObservedWindow *known=(__bridge DWObservedWindow *)CFDictionaryGetValue(application.windows,element);
     if(!known&&!CFEqual(notification,kAXTitleChangedNotification))[self resolve:element application:application];
-    [self changed:known?known.window:0 pid:pid];
+    if(known&&CFEqual(notification,kAXWindowMovedNotification))[self changed:known.window pid:pid moveOnly:YES];
+    else [self changed:known?known.window:0 pid:pid];
 }
 // yabai's process manager has launch, end and front switch from Carbon; NSWorkspace says the same.
 - (void)applyApplicationNotice:(DWApplicationMetadata *)notice {
@@ -657,13 +661,24 @@ static NSArray<DWApplicationMetadata *> *canonicalApplications(NSArray<NSRunning
 - (void)spaceChanged:(NSNotification *)note { (void)note;if(self.stopped)return;for(DWObservedApplication *application in self.applications.allValues)[self list:application];[self changed:appeared pid:0]; }
 - (void)deliver:(NSNumber *)key {
     uint64_t value=key.unsignedLongLongValue;id<DWWindowEventSink> sink=self.sink;CGWindowID window=(CGWindowID)(value&0xffffffff);pid_t pid=(pid_t)(value>>32);
-    if(!value)[sink focusChanged];else if(window==appeared)[sink windowsChanged:pid];else [sink windowChanged:window pid:pid];
+    if(!value)[sink focusChanged];else if(window==appeared)[sink windowsChanged:pid];
+    else if([self.moveOnly containsObject:key])[sink windowMoved:window pid:pid];
+    else [sink windowChanged:window pid:pid];
 }
 // A change of one window, of some window of an application (`window` 0), of the windows an application has on screen
 // (`appeared`; pid 0 for every application's) or of native focus (both 0). Reported at once unless one was reported within
 // the last 80 ms; either way one more report is owed 80 ms after the last one made.
 - (void)changed:(CGWindowID)window pid:(pid_t)pid {
+    [self changed:window pid:pid moveOnly:NO];
+}
+- (void)changed:(CGWindowID)window pid:(pid_t)pid moveOnly:(BOOL)moved {
     if(self.stopped)return;NSNumber *key=@((uint64_t)(uint32_t)pid<<32|window),*last=self.sent[key];NSTimeInterval now=NSProcessInfo.processInfo.systemUptime;
+    NSNumber *applicationKey=@((uint64_t)(uint32_t)pid<<32);
+    moved=moved&&pid>0&&window&&window!=appeared&&![self.owed containsObject:applicationKey];
+    if(!window&&pid>0)for(NSNumber *pending in self.moveOnly.allObjects)
+        if((pid_t)(pending.unsignedLongLongValue>>32)==pid)[self.moveOnly removeObject:pending];
+    if(!moved)[self.moveOnly removeObject:key];
+    else if(![self.owed containsObject:key])[self.moveOnly addObject:key];
     [self.owed addObject:key];
     if(!last||now-last.doubleValue>=coalesce){self.sent[key]=@(now);[self deliver:key];if(self.stopped)return;}
     [self arm:self.sent[key].doubleValue+coalesce-NSProcessInfo.processInfo.systemUptime];
@@ -679,7 +694,7 @@ static NSArray<DWApplicationMetadata *> *canonicalApplications(NSArray<NSRunning
     self.timer=nil;if(self.stopped)return;NSTimeInterval now=NSProcessInfo.processInfo.systemUptime,next=0;
     for(NSNumber *key in self.owed.allObjects){
         NSTimeInterval at=self.sent[key].doubleValue+coalesce;if(at>now+.002){if(!next||at<next)next=at;continue;}
-        [self.owed removeObject:key];self.sent[key]=@(now);[self deliver:key];if(self.stopped)return;
+        [self.owed removeObject:key];self.sent[key]=@(now);[self deliver:key];[self.moveOnly removeObject:key];if(self.stopped)return;
     }
     for(NSNumber *key in self.sent.allKeys)if(![self.owed containsObject:key]&&now-self.sent[key].doubleValue>1)[self.sent removeObjectForKey:key];
     for(DWObservedApplication *application in self.applications.allValues){
@@ -695,7 +710,7 @@ static NSArray<DWApplicationMetadata *> *canonicalApplications(NSArray<NSRunning
     [self.workspaceNotifications removeObserver:self];self.workspaceNotifications=nil;[self.timer invalidate];self.timer=nil;
     [self clearApplicationWatches];
     for(NSNumber *pid in self.applications.allKeys)[self remove:pid.intValue ended:NO];
-    [self.owed removeAllObjects];[self.sent removeAllObjects];
+    [self.owed removeAllObjects];[self.sent removeAllObjects];[self.moveOnly removeAllObjects];
 }
 - (void)dealloc { [self stop]; }
 @end

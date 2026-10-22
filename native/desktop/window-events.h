@@ -22,7 +22,13 @@
 // The set of windows on screen may have changed for this application: it launched, it was shown again, one of its windows was
 // created or came back from the Dock. 0: for any application, because the active Space changed.
 - (void)windowsChanged:(pid_t)pid;
-// This window moved, was resized, retitled, miniaturized or shown again, or its application was hidden, shown or ended.
+// Only AXMoved named this known window during this coalesced batch. This is still
+// a hint, not proof of origin-only movement: the sink must validate fresh identity
+// and extent. Any mixed change, or unknown-window change for its PID, takes the
+// generic path instead. The trailing report retains the same conservative kind.
+- (void)windowMoved:(CGWindowID)window pid:(pid_t)pid;
+// This window was resized, retitled, miniaturized or shown again, its application was hidden, shown or ended, or a move
+// could not be attributed to exactly one known window (or was coalesced with another change).
 // `window` 0: some window of the application, which one is not known.
 - (void)windowChanged:(CGWindowID)window pid:(pid_t)pid;
 // Its application reported the window destroyed. At once; a -windowChanged: for it follows 80 ms later, because the window

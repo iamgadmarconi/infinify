@@ -10,7 +10,11 @@
 
 static NSUInteger checks,candidateBasisReads;
 static BOOL inWorker,listAvailable=YES,deliverDiscoveryDuringFamily;
-static BOOL allowOverlayPermissionRead;
+static BOOL allowOverlayPermissionRead,allListAvailable=YES,closeTesting,titleTesting;
+static NSArray<NSDictionary *> *closeElements;
+static NSUInteger closePresses,closeOwnerReads,closeOwnerFailsAt;
+static NSUInteger allListReads,processReads,processMode;
+static NSArray<NSDictionary *> *allWindowRows,*secondAllWindowRows;
 static NSTimeInterval fixtureNow=100;
 static NSArray<NSDictionary *> *windowRows;
 static NSMutableArray<dispatch_block_t> *mainBlocks,*workerBlocks;
@@ -22,15 +26,38 @@ static void fixtureAsync(dispatch_queue_t queue,dispatch_block_t block) {
     [(queue==dispatch_get_main_queue()?mainBlocks:workerBlocks)addObject:[block copy]];
 }
 static CFTimeInterval fixtureTime(void) { return fixtureNow; }
-static BOOL fixtureTrusted(void) { return NO; }
+static BOOL fixtureTrusted(void) { return closeTesting||titleTesting; }
 static BOOL fixtureCaptureAccess(void) { check(allowOverlayPermissionRead,@"only overlay creation reads capture permission");return NO; }
 static CFArrayRef fixtureWindowList(CGWindowListOption options,CGWindowID window) {
-    (void)options;(void)window;check(inWorker,@"WindowServer metadata reads stay off main");
+    (void)window;check(inWorker,@"WindowServer metadata reads stay off main");
+    if(options==(kCGWindowListOptionAll|kCGWindowListExcludeDesktopElements)){
+        allListReads++;return allListAvailable?CFBridgingRetain(allListReads%2==0&&secondAllWindowRows?secondAllWindowRows:allWindowRows):NULL;
+    }
     return listAvailable?CFBridgingRetain(windowRows):NULL;
 }
 static int fixtureProcessInfo(int pid,int flavor,uint64_t argument,void *buffer,int size) {
     (void)argument;check(inWorker&&pid==123&&flavor==PROC_PIDTBSDINFO&&size==(int)sizeof(struct proc_bsdinfo),@"observation revalidates the modeled process birth on its worker");
-    struct proc_bsdinfo process={.pbi_start_tvsec=100,.pbi_start_tvusec=20};memcpy(buffer,&process,sizeof(process));return size;
+    processReads++;if(processMode==3)return 0;
+    struct proc_bsdinfo process={.pbi_uid=processMode==1?getuid()+1:getuid(),.pbi_start_tvsec=processMode==2&&processReads>1?101:100,.pbi_start_tvusec=20};memcpy(buffer,&process,sizeof(process));return size;
+}
+// Exact production close path with AX dictionaries; no native AX object or
+// action is created. The unnumbered scroll area is Finder's observed sibling.
+static AXUIElementRef closeApplication(pid_t pid) { check((closeTesting||titleTesting)&&pid==123,@"close resolves only the expected process");return (AXUIElementRef)CFRetain((__bridge CFTypeRef)@{@"pid":@123}); }
+static AXError closeTimeout(AXUIElementRef element,float seconds) { (void)element;check((closeTesting||titleTesting)&&seconds>0&&seconds<=1,@"close AX reads/actions keep their bounded messaging timeout");return kAXErrorSuccess; }
+static AXError closePid(AXUIElementRef element,pid_t *pid) { NSDictionary *value=(__bridge NSDictionary *)element;*pid=[value[@"pid"]intValue];return [value[@"pid_error"]intValue]; }
+static AXError closeWindowID(AXUIElementRef element,uint32_t *window) { NSDictionary *value=(__bridge NSDictionary *)element;*window=[value[@"wid"]unsignedIntValue];return [value[@"window_error"]intValue]; }
+static void *closeSymbol(void *handle,const char *name) { (void)handle;return (closeTesting||titleTesting)&&!strcmp(name,"_AXUIElementGetWindow")?(void *)closeWindowID:NULL; }
+static AXError closeCopy(AXUIElementRef element,CFStringRef attribute,CFTypeRef *out) {
+    check(closeTesting||titleTesting,@"only modeled close/title lookup sends AX reads");NSDictionary *value=(__bridge NSDictionary *)element;id result=nil;
+    if(CFEqual(attribute,kAXWindowsAttribute))result=closeElements;
+    else if(CFEqual(attribute,kAXRoleAttribute)){if(value[@"role_error"])return [value[@"role_error"]intValue];result=value[@"role"];}
+    else if(CFEqual(attribute,kAXSubroleAttribute))result=value[@"subrole"];
+    else if(CFEqual(attribute,kAXTitleAttribute))result=value[@"title"];
+    else if(CFEqual(attribute,kAXCloseButtonAttribute)){check([value[@"wid"]isEqual:@42],@"only exact target supplies a close button");result=@{@"pid":@123,@"button_for":@42};}
+    if(!result)return kAXErrorNoValue;*out=CFRetain((__bridge CFTypeRef)result);return kAXErrorSuccess;
+}
+static AXError closePress(AXUIElementRef element,CFStringRef action) {
+    check(closeTesting&&CFEqual(action,kAXPressAction)&&[((__bridge NSDictionary *)element)[@"button_for"]isEqual:@42],@"only exact target close button receives one modeled press");closePresses++;return kAXErrorSuccess;
 }
 @interface DiscoveryApplication : NSObject
 @property(readonly) NSApplicationActivationPolicy activationPolicy;
@@ -74,6 +101,15 @@ static int fixtureProcessInfo(int pid,int flavor,uint64_t argument,void *buffer,
 - (void)stop {}
 @end
 
+#define AXUIElementCreateApplication closeApplication
+#define AXUIElementSetMessagingTimeout closeTimeout
+#define AXUIElementGetPid closePid
+#define AXUIElementGetTypeID CFDictionaryGetTypeID
+#define AXUIElementCopyAttributeValue closeCopy
+#define AXUIElementPerformAction closePress
+#define dlsym closeSymbol
+#define CGWindowListCopyWindowInfo fixtureWindowList
+#define proc_pidinfo fixtureProcessInfo
 #define dispatch_async fixtureAsync
 #define AXIsProcessTrusted fixtureTrusted
 #define CGPreflightScreenCaptureAccess fixtureCaptureAccess
@@ -83,13 +119,18 @@ static int fixtureProcessInfo(int pid,int flavor,uint64_t argument,void *buffer,
 #define DWWindowEvents DiscoveryEvents
 #define CACurrentMediaTime fixtureTime
 #import "window-manager.m"
+#undef AXUIElementCreateApplication
+#undef AXUIElementSetMessagingTimeout
+#undef AXUIElementGetPid
+#undef AXUIElementGetTypeID
+#undef AXUIElementCopyAttributeValue
+#undef AXUIElementPerformAction
+#undef dlsym
 #undef DWWindowEvents
 #undef NSProcessInfo
 #undef NSWorkspace
 #undef NSRunningApplication
 #define NSRunningApplication DiscoveryApplication
-#define CGWindowListCopyWindowInfo fixtureWindowList
-#define proc_pidinfo fixtureProcessInfo
 #import "window-observer.m"
 #undef proc_pidinfo
 #undef NSRunningApplication
@@ -99,8 +140,85 @@ static int fixtureProcessInfo(int pid,int flavor,uint64_t argument,void *buffer,
 #undef AXIsProcessTrusted
 #undef dispatch_async
 
+// Startup admission uses a private notification center and substituted public
+// queries; no host session/display or NSWorkspace singleton is inspected.
+static NSDictionary *sessionValues;
+static NSUInteger sessionQueries;
+static uint32_t sessionDisplayCount=1;
+static CGError sessionDisplayError;
+static BOOL sessionDisplayAwake,sessionDisplayActive=YES;
+static CFDictionaryRef sessionCopy(void) { sessionQueries++;return sessionValues?CFBridgingRetain(sessionValues):NULL; }
+static CGError sessionDisplays(uint32_t capacity,CGDirectDisplayID *ids,uint32_t *count) {
+    check(capacity==32,@"session display query has a fixed bounded capacity");*count=sessionDisplayCount;if(capacity)ids[0]=1;return sessionDisplayError;
+}
+static CGDirectDisplayID sessionMain(void) { return 1; }
+static boolean_t sessionOnline(CGDirectDisplayID display) { return display==1; }
+static boolean_t sessionActive(CGDirectDisplayID display) { return display==1&&sessionDisplayActive; }
+static boolean_t sessionAsleep(CGDirectDisplayID display) { return display!=1||!sessionDisplayAwake; }
+@interface SessionWorkspace : NSObject
+@property NSNotificationCenter *notificationCenter;
++ (instancetype)sharedWorkspace;
+@end
+@implementation SessionWorkspace
++ (instancetype)sharedWorkspace { static SessionWorkspace *workspace;if(!workspace){workspace=[self new];workspace.notificationCenter=[NSNotificationCenter new];}return workspace; }
+@end
+#define NSWorkspace SessionWorkspace
+#define CGSessionCopyCurrentDictionary sessionCopy
+#define CGGetOnlineDisplayList sessionDisplays
+#define CGMainDisplayID sessionMain
+#define CGDisplayIsOnline sessionOnline
+#define CGDisplayIsActive sessionActive
+#define CGDisplayIsAsleep sessionAsleep
+#define CACurrentMediaTime fixtureTime
+#import "session-watch.m"
+#undef NSWorkspace
+#undef CGSessionCopyCurrentDictionary
+#undef CGGetOnlineDisplayList
+#undef CGMainDisplayID
+#undef CGDisplayIsOnline
+#undef CGDisplayIsActive
+#undef CGDisplayIsAsleep
+#undef CACurrentMediaTime
+static void sessionAdmission(void) {
+    fixtureNow=1000;sessionValues=@{(__bridge NSString *)kCGSessionOnConsoleKey:@YES,(__bridge NSString *)kCGSessionLoginDoneKey:@YES};
+    __block NSUInteger returns=0,leaves=0;
+    DWSessionWatch *watch=[[DWSessionWatch alloc]initWithReturned:^{returns++;} left:^{leaves++;}];
+    check(!watch.ready&&!returns&&!leaves,@"already asleep startup is blocked synchronously without departure/save callbacks");
+    NSUInteger queries=sessionQueries;for(int i=0;i<10;i++)[watch poll];
+    check(sessionQueries==queries,@"inactive admission does not query at idle-poll frequency");
+    sessionDisplayAwake=YES;fixtureNow+=.5;[watch poll];
+    check(watch.ready&&returns==1&&!leaves,@"missed prelaunch sleep notification recovers once current display becomes awake");
+    queries=sessionQueries;fixtureNow+=5;[watch poll];check(sessionQueries==queries,@"active session has no polling query loop");
+    NSNotificationCenter *center=SessionWorkspace.sharedWorkspace.notificationCenter;
+    [center postNotificationName:NSWorkspaceWillSleepNotification object:nil];
+    [center postNotificationName:NSWorkspaceScreensDidSleepNotification object:nil];
+    [center postNotificationName:NSWorkspaceActiveSpaceDidChangeNotification object:nil];
+    check(!watch.ready&&leaves==1&&returns==1,@"Space changes cannot release either notification-held departure");
+    [center postNotificationName:NSWorkspaceDidWakeNotification object:nil];
+    check(!watch.ready&&returns==1,@"system wake alone leaves display-sleep hold intact");
+    sessionDisplayAwake=NO;[center postNotificationName:NSWorkspaceScreensDidWakeNotification object:nil];
+    check(!watch.ready&&returns==1,@"early final wake notification does not override an asleep current display");
+    queries=sessionQueries;sessionDisplayAwake=YES;fixtureNow+=.49;[watch poll];check(sessionQueries==queries,@"early-wake retry keeps its half-second budget");
+    fixtureNow+=.02;[watch poll];check(watch.ready&&returns==2,@"wake readiness is retried without requiring another notification");
+    [center postNotificationName:NSWorkspaceSessionDidResignActiveNotification object:nil];
+    sessionValues=@{(__bridge NSString *)kCGSessionOnConsoleKey:@YES,(__bridge NSString *)kCGSessionLoginDoneKey:@YES,@"CGSSessionScreenIsLocked":@YES};
+    [center postNotificationName:NSWorkspaceSessionDidBecomeActiveNotification object:nil];check(!watch.ready&&leaves==2,@"known locked state blocks a session-return hint");
+    sessionValues=@{(__bridge NSString *)kCGSessionOnConsoleKey:@1,(__bridge NSString *)kCGSessionLoginDoneKey:@YES};fixtureNow+=.5;[watch poll];
+    check(!watch.ready,@"malformed documented session boolean is not coerced into admission");
+    sessionValues=nil;fixtureNow+=.5;[watch poll];check(!watch.ready,@"unavailable current session remains blocked");
+    sessionValues=@{(__bridge NSString *)kCGSessionOnConsoleKey:@YES,(__bridge NSString *)kCGSessionLoginDoneKey:@YES};
+    sessionDisplayCount=32;fixtureNow+=.5;[watch poll];check(!watch.ready,@"saturated display inventory cannot authorize admission");
+    sessionDisplayCount=1;sessionDisplayActive=NO;fixtureNow+=.5;[watch poll];check(!watch.ready,@"awake but inactive main display remains blocked");
+    sessionDisplayActive=YES;fixtureNow+=.5;[watch poll];check(watch.ready&&returns==3,@"public readiness with unknown optional lock metadata recovers without asserting unlocked");
+    [watch stop];queries=sessionQueries;fixtureNow+=1;[watch poll];[center postNotificationName:NSWorkspaceActiveSpaceDidChangeNotification object:nil];
+    check(!watch.ready&&sessionQueries==queries&&returns==3&&leaves==2,@"stop removes callbacks and pending retry authority");
+}
+
 BOOL DWInScope(NSDictionary *scope,pid_t pid) { return !scope||[scope[@(pid)]isEqual:@[@100,@20]]; }
-bool dw_focus_owner(DWFocusIdentity identity,CGRect *bounds) { (void)identity;(void)bounds;check(NO,@"no native focus or close lookup is performed");return false; }
+bool dw_focus_owner(DWFocusIdentity identity,CGRect *bounds) {
+    (void)bounds;check(closeTesting&&identity.pid==123&&identity.window==42&&identity.seconds==100&&identity.microseconds==20,@"close revalidates exact process birth/window identity");
+    closeOwnerReads++;return closeOwnerReads!=closeOwnerFailsAt;
+}
 bool DWNativeBounds(uint32_t window,CGRect *bounds) { check(inWorker&&window==42,@"bound-source native bounds stay on the worker");*bounds=CGRectMake(100,100,320,232);return true; }
 NSDictionary *DWNativeWindowFamily(NSDictionary *identity,NSString *__autoreleasing *why) {
     (void)why;check(inWorker&&[identity[@"wid"]isEqual:@42],@"family audit belongs to the bound source's worker");
@@ -121,25 +239,31 @@ NSDictionary *DWNativeWindowDiscoveryBasis(NSDictionary *identity) {
     check(inWorker,@"native candidate basis is read only on the worker");candidateBasisReads++;return candidateBases(windowRows)[identity[@"wid"]];
 }
 static NSDictionary *row(uint32_t window,CGFloat width) {
-    return @{(id)kCGWindowNumber:@(window),(id)kCGWindowOwnerPID:@123,(id)kCGWindowLayer:@0,
+    return @{(id)kCGWindowNumber:@(window),(id)kCGWindowOwnerPID:@123,(id)kCGWindowLayer:@0,(id)kCGWindowName:@"Discovery window",
         (id)kCGWindowBounds:CFBridgingRelease(CGRectCreateDictionaryRepresentation(CGRectMake(100,100,width,232)))};
 }
 @interface DiscoveryHost : NSObject <DWWindowHost>
-@property NSUInteger requested,appeared,completed;
+@property NSUInteger requested,appeared,completed,failed,moved,changed;
+@property NSArray<NSDictionary *> *present;
+@property NSMutableArray<NSString *> *titles;
+@property NSSet<NSNumber *> *managed;
 @end
 @implementation DiscoveryHost
-- (BOOL)managesWindow:(CGWindowID)window pid:(pid_t)pid { (void)window;(void)pid;return NO; }
-- (void)windowAppeared:(DWWindowCandidate *)window { check(window.pid==123&&window.frame.size.width>=320,@"the candidate retains its actual metadata");self.appeared++; }
-- (void)discoveryCompleted:(NSArray *)present { check(!present.count,@"native discovery does not enumerate off-screen capture windows");self.completed++; }
-- (void)discoveryFailed:(NSString *)reason { (void)reason;check(NO,@"native metadata discovery has no capture failure"); }
-- (void)windowChanged:(CGWindowID)window pid:(pid_t)pid { (void)window;(void)pid; }
+- (BOOL)managesWindow:(CGWindowID)window pid:(pid_t)pid { (void)pid;return [self.managed containsObject:@(window)]; }
+- (void)windowAppeared:(DWWindowCandidate *)window { check(window.pid==123&&window.frame.size.width>=320,@"the candidate retains its actual metadata");self.appeared++;if(!self.titles)self.titles=[NSMutableArray array];[self.titles addObject:window.title?:@"<unknown>"]; }
+- (void)discoveryCompleted:(NSArray *)present { self.present=[present copy];self.completed++; }
+- (void)discoveryFailed:(NSString *)reason { check(reason.length>0,@"metadata failure retains its reason");self.failed++; }
+- (void)windowMoved:(CGWindowID)window pid:(pid_t)pid { check(window==42&&pid==123,@"move forwarding retains exact event target");self.moved++; }
+- (void)windowChanged:(CGWindowID)window pid:(pid_t)pid { (void)window;(void)pid;self.changed++; }
 - (void)windowDestroyed:(CGWindowID)window pid:(pid_t)pid { (void)window;(void)pid; }
 - (void)focusChanged {}
 - (void)windowDiscoveryRequested { self.requested++; }
 @end
 int main(void) {@autoreleasepool {
-    mainBlocks=[NSMutableArray array];workerBlocks=[NSMutableArray array];windowRows=@[row(42,320)];
+    mainBlocks=[NSMutableArray array];workerBlocks=[NSMutableArray array];windowRows=@[row(42,320)];allWindowRows=@[];
     DiscoveryHost *host=[DiscoveryHost new];DWWindowManager *manager=[DWWindowManager managerWithHost:host scope:nil mode:DWWindowDiscoveryModeNativePresentation];
+    [manager windowMoved:42 pid:123];[manager windowChanged:42 pid:123];
+    check(host.moved==1&&host.changed==1,@"manager forwards pure move separately without weakening generic invalidation");
     [manager pollWithWindowRecords:windowRows nativeCandidateBases:candidateBases(windowRows) sampledAt:fixtureTime()];NSTimer *first=manager.discoveryTimer;
     check(first&&fabs(manager.discoveryDeadline-100.05)<1e-9&&!host.appeared,@"first geometry observation schedules the existing exact 50 ms hold");
     fixtureNow=100.02;[manager pollWithWindowRecords:windowRows nativeCandidateBases:candidateBases(windowRows) sampledAt:fixtureTime()];
@@ -163,6 +287,27 @@ int main(void) {@autoreleasepool {
     check(host.appeared==3&&![manager.offered containsObject:@46],@"candidate disappearing during role/title read is never offered");
     fixtureNow=104;windowRows=@[row(42,320),row(43,340),row(45,340),row(44,320)];[manager pollWithWindowRecords:windowRows nativeCandidateBases:candidateBases(windowRows) sampledAt:fixtureTime()];NSTimer *cancelled=manager.discoveryTimer;NSUInteger requested=host.requested;[manager stop];[cancelled fire];
     check(!manager.discoveryTimer&&host.requested==requested,@"stop invalidates pending candidate timers and callbacks");
+    [manager windowMoved:42 pid:123];[manager windowChanged:42 pid:123];
+    check(host.moved==1&&host.changed==1,@"stopped manager cannot forward either event kind");
+
+    // Missing title metadata must not consume a saved slot as literal Untitled.
+    // A later exact CG title or successful AX title permits the normal adoption.
+    DiscoveryHost *titleHost=[DiscoveryHost new];DWWindowManager *titleManager=[DWWindowManager managerWithHost:titleHost scope:nil mode:DWWindowDiscoveryModeNativePresentation];
+    NSMutableDictionary *untitled=[row(74,320)mutableCopy];[untitled removeObjectForKey:(id)kCGWindowName];NSArray *titleRows=@[untitled];
+    fixtureNow=110;[titleManager pollWithWindowRecords:titleRows nativeCandidateBases:candidateBases(titleRows) sampledAt:fixtureTime()];
+    fixtureNow=110.051;[titleManager pollWithWindowRecords:titleRows nativeCandidateBases:candidateBases(titleRows) sampledAt:fixtureTime()];drain();
+    check(!titleHost.appeared&&!titleHost.completed&&![titleManager.offeredWindows containsObject:@74],@"unknown native title is retried before offering or completing saved-slot adoption");
+    fixtureNow=110.1;[titleManager pollWithWindowRecords:titleRows nativeCandidateBases:candidateBases(titleRows) sampledAt:fixtureTime()];
+    check(!workerBlocks.count,@"unknown title uses existing bounded retry instead of an AX polling loop");
+    NSMutableDictionary *named=[untitled mutableCopy];named[(id)kCGWindowName]=@"Saved document";titleRows=@[named];
+    fixtureNow=112.01;[titleManager pollWithWindowRecords:titleRows nativeCandidateBases:candidateBases(titleRows) sampledAt:fixtureTime()];
+    fixtureNow=112.071;[titleManager pollWithWindowRecords:titleRows nativeCandidateBases:candidateBases(titleRows) sampledAt:fixtureTime()];drain();
+    check(titleHost.appeared==1&&[titleHost.titles isEqual:@[@"Saved document"]]&&titleHost.completed==1,@"readable CG title preserves the real saved-slot name when AX is unavailable");[titleManager stop];
+    titleTesting=YES;closeElements=@[@{@"pid":@123,@"wid":@75,@"subrole":(__bridge NSString *)kAXStandardWindowSubrole,@"title":@"Current AX title"},@{@"pid":@123,@"wid":@76,@"subrole":(__bridge NSString *)kAXStandardWindowSubrole,@"title":@""}];
+    titleHost=[DiscoveryHost new];titleManager=[DWWindowManager managerWithHost:titleHost scope:nil mode:DWWindowDiscoveryModeNativePresentation];
+    titleRows=@[row(75,320),row(76,320)];fixtureNow=115;[titleManager pollWithWindowRecords:titleRows nativeCandidateBases:candidateBases(titleRows) sampledAt:fixtureTime()];
+    fixtureNow=115.051;[titleManager pollWithWindowRecords:titleRows nativeCandidateBases:candidateBases(titleRows) sampledAt:fixtureTime()];drain();
+    check(titleHost.appeared==2&&[titleHost.titles isEqual:@[@"",@"Current AX title"]],@"successful AX title overrides CG and known empty title remains distinct from unavailable");[titleManager stop];titleTesting=NO;closeElements=nil;
 
     DiscoveryHost *nativeHost=[DiscoveryHost new];DWWindowManager *nativeManager=[DWWindowManager managerWithHost:nativeHost scope:nil mode:DWWindowDiscoveryModeNativePresentation];
     fixtureNow=150;NSArray *animated=@[row(72,604)];NSDictionary *stableOwn=candidateBases(@[row(72,610)]);
@@ -214,5 +359,55 @@ int main(void) {@autoreleasepool {
     check(!overlay.capturing&&!overlayHost.appeared&&fabs(overlay.discoveryDeadline-220.09)<1e-9,@"scoped overlay without recording still waits on CG geometry and ignores native candidate bases");
     fixtureNow=220.091;[overlay.discoveryTimer fire];[overlay pollWithWindowRecords:overlayRows nativeCandidateBases:nil sampledAt:fixtureTime()];drain();
     check(overlayHost.appeared==1&&[overlay.bounds[@82][@"Width"]isEqual:@620],@"overlay adoption retains its actual CG rectangle");[overlay stop];
-    printf("PASS: %lu discovery scheduling checks; no native mutation or live latency claim\n",(unsigned long)checks);
+    // Startup names are preservation-only. These windows never enter the
+    // on-screen stability/adoption path, even when titled and otherwise normal.
+    fixtureNow=300;NSMutableDictionary *offscreen=[row(90,400)mutableCopy];offscreen[(id)kCGWindowName]=@"Saved document";offscreen[(id)kCGWindowIsOnscreen]=@NO;
+    NSMutableDictionary *duplicate=[offscreen mutableCopy];duplicate[(id)kCGWindowNumber]=@91;
+    NSMutableDictionary *unnamed=[offscreen mutableCopy];unnamed[(id)kCGWindowNumber]=@92;[unnamed removeObjectForKey:(id)kCGWindowName];
+    allWindowRows=@[offscreen,duplicate,unnamed];allListReads=processReads=0;
+    DiscoveryHost *savedHost=[DiscoveryHost new];DWWindowManager *saved=[DWWindowManager managerWithHost:savedHost scope:nil mode:DWWindowDiscoveryModeNativePresentation];
+    [saved pollWithWindowRecords:@[] nativeCandidateBases:@{} sampledAt:fixtureTime()];drain();
+    NSArray *names=@[@{@"bundle_id":@"fixture.discovery",@"title":@"Saved document"},@{@"bundle_id":@"fixture.discovery",@"title":@"Saved document"}];
+    check(savedHost.completed==1&&[savedHost.present isEqual:names]&&!savedHost.appeared&&saved.offeredWindows.count==0,@"same-user offscreen windows preserve duplicate exact-title slots without adoption; unreadable titles are not invented");
+    check(allListReads==2&&processReads==2,@"startup metadata rechecks list ownership and exact process birth");
+    [saved pollWithWindowRecords:@[] nativeCandidateBases:@{} sampledAt:fixtureTime()];drain();check(allListReads==2,@"successful startup preservation is not repeated by ordinary polling");[saved stop];
+    for(NSUInteger fault=1;fault<=5;fault++){
+        processMode=fault<=3?fault:0;processReads=allListReads=0;allWindowRows=@[offscreen];secondAllWindowRows=fault==4?@[]:nil;
+        NSDictionary *scope=fault==5?@{@123:@[@99,@20]}:nil;
+        DiscoveryHost *refusedHost=[DiscoveryHost new];DWWindowManager *refused=[DWWindowManager managerWithHost:refusedHost scope:scope mode:DWWindowDiscoveryModeNativePresentation];
+        [refused pollWithWindowRecords:@[] nativeCandidateBases:@{} sampledAt:fixtureTime()];drain();
+        check(refusedHost.completed==1&&!refusedHost.present.count&&!refusedHost.appeared,@"other UID, changed/unknown process, disappeared WID or stale scoped birth never names or adopts a window");[refused stop];
+    }
+    processMode=0;processReads=allListReads=0;secondAllWindowRows=nil;allWindowRows=@[offscreen];
+    DiscoveryHost *boundHost=[DiscoveryHost new];boundHost.managed=[NSSet setWithObject:@90];DWWindowManager *bound=[DWWindowManager managerWithHost:boundHost scope:nil mode:DWWindowDiscoveryModeNativePresentation];
+    [bound pollWithWindowRecords:@[] nativeCandidateBases:@{} sampledAt:fixtureTime()];drain();check(boundHost.completed==1&&!boundHost.present.count,@"a slot already bound during startup is not held a second time");[bound stop];
+    DiscoveryHost *retryHost=[DiscoveryHost new];DWWindowManager *retryManager=[DWWindowManager managerWithHost:retryHost scope:nil mode:DWWindowDiscoveryModeNativePresentation];allListAvailable=NO;allListReads=0;
+    [retryManager pollWithWindowRecords:@[] nativeCandidateBases:@{} sampledAt:fixtureTime()];drain();check(retryHost.failed==1&&!retryHost.completed,@"failed all-window read does not turn unknown presence into empty saved-slot completion");
+    fixtureNow=301;[retryManager pollWithWindowRecords:@[] nativeCandidateBases:@{} sampledAt:fixtureTime()];drain();check(allListReads==1,@"metadata retry is bounded and does not query capture permission");
+    fixtureNow=302.01;allListAvailable=YES;allListReads=0;[retryManager pollWithWindowRecords:@[] nativeCandidateBases:@{} sampledAt:fixtureTime()];drain();
+    check(retryHost.completed==1&&retryHost.present.count==1&&!retryHost.appeared,@"metadata-only retry recovers exact saved-slot presence");[retryManager stop];
+    DiscoveryHost *stoppedHost=[DiscoveryHost new];DWWindowManager *stoppedManager=[DWWindowManager managerWithHost:stoppedHost scope:nil mode:DWWindowDiscoveryModeNativePresentation];
+    [stoppedManager pollWithWindowRecords:@[] nativeCandidateBases:@{} sampledAt:fixtureTime()];step(YES);step(NO);check(stoppedManager.reading&&workerBlocks.count==1,@"preservation worker can outlive its initial on-screen pass");
+    [stoppedManager stop];drain();check(!stoppedHost.completed&&!stoppedHost.failed&&!stoppedHost.appeared,@"stop discards pending saved-slot completion without native lifecycle changes");
+    closeTesting=YES;NSDictionary *closeIdentity=@{@"pid":@123,@"wid":@42,@"birth_sec":@100,@"birth_usec":@20};
+    NSDictionary *target=@{@"pid":@123,@"wid":@42,@"role":(id)kAXWindowRole};
+    NSDictionary *desktop=@{@"pid":@123,@"role":(id)kAXScrollAreaRole,@"window_error":@(kAXErrorIllegalArgument)};
+    for(NSArray *elements in @[@[target,desktop],@[desktop,target]]){
+        closeElements=elements;closePresses=closeOwnerReads=closeOwnerFailsAt=0;
+        check(DWCloseWindow(closeIdentity)==nil&&closePresses==1&&closeOwnerReads==3,@"Finder target closes once with verified windowless desktop before or after it");
+    }
+    NSArray *refused=@[
+        @[target,desktop,target],
+        @[target,@{@"pid":@124,@"role":(id)kAXScrollAreaRole,@"window_error":@(kAXErrorIllegalArgument)}],
+        @[target,@{@"pid":@123,@"role":(id)kAXWindowRole,@"window_error":@(kAXErrorIllegalArgument)}],
+        @[target,@{@"pid":@123,@"role":(id)kAXScrollAreaRole,@"window_error":@(kAXErrorCannotComplete)}],
+        @[target,@{@"pid":@123,@"role":(id)kAXScrollAreaRole,@"role_error":@(kAXErrorCannotComplete),@"window_error":@(kAXErrorIllegalArgument)}],
+        @[target,@{@"pid":@123,@"pid_error":@(kAXErrorCannotComplete),@"role":(id)kAXScrollAreaRole,@"window_error":@(kAXErrorIllegalArgument)}]
+    ];
+    for(NSArray *elements in refused){closeElements=elements;closePresses=closeOwnerReads=closeOwnerFailsAt=0;
+        check(DWCloseWindow(closeIdentity)!=nil&&!closePresses,@"duplicate target or unknown/error/foreign desktop candidate refuses without press");}
+    closeElements=@[target,desktop];closePresses=closeOwnerReads=0;closeOwnerFailsAt=3;
+    check(DWCloseWindow(closeIdentity)!=nil&&!closePresses&&closeOwnerReads==3,@"identity change immediately before close retains no-mutation refusal");closeTesting=NO;
+    sessionAdmission();
+    printf("PASS: %lu discovery, session admission and close checks; no native mutation or live latency claim\n",(unsigned long)checks);
 }return 0;}

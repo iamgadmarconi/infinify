@@ -277,7 +277,11 @@ only while there is one.
 Upstream relaunches a focused stand-in on Enter and on a click on its name.
 Neither is a config binding, so neither is in the `bindings` reply. The entry
 point for both is `{"Relaunch":null}` through the `ipc` command; delivering the
-key or the click is the shell's, and the app's shell delivers neither yet.
+key or the click is the shell's. The app delivers plain Return/keypad Enter
+after configured bindings while its stand-in canvas owns keyboard focus, and a
+click on the fitted name label. The body only focuses, the title bar drags, and
+the close button dismisses through `Close`. Native application focus revokes
+Enter admission; a stale logical stand-in cannot take native typing.
 
 ## Slots and re-adoption: the macOS rule
 
@@ -729,6 +733,27 @@ the user's account of it. In this contract's terms the shell
 - sends no new-window `attach` and no `adoption_complete` without Screen
   Recording access or with `--manual`: `settled` stays false for the whole run,
   no slot is dropped and `session.restore_windows` is never read.
+
+### Stand-in relaunch validation, 2026-10-22
+
+The production v11 native app in the macOS VM (SHA-256
+`5bc5a15d747220a06a2f84f1815c99d3d8e9043b07fab168f509a34e188d6857`)
+reopened the deliberately launched Terminal stand-in through actual CUA Return.
+It kept logical id `61`, world center `[1468, -1444]` and size `860x499`.
+Actual typing of `echo infinify-v11-workflow` followed by Return produced visible
+shell output. Actual F3 overview and return restored the previous camera/zoom.
+The original six application mappings stayed unchanged; the temporary Terminal
+was closed through product IPC and the original six-window view restored.
+
+Evidence is retained under `target/native-vm/ux-flow-20261022/`:
+`keyboard/standin-before-enter.json`, `keyboard/standin-after-enter-v11.json`,
+`keyboard/v11-terminal.png`, `keyboard/v11-f3-overview.json`,
+`keyboard/v11-f3-return.json` and `infinify-v11-relaunch.mov`.
+The same Return action left the stand-in suspended on v10
+(`keyboard/standin-after-enter-v10.json`). Label-click, close-button and title-drag
+physical inputs remain unverified because CUA pointer delivery was unavailable.
+This validates the scoped Terminal relaunch/edit/return workflow, not all
+application matching, lifecycle failures or general parity.
 
 ### Live runs, 2026-10-09
 

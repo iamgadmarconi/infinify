@@ -2,7 +2,14 @@
 // Adapter policy only: call the real tap handlers with in-memory packets. No
 // tap, NSApplication, window, file promise, event posting or native drag session
 // is created. Passing does not prove third-party drag-and-drop delivery.
+#import <ApplicationServices/ApplicationServices.h>
+static uint32_t physicalButtons;
+static bool physicalButtonState(CGEventSourceStateID state,CGMouseButton button) {
+    (void)state;return button<32&&(physicalButtons&(1u<<button))!=0;
+}
+#define CGEventSourceButtonState physicalButtonState
 #import "native-input.m"
+#undef CGEventSourceButtonState
 #import <objc/runtime.h>
 
 @interface PolicyTouchFrame : DWTrackpadTouchFrame
@@ -57,23 +64,31 @@ int main(void) {@autoreleasepool {
         earlyConsume:nil
         ignoreEvent:^BOOL(CGEventRef event){return CGEventGetIntegerValueField(event,kCGEventSourceUserData)==771;}
         cancelled:^{cancelled++;}];
+    __block NSIndexSet *nativeOwned=nil;__block NSUInteger nativeChanges=0,nativeResets=0;
+    input.nativeMouseOwnershipChanged=^(CGEventRef event,NSIndexSet *buttons){nativeOwned=buttons;nativeChanges++;if(!event)nativeResets++;};
     const int64_t foreign=(int64_t)getpid()+100000;
     CGEventRef down=packet(kCGEventLeftMouseDown,0,foreign),drag=packet(kCGEventLeftMouseDragged,0,getpid()),up=packet(kCGEventLeftMouseUp,0,getpid()),move=packet(kCGEventMouseMoved,0,getpid());
     CGEventRef taggedUp=packet(kCGEventLeftMouseUp,0,getpid()),taggedDown=packet(kCGEventLeftMouseDown,0,foreign);
     CGEventSetIntegerValueField(taggedUp,kCGEventSourceUserData,771);CGEventSetIntegerValueField(taggedDown,kCGEventSourceUserData,771);
     check(unchanged(down,^{return [input handle:kCGEventLeftMouseDown event:down];})&&consumed==1,@"native down reaches consumer once and remains original");
+    check(nativeChanges==1&&[nativeOwned isEqualToIndexSet:[NSIndexSet indexSetWithIndex:0]],@"native owner learns the exact unclaimed physical down before it returns");
     take=YES;
     check(unchanged(drag,^{return [input handle:kCGEventLeftMouseDragged event:drag];})&&consumed==1,@"foreign drag crossing own canvas bypasses consumer with exact payload");
+    check(nativeChanges==2&&nativeOwned.count==1,@"native drag is observed without intercepting or retargeting its original packet");
     check(unchanged(move,^{return [input handle:kCGEventMouseMoved event:move];})&&consumed==1,@"native tracking motion retains location, deltas, flags and pressure");
     check(unchanged(taggedUp,^{return [input handle:kCGEventLeftMouseUp event:taggedUp];})&&consumed==1,@"tagged synthetic release cannot end native physical pair");
+    check(nativeChanges==2&&nativeOwned.count==1,@"synthetic and crossing packets cannot retire or retarget native ownership");
     check([input handle:kCGEventLeftMouseDragged event:drag]==drag&&consumed==1,@"native pair survives tagged release");
     check(unchanged(up,^{return [input handle:kCGEventLeftMouseUp event:up];})&&consumed==1,@"physical native release remains original");
+    check(nativeChanges==4&&!nativeOwned.count,@"native release notifies after retiring its owned button");
     check([input handle:kCGEventMouseMoved event:move]==NULL&&consumed==2,@"physical release ends native reservation");
 
     take=NO;[input handle:kCGEventLeftMouseDown event:down];NSUInteger before=consumed;take=YES;
     CGEventRef second=packet(kCGEventRightMouseDown,1,getpid()),secondDrag=packet(kCGEventRightMouseDragged,1,getpid()),secondUp=packet(kCGEventRightMouseUp,1,getpid());
     check([input handle:kCGEventRightMouseDown event:second]==second&&consumed==before,@"additional native button cannot begin canvas action during drag");
+    check(nativeOwned.count==2,@"additional button retains the original native owner");
     [input handle:kCGEventLeftMouseUp event:up];
+    check([nativeOwned isEqualToIndexSet:[NSIndexSet indexSetWithIndex:1]],@"one release cannot resume a still-held second native button");
     check([input handle:kCGEventRightMouseDragged event:secondDrag]==secondDrag&&consumed==before,@"each native button retains its own physical pair");
     [input handle:kCGEventRightMouseUp event:secondUp];
     check([input handle:kCGEventMouseMoved event:move]==NULL&&consumed==before+1,@"last native release retires reservation");
@@ -90,10 +105,24 @@ int main(void) {@autoreleasepool {
         &&unchanged(up,^{return [input handle:kCGEventLeftMouseUp event:up];}),@"a subsequent admitted native pair retains all original physical payloads");
     take=NO;[input handle:kCGEventLeftMouseDown event:down];before=consumed;
     [input handle:kCGEventTapDisabledByTimeout event:NULL];take=YES;
+    check(nativeResets>=1&&!nativeOwned.count,@"tap loss reports cancellation distinctly from a physical release");
     check(cancelled==1&&[input handle:kCGEventMouseMoved event:move]==NULL&&consumed==before+1,@"tap disable discards stale native reservation");
     [input handle:kCGEventLeftMouseDown event:own];take=NO;
     [input handle:kCGEventTapDisabledByUserInput event:NULL];
     check(cancelled==2&&[input handle:kCGEventLeftMouseUp event:up]==NULL,@"tap cancellation retains suppression for an already captured down");
+
+    take=NO;[input handle:kCGEventLeftMouseDown event:down];before=consumed;take=YES;physicalButtons=1;
+    [input handle:kCGEventTapDisabledByTimeout event:NULL];
+    check([nativeOwned isEqualToIndexSet:[NSIndexSet indexSetWithIndex:0]],@"tap timeout retains a physically held native button");
+    check(unchanged(second,^{return [input handle:kCGEventRightMouseDown event:second];})&&consumed==before&&nativeOwned.count==2,
+        @"secondary button after timeout cannot start a competing canvas action");
+    physicalButtons=2;[input handle:kCGEventTapDisabledByUserInput event:NULL];
+    check([nativeOwned isEqualToIndexSet:[NSIndexSet indexSetWithIndex:1]],@"tap cancellation prunes only native buttons confirmed released");
+    check(unchanged(secondDrag,^{return [input handle:kCGEventRightMouseDragged event:secondDrag];})&&consumed==before,
+        @"remaining native drag after cancellation keeps its original packets");
+    physicalButtons=0;
+    check(unchanged(secondUp,^{return [input handle:kCGEventRightMouseUp event:secondUp];})&&!nativeOwned.count,
+        @"final physical native release ends timeout reservation");
 
     before=consumed;
     check([input handle:kCGEventLeftMouseDown event:taggedDown]==taggedDown&&consumed==before,@"tagged down bypasses physical bookkeeping");
@@ -116,6 +145,34 @@ int main(void) {@autoreleasepool {
     NSUInteger cancellationCount=earlyCancels;
     check([early handleEarly:kCGEventLeftMouseDown event:down]==NULL&&earlyCancels==cancellationCount+1,@"new down cancels a lost early pair before replacing it");
     [early handleEarly:kCGEventLeftMouseUp event:up];
+    check([early handleEarly:kCGEventLeftMouseDown event:down]==NULL,@"managed chrome owns a fresh pair even when its action may be refused");
+    physicalButtons=1;
+    NSUInteger companionTails=earlyTails,companionDowns=earlyDowns;
+    check([early handleEarly:kCGEventRightMouseDown event:second]==NULL&&earlyTails==companionTails,
+        @"an additional button is suppressed before native tracking during owned chrome");
+    physicalButtons=2;
+    check([early handleEarly:kCGEventRightMouseDragged event:secondDrag]==NULL&&earlyTails==companionTails,
+        @"additional chrome button tails cannot start a second consumer gesture");
+    check(unchanged(taggedUp,^{return [early handleEarly:kCGEventLeftMouseUp event:taggedUp];}),@"tagged packet cannot retire exclusive chrome ownership");
+    [early handleEarly:kCGEventLeftMouseUp event:up];companionTails=earlyTails;
+    check([early handleEarly:kCGEventLeftMouseDown event:down]==NULL&&earlyDowns==companionDowns,
+        @"a held companion keeps exclusivity after the primary release");
+    check([early handleEarly:kCGEventLeftMouseUp event:up]==NULL&&earlyTails==companionTails,
+        @"replacement primary pair stays inert while a companion is held");
+    [early handleEarly:kCGEventTapDisabledByTimeout event:NULL];
+    check([early handle:kCGEventRightMouseDragged event:secondDrag]==NULL&&earlyTails==companionTails,
+        @"annotated fallback preserves companion suppression after early tap cancellation");
+    check([early handle:kCGEventRightMouseUp event:secondUp]==NULL&&earlyTails==companionTails,
+        @"companion release retires only its own swallowed pair");
+    physicalButtons=0;
+    check([early handleEarly:kCGEventLeftMouseDown event:down]==NULL&&earlyDowns==companionDowns+1,
+        @"last companion release permits a new chrome gesture");
+    [early handleEarly:kCGEventLeftMouseUp event:up];
+    check([early handleEarly:kCGEventLeftMouseDown event:down]==NULL,@"primary admission before lost-up recovery");
+    [early handleEarly:kCGEventTapDisabledByTimeout event:NULL];physicalButtons=0;
+    check(unchanged(second,^{return [early handleEarly:kCGEventRightMouseDown event:second];}),
+        @"released primary tombstone cannot swallow a later independent secondary down");
+    check([early handleEarly:kCGEventLeftMouseUp event:up]==NULL,@"late primary up remains swallowed after stale primary retirement");
     CGEventRef earlyNativeSecond=packet(kCGEventRightMouseDown,1,foreign);
     [early handle:kCGEventRightMouseDown event:earlyNativeSecond];NSUInteger earlyCount=earlyDowns;
     check(unchanged(down,^{return [early handleEarly:kCGEventLeftMouseDown event:down];})&&earlyDowns==earlyCount,@"a native other-button pair forbids early title admission");

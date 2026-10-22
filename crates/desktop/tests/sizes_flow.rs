@@ -233,6 +233,8 @@ const GRABBED: &str = "a window is under an interactive move or resize";
 #[test]
 fn without_the_capability_every_sizing_request_answers_as_it_did_before() {
     let mut h = one(CONFIG);
+    // Keep the historical Command chords in the exact reply literals below.
+    h.ok(json!({"op":"set_platform","super":"cmd"}));
     let refused = |name: &str| {
         format!(
             r#"{{"error":"action not implemented on macOS yet: {name}","ok":false,"version":1}}"#

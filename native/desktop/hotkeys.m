@@ -70,6 +70,8 @@ static CGEventRef reservedKeyEvent(CGEventTapProxy proxy,CGEventType type,CGEven
     NSUInteger _generation;
     BOOL _passAll; // pass_keys = true
     NSSet<NSString *> *_passed; // pass_keys' combos
+    BOOL _passedFullscreen; // an explicit F combo; modifier spellings are controller-owned
+    NSNumber *_nativeFullscreenKey; // the current layout's unshifted F, or nil
     NSMutableIndexSet *_withheld; // keys of _keys left unregistered because they are passed
     UInt32 _down; // hot key id Carbon reported pressed and not yet released, 0 for none
 }
@@ -85,6 +87,7 @@ static CGEventRef reservedKeyEvent(CGEventTapProxy proxy,CGEventType type,CGEven
     // Upstream looks the active layout's keysym up first in both modes (keyboard.rs: modified_sym, then Config::lookup);
     // layout_independent, its default and what absent means here, only adds a fallback: here the ANSI position.
     NSNumber *independent=typed(_bindings[@"layout_independent"],NSNumber.class);NSData *layout=keyboardLayout();BOOL fallback=!independent||independent.boolValue;
+    _nativeFullscreenKey=keyTyping(layout,@"f",@3,NO);
     NSMutableArray *keys=[NSMutableArray array],*notes=[NSMutableArray array],*deferred=[NSMutableArray array];NSMutableSet *taken=[NSMutableSet set];
     // Upstream tries the fallback only once the layout's own keysym has found no binding: keys the layout resolves take their chords first.
     for(int pass=0;pass<2;pass++)for(id entry in pass?deferred:typed(_bindings[@"keys"],NSArray.class)){
@@ -121,7 +124,7 @@ static CGEventRef reservedKeyEvent(CGEventTapProxy proxy,CGEventType type,CGEven
     // Carbon cannot reliably take system-owned Command-Tab or Mission Control.
     // A session filter owns their physical down/up pair while the desktop is open.
     // No global shortcut preferences are modified, and stopping removes the tap.
-    if(_tapKeys.count&&AXIsProcessTrusted()){
+    if((_tapKeys.count||self.standinEnter||self.nativeFullscreen)&&AXIsProcessTrusted()){
         _keyTap=CGEventTapCreate(kCGSessionEventTap,kCGHeadInsertEventTap,kCGEventTapOptionDefault,
             CGEventMaskBit(kCGEventKeyDown)|CGEventMaskBit(kCGEventKeyUp)|CGEventMaskBit(kCGEventFlagsChanged),reservedKeyEvent,(__bridge void *)self);
         if(_keyTap){_keySource=CFMachPortCreateRunLoopSource(NULL,_keyTap,0);
@@ -178,6 +181,24 @@ static CGEventRef reservedKeyEvent(CGEventTapProxy proxy,CGEventType type,CGEven
         // The action may resize/focus an app; keep that work outside the tap callback.
         dispatch_async(dispatch_get_main_queue(),^{DWHotKeys *keys=weak;if(keys&&keys->_generation==generation)[keys pressed:identifier.unsignedIntValue];});return NULL;
     }
+    // keyboard.rs at 352333a8: bindings precede the focused stand-in's Enter.
+    // A binding registered with Carbon still owns its chord; do not swallow it.
+    if((code==36||code==76)&&modifiers==0&&![self holds:chord]&&self.standinEnter){
+        dispatch_block_t launch=self.standinEnter();
+        if(launch){_suppressedKeys[physical]=@0;
+            dispatch_async(dispatch_get_main_queue(),^{DWHotKeys *keys=weak;if(keys&&keys->_generation==generation)launch();});return NULL;}
+    }
+    // A native fullscreen shortcut is window control only when the caller can
+    // prove its exact managed focus. Authored chords and pass-all retain their
+    // existing policy; a missing keyboard-layout mapping stays native too.
+    BOOL function=(f&kCGEventFlagMaskSecondaryFn)!=0;
+    BOOL fullscreenChord=function?modifiers==0:modifiers==(controlKey|cmdKey);
+    if(_nativeFullscreenKey&&code==_nativeFullscreenKey.unsignedIntValue&&fullscreenChord
+        &&!_passAll&&!_passedFullscreen&&![self holds:chord]&&self.nativeFullscreen){
+        dispatch_block_t fullscreen=self.nativeFullscreen();
+        if(fullscreen){_suppressedKeys[physical]=@0;
+            dispatch_async(dispatch_get_main_queue(),^{DWHotKeys *keys=weak;if(keys&&keys->_generation==generation)fullscreen();});return NULL;}
+    }
     return event;
 }
 // Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d, src/input/keyboard.rs (the pass_keys
@@ -208,7 +229,12 @@ static CGEventRef reservedKeyEvent(CGEventTapProxy proxy,CGEventType type,CGEven
     // Carbon reports the held key's release; a chord whose modifiers are gone is over even if that report never came.
     if(_down&&_down<=_keys.count){UInt32 modifiers=[_keys[_down-1][@"chord"]unsignedIntValue]&chordModifiers;if((heldModifiers()&modifiers)!=modifiers)[self lift];}
     if(all==_passAll&&[combos isEqual:_passed?:[NSSet set]])return @[];
-    _passAll=all;_passed=combos;NSMutableArray<NSString *> *refused=[NSMutableArray array];
+    _passAll=all;_passed=combos;_passedFullscreen=NO;
+    // The controller exports upstream combo text, not physical chords for
+    // unbound pass entries. Conservatively leave both native fallbacks alone
+    // for any explicit F passthrough rather than duplicate its modifier mapping.
+    for(NSString *combo in combos)if([[combo componentsSeparatedByString:@"+"].lastObject.lowercaseString isEqual:@"f"]){_passedFullscreen=YES;break;}
+    NSMutableArray<NSString *> *refused=[NSMutableArray array];
     // Not started: -start registers by what is passed then.
     if(!_handler)return refused;
     for(NSUInteger i=0;i<_keys.count;i++){
@@ -250,6 +276,6 @@ static CGEventRef reservedKeyEvent(CGEventTapProxy proxy,CGEventType type,CGEven
     for(NSValue *reference in _registered)if(reference.pointerValue)UnregisterEventHotKey(reference.pointerValue);
     _registered=nil;_withheld=nil;if(_handler){RemoveEventHandler(_handler);_handler=NULL;}
 }
-- (void)invalidate { [self stop];self.changed=nil;[NSDistributedNotificationCenter.defaultCenter removeObserver:self]; }
+- (void)invalidate { [self stop];self.changed=nil;self.standinEnter=nil;self.nativeFullscreen=nil;[NSDistributedNotificationCenter.defaultCenter removeObserver:self]; }
 - (void)dealloc { [self stop];[NSDistributedNotificationCenter.defaultCenter removeObserver:self]; }
 @end

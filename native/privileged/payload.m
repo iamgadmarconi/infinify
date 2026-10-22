@@ -29,6 +29,15 @@ static CGError (*getScreenRect)(int, uint32_t, CGRect *);
 static CGError (*getAlpha)(int, uint32_t, float *);
 static CGError (*setAlpha)(int, uint32_t, float);
 static CGError (*connectionPID)(int, pid_t *);
+// Optional Space membership operations. Same pinned yabai commit, extern.h
+// 22,40,42,54,56,63 and osax/payload.m:905-929. The move returns void;
+// only fresh membership readback can establish that a request was applied.
+static CFArrayRef (*copyWindowSpaces)(int,int,CFArrayRef);
+static CFStringRef (*copySpaceDisplay)(int,uint64_t);
+static uint64_t (*displayCurrentSpace)(int,CFStringRef);
+static int (*getSpaceType)(int,uint64_t);
+static void (*moveWindowsToSpace)(int,CFArrayRef,uint64_t);
+static CFUUIDRef (*createDisplayUUID)(CGDirectDisplayID);
 static NSDictionary *fixtureIdentity;
 static NSString *secret;
 static NSArray *allowlist;
@@ -95,6 +104,9 @@ static int startServer(const char *directory, const char *nonce, const uint32_t 
     getTransform=dlsym(sky,"SLSGetWindowTransform");setTransform=dlsym(sky,"SLSSetWindowTransform");getScreenRect=dlsym(sky,"SLSGetScreenRectForWindow");getBounds=dlsym(sky,"SLSGetWindowBounds");
     if(!mainConnection||!getOwner||!getTransform||!setTransform||!getScreenRect||!getBounds)return -__LINE__;
     getAlpha=dlsym(sky,"SLSGetWindowAlpha");setAlpha=dlsym(sky,"SLSSetWindowAlpha");connectionPID=dlsym(sky,"SLSConnectionGetPID");
+    copyWindowSpaces=dlsym(sky,"SLSCopySpacesForWindows");copySpaceDisplay=dlsym(sky,"SLSCopyManagedDisplayForSpace");
+    displayCurrentSpace=dlsym(sky,"SLSManagedDisplayGetCurrentSpace");getSpaceType=dlsym(sky,"SLSSpaceGetType");
+    moveWindowsToSpace=dlsym(sky,"SLSMoveWindowsToManagedSpace");createDisplayUUID=dlsym(RTLD_DEFAULT,"CGDisplayCreateUUIDFromDisplayID");
     if(fixture){fixtureIdentity=identity(wids[0]);
         if(!fixtureIdentity || [fixtureIdentity[@"pid"] intValue]!=getpid())return -__LINE__;
         fixtureCount=0;

@@ -168,6 +168,7 @@ enum Plan {
     Unfullscreen {
         place: Option<Point>,
         extent: Size,
+        native: Option<Rect>,
     },
 }
 /// What fullscreen.rs asks the one size transaction for.
@@ -177,7 +178,11 @@ pub(crate) enum Screen {
     Fill,
     /// The size it had before fullscreen, at the top-left the exit restored,
     /// or wherever the window has been placed since (`None`).
-    Restore { at: Option<Point>, extent: Size },
+    Restore {
+        at: Option<Point>,
+        extent: Size,
+        native: Option<Rect>,
+    },
 }
 impl Plan {
     // Preserve the exact native extent saved by fullscreen; whole logical
@@ -186,6 +191,12 @@ impl Plan {
         match self {
             Self::Unfullscreen { extent, .. } => *extent,
             _ => size_of(fallback),
+        }
+    }
+    fn native_origin(&self) -> Option<Point> {
+        match self {
+            Self::Unfullscreen { native, .. } => native.map(|rect| rect.origin),
+            _ => None,
         }
     }
     /// Where the window's top-left goes once it has `actual` size, or `None`
@@ -565,8 +576,12 @@ impl Controller {
                 self.fullscreen.answered(window);
                 self.sizes.asked.remove(&window);
             }
-            Plan::Unfullscreen { .. } => {
-                self.fullscreen.restored(window);
+            Plan::Unfullscreen { native, .. } => {
+                // A setter can be followed by an application-driven relocation.
+                // Keep the native frame owed until the final read confirms it.
+                if native.is_none() || !self.resize_slot().is_some_and(|slot| slot.live) {
+                    self.fullscreen.restored(window);
+                }
                 self.sizes.asked.remove(&window);
             }
         }
@@ -606,7 +621,9 @@ impl Controller {
             self.fullscreen.restored(window);
         }
         let requested = plan.requested_size(target);
-        if rect.size == requested {
+        // A native frame restore needs a fresh read even when cached geometry
+        // matches: the previous attempt may have ended with a failed final read.
+        if rect.size == requested && plan.native_origin().is_none() {
             self.place(window, &plan);
             self.settle(window, &plan, asked);
             outcome.dirty = true;
@@ -621,6 +638,8 @@ impl Controller {
         // and a widget or a rule-pinned window the size its rule names.
         let by_hand = !restoring && !matches!(plan, Plan::Absolute { by_hand: false, .. });
         let began = self.begin_sized_resize(window, output, edges, requested, by_hand)?;
+        self.set_resize_native_origin(plan.native_origin());
+        self.set_resize_native_fill(matches!(plan, Plan::Fullscreen));
         let transaction = self
             .resize_slot()
             .ok_or(Error::Invalid("resize transaction missing"))?
@@ -690,6 +709,17 @@ impl Controller {
         if self.resize_slot().is_some_and(|slot| slot.live) {
             return Ok(reply);
         }
+        // A cancelled fullscreen operation drains its outstanding result first.
+        // Once that slot is free, restore the saved native frame in this reply.
+        if self
+            .cancelled_resize_window()
+            .is_some_and(|window| self.fullscreen.restore_size(window).is_some())
+        {
+            self.settle_fullscreen()?;
+            if let (Some(began), _) = self.flush_owed() {
+                return Ok(carry(reply, Some(began)));
+            }
+        }
         let began = self.ask_ruled(None);
         Ok(carry(reply, began))
     }
@@ -709,6 +739,7 @@ impl Controller {
             .filter(|pending| pending.transaction == transaction);
         let answer = self.resize_answer(transaction, effect_id);
         let (observed, attempted) = (result.observed, result.mutation_attempted);
+        let native = result.actual_ax;
         let size_before = pending
             .as_ref()
             .and_then(|pending| self.scene.window(pending.window))
@@ -719,6 +750,37 @@ impl Controller {
             self.sizes.pending = pending;
             return reply;
         };
+        if matches!(pending.plan, Plan::Fullscreen)
+            && self.resize_failed_without_mutation(transaction)
+            && self.abort_unmutated_fullscreen(pending.window)
+        {
+            // An unattempted native request is not an application's answer
+            // to a configure. Undo its provisional fullscreen instead of
+            // concealing the desktop behind a window that was never resized.
+            let mut reply = reply.clone();
+            reply["dirty"] = json!(true);
+            reply["failure"] = json!(
+                "fullscreen could not change the native window; the previous view was restored"
+            );
+            return Ok(carry(reply, self.flush_owed().0));
+        }
+        if let Plan::Unfullscreen {
+            native: saved,
+            extent,
+            ..
+        } = &mut pending.plan
+        {
+            // An exit may replace the enter while its initial read is in flight.
+            if saved.is_none() {
+                *saved = self.fullscreen.restore_native_frame(pending.window);
+                if let Some(saved_extent) = self.fullscreen.restore_extent(pending.window) {
+                    *extent = saved_extent;
+                }
+                if let Some(saved_size) = self.fullscreen.restore_size(pending.window) {
+                    pending.asked.requested = saved_size;
+                }
+            }
+        }
         let rect = self.scene.window(pending.window).map(|w| w.world_rect);
         if let (Some((requested, uncertain)), Some(rect), true) = (answer, rect, observed) {
             let setter = requested.is_some();
@@ -733,9 +795,16 @@ impl Controller {
             let superseded = matches!(pending.plan, Plan::Fullscreen | Plan::Unfullscreen { .. })
                 && requested.is_some_and(|size| size != asked)
                 && rect.size != asked;
+            let native_restored = pending.plan.native_origin().is_none_or(|origin| {
+                (origin.x - native.origin.x).abs() <= 1.0
+                    && (origin.y - native.origin.y).abs() <= 1.0
+            });
             // An attempted setter is behind this observation: its own result,
             // the read that follows an unresolved one, or a later read.
-            if !superseded && ((setter && attempted) || uncertain || pending.settled) {
+            if !superseded
+                && native_restored
+                && ((setter && attempted) || uncertain || pending.settled)
+            {
                 let resized = size_before != Some(rect.size);
                 let undisturbed = pending.placed.is_none_or(|at| at == rect.origin);
                 if (!pending.settled || resized) && undisturbed {
@@ -763,10 +832,23 @@ impl Controller {
             // is written as `deliver` writes it for a window that has the
             // size asked for.
             let ended = !self.resize_slot().is_some_and(|slot| slot.live);
-            if ended && !setter && !pending.settled && rect.size == asked {
+            if ended && !setter && !pending.settled && rect.size == asked && native_restored {
                 pending.placed = self.place(pending.window, &pending.plan);
                 self.settle(pending.window, &pending.plan, pending.asked);
                 pending.settled = true;
+            }
+            if ended
+                && pending.settled
+                && native_restored
+                && matches!(
+                    pending.plan,
+                    Plan::Unfullscreen {
+                        native: Some(_),
+                        ..
+                    }
+                )
+            {
+                self.fullscreen.restored(pending.window);
             }
         }
         self.sizes.pending = Some(pending);
@@ -1206,7 +1288,11 @@ impl Controller {
         let (_, committed) = self.committed_frame(window)?;
         let plan = match screen {
             Screen::Fill => Plan::Fullscreen,
-            Screen::Restore { at, extent } => Plan::Unfullscreen { place: at, extent },
+            Screen::Restore { at, extent, native } => Plan::Unfullscreen {
+                place: at,
+                extent,
+                native,
+            },
         };
         let asked = Asked {
             requested: target,
@@ -1233,6 +1319,10 @@ impl Controller {
             return Ok(false);
         }
         let requested = plan.requested_size(target);
+        let native_origin = plan.native_origin();
+        let restoring = matches!(plan, Plan::Unfullscreen { .. });
+        self.set_resize_native_origin(native_origin);
+        self.set_resize_native_fill(matches!(plan, Plan::Fullscreen));
         self.retarget_sized_resize(requested)?;
         if let Some(pending) = self.sizes.pending.as_mut() {
             pending.plan = plan;
@@ -1248,6 +1338,7 @@ impl Controller {
             .window(window)
             .is_some_and(|w| w.world_rect.size == requested)
             && !slot.setting
+            && !restoring
         {
             self.settle_walked_back(outcome);
         }

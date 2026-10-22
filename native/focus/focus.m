@@ -6,6 +6,8 @@
 #include <math.h>
 #include <string.h>
 #include <time.h>
+#include <stdio.h>
+#include <stdlib.h>
 // Signature provenance: yabai dd845723416f5fe92af49fad5ebab00369e07edd,
 // src/misc/extern.h:8 and src/misc/helpers.h:499-504, as native/resize.
 // New implementation with no title matching, but for forward() below, which is adapted from yabai (MIT, same commit):
@@ -43,6 +45,28 @@ bool dw_focus_identity(pid_t p,CGWindowID w,DWFocusIdentity *out) {
 }
 static AXError timeout(AXUIElementRef w,double end) { double r=end-now();return r>0?AXUIElementSetMessagingTimeout(w,(float)fmin(.1,r)):kAXErrorCannotComplete; }
 static AXError copy(AXUIElementRef w,CFStringRef key,CFTypeRef *v,double end) { AXError e=timeout(w,end);return e==kAXErrorSuccess?AXUIElementCopyAttributeValue(w,key,v):e; }
+static void log_window_lookup(AXUIElementRef element,pid_t expectedPID,uint32_t expectedWindow,CFIndex index,AXError error,double end) {
+    if(!getenv("INFINIFY_DEBUG"))return;
+    CFTypeRef role=NULL,subrole=NULL;pid_t candidatePID=0;
+    AXError pidError=AXUIElementGetPid(element,&candidatePID);
+    AXError roleError=timeout(element,end);
+    if(!roleError)roleError=AXUIElementCopyAttributeValue(element,kAXRoleAttribute,&role);
+    AXError subroleError=timeout(element,end);
+    if(!subroleError)subroleError=AXUIElementCopyAttributeValue(element,kAXSubroleAttribute,&subrole);
+    const char *roleName=role&&CFGetTypeID(role)==CFStringGetTypeID()?[(__bridge NSString *)role UTF8String]:"unavailable";
+    const char *subroleName=subrole&&CFGetTypeID(subrole)==CFStringGetTypeID()?[(__bridge NSString *)subrole UTF8String]:"unavailable";
+    fprintf(stderr,"[infinify-debug] focus AX window lookup pid=%d target=%u index=%ld error=%d candidate_pid=%d pid_error=%d role=%s role_error=%d subrole=%s subrole_error=%d\n",expectedPID,expectedWindow,(long)index,error,candidatePID,pidError,roleName,roleError,subroleName,subroleError);
+    if(role)CFRelease(role);if(subrole)CFRelease(subrole);
+}
+// Finder includes its same-process desktop AXScrollArea in AXWindows. It has
+// no WindowServer ID; only that verified non-window role may be skipped.
+static bool windowless_scroll_area(AXUIElementRef element,pid_t expectedPID,double end) {
+    pid_t pid=0;if(AXUIElementGetPid(element,&pid)!=kAXErrorSuccess||pid!=expectedPID)return false;
+    CFTypeRef role=NULL;AXError error=timeout(element,end);
+    if(error==kAXErrorSuccess)error=AXUIElementCopyAttributeValue(element,kAXRoleAttribute,&role);
+    bool known=error==kAXErrorSuccess&&role&&CFGetTypeID(role)==CFStringGetTypeID()&&CFEqual(role,kAXScrollAreaRole);
+    if(role)CFRelease(role);return known;
+}
 static AXUIElementRef resolve(DWFocusIdentity i,double end,DWFocusResult *r) {
     if(!dw_focus_owner(i,&r->bounds)){r->outcome=DWFocusStale;return NULL;}
     GetWindow get=(GetWindow)dlsym(RTLD_DEFAULT,"_AXUIElementGetWindow");
@@ -54,7 +78,10 @@ static AXUIElementRef resolve(DWFocusIdentity i,double end,DWFocusResult *r) {
     for(CFIndex n=0;n<CFArrayGetCount(list);n++) {
         AXUIElementRef w=(AXUIElementRef)CFArrayGetValueAtIndex(list,n);uint32_t wid=0;pid_t pid=0;
         if(now()>=end){r->outcome=DWFocusTimedOut;valid=false;break;}
-        if(CFGetTypeID(w)!=AXUIElementGetTypeID()||(r->ax_error=timeout(w,end))||(r->ax_error=get(w,&wid))){r->outcome=DWFocusUnavailable;valid=false;break;}
+        if(CFGetTypeID(w)!=AXUIElementGetTypeID()||(r->ax_error=timeout(w,end))){r->outcome=DWFocusUnavailable;valid=false;break;}
+        r->ax_error=get(w,&wid);
+        if(r->ax_error==kAXErrorIllegalArgument&&windowless_scroll_area(w,i.pid,end)){r->ax_error=kAXErrorSuccess;continue;}
+        if(r->ax_error){log_window_lookup(w,i.pid,i.window,n,r->ax_error,end);r->outcome=DWFocusUnavailable;valid=false;break;}
         if(wid==i.window){if((r->ax_error=AXUIElementGetPid(w,&pid))||pid!=i.pid){valid=false;r->outcome=DWFocusStale;break;}matches++;if(!found)found=(AXUIElementRef)CFRetain(w);}
     }
     CFRelease(list);
@@ -69,6 +96,19 @@ static bool focusedWindow(AXUIElementRef app,pid_t expected,CGWindowID *wid,doub
     if(ok)ok=!(*e=timeout(w,end))&&!(*e=AXUIElementGetPid(w,&pid))&&pid==expected&&!(*e=get(w,wid));
     if(w)CFRelease(w);return ok;
 }
+bool dw_focus_frontmost(DWFocusIdentity *out) { @autoreleasepool {
+    if(!out)return false;*out=(DWFocusIdentity){0};
+    double end=now()+.05;
+    DWFocusIdentity i={.pid=NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier};
+    if(i.pid<=0||!dw_focus_birth(i.pid,&i.seconds,&i.microseconds)||!AXIsProcessTrusted()||now()>=end)return false;
+    AXUIElementRef app=AXUIElementCreateApplication(i.pid);if(!app)return false;
+    AXError error=kAXErrorSuccess;
+    bool known=focusedWindow(app,i.pid,&i.window,end,&error);
+    CFRelease(app);
+    if(!known||now()>=end||!dw_focus_owner(i,NULL)||!fresh(i)
+        ||NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier!=i.pid||now()>=end)return false;
+    *out=i;return true;
+} }
 static bool readback(DWFocusIdentity i,AXUIElementRef w,double end,DWFocusResult *r) {
     r->focused=false;r->system_pid=0;r->system_window=0;r->app_window=0;
     if(!dw_focus_owner(i,&r->bounds)){r->outcome=DWFocusStale;return false;}

@@ -4,6 +4,47 @@
 use super::*;
 
 impl Controller {
+    pub(crate) fn observe_source(
+        &mut self,
+        window: WindowId,
+        identity: &SourceIdentity,
+        source_rect: Rect,
+        buffer: BufferSize,
+        adopt_size: bool,
+    ) -> Result<Value, Error> {
+        self.guard_resize_structure(Some(window))?;
+        let native_size_changed =
+            self.fresh(window, identity)?.observed_rect.size != source_rect.size;
+        buffer.validate()?;
+        if !rect_valid(source_rect) {
+            return Err(Error::Invalid("invalid observed source rectangle"));
+        }
+        let source = self
+            .sources
+            .get_mut(&window)
+            .ok_or(Error::Invalid("unbound source"))?;
+        if source.buffer.width != buffer.width || source.buffer.height != buffer.height {
+            source.content_rect = buffer.full_rect();
+        }
+        source.observed_rect = source_rect;
+        source.buffer = buffer;
+        // A presentation handoff can change native geometry without changing
+        // the canvas frame. Repeating that basis is not a new application resize.
+        if adopt_size && native_size_changed && self.sizes.capability && self.gesture.is_none() {
+            let mut rect = self
+                .scene
+                .window(window)
+                .ok_or(Error::Invalid("unknown window"))?
+                .world_rect;
+            if rect.size != source_rect.size {
+                rect.size = source_rect.size;
+                self.scene.set_window_rect(window, rect)?;
+                return Ok(json!({"resized": true}));
+            }
+        }
+        Ok(json!({}))
+    }
+
     pub(crate) fn relocate_source(
         &mut self,
         window: WindowId,
@@ -90,9 +131,9 @@ impl Controller {
         source_rect: Rect,
         buffer: BufferSize,
     ) -> bool {
-        // A repeated physical observation may still adopt the world size after
-        // a gesture, or settle pending structure. Leave every such case on the
-        // ordinary transactional path, including runs without native resize capability.
+        // Pending structure still needs the ordinary transactional path,
+        // including runs without native resize capability. A stable native
+        // basis may intentionally differ from its canvas size after a handoff.
         if !self.sizes.observation_idle()
             || !self.fullscreen.observation_idle()
             || self.gesture.is_some()
@@ -115,10 +156,6 @@ impl Controller {
         source.observed_rect == source_rect
             && source.buffer.width == buffer.width
             && source.buffer.height == buffer.height
-            && self
-                .scene
-                .window(window)
-                .is_some_and(|window| window.world_rect.size == source_rect.size)
     }
 }
 
@@ -173,7 +210,7 @@ mod tests {
     }
 
     #[test]
-    fn changed_world_size_requires_observation_after_gesture_ends() {
+    fn unchanged_native_size_does_not_undo_completed_canvas_gesture() {
         let (mut controller, window, identity) = setup();
         controller
             .execute(Request {
@@ -202,7 +239,9 @@ mod tests {
                 command: Command::EndGesture {},
             })
             .unwrap();
-        assert!(!current(&controller, window, &identity));
+        assert!(current(&controller, window, &identity));
+        let placed = controller.scene.window(window).unwrap().world_rect;
+        assert_ne!(placed.size, Size::new(200., 150.));
         let result = controller
             .execute(Request {
                 version: ABI_VERSION,
@@ -217,8 +256,141 @@ mod tests {
                 },
             })
             .unwrap();
-        assert_eq!(result["resized"], true);
+        // The former rule re-adopted any world/native mismatch. A fresh native
+        // size change is now required; an unchanged poll preserves the gesture.
+        assert!(result.get("resized").is_none());
+        assert_eq!(controller.scene.window(window).unwrap().world_rect, placed);
         assert!(current(&controller, window, &identity));
+    }
+
+    #[test]
+    fn presentation_basis_preserves_world_until_a_new_native_size_change() {
+        let (mut controller, window, identity) = setup();
+        let original = controller.scene.window(window).unwrap().world_rect;
+        let basis = Rect::new(30., 45., 320., 240.);
+        let buffer = BufferSize {
+            width: 640,
+            height: 480,
+        };
+        let reply = controller
+            .request(
+                &serde_json::to_vec(&json!({"version":1,"command":{
+                    "op":"observe_presentation","window":window,"identity":identity,
+                    "source_rect":basis,"buffer":buffer
+                }}))
+                .unwrap(),
+            )
+            .unwrap();
+        assert!(reply.get("resized").is_none());
+        assert_eq!(
+            controller.scene.window(window).unwrap().world_rect,
+            original
+        );
+        assert_eq!(controller.sources[&window].observed_rect, basis);
+        assert_eq!(controller.sources[&window].content_rect, buffer.full_rect());
+        assert!(controller.observation_current(window, &identity, basis, buffer));
+
+        for observed in [basis, Rect::new(31., 46., 320., 240.)] {
+            let reply = controller
+                .execute(Request {
+                    version: ABI_VERSION,
+                    command: Command::Observe {
+                        window,
+                        identity: identity.clone(),
+                        source_rect: observed,
+                        buffer,
+                    },
+                })
+                .unwrap();
+            assert!(reply.get("resized").is_none());
+            assert_eq!(
+                controller.scene.window(window).unwrap().world_rect,
+                original
+            );
+        }
+
+        let changed = Rect::new(31., 46., 330., 250.);
+        let reply = controller
+            .execute(Request {
+                version: ABI_VERSION,
+                command: Command::Observe {
+                    window,
+                    identity: identity.clone(),
+                    source_rect: changed,
+                    buffer,
+                },
+            })
+            .unwrap();
+        assert_eq!(reply["resized"], true);
+        assert_eq!(
+            controller.scene.window(window).unwrap().world_rect,
+            Rect {
+                origin: original.origin,
+                size: changed.size
+            }
+        );
+    }
+
+    #[test]
+    fn presentation_observation_rejects_invalid_or_stale_basis_atomically() {
+        let (mut controller, window, identity) = setup();
+        let original = controller.sources[&window].clone();
+        let world = controller.scene.window(window).unwrap().world_rect;
+        let mut stale = identity.clone();
+        stale.birth_sec += 1;
+        for (candidate, rect, buffer) in [
+            (
+                stale,
+                Rect::new(30., 45., 320., 240.),
+                BufferSize {
+                    width: 640,
+                    height: 480,
+                },
+            ),
+            (
+                identity.clone(),
+                Rect::new(30., 45., 0., 240.),
+                BufferSize {
+                    width: 640,
+                    height: 480,
+                },
+            ),
+            (
+                identity,
+                Rect::new(30., 45., 320., 240.),
+                BufferSize {
+                    width: 0,
+                    height: 480,
+                },
+            ),
+        ] {
+            assert!(
+                controller
+                    .execute(Request {
+                        version: ABI_VERSION,
+                        command: Command::ObservePresentation {
+                            window,
+                            identity: candidate,
+                            source_rect: rect,
+                            buffer
+                        }
+                    })
+                    .is_err()
+            );
+            assert_eq!(
+                controller.sources[&window].observed_rect,
+                original.observed_rect
+            );
+            assert_eq!(
+                controller.sources[&window].buffer.width,
+                original.buffer.width
+            );
+            assert_eq!(
+                controller.sources[&window].content_rect,
+                original.content_rect
+            );
+            assert_eq!(controller.scene.window(window).unwrap().world_rect, world);
+        }
     }
 
     #[test]
@@ -473,6 +645,26 @@ mod tests {
                 },
             })
             .unwrap();
+        assert!(
+            controller
+                .execute(Request {
+                    version: ABI_VERSION,
+                    command: Command::ObservePresentation {
+                        window,
+                        identity: identity.clone(),
+                        source_rect: Rect::new(30., 45., 320., 240.),
+                        buffer: BufferSize {
+                            width: 640,
+                            height: 480
+                        },
+                    },
+                })
+                .is_err()
+        );
+        assert_eq!(
+            controller.sources[&window].observed_rect,
+            Rect::new(10., 20., 200., 150.)
+        );
         assert!(
             relocate(
                 &mut controller,

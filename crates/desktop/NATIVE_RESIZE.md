@@ -45,23 +45,92 @@ Logical `begin_resize` remains a canvas operation; native pinned resizing uses
   fractional press at distant camera coordinates.
   The primary resize proposal advances snap intent without changing the Scene.
   `latest_requested` and `requested_outline` are presentation hints only.
-- `resize_native_window` effects contain size only. There is one pending effect,
-  with at most one latest coalesced request. Effects include transaction, effect
-  ID, window, exact source identity and binding generation. Resize pending state
-  is independent of focus pending state; effect IDs share a monotonic allocator.
+- `resize_native_window` effects contain `requested:{width,height}` and
+  `native_origin`, either `null` for ordinary sizing or `{x,y}` in native global
+  screen points for a fullscreen frame restore. An `observe_resize_source`
+  effect has both fields `null`. The native origin is never a world coordinate
+  or a camera projection. There is one pending effect, with at most one latest
+  coalesced request. Effects include transaction, effect ID, window, exact source
+  identity and binding generation. Resize pending state is independent of focus
+  pending state; effect IDs share a monotonic allocator.
+- A fullscreen-enter setter additionally carries `native_action:"fill"`.
+  This is an optional preference for an app-owned same-Space Fill action, not
+  macOS fullscreen or an authorization to target another window. A capable
+  native shell may elect that action; the requested size and observed-result
+  validation remain unchanged. Reads, ordinary sizing and exact frame restores
+  omit it. Retargeting an unsent enter to an exit clears the preference; an
+  already outstanding action must drain before restoration. This metadata
+  alone does not establish an available native action or animation behavior.
+  The desktop native shell elects `dw_resize_fill`, resolving the app's exact
+  `_zoomFill:` menu identifier with focused-window identity checks. Only
+  `unsupported` with `mutation_attempted:false` permits an ordinary size-setter
+  fallback; an attempted press or uncertain lookup never does. The presenter
+  withholds the root's whole family from helper frames and retains its restore
+  journal. Before ordinary Fill, the driver waits at most 0.5 seconds for a newer helper
+  ACK confirming that omission; the adapter then has its existing 2-second
+  deadline. During this handoff input cannot use intermediate geometry. Final
+  placement requires a new family ACK. Headless dispatch/ACK checks do not prove
+  that a third-party application's Fill animation is visually preserved.
+  Aligned native/displayed frames (within one point) go directly to Fill.
+  A translation-only, same-extent source with a freshly audited root-only family
+  can now rebase its native origin to its displayed origin first. The original
+  controller baseline remains the restore target. One `AXPosition` call has a
+  350ms adapter limit, <=50ms AX timeouts, and a final local deadline check.
+  `SLSDisableUpdate`/`SLSReenableUpdate` bracket this position write and a neutral
+  helper transform: an exact APPLIED ACK, followed by a newer omission ACK,
+  is required before the hold ends and Fill begins. All preparation shares a
+  750ms deadline; the hold is capped at 650ms. An independent watchdog releases
+  an acquired hold even if the AX worker or main queue stalls. Failed acquisition
+  never enables an unknown hold; late successful acquisition immediately releases
+  without AX. The synchronous private acquisition call itself is not cancellable.
+  Failure preserves normalization mutation/timeout evidence and refuses Fill;
+  no temporary ACK grants input or releases the helper's original journal.
+  Scaled root-only presentations instead use a fresh raw ScreenCaptureKit image
+  and a noninteractive AppKit panel. Before native mutation, the helper must
+  acknowledge alpha-zero, then a neutral transform, then omission. The snapshot
+  owns the visible AppKit frame animation; it survives native reveal until normal
+  placement is acknowledged. These handoffs allow 2.5 seconds for preparation and
+  seven seconds for the resize coordinator. Restore waits for the same hidden
+  acknowledgement and sets the saved frame directly, without native Unfill:
+  real TextEdit trials showed its animation could overwrite an exact correction
+  after successful readback. AppKit's final panel frame may round each edge by
+  less than one screen point; the native target retains the exact canvas mapping.
+  Attached families and unavailable capture retain the ordinary size path.
+  The private signatures and bracket precedent are pinned to yabai
+  `dd845723416f5fe92af49fad5ebab00369e07edd`, `src/misc/extern.h:23–24` and
+  `src/window_manager.c:618–699`; that implementation also uses proxies and a
+  separate connection, so it does not prove this app-connection rebase is atomic.
+  Actual TextEdit Fill from an aligned start was sampled without an offset jump;
+  a translated start previously retained the old offset through the animation
+  (`target/native-vm/real-desktop-20261021/textedit-fill-frame-samples.jsonl`).
+  VM validation on macOS 27: two consecutive TextEdit cycles at 65% zoom restored
+  native frame, world position/size, camera, zoom and displayed transform exactly;
+  the recording shows the AppKit snapshot animation. A translated TextEdit cycle
+  at 100% used native Fill and restored exactly. Already-screen-sized Safari at
+  65% also restored exactly, with both animation/reveal handoffs acknowledged;
+  its final recorder stalled, so that run is geometry/handoff evidence only.
+  Evidence is under `target/native-vm/real-desktop-20261021/` (`hidden-textedit-*`,
+  `live-unit-*`, `live-safari-*`). Physical title dragging was manually confirmed
+  stable in the VM, including zoomed-out TextEdit and Finder. Physical double-click,
+  attached families and broader application coverage remain separate checks.
 - `native_resize_result {transaction, effect_id, identity, generation, result}`
   accepts native/resize/resize.h outcomes/fields: `outcome`, `ax_error`,
   `mutation_attempted`, `observed`, `requested`, `actual_ax`, `actual_cg`.
   AX/CG rectangles must be valid and agree within one point on each coordinate
-  and dimension when observed. Contradictory outcomes, stale IDs, generations,
+  and dimension when observed. An `applied` result for an effect with
+  `native_origin` must also place the AX origin within one point of that target
+  on each axis. Contradictory outcomes, stale IDs, generations,
   identities, requested sizes and duplicates reject atomically. The reply's
   `transaction` and `effect` are the next effect to perform. When the result
   ends its transaction that can be the first effect of another one: the size
   transaction of the next window whose rule's `size` is still owed
-  ([RULES.md](RULES.md#a-rules-size)).
+  ([RULES.md](RULES.md#a-rules-size)), or the fullscreen frame restore after a
+  cancelled transaction finishes draining.
 - `end_native_resize {transaction}` drains the latest request and final read.
   `cancel_native_resize {transaction}` discards unsent intent, drains sent work
-  and reads actual geometry. Cancellation does not roll back a native setter.
+  and reads actual geometry. Cancelling a fullscreen enter ends the fullscreen
+  and queues restoration of its saved frame after sent work drains. Cancellation
+  itself does not roll back a native setter.
   Both reject subsequent motion. Removing the transaction's output cancels it
   while retaining reconciliation; any new read effect is returned by removal.
 
@@ -70,6 +139,12 @@ single authoritative `Window.world_rect`. Left/top anchoring adds the difference
 between last committed and newly observed dimensions to the **current** world
 origin. A world drag between release and delayed observation therefore survives.
 Actual native origin updates only source observation. No result changes a camera.
+Fullscreen records the enter's fresh native baseline separately from the world
+top-left and camera. Its exit requests that native origin and the exact baseline
+extent, including fractional dimensions, except that an explicit rule's deferred
+`size` still takes precedence. A delayed enter baseline can update the restore
+target after fullscreen has already ended, without dispatching the abandoned
+fullscreen setter. See [fullscreen restoration](FULLSCREEN.md#leaving).
 Native constraints remain explicitly unknown; no client minimum is inferred.
 The existing proposal floor is one point. Out-of-adapter-range requests can be
 rejected by the adapter; they do not create committed geometry.
@@ -83,6 +158,12 @@ it observed the window, committing that actual size, otherwise failed with
 CannotComplete (-25204). A setter may land later; that is an external native
 size change, adopted by the next `observe`, rather than a promise that a
 successful read proved future quiescence.
+
+A fullscreen native-frame restore retains its obligation through the final read.
+A wrong origin or failed final read leaves it owed for a later carrier, subject
+to the three-transaction restore limit. Retrying always starts with a fresh read,
+even when cached source geometry matches; a matching fresh frame ends without a
+setter. Controller acceptance of these reports is not independent native evidence.
 
 The shell answers an effect after three seconds if its adapter did not. It
 reports `timed_out`, unobserved, and `mutation_attempted:true` for a setter.
@@ -107,9 +188,17 @@ birth, generation, native membership and actual image geometry before native
 input or replica publication.
 
 `observe` updates the observed native frame and buffer dimensions. With native
-resize capability enabled, it adopts a changed world size with the top-left
-kept, except during a gesture. Buffer coordinates stay independent of native
-coordinates. Actual ScreenCaptureKit pixel crop, timestamp and image-generation
+resize capability enabled, it adopts a native size that changed since the prior
+source observation, with the world top-left kept, except during a gesture.
+`observe_presentation` has the same identity, rectangle, buffer validation and
+resize-transaction fences, but updates only the source/buffer basis. The native
+adapter uses it for reflow caused by its own Space handoff, preserving canvas
+geometry. An identical later `observe` does not undo that preserved world size;
+a subsequent genuine native size change still adopts normally. The unchanged
+observation fast path accepts an intentional world/native size mismatch only
+when all its existing idle, gesture, policy and lifecycle guards pass.
+Buffer coordinates stay independent of native coordinates.
+Actual ScreenCaptureKit pixel crop, timestamp and image-generation
 checks remain in the native capture adapters; no reducer acknowledgement
 establishes pixel freshness. The retired `native_resize_capture_ready` and
 `invalidate_native_capture` commands, and their revision handshake fields, are
@@ -143,7 +232,8 @@ are rejected, with no default conversion or compatibility alias.
 The native window is the authority for its size. A differing baseline is
 adopted, including when a window changed itself before a poll. A baseline that
 already has the requested size ends without a setter. `observe` similarly
-adopts a native size outside a gesture and answers `{"resized":true}`.
+adopts a newly changed native size outside a gesture and answers `{"resized":true}`;
+a repeated presentation basis is not a size change.
 
 Every new request asks a window again after `unsupported`: a sheet may have
 closed or its size attribute become settable. No persistent disabled cache
@@ -153,7 +243,7 @@ size becomes the basis of the next request. Accessibility supplies no declared
 client limits, so a repeated request beyond a window's maximum may be sent
 again and leave the same actual geometry.
 
-While a transaction is live the controller refuses `observe`, `window_closed`,
+While a transaction is live the controller refuses `observe`, `observe_presentation`, `window_closed`,
 `remove_source` and `forget` for its window; another window's size request is
 refused while the first owns the slot. The shell's `busyWindow` and bounded
 watchdog enforce this lifecycle without waiting for a frame.

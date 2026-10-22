@@ -9,6 +9,10 @@
 // Children need a positive conservatively padded projected viewport
 // intersection on some site, with two seconds of grace for installed streams.
 // capture_all conservatively retains children during family geometry animation.
+// Experimental capture_controls:YES recognizes exact read-only OS capture
+// companions. They stay in descriptions.members as capture_control:YES, but
+// never become separate streams, drawable attachments or child input targets.
+// Missing/false preserves ordinary behavior; unknown classification is a child.
 // Mutable demand never changes the audited binding epoch or full description.
 // capture:NO observes ancestry/geometry without starting child streams. Native
 // identities and bounds stay here; the renderer receives normalized images.
@@ -32,6 +36,8 @@
 @property(readonly) uint64_t orderRevision;
 // A child hit in untransformed root-local points; never authorizes posting by
 // itself. The caller must still validate root binding and fresh native parentage.
+// Hits/contains require a published Complete image after the latest unavailable
+// callback. Idle preserves that image but cannot revive revoked capture.
 - (NSDictionary *)hit:(NSNumber *)window local:(CGPoint)local;
 // Select only this exact currently captured opaque attachment key.
 - (NSDictionary *)hit:(NSNumber *)window key:(NSString *)key local:(CGPoint)local;

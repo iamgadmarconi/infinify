@@ -16,6 +16,9 @@
 // [80,937,320,232] untouched, at half size and parked). NO when the window server
 // does not answer for that window. Any thread.
 bool DWNativeBounds(uint32_t wid,CGRect *out);
+// Balanced, bounded by the caller, on this app connection. Private signatures
+// follow pinned yabai; success alone does not prove cross-process atomicity.
+CGError DWNativeScreenUpdates(BOOL enabled);
 // Desired rectangular display clipping in a member's own local coordinates.
 // Pure geometry: native and rootNative are untransformed bounds; rootScreen is
 // the canvas placement in global top-left points. The viewport is that output's
@@ -42,9 +45,33 @@ bool DWNativeClipPlacement(CGRect native,CGRect rootNative,CGRect rootScreen,CGR
 // may serialize owner:null; a populated owner is refused, never silently dropped.
 @property(nonatomic,readonly) CGRect requestedScreenRect,requestedClipRect,requestedViewport;
 // Sorted complete family: identity, native_bounds, audited parent WID (root:0), requested_transform,
-// requested_alpha (null when not set), and the exact wire flags. Bounds are the
+// requested_alpha and requested_space (null when not set), and the exact wire flags (including pin intent). Bounds are the
 // cached native basis used to request the transform, not an independent read.
 @property(nonatomic,readonly,copy) NSArray<NSDictionary *> *members;
+@end
+// Exact helper ACK for a caller-guarded, unit-scale backing root. This is not a
+// native owner, capture-freshness proof, guard-window proof or input permission.
+// The caller must bind a post-ACK capture mailbox floor and independently fence
+// the guard, topology, Space and source before using it for replica input.
+@interface DWNativeAppliedParking : NSObject
+- (instancetype)init NS_UNAVAILABLE;
++ (instancetype)new NS_UNAVAILABLE;
+@property(nonatomic,readonly,copy) NSUUID *session;
+@property(nonatomic,readonly) uint64_t sequence,window,generation,guardEpoch;
+@property(nonatomic,readonly,copy) NSDictionary *identity;
+@property(nonatomic,readonly) CGRect nativeBounds,screenRect;
+// Immutable root-first descriptor members: identity, native_bounds (JSON rect),
+// parent; the optional direct child also carries capture_control:YES. All were
+// present in the complete acknowledged unit-scale family frame.
+@property(nonatomic,readonly,copy) NSArray<NSDictionary *> *members;
+@end
+// Opaque root-only transition lease. Its immutable starting geometry came from
+// an exact current helper ACK; it never authorizes input or native ownership.
+@interface DWNativeHiddenRoot : NSObject
+- (instancetype)init NS_UNAVAILABLE;
++ (instancetype)new NS_UNAVAILABLE;
+@property(nonatomic,readonly,copy) NSDictionary *identity;
+@property(nonatomic,readonly) CGRect nativeBounds,screenRect;
 @end
 // Main thread only, but for the library's two callbacks and the watchdog, which touch
 // only what is said of them in the implementation.
@@ -95,14 +122,45 @@ bool DWNativeClipPlacement(CGRect native,CGRect rootNative,CGRect rootScreen,CGR
 // A serial observation worker can supply the read-only family report to keep
 // its queries off the frame queue. nil performs a fresh query when required.
 - (void)bound:(NSDictionary *)identity bounds:(CGRect)native family:(NSDictionary *)family;
-// Restore this identity's original transform and alpha through a negotiated
+// Observe a submitted display-Space handoff's native reflow independently of
+// world geometry. YES asks the controller to update only its source basis.
+// A matching family ACK and stable native frame end the guard; explicit native
+// input ends it immediately. The diagnostic retains before/after native frames,
+// but no AX frame restoration is performed or promised by this presenter.
+- (BOOL)observeSpaceReflow:(NSDictionary *)identity bounds:(CGRect)native nativeInput:(BOOL)nativeInput;
+// Restore this identity's original transform, alpha and touched sublevel through a negotiated
 // per-window release record. It remains queued until acknowledged; other bound
 // windows keep their placements. Every admitted helper must support this contract.
 - (void)unbound:(NSDictionary *)identity;
+// Temporarily omit this exact root and every bound family member from frames
+// while its application owns a native Fill animation. Originals stay journaled;
+// unbind/finish still restore them. No placement receipt is eligible while held.
+- (BOOL)withholdWindow:(NSDictionary *)identity;
+- (BOOL)isWindowWithheld:(NSDictionary *)identity;
+- (void)resumeWindow:(NSDictionary *)identity;
+// A zoom-1 rebase is restricted to an already withheld root with no children.
+// Send a neutral transform without releasing its original helper journal, then
+// drain it back to omission after an exact APPLIED ACK. Neither grants input.
+- (BOOL)canRebaseWindow:(NSDictionary *)identity;
+- (BOOL)rebaseWindow:(NSDictionary *)identity bounds:(CGRect)native;
+- (BOOL)isWindowRebased:(NSDictionary *)identity;
+- (void)cancelRebaseWindow:(NSDictionary *)identity;
+// Capture may occur while initially withheld. Hide preserves the acknowledged
+// matrix first; only its alpha-zero ACK permits neutralization. Both neutral
+// and subsequent omission ACKs must settle before the caller mutates the app.
+- (DWNativeHiddenRoot *)beginTransitionForWindow:(NSDictionary *)identity;
+- (BOOL)hideTransition:(DWNativeHiddenRoot *)transition;
+- (BOOL)isTransitionHidden:(DWNativeHiddenRoot *)transition;
+- (BOOL)revealTransition:(DWNativeHiddenRoot *)transition screen:(CGRect)screen alpha:(double)alpha;
+- (BOOL)isTransitionRevealed:(DWNativeHiddenRoot *)transition;
 // The frame this snapshot asks for: one record for every bound window (`identities`,
 // logical id → identity), at its placement's screen_rect, or parked beyond every
 // display when it has none. Nothing is sent. A snapshot without outputs (a display
 // change between its two halves) describes nothing and leaves the last frame standing.
+// A visible pinned placement requests floating sublevel for its complete audited
+// family; normal and parked records restore any journalled original sublevel.
+// Pin/unpin changes require a fresh whole-family ACK even at unchanged geometry.
+// A pin request without the negotiated capability ends/restores that session.
 - (void)describe:(NSDictionary *)snapshot bound:(NSDictionary<NSNumber *,NSDictionary *> *)identities;
 // Hands the described frame to the library's writer thread if it differs from the
 // last one handed over, or a window's own frame changed since. Never waits.
@@ -121,6 +179,32 @@ bool DWNativeClipPlacement(CGRect native,CGRect rootNative,CGRect rootScreen,CGR
 // because -describe or -submit succeeded. Grouped helpers retain separate session
 // IDs and sequences; a receipt belongs only to its original owning session.
 - (DWNativeAppliedPlacement *)acknowledgedPlacementForWindow:(NSNumber *)window identity:(NSDictionary *)identity generation:(NSNumber *)generation output:(NSNumber *)output;
+// Distinct from native placement: the latest complete family frame was applied
+// at unit-scale parking with no Space request. Exact generation/native basis
+// must still match; withheld families and native placements never qualify.
+// This can end transfer coverage for replicas, not authorize native input.
+- (BOOL)isParkingAcknowledgedForWindow:(NSNumber *)window identity:(NSDictionary *)identity generation:(NSNumber *)generation;
+// Optional guarded backing placements, keyed by logical window. Keys per descriptor:
+// window, identity, generation, native_bounds, screen_rect, guard_epoch, members. Rects
+// use {origin:{x,y},size:{width,height}}; extents must match exactly. Identity
+// uses the four helper fields (owner absent/null). Only a currently observed,
+// complete known family without a native placement can use this descriptor:
+// the root and at most one contained direct child classified by the caller as
+// capture_control:YES. Explicit members carry identity/native_bounds/parent;
+// all must match the current audited family. The presenter does not classify AX
+// controls. Every member retains its root-relative offset at unit scale.
+// All mismatches fall back to ordinary far-offscreen parking. The caller MUST
+// revoke/cancel replica input before clearing or replacing a root's descriptor.
+// The map replaces the complete desired set; nil/empty clears it, malformed
+// entries are omitted. Changing a root retains unrelated descriptors and their
+// immediate receipts. The next complete session frame still follows the usual
+// latest-sequence ACK fence; unrelated grouped sessions are left alone.
+// Default is empty. Lane geometry/visibility and ordering remain caller-owned.
+- (void)setGuardedParkings:(NSDictionary<NSNumber *,NSDictionary *> *)descriptors;
+// Compatibility replacement for a single root; nil/malformed clears the map.
+- (void)setGuardedParking:(NSDictionary *)descriptor;
+- (DWNativeAppliedParking *)acknowledgedGuardedParkingForWindow:(NSNumber *)window identity:(NSDictionary *)identity generation:(NSNumber *)generation guardEpoch:(uint64_t)epoch;
+- (BOOL)isAcknowledgedGuardedParkingCurrent:(DWNativeAppliedParking *)parking;
 // Call after the independent admission checks, immediately before input. This
 // only fences the ACK against current presentation state; it performs no native
 // getters or event-hit queries and never establishes usable input by itself.

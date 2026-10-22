@@ -1244,7 +1244,7 @@ fn clear_focus_and_the_reported_cycle_hold() {
     let mut h = empty(rebound);
     assert_eq!(
         h.ok(json!({"op":"bindings"}))["cycle_hold"],
-        json!({"control":false,"option":false,"shift":false,"command":true})
+        json!({"control":true,"option":true,"shift":false,"command":false})
     );
     h.ok(json!({"op":"set_platform","super":"cmd"}));
     assert_eq!(

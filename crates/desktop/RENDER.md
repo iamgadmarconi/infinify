@@ -317,6 +317,14 @@ extent. The app's shell does the same. So a capture is the same file with
 `cache_shader` on or off, and for a TIFF larger than 4096 pixels it is softer
 than the screen. Nothing in the effect or the result says which was drawn.
 
+The screenshot writer encodes the image, creates any missing parent directories,
+then writes the named PNG, following `capture_region_to_png` at the pinned
+revision (`src/render/screenshot.rs:117–122`). A non-directory parent reports
+`cannot create <parent>: …`; a failure opening or writing the final file reports
+`cannot write <path>: …`. Existing files retain the previous direct overwrite
+behavior. Encoding and writes run on the existing serial export worker; no
+parent directories are created when rendering or encoding fails.
+
 **2. The result.** When the file is written the shell calls
 
 ```json
@@ -437,11 +445,6 @@ every `ipc` request.
   `no renderer available for capture` and `suspended window is gone` cannot
   happen here. `capture region is empty` is kept and cannot be reached: no
   target resolves to an empty region at a zoom of at most 1.
-- **Only the named file is written.** Upstream's writer creates the missing
-  directories of the path and then the file. Here `path` is all the shell may
-  write, so the app's shell creates no directory and a path inside one that
-  does not exist comes back as `cannot write <path>: No such file or directory
-  (os error 2)`.
 - **A failed capture has no id.** `screenshot_result` with an `error` answers
   the oldest effect waiting. A shell that renders two captures at once and
   fails the newer first would cross their replies.
@@ -450,6 +453,16 @@ every `ipc` request.
   shell's.
 
 ## Verification boundary
+
+`tests/e2e/screenshot-write.sh` exercises the production `msg` client, Unix
+socket server, controller C ABI and PNG writer with a synthetic 2×3 image. It
+checks nested parent creation, preservation of a non-directory parent, a final
+filename already occupied by a directory, existing-file overwrite, PNG dimensions,
+and byte-identical `-o -` output with temporary-file cleanup. This starts no
+desktop application, renderer, GPU, native window, capture stream or input. It
+validates the filesystem and reply contract only, not native image capture or
+compositing. Red/green receipts for the parent-directory fix are saved under
+`target/parity/screenshot-parents-20261021/`.
 
 `tests/render_flow.rs` drives the exported C ABI with config files in a
 throwaway directory:

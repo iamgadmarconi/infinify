@@ -37,8 +37,13 @@ struct dw_client_callbacks {
 int dw_client_open(const char *runtime, const char *nonce64, const struct dw_client_callbacks *callbacks,
                    uint32_t timeout_ms, dw_client **out, struct dw_client_info *info);
 // Never touches a socket: copies the records and returns. A frame not yet written
-// when the next one arrives is replaced by it (dropped_local).
+// when the next one arrives is replaced by it (dropped_local). PINNED requires
+// CAP_PINNED for both frame types; without it no frame/sequence is queued.
 int dw_client_submit_frame(dw_client *client, const struct dw2_record *records, uint32_t count, uint64_t *seq);
+// Same asynchronous frame/ACK semantics, with one optional Space request per
+// record. Requires CAP_SPACE; without it returns DW_CLIENT_INVALID and queues
+// nothing. Both frame types share the replaceable latest-frame slot.
+int dw_client_submit_space_frame(dw_client *client, const struct dw2_space_record *records, uint32_t count, uint64_t *seq);
 // The raw probe reply (struct dw2_probe_reply, table entries, fixture identities).
 int dw_client_probe(dw_client *client, uint32_t timeout_ms, void *reply, size_t capacity, size_t *length);
 // Reads the helper's exact process scope before any frame is submitted. Fails on

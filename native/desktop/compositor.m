@@ -1343,8 +1343,8 @@ static NSMutableData *IFCRenderBodyFill(long width, long height, long scale, IFC
 
 // suspended.rs `ensure_label`: the label buffer and its body-local rectangle.
 // Returns nil (and a zero rect) when nothing fits.
-static NSMutableData *IFCRenderLabel(NSString *text, long bodyW, long bodyH, long scale, IFCompositorChromeStyle *style,
-                                     long *outW, long *outH, IFCRectI *labelRect) {
+static NSMutableData *IFCLabel(NSString *text, long bodyW, long bodyH, long scale, IFCompositorChromeStyle *style,
+                                     long *outW, long *outH, IFCRectI *labelRect, BOOL rasterize) {
     *labelRect = IFCRectIMake(0, 0, 0, 0);
     long s = MAX(scale, 1L);
     float fontPx = fmaxf((float)style.fontSize * kIFCPtToPx * (float)s, 1.0f);
@@ -1362,8 +1362,8 @@ static NSMutableData *IFCRenderLabel(NSString *text, long bodyW, long bodyH, lon
         CFRelease(font);
         return nil;
     }
-    NSMutableData *data = [NSMutableData dataWithLength:(NSUInteger)(bufW * bufH * 4)];
-    IFCRasterizeInto(data.mutableBytes, bufW, bufH, fitted, font, fontPx, style.foregroundColor, 0);
+    NSMutableData *data = rasterize ? [NSMutableData dataWithLength:(NSUInteger)(bufW * bufH * 4)] : nil;
+    if (rasterize) IFCRasterizeInto(data.mutableBytes, bufW, bufH, fitted, font, fontPx, style.foregroundColor, 0);
     CFRelease(font);
     // Centre within the bar+body footprint: shift up by half the bar.
     long lw = MAX(bufW / s, 1L), lh = MAX(bufH / s, 1L);
@@ -1371,6 +1371,18 @@ static NSMutableData *IFCRenderLabel(NSString *text, long bodyW, long bodyH, lon
     *outW = bufW;
     *outH = bufH;
     return data;
+}
+
+static NSMutableData *IFCRenderLabel(NSString *text, long bodyW, long bodyH, long scale, IFCompositorChromeStyle *style,
+                                     long *outW, long *outH, IFCRectI *labelRect) {
+    return IFCLabel(text,bodyW,bodyH,scale,style,outW,outH,labelRect,YES);
+}
+CGRect IFCompositorStandInLabelRect(NSString *name, BOOL launching, CGSize body, NSInteger scale, IFCompositorChromeStyle *style) {
+    if(!style||!isfinite(body.width)||!isfinite(body.height)||body.width<=0||body.height<=0)return CGRectNull;
+    long w=0,h=0;IFCRectI r;
+    NSString *text=launching?[name stringByAppendingString:@" launching\u2026"]:name;
+    IFCLabel(text,IFCRound(body.width),IFCRound(body.height),MAX(scale,1),style,&w,&h,&r,NO);
+    return r.w>0&&r.h>0?CGRectMake(r.x,r.y,r.w,r.h):CGRectNull;
 }
 
 // MARK: - Element

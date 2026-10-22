@@ -16,24 +16,33 @@
 #define DW2_MAX_PROCESSES 1024
 #define DW2_REPLY 0x8000
 
-enum { DW2_HELLO=1, DW2_FRAME=2, DW2_HEARTBEAT=3, DW2_RESTORE_ALL=4, DW2_PROBE=5, DW2_ENROLLMENT=6, DW2_INSPECT=7 };
+enum { DW2_HELLO=1, DW2_FRAME=2, DW2_HEARTBEAT=3, DW2_RESTORE_ALL=4, DW2_PROBE=5, DW2_ENROLLMENT=6, DW2_INSPECT=7, DW2_FRAME_SPACE=8 };
 enum { DW2_ROLE_CONTROL=1, DW2_ROLE_HEARTBEAT=2 };
 enum { DW2_HELLO_OK=0, DW2_HELLO_AUTH=1, DW2_HELLO_VERSION=2, DW2_HELLO_BUSY=3, DW2_HELLO_TOKEN=4, DW2_HELLO_MALFORMED=5 };
-enum { DW2_CAP_ALPHA=1, DW2_CAP_RESTORE_WINDOW=2, DW2_CAP_ENROLLMENT=4, DW2_CAP_FIXTURE_FAMILY=8, DW2_CAP_INSPECT=16 };
+enum { DW2_CAP_ALPHA=1, DW2_CAP_RESTORE_WINDOW=2, DW2_CAP_ENROLLMENT=4, DW2_CAP_FIXTURE_FAMILY=8, DW2_CAP_INSPECT=16, DW2_CAP_SPACE=32, DW2_CAP_PINNED=64 };
 // FIXTURE_FAMILY asks a client to exercise native root/child presentation on
 // the host's finite, explicitly created window list. It expands no process or
 // window authority and says nothing about third-party family compositing.
 enum { DW2_SCOPE_COOPERATIVE=1, DW2_SCOPE_ALLOWLIST=2, DW2_SCOPE_SAME_USER=3 };
 enum { DW2_QUEUE_OWN=0, DW2_QUEUE_MAIN=1 };
-enum { DW2_RECORD_HAS_ALPHA=1, DW2_RECORD_RESTORE=2 };
+enum { DW2_RECORD_HAS_ALPHA=1, DW2_RECORD_RESTORE=2, DW2_RECORD_PINNED=4 };
+// PINNED is negotiated by CAP_PINNED and uses the existing record layout. It
+// requests the floating sublevel, without activation or changing the base level.
+// The first request journals the exact original sublevel. Later frames without
+// PINNED restore that original if touched; untouched windows receive no write.
+// The client must apply one policy to every member of its audited native family.
 // RESTORE is negotiated by CAP_RESTORE_WINDOW and stands alone: m and alpha are
 // ignored. It restores the journalled original for this identity, then removes
 // the entry. A pending restore stays journalled and is retried independently.
-// APPLIED: the set returned 0 and the readback equals the request. NOT_APPLIED: the
-// set failed or read back differently; the window stays in the table because it may
-// have been changed.
+// APPLIED: transform/alpha/sublevel setters returned 0 and their readback equals the
+// request; a requested Space also has exact observed membership (its setter is
+// void). NOT_APPLIED: a set failed or readback differs/is unavailable; the window
+// stays in the table because it may have been changed.
 enum { DW2_APPLIED=0, DW2_SCOPE=1, DW2_IDENTITY=2, DW2_MATRIX=3, DW2_ALPHA=4, DW2_SNAPSHOT=5, DW2_JOURNAL=6,
-       DW2_NOT_APPLIED=7, DW2_RESTORE_PENDING=8, DW2_TABLE_FULL=9, DW2_MALFORMED=10 };
+       DW2_NOT_APPLIED=7, DW2_RESTORE_PENDING=8, DW2_TABLE_FULL=9, DW2_MALFORMED=10, DW2_SPACE=11, DW2_SUBLEVEL=12 };
+// SUBLEVEL refuses a pin request when the optional sublevel API is unavailable.
+// SPACE refuses unsupported, invalid, non-singleton or non-current Space
+// admission. An attempted but unconfirmed move is NOT_APPLIED instead.
 enum { DW2_FRAME_APPLIED=0, DW2_FRAME_DROPPED=1 };
 enum { DW2_RESTORED=0, DW2_GONE=1, DW2_PENDING=2 };
 enum { DW2_HELD=0, DW2_RESTORING=1 };
@@ -46,7 +55,10 @@ struct dw2_hello_reply { uint32_t status, lease_ms, max_records, max_body, caps,
 struct dw2_identity { int32_t pid; uint32_t wid; uint64_t birth_sec, birth_usec; };
 // m is a,b,c,d,tx,ty: screen to window-local, global top-left points.
 struct dw2_record { struct dw2_identity id; double m[6]; float alpha; uint32_t flags; };
-struct dw2_frame { uint32_t count, reserved; };                 // then count records
+// FRAME_SPACE is negotiated by CAP_SPACE. Zero target_space leaves membership
+// unchanged. Legacy FRAME and dw2_record retain their exact original layout.
+struct dw2_space_record { struct dw2_record record; uint64_t target_space; };
+struct dw2_frame { uint32_t count, reserved; }; // then count records of the opcode's type
 struct dw2_frame_reply { uint32_t disposition, count, superseded, reserved; uint64_t frames_applied; }; // then count status bytes
 struct dw2_heartbeat_reply { uint32_t status, lease_ms, held, restoring; };
 struct dw2_restore_result { struct dw2_identity id; uint32_t outcome; int32_t set_status; };
@@ -70,6 +82,7 @@ _Static_assert(sizeof(struct dw2_hello)==88,"hello");
 _Static_assert(sizeof(struct dw2_hello_reply)==48,"hello reply");
 _Static_assert(sizeof(struct dw2_identity)==24,"identity");
 _Static_assert(sizeof(struct dw2_record)==80,"record");
+_Static_assert(sizeof(struct dw2_space_record)==88,"Space record");
 _Static_assert(sizeof(struct dw2_frame)==8,"frame");
 _Static_assert(sizeof(struct dw2_frame_reply)==24,"frame reply");
 _Static_assert(sizeof(struct dw2_heartbeat_reply)==16,"heartbeat reply");
@@ -82,5 +95,6 @@ _Static_assert(sizeof(struct dw2_enrollment_reply)==16,"enrollment reply");
 _Static_assert(sizeof(struct dw2_inspect_reply)==144,"inspect reply");
 _Static_assert(sizeof(struct dw2_enrollment_reply)+DW2_MAX_PROCESSES*sizeof(struct dw2_process)<=DW2_MAX_BODY,"largest enrollment fits");
 _Static_assert(sizeof(struct dw2_frame)+DW2_MAX_RECORDS*sizeof(struct dw2_record)<=DW2_MAX_BODY,"largest frame fits");
+_Static_assert(sizeof(struct dw2_frame)+DW2_MAX_RECORDS*sizeof(struct dw2_space_record)<=DW2_MAX_BODY,"largest Space frame fits");
 _Static_assert(sizeof(struct dw2_probe_reply)+DW2_MAX_TABLE*sizeof(struct dw2_probe_entry)+16*sizeof(struct dw2_identity)<=DW2_MAX_BODY,"largest probe fits");
 #endif
