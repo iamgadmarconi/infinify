@@ -3,6 +3,7 @@
 #import "native-presenter.h"
 #import "native-placement-validation.h"
 #import "../focus/focus.h"
+#import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
 #include <dlfcn.h>
 #include <math.h>
@@ -23,6 +24,79 @@ static id decorationAttribute(AXUIElementRef element,CFStringRef name,AXError *e
     if(result){if(value)CFRelease(value);return nil;}return CFBridgingRelease(value);
 }
 static CGRect decorationLocal(CGRect frame,CGRect own){frame.origin.x-=own.origin.x;frame.origin.y-=own.origin.y;return frame;}
+static CGRect decorationReadRect(NSDictionary *value){
+    return CGRectMake([value[@"origin"][@"x"]doubleValue],[value[@"origin"][@"y"]doubleValue],[value[@"size"][@"width"]doubleValue],[value[@"size"][@"height"]doubleValue]);
+}
+static BOOL decorationFinderFrame(AXUIElementRef element,pid_t pid,uint32_t wid,AXError(*getWindow)(AXUIElementRef,uint32_t *),CFTimeInterval deadline,CGRect *frame){
+    pid_t actualPID=0;uint32_t actualWindow=0;
+    return CACurrentMediaTime()<deadline&&!AXUIElementSetMessagingTimeout(element,.02)
+        &&!AXUIElementGetPid(element,&actualPID)&&actualPID==pid&&!getWindow(element,&actualWindow)&&actualWindow==wid
+        &&decorationFrame(element,frame)&&CACurrentMediaTime()<deadline
+        &&!getWindow(element,&actualWindow)&&actualWindow==wid;
+}
+static AXUIElementRef decorationFinderSplit(AXUIElementRef parent,CGRect own,pid_t pid,uint32_t wid,AXError(*getWindow)(AXUIElementRef,uint32_t *),CFTimeInterval deadline){
+    if(CACurrentMediaTime()>=deadline)return NULL;
+    __attribute__((objc_precise_lifetime)) id children=decorationAttribute(parent,kAXChildrenAttribute,NULL);
+    if(![children isKindOfClass:NSArray.class]||![children count]||[children count]>64)return NULL;
+    AXUIElementRef selected=NULL;
+    for(id value in children){
+        if(CACurrentMediaTime()>=deadline||CFGetTypeID((__bridge CFTypeRef)value)!=AXUIElementGetTypeID())return NULL;
+        AXUIElementRef child=(__bridge AXUIElementRef)value;
+        if(AXUIElementSetMessagingTimeout(child,.02))return NULL;
+        id role=decorationAttribute(child,kAXRoleAttribute,NULL);if(![role isKindOfClass:NSString.class])return NULL;
+        if(![role isEqual:(__bridge NSString *)kAXSplitGroupRole])continue;
+        CGRect frame;if(!decorationFinderFrame(child,pid,wid,getWindow,deadline,&frame))return NULL;
+        if(!CGRectEqualToRect(frame,own))continue;if(selected)return NULL;selected=child;
+    }
+    // The caller retains this reference while the temporary children array dies.
+    return selected?(AXUIElementRef)CFRetain(selected):NULL;
+}
+// Finder's observed search-scope row is draggable outside its controls, although
+// it sits below AXToolbar. Recognize only this exact named Finder hierarchy;
+// a generic group, empty content or a guessed title-bar height is not chrome.
+static NSDictionary *decorationFinderSearchHeader(AXUIElementRef window,CGRect own,CGRect toolbar,pid_t pid,uint32_t wid,AXError(*getWindow)(AXUIElementRef,uint32_t *),CFTimeInterval deadline){
+    if(CACurrentMediaTime()>=deadline||![[NSRunningApplication runningApplicationWithProcessIdentifier:pid].bundleIdentifier isEqual:@"com.apple.finder"]
+        ||CACurrentMediaTime()>=deadline||![decorationAttribute(window,kAXIdentifierAttribute,NULL)isEqual:@"FinderWindow"])return nil;
+    AXUIElementRef outer=decorationFinderSplit(window,own,pid,wid,getWindow,deadline);if(!outer)return nil;
+    AXUIElementRef inner=decorationFinderSplit(outer,own,pid,wid,getWindow,deadline);CFRelease(outer);if(!inner)return nil;
+    __attribute__((objc_precise_lifetime)) id children=CACurrentMediaTime()<deadline?decorationAttribute(inner,kAXChildrenAttribute,NULL):nil;CFRelease(inner);
+    if(![children isKindOfClass:NSArray.class]||[children count]!=5)return nil;
+    AXUIElementRef header=NULL;CGRect headerFrame=CGRectNull,results=CGRectNull;NSMutableArray *siblings=[NSMutableArray array];
+    for(id value in children){
+        if(CFGetTypeID((__bridge CFTypeRef)value)!=AXUIElementGetTypeID())return nil;
+        AXUIElementRef child=(__bridge AXUIElementRef)value;CGRect frame;
+        if(!decorationFinderFrame(child,pid,wid,getWindow,deadline,&frame))return nil;
+        id role=decorationAttribute(child,kAXRoleAttribute,NULL),identifier=decorationAttribute(child,kAXIdentifierAttribute,NULL);
+        if(![role isKindOfClass:NSString.class]||CACurrentMediaTime()>=deadline)return nil;
+        if([role isEqual:(__bridge NSString *)kAXGroupRole]&&[identifier isEqual:@"_NS:129"]){if(header)return nil;header=child;headerFrame=frame;}
+        else {
+            [siblings addObject:decorationRect(frame)];
+            if([role isEqual:(__bridge NSString *)kAXScrollAreaRole]&&[identifier isEqual:@"_NS:23"]){if(!CGRectIsNull(results))return nil;results=frame;}
+        }
+    }
+    if(!header||CGRectIsNull(results)||!CGRectContainsRect(CGRectInset(own,-1,-1),headerFrame)
+        ||!CGRectContainsRect(CGRectInset(own,-1,-1),results)||fabs(CGRectGetMinY(headerFrame)-CGRectGetMaxY(toolbar))>1
+        ||fabs(headerFrame.origin.x-results.origin.x)>1||fabs(headerFrame.size.width-results.size.width)>1
+        ||CGRectGetMinY(results)<CGRectGetMaxY(headerFrame)-1)return nil;
+    id controls=decorationAttribute(header,kAXChildrenAttribute,NULL);
+    if(![controls isKindOfClass:NSArray.class]||[controls count]!=4)return nil;
+    NSDictionary *roles=@{@"_NS:12":(__bridge NSString *)kAXStaticTextRole,@"_NS:29":(__bridge NSString *)kAXRadioGroupRole,
+        @"_NS:51":(__bridge NSString *)kAXButtonRole,@"plusMinusButton":(__bridge NSString *)kAXCheckBoxRole};
+    NSMutableSet *seen=[NSMutableSet set];NSMutableArray *excluded=[NSMutableArray array];
+    for(id value in controls){
+        if(CFGetTypeID((__bridge CFTypeRef)value)!=AXUIElementGetTypeID())return nil;
+        AXUIElementRef control=(__bridge AXUIElementRef)value;CGRect frame;
+        if(!decorationFinderFrame(control,pid,wid,getWindow,deadline,&frame)||!CGRectContainsRect(CGRectInset(headerFrame,-1,-1),frame))return nil;
+        id identifier=decorationAttribute(control,kAXIdentifierAttribute,NULL),role=decorationAttribute(control,kAXRoleAttribute,NULL);
+        if(![identifier isKindOfClass:NSString.class]||!roles[identifier]||![roles[identifier]isEqual:role]||[seen containsObject:identifier])return nil;
+        if([identifier isEqual:@"plusMinusButton"]&&![decorationAttribute(control,kAXSubroleAttribute,NULL)isEqual:@"AXToggle"])return nil;
+        [seen addObject:identifier];[excluded addObject:decorationRect(decorationLocal(CGRectInset(frame,-1,-1),own))];
+    }
+    for(NSDictionary *sibling in siblings){CGRect frame=CGRectIntersection(decorationReadRect(sibling),headerFrame);
+        if(!CGRectIsNull(frame)&&!CGRectIsEmpty(frame))[excluded addObject:decorationRect(decorationLocal(CGRectInset(frame,-1,-1),own))];}
+    CGRect after;if(seen.count!=4||!decorationFinderFrame(header,pid,wid,getWindow,deadline,&after)||!CGRectEqualToRect(after,headerFrame))return nil;
+    return @{@"region":decorationRect(decorationLocal(headerFrame,own)),@"excluded":excluded};
+}
 // Retain the first rejection for the next debug press, without another AX read
 // or a log line on every background refresh. No title or document text is kept.
 static NSDictionary *decorationRejected(NSString **reason,NSString *value){if(reason)*reason=value;return nil;}
@@ -173,10 +247,16 @@ NSDictionary *DWNativeDecorationButtons(NSDictionary *identity){
     }
     if(CACurrentMediaTime()>=deadline){CFRelease(window);return nil;}
     NSString *titleReason=nil;NSDictionary *titleDetail=nil;BOOL debug=getenv("INFINIFY_DEBUG")!=NULL;
-    NSDictionary *title=decorationTitle(window,own,selected.window,getWindow,deadline,debug?&titleReason:NULL,debug?&titleDetail:NULL);
+    NSDictionary *title=decorationTitle(window,own,selected.window,getWindow,deadline,&titleReason,debug?&titleDetail:NULL);
     // Title support is optional. A timed-out title/child query must not withdraw
     // an already successful green-button lookup from this unchanged window.
     if(CACurrentMediaTime()>=deadline){title=nil;if(debug)titleReason=@"title_deadline";}
+    if(title&&[titleReason isEqual:@"accepted_unified_toolbar"]){
+        CGRect toolbar=decorationReadRect(title[@"region"]);toolbar.origin.x+=own.origin.x;toolbar.origin.y+=own.origin.y;
+        NSDictionary *header=decorationFinderSearchHeader(window,own,toolbar,selected.pid,selected.window,getWindow,deadline);
+        // This optional audit never withdraws the independently valid toolbar.
+        if(header){NSMutableDictionary *extended=[title mutableCopy];extended[@"additional_regions"]=@[header];title=extended.copy;titleReason=@"accepted_unified_toolbar_finder_search_header";}
+    }
     CFRelease(window);CGRect after;
     if(!dw_focus_owner(selected,&after)||!CGRectEqualToRect(own,after))return nil;
     NSMutableDictionary *report=[@{@"identity":[identity copy],@"native_bounds":decorationRect(own),@"buttons":buttons.copy,@"title":title?:@{},@"sampled_at":@(CACurrentMediaTime())}mutableCopy];
@@ -190,9 +270,6 @@ BOOL DWNativeDecorationHit(NSDictionary *report,NSDictionary *identity,CGRect ow
     CGPoint local=CGPointMake((point.x-displayed.origin.x)*own.size.width/displayed.size.width,(point.y-displayed.origin.y)*own.size.height/displayed.size.height);
     for(NSDictionary *button in report[@"buttons"]){NSDictionary *origin=button[@"origin"],*extent=button[@"size"];CGRect r=CGRectMake([origin[@"x"]doubleValue],[origin[@"y"]doubleValue],[extent[@"width"]doubleValue],[extent[@"height"]doubleValue]);if(CGRectContainsPoint(r,local))return YES;}
     return NO;
-}
-static CGRect decorationReadRect(NSDictionary *value){
-    return CGRectMake([value[@"origin"][@"x"]doubleValue],[value[@"origin"][@"y"]doubleValue],[value[@"size"][@"width"]doubleValue],[value[@"size"][@"height"]doubleValue]);
 }
 static BOOL decorationDragMiss(NSDictionary *identity,CGPoint point,const char *reason){
     if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"debug: native title miss pid=%d wid=%u point=%g,%g reason=%s\n",[identity[@"pid"]intValue],[identity[@"wid"]unsignedIntValue],point.x,point.y,reason);
@@ -215,13 +292,18 @@ BOOL DWNativeWindowDragHit(NSDictionary *identity,NSDictionary *report,CGPoint p
     if([row[(id)kCGWindowOwnerPID]intValue]!=selected.pid||![row[(id)kCGWindowIsOnscreen]boolValue]||[row[(id)kCGWindowAlpha]doubleValue]<=0
         ||!row[(id)kCGWindowBounds]||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)row[(id)kCGWindowBounds],&displayed)||CGRectIsEmpty(displayed)||!CGRectContainsPoint(displayed,point))return decorationDragMiss(identity,point,"not_in_displayed_window");
     CGPoint local=CGPointMake((point.x-displayed.origin.x)*own.size.width/displayed.size.width,(point.y-displayed.origin.y)*own.size.height/displayed.size.height);
-    if(!CGRectContainsPoint(region,local)){
+    NSArray *regions=[@[title]arrayByAddingObjectsFromArray:[title[@"additional_regions"]isKindOfClass:NSArray.class]?title[@"additional_regions"]:@[]];
+    BOOL inside=NO;
+    for(NSDictionary *candidate in regions){
+        if(CGRectContainsPoint(decorationReadRect(candidate[@"region"]),local))inside=YES;
+        for(NSDictionary *excluded in candidate[@"excluded"])if(CGRectContainsPoint(decorationReadRect(excluded),local)){
+            if(getenv("INFINIFY_DEBUG")){CGRect frame=decorationReadRect(excluded);fprintf(stderr,"debug: native title miss local=%g,%g excluded=%g,%g,%g,%g\n",local.x,local.y,frame.origin.x,frame.origin.y,frame.size.width,frame.size.height);}
+            return decorationDragMiss(identity,point,"native_control");
+        }
+    }
+    if(!inside){
         if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"debug: native title miss local=%g,%g title=%g,%g,%g,%g displayed=%g,%g,%g,%g\n",local.x,local.y,region.origin.x,region.origin.y,region.size.width,region.size.height,displayed.origin.x,displayed.origin.y,displayed.size.width,displayed.size.height);
         return decorationDragMiss(identity,point,"outside_title");
-    }
-    for(NSDictionary *excluded in title[@"excluded"])if(CGRectContainsPoint(decorationReadRect(excluded),local)){
-        if(getenv("INFINIFY_DEBUG")){CGRect frame=decorationReadRect(excluded);fprintf(stderr,"debug: native title miss local=%g,%g excluded=%g,%g,%g,%g\n",local.x,local.y,frame.origin.x,frame.origin.y,frame.size.width,frame.size.height);}
-        return decorationDragMiss(identity,point,"native_control");
     }
     CGRect after;if(!dw_focus_owner(selected,&after)||!CGRectEqualToRect(own,after)
         ||![recipient isEqual:DWNativeEventRecipientAtPoint(point)])return decorationDragMiss(identity,point,"changed_during_hit");

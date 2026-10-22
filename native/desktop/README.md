@@ -893,6 +893,11 @@ is a line on stderr ([Desktop mode](#desktop-mode)).
   controls, document proxies and content keep their native input. Title recognition
   needs fresh Accessibility geometry; custom or ambiguous title layouts remain
   with their application and have not been validated for transformed dragging.
+  Finder's measured search-scope header below its toolbar also uses this gesture
+  when its exact Accessibility structure is recognized. Its scope controls,
+  Save button and filter toggle remain native. Physical Finder drags at 75% and
+  100% zoom were checked in the macOS 27.0.1 VM; see the
+  [live result](evidence/finder-header-20261022.md) for the tested layout and limits.
 - Window sizing. Control-Option-Shift-W (`zoom-to-fit-snapped`; also
   Control-Option with a four-finger pinch in) frames the focused window's snap
   cluster and nothing else, and a second press returns, as Fit does for every
