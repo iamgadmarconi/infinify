@@ -52,7 +52,7 @@ def method(marker):
     "- (NSDictionary *)inputIntentForHit:", "- (void)deliverHeld {",
     "- (BOOL)forward:(CGEventRef)e at:(CGPoint)p output:(NSNumber *)output activate:(BOOL)activate {",
     "- (BOOL)forward:(CGEventRef)e at:(CGPoint)p output:(NSNumber *)output activate:(BOOL)activate expected:",
-    "- (BOOL)forwardCaptured:", "- (void)releasePressed {",
+    "- (BOOL)forwardCaptured:", "- (void)mouseDragged:", "- (void)releasePressed {",
     "- (void)released:(CGPoint)p at:(NSTimeInterval)time",
 )))
 (output / "captured-input-desktop-consumers.inc").write_text("\n".join(method(marker) for marker in (

@@ -67,9 +67,11 @@
 - (NSDictionary *)request:(NSDictionary *)request { (void)request;return @{}; }
 @end
 @interface InputHover : NSObject
+- (BOOL)pressDragged:(CGPoint)point;
 - (void)pressReleased:(CGPoint)point;
 @end
 @implementation InputHover
+- (BOOL)pressDragged:(CGPoint)point { (void)point;return NO; }
 - (void)pressReleased:(CGPoint)point { (void)point; }
 @end
 @interface InputDesktop : NSObject
@@ -81,12 +83,15 @@
 @property InputFamilies *nativeFamilies;
 @property BOOL sessionInactive,cleaning,logicalFocus;
 @property BOOL configured;
+@property BOOL probe,probeDrivingGesture,probeHumanInput;
 @property NSArray *views;
 @property InputResize *resize;
 @property NSDictionary *nativeTitleClick;
 @property NSTimer *nativeTitleClickTimer;
 @property uint64_t nativeSessionEpoch;
 @property NSUInteger titleClicks,endedGestures;
+@property NSUInteger gestureMoves;
+@property NSDictionary *lastGestureMove;
 @property NSString *statusText;
 @property DWNativePointerGrab *pointerGrab;
 @property DWNativeTabletRouter *tablet;
@@ -105,6 +110,8 @@
 - (void)panEnd:(NSNumber *)output;
 - (void)clearFocus;
 - (void)saveScene;
+- (void)render;
+- (void)ensureFrames;
 - (BOOL)validateInputTarget:(NSDictionary *)target;
 - (BOOL)postInput:(CGEventRef)event target:(NSDictionary *)target local:(CGPoint)local;
 - (NSDictionary *)resolveCapturedPointer:(NSDictionary *)target screen:(CGPoint)screen;
@@ -158,6 +165,8 @@
 - (BOOL)focusPending:(NSNumber *)window intent:(NSDictionary *)intent;
 - (void)focusSource:(LiveSource *)source;
 - (CGPoint)screenPoint:(NSEvent *)event;
+- (void)mouseDragged:(NSEvent *)event;
+- (void)pan:(CGPoint)delta output:(NSNumber *)output event:(NSEvent *)event source:(NSString *)source;
 - (void)deliverHeld;
 - (void)releasePressed;
 - (BOOL)forward:(CGEventRef)event at:(CGPoint)point output:(NSNumber *)output activate:(BOOL)activate;
@@ -197,12 +206,14 @@ enum { DWPolicyPress=5 };
 - (BOOL)focusPending:(NSNumber *)window intent:(NSDictionary *)intent { (void)window;(void)intent;return NO; }
 - (void)focusSource:(LiveSource *)source { (void)source;if(self.duringFocus)self.duringFocus(); }
 - (CGPoint)screenPoint:(NSEvent *)event { return CGEventGetLocation(event.CGEvent); }
+- (void)pan:(CGPoint)delta output:(NSNumber *)output event:(NSEvent *)event source:(NSString *)source { (void)delta;(void)output;(void)event;(void)source; }
 #include "captured-input-view-consumers.inc"
 @end
 @implementation InputDesktop
 - (NSDictionary *)presentationSnapshot { return self.snapshot; }
 - (NSDictionary *)call:(NSDictionary *)request {
     if([request[@"op"]isEqual:@"end_gesture"])self.endedGestures++;
+    if([request[@"op"]isEqual:@"gesture_to"]){self.gestureMoves++;self.lastGestureMove=request;}
     if([request[@"cause"]isEqual:@"click_release"])self.titleClicks++;
     (void)request;dispatch_block_t before=self.beforeReply;self.beforeReply=nil;if(before)before();
     NSMutableDictionary *reply=[self.snapshot mutableCopy];reply[@"hit"]=@{@"window":@1,@"local":pointJSON(CGPointMake(4,5))};return reply;
@@ -214,6 +225,8 @@ enum { DWPolicyPress=5 };
 - (void)panEnd:(NSNumber *)output { (void)output; }
 - (void)clearFocus {}
 - (void)saveScene {}
+- (void)render {}
+- (void)ensureFrames {}
 - (BOOL)validateInputTarget:(NSDictionary *)target {
     LiveSource *s=self.sources[target[@"window"]];return s&&s.router.validIdentity&&!s.detached
         &&[target[@"identity"]isEqual:s.identity]&&[target[@"generation"]isEqual:@2];
@@ -247,21 +260,48 @@ static void titleReleaseCase(NSString *mode,BOOL expected) {
     LiveSource *s=v.desktop.sources[@1];v.nativeTitlePress=@{@"window":@1,@"output":@3,@"identity":s.identity,@"generation":@2};v.nativeTitleReleased=YES;
     NSMutableDictionary *snapshot=[v.desktop.snapshot mutableCopy];snapshot[@"outputs"]=@[@{@"id":@3,@"camera":pointJSON(CGPointZero),@"zoom":@.5,@"screen_bounds":rectJSON(CGRectMake(0,0,500,500))}];
     snapshot[@"focus"]=@{@"intent":@1,@"observed_native":v.nativeTitlePress};v.desktop.snapshot=snapshot;v.desktop.nativeViews=[InputViews new];
-    CGPoint release=CGPointMake(103,204);
+    CGPoint release=v.startPoint;
+    if([mode isEqual:@"slop"])release=CGPointMake(103,204);
     if([mode isEqual:@"drag"])release.x=106;
     if([mode isEqual:@"out_and_back"])v.nativeTitleMoved=YES;
     if([mode isEqual:@"lost_up"])v.nativeTitleReleased=NO;
     if([mode isEqual:@"other_output"])release.x=501;
     [v released:release at:1];
+    NSUInteger expectedMoves=([mode isEqual:@"drag"]||[mode isEqual:@"out_and_back"]||[mode isEqual:@"other_output"])?1:0;
+    check(v.desktop.gestureMoves==expectedMoves,[NSString stringWithFormat:@"title release %@ moves only after crossing click slop",mode]);
     check((v.desktop.nativeTitleClick!=nil)==expected,[NSString stringWithFormat:@"title click %@ release eligibility",mode]);
     check(v.desktop.titleClicks==0,@"title click never navigates before the double-click interval");
     check(v.gesture==0&&v.nativeTitlePress==nil,@"title release always ends original drag ownership");
     if(expected){
+        check(v.desktop.gestureMoves==0,@"stationary title click never enters magnetic snapping or arms edge pan");
         check(v.desktop.endedGestures==1,@"title click is armed after ending the world drag");
         [v.desktop fireNativeTitleClick:v.desktop.nativeTitleClickTimer];
         check(v.desktop.titleClicks==1,@"current stationary title click reaches controller navigation after delay");
     }
     [v.desktop cancelNativeTitleClick];
+}
+static void titleMotionCase(void) {
+    InputView *v=inputView(source(NO));v.desktop.configured=YES;v.gesture=2;v.gestureButton=0;v.startPoint=CGPointMake(100,200);v.dragOutput=@3;
+    v.nativeTitlePress=@{@"window":@1,@"output":@3};
+    CGEventRef packet=mousePacket(kCGEventLeftMouseDragged,kCGMouseButtonLeft);
+    CGEventSetLocation(packet,CGPointMake(103,204));[v mouseDragged:[NSEvent eventWithCGEvent:packet]];
+    check(!v.nativeTitleMoved&&v.desktop.gestureMoves==0,@"title motion inside click slop never enters snapping or edge pan");
+    CGEventSetLocation(packet,CGPointMake(106,200));[v mouseDragged:[NSEvent eventWithCGEvent:packet]];
+    check(v.nativeTitleMoved&&v.desktop.gestureMoves==1&&[v.desktop.lastGestureMove[@"screen_delta"]isEqual:pointJSON(CGPointMake(6,0))],@"crossing title click slop immediately sends the complete drag displacement");
+    CGEventSetLocation(packet,v.startPoint);[v mouseDragged:[NSEvent eventWithCGEvent:packet]];
+    check(v.nativeTitleMoved&&v.desktop.gestureMoves==2,@"a real drag returning into click slop continues moving");
+    v.nativeTitleReleased=YES;[v released:CGPointMake(108,200) at:1];
+    check(v.desktop.gestureMoves==3&&[v.desktop.lastGestureMove[@"screen_delta"]isEqual:pointJSON(CGPointMake(8,0))],@"real title drag consumes final release displacement");
+    check(!v.desktop.nativeTitleClick&&v.desktop.endedGestures==1,@"real title drag ends without click navigation");
+    CFRelease(packet);
+    v=inputView(source(NO));v.desktop.configured=YES;v.gesture=2;v.gestureButton=0;v.startPoint=CGPointMake(100,200);v.dragOutput=@3;
+    v.nativeTitlePress=@{@"window":@1,@"output":@3};v.nativeTitleReleased=YES;
+    [v released:CGPointMake(106,200) at:1];
+    check(v.desktop.gestureMoves==1&&[v.desktop.lastGestureMove[@"screen_delta"]isEqual:pointJSON(CGPointMake(6,0))],@"release crossing click slop starts movement even without a drag packet");
+    v=inputView(source(NO));v.desktop.configured=YES;v.gesture=2;v.gestureButton=0;v.startPoint=CGPointMake(100,200);v.dragOutput=@3;
+    packet=mousePacket(kCGEventLeftMouseDragged,kCGMouseButtonLeft);CGEventSetLocation(packet,v.startPoint);
+    [v mouseDragged:[NSEvent eventWithCGEvent:packet]];
+    check(v.desktop.gestureMoves==1,@"bound window moves retain their existing immediate gesture behavior");CFRelease(packet);
 }
 static void titleDeferredCase(NSString *mode) {
     InputView *v=inputView(source(NO));InputDesktop *d=v.desktop;LiveSource *s=d.sources[@1];d.configured=YES;d.nativeViews=[InputViews new];
@@ -479,7 +519,7 @@ int main(void) {@autoreleasepool {
     check(DWNativeButtonsAfterRefresh(negativeChrome,chromeReport,chromeIdentity,refreshNow,YES,chromeNative)==negativeChrome,@"successful negative title report replaces the older map");
     check(!DWNativeButtonsAfterRefresh(chromeReport,chromeReport,chromeIdentity,refreshNow,YES,chromeNative),@"late nonnil report cannot fall back to an older map");
 
-    titleReleaseCase(@"stationary",YES);
+    titleReleaseCase(@"stationary",YES);titleReleaseCase(@"slop",YES);titleMotionCase();
     titleReleaseCase(@"drag",NO);titleReleaseCase(@"out_and_back",NO);
     titleReleaseCase(@"lost_up",NO);titleReleaseCase(@"other_output",NO);
     for(NSString *mode in @[@"second_down",@"rebound",@"focus",@"pose",@"session"])titleDeferredCase(mode);

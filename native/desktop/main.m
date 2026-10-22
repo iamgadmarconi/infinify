@@ -1917,7 +1917,12 @@ static NSDictionary *DWNativeButtonsAfterRefresh(NSDictionary *report,NSDictiona
     if(self.desktop.probe&&!self.desktop.probeDrivingGesture){self.desktop.probeHumanInput=YES;return;}
     if(self.desktop.configured&&e.buttonNumber!=self.gestureButton)return;
     CGPoint p=[self screenPoint:e];
-    if(self.nativeTitlePress&&hypot(p.x-self.startPoint.x,p.y-self.startPoint.y)>5)self.nativeTitleMoved=YES;
+    if(self.nativeTitlePress){
+        if(hypot(p.x-self.startPoint.x,p.y-self.startPoint.y)>5)self.nativeTitleMoved=YES;
+        // A title click owns the native pair but is not yet a window move.
+        // Even a zero delta can magnetically snap and arm edge pan.
+        if(!self.nativeTitleMoved){self.lastPoint=p;return;}
+    }
     // A pick-mode press dragged past the click slop is a window move from here on, as upstream's grab starts where it is promoted.
     if(self.gesture==DWPolicyPress&&[self.hover pressDragged:p]){self.gesture=2;self.startPoint=p;}
     // Each drag event says where the pointer is; the controller asks one size at a time of the window and keeps only the latest while one
@@ -1977,9 +1982,10 @@ static NSDictionary *DWNativeButtonsAfterRefresh(NSDictionary *report,NSDictiona
         &&hypot(p.x-self.startPoint.x,p.y-self.startPoint.y)<=5&&[[self outputAt:p]isEqual:self.dragOutput]
         &&[self nativeTitlePressCurrent]?self.nativeTitlePress:nil;
     self.nativeTitleReleased=NO;
-    // Native title movement never reaches AppKit. Apply an up farther than
-    // the last drag through the same pointer-to-world mapping before ending it.
-    if(self.nativeTitlePress&&self.gesture==2&&[self nativeTitlePressCurrent])
+    // Native title movement never reaches AppKit. After crossing click slop,
+    // apply the final up through the same pointer-to-world mapping. An up may
+    // be the first packet beyond slop; a stationary click must never snap.
+    if(self.nativeTitlePress&&self.gesture==2&&(self.nativeTitleMoved||hypot(p.x-self.startPoint.x,p.y-self.startPoint.y)>5)&&[self nativeTitlePressCurrent])
         [self.desktop call:@{@"op":@"gesture_to",@"screen_delta":pointJSON(CGPointMake(p.x-self.startPoint.x,p.y-self.startPoint.y)),@"pointer":pointJSON(p)}];
     self.nativeTitlePress=nil;
     // The release of a resize grab: the last size asked is let through, the window is read once more, and the canvas has the size it has.
