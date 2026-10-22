@@ -28,6 +28,13 @@ end = source.index("\n- (BOOL)installSample:", start)
 start = source.index("static BOOL DWRootCaptureCrop(")
 end = source.index("\n}\n", start) + len("\n}\n")
 (output / "root-capture-crop.inc").write_text(source[start:end])
+transition = Path("native/desktop/native-transition.m").read_text()
+geometry = []
+for marker in ("static BOOL validRect(", "static BOOL roundedEdgesMatch(", "static BOOL captureImageGeometry("):
+    start = transition.index(marker)
+    end = transition.index("\n}\n", start) + len("\n}\n")
+    geometry.append(transition[start:end])
+(output / "native-transition-capture-geometry.inc").write_text("\n".join(geometry))
 start = source.index("static BOOL DWCapturedInputAvailable(")
 end = source.index("\n}", start) + len("\n}")
 (output / "root-capture-input-availability.inc").write_text(source[start:end] + "\n")

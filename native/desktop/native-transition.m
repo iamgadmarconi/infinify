@@ -107,6 +107,17 @@ static BOOL roundedEdgesMatch(CGRect mapping,CGRect observed) {
     return fabs(CGRectGetMinX(mapping)-CGRectGetMinX(observed))<1&&fabs(CGRectGetMinY(mapping)-CGRectGetMinY(observed))<1
         &&fabs(CGRectGetMaxX(mapping)-CGRectGetMaxX(observed))<1&&fabs(CGRectGetMaxY(mapping)-CGRectGetMaxY(observed))<1;
 }
+// SCK describes the rounded CG window region. Its raster must cover that
+// exact pinned region; the caller's unrounded helper mapping stays unchanged.
+// Comparing their aspect ratios instead would amplify permitted edge rounding
+// by the backing density and reject valid scaled windows.
+static BOOL captureImageGeometry(CGRect mapping,CGRect observed,CGRect windowFrame,CGRect area,double density,double *width,double *height) {
+    if(!validRect(mapping)||!validRect(observed)||!validRect(area)||!roundedEdgesMatch(mapping,observed)
+        ||!CGRectEqualToRect(windowFrame,observed)||!CGRectEqualToRect(area,observed)||!isfinite(density)||density<=0)return NO;
+    double w=ceil(area.size.width*density),h=ceil(area.size.height*density);
+    if(!isfinite(w)||!isfinite(h)||w<1||h<1||w>16384||h>16384)return NO;
+    *width=w;*height=h;return YES;
+}
 static BOOL captureRefused(NSString *__autoreleasing *reason,NSString *value) {
     if(reason)*reason=value;return NO;
 }
@@ -187,9 +198,8 @@ static BOOL captureRootCurrent(NSDictionary *identity,CGRect native,CGRect scree
     for(SCWindow *candidate in content.windows)if(candidate.windowID==[_identity[@"wid"]unsignedIntValue]&&candidate.owningApplication.processID==[_identity[@"pid"]intValue]){window=candidate;matches++;}
     if(matches!=1){[self complete:nil failure:@"Native transition root is unavailable or ambiguous for capture"];return;}
     SCContentFilter *filter=[[SCContentFilter alloc]initWithDesktopIndependentWindow:window];CGRect area=filter.contentRect;double density=filter.pointPixelScale;
-    double width=ceil(area.size.width*density),height=ceil(area.size.height*density);
-    if(!validRect(area)||!isfinite(density)||density<=0||!isfinite(width)||!isfinite(height)||width<1||height<1||width>16384||height>16384
-        ||fabs(width*_screen.size.height-height*_screen.size.width)>_screen.size.width+_screen.size.height){[self complete:nil failure:@"Native transition capture has invalid image geometry"];return;}
+    double width=0,height=0;
+    if(!captureImageGeometry(_screen,_observedScreen,window.frame,area,density,&width,&height)){[self complete:nil failure:@"Native transition capture has invalid image geometry"];return;}
     SCScreenshotConfiguration *config=[SCScreenshotConfiguration new];config.width=(NSInteger)width;config.height=(NSInteger)height;config.destinationRect=CGRectMake(0,0,width,height);
     config.showsCursor=NO;config.ignoreShadows=YES;config.ignoreClipping=YES;config.includeChildWindows=NO;config.dynamicRange=SCScreenshotDynamicRangeSDR;
     dispatch_async(_queue,^{

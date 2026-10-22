@@ -71,6 +71,7 @@ static void deferDispatch(dispatch_queue_t queue,dispatch_block_t block) { (void
 #define dispatch_async deferDispatch
 
 #include "root-capture-crop.inc"
+#include "native-transition-capture-geometry.inc"
 @implementation LiveSource
 - (instancetype)init { if((self=[super init]))_contentRect=CGRectNull;return self; }
 - (CVPixelBufferRef)pixels { return (__bridge CVPixelBufferRef)self.installedImage; }
@@ -127,6 +128,31 @@ static void publish(LiveSource *source,NSUInteger phase) {
 static void resetSource(LiveSource *source) { [source.captureMailbox cancel];while(jobs.count)drainOne(); }
 
 int main(void) {@autoreleasepool {
+    // Actual Finder metadata from v24-transition-metadata.json. SCK's raster
+    // follows the outward-rounded CG rectangle, not the exact helper mapping.
+    CGRect finderMapping=CGRectMake(656.13232665461635,435.61747525278042,743.73534669076719,408.76504949443915);
+    CGRect finderObserved=CGRectMake(656,435,744,410);double width=0,height=0;
+    check(roundedEdgesMatch(finderMapping,finderObserved),@"live Finder phase satisfies the existing per-edge mapping fence");
+    check(captureImageGeometry(finderMapping,finderObserved,finderObserved,finderObserved,2,&width,&height)&&width==1488&&height==820,
+        @"live Finder rounded filter produces the observed raster without rejecting its exact logical mapping");
+    check(!captureImageGeometry(finderMapping,finderObserved,CGRectOffset(finderObserved,1,0),finderObserved,2,&width,&height),
+        @"a stale enumerated SCWindow frame cannot authorize the pinned capture");
+    check(!captureImageGeometry(finderMapping,finderObserved,finderObserved,CGRectOffset(finderObserved,1,0),2,&width,&height),
+        @"same-aspect shifted filter cannot replace the exact pinned observed window");
+    check(!captureImageGeometry(finderMapping,finderObserved,finderObserved,CGRectInset(finderObserved,-1,-1),2,&width,&height),
+        @"a padded filter cannot map extra pixels into the window");
+    check(!captureImageGeometry(finderMapping,finderObserved,finderObserved,CGRectInset(finderObserved,1,1),2,&width,&height),
+        @"a cropped filter cannot stretch partial content over the entire window");
+    CGRect outside=finderMapping;outside.origin.x=finderObserved.origin.x+1;
+    check(!captureImageGeometry(outside,finderObserved,finderObserved,finderObserved,2,&width,&height),
+        @"raster admission retains the original strict less-than-one-point edge fence");
+    check(!captureImageGeometry(finderMapping,finderObserved,finderObserved,finderObserved,NAN,&width,&height)
+        &&!captureImageGeometry(finderMapping,finderObserved,finderObserved,finderObserved,0,&width,&height)
+        &&!captureImageGeometry(finderMapping,finderObserved,finderObserved,finderObserved,32,&width,&height),
+        @"invalid density and oversized rasters remain refused");
+    CGRect ordinary=CGRectMake(-40,30,656,422);
+    check(captureImageGeometry(ordinary,ordinary,ordinary,ordinary,2,&width,&height)&&width==1312&&height==844,
+        @"unscaled whole-window capture retains native raster sizing");
     jobs=[NSMutableArray array];LiveSource *s=source(NO);
     check(!s.captureMailbox.currentImageAvailable,@"new stream has no published image");
     check(!DWCapturedInputAvailable(s),@"new composited capture cannot authorize synthetic input");
