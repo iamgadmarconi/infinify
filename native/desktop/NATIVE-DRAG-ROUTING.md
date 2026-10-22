@@ -129,13 +129,23 @@ presses use the existing Infinify Fill path.
 Only a separately reported, validated AX move may translate a recent titlebar
 map without discarding it. Its original age and local control exclusions remain
 unchanged; size, title, mixed and unknown changes still invalidate the map.
+A failed AX refresh can retain the currently published map only within its
+original half-second lifetime and after a fresh identity and exact-frame check.
+It cannot revive an invalidated map or extend its lifetime; a successful negative
+titlebar report replaces it.
 Control-Command-F and Fn-F use the same canvas Fill path when a fresh bounded
 native focus read identifies a currently managed root. Admission starts with the
 actual focused window rather than the asynchronous logical focus observation;
 the deferred action rechecks its identity, binding, session and output. Authored
-bindings and explicit F-key passthrough retain precedence. Unknown chrome,
-green hover popovers, application menus and other keyboard window commands
-remain separate native paths. These changes do not claim blanket suppression of
+bindings and explicit key passthrough retain precedence. Fn-Control-F enters
+Fill, Fn-Control-R restores it, and Fn-Control-C centers the camera on that exact
+target without resizing it. Repeated Fill or Restore presses cannot toggle the
+opposite state. The documented Fn-Control-arrow tiling chords, including their
+Shift and Option-Shift variants, are consumed for admitted managed roots so
+macOS cannot rearrange their backing windows. Unmanaged or unverified targets
+retain native input.
+Unknown chrome, green hover popovers and application menus remain separate
+native paths. These changes do not claim blanket suppression of
 every application's window controls. Physical gesture acceptance must be checked
 in the running VM; policy checks and compilation alone are insufficient.
 

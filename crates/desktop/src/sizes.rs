@@ -992,14 +992,29 @@ impl Controller {
     ) -> Result<Value, Error> {
         self.check_generation(window, identity, generation)?;
         self.navigation_context(output)?;
-        if !self.sizes.capability {
+        // Directional commands do not undo an enter or start another restore
+        // while the matching native transaction is still settling.
+        if matches!(action, DecorationAction::Fill) && self.is_fullscreen(window)
+            || matches!(action, DecorationAction::Restore) && !self.is_fullscreen(window)
+        {
+            return Ok(Outcome::default().reply());
+        }
+        if !matches!(action, DecorationAction::Center) && !self.sizes.capability {
             return Err(Error::Invalid("native sizing is unavailable"));
         }
         self.guard_resize_structure(Some(window))?;
         let mut outcome = Outcome::default();
         match action {
-            DecorationAction::Fullscreen => {
+            DecorationAction::Fullscreen | DecorationAction::Fill | DecorationAction::Restore => {
                 self.decoration_fullscreen(window, output, &mut outcome)?;
+            }
+            DecorationAction::Center => {
+                let moved = self.navigate_restoring_fill(window, output)?;
+                outcome.navigation = moved.navigation;
+                outcome.dirty = moved.refocused;
+                if !moved.effect.is_null() {
+                    outcome.effects.push(moved.effect);
+                }
             }
             DecorationAction::Fit => {
                 if self.is_widget(window) || self.is_pinned(window) {

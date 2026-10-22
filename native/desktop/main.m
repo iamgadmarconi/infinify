@@ -1031,7 +1031,7 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 @property NSPanel *standinKeyboardPanel;
 @property NSUInteger standinKeyboardSerial;
 - (dispatch_block_t)standInEnter;
-- (dispatch_block_t)nativeFullscreenKey;
+- (dispatch_block_t)nativeWindowControlKey:(DWNativeWindowControl)action;
 - (void)updateStandInKeyboard:(NSDictionary *)snapshot;
 @property DWTapKeys *tapKeys; // DriftWM's tap bindings, watched while the hot keys are registered
 @property DWConfigWatcher *configWatcher;
@@ -1603,6 +1603,20 @@ static NSDictionary *DWNativeMovedButtons(NSDictionary *report,NSDictionary *ide
         ||!isfinite(native.origin.x)||!isfinite(native.origin.y)||!isfinite(native.size.width)||!isfinite(native.size.height)
         ||native.size.width<=0||native.size.height<=0||!CGSizeEqualToSize(old.size,native.size))return nil;
     NSMutableDictionary *moved=[report mutableCopy];moved[@"native_bounds"]=rectJSON(native);return moved.copy;
+}
+
+// Failed AX refresh is not a new chrome observation. Only a still-public map
+// can survive it, under its original title-hit age and exact native geometry.
+// A returned report (including a negative title result) always supersedes it.
+static NSDictionary *DWNativeButtonsAfterRefresh(NSDictionary *report,NSDictionary *current,NSDictionary *identity,
+    CFTimeInterval now,BOOL nativeCurrent,CGRect native) {
+    if(report)return now-[report[@"sampled_at"]doubleValue]<=.1?report:nil;
+    double sampled=[current[@"sampled_at"]doubleValue],age=now-sampled;
+    if(!current||!nativeCurrent||![current[@"identity"]isEqual:identity]||!isfinite(sampled)||sampled<=0
+        ||!isfinite(age)||age<0||age>.5||!isfinite(native.origin.x)||!isfinite(native.origin.y)
+        ||!isfinite(native.size.width)||!isfinite(native.size.height)||native.size.width<=0||native.size.height<=0
+        ||!CGRectEqualToRect(jsonRect(current[@"native_bounds"]),native))return nil;
+    return current;
 }
 
 // A child press may activate its application, but must never raise the root:
@@ -2833,7 +2847,13 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         NSDictionary *report=DWNativeDecorationButtons(identity);
         dispatch_async(dispatch_get_main_queue(),^{Desktop *d=weak;source.nativeButtonsReading=NO;
             if(!d||d.cleaning||d.sessionInactive||!d.configured||d.native.ended||d.nativeSessionEpoch!=session||d.sources[source.logical]!=source||source.detached||source.nativeButtonsRevision!=revision||![source.identity isEqual:identity]||!DWInScope(d.scope,source.router.pid))return;
-            source.nativeButtons=report&&CACurrentMediaTime()-[report[@"sampled_at"]doubleValue]<=.1?report:nil;source.nativeButtonsMoveCandidate=nil;
+            NSDictionary *current=source.nativeButtons;CGRect native=CGRectZero;BOOL nativeCurrent=NO;
+            if(!report&&current){
+                DWFocusIdentity selected={.pid=[identity[@"pid"]intValue],.window=[identity[@"wid"]unsignedIntValue],.seconds=[identity[@"birth_sec"]unsignedLongLongValue],.microseconds=[identity[@"birth_usec"]unsignedLongLongValue]};
+                nativeCurrent=dw_focus_owner(selected,&native);
+            }
+            source.nativeButtons=DWNativeButtonsAfterRefresh(report,current,identity,CACurrentMediaTime(),nativeCurrent,native);
+            source.nativeButtonsMoveCandidate=nil;
             if(DWInputTrace()){
                 NSString *reason=asString(source.nativeButtons[@"title_reason"])?:report?@"stale_report":@"report_unavailable";
                 if(![source.nativeTitleDebugReason isEqual:reason]){
@@ -4156,10 +4176,10 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     return ^{Desktop *d=weak;if(!d||d.standinKeyboardSerial!=serial||![d.standinKeyboardWindow isEqual:window]||![d standInEnter])return;
         [d.tapKeys taint];[d applyReply:[d call:@{@"op":@"ipc",@"request":@{@"Relaunch":window}}]];};
 }
-// A system fullscreen shortcut belongs to the exact managed native root that
+// A system window-control shortcut belongs to the exact managed native root that
 // currently has keyboard focus. The controller's last observation alone cannot
 // distinguish a new window in the same app; read only AXFocusedWindow here.
-- (NSDictionary *)nativeFullscreenIntent {
+- (NSDictionary *)nativeWindowControlIntent {
     if(!self.native||!self.configured||self.windowed||self.cleaning||self.sessionInactive||[self nativeUnavailable])return nil;
     DWFocusIdentity target={0};if(!dw_focus_frontmost(&target))return nil;
     NSDictionary *observed=@{@"pid":@(target.pid),@"wid":@(target.window),@"birth_sec":@(target.seconds),@"birth_usec":@(target.microseconds)};
@@ -4174,11 +4194,11 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     NSDictionary *identity=source.identity.copy;
     return @{@"window":window,@"identity":identity,@"generation":binding[@"generation"],@"output":output,@"session":@(self.nativeSessionEpoch)};
 }
-- (dispatch_block_t)nativeFullscreenKey {
-    NSDictionary *intent=[self nativeFullscreenIntent];if(!intent)return nil;__weak Desktop *weak=self;
+- (dispatch_block_t)nativeWindowControlKey:(DWNativeWindowControl)action {
+    NSDictionary *intent=[self nativeWindowControlIntent];if(!intent)return nil;__weak Desktop *weak=self;
     // The physical pair stays owned even if the target or geometry becomes
     // unavailable before dispatch. Never deliver a native fallback mid-pair.
-    return ^{Desktop *d=weak;if(!d||![[d nativeFullscreenIntent]isEqual:intent])return;
+    return ^{Desktop *d=weak;if(!d||![[d nativeWindowControlIntent]isEqual:intent])return;
         LiveSource *source=d.sources[intent[@"window"]];
         NSDictionary *focus=asDict([d call:@{@"op":@"snapshot"}][@"focus"]);
         if(asDict(focus[@"pending_effect"])||d.nativeFillHandoff||source.nativeMouseOwnership||d.nativeOwnershipTransfer||d.nativeHoverTransfer
@@ -4186,9 +4206,19 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
             ||d.trackpad.engaged||d.globalGestureContact||d.globalTrackpad.ownsTouches||d.globalTrackpad.hasNativeMousePress
             ||NSEvent.pressedMouseButtons||[[d.resize busyWindow]isEqual:source.logical])return;
         for(DesktopView *view in d.views)if(view.gesture||view.heldPress||view.pressedSource||view.pressedTablet||view.pressedPointerGrab)return;
-        NSMutableDictionary *command=[intent mutableCopy];[command removeObjectForKey:@"session"];command[@"op"]=@"native_decoration";command[@"action"]=@"fullscreen";
+        NSString *name=nil;
+        switch(action){
+            case DWNativeWindowControlToggleFullscreen:name=@"fullscreen";break;
+            case DWNativeWindowControlFill:name=@"fill";break;
+            case DWNativeWindowControlRestore:name=@"restore";break;
+            case DWNativeWindowControlCenter:name=@"center";break;
+            case DWNativeWindowControlSuppressTiling:
+                [d.tapKeys taint];[d cancelNativeTitleClick];[d flashStatus:@"Use the canvas to arrange windows"];[d render];return;
+        }
+        if(!name)return;
+        NSMutableDictionary *command=[intent mutableCopy];[command removeObjectForKey:@"session"];command[@"op"]=@"native_decoration";command[@"action"]=name;
         [d.tapKeys taint];[d cancelNativeTitleClick];[d applyReply:[d call:command]];
-        if(DWInputTrace())fprintf(stderr,"debug: native fullscreen key window=#%s\n",source.logical.description.UTF8String);
+        if(DWInputTrace())fprintf(stderr,"debug: native window control key action=%s window=#%s\n",name.UTF8String,source.logical.description.UTF8String);
     };
 }
 - (void)launch:(NSString *)bundle {
@@ -4631,7 +4661,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     NSDictionary *bindings=[self call:@{@"op":@"bindings"}];if(!bindings)[notes addObject:self.statusText?:@"bindings unavailable"];
     for(id warning in asArray(bindings[@"warnings"]))if(asString(warning))[notes addObject:warning];
     // A key that fires as a binding is a key on top of whatever modifier chord is held: that chord is no tap.
-    if(!self.hotKeys){__weak Desktop *weak=self;self.hotKeys=[[DWHotKeys alloc]initWithFire:^(NSString *action){[weak.tapKeys taint];[weak action:action output:[weak viewOutput]];}];self.hotKeys.kept=exitChord();self.hotKeys.standinEnter=^dispatch_block_t{return [weak standInEnter];};self.hotKeys.nativeFullscreen=^dispatch_block_t{return [weak nativeFullscreenKey];};self.hotKeys.changed=^{Desktop *d=weak;NSArray<NSString *> *left=[d refreshBindings];for(NSString *line in left)fprintf(stderr,"%s\n",line.UTF8String);if(left.count){d.statusText=summary(@"Bindings",left);[d render];}};}
+    if(!self.hotKeys){__weak Desktop *weak=self;self.hotKeys=[[DWHotKeys alloc]initWithFire:^(NSString *action){[weak.tapKeys taint];[weak action:action output:[weak viewOutput]];}];self.hotKeys.kept=exitChord();self.hotKeys.standinEnter=^dispatch_block_t{return [weak standInEnter];};self.hotKeys.nativeWindowControl=^dispatch_block_t(DWNativeWindowControl action){return [weak nativeWindowControlKey:action];};self.hotKeys.changed=^{Desktop *d=weak;NSArray<NSString *> *left=[d refreshBindings];for(NSString *line in left)fprintf(stderr,"%s\n",line.UTF8String);if(left.count){d.statusText=summary(@"Bindings",left);[d render];}};}
     // A tap binding's chord, completed, goes back to the controller as it came, to be looked up and run there. The output, the pointer and the modifiers
     // still down are those of the moment, as a hot key's: the release that completes a chord of two leaves one of them held.
     if(!self.tapKeys){__weak Desktop *weak=self;self.tapKeys=[[DWTapKeys alloc]initWithFire:^(NSDictionary *tap){NSDictionary *chord=asDict(tap[@"modifiers"]);if(chord)[weak action:asString(tap[@"action"]) output:[weak viewOutput] at:pointer() held:[DWCycleHold modifiersDown]!=0 corner:nil tap:chord];}];}

@@ -286,6 +286,9 @@ pub struct PresentWindow {
 pub enum DecorationAction {
     Fit,
     Fullscreen,
+    Fill,
+    Restore,
+    Center,
 }
 /// Adapter-chosen screen placement. It carries no native coordinate system or
 /// ownership; `screen_pos` is local to the canvas output named here.
@@ -299,7 +302,7 @@ pub struct SourceScreenPin {
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
     Snapshot {},
-    /// A native title-bar control, addressed to its exact source rather than
+    /// A native window control, addressed to its exact source rather than
     /// whichever window currently has canvas focus. Native geometry stays in
     /// the adapter that identified the control.
     NativeDecoration {

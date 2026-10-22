@@ -513,6 +513,147 @@ fn nothing() -> Value {
     serde_json::from_str(NOTHING).unwrap()
 }
 
+fn decoration(h: &mut Host, id: u64, output: u64, action: &str) -> Value {
+    let source = window(h, id)["source"].clone();
+    h.ok(json!({"op":"native_decoration","window":id,"output":output,
+        "identity":source["identity"],"generation":source["generation"],"action":action}))
+}
+
+#[test]
+fn native_decoration_fill_and_restore_are_directional_and_exact_targeted() {
+    let mut h = zoomed(CONFIG);
+    attach(&mut h, 2, "app.2", (900.0, 600.0, 200.0, 100.0));
+    h.ok(json!({"op":"focus","window":2}));
+    let original = world(&mut h, 1);
+    let other = world(&mut h, 2);
+    let original_view = pose(&mut h, 2);
+    let reply = decoration(&mut h, 1, 2, "fill");
+    assert_eq!(fullscreen(&mut h, 2)["window"], 1);
+    let pending = h.snapshot();
+    assert_eq!(decoration(&mut h, 1, 1, "fill"), nothing());
+    assert_eq!(
+        h.snapshot(),
+        pending,
+        "repeated Fill must not exit or retarget"
+    );
+    deliver(
+        &mut h,
+        &reply,
+        (START.2, START.3),
+        (B.2, B.3),
+        "applied",
+        (B.2, B.3),
+    );
+    let filled = h.snapshot();
+    assert_eq!(decoration(&mut h, 1, 2, "fill"), nothing());
+    assert_eq!(h.snapshot(), filled);
+    assert_eq!(decoration(&mut h, 2, 2, "restore"), nothing());
+    assert_eq!(
+        h.snapshot(),
+        filled,
+        "Restore must not exit a different window"
+    );
+    let reply = decoration(&mut h, 1, 1, "restore");
+    assert_eq!(fullscreen(&mut h, 2), Value::Null);
+    let pending = h.snapshot();
+    assert_eq!(decoration(&mut h, 1, 2, "restore"), nothing());
+    assert_eq!(h.snapshot(), pending);
+    deliver(
+        &mut h,
+        &reply,
+        (B.2, B.3),
+        (START.2, START.3),
+        "applied",
+        (START.2, START.3),
+    );
+    assert_eq!(world(&mut h, 1), original);
+    assert_eq!(world(&mut h, 2), other);
+    assert_eq!(pose(&mut h, 2), original_view);
+    let restored = h.snapshot();
+    assert_eq!(decoration(&mut h, 1, 2, "restore"), nothing());
+    assert_eq!(h.snapshot(), restored, "repeated Restore must not enter");
+}
+
+#[test]
+fn native_decoration_center_uses_exact_target_and_canonical_navigation_without_sizing() {
+    let mut h = fixture(CONFIG); // Center needs no native resize capability.
+    attach(&mut h, 2, "app.2", (900.0, 600.0, 200.0, 100.0));
+    let expected = action(&mut h, 2, "center-window");
+    h.ok(json!({"op":"focus","window":2}));
+    let before = [world(&mut h, 1), world(&mut h, 2)];
+    let source = window(&mut h, 1)["source"].clone();
+    let reply = decoration(&mut h, 1, 2, "center");
+    assert_eq!(reply["effects"][0]["window"], 1);
+    assert_eq!(reply["effects"][0]["identity"], source["identity"]);
+    assert_eq!(reply["navigation"]["output"], 2);
+    assert_eq!(
+        reply["navigation"]["target_camera"],
+        expected["navigation"]["target_camera"]
+    );
+    assert_eq!(
+        reply["navigation"]["target_zoom"],
+        expected["navigation"]["target_zoom"]
+    );
+    assert!(reply.get("transaction").is_none());
+    assert_eq!([world(&mut h, 1), world(&mut h, 2)], before);
+}
+
+#[test]
+fn native_decoration_directional_actions_preserve_pin_and_widget_rules() {
+    let mut h = capable(CONFIG);
+    attach(&mut h, 2, "app.widget", (500.0, 100.0, 300.0, 200.0));
+    for action in ["fill", "restore"] {
+        let before = h.snapshot();
+        assert_eq!(decoration(&mut h, 2, 1, action), nothing());
+        assert_eq!(h.snapshot(), before);
+    }
+    let before_view = pose(&mut h, 1);
+    let reply = decoration(&mut h, 2, 1, "center");
+    assert_eq!(reply["navigation"], Value::Null);
+    assert_eq!(pose(&mut h, 1), before_view);
+    h.ok(json!({"op":"focus","window":1}));
+    action(&mut h, 1, "toggle-pin-to-screen");
+    let pin = window(&mut h, 1)["pinned"].clone();
+    let reply = decoration(&mut h, 1, 1, "center");
+    assert_eq!(reply["navigation"], Value::Null);
+    assert_eq!(pose(&mut h, 1), before_view);
+    let reply = decoration(&mut h, 1, 1, "fill");
+    assert_eq!(window(&mut h, 1)["pinned"], Value::Null);
+    deliver(
+        &mut h,
+        &reply,
+        (START.2, START.3),
+        (USABLE.2, USABLE.3),
+        "applied",
+        (USABLE.2, USABLE.3),
+    );
+    let reply = decoration(&mut h, 1, 1, "restore");
+    deliver(
+        &mut h,
+        &reply,
+        (USABLE.2, USABLE.3),
+        (START.2, START.3),
+        "applied",
+        (START.2, START.3),
+    );
+    assert_eq!(window(&mut h, 1)["pinned"], pin);
+}
+
+#[test]
+fn native_decoration_directional_actions_reject_stale_bindings() {
+    let mut h = capable(CONFIG);
+    let source = window(&mut h, 1)["source"].clone();
+    for action in ["fill", "restore", "center"] {
+        for (identity, generation) in [
+            (identity(99), source["generation"].clone()),
+            (identity(1), json!(0)),
+        ] {
+            h.error(json!({"op":"native_decoration","window":1,"output":1,
+                "identity":identity,"generation":generation,"action":action}));
+        }
+    }
+}
+
 // Captured from the tree before this milestone, built apart and asked the
 // same requests of the same state: every literal below is the exact response
 // the C ABI returned then. First from c5dd6fb, the tree the milestone was
@@ -531,7 +672,7 @@ fn without_the_capability_fullscreen_answers_as_it_did_before() {
     const END: &str = r#"{"data":{"dirty":false,"effects":[],"fired":null,"gesture":{"cancelled":false,"output":1,"state":"pinch_threshold","window":null},"navigation":null,"needs_frames":false,"note":null,"trackpad":true},"ok":true,"version":1}"#;
     const STATE: &str = r#"{"data":{"dirty":false,"effects":[],"navigation":null,"reply":{"Ok":{"State":{"active_bookmark":null,"camera":[500.0,-400.0],"canvas_layers":[],"fullscreen":[],"layers":[],"layout":"","layout_short":"","outputs":[{"active":true,"active_bookmark":null,"camera":[500.0,-400.0],"name":"view-a","size":[1000,800],"zoom":1.0},{"active":false,"active_bookmark":null,"camera":[400.0,-300.0],"name":"view-b","size":[800,600],"zoom":1.0}],"pinned":[],"windows":[{"app_id":"app.1","id":1,"is_focused":true,"is_widget":false,"mode":"Normal","position":[300,-250],"size":[400,300],"suspended":false,"title":"fixture"}],"zoom":1.0}}}},"ok":true,"version":1}"#;
     const KEY: &str = r#"{"action":"toggle-fullscreen","character":"f","chord":"⌘F","combo":"mod+f","implemented":false,"key_code":3,"modifiers":{"command":true,"control":false,"option":false,"shift":false},"passable":true,"repeat":false}"#;
-    const ATTACH: &str = r#"{"data":{"adopted":false,"dirty":true,"effect":{"effect_id":2,"generation":2,"identity":{"birth_sec":1800000000,"birth_usec":0,"owner":null,"pid":123,"wid":2},"op":"focus_native_window","window":2},"navigation":{"animating":true,"generation":1,"output":1,"target_camera":{"x":0.0,"y":0.0},"target_zoom":1.0},"window":2},"ok":true,"version":1}"#;
+    const ATTACH: &str = r#"{"data":{"adopted":false,"background":false,"dirty":true,"effect":{"effect_id":2,"generation":2,"identity":{"birth_sec":1800000000,"birth_usec":0,"owner":null,"pid":123,"wid":2},"op":"focus_native_window","window":2},"navigation":{"animating":true,"generation":1,"output":1,"target_camera":{"x":0.0,"y":0.0},"target_zoom":1.0},"window":2},"ok":true,"version":1}"#;
     const RULE: &str = r#"{"blur":false,"border_color":null,"border_color_focused":null,"border_width":null,"corner_radius":null,"decoration":null,"focus_on_open":null,"fullscreen":true,"layer_order":null,"not_applied":["fullscreen"],"opacity":null,"output":"view-b","pass_keys":"none","pass_mouse":"none","pinned_to_screen":false,"position":null,"preserve_aspect_ratio":false,"restore_windows":null,"shadow":null,"size":null,"suspend_on_close":null,"widget":false}"#;
     // Freeze the historical placement and Command chords behind the exact reply literals.
     let config = format!("window_placement = \"center\"\n{CONFIG}");

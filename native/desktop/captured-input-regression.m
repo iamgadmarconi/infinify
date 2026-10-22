@@ -338,19 +338,20 @@ static void standInKeys(void) {
     [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.01]];check(launches==1,@"deferred relaunch rechecks canvas ownership");
     CFRelease(event);[keys invalidate];
 }
-static void nativeFullscreenKeys(void) {
+static void nativeWindowControlKeys(void) {
     __block NSUInteger admitted=0,fired=0;__block BOOL current=YES;
+    __block DWNativeWindowControl selected=DWNativeWindowControlToggleFullscreen,delivered=DWNativeWindowControlToggleFullscreen;
     DWHotKeys *keys=[[DWHotKeys alloc]initWithFire:^(NSString *action){(void)action;}];
-    keys.nativeFullscreen=^dispatch_block_t{admitted++;return current?^{if(current)fired++;}:nil;};
+    keys.nativeWindowControl=^dispatch_block_t(DWNativeWindowControl action){admitted++;selected=action;return current?^{if(current){fired++;delivered=action;}}:nil;};
     // Pin the resolver's output: this input-policy test never changes the host layout.
-    [keys setValue:@3 forKey:@"nativeFullscreenKey"];
+    [keys setValue:@3 forKey:@"nativeFullscreenKey"];[keys setValue:@15 forKey:@"nativeRestoreKey"];[keys setValue:@8 forKey:@"nativeCenterKey"];
     [keys setValue:[NSMutableDictionary dictionary] forKey:@"suppressedKeys"];[keys setValue:[NSMutableIndexSet indexSet] forKey:@"tapKeys"];
     CGEventRef event=CGEventCreateKeyboardEvent(NULL,3,true);CGEventSetFlags(event,kCGEventFlagMaskControl|kCGEventFlagMaskCommand);
     check([keys filterKey:kCGEventKeyDown event:event]==NULL,@"native fullscreen owns an admitted Control-Command-F down");
     CGEventSetIntegerValueField(event,kCGKeyboardEventAutorepeat,1);
     check([keys filterKey:kCGEventKeyDown event:event]==NULL&&admitted==1,@"fullscreen repeat cannot toggle twice");
     check([keys filterKey:kCGEventKeyUp event:event]==NULL,@"fullscreen owns its physical release");
-    [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.01]];check(fired==1,@"fullscreen dispatches one admitted job");
+    [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.01]];check(fired==1&&delivered==DWNativeWindowControlToggleFullscreen,@"fullscreen dispatches one admitted toggle job");
     CGEventSetIntegerValueField(event,kCGKeyboardEventAutorepeat,0);current=NO;
     check([keys filterKey:kCGEventKeyDown event:event]==event,@"unknown or unmanaged focus keeps native fullscreen");current=YES;
     NSUInteger before=admitted;CGEventSetFlags(event,kCGEventFlagMaskCommand);
@@ -373,14 +374,77 @@ static void nativeFullscreenKeys(void) {
     CGEventSetFlags(event,kCGEventFlagMaskSecondaryFn);
     check([keys filterKey:kCGEventKeyDown event:event]==NULL,@"native Fn-F owns an admitted pair");
     check([keys filterKey:kCGEventKeyUp event:event]==NULL,@"native Fn-F owns its release");
-    [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.01]];check(fired==2,@"Fn-F dispatches the same pinned action");
+    [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.01]];check(fired==2&&delivered==DWNativeWindowControlToggleFullscreen,@"Fn-F dispatches the same pinned toggle action");
+    // Exact Apple window-control combinations only. Modifier mapping has no Fn,
+    // so both authored bindings and explicit terminal-key pass rules still win.
+    CGEventFlags fnControl=kCGEventFlagMaskSecondaryFn|kCGEventFlagMaskControl;
+    NSMutableArray<NSDictionary *> *controls=[@[
+        @{ @"code":@3,@"flags":@(fnControl),@"action":@(DWNativeWindowControlFill),@"terminal":@"f" },
+        @{ @"code":@15,@"flags":@(fnControl),@"action":@(DWNativeWindowControlRestore),@"terminal":@"r" },
+        @{ @"code":@8,@"flags":@(fnControl),@"action":@(DWNativeWindowControlCenter),@"terminal":@"c" }
+    ]mutableCopy];
+    NSArray *arrows=@[@"left",@"right",@"down",@"up"];
+    for(NSUInteger i=0;i<4;i++)for(NSNumber *extra in @[@0,@(kCGEventFlagMaskShift),@(kCGEventFlagMaskShift|kCGEventFlagMaskAlternate)])
+        [controls addObject:@{@"code":@(123+i),@"flags":@(fnControl|extra.unsignedLongLongValue),@"action":@(DWNativeWindowControlSuppressTiling),@"terminal":arrows[i]}];
+    for(NSDictionary *control in controls){
+        UInt32 code=[control[@"code"]unsignedIntValue];CGEventFlags flags=[control[@"flags"]unsignedLongLongValue];
+        DWNativeWindowControl expected=[control[@"action"]unsignedIntegerValue];
+        NSString *label=[NSString stringWithFormat:@"%@ flags %llu",control[@"terminal"],(unsigned long long)flags];
+        CGEventSetIntegerValueField(event,kCGKeyboardEventKeycode,code);CGEventSetFlags(event,flags);CGEventSetIntegerValueField(event,kCGKeyboardEventAutorepeat,0);
+        NSUInteger admissions=admitted,deliveries=fired;
+        check([keys filterKey:kCGEventKeyDown event:event]==NULL&&selected==expected&&admitted==admissions+1,[label stringByAppendingString:@" admits the exact semantic action"]);
+        CGEventSetIntegerValueField(event,kCGKeyboardEventAutorepeat,1);
+        check([keys filterKey:kCGEventKeyDown event:event]==NULL&&admitted==admissions+1,[label stringByAppendingString:@" owns repeats without replay"]);
+        [keys pass:@YES];CGEventSetFlags(event,0);
+        [keys filterKey:kCGEventTapDisabledByTimeout event:event];
+        check([keys filterKey:kCGEventKeyUp event:event]==NULL,[label stringByAppendingString:@" retains release after timeout, modifier release and pass-policy change"]);
+        [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.001]];
+        check(fired==deliveries+1&&delivered==expected,[label stringByAppendingString:@" dispatches the semantic action once"]);
+        [keys pass:@NO];CGEventSetFlags(event,flags);CGEventSetIntegerValueField(event,kCGKeyboardEventAutorepeat,0);
+        UInt32 modifiers=controlKey|(flags&kCGEventFlagMaskShift?shiftKey:0)|(flags&kCGEventFlagMaskAlternate?optionKey:0);
+        [keys setValue:@[@{@"chord":DWChord(code,modifiers)}] forKey:@"keys"];
+        check([keys filterKey:kCGEventKeyDown event:event]==event&&admitted==admissions+1,[label stringByAppendingString:@" defers to authored Carbon chord without Fn"]);
+        [keys setValue:@[] forKey:@"keys"];[keys pass:@[[@"mod+" stringByAppendingString:[control[@"terminal"]uppercaseString]]]];
+        check([keys filterKey:kCGEventKeyDown event:event]==event&&admitted==admissions+1,[label stringByAppendingString:@" respects case-insensitive terminal-key passthrough"]);
+        [keys pass:@NO];current=NO;
+        check([keys filterKey:kCGEventKeyDown event:event]==event&&admitted==admissions+2,[label stringByAppendingString:@" leaves unverified native focus untouched"]);current=YES;
+    }
+    // Content navigation, accessibility function keys, and near-miss modifiers
+    // must not become window controls merely because Fn or Control is held.
+    NSArray *ordinary=@[
+        @[@3,@(kCGEventFlagMaskControl)],@[@3,@(kCGEventFlagMaskCommand)],
+        @[@8,@(kCGEventFlagMaskCommand)],@[@15,@(kCGEventFlagMaskCommand)],
+        @[@8,@(fnControl|kCGEventFlagMaskShift)],@[@15,@(fnControl|kCGEventFlagMaskAlternate)],
+        @[@3,@(fnControl|kCGEventFlagMaskCommand)],@[@120,@(fnControl)],
+        @[@123,@(kCGEventFlagMaskSecondaryFn)],@[@124,@(kCGEventFlagMaskControl)],
+        @[@125,@(fnControl|kCGEventFlagMaskAlternate)],@[@126,@(fnControl|kCGEventFlagMaskCommand)],
+        @[@123,@(kCGEventFlagMaskSecondaryFn|kCGEventFlagMaskShift)],
+        @[@124,@(kCGEventFlagMaskControl|kCGEventFlagMaskAlternate|kCGEventFlagMaskShift)]
+    ];
+    for(NSArray *ordinaryKey in ordinary){
+        CGEventSetIntegerValueField(event,kCGKeyboardEventKeycode,[ordinaryKey[0]unsignedIntValue]);CGEventSetFlags(event,[ordinaryKey[1]unsignedLongLongValue]);before=admitted;
+        check([keys filterKey:kCGEventKeyDown event:event]==event&&admitted==before,@"ordinary or unsupported chord does not request window-control admission");
+    }
+    [keys pass:@[@"ctrl+f"]];CGEventSetIntegerValueField(event,kCGKeyboardEventKeycode,8);CGEventSetFlags(event,fnControl);
+    check([keys filterKey:kCGEventKeyDown event:event]==NULL&&selected==DWNativeWindowControlCenter,@"F passthrough does not suppress unrelated Center admission");
+    check([keys filterKey:kCGEventKeyUp event:event]==NULL,@"Center owns its release with another terminal passed");[keys pass:@NO];
+    [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.001]];
+    for(NSDictionary *letter in @[@{@"key":@"nativeRestoreKey",@"old":@15,@"new":@31,@"action":@(DWNativeWindowControlRestore)},@{@"key":@"nativeCenterKey",@"old":@8,@"new":@35,@"action":@(DWNativeWindowControlCenter)}]){
+        [keys setValue:letter[@"new"] forKey:letter[@"key"]];CGEventSetIntegerValueField(event,kCGKeyboardEventKeycode,[letter[@"old"]unsignedIntValue]);
+        check([keys filterKey:kCGEventKeyDown event:event]==event,@"layout-resolved control does not also claim its ANSI key");
+        CGEventSetIntegerValueField(event,kCGKeyboardEventKeycode,[letter[@"new"]unsignedIntValue]);
+        check([keys filterKey:kCGEventKeyDown event:event]==NULL&&selected==[letter[@"action"]unsignedIntegerValue],@"control follows its resolved keyboard-layout key");
+        check([keys filterKey:kCGEventKeyUp event:event]==NULL,@"layout-resolved control owns release");
+    }
+    [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.001]];NSUInteger beforeStop=fired;
+    CGEventSetIntegerValueField(event,kCGKeyboardEventKeycode,3);
     CGEventSetFlags(event,kCGEventFlagMaskControl|kCGEventFlagMaskCommand);
     current=YES;[keys setValue:@40 forKey:@"nativeFullscreenKey"];
     check([keys filterKey:kCGEventKeyDown event:event]==event,@"layout-resolved F does not also claim ANSI F");
     CGEventSetIntegerValueField(event,kCGKeyboardEventKeycode,40);
     current=YES;check([keys filterKey:kCGEventKeyDown event:event]==NULL,@"fullscreen admission before stop");[keys stop];
-    [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.01]];check(fired==2,@"stopping fences queued fullscreen action");
-    CFRelease(event);[keys invalidate];check(!keys.nativeFullscreen,@"invalidation releases fullscreen admission callback");
+    [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.01]];check(fired==beforeStop,@"stopping fences queued window-control action");
+    CFRelease(event);[keys invalidate];check(!keys.nativeWindowControl,@"invalidation releases window-control admission callback");
 }
 int main(void) {@autoreleasepool {
     jobs=[NSMutableArray array];checks=0;
@@ -404,12 +468,23 @@ int main(void) {@autoreleasepool {
     check(!DWNativeMovedButtons(chromeReport,@{@"pid":@7,@"wid":@10},chromeNative),@"identity change invalidates move-only chrome");
     NSMutableDictionary *expired=[chromeReport mutableCopy];expired[@"sampled_at"]=@(chromeSample-1);
     check(!DWNativeMovedButtons(expired,chromeIdentity,chromeNative),@"move hint never freshens expired AX geometry");
+    CFTimeInterval refreshNow=chromeSample+.2;
+    check(DWNativeButtonsAfterRefresh(nil,chromeReport,chromeIdentity,refreshNow,YES,chromeNative)==chromeReport,@"nil refresh preserves the exact current public map and its original timestamp");
+    check(!DWNativeButtonsAfterRefresh(nil,chromeReport,chromeIdentity,chromeSample+.501,YES,chromeNative),@"failed refresh cannot extend the half-second title authority");
+    check(!DWNativeButtonsAfterRefresh(nil,chromeReport,chromeIdentity,refreshNow,NO,chromeNative),@"failed native owner validation cannot retain title authority");
+    check(!DWNativeButtonsAfterRefresh(nil,chromeReport,chromeIdentity,refreshNow,YES,CGRectOffset(chromeNative,1,0)),@"failed refresh cannot translate a public title map");
+    check(!DWNativeButtonsAfterRefresh(nil,chromeReport,@{@"pid":@7,@"wid":@10},refreshNow,YES,chromeNative),@"failed refresh cannot retain a different source identity");
+    check(!DWNativeButtonsAfterRefresh(nil,nil,chromeIdentity,refreshNow,YES,chromeNative),@"invalidated public map cannot be resurrected from a prior request");
+    NSDictionary *negativeChrome=@{@"identity":chromeIdentity,@"native_bounds":rectJSON(chromeNative),@"sampled_at":@(refreshNow),@"title":@{}};
+    check(DWNativeButtonsAfterRefresh(negativeChrome,chromeReport,chromeIdentity,refreshNow,YES,chromeNative)==negativeChrome,@"successful negative title report replaces the older map");
+    check(!DWNativeButtonsAfterRefresh(chromeReport,chromeReport,chromeIdentity,refreshNow,YES,chromeNative),@"late nonnil report cannot fall back to an older map");
+
     titleReleaseCase(@"stationary",YES);
     titleReleaseCase(@"drag",NO);titleReleaseCase(@"out_and_back",NO);
     titleReleaseCase(@"lost_up",NO);titleReleaseCase(@"other_output",NO);
     for(NSString *mode in @[@"second_down",@"rebound",@"focus",@"pose",@"session"])titleDeferredCase(mode);
     standInKeys();
-    nativeFullscreenKeys();
+    nativeWindowControlKeys();
     heldFocusCase(@"pending root focus never posts early",@"pending",NO);
     heldFocusCase(@"failed root focus drops the unsent pair",@"failure",NO);
     heldFocusCase(@"cancelled root focus drops the unsent pair",@"cancelled",NO);

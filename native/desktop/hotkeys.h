@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import <Foundation/Foundation.h>
+typedef NS_ENUM(NSUInteger, DWNativeWindowControl) {
+    DWNativeWindowControlToggleFullscreen,
+    DWNativeWindowControlFill,
+    DWNativeWindowControlRestore,
+    DWNativeWindowControlCenter,
+    DWNativeWindowControlSuppressTiling,
+};
 // The controller's {"op":"bindings"} reply as global hot keys. Command-Tab and F3 use a session event filter
 // (including the top-row Mission Control alias); other keys use Carbon. Main thread only.
 // A key with a "character" is the key that types it in the current keyboard layout,
@@ -17,10 +24,12 @@
 // Main-thread admission of an unbound Return/keypad Enter. A returned job owns
 // this physical pair; it must revalidate its exact canvas target when dispatched.
 @property (copy) dispatch_block_t (^standinEnter)(void);
-// Optional native-window Fn-F / Control-Command-F route, after authored bindings and
-// pass-all policy. Admission must prove the exact current native focus; nil
-// leaves the original pair native. A returned job revalidates its pinned target.
-@property (copy) dispatch_block_t (^nativeFullscreen)(void);
+// Optional native window controls: Fn-F / Control-Command-F, Fn-Control-F/R/C,
+// and Fn-Control arrows with no extra modifier, Shift, or Option+Shift. Authored
+// bindings and pass policy precede admission. The caller must prove exact native
+// focus; nil leaves the pair native. A returned job owns the complete physical
+// pair and revalidates its pinned target, including for SuppressTiling.
+@property (copy) dispatch_block_t (^nativeWindowControl)(DWNativeWindowControl action);
 // Unregisters, then resolves every key against the current layout. A key the reply
 // marks "implemented": false is left out silently, its chord untouched.
 - (void)setBindings:(NSDictionary *)bindings;
