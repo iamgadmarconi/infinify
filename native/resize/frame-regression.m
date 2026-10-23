@@ -10,6 +10,8 @@
 static CGRect nativeFrame;
 static NSMutableArray<NSString *> *writes;
 static BOOL ignorePosition,positionSettable,sizeSettable,resizeOnPosition,staleAfterSize,disagreeAfterSize,stale,disagree;
+static BOOL offsetCGAfterPosition;
+static CGFloat cgWidthOffset;
 static BOOL positionExhaustsDeadline;
 static int sizeTimeouts,positionTimeouts,positionReadTimeouts,sizeReadTimeouts,positionReads,sizeReads;
 static BOOL staleAfterReadTimeout,readTimeoutAfterSize;
@@ -40,7 +42,7 @@ static AXUIElementRef fakeApp;
 static NSArray *axWindows;
 static CFArrayRef windowInfo(CGWindowListOption options,CGWindowID wid) {
     (void)options;
-    CGRect cg=nativeFrame;double sincePress=monotonicSeconds-pressedAt;
+    CGRect cg=nativeFrame;cg.size.width+=cgWidthOffset;double sincePress=monotonicSeconds-pressedAt;
     if(disagree||(fillTransientDisagree&&pressedAt&&sincePress>=.09&&sincePress<.21))cg.origin.x+=10;
     NSDictionary *row=@{(id)kCGWindowNumber:@(wid),(id)kCGWindowOwnerPID:@(stale?0:getpid()),
         (id)kCGWindowBounds:CFBridgingRelease(CGRectCreateDictionaryRepresentation(cg))};
@@ -85,10 +87,11 @@ static AXError set(AXUIElementRef element,CFStringRef attribute,CFTypeRef value)
     if(CFEqual(attribute,kAXPositionAttribute)) {
         [writes addObject:@"position"];if(!ignorePosition)AXValueGetValue((AXValueRef)value,kAXValueCGPointType,&nativeFrame.origin);
         if(resizeOnPosition)nativeFrame.size.width-=20;
+        if(offsetCGAfterPosition)cgWidthOffset=.5;
         if(positionExhaustsDeadline){monotonicSeconds+=3;return kAXErrorCannotComplete;}
         if(positionTimeouts>0){positionTimeouts--;return kAXErrorCannotComplete;}
     } else if(CFEqual(attribute,kAXSizeAttribute)) {
-        [writes addObject:@"size"];AXValueGetValue((AXValueRef)value,kAXValueCGSizeType,&nativeFrame.size);
+        [writes addObject:@"size"];AXValueGetValue((AXValueRef)value,kAXValueCGSizeType,&nativeFrame.size);cgWidthOffset=0;
         stale|=staleAfterSize;disagree|=disagreeAfterSize;
         if(readTimeoutAfterSize){positionReadTimeouts=1;readTimeoutAfterSize=NO;}
         if(sizeTimeouts>0){sizeTimeouts--;return kAXErrorCannotComplete;}
@@ -122,6 +125,7 @@ static void check(BOOL condition,NSString *why) {if(!condition){fprintf(stderr,"
 static DWResizeIdentity reset(CGRect frame) {
     nativeFrame=frame;writes=[NSMutableArray array];positionSettable=sizeSettable=YES;axWindows=nil;
     ignorePosition=resizeOnPosition=staleAfterSize=disagreeAfterSize=stale=disagree=NO;
+    offsetCGAfterPosition=NO;cgWidthOffset=0;
     positionExhaustsDeadline=staleAfterReadTimeout=readTimeoutAfterSize=NO;sizeTimeouts=positionTimeouts=positionReadTimeouts=sizeReadTimeouts=positionReads=sizeReads=0;
     positionReadError=kAXErrorSuccess;monotonicSeconds=100;messageTimeout=.15;
     frontmost=YES;focusedWindow=42;focusChangesAfterMenu=fillStale=fillDisagree=fillTransientDisagree=fillUnchanged=fillAnimating=fillDrifting=menuTimeout=NO;fillError=fillReadError=kAXErrorSuccess;pressedAt=0;animationDelay=.18;pressedIdentifier=nil;fillFrame=CGRectMake(0,30,960,740);
@@ -133,7 +137,11 @@ int main(void) {@autoreleasepool {
     DWResizeIdentity identity=reset(CGRectMake(0,30,960,740));
     DWResizeResult restored=dw_resize_apply_frame(identity,original);
     check(restored.outcome==DWResizeApplied&&restored.observed&&restored.mutation_attempted&&CGRectEqualToRect(restored.actual_ax,original),@"full fractional frame restored");
-    check([writes isEqual:@[@"size",@"position",@"size"]],@"size-position-size ordering");
+    check([writes isEqual:@[@"size",@"position"]],@"exact AX and CG extent after positioning needs no second size write");
+    identity=reset(CGRectMake(0,30,960,740));resizeOnPosition=YES;restored=dw_resize_apply_frame(identity,original);
+    check(restored.outcome==DWResizeApplied&&CGRectEqualToRect(restored.actual_ax,original)&&CGRectEqualToRect(restored.actual_cg,original)&&[writes isEqual:@[@"size",@"position",@"size"]],@"position-induced extent change retains size-position-size ordering");
+    identity=reset(CGRectMake(0,30,960,740));offsetCGAfterPosition=YES;restored=dw_resize_apply_frame(identity,original);
+    check(restored.outcome==DWResizeApplied&&CGRectEqualToRect(restored.actual_ax,original)&&CGRectEqualToRect(restored.actual_cg,original)&&[writes isEqual:@[@"size",@"position",@"size"]],@"near but non-exact CG extent cannot skip the corrective size write");
     identity=reset((CGRect){CGPointMake(0,30),original.size});restored=dw_resize_apply_frame(identity,original);
     check(restored.outcome==DWResizeApplied&&restored.moved&&CGRectEqualToRect(restored.actual_cg,original),@"origin restored when size was already correct");
     identity=reset((CGRect){CGPointMake(0,30),original.size});sizeSettable=NO;restored=dw_resize_apply_frame(identity,original);
@@ -165,13 +173,13 @@ int main(void) {@autoreleasepool {
     NSDictionary *who=@{@"pid":@(identity.pid),@"birth_sec":@(identity.birth_seconds),@"birth_usec":@(identity.birth_microseconds),@"wid":@(identity.window)};
     NSDictionary *effect=@{@"identity":who,@"requested":@{@"width":@(original.size.width),@"height":@(original.size.height)},@"native_origin":@{@"x":@(original.origin.x),@"y":@(original.origin.y)}};
     DWNativeResizeDriver *driver=[DWNativeResizeDriver new];NSDictionary *receipt=[driver perform:effect];
-    check([receipt[@"outcome"]isEqual:@"applied"]&&[receipt[@"actual_ax"][@"origin"][@"y"]doubleValue]==original.origin.y&&[writes isEqual:@[@"size",@"position",@"size"]],@"shell effect dispatches the frame adapter");
+    check([receipt[@"outcome"]isEqual:@"applied"]&&[receipt[@"actual_ax"][@"origin"][@"y"]doubleValue]==original.origin.y&&[writes isEqual:@[@"size",@"position"]],@"shell effect dispatches the frame adapter without a redundant final size write");
     [writes removeAllObjects];NSMutableDictionary *invalid=[effect mutableCopy];invalid[@"native_origin"]=@{@"x":@0};receipt=[driver perform:invalid];
     check([receipt[@"outcome"]isEqual:@"invalid_request"]&&writes.count==0,@"malformed frame effect cannot fall back to a size setter");
     identity=reset(original);positionReadTimeouts=1;restored=dw_resize_observe(identity);
     check(restored.outcome==DWResizeObserved&&restored.observed&&positionReads==2&&writes.count==0,@"a transient position query timeout is retried without mutation");
     identity=reset(CGRectMake(0,30,960,740));sizeReadTimeouts=1;restored=dw_resize_apply_frame(identity,original);
-    check(restored.outcome==DWResizeApplied&&restored.observed&&CGRectEqualToRect(restored.actual_ax,original)&&[writes isEqual:@[@"size",@"position",@"size"]],@"a transient size query timeout does not abandon frame restoration or repeat setters");
+    check(restored.outcome==DWResizeApplied&&restored.observed&&CGRectEqualToRect(restored.actual_ax,original)&&[writes isEqual:@[@"size",@"position"]],@"a transient size query timeout does not abandon frame restoration or repeat setters");
     identity=reset(original);positionReadTimeouts=100;restored=dw_resize_observe(identity);
     check(restored.outcome==DWResizeTimedOut&&!restored.observed&&!restored.mutation_attempted&&writes.count==0&&monotonicSeconds<102.00001&&positionReads<14,@"persistent query timeouts exhaust only the shared deadline without mutation");
     identity=reset(original);positionReadTimeouts=1;staleAfterReadTimeout=YES;restored=dw_resize_observe(identity);
@@ -179,7 +187,7 @@ int main(void) {@autoreleasepool {
     identity=reset(original);positionReadError=kAXErrorAttributeUnsupported;restored=dw_resize_observe(identity);
     check(restored.outcome==DWResizeReadbackFailed&&!restored.observed&&positionReads==1&&writes.count==0,@"a permanent query failure is not retried");
     identity=reset(CGRectMake(0,30,960,740));sizeTimeouts=1;readTimeoutAfterSize=YES;restored=dw_resize_apply_frame(identity,original);
-    check(restored.outcome==DWResizeApplied&&restored.observed&&restored.mutation_attempted&&restored.ax_error==kAXErrorCannotComplete&&CGRectEqualToRect(restored.actual_ax,original)&&[writes isEqual:@[@"size",@"position",@"size"]],@"post-setter query recovery preserves the original setter timeout without replaying writes");
+    check(restored.outcome==DWResizeApplied&&restored.observed&&restored.mutation_attempted&&restored.ax_error==kAXErrorCannotComplete&&CGRectEqualToRect(restored.actual_ax,original)&&[writes isEqual:@[@"size",@"position"]],@"post-setter query recovery preserves the original setter timeout without replaying writes");
     NSDictionary *target=@{@"wid":@42},*desktop=@{@"window_error":@(kAXErrorIllegalArgument),@"role":(id)kAXScrollAreaRole};
     for(NSArray *candidates in @[@[desktop,target],@[target,desktop]]){
         identity=reset(original);axWindows=candidates;restored=dw_resize_observe(identity);

@@ -66,8 +66,10 @@ parent death and a 30-second deadline. Decoys must remain unchanged.
 
 Fullscreen uses the separate `dw_resize_apply_frame` operation to return the
 original native origin alongside its saved exact extent. It shares a two-second
-deadline across size/position/size writes, checks fresh ownership before each
-setter, and requires AX and native CG geometry to agree afterward. A successful
+deadline across its size and position writes, checks fresh ownership before each
+setter, and requires AX and native CG geometry to agree afterward. The final
+size write is omitted when the post-position AX and CG extents both exactly match
+the saved dimensions, including when an earlier size write restored them. A successful
 setter with another origin is clamped or rejected, never applied. This operation
 does not bypass the owner's size or position constraints. An already matching
 extent needs only the position write, so restoration still works when the

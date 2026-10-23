@@ -49,9 +49,9 @@ DWResizeResult dw_resize_unfill(DWResizeIdentity identity, CGRect saved_frame);
 // A 350ms shared budget and 50ms per AX call; one position write only after the
 // native frame still exactly equals expected_before. Extent must stay unchanged.
 DWResizeResult dw_resize_reposition(DWResizeIdentity identity, CGRect expected_before, CGPoint origin, double absolute_deadline);
-// Explicit full-frame request for fullscreen restoration. Uses size/position/size
-// when the extent differs; an unchanged extent needs only a position write.
-// rechecks ownership before every setter, and verifies AX against native CG bounds.
+// Explicit full-frame request for fullscreen restoration. Sizes before positioning
+// when the extent differs, and repeats size only when the post-position AX and
+// native CG extents do not both exactly match. Rechecks ownership before every setter.
 // Owner constraints remain applied/clamped/rejected; this does not bypass them.
 DWResizeResult dw_resize_apply_frame(DWResizeIdentity identity, CGRect frame);
 typedef bool (*DWResizeGuard)(DWResizeIdentity identity, void *context);

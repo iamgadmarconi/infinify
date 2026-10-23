@@ -451,7 +451,9 @@ DWResizeResult dw_resize_apply_frame(DWResizeIdentity i, CGRect frame) { @autore
         if (r.outcome==DWResizeStaleIdentity) { CFRelease(w); return frame_result(r,mutation); }
     }
     if (!r.observed) { if(positionStatus!=kAXErrorSuccess)r.ax_error=positionStatus; CFRelease(w); return frame_result(r,mutation); }
-    DWResizeResult sized=(!resize && CGSizeEqualToSize(r.actual_ax.size,frame.size))
+    // Positioning may change the extent. Repeat size only when its fresh AX
+    // and native CG readback do not both exactly match the saved dimensions.
+    DWResizeResult sized=(CGSizeEqualToSize(r.actual_ax.size,frame.size) && CGSizeEqualToSize(r.actual_cg.size,frame.size))
         ? r : apply_size(i,frame.size,NULL,NULL,NULL,deadline,&mutation);
     sized.mutation_attempted|=r.mutation_attempted;
     if (!sized.observed && sized.mutation_attempted && (sized.outcome==DWResizeUnavailable || sized.outcome==DWResizeMissingWindow || sized.outcome==DWResizeAmbiguousWindow)) sized.outcome=DWResizeReadbackFailed;

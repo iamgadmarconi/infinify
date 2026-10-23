@@ -17,6 +17,7 @@ static NSUInteger allListReads,processReads,processMode;
 static NSArray<NSDictionary *> *allWindowRows,*secondAllWindowRows;
 static NSTimeInterval fixtureNow=100;
 static NSArray<NSDictionary *> *windowRows;
+static NSDictionary *candidateBasisOverride;
 static NSMutableArray<dispatch_block_t> *mainBlocks,*workerBlocks;
 static void check(BOOL condition,NSString *message) {
     checks++;if(!condition){fprintf(stderr,"FAIL: %s\n",message.UTF8String);exit(1);}
@@ -236,7 +237,7 @@ static NSDictionary *candidateBases(NSArray<NSDictionary *> *rows) {
     }return bases.copy;
 }
 NSDictionary *DWNativeWindowDiscoveryBasis(NSDictionary *identity) {
-    check(inWorker,@"native candidate basis is read only on the worker");candidateBasisReads++;return candidateBases(windowRows)[identity[@"wid"]];
+    check(inWorker,@"native candidate basis is read only on the worker");candidateBasisReads++;return (candidateBasisOverride?:candidateBases(windowRows))[identity[@"wid"]];
 }
 static NSDictionary *row(uint32_t window,CGFloat width) {
     return @{(id)kCGWindowNumber:@(window),(id)kCGWindowOwnerPID:@123,(id)kCGWindowLayer:@0,(id)kCGWindowName:@"Discovery window",
@@ -335,6 +336,41 @@ static void nativeMetadataOverlap(void) {
     }
     titleTesting=NO;closeElements=nil;
 }
+static void nativeEarlyAdmission(void) {
+    NSArray *savedRows=windowRows;titleTesting=YES;
+    for(NSString *mode in @[@"ready",@"empty",@"startup",@"dialog",@"missing",@"matrix",@"post_size",@"post_birth",@"event",@"move",@"family",@"space",@"appearance",@"stale",@"stop"]){
+        fixtureNow=600;DiscoveryHost *host=[DiscoveryHost new];DWWindowManager *manager=[DWWindowManager managerWithHost:host scope:nil mode:DWWindowDiscoveryModeNativePresentation];manager.completed=![mode isEqual:@"startup"];
+        windowRows=@[row(42,320)];NSMutableDictionary *bases=[candidateBases(windowRows)mutableCopy];
+        NSMutableDictionary *element=[@{@"pid":@123,@"wid":@42,@"subrole":[mode isEqual:@"dialog"]?(__bridge NSString *)kAXDialogSubrole:(__bridge NSString *)kAXStandardWindowSubrole,@"title":[mode isEqual:@"empty"]?@"":@"Early AX title"}mutableCopy];
+        if([mode isEqual:@"missing"])[element removeObjectForKey:@"title"];
+        if([mode isEqual:@"matrix"]){NSMutableDictionary *basis=[bases[@42]mutableCopy];basis[@"transform"]=@[@1.001,@0,@0,@1,@(-100),@(-100)];bases[@42]=basis;}
+        candidateBasisOverride=bases.copy;closeElements=@[element.copy];
+        [manager pollWithWindowRecords:windowRows nativeCandidateBases:bases sampledAt:fixtureTime()];
+        check(workerBlocks.count==1&&!host.appeared,@"early admission still waits for positive asynchronous AX metadata");
+        if([mode isEqual:@"post_size"])candidateBasisOverride=candidateBases(@[row(42,340)]);
+        if([mode isEqual:@"post_birth"]){NSMutableDictionary *basis=[bases[@42]mutableCopy];basis[@"identity"]=@{@"pid":@123,@"wid":@42,@"birth_sec":@101,@"birth_usec":@20};candidateBasisOverride=@{@42:basis};}
+        fixtureNow=600.01;check(step(YES),@"early admission revalidates only on its metadata worker");fixtureNow=600.02;
+        if([mode isEqual:@"event"])[manager windowChanged:42 pid:123];
+        if([mode isEqual:@"move"])[manager windowMoved:42 pid:123];
+        if([mode isEqual:@"family"])[manager windowsChanged:123];
+        if([mode isEqual:@"space"])[manager windowsChanged:0];
+        if([mode isEqual:@"appearance"]){[manager pollWithWindowRecords:@[] nativeCandidateBases:@{} sampledAt:fixtureTime()];[manager pollWithWindowRecords:windowRows nativeCandidateBases:bases sampledAt:fixtureTime()];}
+        if([mode isEqual:@"stale"])fixtureNow=600.101;
+        if([mode isEqual:@"stop"])[manager stop];
+        drain();BOOL early=[mode isEqual:@"ready"]||[mode isEqual:@"empty"];
+        check(host.appeared==(early?1u:0u),[NSString stringWithFormat:@"early %@ admits only fresh unchanged canonical standard windows before 50 ms",mode]);
+        if(early){check([host.titles isEqual:@[[mode isEqual:@"empty"]?@"":@"Early AX title"]],@"early admission retains AX title precedence and known empty titles");
+            fixtureNow=600.051;[manager pollWithWindowRecords:windowRows nativeCandidateBases:bases sampledAt:fixtureTime()];drain();check(host.appeared==1,@"ordinary follow-up cannot offer an early window twice");}
+        else if(![mode isEqual:@"stop"]){
+            candidateBasisOverride=bases.copy;closeElements=@[@{@"pid":@123,@"wid":@42,@"subrole":(__bridge NSString *)kAXStandardWindowSubrole,@"title":@"Ordinary AX title"}];
+            fixtureNow=[mode isEqual:@"stale"]?600.11:600.071;[manager pollWithWindowRecords:windowRows nativeCandidateBases:bases sampledAt:fixtureTime()];drain();
+            if([mode isEqual:@"stale"]){fixtureNow=600.161;[manager pollWithWindowRecords:windowRows nativeCandidateBases:bases sampledAt:fixtureTime()];drain();}
+            check(host.appeared==1,[NSString stringWithFormat:@"early %@ refusal retains the ordinary stable admission path",mode]);
+        }
+        [manager stop];candidateBasisOverride=nil;
+    }
+    windowRows=savedRows;titleTesting=NO;closeElements=nil;
+}
 int main(void) {@autoreleasepool {
     mainBlocks=[NSMutableArray array];workerBlocks=[NSMutableArray array];windowRows=@[row(42,320)];allWindowRows=@[];
     DiscoveryHost *host=[DiscoveryHost new];DWWindowManager *manager=[DWWindowManager managerWithHost:host scope:nil mode:DWWindowDiscoveryModeNativePresentation];
@@ -389,7 +425,7 @@ int main(void) {@autoreleasepool {
     titleRows=@[row(75,320),row(76,320)];fixtureNow=115;[titleManager pollWithWindowRecords:titleRows nativeCandidateBases:candidateBases(titleRows) sampledAt:fixtureTime()];drain();
     fixtureNow=115.051;[titleManager pollWithWindowRecords:titleRows nativeCandidateBases:candidateBases(titleRows) sampledAt:fixtureTime()];drain();
     check(titleHost.appeared==2&&[titleHost.titles isEqual:@[@"",@"Current AX title"]],@"successful AX title overrides CG and known empty title remains distinct from unavailable");[titleManager stop];titleTesting=NO;closeElements=nil;
-    titleRetryInvalidation();nativeMetadataOverlap();
+    titleRetryInvalidation();nativeMetadataOverlap();nativeEarlyAdmission();
 
     DiscoveryHost *nativeHost=[DiscoveryHost new];DWWindowManager *nativeManager=[DWWindowManager managerWithHost:nativeHost scope:nil mode:DWWindowDiscoveryModeNativePresentation];
     fixtureNow=150;NSArray *animated=@[row(72,604)];NSDictionary *stableOwn=candidateBases(@[row(72,610)]);

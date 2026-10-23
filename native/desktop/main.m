@@ -54,6 +54,19 @@
 #import "../focus/focus.h"
 #import "../resize/resize.h"
 
+// AppKit services the main run loop while waiting for an event, including
+// dispatch blocks and timer/display callbacks. Keep the production poll's one
+// deadline instead of rearming the probe's alternating 5 ms waits at idle.
+// Events wake this wait immediately; a nonblocking turn after delivery also
+// services callbacks when a continuous event stream never lets AppKit wait.
+static void DWDesktopPump(double seconds) {
+    NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:seconds];
+    do {
+        NSEvent *event=[NSApp nextEventMatchingMask:NSEventMaskAny untilDate:deadline inMode:NSDefaultRunLoopMode dequeue:YES];
+        if(event){[NSApp sendEvent:event];CFRunLoopRunInMode(kCFRunLoopDefaultMode,0,true);}
+    } while(!stopped&&deadline.timeIntervalSinceNow>0);
+}
+
 static NSDictionary *pointJSON(CGPoint p) { return @{@"x":@(p.x),@"y":@(p.y)}; }
 static NSDictionary *rectJSON(CGRect r) { return @{@"origin":pointJSON(r.origin),@"size":@{@"width":@(r.size.width),@"height":@(r.size.height)}}; }
 static CGRect jsonRect(NSDictionary *r) { return CGRectMake([r[@"origin"][@"x"] doubleValue],[r[@"origin"][@"y"] doubleValue],[r[@"size"][@"width"] doubleValue],[r[@"size"][@"height"] doubleValue]); }
@@ -1360,8 +1373,12 @@ static const NSInteger DWPolicyPress=9;
 - (BOOL)pointerFramed { return self.desktop.frameDriver!=nil; }
 - (BOOL)pointerHeld { return [DWCycleHold modifiersDown]!=0; }
 - (void)refreshCursor {
+    Desktop *desktop=self.desktop;
+    // Fill owns interaction until the same native root is revealed. There is
+    // no canvas cursor to admit against its intermediate snapshot geometry.
+    if(desktop.nativeFillHandoff){[desktop.canvasCursor releaseOwner:self];return;}
     NSPoint location=NSEvent.mouseLocation;CGPoint point=CGPointMake(location.x,screenTop()-location.y);
-    NSNumber *output=[self outputAt:point];Desktop *desktop=self.desktop;
+    NSNumber *output=[self outputAt:point];
     if(desktop.native){
         BOOL grab=NO;for(DesktopView *view in desktop.views)if(view.gesture==1||view.gesture==2||view.gesture==4){grab=YES;break;}
         // Native camera frames move real windows over a stationary pointer.
@@ -1382,7 +1399,7 @@ static const NSInteger DWPolicyPress=9;
 // This policy never guesses the cursor requested by a captured application.
 - (void)pointerCursor:(CGPoint)p output:(NSNumber *)output reply:(NSDictionary *)reply {
     Desktop *d=self.desktop;
-    if(!d.configured||d.cleaning||d.sessionInactive||!output||![self.outputs containsObject:output]||!self.window.visible||self.window.ignoresMouseEvents||!CGRectContainsPoint(self.globalBounds,p)){
+    if(d.nativeFillHandoff||!d.configured||d.cleaning||d.sessionInactive||!output||![self.outputs containsObject:output]||!self.window.visible||self.window.ignoresMouseEvents||!CGRectContainsPoint(self.globalBounds,p)){
         [d.canvasCursor releaseOwner:self];return;
     }
     DesktopView *grab=nil;
@@ -6953,7 +6970,7 @@ int main(int argc,const char **argv) { @autoreleasepool {
     // A launch held at the onboarding window runs it when its canvas opens (-onboard).
     if(!desktop.onboarding)[desktop runAutostart];
     // A pool per turn: what a poll, its controller calls and the events it pumps autorelease ends with the turn.
-    while(!stopped){@autoreleasepool{[desktop poll];pump(.08);}}
+    while(!stopped){@autoreleasepool{[desktop poll];DWDesktopPump(.08);}}
     // Stopped first: the pending quit reply is written, and no request can arrive during cleanup.
     [desktop.ipc stop];desktop.ipc=nil;[desktop cleanup];[desktop.chooser close];[desktop.onboarding close];
     // Relaunch: the same executable with the same arguments in this very process, once everything above has ended and the socket is free again.

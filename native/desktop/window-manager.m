@@ -13,13 +13,14 @@
 // host's single-flight worker observation; existing bound-window events are delivered to the host immediately.
 #import "window-manager.h"
 #import "window-events.h"
+#import "native-family.h"
 #import "../focus/focus.h"
 #import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
 #include <dlfcn.h>
 #include <libproc.h>
-// A candidate is offered once its bounds have held this long. The idle poll comes
-// every 80 ms, so successive completed observations normally satisfy this delay.
+// Ordinary candidates wait for two stable observations. A positively identified
+// standard native window may use the stricter post-AX basis check below instead.
 static const NSTimeInterval still=.05;
 @interface DWWindowManager () <DWWindowEventSink>
 @property (weak) id<DWWindowHost> host;
@@ -145,6 +146,17 @@ static NSArray<NSDictionary *> *nativePreservedWindows(NSDictionary<NSNumber *,N
 }
 // A real window by that reading: a standard window or a dialog.
 static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)kAXStandardWindowSubrole,(__bridge NSString *)kAXDialogSubrole,(__bridge NSString *)kAXSystemDialogSubrole]containsObject:subrole]; }
+// Restrict early admission to the native, unscaled presentation basis. This is
+// only an eligibility check: the helper still snapshots the actual original.
+static BOOL canonicalNativeBasis(NSDictionary *basis) {
+    CGRect bounds=CGRectZero;id matrix=basis[@"transform"],frame=basis[@"native_bounds"];
+    if(![matrix isKindOfClass:NSArray.class]||[matrix count]!=6||![frame isKindOfClass:NSDictionary.class]||
+       !CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)frame,&bounds)||!isfinite(bounds.origin.x)||!isfinite(bounds.origin.y)||
+       !isfinite(bounds.size.width)||!isfinite(bounds.size.height)||bounds.size.width<40||bounds.size.height<40)return NO;
+    for(id number in matrix)if(![number isKindOfClass:NSNumber.class]||!isfinite([number doubleValue]))return NO;
+    return [matrix[0]doubleValue]==1&&[matrix[1]doubleValue]==0&&[matrix[2]doubleValue]==0&&[matrix[3]doubleValue]==1
+        &&[matrix[4]doubleValue]==-bounds.origin.x&&[matrix[5]doubleValue]==-bounds.origin.y;
+}
 @implementation DWWindowCandidate
 + (instancetype)candidateWithShareable:(SCWindow *)shareable {
     DWWindowCandidate *candidate=[self new];candidate.pid=shareable.owningApplication.processID;candidate.window=shareable.windowID;candidate.bundleIdentifier=shareable.owningApplication.bundleIdentifier;
@@ -181,21 +193,36 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
     }];
     [NSRunLoop.mainRunLoop addTimer:self.discoveryTimer forMode:NSRunLoopCommonModes];
 }
-- (void)prefetchNativeMetadata:(NSDictionary<NSNumber *,NSNumber *> *)asked titles:(NSDictionary *)listedTitles {
+- (void)prefetchNativeMetadata:(NSDictionary<NSNumber *,NSNumber *> *)asked titles:(NSDictionary *)listedTitles records:(NSArray<NSDictionary *> *)records {
     NSMutableDictionary *tickets=[NSMutableDictionary dictionary];NSTimeInterval now=NSProcessInfo.processInfo.systemUptime;
     for(NSNumber *wid in asked){NSMutableDictionary *ticket=[@{@"basis":self.bases[wid],@"since":self.since[wid],@"cg_title":listedTitles[wid]?:NSNull.null,@"started":@(now)}mutableCopy];self.nativeMetadata[wid]=ticket;tickets[wid]=ticket;}
+    NSMutableArray *front=[NSMutableArray array];NSMutableDictionary *levels=[NSMutableDictionary dictionary];
+    for(NSDictionary *row in records){NSNumber *wid=row[(id)kCGWindowNumber];if([asked[wid]isEqual:row[(id)kCGWindowOwnerPID]]){[front addObject:wid];levels[wid]=row[(id)kCGWindowLayer];}}
+    BOOL afterStartup=self.completed;
     self.reading=YES;__weak DWWindowManager *weak=self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
         NSMutableDictionary *titles=[NSMutableDictionary dictionary];NSDictionary *roles=windowSubroles(asked,titles);
+        NSMutableDictionary *verified=[NSMutableDictionary dictionary];
+        if(afterStartup)for(NSNumber *wid in asked){NSDictionary *ticket=tickets[wid],*basis=ticket[@"basis"];
+            if([levels[wid]integerValue]!=0||![roles[wid]isEqual:(__bridge NSString *)kAXStandardWindowSubrole]||
+               ![titles[wid]isKindOfClass:NSString.class]||!canonicalNativeBasis(basis)||CACurrentMediaTime()-[ticket[@"started"]doubleValue]>.1)continue;
+            NSDictionary *fresh=DWNativeWindowDiscoveryBasis(basis[@"identity"]);
+            if([fresh isEqual:basis])verified[wid]=fresh;
+        }
         dispatch_async(dispatch_get_main_queue(),^{DWWindowManager *manager=weak;if(!manager||manager.stopped)return;manager.reading=NO;
             NSTimeInterval now=NSProcessInfo.processInfo.systemUptime,delay=still;
+            NSMutableDictionary *early=[NSMutableDictionary dictionary],*earlyAsked=[NSMutableDictionary dictionary],*frames=[NSMutableDictionary dictionary],*bases=[NSMutableDictionary dictionary];
             for(NSNumber *wid in tickets){NSMutableDictionary *ticket=tickets[wid];
                 if(manager.nativeMetadata[wid]!=ticket||![ticket[@"basis"]isEqual:manager.bases[wid]]||![ticket[@"since"]isEqual:manager.since[wid]])continue;
                 delay=MIN(delay,MAX(0,[ticket[@"since"]doubleValue]+still-now));
                 BOOL positive=[roles[wid]isKindOfClass:NSString.class]&&(toplevelSubrole(roles[wid])||[roles[wid]isEqual:(__bridge NSString *)kAXFloatingWindowSubrole]);
-                if(now-[ticket[@"started"]doubleValue]<=.1&&positive&&[titles[wid]isKindOfClass:NSString.class]){ticket[@"subrole"]=roles[wid];ticket[@"title"]=titles[wid];}
+                if(now-[ticket[@"started"]doubleValue]<=.1&&positive&&[titles[wid]isKindOfClass:NSString.class]){ticket[@"subrole"]=roles[wid];ticket[@"title"]=titles[wid];
+                    if(manager.completed&&verified[wid]){early[wid]=ticket;earlyAsked[wid]=asked[wid];frames[wid]=verified[wid][@"native_bounds"];bases[wid]=verified[wid];}}
             }
-            // The fresh worker sample, never this AX reply, ends the hold.
+            // This one fresh post-AX sample may end the hold only for exact
+            // standard-window tickets. Unknown or changing windows still wait.
+            if(early.count){NSMutableArray *ordered=[NSMutableArray array];for(NSNumber *wid in front)if(early[wid])[ordered addObject:wid];
+                [manager read:nil error:nil asked:earlyAsked front:ordered subroles:roles titles:titles frames:frames levels:levels basis:bases titleTickets:@{} earlyTickets:early];}
             [manager requestDiscoveryAfter:delay];
         });
     });
@@ -252,11 +279,11 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
     if(moving||titleDelay){if(moving)self.eager=now+1;[self requestDiscoveryAfter:moving?(titleDelay?MIN(stabilityDelay,titleDelay):stabilityDelay):titleDelay];}
     else {[self.discoveryTimer invalidate];self.discoveryTimer=nil;self.discoveryDeadline=0;}
     // AX selection overlaps the wait, but never competes with a stable read or
-    // starts a second flight. The ordinary path below alone may offer windows.
+    // starts a second flight. Only its exact post-AX proof may end the hold early.
     BOOL startupWaiting=!self.completed&&moving&&now-self.began<2;
     if(self.native&&!self.reading&&(!self.retry||now>=self.retry)&&(!wanted.count||startupWaiting)&&AXIsProcessTrusted()){
         for(NSNumber *wid in warming.allKeys)if(self.nativeMetadata[wid])[warming removeObjectForKey:wid];
-        if(warming.count)[self prefetchNativeMetadata:warming.copy titles:candidateTitles];
+        if(warming.count)[self prefetchNativeMetadata:warming.copy titles:candidateTitles records:list];
     }
     // The first pass waits, two seconds at most, until every window holds still, so that one read offers them all.
     if(startupWaiting)return;
@@ -276,7 +303,7 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
     NSMutableDictionary<NSNumber *,NSDictionary *> *requestedBounds=[NSMutableDictionary dictionary],*requestedBases=[NSMutableDictionary dictionary],*titleTickets=[NSMutableDictionary dictionary];for(NSNumber *wid in asked){requestedBounds[wid]=bounds[wid];requestedBases[wid]=bases[wid];
         if(self.native&&!listedTitles[wid]){NSMutableDictionary *ticket=[@{@"basis":bases[wid],@"deadline":@0}mutableCopy];self.titleRetries[wid]=ticket;titleTickets[wid]=ticket;}}
     NSDictionary *frames=requestedBounds.copy,*basis=requestedBases.copy,*tickets=titleTickets.copy;
-    if(self.capturing){[SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO completionHandler:^(SCShareableContent *content,NSError *error){NSDictionary<NSNumber *,id> *subroles=content?windowSubroles(asked,nil):nil;dispatch_async(dispatch_get_main_queue(),^{[weak read:content error:error asked:asked front:front subroles:subroles titles:nil frames:nil levels:levels basis:basis titleTickets:tickets];});}];return;}
+    if(self.capturing){[SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO completionHandler:^(SCShareableContent *content,NSError *error){NSDictionary<NSNumber *,id> *subroles=content?windowSubroles(asked,nil):nil;dispatch_async(dispatch_get_main_queue(),^{[weak read:content error:error asked:asked front:front subroles:subroles titles:nil frames:nil levels:levels basis:basis titleTickets:tickets earlyTickets:nil];});}];return;}
     // Native presentation or a scoped overlay without Screen Recording access: shareable windows are not asked for, so nothing can prompt. What they
     // would have said of a candidate is read from the window list (this pass's bounds) and from Accessibility, off the main thread like the subroles.
     NSMutableDictionary *uncached=[asked mutableCopy],*cachedRoles=[NSMutableDictionary dictionary],*cachedTitles=[listedTitles mutableCopy];
@@ -285,14 +312,14 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
             cachedRoles[wid]=ticket[@"subrole"];cachedTitles[wid]=ticket[@"title"];[uncached removeObjectForKey:wid];
         }
     }
-    if(asked.count&&!uncached.count){[self read:nil error:nil asked:asked front:front subroles:cachedRoles titles:cachedTitles frames:frames levels:levels basis:basis titleTickets:tickets];return;}
+    if(asked.count&&!uncached.count){[self read:nil error:nil asked:asked front:front subroles:cachedRoles titles:cachedTitles frames:frames levels:levels basis:basis titleTickets:tickets earlyTickets:nil];return;}
     // Do not carry an older prefetched result through another app's slow read.
     // A mixed batch uses the ordinary fresh selection for its complete set.
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{NSMutableDictionary<NSNumber *,NSString *> *titles=[listedTitles mutableCopy];NSDictionary<NSNumber *,id> *subroles=windowSubroles(asked,titles);dispatch_async(dispatch_get_main_queue(),^{[weak read:nil error:nil asked:asked front:front subroles:subroles titles:titles frames:frames levels:levels basis:basis titleTickets:tickets];});});
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{NSMutableDictionary<NSNumber *,NSString *> *titles=[listedTitles mutableCopy];NSDictionary<NSNumber *,id> *subroles=windowSubroles(asked,titles);dispatch_async(dispatch_get_main_queue(),^{[weak read:nil error:nil asked:asked front:front subroles:subroles titles:titles frames:frames levels:levels basis:basis titleTickets:tickets earlyTickets:nil];});});
 }
 // `front` is the window list's own order, front to back. `subroles` is windowSubroles' answer for `asked`, read before this turn of the main queue.
 // `titles` and `frames` stand in for the shareable windows in a run that does not read them (`capturing` NO): `content` is then nil and no failure.
-- (void)read:(SCShareableContent *)content error:(NSError *)error asked:(NSDictionary<NSNumber *,NSNumber *> *)asked front:(NSArray<NSNumber *> *)front subroles:(NSDictionary<NSNumber *,id> *)subroles titles:(NSDictionary<NSNumber *,NSString *> *)titles frames:(NSDictionary<NSNumber *,NSDictionary *> *)frames levels:(NSDictionary<NSNumber *,NSNumber *> *)levels basis:(NSDictionary<NSNumber *,NSDictionary *> *)basis titleTickets:(NSDictionary<NSNumber *,NSDictionary *> *)tickets {
+- (void)read:(SCShareableContent *)content error:(NSError *)error asked:(NSDictionary<NSNumber *,NSNumber *> *)asked front:(NSArray<NSNumber *> *)front subroles:(NSDictionary<NSNumber *,id> *)subroles titles:(NSDictionary<NSNumber *,NSString *> *)titles frames:(NSDictionary<NSNumber *,NSDictionary *> *)frames levels:(NSDictionary<NSNumber *,NSNumber *> *)levels basis:(NSDictionary<NSNumber *,NSDictionary *> *)basis titleTickets:(NSDictionary<NSNumber *,NSDictionary *> *)tickets earlyTickets:(NSDictionary<NSNumber *,NSDictionary *> *)earlyTickets {
     if(self.stopped)return;self.reading=NO;id<DWWindowHost> host=self.host;
     // `requested` stays: the same candidates are not read again at once, so a failure cannot loop.
     if(!content&&self.capturing){self.retry=NSProcessInfo.processInfo.systemUptime+2;[host discoveryFailed:error.localizedDescription?:@"the shareable windows are unavailable"];return;}
@@ -314,7 +341,11 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
         // An AX role/title reply cannot turn an aged native stability sample
         // into current eligibility. The date is separate from basis equality.
         if(self.native&&(!self.sampled[wid]||CACurrentMediaTime()-self.sampled[wid].doubleValue>.1)){again=YES;[self requestDiscoveryAfter:0];continue;}
-        if(![self.bases[wid]isEqual:basis[wid]]||!held||NSProcessInfo.processInfo.systemUptime-held.doubleValue<still){again=YES;continue;}
+        NSDictionary *early=earlyTickets[wid];BOOL earlyReady=self.native&&self.completed&&early&&self.nativeMetadata[wid]==early
+            &&[early[@"basis"]isEqual:basis[wid]]&&[early[@"since"]isEqual:held]&&NSProcessInfo.processInfo.systemUptime-[early[@"started"]doubleValue]<=.1
+            &&[levels[wid]integerValue]==0&&[subroles[wid]isEqual:(__bridge NSString *)kAXStandardWindowSubrole]
+            &&[titles[wid]isKindOfClass:NSString.class]&&canonicalNativeBasis(basis[wid]);
+        if(![self.bases[wid]isEqual:basis[wid]]||!held||(earlyTickets?!earlyReady:NSProcessInfo.processInfo.systemUptime-held.doubleValue<still)){again=YES;continue;}
         DWWindowCandidate *window=found[wid];
         // A window the read did not list yet is asked for once more, then left until it next comes on screen.
         if(!window){if([self.missed containsObject:wid])[self.offered addObject:wid];else {[self.missed addObject:wid];again=YES;}continue;}
@@ -398,15 +429,19 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
 - (void)stop { self.stopped=YES;[self.discoveryTimer invalidate];self.discoveryTimer=nil;self.discoveryDeadline=0;self.host=nil;[self.events stop];self.events=nil; }
 // DWWindowEventSink. Creation/appearance hints coalesce into the host's next
 // worker observation. Bound-window and family invalidations still arrive now.
-- (void)windowsChanged:(pid_t)pid { if(self.stopped)return;self.eager=NSProcessInfo.processInfo.systemUptime+1;if([self.host respondsToSelector:@selector(windowFamilyChanged:)])[self.host windowFamilyChanged:pid]; }
+- (void)invalidateNativeMetadata:(CGWindowID)window pid:(pid_t)pid {
+    for(NSNumber *wid in self.nativeMetadata.allKeys)if((!window||wid.unsignedIntValue==window)&&(!pid||[self.nativeMetadata[wid][@"basis"][@"identity"][@"pid"]intValue]==pid))[self.nativeMetadata removeObjectForKey:wid];
+}
+- (void)windowsChanged:(pid_t)pid { if(self.stopped)return;[self invalidateNativeMetadata:0 pid:pid];self.eager=NSProcessInfo.processInfo.systemUptime+1;if([self.host respondsToSelector:@selector(windowFamilyChanged:)])[self.host windowFamilyChanged:pid]; }
 - (void)windowMoved:(CGWindowID)window pid:(pid_t)pid {
     if(self.stopped)return;
+    [self invalidateNativeMetadata:window pid:pid];
     if(window&&![self.offered containsObject:@(window)])self.eager=NSProcessInfo.processInfo.systemUptime+1;
     [self.host windowMoved:window pid:pid];
 }
 - (void)windowChanged:(CGWindowID)window pid:(pid_t)pid {
     if(self.stopped)return;
-    for(NSNumber *wid in self.nativeMetadata.allKeys)if((!window||wid.unsignedIntValue==window)&&[self.nativeMetadata[wid][@"basis"][@"identity"][@"pid"]intValue]==pid)[self.nativeMetadata removeObjectForKey:wid];
+    [self invalidateNativeMetadata:window pid:pid];
     BOOL titleChanged=NO;
     for(NSNumber *wid in self.titleRetries.allKeys)if((!window||wid.unsignedIntValue==window)&&[self.titleRetries[wid][@"basis"][@"identity"][@"pid"]intValue]==pid){[self.titleRetries removeObjectForKey:wid];titleChanged=YES;}
     if(titleChanged)[self requestDiscoveryAfter:0];
@@ -419,7 +454,7 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
 - (void)windowDestroyed:(CGWindowID)window pid:(pid_t)pid {
     if(self.stopped)return;NSNumber *wid=@(window);[self.offered removeObject:wid];[self.missed removeObject:wid];[self.unlisted removeObject:wid];
     if([self.titleRetries[wid][@"basis"][@"identity"][@"pid"]intValue]==pid)[self.titleRetries removeObjectForKey:wid];
-    if([self.nativeMetadata[wid][@"basis"][@"identity"][@"pid"]intValue]==pid)[self.nativeMetadata removeObjectForKey:wid];
+    [self invalidateNativeMetadata:window pid:pid];
     [self.host windowDestroyed:window pid:pid];
 }
 - (void)focusChanged { if(!self.stopped)[self.host focusChanged]; }
