@@ -83,8 +83,11 @@ frame interval was 50 ms. The physical UTM drag tool still returned
 
 The opening comparison used original decoded frames and actual video timestamps,
 with the same event pump in v38 and v39. First-native-visible to first wholly
-relocated target was 117/167/150 ms on v38 and 67/100/167 ms on v39. The first two
-trials improved by 50/67 ms. The third v39 transition contains an 83 ms recording
+relocated target was 117/167/150 ms on v38 and 67/100/167 ms on v39. In v38's
+second trial, a partial managed-picture update began at 117 ms while the new
+window was clipped at its old location; the whole target appeared at 167 ms.
+Thus the first two whole-target intervals shortened by 50/67 ms, while their
+first-picture-change intervals shortened by 50/17 ms. The third v39 transition contains an 83 ms recording
 gap, leaving an 83–200 ms latency bracket. The small-sample median fell from
 150 to 100 ms, but consistent improvement is not established. All six openings
 still visibly appeared at the native position and then jumped. Effectively
