@@ -123,7 +123,7 @@ impl Controller {
         // unchanged native metadata cannot move or resize them. Keeping one
         // screen pin must not invalidate this shortcut for the whole desktop.
         if !self.sizes.observation_idle()
-            || !self.fullscreen.observation_idle()
+            || !self.fullscreen_observation_idle()
             || self.gesture.is_some()
             || self.trackpad_gesture.is_some()
             || self.guard_resize_structure(None).is_err()

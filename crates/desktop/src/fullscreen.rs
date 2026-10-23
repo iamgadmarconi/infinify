@@ -163,9 +163,6 @@ impl Fullscreen {
     pub(crate) fn restore_extent(&self, window: WindowId) -> Option<Size> {
         self.restores.get(&window).map(|restore| restore.extent)
     }
-    pub(crate) fn observation_idle(&self) -> bool {
-        self.entries.is_empty() && self.restores.is_empty()
-    }
     pub(crate) fn observation_blocked(&self, window: WindowId) -> bool {
         self.output_of(window).is_some() || self.restores.contains_key(&window)
     }
@@ -246,6 +243,32 @@ pub(crate) fn carries(command: &Command) -> bool {
 }
 
 impl Controller {
+    /// Settled fullscreen entries have no timed work. Keeping one open must
+    /// not invalidate unchanged observations and visual snapshots every poll.
+    /// Pending replies/restores, a changed usable area, or an unparked view
+    /// still require the ordinary transaction and settlement path.
+    pub(crate) fn fullscreen_observation_idle(&self) -> bool {
+        self.fullscreen.restores.is_empty()
+            && self.fullscreen.entries.iter().all(|(output, entry)| {
+                let Some(viewport) = self.scene.output(*output) else {
+                    return false;
+                };
+                let Some(window) = self.scene.window(entry.window) else {
+                    return false;
+                };
+                let Some(inset) = self.output_inset_px(*output) else {
+                    return false;
+                };
+                !entry.awaiting
+                    && self.output_px(*output) == Some(entry.offered)
+                    && self.sources.contains_key(&entry.window)
+                    && viewport.camera == point_of(entry.park)
+                    && viewport.zoom == 1.0
+                    && frame(window.world_rect).is_ok_and(|(loc, _)| {
+                        loc == [entry.park[0] + inset[0], entry.park[1] + inset[1]]
+                    })
+            })
+    }
     /// Upstream is_window_fullscreen.
     pub(crate) fn is_fullscreen(&self, window: WindowId) -> bool {
         self.fullscreen.output_of(window).is_some()

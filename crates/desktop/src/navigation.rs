@@ -358,7 +358,7 @@ impl Controller {
             && self.focus.hover.is_empty()
             && self.resize_slot().is_none_or(|slot| !slot.live)
             && self.sizes.observation_idle()
-            && self.fullscreen.observation_idle()
+            && self.fullscreen_observation_idle()
             && self.lifecycle.marks.is_empty()
             && self.lifecycle.relaunching.is_empty()
     }
@@ -556,6 +556,129 @@ mod tests {
             assert_eq!(
                 compare_transaction(&mut loaded, timestamp)["clock_only"],
                 true
+            );
+        }
+    }
+    fn finish_fullscreen_resize(controller: &mut Controller, reply: Value, took: Size) {
+        let mut effect = reply["effect"].clone();
+        let before = controller.sources[&WindowId(1)].observed_rect.size;
+        for (outcome, attempted, size) in [
+            ("observed", false, before),
+            ("applied", true, took),
+            ("observed", false, took),
+        ] {
+            let actual = Rect {
+                origin: Point::new(4000.0, 3000.0),
+                size,
+            };
+            let requested = if effect["requested"].is_null() {
+                json!({"width":0.0,"height":0.0})
+            } else {
+                effect["requested"].clone()
+            };
+            effect = command(
+                controller,
+                json!({"op":"native_resize_result","transaction":effect["transaction"],
+                    "effect_id":effect["effect_id"],"identity":effect["identity"],
+                    "generation":effect["generation"],"result":{"outcome":outcome,
+                    "ax_error":0,"mutation_attempted":attempted,"observed":true,
+                    "requested":requested,"actual_ax":actual,"actual_cg":actual}}),
+            )["effect"]
+                .clone();
+        }
+        assert!(effect.is_null());
+    }
+    fn settled_fullscreen_controller(took: Size, pinned: bool) -> Controller {
+        let mut controller = idle_controller();
+        command(
+            &mut controller,
+            json!({"op":"zoom","output":1,"zoom":0.75,"anchor":{"x":31.5,"y":47.25}}),
+        );
+        if pinned {
+            command(
+                &mut controller,
+                json!({"op":"ipc","output":1,"request":{"Pin":{"window":1,"value":true}}}),
+            );
+        }
+        command(&mut controller, json!({"op":"focus","window":1}));
+        let reply = command(
+            &mut controller,
+            json!({"op":"action","output":1,"action":"toggle-fullscreen"}),
+        );
+        assert!(!controller.navigation_clock_only());
+        finish_fullscreen_resize(&mut controller, reply, took);
+        controller
+    }
+    #[test]
+    fn settled_fullscreen_ticks_and_observations_match_full_transactions() {
+        for took in [Size::new(1000.0, 800.0), Size::new(750.0, 500.0)] {
+            for pinned in [false, true] {
+                let mut controller = settled_fullscreen_controller(took, pinned);
+                for timestamp in [0, 80_000_000, 20_000_000_000] {
+                    assert_eq!(
+                        compare_transaction(&mut controller, timestamp)["clock_only"],
+                        true
+                    );
+                }
+                for (&window, source) in &controller.sources {
+                    let mut reference = controller.clone();
+                    reference
+                        .apply(Command::Observe {
+                            window,
+                            identity: source.identity.clone(),
+                            source_rect: source.observed_rect,
+                            buffer: source.buffer,
+                        })
+                        .unwrap();
+                    reference.settle_state().unwrap();
+                    assert_eq!(format!("{reference:?}"), format!("{controller:?}"));
+                    assert!(controller.observation_current(
+                        window,
+                        &source.identity,
+                        source.observed_rect,
+                        source.buffer,
+                    ));
+                    let mut stale = source.identity.clone();
+                    stale.birth_sec += 1;
+                    assert!(!controller.observation_current(
+                        window,
+                        &stale,
+                        source.observed_rect,
+                        source.buffer,
+                    ));
+                }
+                command(
+                    &mut controller,
+                    json!({"op":"action","output":1,"action":"toggle-fullscreen"}),
+                );
+                assert_eq!(
+                    compare_transaction(&mut controller, 21_000_000_000)["clock_only"],
+                    false
+                );
+                let source = &controller.sources[&WindowId(1)];
+                assert!(!controller.observation_current(
+                    WindowId(1),
+                    &source.identity,
+                    source.observed_rect,
+                    source.buffer,
+                ));
+            }
+        }
+    }
+    #[test]
+    fn settled_fullscreen_pending_output_resize_and_other_output_motion_do_not_skip_work() {
+        let settled = settled_fullscreen_controller(Size::new(1000.0, 800.0), true);
+        for pending in [
+            json!({"op":"set_usable_area","output":1,"usable_rect_local":Rect::new(0.0,30.0,900.0,700.0)}),
+            json!({"op":"navigate_window","window":2,"output":2,"zoom_policy":"keep"}),
+            json!({"op":"begin_drag","window":2,"output":2}),
+        ] {
+            let mut controller = settled.clone();
+            command(&mut controller, pending.clone());
+            assert_eq!(
+                compare_transaction(&mut controller, 80_000_000)["clock_only"],
+                false,
+                "{pending}"
             );
         }
     }

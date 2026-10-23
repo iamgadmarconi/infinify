@@ -302,6 +302,39 @@ static void titleRetryInvalidation(void) {
         drain();[manager stop];
     }
 }
+static void nativeMetadataOverlap(void) {
+    titleTesting=YES;
+    for(NSString *mode in @[@"ready",@"empty",@"missing",@"role",@"basis",@"appearance",@"event",@"cg",@"stale",@"stop"]){
+        fixtureNow=500;DiscoveryHost *host=[DiscoveryHost new];DWWindowManager *manager=[DWWindowManager managerWithHost:host scope:nil mode:DWWindowDiscoveryModeNativePresentation];manager.completed=YES;
+        NSArray *rows=@[row(88,320)];NSDictionary *bases=candidateBases(rows);
+        NSMutableDictionary *element=[@{@"pid":@123,@"wid":@88,@"subrole":(__bridge NSString *)kAXStandardWindowSubrole,@"title":[mode isEqual:@"empty"]?@"":@"Prefetched AX title"}mutableCopy];
+        if([mode isEqual:@"missing"])[element removeObjectForKey:@"title"];
+        if([mode isEqual:@"role"])element[@"subrole"]=@"AXUnknown";
+        closeElements=@[element.copy];
+        [manager pollWithWindowRecords:rows nativeCandidateBases:bases sampledAt:fixtureTime()];
+        check(workerBlocks.count==1&&!host.appeared,@"native AX metadata starts inside the 50 ms hold without offering the window");
+        check(step(YES)&&mainBlocks.count==1&&!host.appeared,@"early AX result remains an asynchronous read-only selection");
+        fixtureNow=500.02;
+        if([mode isEqual:@"basis"]){rows=@[row(88,340)];bases=candidateBases(rows);[manager pollWithWindowRecords:rows nativeCandidateBases:bases sampledAt:fixtureTime()];}
+        if([mode isEqual:@"appearance"]){[manager pollWithWindowRecords:@[] nativeCandidateBases:@{} sampledAt:fixtureTime()];[manager pollWithWindowRecords:rows nativeCandidateBases:bases sampledAt:fixtureTime()];}
+        if([mode isEqual:@"event"])[manager windowChanged:88 pid:123];
+        if([mode isEqual:@"cg"]){NSMutableDictionary *named=[rows[0]mutableCopy];named[(id)kCGWindowName]=@"Changed CG title";rows=@[named];[manager pollWithWindowRecords:rows nativeCandidateBases:bases sampledAt:fixtureTime()];}
+        if([mode isEqual:@"stale"]){fixtureNow=500.051;[manager pollWithWindowRecords:rows nativeCandidateBases:bases sampledAt:fixtureTime()];fixtureNow=500.101;}
+        if([mode isEqual:@"stop"])[manager stop];
+        drain();check(!host.appeared,@"AX completion alone never substitutes for the fresh stable geometry pass");
+        if([mode isEqual:@"stop"]){check(!manager.discoveryTimer&&!host.requested,@"stopped prefetch cannot schedule or offer a candidate");continue;}
+        BOOL cached=[mode isEqual:@"ready"]||[mode isEqual:@"empty"];
+        closeElements=@[@{@"pid":@123,@"wid":@88,@"subrole":(__bridge NSString *)kAXStandardWindowSubrole,@"title":@"Fresh AX title"}];
+        fixtureNow=[mode isEqual:@"stale"]?500.11:([mode isEqual:@"basis"]||[mode isEqual:@"appearance"]?500.071:500.051);
+        [manager.discoveryTimer fire];check(!host.appeared,@"stability timer requests observation without adopting old geometry");
+        [manager pollWithWindowRecords:rows nativeCandidateBases:bases sampledAt:fixtureTime()];
+        check(cached?(host.appeared==1&&!workerBlocks.count):(!host.appeared&&workerBlocks.count==1),
+            [NSString stringWithFormat:@"prefetch %@ %@",mode,cached?@"eliminates the serial AX read after stability":@"requires fresh ordinary AX selection"]);
+        drain();NSString *expected=cached?([mode isEqual:@"empty"]?@"":@"Prefetched AX title"):@"Fresh AX title";
+        check(host.appeared==1&&[host.titles isEqual:@[expected]],@"only current positive metadata preserves AX title precedence and empty-title meaning");[manager stop];
+    }
+    titleTesting=NO;closeElements=nil;
+}
 int main(void) {@autoreleasepool {
     mainBlocks=[NSMutableArray array];workerBlocks=[NSMutableArray array];windowRows=@[row(42,320)];allWindowRows=@[];
     DiscoveryHost *host=[DiscoveryHost new];DWWindowManager *manager=[DWWindowManager managerWithHost:host scope:nil mode:DWWindowDiscoveryModeNativePresentation];
@@ -353,10 +386,10 @@ int main(void) {@autoreleasepool {
     check(titleHost.appeared==2&&[titleHost.titles isEqual:@[@"Discovery window",@"Saved document"]]&&titleHost.completed==1,@"fresh CG title clears only its own backoff before two seconds and preserves the real saved-slot name");[titleManager stop];
     titleTesting=YES;closeElements=@[@{@"pid":@123,@"wid":@75,@"subrole":(__bridge NSString *)kAXStandardWindowSubrole,@"title":@"Current AX title"},@{@"pid":@123,@"wid":@76,@"subrole":(__bridge NSString *)kAXStandardWindowSubrole,@"title":@""}];
     titleHost=[DiscoveryHost new];titleManager=[DWWindowManager managerWithHost:titleHost scope:nil mode:DWWindowDiscoveryModeNativePresentation];
-    titleRows=@[row(75,320),row(76,320)];fixtureNow=115;[titleManager pollWithWindowRecords:titleRows nativeCandidateBases:candidateBases(titleRows) sampledAt:fixtureTime()];
+    titleRows=@[row(75,320),row(76,320)];fixtureNow=115;[titleManager pollWithWindowRecords:titleRows nativeCandidateBases:candidateBases(titleRows) sampledAt:fixtureTime()];drain();
     fixtureNow=115.051;[titleManager pollWithWindowRecords:titleRows nativeCandidateBases:candidateBases(titleRows) sampledAt:fixtureTime()];drain();
     check(titleHost.appeared==2&&[titleHost.titles isEqual:@[@"",@"Current AX title"]],@"successful AX title overrides CG and known empty title remains distinct from unavailable");[titleManager stop];titleTesting=NO;closeElements=nil;
-    titleRetryInvalidation();
+    titleRetryInvalidation();nativeMetadataOverlap();
 
     DiscoveryHost *nativeHost=[DiscoveryHost new];DWWindowManager *nativeManager=[DWWindowManager managerWithHost:nativeHost scope:nil mode:DWWindowDiscoveryModeNativePresentation];
     fixtureNow=150;NSArray *animated=@[row(72,604)];NSDictionary *stableOwn=candidateBases(@[row(72,610)]);

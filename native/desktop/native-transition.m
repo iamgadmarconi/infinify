@@ -283,7 +283,27 @@ static BOOL captureRootCurrent(NSDictionary *identity,CGRect native,CGRect scree
 - (BOOL)show {
     NSAssert(NSThread.isMainThread,@"Native transition requires the main thread");
     if(_closed||![self basisCurrent])return NO;
-    [_panel.contentView displayIfNeeded];[_panel orderFrontRegardless];return _panel.isVisible;
+    // Ordering can defer the panel's first backing update. Draw after ordering
+    // and submit that transaction before the helper may hide the real root.
+    // Server metadata confirms only ordering/geometry, never rendered pixels.
+    [_panel orderFrontRegardless];[_panel displayIfNeeded];[CATransaction flush];
+    NSInteger number=_panel.windowNumber;NSRect frame=_panel.frame;
+    CGRect expected=CGRectMake(frame.origin.x-_basis.x,_basis.y-NSMaxY(frame),frame.size.width,frame.size.height);
+    BOOL ordered=NO;NSUInteger matches=0;
+    if(number>0&&(uint64_t)number<=UINT32_MAX){
+        NSArray *rows=CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow,(CGWindowID)number));
+        for(NSDictionary *row in rows)if([row[(id)kCGWindowNumber]unsignedLongLongValue]==(uint64_t)number){
+            CGRect observed=CGRectNull;NSNumber *alpha=row[(id)kCGWindowAlpha];++matches;
+            ordered=[row[(id)kCGWindowOwnerPID]intValue]==getpid()&&[row[(id)kCGWindowIsOnscreen]boolValue]
+                &&[alpha isKindOfClass:NSNumber.class]&&alpha.doubleValue==1
+                &&[row[(id)kCGWindowBounds]isKindOfClass:NSDictionary.class]
+                &&CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)row[(id)kCGWindowBounds],&observed)
+                &&validRect(observed)&&roundedEdgesMatch(expected,observed);
+        }
+    }
+    BOOL ready=matches==1&&ordered&&_panel.isVisible&&[self basisCurrent];
+    if(transitionTiming())fprintf(stderr,"debug: native transition panel ordered window=%ld ready=%d time=%.6f\n",(long)number,ready,CACurrentMediaTime());
+    return ready;
 }
 - (BOOL)animateToScreenRect:(CGRect)rect completion:(void (^)(BOOL))completion {
     NSAssert(NSThread.isMainThread,@"Native transition requires the main thread");
@@ -298,6 +318,7 @@ static BOOL captureRootCurrent(NSDictionary *identity,CGRect native,CGRect scree
     } completionHandler:^{
         DWNativeTransition *strong=weak;if(!strong||strong->_closed||strong->_serial!=serial)return;
         strong->_animating=NO;void (^done)(BOOL)=strong->_completion;strong->_completion=nil;
+        if(transitionTiming())fprintf(stderr,"debug: native transition completion entered animation_ms=%.3f time=%.6f\n",(CACurrentMediaTime()-started)*1000,CACurrentMediaTime());
         NSRect actual=strong->_panel.frame;BOOL visible=strong.visible,basis=[strong basisCurrent];
         BOOL rounded=validRect(NSRectToCGRect(actual))&&roundedEdgesMatch(NSRectToCGRect(frame),NSRectToCGRect(actual));
         if(transitionTiming())fprintf(stderr,"debug: native transition panel completed actual=%s target=%s visible=%d basis=%d rounded_match=%d animation_ms=%.3f time=%.6f\n",NSStringFromRect(actual).UTF8String,NSStringFromRect(frame).UTF8String,visible,basis,rounded,(CACurrentMediaTime()-started)*1000,CACurrentMediaTime());
