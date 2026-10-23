@@ -119,12 +119,14 @@ impl Controller {
         // Pending structure still needs the ordinary transactional path,
         // including runs without native resize capability. A stable native
         // basis may intentionally differ from its canvas size after a handoff.
+        // Pins alone are already settled by every successful scene mutation;
+        // unchanged native metadata cannot move or resize them. Keeping one
+        // screen pin must not invalidate this shortcut for the whole desktop.
         if !self.sizes.observation_idle()
             || !self.fullscreen.observation_idle()
             || self.gesture.is_some()
             || self.trackpad_gesture.is_some()
             || self.guard_resize_structure(None).is_err()
-            || !self.policy.pins.is_empty()
             || !self.policy.sizing.is_empty()
             || !self.lifecycle.standins.is_empty()
             || !self.lifecycle.relaunching.is_empty()
@@ -913,5 +915,195 @@ mod tests {
             controller.scene.window(window).unwrap().world_rect,
             expected
         );
+    }
+    // Compare the no-op shortcut with the complete Observe transaction,
+    // including fields absent from Snapshot. Real native authority is still
+    // checked by the adapter before this controller-only decision.
+    fn assert_settled_observations_are_noops(controller: &Controller) {
+        for (&window, source) in &controller.sources {
+            let before = format!("{controller:?}");
+            let mut reference = controller.clone();
+            reference
+                .execute(Request {
+                    version: ABI_VERSION,
+                    command: Command::Observe {
+                        window,
+                        identity: source.identity.clone(),
+                        source_rect: source.observed_rect,
+                        buffer: source.buffer,
+                    },
+                })
+                .unwrap();
+            assert_eq!(format!("{reference:?}"), before);
+            assert!(controller.observation_current(
+                window,
+                &source.identity,
+                source.observed_rect,
+                source.buffer,
+            ));
+        }
+    }
+
+    fn pinned_observation_scene() -> (Controller, WindowId, SourceIdentity) {
+        let (mut controller, window, identity) = setup();
+        controller
+            .request(
+                &serde_json::to_vec(&json!({"version":1,"command":{
+                    "op":"ipc","output":1,"request":{"Pin":{"window":window,"value":true}}
+                }}))
+                .unwrap(),
+            )
+            .unwrap();
+        let mut ordinary = identity.clone();
+        ordinary.wid += 1;
+        controller
+            .request(
+                &serde_json::to_vec(&json!({"version":1,"command":{
+                    "op":"attach","identity":ordinary,"bundle_id":"test","title":"ordinary",
+                    "buffer":{"width":400,"height":300},
+                    "source_rect":Rect::new(10.,20.,200.,150.),
+                    "world_rect":Rect::new(500.,100.,200.,150.)
+                }}))
+                .unwrap(),
+            )
+            .unwrap();
+        (controller, window, identity)
+    }
+
+    #[test]
+    fn settled_pin_does_not_force_unchanged_observations_through_transactions() {
+        let (mut controller, _, _) = pinned_observation_scene();
+        assert_settled_observations_are_noops(&controller);
+        for zoom in [0.5, 0.8, 1.0] {
+            controller
+                .execute(Request {
+                    version: ABI_VERSION,
+                    command: Command::Zoom {
+                        output: OutputId(1),
+                        zoom,
+                        anchor: Point::new(187., 263.),
+                    },
+                })
+                .unwrap();
+            controller
+                .execute(Request {
+                    version: ABI_VERSION,
+                    command: Command::Pan {
+                        output: OutputId(1),
+                        screen_delta: Point::new(37.25, -19.5),
+                        time_ms: None,
+                        source: None,
+                    },
+                })
+                .unwrap();
+            assert_settled_observations_are_noops(&controller);
+        }
+    }
+
+    #[test]
+    fn unchanged_pin_observation_preserves_partial_offscreen_drag_and_native_basis_restore() {
+        let (mut controller, window, identity) = pinned_observation_scene();
+        for (target, pointer) in [
+            (Point::new(-50., 100.), Point::new(50., 150.)),
+            (Point::new(900., 100.), Point::new(950., 150.)),
+            (Point::new(100., -50.), Point::new(150., 50.)),
+            (Point::new(100., 750.), Point::new(150., 775.)),
+        ] {
+            let pin = controller.policy.pins[&window];
+            let start = Point::new(f64::from(pin.screen_pos[0]), f64::from(pin.screen_pos[1]));
+            for command in [
+                Command::BeginDrag {
+                    window,
+                    output: OutputId(1),
+                    group: false,
+                },
+                Command::GestureTo {
+                    screen_delta: target - start,
+                    pointer: Some(pointer),
+                },
+                Command::EndGesture {},
+            ] {
+                controller
+                    .execute(Request {
+                        version: ABI_VERSION,
+                        command,
+                    })
+                    .unwrap();
+            }
+            assert_eq!(
+                controller.policy.pins[&window].screen_pos,
+                [target.x as i32, target.y as i32]
+            );
+            assert_settled_observations_are_noops(&controller);
+        }
+        for source_rect in [
+            Rect::new(30., 45., 320., 240.),
+            Rect::new(10., 20., 200., 150.),
+        ] {
+            controller
+                .execute(Request {
+                    version: ABI_VERSION,
+                    command: Command::ObservePresentation {
+                        window,
+                        identity: identity.clone(),
+                        source_rect,
+                        buffer: BufferSize {
+                            width: 400,
+                            height: 300,
+                        },
+                    },
+                })
+                .unwrap();
+            assert_settled_observations_are_noops(&controller);
+        }
+    }
+
+    #[test]
+    fn pinned_observation_still_rejects_changed_geometry_identity_buffer_and_live_gesture() {
+        let (mut controller, window, identity) = pinned_observation_scene();
+        let source = controller.sources[&window].clone();
+        let mut stale = identity.clone();
+        stale.birth_sec += 1;
+        for (owner, rect, buffer) in [
+            (stale, source.observed_rect, source.buffer),
+            (
+                identity.clone(),
+                Rect::new(11., 20., 200., 150.),
+                source.buffer,
+            ),
+            (
+                identity.clone(),
+                Rect::new(10., 20., 201., 150.),
+                source.buffer,
+            ),
+            (
+                identity.clone(),
+                source.observed_rect,
+                BufferSize {
+                    width: 401,
+                    height: 300,
+                },
+            ),
+        ] {
+            assert!(!controller.observation_current(window, &owner, rect, buffer));
+        }
+        controller
+            .execute(Request {
+                version: ABI_VERSION,
+                command: Command::BeginDrag {
+                    window,
+                    output: OutputId(1),
+                    group: false,
+                },
+            })
+            .unwrap();
+        for (&id, source) in &controller.sources {
+            assert!(!controller.observation_current(
+                id,
+                &source.identity,
+                source.observed_rect,
+                source.buffer
+            ));
+        }
     }
 }
