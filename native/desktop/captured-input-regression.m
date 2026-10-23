@@ -18,6 +18,13 @@
 #include "root-capture-mailbox-regression.m"
 #undef main
 
+@interface LiveSource (FillBackgroundRegression)
+@property(readonly) NSDictionary *nativeMouseOwnership;
+@end
+@implementation LiveSource (FillBackgroundRegression)
+- (NSDictionary *)nativeMouseOwnership { return nil; }
+@end
+
 @interface Router : NSObject
 @property pid_t pid;
 @property uint32_t wid;
@@ -78,6 +85,11 @@
 @property NSMutableDictionary *sources;
 @property NSDictionary *snapshot,*scope;
 @property NSDictionary *nativeFillHandoff;
+@property NSObject *nativeFillRoot;
+@property BOOL nativeFillAnimated,nativeFillResuming;
+@property NSArray *nativeFillBackgroundTrace;
+@property uint64_t nativeFillBlockedButtons;
+@property BOOL nativeFillBlockedScroll;
 @property InputNative *native;
 @property InputViews *nativeViews;
 @property InputFamilies *nativeFamilies;
@@ -117,6 +129,9 @@
 - (NSDictionary *)resolveCapturedPointer:(NSDictionary *)target screen:(CGPoint)screen;
 - (BOOL)forwardCapturedPointer:(CGEventRef)event screen:(CGPoint)screen;
 - (BOOL)forwardTabletTail:(CGEventRef)event;
+- (BOOL)fillInput:(CGEventType)type event:(CGEventRef)event;
+- (BOOL)nativeFillCurrent:(NSDictionary *)held snapshot:(NSDictionary *)snapshot;
+- (NSDictionary *)nativeFillBackground:(NSDictionary *)snapshot;
 @end
 @interface InputApplication : NSObject
 @property pid_t processIdentifier;
@@ -132,6 +147,7 @@
 + (instancetype)sharedWorkspace { static InputWorkspace *workspace;if(!workspace){workspace=[InputWorkspace new];workspace.frontmostApplication=[InputApplication new];workspace.frontmostApplication.processIdentifier=7;}return workspace; }
 @end
 @interface InputView : NSObject
+@property NSWindow *window;
 @property InputDesktop *desktop;
 @property NSDictionary *testHit;
 @property LiveSource *pressedSource;
@@ -188,6 +204,12 @@ static NSDictionary *windowInfo(uint32_t wid) {
 }
 static BOOL DWInputTrace(void) { return NO; }
 static BOOL inputTrusted(void) { return YES; }
+// WindowServer's recipient annotation is read-only on constructed scroll
+// packets. Substitute only that annotation; AppKit decodes real packet phases.
+static int64_t fillEventInteger(CGEventRef packet,CGEventField field) {
+    if(field==kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent||field==kCGMouseEventWindowUnderMousePointer)return 9;
+    return CGEventGetIntegerValueField(packet,field);
+}
 static volatile sig_atomic_t stopped;
 static NSArray *asArray(id value) {return [value isKindOfClass:NSArray.class]?value:nil;}
 #include "native-chrome-geometry.inc"
@@ -238,6 +260,12 @@ enum { DWPolicyPress=5 };
     if(type==kCGEventLeftMouseUp||type==kCGEventRightMouseUp||type==kCGEventOtherMouseUp)self.ups++;
     if(DWNativeTabletProximityEvent(event)&&!CGEventGetIntegerValueField(event,kCGTabletProximityEventEnterProximity))self.toolOuts++;
     return YES;
+}
+- (BOOL)fillInput:(CGEventType)type event:(CGEventRef)cg {
+#define CGEventGetIntegerValueField fillEventInteger
+#include "captured-input-fill-blocker.inc"
+#undef CGEventGetIntegerValueField
+    return NO;
 }
 #include "captured-input-desktop-consumers.inc"
 @end
@@ -486,6 +514,79 @@ static void nativeWindowControlKeys(void) {
     [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.01]];check(fired==beforeStop,@"stopping fences queued window-control action");
     CFRelease(event);[keys invalidate];check(!keys.nativeWindowControl,@"invalidation releases window-control admission callback");
 }
+
+static CGEventRef fillScrollPacket(CGScrollPhase phase,CGMomentumScrollPhase momentum,BOOL continuous) {
+    CGEventRef packet=CGEventCreateScrollWheelEvent(NULL,continuous?kCGScrollEventUnitPixel:kCGScrollEventUnitLine,1,1);
+    CGEventSetIntegerValueField(packet,kCGScrollWheelEventIsContinuous,continuous);
+    CGEventSetIntegerValueField(packet,kCGScrollWheelEventScrollPhase,phase);
+    CGEventSetIntegerValueField(packet,kCGScrollWheelEventMomentumPhase,momentum);
+    return packet;
+}
+static BOOL fillScroll(InputDesktop *desktop,CGScrollPhase phase,CGMomentumScrollPhase momentum,BOOL continuous) {
+    CGEventRef packet=fillScrollPacket(phase,momentum,continuous);
+    BOOL consumed=[desktop fillInput:kCGEventScrollWheel event:packet];CFRelease(packet);return consumed;
+}
+static void fillInputTails(void) {
+    InputView *view=inputView(source(NO));InputDesktop *desktop=view.desktop;desktop.native=[InputNative new];LiveSource *live=desktop.sources[@1];
+    NSDictionary *handoff=@{@"identity":@{@"wid":@99},@"output":@3,@"background":@{@"placements":@[@{@"window":@1,@"output":@3,@"source":@{@"identity":live.identity}}]}};
+    desktop.nativeFillHandoff=handoff;
+    check(fillScroll(desktop,kCGScrollPhaseBegan,kCGMomentumScrollPhaseNone,YES)&&desktop.nativeFillBlockedScroll,@"a retained background owns a swallowed precise scroll from its beginning");
+    desktop.nativeFillHandoff=nil;
+    check(fillScroll(desktop,kCGScrollPhaseChanged,kCGMomentumScrollPhaseNone,YES),@"blocked scroll changed survives handoff cleanup");
+    check(fillScroll(desktop,kCGScrollPhaseEnded,kCGMomentumScrollPhaseNone,YES)&&desktop.nativeFillBlockedScroll,@"finger end keeps suppression for pending momentum");
+    check(fillScroll(desktop,0,kCGMomentumScrollPhaseBegin,YES)&&fillScroll(desktop,0,kCGMomentumScrollPhaseContinue,YES),@"blocked momentum cannot enter the newly fullscreen app");
+    check(fillScroll(desktop,0,kCGMomentumScrollPhaseEnd,YES)&&!desktop.nativeFillBlockedScroll,@"momentum end consumes its final packet and releases ownership");
+    check(!fillScroll(desktop,kCGScrollPhaseBegan,kCGMomentumScrollPhaseNone,YES),@"a later independent gesture keeps normal admission");
+    desktop.nativeFillHandoff=handoff;check(fillScroll(desktop,kCGScrollPhaseBegan,kCGMomentumScrollPhaseNone,YES),@"second held scroll starts");desktop.nativeFillHandoff=nil;
+    check(!fillScroll(desktop,kCGScrollPhaseMayBegin,kCGMomentumScrollPhaseNone,YES)&&!desktop.nativeFillBlockedScroll,@"new physical may-begin retires a lost terminal packet");
+    desktop.nativeFillHandoff=handoff;check(fillScroll(desktop,kCGScrollPhaseBegan,kCGMomentumScrollPhaseNone,YES),@"third held scroll starts");desktop.nativeFillHandoff=nil;
+    check(fillScroll(desktop,kCGScrollPhaseCancelled,kCGMomentumScrollPhaseNone,YES)&&!desktop.nativeFillBlockedScroll,@"cancelled scroll closes its swallowed sequence after cleanup");
+    desktop.nativeFillHandoff=handoff;
+    check(fillScroll(desktop,0,kCGMomentumScrollPhaseNone,NO)&&!desktop.nativeFillBlockedScroll,@"a discrete wheel event is blocked without reserving later wheel events");
+    desktop.nativeFillHandoff=nil;check(!fillScroll(desktop,0,kCGMomentumScrollPhaseNone,NO),@"later discrete wheel event keeps ordinary admission");
+    NSMutableDictionary *other=[handoff mutableCopy];other[@"output"]=@4;desktop.nativeFillHandoff=other;
+    check(!fillScroll(desktop,kCGScrollPhaseBegan,kCGMomentumScrollPhaseNone,YES),@"another output's roots are not retained input targets");
+    desktop.nativeFillHandoff=handoff;NSDictionary *identity=live.identity;live.identity=@{@"pid":@7,@"wid":@9,@"birth_sec":@124,@"birth_usec":@456};
+    check(!fillScroll(desktop,kCGScrollPhaseBegan,kCGMomentumScrollPhaseNone,YES),@"a rebound native identity cannot inherit a background input hold");live.identity=identity;
+    CGEventRef packet=mousePacket(kCGEventLeftMouseDown,kCGMouseButtonLeft);
+    check([desktop fillInput:kCGEventLeftMouseDown event:packet]&&desktop.nativeFillBlockedButtons==1,@"retained background mouse down reserves its complete pair");
+    desktop.nativeFillHandoff=nil;CGEventSetType(packet,kCGEventLeftMouseDragged);check([desktop fillInput:kCGEventLeftMouseDragged event:packet],@"retained background drag stays swallowed after cleanup");
+    CGEventSetType(packet,kCGEventLeftMouseUp);check([desktop fillInput:kCGEventLeftMouseUp event:packet]&&!desktop.nativeFillBlockedButtons,@"retained background up closes its own swallowed pair");CFRelease(packet);
+}
+
+static void fillBackgroundCase(NSString *mode,BOOL retained) {
+    InputDesktop *desktop=inputView(source(NO)).desktop;desktop.native=[InputNative new];desktop.nativeViews=[InputViews new];desktop.nativeFillRoot=[NSObject new];
+    LiveSource *background=source(NO);background.logical=@2;background.identity=@{@"pid":@7,@"wid":@10,@"birth_sec":@123,@"birth_usec":@456};desktop.sources[@2]=background;
+    BOOL pinned=[mode hasPrefix:@"pin_"];
+    NSDictionary *screen=rectJSON(CGRectMake(0,0,1600,1200)),*parked=pointJSON(CGPointMake(12,-4));
+    NSDictionary *oldOutput=@{@"id":@3,@"camera":pointJSON(CGPointMake(12.25,-4.5)),@"zoom":@.75,@"screen_bounds":screen};
+    NSMutableDictionary *output=[@{@"id":@3,@"camera":parked,@"zoom":@1,@"screen_bounds":screen}mutableCopy];
+    NSDictionary *root=desktop.snapshot[@"windows"][0],*binding=@{@"identity":background.identity,@"generation":@3,@"observation_known":@YES};
+    NSDictionary *screenRect=rectJSON(CGRectMake(100,110,pinned?200:150,pinned?100:75));
+    NSDictionary *pin=@{@"output":@3,@"screen_rect":screenRect};
+    NSDictionary *old=@{@"window":@2,@"source":binding,@"world_rect":rectJSON(CGRectMake(50,60,200,100)),@"pinned":pinned?pin:(id)NSNull.null};
+    NSDictionary *placement=@{@"window":@2,@"output":@3,@"source":binding,@"screen_rect":screenRect,@"clip_rect":screenRect,@"pinned":@(pinned)};
+    NSMutableDictionary *current=[old mutableCopy],*currentRoot=[root mutableCopy];
+    if(pinned||[mode isEqual:@"moved"])current[@"world_rect"]=rectJSON(CGRectMake(112,106,200,100));
+    if([mode isEqual:@"display"])output[@"screen_bounds"]=rectJSON(CGRectMake(0,0,1800,1200));
+    if([mode isEqual:@"camera"])output[@"camera"]=pointJSON(CGPointMake(13,-4));
+    if([mode isEqual:@"binding"]){NSMutableDictionary *changed=[root[@"source"]mutableCopy];changed[@"generation"]=@4;currentRoot[@"source"]=changed;}
+    if([mode isEqual:@"source"]){NSMutableDictionary *changed=[binding mutableCopy];changed[@"generation"]=@4;current[@"source"]=changed;}
+    if([mode isEqual:@"identity"])background.identity=@{@"pid":@7,@"wid":@10,@"birth_sec":@124,@"birth_usec":@456};
+    if([mode isEqual:@"pin_screen"])current[@"pinned"]=@{@"output":@3,@"screen_rect":rectJSON(CGRectMake(101,110,200,100))};
+    if([mode isEqual:@"pin_output"])current[@"pinned"]=@{@"output":@4,@"screen_rect":screenRect};
+    NSDictionary *prior=@{@"outputs":@[oldOutput],@"windows":@[root,old],@"placements":@[placement]};
+    NSDictionary *snapshot=@{@"outputs":@[output],@"windows":@[currentRoot,current],@"placements":@[]};
+    desktop.nativeFillHandoff=@{@"window":@1,@"output":@3,@"identity":root[@"source"][@"identity"],@"generation":@2,@"presenter":desktop.native,
+        @"session":@(desktop.nativeSessionEpoch),@"transaction":@1,@"camera":parked,@"zoom":@1,@"screen_bounds":screen,@"background":prior};
+    if([mode isEqual:@"session"])desktop.nativeSessionEpoch++;
+    if([mode isEqual:@"animated"])desktop.nativeFillAnimated=YES;
+    NSDictionary *result=[desktop nativeFillBackground:snapshot];
+    check(retained?([result[@"placements"]count]==1&&result[@"placements"][0]==placement):result==snapshot,
+        [NSString stringWithFormat:@"Fill background %@ %@",mode,retained?@"retains its exact prior screen placement":@"refuses obsolete projection"]);
+    check([snapshot[@"placements"]count]==0&&prior[@"placements"][0]==placement,@"Fill background projection leaves both input snapshots unchanged");
+}
+
 int main(void) {@autoreleasepool {
     jobs=[NSMutableArray array];checks=0;
     CGRect chromeNative=CGRectMake(90,100,230,408),chromeScreen=CGRectMake(600,200,230,408);
@@ -519,6 +620,9 @@ int main(void) {@autoreleasepool {
     check(DWNativeButtonsAfterRefresh(negativeChrome,chromeReport,chromeIdentity,refreshNow,YES,chromeNative)==negativeChrome,@"successful negative title report replaces the older map");
     check(!DWNativeButtonsAfterRefresh(chromeReport,chromeReport,chromeIdentity,refreshNow,YES,chromeNative),@"late nonnil report cannot fall back to an older map");
 
+    fillInputTails();
+    fillBackgroundCase(@"fractional",YES);fillBackgroundCase(@"pin_world",YES);
+    for(NSString *mode in @[@"display",@"binding",@"source",@"identity",@"pin_screen",@"pin_output",@"moved",@"camera",@"session",@"animated"])fillBackgroundCase(mode,NO);
     titleReleaseCase(@"stationary",YES);titleReleaseCase(@"slop",YES);titleMotionCase();
     titleReleaseCase(@"drag",NO);titleReleaseCase(@"out_and_back",NO);
     titleReleaseCase(@"lost_up",NO);titleReleaseCase(@"other_output",NO);

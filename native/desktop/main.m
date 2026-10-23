@@ -1100,6 +1100,7 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 @property NSDictionary *overlayFamilySnapshot,*overlayFamilyBase,*overlayFamilyDescriptions;
 @property NSDictionary *nativeViewSnapshot,*nativeOwnerSnapshot;
 @property NSDictionary *nativeFillHandoff,*nativeRestoreDeferred;
+@property NSArray *nativeFillBackgroundTrace;
 @property NSMutableDictionary<NSNumber *,NSDictionary *> *nativeFillHistory;
 @property NSMutableSet<NSNumber *> *nativeFillRefusedTransactions;
 @property DWNativeResizeDriver *nativeResizeDriver;
@@ -1110,6 +1111,7 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 @property CFTimeInterval nativeFillPresentationDeadline;
 @property BOOL nativeFillResuming;
 @property uint64_t nativeFillBlockedButtons;
+@property BOOL nativeFillBlockedScroll;
 @property (weak) LiveSource *nativeMouseOwner;
 - (void)nativeMouseOwnershipChanged:(CGEventRef)event buttons:(NSIndexSet *)buttons;
 - (void)updateNativeMouseOwners;
@@ -3038,6 +3040,18 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     }
     if(!view)return NO;
     NSDictionary *recipient=DWNativeEventRecipientAtPoint(point);CGWindowID wid=[recipient[@"wid"]unsignedIntValue];LiveSource *source=nil;
+    // A temporary background has no current logical hit site. Refuse its
+    // complete native family before title tracking, even without chrome data.
+    NSNumber *root=[self.native rootWindowFor:wid];
+    for(NSDictionary *placement in self.nativeFillHandoff[@"background"][@"placements"]){
+        LiveSource *background=self.sources[placement[@"window"]];NSDictionary *identity=background.identity;
+        if(background&&!background.detached&&[placement[@"output"]isEqual:self.nativeFillHandoff[@"output"]]
+            &&boundIdentity(placement[@"source"][@"identity"],identity)&&[root isEqual:identity[@"wid"]]
+            &&[recipient[@"pid"]isEqual:identity[@"pid"]]&&[recipient[@"birth_sec"]isEqual:identity[@"birth_sec"]]
+            &&[recipient[@"birth_usec"]isEqual:identity[@"birth_usec"]]&&DWInScope(self.scope,background.router.pid)){
+            [self cancelNativeTitleClick];self.nativeFillBlockedButtons|=1;return YES;
+        }
+    }
     for(LiveSource *candidate in self.sources.allValues)
         if(!candidate.detached&&candidate.router.wid==wid&&boundIdentity(recipient,candidate.identity)){source=candidate;break;}
     if(!source||!DWInScope(self.scope,source.router.pid))return NO;
@@ -3137,12 +3151,26 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(fillBit&&(self.nativeFillBlockedButtons&fillBit)&&(fillUp||fillDrag)){
         if(fillUp)self.nativeFillBlockedButtons&=~fillBit;return YES;
     }
+    NSEvent *fillScroll=type==kCGEventScrollWheel?[NSEvent eventWithCGEvent:cg]:nil;
+    BOOL fillScrollPhased=fillScroll.hasPreciseScrollingDeltas&&(fillScroll.phase!=NSEventPhaseNone||fillScroll.momentumPhase!=NSEventPhaseNone);
+    BOOL fillScrollBegin=(fillScroll.phase&(NSEventPhaseBegan|NSEventPhaseMayBegin))!=0;
+    BOOL fillScrollEnd=((fillScroll.phase|fillScroll.momentumPhase)&NSEventPhaseCancelled)||(fillScroll.momentumPhase&NSEventPhaseEnded);
+    if(fillScrollPhased&&fillScrollBegin)self.nativeFillBlockedScroll=NO;
+    if(fillScrollPhased&&self.nativeFillBlockedScroll){if(fillScrollEnd)self.nativeFillBlockedScroll=NO;return YES;}
     if(self.nativeFillHandoff&&(fillDown||type==kCGEventScrollWheel)){
         CGWindowID recipient=(CGWindowID)CGEventGetIntegerValueField(cg,kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent);
         if(!recipient)recipient=(CGWindowID)CGEventGetIntegerValueField(cg,kCGMouseEventWindowUnderMousePointer);
-        BOOL held=[[self.native rootWindowFor:recipient]isEqual:self.nativeFillHandoff[@"identity"][@"wid"]];
+        NSNumber *root=[self.native rootWindowFor:recipient];
+        BOOL held=[root isEqual:self.nativeFillHandoff[@"identity"][@"wid"]];
+        // Retained background windows are visual coverage only. Their current
+        // fullscreen scene has no input site, so consume the complete pair.
+        for(NSDictionary *placement in self.nativeFillHandoff[@"background"][@"placements"]){
+            LiveSource *live=self.sources[placement[@"window"]];
+            if(live&&!live.detached&&[placement[@"output"]isEqual:self.nativeFillHandoff[@"output"]]
+                &&boundIdentity(placement[@"source"][@"identity"],live.identity)&&[root isEqual:live.identity[@"wid"]])held=YES;
+        }
         for(DesktopView *view in self.views)if((CGWindowID)view.window.windowNumber==recipient)held=YES;
-        if(held){if(fillDown)self.nativeFillBlockedButtons|=fillBit;return YES;}
+        if(held){if(fillDown)self.nativeFillBlockedButtons|=fillBit;if(fillScrollPhased&&!fillScrollEnd)self.nativeFillBlockedScroll=YES;return YES;}
     }
     // A shell-owned decoration/action pair predates any second button that
     // may have reached a captured child. That grab must not consume this up.
@@ -3980,7 +4008,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     // Invalidate the callbacks before cancellation can synchronously complete.
     DWNativeTransitionCapture *capture=self.nativeFillCapture;DWNativeTransition *picture=self.nativeFillPicture;
     DWNativePresenter *presenter=self.nativeFillHandoff[@"presenter"];presenter.transitionFrameAcknowledged=nil;
-    self.nativeFillHandoff=nil;self.nativeFillCapture=nil;self.nativeFillPicture=nil;self.nativeFillRoot=nil;
+    self.nativeFillHandoff=nil;self.nativeFillCapture=nil;self.nativeFillPicture=nil;self.nativeFillRoot=nil;self.nativeViewSnapshot=nil;self.nativeFillBackgroundTrace=nil;
     self.nativeFillResuming=NO;self.nativeFillHiding=NO;self.nativeFillAnimating=NO;self.nativeFillAnimated=NO;self.nativeFillRevealing=NO;self.nativeFillPresentationDeadline=0;
     self.nativeResizeDriver.fillPreparationTimeout=.75;self.resize.timeout=3;
     [capture cancel];[picture cancel];
@@ -4020,7 +4048,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(restoring)[self.nativeFillHistory removeObjectForKey:source.logical];
     else if(root){if(!self.nativeFillHistory)self.nativeFillHistory=[NSMutableDictionary dictionary];self.nativeFillHistory[source.logical]=@{@"identity":source.identity.copy,@"generation":effect[@"generation"]};}
     self.nativeFillRoot=root;self.nativeFillHiding=NO;self.nativeFillAnimating=NO;self.nativeFillAnimated=NO;self.nativeFillRevealing=NO;self.nativeFillPresentationDeadline=0;
-    self.nativeFillHandoff=@{@"window":effect[@"window"],@"transaction":effect[@"transaction"],@"identity":source.identity.copy,@"generation":effect[@"generation"],@"restoring":@(restoring),@"presenter":self.native,@"session":@(self.nativeSessionEpoch),@"output":output,@"camera":view[@"camera"],@"zoom":view[@"zoom"],@"screen_bounds":view[@"screen_bounds"]};self.nativeFillResuming=NO;
+    self.nativeFillHandoff=@{@"window":effect[@"window"],@"transaction":effect[@"transaction"],@"identity":source.identity.copy,@"generation":effect[@"generation"],@"restoring":@(restoring),@"presenter":self.native,@"session":@(self.nativeSessionEpoch),@"output":output,@"camera":view[@"camera"],@"zoom":view[@"zoom"],@"screen_bounds":view[@"screen_bounds"],@"background":root&&!restoring?(self.nativeOwnerSnapshot?:@{}):@{}};self.nativeFillResuming=NO;
     __weak Desktop *handoffDesktop=self;__weak DWNativePresenter *handoffPresenter=self.native;NSNumber *handoffTransaction=effect[@"transaction"];
     self.native.transitionFrameAcknowledged=^{Desktop *d=handoffDesktop;
         if(!d||d.cleaning||d.sessionInactive||d.native!=handoffPresenter||![d.nativeFillHandoff[@"transaction"]isEqual:handoffTransaction])return;
@@ -4089,7 +4117,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
                         for(NSDictionary *item in [d presentationSnapshot][@"placements"])if([item[@"window"]isEqual:held[@"window"]]&&[item[@"output"]isEqual:held[@"output"]]&&CGRectEqualToRect(jsonRect(item[@"screen_rect"]),target))targetMatches=YES;
                         BOOL current=[d nativeFillCurrent:held snapshot:now];
                         if(!completed||!targetMatches||!current){if(DWInputTrace())fprintf(stderr,"debug: native transition completion refused window=#%s completed=%d target=%d current=%d\n",[held[@"window"]description].UTF8String,completed,targetMatches,current);d.nativeFillPresentationDeadline=CACurrentMediaTime();return;}
-                        d.nativeFillAnimated=YES;
+                        d.nativeFillAnimated=YES;d.nativeViewSnapshot=nil;
                         if(DWInputTrace())fprintf(stderr,"debug: native transition animated window=#%s\n",[held[@"window"]description].UTF8String);
                         [d render];};
                     BOOL accepted=[self.nativeFillPicture animateToScreenRect:target completion:reveal];
@@ -5000,6 +5028,45 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 - (void)forgetNativeFamily:(LiveSource *)source {
     if(source.nativeFamily){if(self.captureBackings[source.logical])[self revokeCaptureBackingForWindow:source.logical];source.nativeFamily=nil;self.nativeFamilyRevision++;}
 }
+- (NSDictionary *)nativeFillBackground:(NSDictionary *)snapshot {
+    NSDictionary *held=self.nativeFillHandoff,*prior=held[@"background"];
+    if(!prior.count||!self.nativeFillRoot||self.nativeFillAnimated||self.nativeFillResuming||[held[@"bridge_failed"]boolValue])return snapshot;
+    void (^trace)(NSString *,NSDictionary *)=^(NSString *reason,NSDictionary *counts){
+        if(!DWInputTrace())return;NSArray *entry=@[held[@"transaction"],reason,counts];if([self.nativeFillBackgroundTrace isEqual:entry])return;
+        self.nativeFillBackgroundTrace=entry;NSData *encoded=[NSJSONSerialization dataWithJSONObject:counts options:0 error:nil];
+        fprintf(stderr,"debug: native transition background window=#%s transaction=%llu reason=%s counts=%s time=%.6f\n",[held[@"window"]description].UTF8String,[held[@"transaction"]unsignedLongLongValue],reason.UTF8String,[[NSString alloc]initWithData:encoded encoding:NSUTF8StringEncoding].UTF8String,CACurrentMediaTime());
+    };
+    if(![self nativeFillCurrent:held snapshot:snapshot]){trace(@"handoff_changed",@{});return snapshot;}
+    NSDictionary *oldOutput=nil;for(NSDictionary *row in prior[@"outputs"])if([row[@"id"]isEqual:held[@"output"]]){oldOutput=row;break;}
+    // Fullscreen deliberately rounds its parked camera and sets zoom to one.
+    // Keep the prior SCREEN placements across that logical change; requiring
+    // the old camera/zoom to equal the parked view discarded every scaled hold.
+    // nativeFillCurrent above still fences any later parked-view change.
+    if(!oldOutput||![oldOutput[@"screen_bounds"]isEqual:held[@"screen_bounds"]]){trace(@"output_changed",@{});return snapshot;}
+    NSMutableDictionary *before=[NSMutableDictionary dictionary],*now=[NSMutableDictionary dictionary];
+    for(NSDictionary *row in prior[@"windows"])if(row[@"window"])before[row[@"window"]]=row;
+    for(NSDictionary *row in snapshot[@"windows"])if(row[@"window"])now[row[@"window"]]=row;
+    NSMutableArray *placements=[asArray(snapshot[@"placements"])mutableCopy];NSMutableSet *placed=[NSMutableSet set];
+    for(NSDictionary *row in placements)if(row[@"window"])[placed addObject:row[@"window"]];
+    NSUInteger excluded=0,changedSource=0,changedWindow=0,retained=0;
+    for(NSDictionary *placement in prior[@"placements"]){
+        NSNumber *window=placement[@"window"];NSDictionary *old=before[window],*current=now[window],*source=asDict(current[@"source"]);LiveSource *live=self.sources[window];
+        if(!window||[window isEqual:held[@"window"]]||[placed containsObject:window]||![placement[@"output"]isEqual:held[@"output"]]){excluded++;continue;}
+        if(!old||!current||!live||live.detached||live.nativeMouseOwnership||!boundIdentity(source[@"identity"],live.identity)
+            ||![source isEqual:placement[@"source"]]){changedSource++;continue;}
+        BOOL pinned=[placement[@"pinned"]boolValue]&&asDict(old[@"pinned"]);
+        BOOL same=YES;for(NSString *key in @[@"source",@"world_rect",@"pinned",@"widget",@"mode",@"kind"]){
+            // A pin's world rectangle follows the parked camera; its exact
+            // output/screen pin descriptor is the physical projection basis.
+            if(pinned&&[key isEqual:@"world_rect"])continue;
+            if(![(old[key]?:NSNull.null)isEqual:current[key]?:NSNull.null]){same=NO;break;}
+        }
+        if(same){[placements addObject:placement];[placed addObject:window];retained++;}else changedWindow++;
+    }
+    trace(@"projected",@{@"prior":@([prior[@"placements"]count]),@"current":@([snapshot[@"placements"]count]),@"retained":@(retained),@"excluded":@(excluded),@"changed_source":@(changedSource),@"changed_window":@(changedWindow)});
+    if(placements.count==[snapshot[@"placements"]count])return snapshot;
+    NSMutableDictionary *covered=[snapshot mutableCopy];covered[@"placements"]=placements.copy;return covered.copy;
+}
 - (NSDictionary *)nativeDescription:(NSDictionary *)snapshot {
     if(!self.native||!snapshot)return nil;
     if(!self.nativeViews)self.nativeViews=[DWNativeViews new];
@@ -5007,7 +5074,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     // path requires an independently visible guarded lane for each no-owner root.
     BOOL backing=[self captureBackingEnabled];self.nativeViews.requiresNativeExtentFit=backing;
     BOOL enabled=!self.native.ended&&!self.sessionInactive&&!self.cleaning&&self.panels.count;
-    if(!backing&&self.nativeViewSnapshot==snapshot&&self.nativeViewPresenter==self.native&&self.nativeViewFamilyRevision==self.nativeFamilyRevision&&self.nativeViewEnabled==enabled&&self.nativeViewTransferRevision==self.nativeViews.transferRevision&&self.nativeViews.presentationSnapshot)return self.nativeOwnerSnapshot;
+    if(!backing&&self.nativeViewSnapshot==snapshot&&self.nativeViewPresenter==self.native&&self.nativeViewFamilyRevision==self.nativeFamilyRevision&&self.nativeViewEnabled==enabled&&self.nativeViewTransferRevision==self.nativeViews.transferRevision&&self.nativeViews.presentationSnapshot)return enabled?[self nativeFillBackground:self.nativeOwnerSnapshot]:self.nativeOwnerSnapshot;
     NSMutableDictionary *bound=[NSMutableDictionary dictionary],*families=[NSMutableDictionary dictionary];
     if(enabled)for(LiveSource *source in self.sources.allValues)if(!source.detached){bound[source.logical]=source.identity;if(source.nativeFamily)families[source.logical]=source.nativeFamily;}
     self.nativeOwnerSnapshot=[self.nativeViews describe:snapshot bound:bound families:families];
@@ -5019,7 +5086,10 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         [self.native requireFreshPlacementAcknowledgement];
     }
     if(backing)[self updateCaptureBacking:snapshot];
-    return self.nativeOwnerSnapshot;
+    // Preserve the already visible native background until the picture covers
+    // its final extent. Recheck this uncached, presenter-only coverage on every
+    // description; it creates no controller hit site or input authority.
+    return enabled?[self nativeFillBackground:self.nativeOwnerSnapshot]:self.nativeOwnerSnapshot;
 }
 // Hover observes real mouse motion without taking it. Native reads, family
 // discovery, rendering and placement requests all happen after the tap returns.
@@ -6455,7 +6525,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
             if([asNumber(seen[@"resized"])boolValue])self.sceneDirty=YES;
         }
         if(self.native){
-            NSDictionary *binding=nil;for(NSDictionary *window in [self call:@{@"op":@"snapshot"}][@"windows"])if([window[@"window"]isEqual:source.logical]){binding=asDict(window[@"source"]);break;}
+            NSDictionary *binding=nil;if(family)for(NSDictionary *window in [self call:@{@"op":@"snapshot"}][@"windows"])if([window[@"window"]isEqual:source.logical]){binding=asDict(window[@"source"]);break;}
             if(family&&boundIdentity(family[@"identity"],source.identity)&&boundIdentity(binding[@"identity"],source.identity)&&binding[@"generation"]&&[binding[@"observation_known"]boolValue]&&CGRectEqualToRect(jsonRect(binding[@"observed_rect"]),bounds)){
                 NSDictionary *description=@{@"identity":source.identity,@"generation":binding[@"generation"],@"native_bounds":rectJSON(bounds),@"members":asArray(family[@"members"])?:@[]};
                 if(![source.nativeFamily isEqual:description]){if(self.captureBackings[source.logical])[self revokeCaptureBackingForWindow:source.logical];source.nativeFamily=description;self.nativeFamilyRevision++;}

@@ -259,6 +259,49 @@ static NSDictionary *row(uint32_t window,CGFloat width) {
 - (void)focusChanged {}
 - (void)windowDiscoveryRequested { self.requested++; }
 @end
+static void titleRetryInvalidation(void) {
+    NSMutableDictionary *unknown=[row(74,320)mutableCopy];[unknown removeObjectForKey:(id)kCGWindowName];NSArray *rows=@[unknown];
+    for(NSString *mode in @[@"event",@"basis",@"appearance",@"deadline"]){
+        fixtureNow=120;DiscoveryHost *host=[DiscoveryHost new];DWWindowManager *manager=[DWWindowManager managerWithHost:host scope:nil mode:DWWindowDiscoveryModeNativePresentation];
+        NSDictionary *basis=candidateBases(rows);
+        [manager pollWithWindowRecords:rows nativeCandidateBases:basis sampledAt:fixtureTime()];fixtureNow=120.051;
+        [manager pollWithWindowRecords:rows nativeCandidateBases:basis sampledAt:fixtureTime()];drain();
+        check(!host.appeared&&!host.completed, @"unknown candidate retains its own retry before invalidation");
+        fixtureNow=120.06;
+        if([mode isEqual:@"event"]){
+            [manager windowChanged:74 pid:124];[manager pollWithWindowRecords:rows nativeCandidateBases:basis sampledAt:fixtureTime()];
+            check(!workerBlocks.count,@"another PID cannot clear this candidate's title retry");
+            [manager windowChanged:74 pid:123];
+        }else if([mode isEqual:@"basis"]){
+            NSMutableDictionary *changed=[basis[@74]mutableCopy];changed[@"identity"]=@{@"pid":@123,@"wid":@74,@"birth_sec":@101,@"birth_usec":@20};basis=@{@74:changed};
+            [manager pollWithWindowRecords:rows nativeCandidateBases:basis sampledAt:fixtureTime()];
+            check(!workerBlocks.count,@"a changed exact process basis still owes the ordinary stability hold");fixtureNow=120.111;
+        }else if([mode isEqual:@"appearance"]){
+            [manager pollWithWindowRecords:@[] nativeCandidateBases:@{} sampledAt:fixtureTime()];drain();fixtureNow=120.07;
+            [manager pollWithWindowRecords:rows nativeCandidateBases:basis sampledAt:fixtureTime()];
+            check(!workerBlocks.count,@"a new appearance still owes the ordinary stability hold");fixtureNow=120.121;
+        }else {
+            fixtureNow=122.052;[manager.discoveryTimer fire];[manager pollWithWindowRecords:rows nativeCandidateBases:basis sampledAt:fixtureTime()];
+            check(!workerBlocks.count,@"retry deadline cannot reuse aged native stability evidence");fixtureNow=122.103;
+        }
+        [manager pollWithWindowRecords:rows nativeCandidateBases:basis sampledAt:fixtureTime()];
+        check(workerBlocks.count==1,[NSString stringWithFormat:@"title retry %@ permits a fresh bounded read",mode]);
+        titleTesting=YES;closeElements=@[@{@"pid":@123,@"wid":@74,@"subrole":(__bridge NSString *)kAXStandardWindowSubrole,@"title":@"Ready title"}];drain();titleTesting=NO;closeElements=nil;
+        check(host.appeared==1&&[host.titles isEqual:@[@"Ready title"]],@"retry admits only the newly read real title");[manager stop];
+    }
+    for(NSString *mode in @[@"event",@"cg"]){
+        fixtureNow=125;DiscoveryHost *host=[DiscoveryHost new];DWWindowManager *manager=[DWWindowManager managerWithHost:host scope:nil mode:DWWindowDiscoveryModeNativePresentation];
+        [manager pollWithWindowRecords:rows nativeCandidateBases:candidateBases(rows) sampledAt:fixtureTime()];fixtureNow=125.051;
+        [manager pollWithWindowRecords:rows nativeCandidateBases:candidateBases(rows) sampledAt:fixtureTime()];check(step(YES),@"unknown title reply can wait on main while a fresh hint arrives");
+        fixtureNow=125.06;NSMutableDictionary *named=[unknown mutableCopy];named[(id)kCGWindowName]=@"Fresh title";
+        NSArray *fresh=[mode isEqual:@"cg"]?@[named]:rows;
+        if([mode isEqual:@"event"])[manager windowChanged:74 pid:123];
+        [manager pollWithWindowRecords:fresh nativeCandidateBases:candidateBases(fresh) sampledAt:fixtureTime()];drain();
+        fixtureNow=125.07;[manager pollWithWindowRecords:fresh nativeCandidateBases:candidateBases(fresh) sampledAt:fixtureTime()];
+        check(workerBlocks.count==1,[NSString stringWithFormat:@"old nil-title reply cannot reinstate backoff after a fresh %@ hint",mode]);
+        drain();[manager stop];
+    }
+}
 int main(void) {@autoreleasepool {
     mainBlocks=[NSMutableArray array];workerBlocks=[NSMutableArray array];windowRows=@[row(42,320)];allWindowRows=@[];
     DiscoveryHost *host=[DiscoveryHost new];DWWindowManager *manager=[DWWindowManager managerWithHost:host scope:nil mode:DWWindowDiscoveryModeNativePresentation];
@@ -299,15 +342,21 @@ int main(void) {@autoreleasepool {
     check(!titleHost.appeared&&!titleHost.completed&&![titleManager.offeredWindows containsObject:@74],@"unknown native title is retried before offering or completing saved-slot adoption");
     fixtureNow=110.1;[titleManager pollWithWindowRecords:titleRows nativeCandidateBases:candidateBases(titleRows) sampledAt:fixtureTime()];
     check(!workerBlocks.count,@"unknown title uses existing bounded retry instead of an AX polling loop");
-    NSMutableDictionary *named=[untitled mutableCopy];named[(id)kCGWindowName]=@"Saved document";titleRows=@[named];
-    fixtureNow=112.01;[titleManager pollWithWindowRecords:titleRows nativeCandidateBases:candidateBases(titleRows) sampledAt:fixtureTime()];
-    fixtureNow=112.071;[titleManager pollWithWindowRecords:titleRows nativeCandidateBases:candidateBases(titleRows) sampledAt:fixtureTime()];drain();
-    check(titleHost.appeared==1&&[titleHost.titles isEqual:@[@"Saved document"]]&&titleHost.completed==1,@"readable CG title preserves the real saved-slot name when AX is unavailable");[titleManager stop];
+    titleRows=@[untitled,row(75,320)];fixtureNow=110.11;
+    [titleManager pollWithWindowRecords:titleRows nativeCandidateBases:candidateBases(titleRows) sampledAt:fixtureTime()];
+    fixtureNow=110.161;[titleManager pollWithWindowRecords:titleRows nativeCandidateBases:candidateBases(titleRows) sampledAt:fixtureTime()];drain();
+    check(titleHost.appeared==1&&[titleHost.titles isEqual:@[@"Discovery window"]]&&!titleHost.completed,@"one unknown title cannot delay a newly stable named window or prematurely complete startup");
+    fixtureNow=110.17;[titleManager pollWithWindowRecords:titleRows nativeCandidateBases:candidateBases(titleRows) sampledAt:fixtureTime()];
+    check(!workerBlocks.count&&!titleHost.completed,@"a pending title alone cannot spin empty startup-preservation reads");
+    NSMutableDictionary *named=[untitled mutableCopy];named[(id)kCGWindowName]=@"Saved document";titleRows=@[named,row(75,320)];
+    fixtureNow=110.18;[titleManager pollWithWindowRecords:titleRows nativeCandidateBases:candidateBases(titleRows) sampledAt:fixtureTime()];drain();
+    check(titleHost.appeared==2&&[titleHost.titles isEqual:@[@"Discovery window",@"Saved document"]]&&titleHost.completed==1,@"fresh CG title clears only its own backoff before two seconds and preserves the real saved-slot name");[titleManager stop];
     titleTesting=YES;closeElements=@[@{@"pid":@123,@"wid":@75,@"subrole":(__bridge NSString *)kAXStandardWindowSubrole,@"title":@"Current AX title"},@{@"pid":@123,@"wid":@76,@"subrole":(__bridge NSString *)kAXStandardWindowSubrole,@"title":@""}];
     titleHost=[DiscoveryHost new];titleManager=[DWWindowManager managerWithHost:titleHost scope:nil mode:DWWindowDiscoveryModeNativePresentation];
     titleRows=@[row(75,320),row(76,320)];fixtureNow=115;[titleManager pollWithWindowRecords:titleRows nativeCandidateBases:candidateBases(titleRows) sampledAt:fixtureTime()];
     fixtureNow=115.051;[titleManager pollWithWindowRecords:titleRows nativeCandidateBases:candidateBases(titleRows) sampledAt:fixtureTime()];drain();
     check(titleHost.appeared==2&&[titleHost.titles isEqual:@[@"",@"Current AX title"]],@"successful AX title overrides CG and known empty title remains distinct from unavailable");[titleManager stop];titleTesting=NO;closeElements=nil;
+    titleRetryInvalidation();
 
     DiscoveryHost *nativeHost=[DiscoveryHost new];DWWindowManager *nativeManager=[DWWindowManager managerWithHost:nativeHost scope:nil mode:DWWindowDiscoveryModeNativePresentation];
     fixtureNow=150;NSArray *animated=@[row(72,604)];NSDictionary *stableOwn=candidateBases(@[row(72,610)]);

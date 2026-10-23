@@ -44,6 +44,9 @@ end = source.index("// A child press may activate", start)
 start = source.index("static NSDictionary *DWFocusedStandIn(")
 end = source.index("// A provisional click recipient", start)
 (output / "captured-input-target-functions.inc").write_text(source[start:end])
+start = source.index("    // Native Fill owns temporary geometry.", source.index("- (BOOL)nativeInput:"))
+end = source.index("    // A shell-owned decoration/action pair", start)
+(output / "captured-input-fill-blocker.inc").write_text(source[start:end])
 def method(marker):
     start = source.index(marker, source.index("@implementation DesktopView"))
     end = source.index("\n- (", start + len(marker))
@@ -58,6 +61,7 @@ def method(marker):
 (output / "captured-input-desktop-consumers.inc").write_text("\n".join(method(marker) for marker in (
     "- (NSDictionary *)resolveCapturedPointer:", "- (BOOL)forwardCapturedPointer:", "- (BOOL)forwardTabletTail:",
     "- (void)cancelNativeTitleClick {", "- (void)deferNativeTitleClick:", "- (void)fireNativeTitleClick:",
+    "- (BOOL)nativeFillCurrent:", "- (NSDictionary *)nativeFillBackground:",
 )))
 PY
 xcrun clang -arch arm64 -mmacosx-version-min=26.0 -O2 -fobjc-arc -Wall -Wextra -Werror \

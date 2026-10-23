@@ -177,10 +177,12 @@ static BOOL captureRootCurrent(NSDictionary *identity,CGRect native,CGRect scree
 }
 - (void)cancel {NSAssert(NSThread.isMainThread,@"Native capture requires the main thread");[self complete:nil failure:@"Native transition capture cancelled"];}
 - (void)begin {
+    [self tracePhase:"begin"];
     if(!_identity||!validRect(_native)||!validRect(_screen)||!_completion){[self complete:nil failure:@"Invalid native transition capture request"];return;}
     if(![self callerCurrent])return;
     if(!CGPreflightScreenCaptureAccess()){[self complete:nil failure:@"Screen Recording access is unavailable"];return;}
     dispatch_async(_queue,^{
+        [self tracePhase:"initial_audit_begin"];
         if(![self active])return;CGRect observed=CGRectNull;NSString *reason=nil;
         BOOL current=captureScreenBounds(self->_identity,&observed);
         if(!current)reason=@"screen_identity_or_bounds_unavailable";
@@ -189,12 +191,14 @@ static BOOL captureRootCurrent(NSDictionary *identity,CGRect native,CGRect scree
         if(current)self->_observedScreen=observed;
         else if(getenv("INFINIFY_DEBUG")&&atoi(getenv("INFINIFY_DEBUG"))==1){CGRect mapping=self->_screen;
             fprintf(stderr,"debug: native transition capture initial refused pid=%d wid=%u mapping=%g,%g %gx%g observed=%g,%g %gx%g reason=%s\n",[self->_identity[@"pid"]intValue],[self->_identity[@"wid"]unsignedIntValue],mapping.origin.x,mapping.origin.y,mapping.size.width,mapping.size.height,observed.origin.x,observed.origin.y,observed.size.width,observed.size.height,(reason?:@"unknown").UTF8String);}
-        dispatch_async(dispatch_get_main_queue(),^{if(![self callerCurrent])return;if(!current){[self complete:nil failure:@"Native transition needs an unchanged root without attached windows"];return;}[self enumerate];});
+        [self tracePhase:"initial_audit_completed"];
+        dispatch_async(dispatch_get_main_queue(),^{[self tracePhase:"initial_audit_delivered"];if(![self callerCurrent])return;if(!current){[self complete:nil failure:@"Native transition needs an unchanged root without attached windows"];return;}[self enumerate];});
     });
 }
 - (void)enumerate {
     [self tracePhase:"enumerate"];
     [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO completionHandler:^(SCShareableContent *content,NSError *error){
+        [self tracePhase:"enumeration_completed"];
         dispatch_async(dispatch_get_main_queue(),^{if(![self callerCurrent])return;
             if(error||!content){[self complete:nil failure:error.localizedDescription?:@"Native transition capture has no window list"];return;}[self capture:content];});
     }];
@@ -222,7 +226,9 @@ static BOOL captureRootCurrent(NSDictionary *identity,CGRect native,CGRect scree
             DWNativeTransitionCaptureResult *result=!error&&image&&CGImageGetWidth(image)==(size_t)width&&CGImageGetHeight(image)==(size_t)height
                 ?[[DWNativeTransitionCaptureResult alloc]initWithImage:image screenRect:self->_screen nativeBounds:self->_native]:nil;
             dispatch_async(self->_queue,^{
+                [self tracePhase:"final_audit_begin"];
                 if(![self active])return;BOOL current=result&&captureRootCurrent(self->_identity,self->_native,self->_observedScreen,NULL);
+                [self tracePhase:"final_audit_completed"];
                 dispatch_async(dispatch_get_main_queue(),^{if(![self callerCurrent])return;
                     if(!current){[self complete:nil failure:error.localizedDescription?:@"Native transition root, geometry or raw image changed during capture"];return;}[self complete:result failure:nil];});
             });

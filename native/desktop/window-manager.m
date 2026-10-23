@@ -39,6 +39,10 @@ static const NSTimeInterval still=.05;
 @property NSDictionary<NSNumber *,NSDictionary *> *bases;
 @property NSDictionary<NSNumber *,NSNumber *> *sampled;
 @property NSDictionary<NSNumber *,NSNumber *> *since;
+// An unavailable native title delays only this exact appearance/basis. Each
+// read owns its ticket; a fresh CG title or change hint retires that ticket so
+// an older AX reply cannot put the candidate back into a two-second wait.
+@property NSMutableDictionary<NSNumber *,NSMutableDictionary *> *titleRetries;
 // The candidates of the last read, until it succeeds.
 @property NSSet<NSNumber *> *requested;
 // When each world window last had a placement.
@@ -148,7 +152,7 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
     if(mode!=DWWindowDiscoveryModeCaptureOverlay&&mode!=DWWindowDiscoveryModeNativePresentation)return nil;
     BOOL native=mode==DWWindowDiscoveryModeNativePresentation;
     BOOL capturing=!native&&CGPreflightScreenCaptureAccess();if(!scope&&!native&&!capturing)return nil;
-    DWWindowManager *manager=[self new];manager.scope=[scope copy];manager.capturing=capturing;manager.native=native;manager.host=host;manager.offered=[NSMutableSet set];manager.missed=[NSMutableSet set];manager.unlisted=[NSMutableSet set];manager.placed=[NSMutableDictionary dictionary];
+    DWWindowManager *manager=[self new];manager.scope=[scope copy];manager.capturing=capturing;manager.native=native;manager.host=host;manager.offered=[NSMutableSet set];manager.missed=[NSMutableSet set];manager.unlisted=[NSMutableSet set];manager.placed=[NSMutableDictionary dictionary];manager.titleRetries=[NSMutableDictionary dictionary];
     manager.events=[[DWWindowEvents alloc]initWithSink:manager scope:manager.scope];return manager;
 }
 - (BOOL)live { return self.events.live; }
@@ -177,7 +181,7 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
 // second global enumeration while another application's observation is in flight.
 - (void)passRecords:(NSArray<NSDictionary *> *)list nativeCandidateBases:(NSDictionary<NSNumber *,NSDictionary *> *)nativeCandidateBases sampledAt:(CFTimeInterval)sampledAt {
     if(self.stopped)return;NSTimeInterval now=NSProcessInfo.processInfo.systemUptime;id<DWWindowHost> host=self.host;if(!self.began)self.began=now;
-    NSMutableDictionary<NSNumber *,NSDictionary *> *bounds=[NSMutableDictionary dictionary],*bases=[NSMutableDictionary dictionary];NSMutableDictionary<NSNumber *,NSNumber *> *wanted=[NSMutableDictionary dictionary],*regular=[NSMutableDictionary dictionary],*since=[NSMutableDictionary dictionary],*scoped=[NSMutableDictionary dictionary],*sampled=[NSMutableDictionary dictionary];NSMutableArray<NSNumber *> *front=[NSMutableArray array];BOOL moving=NO;NSTimeInterval stabilityDelay=still;
+    NSMutableDictionary<NSNumber *,NSDictionary *> *bounds=[NSMutableDictionary dictionary],*bases=[NSMutableDictionary dictionary];NSMutableDictionary<NSNumber *,NSNumber *> *wanted=[NSMutableDictionary dictionary],*regular=[NSMutableDictionary dictionary],*since=[NSMutableDictionary dictionary],*scoped=[NSMutableDictionary dictionary],*sampled=[NSMutableDictionary dictionary];NSMutableArray<NSNumber *> *front=[NSMutableArray array];BOOL moving=NO;NSTimeInterval stabilityDelay=still,titleDelay=0;
     for(NSDictionary *w in list){
         NSNumber *wid=w[(id)kCGWindowNumber],*pid=w[(id)kCGWindowOwnerPID];NSDictionary *b=w[(id)kCGWindowBounds];CGRect r=CGRectZero;
         NSInteger level=[w[(id)kCGWindowLayer]integerValue];BOOL benchmark=self.scope&&self.benchmarkWindowLevel>0&&level==self.benchmarkWindowLevel;
@@ -203,16 +207,22 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
         }
         BOOL recent=!self.native||(self.sampled[wid]&&sampledAt-self.sampled[wid].doubleValue<=.1);
         NSNumber *held=recent&&[self.bases[wid]isEqual:basis]?self.since[wid]:nil;bases[wid]=basis;sampled[wid]=@(sampledAt);since[wid]=held?:@(now);
+        NSDictionary *titleRetry=self.titleRetries[wid];
+        if(titleRetry&&(![titleRetry[@"basis"]isEqual:basis]||[w[(id)kCGWindowName]isKindOfClass:NSString.class])){[self.titleRetries removeObjectForKey:wid];titleRetry=nil;}
         // Upstream places a window on its first sized commit. A window still being
         // sized is not offered: its world size is the source rectangle it is offered with.
         if(!held||now-held.doubleValue<still){moving=YES;stabilityDelay=MIN(stabilityDelay,held?still-(now-held.doubleValue):still);continue;}
+        NSTimeInterval remaining=[titleRetry[@"deadline"]doubleValue]-now;
+        if(remaining>0){titleDelay=titleDelay?MIN(titleDelay,remaining):remaining;continue;}
+        if(titleRetry&&[titleRetry[@"deadline"]doubleValue]>0)[self.titleRetries removeObjectForKey:wid];
         wanted[wid]=pid;[front addObject:wid];
     }
     // Leaving the screen ends a window's turn; coming back is a new appearance.
     NSSet<NSNumber *> *present=[NSSet setWithArray:bounds.allKeys];self.bounds=bounds;self.bases=bases;self.sampled=sampled;self.since=since;[self.offered intersectSet:present];[self.missed intersectSet:present];[self.unlisted intersectSet:present];
+    for(NSNumber *wid in self.titleRetries.allKeys)if(![self.titleRetries[wid][@"basis"]isEqual:bases[wid]])[self.titleRetries removeObjectForKey:wid];
     // The same 50 ms hold, followed by a fresh worker read at its earliest due
     // deadline. Polling remains the fallback for a host without this callback.
-    if(moving){self.eager=now+1;[self requestDiscoveryAfter:stabilityDelay];}
+    if(moving||titleDelay){if(moving)self.eager=now+1;[self requestDiscoveryAfter:moving?(titleDelay?MIN(stabilityDelay,titleDelay):stabilityDelay):titleDelay];}
     else {[self.discoveryTimer invalidate];self.discoveryTimer=nil;self.discoveryDeadline=0;}
     // The first pass waits, two seconds at most, until every window holds still, so that one read offers them all.
     if(!self.completed&&moving&&now-self.began<2)return;
@@ -221,7 +231,7 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
     // A read that failed is tried again after about two seconds, while access still stands: this never asks for it.
     if(self.retry&&now>=self.retry){self.retry=0;if(self.native||CGPreflightScreenCaptureAccess())self.requested=nil;}
     // The first pass reads the shareable windows even with nothing to offer: it must name the windows that are not on screen.
-    if(!wanted.count&&(self.completed||self.requested))return;
+    if(!wanted.count&&(self.completed||self.requested||self.titleRetries.count))return;
     NSSet<NSNumber *> *ids=[NSSet setWithArray:wanted.allKeys];if(self.requested&&[ids isEqualToSet:self.requested])return;
     self.reading=YES;self.requested=ids;__weak DWWindowManager *weak=self;NSDictionary<NSNumber *,NSNumber *> *asked=[wanted copy];
     NSMutableDictionary *levels=[NSMutableDictionary dictionary],*listedTitles=[NSMutableDictionary dictionary];
@@ -229,15 +239,17 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
         levels[wid]=row[(id)kCGWindowLayer];NSString *title=row[(id)kCGWindowName];
         if([title isKindOfClass:NSString.class])listedTitles[wid]=title;
     }
-    NSMutableDictionary<NSNumber *,NSDictionary *> *requestedBounds=[NSMutableDictionary dictionary],*requestedBases=[NSMutableDictionary dictionary];for(NSNumber *wid in asked){requestedBounds[wid]=bounds[wid];requestedBases[wid]=bases[wid];}NSDictionary *frames=requestedBounds.copy,*basis=requestedBases.copy;
-    if(self.capturing){[SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO completionHandler:^(SCShareableContent *content,NSError *error){NSDictionary<NSNumber *,id> *subroles=content?windowSubroles(asked,nil):nil;dispatch_async(dispatch_get_main_queue(),^{[weak read:content error:error asked:asked front:front subroles:subroles titles:nil frames:nil levels:levels basis:basis];});}];return;}
+    NSMutableDictionary<NSNumber *,NSDictionary *> *requestedBounds=[NSMutableDictionary dictionary],*requestedBases=[NSMutableDictionary dictionary],*titleTickets=[NSMutableDictionary dictionary];for(NSNumber *wid in asked){requestedBounds[wid]=bounds[wid];requestedBases[wid]=bases[wid];
+        if(self.native&&!listedTitles[wid]){NSMutableDictionary *ticket=[@{@"basis":bases[wid],@"deadline":@0}mutableCopy];self.titleRetries[wid]=ticket;titleTickets[wid]=ticket;}}
+    NSDictionary *frames=requestedBounds.copy,*basis=requestedBases.copy,*tickets=titleTickets.copy;
+    if(self.capturing){[SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO completionHandler:^(SCShareableContent *content,NSError *error){NSDictionary<NSNumber *,id> *subroles=content?windowSubroles(asked,nil):nil;dispatch_async(dispatch_get_main_queue(),^{[weak read:content error:error asked:asked front:front subroles:subroles titles:nil frames:nil levels:levels basis:basis titleTickets:tickets];});}];return;}
     // Native presentation or a scoped overlay without Screen Recording access: shareable windows are not asked for, so nothing can prompt. What they
     // would have said of a candidate is read from the window list (this pass's bounds) and from Accessibility, off the main thread like the subroles.
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{NSMutableDictionary<NSNumber *,NSString *> *titles=[listedTitles mutableCopy];NSDictionary<NSNumber *,id> *subroles=windowSubroles(asked,titles);dispatch_async(dispatch_get_main_queue(),^{[weak read:nil error:nil asked:asked front:front subroles:subroles titles:titles frames:frames levels:levels basis:basis];});});
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{NSMutableDictionary<NSNumber *,NSString *> *titles=[listedTitles mutableCopy];NSDictionary<NSNumber *,id> *subroles=windowSubroles(asked,titles);dispatch_async(dispatch_get_main_queue(),^{[weak read:nil error:nil asked:asked front:front subroles:subroles titles:titles frames:frames levels:levels basis:basis titleTickets:tickets];});});
 }
 // `front` is the window list's own order, front to back. `subroles` is windowSubroles' answer for `asked`, read before this turn of the main queue.
 // `titles` and `frames` stand in for the shareable windows in a run that does not read them (`capturing` NO): `content` is then nil and no failure.
-- (void)read:(SCShareableContent *)content error:(NSError *)error asked:(NSDictionary<NSNumber *,NSNumber *> *)asked front:(NSArray<NSNumber *> *)front subroles:(NSDictionary<NSNumber *,id> *)subroles titles:(NSDictionary<NSNumber *,NSString *> *)titles frames:(NSDictionary<NSNumber *,NSDictionary *> *)frames levels:(NSDictionary<NSNumber *,NSNumber *> *)levels basis:(NSDictionary<NSNumber *,NSDictionary *> *)basis {
+- (void)read:(SCShareableContent *)content error:(NSError *)error asked:(NSDictionary<NSNumber *,NSNumber *> *)asked front:(NSArray<NSNumber *> *)front subroles:(NSDictionary<NSNumber *,id> *)subroles titles:(NSDictionary<NSNumber *,NSString *> *)titles frames:(NSDictionary<NSNumber *,NSDictionary *> *)frames levels:(NSDictionary<NSNumber *,NSNumber *> *)levels basis:(NSDictionary<NSNumber *,NSDictionary *> *)basis titleTickets:(NSDictionary<NSNumber *,NSDictionary *> *)tickets {
     if(self.stopped)return;self.reading=NO;id<DWWindowHost> host=self.host;
     // `requested` stays: the same candidates are not read again at once, so a failure cannot loop.
     if(!content&&self.capturing){self.retry=NSProcessInfo.processInfo.systemUptime+2;[host discoveryFailed:error.localizedDescription?:@"the shareable windows are unavailable"];return;}
@@ -281,8 +293,12 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
         // Keep an otherwise eligible native candidate unoffered until CG or AX
         // supplies a string; a successfully read empty string is still known.
         if(self.native&&real&&window.title==nil){
-            again=YES;self.retry=NSProcessInfo.processInfo.systemUptime+2;[self requestDiscoveryAfter:2];continue;
+            again=YES;NSMutableDictionary *ticket=self.titleRetries[wid];
+            if(ticket&&ticket==tickets[wid]){ticket[@"deadline"]=@(NSProcessInfo.processInfo.systemUptime+2);[self requestDiscoveryAfter:2];}
+            else [self requestDiscoveryAfter:0];
+            continue;
         }
+        [self.titleRetries removeObjectForKey:wid];
         [self.offered addObject:wid];
         if(!real){
             // A window of a size a person would call a window is named, so that one this rule leaves out can be found and added by hand.
@@ -298,7 +314,7 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
     // A candidate owed its second read is read at the poll's own pace, not a reconciliation later.
     if(again)self.eager=NSProcessInfo.processInfo.systemUptime+1;
     // The first pass ends once no candidate is owed its second read.
-    if(!self.completed&&!again)[self complete:content];
+    if(!self.completed&&!again&&!self.titleRetries.count)[self complete:content];
 }
 // A window that exists but was not offered is named, so that the controller keeps its
 // slot waiting instead of taking the window for closed. Titled windows only, and by
@@ -346,6 +362,9 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
 }
 - (void)windowChanged:(CGWindowID)window pid:(pid_t)pid {
     if(self.stopped)return;
+    BOOL titleChanged=NO;
+    for(NSNumber *wid in self.titleRetries.allKeys)if((!window||wid.unsignedIntValue==window)&&[self.titleRetries[wid][@"basis"][@"identity"][@"pid"]intValue]==pid){[self.titleRetries removeObjectForKey:wid];titleChanged=YES;}
+    if(titleChanged)[self requestDiscoveryAfter:0];
     // A candidate not offered yet needs a discovery pass. A bound window is the host's to look at now.
     if(window&&![self.offered containsObject:@(window)])self.eager=NSProcessInfo.processInfo.systemUptime+1;
     [self.host windowChanged:window pid:pid];
@@ -354,6 +373,7 @@ static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)
 // then a new appearance, whenever the next pass comes.
 - (void)windowDestroyed:(CGWindowID)window pid:(pid_t)pid {
     if(self.stopped)return;NSNumber *wid=@(window);[self.offered removeObject:wid];[self.missed removeObject:wid];[self.unlisted removeObject:wid];
+    if([self.titleRetries[wid][@"basis"][@"identity"][@"pid"]intValue]==pid)[self.titleRetries removeObjectForKey:wid];
     [self.host windowDestroyed:window pid:pid];
 }
 - (void)focusChanged { if(!self.stopped)[self.host focusChanged]; }
