@@ -137,6 +137,7 @@ static BOOL captureRootCurrent(NSDictionary *identity,CGRect native,CGRect scree
 - (instancetype)initPrivate;
 - (void)begin;
 - (void)enumerate;
+- (void)captureWhenReady;
 - (void)capture:(SCShareableContent *)content;
 - (void)complete:(nullable DWNativeTransitionCaptureResult *)result failure:(nullable NSString *)failure;
 @end
@@ -146,6 +147,8 @@ static BOOL captureRootCurrent(NSDictionary *identity,CGRect native,CGRect scree
     CGRect _native,_screen,_observedScreen;
     CFTimeInterval _startedAt,_deadline;
     dispatch_queue_t _queue;
+    SCShareableContent *_content;
+    BOOL _audited,_captureStarted;
     BOOL (^_validate)(void);
     void (^_completion)(DWNativeTransitionCaptureResult *,NSString *);
 }
@@ -173,7 +176,7 @@ static BOOL captureRootCurrent(NSDictionary *identity,CGRect native,CGRect scree
     if(atomic_exchange(&_completed,true))return;
     if(result&&CACurrentMediaTime()>=_deadline){result=nil;failure=@"Native transition capture timed out";}
     [self tracePhase:result?"complete":"refused"];
-    void (^done)(DWNativeTransitionCaptureResult *,NSString *)=_completion;_completion=nil;_validate=nil;if(done)done(result,failure);
+    void (^done)(DWNativeTransitionCaptureResult *,NSString *)=_completion;_completion=nil;_validate=nil;_content=nil;if(done)done(result,failure);
 }
 - (void)cancel {NSAssert(NSThread.isMainThread,@"Native capture requires the main thread");[self complete:nil failure:@"Native transition capture cancelled"];}
 - (void)begin {
@@ -192,16 +195,24 @@ static BOOL captureRootCurrent(NSDictionary *identity,CGRect native,CGRect scree
         else if(getenv("INFINIFY_DEBUG")&&atoi(getenv("INFINIFY_DEBUG"))==1){CGRect mapping=self->_screen;
             fprintf(stderr,"debug: native transition capture initial refused pid=%d wid=%u mapping=%g,%g %gx%g observed=%g,%g %gx%g reason=%s\n",[self->_identity[@"pid"]intValue],[self->_identity[@"wid"]unsignedIntValue],mapping.origin.x,mapping.origin.y,mapping.size.width,mapping.size.height,observed.origin.x,observed.origin.y,observed.size.width,observed.size.height,(reason?:@"unknown").UTF8String);}
         [self tracePhase:"initial_audit_completed"];
-        dispatch_async(dispatch_get_main_queue(),^{[self tracePhase:"initial_audit_delivered"];if(![self callerCurrent])return;if(!current){[self complete:nil failure:@"Native transition needs an unchanged root without attached windows"];return;}[self enumerate];});
+        dispatch_async(dispatch_get_main_queue(),^{[self tracePhase:"initial_audit_delivered"];if(![self callerCurrent])return;if(!current){[self complete:nil failure:@"Native transition needs an unchanged root without attached windows"];return;}self->_audited=YES;[self captureWhenReady];});
     });
+    // Enumeration does not depend on the read-only audit. Join both on main;
+    // the exact screen/native checks before and after capture still fence any
+    // change while either read was pending. Neither result mutates a window.
+    [self enumerate];
 }
 - (void)enumerate {
     [self tracePhase:"enumerate"];
     [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO completionHandler:^(SCShareableContent *content,NSError *error){
         [self tracePhase:"enumeration_completed"];
         dispatch_async(dispatch_get_main_queue(),^{if(![self callerCurrent])return;
-            if(error||!content){[self complete:nil failure:error.localizedDescription?:@"Native transition capture has no window list"];return;}[self capture:content];});
+            if(error||!content){[self complete:nil failure:error.localizedDescription?:@"Native transition capture has no window list"];return;}self->_content=content;[self captureWhenReady];});
     }];
+}
+- (void)captureWhenReady {
+    if(_captureStarted||!_audited||!_content||![self callerCurrent])return;
+    _captureStarted=YES;SCShareableContent *content=_content;_content=nil;[self capture:content];
 }
 - (void)capture:(SCShareableContent *)content {
     [self tracePhase:"enumerated"];

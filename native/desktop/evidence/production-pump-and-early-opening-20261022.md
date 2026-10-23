@@ -92,3 +92,32 @@ gap, leaving an 83–200 ms latency bracket. The small-sample median fell from
 150 to 100 ms, but consistent improvement is not established. All six openings
 still visibly appeared at the native position and then jumped. Effectively
 immediate opening, reliable stutter-free motion and custom minimize remain open.
+
+The next unprofiled v39 six-pair run reproduced the freeze: one animation took
+556.446 ms, followed by 503.7 ms between reveal and resume. Continuous profiling
+and two subsequent delayed-trigger runs (12 and 24 transitions) did not reproduce
+it. The delayed sampler starts only after a transition exceeds 170 ms; it never
+fired in those two runs. The cause remains unresolved.
+
+v40 overlaps the initial read-only root audit with ScreenCaptureKit enumeration.
+Their results join once on main before capture; cancellation, the absolute
+deadline, caller ownership, and pre/post-capture identity and geometry checks
+remain. Independent review, strict compilation, the 145-check mailbox and
+362-check input scenarios, and the production package build passed.
+
+A six-pair real TextEdit run measured median capture preparation of 119.7 ms,
+versus 140.4–145.8 ms across the three preceding v39 runs. The v40 range was
+106.6–145.3 ms. Median host CLI-to-resume time was 632.9 ms, so this remains far
+from immediate response. All 12 animation completion entries were below 102 ms.
+Original-frame review of the first pair showed the expected expansion and shrink
+with no intervening desktop flash. These small sequential samples establish a
+promising preparation improvement, not a distribution or a fix for the freeze.
+
+The deployed v40 executable SHA-256 is
+`4a726f0d874171ee4943c8a4cb64a72d9cbeab57eea73f55b5b0c4609f932a7c`.
+The exact scene, focus and Calculator native geometry were restored; all six
+original transforms and Space memberships were verified during deployment.
+Receipts and video are under `target/native-vm/ux-flow-20261022/v40-*` and
+`capture-overlap-v40-deployment/`. Its idle `vmmap` still reports a 206.9 MiB
+footprint: three named 4112×2500 CAMetalLayer drawables account for 119.1 MiB.
+No memory improvement is claimed.
