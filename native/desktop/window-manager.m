@@ -48,6 +48,12 @@ static const NSTimeInterval still=.05;
 // it to one exact appearance, basis and CG-title version; negative early reads
 // do not spend admission retries or invent a title.
 @property NSMutableDictionary<NSNumber *,NSMutableDictionary *> *nativeMetadata;
+// One direct AX creation read, independent of the global discovery/AX flight.
+// Raw events retire its ticket even while their ordinary hint is coalesced.
+@property NSDictionary *creationTicket;
+@property BOOL creationReading;
+@property CFTimeInterval nativeSampleAt;
+@property NSUInteger creationTraceLines; // DEBUG only, bounded for this manager lifetime
 // The candidates of the last read, until it succeeds.
 @property NSSet<NSNumber *> *requested;
 // When each world window last had a placement.
@@ -148,14 +154,59 @@ static NSArray<NSDictionary *> *nativePreservedWindows(NSDictionary<NSNumber *,N
 static BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)kAXStandardWindowSubrole,(__bridge NSString *)kAXDialogSubrole,(__bridge NSString *)kAXSystemDialogSubrole]containsObject:subrole]; }
 // Restrict early admission to the native, unscaled presentation basis. This is
 // only an eligibility check: the helper still snapshots the actual original.
-static BOOL canonicalNativeBasis(NSDictionary *basis) {
+static const char *canonicalNativeBasisRefusal(NSDictionary *basis) {
+    if(!basis)return "basis_unavailable_before";
     CGRect bounds=CGRectZero;id matrix=basis[@"transform"],frame=basis[@"native_bounds"];
     if(![matrix isKindOfClass:NSArray.class]||[matrix count]!=6||![frame isKindOfClass:NSDictionary.class]||
        !CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)frame,&bounds)||!isfinite(bounds.origin.x)||!isfinite(bounds.origin.y)||
-       !isfinite(bounds.size.width)||!isfinite(bounds.size.height)||bounds.size.width<40||bounds.size.height<40)return NO;
-    for(id number in matrix)if(![number isKindOfClass:NSNumber.class]||!isfinite([number doubleValue]))return NO;
-    return [matrix[0]doubleValue]==1&&[matrix[1]doubleValue]==0&&[matrix[2]doubleValue]==0&&[matrix[3]doubleValue]==1
-        &&[matrix[4]doubleValue]==-bounds.origin.x&&[matrix[5]doubleValue]==-bounds.origin.y;
+       !isfinite(bounds.size.width)||!isfinite(bounds.size.height)||bounds.size.width<40||bounds.size.height<40)return "basis_format_or_extent";
+    for(id number in matrix)if(![number isKindOfClass:NSNumber.class]||!isfinite([number doubleValue]))return "basis_matrix_nonfinite";
+    if([matrix[0]doubleValue]!=1||[matrix[1]doubleValue]!=0||[matrix[2]doubleValue]!=0||[matrix[3]doubleValue]!=1)return "basis_matrix_not_unit";
+    if([matrix[4]doubleValue]!=-bounds.origin.x)return "basis_translation_x";
+    if([matrix[5]doubleValue]!=-bounds.origin.y)return "basis_translation_y";
+    return NULL;
+}
+static BOOL canonicalNativeBasis(NSDictionary *basis) { return canonicalNativeBasisRefusal(basis)==NULL; }
+// Creation already supplies an exact AX element: no AXWindows enumeration or
+// global discovery queue is needed. Still only admit a visible, canonical
+// standard window, with two matching fresh native bases after its AX metadata.
+static void creationTrace(NSUInteger *lines,const char *stage,pid_t pid,CGWindowID wid,CFTimeInterval started,const char *detail) {
+    if(!getenv("INFINIFY_DEBUG")||*lines>=128)return;(*lines)++;CFTimeInterval at=CACurrentMediaTime();
+    fprintf(stderr,"debug: native creation trace stage=%s pid=%d wid=%u at=%.6f elapsed_ms=%.3f detail=%s\n",stage,pid,wid,at,started?(at-started)*1000:0,detail?:"none");
+}
+static DWWindowCandidate *createdNativeWindow(AXUIElementRef element,pid_t pid,NSArray *born,NSDictionary **verified,const char **refusal,CGWindowID *observedWindow) {
+    *refusal="birth_or_trust";
+    if(born.count!=2||![preservationBirth(pid)isEqual:born]||!AXIsProcessTrusted())return nil;
+    AXError (*get)(AXUIElementRef,uint32_t *)=(AXError (*)(AXUIElementRef,uint32_t *))dlsym(RTLD_DEFAULT,"_AXUIElementGetWindow");
+    uint32_t wid=0;pid_t owner=0;
+    *refusal="ax_identity";
+    if(!get||AXUIElementSetMessagingTimeout(element,.1)||AXUIElementGetPid(element,&owner)||owner!=pid||get(element,&wid)||!wid)return nil;
+    *observedWindow=wid;*refusal="canonical_before";
+    NSDictionary *identity=@{@"pid":@(pid),@"wid":@(wid),@"birth_sec":born[0],@"birth_usec":born[1]};
+    CFTypeRef role=NULL,subrole=NULL,title=NULL;
+    *refusal="role";BOOL known=AXUIElementCopyAttributeValue(element,kAXRoleAttribute,&role)==kAXErrorSuccess&&role&&CFEqual(role,kAXWindowRole);
+    if(known){*refusal="subrole";known=AXUIElementCopyAttributeValue(element,kAXSubroleAttribute,&subrole)==kAXErrorSuccess&&subrole&&CFEqual(subrole,kAXStandardWindowSubrole);}
+    if(known){*refusal="title_unavailable";known=AXUIElementCopyAttributeValue(element,kAXTitleAttribute,&title)==kAXErrorSuccess&&title&&CFGetTypeID(title)==CFStringGetTypeID();}
+    NSString *name=known?[(__bridge NSString *)title copy]:nil;
+    if(role)CFRelease(role);if(subrole)CFRelease(subrole);if(title)CFRelease(title);if(!known)return nil;
+    // AXCreated can precede publication of the window's CG ownership record.
+    // Use that exact element's positive metadata while its application finishes
+    // opening; ownership, on-screen state and canonical geometry are still
+    // proved afresh below, twice, before any candidate can be offered.
+    NSDictionary *before=DWNativeWindowDiscoveryBasis(identity);const char *basisRefusal=canonicalNativeBasisRefusal(before);if(basisRefusal){*refusal=basisRefusal;return nil;}
+    *refusal="cg_duplicate";NSArray *rows=CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow,wid));NSDictionary *row=nil;
+    for(NSDictionary *entry in rows)if([entry[(id)kCGWindowNumber]unsignedIntValue]==wid){if(row)return nil;row=entry;}
+    NSRunningApplication *application=[NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+    *refusal="cg_visibility_owner_layer_or_app";
+    if([row[(id)kCGWindowOwnerPID]intValue]!=pid||![row[(id)kCGWindowIsOnscreen]boolValue]||
+        ![row[(id)kCGWindowLayer]isKindOfClass:NSNumber.class]||[row[(id)kCGWindowLayer]integerValue]!=0||
+        !application||application.activationPolicy!=NSApplicationActivationPolicyRegular||!application.bundleIdentifier.length)return nil;
+    *refusal="final_basis_or_birth";NSDictionary *after=DWNativeWindowDiscoveryBasis(identity);
+    if(![after isEqual:before]||![preservationBirth(pid)isEqual:born])return nil;
+    *refusal="final_bounds";CGRect frame=CGRectZero;if(!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)after[@"native_bounds"],&frame))return nil;
+    DWWindowCandidate *candidate=[DWWindowCandidate new];candidate.pid=pid;candidate.window=wid;candidate.nativeIdentity=identity;
+    candidate.frame=frame;candidate.title=name;candidate.bundleIdentifier=application.bundleIdentifier;candidate.applicationName=application.localizedName;
+    *verified=after;*refusal="qualified";return candidate;
 }
 @implementation DWWindowCandidate
 + (instancetype)candidateWithShareable:(SCWindow *)shareable {
@@ -227,9 +278,45 @@ static BOOL canonicalNativeBasis(NSDictionary *basis) {
         });
     });
 }
+- (void)windowCreatedElement:(AXUIElementRef)element pid:(pid_t)pid birth:(NSArray<NSNumber *> *)born {
+    const char *skip=self.stopped?"stopped":!self.native?"not_native":!self.completed?"startup":self.creationReading?"busy":!element?"no_element":
+        (pid<=1||pid==getpid())?"pid":born.count!=2?"birth":(self.scope&&![self.scope[@(pid)]isEqual:born])?"scope":NULL;
+    if(skip){creationTrace(&_creationTraceLines,"ingress_skip",pid,0,0,skip);return;}
+    NSDictionary *ticket=@{@"pid":@(pid),@"started":@(CACurrentMediaTime())};self.creationTicket=ticket;self.creationReading=YES;
+    creationTrace(&_creationTraceLines,"started",pid,0,[ticket[@"started"]doubleValue],NULL);
+    NSArray *original=[born copy];CFRetain(element);__weak DWWindowManager *weak=self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+        NSDictionary *basis=nil;const char *refusal=NULL;CGWindowID observedWindow=0;
+        DWWindowCandidate *candidate=createdNativeWindow(element,pid,original,&basis,&refusal,&observedWindow);CFRelease(element);
+        dispatch_async(dispatch_get_main_queue(),^{DWWindowManager *manager=weak;if(!manager)return;manager.creationReading=NO;
+            CFTimeInterval started=[ticket[@"started"]doubleValue];
+            creationTrace(&manager->_creationTraceLines,"worker",pid,observedWindow,started,refusal);
+            if(manager.creationTicket!=ticket){creationTrace(&manager->_creationTraceLines,"completion_skip",pid,observedWindow,started,"ticket_retired");return;}manager.creationTicket=nil;
+            const char *skip=manager.stopped?"stopped":!manager.native?"not_native":!manager.completed?"startup":!candidate?"worker_refused":CACurrentMediaTime()-started>.1?"age":NULL;
+            if(skip){creationTrace(&manager->_creationTraceLines,"completion_skip",pid,observedWindow,started,skip);return;}
+            NSNumber *wid=@(candidate.window);
+            if([manager.offered containsObject:wid]||[manager.host managesWindow:candidate.window pid:pid]){creationTrace(&manager->_creationTraceLines,"completion_skip",pid,observedWindow,started,"already_managed");return;}
+            // A newer global observation can only reject this direct proof;
+            // it cannot be replaced or have its single-flight state cleared.
+            if(manager.nativeSampleAt>started&&(!manager.bounds[wid]||(manager.sampled[wid].doubleValue>started&&![manager.bases[wid]isEqual:basis]))){
+                creationTrace(&manager->_creationTraceLines,"completion_skip",pid,observedWindow,started,"newer_observation");return;}
+            if(!DWInScope(manager.scope,pid)){creationTrace(&manager->_creationTraceLines,"completion_skip",pid,observedWindow,started,"scope");return;}
+            [manager.offered addObject:wid];[manager.titleRetries removeObjectForKey:wid];[manager.nativeMetadata removeObjectForKey:wid];
+            if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"debug: native creation direct pid=%d wid=%u metadata_ms=%.3f\n",pid,candidate.window,(CACurrentMediaTime()-started)*1000);
+            [manager.host windowAppeared:candidate];
+        });
+    });
+}
+- (void)windowCreationInvalidated:(pid_t)pid {
+    if(!pid||[self.creationTicket[@"pid"]intValue]==pid){
+        if(self.creationTicket)creationTrace(&_creationTraceLines,"invalidated",[self.creationTicket[@"pid"]intValue],0,[self.creationTicket[@"started"]doubleValue],pid?"pid_hint":"global_hint");
+        self.creationTicket=nil;
+    }
+}
 // One completed worker read serves the whole discovery set. No event starts a
 // second global enumeration while another application's observation is in flight.
 - (void)passRecords:(NSArray<NSDictionary *> *)list nativeCandidateBases:(NSDictionary<NSNumber *,NSDictionary *> *)nativeCandidateBases sampledAt:(CFTimeInterval)sampledAt {
+    if(self.native)self.nativeSampleAt=MAX(self.nativeSampleAt,sampledAt);
     if(self.stopped)return;NSTimeInterval now=NSProcessInfo.processInfo.systemUptime;id<DWWindowHost> host=self.host;if(!self.began)self.began=now;
     NSMutableDictionary<NSNumber *,NSDictionary *> *bounds=[NSMutableDictionary dictionary],*bases=[NSMutableDictionary dictionary];NSMutableDictionary<NSNumber *,NSNumber *> *wanted=[NSMutableDictionary dictionary],*warming=[NSMutableDictionary dictionary],*regular=[NSMutableDictionary dictionary],*since=[NSMutableDictionary dictionary],*scoped=[NSMutableDictionary dictionary],*sampled=[NSMutableDictionary dictionary];NSMutableDictionary *candidateTitles=[NSMutableDictionary dictionary];NSMutableArray<NSNumber *> *front=[NSMutableArray array];BOOL moving=NO;NSTimeInterval stabilityDelay=still,titleDelay=0;
     for(NSDictionary *w in list){
@@ -430,6 +517,7 @@ static BOOL canonicalNativeBasis(NSDictionary *basis) {
 // DWWindowEventSink. Creation/appearance hints coalesce into the host's next
 // worker observation. Bound-window and family invalidations still arrive now.
 - (void)invalidateNativeMetadata:(CGWindowID)window pid:(pid_t)pid {
+    [self windowCreationInvalidated:pid];
     for(NSNumber *wid in self.nativeMetadata.allKeys)if((!window||wid.unsignedIntValue==window)&&(!pid||[self.nativeMetadata[wid][@"basis"][@"identity"][@"pid"]intValue]==pid))[self.nativeMetadata removeObjectForKey:wid];
 }
 - (void)windowsChanged:(pid_t)pid { if(self.stopped)return;[self invalidateNativeMetadata:0 pid:pid];self.eager=NSProcessInfo.processInfo.systemUptime+1;if([self.host respondsToSelector:@selector(windowFamilyChanged:)])[self.host windowFamilyChanged:pid]; }
@@ -448,6 +536,10 @@ static BOOL canonicalNativeBasis(NSDictionary *basis) {
     // A candidate not offered yet needs a discovery pass. A bound window is the host's to look at now.
     if(window&&![self.offered containsObject:@(window)])self.eager=NSProcessInfo.processInfo.systemUptime+1;
     [self.host windowChanged:window pid:pid];
+}
+- (void)windowVisibilityChanged:(CGWindowID)window pid:(pid_t)pid {
+    if(self.stopped)return;[self invalidateNativeMetadata:window pid:pid];
+    if([self.host respondsToSelector:@selector(windowVisibilityChanged:pid:)])[self.host windowVisibilityChanged:window pid:pid];
 }
 // The window number may come back on screen, when its application kept the window object and shows it again. That is
 // then a new appearance, whenever the next pass comes.

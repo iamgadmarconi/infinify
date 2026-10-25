@@ -209,6 +209,9 @@ static void *catalogObservation=&catalogObservation;
 // The one timer: armed for the earliest report owed or quick attempt due.
 @property NSTimer *timer;
 @property NSTimeInterval checked;
+@property NSTimeInterval creationTraceUntil; // DEBUG-only raw notifications for 150 ms after creation
+@property pid_t creationTracePID;
+@property NSUInteger creationTraceLines;
 @property BOOL trusted, stopped;
 @property BOOL scanning; // one collection-KVO/initial catalog read is under way off the main thread
 - (void)notified:(CFStringRef)notification element:(AXUIElementRef)element application:(DWObservedApplication *)application window:(DWObservedWindow *)window;
@@ -306,6 +309,7 @@ BOOL DWInScope(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope,pid_t pid) 
     if(application.running==record.running)[self remove:record.pid ended:ended];
 }
 - (void)clearApplicationWatches {
+    if([self.sink respondsToSelector:@selector(windowCreationInvalidated:)])[self.sink windowCreationInvalidated:0];
     self.observationEpoch++;self.catalogRevision++;self.hasApplicationCatalog=NO;
     [self.applicationCatalogWatch invalidate];self.applicationCatalogWatch=nil;self.appliedCatalogRevision=0;self.applicationCatalogDirty=NO;
     for(DWApplicationWatch *record in self.applicationWatches.objectEnumerator)[record invalidate];
@@ -567,6 +571,12 @@ static NSArray<DWApplicationMetadata *> *canonicalApplications(NSArray<NSRunning
 // message to the application: the element is looked up in the table, and one the table does not know is resolved on the worker.
 - (void)notified:(CFStringRef)notification element:(AXUIElementRef)element application:(DWObservedApplication *)application window:(DWObservedWindow *)window {
     id<DWWindowEventSink> sink=self.sink;if(self.stopped||!application||application.gone)return;pid_t pid=application.pid;
+    if(getenv("INFINIFY_DEBUG")){
+        NSTimeInterval at=NSProcessInfo.processInfo.systemUptime;
+        if(CFEqual(notification,kAXCreatedNotification)||CFEqual(notification,kAXWindowCreatedNotification)){self.creationTraceUntil=at+.15;self.creationTracePID=pid;}
+        if(pid==self.creationTracePID&&at<=self.creationTraceUntil&&self.creationTraceLines<128){self.creationTraceLines++;
+            fprintf(stderr,"debug: native creation event pid=%d at=%.6f notification=%s known_wid=%u\n",pid,at,[(__bridge NSString *)notification UTF8String],window.window);}
+    }
     if(window){
         if(window.destroyed)return;
         if(CFEqual(notification,kAXUIElementDestroyedNotification)){
@@ -576,6 +586,7 @@ static NSArray<DWApplicationMetadata *> *canonicalApplications(NSArray<NSRunning
             [sink windowDestroyed:window.window pid:pid];return;
         }
         // WINDOW_DEMINIMIZED: the window comes back on screen, where it may be a candidate again. WINDOW_MINIMIZED: it left.
+        if((CFEqual(notification,kAXWindowMiniaturizedNotification)||CFEqual(notification,kAXWindowDeminiaturizedNotification))&&[sink respondsToSelector:@selector(windowVisibilityChanged:pid:)])[sink windowVisibilityChanged:window.window pid:pid];
         if(CFEqual(notification,kAXWindowDeminiaturizedNotification))[self changed:appeared pid:pid];
         [self changed:window.window pid:pid];return;
     }
@@ -583,7 +594,12 @@ static NSArray<DWApplicationMetadata *> *canonicalApplications(NSArray<NSRunning
     if(CFEqual(notification,kAXFocusedWindowChangedNotification)){[self resolve:element application:application];[self changed:0 pid:0];return;}
     // WINDOW_CREATED: its own notifications are registered, and the sink looks for it on screen. Coalesced like the rest: an
     // application may report elements at any rate, and both names may announce one window.
-    if(CFEqual(notification,kAXCreatedNotification)||CFEqual(notification,kAXWindowCreatedNotification)){[self resolve:element application:application];[self changed:appeared pid:pid];return;}
+    if(CFEqual(notification,kAXCreatedNotification)||CFEqual(notification,kAXWindowCreatedNotification)){
+        [self resolve:element application:application];[self changed:appeared pid:pid];
+        if(!self.stopped&&!application.gone&&[sink respondsToSelector:@selector(windowCreatedElement:pid:birth:)])
+            [sink windowCreatedElement:element pid:pid birth:@[@(application.seconds),@(application.microseconds)]];
+        return;
+    }
     // WINDOW_MOVED, WINDOW_RESIZED, WINDOW_TITLE_CHANGED. A title change is reported for elements that are no window too.
     DWObservedWindow *known=(__bridge DWObservedWindow *)CFDictionaryGetValue(application.windows,element);
     if(!known&&!CFEqual(notification,kAXTitleChangedNotification))[self resolve:element application:application];
@@ -633,6 +649,8 @@ static NSArray<DWApplicationMetadata *> *canonicalApplications(NSArray<NSRunning
     NSRunningApplication *running=note.userInfo[NSWorkspaceApplicationKey];if(self.stopped||!running)return;
     if(!self.trusted){[self changed:appeared pid:0];return;}
     DWApplicationWatch *record=[self.applicationWatches objectForKey:running];
+    if((identity||(hints&(applicationAppeared|applicationChanged)))&&[self.sink respondsToSelector:@selector(windowCreationInvalidated:)])
+        [self.sink windowCreationInvalidated:record.pid];
     if(record){DWApplicationMetadata *notice=[DWApplicationMetadata new];notice.watch=record;notice.revision=record.revision;notice.hints=hints;notice.identityNotice=identity;[self applyApplicationNotice:notice];return;}
     for(DWApplicationMetadata *pending in self.applicationNotices)if(pending.running==running){pending.hints|=hints;pending.identityNotice|=identity;return;}
     if(self.applicationNotices.count>=64){[self changed:appeared pid:0];return;}
@@ -661,6 +679,8 @@ static NSArray<DWApplicationMetadata *> *canonicalApplications(NSArray<NSRunning
 - (void)spaceChanged:(NSNotification *)note { (void)note;if(self.stopped)return;for(DWObservedApplication *application in self.applications.allValues)[self list:application];[self changed:appeared pid:0]; }
 - (void)deliver:(NSNumber *)key {
     uint64_t value=key.unsignedLongLongValue;id<DWWindowEventSink> sink=self.sink;CGWindowID window=(CGWindowID)(value&0xffffffff);pid_t pid=(pid_t)(value>>32);
+    if(getenv("INFINIFY_DEBUG")&&pid==self.creationTracePID&&NSProcessInfo.processInfo.systemUptime<=self.creationTraceUntil&&self.creationTraceLines<128){self.creationTraceLines++;
+        fprintf(stderr,"debug: native creation hint pid=%d wid=%u at=%.6f move_only=%d\n",pid,window,NSProcessInfo.processInfo.systemUptime,[self.moveOnly containsObject:key]);}
     if(!value)[sink focusChanged];else if(window==appeared)[sink windowsChanged:pid];
     else if([self.moveOnly containsObject:key])[sink windowMoved:window pid:pid];
     else [sink windowChanged:window pid:pid];
@@ -672,6 +692,10 @@ static NSArray<DWApplicationMetadata *> *canonicalApplications(NSArray<NSRunning
     [self changed:window pid:pid moveOnly:NO];
 }
 - (void)changed:(CGWindowID)window pid:(pid_t)pid moveOnly:(BOOL)moved {
+    // This runs before coalescing can defer a raw change. A new sibling window
+    // or a focus hint does not change the window being qualified.
+    if(!self.stopped&&(window||pid)&&!(window==appeared&&pid>0)&&[self.sink respondsToSelector:@selector(windowCreationInvalidated:)])
+        [self.sink windowCreationInvalidated:pid];
     if(self.stopped)return;NSNumber *key=@((uint64_t)(uint32_t)pid<<32|window),*last=self.sent[key];NSTimeInterval now=NSProcessInfo.processInfo.systemUptime;
     NSNumber *applicationKey=@((uint64_t)(uint32_t)pid<<32);
     moved=moved&&pid>0&&window&&window!=appeared&&![self.owed containsObject:applicationKey];

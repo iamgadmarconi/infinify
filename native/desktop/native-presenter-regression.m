@@ -23,6 +23,7 @@ static NSData *lastSpaceFrame;
 uint64_t DWNativeDisplaySpace(CGRect viewport) {
     return CGRectEqualToRect(viewport,CGRectMake(0,0,1200,900))?readinessSpace:0;
 }
+uint64_t DWNativePresentationDisplaySpace(CGRect viewport) { return DWNativeDisplaySpace(viewport); }
 static void check(BOOL condition,NSString *message) {
     checks++;if(!condition){fprintf(stderr,"FAIL: %s\n",message.UTF8String);exit(1);}
 }

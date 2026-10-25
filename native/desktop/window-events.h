@@ -36,6 +36,17 @@
 - (void)windowDestroyed:(CGWindowID)window pid:(pid_t)pid;
 // Native focus may have moved: an application was activated, or an application's focused window changed.
 - (void)focusChanged;
+@optional
+// Exact AXCreated/AXWindowCreated element, after the ordinary appearance hint.
+// Borrowed for this call only; retain it for off-main AX reads. The birth is
+// the observed application's original identity, never a newly resolved PID.
+- (void)windowCreatedElement:(AXUIElementRef)element pid:(pid_t)pid birth:(NSArray<NSNumber *> *)birth;
+// Raw geometry/title/lifecycle invalidation, before coalescing. PID 0 covers
+// every application, including an active-Space change.
+- (void)windowCreationInvalidated:(pid_t)pid;
+// Miniaturized/deminiaturized is a hint to read AXMinimized for the exact
+// current binding. Neither the notification nor its boolean establishes state.
+- (void)windowVisibilityChanged:(CGWindowID)window pid:(pid_t)pid;
 @end
 // Event-driven window tracking, the way yabai does it. NSWorkspace says when an application launches, ends, is activated,
 // hidden or shown, and when the active Space changes; with Accessibility access one AXObserver per regular application says

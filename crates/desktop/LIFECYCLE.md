@@ -56,6 +56,48 @@ Which of the events below upstream animates, and how the snapshot's
 `lifecycle_events` reports each to the shell, is
 [EFFECTS.md](EFFECTS.md#lifecycle-events).
 
+## Native minimization
+
+Native macOS minimization keeps a **live** source. It does not invoke
+`suspend-window`, close the app window, create a stand-in, or change its logical
+id, binding generation, canvas slot, or pin. The ephemeral source fields
+`visibility` (`visible`, `minimized`, `restoring`), `visibility_pending`, and `visibility_revision`
+report that lifecycle in the snapshot; they are not persisted as a new scene.
+
+`observe_visibility` takes the exact `window`, `identity`, `generation`, and
+observed `minimized` boolean. Minimized sources produce no placements, hit sites,
+focus targets, navigation-history entries, or resize gestures. On a native
+restore they become presentable as `restoring` but remain ineligible for input.
+`source_visible` additionally requires the current `visibility_revision`, so an
+ACK from an earlier minimize/restore cycle cannot release a later one.
+
+The native shell reads AXMinimized only after a visibility event or an explicit
+request, on the existing observation worker with its identity and freshness
+fences. Unknown is never interpreted as false. It withholds the exact native
+family while minimized and preserves the helper's restoration journal. Restore
+waits for two unchanged native geometry observations and then a new complete
+placement ACK (or a parking ACK for an off-canvas slot). An API setter return,
+notification, or desired placement alone does not establish readiness.
+
+`infinify msg minimize --id ID` and `infinify msg deminimize --id ID` use the same
+exact native binding and AX attribute path. The setter runs off main only after
+acknowledged helper omission. Minimizing from Fill first completes the ordinary
+Fill exit. If AppKit minimizes an already filled window externally, the canvas
+exits Fill immediately and retains the original native-size debt while hidden;
+a restore placement ACK starts that size restoration, and input stays blocked
+until its final placement ACK. A visibility event during an active Fill retires
+that picture and future setters/reveals, marks `source_visibility_pending` to
+defer owed-size delivery without asserting minimization, keeps the family omitted, and cancels
+and drains the resize before accepting the observation. An adapter call already
+in progress can finish its internal native operations; cancellation cannot
+retract an AX call already issued. A real destruction still follows the close
+path. A reconciled on-screen record of a known-minimized source requests one
+fresh AX read to recover a missed deminiaturization notification.
+
+This first slice retains AppKit's minimize/deminimize animation. It does not
+implement a custom fast Dock animation; real-app VM acceptance is recorded
+separately from the focused controller and adapter checks.
+
 ## A window appears
 
 `attach` with neither `logical_id` nor `world_rect` means a window appeared by

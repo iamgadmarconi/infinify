@@ -66,6 +66,9 @@ pub(crate) enum Request {
     },
     Close(Option<WindowSelector>),
     Suspend(Option<WindowSelector>),
+    /// macOS visibility; unlike Suspend this never closes the native window.
+    Minimize(Option<WindowSelector>),
+    Deminimize(Option<WindowSelector>),
     Relaunch(Option<WindowSelector>),
     /// A config action by its config-grammar string.
     Action(String),
@@ -396,6 +399,12 @@ impl Controller {
             }
             Request::Relaunch(selector) => self
                 .cmd_relaunch(selector.as_ref(), outcome)
+                .map(|()| Response::Ok),
+            Request::Minimize(selector) => self
+                .cmd_minimize(selector.as_ref(), true, outcome)
+                .map(|()| Response::Ok),
+            Request::Deminimize(selector) => self
+                .cmd_minimize(selector.as_ref(), false, outcome)
                 .map(|()| Response::Ok),
             Request::Layout { short: true } => Ok(Response::Layout(self.layout_short())),
             Request::Layout { short: false } => Ok(Response::Layout(self.layout_name())),

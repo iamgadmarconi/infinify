@@ -1157,6 +1157,8 @@ opacity 0.85 --id 5 | {"Opacity":{"window":5,"value":0.85}} | {"Ok":{"Opacity":0
 pin ON --id 3 | {"Pin":{"window":3,"value":true}} | {"Ok":{"Pin":true}} | 0
 pin 0 | {"Pin":{"window":null,"value":false}} | {"Ok":{"Pin":false}} | 0
 close firefox | {"Close":"firefox"} | {"Ok":"Ok"} | 0
+minimize --id 5 | {"Minimize":5} | {"Ok":"Ok"} | 0
+deminimize Term | {"Deminimize":"Term"} | {"Ok":"Ok"} | 0
 suspend | {"Suspend":null} | {"Err":"no focused window"} | 1
 relaunch --id 9 | {"Relaunch":9} | {"Ok":"Ok"} | 0
 bookmark | {"Bookmark":{"name":null,"to":null,"delete":false}} | {"Ok":{"Bookmarks":{"home":[0.0,0.0]}}} | 0

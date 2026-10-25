@@ -9,26 +9,53 @@
 #include <libproc.h>
 #include <unistd.h>
 #include <time.h>
+#include <stdatomic.h>
 static NSDictionary *rect(CGRect r){return @{ @"origin":@{@"x":@(r.origin.x),@"y":@(r.origin.y)},@"size":@{@"width":@(r.size.width),@"height":@(r.size.height)}};}
 static NSArray *birth(pid_t pid){struct proc_bsdinfo info={0};if(proc_pidinfo(pid,PROC_PIDTBSDINFO,0,&info,sizeof(info))!=sizeof(info)||info.pbi_uid!=getuid())return nil;return @[@(info.pbi_start_tvsec),@(info.pbi_start_tvusec)];}
-static NSDictionary *cg(uint32_t wid){CFArrayRef a=CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow,wid);NSArray *rows=CFBridgingRelease(a);for(NSDictionary *row in rows)if([row[(id)kCGWindowNumber]unsignedIntValue]==wid)return row;return nil;}
+static NSDictionary *cgWithReason(uint32_t wid,const char **why){
+    CFArrayRef a=CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow,wid);NSArray *rows=CFBridgingRelease(a);
+    if(why)*why=rows?"row_absent":"list_unavailable";
+    for(NSDictionary *row in rows)if([row[(id)kCGWindowNumber]unsignedIntValue]==wid){if(why)*why=NULL;return row;}return nil;
+}
+static NSDictionary *cg(uint32_t wid){return cgWithReason(wid,NULL);}
 #include "../families/window-server-family.h"
 
+// Bounded diagnostic labels only; each label reuses the failing read above it.
+static NSDictionary *discoveryBasisRefused(pid_t pid,uint32_t wid,const char *reason) {
+    static atomic_uint lines;
+    if(getenv("INFINIFY_DEBUG")&&atomic_load_explicit(&lines,memory_order_relaxed)<128&&atomic_fetch_add_explicit(&lines,1,memory_order_relaxed)<128){
+        struct timespec at;clock_gettime(CLOCK_MONOTONIC,&at);
+        fprintf(stderr,"debug: native creation basis pid=%d wid=%u at=%.6f refusal=%s\n",pid,wid,at.tv_sec+at.tv_nsec/1e9,reason);
+    }
+    return nil;
+}
 NSDictionary *DWNativeWindowDiscoveryBasis(NSDictionary *identity){
     pid_t pid=[identity[@"pid"]intValue];uint32_t wid=[identity[@"wid"]unsignedIntValue];
     id seconds=identity[@"birth_sec"],microseconds=identity[@"birth_usec"];
-    if(pid<=1||!wid||![seconds isKindOfClass:NSNumber.class]||![microseconds isKindOfClass:NSNumber.class])return nil;
-    NSArray *enrolled=@[seconds,microseconds];NSDictionary *before=ownedCGWindow(wid,pid,enrolled);
-    if(![before[(id)kCGWindowIsOnscreen]boolValue])return nil;
+    if(pid<=1||!wid||![seconds isKindOfClass:NSNumber.class]||![microseconds isKindOfClass:NSNumber.class])return discoveryBasisRefused(pid,wid,"identity_format");
+    NSArray *enrolled=@[seconds,microseconds];
+    if(![birth(pid)isEqual:enrolled])return discoveryBasisRefused(pid,wid,"birth_before");
+    const char *missing=NULL;NSDictionary *before=cgWithReason(wid,&missing);
+    if(!before)return discoveryBasisRefused(pid,wid,!strcmp(missing,"row_absent")?"row_absent_before":"list_unavailable_before");
+    if([before[(id)kCGWindowOwnerPID]intValue]!=pid)return discoveryBasisRefused(pid,wid,"pid_mismatch_before");
+    if(![before[(id)kCGWindowIsOnscreen]boolValue])return discoveryBasisRefused(pid,wid,"offscreen_before");
     // Getter ABI: yabai dd845723416f5fe92af49fad5ebab00369e07edd,
     // src/osax/payload.m:54,606; the same reader as native/backend/bridge.m.
     static int (*connection)(void);static CGError (*transform)(int,uint32_t,CGAffineTransform *);static dispatch_once_t once;
     dispatch_once(&once,^{void *sky=dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight",RTLD_NOW|RTLD_LOCAL);if(!sky)return;connection=dlsym(sky,"SLSMainConnectionID");transform=dlsym(sky,"SLSGetWindowTransform");});
     CGRect bounds=CGRectZero,afterBounds=CGRectZero;CGAffineTransform matrix=CGAffineTransformIdentity;
-    if(!connection||!transform||!DWNativeBounds(wid,&bounds)||transform(connection(),wid,&matrix)!=kCGErrorSuccess||!DWNativeBounds(wid,&afterBounds)||!CGRectEqualToRect(bounds,afterBounds))return nil;
-    for(NSNumber *value in @[@(matrix.a),@(matrix.b),@(matrix.c),@(matrix.d),@(matrix.tx),@(matrix.ty)])if(!isfinite(value.doubleValue))return nil;
-    double determinant=matrix.a*matrix.d-matrix.b*matrix.c;if(!isfinite(determinant)||fabs(determinant)<1e-8)return nil;
-    NSDictionary *after=ownedCGWindow(wid,pid,enrolled);if(![after[(id)kCGWindowIsOnscreen]boolValue])return nil;
+    if(!connection||!transform)return discoveryBasisRefused(pid,wid,"getter_unavailable");
+    if(!DWNativeBounds(wid,&bounds))return discoveryBasisRefused(pid,wid,"bounds_before");
+    if(transform(connection(),wid,&matrix)!=kCGErrorSuccess)return discoveryBasisRefused(pid,wid,"transform_read");
+    if(!DWNativeBounds(wid,&afterBounds))return discoveryBasisRefused(pid,wid,"bounds_after");
+    if(!CGRectEqualToRect(bounds,afterBounds))return discoveryBasisRefused(pid,wid,"bounds_changed");
+    for(NSNumber *value in @[@(matrix.a),@(matrix.b),@(matrix.c),@(matrix.d),@(matrix.tx),@(matrix.ty)])if(!isfinite(value.doubleValue))return discoveryBasisRefused(pid,wid,"matrix_nonfinite");
+    double determinant=matrix.a*matrix.d-matrix.b*matrix.c;if(!isfinite(determinant)||fabs(determinant)<1e-8)return discoveryBasisRefused(pid,wid,"matrix_singular");
+    if(![birth(pid)isEqual:enrolled])return discoveryBasisRefused(pid,wid,"birth_after");
+    NSDictionary *after=cgWithReason(wid,&missing);
+    if(!after)return discoveryBasisRefused(pid,wid,!strcmp(missing,"row_absent")?"row_absent_after":"list_unavailable_after");
+    if([after[(id)kCGWindowOwnerPID]intValue]!=pid)return discoveryBasisRefused(pid,wid,"pid_mismatch_after");
+    if(![after[(id)kCGWindowIsOnscreen]boolValue])return discoveryBasisRefused(pid,wid,"offscreen_after");
     return @{@"identity":[identity copy],@"native_bounds":CFBridgingRelease(CGRectCreateDictionaryRepresentation(bounds)),
         @"transform":@[@(matrix.a),@(matrix.b),@(matrix.c),@(matrix.d),@(matrix.tx),@(matrix.ty)]};
 }

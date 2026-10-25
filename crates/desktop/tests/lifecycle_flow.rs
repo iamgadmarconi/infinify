@@ -2594,3 +2594,116 @@ fn a_pass_that_ends_before_a_window_arrives_decides_only_what_it_did_not_name() 
     assert_eq!(h.snapshot()["focus"]["history"], json!([]));
     assert_eq!(h.events(), json!([]));
 }
+
+#[test]
+fn minimized_native_source_keeps_slot_identity_and_pin_but_requires_a_fresh_restore_receipt() {
+    for pinned in [false, true] {
+        let scratch = Scratch::new();
+        let config = if pinned {
+            "[[window_rules]]\napp_id = \"app.a\"\npinned_to_screen = true\nposition = [100, 100]\n"
+        } else {
+            ""
+        };
+        let mut h = running(&scratch, config);
+        put(&mut h, 1, "app.a", "A", rect(300.0, 275.0, 400.0, 300.0));
+        h.focus_logically(1);
+        if pinned {
+            h.ipc(json!({"Pin":{"window":1,"value":true}}));
+        }
+        let original = h.window(1);
+        let source = original["source"].clone();
+        let original_placements = h.snapshot()["placements"].clone();
+        assert_eq!(original["pinned"].is_object(), pinned);
+        let screen = original_placements[0]["screen_rect"].clone();
+        let hit_point = point(
+            screen["origin"]["x"].as_f64().unwrap() + 20.0,
+            screen["origin"]["y"].as_f64().unwrap() + 20.0,
+        );
+        assert_eq!(
+            h.ok(json!({"op":"hit","output":1,"screen":hit_point}))["hit"]["window"],
+            1
+        );
+        let effect = h.ipc(json!({"Minimize":1}))["effects"][0].clone();
+        assert_eq!(effect["op"], "set_minimized");
+        assert_eq!(effect["minimized"], true);
+        assert_eq!(
+            h.window(1),
+            original,
+            "a native request is not visibility proof"
+        );
+        h.error(json!({"op":"observe_visibility","window":1,"identity":identity(2),"generation":source["generation"],"minimized":true}));
+        h.error(json!({"op":"observe_visibility","window":1,"identity":source["identity"],"generation":999,"minimized":true}));
+        h.ok(json!({"op":"observe_visibility","window":1,"identity":source["identity"],"generation":source["generation"],"minimized":true}));
+        assert_eq!(h.world(1), original["world_rect"]);
+        assert_eq!(h.window(1)["source"]["identity"], source["identity"]);
+        assert_eq!(h.window(1)["source"]["generation"], source["generation"]);
+        assert_eq!(h.window(1)["pinned"], original["pinned"]);
+        assert_eq!(h.window(1)["source"]["visibility"], "minimized");
+        assert_eq!(h.snapshot()["placements"], json!([]));
+        assert_eq!(
+            h.ok(json!({"op":"hit","output":1,"screen":hit_point}))["hit"],
+            Value::Null
+        );
+        assert_eq!(h.focused(), Value::Null);
+        assert!(
+            h.error(json!({"op":"focus","window":1}))
+                .contains("minimized")
+        );
+        h.error(native(1, &source["identity"], &source["generation"]));
+        h.error(json!({"op":"observe_focus","window":1,"identity":source["identity"],"generation":source["generation"]}));
+        assert!(h.lifecycle()["marks"].as_array().is_none_or(Vec::is_empty));
+        assert_eq!(
+            h.ipc(json!({"Deminimize":1}))["effects"][0]["op"],
+            "set_minimized"
+        );
+        h.ok(json!({"op":"observe_visibility","window":1,"identity":source["identity"],"generation":source["generation"],"minimized":false}));
+        let restoring = h.window(1)["source"].clone();
+        assert_eq!(restoring["visibility"], "restoring");
+        assert_eq!(
+            h.ok(json!({"op":"hit","output":1,"screen":hit_point}))["hit"],
+            Value::Null
+        );
+        assert_eq!(
+            h.snapshot()["placements"].as_array().unwrap().len(),
+            original_placements.as_array().unwrap().len()
+        );
+        h.error(json!({"op":"focus","window":1}));
+        let visible = json!({"op":"source_visible","window":1,"identity":source["identity"],"generation":source["generation"],"visibility_revision":restoring["visibility_revision"]});
+        // A repeated minimize/restore cycle invalidates the first ACK even
+        // though the original live binding generation is retained.
+        h.ok(json!({"op":"observe_visibility","window":1,"identity":source["identity"],"generation":source["generation"],"minimized":true}));
+        h.ok(json!({"op":"observe_visibility","window":1,"identity":source["identity"],"generation":source["generation"],"minimized":false}));
+        h.error(visible.clone());
+        let mut fresh = visible;
+        fresh["visibility_revision"] = h.window(1)["source"]["visibility_revision"].clone();
+        h.ok(fresh);
+        assert_eq!(h.window(1)["source"]["visibility"], "visible");
+        assert_eq!(h.world(1), original["world_rect"]);
+        h.focus_logically(1);
+        h.ok(json!({"op":"observe_visibility","window":1,"identity":source["identity"],"generation":source["generation"],"minimized":true}));
+        h.closed(1);
+        assert!(
+            h.snapshot()["windows"].as_array().unwrap().is_empty(),
+            "a real close is still a close"
+        );
+    }
+}
+
+#[test]
+fn restoring_a_minimized_off_canvas_source_keeps_its_world_slot() {
+    let scratch = Scratch::new();
+    let mut h = running(&scratch, "");
+    let original = rect(10000.0, 10000.0, 400.0, 300.0);
+    put(&mut h, 1, "app.a", "A", original.clone());
+    let source = h.window(1)["source"].clone();
+    for minimized in [true, false] {
+        h.ok(json!({"op":"observe_visibility","window":1,"identity":source["identity"],"generation":source["generation"],"minimized":minimized}));
+        assert_eq!(h.world(1), original);
+        assert_eq!(h.snapshot()["placements"], json!([]));
+    }
+    // The shell may supply a fresh parking ACK for this same visibility epoch.
+    let restoring = h.window(1)["source"].clone();
+    h.ok(json!({"op":"source_visible","window":1,"identity":source["identity"],"generation":source["generation"],"visibility_revision":restoring["visibility_revision"]}));
+    assert_eq!(h.world(1), original);
+    assert_eq!(h.snapshot()["placements"], json!([]));
+}

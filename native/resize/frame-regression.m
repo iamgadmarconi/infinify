@@ -25,6 +25,9 @@ static CGRect fillFrame;
 static double pressedAt,animationDelay;
 static NSString *pressedIdentifier;
 static double monotonicSeconds,messageTimeout;
+static double sizeReturnedAt,postSizeReadSeconds,sizeSettlesAfter,lastSizeObservationStarted;
+static BOOL clampSize;
+static CGSize requestedSize;
 static int monotonicClock(clockid_t clock,struct timespec *t) {(void)clock;*t=(struct timespec){(time_t)monotonicSeconds,(long)((monotonicSeconds-floor(monotonicSeconds))*1e9)};return 0;}
 static int sleepMicros(useconds_t duration) {monotonicSeconds+=duration/1e6;return 0;}
 @interface FrameScreen : NSObject
@@ -65,6 +68,8 @@ static AXError copy(AXUIElementRef element,CFStringRef attribute,CFTypeRef *out)
     }
     else if(CFEqual(attribute,kAXRoleAttribute)){NSDictionary *w=(__bridge NSDictionary *)element;if(w[@"role_error"])return [w[@"role_error"]intValue];if(!w[@"role"])return kAXErrorNoValue;*out=CFRetain((__bridge CFTypeRef)w[@"role"]);}
     else if(CFEqual(attribute,kAXPositionAttribute)) {
+        if(sizeReturnedAt){lastSizeObservationStarted=monotonicSeconds;monotonicSeconds+=postSizeReadSeconds;
+            if(sizeSettlesAfter>0&&monotonicSeconds-sizeReturnedAt>=sizeSettlesAfter)nativeFrame.size=requestedSize;}
         if(fillAnimating&&pressedAt&&monotonicSeconds-pressedAt>=animationDelay)nativeFrame=fillFrame;
         if(fillDrifting&&pressedAt)nativeFrame.origin.x+=.8;
         positionReads++;
@@ -72,6 +77,7 @@ static AXError copy(AXUIElementRef element,CFStringRef attribute,CFTypeRef *out)
         if(positionReadError!=kAXErrorSuccess)return positionReadError;
         *out=AXValueCreate(kAXValueCGPointType,&nativeFrame.origin);
     } else if(CFEqual(attribute,kAXSizeAttribute)) {
+        if(sizeReturnedAt)monotonicSeconds+=postSizeReadSeconds;
         sizeReads++;
         if(sizeReadTimeouts>0){sizeReadTimeouts--;monotonicSeconds+=messageTimeout;stale|=staleAfterReadTimeout;return kAXErrorCannotComplete;}
         *out=AXValueCreate(kAXValueCGSizeType,&nativeFrame.size);
@@ -92,6 +98,7 @@ static AXError set(AXUIElementRef element,CFStringRef attribute,CFTypeRef value)
         if(positionTimeouts>0){positionTimeouts--;return kAXErrorCannotComplete;}
     } else if(CFEqual(attribute,kAXSizeAttribute)) {
         [writes addObject:@"size"];AXValueGetValue((AXValueRef)value,kAXValueCGSizeType,&nativeFrame.size);cgWidthOffset=0;
+        requestedSize=nativeFrame.size;sizeReturnedAt=monotonicSeconds;if(clampSize)nativeFrame.size.width-=20;
         stale|=staleAfterSize;disagree|=disagreeAfterSize;
         if(readTimeoutAfterSize){positionReadTimeouts=1;readTimeoutAfterSize=NO;}
         if(sizeTimeouts>0){sizeTimeouts--;return kAXErrorCannotComplete;}
@@ -128,6 +135,7 @@ static DWResizeIdentity reset(CGRect frame) {
     offsetCGAfterPosition=NO;cgWidthOffset=0;
     positionExhaustsDeadline=staleAfterReadTimeout=readTimeoutAfterSize=NO;sizeTimeouts=positionTimeouts=positionReadTimeouts=sizeReadTimeouts=positionReads=sizeReads=0;
     positionReadError=kAXErrorSuccess;monotonicSeconds=100;messageTimeout=.15;
+    sizeReturnedAt=postSizeReadSeconds=sizeSettlesAfter=lastSizeObservationStarted=0;clampSize=NO;requestedSize=CGSizeZero;
     frontmost=YES;focusedWindow=42;focusChangesAfterMenu=fillStale=fillDisagree=fillTransientDisagree=fillUnchanged=fillAnimating=fillDrifting=menuTimeout=NO;fillError=fillReadError=kAXErrorSuccess;pressedAt=0;animationDelay=.18;pressedIdentifier=nil;fillFrame=CGRectMake(0,30,960,740);
     menuRoot=menuTree(@[@{@"role":(id)kAXMenuItemRole,@"AXIdentifier":@"_zoomFill:",@"AXEnabled":@YES}]);
     DWResizeIdentity identity={0};check(dw_resize_identity(getpid(),42,&identity),@"mock identity enrolled");return identity;
@@ -138,6 +146,14 @@ int main(void) {@autoreleasepool {
     DWResizeResult restored=dw_resize_apply_frame(identity,original);
     check(restored.outcome==DWResizeApplied&&restored.observed&&restored.mutation_attempted&&CGRectEqualToRect(restored.actual_ax,original),@"full fractional frame restored");
     check([writes isEqual:@[@"size",@"position"]],@"exact AX and CG extent after positioning needs no second size write");
+    identity=reset(original);clampSize=YES;postSizeReadSeconds=.01;restored=dw_resize_apply(identity,CGSizeMake(600,400));
+    check(restored.outcome==DWResizeClamped&&restored.observed&&sizeReads==6&&lastSizeObservationStarted-sizeReturnedAt>=.12&&monotonicSeconds-sizeReturnedAt<.141&&[writes isEqual:@[@"size"]],@"non-exact size retains all five reads through 120ms while AX time overlaps the settling window");
+    identity=reset(original);postSizeReadSeconds=.01;restored=dw_resize_apply(identity,CGSizeMake(600,400));
+    check(restored.outcome==DWResizeApplied&&sizeReads==2&&monotonicSeconds-sizeReturnedAt<.021&&[writes isEqual:@[@"size"]],@"an exact first read finishes without a settling delay or repeated setter");
+    identity=reset(original);clampSize=YES;postSizeReadSeconds=.025;restored=dw_resize_apply(identity,CGSizeMake(600,400));
+    check(restored.outcome==DWResizeClamped&&sizeReads==6&&lastSizeObservationStarted-sizeReturnedAt>=.12&&monotonicSeconds-sizeReturnedAt<.251&&[writes isEqual:@[@"size"]],@"slow observations never add sleeps after their retry deadlines or shorten the final observation floor");
+    identity=reset(original);clampSize=YES;postSizeReadSeconds=.01;sizeSettlesAfter=.11;restored=dw_resize_apply(identity,CGSizeMake(600,400));
+    check(restored.outcome==DWResizeApplied&&restored.observed&&CGSizeEqualToSize(restored.actual_ax.size,CGSizeMake(600,400))&&lastSizeObservationStarted-sizeReturnedAt>=.12&&[writes isEqual:@[@"size"]],@"an intermediate owner frame still gets the final 120ms observation before classification");
     identity=reset(CGRectMake(0,30,960,740));resizeOnPosition=YES;restored=dw_resize_apply_frame(identity,original);
     check(restored.outcome==DWResizeApplied&&CGRectEqualToRect(restored.actual_ax,original)&&CGRectEqualToRect(restored.actual_cg,original)&&[writes isEqual:@[@"size",@"position",@"size"]],@"position-induced extent change retains size-position-size ordering");
     identity=reset(CGRectMake(0,30,960,740));offsetCGAfterPosition=YES;restored=dw_resize_apply_frame(identity,original);

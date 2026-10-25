@@ -14,10 +14,12 @@ static BOOL allowOverlayPermissionRead,allListAvailable=YES,closeTesting,titleTe
 static NSArray<NSDictionary *> *closeElements;
 static NSUInteger closePresses,closeOwnerReads,closeOwnerFailsAt;
 static NSUInteger allListReads,processReads,processMode;
+static NSUInteger titleListReads;
 static NSArray<NSDictionary *> *allWindowRows,*secondAllWindowRows;
 static NSTimeInterval fixtureNow=100;
-static NSArray<NSDictionary *> *windowRows;
+static NSArray<NSDictionary *> *windowRows,*createdRowsAfterTitle;
 static NSDictionary *candidateBasisOverride;
+static NSDictionary *candidateBasisSecond;
 static NSMutableArray<dispatch_block_t> *mainBlocks,*workerBlocks;
 static void check(BOOL condition,NSString *message) {
     checks++;if(!condition){fprintf(stderr,"FAIL: %s\n",message.UTF8String);exit(1);}
@@ -50,10 +52,10 @@ static AXError closeWindowID(AXUIElementRef element,uint32_t *window) { NSDictio
 static void *closeSymbol(void *handle,const char *name) { (void)handle;return (closeTesting||titleTesting)&&!strcmp(name,"_AXUIElementGetWindow")?(void *)closeWindowID:NULL; }
 static AXError closeCopy(AXUIElementRef element,CFStringRef attribute,CFTypeRef *out) {
     check(closeTesting||titleTesting,@"only modeled close/title lookup sends AX reads");NSDictionary *value=(__bridge NSDictionary *)element;id result=nil;
-    if(CFEqual(attribute,kAXWindowsAttribute))result=closeElements;
+    if(CFEqual(attribute,kAXWindowsAttribute)){titleListReads++;result=closeElements;}
     else if(CFEqual(attribute,kAXRoleAttribute)){if(value[@"role_error"])return [value[@"role_error"]intValue];result=value[@"role"];}
     else if(CFEqual(attribute,kAXSubroleAttribute))result=value[@"subrole"];
-    else if(CFEqual(attribute,kAXTitleAttribute))result=value[@"title"];
+    else if(CFEqual(attribute,kAXTitleAttribute)){result=value[@"title"];if(createdRowsAfterTitle){windowRows=createdRowsAfterTitle;createdRowsAfterTitle=nil;}}
     else if(CFEqual(attribute,kAXCloseButtonAttribute)){check([value[@"wid"]isEqual:@42],@"only exact target supplies a close button");result=@{@"pid":@123,@"button_for":@42};}
     if(!result)return kAXErrorNoValue;*out=CFRetain((__bridge CFTypeRef)result);return kAXErrorSuccess;
 }
@@ -216,6 +218,7 @@ static void sessionAdmission(void) {
 }
 
 BOOL DWInScope(NSDictionary *scope,pid_t pid) { return !scope||[scope[@(pid)]isEqual:@[@100,@20]]; }
+bool dw_focus_minimized(DWFocusIdentity identity,bool *minimized) { (void)identity;(void)minimized;check(NO,@"discovery-only observations do not request visibility AX reads");return false; }
 bool dw_focus_owner(DWFocusIdentity identity,CGRect *bounds) {
     (void)bounds;check(closeTesting&&identity.pid==123&&identity.window==42&&identity.seconds==100&&identity.microseconds==20,@"close revalidates exact process birth/window identity");
     closeOwnerReads++;return closeOwnerReads!=closeOwnerFailsAt;
@@ -237,7 +240,7 @@ static NSDictionary *candidateBases(NSArray<NSDictionary *> *rows) {
     }return bases.copy;
 }
 NSDictionary *DWNativeWindowDiscoveryBasis(NSDictionary *identity) {
-    check(inWorker,@"native candidate basis is read only on the worker");candidateBasisReads++;return (candidateBasisOverride?:candidateBases(windowRows))[identity[@"wid"]];
+    check(inWorker,@"native candidate basis is read only on the worker");candidateBasisReads++;return ((candidateBasisReads>1?candidateBasisSecond:nil)?:candidateBasisOverride?:candidateBases(windowRows))[identity[@"wid"]];
 }
 static NSDictionary *row(uint32_t window,CGFloat width) {
     return @{(id)kCGWindowNumber:@(window),(id)kCGWindowOwnerPID:@123,(id)kCGWindowLayer:@0,(id)kCGWindowName:@"Discovery window",
@@ -248,10 +251,11 @@ static NSDictionary *row(uint32_t window,CGFloat width) {
 @property NSArray<NSDictionary *> *present;
 @property NSMutableArray<NSString *> *titles;
 @property NSSet<NSNumber *> *managed;
+@property DWWindowCandidate *lastCandidate;
 @end
 @implementation DiscoveryHost
 - (BOOL)managesWindow:(CGWindowID)window pid:(pid_t)pid { (void)pid;return [self.managed containsObject:@(window)]; }
-- (void)windowAppeared:(DWWindowCandidate *)window { check(window.pid==123&&window.frame.size.width>=320,@"the candidate retains its actual metadata");self.appeared++;if(!self.titles)self.titles=[NSMutableArray array];[self.titles addObject:window.title?:@"<unknown>"]; }
+- (void)windowAppeared:(DWWindowCandidate *)window { check(window.pid==123&&window.frame.size.width>=320,@"the candidate retains its actual metadata");self.lastCandidate=window;self.appeared++;if(!self.titles)self.titles=[NSMutableArray array];[self.titles addObject:window.title?:@"<unknown>"]; }
 - (void)discoveryCompleted:(NSArray *)present { self.present=[present copy];self.completed++; }
 - (void)discoveryFailed:(NSString *)reason { check(reason.length>0,@"metadata failure retains its reason");self.failed++; }
 - (void)windowMoved:(CGWindowID)window pid:(pid_t)pid { check(window==42&&pid==123,@"move forwarding retains exact event target");self.moved++; }
@@ -335,6 +339,42 @@ static void nativeMetadataOverlap(void) {
         check(host.appeared==1&&[host.titles isEqual:@[expected]],@"only current positive metadata preserves AX title precedence and empty-title meaning");[manager stop];
     }
     titleTesting=NO;closeElements=nil;
+}
+static void nativeCreatedAdmission(void) {
+    NSArray *savedRows=windowRows;titleTesting=YES;
+    for(NSString *mode in @[@"ready",@"empty",@"published_after_title",@"owner_missing",@"startup",@"dialog",@"missing",@"offscreen",@"matrix",@"basis_change",@"birth_change",@"raw",@"global",@"stale",@"observed_missing",@"observed_changed",@"managed",@"stop"]){
+        fixtureNow=700;processReads=0;processMode=[mode isEqual:@"birth_change"]?2:0;candidateBasisReads=0;titleListReads=0;
+        DiscoveryHost *host=[DiscoveryHost new];DWWindowManager *manager=[DWWindowManager managerWithHost:host scope:nil mode:DWWindowDiscoveryModeNativePresentation];
+        manager.completed=![mode isEqual:@"startup"];manager.reading=YES; // an unrelated global AX flight must remain owned
+        NSMutableDictionary *visible=[row(42,320)mutableCopy];visible[(id)kCGWindowIsOnscreen]=@(![mode isEqual:@"offscreen"]);windowRows=@[visible];
+        NSMutableDictionary *element=[@{@"pid":@123,@"wid":@42,@"role":(__bridge NSString *)kAXWindowRole,
+            @"subrole":[mode isEqual:@"dialog"]?(__bridge NSString *)kAXDialogSubrole:(__bridge NSString *)kAXStandardWindowSubrole,@"title":[mode isEqual:@"empty"]?@"":@"Created AX title"}mutableCopy];
+        if([mode isEqual:@"missing"])[element removeObjectForKey:@"title"];
+        if([mode isEqual:@"matrix"]){NSMutableDictionary *basis=[candidateBases(windowRows)[@42]mutableCopy];basis[@"transform"]=@[@1.01,@0,@0,@1,@(-100),@(-100)];candidateBasisOverride=@{@42:basis};}
+        if([mode isEqual:@"basis_change"])candidateBasisSecond=candidateBases(@[row(42,340)]);
+        if([mode isEqual:@"published_after_title"]){createdRowsAfterTitle=windowRows;windowRows=@[];}
+        if([mode isEqual:@"owner_missing"])windowRows=@[];
+        AXUIElementRef ax=(__bridge AXUIElementRef)element;
+        [manager windowCreatedElement:ax pid:123 birth:@[@100,@20]];
+        [manager windowCreatedElement:ax pid:123 birth:@[@100,@20]];
+        if([mode isEqual:@"startup"]){check(!workerBlocks.count&&!host.appeared,@"startup creation retains ordinary discovery ordering");[manager stop];continue;}
+        check(workerBlocks.count==1&&manager.creationReading&&manager.reading,@"creation has one independent read and duplicate hints do not queue AX work");
+        fixtureNow=700.01;check(step(YES)&&mainBlocks.count==1&&!host.appeared,@"creation qualification is read-only off main");fixtureNow=700.02;
+        if([mode isEqual:@"raw"])[manager windowCreationInvalidated:123];
+        if([mode isEqual:@"global"])[manager windowsChanged:0];
+        if([mode isEqual:@"stale"])fixtureNow=700.101;
+        if([mode isEqual:@"observed_missing"])[manager pollWithWindowRecords:@[] nativeCandidateBases:@{} sampledAt:fixtureTime()];
+        if([mode isEqual:@"observed_changed"]){NSArray *changed=@[row(42,340)];[manager pollWithWindowRecords:changed nativeCandidateBases:candidateBases(changed) sampledAt:fixtureTime()];}
+        if([mode isEqual:@"managed"])host.managed=[NSSet setWithObject:@42];
+        if([mode isEqual:@"stop"])[manager stop];
+        drain();BOOL accepted=[mode isEqual:@"ready"]||[mode isEqual:@"empty"]||[mode isEqual:@"published_after_title"];
+        check(host.appeared==(accepted?1u:0u),[NSString stringWithFormat:@"creation %@ admits only its fresh exact positive standard-window proof",mode]);
+        check(manager.reading&&!manager.creationReading&&!titleListReads,@"direct completion preserves global single-flight and never enumerates AXWindows");
+        if(accepted){check([host.lastCandidate.nativeIdentity isEqual:@{@"pid":@123,@"wid":@42,@"birth_sec":@100,@"birth_usec":@20}]&&[host.lastCandidate.title isEqual:element[@"title"]],@"creation carries original identity and known title through host admission");
+            [manager windowCreatedElement:ax pid:123 birth:@[@100,@20]];drain();check(host.appeared==1,@"a repeated creation cannot attach the same appearance twice");}
+        [manager stop];candidateBasisOverride=nil;candidateBasisSecond=nil;processMode=0;createdRowsAfterTitle=nil;
+    }
+    windowRows=savedRows;titleTesting=NO;
 }
 static void nativeEarlyAdmission(void) {
     NSArray *savedRows=windowRows;titleTesting=YES;
@@ -425,7 +465,7 @@ int main(void) {@autoreleasepool {
     titleRows=@[row(75,320),row(76,320)];fixtureNow=115;[titleManager pollWithWindowRecords:titleRows nativeCandidateBases:candidateBases(titleRows) sampledAt:fixtureTime()];drain();
     fixtureNow=115.051;[titleManager pollWithWindowRecords:titleRows nativeCandidateBases:candidateBases(titleRows) sampledAt:fixtureTime()];drain();
     check(titleHost.appeared==2&&[titleHost.titles isEqual:@[@"",@"Current AX title"]],@"successful AX title overrides CG and known empty title remains distinct from unavailable");[titleManager stop];titleTesting=NO;closeElements=nil;
-    titleRetryInvalidation();nativeMetadataOverlap();nativeEarlyAdmission();
+    titleRetryInvalidation();nativeMetadataOverlap();nativeEarlyAdmission();nativeCreatedAdmission();
 
     DiscoveryHost *nativeHost=[DiscoveryHost new];DWWindowManager *nativeManager=[DWWindowManager managerWithHost:nativeHost scope:nil mode:DWWindowDiscoveryModeNativePresentation];
     fixtureNow=150;NSArray *animated=@[row(72,604)];NSDictionary *stableOwn=candidateBases(@[row(72,610)]);

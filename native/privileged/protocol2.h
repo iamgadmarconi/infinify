@@ -34,10 +34,13 @@ enum { DW2_RECORD_HAS_ALPHA=1, DW2_RECORD_RESTORE=2, DW2_RECORD_PINNED=4 };
 // RESTORE is negotiated by CAP_RESTORE_WINDOW and stands alone: m and alpha are
 // ignored. It restores the journalled original for this identity, then removes
 // the entry. A pending restore stays journalled and is retried independently.
-// APPLIED: transform/alpha/sublevel setters returned 0 and their readback equals the
-// request; a requested Space also has exact observed membership (its setter is
-// void). NOT_APPLIED: a set failed or readback differs/is unavailable; the window
-// stays in the table because it may have been changed.
+// APPLIED: fresh native property readbacks equal the request and final identity
+// is current. Status-bearing scalar/list setters must also return 0 when called;
+// transaction submission and Space moves have no trustworthy setter status and
+// cannot substitute for readback. A previously verified unchanged property may
+// omit its setter only after fresh readback. NOT_APPLIED: a reported set failure
+// or differing/unavailable readback; the window stays journalled because it may
+// have been changed. None of these receipts proves optical presentation/input.
 enum { DW2_APPLIED=0, DW2_SCOPE=1, DW2_IDENTITY=2, DW2_MATRIX=3, DW2_ALPHA=4, DW2_SNAPSHOT=5, DW2_JOURNAL=6,
        DW2_NOT_APPLIED=7, DW2_RESTORE_PENDING=8, DW2_TABLE_FULL=9, DW2_MALFORMED=10, DW2_SPACE=11, DW2_SUBLEVEL=12 };
 // SUBLEVEL refuses a pin request when the optional sublevel API is unavailable.

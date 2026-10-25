@@ -29,6 +29,7 @@ static uint32_t fixtureWids[16], fixtureCount;
     BOOL reattaching;
     // Apply-only state. Originals and restoration never depend on this hint.
     CGAffineTransform appliedTransform; BOOL appliedTransformKnown;
+    float appliedAlpha; BOOL appliedAlphaKnown;
     // Optional pin obligation, immutable after first durable admission.
     int originalSublevel; BOOL sublevelTouched, sublevelFresh;
     // Optional Space obligation. Original membership is immutable. A void
@@ -81,6 +82,8 @@ static void v2ResolveSublevels(void) {
     v2GetWindowSublevel=dlsym(sky,"SLSGetWindowSubLevel");
     v2SetWindowSublevel=dlsym(sky,"SLSSetWindowSubLevel");
 }
+
+#import "forward-operations.h"
 
 static uint64_t v2Now(void) { return (uint64_t)nowMS(); }
 static BOOL v2SameProcess(const struct dw2_identity *a,const struct dw2_identity *b) { return a->pid==b->pid && a->birth_sec==b->birth_sec && a->birth_usec==b->birth_usec; }
@@ -253,6 +256,42 @@ static void v2Count(void) {
     for(DW2Entry *e in v2Table.objectEnumerator)if(e->state==DW2_RESTORING)restoring++;
     atomic_store(&v2Held,(uint32_t)v2Table.count-restoring);atomic_store(&v2Restoring,restoring);
 }
+
+#if DW_V2_BATCH_COMPILED
+// The explicit batching comparison builds share final property verification.
+// Hints only omit a setter after a fresh getter proves the desired native value;
+// originals, identity fences and restoration never depend on a hint.
+static uint8_t v2FinishForward(DW2Entry *e,const struct dw2_record *r,uint64_t target,BOOL ok) {
+    BOOL alphaOK=YES;
+    if(r->flags&DW2_RECORD_HAS_ALPHA) {
+        if(!v2EntryCurrent(e))return DW2_IDENTITY;
+        float actual=-1;
+        BOOL repeated=DW_V2_ALPHA_DEDUP && e->appliedAlphaKnown && e->appliedAlpha==r->alpha;
+        alphaOK=repeated && !getAlpha(mainConnection(),e->who.wid,&actual) && actual==r->alpha;
+        e->appliedAlphaKnown=NO;
+        if(!alphaOK) {
+            // A corrective write after the getter needs the same fresh identity
+            // fence as a corrective transform; a reused WID receives no write.
+            if(repeated && !v2EntryCurrent(e))return DW2_IDENTITY;
+            alphaOK=!setAlpha(mainConnection(),e->who.wid,r->alpha)
+                && !getAlpha(mainConnection(),e->who.wid,&actual) && actual==r->alpha;
+        }
+        if(!alphaOK)ok=NO;
+    }
+    if(e->sublevelTouched) {
+        int requested=(r->flags&DW2_RECORD_PINNED)?CGWindowLevelForKey(kCGFloatingWindowLevelKey):e->originalSublevel;
+        int setStatus=0;if(!v2ApplySublevel(e,requested,&setStatus))ok=NO;
+    }
+    BOOL spaceOK=!target||(v2WindowSpace(e->who.wid)==target&&v2SpaceDisplay(target,YES));
+    if(!v2EntryCurrent(e))return DW2_IDENTITY;
+    if(!spaceOK||!ok)return DW2_NOT_APPLIED;
+    e->appliedTransform=CGAffineTransformMake(r->m[0],r->m[1],r->m[2],r->m[3],r->m[4],r->m[5]);
+    e->appliedTransformKnown=YES;
+    if(r->flags&DW2_RECORD_HAS_ALPHA){e->appliedAlpha=r->alpha;e->appliedAlphaKnown=alphaOK;}
+    return DW2_APPLIED;
+}
+
+#endif // DW_V2_BATCH_COMPILED
 
 // Durable no-follow staging and rename; original values survive every frame.
 static NSDictionary *v2JournalEntry(DW2Entry *e,NSString *state) {
@@ -632,12 +671,28 @@ static void v2ApplyWithSpaces(const struct dw2_record *records,const uint64_t *t
         if(!saved){v2JournalStale=YES;v2ScheduleRetry();}
     }
     BOOL spaceAttempted=NO;
+#if DW_V2_BATCH_COMPILED
+    // Only this explicit build variant stages transforms. Production retains
+    // the scalar path until owned optical/readback/abort comparisons establish
+    // the private transaction behavior on each supported OS.
+    BOOL listBatch=v2UseWindowListBatch&&v2SetWindowTransforms&&count>1;
+    BOOL batching=listBatch||(v2UseTransactionBatch&&count>1&&v2ForwardTransactionsAvailable());
+    NSMutableData *stagedData=batching?[NSMutableData dataWithLength:count]:nil;
+    uint8_t *staged=stagedData.mutableBytes;
+    CFTypeRef transaction=NULL;BOOL stagedAny=NO;
+#endif
     for(uint32_t i=0;i<count;i++) {
         DW2Entry *e=entries[i];
         if((id)e==NSNull.null)continue;
         const struct dw2_record *r=&records[i];
-        if(!v2EntryCurrent(e)){if(!spaceAttempted)v2ForgetUnsentSpace(e);status[i]=DW2_IDENTITY;continue;}
         uint64_t target=targets?targets[i]:0;
+#if DW_V2_BATCH_COMPILED
+        // A staged transform has no scalar mutation here: the fresh precommit
+        // audit below is its mutation fence. Space operations still need theirs.
+        if((!batching||target)&&!v2EntryCurrent(e)){if(!spaceAttempted)v2ForgetUnsentSpace(e);status[i]=DW2_IDENTITY;continue;}
+#else
+        if(!v2EntryCurrent(e)){if(!spaceAttempted)v2ForgetUnsentSpace(e);status[i]=DW2_IDENTITY;continue;}
+#endif
         if(target){
             uint64_t current=0;
             if(!v2CanMoveSpace(e->who.wid,target,&current,NULL)){if(!spaceAttempted)v2ForgetUnsentSpace(e);status[i]=DW2_SPACE;continue;}
@@ -661,24 +716,91 @@ static void v2ApplyWithSpaces(const struct dw2_record *records,const uint64_t *t
         if(!ok){
             // The extra read above may have outlived this window. Never use its
             // cached request to authorize the corrective write to a replacement.
+#if DW_V2_BATCH_COMPILED
+            if(repeated && !batching && !v2EntryCurrent(e)){status[i]=DW2_IDENTITY;continue;}
+            if(batching) {
+                if(listBatch){staged[i]=1;stagedAny=YES;continue;}
+                if(!transaction)transaction=v2TransactionCreate(mainConnection());
+                if(transaction) {
+                    v2TransactionSetTransform(transaction,e->who.wid,0,0,requested);
+                    if(DW_V2_TRANSACTION_TRACE)fprintf(stderr,"DW_TX_STAGE wid=%u\n",e->who.wid);
+                    staged[i]=1;stagedAny=YES;continue;
+                }
+                // Missing/create-failed transactions retain the scalar contract.
+                batching=NO;
+                if(!v2EntryCurrent(e)){status[i]=DW2_IDENTITY;continue;}
+            }
+#else
             if(repeated && !v2EntryCurrent(e)){status[i]=DW2_IDENTITY;continue;}
+#endif
             ok=setTransform(mainConnection(),e->who.wid,requested)==0 && getTransform(mainConnection(),e->who.wid,&actual)==0 && v2SameTransform(actual,requested);
         }
+#if DW_V2_BATCH_COMPILED
+        status[i]=v2FinishForward(e,r,target,ok);
+#else
+        // Keep the ordinary scalar loop in its original shape: no batching
+        // objects, nil message sends, or extracted finalization call. The only
+        // optional extra behavior here is freshly verified alpha deduplication.
+        BOOL alphaOK=YES;
         if(r->flags&DW2_RECORD_HAS_ALPHA) {
             if(!v2EntryCurrent(e)){status[i]=DW2_IDENTITY;continue;}
-            float alpha=-1;
-            if(setAlpha(mainConnection(),e->who.wid,r->alpha) || getAlpha(mainConnection(),e->who.wid,&alpha) || alpha!=r->alpha)ok=NO;
+            float actualAlpha=-1;
+            BOOL repeatedAlpha=DW_V2_ALPHA_DEDUP&&e->appliedAlphaKnown&&e->appliedAlpha==r->alpha;
+            alphaOK=repeatedAlpha&&!getAlpha(mainConnection(),e->who.wid,&actualAlpha)&&actualAlpha==r->alpha;
+            e->appliedAlphaKnown=NO;
+            if(!alphaOK) {
+                if(repeatedAlpha&&!v2EntryCurrent(e)){status[i]=DW2_IDENTITY;continue;}
+                alphaOK=!setAlpha(mainConnection(),e->who.wid,r->alpha)
+                    &&!getAlpha(mainConnection(),e->who.wid,&actualAlpha)&&actualAlpha==r->alpha;
+            }
+            if(!alphaOK)ok=NO;
         }
-        if(e->sublevelTouched){
+        if(e->sublevelTouched) {
             int requestedSublevel=(r->flags&DW2_RECORD_PINNED)?CGWindowLevelForKey(kCGFloatingWindowLevelKey):e->originalSublevel;
             int sublevelStatus=0;if(!v2ApplySublevel(e,requestedSublevel,&sublevelStatus))ok=NO;
         }
         BOOL spaceOK=!target||(v2WindowSpace(e->who.wid)==target&&v2SpaceDisplay(target,YES));
         if(!v2EntryCurrent(e))status[i]=DW2_IDENTITY;
-        else if(!spaceOK)status[i]=DW2_NOT_APPLIED;
-        else if(!ok)status[i]=DW2_NOT_APPLIED;
-        else {e->appliedTransform=requested;e->appliedTransformKnown=YES;}
+        else if(!spaceOK||!ok)status[i]=DW2_NOT_APPLIED;
+        else {
+            e->appliedTransform=requested;e->appliedTransformKnown=YES;
+            if(r->flags&DW2_RECORD_HAS_ALPHA){e->appliedAlpha=r->alpha;e->appliedAlphaKnown=alphaOK;}
+        }
+#endif
     }
+#if DW_V2_BATCH_COMPILED
+    if(stagedAny) {
+        // No staged record is mutated if any exact identity changed. The native
+        // list uses only local buffers until its call. Transaction cancellation
+        // is release-without-commit, independently checked on the owned fixture.
+        BOOL current=YES;
+        for(uint32_t i=0;i<count;i++)if(staged[i]&&!v2EntryCurrent(entries[i]))current=NO;
+        BOOL submitted=current;
+        if(listBatch&&current) {
+            NSMutableData *widsData=[NSMutableData dataWithLength:count*sizeof(uint32_t)];
+            NSMutableData *matricesData=[NSMutableData dataWithLength:count*sizeof(CGAffineTransform)];
+            uint32_t *wids=widsData.mutableBytes;CGAffineTransform *matrices=matricesData.mutableBytes;uint32_t nativeCount=0;
+            for(uint32_t i=0;i<count;i++)if(staged[i]) {
+                const struct dw2_record *r=&records[i];wids[nativeCount]=r->id.wid;
+                matrices[nativeCount++]=CGAffineTransformMake(r->m[0],r->m[1],r->m[2],r->m[3],r->m[4],r->m[5]);
+            }
+            CGError result=v2SetWindowTransforms(mainConnection(),wids,matrices,nativeCount);submitted=!result;
+            if(DW_V2_TRANSACTION_TRACE)fprintf(stderr,"DW_WINDOW_LIST count=%u status=%d\n",nativeCount,result);
+        } else if(transaction) {
+            if(current)v2TransactionCommit(transaction,DW_V2_TRANSACTION_SYNC);
+            if(DW_V2_TRANSACTION_TRACE)fprintf(stderr,"DW_TX_COMMIT submitted=%d sync=%d\n",current,DW_V2_TRANSACTION_SYNC);
+        }
+        if(transaction)CFRelease(transaction);
+        for(uint32_t i=0;i<count;i++)if(staged[i]) {
+            DW2Entry *e=entries[i];
+            if(!submitted){status[i]=v2EntryCurrent(e)?DW2_NOT_APPLIED:DW2_IDENTITY;continue;}
+            const struct dw2_record *r=&records[i];
+            CGAffineTransform requested=CGAffineTransformMake(r->m[0],r->m[1],r->m[2],r->m[3],r->m[4],r->m[5]),actual=CGAffineTransformIdentity;
+            BOOL ok=!getTransform(mainConnection(),e->who.wid,&actual)&&v2SameTransform(actual,requested);
+            status[i]=v2FinishForward(e,r,targets?targets[i]:0,ok);
+        }
+    }
+#endif // DW_V2_BATCH_COMPILED
     for(DW2Entry *e in v2Table.objectEnumerator)e->spaceFresh=e->pendingSpaceFresh=NO;
     v2Count();
 }
@@ -1176,6 +1298,9 @@ static BOOL v2LoadJournal(NSDictionary *recovery) {
 // The sole listener. A failure is startup failure, never a fallback server.
 static int v2Start(const char *directory,BOOL onMain,NSDictionary *recovery) {
     v2ResolveSublevels();
+#if DW_V2_BATCH_COMPILED
+    v2ResolveForwardTransactions();
+#endif
     v2WriterIdentity=v2CurrentWriterIdentity();if(!v2WriterIdentity)return -__LINE__;
     v2OnMain=onMain;
     v2q=onMain ? dispatch_get_main_queue() : dispatch_queue_create("dw.v2",dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,QOS_CLASS_USER_INTERACTIVE,0));

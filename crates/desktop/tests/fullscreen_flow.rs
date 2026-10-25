@@ -3400,3 +3400,93 @@ fn readback_an_exit_the_window_never_answers_leaves_the_slot_free() {
         (220.0, 100.0),
     );
 }
+
+#[test]
+fn external_minimize_exits_fill_and_defers_native_restore_until_visible_placement() {
+    let mut h = zoomed(CONFIG);
+    let initial = world(&mut h, 1);
+    let initial_pose = pose(&mut h, 1);
+    entered(&mut h);
+    let source = window(&mut h, 1)["source"].clone();
+    let reply = h.ok(json!({"op":"observe_visibility","window":1,"identity":source["identity"],"generation":source["generation"],"minimized":true}));
+    assert!(reply["effect"].is_null());
+    assert_eq!(fullscreen(&mut h, 1), Value::Null);
+    assert_eq!(world(&mut h, 1), initial);
+    assert_eq!(pose(&mut h, 1), initial_pose);
+    assert!(placed_ids(&mut h, 1).is_empty());
+    // Other commands may carry owed sizes, but never resize a minimized app.
+    assert!(h.ok(json!({"op":"clear_focus"}))["effect"].is_null());
+    let reply=h.ok(json!({"op":"observe_visibility","window":1,"identity":source["identity"],"generation":source["generation"],"minimized":false}));
+    assert!(reply["effect"].is_null());
+    assert!(h.ok(json!({"op":"clear_focus"}))["effect"].is_null());
+    let binding = window(&mut h, 1)["source"].clone();
+    let ack = json!({"op":"source_visible","window":1,"identity":source["identity"],"generation":source["generation"],"visibility_revision":binding["visibility_revision"]});
+    let restore = h.ok(ack.clone());
+    assert_eq!(restore["visibility"], "restoring");
+    assert_eq!(window(&mut h, 1)["source"]["visibility"], "restoring");
+    perform(
+        &mut h,
+        &restore["effects"][0],
+        (USABLE.2, USABLE.3),
+        (START.2, START.3),
+        "applied",
+        (START.2, START.3),
+    );
+    assert_eq!(h.ok(ack)["visibility"], "visible");
+    assert_eq!(world(&mut h, 1), initial);
+    assert_eq!(pose(&mut h, 1), initial_pose);
+}
+
+#[test]
+fn product_minimize_leaves_fill_through_its_existing_resize_handoff() {
+    let mut h = zoomed(CONFIG);
+    let initial = world(&mut h, 1);
+    entered(&mut h);
+    let reply = ipc(&mut h, json!({"Minimize":1}));
+    assert_eq!(reply["effects"][0]["op"], "set_minimized");
+    assert_eq!(reply["effects"][0]["minimized"], true);
+    assert_eq!(window(&mut h, 1)["source"]["visibility"], "visible");
+    assert_eq!(fullscreen(&mut h, 1), Value::Null);
+    deliver(
+        &mut h,
+        &reply,
+        (USABLE.2, USABLE.3),
+        (START.2, START.3),
+        "applied",
+        (START.2, START.3),
+    );
+    assert_eq!(world(&mut h, 1), initial);
+}
+
+#[test]
+fn visibility_hint_during_restore_keeps_owed_native_size_while_cancellation_drains() {
+    let mut h = zoomed(CONFIG);
+    let initial = world(&mut h, 1);
+    entered(&mut h);
+    let restore = action(&mut h, 1, "toggle-fullscreen");
+    let read = began(&mut h, &restore);
+    let source = window(&mut h, 1)["source"].clone();
+    h.ok(json!({"op":"source_visibility_pending","window":1,"identity":source["identity"],"generation":source["generation"]}));
+    h.ok(json!({"op":"cancel_native_resize","transaction":read["transaction"]}));
+    let drained = answer(&mut h, &read, "observed", false, (USABLE.2, USABLE.3));
+    assert!(
+        drained["effect"].is_null(),
+        "pending visibility must not retry and exhaust the native-size debt: {drained}"
+    );
+    h.ok(json!({"op":"observe_visibility","window":1,"identity":source["identity"],"generation":source["generation"],"minimized":true}));
+    assert_eq!(world(&mut h, 1), initial);
+    h.ok(json!({"op":"observe_visibility","window":1,"identity":source["identity"],"generation":source["generation"],"minimized":false}));
+    let source = window(&mut h, 1)["source"].clone();
+    let ready = json!({"op":"source_visible","window":1,"identity":source["identity"],"generation":source["generation"],"visibility_revision":source["visibility_revision"]});
+    let restore = h.ok(ready.clone());
+    perform(
+        &mut h,
+        &restore["effects"][0],
+        (USABLE.2, USABLE.3),
+        (START.2, START.3),
+        "applied",
+        (START.2, START.3),
+    );
+    assert_eq!(h.ok(ready)["visibility"], "visible");
+    assert_eq!(world(&mut h, 1), initial);
+}

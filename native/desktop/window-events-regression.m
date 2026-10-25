@@ -127,9 +127,17 @@ static NSNotification *note(EventApplication *application) { return [NSNotificat
 
 @interface EventDeliverySink : NSObject <DWWindowEventSink>
 @property NSMutableArray<NSArray *> *reports;
+@property NSMutableArray<NSNumber *> *creationInvalidations;
+@property NSUInteger creations;
+@property NSArray *creationBirth;
+@property (assign) AXUIElementRef creationElement;
 @end
 @implementation EventDeliverySink
-- (instancetype)init { if((self=[super init]))_reports=[NSMutableArray array];return self; }
+- (instancetype)init { if((self=[super init])){_reports=[NSMutableArray array];_creationInvalidations=[NSMutableArray array];}return self; }
+- (void)windowCreationInvalidated:(pid_t)pid { [self.creationInvalidations addObject:@(pid)]; }
+- (void)windowCreatedElement:(AXUIElementRef)element pid:(pid_t)pid birth:(NSArray<NSNumber *> *)birth {
+    check(!inWorker&&pid==123,@"creation ingress carries the original event on main without AX reads");self.creations++;self.creationBirth=birth;self.creationElement=element;
+}
 - (void)windowsChanged:(pid_t)pid { [self.reports addObject:@[@"appeared",@0,@(pid)]]; }
 - (void)windowMoved:(CGWindowID)window pid:(pid_t)pid { [self.reports addObject:@[@"moved",@(window),@(pid)]]; }
 - (void)windowChanged:(CGWindowID)window pid:(pid_t)pid { [self.reports addObject:@[@"changed",@(window),@(pid)]]; }
@@ -145,15 +153,20 @@ static void deliveryDue(DWWindowEvents *events) {
 static void moveProvenance(void) {
     EventWorkspace.sharedWorkspace.catalog=@[];EventDeliverySink *sink=[EventDeliverySink new];
     DWWindowEvents *events=[[DWWindowEvents alloc]initWithSink:sink scope:nil];drain();
-    DWObservedApplication *application=[DWObservedApplication new];application.pid=123;
+    DWObservedApplication *application=[DWObservedApplication new];application.pid=123;application.seconds=100;application.microseconds=20;
     application.windows=CFDictionaryCreateMutable(NULL,0,&kCFTypeDictionaryKeyCallBacks,NULL);
     DWObservedWindow *window=[DWObservedWindow new];window.window=42;window.application=application;
     window.element=(AXUIElementRef)CFRetain(CFSTR("known window"));
     CFDictionarySetValue(application.windows,window.element,(__bridge void *)window);
     void (^notify)(CFStringRef)=^(CFStringRef name){[events notified:name element:window.element application:application window:nil];};
+    notify(kAXCreatedNotification);
+    check(sink.creations==1&&sink.creationElement==window.element&&[sink.creationBirth isEqual:@[@100,@20]],@"created ingress preserves exact element and observed process birth");
+    deliveryDue(events);
+    [sink.reports removeAllObjects];[sink.creationInvalidations removeAllObjects];
     notify(kAXWindowMovedNotification);
     check([sink.reports isEqual:@[@[@"moved",@42,@123]]],@"known AXMoved is delivered separately at once");
-    notify(kAXWindowMovedNotification);deliveryDue(events);
+    notify(kAXWindowMovedNotification);
+    check([sink.creationInvalidations isEqual:@[@123,@123]],@"both raw move events invalidate creation before their coalesced delivery");deliveryDue(events);
     check(sink.reports.count==2&&[sink.reports.lastObject isEqual:@[@"moved",@42,@123]],@"move-only storm retains provenance in its single trailing report");
     [sink.reports removeAllObjects];notify(kAXWindowMovedNotification);notify(kAXWindowResizedNotification);notify(kAXWindowMovedNotification);deliveryDue(events);
     check([sink.reports isEqual:@[@[@"changed",@42,@123]]],@"resize dominates later moves in the same pending batch");
@@ -171,6 +184,8 @@ static void moveProvenance(void) {
     [sink.reports removeAllObjects];notify(kAXWindowMovedNotification);
     [events notified:kAXUIElementDestroyedNotification element:window.element application:application window:window];deliveryDue(events);
     check([sink.reports isEqual:@[@[@"destroyed",@42,@123],@[@"changed",@42,@123]]],@"destroyed remains immediate and its trailing report is generic");
+    [sink.creationInvalidations removeAllObjects];[events spaceChanged:nil];
+    check([sink.creationInvalidations.lastObject isEqual:@0],@"global Space hint invalidates every pending creation read immediately");
     [events stop];NSUInteger count=sink.reports.count;notify(kAXWindowMovedNotification);deliveryDue(events);
     check(sink.reports.count==count&&!events.moveOnly.count&&!events.owed.count,@"stop clears move provenance and fences late callbacks");drain();
 }

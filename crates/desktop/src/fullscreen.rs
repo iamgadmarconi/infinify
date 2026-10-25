@@ -239,6 +239,7 @@ pub(crate) fn carries(command: &Command) -> bool {
             | Command::GestureUpdate { .. }
             | Command::GestureEnd { .. }
             | Command::SetUsableArea { .. }
+            | Command::SourceVisible { .. }
     )
 }
 
@@ -529,6 +530,23 @@ impl Controller {
         self.restore_fullscreen_view(output, entry.camera, entry.zoom);
         Some(window)
     }
+    /// AppKit already minimized this source. Restore its canvas slot now,
+    /// retaining the native-size debt until the same live source returns.
+    pub(crate) fn minimize_fullscreen(&mut self, window: WindowId) {
+        if let Some(output) = self.fullscreen_output_of(window) {
+            self.exit_fullscreen_on(output);
+        }
+        if let Some(restore) = self.fullscreen.restores.get(&window) {
+            let rect = Rect {
+                origin: restore.loc,
+                size: restore.extent,
+            };
+            let _ = self.scene.set_window_rect(window, rect);
+        }
+    }
+    pub(crate) fn fullscreen_restore_owed(&self, window: WindowId) -> bool {
+        self.fullscreen.restores.contains_key(&window)
+    }
     /// Undo a provisional enter that ended before any native mutation. An
     /// earlier exit or a window rule may still owe a size.
     pub(crate) fn abort_unmutated_fullscreen(&mut self, window: WindowId) -> bool {
@@ -748,7 +766,15 @@ impl Controller {
             .fullscreen
             .restores
             .iter()
-            .filter(|(_, restore)| !restore.delivered)
+            .filter(|(window, restore)| {
+                !restore.delivered
+                    && self.sources.get(window).is_some_and(|source| {
+                        !source.visibility_pending
+                            && (source.visibility == SourceVisibility::Visible
+                                || (source.visibility == SourceVisibility::Restoring
+                                    && source.visibility_placement_ready))
+                    })
+            })
             .map(|(window, restore)| (*window, restore.clone()))
             .collect();
         for (window, restore) in owed {
@@ -1086,6 +1112,9 @@ impl Controller {
     /// points, or `None` for an output that is not fullscreen.
     fn fullscreen_rect(&self, viewport: &Viewport) -> Option<(WindowId, Rect)> {
         let entry = self.fullscreen.entries.get(&viewport.id)?;
+        if !self.source_presentable(entry.window) {
+            return None;
+        }
         let rect = self.scene.window(entry.window)?.world_rect;
         let offset = rect.origin - point_of(entry.park);
         Some((
@@ -1125,6 +1154,7 @@ impl Controller {
         self.fullscreen.entries.get(&viewport.id)?;
         Some(
             self.fullscreen_rect(viewport)
+                .filter(|(window, _)| self.source_interactive(*window))
                 .filter(|(_, rect)| rect.contains(screen))
                 .map(|(window, rect)| (window, screen - rect.origin)),
         )

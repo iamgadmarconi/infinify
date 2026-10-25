@@ -29,6 +29,8 @@ Commands:
   opacity [VALUE] [--id ID]           Get a window's opacity, or set it (0 to 1)
   pin [on|off] [--id ID]              Get whether a window is pinned to the screen, or set it
   suspend [APP_ID] [--id ID]          Suspend the focused window, or one by app id or id
+  minimize [APP_ID] [--id ID]         Minimize a live native window without closing it
+  deminimize [APP_ID] [--id ID]       Restore the same minimized native window
   relaunch [APP_ID] [--id ID]         Relaunch a suspended window
   camera [X] [Y]                      Get the camera position, or pan to a canvas point (Y-up)
   zoom [LEVEL]                        Get the zoom level, or set it
@@ -212,12 +214,14 @@ fn to_invocation(command: &str, rest: &[String], global: &mut Global) -> Result<
                 _ => Request::DebugCounters,
             }
         }
-        "focus" | "close" | "suspend" | "relaunch" => {
+        "focus" | "close" | "suspend" | "relaunch" | "minimize" | "deminimize" => {
             let selector = split(rest, &[], &["--id"], false, global)?.selector()?;
             match command {
                 "focus" => Request::Focus(selector),
                 "close" => Request::Close(selector),
                 "suspend" => Request::Suspend(selector),
+                "minimize" => Request::Minimize(selector),
+                "deminimize" => Request::Deminimize(selector),
                 _ => Request::Relaunch(selector),
             }
         }

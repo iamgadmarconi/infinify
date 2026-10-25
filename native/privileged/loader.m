@@ -380,7 +380,7 @@ static BOOL wait_for_helper(const char *runtime,const char *nonce,pid_t pid,
 static int usage(void) {
     fprintf(stderr,"usage: loader --dock-identity\n"
         "       loader --inject-dock PAYLOAD RUNTIME --nonce-file ABS_FILE --desktop [--expected-dock PID SEC USEC] [--recover-journal ABS_PATH --expected-retired-dock PID SEC USEC]\n"
-        "       loader --inject-dock PAYLOAD RUNTIME --nonce-file ABS_FILE --only-pid PID\n"
+        "       loader --inject-dock PAYLOAD RUNTIME --nonce-file ABS_FILE --only-pid PID [--expected-dock PID SEC USEC]\n"
         "Paths must be absolute. Explicit scope is required; run doctor first. No SIP/boot settings are changed.\n"
         "--desktop authorizes same-login-user scope; --only-pid pins one process instance.\n");
     return 2;
@@ -406,7 +406,7 @@ int main(int argc, char **argv) { @autoreleasepool {
         if(!parse_decimal(argv[option+1],INT_MAX,&onlyPID) || onlyPID<=1)return usage();
         option+=2;
     } else return usage();
-    if(desktop && option<argc && !strcmp(argv[option],"--expected-dock")) {
+    if(option<argc && !strcmp(argv[option],"--expected-dock")) {
         if(option+4>argc || !parse_decimal(argv[option+1],INT_MAX,&expectedPID) || expectedPID<=1
             || !parse_decimal(argv[option+2],UINT64_MAX,&expectedSec) || !expectedSec
             || !parse_decimal(argv[option+3],999999,&expectedUsec))return usage();

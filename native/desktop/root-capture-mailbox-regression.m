@@ -30,7 +30,7 @@
 @interface LiveSource : NSObject
 @property SCStream *stream;
 @property DWRootCaptureMailbox *captureMailbox;
-@property BOOL detached,composited,restarted,rejectInstall;
+@property BOOL detached,composited,restarted,rejectInstall,nativeVisibilityHeld,nativeVisibilityWanted;
 @property NSString *error;
 @property NSObject *synth;
 @property NSNumber *logical;

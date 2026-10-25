@@ -297,6 +297,15 @@ impl Controller {
         target: Size,
         by_hand: bool,
     ) -> Result<Value, Error> {
+        if by_hand
+            || !self.source_presentable(window)
+            || self
+                .sources
+                .get(&window)
+                .is_some_and(|source| source.visibility_pending)
+        {
+            self.require_source_interactive(window)?;
+        }
         self.guard_resize_structure(None)?;
         if self.gesture.is_some() {
             return Err(Error::Invalid("native resize during active gesture"));
@@ -431,6 +440,7 @@ impl Controller {
         start_screen: Point,
         group: bool,
     ) -> Result<Value, Error> {
+        self.require_source_interactive(window)?;
         self.guard_resize_structure(None)?;
         if self.gesture.is_some() || !point_valid(start_screen) {
             return Err(Error::Invalid(

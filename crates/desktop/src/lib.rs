@@ -27,6 +27,7 @@ mod sizes;
 mod storage;
 mod taps;
 mod view_actions;
+mod visibility;
 mod window_actions;
 use bindings::Platform;
 pub use bindings::{MacModifiers, PointerContext, PointerTrigger, ScrollSource};
@@ -50,6 +51,7 @@ use settings::{CameraSeed, Settings};
 use sizes::Sizes;
 pub use view_actions::ViewDirection;
 use view_actions::{ViewReturn, pixel_size};
+pub use visibility::SourceVisibility;
 pub use window_actions::ActivationCause;
 
 use driftwm_canvas::{
@@ -130,6 +132,12 @@ pub struct Source {
     pub original_rect: Rect,
     pub observed_rect: Rect,
     pub observation_known: bool,
+    pub visibility: SourceVisibility,
+    pub visibility_revision: u64,
+    /// An identity-fenced native hint is awaiting an actual visibility read.
+    pub visibility_pending: bool,
+    /// The first restored placement ACK admitted any pre-Fill size debt.
+    pub visibility_placement_ready: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -610,6 +618,28 @@ pub enum Command {
         identity: SourceIdentity,
         source_rect: Rect,
         buffer: BufferSize,
+    },
+    /// Suspend input and owed size delivery while a native visibility hint is
+    /// resolved. This neither asserts minimization nor changes live ownership.
+    SourceVisibilityPending {
+        window: WindowId,
+        identity: SourceIdentity,
+        generation: u64,
+    },
+    /// An exact native source was observed minimized or restored. A restored
+    /// source remains noninteractive until its adapter confirms placement.
+    ObserveVisibility {
+        window: WindowId,
+        identity: SourceIdentity,
+        generation: u64,
+        minimized: bool,
+    },
+    /// The restored source's current placement was acknowledged by its owner.
+    SourceVisible {
+        window: WindowId,
+        identity: SourceIdentity,
+        generation: u64,
+        visibility_revision: u64,
     },
     /// The source owner moved its unchanged-size window. The adapter supplies
     /// displacement in unscaled window units, separately from current native
@@ -1123,6 +1153,7 @@ impl Controller {
                 forward_motion,
             } => {
                 self.check_generation(window, &identity, generation)?;
+                self.require_source_interactive(window)?;
                 return self.hover_with_target(
                     output,
                     screen,
@@ -1347,6 +1378,10 @@ impl Controller {
                         original_rect: source_rect,
                         observed_rect: source_rect,
                         observation_known: true,
+                        visibility: SourceVisibility::Visible,
+                        visibility_revision: 0,
+                        visibility_pending: false,
+                        visibility_placement_ready: false,
                     },
                 );
                 self.map_rule(id, rule, arrival);
@@ -1429,6 +1464,37 @@ impl Controller {
                 buffer,
             } => {
                 return self.observe_source(window, &identity, source_rect, buffer, false);
+            }
+            Command::SourceVisibilityPending {
+                window,
+                identity,
+                generation,
+            } => {
+                self.check_generation(window, &identity, generation)?;
+                let source = self.sources.get_mut(&window).expect("validated source");
+                source.visibility_pending = true;
+                source.visibility_placement_ready = false;
+                source.visibility_revision = source
+                    .visibility_revision
+                    .checked_add(1)
+                    .ok_or(Error::Invalid("visibility revisions exhausted"))?;
+                return Ok(json!({"visibility_pending":true}));
+            }
+            Command::ObserveVisibility {
+                window,
+                identity,
+                generation,
+                minimized,
+            } => {
+                return self.observe_visibility(window, &identity, generation, minimized);
+            }
+            Command::SourceVisible {
+                window,
+                identity,
+                generation,
+                visibility_revision,
+            } => {
+                return self.source_visible(window, &identity, generation, visibility_revision);
             }
             Command::RemoveSource {
                 window,
@@ -1593,6 +1659,7 @@ impl Controller {
                 generation,
             } => {
                 self.check_generation(window, &identity, generation)?;
+                self.require_source_interactive(window)?;
                 self.finish_cycle();
                 self.focus.pending_effect = None;
                 self.focus.logical = None;
@@ -1848,6 +1915,7 @@ impl Controller {
         Ok(())
     }
     fn request_focus(&mut self, window: WindowId) -> Result<Value, Error> {
+        self.require_source_interactive(window)?;
         self.focus.pending_effect = None;
         self.focus.logical = None;
         let Some(source) = self.sources.get(&window) else {

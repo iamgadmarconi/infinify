@@ -10,6 +10,9 @@
 @property (copy) NSString *bundleIdentifier, *applicationName, *title;
 @property CGRect frame;
 @property SCWindow *shareable;
+// A direct AX creation result stays bound to this original process instance.
+// The host must compare it before constructing a source from a fresh PID read.
+@property (copy) NSDictionary *nativeIdentity;
 @property BOOL displayFixed; // independently rooted AXFloatingWindow at the floating level
 + (instancetype)candidateWithShareable:(SCWindow *)shareable;
 @end
@@ -44,6 +47,7 @@
 // Native focus may have moved: an application was activated, or changed its focused window.
 - (void)focusChanged;
 @optional
+- (void)windowVisibilityChanged:(CGWindowID)window pid:(pid_t)pid;
 // A candidate's existing bounds-stability deadline is due. Request the host's
 // single-flight worker observation now; this callback performs no enumeration.
 - (void)windowDiscoveryRequested;

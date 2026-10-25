@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import "window-observer.h"
+#import "../focus/focus.h"
 #import "native-presenter.h"
 #import "native-family.h"
 #import <AppKit/AppKit.h>
@@ -9,6 +10,7 @@
 @interface DWWindowObservation ()
 @property(nonatomic,copy,readwrite) NSDictionary *request,*info,*family;
 @property(nonatomic,copy,readwrite) NSString *failure,*familyFailure;
+@property(nonatomic,copy,readwrite) NSNumber *minimized;
 @property(nonatomic,readwrite) DWWindowObservationState state;
 @property(nonatomic,readwrite) CGRect bounds;
 @property(nonatomic,readwrite) BOOL hasBounds;
@@ -47,6 +49,7 @@ static NSDictionary *observedRequest(NSDictionary *source) {
     if([source[@"prior_bounds"]isKindOfClass:NSDictionary.class])request[@"prior_bounds"]=[source[@"prior_bounds"]copy];
     if(source[@"native_bounds"]){if(!observedNumber(source[@"native_bounds"]))return nil;request[@"native_bounds"]=@([source[@"native_bounds"]boolValue]);}
     if(source[@"families"]){if(!observedNumber(source[@"families"]))return nil;request[@"families"]=@([source[@"families"]boolValue]);}
+    if(source[@"visibility_revision"]){if(!observedNumber(source[@"visibility_revision"]))return nil;request[@"visibility_revision"]=[source[@"visibility_revision"]copy];}
     if([request[@"families"]boolValue]&&![request[@"native_bounds"]boolValue])return nil;
     return [request copy];
 }
@@ -111,6 +114,8 @@ static DWWindowObservationSnapshot *observeWindows(uint64_t generation,NSArray<N
                 else if(!info){source.state=DWWindowObservationAbsent;source.failure=@"window server has no current window record";}
                 else if([info[(id)kCGWindowOwnerPID]intValue]!=pid.intValue){source.state=DWWindowObservationIdentityChanged;source.failure=@"window owner changed";}
                 else {source.info=info;CGRect own=CGRectZero;BOOL nativeBounds=[request[@"native_bounds"]boolValue];
+                    if(request[@"visibility_revision"]){bool minimized=false;DWFocusIdentity selected={.pid=pid.intValue,.window=wid.unsignedIntValue,.seconds=[identity[@"birth_sec"]unsignedLongLongValue],.microseconds=[identity[@"birth_usec"]unsignedLongLongValue]};
+                        if(dw_focus_minimized(selected,&minimized))source.minimized=@(minimized);}
                     NSDictionary *frame=info[(id)kCGWindowBounds];
                     BOOL hasBounds=nativeBounds?DWNativeBounds(wid.unsignedIntValue,&own):([frame isKindOfClass:NSDictionary.class]&&CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)frame,&own));
                     if(hasBounds){

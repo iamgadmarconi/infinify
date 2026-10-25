@@ -27,7 +27,7 @@ if [ "$(uname -s)" != Darwin ] || [ "$(uname -m)" != arm64 ]; then
   echo 'Privileged helper requires Apple Silicon macOS 26+.' >&2; exit 1
 fi
 mkdir -p "$out"
-xcrun clang -arch arm64 -mmacosx-version-min=26.0 -Wall -Wextra \
+xcrun clang -O2 -arch arm64 -mmacosx-version-min=26.0 -Wall -Wextra \
   native/privileged/doctor.m -framework Foundation -o "$out/doctor"
 if [ "$mode" = doctor ]; then
   printf '%s\n' 'Built read-only doctor; nothing injected or launched.'
@@ -37,30 +37,38 @@ fi
 # host; macOS may prohibit arm64e third-party processes without boot policy changes.
 # payload.m includes payload-v2.m (protocol v2). DW_V2_MAIN_QUEUE=1 in the environment
 # builds a payload whose v2 native calls run on the main queue instead of its own.
+# DW_V2_TRANSACTION_BATCH=1 explicitly enables the comparison transaction path;
+# it remains off until native fixture/optical/abort evidence supports promotion.
+# DW_V2_ALPHA_DEDUP=0 keeps scalar alpha writes for a focused comparison.
 architectures=arm64e
 [ "$mode" = production ] || architectures='arm64 arm64e'
 for arch in $architectures; do
   # The install name is part of the signed payload bytes. Keep staging paths out
   # of its identity so rebuilding unchanged source preserves helper reuse hashes.
-  xcrun clang -arch "$arch" -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror -dynamiclib \
+  xcrun clang -O2 -arch "$arch" -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror -dynamiclib \
     -Wl,-install_name,"@rpath/payload-$arch.dylib" \
     ${DW_V2_MAIN_QUEUE:+-DDW_V2_MAIN_QUEUE="$DW_V2_MAIN_QUEUE"} \
+    ${DW_V2_TRANSACTION_BATCH:+-DDW_V2_TRANSACTION_BATCH="$DW_V2_TRANSACTION_BATCH"} \
+    ${DW_V2_WINDOW_LIST_BATCH:+-DDW_V2_WINDOW_LIST_BATCH="$DW_V2_WINDOW_LIST_BATCH"} \
+    ${DW_V2_TRANSACTION_SYNC:+-DDW_V2_TRANSACTION_SYNC="$DW_V2_TRANSACTION_SYNC"} \
+    ${DW_V2_TRANSACTION_TRACE:+-DDW_V2_TRANSACTION_TRACE="$DW_V2_TRANSACTION_TRACE"} \
+    ${DW_V2_ALPHA_DEDUP:+-DDW_V2_ALPHA_DEDUP="$DW_V2_ALPHA_DEDUP"} \
     native/privileged/payload.m -framework AppKit -o "$out/payload-$arch.dylib"
 done
 # Protocol v2 client library for the desktop shell.
-xcrun clang -arch arm64 -mmacosx-version-min=26.0 -std=gnu11 -Wall -Wextra -Werror -c \
+xcrun clang -O2 -arch arm64 -mmacosx-version-min=26.0 -std=gnu11 -Wall -Wextra -Werror -c \
   native/privileged/dwclient.c -o "$out/dwclient.o"
 # The loader's authenticated v2 readiness audit needs its own arm64e client;
 # the arm64 object used by the shell cannot be linked into this executable.
-xcrun clang -arch arm64e -mmacosx-version-min=26.0 -std=gnu11 -Wall -Wextra -Werror -c \
+xcrun clang -O2 -arch arm64e -mmacosx-version-min=26.0 -std=gnu11 -Wall -Wextra -Werror -c \
   native/privileged/dwclient.c -o "$out/dwclient-arm64e.o"
 if [ "$mode" = all ]; then
-  xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror \
+  xcrun clang -O2 -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror \
     native/privileged/host.m -framework AppKit -framework Metal -framework QuartzCore -o "$out/host"
-  xcrun clang -arch arm64 -mmacosx-version-min=26.0 -std=gnu11 -Wall -Wextra -Werror \
+  xcrun clang -O2 -arch arm64 -mmacosx-version-min=26.0 -std=gnu11 -Wall -Wextra -Werror \
     native/privileged/v2client.c "$out/dwclient.o" -o "$out/v2client"
 fi
-xcrun clang -arch arm64e -mmacosx-version-min=26.0 -Wall -Wextra \
+xcrun clang -O2 -arch arm64e -mmacosx-version-min=26.0 -Wall -Wextra \
   native/privileged/loader.m "$out/dwclient-arm64e.o" -framework AppKit -o "$out/loader-arm64e"
 # Ad-hoc sign the standalone production tools and Dock payload, exactly as yabai
 # signs its scripting addition binaries (yabai dd845723416f5fe92af49fad5ebab00369e07edd

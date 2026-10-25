@@ -30,7 +30,12 @@ impl Controller {
         source.buffer = buffer;
         // A presentation handoff can change native geometry without changing
         // the canvas frame. Repeating that basis is not a new application resize.
-        if adopt_size && native_size_changed && self.sizes.capability && self.gesture.is_none() {
+        if adopt_size
+            && native_size_changed
+            && self.source_interactive(window)
+            && self.sizes.capability
+            && self.gesture.is_none()
+        {
             let mut rect = self
                 .scene
                 .window(window)
@@ -56,6 +61,7 @@ impl Controller {
     ) -> Result<Value, Error> {
         self.guard_resize_structure(Some(window))?;
         self.check_generation(window, identity, generation)?;
+        self.require_source_interactive(window)?;
         if !rect_valid(observed_rect) || !rect_valid(expected_world_rect) || !point_valid(delta) {
             return Err(Error::Invalid("invalid source displacement"));
         }

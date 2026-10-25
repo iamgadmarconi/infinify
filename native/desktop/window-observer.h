@@ -19,6 +19,8 @@ typedef NS_ENUM(NSUInteger,DWWindowObservationState) {
 @property(nonatomic,copy,readonly) NSString *failure;
 @property(nonatomic,copy,readonly) NSDictionary *family;
 @property(nonatomic,copy,readonly) NSString *familyFailure;
+// nil is unknown/unrequested, never evidence that a window was restored.
+@property(nonatomic,copy,readonly) NSNumber *minimized;
 @property(nonatomic,readonly) DWWindowObservationState state;
 @property(nonatomic,readonly) CGRect bounds;
 @property(nonatomic,readonly) BOOL hasBounds;

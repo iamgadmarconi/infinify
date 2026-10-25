@@ -169,12 +169,13 @@ impl Controller {
     /// Upstream update_focus_history's eligibility: neither a widget nor
     /// screen-pinned. A fullscreen window, whose pin is put away, is in it.
     pub(crate) fn in_history(&self, window: WindowId) -> bool {
-        !self.is_widget(window) && !self.is_pinned(window)
+        self.source_interactive(window) && !self.is_widget(window) && !self.is_pinned(window)
     }
     /// Upstream's move and resize bindings pass over a widget. A
     /// screen-pinned window is refused by this canvas-only guard. Its native
     /// resize and `install_drag` use their own screen-space paths instead.
     pub(crate) fn movable(&self, window: WindowId) -> Result<(), Error> {
+        self.require_source_interactive(window)?;
         if self.is_widget(window) {
             return Err(Error::Invalid("a widget is not moved or resized by hand"));
         }
@@ -947,6 +948,9 @@ impl Controller {
         }
         let windows = self.scene.windows();
         let pinned = windows.iter().rev().find_map(|w| {
+            if !self.source_interactive(w.id) {
+                return None;
+            }
             let (on, rect) = self.pinned_rect(w.id)?;
             (on == output && rect.contains(screen)).then(|| (w.id, screen - rect.origin))
         });
@@ -956,6 +960,7 @@ impl Controller {
                 .iter()
                 .rev()
                 .filter(|w| !self.is_pinned(w.id) && self.is_widget(w.id) == widgets)
+                .filter(|w| self.source_interactive(w.id))
                 .filter(|w| !self.is_fullscreen(w.id))
                 .find(|w| w.world_rect.contains(world))
                 .map(|w| (w.id, world - w.world_rect.origin))
@@ -992,6 +997,7 @@ impl Controller {
                         .iter()
                         .filter(|p| {
                             p.output == viewport.id
+                                && self.source_presentable(p.window)
                                 && !self.is_pinned(p.window)
                                 && self.is_widget(p.window) == widgets
                         })
@@ -999,6 +1005,9 @@ impl Controller {
                 );
             }
             for window in self.scene.windows() {
+                if !self.source_presentable(window.id) {
+                    continue;
+                }
                 let Some((on, screen_rect)) = self.pinned_rect(window.id) else {
                     continue;
                 };

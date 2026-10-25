@@ -388,6 +388,7 @@ impl Controller {
         generation: Option<u64>,
     ) -> Result<Value, Error> {
         self.window_rect(window)?;
+        self.require_source_interactive(window)?;
         if let Some(output) = output {
             self.navigation_context(output)?;
         }

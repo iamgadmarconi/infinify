@@ -22,6 +22,14 @@ An `AXCannotComplete` during position/size observation retries the complete
 read with fresh ownership checks within that same deadline. Other errors,
 invalid geometry and AX/CG disagreement fail closed. This never repeats a setter.
 
+After AXSize, an exact requested size completes immediately. Non-exact results
+retain five observations, with retries due 30, 60, 90 and 120 ms after the setter
+returns. Readback work counts toward these deadlines instead of extending every
+interval by its own duration; the final non-exact observation still starts no
+earlier than 120 ms. The shared two-second deadline remains authoritative.
+`INFINIFY_DEBUG=1` records one settling receipt per size setter, separating read
+and sleep time from the elapsed post-setter interval.
+
 One native position write may precede the size. macOS grants no Accessibility size
 that would carry a window past the visible frame of its screen: asked from an
 origin the size does not fit from, the window keeps the size it has (rejected). On

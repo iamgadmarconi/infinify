@@ -89,6 +89,23 @@ static AXUIElementRef resolve(DWFocusIdentity i,double end,DWFocusResult *r) {
     if(valid)r->outcome=matches>1?DWFocusAmbiguous:matches==0?DWFocusMissing:DWFocusStale;
     if(found)CFRelease(found);return NULL;
 }
+bool dw_focus_minimized(DWFocusIdentity identity,bool *minimized) { @autoreleasepool {
+    if(!minimized)return false;
+    double end=now()+.08;DWFocusResult result={0};AXUIElementRef window=resolve(identity,end,&result);if(!window)return false;
+    CFTypeRef value=NULL;AXError error=copy(window,kAXMinimizedAttribute,&value,end);CFRelease(window);
+    bool known=error==kAXErrorSuccess&&value&&CFGetTypeID(value)==CFBooleanGetTypeID()&&now()<end&&dw_focus_owner(identity,NULL);
+    if(known)*minimized=CFBooleanGetValue(value);
+    if(value)CFRelease(value);return known;
+} }
+DWFocusResult dw_focus_set_minimized(DWFocusIdentity identity,bool minimized,DWFocusGuard guard,void *context) { @autoreleasepool {
+    DWFocusResult result={.outcome=DWFocusDenied};double end=now()+.5;
+    if(!guard||!guard(identity,context))return result;
+    AXUIElementRef window=resolve(identity,end,&result);if(!window)return result;
+    if(!guard(identity,context)||!dw_focus_owner(identity,NULL)||now()>=end){CFRelease(window);result.outcome=DWFocusStale;return result;}
+    result.ax_error=timeout(window,end);
+    if(!result.ax_error){result.mutation_attempted=true;result.ax_error=AXUIElementSetAttributeValue(window,kAXMinimizedAttribute,minimized?kCFBooleanTrue:kCFBooleanFalse);}
+    CFRelease(window);result.outcome=result.ax_error?DWFocusAXFailed:DWFocusObserved;return result;
+} }
 static bool focusedWindow(AXUIElementRef app,pid_t expected,CGWindowID *wid,double end,AXError *e) {
     CFTypeRef w=NULL;*e=copy(app,kAXFocusedWindowAttribute,&w,end);pid_t pid=0;
     GetWindow get=(GetWindow)dlsym(RTLD_DEFAULT,"_AXUIElementGetWindow");

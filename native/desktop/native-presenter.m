@@ -950,7 +950,7 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     for(NSDictionary *output in snapshot[@"outputs"]){CGRect viewport=DWNativeJSONRect(output[@"screen_bounds"]);NSNumber *identifier=output[@"id"];
         if([identifier isKindOfClass:NSNumber.class]&&!CGRectIsNull(viewport)){
             viewports[identifier]=[NSValue valueWithRect:NSRectFromCGRect(viewport)];
-            if(spaceFrames)outputSpaces[identifier]=@(DWNativeDisplaySpace(viewport));
+            if(spaceFrames)outputSpaces[identifier]=@(DWNativePresentationDisplaySpace(viewport));
         }}
     for(NSDictionary *p in snapshot[@"placements"]){
         NSNumber *logical=p[@"window"];NSDictionary *clip=p[@"clip_rect"][@"size"];if(!logical||!identities[logical])continue;

@@ -395,19 +395,29 @@ static DWResizeResult apply_size(DWResizeIdentity i, CGSize size, DWResizeGuard 
     if (final_authorize && now()+.15>deadline) { r.outcome=DWResizeTimedOut; r.ax_error=kAXErrorCannotComplete; CFRelease(v); CFRelease(w); return r; }
     r.mutation_attempted=true;
     AXError setter=AXUIElementSetAttributeValue(w,kAXSizeAttribute,v); CFRelease(v);
+    double returned=now(),readSeconds=0,sleepSeconds=0;int attempts=0;
     record_mutation(mutation,setter);
     r.observed=false; r.outcome=now()>=deadline?DWResizeTimedOut:DWResizeReadbackFailed;
     // Always read back even after an error: the receiver may have accepted a timed-out call.
     bool observed=false;
     for (int n=0;n<5 && now()<deadline;n++) {
-        if (n) usleep(30000);
+        // Keep the final non-exact observation at least 120ms after the
+        // setter returned. AX/CG read time belongs inside that settling
+        // window, not in addition to four successive 30ms sleeps.
+        double due=fmin(returned+n*.03,deadline),pause;
+        while((pause=due-now())>0){double began=now();usleep((useconds_t)ceil(pause*1e6));sleepSeconds+=now()-began;}
+        if(now()>=deadline){observed=false;r.observed=false;r.outcome=DWResizeTimedOut;break;}
+        double began=now();attempts++;
         observed=readback(i,w,deadline,&r);
+        readSeconds+=now()-began;
         // An agreed AX/CG change can still be an intermediate owner animation
         // frame. Only the requested size completes immediately; a non-exact
         // size keeps the existing four delayed reads before it is classified.
         if (observed && same_size(size,r.actual_ax.size)) break;
         if (r.outcome==DWResizeStaleIdentity) break;
     }
+    const char *debug=getenv("INFINIFY_DEBUG");
+    if(debug&&atoi(debug)==1)fprintf(stderr,"debug: native size settle pid=%d wid=%u attempts=%d elapsed_ms=%.3f read_ms=%.3f sleep_ms=%.3f requested=%gx%g observed=%d actual=%gx%g\n",i.pid,i.window,attempts,(now()-returned)*1000,readSeconds*1000,sleepSeconds*1000,size.width,size.height,observed,r.actual_ax.size.width,r.actual_ax.size.height);
     if (observed) r.outcome=same_size(size,r.actual_ax.size)?DWResizeApplied:(!same_size(before.size,r.actual_ax.size)?DWResizeClamped:DWResizeRejected);
     if (setter!=kAXErrorSuccess) r.ax_error=setter;
     if (positioned && observed) r.moved=!CGPointEqualToPoint(r.actual_ax.origin,origin);

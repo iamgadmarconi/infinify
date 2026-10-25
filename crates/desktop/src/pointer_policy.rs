@@ -121,6 +121,9 @@ impl Controller {
         // Pins are above the canvas and retain their one-point scale in
         // overview. A widget can cover an edge but never acquires a resize.
         let pinned = self.scene.windows().iter().rev().find_map(|window| {
+            if !self.source_interactive(window.id) {
+                return None;
+            }
             let pin = self.policy.pins.get(&window.id)?;
             if pin.output != output {
                 return None;

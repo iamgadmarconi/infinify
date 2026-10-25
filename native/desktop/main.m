@@ -300,6 +300,10 @@ static CGFloat toolbarButton(NSView *view,NSButton *button,CGFloat x) { button.f
 @property NSUInteger captureFailures;
 @property CFTimeInterval captureRetryAt;
 @property uint64_t observationToken;
+@property BOOL nativeMinimized,nativeVisibilityHeld,nativeVisibilityWanted,nativeVisibilityWriting;
+@property uint64_t nativeVisibilityRevision;
+@property CFTimeInterval nativeVisibilityRetryAt,nativeVisibilityStableSince;
+@property NSDictionary *nativeVisibilityEffect,*nativeVisibilityRestore,*nativeVisibilityStable;
 // Audited worker geometry for presentation discovery only; capture and input
 // still require their own fresh native identity/parent checks.
 @property NSDictionary *nativeFamily;
@@ -1032,6 +1036,11 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 - (void)action:(NSString *)action output:(NSNumber *)output;
 - (void)action:(NSString *)action output:(NSNumber *)output at:(CGPoint)point held:(BOOL)held;
 - (void)applyReply:(NSDictionary *)reply;
+- (void)setNativeMinimized:(NSDictionary *)effect;
+- (void)updateNativeVisibility;
+- (void)requestVisibility:(LiveSource *)source;
+- (void)observeVisibility:(DWWindowObservation *)observation source:(LiveSource *)source;
+- (void)requestWindowObservation;
 - (void)flashStatus:(NSString *)text;
 // Normal runs only: keys, pointer gestures and settings come from the DriftWM config.
 // Probe, demo and owned-fixture runs leave it off and keep the fixed chords and
@@ -1136,6 +1145,7 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 - (void)clearNativeFillPresentation;
 - (BOOL)nativeFillCurrent:(NSDictionary *)held snapshot:(NSDictionary *)snapshot;
 - (void)updateNativeFill;
+- (void)interruptFillForVisibility:(LiveSource *)source;
 @property DWNativePresenter *nativeViewPresenter;
 @property NSUInteger nativeFamilyRevision,nativeViewFamilyRevision;
 @property BOOL nativeViewEnabled;
@@ -2862,7 +2872,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 }
 - (void)refreshNativeButtons:(LiveSource *)source {
     CFTimeInterval now=CACurrentMediaTime();
-    if(self.cleaning||self.sessionInactive||!self.configured||self.native.ended||!source||source.detached||source.nativeButtonsReading||source.nativeButtonsNext>now||!AXIsProcessTrusted()||!DWInScope(self.scope,source.router.pid))return;
+    if(self.cleaning||self.sessionInactive||!self.configured||self.native.ended||!source||source.detached||source.nativeVisibilityHeld||source.nativeButtonsReading||source.nativeButtonsNext>now||!AXIsProcessTrusted()||!DWInScope(self.scope,source.router.pid))return;
     source.nativeButtonsReading=YES;source.nativeButtonsNext=now+.2;
     if(!self.nativeButtonQueue)self.nativeButtonQueue=dispatch_queue_create("org.infinify.native-decorations",dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,QOS_CLASS_USER_INITIATED,0));
     // Routine, unchanged window observations must not starve an AX chrome read.
@@ -3060,6 +3070,13 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     // A temporary background has no current logical hit site. Refuse its
     // complete native family before title tracking, even without chrome data.
     NSNumber *root=[self.native rootWindowFor:wid];
+    for(LiveSource *held in self.sources.allValues){NSDictionary *identity=held.identity;
+        if(held.nativeVisibilityHeld&&!held.detached&&[root isEqual:identity[@"wid"]]
+            &&[recipient[@"pid"]isEqual:identity[@"pid"]]&&[recipient[@"birth_sec"]isEqual:identity[@"birth_sec"]]
+            &&[recipient[@"birth_usec"]isEqual:identity[@"birth_usec"]]&&DWInScope(self.scope,held.router.pid)){
+            [self cancelNativeTitleClick];self.nativeFillBlockedButtons|=1;return YES;
+        }
+    }
     for(NSDictionary *placement in self.nativeFillHandoff[@"background"][@"placements"]){
         LiveSource *background=self.sources[placement[@"window"]];NSDictionary *identity=background.identity;
         if(background&&!background.detached&&[placement[@"output"]isEqual:self.nativeFillHandoff[@"output"]]
@@ -3188,6 +3205,14 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         }
         for(DesktopView *view in self.views)if((CGWindowID)view.window.windowNumber==recipient)held=YES;
         if(held){if(fillDown)self.nativeFillBlockedButtons|=fillBit;if(fillScrollPhased&&!fillScrollEnd)self.nativeFillBlockedScroll=YES;return YES;}
+    }
+    if(fillDown||type==kCGEventScrollWheel){
+        CGWindowID recipient=(CGWindowID)CGEventGetIntegerValueField(cg,kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent);
+        if(!recipient)recipient=(CGWindowID)CGEventGetIntegerValueField(cg,kCGMouseEventWindowUnderMousePointer);
+        NSNumber *root=[self.native rootWindowFor:recipient];
+        for(LiveSource *source in self.sources.allValues)if(source.nativeVisibilityHeld&&[root isEqual:source.identity[@"wid"]]){
+            if(fillDown)self.nativeFillBlockedButtons|=fillBit;if(fillScrollPhased&&!fillScrollEnd)self.nativeFillBlockedScroll=YES;return YES;
+        }
     }
     // A shell-owned decoration/action pair predates any second button that
     // may have reached a captured child. That grab must not consume this up.
@@ -3495,6 +3520,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     driver.canPerform=^BOOL(NSDictionary *effect){
         Desktop *d=weak;LiveSource *source=d.sources[effect[@"window"]];
         if(!source||source.detached||source.nativeMouseOwnership||!boundIdentity(source.identity,effect[@"identity"]))return NO;
+        if([effect[@"op"]isEqual:@"resize_native_window"]&&(source.nativeVisibilityWanted||source.nativeVisibilityWriting||source.nativeMinimized))return NO;
         // A worker may start after a newer handoff replaced its prepared read.
         // Only the controller's still-pending effect can enter native code.
         return [asDict([d call:@{@"op":@"snapshot"}][@"native_resize"])[@"pending_effect"]isEqual:effect];
@@ -3966,7 +3992,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     NSDictionary *effect=deferred[@"effect"];LiveSource *source=self.sources[effect[@"window"]];
     if(!deferred||self.cleaning||stopped||self.sessionInactive||self.native.ended||deferred[@"presenter"]!=self.native
         ||[deferred[@"session"]unsignedLongLongValue]!=self.nativeSessionEpoch||!source||source.detached||source.nativeMouseOwnership
-        ||![source.identity isEqual:deferred[@"identity"]]||!boundIdentity(source.identity,effect[@"identity"])
+        ||source.nativeVisibilityWanted||![source.identity isEqual:deferred[@"identity"]]||!boundIdentity(source.identity,effect[@"identity"])
         ||![asDict(snapshot[@"native_resize"])isEqual:deferred[@"transaction_state"]])return NO;
     NSDictionary *binding=nil,*view=nil;
     for(NSDictionary *row in snapshot[@"windows"])if([row[@"window"]isEqual:effect[@"window"]]){binding=asDict(row[@"source"]);break;}
@@ -4033,7 +4059,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 - (BOOL)nativeFillCurrent:(NSDictionary *)held snapshot:(NSDictionary *)snapshot {
     LiveSource *source=self.sources[held[@"window"]];
     if(!held||self.cleaning||self.sessionInactive||self.native.ended||held[@"presenter"]!=self.native
-        ||[held[@"session"]unsignedLongLongValue]!=self.nativeSessionEpoch||!source||source.detached||!boundIdentity(source.identity,held[@"identity"]))return NO;
+        ||[held[@"session"]unsignedLongLongValue]!=self.nativeSessionEpoch||!source||source.detached||source.nativeVisibilityWanted||!boundIdentity(source.identity,held[@"identity"]))return NO;
     NSDictionary *binding=nil,*view=nil;
     for(NSDictionary *row in snapshot[@"windows"])if([row[@"window"]isEqual:held[@"window"]]){binding=asDict(row[@"source"]);break;}
     for(NSDictionary *row in snapshot[@"outputs"])if([row[@"id"]isEqual:held[@"output"]]){view=row;break;}
@@ -4049,7 +4075,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     NSDictionary *prior=self.nativeFillHistory[effect[@"window"]];
     BOOL remembered=boundIdentity(prior[@"identity"],effect[@"identity"])&&[prior[@"generation"]isEqual:effect[@"generation"]];
     BOOL restoring=!fullscreen&&([self.nativeResizeDriver hasNativeFillForEffect:effect]||remembered);
-    LiveSource *source=self.sources[effect[@"window"]];if((!fullscreen&&!restoring)||!source||source.detached||source.nativeMouseOwnership||!boundIdentity(source.identity,effect[@"identity"]))return;
+    LiveSource *source=self.sources[effect[@"window"]];if((!fullscreen&&!restoring)||!source||source.detached||source.nativeVisibilityWanted||source.nativeMinimized||source.nativeMouseOwnership||!boundIdentity(source.identity,effect[@"identity"]))return;
     NSNumber *output=[self.nativeViews desiredOwnerForWindow:source.logical];NSDictionary *view=nil,*binding=nil;
     for(NSDictionary *row in snapshot[@"outputs"])if([row[@"id"]isEqual:output]){view=row;break;}
     for(NSDictionary *row in snapshot[@"windows"])if([row[@"window"]isEqual:source.logical]){binding=asDict(row[@"source"]);break;}
@@ -4096,9 +4122,21 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         }];
     }
 }
+- (void)interruptFillForVisibility:(LiveSource *)source {
+    NSDictionary *held=self.nativeFillHandoff;
+    if(!source||![held[@"window"]isEqual:source.logical]||!boundIdentity(held[@"identity"],source.identity))return;
+    // Retire temporary hide/reveal phases without ever describing a resumed
+    // frame. The same main turn keeps the family omitted and journalled.
+    [self clearNativeFillPresentation]; // invalidate asynchronous capture/animation callbacks first
+    if(held[@"presenter"]==self.native&&[held[@"session"]unsignedLongLongValue]==self.nativeSessionEpoch){
+        [self.native resumeWindow:source.identity];source.nativeVisibilityHeld=[self.native withholdWindow:source.identity];
+    }
+}
 - (void)updateNativeFill {
     [self updateDeferredNativeRestore];
     NSDictionary *held=self.nativeFillHandoff;if(!held)return;
+    LiveSource *visibilitySource=self.sources[held[@"window"]];
+    if(visibilitySource.nativeVisibilityWanted){[self interruptFillForVisibility:visibilitySource];return;}
     NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}],*transaction=asDict(snapshot[@"native_resize"]);
     BOOL gone=![self nativeFillCurrent:held snapshot:snapshot];
     BOOL finished=![transaction[@"transaction"]isEqual:held[@"transaction"]]||([self.resize canRemove:held[@"window"]]&&!self.resize.obligations);
@@ -4199,8 +4237,147 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         // Deferred: a reload replaces the hot keys, and this may be running inside one of their handlers.
         else if([op isEqual:@"reload_config"]){__weak Desktop *weak=self;dispatch_async(dispatch_get_main_queue(),^{Desktop *d=weak;if(d&&!d.cleaning)[d loadConfig:NO];});}
         else if([op isEqual:@"close_window"])[self closeWindow:e];
+        else if([op isEqual:@"set_minimized"])[self setNativeMinimized:e];
         else if([op isEqual:@"launch"])[self launch:asString(e[@"bundle_id"])];
     }
+}
+// Minimize retains the native identity, controller slot and helper journal.
+// AX notifications request a bounded worker observation; they are not proof of
+// visibility. Restores remain ineligible for input until a fresh placement ACK.
+- (NSDictionary *)visibilityBinding:(LiveSource *)source {
+    if(!source||source.detached||self.sources[source.logical]!=source)return nil;
+    for(NSDictionary *row in [self call:@{@"op":@"snapshot"}][@"windows"])
+        if([row[@"window"]isEqual:source.logical]&&boundIdentity(row[@"source"][@"identity"],source.identity))return asDict(row[@"source"]);
+    return nil;
+}
+- (BOOL)visibilityTicketCurrent:(NSDictionary *)ticket source:(LiveSource *)source {
+    if(!ticket||self.cleaning||self.sessionInactive||!self.native||self.native.ended||ticket[@"presenter"]!=self.native
+        ||[ticket[@"session"]unsignedLongLongValue]!=self.nativeSessionEpoch||!source||source.detached
+        ||self.sources[source.logical]!=source||!boundIdentity(source.identity,ticket[@"identity"]))return NO;
+    NSDictionary *binding=[self visibilityBinding:source];
+    return [binding[@"generation"]isEqual:ticket[@"generation"]];
+}
+- (void)requestVisibility:(LiveSource *)source {
+    if(!source||source.detached)return;
+    NSDictionary *binding=[self visibilityBinding:source];
+    if(!binding||![self call:@{@"op":@"source_visibility_pending",@"window":source.logical,@"identity":source.identity,@"generation":binding[@"generation"]}])return;
+    source.nativeVisibilityRevision++;source.nativeVisibilityWanted=YES;source.nativeVisibilityRetryAt=0;
+    source.nativeVisibilityStable=nil;source.nativeVisibilityRestore=nil;
+    source.observationToken=++self.observationEpoch;[source invalidateNativeButtons];
+    [self cancelNativeHoverForWindow:source.logical];[self cancelCapturedInputForWindow:source.logical];
+    [self interruptFillForVisibility:source];
+    if([[self.resize busyWindow]isEqual:source.logical])[self.resize cancel];
+    if(self.native&&!self.nativeFillHandoff&&![[self.resize busyWindow]isEqual:source.logical]
+        &&[self.native withholdWindow:source.identity])source.nativeVisibilityHeld=YES;
+    self.nativeViewSnapshot=nil;self.windowObservationAgain=YES;[self render];[self requestWindowObservation];
+}
+- (void)windowVisibilityChanged:(CGWindowID)window pid:(pid_t)pid {
+    if(self.cleaning)return;
+    for(LiveSource *source in self.sources.allValues)if(source.router.pid==pid&&source.router.wid==window)[self requestVisibility:source];
+}
+- (void)setNativeMinimized:(NSDictionary *)effect {
+    LiveSource *source=self.sources[effect[@"window"]];NSDictionary *binding=[self visibilityBinding:source];
+    if(!self.native||!source||!boundIdentity(source.identity,effect[@"identity"])||![binding[@"generation"]isEqual:effect[@"generation"]]){
+        [self flashStatus:@"Minimize skipped: native window binding is unavailable"];return;
+    }
+    if(source.nativeVisibilityEffect){[self flashStatus:@"A window visibility request is already pending"];return;}
+    NSMutableDictionary *ticket=[effect mutableCopy];ticket[@"presenter"]=self.native;ticket[@"session"]=@(self.nativeSessionEpoch);ticket[@"deadline"]=@(CACurrentMediaTime()+8);ticket[@"revision"]=@(source.nativeVisibilityRevision);
+    source.nativeVisibilityEffect=ticket.copy;[self updateNativeVisibility];
+}
+static bool DWVisibilityAllowed(DWFocusIdentity selected,void *context) {
+    (void)selected;BOOL (^check)(void)=(__bridge id)context;__block BOOL allowed=NO;
+    dispatch_sync(dispatch_get_main_queue(),^{allowed=check();});return allowed;
+}
+- (void)updateNativeVisibility {
+    if(self.cleaning||self.sessionInactive||!self.native||self.native.ended)return;
+    for(LiveSource *source in self.sources.allValues){
+        NSDictionary *effect=source.nativeVisibilityEffect;
+        if(effect&&!source.nativeVisibilityWriting){
+            if(![self visibilityTicketCurrent:effect source:source]||[effect[@"revision"]unsignedLongLongValue]!=source.nativeVisibilityRevision||CACurrentMediaTime()>[effect[@"deadline"]doubleValue]){
+                source.nativeVisibilityEffect=nil;[self requestVisibility:source];[self flashStatus:@"Window visibility request expired before native ownership settled"];continue;
+            }
+            // A Fill exit owns the same withhold/resume mechanism. Finish it,
+            // including its helper ACK, before handing this window to AppKit.
+            if(self.nativeFillHandoff||![self.resize canRemove:source.logical]||source.nativeMouseOwnership)continue;
+            if(![self.native withholdWindow:source.identity])continue;
+            source.nativeVisibilityHeld=YES;
+            if(![self.native isWindowWithheld:source.identity]){[self render];continue;}
+            source.nativeVisibilityWriting=YES;
+            [source invalidateNativeButtons];[self cancelNativeHoverForWindow:source.logical];[self cancelCapturedInputForWindow:source.logical];
+            __weak Desktop *weak=self;__weak LiveSource *live=source;
+            BOOL (^valid)(void)=^BOOL{Desktop *d=weak;LiveSource *s=live;
+                return d&&s&&s.nativeVisibilityEffect==effect&&[d visibilityTicketCurrent:effect source:s]
+                    &&[effect[@"revision"]unsignedLongLongValue]==s.nativeVisibilityRevision&&CACurrentMediaTime()<[effect[@"deadline"]doubleValue]&&!d.nativeFillHandoff&&[d.resize canRemove:s.logical]
+                    &&[d.native isWindowWithheld:s.identity];};
+            NSDictionary *identity=source.identity;
+            DWFocusIdentity selected={.pid=[identity[@"pid"]intValue],.window=[identity[@"wid"]unsignedIntValue],.seconds=[identity[@"birth_sec"]unsignedLongLongValue],.microseconds=[identity[@"birth_usec"]unsignedLongLongValue]};
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+                DWFocusResult result=dw_focus_set_minimized(selected,[effect[@"minimized"]boolValue],DWVisibilityAllowed,(__bridge void *)valid);
+                dispatch_async(dispatch_get_main_queue(),^{Desktop *d=weak;LiveSource *s=live;if(!d||!s||d.sources[s.logical]!=s)return;
+                    s.nativeVisibilityWriting=NO;if(s.nativeVisibilityEffect==effect)s.nativeVisibilityEffect=nil;
+                    if(![d visibilityTicketCurrent:effect source:s])return;
+                    // A successful setter is still only an attempt. Read the
+                    // actual AX value through the existing observer worker.
+                    [d requestVisibility:s];
+                    if(result.outcome!=DWFocusObserved)[d flashStatus:[NSString stringWithFormat:@"Window visibility request: %s",dw_focus_outcome_name(result.outcome)]];
+                    if(DWInputTrace())fprintf(stderr,"debug: native visibility write window=#%s minimized=%d attempted=%d outcome=%s\n",s.logical.description.UTF8String,[effect[@"minimized"]boolValue],result.mutation_attempted,dw_focus_outcome_name(result.outcome));
+                });
+            });
+        }
+        NSDictionary *restore=source.nativeVisibilityRestore;if(!restore)continue;
+        if(![self visibilityTicketCurrent:restore source:source]||[restore[@"revision"]unsignedLongLongValue]!=source.nativeVisibilityRevision){source.nativeVisibilityRestore=nil;continue;}
+        if(self.nativeFillHandoff||source.nativeVisibilityWanted||source.nativeVisibilityWriting)continue;
+        NSNumber *output=[self.nativeViews desiredOwnerForWindow:source.logical];
+        DWNativeAppliedPlacement *receipt=output?[self.native acknowledgedPlacementForWindow:source.logical identity:source.identity generation:restore[@"generation"] output:output]:nil;
+        BOOL ready=output?(receipt&&[self.native isAcknowledgedPlacementCurrent:receipt]):[self.native isParkingAcknowledgedForWindow:source.logical identity:source.identity generation:restore[@"generation"]];
+        if(!ready)continue;
+        if(![self.resize canRemove:source.logical])continue;
+        NSDictionary *binding=[self visibilityBinding:source];
+        if([binding[@"visibility"]isEqual:@"restoring"]){
+            NSDictionary *reply=[self call:@{@"op":@"source_visible",@"window":source.logical,@"identity":source.identity,@"generation":restore[@"generation"],@"visibility_revision":restore[@"visibility_revision"]}];
+            if(!reply)continue;
+            // External Fill minimization retained a size debt. Its first
+            // acknowledged restore starts that guarded transaction; input
+            // remains closed until a later ACK observes it fully settled.
+            if(sizeEffect(reply)){[self applyReply:reply];continue;}
+            if(![reply[@"visibility"]isEqual:@"visible"])continue;
+        }else if(![binding[@"visibility"]isEqual:@"visible"])continue;
+        source.nativeMinimized=NO;source.nativeVisibilityHeld=NO;source.nativeVisibilityRestore=nil;
+        if(DWInputTrace())fprintf(stderr,"debug: native visibility ready window=#%s revision=%llu sequence=%llu parked=%d\n",source.logical.description.UTF8String,[restore[@"revision"]unsignedLongLongValue],(unsigned long long)receipt.sequence,!output);
+        [self render];[self focusChanged];
+    }
+}
+- (void)observeVisibility:(DWWindowObservation *)observation source:(LiveSource *)source {
+    NSDictionary *request=observation.request;
+    if(!request[@"visibility_revision"]||[request[@"visibility_revision"]unsignedLongLongValue]!=source.nativeVisibilityRevision||!source.nativeVisibilityWanted)return;
+    source.nativeVisibilityRetryAt=CACurrentMediaTime()+.1;
+    if(!observation.minimized||self.nativeFillHandoff||![self.resize canRemove:source.logical]||source.nativeVisibilityWriting)return;
+    BOOL minimized=observation.minimized.boolValue;
+    NSDictionary *binding=[self visibilityBinding:source];if(!binding)return;
+    if(!minimized){
+        // AppKit's deminiaturization owns its native animation. Two fresh,
+        // unchanged native readings keep its moving geometry out of ours.
+        // An off-canvas source can legitimately remain off screen.
+        if(!observation.hasBounds){source.nativeVisibilityStable=nil;return;}
+        NSDictionary *stable=@{@"bounds":rectJSON(observation.bounds),@"displayed":observation.info[(id)kCGWindowBounds]?:@{},@"onscreen":@([observation.info[(id)kCGWindowIsOnscreen]boolValue])};
+        if(![source.nativeVisibilityStable isEqual:stable]){source.nativeVisibilityStable=stable;source.nativeVisibilityStableSince=CACurrentMediaTime();return;}
+        if(CACurrentMediaTime()-source.nativeVisibilityStableSince<.05)return;
+    }
+    if(observation.hasBounds)[self.native bound:source.identity bounds:observation.bounds family:observation.family];
+    if(![self.native withholdWindow:source.identity])return;
+    source.nativeVisibilityHeld=YES;
+    NSDictionary *reply=[self call:@{@"op":@"observe_visibility",@"window":source.logical,@"identity":source.identity,@"generation":binding[@"generation"],@"minimized":@(minimized)}];if(!reply)return;
+    source.nativeVisibilityWanted=NO;source.nativeVisibilityStable=nil;
+    source.nativeMinimized=minimized;
+    if(minimized){if([reply[@"changed"]boolValue])self.sceneDirty=YES;source.nativeVisibilityRestore=nil;[self forgetNativeFamily:source];self.nativeViewSnapshot=nil;[self render];return;}
+    // Rebind the fresh native basis while preserving the controller's world
+    // rectangle. The restore placement is presentable but never a hit target.
+    [self.native bound:source.identity bounds:observation.bounds family:observation.family];
+    source.router.bounds=CFBridgingRelease(CGRectCreateDictionaryRepresentation(observation.bounds));
+    [self call:@{@"op":@"observe_presentation",@"window":source.logical,@"identity":source.identity,@"source_rect":rectJSON(observation.bounds),@"buffer":@{@"width":@(source.buffer.width),@"height":@(source.buffer.height)}}];
+    binding=[self visibilityBinding:source];
+    source.nativeVisibilityRestore=@{@"identity":source.identity.copy,@"generation":binding[@"generation"],@"visibility_revision":binding[@"visibility_revision"],@"revision":@(source.nativeVisibilityRevision),@"presenter":self.native,@"session":@(self.nativeSessionEpoch)};
+    [self.native resumeWindow:source.identity];self.nativeViewSnapshot=nil;[self render];
 }
 // The close_window effect of close-window and suspend-window. It is taken only from the
 // reply to a binding, a toolbar action or an IPC request, never from a window that came
@@ -4259,7 +4436,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     NSDictionary *observed=@{@"pid":@(target.pid),@"wid":@(target.window),@"birth_sec":@(target.seconds),@"birth_usec":@(target.microseconds)};
     LiveSource *source=nil;
     for(LiveSource *candidate in self.sources.allValues)if(boundIdentity(candidate.identity,observed)){source=candidate;break;}
-    if(!source||source.detached||!DWInScope(self.scope,source.router.pid))return nil;
+    if(!source||source.detached||source.nativeVisibilityHeld||!DWInScope(self.scope,source.router.pid))return nil;
     NSNumber *window=source.logical;NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}];
     NSDictionary *binding=nil;
     for(NSDictionary *record in snapshot[@"windows"])if([record[@"window"]isEqual:window]){binding=asDict(record[@"source"]);break;}
@@ -5746,6 +5923,9 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     if(!DWInScope(self.scope,pid)){self.statusText=@"Not attached: its process is outside --only-pid";return NO;}
     // Under a scope the start time is the one DWInScope has just matched, not a second reading that another process could answer.
     NSArray *processBirth=self.scope?self.scope[@(pid)]:birth(pid);NSDictionary *info=windowInfo(wid);CGRect bounds=CGRectZero;
+    NSDictionary *created=window.nativeIdentity;
+    if(created&&(![created[@"pid"]isEqual:@(pid)]||![created[@"wid"]isEqual:@(wid)]||processBirth.count!=2||
+        ![created[@"birth_sec"]isEqual:processBirth[0]]||![created[@"birth_usec"]isEqual:processBirth[1]])){self.statusText=@"Source identity changed after its creation notification";return NO;}
     if(!processBirth||[info[(id)kCGWindowOwnerPID]intValue]!=pid||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)info[(id)kCGWindowBounds],&bounds)){self.statusText=@"Source closed or identity changed; refresh the chooser.";return NO;}
     if(window.displayFixed&&(!self.native||[info[(id)kCGWindowLayer]integerValue]!=NSFloatingWindowLevel)){self.statusText=@"Utility panel changed its native level before adoption";return NO;}
     // Native presentation: the window's own frame, not where the helper may still be drawing it for a run that ended without restoring.
@@ -6269,7 +6449,8 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
             d.native=candidate;d.nativeResumeWanted=NO;d.nativeResumeFailures=0;d.nativeResumeNote=nil;
             [d say:@"Native presentation reconnected after authenticated restoration audit"];d.statusText=[d restingStatus];
             d.navigation.enabled=YES;d.lastObservation=0;
-            for(LiveSource *source in d.sources.allValues){source.observationToken=++d.observationEpoch;[source invalidateNativeButtons];}
+            for(LiveSource *source in d.sources.allValues){source.observationToken=++d.observationEpoch;[source invalidateNativeButtons];
+                if(source.nativeMinimized||source.nativeVisibilityHeld){source.nativeVisibilityRevision++;source.nativeVisibilityWanted=YES;source.nativeVisibilityRetryAt=0;source.nativeVisibilityStable=nil;source.nativeVisibilityRestore=nil;}}
             d.windowObservationAgain=YES;[d requestWindowObservation];[d configureNativeInput];[d render];
         });
     });
@@ -6279,6 +6460,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     self.sessionInactive=NO;self.navigation.enabled=!self.native||!self.native.ended;self.lastObservation=0;[self resumeNative];
     if(!self.panels.count){[self openPanels];if(!self.panels.count)return;[self runAutostart];}
     for(LiveSource *source in self.sources.allValues)if(source.captureRecovering)source.captureRetryAt=CACurrentMediaTime();
+    for(LiveSource *source in self.sources.allValues)if(source.nativeMinimized||source.nativeVisibilityHeld)[self requestVisibility:source];
     BOOL screensChanged=![self.panelScreens isEqual:physicalScreens()];
     if(screensChanged)[self screensChanged:nil];
     // Unmanaged fixture canvases do not have captureDemand. Resume their
@@ -6354,6 +6536,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     NSMutableArray *requests=[NSMutableArray array];
     for(LiveSource *source in self.sources.allValues)if(!source.detached){
         NSMutableDictionary *request=[@{@"logical":source.logical,@"generation":@(source.observationToken),@"identity":source.identity,@"native_bounds":@(self.native!=nil),@"families":@(self.native.familiesNeeded||source.nativeTransferFamilyWanted)}mutableCopy];
+        if(source.nativeVisibilityWanted&&CACurrentMediaTime()>=source.nativeVisibilityRetryAt)request[@"visibility_revision"]=@(source.nativeVisibilityRevision);
         if(source.router.bounds)request[@"prior_bounds"]=source.router.bounds;[requests addObject:request];
     }
     DWWindowManager *manager=self.manager;DWNativePresenter *presenter=self.native;uint64_t session=self.nativeSessionEpoch;__weak Desktop *weak=self;__block BOOL reconcile=NO;
@@ -6395,6 +6578,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
             // Discovery can stay eager after an appearance hint without asking
             // the controller to observe every unchanged overlay root again.
             if(!presenter&&!reconcile&&!source.error&&!source.destroyed)continue;
+            [d observeVisibility:observation source:source];
             if(observation.state==DWWindowObservationReadFailed){[d forgetNativeFamily:source];continue;}
             if(observation.state!=DWWindowObservationPresent){[d track:source];describe=YES;continue;}
             if(!DWInScope(d.scope,source.router.pid))continue;
@@ -6408,6 +6592,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     [self.session poll]; // blocked startup/early wake retries before the inactive early return
     [self updateNativeMouseOwners];
     [self updateNativeFill];
+    [self updateNativeVisibility];
     if(self.cleaning||self.sessionInactive)return;
     [self resumeNative];
     if([self nativeUnavailable]){
@@ -6437,7 +6622,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     // on the frame thread or queue more than one read. Event/input/resize paths
     // retain their own fresh validation; unmanaged manual sources retain their poll.
     BOOL reconcile=!self.manager;
-    if(self.manager){BOOL due=[self.manager reconciliationDue];for(LiveSource *source in self.sources.allValues)if(source.error||source.destroyed)due=YES;if(due)[self requestWindowObservation];}
+    if(self.manager){BOOL due=[self.manager reconciliationDue];for(LiveSource *source in self.sources.allValues)if(source.error||source.destroyed||(source.nativeVisibilityWanted&&CACurrentMediaTime()>=source.nativeVisibilityRetryAt))due=YES;if(due)[self requestWindowObservation];}
     BOOL describe=reconcile;
     if(reconcile)for(LiveSource *source in self.sources.allValues)[self track:source];
     if(timing)stages[4]=CACurrentMediaTime();
@@ -6474,6 +6659,10 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
 - (void)track:(LiveSource *)source info:(NSDictionary *)w observation:(DWWindowObservation *)observation {
         source.observationToken=++self.observationEpoch;
         if(self.native&&(self.sessionInactive||self.native.ended)){[self forgetNativeFamily:source];return;}
+        // Miniaturization can temporarily remove a WindowServer record. A
+        // live process without a destroy hint keeps its minimized binding.
+        if(!w&&(source.nativeMinimized||(source.nativeVisibilityHeld&&source.nativeVisibilityWanted))&&!source.destroyed
+            &&[birth(source.router.pid)isEqual:source.router.processBirth])return;
         BOOL gone=sourceGone(source,w)||[self destroyed:source info:w];
         if(gone)[self forgetNativeFamily:source];
         // WindowServer owns the complete physical pair and final settling.
@@ -6496,6 +6685,10 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
         if([self grabbed:source]){if(gone)[self.resize cancel];return;}
         if(gone&&(self.manager||[self marked:source])){[self closed:source];return;}
         if((source.error&&!source.captureRecovering&&!source.nativeReplica)||gone){self.statusText=source.error?:@"A source closed. Its world placeholder is retained for explicit rebind.";[self detach:source];return;}
+        if(source.nativeMinimized&&!source.nativeVisibilityWanted&&[w[(id)kCGWindowIsOnscreen]boolValue]){
+            [self requestVisibility:source];return; // bounded recovery for a missed deminiaturized hint
+        }
+        if(source.nativeMinimized||source.nativeVisibilityHeld)return;
         CGRect bounds=CGRectZero;NSDictionary *frame=w[(id)kCGWindowBounds],*family=nil;
         // Native presentation: the window list's bounds are where the helper draws the window, at the size the zoom gives it. Observed
         // as the window's size they would become its world size, drawn smaller again on the next frame, and so on. The window's own

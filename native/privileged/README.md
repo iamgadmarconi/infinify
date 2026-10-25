@@ -259,15 +259,22 @@ transform of the same window in the same frame.
 Record statuses are applied=0, scope=1, identity=2, matrix=3, alpha=4,
 snapshot=5, journal=6, not applied=7, restore pending=8, table full=9, malformed=10,
 Space admission=11 (retryable without a setter).
-An applied transform requires both native set success and readback equality after
-float rounding, matching WindowServer transform storage. A failed or differing
-set remains journaled because it may have changed the window. A status or symbol
-alone is not evidence of usable native presentation.
+An applied transform requires fresh readback equality after float rounding,
+matching WindowServer transform storage, and a current final identity. A called
+status-bearing scalar or list setter must also succeed. Private transaction
+staging/commit return registers are ignored: on the inspected macOS 27.0.0 build
+26A434 they are not trustworthy error statuses, despite the pinned upstream
+headers declaring `CGError`. A failed or differing set remains journaled because
+it may have changed the window. A status or symbol alone is not evidence of
+usable native presentation.
 The helper revalidates exact process birth, owner connection, UID and scope
 after journal persistence and immediately before each transform or alpha write,
 then again before acknowledging the frame. Earlier batch admission cannot
 authorize a window number replaced during disk I/O or another record's work.
 Restoration also rechecks identity between its transform and alpha writes.
+Previously verified unchanged transforms and alpha omit their setters only after
+fresh native getters still equal the current request. A mismatch gets a new
+identity fence before correction. The saved originals remain unchanged.
 
 `FRAME_SPACE` adds `u64 target_space` after each unchanged 80-byte record.
 Zero leaves membership untouched; legacy `FRAME` bytes remain unchanged.
@@ -320,6 +327,27 @@ default. `DW_V2_MAIN_QUEUE=1` at build time, a sidecar `v2_queue` of `own`/`main
 or the fixture's `--v2-queue` can select the main queue. Socket parsing, heartbeats
 and lease checks run on connection threads. Acceptance of own-queue native calls
 inside Dock still requires scoped real-host evidence.
+
+Production helper builds use `-O2`. For explicit comparisons,
+`DW_V2_TRANSACTION_BATCH=1` stages changed transforms in one transaction, while
+`DW_V2_WINDOW_LIST_BATCH=1` uses one `SLSSetWindowTransforms` call; if both are
+selected the list path takes precedence. Missing APIs/create failures use the
+scalar path. Each staged record retains its original and is audited immediately
+before submission, read back afterward, and finally identity-checked. Any changed
+identity cancels the pending batch. Transaction release without commit was
+observed to leave all eight owned fixture windows unchanged on macOS 27.0.0;
+that does not establish the same behavior on every supported build.
+`DW_V2_TRANSACTION_SYNC=1` and `DW_V2_TRANSACTION_TRACE=1` are diagnostic build
+controls, and `DW_V2_ALPHA_DEDUP=0` keeps the previous alpha-write behavior for a
+comparison. No protocol layout or per-window restoration contract changes.
+Ordinary scalar builds compile the optional batching machinery out entirely;
+there are no batch setup objects or extracted finalizer calls on that path.
+`forward-operations.h` records exact ABI provenance. The substituted-call
+`forward-operations-test.m` uses `DW_FORWARD_ONLY_SCALAR=1` to exercise this exact
+production scalar path; its default comparison build includes the explicit
+transaction/list paths. It can also compile against a frozen payload using
+`DW_FORWARD_PAYLOAD` and `DW_TEST_FROZEN_BASELINE=1`. Its observations are call
+counts and controller correctness, not native compositing evidence.
 
 ## Journal and strict recovery
 
