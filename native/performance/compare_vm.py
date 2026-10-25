@@ -87,6 +87,7 @@ def main():
     parser.add_argument('--windows', type=int, choices=range(1, 17), default=4)
     parser.add_argument('--pan-points', type=float, default=600,
                         help='bounded trace span0..600;600 improves per-frame pixel-pose separation')
+    parser.add_argument('--trace-kind', choices=('continuous', 'held-step'), default='continuous')
     parser.add_argument('--fixture-payload', help='common cooperative arm64 payload, never a measured backend')
     parser.add_argument('--environment-only', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -109,13 +110,16 @@ def main():
     script, bench = Path(__file__).resolve(), Path(__file__).with_name('native_path_bench.py').resolve()
     built = root / 'variants'
     host, observer = built / 'native-performance/marker-fixture', built / 'native-performance/display-observer'
-    dock_loader, ws_loader = built / 'loader-pinned-arm64e', built / 'windowserver-prototype/ws-loader-arm64e'
+    dock_loader, ws_loader = built / 'loader-pinned-arm64e', built / 'windowserver-mailbox/ws-loader-arm64e'
+    mailbox_client = built / 'windowserver-mailbox/libmailbox-client.dylib'
     fixture_payload = Path(args.fixture_payload).resolve() if args.fixture_payload else built / 'candidate-list/helper/payload-arm64.dylib'
-    payloads = {v: built / ('windowserver-prototype' if v == 'windowserver' else v + '/helper') / 'payload-arm64e.dylib' for v in variants}
+    payloads = {v: built / ('windowserver-mailbox' if v == 'windowserver' else v + '/helper') / 'payload-arm64e.dylib' for v in variants}
     artifacts = {'orchestrator': script, 'client': bench, 'fixture': host, 'observer': observer,
                  'fixture_payload': fixture_payload, **{v + '_payload': p for v, p in payloads.items()}}
     if any(v != 'windowserver' for v in variants):artifacts['dock_loader'] = dock_loader
-    if 'windowserver' in variants:artifacts['windowserver_loader'] = ws_loader
+    if 'windowserver' in variants:
+        artifacts['windowserver_loader'] = ws_loader
+        artifacts['mailbox_client'] = mailbox_client
     pins = {key: {'path': str(path), 'sha256': sha(path)} for key, path in artifacts.items()}
     output.mkdir(mode=0o755, parents=True, exist_ok=False);os.chown(output, account.pw_uid, account.pw_gid)
     admin_env = dict(os.environ, HOME=account.pw_dir, USER=args.admin, LOGNAME=args.admin)
@@ -216,7 +220,7 @@ def main():
             time.sleep(.1)
         env['common_pins'] = pins;save(output / 'environment.json', env)
         command([sys.executable, bench, 'trace', '--hz', '60', '--seconds', '2', '--pan-points', args.pan_points,
-                 '--output', output / 'trace.json'], 'trace', admin=True)
+                 '--kind', args.trace_kind, '--output', output / 'trace.json'], 'trace', admin=True)
         supervisor, fixture_log = launch([sys.executable, bench, 'fixture', '--live-owned-fixture',
             '--host', host, '--payload', fixture_payload, '--windows', args.windows, '--size', '480x320',
             '--hold-seconds', '300', '--output', fixture_dir], 'fixture')
@@ -262,6 +266,7 @@ def main():
                             '--variant', variant, '--output', run_dir, '--sample-hz', '120',
                             '--environment', output / 'environment.json']
                     for key, path in artifacts.items():argv += ['--artifact', key + '=' + str(path)]
+                    if variant == 'windowserver':argv += ['--mailbox-client', mailbox_client]
                     command(argv, label + '-run', admin=True)
                 finally:
                     if pixel_proc.poll() is None:os.killpg(pixel_proc.pid, signal.SIGTERM)

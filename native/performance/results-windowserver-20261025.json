@@ -1,0 +1,2099 @@
+{
+  "clock": "mach_absolute_time_ns",
+  "date": "2026-10-25",
+  "exploratory_comparisons": [
+    11,
+    12,
+    13,
+    15
+  ],
+  "latency_result": {
+    "all_trial_steps_observed": true,
+    "all_trials_all_six_phases": true,
+    "dock_ms": 39.778266424103066,
+    "mean_difference_ms": 9.50378656541792,
+    "metric": "equal-weight mean across six actual display-phase buckets, then equal-weight mean of three trials",
+    "observed_mean_latency_winner": "windowserver",
+    "paired_dock_minus_windowserver_ms": [
+      0.387933464468869,
+      18.511615647306407,
+      9.611810584478487
+    ],
+    "windowserver_ms": 30.27447985868514
+  },
+  "limits": [
+    "display capture is not physical input-to-photon",
+    "Dock uses production Unix socket; WindowServer uses file mmap, so this measures the whole paths",
+    "continuous 90 percent command-pose coverage gate remains unchanged",
+    "only three counterbalanced repetitions per workload",
+    "fixed fixture and pinned macOS27.0.1 build26A434, no third-party app compatibility claim"
+  ],
+  "primary_comparisons": {
+    "continuous": {
+      "cleanup": {
+        "fixture": {
+          "exit_code": 0,
+          "originals_verified_before_exit": true,
+          "pid": 1477,
+          "terminated": true
+        },
+        "independent_restoration": true
+      },
+      "directory": "target/native-perf/evidence/if-native-comparison-14",
+      "display_state": {
+        "active_display_count": 1,
+        "awake_active_display_count": 1,
+        "common_pins": {
+          "candidate-scalar-inline_payload": {
+            "path": "/Users/admin/InfinifyPerf/variants/candidate-scalar-inline/helper/payload-arm64e.dylib",
+            "sha256": "ab58b111be5c1883d975c44dba0c9967ae28f9c368c051f4077322827a3194b9"
+          },
+          "client": {
+            "path": "/Users/admin/InfinifyPerf/repo/native/performance/native_path_bench.py",
+            "sha256": "094fc768d188dddae690a0813a197ce3580ff20f693b21610f8efa6f6243f591"
+          },
+          "dock_loader": {
+            "path": "/Users/admin/InfinifyPerf/variants/loader-pinned-arm64e",
+            "sha256": "509090ac5c64bb5a28fc0d6f615e4a506e886bda1c050f9fa9bf6ce7c04540e4"
+          },
+          "fixture": {
+            "path": "/Users/admin/InfinifyPerf/variants/native-performance/marker-fixture",
+            "sha256": "b4011e7c0157d051836a84abdd416cd2648f2e70787a40e2ba5413b1d4b7f837"
+          },
+          "fixture_payload": {
+            "path": "/Users/admin/InfinifyPerf/variants/candidate-list/helper/payload-arm64.dylib",
+            "sha256": "cd0b73181f9ec973b6a4bc0736e3b6008afc8f9ca261cc009eb077010b294d0c"
+          },
+          "mailbox_client": {
+            "path": "/Users/admin/InfinifyPerf/variants/windowserver-mailbox/libmailbox-client.dylib",
+            "sha256": "f9cf11a98313c7e24c20eebe565178c1f211ced0d7755c13c0518d2eeddfd378"
+          },
+          "observer": {
+            "path": "/Users/admin/InfinifyPerf/variants/native-performance/display-observer",
+            "sha256": "a2a08f1b5af4cea3284140942c6d2e582e2e29028b7f81fe9b46d32ff573ca18"
+          },
+          "orchestrator": {
+            "path": "/Users/admin/InfinifyPerf/repo/native/performance/compare_vm.py",
+            "sha256": "1b88a840e654bffaad05b3d726e4634b143c05a9cd4fad2e952e0181146fadb8"
+          },
+          "windowserver_loader": {
+            "path": "/Users/admin/InfinifyPerf/variants/windowserver-mailbox/ws-loader-arm64e",
+            "sha256": "8d46708fafa70bc622ff2f5cefa771beb9ecdc7aaae4cf5fb86833e4fae0ebb5"
+          },
+          "windowserver_payload": {
+            "path": "/Users/admin/InfinifyPerf/variants/windowserver-mailbox/payload-arm64e.dylib",
+            "sha256": "1d41e7920f6529a4fdbb116959b1dd7c7569e4f8cc02c8b4278338fb36788147"
+          }
+        },
+        "displays": [
+          {
+            "asleep": false,
+            "id": 1,
+            "mode_refresh_hz": 60.0,
+            "pixel_height": 2500,
+            "pixel_width": 4112
+          }
+        ],
+        "hw_model": "VirtualMac2,1",
+        "online_display_count": 1,
+        "online_displays": [
+          {
+            "asleep": false,
+            "id": 1
+          }
+        ],
+        "refresh_note": "zero mode refresh is unknown; delivered cadence is measured separately",
+        "requested_observer_hz": 60,
+        "requested_trace_hz": 60
+      },
+      "pins": {
+        "candidate-scalar-inline_payload": {
+          "path": "/Users/admin/InfinifyPerf/variants/candidate-scalar-inline/helper/payload-arm64e.dylib",
+          "sha256": "ab58b111be5c1883d975c44dba0c9967ae28f9c368c051f4077322827a3194b9"
+        },
+        "client": {
+          "path": "/Users/admin/InfinifyPerf/repo/native/performance/native_path_bench.py",
+          "sha256": "094fc768d188dddae690a0813a197ce3580ff20f693b21610f8efa6f6243f591"
+        },
+        "dock_loader": {
+          "path": "/Users/admin/InfinifyPerf/variants/loader-pinned-arm64e",
+          "sha256": "509090ac5c64bb5a28fc0d6f615e4a506e886bda1c050f9fa9bf6ce7c04540e4"
+        },
+        "fixture": {
+          "path": "/Users/admin/InfinifyPerf/variants/native-performance/marker-fixture",
+          "sha256": "b4011e7c0157d051836a84abdd416cd2648f2e70787a40e2ba5413b1d4b7f837"
+        },
+        "fixture_payload": {
+          "path": "/Users/admin/InfinifyPerf/variants/candidate-list/helper/payload-arm64.dylib",
+          "sha256": "cd0b73181f9ec973b6a4bc0736e3b6008afc8f9ca261cc009eb077010b294d0c"
+        },
+        "mailbox_client": {
+          "path": "/Users/admin/InfinifyPerf/variants/windowserver-mailbox/libmailbox-client.dylib",
+          "sha256": "f9cf11a98313c7e24c20eebe565178c1f211ced0d7755c13c0518d2eeddfd378"
+        },
+        "observer": {
+          "path": "/Users/admin/InfinifyPerf/variants/native-performance/display-observer",
+          "sha256": "a2a08f1b5af4cea3284140942c6d2e582e2e29028b7f81fe9b46d32ff573ca18"
+        },
+        "orchestrator": {
+          "path": "/Users/admin/InfinifyPerf/repo/native/performance/compare_vm.py",
+          "sha256": "1b88a840e654bffaad05b3d726e4634b143c05a9cd4fad2e952e0181146fadb8"
+        },
+        "windowserver_loader": {
+          "path": "/Users/admin/InfinifyPerf/variants/windowserver-mailbox/ws-loader-arm64e",
+          "sha256": "8d46708fafa70bc622ff2f5cefa771beb9ecdc7aaae4cf5fb86833e4fae0ebb5"
+        },
+        "windowserver_payload": {
+          "path": "/Users/admin/InfinifyPerf/variants/windowserver-mailbox/payload-arm64e.dylib",
+          "sha256": "1d41e7920f6529a4fdbb116959b1dd7c7569e4f8cc02c8b4278338fb36788147"
+        }
+      },
+      "runs": [
+        {
+          "acknowledgement_round_trip_ms": {
+            "count": 211,
+            "max": 85.820042,
+            "p50": 16.070792,
+            "p95": 38.166667,
+            "p99": 50.208541
+          },
+          "applied_replies": 211,
+          "decoder_source_sha256": "525ae89ceb22aa8cd1dd5ec908c54fabdc62e658c60f46646335fa2deee92b93",
+          "frames_submitted": 240,
+          "name": "01-candidate-scalar-inline",
+          "optical": {
+            "ambiguous_samples": 13,
+            "available": true,
+            "cadence_eligible": false,
+            "capture_observation": {
+              "admissible_pose_samples": 181,
+              "captured_pose_age_ms": {
+                "count": 181,
+                "max": 67.401125,
+                "p50": 33.8175,
+                "p95": 50.727167,
+                "p99": 66.876167
+              },
+              "conditional_cadence_limit": "only adjacent admissible captures one requested refresh apart; missing/rejected captures excluded; not total output FPS",
+              "decoder_exclusions": {
+                "multiple_matching_poses": 2,
+                "no_matching_pose": 1,
+                "outside_held_observation_window": 0
+              },
+              "distinct_admissible_poses": 144,
+              "fresh_pose_fraction_in_one_refresh_transitions": 0.7872340425531915,
+              "limits": "complete-frame callback records only; gaps include capture/scheduling omissions; repeated poses are expected during held steps; no physical-refresh claim",
+              "one_refresh_transition_fraction": 0.7268041237113402,
+              "one_refresh_transitions": 141,
+              "raw_callback_gap_ms": {
+                "count": 194,
+                "max": 72.459458,
+                "p50": 17.97075,
+                "p95": 33.794875,
+                "p99": 51.575292
+              },
+              "raw_complete_frame_records": 195,
+              "raw_display_time_gap_ms": {
+                "count": 194,
+                "max": 50.0,
+                "p50": 16.666667,
+                "p95": 33.333334,
+                "p99": 50.0
+              },
+              "rejection_reasons": {
+                "already_stale_at_callback": 1,
+                "stale_visibility_witness": 10
+              },
+              "repeated_in_one_refresh_transitions": 30,
+              "repeated_pose_samples": 37,
+              "window_end_ns": 1775183284333,
+              "window_start_ns": 1771184306833
+            },
+            "coverage": 0.6041666666666666,
+            "decoder_source_sha256": "525ae89ceb22aa8cd1dd5ec908c54fabdc62e658c60f46646335fa2deee92b93",
+            "input_to_visible_ms": {
+              "count": 145,
+              "max": 52.492583,
+              "p50": 33.375625,
+              "p95": 50.531417,
+              "p99": 50.86225
+            },
+            "limitation": "insufficient unambiguous pose coverage/capture rate; no smoothness winner",
+            "limits": "external observer must decode actual displayed transformed poses; no self-observed counters",
+            "observed_pose_gap_intervals": 95,
+            "observed_pose_gap_ms": {
+              "count": 144,
+              "max": 200.0,
+              "p50": 16.666667,
+              "p95": 50.0,
+              "p99": 83.333334
+            },
+            "observed_poses": 145,
+            "observer": "scoped ScreenCaptureKit display output marker bounding box",
+            "phase_clock": {
+              "basis": "actual send phase modulo requested display period from captured display timestamp origin",
+              "buckets": 6,
+              "origin_ns": 1770803558500,
+              "period_ns": 16666667
+            },
+            "physical_panel_optical_proof": false,
+            "pose_gap_note": "unobserved intervals between decoded poses; includes capture/decoder omissions, not physical missed refreshes",
+            "raw_samples_sha256": "81f4dd6c3b52c59c8f2202a12042f1fed878c63d5bab912c4d82f3e50c0b4e6c",
+            "requested_observer_hz": 60,
+            "source_sha256": "1d142dfe25f517fbad86b2cc183e225f8cecfe103df7c4ab878f7214024b7848"
+          },
+          "producer_source_sha256": "094fc768d188dddae690a0813a197ce3580ff20f693b21610f8efa6f6243f591",
+          "report_sha256": "47107cf70474c2659422a6fd489025b4c3db55edf64607626595791de51b53e5",
+          "restoration": {
+            "attempted": true,
+            "helper_count": 8,
+            "independently_verified": true,
+            "journal_persisted": true,
+            "method": "restore_all"
+          },
+          "variant": "candidate-scalar-inline"
+        },
+        {
+          "acknowledgement_round_trip_ms": {
+            "count": 240,
+            "max": 27.104625,
+            "p50": 9.783708,
+            "p95": 18.995,
+            "p99": 23.996541
+          },
+          "applied_replies": 240,
+          "decoder_source_sha256": "525ae89ceb22aa8cd1dd5ec908c54fabdc62e658c60f46646335fa2deee92b93",
+          "frames_submitted": 240,
+          "name": "01-windowserver",
+          "optical": {
+            "ambiguous_samples": 22,
+            "available": true,
+            "cadence_eligible": false,
+            "capture_observation": {
+              "admissible_pose_samples": 182,
+              "captured_pose_age_ms": {
+                "count": 182,
+                "max": 48.671125,
+                "p50": 29.2285,
+                "p95": 46.079583,
+                "p99": 48.578833
+              },
+              "conditional_cadence_limit": "only adjacent admissible captures one requested refresh apart; missing/rejected captures excluded; not total output FPS",
+              "decoder_exclusions": {
+                "multiple_matching_poses": 4,
+                "no_matching_pose": 1,
+                "outside_held_observation_window": 0
+              },
+              "distinct_admissible_poses": 180,
+              "fresh_pose_fraction_in_one_refresh_transitions": 0.9923664122137404,
+              "limits": "complete-frame callback records only; gaps include capture/scheduling omissions; repeated poses are expected during held steps; no physical-refresh claim",
+              "one_refresh_transition_fraction": 0.6894736842105263,
+              "one_refresh_transitions": 131,
+              "raw_callback_gap_ms": {
+                "count": 190,
+                "max": 40.996,
+                "p50": 18.521292,
+                "p95": 32.32775,
+                "p99": 39.374792
+              },
+              "raw_complete_frame_records": 191,
+              "raw_display_time_gap_ms": {
+                "count": 190,
+                "max": 50.0,
+                "p50": 16.666667,
+                "p95": 33.333334,
+                "p99": 33.333334
+              },
+              "rejection_reasons": {
+                "stale_visibility_witness": 4
+              },
+              "repeated_in_one_refresh_transitions": 1,
+              "repeated_pose_samples": 2,
+              "window_end_ns": 1780222245167,
+              "window_start_ns": 1776220124666
+            },
+            "coverage": 0.75,
+            "decoder_source_sha256": "525ae89ceb22aa8cd1dd5ec908c54fabdc62e658c60f46646335fa2deee92b93",
+            "input_to_visible_ms": {
+              "count": 180,
+              "max": 48.671125,
+              "p50": 29.223042,
+              "p95": 46.006292,
+              "p99": 48.578833
+            },
+            "limitation": "insufficient unambiguous pose coverage/capture rate; no smoothness winner",
+            "limits": "external observer must decode actual displayed transformed poses; no self-observed counters",
+            "observed_pose_gap_intervals": 59,
+            "observed_pose_gap_ms": {
+              "count": 179,
+              "max": 83.333333,
+              "p50": 16.666667,
+              "p95": 33.333334,
+              "p99": 83.333333
+            },
+            "observed_poses": 180,
+            "observer": "scoped ScreenCaptureKit display output marker bounding box",
+            "phase_clock": {
+              "basis": "actual send phase modulo requested display period from captured display timestamp origin",
+              "buckets": 6,
+              "origin_ns": 1775867166666,
+              "period_ns": 16666667
+            },
+            "physical_panel_optical_proof": false,
+            "pose_gap_note": "unobserved intervals between decoded poses; includes capture/decoder omissions, not physical missed refreshes",
+            "raw_samples_sha256": "2b39a13e32f71e14cc5fe8c82de023b9d9ddbc47143f1a623b99a0a07e86a4e4",
+            "requested_observer_hz": 60,
+            "source_sha256": "e206272405c2c2911a8b1d5e2e49721d885268f1dd1de200dba5031eeb74bedb"
+          },
+          "producer_source_sha256": "094fc768d188dddae690a0813a197ce3580ff20f693b21610f8efa6f6243f591",
+          "report_sha256": "933c7d4d0ef7abae617ac83adfabc7688ea695f9e5551c5a8ba53894fd95bb8b",
+          "restoration": {
+            "attempted": true,
+            "helper_count": 8,
+            "independently_verified": true,
+            "journal_persisted": true,
+            "method": "restore_all"
+          },
+          "variant": "windowserver"
+        },
+        {
+          "acknowledgement_round_trip_ms": {
+            "count": 212,
+            "max": 100.7585,
+            "p50": 16.679333,
+            "p95": 37.308875,
+            "p99": 91.140375
+          },
+          "applied_replies": 212,
+          "decoder_source_sha256": "525ae89ceb22aa8cd1dd5ec908c54fabdc62e658c60f46646335fa2deee92b93",
+          "frames_submitted": 240,
+          "name": "02-candidate-scalar-inline",
+          "optical": {
+            "ambiguous_samples": 24,
+            "available": true,
+            "cadence_eligible": false,
+            "capture_observation": {
+              "admissible_pose_samples": 161,
+              "captured_pose_age_ms": {
+                "count": 161,
+                "max": 102.440959,
+                "p50": 19.203292,
+                "p95": 38.261042,
+                "p99": 102.155125
+              },
+              "conditional_cadence_limit": "only adjacent admissible captures one requested refresh apart; missing/rejected captures excluded; not total output FPS",
+              "decoder_exclusions": {
+                "multiple_matching_poses": 2,
+                "no_matching_pose": 1,
+                "outside_held_observation_window": 0
+              },
+              "distinct_admissible_poses": 150,
+              "fresh_pose_fraction_in_one_refresh_transitions": 0.9142857142857143,
+              "limits": "complete-frame callback records only; gaps include capture/scheduling omissions; repeated poses are expected during held steps; no physical-refresh claim",
+              "one_refresh_transition_fraction": 0.6069364161849711,
+              "one_refresh_transitions": 105,
+              "raw_callback_gap_ms": {
+                "count": 173,
+                "max": 86.919208,
+                "p50": 19.792208,
+                "p95": 36.414125,
+                "p99": 80.170375
+              },
+              "raw_complete_frame_records": 174,
+              "raw_display_time_gap_ms": {
+                "count": 173,
+                "max": 50.0,
+                "p50": 16.666667,
+                "p95": 33.333334,
+                "p99": 50.0
+              },
+              "rejection_reasons": {
+                "already_stale_at_callback": 3,
+                "stale_visibility_witness": 7
+              },
+              "repeated_in_one_refresh_transitions": 9,
+              "repeated_pose_samples": 11,
+              "window_end_ns": 1790331446083,
+              "window_start_ns": 1786330534750
+            },
+            "coverage": 0.6291666666666667,
+            "decoder_source_sha256": "525ae89ceb22aa8cd1dd5ec908c54fabdc62e658c60f46646335fa2deee92b93",
+            "input_to_visible_ms": {
+              "count": 151,
+              "max": 102.440959,
+              "p50": 19.155875,
+              "p95": 37.968167,
+              "p99": 102.155125
+            },
+            "limitation": "insufficient unambiguous pose coverage/capture rate; no smoothness winner",
+            "limits": "external observer must decode actual displayed transformed poses; no self-observed counters",
+            "observed_pose_gap_intervals": 90,
+            "observed_pose_gap_ms": {
+              "count": 150,
+              "max": 116.666667,
+              "p50": 16.666667,
+              "p95": 50.0,
+              "p99": 116.666667
+            },
+            "observed_poses": 151,
+            "observer": "scoped ScreenCaptureKit display output marker bounding box",
+            "phase_clock": {
+              "basis": "actual send phase modulo requested display period from captured display timestamp origin",
+              "buckets": 6,
+              "origin_ns": 1786017166666,
+              "period_ns": 16666667
+            },
+            "physical_panel_optical_proof": false,
+            "pose_gap_note": "unobserved intervals between decoded poses; includes capture/decoder omissions, not physical missed refreshes",
+            "raw_samples_sha256": "cc0e4994649881637aefe6c7e04013cde1744227366797ef9fb5567e1af676e9",
+            "requested_observer_hz": 60,
+            "source_sha256": "c05d92bda96270269e9f2182d0e9d8d9e5406332169aa2cba9e1dbc48a1e6f65"
+          },
+          "producer_source_sha256": "094fc768d188dddae690a0813a197ce3580ff20f693b21610f8efa6f6243f591",
+          "report_sha256": "493f5b4d3be1dee1a7e14d1d07f7129b5ac89b8566b0ab391e13156c22cbdc44",
+          "restoration": {
+            "attempted": true,
+            "helper_count": 8,
+            "independently_verified": true,
+            "journal_persisted": true,
+            "method": "restore_all"
+          },
+          "variant": "candidate-scalar-inline"
+        },
+        {
+          "acknowledgement_round_trip_ms": {
+            "count": 240,
+            "max": 30.738208,
+            "p50": 9.814542,
+            "p95": 23.929084,
+            "p99": 29.338709
+          },
+          "applied_replies": 240,
+          "decoder_source_sha256": "525ae89ceb22aa8cd1dd5ec908c54fabdc62e658c60f46646335fa2deee92b93",
+          "frames_submitted": 240,
+          "name": "02-windowserver",
+          "optical": {
+            "ambiguous_samples": 25,
+            "available": true,
+            "cadence_eligible": false,
+            "capture_observation": {
+              "admissible_pose_samples": 155,
+              "captured_pose_age_ms": {
+                "count": 155,
+                "max": 47.942166,
+                "p50": 28.15375,
+                "p95": 46.522916,
+                "p99": 47.718792
+              },
+              "conditional_cadence_limit": "only adjacent admissible captures one requested refresh apart; missing/rejected captures excluded; not total output FPS",
+              "decoder_exclusions": {
+                "multiple_matching_poses": 4,
+                "no_matching_pose": 0,
+                "outside_held_observation_window": 0
+              },
+              "distinct_admissible_poses": 155,
+              "fresh_pose_fraction_in_one_refresh_transitions": 1.0,
+              "limits": "complete-frame callback records only; gaps include capture/scheduling omissions; repeated poses are expected during held steps; no physical-refresh claim",
+              "one_refresh_transition_fraction": 0.5828571428571429,
+              "one_refresh_transitions": 102,
+              "raw_callback_gap_ms": {
+                "count": 175,
+                "max": 70.435458,
+                "p50": 19.94975,
+                "p95": 35.722917,
+                "p99": 64.642292
+              },
+              "raw_complete_frame_records": 176,
+              "raw_display_time_gap_ms": {
+                "count": 175,
+                "max": 66.666666,
+                "p50": 16.666667,
+                "p95": 33.333334,
+                "p99": 50.0
+              },
+              "rejection_reasons": {
+                "already_stale_at_callback": 3,
+                "stale_visibility_witness": 14
+              },
+              "repeated_in_one_refresh_transitions": 0,
+              "repeated_pose_samples": 0,
+              "window_end_ns": 1785389169750,
+              "window_start_ns": 1781391999000
+            },
+            "coverage": 0.6458333333333334,
+            "decoder_source_sha256": "525ae89ceb22aa8cd1dd5ec908c54fabdc62e658c60f46646335fa2deee92b93",
+            "input_to_visible_ms": {
+              "count": 155,
+              "max": 47.942166,
+              "p50": 28.15375,
+              "p95": 46.522916,
+              "p99": 47.718792
+            },
+            "limitation": "insufficient unambiguous pose coverage/capture rate; no smoothness winner",
+            "limits": "external observer must decode actual displayed transformed poses; no self-observed counters",
+            "observed_pose_gap_intervals": 78,
+            "observed_pose_gap_ms": {
+              "count": 154,
+              "max": 150.0,
+              "p50": 16.666667,
+              "p95": 50.0,
+              "p99": 100.0
+            },
+            "observed_poses": 155,
+            "observer": "scoped ScreenCaptureKit display output marker bounding box",
+            "phase_clock": {
+              "basis": "actual send phase modulo requested display period from captured display timestamp origin",
+              "buckets": 6,
+              "origin_ns": 1781050500000,
+              "period_ns": 16666667
+            },
+            "physical_panel_optical_proof": false,
+            "pose_gap_note": "unobserved intervals between decoded poses; includes capture/decoder omissions, not physical missed refreshes",
+            "raw_samples_sha256": "636f9986e30625186964d2041ab9cde00aa4b543fd9e41cfbb0a90b09890643c",
+            "requested_observer_hz": 60,
+            "source_sha256": "1930330d7f44bcc24f13ccf43a5874b7de86f196cdce7e36182b5743ce3007ac"
+          },
+          "producer_source_sha256": "094fc768d188dddae690a0813a197ce3580ff20f693b21610f8efa6f6243f591",
+          "report_sha256": "430375e25752b52495f83b0a7d45a0b04f1e2fa25572d5c0b6433127f886ade8",
+          "restoration": {
+            "attempted": true,
+            "helper_count": 8,
+            "independently_verified": true,
+            "journal_persisted": true,
+            "method": "restore_all"
+          },
+          "variant": "windowserver"
+        },
+        {
+          "acknowledgement_round_trip_ms": {
+            "count": 228,
+            "max": 62.968375,
+            "p50": 11.207083,
+            "p95": 34.98725,
+            "p99": 48.223083
+          },
+          "applied_replies": 228,
+          "decoder_source_sha256": "525ae89ceb22aa8cd1dd5ec908c54fabdc62e658c60f46646335fa2deee92b93",
+          "frames_submitted": 240,
+          "name": "03-candidate-scalar-inline",
+          "optical": {
+            "ambiguous_samples": 28,
+            "available": true,
+            "cadence_eligible": false,
+            "capture_observation": {
+              "admissible_pose_samples": 179,
+              "captured_pose_age_ms": {
+                "count": 179,
+                "max": 58.711292,
+                "p50": 24.673625,
+                "p95": 56.356375,
+                "p99": 58.614875
+              },
+              "conditional_cadence_limit": "only adjacent admissible captures one requested refresh apart; missing/rejected captures excluded; not total output FPS",
+              "decoder_exclusions": {
+                "multiple_matching_poses": 4,
+                "no_matching_pose": 1,
+                "outside_held_observation_window": 0
+              },
+              "distinct_admissible_poses": 167,
+              "fresh_pose_fraction_in_one_refresh_transitions": 0.9692307692307692,
+              "limits": "complete-frame callback records only; gaps include capture/scheduling omissions; repeated poses are expected during held steps; no physical-refresh claim",
+              "one_refresh_transition_fraction": 0.6989247311827957,
+              "one_refresh_transitions": 130,
+              "raw_callback_gap_ms": {
+                "count": 186,
+                "max": 57.97825,
+                "p50": 18.401833,
+                "p95": 34.760542,
+                "p99": 46.642125
+              },
+              "raw_complete_frame_records": 187,
+              "raw_display_time_gap_ms": {
+                "count": 186,
+                "max": 52.223333,
+                "p50": 16.666667,
+                "p95": 33.333334,
+                "p99": 50.0
+              },
+              "rejection_reasons": {
+                "stale_visibility_witness": 3
+              },
+              "repeated_in_one_refresh_transitions": 4,
+              "repeated_pose_samples": 12,
+              "window_end_ns": 1795609041833,
+              "window_start_ns": 1791613344666
+            },
+            "coverage": 0.6958333333333333,
+            "decoder_source_sha256": "525ae89ceb22aa8cd1dd5ec908c54fabdc62e658c60f46646335fa2deee92b93",
+            "input_to_visible_ms": {
+              "count": 167,
+              "max": 58.607833,
+              "p50": 24.35225,
+              "p95": 41.997292,
+              "p99": 42.290542
+            },
+            "limitation": "insufficient unambiguous pose coverage/capture rate; no smoothness winner",
+            "limits": "external observer must decode actual displayed transformed poses; no self-observed counters",
+            "observed_pose_gap_intervals": 70,
+            "observed_pose_gap_ms": {
+              "count": 166,
+              "max": 102.223333,
+              "p50": 16.666667,
+              "p95": 50.0,
+              "p99": 100.0
+            },
+            "observed_poses": 167,
+            "observer": "scoped ScreenCaptureKit display output marker bounding box",
+            "phase_clock": {
+              "basis": "actual send phase modulo requested display period from captured display timestamp origin",
+              "buckets": 6,
+              "origin_ns": 1791150500000,
+              "period_ns": 16666667
+            },
+            "physical_panel_optical_proof": false,
+            "pose_gap_note": "unobserved intervals between decoded poses; includes capture/decoder omissions, not physical missed refreshes",
+            "raw_samples_sha256": "c647c4ae0ce2630ef48b894fde07d97a7fad93761f6c3f3c2d3abd90dbee794a",
+            "requested_observer_hz": 60,
+            "source_sha256": "7356632cdfbbb6d7dc1e6263a41cc2912a7bac6bd7e649851ded00596b7ca00d"
+          },
+          "producer_source_sha256": "094fc768d188dddae690a0813a197ce3580ff20f693b21610f8efa6f6243f591",
+          "report_sha256": "626995d21d0bb579800dc859044b28ff140c36464c72046f9c1111e804c10f7d",
+          "restoration": {
+            "attempted": true,
+            "helper_count": 8,
+            "independently_verified": true,
+            "journal_persisted": true,
+            "method": "restore_all"
+          },
+          "variant": "candidate-scalar-inline"
+        },
+        {
+          "acknowledgement_round_trip_ms": {
+            "count": 240,
+            "max": 22.130792,
+            "p50": 2.799833,
+            "p95": 16.459125,
+            "p99": 19.54075
+          },
+          "applied_replies": 240,
+          "decoder_source_sha256": "525ae89ceb22aa8cd1dd5ec908c54fabdc62e658c60f46646335fa2deee92b93",
+          "frames_submitted": 240,
+          "name": "03-windowserver",
+          "optical": {
+            "ambiguous_samples": 22,
+            "available": true,
+            "cadence_eligible": false,
+            "capture_observation": {
+              "admissible_pose_samples": 187,
+              "captured_pose_age_ms": {
+                "count": 187,
+                "max": 49.85125,
+                "p50": 32.64075,
+                "p95": 35.393583,
+                "p99": 49.304167
+              },
+              "conditional_cadence_limit": "only adjacent admissible captures one requested refresh apart; missing/rejected captures excluded; not total output FPS",
+              "decoder_exclusions": {
+                "multiple_matching_poses": 4,
+                "no_matching_pose": 1,
+                "outside_held_observation_window": 0
+              },
+              "distinct_admissible_poses": 161,
+              "fresh_pose_fraction_in_one_refresh_transitions": 0.8194444444444444,
+              "limits": "complete-frame callback records only; gaps include capture/scheduling omissions; repeated poses are expected during held steps; no physical-refresh claim",
+              "one_refresh_transition_fraction": 0.7461139896373057,
+              "one_refresh_transitions": 144,
+              "raw_callback_gap_ms": {
+                "count": 193,
+                "max": 50.793459,
+                "p50": 18.000708,
+                "p95": 31.759625,
+                "p99": 45.285417
+              },
+              "raw_complete_frame_records": 194,
+              "raw_display_time_gap_ms": {
+                "count": 193,
+                "max": 50.0,
+                "p50": 16.666667,
+                "p95": 33.333334,
+                "p99": 50.0
+              },
+              "rejection_reasons": {
+                "stale_visibility_witness": 2
+              },
+              "repeated_in_one_refresh_transitions": 26,
+              "repeated_pose_samples": 26,
+              "window_end_ns": 1800683686917,
+              "window_start_ns": 1796683908375
+            },
+            "coverage": 0.6708333333333333,
+            "decoder_source_sha256": "525ae89ceb22aa8cd1dd5ec908c54fabdc62e658c60f46646335fa2deee92b93",
+            "input_to_visible_ms": {
+              "count": 161,
+              "max": 49.85125,
+              "p50": 19.499667,
+              "p95": 33.900417,
+              "p99": 49.304167
+            },
+            "limitation": "insufficient unambiguous pose coverage/capture rate; no smoothness winner",
+            "limits": "external observer must decode actual displayed transformed poses; no self-observed counters",
+            "observed_pose_gap_intervals": 76,
+            "observed_pose_gap_ms": {
+              "count": 160,
+              "max": 116.666666,
+              "p50": 16.666667,
+              "p95": 50.0,
+              "p99": 66.666667
+            },
+            "observed_poses": 161,
+            "observer": "scoped ScreenCaptureKit display output marker bounding box",
+            "phase_clock": {
+              "basis": "actual send phase modulo requested display period from captured display timestamp origin",
+              "buckets": 6,
+              "origin_ns": 1796417166666,
+              "period_ns": 16666667
+            },
+            "physical_panel_optical_proof": false,
+            "pose_gap_note": "unobserved intervals between decoded poses; includes capture/decoder omissions, not physical missed refreshes",
+            "raw_samples_sha256": "b13d4ede48859d70718c2730f5b9aa0acd57b9ef392ecb9082c5998a0a046773",
+            "requested_observer_hz": 60,
+            "source_sha256": "fa2230dcbf623a8be7ddc415583848b0ca622da6512bf2a30f6324a7207148d0"
+          },
+          "producer_source_sha256": "094fc768d188dddae690a0813a197ce3580ff20f693b21610f8efa6f6243f591",
+          "report_sha256": "46d7fbe17c9b98a08ce56b207e48ae899bd4ef6798011a3ef7e0b955b3a2907d",
+          "restoration": {
+            "attempted": true,
+            "helper_count": 8,
+            "independently_verified": true,
+            "journal_persisted": true,
+            "method": "restore_all"
+          },
+          "variant": "windowserver"
+        }
+      ],
+      "trace_sha256": "4246e46af9cc0e44206d9106e949c12afd3d221a84710deb864693521efde495"
+    },
+    "held48": {
+      "cleanup": {
+        "fixture": {
+          "exit_code": 0,
+          "originals_verified_before_exit": true,
+          "pid": 1751,
+          "terminated": true
+        },
+        "independent_restoration": true
+      },
+      "directory": "target/native-perf/evidence/if-native-comparison-16",
+      "display_state": {
+        "active_display_count": 1,
+        "awake_active_display_count": 1,
+        "common_pins": {
+          "candidate-scalar-inline_payload": {
+            "path": "/Users/admin/InfinifyPerf/variants/candidate-scalar-inline/helper/payload-arm64e.dylib",
+            "sha256": "ab58b111be5c1883d975c44dba0c9967ae28f9c368c051f4077322827a3194b9"
+          },
+          "client": {
+            "path": "/Users/admin/InfinifyPerf/repo/native/performance/native_path_bench.py",
+            "sha256": "ac1a2e9ee88ca392f56a21b40f4f4c6469b18add167c2fc3ed3bcca4452795ae"
+          },
+          "dock_loader": {
+            "path": "/Users/admin/InfinifyPerf/variants/loader-pinned-arm64e",
+            "sha256": "509090ac5c64bb5a28fc0d6f615e4a506e886bda1c050f9fa9bf6ce7c04540e4"
+          },
+          "fixture": {
+            "path": "/Users/admin/InfinifyPerf/variants/native-performance/marker-fixture",
+            "sha256": "b4011e7c0157d051836a84abdd416cd2648f2e70787a40e2ba5413b1d4b7f837"
+          },
+          "fixture_payload": {
+            "path": "/Users/admin/InfinifyPerf/variants/candidate-list/helper/payload-arm64.dylib",
+            "sha256": "cd0b73181f9ec973b6a4bc0736e3b6008afc8f9ca261cc009eb077010b294d0c"
+          },
+          "mailbox_client": {
+            "path": "/Users/admin/InfinifyPerf/variants/windowserver-mailbox/libmailbox-client.dylib",
+            "sha256": "f9cf11a98313c7e24c20eebe565178c1f211ced0d7755c13c0518d2eeddfd378"
+          },
+          "observer": {
+            "path": "/Users/admin/InfinifyPerf/variants/native-performance/display-observer",
+            "sha256": "a2a08f1b5af4cea3284140942c6d2e582e2e29028b7f81fe9b46d32ff573ca18"
+          },
+          "orchestrator": {
+            "path": "/Users/admin/InfinifyPerf/repo/native/performance/compare_vm.py",
+            "sha256": "1b88a840e654bffaad05b3d726e4634b143c05a9cd4fad2e952e0181146fadb8"
+          },
+          "windowserver_loader": {
+            "path": "/Users/admin/InfinifyPerf/variants/windowserver-mailbox/ws-loader-arm64e",
+            "sha256": "8d46708fafa70bc622ff2f5cefa771beb9ecdc7aaae4cf5fb86833e4fae0ebb5"
+          },
+          "windowserver_payload": {
+            "path": "/Users/admin/InfinifyPerf/variants/windowserver-mailbox/payload-arm64e.dylib",
+            "sha256": "1d41e7920f6529a4fdbb116959b1dd7c7569e4f8cc02c8b4278338fb36788147"
+          }
+        },
+        "displays": [
+          {
+            "asleep": false,
+            "id": 1,
+            "mode_refresh_hz": 60.0,
+            "pixel_height": 2500,
+            "pixel_width": 4112
+          }
+        ],
+        "hw_model": "VirtualMac2,1",
+        "online_display_count": 1,
+        "online_displays": [
+          {
+            "asleep": false,
+            "id": 1
+          }
+        ],
+        "refresh_note": "zero mode refresh is unknown; delivered cadence is measured separately",
+        "requested_observer_hz": 60,
+        "requested_trace_hz": 60
+      },
+      "pins": {
+        "candidate-scalar-inline_payload": {
+          "path": "/Users/admin/InfinifyPerf/variants/candidate-scalar-inline/helper/payload-arm64e.dylib",
+          "sha256": "ab58b111be5c1883d975c44dba0c9967ae28f9c368c051f4077322827a3194b9"
+        },
+        "client": {
+          "path": "/Users/admin/InfinifyPerf/repo/native/performance/native_path_bench.py",
+          "sha256": "ac1a2e9ee88ca392f56a21b40f4f4c6469b18add167c2fc3ed3bcca4452795ae"
+        },
+        "dock_loader": {
+          "path": "/Users/admin/InfinifyPerf/variants/loader-pinned-arm64e",
+          "sha256": "509090ac5c64bb5a28fc0d6f615e4a506e886bda1c050f9fa9bf6ce7c04540e4"
+        },
+        "fixture": {
+          "path": "/Users/admin/InfinifyPerf/variants/native-performance/marker-fixture",
+          "sha256": "b4011e7c0157d051836a84abdd416cd2648f2e70787a40e2ba5413b1d4b7f837"
+        },
+        "fixture_payload": {
+          "path": "/Users/admin/InfinifyPerf/variants/candidate-list/helper/payload-arm64.dylib",
+          "sha256": "cd0b73181f9ec973b6a4bc0736e3b6008afc8f9ca261cc009eb077010b294d0c"
+        },
+        "mailbox_client": {
+          "path": "/Users/admin/InfinifyPerf/variants/windowserver-mailbox/libmailbox-client.dylib",
+          "sha256": "f9cf11a98313c7e24c20eebe565178c1f211ced0d7755c13c0518d2eeddfd378"
+        },
+        "observer": {
+          "path": "/Users/admin/InfinifyPerf/variants/native-performance/display-observer",
+          "sha256": "a2a08f1b5af4cea3284140942c6d2e582e2e29028b7f81fe9b46d32ff573ca18"
+        },
+        "orchestrator": {
+          "path": "/Users/admin/InfinifyPerf/repo/native/performance/compare_vm.py",
+          "sha256": "1b88a840e654bffaad05b3d726e4634b143c05a9cd4fad2e952e0181146fadb8"
+        },
+        "windowserver_loader": {
+          "path": "/Users/admin/InfinifyPerf/variants/windowserver-mailbox/ws-loader-arm64e",
+          "sha256": "8d46708fafa70bc622ff2f5cefa771beb9ecdc7aaae4cf5fb86833e4fae0ebb5"
+        },
+        "windowserver_payload": {
+          "path": "/Users/admin/InfinifyPerf/variants/windowserver-mailbox/payload-arm64e.dylib",
+          "sha256": "1d41e7920f6529a4fdbb116959b1dd7c7569e4f8cc02c8b4278338fb36788147"
+        }
+      },
+      "runs": [
+        {
+          "acknowledgement_round_trip_ms": {
+            "count": 48,
+            "max": 58.195,
+            "p50": 2.172583,
+            "p95": 22.805083,
+            "p99": 58.195
+          },
+          "applied_replies": 48,
+          "decoder_source_sha256": "525ae89ceb22aa8cd1dd5ec908c54fabdc62e658c60f46646335fa2deee92b93",
+          "frames_submitted": 48,
+          "name": "01-candidate-scalar-inline",
+          "optical": {
+            "actual_phase_latency_ms": {
+              "0": {
+                "count": 13,
+                "max": 66.415208,
+                "p50": 32.848333,
+                "p95": 66.415208,
+                "p99": 66.415208
+              },
+              "1": {
+                "count": 5,
+                "max": 47.057542,
+                "p50": 30.244458,
+                "p95": 47.057542,
+                "p99": 47.057542
+              },
+              "2": {
+                "count": 10,
+                "max": 58.722167,
+                "p50": 27.405833,
+                "p95": 58.722167,
+                "p99": 58.722167
+              },
+              "3": {
+                "count": 5,
+                "max": 41.005792,
+                "p50": 24.922916,
+                "p95": 41.005792,
+                "p99": 41.005792
+              },
+              "4": {
+                "count": 6,
+                "max": 22.091208,
+                "p50": 20.791083,
+                "p95": 22.091208,
+                "p99": 22.091208
+              },
+              "5": {
+                "count": 9,
+                "max": 51.376084,
+                "p50": 33.562458,
+                "p95": 51.376084,
+                "p99": 51.376084
+              }
+            },
+            "ambiguous_samples": 1,
+            "available": true,
+            "cadence_eligible": false,
+            "capture_observation": {
+              "admissible_pose_samples": 110,
+              "captured_pose_age_ms": {
+                "count": 110,
+                "max": 119.809083,
+                "p50": 45.086417,
+                "p95": 103.142417,
+                "p99": 116.415208
+              },
+              "conditional_cadence_limit": "only adjacent admissible captures one requested refresh apart; missing/rejected captures excluded; not total output FPS",
+              "decoder_exclusions": {
+                "multiple_matching_poses": 0,
+                "no_matching_pose": 1,
+                "outside_held_observation_window": 12
+              },
+              "distinct_admissible_poses": 48,
+              "fresh_pose_fraction_in_one_refresh_transitions": 0.09615384615384615,
+              "limits": "complete-frame callback records only; gaps include capture/scheduling omissions; repeated poses are expected during held steps; no physical-refresh claim",
+              "one_refresh_transition_fraction": 0.45217391304347826,
+              "one_refresh_transitions": 52,
+              "raw_callback_gap_ms": {
+                "count": 115,
+                "max": 123.687167,
+                "p50": 23.571083,
+                "p95": 90.873583,
+                "p99": 114.391125
+              },
+              "raw_complete_frame_records": 116,
+              "raw_display_time_gap_ms": {
+                "count": 115,
+                "max": 133.333333,
+                "p50": 33.333333,
+                "p95": 100.0,
+                "p99": 100.0
+              },
+              "rejection_reasons": {
+                "stale_visibility_witness": 5
+              },
+              "repeated_in_one_refresh_transitions": 47,
+              "repeated_pose_samples": 62,
+              "window_end_ns": 2115394573819,
+              "window_start_ns": 2110585950583
+            },
+            "coverage": 1.0,
+            "decoder_source_sha256": "525ae89ceb22aa8cd1dd5ec908c54fabdc62e658c60f46646335fa2deee92b93",
+            "held_step_latency_ms": {
+              "count": 48,
+              "max": 66.415208,
+              "p50": 31.216083,
+              "p95": 51.376084,
+              "p99": 66.415208
+            },
+            "input_to_visible_ms": {
+              "count": 48,
+              "max": 66.415208,
+              "p50": 31.216083,
+              "p95": 51.376084,
+              "p99": 66.415208
+            },
+            "latency_eligible": true,
+            "latency_note": "first captured pose per held step; all steps and all six actual phase buckets required; no continuous smoothness claim",
+            "limits": "external observer must decode actual displayed transformed poses; no self-observed counters",
+            "observed_poses": 48,
+            "observer": "scoped ScreenCaptureKit display output marker bounding box",
+            "phase_balance_complete": true,
+            "phase_balanced_mean_first_pose_ms": 29.904774574786327,
+            "phase_clock": {
+              "basis": "actual send phase modulo requested display period from captured display timestamp origin",
+              "buckets": 6,
+              "origin_ns": 2110300500000,
+              "period_ns": 16666667
+            },
+            "physical_panel_optical_proof": false,
+            "pose_gap_note": "held steps intentionally retain one pose; no continuous-cadence interpretation",
+            "raw_samples_sha256": "c04ff509ab9eba6e8440916eda46ba454c16eea20fed5f1d7ee38dd883738f41",
+            "requested_observer_hz": 60,
+            "requested_phase_latency_ms": {
+              "0": {
+                "count": 8,
+                "max": 50.308542,
+                "p50": 32.847333,
+                "p95": 50.308542,
+                "p99": 50.308542
+              },
+              "1": {
+                "count": 8,
+                "max": 45.102125,
+                "p50": 28.41975,
+                "p95": 45.102125,
+                "p99": 45.102125
+              },
+              "2": {
+                "count": 8,
+                "max": 58.722167,
+                "p50": 25.41775,
+                "p95": 58.722167,
+                "p99": 58.722167
+              },
+              "3": {
+                "count": 8,
+                "max": 39.615333,
+                "p50": 21.716625,
+                "p95": 39.615333,
+                "p99": 39.615333
+              },
+              "4": {
+                "count": 8,
+                "max": 66.415208,
+                "p50": 19.989833,
+                "p95": 66.415208,
+                "p99": 66.415208
+              },
+              "5": {
+                "count": 8,
+                "max": 50.136667,
+                "p50": 32.848333,
+                "p95": 50.136667,
+                "p99": 50.136667
+              }
+            },
+            "source_sha256": "cb9829f17659002ef7bfc600f75bd0e5f45b62c33a9387104a97f3ed27f5a516"
+          },
+          "producer_source_sha256": "ac1a2e9ee88ca392f56a21b40f4f4c6469b18add167c2fc3ed3bcca4452795ae",
+          "report_sha256": "f517c69e88d62b2c15ee381682a1508fe883d08e7e7571adc0d217391941839b",
+          "restoration": {
+            "attempted": true,
+            "helper_count": 8,
+            "independently_verified": true,
+            "journal_persisted": true,
+            "method": "restore_all"
+          },
+          "variant": "candidate-scalar-inline"
+        },
+        {
+          "acknowledgement_round_trip_ms": {
+            "count": 48,
+            "max": 11.651792,
+            "p50": 0.550083,
+            "p95": 1.0055,
+            "p99": 11.651792
+          },
+          "applied_replies": 48,
+          "decoder_source_sha256": "525ae89ceb22aa8cd1dd5ec908c54fabdc62e658c60f46646335fa2deee92b93",
+          "frames_submitted": 48,
+          "name": "01-windowserver",
+          "optical": {
+            "actual_phase_latency_ms": {
+              "0": {
+                "count": 10,
+                "max": 66.324,
+                "p50": 32.396959,
+                "p95": 66.324,
+                "p99": 66.324
+              },
+              "1": {
+                "count": 7,
+                "max": 62.672583,
+                "p50": 30.367375,
+                "p95": 62.672583,
+                "p99": 62.672583
+              },
+              "2": {
+                "count": 7,
+                "max": 41.998625,
+                "p50": 25.744875,
+                "p95": 41.998625,
+                "p99": 41.998625
+              },
+              "3": {
+                "count": 12,
+                "max": 55.640958,
+                "p50": 23.548667,
+                "p95": 55.640958,
+                "p99": 55.640958
+              },
+              "4": {
+                "count": 4,
+                "max": 37.6935,
+                "p50": 20.545667,
+                "p95": 37.6935,
+                "p99": 37.6935
+              },
+              "5": {
+                "count": 8,
+                "max": 34.8385,
+                "p50": 18.992125,
+                "p95": 34.8385,
+                "p99": 34.8385
+              }
+            },
+            "ambiguous_samples": 1,
+            "available": true,
+            "cadence_eligible": false,
+            "capture_observation": {
+              "admissible_pose_samples": 102,
+              "captured_pose_age_ms": {
+                "count": 102,
+                "max": 122.307625,
+                "p50": 42.298667,
+                "p95": 98.427958,
+                "p99": 118.992125
+              },
+              "conditional_cadence_limit": "only adjacent admissible captures one requested refresh apart; missing/rejected captures excluded; not total output FPS",
+              "decoder_exclusions": {
+                "multiple_matching_poses": 0,
+                "no_matching_pose": 1,
+                "outside_held_observation_window": 17
+              },
+              "distinct_admissible_poses": 48,
+              "fresh_pose_fraction_in_one_refresh_transitions": 0.07317073170731703,
+              "limits": "complete-frame callback records only; gaps include capture/scheduling omissions; repeated poses are expected during held steps; no physical-refresh claim",
+              "one_refresh_transition_fraction": 0.3867924528301887,
+              "one_refresh_transitions": 41,
+              "raw_callback_gap_ms": {
+                "count": 106,
+                "max": 110.978291,
+                "p50": 28.649125,
+                "p95": 94.808208,
+                "p99": 103.874542
+              },
+              "raw_complete_frame_records": 107,
+              "raw_display_time_gap_ms": {
+                "count": 106,
+                "max": 116.666667,
+                "p50": 33.333334,
+                "p95": 100.0,
+                "p99": 116.666666
+              },
+              "rejection_reasons": {
+                "stale_visibility_witness": 4
+              },
+              "repeated_in_one_refresh_transitions": 38,
+              "repeated_pose_samples": 54,
+              "window_end_ns": 2121165944236,
+              "window_start_ns": 2116357454041
+            },
+            "coverage": 1.0,
+            "decoder_source_sha256": "525ae89ceb22aa8cd1dd5ec908c54fabdc62e658c60f46646335fa2deee92b93",
+            "held_step_latency_ms": {
+              "count": 48,
+              "max": 66.324,
+              "p50": 29.116375,
+              "p95": 55.640958,
+              "p99": 66.324
+            },
+            "input_to_visible_ms": {
+              "count": 48,
+              "max": 66.324,
+              "p50": 29.116375,
+              "p95": 55.640958,
+              "p99": 66.324
+            },
+            "latency_eligible": true,
+            "latency_note": "first captured pose per held step; all steps and all six actual phase buckets required; no continuous smoothness claim",
+            "limits": "external observer must decode actual displayed transformed poses; no self-observed counters",
+            "observed_poses": 48,
+            "observer": "scoped ScreenCaptureKit display output marker bounding box",
+            "phase_balance_complete": true,
+            "phase_balanced_mean_first_pose_ms": 29.516841110317458,
+            "phase_clock": {
+              "basis": "actual send phase modulo requested display period from captured display timestamp origin",
+              "buckets": 6,
+              "origin_ns": 2116033833333,
+              "period_ns": 16666667
+            },
+            "physical_panel_optical_proof": false,
+            "pose_gap_note": "held steps intentionally retain one pose; no continuous-cadence interpretation",
+            "raw_samples_sha256": "d87884b441b70c7a9c6de482891f3ea1eb626099466f464eb7ede4d19646e432",
+            "requested_observer_hz": 60,
+            "requested_phase_latency_ms": {
+              "0": {
+                "count": 8,
+                "max": 40.390334,
+                "p50": 25.632,
+                "p95": 40.390334,
+                "p99": 40.390334
+              },
+              "1": {
+                "count": 8,
+                "max": 48.996125,
+                "p50": 23.548667,
+                "p95": 48.996125,
+                "p99": 48.996125
+              },
+              "2": {
+                "count": 8,
+                "max": 37.6935,
+                "p50": 18.992125,
+                "p95": 37.6935,
+                "p99": 37.6935
+              },
+              "3": {
+                "count": 8,
+                "max": 55.640958,
+                "p50": 34.272625,
+                "p95": 55.640958,
+                "p99": 55.640958
+              },
+              "4": {
+                "count": 8,
+                "max": 66.324,
+                "p50": 31.831625,
+                "p95": 66.324,
+                "p99": 66.324
+              },
+              "5": {
+                "count": 8,
+                "max": 62.672583,
+                "p50": 44.895916,
+                "p95": 62.672583,
+                "p99": 62.672583
+              }
+            },
+            "source_sha256": "29d7b8f68f32e93f8310fd06fa1cd9891a339d3f0423b5e8e9e981dfdae16ce4"
+          },
+          "producer_source_sha256": "ac1a2e9ee88ca392f56a21b40f4f4c6469b18add167c2fc3ed3bcca4452795ae",
+          "report_sha256": "fca0417253e23e9416120bdbe9b8f8fbb6fe4b1add69cf61f7984970999f2d34",
+          "restoration": {
+            "attempted": true,
+            "helper_count": 8,
+            "independently_verified": true,
+            "journal_persisted": true,
+            "method": "restore_all"
+          },
+          "variant": "windowserver"
+        },
+        {
+          "acknowledgement_round_trip_ms": {
+            "count": 48,
+            "max": 88.2385,
+            "p50": 6.018958,
+            "p95": 42.6885,
+            "p99": 88.2385
+          },
+          "applied_replies": 48,
+          "decoder_source_sha256": "525ae89ceb22aa8cd1dd5ec908c54fabdc62e658c60f46646335fa2deee92b93",
+          "frames_submitted": 48,
+          "name": "02-candidate-scalar-inline",
+          "optical": {
+            "actual_phase_latency_ms": {
+              "0": {
+                "count": 8,
+                "max": 82.135583,
+                "p50": 49.434625,
+                "p95": 82.135583,
+                "p99": 82.135583
+              },
+              "1": {
+                "count": 6,
+                "max": 79.001917,
+                "p50": 44.493875,
+                "p95": 79.001917,
+                "p99": 79.001917
+              },
+              "2": {
+                "count": 5,
+                "max": 76.902792,
+                "p50": 43.779083,
+                "p95": 76.902792,
+                "p99": 76.902792
+              },
+              "3": {
+                "count": 10,
+                "max": 91.274208,
+                "p50": 40.914375,
+                "p95": 91.274208,
+                "p99": 91.274208
+              },
+              "4": {
+                "count": 9,
+                "max": 88.314041,
+                "p50": 38.468083,
+                "p95": 88.314041,
+                "p99": 88.314041
+              },
+              "5": {
+                "count": 10,
+                "max": 101.281792,
+                "p50": 66.744292,
+                "p95": 101.281792,
+                "p99": 101.281792
+              }
+            },
+            "ambiguous_samples": 1,
+            "available": true,
+            "cadence_eligible": false,
+            "capture_observation": {
+              "admissible_pose_samples": 96,
+              "captured_pose_age_ms": {
+                "count": 96,
+                "max": 121.647375,
+                "p50": 67.965084,
+                "p95": 108.140583,
+                "p99": 121.647375
+              },
+              "conditional_cadence_limit": "only adjacent admissible captures one requested refresh apart; missing/rejected captures excluded; not total output FPS",
+              "decoder_exclusions": {
+                "multiple_matching_poses": 0,
+                "no_matching_pose": 1,
+                "outside_held_observation_window": 26
+              },
+              "distinct_admissible_poses": 48,
+              "fresh_pose_fraction_in_one_refresh_transitions": 0.04761904761904767,
+              "limits": "complete-frame callback records only; gaps include capture/scheduling omissions; repeated poses are expected during held steps; no physical-refresh claim",
+              "one_refresh_transition_fraction": 0.18584070796460178,
+              "one_refresh_transitions": 21,
+              "raw_callback_gap_ms": {
+                "count": 113,
+                "max": 107.856125,
+                "p50": 36.607792,
+                "p95": 87.7585,
+                "p99": 98.166875
+              },
+              "raw_complete_frame_records": 114,
+              "raw_display_time_gap_ms": {
+                "count": 113,
+                "max": 116.666667,
+                "p50": 33.333334,
+                "p95": 83.333333,
+                "p99": 100.0
+              },
+              "rejection_reasons": {
+                "already_stale_at_callback": 1,
+                "stale_visibility_witness": 16
+              },
+              "repeated_in_one_refresh_transitions": 20,
+              "repeated_pose_samples": 48,
+              "window_end_ns": 2133131140611,
+              "window_start_ns": 2128322716125
+            },
+            "coverage": 1.0,
+            "decoder_source_sha256": "525ae89ceb22aa8cd1dd5ec908c54fabdc62e658c60f46646335fa2deee92b93",
+            "held_step_latency_ms": {
+              "count": 48,
+              "max": 101.281792,
+              "p50": 44.493875,
+              "p95": 88.314041,
+              "p99": 101.281792
+            },
+            "input_to_visible_ms": {
+              "count": 48,
+              "max": 101.281792,
+              "p50": 44.493875,
+              "p95": 88.314041,
+              "p99": 101.281792
+            },
+            "latency_eligible": true,
+            "latency_note": "first captured pose per held step; all steps and all six actual phase buckets required; no continuous smoothness claim",
+            "limits": "external observer must decode actual displayed transformed poses; no self-observed counters",
+            "observed_poses": 48,
+            "observer": "scoped ScreenCaptureKit display output marker bounding box",
+            "phase_balance_complete": true,
+            "phase_balanced_mean_first_pose_ms": 52.58668249074075,
+            "phase_clock": {
+              "basis": "actual send phase modulo requested display period from captured display timestamp origin",
+              "buckets": 6,
+              "origin_ns": 2127800500000,
+              "period_ns": 16666667
+            },
+            "physical_panel_optical_proof": false,
+            "pose_gap_note": "held steps intentionally retain one pose; no continuous-cadence interpretation",
+            "raw_samples_sha256": "aa71449fc191d0100d268bf3eb4673150dd27964698a33cd2c11d6c8c53b92c8",
+            "requested_observer_hz": 60,
+            "requested_phase_latency_ms": {
+              "0": {
+                "count": 8,
+                "max": 76.902792,
+                "p50": 44.450541,
+                "p95": 76.902792,
+                "p99": 76.902792
+              },
+              "1": {
+                "count": 8,
+                "max": 79.001917,
+                "p50": 40.914375,
+                "p95": 79.001917,
+                "p99": 79.001917
+              },
+              "2": {
+                "count": 8,
+                "max": 70.710709,
+                "p50": 22.238334,
+                "p95": 70.710709,
+                "p99": 70.710709
+              },
+              "3": {
+                "count": 8,
+                "max": 101.281792,
+                "p50": 69.530625,
+                "p95": 101.281792,
+                "p99": 101.281792
+              },
+              "4": {
+                "count": 8,
+                "max": 83.670333,
+                "p50": 66.846334,
+                "p95": 83.670333,
+                "p99": 83.670333
+              },
+              "5": {
+                "count": 8,
+                "max": 66.744292,
+                "p50": 48.509417,
+                "p95": 66.744292,
+                "p99": 66.744292
+              }
+            },
+            "source_sha256": "a0b5ff65bb838d13ecdbcc8b2af9a95c47aaff4ec7c2fc1458ece69c03ca2cee"
+          },
+          "producer_source_sha256": "ac1a2e9ee88ca392f56a21b40f4f4c6469b18add167c2fc3ed3bcca4452795ae",
+          "report_sha256": "dbf6de14f4a1ddc636402ce551bda90ce0aec68044c07610fd1f72e48713162f",
+          "restoration": {
+            "attempted": true,
+            "helper_count": 8,
+            "independently_verified": true,
+            "journal_persisted": true,
+            "method": "restore_all"
+          },
+          "variant": "candidate-scalar-inline"
+        },
+        {
+          "acknowledgement_round_trip_ms": {
+            "count": 48,
+            "max": 4.989417,
+            "p50": 0.497417,
+            "p95": 0.878042,
+            "p99": 4.989417
+          },
+          "applied_replies": 48,
+          "decoder_source_sha256": "525ae89ceb22aa8cd1dd5ec908c54fabdc62e658c60f46646335fa2deee92b93",
+          "frames_submitted": 48,
+          "name": "02-windowserver",
+          "optical": {
+            "actual_phase_latency_ms": {
+              "0": {
+                "count": 12,
+                "max": 49.756291,
+                "p50": 31.899292,
+                "p95": 49.756291,
+                "p99": 49.756291
+              },
+              "1": {
+                "count": 6,
+                "max": 63.425625,
+                "p50": 29.024042,
+                "p95": 63.425625,
+                "p99": 63.425625
+              },
+              "2": {
+                "count": 4,
+                "max": 42.556334,
+                "p50": 25.814417,
+                "p95": 42.556334,
+                "p99": 42.556334
+              },
+              "3": {
+                "count": 11,
+                "max": 56.106583,
+                "p50": 24.438333,
+                "p95": 56.106583,
+                "p99": 56.106583
+              },
+              "4": {
+                "count": 6,
+                "max": 54.633541,
+                "p50": 21.67325,
+                "p95": 54.633541,
+                "p99": 54.633541
+              },
+              "5": {
+                "count": 9,
+                "max": 66.789458,
+                "p50": 35.297917,
+                "p95": 66.789458,
+                "p99": 66.789458
+              }
+            },
+            "ambiguous_samples": 1,
+            "available": true,
+            "cadence_eligible": false,
+            "capture_observation": {
+              "admissible_pose_samples": 103,
+              "captured_pose_age_ms": {
+                "count": 103,
+                "max": 117.858292,
+                "p50": 46.369166,
+                "p95": 91.341542,
+                "p99": 115.23675
+              },
+              "conditional_cadence_limit": "only adjacent admissible captures one requested refresh apart; missing/rejected captures excluded; not total output FPS",
+              "decoder_exclusions": {
+                "multiple_matching_poses": 0,
+                "no_matching_pose": 1,
+                "outside_held_observation_window": 13
+              },
+              "distinct_admissible_poses": 48,
+              "fresh_pose_fraction_in_one_refresh_transitions": 0.061224489795918324,
+              "limits": "complete-frame callback records only; gaps include capture/scheduling omissions; repeated poses are expected during held steps; no physical-refresh claim",
+              "one_refresh_transition_fraction": 0.4537037037037037,
+              "one_refresh_transitions": 49,
+              "raw_callback_gap_ms": {
+                "count": 108,
+                "max": 103.749584,
+                "p50": 23.354209,
+                "p95": 93.729708,
+                "p99": 100.694
+              },
+              "raw_complete_frame_records": 109,
+              "raw_display_time_gap_ms": {
+                "count": 108,
+                "max": 100.0,
+                "p50": 33.333333,
+                "p95": 100.0,
+                "p99": 100.0
+              },
+              "rejection_reasons": {
+                "stale_visibility_witness": 5
+              },
+              "repeated_in_one_refresh_transitions": 46,
+              "repeated_pose_samples": 55,
+              "window_end_ns": 2126816253653,
+              "window_start_ns": 2122008018916
+            },
+            "coverage": 1.0,
+            "decoder_source_sha256": "525ae89ceb22aa8cd1dd5ec908c54fabdc62e658c60f46646335fa2deee92b93",
+            "held_step_latency_ms": {
+              "count": 48,
+              "max": 66.789458,
+              "p50": 31.522042,
+              "p95": 62.999583,
+              "p99": 66.789458
+            },
+            "input_to_visible_ms": {
+              "count": 48,
+              "max": 66.789458,
+              "p50": 31.522042,
+              "p95": 62.999583,
+              "p99": 66.789458
+            },
+            "latency_eligible": true,
+            "latency_note": "first captured pose per held step; all steps and all six actual phase buckets required; no continuous smoothness claim",
+            "limits": "external observer must decode actual displayed transformed poses; no self-observed counters",
+            "observed_poses": 48,
+            "observer": "scoped ScreenCaptureKit display output marker bounding box",
+            "phase_balance_complete": true,
+            "phase_balanced_mean_first_pose_ms": 34.07506684343434,
+            "phase_clock": {
+              "basis": "actual send phase modulo requested display period from captured display timestamp origin",
+              "buckets": 6,
+              "origin_ns": 2121783833333,
+              "period_ns": 16666667
+            },
+            "physical_panel_optical_proof": false,
+            "pose_gap_note": "held steps intentionally retain one pose; no continuous-cadence interpretation",
+            "raw_samples_sha256": "1d8480fbd38d2e837443f293847ddd97717f42f1cd99359f98566d3d74099c89",
+            "requested_observer_hz": 60,
+            "requested_phase_latency_ms": {
+              "0": {
+                "count": 8,
+                "max": 63.425625,
+                "p50": 30.838125,
+                "p95": 63.425625,
+                "p99": 63.425625
+              },
+              "1": {
+                "count": 8,
+                "max": 54.633541,
+                "p50": 23.696,
+                "p95": 54.633541,
+                "p99": 54.633541
+              },
+              "2": {
+                "count": 8,
+                "max": 52.206333,
+                "p50": 23.060958,
+                "p95": 52.206333,
+                "p99": 52.206333
+              },
+              "3": {
+                "count": 8,
+                "max": 66.789458,
+                "p50": 35.563959,
+                "p95": 66.789458,
+                "p99": 66.789458
+              },
+              "4": {
+                "count": 8,
+                "max": 62.999583,
+                "p50": 47.733625,
+                "p95": 62.999583,
+                "p99": 62.999583
+              },
+              "5": {
+                "count": 8,
+                "max": 47.254125,
+                "p50": 29.7025,
+                "p95": 47.254125,
+                "p99": 47.254125
+              }
+            },
+            "source_sha256": "e62190ef9a652a116ea30863a8b8f5c751bff8381e6950ccd0e529a7d5ab6696"
+          },
+          "producer_source_sha256": "ac1a2e9ee88ca392f56a21b40f4f4c6469b18add167c2fc3ed3bcca4452795ae",
+          "report_sha256": "ae25398e162c29cc39e7b6d9ac76c4f73ae7c70739dbeb7a7d17ac56a73b4c3d",
+          "restoration": {
+            "attempted": true,
+            "helper_count": 8,
+            "independently_verified": true,
+            "journal_persisted": true,
+            "method": "restore_all"
+          },
+          "variant": "windowserver"
+        },
+        {
+          "acknowledgement_round_trip_ms": {
+            "count": 48,
+            "max": 37.8775,
+            "p50": 2.053167,
+            "p95": 17.808708,
+            "p99": 37.8775
+          },
+          "applied_replies": 48,
+          "decoder_source_sha256": "525ae89ceb22aa8cd1dd5ec908c54fabdc62e658c60f46646335fa2deee92b93",
+          "frames_submitted": 48,
+          "name": "03-candidate-scalar-inline",
+          "optical": {
+            "actual_phase_latency_ms": {
+              "0": {
+                "count": 4,
+                "max": 38.187208,
+                "p50": 37.649583,
+                "p95": 38.187208,
+                "p99": 38.187208
+              },
+              "1": {
+                "count": 11,
+                "max": 51.508625,
+                "p50": 33.719,
+                "p95": 51.508625,
+                "p99": 51.508625
+              },
+              "2": {
+                "count": 7,
+                "max": 64.8355,
+                "p50": 48.737167,
+                "p95": 64.8355,
+                "p99": 64.8355
+              },
+              "3": {
+                "count": 5,
+                "max": 46.111333,
+                "p50": 30.246708,
+                "p95": 46.111333,
+                "p99": 46.111333
+              },
+              "4": {
+                "count": 9,
+                "max": 59.92325,
+                "p50": 42.285625,
+                "p95": 59.92325,
+                "p99": 59.92325
+              },
+              "5": {
+                "count": 12,
+                "max": 57.302875,
+                "p50": 24.705625,
+                "p95": 57.302875,
+                "p99": 57.302875
+              }
+            },
+            "ambiguous_samples": 1,
+            "available": true,
+            "cadence_eligible": false,
+            "capture_observation": {
+              "admissible_pose_samples": 96,
+              "captured_pose_age_ms": {
+                "count": 96,
+                "max": 124.705625,
+                "p50": 46.913375,
+                "p95": 98.168833,
+                "p99": 124.705625
+              },
+              "conditional_cadence_limit": "only adjacent admissible captures one requested refresh apart; missing/rejected captures excluded; not total output FPS",
+              "decoder_exclusions": {
+                "multiple_matching_poses": 0,
+                "no_matching_pose": 1,
+                "outside_held_observation_window": 17
+              },
+              "distinct_admissible_poses": 48,
+              "fresh_pose_fraction_in_one_refresh_transitions": 0.1071428571428571,
+              "limits": "complete-frame callback records only; gaps include capture/scheduling omissions; repeated poses are expected during held steps; no physical-refresh claim",
+              "one_refresh_transition_fraction": 0.27722772277227725,
+              "one_refresh_transitions": 28,
+              "raw_callback_gap_ms": {
+                "count": 101,
+                "max": 110.39925,
+                "p50": 32.618833,
+                "p95": 96.425125,
+                "p99": 104.325417
+              },
+              "raw_complete_frame_records": 102,
+              "raw_display_time_gap_ms": {
+                "count": 101,
+                "max": 116.666667,
+                "p50": 33.333334,
+                "p95": 100.0,
+                "p99": 116.666667
+              },
+              "rejection_reasons": {
+                "stale_visibility_witness": 5
+              },
+              "repeated_in_one_refresh_transitions": 25,
+              "repeated_pose_samples": 48,
+              "window_end_ns": 2140087331861,
+              "window_start_ns": 2135275794375
+            },
+            "coverage": 1.0,
+            "decoder_source_sha256": "525ae89ceb22aa8cd1dd5ec908c54fabdc62e658c60f46646335fa2deee92b93",
+            "held_step_latency_ms": {
+              "count": 48,
+              "max": 64.8355,
+              "p50": 40.415292,
+              "p95": 57.302875,
+              "p99": 64.8355
+            },
+            "input_to_visible_ms": {
+              "count": 48,
+              "max": 64.8355,
+              "p50": 40.415292,
+              "p95": 57.302875,
+              "p99": 64.8355
+            },
+            "latency_eligible": true,
+            "latency_note": "first captured pose per held step; all steps and all six actual phase buckets required; no continuous smoothness claim",
+            "limits": "external observer must decode actual displayed transformed poses; no self-observed counters",
+            "observed_poses": 48,
+            "observer": "scoped ScreenCaptureKit display output marker bounding box",
+            "phase_balance_complete": true,
+            "phase_balanced_mean_first_pose_ms": 36.84334220678211,
+            "phase_clock": {
+              "basis": "actual send phase modulo requested display period from captured display timestamp origin",
+              "buckets": 6,
+              "origin_ns": 2134795052833,
+              "period_ns": 16666667
+            },
+            "physical_panel_optical_proof": false,
+            "pose_gap_note": "held steps intentionally retain one pose; no continuous-cadence interpretation",
+            "raw_samples_sha256": "de60a9fe8de0784f8c707dd4871392429abc1484a99063f4848656de4755cac0",
+            "requested_observer_hz": 60,
+            "requested_phase_latency_ms": {
+              "0": {
+                "count": 8,
+                "max": 42.285625,
+                "p50": 25.963125,
+                "p95": 42.285625,
+                "p99": 42.285625
+              },
+              "1": {
+                "count": 8,
+                "max": 51.508625,
+                "p50": 33.719,
+                "p95": 51.508625,
+                "p99": 51.508625
+              },
+              "2": {
+                "count": 8,
+                "max": 64.8355,
+                "p50": 48.737167,
+                "p95": 64.8355,
+                "p99": 64.8355
+              },
+              "3": {
+                "count": 8,
+                "max": 51.086667,
+                "p50": 30.246708,
+                "p95": 51.086667,
+                "p99": 51.086667
+              },
+              "4": {
+                "count": 8,
+                "max": 56.311917,
+                "p50": 42.212,
+                "p95": 56.311917,
+                "p99": 56.311917
+              },
+              "5": {
+                "count": 8,
+                "max": 59.92325,
+                "p50": 40.415292,
+                "p95": 59.92325,
+                "p99": 59.92325
+              }
+            },
+            "source_sha256": "e5b23f85a5d69347d9ef5b8c089f2e05cf46aa138642e6225a7b694fadba86ce"
+          },
+          "producer_source_sha256": "ac1a2e9ee88ca392f56a21b40f4f4c6469b18add167c2fc3ed3bcca4452795ae",
+          "report_sha256": "c95bfa3affe33550fe24cf626e69f16a62ea9c173fa231f3fa7c50a4389b68c5",
+          "restoration": {
+            "attempted": true,
+            "helper_count": 8,
+            "independently_verified": true,
+            "journal_persisted": true,
+            "method": "restore_all"
+          },
+          "variant": "candidate-scalar-inline"
+        },
+        {
+          "acknowledgement_round_trip_ms": {
+            "count": 48,
+            "max": 3.900417,
+            "p50": 0.48425,
+            "p95": 2.344166,
+            "p99": 3.900417
+          },
+          "applied_replies": 48,
+          "decoder_source_sha256": "525ae89ceb22aa8cd1dd5ec908c54fabdc62e658c60f46646335fa2deee92b93",
+          "frames_submitted": 48,
+          "name": "03-windowserver",
+          "optical": {
+            "actual_phase_latency_ms": {
+              "0": {
+                "count": 13,
+                "max": 66.605375,
+                "p50": 35.777042,
+                "p95": 66.605375,
+                "p99": 66.605375
+              },
+              "1": {
+                "count": 8,
+                "max": 46.721708,
+                "p50": 29.689209,
+                "p95": 46.721708,
+                "p99": 46.721708
+              },
+              "2": {
+                "count": 7,
+                "max": 43.841875,
+                "p50": 26.961292,
+                "p95": 43.841875,
+                "p99": 43.841875
+              },
+              "3": {
+                "count": 9,
+                "max": 57.232375,
+                "p50": 23.512667,
+                "p95": 57.232375,
+                "p99": 57.232375
+              },
+              "4": {
+                "count": 7,
+                "max": 37.9805,
+                "p50": 5.547167,
+                "p95": 37.9805,
+                "p99": 37.9805
+              },
+              "5": {
+                "count": 4,
+                "max": 50.531625,
+                "p50": 16.785333,
+                "p95": 50.531625,
+                "p99": 50.531625
+              }
+            },
+            "ambiguous_samples": 2,
+            "available": true,
+            "cadence_eligible": false,
+            "capture_observation": {
+              "admissible_pose_samples": 100,
+              "captured_pose_age_ms": {
+                "count": 100,
+                "max": 115.972208,
+                "p50": 42.85625,
+                "p95": 98.880083,
+                "p99": 115.845667
+              },
+              "conditional_cadence_limit": "only adjacent admissible captures one requested refresh apart; missing/rejected captures excluded; not total output FPS",
+              "decoder_exclusions": {
+                "multiple_matching_poses": 0,
+                "no_matching_pose": 2,
+                "outside_held_observation_window": 19
+              },
+              "distinct_admissible_poses": 48,
+              "fresh_pose_fraction_in_one_refresh_transitions": 0.06451612903225812,
+              "limits": "complete-frame callback records only; gaps include capture/scheduling omissions; repeated poses are expected during held steps; no physical-refresh claim",
+              "one_refresh_transition_fraction": 0.2980769230769231,
+              "one_refresh_transitions": 31,
+              "raw_callback_gap_ms": {
+                "count": 104,
+                "max": 110.23825,
+                "p50": 25.982375,
+                "p95": 93.569625,
+                "p99": 101.617875
+              },
+              "raw_complete_frame_records": 105,
+              "raw_display_time_gap_ms": {
+                "count": 104,
+                "max": 116.666667,
+                "p50": 33.333333,
+                "p95": 100.0,
+                "p99": 100.0
+              },
+              "rejection_reasons": {
+                "stale_visibility_witness": 3
+              },
+              "repeated_in_one_refresh_transitions": 29,
+              "repeated_pose_samples": 52,
+              "window_end_ns": 2145773691194,
+              "window_start_ns": 2140967987666
+            },
+            "coverage": 1.0,
+            "decoder_source_sha256": "525ae89ceb22aa8cd1dd5ec908c54fabdc62e658c60f46646335fa2deee92b93",
+            "held_step_latency_ms": {
+              "count": 48,
+              "max": 66.605375,
+              "p50": 26.961292,
+              "p95": 57.232375,
+              "p99": 66.605375
+            },
+            "input_to_visible_ms": {
+              "count": 48,
+              "max": 66.605375,
+              "p50": 26.961292,
+              "p95": 57.232375,
+              "p99": 66.605375
+            },
+            "latency_eligible": true,
+            "latency_note": "first captured pose per held step; all steps and all six actual phase buckets required; no continuous smoothness claim",
+            "limits": "external observer must decode actual displayed transformed poses; no self-observed counters",
+            "observed_poses": 48,
+            "observer": "scoped ScreenCaptureKit display output marker bounding box",
+            "phase_balance_complete": true,
+            "phase_balanced_mean_first_pose_ms": 27.231531622303624,
+            "phase_clock": {
+              "basis": "actual send phase modulo requested display period from captured display timestamp origin",
+              "buckets": 6,
+              "origin_ns": 2140650500000,
+              "period_ns": 16666667
+            },
+            "physical_panel_optical_proof": false,
+            "pose_gap_note": "held steps intentionally retain one pose; no continuous-cadence interpretation",
+            "raw_samples_sha256": "5663f0474729404ee65879f0f8b7f21f84da9ec1e205a0ce7809286f09345da2",
+            "requested_observer_hz": 60,
+            "requested_phase_latency_ms": {
+              "0": {
+                "count": 8,
+                "max": 49.456125,
+                "p50": 29.689209,
+                "p95": 49.456125,
+                "p99": 49.456125
+              },
+              "1": {
+                "count": 8,
+                "max": 66.605375,
+                "p50": 37.569334,
+                "p95": 66.605375,
+                "p99": 66.605375
+              },
+              "2": {
+                "count": 8,
+                "max": 45.720791,
+                "p50": 29.513792,
+                "p95": 45.720791,
+                "p99": 45.720791
+              },
+              "3": {
+                "count": 8,
+                "max": 46.721708,
+                "p50": 26.961292,
+                "p95": 46.721708,
+                "p99": 46.721708
+              },
+              "4": {
+                "count": 8,
+                "max": 57.232375,
+                "p50": 23.900959,
+                "p95": 57.232375,
+                "p99": 57.232375
+              },
+              "5": {
+                "count": 8,
+                "max": 50.531625,
+                "p50": 23.143209,
+                "p95": 50.531625,
+                "p99": 50.531625
+              }
+            },
+            "source_sha256": "db75593f001bea0dbaccc71389c3d42c7e137c98514764cf0f9650ba18bb6942"
+          },
+          "producer_source_sha256": "ac1a2e9ee88ca392f56a21b40f4f4c6469b18add167c2fc3ed3bcca4452795ae",
+          "report_sha256": "281a1409d3aba9c7e72feaf37822ac04ceb7b1a4e5ddfe978a92d964157082aa",
+          "restoration": {
+            "attempted": true,
+            "helper_count": 8,
+            "independently_verified": true,
+            "journal_persisted": true,
+            "method": "restore_all"
+          },
+          "variant": "windowserver"
+        }
+      ],
+      "trace_sha256": "bd065a0c13dc01d4873b67e2d03a01b459dd1ef0d665c08a9c04e625387cab79"
+    }
+  },
+  "requested_hz": 60,
+  "schema": 1,
+  "scope": "authorized disposable macOS VirtualMac2,1 only",
+  "smoothness_result": {
+    "conditional_metrics": {
+      "candidate-scalar-inline": {
+        "coverage": [
+          0.6041666666666666,
+          0.6291666666666667,
+          0.6958333333333333
+        ],
+        "fresh_fraction": 0.8856382978723404,
+        "one_refresh_transitions": 376,
+        "per_trial_fresh_fraction": [
+          0.7872340425531915,
+          0.9142857142857143,
+          0.9692307692307692
+        ],
+        "repeated_transitions": 43
+      },
+      "windowserver": {
+        "coverage": [
+          0.75,
+          0.6458333333333334,
+          0.6708333333333333
+        ],
+        "fresh_fraction": 0.9283819628647215,
+        "one_refresh_transitions": 377,
+        "per_trial_fresh_fraction": [
+          0.9923664122137404,
+          1.0,
+          0.8194444444444444
+        ],
+        "repeated_transitions": 27
+      }
+    },
+    "overall_winner": null,
+    "reason": "capture gaps and below90percent command-pose coverage prevent overall smoothness ranking; conditional fresh-pose metric favors WS in two of three trials"
+  },
+  "window_count": 8
+}

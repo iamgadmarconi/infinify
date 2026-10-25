@@ -39,6 +39,162 @@ class Contracts(unittest.TestCase):
         with self.assertRaises(ValueError):
             bench.make_trace(60, 2, 601)
 
+    def test_held_steps_are_unique_bounded_and_counterbalance_requested_phase(self):
+        trace = bench.make_trace(60, 2, 600, kind='held-step')
+        self.assertEqual(bench.encoded(trace), bench.encoded(bench.make_trace(60, 2, 600, kind='held-step')))
+        self.assertEqual(trace['kind'], 'held-step')
+        self.assertEqual(len(trace['frames']), 48)
+        self.assertLess(trace['duration_ns'], 5_000_000_000)
+        self.assertEqual(trace['duration_ns'] - trace['frames'][-1]['due_ns'], 100_000_000)
+        self.assertEqual([row['phase'] for row in trace['frames']], ['pan'] * 24 + ['zoom'] * 24)
+        window = {'screen_rect': [100., 200., 480., 320.]}
+        self.assertEqual(len({tuple(bench.matrix(row, window)) for row in trace['frames']}), 48)
+        for bucket in range(6):
+            self.assertEqual(sum(row['requested_phase_bucket'] == bucket for row in trace['frames']), 8)
+        for index, row in enumerate(trace['frames']):
+            offset = row['due_ns'] - index * trace['nominal_hold_ns']
+            expected = (row['requested_phase_bucket'] + 0.5) * (1e9 / 60) / 6
+            self.assertLessEqual(abs(offset - expected), 1)
+        self.assertTrue(all(a['due_ns'] < b['due_ns'] for a, b in zip(trace['frames'], trace['frames'][1:])))
+        self.assertEqual(bench.make_trace(60, 2)['kind'], 'continuous')
+        with self.assertRaises(ValueError):
+            bench.make_trace(29, 2, 600, kind='held-step')
+        with self.assertRaises(ValueError):
+            bench.make_trace(60, 2, 119, kind='held-step')
+
+    def test_held_step_latency_requires_every_pose_and_actual_phase_bucket(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'held.jsonl'
+            submitted = {index: {'send_before_ns': index * 100_000_000,
+                                  'requested_phase_bucket': index % 6} for index in range(24)}
+            samples = [{'schema': bench.SCHEMA, 'run_id': 'r', 'trace_sha256': 'h',
+                        'clock': bench.SHARED_CLOCK, 'observer_kind': 'independent_display_pixels',
+                        'capture_method': 'display_capture', 'occluded': False, 'trace_index': index,
+                        'presented_ns': submitted[index]['send_before_ns'] + (index % 6 + 1) * 1_000_000,
+                        'capture_requested_hz': 60, 'actual_phase_bucket': index % 6} for index in range(24)]
+            path.write_text(''.join(json.dumps(row) + '\n' for row in samples))
+            result = bench.parse_optical(path, 'r', 'h', submitted, 60, 'held-step')
+            self.assertTrue(result['latency_eligible'])
+            self.assertFalse(result['cadence_eligible'])
+            self.assertEqual(result['coverage'], 1)
+            self.assertAlmostEqual(result['phase_balanced_mean_first_pose_ms'], 3.5)
+            self.assertEqual([value['count'] for value in result['actual_phase_latency_ms'].values()], [4] * 6)
+            self.assertNotIn('observed_pose_gap_intervals', result)
+            path.write_text(''.join(json.dumps(row) + '\n' for row in samples[:-1]))
+            result = bench.parse_optical(path, 'r', 'h', submitted, 60, 'held-step')
+            self.assertGreater(result['coverage'], 0.9)
+            self.assertFalse(result['latency_eligible'])
+            for row in samples:
+                row['actual_phase_bucket'] = 0
+            path.write_text(''.join(json.dumps(row) + '\n' for row in samples))
+            result = bench.parse_optical(path, 'r', 'h', submitted, 60, 'held-step')
+            self.assertEqual(result['coverage'], 1)
+            self.assertFalse(result['phase_balance_complete'])
+            self.assertFalse(result['latency_eligible'])
+
+    def test_capture_metrics_separate_repeated_poses_raw_gaps_and_stale_exclusions(self):
+        raw = [{'type': 'observer'},
+               {'type': 'pixels', 'presented_ns': 0, 'callback_ns': 1_000_000,
+                'marker_bounds': [1, 1, 10, 10], 'unobscured': True, 'rejection_reason': 'none'},
+               {'type': 'pixels', 'presented_ns': 16_666_667, 'callback_ns': 60_000_000,
+                'marker_bounds': None, 'unobscured': False, 'rejection_reason': 'already_stale_at_callback'},
+               {'type': 'pixels', 'presented_ns': 33_333_334, 'callback_ns': 65_000_000,
+                'marker_bounds': [1, 1, 10, 10], 'unobscured': False, 'visibility_witness_ns': 72_000_000},
+               {'type': 'pixels', 'presented_ns': 50_000_001, 'callback_ns': 70_000_000,
+                'marker_bounds': [1, 1, 10, 10], 'unobscured': True, 'rejection_reason': 'none'}]
+        matched = [{'trace_index': 0, 'presented_ns': 0, 'pose_age_ms': 1},
+                   {'trace_index': 0, 'presented_ns': 50_000_001, 'pose_age_ms': 51}]
+        result = bench.capture_observation_metrics(raw, matched, 60, 0, 60_000_000,
+                                                   {'multiple_matching_poses': 2})
+        self.assertEqual(result['raw_complete_frame_records'], 4)
+        self.assertEqual(result['raw_callback_gap_ms']['count'], 3)
+        self.assertEqual(result['raw_callback_gap_ms']['max'], 59)
+        self.assertEqual(result['repeated_pose_samples'], 1)
+        self.assertEqual(result['distinct_admissible_poses'], 1)
+        self.assertEqual(result['captured_pose_age_ms']['max'], 51)
+        self.assertEqual(result['rejection_reasons'], {'already_stale_at_callback': 1, 'stale_visibility_witness': 1})
+        self.assertEqual(result['decoder_exclusions']['multiple_matching_poses'], 2)
+
+    def test_held_decoder_uses_first_capture_and_keeps_repeats_separate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            window = {'wid': 42, 'screen_rect': [100., 200., 480., 320.],
+                      'bounds': [100., 200., 480., 320.]}
+            fixture_path = directory / 'fixture.json'
+            bench.write_json(fixture_path, {'pid': 123, 'windows': [window]})
+            trace = bench.make_trace(60, 2, 600, kind='held-step')
+            base, frames = 1_000_000_000, []
+            raw = [{'schema': bench.SCHEMA, 'type': 'observer', 'clock': bench.SHARED_CLOCK,
+                    'fixture_manifest_sha256': bench.digest(fixture_path), 'wid': 42, 'pid': 123,
+                    'capture_method': 'display_capture', 'filtered_fixture_only': True,
+                    'point_scale_x': 1, 'point_scale_y': 1, 'requested_hz': 60},
+                   {'type': 'pixels', 'presented_ns': base - 100_000_000,
+                    'callback_ns': base - 99_000_000, 'marker_bounds': None}]
+            for row in trace['frames']:
+                pose = bench.matrix(row, window)
+                frame = {'trace_index': row['index'], 'send_before_ns': base + row['due_ns'],
+                         'observed_window_matrix': pose, 'requested_phase_bucket': row['requested_phase_bucket']}
+                frames.append(frame)
+                a, _, _, d, tx, ty = pose
+                rect = [-tx / a, -ty / d, 480 / a, 320 / d]
+                # Write the later repeated pose first to verify timestamp-based
+                # first-capture selection, independently of JSONL arrival order.
+                for delay in (40_000_000, 20_000_000):
+                    at = frame['send_before_ns'] + delay
+                    raw.append({'type': 'pixels', 'presented_ns': at, 'callback_ns': at + 1_000_000,
+                                'marker_bounds': rect, 'unobscured': True,
+                                'visibility_witness_ns': at + 2_000_000, 'rejection_reason': 'none'})
+            report = {'schema': bench.SCHEMA, 'clock': bench.SHARED_CLOCK, 'run_id': 'held',
+                      'trace_sha256': 'trace', 'fixture_manifest_sha256': bench.digest(fixture_path),
+                      'hz': 60, 'trace_kind': 'held-step', 'start_shared_ns': base,
+                      'trace_duration_ns': trace['duration_ns'], 'status': 'measured_control_path',
+                      'restoration': {'independently_verified': True}}
+            bench.write_json(directory / 'run.json', report)
+            (directory / 'frames.jsonl').write_text(''.join(json.dumps(row) + '\n' for row in frames))
+            raw_path = directory / 'raw.jsonl'
+            raw_path.write_text(''.join(json.dumps(row) + '\n' for row in raw))
+            bench.decode_pixels(argparse.Namespace(run_dir=str(directory), fixture_manifest=str(fixture_path),
+                                                   raw_pixels=str(raw_path), output=str(directory / 'decoded.jsonl')))
+            result = json.loads((directory / 'run.json').read_text())
+            self.assertEqual(result['optical']['coverage'], 1)
+            self.assertEqual(result['optical']['held_step_latency_ms']['count'], 48)
+            self.assertAlmostEqual(result['optical']['held_step_latency_ms']['max'], 20)
+            self.assertTrue(result['latency_comparison_eligible'])
+            self.assertFalse(result['winner_eligible'])
+            self.assertFalse(result['optical']['cadence_eligible'])
+            capture = result['optical']['capture_observation']
+            self.assertEqual(capture['repeated_pose_samples'], 48)
+            self.assertEqual(capture['admissible_pose_samples'], 96)
+            self.assertAlmostEqual(capture['captured_pose_age_ms']['max'], 40)
+            # A first observation after the frozen final hold cannot complete
+            # latency coverage while lying outside the sensor diagnostic window.
+            late_raw = [row for row in raw if row.get('marker_bounds') != rect]
+            late_at = base + trace['duration_ns'] + 1_000_000
+            late_raw.append({'type': 'pixels', 'presented_ns': late_at, 'callback_ns': late_at + 1_000_000,
+                             'marker_bounds': rect, 'unobscured': True,
+                             'visibility_witness_ns': late_at + 2_000_000, 'rejection_reason': 'none'})
+            raw_path.write_text(''.join(json.dumps(row) + '\n' for row in late_raw))
+            bench.decode_pixels(argparse.Namespace(run_dir=str(directory), fixture_manifest=str(fixture_path),
+                                                   raw_pixels=str(raw_path), output=str(directory / 'decoded.jsonl')))
+            result = json.loads((directory / 'run.json').read_text())
+            self.assertEqual(result['optical']['observed_poses'], len(trace['frames']) - 1)
+            self.assertFalse(result['latency_comparison_eligible'])
+            self.assertEqual(result['optical']['capture_observation']['decoder_exclusions']['outside_held_observation_window'], 1)
+
+    def test_continuous_ninety_percent_gate_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'continuous.jsonl'
+            submitted = {index: {'send_before_ns': index * 1_000_000} for index in range(10)}
+            rows = [{'schema': bench.SCHEMA, 'run_id': 'r', 'trace_sha256': 'h', 'clock': bench.SHARED_CLOCK,
+                     'observer_kind': 'independent_display_pixels', 'capture_method': 'display_capture',
+                     'occluded': False, 'trace_index': index, 'presented_ns': index * 1_000_000 + 100_000,
+                     'capture_requested_hz': 60} for index in range(9)]
+            path.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+            result = bench.parse_optical(path, 'r', 'h', submitted, 60)
+            self.assertEqual(result['coverage'], 0.9)
+            self.assertTrue(result['cadence_eligible'])
+            self.assertIn('observed_pose_gap_intervals', result)
+
     def test_pixel_proof_rejects_producer_and_clock_mismatch(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'samples.jsonl'
@@ -119,6 +275,19 @@ class Contracts(unittest.TestCase):
         upper = absolute() * info.numer // info.denom
         self.assertLessEqual(lower, shared)
         self.assertLessEqual(shared, upper)
+
+    def test_conditional_cadence_excludes_missing_or_rejected_capture_intervals(self):
+        period = 1_000_000_000 / 60
+        times = {i: 1_000_000_000 + round(i * period) for i in (0, 1, 2, 4, 5, 6)}
+        raw = [{'type': 'pixels', 'presented_ns': t, 'callback_ns': t + 1_000_000}
+               for t in times.values()]
+        poses = [{'presented_ns': times[i], 'trace_index': pose, 'pose_age_ms': 1}
+                 for i, pose in ((0, 0), (1, 0), (2, 1), (4, 3), (6, 4))]
+        result = bench.capture_observation_metrics(raw, poses, 60, times[0], times[6], {})
+        self.assertEqual(result['one_refresh_transitions'], 2)
+        self.assertEqual(result['repeated_in_one_refresh_transitions'], 1)
+        self.assertEqual(result['fresh_pose_fraction_in_one_refresh_transitions'], 0.5)
+        self.assertEqual(result['one_refresh_transition_fraction'], 0.4)
 
     def test_legacy_clock_cannot_select_a_visible_winner(self):
         with tempfile.TemporaryDirectory() as directory:

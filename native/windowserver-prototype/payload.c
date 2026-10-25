@@ -179,133 +179,17 @@ static bool read_bytes(int fd,void *bytes,size_t length,uint64_t deadline) {
     }
     return true;
 }
-static bool write_bytes(int fd,const void *bytes,size_t length) {
-    size_t used=0;while(used<length) {
-        ssize_t n=write(fd,(const char*)bytes+used,length-used);
-        if(n<0&&errno==EINTR)continue;if(n<=0)return false;used+=(size_t)n;
-    }return true;
-}
-static bool send_reply(int fd,const struct dw2_header *request,const void *body,uint32_t length) {
-    struct dw2_header h={.length=length,.type=request->type|DW2_REPLY,.seq=request->seq};
-    return write_bytes(fd,&h,sizeof(h))&&write_bytes(fd,body,length);
-}
-static bool frame_body_valid(const struct dw2_header *header,const unsigned char *body) {
-    if(header->type!=DW2_FRAME||header->flags||header->length<sizeof(struct dw2_frame))return false;
-    struct dw2_frame frame;memcpy(&frame,body,sizeof(frame));
-    return !frame.reserved&&frame.count<=config.window_count
-        &&header->length==sizeof(frame)+frame.count*sizeof(struct dw2_record);
-}
-static bool newest_complete_frame(int fd,struct dw2_header *header,unsigned char *body,uint32_t *superseded) {
-    *superseded=0;if(!frame_body_valid(header,body))return false;
-    // Drain only complete consecutive FRAME requests already in the socket.
-    // Inspection, PROBE and RESTORE remain ordered barriers. Never wait for a
-    // partial future frame or queue hundreds of obsolete camera poses.
-    for(unsigned i=0;i<1024;i++) {
-        int available=0;if(ioctl(fd,FIONREAD,&available)||available<(int)sizeof(*header))break;
-        struct dw2_header next;
-        ssize_t peeked=recv(fd,&next,sizeof(next),MSG_PEEK|MSG_DONTWAIT);
-        if(peeked!=(ssize_t)sizeof(next)||next.type!=DW2_FRAME)break;
-        if(next.flags||next.length>DW2_MAX_BODY||next.seq<=header->seq)return false;
-        if((uint64_t)available<sizeof(next)+(uint64_t)next.length)break;
-        if(!read_bytes(fd,&next,sizeof(next),milliseconds()+100)
-            ||!read_bytes(fd,body,next.length,milliseconds()+100)||!frame_body_valid(&next,body))return false;
-        *header=next;(*superseded)++;
-    }return true;
-}
-static bool hello(int fd,uint16_t *role,uint8_t token[16],bool *session_started) {
-    uid_t uid=0;gid_t gid=0;
-    struct dw2_header h;struct dw2_hello body;
-    if(getpeereid(fd,&uid,&gid)||uid!=config.controller_uid||!read_bytes(fd,&h,sizeof(h),milliseconds()+500)
-        ||h.type!=DW2_HELLO||h.flags||h.length!=sizeof(body)
-        ||!read_bytes(fd,&body,sizeof(body),milliseconds()+500))return false;
-    struct dw2_hello_reply reply={.lease_ms=DW2_LEASE_MS,.max_records=config.window_count,.max_body=DW2_MAX_BODY,
-        .caps=capabilities,.scope=DW2_SCOPE_ALLOWLIST,.queue=DW2_QUEUE_MAIN,.server_pid=getpid()};
-    bool starting=false;
-    if(memcmp(body.magic,DW2_MAGIC,4)||body.version!=DW2_VERSION||memcmp(body.nonce,config.nonce,64))reply.status=DW2_HELLO_AUTH;
-    else if(body.role==DW2_ROLE_CONTROL) {
-        if(*session_started)reply.status=DW2_HELLO_BUSY;
-        else {arc4random_buf(token,16);starting=true;}
-    } else if(body.role!=DW2_ROLE_HEARTBEAT||!*session_started||memcmp(body.token,token,16))reply.status=DW2_HELLO_TOKEN;
-    memcpy(reply.token,token,16);*role=body.role;
-    bool accepted=send_reply(fd,&h,&reply,sizeof(reply))&&reply.status==DW2_HELLO_OK;
-    if(starting){if(accepted)*session_started=true;else memset(token,0,16);}
-    return accepted;
-}
-static void *serve(void *unused) {
-    startup_diagnostic("worker-enter",0,"bounded socket worker started");
-    (void)unused;char path[sizeof(((struct sockaddr_un*)0)->sun_path)];
-    int n=snprintf(path,sizeof(path),"%s/" DW2_SOCKET,config.runtime);
-    if(n<0||(size_t)n>=sizeof(path)){startup_diagnostic("socket-path",ENAMETOOLONG,"socket address does not fit");return NULL;}
-    struct sockaddr_un address={.sun_family=AF_UNIX};memcpy(address.sun_path,path,(size_t)n+1);
-    int listener=socket(AF_UNIX,SOCK_STREAM,0);
-    if(listener<0){startup_diagnostic("socket-create",errno,"socket creation failed");return NULL;}
-    if(bind(listener,(struct sockaddr*)&address,sizeof(address))){int error=errno;close(listener);startup_diagnostic("socket-bind",error,"socket bind failed");return NULL;}
-    startup_diagnostic("socket-bound",0,"socket bind completed");
-    if(chmod(path,0666)){int error=errno;close(listener);startup_diagnostic("socket-mode",error,"socket chmod failed");return NULL;}
-    if(listen(listener,2)){int error=errno;close(listener);startup_diagnostic("socket-listen",error,"socket listen failed");return NULL;}
-    startup_diagnostic("socket-ready",0,"socket listener ready; no window mutation performed");
-    uint64_t end=milliseconds()+config.lifetime_ms,lease=end;int control=-1,heartbeat=-1;
-    uint8_t token[16]={0};bool started=false;unsigned sessions_completed=0;
-    while(milliseconds()<end&&milliseconds()<lease&&fixture_current()) {
-        struct pollfd fds[3]={{.fd=listener,.events=POLLIN},{.fd=control,.events=POLLIN},{.fd=heartbeat,.events=POLLIN}};
-        if(poll(fds,3,50)<0){if(errno==EINTR)continue;break;}
-        if(fds[0].revents&POLLIN) {
-            int fd=accept(listener,NULL,NULL);if(fd>=0) {
-                int one=1;struct timeval timeout={.tv_sec=1};
-                setsockopt(fd,SOL_SOCKET,SO_NOSIGPIPE,&one,sizeof(one));setsockopt(fd,SOL_SOCKET,SO_SNDTIMEO,&timeout,sizeof(timeout));
-                uint16_t role=0;
-                if(hello(fd,&role,token,&started)) {
-                    if(role==DW2_ROLE_CONTROL&&control<0)control=fd;
-                    else if(role==DW2_ROLE_HEARTBEAT&&heartbeat<0)heartbeat=fd;
-                    else close(fd);
-                    lease=milliseconds()+DW2_LEASE_MS;
-                }else close(fd);
-            }
-        }
-        bool stopped=false;
-        for(unsigned i=1;i<3;i++)if(fds[i].fd>=0&&fds[i].revents) {
-            int fd=fds[i].fd;struct dw2_header h;
-            if(!read_bytes(fd,&h,sizeof(h),milliseconds()+500)||h.flags||h.length>DW2_MAX_BODY){stopped=true;break;}
-            unsigned char body[DW2_MAX_BODY],reply[DW2_MAX_BODY];
-            if(!read_bytes(fd,body,h.length,milliseconds()+500)){stopped=true;break;}
-            lease=milliseconds()+DW2_LEASE_MS;
-            if(h.type==DW2_HEARTBEAT&&!h.length) {
-                uint32_t held=0;for(unsigned j=0;j<config.window_count;j++)held+=touched[j];
-                struct dw2_heartbeat_reply response={.lease_ms=DW2_LEASE_MS,.held=held};
-                if(!send_reply(fd,&h,&response,sizeof(response)))stopped=true;
-            }else if(i==1) {
-                struct request_context context={.header=&h,.body=body,.reply=reply};
-                if(h.type==DW2_FRAME&&!newest_complete_frame(fd,&h,body,&context.superseded)){stopped=true;break;}
-                if(!ifwsp_server_call(&config,perform_request,&context)||!context.length||!send_reply(fd,&h,reply,context.length))stopped=true;
-            }else stopped=true;
-            if(stopped)break;
-        }
-        if(stopped) {
-            // Sequential benchmark trials may reconnect only after the previous
-            // session's exact raw originals have been restored. There is still
-            // one fixed outer lifetime and one fixed disposable fixture scope.
-            if(!ifwsp_server_restore_call(&config,restore_operation,NULL)||pending_restores())break;
-            if(control>=0)close(control);if(heartbeat>=0)close(heartbeat);
-            control=-1;heartbeat=-1;started=false;memset(token,0,sizeof(token));
-            received=0;applied=0;superseded_frames=0;lease=end;sessions_completed++;
-        }
-    }
-    // Server callbacks restore before the worker terminates. A stalled server
-    // cannot execute its own callbacks until it resumes; the fixture is disposable.
-    ifwsp_server_restore_call(&config,restore_operation,NULL);
-    if(control>=0)close(control);if(heartbeat>=0)close(heartbeat);close(listener);unlink(path);
-    char report[140];snprintf(report,sizeof(report),"%s/restoration.txt",config.runtime);
-    int fd=open(report,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600);
-    if(fd>=0){dprintf(fd,"pending=%u\nsessions_completed=%u\n",pending_restores(),sessions_completed);fsync(fd);close(fd);}
-    return NULL;
-}
+#include "mailbox-server.inc"
 
 __attribute__((constructor)) static void start(void) {
     // No sidecar means inert. In particular dlopen from a read-only inspection
     // process never opens a socket, creates a thread, or performs native queries.
+    constructor_started_ns=ifwsp_mb_now_ns();
     startup_diagnostic("constructor-enter",0,"payload constructor entered");
     Dl_info image={0};
     if(!dladdr((void*)&start,&image)||!image.dli_fname){startup_diagnostic("image-path",errno,"payload image lookup failed");return;}
+    if(strlen(image.dli_fname)>=sizeof(payload_image_path))return;
+    strcpy(payload_image_path,image.dli_fname);
     char path[4096];int n=snprintf(path,sizeof(path),"%s.ifwsp",image.dli_fname);
     if(n<0||(size_t)n>=sizeof(path)){startup_diagnostic("sidecar-path",ENAMETOOLONG,"sidecar path does not fit");return;}
     int fd=open(path,O_RDONLY|O_NOFOLLOW);

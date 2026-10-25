@@ -84,9 +84,31 @@ def distribution(values):
                                     for q in (50, 95, 99)}, 'max': values[-1]}
 
 
-def make_trace(hz, seconds, pan_points=120):
+def make_trace(hz, seconds, pan_points=120, kind='continuous'):
     if not 1 <= hz <= 240 or not 1 <= seconds <= 30 or not 0 <= pan_points <= 600:
         raise ValueError('trace requires hz 1..240, seconds per phase 1..30, pan 0..600')
+    if kind not in ('continuous', 'held-step'):
+        raise ValueError('trace kind must be continuous or held-step')
+    if kind == 'held-step':
+        if hz < 30 or pan_points < 120:
+            raise ValueError('held-step requires hz 30..240 and pan span 120..600 for distinct observable poses')
+        frames, buckets, steps = [], 6, 48
+        period_ns = 1_000_000_000 / hz
+        spacing_ns = math.ceil(hz / 10) * period_ns
+        for index in range(steps):
+            phase, local = ('pan', index) if index < steps // 2 else ('zoom', index - steps // 2)
+            t = local / (steps // 2 - 1)
+            bucket = index % buckets
+            frames.append({'index': index, 'phase': phase,
+                           'due_ns': round(index * spacing_ns + (bucket + 0.5) * period_ns / buckets),
+                           'requested_phase_bucket': bucket,
+                           'zoom': 0.75 if phase == 'pan' else 0.6 + 0.3 * t,
+                           'pan_x': pan_points * t, 'pan_y': pan_points * 0.125 * t})
+        return {'schema': SCHEMA, 'kind': kind, 'hz': hz, 'clock': SHARED_CLOCK,
+                'steps': steps, 'phase_bucket_count': buckets,
+                'phase_bucket_basis': 'requested offsets relative to trace origin; actual captured-clock phase is reported separately',
+                'nominal_hold_ns': round(spacing_ns),
+                'duration_ns': frames[-1]['due_ns'] + round(spacing_ns), 'frames': frames}
     frames = []
     count = round(hz * seconds)
     for phase in ('pan', 'zoom'):
@@ -98,7 +120,8 @@ def make_trace(hz, seconds, pan_points=120):
                            'due_ns': round(len(frames) * 1_000_000_000 / hz),
                            'zoom': zoom, 'pan_x': pan_points * t,
                            'pan_y': pan_points * 0.125 * t})
-    return {'schema': SCHEMA, 'hz': hz, 'seconds_per_phase': seconds,
+    return {'schema': SCHEMA, 'kind': kind, 'hz': hz, 'seconds_per_phase': seconds,
+            'duration_ns': round(len(frames) * 1_000_000_000 / hz),
             'clock': SHARED_CLOCK, 'frames': frames}
 
 
@@ -268,6 +291,89 @@ class Connection:
     def close(self):
         self.s.close()
 
+    def shutdown(self):
+        try:
+            self.s.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+
+class MailboxConnection(Connection):
+    """Existing DWv2 messages through the VM's bounded native file adapter."""
+    def __init__(self, library, runtime, nonce, server_pid, server_uid, role=1, token=bytes(16)):
+        self.lib = C.CDLL(str(library))
+        self.lib.ifwsp_mb_open.argtypes = [C.c_char_p, C.c_char_p, C.c_int, C.c_uint32,
+                                         C.c_uint16, C.c_void_p, C.c_void_p, C.POINTER(C.c_void_p)]
+        self.lib.ifwsp_mb_open.restype = C.c_int
+        self.lib.ifwsp_mb_send.argtypes = [C.c_void_p, C.c_uint16, C.c_uint64, C.c_void_p, C.c_uint32]
+        self.lib.ifwsp_mb_send.restype = C.c_int
+        self.lib.ifwsp_mb_recv.argtypes = [C.c_void_p, C.POINTER(C.c_uint16), C.POINTER(C.c_uint64),
+                                         C.c_void_p, C.c_uint32, C.POINTER(C.c_uint32), C.c_uint32]
+        self.lib.ifwsp_mb_recv.restype = C.c_int
+        for name in ('ifwsp_mb_shutdown', 'ifwsp_mb_close'):
+            getattr(self.lib, name).argtypes = [C.c_void_p]
+            getattr(self.lib, name).restype = None
+        self._condition = threading.Condition()
+        self._active, self._stopping = 0, False
+        self._handle = C.c_void_p()
+        hello, key = C.create_string_buffer(48), C.create_string_buffer(token, 16)
+        error = self.lib.ifwsp_mb_open(os.fsencode(runtime), nonce.encode(), server_pid, server_uid,
+                                      role, key, hello, C.byref(self._handle))
+        if error:
+            raise OSError(error, 'bounded mailbox HELLO failed')
+        status, self.lease_ms, self.max_records, _, self.caps, self.scope, _, reported_pid, self.token = struct.unpack('<7Ii16s', hello.raw)
+        self.seq = 1
+        if status or reported_pid != server_pid or not 100 <= self.lease_ms <= 60000:
+            self.close()
+            raise ValueError('mailbox refused or misidentified HELLO')
+
+    def _call(self, name, *arguments):
+        with self._condition:
+            if self._stopping or not self._handle:
+                raise EOFError('mailbox lane is closed')
+            self._active += 1
+            handle = self._handle
+        try:
+            error = getattr(self.lib, name)(handle, *arguments)
+            if error:
+                raise OSError(error, 'bounded mailbox IO failed')
+        finally:
+            with self._condition:
+                self._active -= 1
+                self._condition.notify_all()
+
+    def send(self, kind, body=b''):
+        self.seq += 1
+        data = C.create_string_buffer(body)
+        self._call('ifwsp_mb_send', kind, self.seq, data, len(body))
+        return self.seq
+
+    def recv(self):
+        kind, seq, length = C.c_uint16(), C.c_uint64(), C.c_uint32()
+        data = C.create_string_buffer(2048)
+        self._call('ifwsp_mb_recv', C.byref(kind), C.byref(seq), data, len(data), C.byref(length), 5000)
+        return kind.value, seq.value, data.raw[:length.value]
+
+    def shutdown(self):
+        with self._condition:
+            if self._handle and not self._stopping:
+                self._stopping = True
+                self.lib.ifwsp_mb_shutdown(self._handle)
+
+    def close(self):
+        self.shutdown()
+        deadline = time.monotonic() + 6
+        with self._condition:
+            while self._active and time.monotonic() < deadline:
+                self._condition.wait(max(0, deadline - time.monotonic()))
+            if self._active:
+                # A blocked native call still owns the mappings. Retain them
+                # until process exit rather than invalidate borrowed storage.
+                return
+            if self._handle:
+                self.lib.ifwsp_mb_close(self._handle)
+                self._handle = C.c_void_p()
+
 
 def verify_probe(body):
     if len(body) < 72:
@@ -282,13 +388,13 @@ def verify_probe(body):
     return result
 
 
-def parse_optical(path, run_id, trace_hash, submitted, hz):
+def parse_optical(path, run_id, trace_hash, submitted, hz, trace_kind='continuous'):
     """External output-pixel evidence only; producer timestamps are never accepted."""
     if not path:
         return {'available': False, 'reason': 'no independent display-pixel observer supplied'}
     rows = [json.loads(line) for line in Path(path).read_text().splitlines() if line.strip()]
     seen = set()
-    samples = []
+    samples, requested_buckets, actual_buckets = [], {}, {}
     for row in rows:
         if (row.get('schema') != SCHEMA or row.get('run_id') != run_id or row.get('trace_sha256') != trace_hash
                 or row.get('clock') != SHARED_CLOCK
@@ -302,7 +408,12 @@ def parse_optical(path, run_id, trace_hash, submitted, hz):
         presented = row['presented_ns']
         if type(presented) is not int or presented < submitted[index]['send_before_ns']:
             raise ValueError('optical timestamp predates its input')
-        samples.append((presented, (presented - submitted[index]['send_before_ns']) / 1e6))
+        latency_ms = (presented - submitted[index]['send_before_ns']) / 1e6
+        samples.append((presented, latency_ms))
+        for key, buckets in (('requested_phase_bucket', requested_buckets), ('actual_phase_bucket', actual_buckets)):
+            bucket = row.get(key, submitted[index].get(key))
+            if type(bucket) is int and 0 <= bucket < 6:
+                buckets.setdefault(bucket, []).append(latency_ms)
         seen.add(index)
     samples.sort()
     if not samples:
@@ -311,7 +422,7 @@ def parse_optical(path, run_id, trace_hash, submitted, hz):
     period = 1000 / hz
     observer_hz = min(row.get('capture_requested_hz', 0) for row in rows)
     coverage = len(samples) / len(submitted)
-    return {'available': True, 'source_sha256': digest(path), 'observed_poses': len(samples),
+    result = {'available': True, 'source_sha256': digest(path), 'observed_poses': len(samples),
             'coverage': coverage, 'cadence_eligible': coverage >= 0.9 and observer_hz >= hz,
             'input_to_visible_ms': distribution([s[1] for s in samples]),
             'observed_pose_gap_ms': distribution(gaps),
@@ -319,6 +430,65 @@ def parse_optical(path, run_id, trace_hash, submitted, hz):
             'pose_gap_note': 'unobserved intervals between decoded poses; includes capture/decoder omissions, not physical missed refreshes',
             'observer': rows[0].get('observer', 'unspecified'),
             'limits': 'external observer must decode actual displayed transformed poses; no self-observed counters'}
+    if trace_kind == 'held-step':
+        complete = len(samples) == len(submitted)
+        phase_complete = all(actual_buckets.get(bucket) for bucket in range(6))
+        result.update(cadence_eligible=False, latency_eligible=complete and phase_complete and observer_hz >= hz,
+                      held_step_latency_ms=distribution([sample[1] for sample in samples]),
+                      requested_phase_latency_ms={str(bucket): distribution(requested_buckets.get(bucket, [])) for bucket in range(6)},
+                      actual_phase_latency_ms={str(bucket): distribution(actual_buckets.get(bucket, [])) for bucket in range(6)},
+                      phase_balance_complete=phase_complete,
+                      phase_balanced_mean_first_pose_ms=(sum(sum(actual_buckets[b]) / len(actual_buckets[b])
+                                                           for b in range(6)) / 6 if phase_complete else None),
+                      latency_note='first captured pose per held step; all steps and all six actual phase buckets required; no continuous smoothness claim')
+        result.pop('observed_pose_gap_ms')
+        result.pop('observed_pose_gap_intervals')
+        result['pose_gap_note'] = 'held steps intentionally retain one pose; no continuous-cadence interpretation'
+    return result
+
+
+def capture_observation_metrics(raw, admissible, hz, start_ns, end_ns, exclusions):
+    """Describe the saved sensor stream separately from first-pose coverage."""
+    pixels = [row for row in raw if row.get('type') == 'pixels'
+              and start_ns <= row.get('presented_ns', -1) <= end_ns]
+    displayed = sorted(row['presented_ns'] for row in pixels)
+    callbacks = sorted(row['callback_ns'] for row in pixels if type(row.get('callback_ns')) is int)
+    matched = [row for row in admissible if start_ns <= row['presented_ns'] <= end_ns]
+    distinct = len({row['trace_index'] for row in matched})
+    by_time = {row['presented_ns']: row for row in matched}
+    period_ns = 1e9 / hz
+    consecutive, repeated_consecutive = 0, 0
+    for before, after in zip(displayed, displayed[1:]):
+        if (before in by_time and after in by_time
+                and abs(after - before - period_ns) <= period_ns * 0.1):
+            consecutive += 1
+            repeated_consecutive += by_time[before]['trace_index'] == by_time[after]['trace_index']
+    reasons = {}
+    for row in pixels:
+        reason = row.get('rejection_reason')
+        if not reason or reason == 'none':
+            if row.get('marker_bounds') and row.get('unobscured') is not True:
+                witness = row.get('visibility_witness_ns')
+                reason = ('stale_visibility_witness' if type(witness) is int
+                          and witness - row['presented_ns'] > 2e9 / hz else 'visibility_refused')
+            elif not row.get('marker_bounds'):
+                reason = 'no_marker'
+        if reason and reason != 'none':
+            reasons[reason] = reasons.get(reason, 0) + 1
+    return {'window_start_ns': start_ns, 'window_end_ns': end_ns,
+            'raw_complete_frame_records': len(pixels),
+            'raw_callback_gap_ms': distribution([(b - a) / 1e6 for a, b in zip(callbacks, callbacks[1:])]),
+            'raw_display_time_gap_ms': distribution([(b - a) / 1e6 for a, b in zip(displayed, displayed[1:])]),
+            'rejection_reasons': reasons, 'decoder_exclusions': exclusions,
+            'admissible_pose_samples': len(matched), 'distinct_admissible_poses': distinct,
+            'repeated_pose_samples': len(matched) - distinct,
+            'one_refresh_transitions': consecutive,
+            'repeated_in_one_refresh_transitions': repeated_consecutive,
+            'fresh_pose_fraction_in_one_refresh_transitions': (1 - repeated_consecutive / consecutive) if consecutive else None,
+            'one_refresh_transition_fraction': consecutive / (len(displayed) - 1) if len(displayed) > 1 else 0,
+            'conditional_cadence_limit': 'only adjacent admissible captures one requested refresh apart; missing/rejected captures excluded; not total output FPS',
+            'captured_pose_age_ms': distribution([row['pose_age_ms'] for row in matched]),
+            'limits': 'complete-frame callback records only; gaps include capture/scheduling omissions; repeated poses are expected during held steps; no physical-refresh claim'}
 
 
 def run(args):
@@ -331,6 +501,11 @@ def run(args):
     if (trace.get('schema') != SCHEMA or trace.get('clock') != SHARED_CLOCK
             or not trace.get('frames') or not 1 <= trace['hz'] <= 240):
         raise ValueError('invalid/legacy frozen trace; regenerate with shared Mach clock schema 2')
+    if trace.get('kind') == 'held-step':
+        duration = trace.get('duration_ns')
+        if (len(trace['frames']) not in (24, 48) or type(duration) is not int or not 0 < duration <= 6_000_000_000
+                or duration <= trace['frames'][-1]['due_ns']):
+            raise ValueError('held-step trace must contain 24 or 48 poses and finish within six seconds')
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=False)
     nonce = private_file(args.nonce_file).read_text().strip()
@@ -343,6 +518,8 @@ def run(args):
               'host_sha256': fixture['host_sha256'], 'environment': environment,
               'system': {'platform': platform.platform(), 'machine': platform.machine()},
               'clock': SHARED_CLOCK, 'hz': trace['hz'], 'sample_hz': args.sample_hz,
+              'trace_kind': trace.get('kind', 'continuous'),
+              'trace_duration_ns': trace.get('duration_ns'),
               'source_hashes': {},
               'limits': ['acknowledgement latency is not visible latency',
                          'native geometry is not optical presentation',
@@ -363,12 +540,13 @@ def run(args):
     rows = (output / 'frames.jsonl').open('w')
     restoration = {'attempted': False, 'independently_verified': False}
     try:
-        control = Connection(args.runtime, nonce, args.server_pid, args.server_uid)
+        connect = (lambda *values: MailboxConnection(args.mailbox_client, *values)) if args.mailbox_client else Connection
+        control = connect(args.runtime, nonce, args.server_pid, args.server_uid)
         before = verify_probe(control.request(PROBE))
         if before['held'] or before['restoring'] or before['table_count'] or before['journal_pending']:
             raise ValueError('helper has pre-existing restoration obligations; refusing benchmark')
         report['probe_before'] = before
-        heartbeat = Connection(args.runtime, nonce, args.server_pid, args.server_uid, 2, control.token)
+        heartbeat = connect(args.runtime, nonce, args.server_pid, args.server_uid, 2, control.token)
 
         def beat():
             try:
@@ -449,6 +627,8 @@ def run(args):
             sent = {'trace_index': frame['index'], 'phase': frame['phase'], 'due_ns': deadline,
                     'wire_seq': control.seq + 1, 'send_before_ns': shared_ns(),
                     'observed_window_matrix': matrices[0]}
+            if 'requested_phase_bucket' in frame:
+                sent['requested_phase_bucket'] = frame['requested_phase_bucket']
             with lock:
                 submitted[frame['index']] = sent
             control.send(FRAME, body)
@@ -456,6 +636,12 @@ def run(args):
             sent['send_call_ms'] = (sent['send_after_ns'] - sent['send_before_ns']) / 1e6
             sent['scheduler_late_ms'] = max(0, sent['send_before_ns'] - deadline) / 1e6
             rows.write(json.dumps(sent) + '\n')
+        if trace.get('kind') == 'held-step':
+            # Preserve the final step's observation opportunity before the drain
+            # and restoration. Holds remain inside the frozen bounded duration.
+            stop.wait(max(0, (start + trace['duration_ns'] - shared_ns()) / 1e9))
+            if stop.is_set():
+                raise RuntimeError('; '.join(errors) or 'held-step benchmark interrupted')
         finished.set()
         # A serial-queue probe is a drain barrier, including when the last frame
         # was answered before the sender set finished. The receiver owns reads.
@@ -484,8 +670,9 @@ def run(args):
             try:
                 if reader and reader.is_alive():
                     # An outstanding receiver owns reads; disconnect invokes restoration.
-                    control.close()
+                    control.shutdown()
                     reader.join(6)
+                    control.close()
                     restoration['method'] = 'control_disconnect'
                 else:
                     body = control.request(RESTORE)
@@ -500,6 +687,9 @@ def run(args):
                 restoration['error'] = str(error)
                 control.close()
         if heartbeat:
+            heartbeat.shutdown()
+            if beater:
+                beater.join(2)
             heartbeat.close()
         end = time.monotonic() + 4
         while True:
@@ -528,7 +718,8 @@ def run(args):
                 first.setdefault(g['trace_index'], g['input_to_geometry_ms'])
         report['first_observed_geometry_ms'] = distribution(list(first.values()))
         try:
-            report['optical'] = parse_optical(args.optical_samples, run_id, trace_hash, submitted, trace['hz'])
+            report['optical'] = parse_optical(args.optical_samples, run_id, trace_hash, submitted, trace['hz'],
+                                              trace.get('kind', 'continuous'))
         except Exception as error:
             report['optical'] = {'available': False, 'error': str(error)}
             report['status'] = 'failed'
@@ -639,12 +830,24 @@ def decode_pixels(args):
     for frame in submitted:
         a, _, _, d, tx, ty = frame['observed_window_matrix']
         expected.append((frame, [-tx / a, -ty / d, window['bounds'][2] / a, window['bounds'][3] / d]))
-    decoded, ambiguous, seen = [], 0, set()
-    for sample in raw:
+    trace_kind = report.get('trace_kind', 'continuous')
+    first_send = min(frame['send_before_ns'] for frame in submitted)
+    end_ns = max(frame['send_before_ns'] for frame in submitted) + round(1e9 / report['hz'])
+    if trace_kind == 'held-step':
+        end_ns = report['start_shared_ns'] + report['trace_duration_ns']
+    display_origin = min(row['presented_ns'] for row in raw if row.get('type') == 'pixels')
+    period_ns = round(1e9 / report['hz'])
+    decoded, ambiguous, seen, admissible = [], 0, set(), []
+    exclusions = {'no_matching_pose': 0, 'multiple_matching_poses': 0,
+                  'outside_held_observation_window': 0}
+    for sample in sorted(raw, key=lambda row: row.get('presented_ns', -1)):
         if (sample.get('type') != 'pixels' or not sample.get('marker_bounds')
                 or sample.get('unobscured') is not True):
             continue
         at = sample['presented_ns']
+        if trace_kind == 'held-step' and not first_send <= at <= end_ns:
+            exclusions['outside_held_observation_window'] += 1
+            continue
         actual = sample['marker_bounds']
         candidates = []
         for frame, rect in expected:
@@ -658,8 +861,14 @@ def decode_pixels(args):
         # within that uncertainty is ambiguous even if one is numerically nearer.
         if len(candidates) != 1:
             ambiguous += 1
+            if first_send <= at <= end_ns:
+                key = 'no_matching_pose' if not candidates else 'multiple_matching_poses'
+                exclusions[key] += 1
             continue
         frame = candidates[0][1]
+        actual_bucket = ((frame['send_before_ns'] - display_origin) % period_ns) * 6 // period_ns
+        admissible.append({'trace_index': frame['trace_index'], 'presented_ns': at,
+                           'pose_age_ms': (at - frame['send_before_ns']) / 1e6})
         if frame['trace_index'] in seen:
             continue
         seen.add(frame['trace_index'])
@@ -669,28 +878,40 @@ def decode_pixels(args):
                         'capture_method': 'display_capture', 'occluded': False,
                         'observer': 'scoped ScreenCaptureKit display output marker bounding box',
                         'capture_requested_hz': metadata['requested_hz'],
-                        'visibility_witness_ns': sample['visibility_witness_ns']})
+                        'visibility_witness_ns': sample['visibility_witness_ns'],
+                        'requested_phase_bucket': frame.get('requested_phase_bucket'),
+                        'actual_phase_bucket': actual_bucket})
     Path(args.output).write_text(''.join(json.dumps(row) + '\n' for row in decoded))
     optical = parse_optical(args.output, report['run_id'], report['trace_sha256'],
-                            {s['trace_index']: s for s in submitted}, report['hz'])
+                            {s['trace_index']: s for s in submitted}, report['hz'], trace_kind)
     optical.update(raw_samples_sha256=digest(args.raw_pixels), ambiguous_samples=ambiguous,
+                   decoder_source_sha256=digest(__file__),
                    requested_observer_hz=metadata['requested_hz'],
                    physical_panel_optical_proof=False)
+    optical['capture_observation'] = capture_observation_metrics(raw, admissible, report['hz'],
+                                                                first_send, end_ns, exclusions)
+    optical['phase_clock'] = {'origin_ns': display_origin, 'period_ns': period_ns, 'buckets': 6,
+                              'basis': 'actual send phase modulo requested display period from captured display timestamp origin'}
     report['observer_configuration'] = {key: metadata.get(key) for key in
                                        ('capture_method', 'filtered_fixture_only', 'display_id',
                                         'width', 'height', 'point_scale_x', 'point_scale_y', 'requested_hz', 'clock',
                                         'observer_sha256', 'visibility_witness_policy')}
     # Quantized poses and inadequate capture cadence cannot establish smoothness.
-    eligible = optical['coverage'] >= 0.9 and metadata['requested_hz'] >= report['hz']
+    eligible = (trace_kind == 'continuous' and optical['coverage'] >= 0.9
+                and metadata['requested_hz'] >= report['hz'])
     optical['cadence_eligible'] = eligible
-    if not eligible:
+    if not eligible and trace_kind == 'continuous':
         optical['limitation'] = 'insufficient unambiguous pose coverage/capture rate; no smoothness winner'
     report['optical'] = optical
     report['winner_eligible'] = (eligible and report['status'] == 'measured_control_path'
                                  and report['restoration']['independently_verified'])
+    report['latency_comparison_eligible'] = (trace_kind == 'held-step' and optical.get('latency_eligible', False)
+                                           and report['status'] == 'measured_control_path'
+                                           and report['restoration']['independently_verified'])
     write_json(directory / 'run.json', report)
     print(json.dumps({'decoded': len(decoded), 'ambiguous_samples': ambiguous,
-                      'coverage': optical['coverage'], 'winner_eligible': report['winner_eligible']}))
+                      'coverage': optical['coverage'], 'winner_eligible': report['winner_eligible'],
+                      'latency_comparison_eligible': report['latency_comparison_eligible']}))
     return 0
 
 
@@ -737,6 +958,7 @@ def main():
     trace.add_argument('--hz', type=int, default=120)
     trace.add_argument('--seconds', type=float, default=5)
     trace.add_argument('--pan-points', type=float, default=120)
+    trace.add_argument('--kind', choices=('continuous', 'held-step'), default='continuous')
     trace.add_argument('--output', required=True)
     live = commands.add_parser('run', help='measure an explicitly scoped, already prepared native endpoint')
     live.add_argument('--live-owned-fixture', action='store_true', required=True)
@@ -748,6 +970,7 @@ def main():
     live.add_argument('--artifact', action='append', default=[], help='LABEL=PATH hashes executable/payload/source bytes')
     live.add_argument('--environment', help='frozen JSON describing hardware, display mode and observer configuration')
     live.add_argument('--optical-samples', help='independent decoded output-pixel JSONL; never producer timestamps')
+    live.add_argument('--mailbox-client', help='VM-built native file transport adapter; omitted uses production Unix socket')
     owned = commands.add_parser('fixture', help='supervise only a newly spawned disposable cooperative host')
     owned.add_argument('--live-owned-fixture', action='store_true', required=True)
     owned.add_argument('--host', required=True)
@@ -767,7 +990,7 @@ def main():
         print(json.dumps({'schema': SCHEMA, 'clock': SHARED_CLOCK, 'now_ns': shared_ns()}))
         return 0
     if args.command == 'trace':
-        write_json(args.output, make_trace(args.hz, args.seconds, args.pan_points))
+        write_json(args.output, make_trace(args.hz, args.seconds, args.pan_points, args.kind))
         print(json.dumps({'trace': args.output, 'sha256': digest(args.output)})); return 0
     if args.command == 'fixture':
         return fixture(args)

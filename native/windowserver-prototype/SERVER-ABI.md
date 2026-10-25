@@ -1,3 +1,9 @@
+> Update: binary config is now version3 (`IFWSP03`) with file-backed directional
+> transport. The server routine ABI and code pins below are unchanged. The earlier
+> network-bind blocker is resolved without a sandbox edit; actual fixture mutation,
+> exact restore and captured-pose results are in
+> [the completed comparison](../performance/RESULTS-WINDOWSERVER-20261025.md).
+
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # WindowServer prototype: reviewed server ABI
 

@@ -8,8 +8,8 @@
 #include "../privileged/protocol2.h"
 #include "kernel-process-identity.h"
 
-#define IFWSP_CONFIG_MAGIC "IFWSP02"
-#define IFWSP_CONFIG_VERSION 2u
+#define IFWSP_CONFIG_MAGIC "IFWSP03"
+#define IFWSP_CONFIG_VERSION 3u
 #define IFWSP_MAX_WINDOWS 16u
 #define IFWSP_MAX_LIFETIME_MS 60000u
 
@@ -30,6 +30,9 @@ struct ifwsp_config {
     int32_t server_pid, fixture_pid;
     uint64_t server_birth_sec, server_birth_usec, fixture_birth_sec, fixture_birth_usec;
     struct ifwsp_kernel_process_identity fixture_kernel_identity;
+    struct ifwsp_kernel_process_identity server_kernel_identity;
+    uint8_t boot_uuid[16],payload_sha256[32];
+    uint64_t runtime_dev,runtime_ino,request_dev,request_ino,reply_dev,reply_ino;
     uint32_t lifetime_ms, window_count;
     char nonce[64];
     char runtime[104];
