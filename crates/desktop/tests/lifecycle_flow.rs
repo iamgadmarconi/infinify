@@ -480,14 +480,16 @@ fn windows_already_open_at_launch_are_placed_without_focus_or_flight() {
     let scratch = Scratch::new();
     let mut h = Host::new();
     open(&mut h);
-    load_config(&mut h, &scratch, "");
+    // Center makes the cascading positions explicit; this scenario isolates
+    // launch-pass suppression of focus and flights from the default policy.
+    load_config(&mut h, &scratch, "window_placement = \"center\"\n");
     assert_eq!(h.lifecycle()["settled"], false);
     // The launch pass: placed by the policy, cascading, and nothing else.
     for (wid, at) in [(1, (300.0, 275.0)), (2, (325.0, 300.0))] {
         let reply = appear(&mut h, wid, "app.a", "A", (400.0, 300.0));
         assert_eq!(
             reply,
-            json!({"window":wid,"adopted":false,"effect":null,"navigation":null,"dirty":true})
+            json!({"window":wid,"adopted":false,"background":false,"effect":null,"navigation":null,"dirty":true})
         );
         assert_eq!(h.world(wid), rect(at.0, at.1, 400.0, 300.0));
     }
@@ -518,7 +520,7 @@ fn windows_already_open_at_launch_are_placed_without_focus_or_flight() {
         let reply = h.ok(json!({"op":"attach","identity":identity(wid),"bundle_id":"app.a","title":"A","buffer":{"width":200,"height":100},"source_rect":rect(NATIVE.0,NATIVE.1,400.0,300.0)}));
         assert_eq!(
             reply,
-            json!({"window":wid,"adopted":false,"effect":null,"navigation":null,"dirty":true})
+            json!({"window":wid,"adopted":false,"background":false,"effect":null,"navigation":null,"dirty":true})
         );
         assert_eq!(h.world(wid), rect(at, at, 400.0, 300.0));
     }
@@ -587,14 +589,14 @@ fn relaunched(scratch: &Scratch, scene: &PathBuf, toml: &str) -> Host {
     assert_eq!(h.stack(), vec![1, 3, 4, 2]);
     h
 }
-const ADOPTED: fn(u64) -> Value =
-    |id| json!({"window":id,"adopted":true,"effect":null,"navigation":null,"dirty":true});
+const ADOPTED: fn(u64) -> Value = |id| json!({"window":id,"adopted":true,"background":false,"effect":null,"navigation":null,"dirty":true});
 
 #[test]
 fn still_open_windows_take_their_saved_slots_back_and_the_rest_are_dropped() {
     let scratch = Scratch::new();
     let scene = saved_session(&scratch);
-    let mut h = relaunched(&scratch, &scene, "");
+    // The unmatched window's fixed center is incidental to slot matching.
+    let mut h = relaunched(&scratch, &scene, "window_placement = \"center\"\n");
     // Two slots of one app: the title picks, not the lower id. The slot keeps
     // its logical id, its world frame whatever the native size is now, and its
     // place in the stack; the window brings its identity.
@@ -615,7 +617,7 @@ fn still_open_windows_take_their_saved_slots_back_and_the_rest_are_dropped() {
     // launch pass that is all.
     assert_eq!(
         appear(&mut h, 23, "app.term", "delta", (640.0, 480.0)),
-        json!({"window":5,"adopted":false,"effect":null,"navigation":null,"dirty":true})
+        json!({"window":5,"adopted":false,"background":false,"effect":null,"navigation":null,"dirty":true})
     );
     assert_eq!(h.world(5), rect(180.0, 185.0, 640.0, 480.0));
     assert_eq!(
@@ -1525,7 +1527,9 @@ fn tick(h: &mut Host, seconds: u64) {
 #[test]
 fn marks_and_pending_relaunches_lapse_on_the_navigation_clock() {
     let scratch = Scratch::new();
-    let on = "[session]\nsuspend_on_close = true\n";
+    // Expiry decides adoption; Center keeps the new-window frame independent
+    // of the dormant stand-in that remains as an Auto placement anchor.
+    let on = "window_placement = \"center\"\n[session]\nsuspend_on_close = true\n";
     // The command, then `later` seconds, then the window goes by itself: the
     // marks still in force and whether a stand-in is left.
     let closes = |toml: &str, action: &str, later: u64| {
@@ -1647,10 +1651,15 @@ fn marks_and_pending_relaunches_lapse_on_the_navigation_clock() {
 #[test]
 fn a_reopened_canvas_ends_its_own_pass() {
     let scratch = Scratch::new();
+    // Placement is incidental to ending the adoption pass. Specify Center
+    // for the fixed new-window coordinates below, with both restore policies.
     for (toml, ended) in [
-        ("", json!({"dropped":[1],"standins":[],"dirty":true})),
         (
-            "[session]\nrestore_windows = true\n",
+            "window_placement = \"center\"\n",
+            json!({"dropped":[1],"standins":[],"dirty":true}),
+        ),
+        (
+            "window_placement = \"center\"\n[session]\nrestore_windows = true\n",
             json!({"dropped":[],"standins":[1],"dirty":true}),
         ),
     ] {
@@ -2177,24 +2186,42 @@ fn a_native_identity_that_closed_and_returns_is_a_new_window() {
         "stale binding generation"
     );
 
-    // A stand-in stayed, and the user opened the window again themselves: a
-    // dormant stand-in is never taken, so the window is placed beside it,
-    // cascading off the corner the stand-in keeps.
+    // A dormant stand-in is never adopted just because its native identity
+    // returned. With the Mac default Auto policy, the 300 x 200 anchor is wider
+    // than tall, so placement grows downward: y = 325 + 200 + snap.gap (12).
+    // Explicit Center instead cascades one 25-point title-bar step diagonally.
+    // Navigation puts each new center at the usable center (500, 425), so its
+    // camera is the new origin minus (350, 325). Neither policy reads NATIVE.
     let on = "[session]\nsuspend_on_close = true\n";
-    let mut h = running(&scratch, on);
-    again(&mut h);
-    assert_eq!(h.closed(1)["standin"], true);
-    let second = again(&mut h);
-    assert_eq!(
-        (&second["window"], &second["adopted"]),
-        (&json!(2), &json!(false))
-    );
-    assert_eq!(h.world(2), rect(375.0, 350.0, 300.0, 200.0));
-    focus_effect(&second, 2, 1);
-    assert_eq!(h.world(1), rect(350.0, 325.0, 300.0, 200.0));
-    assert_eq!(h.window(1)["source"], Value::Null);
-    assert_eq!(h.lifecycle()["standins"], json!([1]));
-    assert_eq!(h.stack(), vec![1, 2]);
+    for (placement, at, camera) in [
+        ("", (350.0, 537.0), (0.0, 212.0)),
+        (
+            "window_placement = \"center\"\n",
+            (375.0, 350.0),
+            (25.0, 25.0),
+        ),
+    ] {
+        let mut h = running(&scratch, &format!("{placement}{on}"));
+        again(&mut h);
+        assert_eq!(h.closed(1)["standin"], true);
+        let second = again(&mut h);
+        assert_eq!(
+            (&second["window"], &second["adopted"]),
+            (&json!(2), &json!(false))
+        );
+        assert_eq!(h.world(2), rect(at.0, at.1, 300.0, 200.0));
+        focus_effect(&second, 2, 1);
+        assert_eq!(armed(&second), flight(camera, 1.0));
+        assert_eq!(h.window(2)["source"]["generation"], 2);
+        assert_eq!(
+            h.window(2)["source"]["observed_rect"],
+            rect(NATIVE.0, NATIVE.1, 300.0, 200.0)
+        );
+        assert_eq!(h.world(1), rect(350.0, 325.0, 300.0, 200.0));
+        assert_eq!(h.window(1)["source"], Value::Null);
+        assert_eq!(h.lifecycle()["standins"], json!([1]));
+        assert_eq!(h.stack(), vec![1, 2]);
+    }
 
     // Relaunched through its stand-in, the same identity takes the slot back
     // as any window of that app would: upstream's adoption, and its crossfade.
@@ -2510,16 +2537,19 @@ fn a_close_and_the_native_focus_that_follows_it_agree_in_either_order() {
 fn a_pass_that_ends_before_a_window_arrives_decides_only_what_it_did_not_name() {
     let scratch = Scratch::new();
     let scene = saved_session(&scratch);
+    // Pass ordering is under test; the later new window's fixed flight uses
+    // Center explicitly instead of docking beside a surviving saved slot.
+    let center = "window_placement = \"center\"\n";
     let beta = |h: &mut Host| appear(h, 21, "app.term", "beta", (640.0, 480.0));
     let docs = |h: &mut Host| appear(h, 22, "app.web", "docs", (640.0, 480.0));
     let ended = json!({"dropped":[1,4],"standins":[],"dirty":true});
     // In time: both windows are offered, then the pass ends.
-    let mut timely = relaunched(&scratch, &scene, "");
+    let mut timely = relaunched(&scratch, &scene, center);
     assert_eq!(beta(&mut timely), ADOPTED(2));
     assert_eq!(docs(&mut timely), ADOPTED(3));
     assert_eq!(timely.ok(json!({"op":"adoption_complete"})), ended);
     // Late: the pass ends first and names the window that is still arriving.
-    let mut h = relaunched(&scratch, &scene, "");
+    let mut h = relaunched(&scratch, &scene, center);
     assert_eq!(beta(&mut h), ADOPTED(2));
     assert_eq!(
         h.ok(json!({"op":"adoption_complete","present":[{"bundle_id":"app.web","title":"docs"}]})),
@@ -2579,7 +2609,7 @@ fn a_pass_that_ends_before_a_window_arrives_decides_only_what_it_did_not_name() 
     // for it when its window arrives after the pass, as every adopted slot
     // that holds the focus does then; within the launch pass nothing is
     // asked and the focus is only recorded.
-    let mut h = relaunched(&scratch, &scene, "");
+    let mut h = relaunched(&scratch, &scene, center);
     assert_eq!(
         h.ok(json!({"op":"adoption_complete","present":[{"bundle_id":"app.term","title":"beta"}]})),
         json!({"dropped":[1,3,4],"standins":[],"dirty":true})
