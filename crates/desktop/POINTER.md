@@ -551,9 +551,29 @@ does nothing, where upstream had already fired.
   panel, which owns the cursor; a forwarded motion does not bring the
   application's cursor shape back. Upstream's pointing-hand affordance over a
   pick target is the shell's to draw from `pick`.
-- **Popups and menus open at the native window's place.** A forwarded motion
-  or click reaches the real window where macOS keeps it, not where the canvas
-  draws it, so whatever the application opens in response appears there.
+- **Popups and menus are the window server's family, placed by transform.**
+  Upstream draws a popup as a surface of its window, in canvas coordinates
+  with the window's transform. Compositor (Dock-helper) mode has the same
+  shape only for what the window server names a child of the window: a
+  context menu, a pop-up button's or pull-down's menu, a combo box's list, a
+  popover, a sheet, a child panel, a completion list, Chrome's omnibox list
+  and hover card, Safari's address suggestions. Each is a family member, drawn
+  at the window's scale at the window's offset, and takes pointer and
+  keyboard input where it is drawn (zoom 0.5, 0.75 and 1; also after a zoom
+  change while open). Before 2026-10-30 such a window was shown at its native
+  place for 11 to 191 ms before the shell's first frame moved it; the helper
+  now places it at the announcement (`native/privileged/README.md`, "Arrival
+  placement"). What is not this: a window with no parent in the window
+  server (the global menu bar's menus, status items, and any popup an
+  application opens without a parent) is left where the application put it,
+  by design for the menu bar and unmeasured for the rest; a popup an
+  application positions from the pointer's screen position instead of from
+  its window is displaced (measured with a fixture panel: drawn 39 points
+  left of and 77 below the pointer at zoom 0.5, because the window's offset is
+  applied to a position already in drawn space; no standard popup measured
+  does this). Tooltips could not be triggered in the guest, so no tooltip
+  window was measured.
+  [Measurements](../../native/desktop/README.md#popups-and-menus-of-a-transformed-window-full-desktop-dock-helper).
 - **An open focus cycle stops hover focus.** Upstream's guard is the pointer
   grab alone, and a hover during Alt-Tab would end the cycle and commit its
   selection. Here the selection stands until the cycle is released or

@@ -18,6 +18,9 @@
 // How long the helper keeps a veiled window invisible without a frame or a RESTORE
 // record for it before it releases the window itself (VEIL below).
 #define DW2_VEIL_TIMEOUT_MS 1000
+// How long the helper keeps the placement it gave, at the announcement, to a child window of a placed root (a menu, a popover, a sheet)
+// without a frame naming it, before it releases the window itself (VEIL below, payload-v2.m v2ArrivalPlace).
+#define DW2_ARRIVAL_TIMEOUT_MS 500
 
 enum { DW2_HELLO=1, DW2_FRAME=2, DW2_HEARTBEAT=3, DW2_RESTORE_ALL=4, DW2_PROBE=5, DW2_ENROLLMENT=6, DW2_INSPECT=7, DW2_FRAME_SPACE=8, DW2_VEIL=9 };
 enum { DW2_ROLE_CONTROL=1, DW2_ROLE_HEARTBEAT=2 };
@@ -60,7 +63,8 @@ enum { DW2_APPLIED=0, DW2_SCOPE=1, DW2_IDENTITY=2, DW2_MATRIX=3, DW2_ALPHA=4, DW
 // DW2_VEIL_TIMEOUT_MS after it was veiled. A frame record for it applies the transform
 // first and then the record's alpha, or the original alpha when the record has none.
 // The reply is DW2_APPLIED or, for a helper that cannot, DW2_SCOPE, and the timeout.
-// The helper never veils a window of the requesting client's own process. Veiling ends
+// While it is on, a window that opens as a child of a window the shell has placed also gets that root's placement at once, and the same
+// ways out. The helper never veils a window of the requesting client's own process. Veiling ends
 // with the session. The idea, and the window server announcement it rests on, are adapted
 // from Sunlight (MIT); exact source provenance is in payload-v2.m.
 enum { DW2_FRAME_APPLIED=0, DW2_FRAME_DROPPED=1 };

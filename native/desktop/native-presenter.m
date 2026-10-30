@@ -1067,8 +1067,10 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
             // Space ownership belongs to the complete audited family. Losing that report must not move a root to another Space while its
             // children are restored; it does not hide the root either: a root that is placed stays placed, and only its Space request waits
             // for the family. Parking it hid the window until the next good audit, and an audit fails whenever a frame is read mid-resize,
-            // a popup-level window (a context menu) is refused, or a Chromium window meets a transient child with no parent or size yet
-            // (parked, its main window vanished for 4 to 339 ms of each such read: the browser "flashing").
+            // a member has no readable parent or size, or a Chromium window meets a transient child with no parent or size yet
+            // (parked, its main window vanished for 4 to 339 ms of each such read: the browser "flashing"). Context menus are no such
+            // member: the guest's audits took every level-101 context menu measured as a child of its root (native/desktop/README.md,
+            // "Popups and menus of a transformed window").
             BOOL sound=!spaceFrames||(targetSpace!=0&&root),spaceSound=sound&&(!spaceFrames||root->familyKnown);
             // The helper's bounds on a matrix; a placement they cannot express (a window a million points off, a zoom of a thousandth) is parked.
             for(int i=0;i<6;i++)if(!isfinite(m[i])||fabs(m[i])>1e6)sound=NO;

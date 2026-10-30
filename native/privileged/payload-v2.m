@@ -49,6 +49,8 @@ static uint32_t fixtureWids[16], fixtureCount;
     // veilBare and veilAlpha are journalled (optional keys veil_bare, veil_alpha). The Cleared flags and
     // veilPrior* only undo a first-frame change whose journal write failed.
     BOOL veiled, veilBare, veilAlpha, veilBareCleared, veilAlphaCleared;
+    // Arrival placement (v2ArrivalPlace): a child of a placed root the helper itself placed when it opened, until a frame names it. Memory only.
+    BOOL arrival;
     CGAffineTransform veilPriorTransform; CGRect veilPriorBounds;
     // Optional Space obligation. Original membership is immutable. A void
     // forward request remains uncertain until its target is actually observed.
@@ -110,6 +112,40 @@ static void v2ResolveSublevels(void) {
     v2GetWindowSublevel=dlsym(sky,"SLSGetWindowSubLevel");
     v2SetWindowSublevel=dlsym(sky,"SLSSetWindowSubLevel");
 }
+
+// The window server's own parent of a window, read-only, through the exact single-window query the shell's family audit uses
+// (native/families/window-server-family.h, whose ABI and call sequence are yabai dd845723416f5fe92af49fad5ebab00369e07edd,
+// src/window.c:872-897 and src/misc/extern.h:9,66-72, MIT). YES only when the query names exactly this window once; *parent is 0 for a root.
+// A variable so that the tests substitute it.
+static CFTypeRef (*v2SLSQueryWindows)(int,CFArrayRef,int);
+static CFTypeRef (*v2SLSQueryCopyWindows)(CFTypeRef);
+static int (*v2SLSIteratorCount)(CFTypeRef);
+static bool (*v2SLSIteratorAdvance)(CFTypeRef);
+static uint32_t (*v2SLSIteratorParent)(CFTypeRef);
+static uint32_t (*v2SLSIteratorWindow)(CFTypeRef);
+static void v2ResolveFamily(void) {
+    void *sky=dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight",RTLD_LAZY|RTLD_LOCAL);
+    if(!sky)return;
+    v2SLSQueryWindows=dlsym(sky,"SLSWindowQueryWindows");
+    v2SLSQueryCopyWindows=dlsym(sky,"SLSWindowQueryResultCopyWindows");
+    v2SLSIteratorCount=dlsym(sky,"SLSWindowIteratorGetCount");
+    v2SLSIteratorAdvance=dlsym(sky,"SLSWindowIteratorAdvance");
+    v2SLSIteratorParent=dlsym(sky,"SLSWindowIteratorGetParentID");
+    v2SLSIteratorWindow=dlsym(sky,"SLSWindowIteratorGetWindowID");
+}
+static BOOL v2NativeParentOf(uint32_t wid,uint32_t *parent) {
+    if(!v2SLSQueryWindows||!v2SLSQueryCopyWindows||!v2SLSIteratorCount||!v2SLSIteratorAdvance||!v2SLSIteratorParent||!v2SLSIteratorWindow||!mainConnection)return NO;
+    CFTypeRef query=v2SLSQueryWindows(mainConnection(),(__bridge CFArrayRef)@[@(wid)],1);
+    if(!query)return NO;
+    CFTypeRef iterator=v2SLSQueryCopyWindows(query);
+    int count=iterator?v2SLSIteratorCount(iterator):0;BOOL advanced=iterator&&count==1&&v2SLSIteratorAdvance(iterator);
+    uint32_t actual=advanced?v2SLSIteratorWindow(iterator):0,up=advanced?v2SLSIteratorParent(iterator):0;
+    BOOL extra=advanced&&v2SLSIteratorAdvance(iterator);
+    if(iterator)CFRelease(iterator);CFRelease(query);
+    if(!advanced||extra||actual!=wid)return NO;
+    *parent=up;return YES;
+}
+static BOOL (*v2ParentOf)(uint32_t,uint32_t *)=v2NativeParentOf;
 
 #import "forward-operations.h"
 
@@ -606,7 +642,7 @@ static void v2Restore(NSString *reason,BOOL retry,NSMutableData *results,struct 
             if(r.outcome==DW2_RESTORED){if(rebased)e->transform=target;e->bounds=releasedBounds;e->reattaching=NO;e->appliedTransformKnown=NO;
                 // A veil's conditional alpha was settled by this release; its mark is not an original to guard later.
                 if(e->veilAlpha)e->alphaTouched=NO;
-                e->veiled=e->veilBare=e->veilAlpha=NO;v2Released[wid]=e;}
+                e->veiled=e->veilBare=e->veilAlpha=e->arrival=NO;v2Released[wid]=e;}
             [v2Table removeObjectForKey:wid];
         }
         count++;
@@ -754,6 +790,7 @@ static void v2ApplyWithSpaces(const struct dw2_record *records,const uint64_t *t
             e->transform=current;e->bounds=bounds;e->veilBare=NO;e->veilBareCleared=YES;changed=YES;
         }
         if(wantsAlpha && e->veilAlpha && !e->veilAlphaCleared){e->veilAlpha=NO;e->veilAlphaCleared=YES;changed=YES;}
+        e->arrival=NO; // the shell names this window in a frame: its placement is the shell's from here on
         entries[i]=e;status[i]=DW2_APPLIED;
     }
     if(changed) {
@@ -945,11 +982,86 @@ static void v2VeilExpire(DW2Entry *e) {
     struct dw2_restore_reply summary={0};
     v2Restore(@"veil timeout",YES,nil,&summary);
 }
+// Arrival placement. A window an application opens as a child of a window the shell has placed (a context menu, a pop-up button's
+// menu, a popover, a sheet, a completion list: the window server names the root as its parent) was shown at its native place for
+// the 23 to 40 ms the shell needed to list it and send a frame (measured), whatever its level or alpha: the veil above holds neither a window the
+// application fades itself nor one that is not at level 0. Here the helper gives such a window, at the announcement, the placement
+// the shell gives every member of that root's family (the root's transform with its translation moved by the window's native offset
+// from the root, native/desktop/native-presenter.m, -describe:), computed from what the root's entry has applied and what the window
+// server reads for both windows now. The shell's first frame naming the window replaces it (and normally equals it); until then it is a
+// table entry like any other: journalled with its original transform, bounds and alpha before the write, released by the ordinary
+// release by a RESTORE record, RESTORE_ALL, the end of the session, VEIL mode 0, or DW2_ARRIVAL_TIMEOUT_MS after it opened if no
+// frame has named it. Only a window whose exact parent chain, in one process instance, ends at a held root with an applied
+// transform is touched: the global menu bar's menus, status items and every other window without such a parent are not.
+static BOOL v2FamilyRoot(const struct dw2_identity *who,uint32_t wid,uint32_t *root) {
+    uint32_t seen[16],cursor=wid;
+    for(unsigned depth=0;depth<16;depth++){
+        for(unsigned i=0;i<depth;i++)if(seen[i]==cursor)return NO;seen[depth]=cursor;
+        uint32_t parent=0;if(!v2ParentOf(cursor,&parent))return NO;
+        if(!parent){*root=cursor;return cursor!=wid;}
+        int owner=0;struct dw2_identity up={0};uid_t uid=0;
+        if(!v2Resolve(parent,&owner,&up,&uid)||uid!=getuid()||!v2SameProcess(&up,who))return NO;
+        cursor=parent;
+    }
+    return NO;
+}
+static void v2ArrivalExpire(DW2Entry *e) {
+    if(v2Table[@(e->who.wid)]!=e || !e->arrival || e->state!=DW2_HELD)return;
+    e->state=DW2_RESTORING;
+    struct dw2_restore_reply summary={0};
+    v2Restore(@"arrival placement timeout",YES,nil,&summary);
+}
+static BOOL v2ArrivalPlace(uint32_t wid) {
+    if(!v2ParentOf||!getTransform||!setTransform||!getBounds)return NO;
+    // Cheapest first: every window anywhere is announced here, and a window without a parent (all but a child) ends this read.
+    uint32_t parent=0;if(!v2ParentOf(wid,&parent)||!parent)return NO;
+    int owner=0;struct dw2_identity who={0};uid_t uid=0;
+    if(!v2Resolve(wid,&owner,&who,&uid)||uid!=getuid()||!v2InScope(&who)||who.pid==getpid()||who.pid==atomic_load(&v2VeilClient))return NO;
+    uint32_t rootWID=0;
+    if(!v2FamilyRoot(&who,wid,&rootWID))return NO;
+    DW2Entry *root=v2Table[@(rootWID)];
+    // A held root the shell has placed, whose transform is still the one applied: nothing is extrapolated from a stale or absent placement.
+    CGAffineTransform rootNow=CGAffineTransformIdentity;CGRect rootBounds=CGRectZero,bounds=CGRectZero;
+    if(!root||root->state!=DW2_HELD||root->veilBare||!root->appliedTransformKnown||!v2SameProcess(&root->who,&who)||root->owner!=owner||!v2EntryCurrent(root)
+        ||getTransform(mainConnection(),rootWID,&rootNow)||!v2SameTransform(rootNow,root->appliedTransform)||!finiteMatrix(rootNow)||rootNow.b||rootNow.c
+        ||getBounds(mainConnection(),rootWID,&rootBounds)||!v2FiniteRect(rootBounds)||getBounds(mainConnection(),wid,&bounds)||!v2FiniteRect(bounds))return NO;
+    CGAffineTransform placement=rootNow;
+    placement.tx-=bounds.origin.x-rootBounds.origin.x;placement.ty-=bounds.origin.y-rootBounds.origin.y;
+    if(!finiteMatrix(placement))return NO;
+    NSNumber *key=@(wid);
+    DW2Entry *e=[DW2Entry new];e->who=who;e->owner=owner;e->state=DW2_HELD;e->bounds=bounds;
+    if(getTransform(mainConnection(),wid,&e->transform)||!finiteMatrix(e->transform))return NO;
+    // Already where the root's family puts it (an identity placement of the root): nothing to take.
+    if(v2SameTransform(e->transform,placement))return NO;
+    if(getAlpha&&setAlpha){if(getAlpha(mainConnection(),wid,&e->alpha)||!isfinite(e->alpha))return NO;e->hasAlpha=YES;}
+    if(!v2EntryCurrent(e))return NO;
+    BOOL pruned=NO;
+    if(v2Table.count+v2Released.count>=DW2_MAX_TABLE)pruned=v2PruneReleased();
+    if(v2Table.count+v2Released.count>=DW2_MAX_TABLE){if(pruned){v2JournalStale=YES;v2ScheduleRetry();}return NO;}
+    e->arrival=YES;v2Table[key]=e;
+    if(!v2Persist()){
+        // Nothing of this window is changed without a record on disk.
+        [v2Table removeObjectForKey:key];v2JournalStale=YES;v2ScheduleRetry();v2Count();return NO;
+    }
+    v2Count();
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)DW2_ARRIVAL_TIMEOUT_MS*NSEC_PER_MSEC),v2q,^{v2ArrivalExpire(e);});
+    CGAffineTransform actual=CGAffineTransformIdentity;
+    if(!v2EntryCurrent(e)||setTransform(mainConnection(),wid,placement)||getTransform(mainConnection(),wid,&actual)||!v2SameTransform(actual,placement)||!v2EntryCurrent(e)){
+        // It may have been changed: the ordinary release puts back what was journalled, or finds the window gone.
+        e->state=DW2_RESTORING;struct dw2_restore_reply summary={0};
+        v2Restore(@"arrival placement not applied",YES,nil,&summary);
+        return YES;
+    }
+    e->appliedTransform=placement;e->appliedTransformKnown=YES;
+    return YES;
+}
 static void v2Veil(uint32_t wid) {
     if(!atomic_load(&v2VeilOn) || !wid || !v2Table)return;
     NSNumber *key=@(wid);
     // A window the table or a release already knows is the shell's to place, not an arrival.
-    if(v2Table[key] || v2Released[key] || !v2VeilEligible(wid))return;
+    if(v2Table[key] || v2Released[key])return;
+    if(v2ArrivalPlace(wid))return;
+    if(!v2VeilEligible(wid))return;
     int owner=0;struct dw2_identity who={0};uid_t uid=0;
     if(!v2Resolve(wid,&owner,&who,&uid) || uid!=getuid() || !v2InScope(&who) || who.pid==getpid() || who.pid==atomic_load(&v2VeilClient))return;
     DW2Entry *e=[DW2Entry new];e->who=who;e->owner=owner;e->state=DW2_HELD;
@@ -976,7 +1088,7 @@ static void v2Veil(uint32_t wid) {
 }
 // On v2q. Ending the veil releases whatever it still holds.
 static void v2VeilRelease(void) {
-    for(DW2Entry *e in v2Table.objectEnumerator)if(e->veiled && e->state==DW2_HELD)e->state=DW2_RESTORING;
+    for(DW2Entry *e in v2Table.objectEnumerator)if((e->veiled||e->arrival) && e->state==DW2_HELD)e->state=DW2_RESTORING;
     struct dw2_restore_reply summary={0};
     v2Restore(@"veil ended",YES,nil,&summary);
 }
@@ -1515,6 +1627,7 @@ static BOOL v2LoadJournal(NSDictionary *recovery) {
 // The sole listener. A failure is startup failure, never a fallback server.
 static int v2Start(const char *directory,BOOL onMain,NSDictionary *recovery) {
     v2ResolveSublevels();
+    v2ResolveFamily();
 #if DW_V2_BATCH_COMPILED
     v2ResolveForwardTransactions();
 #endif

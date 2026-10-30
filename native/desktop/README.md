@@ -3127,8 +3127,8 @@ context menu). Frames for the Dock helper carry, per window, either its placemen
 whenever its audited family report was missing (`root->familyKnown` false). That report is dropped (`-forgetChildrenOf:reason:`,
 printed once per root and reason as `native family #N unavailable: …`) whenever an audit fails: a native frame that cannot be read
 for an instant (`-[Desktop track:info:]` calls `-forgetNativeFamily:` when `DWNativeBounds` fails), a member that changed while it
-was being read (`inconsistent, duplicate or changed family member`), or a window the audit refuses, such as a popup-level context
-menu. A window is then parked, off the display, until the next audit passes. In the unchanged build the guest showed it
+was being read (`inconsistent, duplicate or changed family member`), or a window the audit refuses (the first version of this text named a
+popup-level context menu; the guest's audits took every context menu measured, see "Popups and menus of a transformed window" below). A window is then parked, off the display, until the next audit passes. In the unchanged build the guest showed it
 during the shell's own edge and corner resizes (14 of 66 mid-drag samples had the resized window parked at the park position,
 none during title drags; `evidence/base-*resize*.jsonl`, `evidence/base-edge-*.jsonl`) and the same line
 `native family #N unavailable: inconsistent, duplicate or changed family member` appeared in its log for the Finder window after
@@ -3274,6 +3274,109 @@ the windows Chromium announces at alpha 0.01 or 0 (hover cards, the 22-point win
 application put them for 2 to 120 ms, with and without the veil, before the family places them: that is what is left of the "transient window
 at the wrong place". A window the application keeps re-announcing without a parent (Aside's wid 1067 in the host log, 61 times) was never seen
 with a parent in these runs and is untouched. No optical capture was taken; every number is a window-server read, polled, not a frame on a display.
+
+#### Popups and menus of a transformed window (full-desktop Dock helper)
+
+The gap recorded in [`crates/desktop/POINTER.md`](../../crates/desktop/POINTER.md#differences-from-upstream) said that popups and menus open
+at the native window's place, not where the canvas draws the window. In compositor mode the shell draws nothing of an application's window:
+the window server draws it, moved and scaled by the helper's transform, and a popup is only where the canvas draws the window if the helper
+transforms that popup too. This section is what was measured in the macOS 27.0.1 (26A434) guests (vm1 2056x1251 points, vm2 1920x1200,
+tiling and Stage Manager as the owner's), what was found, what changed and what is still open. Evidence (probe TSVs with every transform,
+bounds, alpha, level and WindowServer parent of every window of the process, JSON, screenshots, the helper's trace) is under
+`target/popup/evidence/` of the working tree and its tools under `target/popup/tools/`; neither is committed.
+
+**Method.** A read-only probe polls every window of the process (alpha first, then transform and bounds, the parent through
+`SLSWindowQueryWindows`; the window list every 3 ms) while real HID events at `kCGHIDEventTap` open a popup, hover, click and press keys.
+"Drawn" is the rectangle the transform gives (the window list's own rectangle lags a transform write by tens of ms); "expected" is the root's
+drawn rectangle plus the window's native offset from the root times the scale, which is what `-describe:` gives every family member. "On
+screen at the wrong place" is the time between a probe row where the window was ordered in, above alpha 0.05 and more than 3 points off
+its expected rectangle and the next row. Applications: a fixture (`popupfix.m`: a window with a context menu, a pop-up button, a pull-down, a
+combo box, a tooltip view, a popover, a sheet that ends itself after 6 s, a child panel, a text field with completion, and a view that opens
+a borderless child panel at `[NSEvent mouseLocation]`; it logs every menu highlight and selection to stderr) and the real TextEdit, Finder,
+Safari and Google Chrome 156.0.8078.80.
+
+**What was already true (unchanged build, vm1 and vm2).**
+
+- Every popup the window server names a child of the window (its `SLSWindowIteratorGetParentID` is the root) is a family member, whatever its
+  level or alpha: the context menus of the fixture, TextEdit, Finder (file and empty space), Safari and Chrome (level 101), the pop-up
+  button's and the pull-down's menus (101), the combo box's list, the popover, the sheet, the child panel, the completion list (level 0),
+  Chrome's omnibox list and hover card, Safari's address suggestions. Each is transformed with its root's scale and offset: drawn within 1.2
+  points of expected at zoom 1, 0.75 and 0.5 in every case measured while open with arrival placement off (14 on vm2 and the vm1 runs of
+  TextEdit, Finder, Safari, Chrome and the fixture; `summarize.py`, `placed_err`). So the premise of the gap, a popup left at the
+  native place for its whole life, was not found for these in either guest. `describe:`'s offset (`m[4]-=dx`) and the window server's own
+  parent chain agree, and the menus were in the audited family (`native family #N unavailable` never printed in these runs).
+- Input lands where the popup is drawn: with the fixture's context menu at zoom 1, 0.75 and 0.5 a click at the drawn position of item 3
+  selected item 3 and the menu's own highlight callback named item 3 first; the same for the pop-up button (item "Popup E", 9 of 9 runs), the
+  pull-down ("Down 3", 3 of 3), the combo list ("Combo 4", 2 of 2); in all 12 context-menu runs item 3 was the one picked; the keyboard (Down three times, Return) selected item 3 of the context menu at zoom
+  0.5; and after a zoom change while the menu was open (0.5 to 0.75, and a pop-up button 0.75 to 0.5) the popup followed its root within a
+  frame (1 to 2 ms behind the root's write) and a click at its new drawn position picked the right item. AppKit tracks a menu with the
+  window server's own window-local events, so a transformed menu is hit-tested where it is drawn.
+- Not touched, as required: the global menu bar's menus. TextEdit's Window menu opened from the menu bar was a level-101 window with no
+  parent at its native place, transform untouched, in the unchanged build (`evidence/vm1-baseline/menubar-edit.tsv`; the menu
+  opened was Window, the file name says edit); a popup without a
+  parent is no family member, so nothing here moves it.
+- What was wrong was timing, not place. The menu windows are announced already at level 101 and already on screen (the helper's own
+  trace of notification 1325: layer 101, ordered in, alpha 1 at the announcement), which the arrival veil does not hold (level 0, alpha 1
+  only), and sheets, popovers and completion lists are announced at alpha 0 to 0.9 under the application's own fade, which no alpha hold
+  can keep. The shell's family frame came 23 to 40 ms after the announcement (announcement to the first row at the placed transform, the
+  main-thread path through `windowsChanged:`, a worker observation and a frame), so a popup was on screen where the application put it, not
+  where its window is drawn, for this long (arrival placement switched off in the same build, vm2, zoom 0.5 unless noted, alpha at the time):
+  context menu 24.7 ms (36.2 at zoom 1), TextEdit's 12.9, Finder's 10.9 (file) and 24.5 (empty space), Safari's 15.5, Chrome's 11.4;
+  the fixture's pop-up button menu 81.4 and pull-down 114.6; a popover 191.3 (fading in); a sheet 13.2 (alpha up to 0.16); a combo list
+  1.3. The unchanged integrated build on vm1 gave 17.7 (TextEdit, 41.3 at zoom 1), 19.6 and 69.5 (Finder), 76.8 (Safari), 13.8 (Chrome),
+  32.6 and 35.9 (fixture, zoom 1 and 0.75). A level-0 child with alpha 1 (child panel, pointer-placed panel) was held by the veil: 0.
+
+**What changed.** The helper places such a window itself, at the announcement: *arrival placement*
+([`native/privileged/README.md`](../privileged/README.md#arrival-veil), `v2ArrivalPlace`). A window whose exact parent chain ends at a
+root the shell has placed gets the root's transform with its translation moved by the window's native offset from the root, journalled
+and read back like any placement, replaced by the shell's first frame naming it (an equal record writes nothing) and released like any
+entry if no frame names it within 500 ms. The shell is unchanged apart from a comment: its family path is what claims the window.
+
+**After (final build, `target/popup/evidence/vm2-final`; the same build with a helper trace and a switch, `vm2-arrival`).** On screen at
+the wrong place: 0.0 ms in every one of the 24 newly opened popups measured with the final build (context menus of the fixture at zoom 1,
+0.75 and 0.5, of TextEdit at 0.5 and 1, of Finder (file and empty space), Safari and Chrome at 0.5, Chrome at 0.75; the pop-up button
+menu at 1, 0.75 and 0.5; the pull-down; a popover; a sheet at 1, 0.75 and 0.5 (alpha as it faded in); a child panel at three zooms; the
+pointer-placed child panel; the completion list; Chrome's hover card), `placed_err` at most 1.2 points. The combo list, Chrome's omnibox list
+and Safari's address suggestions were windows those applications had shown before the final build's session began; the trace build placed
+each of them at its announcement (`arrival-placed` in `vm2-arrival/helper-trace.log`). Selections, highlights and the keyboard were as
+before the change, and the popup still followed its root during a zoom while open (0.5 to 0.75 and 0.75 to 0.5, item picked right
+afterwards). From announcement to the placed transform read back, with the trace on (it costs about a millisecond of its own), over
+29 windows of the trace build: 1.0 to 3.4 ms for 27, 22.6 and 26.5 ms for two, both menus opened within a second of a camera flight, while
+the shell's frames were being applied (the helper's queue is serial). The trace build itself still showed a combo list for 1.9 ms
+and a sheet at zoom 1 for 1.7 ms at the wrong place (windows already on screen, or fading in, when the announcement arrived) and a fixture
+menu for 24.2 ms at zoom 1 (the 26.5 ms case); the final build, run after a longer settle, saw none of these, which is not proof that
+the window is never seen: the probe's resolution is its poll (about 0.5 ms) and the list's 3 ms, and nothing here is an optical capture.
+`quit-native` with a context menu open restored both the root and the menu to scale 1, alpha 1 and translation minus its native origin
+(trace build, vm2: root -700,-187, menu -801,-249; with the final build the menu read -801,-249 and its root 0,0, a state its original
+had before the session, below).
+
+**Not established, and what is open.**
+
+- Tooltips: no tooltip window appeared in any run (the fixture's `toolTip` with synthetic hover, in three attempts), so none was measured;
+  Chrome's hover card, which is tooltip-like, was. Finder's toolbar menus, Chrome's three-dot menu and Safari's other popovers were not run.
+- A popup an application positions from the pointer's *screen* position, not from its window, is displaced: the fixture's pointer-placed
+  child panel (native top-left at the pointer, 1037,633 at zoom 0.5) is drawn at 998,710, 39 points left and 77 below the pointer, because the
+  family offset is applied to a position that was already in drawn space (the same before and after the change). The standard AppKit
+  popups measured derive their place from the window, so they are not affected; which applications place a popup from the pointer is not
+  known, and no rule can tell such a popup from its native frame.
+- A popup the shell never names within 500 ms (for example one the family audit does not list although the window server calls it a
+  child) is released and shows where the application put it, 0.5 s after it opened. No such case was seen; nothing makes it impossible.
+- A window the application or the helper has released and the application shows again (a Chromium pool window, an AppKit window
+  reused after the shell dropped it) is in the helper's released table and is not placed by this path; the shell's family places it as before.
+- Placement waits behind a frame being applied (one case, 26.5 ms). The hover cards Chromium announces at alpha 0.01 were placed at the
+  announcement, so their fade now starts in place; whether Chromium's windows that come without a parent for a few frames are placed
+  correctly was not separated from the existing family grace.
+- Menu bar menus were measured once, in the unchanged build; the final build's arrival path cannot touch a window without a parent (a
+  regression case, `restore_identity_test.m`), but a live menu-bar run of the final build was not made. Aside, macOS 26, the owner's M5 Pro
+  and macOS 27.2, a second display and Spaces were not run, and the real Finder context menu that the owner saw vanish under was not reproduced.
+- **Found on the way, not a popup result.** After `quit-native` has restored every window correctly (alpha 1, scale 1, translation minus the
+  native origin, read back), `killall Dock` leaves each window the helper ever touched with translation 0,0 and drawn at the top-left corner of
+  the display (`cg=0,0,W,H`, `SLSGetWindowBounds` still reporting the native origin); a second `killall Dock` changes nothing, and the next
+  helper session then takes that state as the window's original. Reproduced on vm2 with a new TextEdit window: before the helper
+  -213,-86, in the session 2.0 scale, after `quit-native` -213,-86, after `killall Dock` 0,0 and drawn at 0,0. The shell's own Dock
+  reload path (a `Dock payload reloaded; reconnecting` session) was not exercised here, and the guests' procedure (`quit-native`, `deploy`,
+  `killall Dock`) does this to every window left open across it. Whether the owner's Mac does the same when the Dock restarts after
+  Infinify has quit is not known.
 
 ### What was run for managed windows
 

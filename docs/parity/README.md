@@ -2858,9 +2858,23 @@ spelling. The existing Mac/driver feature stays available.
 
 Two more gaps have no row of their own. They are recorded in the
 [pointer contract](../../crates/desktop/POINTER.md#differences-from-upstream),
-not in the inventory: popups and menus open at the native window's place, not
-where the canvas draws the window, and the cursor shape cannot follow the
-application under the pointer.
+not in the inventory. The cursor shape cannot follow the application under the
+pointer. Popups and menus: in compositor (Dock-helper) mode the popups the
+window server names children of a window (context menus, pop-up and pull-down
+menus, combo lists, popovers, sheets, child panels, completion lists, Chrome's
+omnibox and hover card, Safari's address suggestions) were found, on
+2026-10-30 in two macOS 27.0.1 guests, to be drawn at the window's scale at
+its offset and to take hover, click and keyboard where they are drawn, at
+zoom 1, 0.75 and 0.5 and across a zoom while open; what was wrong was that
+they were seen at the application's native place for 11 to 191 ms first, which
+the helper's arrival placement now removes (0.0 ms at the probe's resolution in
+24 of 24 final-build cases, no optical capture). Still open there: tooltips (none could
+be triggered), popups with no window-server parent other than the global menu
+bar's menus (measured once, left alone), a popup an application places from the
+pointer's screen position (displaced, measured), a released window the
+application shows again, the owner's real Mac and macOS 26, and the capture
+overlay's popups (no change; they keep their native placement, above).
+[Details](../../native/desktop/README.md#popups-and-menus-of-a-transformed-window-full-desktop-dock-helper).
 
 The evidence boundary stands for every row, whatever its status. The original
 inventory evidence consisted of controller scenarios, own-fixture probes and

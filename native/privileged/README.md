@@ -698,11 +698,35 @@ adaptation of the idea Sunlight uses (see below), as an alpha write instead of a
   a window that was placed with no alpha of its own is never written again, and a window an application has taken
   over keeps its alpha; an alpha the shell asked for is its own obligation and is put back as before. `veiled`
   (whether alpha is being held now) is memory only.
-- **Not covered.** Windows not at layer 0 (utility panels at the floating level, menus, popovers) are not veiled.
+- **Not covered.** Windows not at layer 0 (utility panels at the floating level, menus, popovers) are not veiled; a child of a window the
+  shell has placed gets *arrival placement* instead (next bullet).
   A window already known to the window server that is announced again for a Space change and not managed by the shell
   is held for up to the bound (while the Dock lives). A window the application animates (TextEdit's document windows, sheets) can have the veil
   overwritten by the application: TextEdit's own open animation wrote alpha 1 about 0.5 s after creation (measured
   501 to 533 ms), before the bound, when nothing placed the window. The veil is not an optical result.
+- **Arrival placement: a child of a placed root.** The veil holds a window by alpha, and only at layer 0 and alpha 1. A context menu is
+  announced already at level 101 and on screen (measured with a temporary trace in the Dock, since removed: the notification arrived with
+  layer 101, ordered in, alpha 1), and the shell's family frame placed it 23 to 40 ms after the announcement (four timed cases). A sheet, a
+  popover or a completion list is announced at alpha 0 to 0.9 under the application's own fade, which no veil can hold. With the same
+  build and this path switched off (a temporary switch, since removed), 12 of 12 such popups on vm2 were on screen where the application
+  put them, not where their root is drawn, for 1.3 to 191.3 ms: context menus 10.9 to 36.2 ms, pop-up button and pull-down menus 81.4 and
+  114.6 ms, a popover 191.3 ms (fading in), a sheet 13.2 ms (alpha up to 0.16), a combo list 1.3 ms. So for such a window the helper does
+  not hide it: at the announcement it gives it the placement the shell gives every member of its root's family. Conditions, all read fresh
+  on v2q: the window's exact WindowServer parent chain (the single-window query the shell's family audit uses, `v2ParentOf`; every link one
+  process instance of the login user) ends at a root that is a held table entry the shell has placed (`appliedTransformKnown`, not
+  restoring, not merely veiled, its transform still the one applied, no rotation), the window is in scope and is neither the Dock's nor the
+  client's, it is in neither the table nor the released table, and the placement differs from what it has. The placement is the root's
+  transform with its translation moved by the window's native offset from the root (the shell's `m[4]-=dx, m[5]-=dy`, native-presenter.m
+  `-describe:`), both bounds read now. The entry is an ordinary one: original transform, bounds and alpha journalled before the write, the
+  write read back (a transform that does not take is released at once), no alpha touched. The first frame that names the window claims it and
+  replaces the placement (normally by an equal one: a repeated record writes nothing); otherwise `DW2_ARRIVAL_TIMEOUT_MS` (500 ms) after the
+  announcement, RESTORE, RESTORE_ALL, the end of the veil (mode 0 or the session) or a closed window release it by the ordinary release, which
+  puts the original transform back. Nothing else is touched: a window with no parent (the global menu bar's menus, status items, every
+  application's own windows) is left alone, as is a child of a window the shell has not placed. It is gated by the veil request
+  (`INFINIFY_NO_VEIL` also turns it off). Announcement to the read-back placement took 1.0 to 3.4 ms for 27 of 29 windows in the trace
+  build and 22.6 and 26.5 ms for two opened while frames were being applied (the helper's queue is serial). A window that the helper has
+  released and the application shows again (Chromium and AppKit reuse windows) is in `v2Released` and is not placed again by this path.
+  No wire change. Results with the shell running are in [the shell's account](../desktop/README.md#popups-and-menus-of-a-transformed-window-full-desktop-dock-helper).
 - **A browser's windows: what the veil held, measured, and a test that was not adopted.** The owner's Aside windows "randomly flashed"
   with the veil on; the veil was not the cause (see [the shell's account](../desktop/README.md#a-root-whose-family-cannot-be-read-the-browsers-main-window-flashing)).
   What Chrome 156.0.8078.80 showed in the macOS 27.0.1 guest, every 1325 announcement read from inside the helper with a temporary trace (removed):
@@ -740,6 +764,13 @@ list paths, decline/bound/end/recovery, closed and replaced windows, the request
 payload through the real handler on a socket pair); `client_protocol_test.py` checks the C client's request,
 refusal and invalid-reply handling against a fake peer; `fixture_v2_test.py`'s frames group, run in the
 guest, shows a cooperative helper offering no veil (caps 119) and refusing the request without ending its session.
+The arrival placement cases (`arrivalCases` in the same file: journal and original before the write at level 0 and 101 and with a fading
+alpha, claim by the shell's frame with no second write, bound, release record, end of the veil, closed window, replay of a writer that died with
+the placement, 17 refusals: no or inexact parent, a cycle, an unplaced, releasing, veiled, rotated, stale-transformed, other-process or
+other-connection root, a root with no applied transform, an equal placement, no veil asked, the client's process, another user, unreadable bounds; a journal that cannot be written changes nothing; a
+transform that does not take is released at once) ran on the host after the change: `restore_identity_test` passed (7 PASS lines),
+`forward-operations-test` and `client_protocol_test.py` passed. They use substituted native calls and are not native evidence. The live run
+of the final build in the vm2 guest is in the shell's account above.
 These are not native evidence. The live numbers below were taken before three later changes: the first frame's re-read and
 journal write (`veil_bare`), the conditional veil alpha (`veil_alpha`, and a lift that leaves an alpha the application
 took over), and the shell's declines from the first pass on; those are covered by the substituted-call and in-memory
