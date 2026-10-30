@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// MRU algorithms adapted from malbiruk/driftwm src/stage/mod.rs,
-// commit 352333a8fa1b22171492d4b71a54102045c9a19d.
+// MRU algorithms adapted from https://github.com/malbiruk/driftwm
+// src/stage/mod.rs, commit 352333a8fa1b22171492d4b71a54102045c9a19d.
 use crate::{Window, WindowId};
 
 /// Value-owned window geometry, stacking, and ephemeral MRU cycle state.

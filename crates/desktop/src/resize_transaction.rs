@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
+// Adapted from https://github.com/malbiruk/driftwm @
+// 352333a8fa1b22171492d4b71a54102045c9a19d:
 // src/grabs/resize_grab.rs (constrain_to_ratio, locked_ratio_for, and the
 // pointer clamp and integer delta of ResizeGrab::motion and apply_resize) and
 // src/input/pointer.rs (edges_from_position). The grab itself is this file's
@@ -153,8 +154,6 @@ pub struct NativeResizeTransaction {
     /// whose rule has `preserve_aspect_ratio`. Such a resize neither snaps
     /// nor carries a cluster.
     ratio: Option<f64>,
-    /// Native min/max are not supplied by AX; no constraints are inferred.
-    native_constraints: Option<Size>,
     latest_requested: Option<Size>,
     /// The size of the last setter sent. Upstream configures a client only
     /// when the size differs from the last one it configured
@@ -353,7 +352,6 @@ impl Controller {
             last_committed_size: size,
             group: false,
             ratio: None,
-            native_constraints: None,
             latest_requested: Some(target),
             last_sent: None,
             requested_outline: None,
@@ -442,7 +440,7 @@ impl Controller {
     ) -> Result<Value, Error> {
         self.require_source_interactive(window)?;
         self.guard_resize_structure(None)?;
-        if self.gesture.is_some() || !point_valid(start_screen) {
+        if self.gesture.is_some() || !start_screen.valid() {
             return Err(Error::Invalid(
                 "native resize requires one ordinary window and valid screen point",
             ));
@@ -526,7 +524,6 @@ impl Controller {
             last_committed_size: size,
             group,
             ratio,
-            native_constraints: None,
             latest_requested: None,
             last_sent: None,
             requested_outline: None,
@@ -704,10 +701,7 @@ impl Controller {
             && t.pending_effect
                 .as_ref()
                 .is_some_and(|e| e.requested.is_none());
-        if (t.phase != Phase::Dragging && !waiting_for_baseline)
-            || t.released
-            || !point_valid(screen)
-        {
+        if (t.phase != Phase::Dragging && !waiting_for_baseline) || t.released || !screen.valid() {
             return Err(Error::Invalid("resize is not accepting motion"));
         }
         let requested = self.resize_request(screen)?;
@@ -802,7 +796,7 @@ impl Controller {
         if !flags_valid
             || (result.observed && !agrees)
             || (effect.requested.is_none() && result.mutation_attempted)
-            || (result.observed && (!rect_valid(result.actual_ax) || !rect_valid(result.actual_cg)))
+            || (result.observed && (!result.actual_ax.valid() || !result.actual_cg.valid()))
             || effect.requested.is_some_and(|s| s != result.requested)
             || (result.outcome == ResizeOutcome::Applied
                 && effect.native_origin.is_some_and(|origin| {

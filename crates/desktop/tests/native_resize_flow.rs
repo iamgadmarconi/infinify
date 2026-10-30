@@ -1,35 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Exported C ABI contract only. Synthetic native observations
 //! do not prove native mutation, pixels, or usable compositing.
-use driftwm_desktop::*;
 use serde_json::{Value, json};
 use std::{
-    ffi::CStr,
     io::Write,
     path::PathBuf,
     process::{Command, Stdio},
     sync::OnceLock,
 };
-struct Host(*mut Controller);
+
+#[path = "support/host.rs"]
+mod host;
+use host::Host;
 impl Host {
-    fn new() -> Self {
-        Self(driftwm_desktop_create())
-    }
-    fn call(&mut self, command: Value) -> Value {
-        let bytes = serde_json::to_vec(&json!({"version":1,"command":command})).unwrap();
-        // SAFETY: owned live handle; response consumed once, then freed.
-        unsafe {
-            let ptr = driftwm_desktop_request(self.0, bytes.as_ptr(), bytes.len());
-            let out = serde_json::from_slice(CStr::from_ptr(ptr).to_bytes()).unwrap();
-            driftwm_desktop_response_free(ptr);
-            out
-        }
-    }
-    fn ok(&mut self, c: Value) -> Value {
-        let r = self.call(c);
-        assert_eq!(r["ok"], true, "{r}");
-        r["data"].clone()
-    }
     fn snap(&mut self) -> Value {
         self.ok(json!({"op":"snapshot"}))
     }
@@ -37,11 +20,6 @@ impl Host {
         let before = self.snap();
         assert_eq!(self.call(c)["ok"], false);
         assert_eq!(self.snap(), before);
-    }
-}
-impl Drop for Host {
-    fn drop(&mut self) {
-        unsafe { driftwm_desktop_destroy(self.0) }
     }
 }
 fn rect(x: f64, y: f64, w: f64, h: f64) -> Value {
@@ -576,16 +554,11 @@ fn adapter_outcome_flags_are_validated_atomically_for_reads_and_setters() {
 }
 
 #[test]
-fn capability_and_retired_protocol_are_strict_and_atomic() {
+fn native_resize_capability_is_strict_and_atomic() {
     let mut h = setup();
     for command in [
         json!({"op":"native_resize_capability"}),
         json!({"op":"native_resize_capability","enabled":null}),
-        json!({"op":"native_resize_capability","enabled":true,"readback":true}),
-        json!({"op":"native_resize_capability","enabled":true,"readback":false}),
-        json!({"op":"native_resize_capture_ready","window":1}),
-        json!({"op":"invalidate_native_capture","window":1}),
-        json!({"op":"retire_native_resize_source","transaction":1}),
     ] {
         h.rejects(command);
     }

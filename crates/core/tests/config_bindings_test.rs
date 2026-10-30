@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Ported from malbiruk/driftwm tests/config_bindings_test.rs at
-// df3de27b26c7998e8a460cffd8a4925cbed3a322 (GPL-3.0-or-later).
-// Changes from upstream: crate paths only — `driftwm::config` reads
+//
+// Ported from DriftWM (GPL-3.0-or-later)
+//   repository: https://github.com/malbiruk/driftwm
+//   commit:     df3de27b26c7998e8a460cffd8a4925cbed3a322
+//   path:       tests/config_bindings_test.rs
+//   sha-256:    181f59507b1e6aa7f095d3ba390decdcba7d22bffa8d8a3d162e6d2f1475abac (upstream file)
+// Changes from upstream: this header, and crate paths only: `driftwm::config` reads
 // `driftwm_core::config` and `smithay::` reads `driftwm_core::platform::`.
 // Nothing else.
+// See PORT.md in the crate root for the full change log.
+
 use driftwm_core::config::{Action, Config, Direction};
 use driftwm_core::platform::input::keyboard::{Keysym, ModifiersState, keysyms};
 

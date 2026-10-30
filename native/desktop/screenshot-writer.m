@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Parent creation and failure stages match malbiruk/driftwm
+// Parent creation and failure stages match DriftWM, https://github.com/malbiruk/driftwm @
 // 352333a8fa1b22171492d4b71a54102045c9a19d,
 // src/render/screenshot.rs:117-122 (capture_region_to_png). The write itself is
-// v0.21.0's write_png, df3de27b26c7998e8a460cffd8a4925cbed3a322,
-// third_party/driftwm/src/render/screenshot.rs: the PNG goes to a new file beside
+// v0.21.0's write_png, https://github.com/malbiruk/driftwm @ df3de27b26c7998e8a460cffd8a4925cbed3a322,
+// src/render/screenshot.rs: the PNG goes to a new file beside
 // its target, then is renamed into place, so a failure never truncates or
 // half-writes what the path held and a symlink at the path is replaced instead
 // of written through. Upstream's temp name is `.<name>.<pid>-<n>.tmp`.

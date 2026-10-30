@@ -9,8 +9,6 @@ fn add(scene: &mut Scene, id: u64, rect: Rect) {
         .add_window(Window {
             id: WindowId(id),
             world_rect: rect,
-            native: None,
-            title: id.to_string(),
         })
         .unwrap();
 }
@@ -306,9 +304,8 @@ fn rejected_resizes_and_stale_members_are_atomic() {
         assert_eq!(resize, gesture_before);
     }
     // Even a valid primary frame cannot overwrite an externally moved member.
-    scene
-        .move_window(WindowId(2), Point::new(-1.0, 0.0))
-        .unwrap();
+    let moved = frame(&scene, 2).translated(Point::new(-1.0, 0.0));
+    scene.set_window_rect(WindowId(2), moved).unwrap();
     let before = scene.clone();
     let gesture_before = resize.clone();
     assert!(

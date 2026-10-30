@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Framing adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
+// Framing adapted from DriftWM, repository https://github.com/malbiruk/driftwm, commit 352333a8fa1b22171492d4b71a54102045c9a19d:
 // src/ipc/mod.rs (IpcServer::new_at, accept_client, serve_connection, write_line,
 // subscribe, Subscriber, broadcast_state_event, drain_subscriber, flush_pending_events):
 // one request per line, one reply line each, in order, several per connection; an
@@ -13,8 +13,8 @@
 // checked by uid, connections are bounded and idle ones time out. Subscribers are
 // bounded as well, and where upstream keeps one that stopped reading, one that
 // takes nothing of an owed event for the idle time is hung up on.
-// The caps are v0.21.0's, df3de27b26c7998e8a460cffd8a4925cbed3a322,
-// third_party/driftwm/src/ipc/mod.rs: MAX_COMMAND_SIZE (1 MiB) and MAX_CONNECTIONS
+// The caps are v0.21.0's, https://github.com/malbiruk/driftwm @ df3de27b26c7998e8a460cffd8a4925cbed3a322,
+// src/ipc/mod.rs: MAX_COMMAND_SIZE (1 MiB) and MAX_CONNECTIONS
 // (1024), refuse_connection (a connection past the cap is told why in one line
 // and closed, which also takes it off the level-triggered listener), and
 // serve_connection's rule that only the bytes just read can complete a request,
@@ -24,6 +24,7 @@
 // and the system caps it at 128), so a burst of clients is not refused while the
 // queue is still accepting them.
 #import "ipc-server.h"
+#include "driftwm_desktop.h"
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/file.h>
@@ -66,8 +67,8 @@ static int runLock(NSString *path,BOOL *duplicate,NSString **error) {
         !lstat(parent.fileSystemRepresentation,&now)&&sameInode(dir,now)&&privateDirectory(now);
     close(directory);if(!valid){close(fd);*error=[NSString stringWithFormat:@"run lock changed during admission: %@",path];return -1;}return fd;
 }
-// A bounded, read-only compatibility check for running releases without leases.
-// Unknown probe errors are failures, never evidence that an old owner is absent.
+// A bounded, read-only check that detects another live Infinify on the socket.
+// Unknown probe errors are failures, never evidence that no other owner is there.
 static int existingServer(NSString *path,NSString **error) {
     struct stat st;if(lstat(path.fileSystemRepresentation,&st)){if(errno==ENOENT)return 0;*error=@"cannot inspect existing socket";return -1;}
     int fd=socket(AF_UNIX,SOCK_STREAM,0);if(fd<0){*error=@"cannot create socket probe";return -1;}
@@ -97,7 +98,7 @@ static int existingServer(NSString *path,NSString **error) {
 - (void)dealloc { if(_secondFD>=0)close(_secondFD);if(_firstFD>=0)close(_firstFD); }
 @end
 
-enum { DWIPCMaxLine=1<<20,DWIPCMaxConnections=1024,DWIPCMaxSubscribers=8,DWIPCIdleSeconds=30,DWIPCBacklog=128 };
+enum { DWIPCMaxLine=DRIFTWM_DESKTOP_MAX_REQUEST_BYTES,DWIPCMaxConnections=1024,DWIPCMaxSubscribers=8,DWIPCIdleSeconds=30,DWIPCBacklog=128 };
 @interface DWIPCConnection : NSObject
 @property int fd;
 @property dispatch_source_t reader,idle;

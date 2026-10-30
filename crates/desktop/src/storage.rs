@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The bounds on what a saved scene, a request or a stand-in may hold are adapted
-// from malbiruk/driftwm v0.21.0 (df3de27b26c7998e8a460cffd8a4925cbed3a322),
-// third_party/driftwm/src/state/session_store.rs: CAMERA_LIMIT, POSITION_LIMIT,
+// from https://github.com/malbiruk/driftwm @ df3de27b26c7998e8a460cffd8a4925cbed3a322
+// (v0.21.0), src/state/session_store.rs: CAMERA_LIMIT, POSITION_LIMIT,
 // valid_canvas_point, within_window_range, valid_camera_seed, MAX_BOOKMARKS,
 // MAX_BOOKMARK_NAME, bookmark_problem, bounded_bookmarks and DriftWm::set_bookmark,
 // valid_entry_geometry (a saved window outside the limits is dropped), and
-// third_party/driftwm/src/decorations.rs MAX_BUFFER_EXTENT, the stand-in ceiling.
+// src/decorations.rs MAX_BUFFER_EXTENT, the stand-in ceiling.
 // Upstream's session store is a stand-in list; here the scene file holds a slot
 // for every window, and the same rule applies to each slot.
 use super::rules::{Pin, Policy};
@@ -109,19 +109,19 @@ struct Saved {
     outputs: BTreeMap<OutputId, SavedOutput>,
     next_window: u64,
     next_output: u64,
-    /// Additive: absent from files written before bookmarks existed, and
-    /// omitted while empty, so an older build still reads a save that has none.
+    /// Absent from files written before bookmarks existed, and omitted while
+    /// empty.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     bookmarks: BTreeMap<String, [f64; 2]>,
-    /// Additive in the same way: the logical ids of the stand-ins. Every other
-    /// window was open at the save, bound or not, and is a slot its own window
-    /// may come back to. A file written before stand-ins existed has only those.
+    /// The logical ids of the stand-ins. Every other window was open at the
+    /// save, bound or not, and is a slot its own window may come back to.
+    /// Absent from files written before stand-ins existed.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     standins: BTreeSet<WindowId>,
-    /// Additive in the same way: the screen-pinned windows, each with the
-    /// output it is fixed to and its place there. Upstream's session file
-    /// holds none, because its windows die with the compositor; here the
-    /// window lives on, and its slot keeps the pin it had.
+    /// The screen-pinned windows, each with the output it is fixed to and its
+    /// place there. Upstream's session file holds none, because its windows
+    /// die with the compositor; here the window lives on, and its slot keeps
+    /// the pin it had. Absent from files that have none.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pins: BTreeMap<WindowId, Pin>,
 }
@@ -133,7 +133,7 @@ impl Controller {
     /// is resolved again when the window maps. A pinned window is saved with
     /// its pin, and with the canvas frame that pin shows.
     /// Rename commits atomically; directory sync errors may occur after commit.
-    pub fn save(&self, path: impl AsRef<Path>) -> Result<(), Error> {
+    pub(crate) fn save(&self, path: impl AsRef<Path>) -> Result<(), Error> {
         let mut scene = self.scene.clone();
         for output in self.scene.outputs() {
             scene.remove_output(output.id)?;
@@ -146,10 +146,6 @@ impl Controller {
         // upstream's per_output_cameras writes it.
         for (window, rect) in self.fullscreen_saved_frames() {
             scene.set_window_rect(window, rect)?;
-        }
-        // The pins say which windows stay out of snapping: one source, not two.
-        for window in self.scene.windows() {
-            scene.set_snapping(window.id, true)?;
         }
         let widget = |id: &WindowId| self.is_widget(*id);
         if self.scene.windows().iter().any(|w| widget(&w.id)) {
@@ -251,7 +247,7 @@ impl Controller {
     /// explicitly attach newly observed identities before requesting input.
     /// The result is unconfigured: the `load` command carries the configuration
     /// in force across and applies its session rules.
-    pub fn load(path: impl AsRef<Path>) -> Result<Self, Error> {
+    pub(crate) fn load(path: impl AsRef<Path>) -> Result<Self, Error> {
         let mut bytes = Vec::new();
         File::open(path)?
             .take(MAX_SAVE_BYTES + 1)
@@ -395,7 +391,7 @@ impl Controller {
             effects: Effects::default(),
             fullscreen: Fullscreen::default(),
         };
-        // Saved scenes reset snapping; their pins restore its exclusions.
+        // A scene file holds no snapping exclusions; the pins restore them.
         // Public load returns that normalized state immediately, so queries
         // need not mutate a newly loaded controller to finish restoring it.
         controller.settle_state()?;

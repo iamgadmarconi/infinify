@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
+// Adapted from https://github.com/malbiruk/driftwm @
+// 352333a8fa1b22171492d4b71a54102045c9a19d:
 // src/input/keyboard.rs (the pass_keys decision of a key press: the focused
 // window's live rule, after the VT switch that is never passed, and skipped
 // while a suspended window holds the focus), src/state/window_lifecycle.rs

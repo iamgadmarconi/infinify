@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm src/layout/{snap,cluster}.rs at 352333a8fa1b22171492d4b71a54102045c9a19d.
+// Adapted from https://github.com/malbiruk/driftwm src/layout/{snap,cluster}.rs
+// at 352333a8fa1b22171492d4b71a54102045c9a19d.
 // Retains strict perpendicular overlap and on-demand connected components.
 // Movement and snapping use the gesture lifecycle in gestures.rs.
 use crate::{Error, Rect, Scene, WindowId};

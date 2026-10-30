@@ -1,72 +1,183 @@
-Infinify — DriftWM macOS development port
+Infinify — DriftWM macOS port
 SPDX-License-Identifier: GPL-3.0-or-later
 
-Upstream: DriftWM, https://github.com/malbiruk/driftwm
-Source baseline: df3de27b26c7998e8a460cffd8a4925cbed3a322 (DriftWM v0.21.0; first ported from 352333a8fa1b22171492d4b71a54102045c9a19d)
-Upstream primary maintainer: Maksim Kononenko (malbiruk), with contributors.
-The GPL version 3 license text in LICENSE is copied unchanged from that baseline.
-Upstream README declares GPL-3.0-or-later.
+All Infinify source is distributed under GPL-3.0-or-later (LICENSE). Third-party
+Cargo packages retain their respective licences; Cargo.lock pins their versions.
+This repository carries no snapshot of any upstream project, only the individual
+files listed below; each source file that embeds or adapts upstream code names, in its header, the upstream
+repository, the commit and the upstream path it follows. No upstream endorsement
+or compatibility guarantee is implied.
 
-This project is a new Rust/macOS implementation informed by DriftWM's infinite
-canvas design. It does not claim to compile or run the upstream Wayland/Smithay
-compositor on macOS. Canvas algorithm adaptations and any copied source have
-additional provenance in their source files. Most macOS platform integration is
-new. The optional native/privileged/loader.m is adapted from yabai at commit
-dd845723416f5fe92af49fad5ebab00369e07edd and retains its MIT license, copyright,
-and Jeremy Legendre arm64e attribution. The exact upstream license is retained
-in native/privileged/YABAI-LICENSE.txt.
-native/desktop/window-events.m and the event handling of
-native/desktop/window-manager.m are adapted from yabai at the same commit
-(src/workspace.m, src/application.c, src/application.h, src/window.c,
-src/window.h, src/event_loop.c, src/window_manager.c: which notifications an
-application and a window are observed with, and what each one means), MIT,
-Copyright (c) 2019 Åsmund Vikane. Its license text is retained in
-native/families/YABAI-NOTICE.txt, which the app bundle carries beside this
-file, and each adapted file names what it took.
-native/focus/focus.m brings a window that is on another desktop forward with
-the calls and the event record of yabai's window_manager_focus_window_with_raise
-and window_manager_make_key_window (src/window_manager.c:1269-1335,
-src/misc/extern.h:81-82, src/window_manager.h:5) at the same commit, under the
-same license and copyright.
-native/desktop/multitouch-source.m and native/desktop/dock-guard.m adapt
-techniques from Sunlight, https://github.com/spacefarm-digital/sunlight, at
-commit afeea74b18e70ca49bf462d6fe462cf65deb2b32 (Sources/Canvas/TrackpadPan.swift:
-reading trackpad contacts through MultitouchSupport, and a session event tap
-that holds back Dock-control events), native/desktop/system-takeover.m
-translates from the same commit, function by function, Sources/Canvas/Takeover/
-SystemPrefs.swift and TakeoverMode.swift (vendored under third_party/sunlight/:
-snapshot the user's own preferences before the first write, an absent key
-restored as absent, restore on every end and from a leftover record at the next
-launch; the header of the file lists each function and its lines), and the
-arrival veil of
-native/privileged/payload-v2.m adapts from the same commit
-Sources/Canvas/RealWindows/WindowServerEvents.swift (SkyLight's window-created
-event and its payload) and the aim of LiveWindows/osax/sunbeam.h that a new
-window is never seen before it is placed, MIT, Copyright (c) 2026 spacefarm. Its
-license text is retained in native/desktop/SUNLIGHT-NOTICE.txt, which the app
-bundle carries beside this file, and each adapted file names what it took.
-The same commit's launch daemon and Dock reload are taken for compositor mode at
-login: native/privileged/loadd.m copies LiveWindows/helper.m (the daemon, its XPC
-listener and caller requirement, with the edits its header lists),
-native/desktop/loader-service.m and native/desktop/dock-reload.m translate
-Sources/Canvas/Setup/LiveWindowsService.swift and
-Sources/Canvas/RealWindows/AdditionReloader.swift (including DockCrashGuard) and
-their tests, and native/privileged/com.marengox.infinify.loader.plist adapts
-Resources/LaunchDaemons/com.spacefarm.sunlight.live-windows.plist, all MIT,
-Copyright (c) 2026 spacefarm. Paths are those of the vendored copy,
-third_party/sunlight/.
-crates/core carries DriftWM's pure modules (canvas, config, layout, session,
-stage and the touch gesture recogniser) from the source baseline with their
-tests; each file records its upstream path, and crates/core/PORT.md lists every
-hash and deviation. Its stand-ins for Smithay geometry and input types follow
-Smithay 0.7.0 (MIT, Copyright (c) 2017 Victor Berger and Victoria Brekenfeld),
-and its key-name lookup reimplements libxkbcommon's rules (MIT/X11).
-All project source is distributed under GPL-3.0-or-later. Third-party Cargo
-packages retain their respective licenses; Cargo.lock pins their versions.
-third_party/driftwm is a verbatim, unmodified copy of DriftWM v0.21.0
-(GPL-3.0-or-later). third_party/sunlight is a verbatim, unmodified copy of
-Sunlight afeea74 (MIT, Copyright (c) 2026 spacefarm; licence text in
-third_party/sunlight/LICENSE). Both are read-only references; see each
-directory's VENDORED.md and SHA256SUMS.
+DriftWM
+-------
+Upstream: https://github.com/malbiruk/driftwm
+Maintainer: Maksim Kononenko (malbiruk), with contributors. GPL-3.0-or-later.
+Pins: each derived file names the commit it was adapted at, either
+df3de27b26c7998e8a460cffd8a4925cbed3a322 (DriftWM v0.21.0, the baseline of
+crates/core) or 352333a8fa1b22171492d4b71a54102045c9a19d (the commit the first
+port started from). The files that name only 352333a8 are crates/canvas/src, the
+crates/desktop/src modules and the native/desktop files listed below that were
+written at that port; crates/core/PORT.md records the hashes and deviations of
+crates/core.
+The GPL version 3 text in LICENSE is copied unchanged from the baseline.
 
-No upstream endorsement or compatibility guarantee is implied.
+This is a new Rust/Objective-C implementation informed by DriftWM's infinite
+canvas design. It does not compile or run the upstream Wayland/Smithay
+compositor on macOS. Files derived from DriftWM (each names the upstream
+repository, commit and path in its header or, in native/desktop, at the adapted
+block or section):
+  crates/core/                  the pure modules: canvas, config, layout, the
+                                direction_from_vector gesture helper, platform
+                                stand-ins and keysym lookup, with their tests;
+                                crates/core/PORT.md lists every hash and deviation
+  crates/canvas/src/            cluster_resize, geometry, gestures, layout, lib, stage
+  crates/desktop/src/           actions, bindings, effects, fullscreen, gestures,
+                                ipc, ipc_client, keyboard_layout, keyboard_snap,
+                                lifecycle, motion, navigation, output_actions,
+                                passthrough, pointer_policy, render,
+                                resize_transaction, rules, settings, sizes,
+                                storage, taps, view_actions, window_actions
+  native/desktop/               background, background-tiff, compositor,
+                                canvas-renderer, cycle-hold, frame-driver,
+                                hot-corners, hotkeys, input-sources, ipc-server,
+                                main, pan-launch, pointer-hover,
+                                screenshot-writer, tap-keys, trackpad-gestures,
+                                window-manager
+  crates/core/config.reference.toml and the two proptest seed files
+  crates/core/proptest-regressions/layout/fill.txt and snap.txt are byte copies
+  of the baseline files and crates/core/docs/window-rules.md is the baseline page with six relative links
+  made absolute (see crates/core/PORT.md); the oracle copies under
+  crates/canvas/tests/upstream, crates/desktop/tests/upstream and
+  crates/desktop/tests/resize_upstream are upstream excerpts, each directory
+  with a SHA256SUMS.
+
+Sunlight
+--------
+Upstream: https://github.com/spacefarm-digital/sunlight
+Commit: afeea74b18e70ca49bf462d6fe462cf65deb2b32
+Licence: MIT, Copyright (c) 2026 spacefarm. The licence text is
+native/desktop/SUNLIGHT-NOTICE.txt, which the app bundle carries beside this
+file. Each adapted file names what it took. Files derived from Sunlight:
+  native/desktop/multitouch-source.m, dock-guard.m, dock-control.h and
+  trackpad-gestures.m adapt Sources/Canvas/TrackpadPan.swift: reading trackpad
+  contacts through MultitouchSupport, a session event tap that holds back
+  Dock-control events, and the spread rule.
+  native/desktop/system-takeover.m translates, function by function,
+  Sources/Canvas/Takeover/SystemPrefs.swift and TakeoverMode.swift: snapshot the
+  user's own preferences before the first write, an absent key restored as
+  absent, restore on every end and from a leftover record at the next launch.
+  native/desktop/window-events.m and window-events.h adapt
+  Sources/Canvas/RealWindows/WindowServerEvents.swift (SkyLight's window-created
+  event and its payload).
+  The arrival veil of native/privileged/payload.m adapts the same event
+  source and the aim of LiveWindows/osax/sunbeam.h that a new window is never
+  seen before it is placed (native/privileged/protocol.h carries its constants).
+  Compositor mode at login: native/privileged/loadd.m copies LiveWindows/helper.m
+  (the daemon, its XPC listener and caller requirement, with the edits its header
+  lists); native/privileged/loadd-request.m borrows the caller-requirement form;
+  native/desktop/loader-service.m and native/desktop/dock-reload.m (with
+  dock-reload.h and dock-reload-regression.m) translate
+  Sources/Canvas/Setup/LiveWindowsService.swift,
+  Sources/Canvas/RealWindows/AdditionReloader.swift (including DockCrashGuard) and
+  Tests/CanvasTests/AdditionReloaderTests.swift; native/privileged/com.marengox.infinify.loader.plist
+  adapts Resources/LaunchDaemons/com.spacefarm.sunlight.live-windows.plist.
+  native/privileged/loader.m also cites Sunlight.
+
+yabai
+-----
+Upstream: https://github.com/asmvik/yabai (https://github.com/koekeishiya/yabai
+redirects to it). Commit: dd845723416f5fe92af49fad5ebab00369e07edd.
+Licence: MIT, Copyright (c) 2019 Åsmund Vikane. The licence text, with the
+provenance of the window-server query and the window-forward calls, is
+native/desktop/YABAI-NOTICE.txt, which the app bundle carries beside this file.
+Each adapted file names the upstream paths it follows. Files derived from yabai:
+  native/privileged/loader.m is adapted from yabai and retains its MIT licence,
+  copyright and Jeremy Legendre arm64e attribution; payload.m
+  cites the same commit for the Dock-side calls. native/privileged/loadd.m reaches
+  yabai's src/sa.m by way of Sunlight's LiveWindows/helper.m (see Sunlight above)
+  and pins only the Sunlight commit.
+  native/desktop/window-events.m, window-events.h and the event handling of
+  native/desktop/window-manager.m (src/workspace.m, src/application.c,
+  src/application.h, src/window.c, src/window.h, src/event_loop.c,
+  src/window_manager.c: which notifications an application and a window are
+  observed with, and what each one means).
+  native/desktop/window-server-family.h (src/window.c:872-897,
+  src/misc/extern.h:9,66-72, src/window_manager.c:841-855), used by
+  native-family.m, native-display-space.m, native-placement-validation.m and
+  native-presenter.m.
+  native/focus/focus.m brings a window that is on another desktop forward with the
+  calls and the event record of window_manager_focus_window_with_raise and
+  window_manager_make_key_window (src/window_manager.c:1269-1335,
+  src/misc/extern.h:81-82, src/window_manager.h:5).
+  native/resize/resize.m cites the same commit.
+
+iss
+---
+native/desktop/dock-control.h adapts the DockSwipe field/type/phase decoding of
+iss.c (lines 436-515) from https://github.com/joshuarli/iss at commit
+493b008f2ea8e9215877c39700e8ea3add800e97 (native/desktop/native-input.m cites it
+too). ISC licence, Copyright (c) 2026 joshuarli:
+
+  Permission to use, copy, modify, and/or distribute this software for any
+  purpose with or without fee is hereby granted.
+  THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+  REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+  AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+  INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+  LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+  OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+  PERFORMANCE OF THIS SOFTWARE.
+
+Cantrip
+-------
+native/desktop/main.m and native/desktop/native-replica-input.m reference the
+per-window posting fields and signatures of https://github.com/ArcaneArts/Cantrip
+at commit 4da10af479701c8007074c65f9eb6a2db03c8ffc (macos/skylight.rs). No code
+is copied.
+
+Smithay, xkeysym, xkbcommon
+---------------------------
+crates/core stands in for Smithay's geometry and input types and follows
+Smithay 0.7.0 (https://github.com/Smithay/smithay, git
+a166cf4c94b5aedc332a65aa1dd753e8148829c3, src/utils/geometry.rs,
+src/backend/input/mod.rs, src/input/keyboard/modifiers_state.rs). MIT licence,
+Copyright (c) 2017 Victor Berger and Victoria Brekenfeld (also
+crates/core/SMITHAY-LICENSE.txt):
+
+  MIT License
+
+  Copyright (c) 2017 Victor Berger and Victoria Brekenfeld
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+The generated key-name table crates/core/src/platform/input/keyboard/keysyms.rs
+takes X.Org keysym names and values by way of
+  xkeysym 0.2.1 (https://github.com/notgull/xkeysym; MIT OR Apache-2.0 OR Zlib,
+  Copyright (c) 2022-2023 John Nunley) and, for one constant,
+  xkbcommon 0.9.0 (https://github.com/rust-x-bindings/xkbcommon-rs; MIT,
+  Copyright (c) 2016 Remi Thebault).
+Those sources are used under their MIT terms: the permission notice reproduced
+above for Smithay applies to them with the copyright holders named here.
+The underlying X.Org headers carry MIT/X11-style notices (The Open Group,
+Digital Equipment Corporation and others). The key-name lookup
+(xkb::keysym_from_name) reimplements libxkbcommon's xkb_keysym_from_name
+(MIT/X11-style; among others Copyright (c) 2009 Dan Nicholson and
+Copyright (c) 1985, 1987, 1990, 1998 The Open Group), read through xkbcommon-rs
+0.1.2 (https://github.com/wysiwys/xkbcommon-rs; same licence,
+Copyright (c) 2024 wysiwys).

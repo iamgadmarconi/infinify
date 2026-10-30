@@ -2,6 +2,7 @@
 #import "native-replica-family.h"
 #import "native-family.h"
 #import "native-presenter.h"
+#import "native-geometry-json.h"
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <QuartzCore/QuartzCore.h>
 #include <stdatomic.h>
@@ -14,10 +15,6 @@
 #include <libproc.h>
 #include <unistd.h>
 
-static CGRect familyRect(NSDictionary *r) {
-    return CGRectMake([r[@"origin"][@"x"]doubleValue],[r[@"origin"][@"y"]doubleValue],
-                      [r[@"size"][@"width"]doubleValue],[r[@"size"][@"height"]doubleValue]);
-}
 static BOOL familySize(CGRect r) {
     return !CGRectIsNull(r)&&!CGRectIsInfinite(r)&&!CGRectIsEmpty(r)
         &&isfinite(r.origin.x)&&isfinite(r.origin.y)&&isfinite(r.size.width)&&isfinite(r.size.height);
@@ -25,7 +22,6 @@ static BOOL familySize(CGRect r) {
 static BOOL familyBinding(NSDictionary *a,NSDictionary *b) {
     if(!a||!b)return NO;
     for(NSString *key in @[@"window",@"identity",@"generation",@"native_bounds"])if(!a[key]||![a[key]isEqual:b[key]])return NO;
-    if([a[@"capture_controls"]isEqual:@YES]!=[b[@"capture_controls"]isEqual:@YES])return NO;
     return YES;
 }
 static BOOL frameNumber(id value) {
@@ -43,7 +39,7 @@ static BOOL familyDemandRect(id value,CGRect *out) {
     id origin=value[@"origin"],size=value[@"size"];
     if(![origin isKindOfClass:NSDictionary.class]||![size isKindOfClass:NSDictionary.class]
        ||!frameNumber(origin[@"x"])||!frameNumber(origin[@"y"])||!frameNumber(size[@"width"])||!frameNumber(size[@"height"]))return NO;
-    *out=familyRect(value);
+    *out=DWRectFromJSON(value);
     return familySize(*out)&&isfinite(CGRectGetMaxX(*out))&&isfinite(CGRectGetMaxY(*out));
 }
 // Only a proven zero intersection may suppress capture. These are drawing
@@ -373,7 +369,7 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
     if(![member imageAvailable]||!member.image.buffer||!familyBinding(member.root,root))return nil;
     CGPoint own=CGPointMake(local.x+member.rootBounds.origin.x-member.bounds.origin.x,local.y+member.rootBounds.origin.y-member.bounds.origin.y);
     if(!CGRectContainsPoint(CGRectMake(0,0,member.bounds.size.width,member.bounds.size.height),own))return nil;
-    return @{@"identity":member.identity,@"generation":member.root[@"generation"],@"native_bounds":@{@"origin":@{@"x":@(member.bounds.origin.x),@"y":@(member.bounds.origin.y)},@"size":@{@"width":@(member.bounds.size.width),@"height":@(member.bounds.size.height)}},@"local":@{@"x":@(own.x),@"y":@(own.y)}};
+    return @{@"identity":member.identity,@"generation":member.root[@"generation"],@"native_bounds":DWRectJSON(member.bounds),@"local":@{@"x":@(own.x),@"y":@(own.y)}};
 }
 
 @implementation DWNativeReplicaFamilies
@@ -447,8 +443,8 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
     NSDictionary<NSNumber *,DWReplicaRecovery *> *family=self.recoveries[root[@"window"]];
     return [plans sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b){
         DWReplicaRecovery *left=family[a[@"identity"][@"wid"]],*right=family[b[@"identity"][@"wid"]];
-        uint64_t x=familyRecoveryMatches(left,root,a[@"identity"],familyRect(a[@"native_bounds"]))?left.waiting:UINT64_MAX;
-        uint64_t y=familyRecoveryMatches(right,root,b[@"identity"],familyRect(b[@"native_bounds"]))?right.waiting:UINT64_MAX;
+        uint64_t x=familyRecoveryMatches(left,root,a[@"identity"],DWRectFromJSON(a[@"native_bounds"]))?left.waiting:UINT64_MAX;
+        uint64_t y=familyRecoveryMatches(right,root,b[@"identity"],DWRectFromJSON(b[@"native_bounds"]))?right.waiting:UINT64_MAX;
         return x<y?NSOrderedAscending:x>y?NSOrderedDescending:[a[@"identity"][@"wid"]compare:b[@"identity"][@"wid"]];
     }];
 }
@@ -459,13 +455,13 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
     CFTimeInterval age=CACurrentMediaTime()-began.doubleValue;if(age<0||age>.1)return;
     NSMutableDictionary *current=[NSMutableDictionary dictionary];for(NSDictionary *plan in plans)current[plan[@"identity"][@"wid"]]=plan;
     for(NSNumber *wid in family.allKeys){NSDictionary *plan=current[wid];
-        if(!plan||!familyRecoveryMatches(family[wid],root,plan[@"identity"],familyRect(plan[@"native_bounds"])))
+        if(!plan||!familyRecoveryMatches(family[wid],root,plan[@"identity"],DWRectFromJSON(plan[@"native_bounds"])))
             [family removeObjectForKey:wid];
     }
     if(!family.count)[self.recoveries removeObjectForKey:root[@"window"]];
     // A fresh complete observation gives waiting members a stable place before
     // capacity is consulted. Merely waiting never consumes a start allowance.
-    for(NSDictionary *plan in plans)[self recovery:plan[@"identity"] root:root bounds:familyRect(plan[@"native_bounds"])];
+    for(NSDictionary *plan in plans)[self recovery:plan[@"identity"] root:root bounds:DWRectFromJSON(plan[@"native_bounds"])];
 }
 - (void)memberFailed:(DWReplicaMember *)member {
     NSNumber *window=member.root[@"window"];
@@ -513,7 +509,7 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
 - (NSArray<NSDictionary *> *)capturePlans:(NSArray<NSDictionary *> *)plans root:(NSDictionary *)root {
     if([root[@"capture"]isEqual:@NO])return @[];
     CFTimeInterval now=CACurrentMediaTime();NSMutableArray *wanted=[NSMutableArray array];
-    for(NSDictionary *plan in plans){CGRect bounds=familyRect(plan[@"native_bounds"]);DWReplicaMember *installed=nil;
+    for(NSDictionary *plan in plans){CGRect bounds=DWRectFromJSON(plan[@"native_bounds"]);DWReplicaMember *installed=nil;
         for(DWReplicaMember *member in self.members[root[@"window"]])if(atomic_load(&member->alive)&&familyBinding(member.root,root)&&[member.identity isEqual:plan[@"identity"]]&&CGRectEqualToRect(member.bounds,bounds)){installed=member;break;}
         BOOL visible=familyIntersectsCapture(root,bounds);
         if(visible&&installed)installed.lastVisible=now;
@@ -544,7 +540,7 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
 }
 - (void)describe:(NSArray<NSDictionary *> *)roots rate:(NSInteger)rate {
     NSMutableDictionary *wanted=[NSMutableDictionary dictionary];
-    for(NSDictionary *root in roots)if(root[@"window"]&&root[@"identity"]&&root[@"generation"]&&familySize(familyRect(root[@"native_bounds"])))wanted[root[@"window"]]=root;
+    for(NSDictionary *root in roots)if(root[@"window"]&&root[@"identity"]&&root[@"generation"]&&familySize(DWRectFromJSON(root[@"native_bounds"])))wanted[root[@"window"]]=root;
     NSInteger hz=MAX(1,MIN(rate,240));BOOL bindingChanged=!familyCohortMatches(self.roots,wanted),configurationChanged=self.rate!=hz;
     for(NSNumber *window in wanted)if(![self.roots[window][@"density"]isEqual:wanted[window][@"density"]]||[self.roots[window][@"capture"]isEqual:@NO]!=[wanted[window][@"capture"]isEqual:@NO])configurationChanged=YES;
     BOOL visibilityGained=NO;
@@ -552,7 +548,7 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
         if(!familyBinding(known,after))continue;
         for(NSDictionary *member in known[@"members"]){
             if([member[@"identity"][@"wid"]isEqual:after[@"identity"][@"wid"]])continue;
-            CGRect bounds=familyRect(member[@"native_bounds"]);
+            CGRect bounds=DWRectFromJSON(member[@"native_bounds"]);
             if(!familyIntersectsCapture(before,bounds)&&familyIntersectsCapture(after,bounds)){visibilityGained=YES;break;}
         }
         if(visibilityGained)break;
@@ -730,21 +726,15 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
             ranks[wid]=@(i);owners[wid]=pid;
         }
         for(NSNumber *window in roots){CFTimeInterval began=CACurrentMediaTime();NSString *why=nil;NSDictionary *family=DWNativeWindowFamily(roots[window][@"identity"],&why);
-            NSMutableArray *children=[NSMutableArray array],*members=[NSMutableArray array];CGRect rootBounds=familyRect(roots[window][@"native_bounds"]);NSUInteger rootCount=0;BOOL rankedChildren=YES;
-            BOOL captureControls=[roots[window][@"capture_controls"]isEqual:@YES];
+            NSMutableArray *children=[NSMutableArray array],*members=[NSMutableArray array];CGRect rootBounds=DWRectFromJSON(roots[window][@"native_bounds"]);NSUInteger rootCount=0;BOOL rankedChildren=YES;
             for(NSDictionary *member in family[@"members"]){
-                if([member[@"identity"][@"wid"]isEqual:roots[window][@"identity"][@"wid"]]){rootCount++;if(!CGRectEqualToRect(familyRect(member[@"native_bounds"]),rootBounds))family=nil;[members addObject:member];continue;}
-                // Membership/restoration remain complete. Capturing this OS
-                // capture companion again can itself create another companion.
-                if(captureControls&&DWNativeWindowIsCaptureControl(member[@"identity"],roots[window][@"identity"],rootBounds,familyRect(member[@"native_bounds"]))){
-                    NSMutableDictionary *control=[member mutableCopy];control[@"capture_control"]=@YES;[members addObject:control.copy];continue;
-                }
+                if([member[@"identity"][@"wid"]isEqual:roots[window][@"identity"][@"wid"]]){rootCount++;if(!CGRectEqualToRect(DWRectFromJSON(member[@"native_bounds"]),rootBounds))family=nil;[members addObject:member];continue;}
                 [members addObject:member];
                 [children addObject:member];if(!familyRank(ranks,owners,member[@"identity"]))rankedChildren=NO;
             }
             if(!family||rootCount!=1){plans[window]=@[];continue;}
             sampledAt[window]=@(began);
-            NSMutableDictionary *description=[family mutableCopy];description[@"window"]=window;description[@"generation"]=roots[window][@"generation"];description[@"native_bounds"]=roots[window][@"native_bounds"];description[@"capture_controls"]=@(captureControls);description[@"members"]=members.copy;descriptions[window]=description.copy;
+            NSMutableDictionary *description=[family mutableCopy];description[@"window"]=window;description[@"generation"]=roots[window][@"generation"];description[@"native_bounds"]=roots[window][@"native_bounds"];description[@"members"]=members.copy;descriptions[window]=description.copy;
             if(rankedChildren)[children sortUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b){return [ranks[b[@"identity"][@"wid"]]compare:ranks[a[@"identity"][@"wid"]]];}];
             plans[window]=children.copy;
             if(rankedChildren&&familyRank(ranks,owners,roots[window][@"identity"]))[completeRoots addObject:window];
@@ -757,13 +747,13 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
                 NSMutableDictionary *checked=[NSMutableDictionary dictionary];
                 for(NSDictionary *plan in plans[logical]){
                     CFTimeInterval began=CACurrentMediaTime();
-                    NSDictionary *identity=plan[@"identity"];CGRect bounds=familyRect(plan[@"native_bounds"]);SCWindow *window=windows[identity[@"wid"]];
+                    NSDictionary *identity=plan[@"identity"];CGRect bounds=DWRectFromJSON(plan[@"native_bounds"]);SCWindow *window=windows[identity[@"wid"]];
                     CGRect rootNow=CGRectZero,memberNow=CGRectZero;
                     if(window&&window.owningApplication.processID==[identity[@"pid"]intValue]&&familySize(bounds)
                        &&DWNativeWindowBelongsToRoot(identity,roots[logical][@"identity"])
                        &&DWNativeBounds([roots[logical][@"identity"][@"wid"]unsignedIntValue],&rootNow)
                        &&DWNativeBounds([identity[@"wid"]unsignedIntValue],&memberNow)
-                       &&CGRectEqualToRect(rootNow,familyRect(roots[logical][@"native_bounds"]))&&CGRectEqualToRect(memberNow,bounds))checked[identity[@"wid"]]=@(began);
+                       &&CGRectEqualToRect(rootNow,DWRectFromJSON(roots[logical][@"native_bounds"]))&&CGRectEqualToRect(memberNow,bounds))checked[identity[@"wid"]]=@(began);
                 }
                 checkedMembers[logical]=checked.copy;
             }
@@ -776,7 +766,7 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
                 CFTimeInterval began=CACurrentMediaTime();CGRect rootNow=CGRectZero;
                 if(DWNativeWindowBelongsToRoot(roots[logical][@"identity"],roots[logical][@"identity"])
                    &&DWNativeBounds([roots[logical][@"identity"][@"wid"]unsignedIntValue],&rootNow)
-                   &&CGRectEqualToRect(rootNow,familyRect(roots[logical][@"native_bounds"])))checkedRoots[logical]=@(began);
+                   &&CGRectEqualToRect(rootNow,DWRectFromJSON(roots[logical][@"native_bounds"])))checkedRoots[logical]=@(began);
             }
             dispatch_async(dispatch_get_main_queue(),^{
             DWNativeReplicaFamilies *owner=weak;if(!owner)return;owner.requestPending=NO;if(!owner.reading||owner.epoch!=epoch||owner.requestSequence!=sequence||!familyCohortMatches(owner.roots,roots))return;owner.reading=NO;
@@ -791,7 +781,7 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
                 if(owner.epoch==epoch&&descriptions[logical])[owner acceptRecoveryCohort:plans[logical] root:roots[logical] sampledAt:sampledAt[logical]];
                 NSArray<NSDictionary *> *wanted=error?@[]:[owner capturePlans:plans[logical] root:currentRoot];
                 for(NSDictionary *plan in [owner admissionPlans:wanted root:roots[logical]]){
-                    NSDictionary *identity=plan[@"identity"];CGRect bounds=familyRect(plan[@"native_bounds"]);SCWindow *window=windows[identity[@"wid"]];
+                    NSDictionary *identity=plan[@"identity"];CGRect bounds=DWRectFromJSON(plan[@"native_bounds"]);SCWindow *window=windows[identity[@"wid"]];
                     // The observer proved this exact child/root binding. Its
                     // deadline includes every native read and queue wait; a
                     // stalled result never becomes fresh at completion. This
@@ -805,7 +795,7 @@ static NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoin
                     density=MIN(2,MAX(1./32,density));DWReplicaMember *member=nil;
                     for(DWReplicaMember *candidate in old)if(atomic_load(&candidate->alive)&&[candidate.identity isEqual:identity]&&CGRectEqualToRect(candidate.bounds,bounds)&&familyBinding(candidate.root,roots[logical])){member=candidate;break;}
                     if(!member){DWReplicaRecovery *recovery=[owner admitRecovery:identity root:roots[logical] bounds:bounds starting:&starting];if(!recovery)continue;
-                        member=[DWReplicaMember new];member.owner=owner;member.root=currentRoot;member.identity=identity;member.bounds=bounds;member.rootBounds=familyRect(currentRoot[@"native_bounds"]);member.density=density;member.rate=rate;member.lastVisible=CACurrentMediaTime();member.frameTime=mach_absolute_time();recovery.attempt=member;
+                        member=[DWReplicaMember new];member.owner=owner;member.root=currentRoot;member.identity=identity;member.bounds=bounds;member.rootBounds=DWRectFromJSON(currentRoot[@"native_bounds"]);member.density=density;member.rate=rate;member.lastVisible=CACurrentMediaTime();member.frameTime=mach_absolute_time();recovery.attempt=member;
                         [owner.coldAttempts addObject:member];
                         familyTrace(member,"create","none",0);
                         DWCanvasAttachment *image=[DWCanvasAttachment new];image.key=[NSString stringWithFormat:@"%@:%@:%@:%@",identity[@"pid"],identity[@"birth_sec"],identity[@"birth_usec"],identity[@"wid"]];

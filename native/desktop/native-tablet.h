@@ -2,6 +2,15 @@
 #import <Foundation/Foundation.h>
 #import <CoreGraphics/CoreGraphics.h>
 
+// Mouse event types, by what the delivery code does with them. Each covers the left, right and
+// other button. DWMouseMove is any pointer motion (moved, or dragged with a button down);
+// DWMouseForwardable is every type a captured mouse or tablet stroke can carry: motion, down and up.
+static inline BOOL DWMouseDown(CGEventType type) { return type==kCGEventLeftMouseDown||type==kCGEventRightMouseDown||type==kCGEventOtherMouseDown; }
+static inline BOOL DWMouseUp(CGEventType type) { return type==kCGEventLeftMouseUp||type==kCGEventRightMouseUp||type==kCGEventOtherMouseUp; }
+static inline BOOL DWMouseDragged(CGEventType type) { return type==kCGEventLeftMouseDragged||type==kCGEventRightMouseDragged||type==kCGEventOtherMouseDragged; }
+static inline BOOL DWMouseMove(CGEventType type) { return type==kCGEventMouseMoved||DWMouseDragged(type); }
+static inline BOOL DWMouseForwardable(CGEventType type) { return DWMouseMove(type)||DWMouseDown(type)||DWMouseUp(type); }
+
 BOOL DWNativeTabletEvent(CGEventRef event);
 BOOL DWNativeTabletProximityEvent(CGEventRef event);
 

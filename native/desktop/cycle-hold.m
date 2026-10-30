@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
+// Adapted from DriftWM, repository https://github.com/malbiruk/driftwm, commit 352333a8fa1b22171492d4b71a54102045c9a19d:
 // src/input/keyboard.rs (on_keyboard: an open cycle ends on the first key event at
 // which config.cycle_hold is no longer all held) and src/input/actions.rs
 // (CycleWindows: a fire with no real modifier down is a single committed step).

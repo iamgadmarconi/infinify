@@ -4,7 +4,7 @@
 // survive scene-file replacement and are never unlinked; descriptors are CLOEXEC.
 // Parent aliases are canonicalized, leaf symlinks/hard-linked scenes and the
 // reserved .infinify-lock suffix are refused.
-// nil + duplicate means an existing owner (including a legacy live socket): exit
+// nil + duplicate means an existing owner (another live Infinify on the socket): exit
 // cleanly without creating a controller, admitting a helper, or saving the scene.
 @interface DWRunOwnership : NSObject
 @property (readonly) NSString *socketPath;

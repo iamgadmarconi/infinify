@@ -17,7 +17,6 @@
 #
 # Exit status: 0 everything was checked and held; 1 something failed; 2 usage; 3 nothing failed and nothing was checked,
 # because Stage Manager is on (NOT RUN).
-# INFINIFY_E2E_ELECTRON=/path/to/Electron (a generic Electron binary) adds an Electron window; unset, that case is skipped.
 set -eu
 cd "$(dirname "$0")/../.."
 [ "$#" -ne 0 ] || { echo 'LIVE NOT RUN: pass --live-owned-fixture to validate disposable sizing windows'; exit 0; }
@@ -42,7 +41,7 @@ quit() {
   wait "$infinify" 2>/dev/null || true; infinify=
 }
 # Only what this script started is ever signalled.
-cleanup() { quit; for pid in $fixtures; do kill "$pid" 2>/dev/null || true; done; for pid in $fixtures; do wait "$pid" 2>/dev/null || true; done; rm -rf "$evidence/electron-data"; }
+cleanup() { quit; for pid in $fixtures; do kill "$pid" 2>/dev/null || true; done; for pid in $fixtures; do wait "$pid" 2>/dev/null || true; done; }
 trap cleanup EXIT
 trap 'exit 1' INT TERM HUP
 
@@ -81,15 +80,6 @@ start m "Size pair M $$" 200 resizable hidden; M=$!
 start d "Size fixture D $$" 0 resizable corner 40x40; D=$!
 # Out of scope and exactly as scoped-windows.sh starts it: four arguments, so none of the sizing test's commands apply to it.
 mkdir "$evidence/z"; "$fixture" "$evidence/z" "Size decoy Z $$" 150 120 & Z=$!; fixtures="$fixtures $Z"
-E=
-if [ -n "${INFINIFY_E2E_ELECTRON:-}" ]; then
-  [ -x "$INFINIFY_E2E_ELECTRON" ] || { echo "INFINIFY_E2E_ELECTRON is not an executable: $INFINIFY_E2E_ELECTRON" >&2; exit 2; }
-  mkdir "$evidence/e" "$evidence/electron-data"
-  SCOPE_DIR=$evidence/e SCOPE_TITLE="Size Electron $$" SCOPE_SECONDS=280 SCOPE_DY=-90 "$INFINIFY_E2E_ELECTRON" "$root/tests/e2e/scoped-electron" "--user-data-dir=$evidence/electron-data" >"$evidence/electron.log" 2>&1 &
-  E=$!; fixtures="$fixtures $E"
-else
-  echo 'SKIPPED: Electron case, INFINIFY_E2E_ELECTRON is unset'
-fi
 
 cat > "$evidence/driver.py" <<'PY'
 import json, os, pathlib, re, socket, subprocess, sys, time
@@ -138,9 +128,8 @@ if phase == 'quit':
     check('no press or tile was ever refused as unsettled', not any('source presentation unsettled' in l for l in lines), [l for l in lines if 'unsettled' in l])
     sys.exit(0)
 
-infinify = int(sys.argv[4]); electron = len(sys.argv) > 5 and sys.argv[5] == 'electron'
-scope = ['a', 'b', 'c', 'd'] + (['e'] if electron else [])
-if electron: until('Electron fixture has a window', 15, lambda: status('e'), lambda r: r.get('window'))
+infinify = int(sys.argv[4])
+scope = ['a', 'b', 'c', 'd']
 decoy = status('z')
 def State(): return ask('State')['Ok']['State']
 def windows(): return State()['windows']
@@ -178,11 +167,11 @@ def near(a, b): return a is not None and abs(a[0] - b[0]) <= 2 and abs(a[1] - b[
 def tile(name, what):
     reply = until(f'{what}: the tile of {name} is on the canvas', 3, lambda: pointer('probe', ids[name], [.5, .5]), lambda r: 'Ok' in r)
     r = reply['Ok']['DebugPointer']['screen_rect']; return [r['origin']['x'], r['origin']['y'], r['size']['width'], r['size']['height']]
-# A click as a person makes it, on the window's plain view (its page, for Electron): it must land once, within two points of
+# A click as a person makes it, on the window's plain view: it must land once, within two points of
 # the middle of that view as the window lays it out at the size it has now. This is the check that no size request leaves a
 # window whose input is refused.
 def clicked(name, what):
-    control = 'web' if name == 'e' else 'plain'; kinds = ['web_down', 'web_up'] if name == 'e' else ['plain_down', 'plain_up']
+    control = 'plain'; kinds = ['plain_down', 'plain_up']
     report = status(name); x, y, w, h = report['controls'][control]; want = [x + w / 2, y + h / 2]
     at = [want[0] / report['bounds'][2], want[1] / report['bounds'][3]]; before = report['counts']; start = len(trace()); window = ids[name]
     reply = pointer('down', window, at)
@@ -218,7 +207,6 @@ def show(name):
         camera = State()['camera']; was, seen[0] = seen[0], camera; time.sleep(.15); return camera == was
     until('the camera is at rest', 5, still, bool); place(name, *State()['camera'])
 show('a'); away('b'); away('c'); away('d')
-if electron: away('e')
 time.sleep(.3)
 W0, H0 = agreed('adoption: the canvas has the size of A\'s window', 'a')
 f0 = frame('a')
@@ -423,19 +411,6 @@ roomed(f'the whole screen, {S[0]}x{S[1]}', S[0], S[1], 'clamped', V[:2], V[2:], 
 # Smaller needs no room: the window stays where it was put, and a click on its tile lands in it there.
 roomed('a smaller size', 500, 400, 'applied', V[:2], [500, 400], 0); clicked('d', '19'); away('d')
 
-# 22. Electron, within the adapter's one point: a step, an absolute size, fit and fullscreen.
-if electron:
-    away('a'); show('e'); time.sleep(.3); clicked('e', '22 before'); e0 = agreed('22: adoption', 'e', tol=1)
-    acted('grow-window right'); agreed('22: grow-window right', 'e', [e0[0] + 30, e0[1]], tol=1); clicked('e', '22 step')
-    resized('e', 500, 400); agreed('22: msg resize 500 400', 'e', [500, 400], tol=1); clicked('e', '22 absolute')
-    acted('fit-window'); agreed('22: fit-window', 'e', [1068, 668], tol=1); clicked('e', '22 fit')
-    acted('fit-window'); agreed('22: fit-window again', 'e', [500, 400], tol=1)
-    since = len(trace()); acted('toggle-fullscreen'); until('22: Electron takes a size for fullscreen', 3, lambda: native('e'), lambda size: size[0] > 600); time.sleep(.4)
-    check('22: toggle-fullscreen asked the window for the output\'s size, 1100x700', any(' requested=1100x700 ' in l for l in resizes(since, 'e')), resizes(since, 'e'))
-    check('22: and Electron took it, within a point', close(native('e'), [1100, 700], 1), native('e')); clicked('e', '22 fullscreen')
-    acted('toggle-fullscreen'); agreed('22: toggle-fullscreen again', 'e', [500, 400], tol=1); clicked('e', '22 after')
-    away('e')
-
 # 18. A window rule's size: a window that appears under a title its rule names is asked for that size.
 (evidence / 'r' / 'show').write_text('1')
 r = until('18: the ruled window is adopted', 8, windows, lambda w: any(x['title'] == status('r')['title'] for x in w))
@@ -482,14 +457,14 @@ PY
 launch() { : > "$evidence/err.log"; INFINIFY_DEBUG=1 "$app" --windowed 1100x700 --state "$state" --config "$config" --socket "$socket" --no-hover-forwarding "$@" 2>"$evidence/err.log" & infinify=$!
   n=0; while [ ! -S "$socket" ] && [ "$n" -lt 50 ]; do sleep .1; n=$((n+1)); done; [ -S "$socket" ] || { echo "FAIL: no socket: $(cat "$evidence/err.log")"; exit 1; }; }
 shown() { grep -q '"visible":true' "$evidence/$1/status.json" 2>/dev/null; }
-for name in a b c d z ${E:+e}; do
+for name in a b c d z; do
   n=0; while ! shown "$name" && [ "$n" -lt 150 ]; do sleep .1; n=$((n+1)); done
-  shown "$name" || { echo "FAIL: fixture $name never showed its window: $(cat "$evidence/electron.log" 2>/dev/null)"; exit 1; }
+  shown "$name" || { echo "FAIL: fixture $name never showed its window: $(cat "$evidence/$name/status.json" 2>/dev/null)"; exit 1; }
 done
 sleep .5
 # The ruled fixture is in the scope from the start: its window appears later, and must be managed when it does.
-launch --debug-pointer --only-pid "$A,$B,$C,$D,$R,$N,$M${E:+,$E}"
-python3 "$evidence/driver.py" "$evidence" "$app" scoped "$infinify" ${E:+electron}
+launch --debug-pointer --only-pid "$A,$B,$C,$D,$R,$N,$M"
+python3 "$evidence/driver.py" "$evidence" "$app" scoped "$infinify"
 quit; [ "$gone" = yes ] || { echo 'FAIL: Infinify did not quit within 8 s of msg action quit'; exit 1; }
 echo 'ok: quit within 8 s'
 python3 "$evidence/driver.py" "$evidence" "$app" quit

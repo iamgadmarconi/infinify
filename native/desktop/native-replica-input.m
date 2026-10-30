@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// The per-window posting fields and signatures are the existing route in
-// native/captured-windows/captured.m (whose private API provenance is recorded
-// there). New adapter geometry: the application's local point is unscaled while
+// The per-window posting fields and signatures are referenced from Cantrip
+// 4da10af479701c8007074c65f9eb6a2db03c8ffc, macos/skylight.rs (no code copied):
+// https://github.com/ArcaneArts/Cantrip/blob/4da10af479701c8007074c65f9eb6a2db03c8ffc/cantrip_cua/src/macos/skylight.rs
+// New adapter geometry: the application's local point is unscaled while
 // the global location follows the real window's current WindowServer rectangle.
 #import "native-replica-input.h"
 #import "native-tablet.h"
@@ -13,9 +14,7 @@
 BOOL DWNativeReplicaPost(CGEventRef event,CGEventSourceRef source,int64_t tag,NSDictionary *identity,CGRect observed,CGPoint local) {
     if(!event||!source||!identity||!isfinite(local.x)||!isfinite(local.y))return NO;
     CGEventType type=CGEventGetType(event);
-    if(type!=kCGEventMouseMoved&&type!=kCGEventScrollWheel&&type!=kCGEventLeftMouseDown&&type!=kCGEventLeftMouseUp&&type!=kCGEventLeftMouseDragged
-       &&type!=kCGEventRightMouseDown&&type!=kCGEventRightMouseUp&&type!=kCGEventRightMouseDragged&&type!=kCGEventOtherMouseDown&&type!=kCGEventOtherMouseUp&&type!=kCGEventOtherMouseDragged
-       &&!DWNativeTabletEvent(event))return NO;
+    if(!DWMouseForwardable(type)&&type!=kCGEventScrollWheel&&!DWNativeTabletEvent(event))return NO;
     pid_t pid=[identity[@"pid"]intValue];uint32_t wid=[identity[@"wid"]unsignedIntValue];uint64_t sec=0,usec=0;
     if(pid<=0||!wid||!dw_focus_birth(pid,&sec,&usec)||sec!=[identity[@"birth_sec"]unsignedLongLongValue]||usec!=[identity[@"birth_usec"]unsignedLongLongValue])return NO;
     NSArray *windows=CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow,wid));NSDictionary *info=nil;

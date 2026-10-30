@@ -5,8 +5,8 @@ DriftWM's fullscreen as controller policy: `toggle-fullscreen`, the window rule
 restores, what a fullscreen output shows and what stays within the pointer's
 reach on it, `[outputs.hot_corners] disable_when_fullscreen`, the translucent
 rule, and fullscreen in the snapshot and in IPC `State`. The rules are
-upstream's, read from malbiruk/driftwm
-`352333a8fa1b22171492d4b71a54102045c9a19d` (GPL-3.0-or-later):
+upstream's, read from <https://github.com/malbiruk/driftwm>
+at `352333a8fa1b22171492d4b71a54102045c9a19d` (GPL-3.0-or-later):
 `src/state/fullscreen.rs`, `src/input/actions.rs`, `src/state/recenter.rs`,
 `src/state/placement.rs`, the fullscreen lines of
 `src/state/{navigation,output,viewport,persistence,session_store}.rs`,
@@ -28,7 +28,7 @@ A fullscreen window is resized to its output, and delivering a size to a real
 Mac window goes only through the size transaction of [SIZES.md](SIZES.md),
 which exists only when the shell reported `native_resize_capability`. Every
 normal run reports it, in [readback mode](NATIVE_RESIZE.md#readback-mode); a
-demo and a probe do not. There is no alternate shipping resize mode.
+controller nobody told anything does not.
 
 While the capability is `false`:
 
@@ -40,19 +40,13 @@ While the capability is `false`:
   its window is placed, focused and flown to like any other;
 - no output is ever fullscreen, so nothing else in this document can happen.
 
-Those replies are byte for byte what they were before this work:
-`tests/fullscreen_flow.rs` compares them with the responses captured from the
-tree before it, for a shell that never sent the capability and for one that
-sent `false`. They were captured twice: from the tree this was written on,
-and again from the tree it was merged into
-([below](#merged-with-effects-pass-through-and-the-polish-pass-2026-10-10)),
-which answered every one the same but a key binding's `bindings` entry, where
-pass-through had added `passable`. The snapshot gains `outputs[].fullscreen`,
-which is then `null`.
+`tests/fullscreen_flow.rs` compares these replies with literals recorded from
+a tree that had no fullscreen, for a shell that never sent the capability and
+for one that sent `false`. Where a later change altered one, the literal is the
+later tree's: a key binding's `bindings` entry gained `passable` with
+pass-through. The snapshot gains `outputs[].fullscreen`, which is then `null`.
 
 ## Wire contract
-
-Additions only; `ABI_VERSION` is unchanged and no command was added.
 
 | Where | What |
 | --- | --- |
@@ -162,8 +156,7 @@ The 2026-10-22 real TextEdit-to-Terminal check completed Restore on its first
 attempt at both default and slower camera speed. The default run reached the
 restored world frame in 1.34 seconds, versus 3.68 seconds before the ordering
 fix; these are single workflow timings including IPC and polling, not animation
-frame-rate measurements. Evidence is in
-`target/native-vm/ux-flow-20261022/RESULT-v16.json`.
+frame-rate measurements.
 
 If an unobserved refusal ends that transaction before any native mutation,
 including a successful baseline followed by a Fill handoff refusal, the provisional
@@ -533,8 +526,7 @@ read with `baseline size differs from committed logical size`.
 
 So that this is the exception, the shell ends every fullscreen before it
 saves and detaches at Quit (a `quit` binding, `msg action quit`, SIGTERM or a
-log out: the one way a normal run's canvas closes since its Return to desktop
-button went with the toolbar strip on 2026-10-10), and performs the size
+log out: how a normal run's canvas closes), and performs the size
 transactions to their end first, bounded at three seconds
 ([shell notes](../../native/desktop/README.md#limits-of-fullscreen)); the
 `quit` action's own guard ends the active output's, as upstream's does. The
@@ -567,16 +559,9 @@ its old place, and its size from before the fullscreen is not restored.
   arriving root: a sheet or dialog never authorizes that correction. Without
   the cancellation observer, native activation follows the ordinary policy.
   Later deliberate native activation exits Fill and carries native restoration.
-  In the macOS 27.0.1 UTM guest, v12 retained TextEdit Fill through a real
-  Terminal launch. IPC focus followed by `center-window` restored TextEdit's
-  exact native frame and world position while Terminal kept focus. Focus alone
-  intentionally leaves Fill active, as described under the parked camera.
-  The background app's menu actions were disabled, so this exit used the
-  existing exact-frame fallback. After refocus, Return to Previous Size was
-  still enabled; a foreground native Unfill cleared it. The geometry result
-  does not establish complete AppKit tiling-state restoration or smoothness.
-  Evidence: `target/native-vm/ux-flow-20261022/RESULT-v12.json`, the
-  `v12b-background-*` readbacks, and `v12b-intentional-switch.png`.
+  Focus alone intentionally leaves Fill active, as described under the parked
+  camera. The geometry result of a run in the macOS 27.0.1 UTM guest does not
+  establish that.
 - **A saved fullscreen window keeps the size it has**, at the place from
   before, where upstream saves the frame from before: [Saving](#saving).
 - **What is hit is what is drawn.** Upstream's canvas walk on a fullscreen
@@ -649,9 +634,8 @@ at each point of the other's transaction, a cancelled, unanswered and
 repeatedly failing restore, a window the adapter will not resize), IPC
 `Close`, a new window that takes the keyboard, the pointer, Alt-Tab,
 `home-toggle` as an action and as the direct command, `send-to-output`, and
-save, load and the adoption that follows; and, since
-[the merge](#merged-with-effects-pass-through-and-the-polish-pass-2026-10-10),
-a fullscreen window's `pass_mouse` claims and `pass_keys`, the order of a
+save, load and the adoption that follows; and, since the merge with effects,
+pass-through and the polish pass, a fullscreen window's `pass_mouse` claims and `pass_keys`, the order of a
 grab, the pinned drag beside a fullscreen output, the frost and the open and
 close events, and a ruled size that waits out an enter.
 
@@ -690,183 +674,3 @@ a locked or confined cursor, the frozen exit picture, the animated
 background's render eligibility, and the coasting camera of
 `fullscreen_exit_cost.rs` (no pan can coast on a fullscreen output here: it
 ends the fullscreen first).
-
-### Built together and run, 2026-10-10
-
-Historical evidence: invocations of `--experimental-native-resize` below
-refer to the mode removed on 2026-10-12 and are not current launch instructions.
-
-The controller and the shell were written apart from this contract and then
-built into the app (`scripts/build-app.sh`, ad-hoc signed, macOS 27.2, Apple
-Silicon). Reading the two sides against each other found one mismatch, fixed
-on this side, and two replies the shell dropped, fixed there:
-
-- **`hover` was listed as a reply that carries an owed size, and the shell
-  never performs one from a hover reply.** `pointer-hover.m` reads `forward`,
-  `dirty` and the focus request and nothing else. A restore begun there would
-  have sat unperformed in the transaction slot until the next action
-  cancelled it, leaving the window at the output's size for good. `hover` is
-  no longer a carrier, and `tests/fullscreen_flow.rs` now asserts that a
-  pointer motion after a pan-exit begins nothing and that the `clear_focus`
-  after it does.
-- The `ipc` bookmark question the shell asks before `go-to-bookmark`, and the
-  cancelled `gesture_end` it sends after a refused gesture update, are replies
-  of carrying commands that the shell read for one answer and dropped. Both
-  now go through its size hook ([SIZES.md](SIZES.md#the-shell)).
-
-Everything else lined up by reading: the op names and reply keys, the two
-shapes a carried transaction takes (`effect` for a reply that lists `effects`;
-an entry of `effects` beside a focus request in `effect`), which the shell's
-`-applyReply:`, `-navigationCall:` and the ruled `attach` path each keep
-apart, `outputs[].fullscreen` and its `backdrop` strings, the placement's
-`fullscreen: true`, and `hot_corners[].disable_when_fullscreen` as a JSON
-boolean. No command gained a field, so the shell sends no new boolean.
-
-Then run: the fifteen scenarios here with the test modules of every source
-file this work touched (229 scenarios in 17 modules, all passing),
-`tests/e2e/desktop-navigation.sh` (PASS; the navigation coordinator is
-unchanged), and the built app twice as `--windowed 1100x700` on a private
-scene of three detached placeholders, a private config and a private socket,
-driven through `Infinify msg`, with no Screen Recording access:
-
-- without the flag, `action toggle-fullscreen` answered
-  `action not implemented on macOS yet: toggle-fullscreen`, before and after
-  `focus --id 1`, and `state` printed `fullscreen 0`;
-- with `--experimental-native-resize`, `action toggle-fullscreen` answered
-  `ok`, with nothing focused and with placeholder 1 focused, and changed
-  nothing: `state` still printed `fullscreen 0`, and `--json state` had
-  `"fullscreen": []` and `"mode": "Normal"` for every window. A stand-in gets
-  no refusal: upstream's arm does nothing without a client, and neither does
-  this one. The differing answer shows the app sent the capability;
-- a viewport `screenshot` rendered in both and was looked at.
-
-**No live window existed, so no fullscreen was entered in the app and no size
-transaction ran there.** Every enter, exit, restore, placement and hit in this
-document ran only in the controller scenarios, where the test plays the native
-side. [The shell notes](../../native/desktop/README.md#what-has-been-run-for-fullscreen)
-have the commands and the answers.
-
-### After review, 2026-10-10
-
-A review of the above confirmed eleven findings, several of them one defect
-seen from two sides, each reproduced through the C ABI by its reviewer, and
-listed five smaller ones read from the code. What changed: IPC `Close` ends no fullscreen; a window
-suspended out of fullscreen that goes before its size is back still leaves
-its stand-in at the frame from before; a window the adapter cannot resize
-enters every time; an exit and an enter may take each other's transaction
-over at any point, a setter in flight included; an exit whose transaction
-ends before the window was asked stays owed; a step on a left or top edge
-out of fullscreen holds the opposite edge of the restored frame; a save and a
-detach keep the size the window has; the shell ends every fullscreen before
-it saves and detaches; a new window that takes the keyboard is documented as
-ending the fullscreen, which it did and upstream's does not; a pin put away
-by a fullscreen follows its output away; the direct `home_toggle` carries
-its transaction; and a fullscreen output projects no outline.
-
-Run afterwards, in this tree: `cargo fmt --check` and `cargo clippy
---all-targets -D warnings` on the crate (clean); the fifteen scenarios here,
-extended for each fix, with `sizes_flow`, `native_resize_flow`, `rules_flow`,
-`render_flow`, `pointer_flow`, `lifecycle_flow`, `navigation_actions_flow`,
-`platform_actions_flow`, `ipc_flow`, `config_flow`, `controller_flow` and
-`view_actions_flow` (189 scenarios in 13 modules, all passing);
-`scripts/build-app.sh`; and the same two launches of the built app on
-detached placeholders, with the same answers as above, each exiting with
-status 0 on SIGTERM and removing its socket. `tests/e2e/desktop-navigation.sh`
-was not run again: the navigation coordinator is unchanged.
-
-One temporary check is not in the repository: a test file, written and
-deleted again, that played every sequence of up to twelve `toggle-fullscreen`
-presses and adapter answers, up to eight with a cancel and up to seven with a
-carrying `State` request among them (39 874 sequences, on a plain and on a
-zoomed output), then let everything drain and asked for the window's frame,
-native size, mode and view from before. None ended anywhere else. With the
-two gates of `sizes.rs` taken out again, 191 of the 2 046 sequences of up to
-ten presses and answers did.
-
-**Still no live window: nothing above ran against a native window.** The
-shell's shutdown path ran in the app with nothing fullscreen, where it does
-nothing. The outline change is compiled only.
-
-### Merged with effects, pass-through and the polish pass, 2026-10-10
-
-Historical evidence: invocations of `--experimental-native-resize` below
-refer to the mode removed on 2026-10-12 and are not current launch instructions.
-
-This work was written on a tree that had window sizing and nothing after it.
-It was then merged into one that also had effects (the frost, the open and
-close animations, the error bar: [EFFECTS.md](EFFECTS.md)), pass-through and
-the pinned drag ([RULES.md](RULES.md#pass-rules)) and a pass over nine
-upstream behaviour gaps (the focus a grab takes first, IPC `resize`'s raise,
-the size a window was last asked for, the queue of rule sizes). Where the two
-met, upstream decided:
-
-| Where they met | What holds now | Upstream |
-| --- | --- | --- |
-| a fullscreen window's frost | its own rule's `blur` only, never `[decorations] blur`: one function answers `decoration.blur` for every window | `effective_blur`'s `is_fullscreen` |
-| a press bound to move or resize on a fullscreen output | the fullscreen ends, then the window is raised and focused, then the grab is installed: [the order of a grab](#the-order-of-a-grab) | `on_pointer_button`'s fullscreen block, then the binding's arm |
-| `pass_mouse` | the fullscreen window claims at the button, scroll and notch sites with no pick gate | `fullscreen_claims` |
-| `pass_keys` | follows the fullscreen window like any holder of the keyboard | the key filter asks the focused window |
-| a wheel notch, a bound scroll | the notch's action runs through the action guard; a bound pan or zoom ends the fullscreen itself | `on_pointer_axis` |
-| a pinned drag | frozen while the pointer is over a fullscreen output; no drag of a window pinned there from elsewhere; no enter under any drag | `MoveGrab::motion`, `pinned_window_under` |
-| a rule with `size` and `fullscreen` | placed for the size, entered at the size the window has, the rule's size owed for the exit: [a new window](#a-new-window) | size at the first commit, placement on the next, then the deferred fullscreen |
-| the queue of rule sizes | a ruled window that maps during an enter or an exit waits for the slot and is asked in the reply that ends it; entering takes a window off the queue | one-shot `pending_size` |
-| the size a window was last asked for | a window owed its size by an exit is measured by that size, not the output's; a filled window comes back at the size its fill asked for | `configured_window_size` after the exit's configure |
-| IPC `Resize` | refuses a fullscreen window in upstream's words before any raise; raises any other window it sizes | `cmd_resize` |
-| who sizes a widget or a pinned window | two requests, neither by hand: the rule's `size` at the map and an exit's restore. Every other size transaction refuses them | upstream sizes them freely |
-| a new window in the background | placed against the frame each window still owed its rule's size is becoming | `fullscreen_background_pos` over the stage's frames |
-| the shell's renderer | its one fullscreen function runs on the frame the effects build; the error bar stays; no closing snapshot and no stand-in fade on a fullscreen output; a fullscreen window's own snapshot is baked bare; a window that opens fullscreen is not held for its size | `compose_frame`: the bar for every output, "no dying-window flash over a fullscreen app" |
-| the shell's shutdown | `-endFullscreens` once in `-cleanup`, after the hot keys, gestures and hover are stopped and before the resize coordinator is shut down; Quit, SIGTERM and a log out all end there (Return to desktop did too, while a normal run had that button). A screen change re-registers the outputs and ends no fullscreen: [Outputs](#outputs) | quit ends fullscreen first |
-
-Two of those were defects of the join and not of either side: a fit or a fill
-pressed out of fullscreen would have centered on the output's size, the last
-one asked, and a rule with both fields would have entered from a frame of the
-rule's size that no observation had committed. Each has a scenario; the first
-was seen to fail with its fix taken out.
-
-Run, in the merged tree: `cargo fmt --check` and `cargo clippy --all-targets
--D warnings` on the crate (clean); nineteen controller test modules, 263
-scenarios, all passing (`fullscreen_flow` 20, `sizes_flow` 31,
-`native_resize_flow` 25, `passthrough_flow` 19, `effects_flow` 5,
-`pointer_flow` 16, `rules_flow` 26, `render_flow` 7, `gesture_flow` 21,
-`motion_flow` 9, `navigation_actions_flow` 12, `platform_actions_flow` 11,
-`lifecycle_flow` 25, `config_flow` 12, `ipc_flow` 8, `view_actions_flow` 2,
-`controller_flow` 4, `navigation_flow` 5, `focus_cycle_flow` 5);
-`tests/e2e/desktop-navigation.sh` (PASS); and `scripts/build-app.sh`.
-
-The capability-off replies were captured again from the tree before the
-merge, built apart and asked the same requests of the same state. Every one
-was byte for byte the literal already recorded, but a key binding's entry in
-`bindings`, which had gained `passable`; that literal is now that tree's. The
-sizing literals of `tests/sizes_flow.rs` did not change. With upstream's
-built-in defaults the merged controller's `bindings` reply lists 45 key
-bindings, 42 of them implemented without the capability (all but `mod+f`,
-`mod+m` and `mod+shift+m`) and all 45 with it; of the 35 action names of
-upstream's grammar six are refused by name without it and none with it.
-
-The built app was launched twice as `--windowed 1100x700` on a private scene
-of three detached placeholders, a private config (whose one window rule,
-with `fullscreen`, `size`, `output`, both pass lists and `blur`, matches no
-placeholder) and a private socket, with no Screen Recording access:
-
-- without the flag: `state`; `action "center-nearest right"` settled with
-  `camera` at `1950 -0` and `focus` on `#2 org.example.seed`; `action
-  "pan-viewport right"` moved the camera to `2050 -0`; `action zoom-to-fit`
-  gave zoom `0.28484848484848485` at `750 -390` and a second one zoom `1` at
-  `2050 -0`; `action toggle-fullscreen` answered `error: action not
-  implemented on macOS yet: toggle-fullscreen`, before and after `focus --id
-  1`; `state` printed `fullscreen 0`; and a viewport `screenshot` was written
-  and looked at;
-- with `--experimental-native-resize`: `state` answered; `focus --id 1`
-  answered `#1 org.example.seed`; `action toggle-fullscreen` answered `ok`,
-  with and without that focus, and changed nothing (`fullscreen 0`,
-  `"fullscreen": []`, every `mode` `Normal`). There is still no refusal for
-  a stand-in. `resize --id 1 700 500` answered `this window has no native
-  size to set: it is a stand-in or has no live window`;
-- both exited with status 0 on SIGTERM and removed the socket, the flagged
-  one through `-endFullscreens` with nothing fullscreen and nothing owed.
-
-**No live window existed in either launch, so no fullscreen was entered and
-no size transaction ran in the app.** Everything in the table ran as
-controller scenarios or is compiled and read: nothing drew a fullscreen
-placement, a frost, a snapshot or an error bar on a fullscreen output, no
-press, scroll or drag reached the app, and no rule matched a window.

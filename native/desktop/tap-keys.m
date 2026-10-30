@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
+// Adapted from DriftWM, repository https://github.com/malbiruk/driftwm, commit 352333a8fa1b22171492d4b71a54102045c9a19d:
 // src/input/keyboard.rs (TapTracker: update, taint, reset; is_modifier_keysym; and
 // on_keyboard, where the tracker only observes and the chord it completes is looked
 // up in the tap bindings) and src/input/mod.rs (process_input_event: a pointer
@@ -7,11 +7,11 @@
 // pointer motion does not). The tracker's rules are upstream's. Upstream is handed
 // every key event; how this one learns of a key or a button on top is new (tap-keys.h).
 #import "tap-keys.h"
+#import "typed-value.h"
 #import <AppKit/AppKit.h>
 #import <Carbon/Carbon.h>
 
 static const NSEventModifierFlags chordFlags=NSEventModifierFlagControl|NSEventModifierFlagOption|NSEventModifierFlagShift|NSEventModifierFlagCommand;
-static id typed(id value,Class type) { return [value isKindOfClass:type]?value:nil; }
 // What upstream's tracker is told by a key press or a pointer button event (either state) on top of the chord. A key let go under the chord with no
 // press under it was down before the chord began: upstream's tracker is tainted by that earlier press, and the release is all that is left to count.
 // A volume, brightness or media key, an ordinary key to upstream, is no key event on a Mac: it arrives system-defined (IOLLEvent.h: NX_SYSDEFINED, an
@@ -43,11 +43,11 @@ static BOOL seenSince(NSTimeInterval then) {
 - (instancetype)initWithFire:(void (^)(NSDictionary *))fire { if((self=[super init])){_fire=[fire copy];_taps=@{};}return self; }
 - (void)setBindings:(NSDictionary *)bindings {
     [self stop];NSMutableDictionary<NSNumber *,NSDictionary *> *taps=[NSMutableDictionary dictionary];
-    for(id entry in typed(typed(bindings,NSDictionary.class)[@"taps"],NSArray.class)){
-        NSDictionary *tap=typed(entry,NSDictionary.class);NSDictionary<NSString *,NSNumber *> *held=typed(tap[@"modifiers"],NSDictionary.class);
+    for(id entry in DWTyped(DWTyped(bindings,NSDictionary.class)[@"taps"],NSArray.class)){
+        NSDictionary *tap=DWTyped(entry,NSDictionary.class);NSDictionary<NSString *,NSNumber *> *held=DWTyped(tap[@"modifiers"],NSDictionary.class);
         // A chord whose action cannot run here is not watched for.
-        if(!held||!typed(tap[@"action"],NSString.class)||[typed(tap[@"implemented"],NSNumber.class)isEqual:@NO])continue;
-        NSEventModifierFlags chord=([typed(held[@"control"],NSNumber.class)boolValue]?NSEventModifierFlagControl:0)|([typed(held[@"option"],NSNumber.class)boolValue]?NSEventModifierFlagOption:0)|([typed(held[@"shift"],NSNumber.class)boolValue]?NSEventModifierFlagShift:0)|([typed(held[@"command"],NSNumber.class)boolValue]?NSEventModifierFlagCommand:0);
+        if(!held||!DWTyped(tap[@"action"],NSString.class)||[DWTyped(tap[@"implemented"],NSNumber.class)isEqual:@NO])continue;
+        NSEventModifierFlags chord=([DWTyped(held[@"control"],NSNumber.class)boolValue]?NSEventModifierFlagControl:0)|([DWTyped(held[@"option"],NSNumber.class)boolValue]?NSEventModifierFlagOption:0)|([DWTyped(held[@"shift"],NSNumber.class)boolValue]?NSEventModifierFlagShift:0)|([DWTyped(held[@"command"],NSNumber.class)boolValue]?NSEventModifierFlagCommand:0);
         if(chord&&!taps[@(chord)])taps[@(chord)]=tap;
     }
     _taps=taps;

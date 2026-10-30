@@ -3,6 +3,7 @@
 #import "../focus/focus.h"
 #import "native-presenter.h"
 #import "native-family.h"
+#import "ax-lookup.h"
 #import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
 #include <libproc.h>
@@ -32,8 +33,8 @@
 static BOOL observedNumber(id value) { return [value isKindOfClass:NSNumber.class]; }
 static NSArray<NSNumber *> *observedBirth(pid_t pid,NSMutableDictionary<NSNumber *,id> *births) {
     id found=births[@(pid)];if(found)return found==NSNull.null?nil:found;
-    struct proc_bsdinfo process={0};NSArray *birth=nil;
-    if(proc_pidinfo(pid,PROC_PIDTBSDINFO,0,&process,sizeof(process))==sizeof(process))birth=@[@(process.pbi_start_tvsec),@(process.pbi_start_tvusec)];
+    NSArray *birth=nil;uint64_t seconds=0,microseconds=0;
+    if(DWProcessBirth(pid,&seconds,&microseconds))birth=@[@(seconds),@(microseconds)];
     births[@(pid)]=birth?:NSNull.null;return birth;
 }
 static NSDictionary *observedRequest(NSDictionary *source) {

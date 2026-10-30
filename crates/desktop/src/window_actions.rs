@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm df3de27b26c7998e8a460cffd8a4925cbed3a322 (v0.21.0),
-// read at third_party/driftwm: src/input/actions.rs (CenterWindow, FocusCenter,
-// CenterNearest, FocusNearest, nearest_in_direction, center_on_anchor,
-// CycleWindows), src/state/navigation.rs (navigate_to_window_on, reveal_element,
+// Adapted from https://github.com/malbiruk/driftwm @
+// df3de27b26c7998e8a460cffd8a4925cbed3a322 (v0.21.0): src/input/actions.rs
+// (CenterWindow, FocusCenter, CenterNearest, FocusNearest,
+// nearest_in_direction, center_on_anchor, CycleWindows),
+// src/state/navigation.rs (navigate_to_window_on, reveal_element,
 // RevealPan, MinimalPan, minimal_pan_camera, pan_minimally_to_element,
 // reveal_frame, related_to_focus, spatial_relatives, window_fully_in_view_at,
 // window_shown_as_fully_at, resolve_click_navigate,
@@ -31,7 +32,7 @@
 use super::ipc::frame;
 use super::navigation::Anchor;
 use super::sizes::{snap_rect, snap_rect_at, usable_px};
-use super::view_actions::{pixel, pixel_size};
+use super::view_actions::{core_point, pixel, pixel_size};
 use super::*;
 use driftwm_core::canvas::{
     find_nearest, leading_edge_camera, minimal_reveal_camera, visible_canvas_rect, visible_fraction,
@@ -40,7 +41,7 @@ use driftwm_core::config::Direction;
 use driftwm_core::layout::cluster::cluster_of;
 use driftwm_core::layout::snap::SnapRect;
 use driftwm_core::platform::utils::{
-    Logical, Point as CorePoint, Rectangle as CoreRectangle, Size as CoreSize,
+    Point as CorePoint, Rectangle as CoreRectangle, Size as CoreSize,
 };
 
 /// Upstream NEAREST_ANCHOR_THRESHOLD: the focused window is the origin of a
@@ -119,9 +120,6 @@ pub(crate) enum MinimalPan {
     /// coordinates if `forward`, held on the line; the camera's course on the
     /// other axis is left as it was.
     LeadingEdge { horizontal: bool, forward: bool },
-}
-fn core_point(point: Point) -> CorePoint<f64, Logical> {
-    CorePoint::from((point.x, point.y))
 }
 
 impl Controller {
@@ -421,7 +419,7 @@ impl Controller {
             .nav_anchors
             .iter()
             .map(|point| Point::new(point.x, point.y))
-            .filter(|point| point_valid(*point))
+            .filter(|point| point.valid())
             .map(|point| (NavTarget::Anchor(point), core_point(point)));
         Ok(find_nearest(
             core_point(origin),

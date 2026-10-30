@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm df3de27b26c7998e8a460cffd8a4925cbed3a322 (v0.21.0),
-// third_party/driftwm/src/state/{navigation,viewport,viewport_animation}.rs
+// Adapted from https://github.com/malbiruk/driftwm @
+// df3de27b26c7998e8a460cffd8a4925cbed3a322 (v0.21.0),
+// src/state/{navigation,viewport,viewport_animation}.rs
 // (landing_view, landing_view_on, set_camera_anchor, navigation_target_zoom).
 // Native frame geometry includes the titlebar; there is no additional compositor border.
 // `set_usable_area` follows src/state/viewport.rs (usable_area_on) and what
@@ -155,7 +156,7 @@ impl NavigationContext {
 
 /// A usable rectangle is output-local and lies inside its output.
 fn usable_fits(usable: Rect, output: Size) -> bool {
-    rect_valid(usable)
+    usable.valid()
         && usable.origin.x >= 0.0
         && usable.origin.y >= 0.0
         && usable.right() <= output.width
@@ -291,7 +292,7 @@ impl Controller {
             screen: context.align(&frame, zoom),
         };
         let target = anchor.canvas - anchor.screen / zoom;
-        if !point_valid(target) {
+        if !target.valid() {
             return Err(Error::Invalid("navigation target out of bounds"));
         }
         Ok((target, zoom, anchor))
@@ -356,7 +357,7 @@ impl Controller {
             return Err(Error::Invalid("navigation during active gesture"));
         }
         let target = anchor.canvas - anchor.screen / zoom;
-        if !point_valid(target) {
+        if !target.valid() {
             return Err(Error::Invalid("navigation target out of bounds"));
         }
         // Upstream set_camera_on: a fullscreen output's camera does not move.

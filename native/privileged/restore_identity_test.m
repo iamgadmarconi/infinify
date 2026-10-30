@@ -505,7 +505,7 @@ static void veilCases(struct dw2_identity who) {
     v2Apply(&frame,1,&status);assert(status==DW2_IDENTITY && [nativeLog isEqualToArray:(@[@"T"])] && nativeAlpha==0);
     ownerValue=7;v2Restore(@"veiled replacement",NO,nil,&summary);assert(!summary.pending && !v2Table.count);
 
-    // The alpha put back is the journalled original, not a constant: an entry holding a fractional original (as a replay or an older helper
+    // The alpha put back is the journalled original, not a constant: an entry holding a fractional original (as a replay
     // could) is lifted to it after the transform, and released to it.
     for(int placed=0;placed<2;placed++){
         VEIL_RESET(1);v2Veil(42);veiled=v2Table[@42];veiled->alpha=.8f;assert(v2Persist());journalAlpha=.8f;[nativeLog removeAllObjects];
@@ -1005,8 +1005,8 @@ int main(void) { @autoreleasepool {
     bootUUID[36]='!';assert(!v2CurrentWriterIdentity());bootUUID[36]='\0';
     bootUUID[9]='c';assert(!v2CurrentWriterIdentity());bootUUID[9]='C';
     bootUUIDStatus=-1;assert(!v2CurrentWriterIdentity());bootUUIDStatus=0;
-    assert(!v2BootUUIDValid(nil) && !v2BootUUIDValid(@1) && !v2BootUUIDValid(@"48359692C6EC-4E77-8BD8-B68CF839CB16")
-        && !v2BootUUIDValid(@"48359692-C6EC-4E77-8BD8-B68CF839CB1G"));
+    assert(!dw_boot_uuid_valid(nil) && !dw_boot_uuid_valid(@1) && !dw_boot_uuid_valid(@"48359692C6EC-4E77-8BD8-B68CF839CB16")
+        && !dw_boot_uuid_valid(@"48359692-C6EC-4E77-8BD8-B68CF839CB1G"));
     const struct dw2_identity recorded={.pid=123,.wid=42,.birth_sec=100,.birth_usec=20};
     rows=@[@{(id)kCGWindowNumber:@42,(id)kCGWindowOwnerPID:@123}];
     expect(&recorded,DW2_INSTANCE_CURRENT);
@@ -1211,8 +1211,8 @@ int main(void) { @autoreleasepool {
     v2Restore(@"new original",NO,nil,&summary);assert(!summary.pending && v2Released[@42]->alpha==.7f);
     journal=readJournal();
 
-    // Strict schema and unique collections are authoritative; schema 2 cannot
-    // silently lose the released-obligation collection during a migration.
+    // Strict schema and unique collections are authoritative: only schema 3 is
+    // accepted, so a journal that lacks the released-obligation collection is refused.
     NSMutableDictionary *bad=[journal mutableCopy];bad[@"v"]=@2;
     assert(!v2DecodeJournal([NSJSONSerialization dataWithJSONObject:bad options:0 error:NULL],[NSMutableDictionary dictionary],[NSMutableDictionary dictionary]));
     bad=[journal mutableCopy];[bad removeObjectForKey:@"boot_uuid"];bad[@"boot_sec"]=@1;bad[@"boot_usec"]=@0;

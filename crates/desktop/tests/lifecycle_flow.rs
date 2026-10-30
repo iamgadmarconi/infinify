@@ -4,35 +4,15 @@
 //! upstream's placement rules, not read back from the controller. They provide
 //! no evidence that a native window is discovered, captured, focused, closed
 //! or launched: every effect here is a request nobody performs.
-use driftwm_desktop::*;
 use serde_json::{Value, json};
-use std::ffi::CStr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-struct Host(*mut Controller);
+#[path = "support/host.rs"]
+mod host;
+use host::Host;
+
 impl Host {
-    fn new() -> Self {
-        let handle = driftwm_desktop_create();
-        assert!(!handle.is_null());
-        Self(handle)
-    }
-    fn call(&mut self, command: Value) -> Value {
-        let bytes = serde_json::to_vec(&json!({"version":1,"command":command})).unwrap();
-        // SAFETY: live exclusive handle, valid bytes, response freed exactly once.
-        unsafe {
-            let response = driftwm_desktop_request(self.0, bytes.as_ptr(), bytes.len());
-            assert!(!response.is_null());
-            let result = serde_json::from_slice(CStr::from_ptr(response).to_bytes()).unwrap();
-            driftwm_desktop_response_free(response);
-            result
-        }
-    }
-    fn ok(&mut self, command: Value) -> Value {
-        let response = self.call(command.clone());
-        assert_eq!(response["ok"], true, "{command}: {response}");
-        response["data"].clone()
-    }
     /// A refused command: an error, and nothing changed.
     fn error(&mut self, command: Value) -> String {
         let before = self.snapshot();
@@ -40,9 +20,6 @@ impl Host {
         assert_eq!(response["ok"], false, "{command}: {response}");
         assert_eq!(self.snapshot(), before, "{command}");
         response["error"].as_str().unwrap().to_owned()
-    }
-    fn snapshot(&mut self) -> Value {
-        self.ok(json!({"op":"snapshot"}))
     }
     fn action(&mut self, action: &str) -> Value {
         self.ok(json!({"op":"action","output":1,"action":action}))
@@ -120,14 +97,6 @@ impl Host {
         self.ok(native(id, &source["identity"], &source["generation"]))
     }
 }
-impl Drop for Host {
-    fn drop(&mut self) {
-        unsafe {
-            driftwm_desktop_destroy(self.0);
-        }
-    }
-}
-
 /// A directory of this test's own, removed when the test ends.
 struct Scratch(PathBuf);
 impl Scratch {

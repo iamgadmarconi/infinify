@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Translated, function by function, from spacefarm-digital/sunlight afeea74b18e70ca49bf462d6fe462cf65deb2b32 (MIT,
-// Copyright (c) 2026 spacefarm), vendored at third_party/sunlight/ (license text: native/desktop/SUNLIGHT-NOTICE.txt).
-// Swift to Objective-C, names kept where they carry over. Line ranges are those of the vendored files.
+// Translated, function by function, from Sunlight, repository https://github.com/spacefarm-digital/sunlight, commit
+// afeea74b18e70ca49bf462d6fe462cf65deb2b32 (MIT, Copyright (c) 2026 spacefarm; license text: native/desktop/SUNLIGHT-NOTICE.txt).
+// Swift to Objective-C, names kept where they carry over. Line ranges are those of the upstream files at that commit.
 //
-// third_party/sunlight/Sources/Canvas/Takeover/SystemPrefs.swift
+// Sources/Canvas/Takeover/SystemPrefs.swift
 //    8-14  struct Pref                  -> DWPref
 //   19     absent                       -> kAbsent
 //   21-45  managed                      -> managed()
@@ -13,7 +13,7 @@
 //   90-98  revert(snapshot:)            -> -revertSnapshot:restored:kept:failed:
 //  100-108 write(_:)                    -> -write:stopAtFailure:written:failed:, and DWCFPrefs -setValue:ofPref:
 //  110-116 equal(_:_:)                  -> equalValues()
-// third_party/sunlight/Sources/Canvas/Takeover/TakeoverMode.swift
+// Sources/Canvas/Takeover/TakeoverMode.swift
 //   26-31  Keys.applied, Keys.snapshot  -> the snapshot file: that it exists is `applied`, what it holds is the snapshot
 //   63-78  startup(), the leftover      -> main()'s -restore: at launch, and the first step of -engage:
 //          branch (75-78)
@@ -39,7 +39,7 @@
 // The regression (system-takeover-regression.m) drives this file with an in-memory store; the guest runs recorded in
 // native/desktop/README.md ("Desktop mode") are what show WindowManager following the real keys.
 #import "system-takeover.h"
-#include <fcntl.h>
+#import "owner-file.h"
 #include <unistd.h>
 
 static NSString *const kDomain=@"com.apple.WindowManager";
@@ -103,18 +103,10 @@ static NSString *listed(NSDictionary *snapshot,NSArray<DWPref *> *prefs) {
 static NSString *named(NSArray<DWPref *> *prefs) {
     NSMutableArray *keys=[NSMutableArray array];for(DWPref *p in prefs)[keys addObject:p.key];return [keys componentsJoinedByString:@", "];
 }
-// Written aside, flushed, then renamed over the file: a crash at any point leaves the old file or the whole new one.
+// Written aside, flushed, then renamed over the file (owner-file.h): a crash at any point leaves the old file or the whole new one.
 static BOOL writeAtomically(NSData *data,NSString *path) {
-    NSString *directory=path.stringByDeletingLastPathComponent,*aside=[path stringByAppendingFormat:@".%d.tmp",getpid()];
-    if(![NSFileManager.defaultManager createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:NULL])return NO;
-    int fd=open(aside.fileSystemRepresentation,O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW,0600);if(fd<0)return NO;
-    const uint8_t *bytes=data.bytes;size_t left=data.length;BOOL ok=YES;
-    while(left&&ok){ssize_t n=write(fd,bytes,left);if(n<0&&errno==EINTR)continue;if(n<=0)ok=NO;else{bytes+=n;left-=(size_t)n;}}
-    if(ok&&fcntl(fd,F_FULLFSYNC)!=0)ok=fsync(fd)==0;
-    ok=close(fd)==0&&ok;
-    if(!ok||rename(aside.fileSystemRepresentation,path.fileSystemRepresentation)!=0){unlink(aside.fileSystemRepresentation);return NO;}
-    int dirfd=open(directory.fileSystemRepresentation,O_RDONLY);if(dirfd>=0){fsync(dirfd);close(dirfd);}
-    return YES;
+    if(![NSFileManager.defaultManager createDirectoryAtPath:path.stringByDeletingLastPathComponent withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:NULL])return NO;
+    return DWOwnerFileWrite(path,data);
 }
 
 @implementation DWSystemTakeover {
@@ -123,7 +115,7 @@ static BOOL writeAtomically(NSData *data,NSString *path) {
     NSDictionary *_snapshot; // what the file holds while this object is engaged (TakeoverMode.isRunning)
 }
 + (instancetype)system {
-    return [[self alloc]initWithStore:[DWCFPrefs new] snapshotPath:[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/Infinify/window-prefs-snapshot.plist"]];
+    return [[self alloc]initWithStore:[DWCFPrefs new] snapshotPath:[DWSupportDirectory() stringByAppendingPathComponent:@"window-prefs-snapshot.plist"]];
 }
 - (instancetype)initWithStore:(id<DWPrefsStore>)store snapshotPath:(NSString *)path {
     if((self=[super init])){_store=store;_path=[path copy];}return self;

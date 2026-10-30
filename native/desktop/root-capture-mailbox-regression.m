@@ -7,6 +7,7 @@
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
 #import <os/lock.h>
+#import "typed-value.h"
 #include <math.h>
 #include <stdint.h>
 
@@ -30,9 +31,8 @@
 @interface LiveSource : NSObject
 @property SCStream *stream;
 @property DWRootCaptureMailbox *captureMailbox;
-@property BOOL detached,composited,restarted,rejectInstall,nativeVisibilityHeld,nativeVisibilityWanted;
+@property BOOL detached,restarted,rejectInstall,nativeVisibilityHeld,nativeVisibilityWanted;
 @property NSString *error;
-@property NSObject *synth;
 @property NSNumber *logical;
 @property NSDictionary *identity;
 @property Router *router;
@@ -41,14 +41,11 @@
 @property(readonly) CVPixelBufferRef pixels;
 @property CGRect contentRect;
 @property(copy) dispatch_block_t duringInstall;
-@property(copy) BOOL (^capturedInputGate)(void);
 - (BOOL)acceptCapturedSample:(CMSampleBufferRef)sample stream:(SCStream *)stream received:(NSUInteger)received forceInstall:(BOOL)force;
 - (BOOL)installSample:(CMSampleBufferRef)sample;
-- (BOOL)installCompositedSample:(CMSampleBufferRef)sample;
 - (BOOL)installPixels:(CVPixelBufferRef)pixels contentRect:(CGRect)crop;
 @end
 
-static NSDictionary *asDict(id value) { return [value isKindOfClass:NSDictionary.class]?value:nil; }
 static BOOL sampleValid(CMSampleBufferRef sample) { return sample&&((__bridge MailboxSample *)sample).valid; }
 static CVImageBufferRef sampleImage(CMSampleBufferRef sample) { return (__bridge CVImageBufferRef)((__bridge MailboxSample *)sample).image; }
 static CFArrayRef sampleAttachments(CMSampleBufferRef sample,BOOL create) {
@@ -76,9 +73,6 @@ static void deferDispatch(dispatch_queue_t queue,dispatch_block_t block) { (void
 - (instancetype)init { if((self=[super init]))_contentRect=CGRectNull;return self; }
 - (CVPixelBufferRef)pixels { return (__bridge CVPixelBufferRef)self.installedImage; }
 #include "root-capture-source-acceptance.inc"
-- (BOOL)installSample:(CMSampleBufferRef)sample {
-    return [self installCompositedSample:sample];
-}
 - (BOOL)installPixels:(CVPixelBufferRef)pixels contentRect:(CGRect)crop {
     if(self.rejectInstall)return NO;
     self.installedImage=(__bridge MailboxImage *)pixels;self.phase=self.installedImage.phase;self.contentRect=crop;self.installs++;self.restarted=NO;
@@ -116,10 +110,10 @@ static void deliverPacket(LiveSource *source,MailboxSample *sample) {
 static void drainOne(void) {
     check(jobs.count==1,@"one coalesced main drain");dispatch_block_t job=jobs.firstObject;[jobs removeObjectAtIndex:0];job();
 }
-static LiveSource *source(BOOL diagnostics) {
-    LiveSource *result=[LiveSource new];result.composited=YES;result.restarted=YES;
+static LiveSource *source(void) {
+    LiveSource *result=[LiveSource new];result.restarted=YES;
     result.stream=(SCStream *)(id)[NSObject new];
-    result.captureMailbox=[[DWRootCaptureMailbox alloc]initWithSource:result stream:result.stream diagnostics:diagnostics];return result;
+    result.captureMailbox=[[DWRootCaptureMailbox alloc]initWithSource:result stream:result.stream];return result;
 }
 static void publish(LiveSource *source,NSUInteger phase) {
     deliverPacket(source,packet(@(SCFrameStatusComplete),YES,YES,phase));drainOne();
@@ -153,10 +147,9 @@ int main(void) {@autoreleasepool {
     CGRect ordinary=CGRectMake(-40,30,656,422);
     check(captureImageGeometry(ordinary,ordinary,ordinary,ordinary,2,&width,&height)&&width==1312&&height==844,
         @"unscaled whole-window capture retains native raster sizing");
-    jobs=[NSMutableArray array];LiveSource *s=source(NO);
+    jobs=[NSMutableArray array];LiveSource *s=source();
     check(!s.captureMailbox.currentImageAvailable,@"new stream has no published image");
-    check(!DWCapturedInputAvailable(s),@"new composited capture cannot authorize synthetic input");
-    check(s.captureMailbox.diagnosticSnapshot==nil,@"default diagnostics stay disabled");
+    check(!DWCapturedInputAvailable(s),@"new capture cannot authorize input");
     deliverPacket(s,packet(@(SCFrameStatusIdle),NO,NO,0));
     check(!s.captureMailbox.currentImageAvailable&&jobs.count==0,@"initial Idle cannot create availability or main work");
     deliverPacket(s,packet(@(SCFrameStatusComplete),YES,YES,1));
@@ -217,7 +210,7 @@ int main(void) {@autoreleasepool {
     SCStream *original=s.stream;s.stream=(SCStream *)(id)[NSObject new];
     check(!s.captureMailbox.currentImageAvailable,@"stream identity replacement rejects old published image");s.stream=original;
     DWRootCaptureMailbox *old=s.captureMailbox;deliverPacket(s,packet(@(SCFrameStatusComplete),YES,YES,200));installed=s.installs;
-    s.stream=(SCStream *)(id)[NSObject new];s.captureMailbox=[[DWRootCaptureMailbox alloc]initWithSource:s stream:s.stream diagnostics:YES];
+    s.stream=(SCStream *)(id)[NSObject new];s.captureMailbox=[[DWRootCaptureMailbox alloc]initWithSource:s stream:s.stream];
     drainOne();check(s.installs==installed&&!old.currentImageAvailable&&!s.captureMailbox.currentImageAvailable,@"late old drain cannot publish into a replaced proxy");
     publish(s,201);[old stream:original didOutputSampleBuffer:(__bridge CMSampleBufferRef)packet(@(SCFrameStatusSuspended),NO,NO,0) ofType:SCStreamOutputTypeScreen];
     check(s.captureMailbox.currentImageAvailable&&jobs.count==0,@"old-stream revocation cannot affect replacement mailbox");
@@ -227,41 +220,8 @@ int main(void) {@autoreleasepool {
     deliverPacket(s,packet(@(SCFrameStatusComplete),YES,YES,203));check(jobs.count==0,@"cancelled callback does not dispatch");
     resetSource(s);
 
-    s=source(YES);[s.captureMailbox stream:s.stream startCompleted:YES];publish(s,300);
-    NSDictionary *report=s.captureMailbox.diagnosticSnapshot;
-    check([report[@"start_completed"]boolValue]&&[report[@"start_succeeded"]boolValue]&&[report[@"image_available"]boolValue],@"opt-in snapshot reports publication separately from start completion");
-    deliverPacket(s,packet(@(SCFrameStatusSuspended),NO,NO,301));report=s.captureMailbox.diagnosticSnapshot;
-    check(![report[@"image_available"]boolValue]&&[report[@"callback_sequence"]unsignedLongLongValue]>[report[@"published_callback_sequence"]unsignedLongLongValue],@"diagnostic receipt distinguishes retained publication from newer revocation");
     resetSource(s);check(jobs.count==0,@"all deferred work is reaped");
-    s=source(NO);publish(s,400);s.synth=[NSObject new];
-    check(!DWCapturedInputAvailable(s),@"synthetic load pixels cannot authorize app input");s.synth=nil;resetSource(s);
-    s=source(YES);deliverPacket(s,packet(@(SCFrameStatusComplete),YES,YES,500));
-    [s.captureMailbox requireFreshImage];NSDictionary *seed=[s.captureMailbox reserveSnapshotSeed];
-    check(seed&&[s.captureMailbox installSnapshotSeed:(__bridge CMSampleBufferRef)packet(nil,YES,NO,501) token:seed]
-        &&s.phase==501&&s.captureMailbox.currentImageAvailable,@"explicit post-fence screenshot bootstraps stationary pixels");
-    drainOne();check(s.phase==501,@"pre-fence queued Complete cannot overwrite the screenshot seed");
-    deliverPacket(s,packet(@(SCFrameStatusIdle),NO,NO,0));
-    check(s.captureMailbox.currentImageAvailable,@"Idle preserves a published screenshot seed");
-    report=s.captureMailbox.diagnosticSnapshot;
-    check([report[@"snapshot_seed_requests"]unsignedIntegerValue]==1&&[report[@"snapshot_seed_published"]unsignedIntegerValue]==1
-        &&[report[@"screen_callbacks"]unsignedIntegerValue]==2&&[report[@"status_counts"][@"complete"]unsignedIntegerValue]==1,
-        @"screenshot publication does not forge stream callback or Complete counters");
-    [s.captureMailbox requireFreshImage];seed=[s.captureMailbox reserveSnapshotSeed];
-    deliverPacket(s,packet(@(SCFrameStatusComplete),YES,YES,502));installed=s.installs;
-    check(![s.captureMailbox installSnapshotSeed:(__bridge CMSampleBufferRef)packet(nil,YES,NO,503) token:seed]
-        &&s.installs==installed,@"pending post-fence Complete takes priority over screenshot");drainOne();
-    [s.captureMailbox requireFreshImage];seed=[s.captureMailbox reserveSnapshotSeed];publish(s,504);installed=s.installs;
-    check(![s.captureMailbox installSnapshotSeed:(__bridge CMSampleBufferRef)packet(nil,YES,NO,505) token:seed]
-        &&s.installs==installed,@"published post-fence Complete takes priority over screenshot");
-    [s.captureMailbox requireFreshImage];seed=[s.captureMailbox reserveSnapshotSeed];
-    deliverPacket(s,packet(@(SCFrameStatusSuspended),NO,NO,0));installed=s.installs;
-    check(![s.captureMailbox installSnapshotSeed:(__bridge CMSampleBufferRef)packet(nil,YES,NO,506) token:seed]
-        &&s.installs==installed&&!s.captureMailbox.currentImageAvailable,@"new revocation invalidates a reserved screenshot");
-    seed=[s.captureMailbox reserveSnapshotSeed];weak=s;s.duringInstall=^{deliverPacket(weak,packet(@(SCFrameStatusBlank),NO,NO,0));};
-    check(![s.captureMailbox installSnapshotSeed:(__bridge CMSampleBufferRef)packet(nil,YES,NO,507) token:seed]
-        &&!s.captureMailbox.currentImageAvailable,@"revocation during screenshot installation cannot be overwritten");
-    resetSource(s);
-    s=source(NO);MailboxSample *cropped=packet(@(SCFrameStatusComplete),YES,YES,600);
+    s=source();MailboxSample *cropped=packet(@(SCFrameStatusComplete),YES,YES,600);
     NSMutableDictionary *cropInfo=[cropped.attachments[0]mutableCopy];
     cropInfo[SCStreamFrameInfoContentRect]=@{@"X":@2,@"Y":@3,@"Width":@20,@"Height":@15};
     cropInfo[SCStreamFrameInfoScaleFactor]=@2;cropInfo[SCStreamFrameInfoContentScale]=@.5;cropped.attachments=@[cropInfo];
@@ -289,18 +249,12 @@ int main(void) {@autoreleasepool {
     }
     badInfo=[cropInfo mutableCopy];[badInfo removeObjectForKey:SCStreamFrameInfoContentScale];
     CGRect crop=CGRectNull;check(!DWRootCaptureCrop(badInfo,(__bridge CVPixelBufferRef)badCrop.image,&crop),@"missing ContentScale is uncertain metadata");
-    [s.captureMailbox requireFreshImage];seed=[s.captureMailbox reserveSnapshotSeed];
-    check([s.captureMailbox installSnapshotSeed:(__bridge CMSampleBufferRef)cropped token:seed]
-        &&CGRectEqualToRect(s.contentRect,CGRectMake(4,6,40,30)),@"snapshot seeds use the same metadata-qualified pixel crop");
     DWRootCaptureMailbox *croppedMailbox=s.captureMailbox;SCStream *croppedStream=s.stream;
-    s.stream=(SCStream *)(id)[NSObject new];s.captureMailbox=[[DWRootCaptureMailbox alloc]initWithSource:s stream:s.stream diagnostics:NO];
-    [croppedMailbox stream:croppedStream didOutputSampleBuffer:(__bridge CMSampleBufferRef)movedCrop ofType:SCStreamOutputTypeScreen];drainOne();
-    check(CGRectEqualToRect(s.contentRect,CGRectMake(4,6,40,30))&&!s.captureMailbox.currentImageAvailable,@"retired stream cannot replace retained crop or authorize the new stream");
+    s.stream=(SCStream *)(id)[NSObject new];s.captureMailbox=[[DWRootCaptureMailbox alloc]initWithSource:s stream:s.stream];
+    [croppedMailbox stream:croppedStream didOutputSampleBuffer:(__bridge CMSampleBufferRef)cropped ofType:SCStreamOutputTypeScreen];drainOne();
+    check(CGRectEqualToRect(s.contentRect,CGRectMake(6,4,40,30))&&!s.captureMailbox.currentImageAvailable,@"retired stream cannot replace retained crop or authorize the new stream");
     [croppedMailbox cancel];
     resetSource(s);
-    s=[LiveSource new];s.composited=NO;
-    check(DWCapturedInputAvailable(s),@"distinct AV fixture renderer keeps its existing binding admission path");
-    s.synth=[NSObject new];check(!DWCapturedInputAvailable(s),@"AV renderer cannot use synthetic pixels for app input");
     check(!DWCapturedInputAvailable(nil),@"missing capture cannot authorize input");
     printf("root capture mailbox: %lu checks passed (substituted samples; no native capture)\n",(unsigned long)checks);
     return 0;

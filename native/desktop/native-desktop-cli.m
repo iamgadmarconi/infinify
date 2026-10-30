@@ -4,15 +4,13 @@
 #import "loader-service.h"
 #import "login-item.h"
 #import "dock-reload.h"
+#import "owner-file.h"
 #import "loadd-request.h"
 #import <ServiceManagement/ServiceManagement.h>
-#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 static NSString *const kLoginFile=@"login.plist";
-static NSString *const kAgentPlist=@"com.marengox.infinify.agent.plist";
-static NSString *const kApproval=@"System Settings > General > Login Items & Extensions";
 
 static NSString *launcherPath(void) {
     NSString *launcher=[NSBundle.mainBundle pathForResource:@"launch" ofType:@"sh" inDirectory:@"NativeDesktop"];
@@ -34,28 +32,13 @@ static BOOL stateDirectory(NSString *directory) {
 // The login-mode record: login.plist in the state directory, written by `enable` and read by `login-start`.
 BOOL DWNativeWriteLoginRecord(NSString *directory,BOOL agentAdded) {
     if(!stateDirectory(directory))return NO;
-    NSDictionary *record=@{@"version":@1,@"mode":@"compositor",@"agent_added":@(agentAdded)};
-    NSData *data=[NSPropertyListSerialization dataWithPropertyList:record format:NSPropertyListXMLFormat_v1_0 options:0 error:nil];
-    NSString *path=[directory stringByAppendingPathComponent:kLoginFile],*staged=[path stringByAppendingFormat:@".%d",getpid()];
-    int fd=open(staged.fileSystemRepresentation,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600);
-    if(fd<0)return NO;
-    BOOL ok=data&&write(fd,data.bytes,data.length)==(ssize_t)data.length&&fsync(fd)==0;
-    close(fd);
-    if(!ok||rename(staged.fileSystemRepresentation,path.fileSystemRepresentation)){unlink(staged.fileSystemRepresentation);return NO;}
-    return YES;
+    return DWOwnerFileWritePlist([directory stringByAppendingPathComponent:kLoginFile],@{@"version":@1,@"mode":@"compositor",@"agent_added":@(agentAdded)});
 }
 NSDictionary *DWNativeReadLoginRecord(NSString *directory) {
-    NSString *path=[directory stringByAppendingPathComponent:kLoginFile];
-    struct stat st;
-    if(lstat(path.fileSystemRepresentation,&st)||!S_ISREG(st.st_mode)||st.st_uid!=getuid()||(st.st_mode&07777)!=0600)return nil;
-    NSDictionary *record=[NSDictionary dictionaryWithContentsOfFile:path];
-    return [record isKindOfClass:NSDictionary.class]&&[record[@"version"] isEqual:@1]&&[record[@"mode"] isEqual:@"compositor"]?record:nil;
+    NSDictionary *record=DWOwnerFileReadPlist([directory stringByAppendingPathComponent:kLoginFile]);
+    return [record[@"version"] isEqual:@1]&&[record[@"mode"] isEqual:@"compositor"]?record:nil;
 }
-BOOL DWNativeRemoveLoginRecord(NSString *directory) {
-    NSString *path=[directory stringByAppendingPathComponent:kLoginFile];
-    struct stat st;
-    return lstat(path.fileSystemRepresentation,&st)==0&&unlink(path.fileSystemRepresentation)==0;
-}
+BOOL DWNativeRemoveLoginRecord(NSString *directory) { return DWOwnerFileRemove([directory stringByAppendingPathComponent:kLoginFile]); }
 BOOL DWNativeLoginIsCompositor(void) { return DWNativeReadLoginRecord(DWDockReloadStateDirectory())!=nil; }
 
 static int execLauncher(NSString *launcher,const char *argument) {
@@ -85,7 +68,7 @@ static int status(void) {
     NSString *directory=DWDockReloadStateDirectory(),*payload=manifestPayloadSHA();
     NSDictionary *login=DWNativeReadLoginRecord(directory);
     printf("compositor mode at login: %s\n",login?"enabled":"disabled");
-    printf("login item: %s\n",agentWord([SMAppService agentServiceWithPlistName:kAgentPlist].status));
+    printf("login item: %s\n",agentWord([SMAppService agentServiceWithPlistName:DWLoginItemAgentPlist].status));
     printf("launch daemon: %s\n",[DWLoaderService describe:[DWLoaderService state]].UTF8String);
     BOOL paused=payload&&DWDockReloadPaused(directory,payload);
     printf("automatic Dock reload: %s\n",paused?"paused after Dock restarts around loads; run Infinify native-desktop by hand to lift it":"ready");
@@ -102,15 +85,14 @@ static int status(void) {
 static int enable(void) {
     NSString *launcher=launcherPath(),*directory=DWDockReloadStateDirectory();
     if(!launcher){fputs("Infinify: the bundled native launcher is missing; rebuild or reinstall the complete app.\n",stderr);return 69;}
-    NSString *bundle=NSBundle.mainBundle.bundlePath;
-    if(![bundle.pathComponents containsObject:@"Applications"])fprintf(stderr,"native-desktop enable: registering the bundle at %s, which is not in an Applications folder; scripts/install-app.sh installs one.\n",bundle.fileSystemRepresentation);
+    DWLoginItemWarnIfOutsideApplications("native-desktop enable");
     fputs("Checking the bundle and the boot policy (read-only)...\n",stdout);fflush(stdout);
     if(runLauncher(launcher,"--check")!=0){fputs("native-desktop enable: the check failed; nothing was registered.\n",stderr);return 1;}
     DWLoaderState state=[DWLoaderService state];
     if(state==DWLoaderUnavailable){fprintf(stderr,"native-desktop enable: launch daemon: %s\nCompositor mode can still be started by hand with Infinify native-desktop.\n",[DWLoaderService describe:state].UTF8String);return 1;}
     if(state==DWLoaderNotRegistered||state==DWLoaderNeedsApproval)state=[DWLoaderService registerDaemon];
     if(state==DWLoaderNeedsApproval){
-        printf("Approve Infinify once under %s (the pane is open); waiting up to three minutes...\n",kApproval.UTF8String);fflush(stdout);
+        printf("Approve Infinify once under %s (the pane is open); waiting up to three minutes...\n",DWLoginItemsPane.UTF8String);fflush(stdout);
         for(int waited=0;waited<180&&state==DWLoaderNeedsApproval;waited+=2){sleep(2);state=[DWLoaderService state];}
     }
     if(state!=DWLoaderEnabled){fprintf(stderr,"native-desktop enable: launch daemon: %s\nRun this again once it is approved.\n",[DWLoaderService describe:state].UTF8String);return 1;}
@@ -119,7 +101,7 @@ static int enable(void) {
     if(pinged!=0){fprintf(stderr,"native-desktop enable: the launch daemon does not answer this app: %s\n",reply.UTF8String);return 1;}
     fputs("The launch daemon answers.\n",stdout);
     // The marker first: registering the login item below starts it at once.
-    SMAppService *agent=[SMAppService agentServiceWithPlistName:kAgentPlist];
+    SMAppService *agent=[SMAppService agentServiceWithPlistName:DWLoginItemAgentPlist];
     BOOL agentWasOn=agent.status==SMAppServiceStatusEnabled;
     NSDictionary *previous=DWNativeReadLoginRecord(directory);
     BOOL added=agentWasOn?[previous[@"agent_added"] boolValue]:YES;

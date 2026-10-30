@@ -7,7 +7,8 @@ says what a frame is made of, in upstream's own terms, and the shell's
 compositor draws it. This file is that description, and the `msg screenshot`
 flow that renders it to a file.
 
-Adapted from malbiruk/driftwm at `352333a8fa1b22171492d4b71a54102045c9a19d`:
+Adapted from <https://github.com/malbiruk/driftwm> at
+`352333a8fa1b22171492d4b71a54102045c9a19d`:
 `cmd_screenshot`, `resolve_screenshot_region`, `window_visual_rect`,
 `snap_rect_to_rect` and `union_rect` in `src/ipc/mod.rs`, the checks at the top
 of `capture_region_to_png` in `src/render/screenshot.rs`,
@@ -25,18 +26,16 @@ is the one the window mapped with: [RULES.md](RULES.md) is the contract for
 rules, widgets and screen-pinned windows, and this file says how each is drawn
 and captured.
 
-`ABI_VERSION`, `SAVE_VERSION`, the durable save file and command shapes are
-unchanged. The snapshot no longer duplicates logical focus at top level:
-consumers read it from `focus.intent` (see [FOCUS.md](FOCUS.md)).
+The snapshot carries logical focus once, as `focus.intent` (see
+[FOCUS.md](FOCUS.md)); it has no top-level `focused`.
 
-| Change | Where |
+| Key or command | What |
 | --- | --- |
-| `render` | a new key of the snapshot |
-| `focused` | the duplicate top-level snapshot key is removed; use `focus.intent` |
-| `kind`, `focused`, `title`, `app_name`, `launching`, `world_rect`, `decoration` | new keys of every entry of the snapshot's `placements`; the same keys, less `world_rect` which was there, on every entry of `windows` |
-| `{"Screenshot":…}` | the `ipc` request is no longer refused: it answers `"reply": null` with one `screenshot` effect |
-| `screenshot_result` | a new command: the shell's answer to that effect |
-| `pending_screenshots` | a new count in the `DebugCounters` reply |
+| `render` | a key of the snapshot |
+| `kind`, `focused`, `title`, `app_name`, `launching`, `world_rect`, `decoration` | keys of every entry of the snapshot's `placements` and of its `windows` |
+| `{"Screenshot":…}` | the `ipc` request answers `"reply": null` with one `screenshot` effect |
+| `screenshot_result` | a command: the shell's answer to that effect |
+| `pending_screenshots` | a count in the `DebugCounters` reply |
 
 ## `render`
 
@@ -289,8 +288,8 @@ target with the background and every window that is on the canvas.
 `compose_capture_elements`. A capture is of the canvas, and a screen-pinned
 window is not on it: `Viewport`, `All` and `Region` never show one, on any
 output, whatever is on the screen (upstream's `window_render_transform` gives
-a pinned window no place without an output, and its `docs/window-rules.md`
-lists canvas screenshots among what a pinned window is excluded from). A
+a pinned window no place without an output, and its
+[`docs/window-rules.md`](https://github.com/malbiruk/driftwm/blob/df3de27b26c7998e8a460cffd8a4925cbed3a322/docs/window-rules.md) lists canvas screenshots among what a pinned window is excluded from). A
 widget is on the canvas and is drawn there, below every other window. `All`
 frames the canvas windows and the stand-ins only, as upstream's
 `is_canvas_window` filter does: a widget that lies inside that frame is
@@ -321,12 +320,12 @@ The screenshot writer encodes the image, creates any missing parent directories,
 then writes the named PNG, following `capture_region_to_png` at the pinned
 revision (`src/render/screenshot.rs:117–122`). A non-directory parent reports
 `cannot create <parent>: …`; a failure opening or writing the final file reports
-`cannot write <path>: …`. Since DriftWM v0.21.0 (`write_png`,
+`cannot write <path>: …`. As in DriftWM v0.21.0 (`write_png`,
 `df3de27b26c7998e8a460cffd8a4925cbed3a322`) the file is written to a new file
 beside the target, `.<name>.<pid>-<n>.tmp`, created with `O_EXCL`, and renamed
 into place; a failure removes the temporary and leaves what the path held, an
-existing file is replaced as a whole (it was truncated and rewritten in place),
-and a symbolic link at the path is replaced instead of written through. Encoding
+existing file is replaced as a whole, and a symbolic link at the path is
+replaced instead of written through. Encoding
 and writes run on the existing serial export worker; no parent directories are
 created when rendering or encoding fails. `msg screenshot -o -` hands the shell
 a file of the client's own to write ([IPC.md](IPC.md#msg-client)).
@@ -462,15 +461,14 @@ every `ipc` request.
 
 ## Verification boundary
 
-`tests/e2e/screenshot-write.sh` exercises the production `msg` client, Unix
+`tests/e2e/ipc-limits.sh` exercises the production `msg` client, Unix
 socket server, controller C ABI and PNG writer with a synthetic 2×3 image. It
 checks nested parent creation, preservation of a non-directory parent, a final
 filename already occupied by a directory, existing-file overwrite, PNG dimensions,
 and byte-identical `-o -` output with temporary-file cleanup. This starts no
 desktop application, renderer, GPU, native window, capture stream or input. It
 validates the filesystem and reply contract only, not native image capture or
-compositing. Red/green receipts for the parent-directory fix are saved under
-`target/parity/screenshot-parents-20261021/`.
+compositing.
 
 `tests/render_flow.rs` drives the exported C ABI with config files in a
 throwaway directory:
@@ -585,11 +583,11 @@ source and there was one output: `kind` `"window"`, a window rule,
 `default_mode`, `title`, `outline`, a second `output`, and so the capture
 opacity of a live window and the wallpaper footprint of another output. The
 list of what was observed, pixel by pixel, is in
-[native/desktop/README.md](../../native/desktop/README.md#what-was-run-for-rendering).
+[native/desktop/README.md](../../native/desktop/README.md).
 
 Also on 2026-10-10, once this contract and [RULES.md](RULES.md) were one
 build, two things were run; neither left saved evidence.
-[native/desktop/README.md](../../native/desktop/README.md#what-was-run-for-rules-and-rendering-together)
+[native/desktop/README.md](../../native/desktop/README.md)
 has the numbers.
 
 - **The drawing path, offscreen.** A throwaway tool outside the repository
@@ -633,7 +631,7 @@ motion keys of `navigation`); the shell's one redraw adopts `render` and
 publishes the State; and a `Screenshot` is rendered and answered within its
 own request while `subscribe` connections stay open. Three more launches of
 the built app
-([the numbers](../../native/desktop/README.md#what-was-run-with-every-other-milestone-built-in))
+([the numbers](../../native/desktop/README.md))
 repeated the viewport, `zoom-to-fit`, `window`, `region`, `-o -` and
 missing-shader results, and added: the focused border colour on a stand-in a
 window navigation action had just focused; a pinned placeholder absent from
@@ -646,7 +644,7 @@ background.
 
 With the background caches, the same day, the app built from this tree was
 launched five more times the same way
-([the numbers](../../native/desktop/README.md#what-was-run-for-the-background-caches)).
+([the numbers](../../native/desktop/README.md)).
 Of this contract that showed: `cache_budget_mb` reaching the shell's caches,
 since the lines they print on stderr for a view over the budget carried the
 number each config named (1, 40, 8, 2 and the default 128), adopted from a

@@ -31,29 +31,29 @@ mod view_actions;
 mod visibility;
 mod window_actions;
 use bindings::Platform;
-pub use bindings::{MacModifiers, PointerContext, PointerTrigger, ScrollSource};
+use bindings::{MacModifiers, PointerContext, PointerTrigger, ScrollSource};
 use effects::Effects;
 pub use ffi::*;
 use fullscreen::Fullscreen;
-pub use gestures::GestureKind;
+use gestures::GestureKind;
 use gestures::{GestureStart, TrackpadGesture};
 use keyboard_layout::KeyboardLayout;
 use lifecycle::{Arrival, Lifecycle};
 use motion::Motion;
-pub use motion::{PanSource, PinchPhase, ZoomSource};
-pub use navigation::{FocusPlacement, ZoomPolicy};
+use motion::{PanSource, PinchPhase, ZoomSource};
+use navigation::{FocusPlacement, ZoomPolicy};
 use navigation::{NavigationContext, ViewFlight};
-pub use output_actions::Corner;
+use output_actions::Corner;
 use passthrough::PinnedDrag;
+use resize_transaction::NativeResizeResult;
 use resize_transaction::NativeResizeTransaction;
-pub use resize_transaction::{NativeResizeResult, ResizeOutcome};
 use rules::Policy;
 use settings::{CameraSeed, Settings};
 use sizes::Sizes;
-pub use view_actions::ViewDirection;
+use view_actions::ViewDirection;
 use view_actions::{ViewReturn, pixel_size};
-pub use visibility::SourceVisibility;
-pub use window_actions::ActivationCause;
+use visibility::SourceVisibility;
+use window_actions::ActivationCause;
 
 use driftwm_canvas::{
     DragGesture, OutputId, Point, Rect, ResizeEdges, ResizeGesture, Scene, Size, SnapOptions,
@@ -64,12 +64,14 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-pub const ABI_VERSION: u32 = 1;
-pub const SAVE_VERSION: u32 = 1;
+pub(crate) const ABI_VERSION: u32 = 1;
+pub(crate) const SAVE_VERSION: u32 = 1;
 pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+// driftwm_desktop.h defines DRIFTWM_DESKTOP_MAX_REQUEST_BYTES with this value for the shell's socket reader.
+const _: () = assert!(MAX_REQUEST_BYTES == 1_048_576);
 
 #[derive(Debug, thiserror::Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("{0}")]
     Invalid(&'static str),
     /// A refusal whose text names the offending input, such as an action string.
@@ -86,7 +88,7 @@ pub enum Error {
 /// Ephemeral observation; must never be reconstructed from a saved session.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SourceIdentity {
+pub(crate) struct SourceIdentity {
     pub pid: i32,
     pub birth_sec: i64,
     pub birth_usec: i32,
@@ -109,7 +111,7 @@ impl SourceIdentity {
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct BufferSize {
+pub(crate) struct BufferSize {
     pub width: u32,
     pub height: u32,
 }
@@ -125,7 +127,7 @@ impl BufferSize {
     }
 }
 #[derive(Clone, Debug, Serialize)]
-pub struct Source {
+pub(crate) struct Source {
     pub generation: u64,
     pub identity: SourceIdentity,
     pub buffer: BufferSize,
@@ -142,7 +144,7 @@ pub struct Source {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Metadata {
+pub(crate) struct Metadata {
     pub bundle_id: String,
     pub title: String,
 }
@@ -180,7 +182,7 @@ enum Gesture {
 }
 /// A request to the native adapter, never evidence that focus changed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct FocusEffect {
+pub(crate) struct FocusEffect {
     pub op: &'static str,
     pub effect_id: u64,
     pub window: WindowId,
@@ -236,7 +238,7 @@ pub struct Controller {
     home_returns: BTreeMap<OutputId, ViewReturn>,
     overview_returns: BTreeMap<OutputId, ViewReturn>,
     /// Upstream bookmarks: name to the canvas point under the usable center,
-    /// Y up. Saved. Unrelated to `Scene`'s camera-and-zoom bookmark map.
+    /// Y up. Saved.
     bookmarks: BTreeMap<String, [f64; 2]>,
     /// Each output's active-bookmark incumbent. Ephemeral, like upstream's.
     active_bookmarks: BTreeMap<OutputId, String>,
@@ -293,7 +295,7 @@ pub struct Controller {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Request {
+pub(crate) struct Request {
     pub version: u32,
     pub command: Command,
 }
@@ -301,13 +303,13 @@ pub struct Request {
 /// it: by application and title, never by a native identity.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PresentWindow {
+pub(crate) struct PresentWindow {
     pub bundle_id: String,
     pub title: String,
 }
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum DecorationAction {
+pub(crate) enum DecorationAction {
     Fit,
     Fullscreen,
     Fill,
@@ -318,13 +320,13 @@ pub enum DecorationAction {
 /// ownership; `screen_pos` is local to the canvas output named here.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SourceScreenPin {
+pub(crate) struct SourceScreenPin {
     pub output: OutputId,
     pub screen_pos: Point,
 }
 #[derive(Debug, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
-pub enum Command {
+pub(crate) enum Command {
     Snapshot {},
     /// A native window control, addressed to its exact source rather than
     /// whichever window currently has canvas focus. Native geometry stays in
@@ -825,7 +827,7 @@ pub enum Command {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Edges {
+pub(crate) enum Edges {
     Left,
     Right,
     Top,
@@ -872,64 +874,41 @@ impl From<Edges> for ResizeEdges {
 fn text_valid(s: &str, max: usize) -> bool {
     !s.contains('\0') && s.len() <= max
 }
-fn point_valid(p: Point) -> bool {
-    p.x.is_finite() && p.y.is_finite() && p.x.abs() <= 1e12 && p.y.abs() <= 1e12
-}
 fn valid_pointer(pointer: Option<Point>) -> Result<Option<Point>, Error> {
     match pointer {
-        Some(point) if !point_valid(point) => Err(Error::Invalid("invalid pointer")),
+        Some(point) if !point.valid() => Err(Error::Invalid("invalid pointer")),
         pointer => Ok(pointer),
     }
 }
-fn rect_valid(r: Rect) -> bool {
-    point_valid(r.origin)
-        && point_valid(Point::new(r.right(), r.bottom()))
-        && r.size.width.is_finite()
-        && r.size.height.is_finite()
-        && r.size.width > 0.0
-        && r.size.height > 0.0
-}
 impl Controller {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
-    pub fn scene(&self) -> &Scene {
-        &self.scene
-    }
     /// Every rejected command leaves in-memory scene, bindings, and gesture intact.
-    pub fn request(&mut self, bytes: &[u8]) -> Result<Value, Error> {
+    pub(crate) fn request(&mut self, bytes: &[u8]) -> Result<Value, Error> {
         if bytes.len() > MAX_REQUEST_BYTES {
             return Err(Error::Invalid("request exceeds 1 MiB"));
         }
         let request: Request = serde_json::from_slice(bytes)?;
         self.execute(request)
     }
-    pub fn execute(&mut self, request: Request) -> Result<Value, Error> {
+    pub(crate) fn execute(&mut self, request: Request) -> Result<Value, Error> {
         if request.version != ABI_VERSION {
             return Err(Error::Invalid("unsupported desktop schema"));
         }
         // Construction and successful mutations leave state settled. These
         // queries borrow it directly, without cloning or changing the state
         // that the native caller may already have decoded from a snapshot.
-        match &request.command {
-            Command::Snapshot {} => return self.pointer_snapshot(),
-            Command::GestureFingers {} => return Ok(self.gesture_fingers()),
-            Command::Hit { output, screen } => return self.pointer_hit(*output, *screen, None),
-            Command::Input {
-                output,
-                screen,
-                identity,
-            } => return self.pointer_hit(*output, *screen, Some(identity)),
-            Command::ResizeBorder { output, screen } => {
-                return Ok(json!({"border":self.resize_border(*output, *screen)}));
-            }
-            Command::TickNavigation { timestamp_ns } if self.navigation_clock_only() => {
-                // No timed settlement or scene mutation is possible here.
-                // Validate the clock before its sole write, without cloning
-                // every window or revalidating an unchanged settled scene.
-                return self.tick_navigation_clock(*timestamp_ns);
-            }
-            _ => {}
+        if let Some(reply) = self.read_only(&request.command) {
+            return reply;
+        }
+        if let Command::TickNavigation { timestamp_ns } = &request.command
+            && self.navigation_clock_only()
+        {
+            // No timed settlement or scene mutation is possible here.
+            // Validate the clock before its sole write, without cloning
+            // every window or revalidating an unchanged settled scene.
+            return self.tick_navigation_clock(*timestamp_ns);
         }
         let mut next = self.clone();
         let carries = fullscreen::carries(&request.command);
@@ -942,6 +921,24 @@ impl Controller {
         next.settle_state()?;
         *self = next;
         Ok(result)
+    }
+    /// The reply to a command that only reads, or `None` for one that may
+    /// change the controller.
+    fn read_only(&self, command: &Command) -> Option<Result<Value, Error>> {
+        Some(match command {
+            Command::Snapshot {} => self.pointer_snapshot(),
+            Command::GestureFingers {} => Ok(self.gesture_fingers()),
+            Command::Hit { output, screen } => self.pointer_hit(*output, *screen, None),
+            Command::Input {
+                output,
+                screen,
+                identity,
+            } => self.pointer_hit(*output, *screen, Some(identity)),
+            Command::ResizeBorder { output, screen } => {
+                Ok(json!({"border":self.resize_border(*output, *screen)}))
+            }
+            _ => return None,
+        })
     }
     fn settle_state(&mut self) -> Result<(), Error> {
         // Fullscreen restoration reads close marks. Prune them first so an
@@ -1007,8 +1004,17 @@ impl Controller {
             _ => {}
         }
         match command {
-            Command::Snapshot {} => return self.pointer_snapshot(),
-            Command::GestureFingers {} => return Ok(self.gesture_fingers()),
+            // `execute` answers these from the controller itself, before it
+            // clones one to mutate.
+            Command::Snapshot {}
+            | Command::GestureFingers {}
+            | Command::Hit { .. }
+            | Command::Input { .. }
+            | Command::ResizeBorder { .. } => {
+                return Err(Error::Invalid(
+                    "a read-only command reached the mutating path",
+                ));
+            }
             Command::NativeDecoration {
                 window,
                 output,
@@ -1023,9 +1029,6 @@ impl Controller {
                 start_screen,
                 group,
             } => return self.begin_native_resize(window, output, edges, start_screen, group),
-            Command::ResizeBorder { output, screen } => {
-                return Ok(json!({"border":self.resize_border(output, screen)}));
-            }
             Command::NativeResizeTo {
                 transaction,
                 screen,
@@ -1099,7 +1102,7 @@ impl Controller {
                 return Ok(json!({"dirty": false}));
             }
             Command::PanViewport { output, direction } => {
-                return self.pan_viewport(output, direction);
+                return self.pan_viewport(output, &direction.into());
             }
             Command::HomeToggle { output } => return self.home_toggle(output),
             Command::ZoomIn { output } => return self.zoom_in(output),
@@ -1314,7 +1317,7 @@ impl Controller {
             } => {
                 identity.validate()?;
                 buffer.validate()?;
-                if !rect_valid(source_rect)
+                if !source_rect.valid()
                     || !text_valid(&bundle_id, 1024)
                     || !text_valid(&title, 16384)
                 {
@@ -1381,12 +1384,7 @@ impl Controller {
                         Some(Arrival::Place { rect, .. } | Arrival::Pin { rect, .. }) => rect,
                         _ => world_rect.unwrap_or(source_rect),
                     };
-                    self.scene.add_window(Window {
-                        id,
-                        world_rect,
-                        native: None,
-                        title: title.clone(),
-                    })?;
+                    self.scene.add_window(Window { id, world_rect })?;
                     id
                 };
                 self.metadata.insert(id, Metadata { bundle_id, title });
@@ -1628,18 +1626,7 @@ impl Controller {
                 generation,
                 success,
             } => {
-                let expected = FocusEffect {
-                    op: "focus_native_window",
-                    effect_id,
-                    window,
-                    identity,
-                    generation,
-                };
-                if self.focus.pending_effect.as_ref() != Some(&expected) {
-                    return Err(Error::Invalid("stale or superseded focus result"));
-                }
-                self.check_generation(window, &expected.identity, generation)?;
-                self.focus.pending_effect = None;
+                let expected = self.take_focus_result(effect_id, window, identity, generation)?;
                 self.focus.last_result = Some(json!({"effect": expected, "success": success}));
                 if success {
                     self.focus.observed_native = Some(expected);
@@ -1659,18 +1646,7 @@ impl Controller {
                 identity,
                 generation,
             } => {
-                let expected = FocusEffect {
-                    op: "focus_native_window",
-                    effect_id,
-                    window,
-                    identity,
-                    generation,
-                };
-                if self.focus.pending_effect.as_ref() != Some(&expected) {
-                    return Err(Error::Invalid("stale or superseded focus result"));
-                }
-                self.check_generation(window, &expected.identity, generation)?;
-                self.focus.pending_effect = None;
+                let expected = self.take_focus_result(effect_id, window, identity, generation)?;
                 self.focus.last_result =
                     Some(json!({"effect": expected, "success": false, "logical": true}));
                 // Upstream focus_changed: the focused window enters the history,
@@ -1702,12 +1678,6 @@ impl Controller {
                     generation,
                 });
             }
-            Command::Hit { output, screen } => return self.pointer_hit(output, screen, None),
-            Command::Input {
-                output,
-                screen,
-                identity,
-            } => return self.pointer_hit(output, screen, Some(&identity)),
             Command::BeginDrag {
                 window,
                 output,
@@ -1895,7 +1865,7 @@ impl Controller {
         screen_delta: Point,
         pointer: Option<Point>,
     ) -> Result<(), Error> {
-        if !point_valid(screen_delta) || pointer.is_some_and(|p| !point_valid(p)) {
+        if !screen_delta.valid() || pointer.is_some_and(|p| !p.valid()) {
             return Err(Error::Invalid("invalid gesture delta"));
         }
         match self.gesture.as_mut() {
@@ -1920,6 +1890,29 @@ impl Controller {
             self.arm_drag_edge_pan(output, pointer - origin)?;
         }
         Ok(())
+    }
+    /// The pending focus effect a result answers, taken: the result must name
+    /// that very request, and a window whose binding is still the one asked.
+    fn take_focus_result(
+        &mut self,
+        effect_id: u64,
+        window: WindowId,
+        identity: SourceIdentity,
+        generation: u64,
+    ) -> Result<FocusEffect, Error> {
+        let expected = FocusEffect {
+            op: "focus_native_window",
+            effect_id,
+            window,
+            identity,
+            generation,
+        };
+        if self.focus.pending_effect.as_ref() != Some(&expected) {
+            return Err(Error::Invalid("stale or superseded focus result"));
+        }
+        self.check_generation(window, &expected.identity, generation)?;
+        self.focus.pending_effect = None;
+        Ok(expected)
     }
     fn check_generation(
         &self,
@@ -2086,7 +2079,7 @@ impl Controller {
         screen: Point,
         expected: Option<&SourceIdentity>,
     ) -> Result<Value, Error> {
-        if !point_valid(screen) {
+        if !screen.valid() {
             return Err(Error::Invalid("invalid screen point"));
         }
         if self.scene.output(output).is_none() {
@@ -2161,7 +2154,7 @@ impl Controller {
             navigation[key] = value;
         }
         Ok(
-            json!({"evidence": "logical_controller_only", "capabilities": ["normal_window_navigation", "native_resize_controller_contract"], "render": self.render_block(), "native_resize": self.native_resize, "lifecycle": self.lifecycle, "lifecycle_events": self.lifecycle_events(), "navigation": navigation, "bookmarks": self.bookmarks, "keyboard_layout": self.layout, "trackpad": self.trackpad_snapshot(), "outputs": self.scene.outputs(), "windows": windows, "pass_keys": self.pass_keys(), "focus": {"intent": self.scene.focused(), "observed_native": self.focus.observed_native, "pending_effect": self.focus.pending_effect, "last_result": self.focus.last_result, "history": self.scene.stage().focus_history(), "cycle": self.scene.stage().cycle_state(), "release_pending": self.focus.release_pending}, "placements": placements}),
+            json!({"evidence": "logical_controller_only", "render": self.render_block(), "native_resize": self.native_resize, "lifecycle": self.lifecycle, "lifecycle_events": self.lifecycle_events(), "navigation": navigation, "bookmarks": self.bookmarks, "keyboard_layout": self.layout, "trackpad": self.trackpad_snapshot(), "outputs": self.scene.outputs(), "windows": windows, "pass_keys": self.pass_keys(), "focus": {"intent": self.scene.focused(), "observed_native": self.focus.observed_native, "pending_effect": self.focus.pending_effect, "last_result": self.focus.last_result, "history": self.scene.stage().focus_history(), "cycle": self.scene.stage().cycle_state(), "release_pending": self.focus.release_pending}, "placements": placements}),
         )
     }
 }

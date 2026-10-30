@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Original implementation. Contract: dwclient.h. Protocol: protocol2.h.
+// Original implementation. Contract: dwclient.h. Protocol: protocol.h.
 #include "dwclient.h"
 #include <errno.h>
 #include <fcntl.h>

@@ -44,7 +44,7 @@ import sys
 
 root, evidence = map(pathlib.Path, sys.argv[1:])
 manifest = json.loads((root / 'target/app/BUILD.json').read_text())
-if manifest.get('schema_version') != 2 or manifest.get('executable') != 'Infinify.app/Contents/MacOS/Infinify':
+if manifest.get('schema_version') != 1 or manifest.get('executable') != 'Infinify.app/Contents/MacOS/Infinify':
     raise SystemExit('FAIL: packaged executable manifest schema/path is not current')
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -55,14 +55,15 @@ lineage = {key: manifest[key] for key in ('schema_version', 'built_at_utc', 'git
 lineage['actual_executable_sha256'] = actual
 lineage['harness_sha256'] = {
     name: digest(root / name) for name in (
-        'tests/e2e/native-drag-drop-driver.py', 'tests/e2e/native-drag-drop.sh',
+        'tests/e2e/native-drag-drop-driver.py', 'tests/e2e/png_pixels.py', 'tests/e2e/native-drag-drop.sh',
         'native/fixture/native-drag-drop-host.m', 'target/privileged/payload-arm64.dylib')
 }
 (evidence / 'build-evidence.json').write_text(json.dumps(lineage, indent=2) + '\n')
 print('Candidate:', lineage['git_commit'], actual)
 print('Driver SHA256:', lineage['harness_sha256']['tests/e2e/native-drag-drop-driver.py'])
 PY
-mkdir -p -m 700 "$evidence/home" "$evidence/source/runtime" "$evidence/destination/runtime"
+mkdir -p "$evidence/home" "$evidence/source/runtime" "$evidence/destination/runtime"
+chmod 700 "$evidence/home" "$evidence/source" "$evidence/source/runtime" "$evidence/destination" "$evidence/destination/runtime"
 socket=$evidence/infinify.sock
 state=$evidence/scene.json
 config=$evidence/config.toml
@@ -76,7 +77,8 @@ for role in source destination; do
   nonce=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')
   (umask 077; printf '%s\n' "$nonce" > "$evidence/$role/nonce")
   bundle=$evidence/$role/DragDropHost.app
-  mkdir -p -m 700 "$bundle/Contents/MacOS"
+  mkdir -p "$bundle/Contents/MacOS"
+  chmod 700 "$bundle" "$bundle/Contents" "$bundle/Contents/MacOS"
   cat > "$bundle/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -161,7 +163,7 @@ driver_mode baseline
 # AppKit callbacks and presenter checks, with no direct destination invocation.
 fixture_views=1
 if [ -n "$replica_destination" ]; then fixture_views=2; fi
-INFINIFY_DEBUG=1 INFINIFY_DEBUG_BENCH=1 INFINIFY_DEBUG_NATIVE_BENCH=1 INFINIFY_DEBUG_NATIVE_VIEWS="$fixture_views" CFFIXED_USER_HOME="$evidence/home" "$app" \
+INFINIFY_DEBUG=1 INFINIFY_DEBUG_TEST_PANEL=1 INFINIFY_DEBUG_NATIVE_PANEL=1 INFINIFY_DEBUG_NATIVE_VIEWS="$fixture_views" CFFIXED_USER_HOME="$evidence/home" "$app" \
   --windowed 1100x700 --state "$state" --config "$config" --socket "$socket" \
   --no-hover-forwarding --debug-pointer --only-pid "$source_pid,$destination_pid" \
   --native-helper "$evidence/source/runtime" "$evidence/source/nonce" \

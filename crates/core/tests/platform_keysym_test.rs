@@ -6,7 +6,9 @@
 //
 // The expected values pin libxkbcommon 1.7.0's rules as PORT.md records them.
 // They are not a comparison against the C library.
-use driftwm_core::config::{Action, Config, ModKey, parse_key_combo};
+use driftwm_core::config::{
+    Action, Config, KeyCombo, ModKey, Modifiers, PassKeys, parse_key_combo,
+};
 use driftwm_core::platform::input::keyboard::{Keysym, ModifiersState, keysyms};
 
 fn sym(name: &str) -> u32 {
@@ -110,35 +112,26 @@ fn pass_keys_written_in_upper_case_matches_the_pressed_key() {
     .unwrap();
     let rule = config.resolve_window_rules("game", "").unwrap();
 
-    let logo = ModifiersState {
-        logo: true,
-        ..Default::default()
-    };
-    let ctrl = ModifiersState {
-        ctrl: true,
-        ..Default::default()
-    };
-    assert!(
-        rule.pass_keys
-            .allows_raw(&logo, Keysym::from(keysyms::KEY_q))
-    );
-    // A shifted press arrives as `Q`; with shift held it is another combo.
-    assert!(!rule.pass_keys.allows_raw(
-        &ModifiersState {
-            logo: true,
-            shift: true,
-            ..Default::default()
-        },
-        Keysym::from(keysyms::KEY_Q)
-    ));
-    assert!(
-        rule.pass_keys
-            .allows_raw(&ctrl, Keysym::from(keysyms::KEY_XF86AudioMute))
-    );
-    assert!(
-        !rule
-            .pass_keys
-            .allows_raw(&ctrl, Keysym::from(keysyms::KEY_q))
+    // `Q` and `XF86_AudioMute` resolve to the table's `q` and `XF86AudioMute`
+    // keysyms, with `mod` read as the default Super key.
+    assert_eq!(
+        rule.pass_keys,
+        PassKeys::Only(vec![
+            KeyCombo {
+                modifiers: Modifiers {
+                    logo: true,
+                    ..Modifiers::EMPTY
+                },
+                sym: Keysym::from(keysyms::KEY_q),
+            },
+            KeyCombo {
+                modifiers: Modifiers {
+                    ctrl: true,
+                    ..Modifiers::EMPTY
+                },
+                sym: Keysym::from(keysyms::KEY_XF86AudioMute),
+            },
+        ])
     );
 }
 

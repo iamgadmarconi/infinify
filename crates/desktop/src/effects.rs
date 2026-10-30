@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
+// Adapted from https://github.com/malbiruk/driftwm @
+// 352333a8fa1b22171492d4b71a54102045c9a19d:
 // src/state/errors.rs (ErrorSource and its order, summarize_config_errors, and
 // set_error's no-op for an unchanged message), src/state/reload.rs
 // (reload_config: which outcome of a load sets the config source and which

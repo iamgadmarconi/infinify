@@ -3,12 +3,9 @@
 DriftWM's per-window policy: `[[window_rules]]` matched when a window maps,
 widgets fixed to the canvas, windows pinned to an output's screen, and the
 bindings a window's rule takes from the canvas (`pass_keys`, `pass_mouse`).
-All of it is additive to ABI 1: no existing command or reply changes shape.
-The shell sends one new command, `outputs_settled`, once it has registered its
-displays. A scene with no rule, no widget and no pin behaves and saves exactly
-as before.
+The shell sends `outputs_settled` once it has registered its displays.
 
-The rules are adapted from malbiruk/driftwm at
+The rules are adapted from <https://github.com/malbiruk/driftwm> at
 `352333a8fa1b22171492d4b71a54102045c9a19d` (GPL-3.0-or-later):
 `src/handlers/compositor.rs` (a new toplevel's first sized commit),
 `src/state/pinned.rs`, `src/state/mod.rs` (`is_canvas_window`),
@@ -28,7 +25,7 @@ and `src/state/pinned.rs` (`send_pinned_to_output`). The matcher, the merge and 
 they are driftwm-core's `Config::resolve_window_rules`, `AppliedWindowRule`
 and `effective_opacity`, upstream's own code. The code is in
 [`src/rules.rs`](src/rules.rs); the user contract is upstream's
-`docs/window-rules.md`.
+[`docs/window-rules.md`](https://github.com/malbiruk/driftwm/blob/df3de27b26c7998e8a460cffd8a4925cbed3a322/docs/window-rules.md).
 
 The pass rules and the drag of a pinned window are in
 [`src/passthrough.rs`](src/passthrough.rs), adapted from the same commit:
@@ -127,8 +124,8 @@ So it follows that gate:
 
 - **Without `native_resize_capability`** nothing is asked. The window keeps
   its own size, a `position` centers that size, and `rule.not_applied` names
-  `size`. This is what a demo or a probe does; every normal run sends the
-  capability.
+  `size`. This is the contract of a caller that has not sent the capability
+  (only the C-ABI tests do; the shell always sends it).
 - **With it**, upstream's order holds. Upstream configures the rule's size at
   the window's first commit and places the window on the commit after it,
   for the size it then has (`src/handlers/compositor.rs`): step 2, 3 or 4
@@ -477,8 +474,8 @@ decides whether the window may claim at all (below).
 - **A fullscreen window claims with no gate at all.** Upstream's
   `fullscreen_claims` asks its `pass_mouse` at the button site, the notch
   site and the scroll site alike, ahead of every pick-mode test ("a pinned
-  window's button claims and a fullscreen window's claims still apply",
-  `docs/window-rules.md`). `hit` reports it on its own output, where nothing
+  window's *button* claims and a fullscreen window's claims still apply",
+  upstream's [`docs/window-rules.md`](https://github.com/malbiruk/driftwm/blob/df3de27b26c7998e8a460cffd8a4925cbed3a322/docs/window-rules.md)). `hit` reports it on its own output, where nothing
   else is drawn, and never as a pick target: its output is parked at zoom 1
   and it is no canvas window. The lookup holds that whatever its caller says:
   `pick` is ignored for a fullscreen window, a press, a scroll and a notch
@@ -623,7 +620,7 @@ screen space.
 Read, recorded and ignored. Upstream orders layer-shell surfaces by it (the
 panels and overlays of one wlr-layer, and the layers a rule puts on the
 canvas) and documents it as "Ignored for regular windows"
-(`docs/config.md`). A Mac has no layer surfaces, and every window here is a
+(upstream's [`docs/config.md`](https://github.com/malbiruk/driftwm/blob/df3de27b26c7998e8a460cffd8a4925cbed3a322/docs/config.md)). A Mac has no layer surfaces, and every window here is a
 regular one, so this port ignores it as upstream does: the window's `rule`
 lists the value, `rule.not_applied` names `layer_order`, and `placements`,
 `hit`, `input` and `focus-center` are in stacking order within each bucket
@@ -641,9 +638,7 @@ The shell answers every screen change by removing all its outputs and
 registering the current ones again. `outputs_settled` after the last
 `register_output` is the first moment the controller can tell a display that
 is gone from one that came straight back. Without it a pin whose display is
-gone stays undrawn until a discovery pass ends. Until 2026-10-10 a normal run
-did the same at Return to desktop followed by Open canvas; its canvas now
-stays open until quit, and only the fixture runs have that button. A wake, an
+gone stays undrawn until a discovery pass ends. A wake, an
 unlock or a change of Space is no screen change: while the displays are the
 ones its panels were made for the shell puts the panels back in front and
 sends nothing.
@@ -726,9 +721,9 @@ rule takes, sorted by output and position. `is_widget` is filled.
   position it was moved to by IPC is gone.
 - **No rule is saved**, and no IPC opacity: every window maps again and
   resolves its rules against the config of that launch.
-- **A pin is saved with its slot**, in the additive field `pins`
-  (`{"<window>":{"output":ID,"screen_pos":[x,y]}}`), omitted while empty, so
-  an older build still reads a save that has none. The slot's saved frame is
+- **A pin is saved with its slot**, in the field `pins`
+  (`{"<window>":{"output":ID,"screen_pos":[x,y]}}`), which is always written
+  and empty while nothing is pinned. The slot's saved frame is
   the canvas frame the pin showed. At the next launch a window that takes its
   slot back is pinned where it was. A pin read from the file waits for its
   own output to register, whatever order outputs arrive in, and is clamped
@@ -787,7 +782,8 @@ rule takes, sorted by output and position. `is_widget` is filled.
 - **`layer_order` is ignored, which is upstream's own rule for a window.**
   It is listed in `not_applied` because the field does nothing here, not
   because something is missing: upstream applies it to layer-shell surfaces
-  only (`docs/config.md`: "Ignored for regular windows"), and there are none
+  only (upstream's [`docs/config.md`](https://github.com/malbiruk/driftwm/blob/df3de27b26c7998e8a460cffd8a4925cbed3a322/docs/config.md): "Ignored for regular
+  windows"), and there are none
   on a Mac ([`layer_order`](#layer_order)).
 - **`pass_keys` follows the keyboard, not the logical focus alone.** Upstream's
   focused window is the one its seat delivers keys to. Here the canvas's
@@ -846,10 +842,8 @@ rule takes, sorted by output and position. `is_widget` is filled.
 - **A pinned drag's pointer is held in arithmetic, not on the screen.**
   Upstream confines the cursor itself to an output, and that is all that
   bounds its pinned move. macOS owns the cursor here: it goes out of a
-  `--windowed` panel (and, until 2026-10-10, into the toolbar strip the
-  shell kept above every output; a display's output is now the whole
-  display), and the controller takes it as held at the edge of the drag's
-  output. After an overshoot the cursor has to travel back to that edge
+  `--windowed` panel, and the controller takes it as held at the edge of the
+  drag's output. After an overshoot the cursor has to travel back to that edge
   before the frame leaves it, where upstream's moves
   at once: upstream clamps each relative motion, so its cursor never
   accumulates an overshoot, and a report here is an absolute position. A move
@@ -983,9 +977,8 @@ corners, with the pointer in the edge-pan zone against a canvas window's
 control, saved and loaded, and unpinned; across to the other output and
 back; with the pointer on no output, above the output and past its far
 corner, and in the 64 points above an output that starts that far down the
-screen (every output did while the shell kept its toolbar strip; a
-`--windowed` panel's still starts inside its display), where the frame stays
-drawn and hit; against every other gesture, a
+screen (a `--windowed` panel's still starts inside its display), where the
+frame stays drawn and hit; against every other gesture, a
 trackpad move's serial included; by the move gesture, to the same numbers,
 raised and focused, its pointer held at the gesture output's last column,
 as a cluster move, with the pointer's own drag taking over, and over a
@@ -1001,8 +994,7 @@ Nothing in `passthrough_flow.rs` shows that a hot key was unregistered, that a
 key or a press reached an application, or that a pinned window followed a
 real pointer: the shell's use of `pass_keys`, `passable`, `passed` and the
 accepted `begin_drag` is its own to verify, and
-[what was run once the two were built together](#with-the-shell-pass-rules-and-the-pinned-drag-2026-10-10)
-reached none of it. Nothing here
+the run made once the two were built together reached none of it. Nothing here
 shows that a native window is drawn at an opacity, blurred, kept above
 another, or receives a click; that a real application's bundle identifier or
 title matches a rule; or what a real display reconfiguration does. The order
@@ -1010,7 +1002,7 @@ the tests replay (every output removed, the current ones registered, then
 `outputs_settled`) is the one `native/desktop/main.m` sends from
 `screensChanged`, `cleanup` and `openPanels`, read there and not observed with
 a second display. The shell's use of `opacity`, `widget` and `pinned` is its
-own to verify; [what was run for it](#with-the-renderer-2026-10-10) is below.
+own to verify.
 Upstream's behaviour was read from the files named above, not run.
 
 One more scenario in the same file crosses this contract with
@@ -1018,254 +1010,3 @@ One more scenario in the same file crosses this contract with
 and a canvas window described for one frame, with the layer keys, the pinned
 `screen_rect` against the camera, one opacity in `opacity` and
 `decoration.opacity`, and what a `Window` and an `All` capture take of them.
-
-### Live run, 2026-10-10
-
-The built app (`scripts/build-app.sh`, ad-hoc signed, macOS 27.2, Apple
-Silicon) was launched once as `--windowed 1100x700` on a private scene, config
-and socket and driven through `Infinify msg` for six seconds. It repeats, on
-the build with the review fixes, a first run of 2026-10-09. It had no Screen
-Recording access, so it managed no window, sent no `adoption_complete`, and
-every window was a placeholder. Nothing from the run is saved as evidence.
-
-The scene was written by a throwaway program driving this controller in
-process: three synthetic sources and two outputs, `windowed` and `away`. The
-third window was pinned on `away` with a `Pin` write, at the output-local point
-(100, 100). The second was moved 60 right of and 10 above `windowed`'s view
-center, pinned with `toggle-pin-to-screen`, unpinned, and pinned again by a
-`Pin` write before the save. That program, not the app, is where a live window
-was pinned: `State.pinned` read `[60, 10]` before and after `pan-viewport
-right`, the unpinned frame's center read `2110 10` against `2010 10` before the
-pin (the camera had moved 100), `Pin` writes of `true` and `false` answered
-themselves, and `Opacity` read 1, took 0.5, read 0.5 and refused 1.5.
-
-Observed in the app, over the socket:
-
-- Both pins loaded from `pins`. The app registered `windowed` and never
-  `away`, and its first `state` listed window 3 under `pinned` on `windowed`
-  at `[-170, 28]`, 560x380, which is the point (100, 100) on a 1100x636
-  output (the window less the 64-point strip that build kept; the whole
-  1100x700 since 2026-10-10). No discovery pass ran, so it was the shell's
-  `outputs_settled` that moved it. Window 2 was listed on `windowed` at
-  `[60, 10]`, 900x600, and window 1 under `windows`. The file saved at exit
-  held window 3's pin on output 1 at `[100, 100]`.
-- Neither entry changed with `pan-viewport right`, nor with a
-  `toggle-pin-to-screen` or a `move-to-bookmark` while window 2 held the
-  focus. A `Move` read of each, the canvas frame re-anchored after each
-  command, followed the camera: `610 -308` and `380 -290` before the pan,
-  `710 -308` and `480 -290` after it. The canvas slot read `520 -360` both
-  times.
-- `Move` and `Resize` writes on window 2 answered the two refusals quoted
-  under [IPC](#ipc); a `Resize` read answered `900 600`.
-- `Pin`, read or write, on each placeholder: `stand-ins can't be pinned`.
-  `Opacity`, read or write: `no window with id N`. `toggle-pin-to-screen`
-  with a placeholder focused, pinned or not: Ok, nothing changed.
-- Two rules in the config matched placeholder titles, one with `widget`, one
-  with `pinned_to_screen` and a `position`. Nothing mapped, so nothing was
-  resolved: `is_widget` stayed false, and window 3 stayed where its saved pin
-  put it, not at the rule's position.
-- `move-to-bookmark` centered a focused placeholder on the bookmark (`Move`
-  read `300 200`), and did nothing for an unset name or with the pinned
-  placeholder focused.
-- `decoration = "fancy"` gave upstream's warning at launch; a rule key the
-  grammar lacks gave upstream's TOML `unknown field` error on reload, and the
-  app went on answering.
-- SIGTERM: exit status 0, socket removed.
-
-Not observed in the app: a rule resolved at `attach`, a widget, a pin or unpin
-of a live window, an `Opacity` write, the close of any window (so none of the
-focus-follow rules), a pinned window adopted at launch or turned into a
-stand-in, a screen change or Return to desktop with a pin in place, a zoom
-(the first run read the pinned entry unchanged at zoom 0.5), a pointer press
-(so neither status note, nor a click forwarded to a widget), `hit` and `input`
-on any of them, and everything drawn: the order of the tiles and their opacity
-were not looked at.
-
-### With the renderer, 2026-10-10
-
-The same day this contract and [RENDER.md](RENDER.md) became one build, and
-what a window's `widget`, `pinned` and `opacity` do to the picture was run
-twice. Nothing from either is saved as evidence; the numbers are in
-[native/desktop/README.md](../../native/desktop/README.md#what-was-run-for-rules-and-rendering-together).
-
-- A throwaway tool outside the repository linked the shell's renderer and the
-  compositor against this controller, gave it a ruled widget, a rule-pinned
-  window and an ordinary window with synthetic sources on an output whose
-  origin is not the global origin, and read each frame back from the output's
-  compositor layer. The pinned window kept its output-local rectangle and its
-  own size at zoom 0.5, after a pan and at zoom 1, above the canvas window;
-  the widget showed only where the canvas window did not cover it; an
-  `Opacity` write of 0.5 blended the canvas window and the pinned one over
-  what lay beneath; the pinned window's detached slot was an opaque stand-in
-  at the same rectangle.
-- The built app, `--windowed 1100x700` on a private scene, config and socket
-  for one second, with no Screen Recording access, read a scene whose `pins`
-  held one placeholder at the output-local point (500, 200), pinned by a
-  throwaway program driving this controller. `state` listed it under `pinned`
-  at `[230, -72]`, 560x380, before and after `pan-viewport right` and at zoom
-  0.5, while its `Move` read went from `780 -390` to `880 -390` to `830 -272`.
-  None of the three viewport screenshots held it, a `window` screenshot held
-  it alone, and `all` framed the other two placeholders. `Pin` and `Opacity`
-  answered `stand-ins can't be pinned` and `no window with id N`, `Move` and
-  `Resize` writes the two refusals above, and the file saved at exit held the
-  pin unchanged.
-
-Still not observed in the app: its own panel on a display, so a pinned
-placeholder drawn over a canvas one there; a rule resolved at `attach`, a
-widget, a live window pinned or given an opacity; a pointer press.
-
-### With window navigation, motion and gestures, 2026-10-10
-
-The same day this contract was joined to the controller's later work: window
-navigation and `activate`, the one focus history, hot corners, `send-to-output`,
-the event stream, camera motion and trackpad gestures.
-[Navigation, activation, gestures and outputs](#navigation-activation-gestures-and-outputs)
-is what the join decided, and four scenarios at the end of `tests/rules_flow.rs`
-are its coverage. The earlier scenarios were restated for the one history:
-where they read a second, logical history they now answer the pending focus
-request `focus_logical`, as a shell that performs no native focus does.
-
-The built app was launched three times on a private scene, config and socket
-([the numbers](../../native/desktop/README.md#what-was-run-with-every-other-milestone-built-in)),
-again with no Screen Recording access and placeholders only. Of this contract
-it observed: a placeholder pinned in the scene file under `State.pinned`
-through a pan and a zoom, and in every line of a `subscribe` stream; the same
-`Pin`, `Opacity`, `Move` and `Resize` refusals; `toggle-pin-to-screen` leaving
-a focused placeholder alone and `move-to-bookmark` moving one; and, with the
-pinned placeholder focused, `center-nearest` and `center-window` choosing a
-canvas placeholder. The table's other rows were not observed in the app: no
-window was live, no widget existed, and no key, pointer press, gesture, hot
-corner or second display was involved.
-
-### With the shell: pass rules and the pinned drag, 2026-10-10
-
-The controller of [Pass rules](#pass-rules) and
-[Dragging a pinned window](#dragging-a-pinned-window) and the shell's use of
-it were written apart and built together the same day. The boundary was
-checked by reading both sides:
-
-| The shell | The controller |
-| --- | --- |
-| reads `snapshot.pass_keys` in its one redraw (`-[Desktop render]`), which every applied reply and every focus report ends in, and hands it to its hot keys | emits `null`, `true` or a list of `combo` strings |
-| keeps `passable` from each entry of `bindings.keys`, absent meaning false, and never unregisters the exit chord or a `quit` whatever it says | emits `passable` on every key and media-key entry |
-| matches a passed combo to a hot key by the text of `bindings.keys[].combo` | spells a pass list's combo with the function that spells `combo` |
-| sends `mouse_binding` with `window` for a press and for a scroll over a hit the controller reported, never for a placeholder's hit, which it builds itself; reads only `binding` | takes an optional `window`; a claim answers `{"binding":null,"passed":true}` |
-| sends `begin_drag` for a move binding on a pinned hit, with `group` a real boolean, then the `gesture_to` (with `pointer`) and `end_gesture` of any drag | installs the pinned drag; ignores `group` |
-
-That reading found no defect at the boundary and changed neither side. A
-review the same day found one: the shell reports a drag's pointer wherever
-macOS has it, the toolbar strip above its output and the space around a
-windowed panel included, where upstream's cursor never leaves an output, and
-a pinned frame could be let go wholly off its output, undrawn and out of the
-pointer's reach. The controller now holds such a pointer at the edge of the
-drag's output ([Dragging a pinned window](#dragging-a-pinned-window)); the
-shell is unchanged. What
-the shell does with each is in
-[native/desktop/README.md](../../native/desktop/README.md#passing-keys-and-presses-to-an-application).
-Two things the shell does not do: it reads no media key entry, so their
-`passable` is unused; and its press path sends no `focus` or `activate`
-before `begin_drag`, so on that day's build a pinned window dragged by a
-bound press was not raised or focused (`begin_drag` has raised and focused
-by itself since). On that day's build it asked no `wheel_up` or
-`wheel_down` lookup either, and the controller ranked windows by
-`layer_order`; [the merge below](#merged-with-the-pointer-policy-window-sizing-and-effects-2026-10-10)
-changed both.
-
-The eight test modules named above for this contract's commands passed on that
-build, and again after the review fixes of the same day, which added two
-scenarios to the first (`passthrough_flow` 16, `rules_flow` 21, `config_flow`
-12, `gesture_flow` 21, `navigation_actions_flow` 12, `lifecycle_flow` 25,
-`ipc_flow` 8, `controller_flow` 4). Those fixes were the controller's alone:
-the pointer of a pinned drag held on an output, a pinned slot keeping its
-drag through its adoption, and a pinned drag ending when a discovery pass
-keeps its slot as a stand-in.
-
-The built app was launched once, `--windowed 1100x700`, on a private scene,
-config and socket, with no Screen Recording access and so with placeholders
-only ([the numbers](../../native/desktop/README.md#what-was-run-for-the-pass-rules-and-the-pinned-drag)),
-and once more, for three seconds and to the same observations, on the build
-with the review fixes.
-Of this contract it observed: a config with `pass_keys = true`, `pass_mouse =
-["alt+left"]` and `layer_order` in one rule, and a `pass_keys` list,
-`pass_mouse = true` and a negative `layer_order` in another, loading and
-reloading with no warning; upstream's `config: pass_keys invalid key combo …`
-and `config: pass_mouse invalid mouse combo …` warnings for a combo the grammar
-lacks, with the app answering afterwards; and a placeholder pinned in the scene
-file listed under `State.pinned` before and after a pan. A throwaway program
-read the same scene and config through this controller in process:
-`snapshot.pass_keys` was `null` with each placeholder focused, and
-`mouse_binding` naming each as `window` answered the binding, not `passed`,
-which is the rule of [`pass_keys`](#pass_keys) and [`pass_mouse`](#pass_mouse)
-for a window without a client.
-
-Not observed anywhere but in `tests/passthrough_flow.rs`: a non-null
-`pass_keys`, a `passed` reply, a pinned drag. Not observed
-at all: a hot key leaving or returning, a key, press or scroll reaching an
-application, a pointer moving a pinned window. The windowed launch registers
-no hot keys, the IPC surface has no verb for a drag or a binding lookup, and
-no window had a client.
-
-### Merged with the pointer policy, window sizing and effects, 2026-10-10
-
-The pass rules and the pinned drag were written on a tree that had neither
-pick mode, hover focus, the sizing actions nor the lifecycle events. Joined to
-them the same day, this is what the join decided:
-
-| Where the two met | Decided |
-| --- | --- |
-| `mouse_binding` has two optional arguments, `window` and `pick` | one lookup: a pick target claims nothing, a screen-pinned window keeps its button claims below `[zoom] interact_min` and loses its scroll and notch claims there ([`pass_mouse`](#pass_mouse)). Upstream's gate, which the pass rules could not have without a pick mode |
-| `install_drag` holds the widget refusal, the pinned drag, the owed-size guard and pick mode's drag-anywhere | in that order of asking: a widget is refused, a window owed its size is refused, a pinned window is then dragged in screen space, at any zoom ([Dragging a pinned window](#dragging-a-pinned-window)) |
-| hover focus moves the focus without a raise, by a request that may be answered late or never | `pass_keys` already asks who holds the keyboard, so nothing changed in the rule: scenarios now show it through a hover's answer, echo, failure, withdrawal and expiry ([`pass_keys`](#pass_keys)) |
-| the shell applies replies in one place, which now also consumes a size transaction and carries the hover | the comparison of `pass_keys` stays in the one redraw every applied reply ends in, a hover's and a pointer command's included. No poll |
-| a close under a pinned drag, with lifecycle events | one `close` or `close_to_standin`, as for any window |
-
-Three things were corrected in the same pass, each from upstream's source:
-
-- **`layer_order` orders nothing again.** The first build ranked the windows
-  of one bucket by it. Upstream applies it to layer-shell surfaces only and
-  documents it as ignored for regular windows, so the ranking was removed:
-  the field is read, shown and named in `not_applied`
-  ([`layer_order`](#layer_order)).
-- **The shell asks the wheel notch.** For each event of a discrete wheel it
-  now looks `wheel_up` or `wheel_down` up first, where upstream's notch site
-  stands ahead of its continuous lookup, runs an action binding, and
-  otherwise falls through, a passed notch included.
-- **The move gesture moves a pinned window.** It was claimed and inert
-  (`swipe_pinned`, with a note). Upstream's `try_start_gesture_move` installs
-  the pinned move grab for a pinned target and raises and focuses the
-  window, and so does `gesture_begin` now, in state `swipe_move`.
-
-The controller modules passed on the merged build: `passthrough_flow` 19,
-`rules_flow` 22, `pointer_flow` 16, `sizes_flow` 30, `effects_flow` 5,
-`render_flow` 7, `gesture_flow` 21, `motion_flow` 9, `platform_actions_flow`
-11, `navigation_actions_flow` 12, `lifecycle_flow` 25, `config_flow` 12,
-`ipc_flow` 8, `controller_flow` 4, `navigation_flow` 5 and `focus_cycle_flow`
-5. Five scenarios of the other contracts changed with the join: one of
-`pointer_flow` and one of `sizes_flow` asserted that `begin_drag` refuses a
-pinned window and now assert its screen-space drag, above and below the
-threshold; one of `sizes_flow` and one of `render_flow` listed a reply's
-exact keys and now list `passable` and `pass_keys`; and the gesture scenario
-of `rules_flow` asserts the move where it asserted `swipe_pinned`.
-
-The built app was launched twice, `--windowed 1100x700`, on a private scene,
-config and socket, with no Screen Recording access and so with placeholders
-only ([the numbers](../../native/desktop/README.md#what-was-run-for-the-pass-rules-with-everything-else-built-in)).
-Of this contract it observed: a config with `pass_keys = true`, `pass_mouse =
-["alt+left"]` and `layer_order = 2` in one rule, and `"mod+wheel-up" =
-"zoom-in"` in `[mouse.anywhere]`, loading and reloading with no warning;
-upstream's two warnings for a combo the grammar lacks; and a pin listed
-under `State.pinned`, before and after a pan, at the place a throwaway
-program had dragged it to through this controller's `begin_drag`,
-`gesture_to` and `end_gesture` before saving the scene. The same program
-read the scene and the config in process: no window had a source or a
-`rule`, `pass_keys` was `null` with each focused, `mouse_binding` naming
-each as `window` answered the binding, and `wheel_up` under ⌃⌥ answered
-the `zoom-in` action in both contexts.
-
-Not observed anywhere but in the controller scenarios: a non-null
-`pass_keys`, a `passed` reply, the pick-mode gate, a pinned drag by pointer
-or by gesture in a running shell. Not observed at all: a hot key leaving or
-returning, a key, press, scroll or wheel notch reaching an application or
-running an action, a hover changing what is passed, a swipe moving a pinned
-window. The windowed launches register no hot keys, the IPC surface has no
-verb for a press, a scroll, a hover or a gesture, and no window had a client.

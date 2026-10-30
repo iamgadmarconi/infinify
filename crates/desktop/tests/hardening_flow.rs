@@ -5,39 +5,16 @@
 //! the test's own. They say nothing about a native window, a socket of the app,
 //! a screenshot written by the shell or the descriptors of a spawned command:
 //! those live in the shell and are exercised by `tests/e2e/ipc-limits.sh`.
-use driftwm_desktop::*;
 use serde_json::{Value, json};
-use std::ffi::CStr;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-struct Host(*mut Controller);
+#[path = "support/host.rs"]
+mod host;
+use host::Host;
+
 impl Host {
-    fn new() -> Self {
-        let handle = driftwm_desktop_create();
-        assert!(!handle.is_null());
-        Self(handle)
-    }
-    fn call(&mut self, command: Value) -> Value {
-        let bytes = serde_json::to_vec(&json!({"version":1,"command":command})).unwrap();
-        // SAFETY: live exclusive handle, valid bytes, response freed exactly once.
-        unsafe {
-            let response = driftwm_desktop_request(self.0, bytes.as_ptr(), bytes.len());
-            assert!(!response.is_null());
-            let result = serde_json::from_slice(CStr::from_ptr(response).to_bytes()).unwrap();
-            driftwm_desktop_response_free(response);
-            result
-        }
-    }
-    fn ok(&mut self, command: Value) -> Value {
-        let response = self.call(command.clone());
-        assert_eq!(response["ok"], true, "{command}: {response}");
-        response["data"].clone()
-    }
-    fn snapshot(&mut self) -> Value {
-        self.ok(json!({"op":"snapshot"}))
-    }
     /// The logical ids of the windows in the scene, bottom to top.
     fn ids(&mut self) -> Vec<u64> {
         self.snapshot()["windows"]
@@ -57,14 +34,6 @@ impl Host {
             .clone()
     }
 }
-impl Drop for Host {
-    fn drop(&mut self) {
-        unsafe {
-            driftwm_desktop_destroy(self.0);
-        }
-    }
-}
-
 /// A directory of this test's own, removed when the test ends.
 struct Scratch(PathBuf);
 impl Scratch {

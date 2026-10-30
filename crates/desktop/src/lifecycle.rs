@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
+// Adapted from https://github.com/malbiruk/driftwm @
+// 352333a8fa1b22171492d4b71a54102045c9a19d:
 // src/state/placement.rs (cursor_placement_pos, auto_placement_pos,
 // nearest_auto_anchor, place_adjacent_to, cascade_position),
 // src/handlers/compositor.rs (a new toplevel's first sized commit: adopt or
@@ -19,17 +20,19 @@
 // include their title bar, so chrome is zero. A window's size is its source
 // rectangle's; its position is only ever the policy's. Upstream's marks and
 // pending relaunches expire by wall clock; here they lapse on the clock
-// `tick_navigation` brings. `depart` also follows v0.21.0 (df3de27b, read at
-// third_party/driftwm): toplevel_destroyed's release_fit_push call, after the
+// `tick_navigation` brings. `depart` also follows v0.21.0
+// (https://github.com/malbiruk/driftwm @ df3de27b26c7998e8a460cffd8a4925cbed3a322,
+// src/handlers/xdg_shell.rs): toplevel_destroyed's release_fit_push call, after the
 // spatial pick and before the visibility checks, for a real close and never
 // for a stand-in conversion (sizes.rs has release_fit_push).
 use super::actions::Outcome;
-use super::ipc::{WindowSelector, readable};
+use super::ipc::{WindowSelector, frame, readable};
 use super::rules::Pin;
-use super::view_actions::pixel_size;
+use super::sizes::snap_rect;
+use super::view_actions::{PixelPoint, PixelSize, core_point, pixel_size};
 use super::window_actions::IN_VIEW_NOISE;
 use super::*;
-use driftwm_canvas::policy::{self, PixelPoint, PixelSize};
+use driftwm_core::canvas;
 use driftwm_core::config::{AppliedWindowRule, WindowPlacement};
 use driftwm_core::layout::auto_placement::{self, place_auto};
 use driftwm_core::layout::cluster::cluster_of;
@@ -142,25 +145,12 @@ enum Follow {
 
 /// A frame at upstream's integer boundary, or `None` when it does not fit.
 fn pixel_frame(rect: Rect) -> Option<(PixelPoint, PixelSize)> {
-    let fit = |value: f64| {
-        let value = value.round();
-        (f64::from(i32::MIN)..=f64::from(i32::MAX))
-            .contains(&value)
-            .then_some(value as i32)
-    };
-    let (x, y) = (fit(rect.origin.x)?, fit(rect.origin.y)?);
-    let (w, h) = (fit(rect.size.width)?, fit(rect.size.height)?);
+    // `frame` keeps each value inside `i32`; the far edges must fit as well.
+    let ([x, y], [w, h]) = frame(rect).ok()?;
+    let (x, y, w, h) = (x as i32, y as i32, w as i32, h as i32);
     x.checked_add(w)?;
     y.checked_add(h)?;
     Some(((x, y).into(), (w, h).into()))
-}
-fn snap_rect(rect: Rect) -> SnapRect {
-    SnapRect {
-        x_low: rect.origin.x,
-        x_high: rect.right(),
-        y_low: rect.origin.y,
-        y_high: rect.bottom(),
-    }
 }
 
 impl Controller {
@@ -249,8 +239,13 @@ impl Controller {
         let frames: Vec<_> = placed.iter().map(|rect| pixel_frame(*rect)).collect();
         let in_view = |index: &usize| {
             frames[*index].is_some_and(|(loc, size)| {
-                policy::visible_fraction(loc, size, viewport.camera, view, viewport.zoom)
-                    >= AUTO_PLACE_CLUSTER_THRESHOLD
+                canvas::visible_fraction(
+                    loc,
+                    size,
+                    core_point(viewport.camera),
+                    view,
+                    viewport.zoom,
+                ) >= AUTO_PLACE_CLUSTER_THRESHOLD
             })
         };
         let center = viewport.camera + usable.center() / viewport.zoom;
@@ -267,7 +262,7 @@ impl Controller {
                 .filter(in_view)
                 .filter_map(|index| {
                     let (loc, size) = frames[index]?;
-                    let closest = policy::closest_point_on_rect(center, loc, size);
+                    let closest = canvas::closest_point_on_rect(core_point(center), loc, size);
                     let (dx, dy) = (closest.x - center.x, closest.y - center.y);
                     Some((index, dx * dx + dy * dy))
                 })
@@ -379,7 +374,7 @@ impl Controller {
         if output.is_some_and(|output| self.scene.output(output).is_none()) {
             return Err(Error::Invalid("unknown output"));
         }
-        if pointer.is_some_and(|pointer| !point_valid(pointer)) {
+        if pointer.is_some_and(|pointer| !pointer.valid()) {
             return Err(Error::Invalid("invalid screen point"));
         }
         if let Some(slot) = self.adoption_target(bundle_id, title) {
@@ -747,9 +742,10 @@ impl Controller {
         }
         Ok(json!({"standin":standin,"effect":effect,"navigation":navigation,"dirty":true}))
     }
-    /// Upstream standin_body_rect (v0.21.0, third_party/driftwm/src/state/
-    /// suspended.rs): a body past the stand-in ceiling is cut to it, keeping
-    /// its top-left. A window's native frame has no such limit, and a stand-in
+    /// Upstream standin_body_rect (https://github.com/malbiruk/driftwm @
+    /// df3de27b26c7998e8a460cffd8a4925cbed3a322, src/state/suspended.rs): a
+    /// body past the stand-in ceiling is cut to it, keeping its top-left. A
+    /// window's native frame has no such limit, and a stand-in
     /// is drawn and saved at one that does: a larger one would be dropped by the
     /// next restore.
     fn cap_standin(&mut self, window: WindowId) {

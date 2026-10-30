@@ -4,20 +4,27 @@
 // gigapixel path. Part of the background module (background.h); no dependency
 // on the rest of the app, and none on Metal.
 //
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
-// src/render/tile_chunks_tiff.rs (TiffSource: scan_lods, read_lod_metadata,
-// read_block, read_whole_lod and the wording of every refusal) and
-// src/render/tile_worker.rs (WorkerPool: six decoders, one FIFO queue, a
-// response list, a wake-up after every response, drain_pending, shutdown).
+// Adapted from DriftWM, https://github.com/malbiruk/driftwm @
+// 352333a8fa1b22171492d4b71a54102045c9a19d: src/render/tile_chunks_tiff.rs
+// (TiffSource: scan_lods, read_lod_metadata, read_block, read_whole_lod and the
+// wording of every refusal) and src/render/tile_worker.rs (WorkerPool: six
+// decoders, one FIFO queue, a response list, a wake-up after every response,
+// drain_pending, shutdown).
 // Upstream decodes with the `tiff` crate; here the container is walked by this
 // file and each tile's compressed bytes are decoded by ImageIO
 // (BACKGROUND-NOTES.md, section 17).
-// Since 2026-10-30 also from v0.21.0 (df3de27b26c7998e8a460cffd8a4925cbed3a322,
-// third_party/driftwm): src/render/tile_chunks_tiff.rs `MAX_WHOLE_LOD_DIM` and
-// `whole_lod`, upstream's turning of an allocation that could abort the
-// compositor into an error (platform.tiff_wallpaper_abort).
+// Also from DriftWM v0.21.0, https://github.com/malbiruk/driftwm @
+// df3de27b26c7998e8a460cffd8a4925cbed3a322: src/render/tile_chunks_tiff.rs
+// `MAX_WHOLE_LOD_DIM` and `whole_lod`, upstream's turning of an allocation that
+// could abort the compositor into an error (platform.tiff_wallpaper_abort).
 
 #import <Foundation/Foundation.h>
+#include <string.h>
+
+/// Rust's `io::Error` as upstream prints it: the errno text and its number.
+static inline NSString * _Nonnull IFBGOSError(int code) {
+    return [NSString stringWithFormat:@"%s (os error %d)", strerror(code), code];
+}
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -102,8 +109,6 @@ NSUInteger IFBGTiffWholeLevel(const IFBGTiffLevel *levels, NSUInteger count, uin
 /// running finishes by itself and its result is discarded. Also done when the
 /// pool is released.
 - (void)shutdown;
-/// Requests queued, being decoded, or decoded and not yet received (diagnostics).
-@property (nonatomic, readonly) NSUInteger outstandingCount;
 @end
 
 NS_ASSUME_NONNULL_END

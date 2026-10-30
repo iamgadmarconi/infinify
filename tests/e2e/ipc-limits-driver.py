@@ -92,7 +92,7 @@ with tempfile.TemporaryDirectory(prefix="iflim.", dir="/tmp") as directory:
             for index in range(1024):
                 client = socket.socket(socket.AF_UNIX)
                 client.settimeout(5)
-                for attempt in range(200):
+                for _ in range(200):
                     try:
                         client.connect(str(sock))
                         break
@@ -168,8 +168,8 @@ with tempfile.TemporaryDirectory(prefix="iflim.", dir="/tmp") as directory:
         server.terminate()
         try:
             stdout, stderr = server.communicate(timeout=5)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as err:
             server.kill()
             stdout, stderr = server.communicate()
-            raise AssertionError("headless server failed to stop")
+            raise AssertionError("headless server failed to stop") from err
         check(server.returncode == 0, f"server exit {server.returncode}: {stderr.decode(errors='replace')}")

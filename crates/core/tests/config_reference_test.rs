@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Ported from malbiruk/driftwm tests/config_reference_test.rs at
-// df3de27b26c7998e8a460cffd8a4925cbed3a322 (GPL-3.0-or-later).
-// Changes from upstream: crate paths only — `driftwm::config` reads
-// `driftwm_core::config`.
-// Nothing else.
+//
+// Ported from DriftWM (GPL-3.0-or-later)
+//   repository: https://github.com/malbiruk/driftwm
+//   commit:     df3de27b26c7998e8a460cffd8a4925cbed3a322
+//   path:       tests/config_reference_test.rs
+//   sha-256:    7aca0f3766a832a9c1ab4490aca00999d9abf8a7cc2cf621decf06234376cb86 (upstream file)
+// Changes from upstream: this header, and crate paths only: `driftwm::config` reads
+// `driftwm_core::config`. Nothing else.
+// See PORT.md in the crate root for the full change log.
+
 //! Guards `config.reference.toml` against drifting from the compiled-in
 //! defaults — it doubles as documentation, so a stale documented default would
 //! mislead every user who reads it.

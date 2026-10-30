@@ -7,7 +7,12 @@
 // The daemon runs one operation: the bundled loader's `--inject-dock` for the login user's whole
 // desktop, exactly as `native-desktop-launcher.sh` runs it under sudo, with the same arguments the
 // launcher builds. It never runs the loader with a payload, runtime, journal or Dock the launcher would
-// not name, and never in a form the launcher does not use (no --only-pid, no unpinned Dock).
+// not name, and never in a form the launcher does not use (no unpinned Dock).
+
+// What the app may ask the daemon for, over XPC. loadd.m implements it; native/desktop/loader-service.m calls it.
+@protocol InfinifyLoaderXPC
+- (void)runCommand:(NSString *)command arguments:(NSArray<NSString *> *)arguments reply:(void (^)(int status, NSString *output))reply;
+@end
 
 // The Mach service the daemon answers on, its launchd label, and the bundle identifier of the one app
 // it answers.

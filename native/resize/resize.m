@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import "resize.h"
+#import "../desktop/ax-lookup.h"
 #import <AppKit/AppKit.h>
 #include <libproc.h>
 #include <dlfcn.h>
@@ -9,15 +10,12 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-// Signature precedent: yabai dd845723416f5fe92af49fad5ebab00369e07edd,
+// Signature precedent: yabai (https://github.com/asmvik/yabai, MIT) commit dd845723416f5fe92af49fad5ebab00369e07edd,
 // src/misc/extern.h:8 and src/misc/helpers.h:499-504. No upstream implementation copied.
+// Licence text: native/desktop/YABAI-NOTICE.txt.
 typedef AXError (*WindowIDFunction)(AXUIElementRef, uint32_t *);
-static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec+t.tv_nsec/1e9; }
-static bool birth(pid_t pid, uint64_t *sec, uint64_t *usec) {
-    struct proc_bsdinfo p = {0};
-    if (pid <= 0 || proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &p, sizeof(p)) != sizeof(p)) return false;
-    *sec=p.pbi_start_tvsec; *usec=p.pbi_start_tvusec; return true;
-}
+static double now(void) { return DWMonotonicSeconds(); }
+static bool birth(pid_t pid, uint64_t *sec, uint64_t *usec) { return DWProcessBirth(pid,sec,usec); }
 static bool valid_rect(CGRect r) {
     return isfinite(r.origin.x) && isfinite(r.origin.y) && isfinite(r.size.width) && isfinite(r.size.height) && r.size.width>0 && r.size.height>0;
 }
@@ -36,40 +34,10 @@ static bool owner(DWResizeIdentity i, CGRect *rect) {
     if (own_bounds && (!own_bounds(i.window,&r) || !valid_rect(r))) return false;
     if (rect) *rect=r; return true;
 }
-bool dw_resize_identity(pid_t pid, CGWindowID window, DWResizeIdentity *identity) {
-    if (!identity) return false;
-    *identity=(DWResizeIdentity){0}; DWResizeIdentity i={.pid=pid,.window=window};
-    if (!birth(pid,&i.birth_seconds,&i.birth_microseconds) || !owner(i,NULL)) return false;
-    *identity=i; return true;
-}
 static DWResizeResult result(DWResizeOutcome o) { return (DWResizeResult){.outcome=o,.ax_error=kAXErrorSuccess}; }
-static AXError timeout(AXUIElementRef element, double deadline) {
-    double remaining=deadline-now();
-    if (remaining<=0) return kAXErrorCannotComplete;
-    return AXUIElementSetMessagingTimeout(element,(float)fmin(.15,remaining));
-}
-static void log_window_lookup(AXUIElementRef element,pid_t expectedPID,uint32_t expectedWindow,CFIndex index,AXError error,double deadline) {
-    if(!getenv("INFINIFY_DEBUG"))return;
-    CFTypeRef role=NULL,subrole=NULL;pid_t candidatePID=0;
-    AXError pidError=AXUIElementGetPid(element,&candidatePID);
-    AXError roleError=timeout(element,deadline);
-    if(!roleError)roleError=AXUIElementCopyAttributeValue(element,kAXRoleAttribute,&role);
-    AXError subroleError=timeout(element,deadline);
-    if(!subroleError)subroleError=AXUIElementCopyAttributeValue(element,kAXSubroleAttribute,&subrole);
-    const char *roleName=role&&CFGetTypeID(role)==CFStringGetTypeID()?[(__bridge NSString *)role UTF8String]:"unavailable";
-    const char *subroleName=subrole&&CFGetTypeID(subrole)==CFStringGetTypeID()?[(__bridge NSString *)subrole UTF8String]:"unavailable";
-    fprintf(stderr,"[infinify-debug] resize AX window lookup pid=%d target=%u index=%ld error=%d candidate_pid=%d pid_error=%d role=%s role_error=%d subrole=%s subrole_error=%d\n",expectedPID,expectedWindow,(long)index,error,candidatePID,pidError,roleName,roleError,subroleName,subroleError);
-    if(role)CFRelease(role);if(subrole)CFRelease(subrole);
-}
-// Finder includes its same-process desktop AXScrollArea in AXWindows. It has
-// no WindowServer ID; only that verified non-window role may be skipped.
-static bool windowless_scroll_area(AXUIElementRef element,pid_t expectedPID,double deadline) {
-    pid_t pid=0;if(AXUIElementGetPid(element,&pid)!=kAXErrorSuccess||pid!=expectedPID)return false;
-    CFTypeRef role=NULL;AXError error=timeout(element,deadline);
-    if(error==kAXErrorSuccess)error=AXUIElementCopyAttributeValue(element,kAXRoleAttribute,&role);
-    bool known=error==kAXErrorSuccess&&role&&CFGetTypeID(role)==CFStringGetTypeID()&&CFEqual(role,kAXScrollAreaRole);
-    if(role)CFRelease(role);return known;
-}
+static AXError timeout(AXUIElementRef element, double deadline) { return DWAXTimeout(element,deadline,.15); }
+static void log_window_lookup(AXUIElementRef element,pid_t expectedPID,uint32_t expectedWindow,CFIndex index,AXError error,double deadline) { DWAXLogWindowLookup("resize",.15,element,expectedPID,expectedWindow,index,error,deadline); }
+static bool windowless_scroll_area(AXUIElementRef element,pid_t expectedPID,double deadline) { return DWAXWindowlessScrollArea(element,expectedPID,deadline,.15); }
 static AXUIElementRef resolve(DWResizeIdentity i, double deadline, DWResizeResult *r) {
     if (!owner(i,NULL)) { r->outcome=DWResizeStaleIdentity; return NULL; }
     if (!AXIsProcessTrusted()) { r->outcome=DWResizeUnavailable; return NULL; }
@@ -326,7 +294,7 @@ finished:
     if(value)CFRelease(value);CFRelease(w);return r;
 } }
 // Full-frame restoration must retain every setter attempt and timeout across
-// its size/position stages. The public size-only result keeps its old contract.
+// its size/position stages; the result of a plain dw_resize_apply is not affected.
 typedef struct { bool attempted, timed_out; } FrameMutation;
 static void record_mutation(FrameMutation *m,AXError error) {
     if (m) { m->attempted=true; m->timed_out|=error==kAXErrorCannotComplete; }
@@ -345,7 +313,7 @@ static DWResizeResult frame_result(DWResizeResult r,FrameMutation m) {
     }
     return r;
 }
-static DWResizeResult apply_size(DWResizeIdentity i, CGSize size, DWResizeGuard guard, DWResizeGuard final_authorize, void *context, double deadline, FrameMutation *mutation) { @autoreleasepool {
+static DWResizeResult apply_size(DWResizeIdentity i, CGSize size, double deadline, FrameMutation *mutation) { @autoreleasepool {
     DWResizeResult r=result(DWResizeInvalidRequest); r.requested=size;
     if (!isfinite(size.width)||!isfinite(size.height)||size.width<1||size.height<1||size.width>32768||size.height>32768) return r;
     AXUIElementRef w=resolve(i,deadline,&r); if (!w) return r;
@@ -357,21 +325,17 @@ static DWResizeResult apply_size(DWResizeIdentity i, CGSize size, DWResizeGuard 
     if (!owner(i,NULL)) { r.outcome=DWResizeStaleIdentity; r.observed=false; CFRelease(w); return r; }
     r.ax_error=timeout(w,deadline);
     if (r.ax_error!=kAXErrorSuccess) { r.outcome=DWResizeTimedOut; CFRelease(w); return r; }
-    if (guard && !guard(i,context)) { r.outcome=DWResizeUnsupported; CFRelease(w); return r; }
-    if (guard && !owner(i,NULL)) { r.outcome=DWResizeStaleIdentity; r.observed=false; CFRelease(w); return r; }
-    if (guard) { r.ax_error=timeout(w,deadline); if(r.ax_error!=kAXErrorSuccess) {r.outcome=DWResizeTimedOut;CFRelease(w);return r;} }
-    // Room first, by a native position write that the same identity, settable and guard checks have just preceded. It is a
+    // Room first, by a native position write that the same identity and settable checks have just preceded. It is a
     // place on the real screen only: the caller maps the window by the origin every result reports and keeps its own geometry.
-    // A scoped final authorization is one ticket for one setter, the size's, so nothing is moved under one. A write that fails
-    // or is not honoured changes nothing below: the size is asked from wherever the window then is.
+    // A write that fails or is not honoured changes nothing below: the size is asked from wherever the window then is.
     CGPoint origin=before.origin, to=origin; bool positioned=false;
-    if (!final_authorize && room(before,size,&to)) {
+    if (room(before,size,&to)) {
         AXValueRef p=AXValueCreate(kAXValueCGPointType,&to); DWResizeResult kept=r; bool seen=false;
         if (p) { positioned=true; record_mutation(mutation,AXUIElementSetAttributeValue(w,kAXPositionAttribute,p)); CFRelease(p); }
         for (int n=0;positioned && n<5 && now()<deadline;n++) {
             // AX setters commonly complete before returning. Read that answer
             // immediately; only a change still in flight needs a delayed retry.
-            // Four retries retain the former 120ms settling window.
+            // Four retries give a 120ms settling window.
             if (n) usleep(30000);
             seen=readback(i,w,deadline,&r);
             if (r.outcome==DWResizeStaleIdentity) { CFRelease(w); return r; }
@@ -387,12 +351,6 @@ static DWResizeResult apply_size(DWResizeIdentity i, CGSize size, DWResizeGuard 
     }
     AXValueRef v=AXValueCreate(kAXValueCGSizeType,&size);
     if (!v) { r.outcome=DWResizeUnavailable; CFRelease(w); return r; }
-    // A scoped final callback must be lightweight: no AX/family/file operations.
-    // No native call intervenes between final authorization and the AXSize setter.
-    if (final_authorize && !final_authorize(i,context)) { r.outcome=DWResizeUnsupported; CFRelease(v); CFRelease(w); return r; }
-    // Reserve the already configured <=150ms timeout, avoiding an AX timeout
-    // update after final authorization. Legacy wrappers preserve their ordering.
-    if (final_authorize && now()+.15>deadline) { r.outcome=DWResizeTimedOut; r.ax_error=kAXErrorCannotComplete; CFRelease(v); CFRelease(w); return r; }
     r.mutation_attempted=true;
     AXError setter=AXUIElementSetAttributeValue(w,kAXSizeAttribute,v); CFRelease(v);
     double returned=now(),readSeconds=0,sleepSeconds=0;int attempts=0;
@@ -423,9 +381,7 @@ static DWResizeResult apply_size(DWResizeIdentity i, CGSize size, DWResizeGuard 
     if (positioned && observed) r.moved=!CGPointEqualToPoint(r.actual_ax.origin,origin);
     CFRelease(w); return r;
 } }
-DWResizeResult dw_resize_apply_scoped(DWResizeIdentity i, CGSize size, DWResizeGuard guard, DWResizeGuard final_authorize, void *context) {
-    return apply_size(i,size,guard,final_authorize,context,now()+2.,NULL);
-}
+DWResizeResult dw_resize_apply(DWResizeIdentity i, CGSize size) { return apply_size(i,size,now()+2.,NULL); }
 DWResizeResult dw_resize_apply_frame(DWResizeIdentity i, CGRect frame) { @autoreleasepool {
     DWResizeResult r=result(DWResizeInvalidRequest); r.requested=frame.size;
     if (!valid_rect(frame) || frame.size.width<1 || frame.size.height<1 || frame.size.width>32768 || frame.size.height>32768) return r;
@@ -435,14 +391,14 @@ DWResizeResult dw_resize_apply_frame(DWResizeIdentity i, CGRect frame) { @autore
     r.ax_error=timeout(w,deadline);
     if (r.ax_error==kAXErrorSuccess) r.ax_error=AXUIElementIsAttributeSettable(w,kAXPositionAttribute,&settable);
     if (r.ax_error!=kAXErrorSuccess || !settable) { r.outcome=DWResizeUnsupported; CFRelease(w); return r; }
-    // Frame ordering precedent: yabai dd845723416f5fe92af49fad5ebab00369e07edd,
+    // Frame ordering precedent: yabai (https://github.com/asmvik/yabai) dd845723416f5fe92af49fad5ebab00369e07edd,
     // src/window_manager.c:729-762. No upstream implementation copied.
     // A window may stop accepting AXSize while keeping the saved extent.
     // Restoring only its origin must not require an unrelated size setter.
     FrameMutation mutation={0};
     bool resize=!CGSizeEqualToSize(before.size,frame.size);
     if (resize) {
-        r=apply_size(i,frame.size,NULL,NULL,NULL,deadline,&mutation);
+        r=apply_size(i,frame.size,deadline,&mutation);
         r=frame_result(r,mutation);
         if (!r.observed || !r.mutation_attempted) { CFRelease(w); return r; }
     }
@@ -464,7 +420,7 @@ DWResizeResult dw_resize_apply_frame(DWResizeIdentity i, CGRect frame) { @autore
     // Positioning may change the extent. Repeat size only when its fresh AX
     // and native CG readback do not both exactly match the saved dimensions.
     DWResizeResult sized=(CGSizeEqualToSize(r.actual_ax.size,frame.size) && CGSizeEqualToSize(r.actual_cg.size,frame.size))
-        ? r : apply_size(i,frame.size,NULL,NULL,NULL,deadline,&mutation);
+        ? r : apply_size(i,frame.size,deadline,&mutation);
     sized.mutation_attempted|=r.mutation_attempted;
     if (!sized.observed && sized.mutation_attempted && (sized.outcome==DWResizeUnavailable || sized.outcome==DWResizeMissingWindow || sized.outcome==DWResizeAmbiguousWindow)) sized.outcome=DWResizeReadbackFailed;
     if (sized.observed) {
@@ -477,12 +433,6 @@ DWResizeResult dw_resize_apply_frame(DWResizeIdentity i, CGRect frame) { @autore
     if (positionStatus!=kAXErrorSuccess) sized.ax_error=positionStatus;
     CFRelease(w); return frame_result(sized,mutation);
 } }
-DWResizeResult dw_resize_apply_guarded(DWResizeIdentity i, CGSize size, DWResizeGuard guard, void *context) { return dw_resize_apply_scoped(i,size,guard,NULL,context); }
-DWResizeResult dw_resize_apply(DWResizeIdentity i, CGSize size) { return dw_resize_apply_guarded(i,size,NULL,NULL); }
-DWResizeResult dw_resize_snapshot(DWResizeIdentity i,DWResizeSnapshot *s) {
-    DWResizeResult r=dw_resize_observe(i); if (s) *s=(DWResizeSnapshot){.identity=i,.original=r.actual_ax,.valid=r.observed}; return r;
-}
-DWResizeResult dw_resize_restore(DWResizeSnapshot s) { return s.valid?dw_resize_apply(s.identity,s.original.size):result(DWResizeInvalidRequest); }
 const char *dw_resize_outcome_name(DWResizeOutcome o) {
     static const char *names[]={"observed","applied","clamped","rejected","invalid_request","stale_identity","unavailable","missing_window","ambiguous_window","unsupported","readback_failed","timed_out"};
     return o<=DWResizeTimedOut && o>=DWResizeObserved?names[o]:"unknown";

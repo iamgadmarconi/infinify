@@ -10,36 +10,16 @@ use driftwm_core::config::{
     BackgroundKind, Config, DecorationConfig, DecorationMode, EffectsConfig, FontWeight,
     OutputOutlineSettings, TitleAlign,
 };
-use driftwm_desktop::*;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
-use std::ffi::CStr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-struct Host(*mut Controller);
+#[path = "support/host.rs"]
+mod host;
+use host::Host;
+
 impl Host {
-    fn new() -> Self {
-        let handle = driftwm_desktop_create();
-        assert!(!handle.is_null());
-        Self(handle)
-    }
-    fn call(&mut self, command: Value) -> Value {
-        let bytes = serde_json::to_vec(&json!({"version":1,"command":command})).unwrap();
-        // SAFETY: live exclusive handle, valid bytes, response freed exactly once.
-        unsafe {
-            let response = driftwm_desktop_request(self.0, bytes.as_ptr(), bytes.len());
-            assert!(!response.is_null());
-            let result = serde_json::from_slice(CStr::from_ptr(response).to_bytes()).unwrap();
-            driftwm_desktop_response_free(response);
-            result
-        }
-    }
-    fn ok(&mut self, command: Value) -> Value {
-        let response = self.call(command.clone());
-        assert_eq!(response["ok"], true, "{command}: {response}");
-        response["data"].clone()
-    }
     /// A refused command: an error, and nothing changed.
     fn error(&mut self, command: Value) -> String {
         let before = self.snapshot();
@@ -47,9 +27,6 @@ impl Host {
         assert_eq!(response["ok"], false, "{command}: {response}");
         assert_eq!(self.snapshot(), before, "{command}");
         response["error"].as_str().unwrap().to_owned()
-    }
-    fn snapshot(&mut self) -> Value {
-        self.ok(json!({"op":"snapshot"}))
     }
     fn render(&mut self) -> Value {
         self.snapshot()["render"].clone()
@@ -138,14 +115,6 @@ impl Host {
         self.ok(json!({"op":"screenshot_result","path":path,"width":width,"height":height}))
     }
 }
-impl Drop for Host {
-    fn drop(&mut self) {
-        unsafe {
-            driftwm_desktop_destroy(self.0);
-        }
-    }
-}
-
 /// A directory of this test's own, removed when the test ends.
 struct Scratch(PathBuf);
 impl Scratch {
@@ -259,7 +228,7 @@ fn the_default_render_block_is_upstreams_defaults() {
     // revision, as every accepted reload spends one.
     assert_eq!(h.configure(&scratch, ""), default_block(2, true));
 
-    // Every key the snapshot had is still there, next to the new one.
+    // The snapshot holds exactly these keys.
     let snapshot = h.snapshot();
     let keys: BTreeSet<&str> = snapshot
         .as_object()
@@ -271,7 +240,6 @@ fn the_default_render_block_is_upstreams_defaults() {
         keys,
         BTreeSet::from([
             "bookmarks",
-            "capabilities",
             "evidence",
             "focus",
             "keyboard_layout",

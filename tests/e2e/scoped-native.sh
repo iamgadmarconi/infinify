@@ -151,7 +151,7 @@ def state(): return ask('State')['Ok']['State']
 def trace(): return errlog.read_text(errors='replace').splitlines()
 def native(): return ask({'DebugNative': {}})['Ok']['DebugNative']
 
-# The window server, asked from this process. As native/privileged/fixture_v2_test.py asks it.
+# The window server, asked from this process. As native/privileged/fixture_test.py asks it.
 class Point(C.Structure): _fields_ = [('x', C.c_double), ('y', C.c_double)]
 class Size(C.Structure): _fields_ = [('width', C.c_double), ('height', C.c_double)]
 class Rect(C.Structure): _fields_ = [('origin', Point), ('size', Size)]
@@ -438,7 +438,10 @@ launch() { : > "$evidence/err.log"; rects > "$evidence/before"; drive baseline; 
   n=0; while [ ! -S "$socket" ] && [ "$n" -lt 50 ]; do sleep .1; n=$((n+1)); done; [ -S "$socket" ] || { echo "FAIL: no socket: $(cat "$evidence/err.log")"; exit 1; }; }
 drive() { python3 "$evidence/driver.py" "$evidence" "$app" "$1" "${infinify:-0}" "$host"; }
 # The window server's rectangle of each of the host's windows, asked from a process of this script's.
-rects() { python3 - $(sed -n 's/^READY [0-9]* //p' "$evidence/host.log" | head -1) <<'PY'
+# The host's READY line lists its window numbers separated by spaces, and each is an argument of its own below.
+rects() { ready_wids=$(sed -n 's/^READY [0-9]* //p' "$evidence/host.log" | head -1)
+# shellcheck disable=SC2086
+python3 - $ready_wids <<'PY'
 import ctypes as C, sys
 class R(C.Structure): _fields_ = [('x', C.c_double), ('y', C.c_double), ('w', C.c_double), ('h', C.c_double)]
 sky = C.CDLL('/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight'); sky.SLSMainConnectionID.restype = C.c_int

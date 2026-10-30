@@ -23,7 +23,7 @@ for marker, name in (
     end = source.index("\n@end", start) + len("\n@end")
     (output / name).write_text(source[start:end] + "\n")
 start = source.index("- (BOOL)acceptCapturedSample:", source.index("@implementation LiveSource"))
-end = source.index("\n- (BOOL)installSample:", start)
+end = source.index("\n- (BOOL)installPixels:(CVPixelBufferRef)pixels {", start)
 (output / "root-capture-source-acceptance.inc").write_text(source[start:end] + "\n")
 start = source.index("static BOOL DWRootCaptureCrop(")
 end = source.index("\n}\n", start) + len("\n}\n")
@@ -53,8 +53,8 @@ def method(marker):
     return source[start:end] + "\n"
 (output / "captured-input-view-consumers.inc").write_text("\n".join(method(marker) for marker in (
     "- (NSDictionary *)inputIntentForHit:", "- (void)deliverHeld {",
-    "- (BOOL)forward:(CGEventRef)e at:(CGPoint)p output:(NSNumber *)output activate:(BOOL)activate {",
-    "- (BOOL)forward:(CGEventRef)e at:(CGPoint)p output:(NSNumber *)output activate:(BOOL)activate expected:",
+    "- (BOOL)forward:(CGEventRef)e at:(CGPoint)p output:(NSNumber *)output {",
+    "- (BOOL)forward:(CGEventRef)e at:(CGPoint)p output:(NSNumber *)output expected:",
     "- (BOOL)forwardCaptured:", "- (void)mouseDragged:", "- (void)releasePressed {",
     "- (void)released:(CGPoint)p at:(NSTimeInterval)time",
 )))

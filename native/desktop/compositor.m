@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Originally carried into native/desktop/ from the standalone compositor port; desktop frame scheduling and diagnostics are adapted here, together with cached-background chunk generation (BACKGROUND-NOTES.md, section 17.3).
 //
-// Infinify compositor — implementation. See compositor.h and NOTES.md.
+// Infinify compositor — implementation. See compositor.h and COMPOSITOR-NOTES.md.
+// The cached-background chunk generation is described in BACKGROUND-NOTES.md,
+// section 17.3.
 //
-// Derived from DriftWM (GPL-3.0-or-later), upstream commit
+// Derived from DriftWM (GPL-3.0-or-later), https://github.com/malbiruk/driftwm @
 // 352333a8fa1b22171492d4b71a54102045c9a19d. Each section names the upstream
 // function it mirrors; expressions are kept in upstream's order and upstream's
 // numeric types (f32 where upstream narrows to f32, Rust rounding and cast
 // rules) so the two can be read side by side.
 
 #import "compositor.h"
+#import "metal-support.h"
 
 #import <CoreText/CoreText.h>
 #import <IOSurface/IOSurface.h>
@@ -221,7 +223,7 @@ static NSString *const kIFCMSL =
      "}\n"
      // texture2D(tex, v_coords) under GL_CLAMP_TO_EDGE, with the edge being that
      // of the content sub-rect instead of the whole texture: for a buffer that
-     // is all content the two are the same sample (NOTES.md, deviations).
+     // is all content the two are the same sample (COMPOSITOR-NOTES.md, deviations).
      "static inline float4 ifc_sample(texture2d<float> tex, sampler smp, float2 v_coords, constant IFCUniforms &U) {\n"
      "    return tex.sample(smp, clamp(v_coords, U.uv_bounds.xy, U.uv_bounds.zw));\n"
      "}\n"
@@ -530,18 +532,7 @@ typedef NS_ENUM(NSUInteger, IFCPipe) {
 }
 
 + (instancetype)resourcesForDevice:(id<MTLDevice>)device {
-    static NSMutableDictionary<NSNumber *, IFCDeviceResources *> *cache;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{ cache = [NSMutableDictionary dictionary]; });
-    @synchronized(cache) {
-        NSNumber *key = @(device.registryID);
-        IFCDeviceResources *r = cache[key];
-        if (!r) {
-            r = [[IFCDeviceResources alloc] initWithDevice:device];
-            cache[key] = r;
-        }
-        return r;
-    }
+    return DWMetalSharedForDevice(self, device, ^id{ return [[IFCDeviceResources alloc] initWithDevice:device]; });
 }
 
 - (instancetype)initWithDevice:(id<MTLDevice>)device {
@@ -551,11 +542,8 @@ typedef NS_ENUM(NSUInteger, IFCPipe) {
 
     // The same math mode as the background module: IEEE arithmetic, so the
     // translated GLSL computes what it says.
-    MTLCompileOptions *options = [MTLCompileOptions new];
-    options.mathMode = MTLMathModeSafe;
-    options.mathFloatingPointFunctions = MTLMathFloatingPointFunctionsFast;
     NSError *error = nil;
-    id<MTLLibrary> library = [device newLibraryWithSource:kIFCMSL options:options error:&error];
+    id<MTLLibrary> library = [device newLibraryWithSource:kIFCMSL options:DWMetalCompileOptions() error:&error];
     if (!library) {
         _error = [NSString stringWithFormat:@"compositor: shaders failed to compile: %@", error.localizedDescription];
         NSLog(@"%@", _error);
@@ -607,18 +595,10 @@ typedef NS_ENUM(NSUInteger, IFCPipe) {
     }
 
     // smithay: GL_LINEAR minification and magnification, CLAMP_TO_EDGE, no mipmaps.
-    MTLSamplerDescriptor *sd = [MTLSamplerDescriptor new];
-    sd.minFilter = MTLSamplerMinMagFilterLinear;
-    sd.magFilter = MTLSamplerMinMagFilterLinear;
-    sd.mipFilter = MTLSamplerMipFilterNotMipmapped;
-    sd.sAddressMode = MTLSamplerAddressModeClampToEdge;
-    sd.tAddressMode = MTLSamplerAddressModeClampToEdge;
-    _sampler = [device newSamplerStateWithDescriptor:sd];
+    _sampler = DWMetalLinearClampSampler(device);
     // blur.rs `backdrop_wrap_mode`: MIRRORED_REPEAT (the GLES 3 answer) on
     // every texture the blur samples past the edge of.
-    sd.sAddressMode = MTLSamplerAddressModeMirrorRepeat;
-    sd.tAddressMode = MTLSamplerAddressModeMirrorRepeat;
-    _mirrorSampler = [device newSamplerStateWithDescriptor:sd];
+    _mirrorSampler = DWMetalLinearSampler(device, MTLSamplerAddressModeMirrorRepeat);
     return self;
 }
 
@@ -1560,17 +1540,12 @@ static IFCLife IFCResolveLife(IFCompositorElement *element, double time, IFCompo
     return _outlineCount;
 }
 
-- (CGRect)outlineRectAtIndex:(NSUInteger)index {
-    return index < _outlineCount ? _outlineRects[index] : CGRectNull;
-}
-
 - (const CGRect *)ifc_outlineRects {
     return _outlineRects;
 }
 
 // The background draws and moves on its own (upstream's animated shader).
 - (BOOL)ifc_backgroundAnimates {
-    if (_debugPasses && !(_debugPasses & IFCompositorPassBackground)) return NO;
     return _background.isAnimated;
 }
 
@@ -1621,7 +1596,6 @@ static IFCLife IFCResolveLife(IFCompositorElement *element, double time, IFCompo
     IFC_MIX(&h, _outline.opacity);
     IFC_MIX(&h, (uint64_t)_outlineCount);
     for (NSUInteger i = 0; i < _outlineCount; i++) IFCMixRect(&h, _outlineRects[i]);
-    IFC_MIX(&h, (uint64_t)_debugPasses);
     IFCompositorEffects effects = IFCompositorEffectsSanitized(_effects);
     IFC_MIX(&h, effects.blurRadius);
     IFC_MIX(&h, effects.blurStrength);
@@ -1643,17 +1617,9 @@ static IFCLife IFCResolveLife(IFCompositorElement *element, double time, IFCompo
 }
 @end
 
-// Integer output size, as upstream's logical output size is integral (the
-// background module's `IFBGPixelSize`).
+// Integer output size, as upstream's logical output size is integral.
 static void IFCPixelSize(IFCompositorFrame *f, long *logicalW, long *logicalH, NSUInteger *pxW, NSUInteger *pxH) {
-    double scale = (isfinite(f.scale) && f.scale > 0) ? f.scale : 1.0;
-    long lw = isfinite(f.size.width) ? lround(f.size.width) : 0, lh = isfinite(f.size.height) ? lround(f.size.height) : 0;
-    lw = MAX(lw, 0L);
-    lh = MAX(lh, 0L);
-    if (logicalW) *logicalW = lw;
-    if (logicalH) *logicalH = lh;
-    if (pxW) *pxW = (NSUInteger)MAX(0L, lround((double)lw * scale));
-    if (pxH) *pxH = (NSUInteger)MAX(0L, lround((double)lh * scale));
+    DWMetalPixelSize(f.size.width, f.size.height, f.scale, logicalW, logicalH, pxW, pxH);
 }
 
 // MARK: - Per-element cache entry
@@ -2061,8 +2027,7 @@ static void IFCCollectStale(const void *key, const void *value, void *context) {
     id<MTLRenderPipelineState> _boundPipeline;
     IFCRectI _target, _boundScissor, _elementScissor;
     IFCRectI _clip;                 // what the pass may draw into: `_target`, or the part of a backdrop that is on the output
-    IFCompositorPass _passMask;
-    IFCompositorPass _skipPasses;   // passes an intermediate pass leaves out (the shadow, for a mask)
+    BOOL _skipShadow;               // the blur mask leaves the window's shadow out
     BOOL _hasXform;                 // the element being drawn carries `_xform`
     IFCompositorTransform _xform;
     long _originX, _originY;        // output pixel that lands on the pass's (0, 0)
@@ -2115,10 +2080,6 @@ static void IFCCollectStale(const void *key, const void *value, void *context) {
     free(_items);
 }
 
-- (NSUInteger)cacheEntryCount {
-    return (NSUInteger)CFDictionaryGetCount(_entries);
-}
-
 static void IFCBuryEntry(const void *key, const void *value, void *context) {
     (void)key;
     [(__bridge IFCGraveyard *)context bury:(__bridge IFCEntry *)value];
@@ -2142,19 +2103,6 @@ static void IFCBuryEntry(const void *key, const void *value, void *context) {
     _bgTextureTried = NO;
     _hasBlurBeat = NO;
     if (_textureCache->ref) CVMetalTextureCacheFlush(_textureCache->ref, 0);
-}
-
-static void IFCCountBlurTextures(const void *key, const void *value, void *context) {
-    (void)key;
-    IFCEntry *entry = (__bridge IFCEntry *)value;
-    NSUInteger *count = context;
-    *count += (entry->frostTexture ? 1u : 0u) + (entry->maskTexture ? 1u : 0u) + (entry->padA ? 1u : 0u) + (entry->padB ? 1u : 0u);
-}
-
-- (NSUInteger)blurTextureCount {
-    NSUInteger count = _bgCopy ? 1 : 0;
-    CFDictionaryApplyFunction(_entries, IFCCountBlurTextures, &count);
-    return count;
 }
 
 // The flushes in the encodes right after a retirement return the IOSurface to
@@ -2295,7 +2243,6 @@ static void IFCCountBlurTextures(const void *key, const void *value, void *conte
     entry->cvTexture = cvTexture;
     entry->cache = _textureCache;
     entry->contentTexture = wrapped;
-    _contentWrapCount++;
     return wrapped;
 }
 
@@ -2308,7 +2255,6 @@ static void IFCCountBlurTextures(const void *key, const void *value, void *conte
     td.usage = MTLTextureUsageShaderRead;
     id<MTLTexture> texture = [_device newTextureWithDescriptor:td];
     [texture replaceRegion:MTLRegionMake2D(0, 0, (NSUInteger)w, (NSUInteger)h) mipmapLevel:0 withBytes:data.bytes bytesPerRow:(NSUInteger)w * 4];
-    _chromeRasterCount++;
     return texture;
 }
 
@@ -2404,26 +2350,9 @@ static IFCRectI IFCTransformRect(IFCRectI r, IFCompositorTransform t) {
     return IFCRectIMake(IFCRound(x0), IFCRound(y0), MAX(IFCRound(x1) - IFCRound(x0), 0L), MAX(IFCRound(y1) - IFCRound(y0), 0L));
 }
 
-static NSString *IFCPassName(IFCompositorPass pass) {
-    switch (pass) {
-        case IFCompositorPassBackground: return @"background";
-        case IFCompositorPassOutline: return @"outline";
-        case IFCompositorPassShadow: return @"shadow";
-        case IFCompositorPassBorder: return @"border";
-        case IFCompositorPassContent: return @"content";
-        case IFCompositorPassTitleBar: return @"title_bar";
-        case IFCompositorPassStandInBody: return @"body";
-        case IFCompositorPassLabel: return @"label";
-        case IFCompositorPassBlur: return @"blur";
-        case IFCompositorPassSnapshot: return @"snapshot";
-        case IFCompositorPassErrorBar: return @"error_bar";
-    }
-    return @"?";
-}
-
-- (void)draw:(IFCPipe)pipe pass:(IFCompositorPass)pass dst:(IFCRectI)dst uniforms:(IFCUniforms *)u texture:(id<MTLTexture>)texture
+- (void)draw:(IFCPipe)pipe dst:(IFCRectI)dst uniforms:(IFCUniforms *)u texture:(id<MTLTexture>)texture
      element:(IFCompositorElement *)element {
-    [self draw:pipe pass:pass dst:dst hole:IFCRectIMake(0, 0, 0, 0) uniforms:u texture:texture element:element];
+    [self draw:pipe dst:dst hole:IFCRectIMake(0, 0, 0, 0) uniforms:u texture:texture element:element];
 }
 
 // `hole` is a rectangle inside `dst` where the fragment shader is known to
@@ -2431,10 +2360,8 @@ static NSString *IFCPassName(IFCompositorPass pass) {
 // border). Under premultiplied source-over a zero fragment leaves the target
 // unchanged, so those fragments are not rasterised at all: the element is
 // drawn as up to four strips around the hole. Same pixels, far less fill.
-- (void)draw:(IFCPipe)pipe pass:(IFCompositorPass)pass dst:(IFCRectI)dst hole:(IFCRectI)hole uniforms:(IFCUniforms *)u
+- (void)draw:(IFCPipe)pipe dst:(IFCRectI)dst hole:(IFCRectI)hole uniforms:(IFCUniforms *)u
      texture:(id<MTLTexture>)texture element:(IFCompositorElement *)element {
-    if (_passMask && !(_passMask & pass)) return;
-    if (_skipPasses & pass) return;
     if (_hasXform) {
         dst = IFCTransformRect(dst, _xform);
         if (hole.w > 0 && hole.h > 0) {
@@ -2496,32 +2423,6 @@ static NSString *IFCPassName(IFCompositorPass pass) {
         [_encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
         _drawsSubmitted++;
     }
-
-    if (_debugDrawHandler && !_internal) {
-        _debugDrawHandler(@{
-            @"pass": IFCPassName(pass),
-            @"element": element ? @(element.identifier) : NSNull.null,
-            @"dst": @[@(dst.x), @(dst.y), @(dst.w), @(dst.h)],
-            @"scissor": @[@(scissor.x), @(scissor.y), @(scissor.w), @(scissor.h)],
-            @"hole": split ? @[@(hole.x), @(hole.y), @(hole.w), @(hole.h)] : NSNull.null,
-            @"size": @[@(u->size.x), @(u->size.y)],
-            @"rect": @[@(u->rect.x), @(u->rect.y), @(u->rect.z), @(u->rect.w)],
-            @"color": @[@(u->color.x), @(u->color.y), @(u->color.z), @(u->color.w)],
-            @"alpha": @(u->alpha),
-            @"aa_scale": @(u->aa_scale),
-            @"inner_radius": @(u->inner_radius),
-            @"border_width": @(u->border_width),
-            @"outer_radius": @(u->outer_radius),
-            @"radius": @(u->radius),
-            @"shadow_corner": @(u->shadow_corner),
-            @"corner_radius": @[@(u->corner_radius.x), @(u->corner_radius.y), @(u->corner_radius.z), @(u->corner_radius.w)],
-            @"geo_size": @[@(u->geo_size.x), @(u->geo_size.y)],
-            @"input_to_geo": @[@(u->m0.x), @(u->m0.y), @(u->m0.z), @(u->m1.x), @(u->m1.y), @(u->m1.z), @(u->m2.x), @(u->m2.y), @(u->m2.z)],
-            @"src": @[@(u->src.x), @(u->src.y), @(u->src.z), @(u->src.w)],
-            @"no_alpha": @(u->no_alpha),
-            @"texture": texture ? @[@(texture.width), @(texture.height)] : NSNull.null,
-        });
-    }
 }
 
 static inline IFCUniforms IFCUniformsZero(void) {
@@ -2539,7 +2440,7 @@ static inline IFCUniforms IFCUniformsZero(void) {
 - (void)drawChromeAround:(IFCRectD)inner decoration:(IFCompositorDecoration)deco borderWidth:(long)bw radius:(long)radius
                   shadow:(BOOL)shadow focused:(BOOL)focused alpha:(float)alpha scale:(double)s zoom:(double)zoom
                    parts:(IFCChromePart)parts element:(IFCompositorElement *)element {
-    if (shadow && (parts & IFCChromeShadow)) {
+    if (shadow && !_skipShadow && (parts & IFCChromeShadow)) {
         // The footprint grows by border_width so the shadow grades from the
         // border's outer edge; the radius follows `outer_corner_radius`.
         // (closing.rs `flatten` hands `bake_shadow_element` the body as it is,
@@ -2551,7 +2452,7 @@ static inline IFCUniforms IFCUniformsZero(void) {
         IFCShadowGeometry(body, IFCOuterCornerRadius((float)radius, (float)bw), deco.shadowRadius, s, zoom, &dst, &hole, &u);
         u.color = IFCColorVector(deco.shadowColor);
         u.alpha = alpha;
-        [self draw:IFCPipeShadow pass:IFCompositorPassShadow dst:dst hole:hole uniforms:&u texture:nil element:element];
+        [self draw:IFCPipeShadow dst:dst hole:hole uniforms:&u texture:nil element:element];
     }
     if (bw > 0 && (parts & IFCChromeBorder)) {
         IFCUniforms u = IFCUniformsZero();
@@ -2559,20 +2460,20 @@ static inline IFCUniforms IFCUniformsZero(void) {
         if (IFCBorderGeometry(inner, bw, (float)radius, s, zoom, &dst, &hole, &u)) {
             u.color = IFCColorVector(focused ? deco.borderColorFocused : deco.borderColor);
             u.alpha = alpha;
-            [self draw:IFCPipeBorder pass:IFCompositorPassBorder dst:dst hole:hole uniforms:&u texture:nil element:element];
+            [self draw:IFCPipeBorder dst:dst hole:hole uniforms:&u texture:nil element:element];
         }
     }
 }
 
 // A memory buffer drawn through smithay's default texture program into `dst`
 // (pre-zoom physical), pixel-snapped by `zoom` (`PixelSnapRescaleElement`).
-- (void)drawBuffer:(id<MTLTexture>)texture preZoom:(IFCRectI)rect zoom:(double)zoom alpha:(float)alpha pass:(IFCompositorPass)pass
+- (void)drawBuffer:(id<MTLTexture>)texture preZoom:(IFCRectI)rect zoom:(double)zoom alpha:(float)alpha
            element:(IFCompositorElement *)element {
     if (!texture) return;
     IFCUniforms u = IFCUniformsZero();
     u.alpha = alpha;
     IFCSetSource(&u, CGRectMake(0, 0, (CGFloat)texture.width, (CGFloat)texture.height), (double)texture.width, (double)texture.height);
-    [self draw:IFCPipeTexture pass:pass dst:IFCCornerRound(rect, zoom) uniforms:&u texture:texture element:element];
+    [self draw:IFCPipeTexture dst:IFCCornerRound(rect, zoom) uniforms:&u texture:texture element:element];
 }
 
 // blur.rs, the splice at the end of `process_blur_requests`: the frost as a
@@ -2589,7 +2490,7 @@ static inline IFCUniforms IFCUniformsZero(void) {
     // (`transform_phys_rect`); the frost element is not wrapped in one.
     BOOL hadXform = _hasXform;
     _hasXform = NO;
-    [self draw:IFCPipeTexture pass:IFCompositorPassBlur dst:dst uniforms:&u texture:entry->frostTexture element:element];
+    [self draw:IFCPipeTexture dst:dst uniforms:&u texture:entry->frostTexture element:element];
     _hasXform = hadXform;
 }
 
@@ -2667,9 +2568,9 @@ static inline IFCUniforms IFCUniformsZero(void) {
             // Only the bottom corners round under a title bar.
             const float radii[4] = {hasSSD ? 0.0f : r, hasSSD ? 0.0f : r, r, r};
             IFCCornerClipUniforms(surface, g.r, radii, s, zoom, bufW, bufH, source, &u);
-            [self draw:IFCPipeCornerClip pass:IFCompositorPassContent dst:dst uniforms:&u texture:content element:element];
+            [self draw:IFCPipeCornerClip dst:dst uniforms:&u texture:content element:element];
         } else {
-            [self draw:IFCPipeTexture pass:IFCompositorPassContent dst:dst uniforms:&u texture:content element:element];
+            [self draw:IFCPipeTexture dst:dst uniforms:&u texture:content element:element];
         }
     }
 
@@ -2680,7 +2581,7 @@ static inline IFCUniforms IFCUniformsZero(void) {
                                           pinned:element.showsPinnedIndicator radius:radius style:style styleHash:styleHash];
         // The bar takes the border's inner width so it stops where the content does.
         IFCRectI barDst = IFCRectIMake(locX, locY - IFCTrunc(barHPhys), IFCPaintedExtent(g.r.w, s), IFCPaintedExtent(barHLogical, s));
-        [self drawBuffer:bar preZoom:barDst zoom:zoom alpha:opacity pass:IFCompositorPassTitleBar element:element];
+        [self drawBuffer:bar preZoom:barDst zoom:zoom alpha:opacity element:element];
     }
 }
 
@@ -2722,12 +2623,12 @@ static inline IFCUniforms IFCUniformsZero(void) {
     id<MTLTexture> bar = [self barTextureFor:entry width:sizeW scale:decorationScale title:@"" pinned:NO radius:radius
                                        style:style styleHash:styleHash];
     IFCRectI barDst = IFCRectIMake(locX, locY - IFCTrunc(barHPhys), IFCPaintedExtent((double)sizeW, s), IFCPaintedExtent(barHLogical, s));
-    [self drawBuffer:bar preZoom:barDst zoom:zoom alpha:alpha pass:IFCompositorPassTitleBar element:element];
+    [self drawBuffer:bar preZoom:barDst zoom:zoom alpha:alpha element:element];
 
     // Rounded body fill in the SSD background colour, trimmed to the painted rect.
     id<MTLTexture> body = [self bodyTextureFor:entry width:sizeW height:sizeH scale:decorationScale style:style styleHash:styleHash];
     IFCRectI bodyDst = IFCRectIMake(locX, locY, IFCPaintedExtent((double)sizeW, s), IFCPaintedExtent((double)sizeH, s));
-    [self drawBuffer:body preZoom:bodyDst zoom:zoom alpha:alpha pass:IFCompositorPassStandInBody element:element];
+    [self drawBuffer:body preZoom:bodyDst zoom:zoom alpha:alpha element:element];
 
     // Centred app-name label.
     NSString *name = element.appName.length ? element.appName : (element.title ?: @"");
@@ -2737,7 +2638,7 @@ static inline IFCUniforms IFCUniformsZero(void) {
         double labelX = g.r.x + (double)entry->labelRect.x, labelY = g.r.y + (double)entry->labelRect.y;
         // The memory element's logical size: buffer size over buffer scale.
         IFCRectI labelDst = IFCMemoryElementRect(labelX * s, labelY * s, entry->labelBufW / decorationScale, entry->labelBufH / decorationScale, s);
-        [self drawBuffer:label preZoom:labelDst zoom:zoom alpha:alpha pass:IFCompositorPassLabel element:element];
+        [self drawBuffer:label preZoom:labelDst zoom:zoom alpha:alpha element:element];
     }
 }
 
@@ -2783,7 +2684,7 @@ static inline IFCUniforms IFCUniformsZero(void) {
     u.alpha = opacity == 1.0 ? alpha : (float)((double)alpha * opacity);
     u.no_alpha = element.contentOpaque ? 1.0f : 0.0f;
     IFCSetSource(&u, source, bufW, bufH);
-    [self draw:IFCPipeTexture pass:IFCompositorPassSnapshot dst:dst uniforms:&u texture:texture element:element];
+    [self draw:IFCPipeTexture dst:dst uniforms:&u texture:texture element:element];
 }
 
 // One element, in whichever pass is open: the frame itself, the backdrop of a
@@ -2847,7 +2748,6 @@ static NSMutableData *IFCRenderErrorBar(NSString *text, long width, long barHeig
         _errorBarMessages = nil;
         return;
     }
-    if (_passMask && !(_passMask & IFCompositorPassErrorBar)) return;
     long width = MAX(c->viewportW, 1L), scale = MAX(c->decorationScale, 1L), barHeight = (long)IFCompositorErrorBarHeight();
     // Keyed by (text, width, scale), as upstream's cache is.
     if (!_errorBarMessages || width != _errorBarWidth || scale != _errorBarScale ||
@@ -2868,7 +2768,7 @@ static NSMutableData *IFCRenderErrorBar(NSString *text, long width, long barHeig
     IFCSetSource(&u, CGRectMake(0, 0, (CGFloat)_errorBarTexture.width, (CGFloat)_errorBarTexture.height),
                  (double)_errorBarTexture.width, (double)_errorBarTexture.height);
     // PixelSnapRescaleElement with a rescale of 1.0: unchanged.
-    [self draw:IFCPipeTexture pass:IFCompositorPassErrorBar dst:dst uniforms:&u texture:_errorBarTexture element:nil];
+    [self draw:IFCPipeTexture dst:dst uniforms:&u texture:_errorBarTexture element:nil];
 }
 
 // mod.rs `outline_edge_strips` + `build_output_outline_elements`.
@@ -2902,7 +2802,7 @@ static NSMutableData *IFCRenderErrorBar(NSString *text, long width, long barHeig
             // loc = strip.loc.to_f64().to_physical(scale); the buffer is at scale 1.
             IFCRectI dst = IFCMemoryElementRect((double)strip.x * s, (double)strip.y * s, strip.w, strip.h, s);
             // PixelSnapRescaleElement with a rescale of 1.0: unchanged.
-            [self draw:IFCPipeSolid pass:IFCompositorPassOutline dst:dst uniforms:&u texture:nil element:nil];
+            [self draw:IFCPipeSolid dst:dst uniforms:&u texture:nil element:nil];
         }
     }
 }
@@ -2968,7 +2868,6 @@ static NSMutableData *IFCRenderErrorBar(NSString *text, long width, long barHeig
     td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
     td.storageMode = MTLStorageModePrivate;
     id<MTLTexture> texture = [_device newTextureWithDescriptor:td];
-    if (texture) _blurTextureAllocationCount++;
     return texture;
 }
 
@@ -2985,7 +2884,7 @@ static NSMutableData *IFCRenderErrorBar(NSString *text, long width, long barHeig
 // handed over — never written, undefined; here `b` is cleared to transparent
 // by its first pass.
 - (id<MTLTexture>)encodeKawaseOn:(id<MTLTexture>)a other:(id<MTLTexture>)b passes:(uint32_t)passes offset:(float)offset
-                   commandBuffer:(id<MTLCommandBuffer>)commandBuffer stage:(void (^)(id<MTLTexture> written))stage {
+                   commandBuffer:(id<MTLCommandBuffer>)commandBuffer {
     if (!a || (passes > 0 && !b)) return nil;
     long allocW = (long)a.width, allocH = (long)a.height;
     for (uint32_t n = 0; n < 2 * passes; n++) {
@@ -3011,7 +2910,6 @@ static NSMutableData *IFCRenderErrorBar(NSString *text, long width, long barHeig
         u.blur = simd_make_float4(halfPixel.x, halfPixel.y, passOffset, 0.0f);
         [self rawDraw:(downscale ? IFCPipeBlurDown : IFCPipeBlurUp) dst:IFCRectIMake(0, 0, dstW, dstH) uniforms:&u texture:a];
         [self endPass];
-        if (stage) stage(b);
         id<MTLTexture> swap = a;
         a = b;
         b = swap;
@@ -3054,8 +2952,6 @@ static NSMutableData *IFCRenderErrorBar(NSString *text, long width, long barHeig
              commandBuffer:commandBuffer]) {
         return 0;
     }
-    IFCompositorPass mask = _passMask;
-    _passMask = 0;
     _internal = YES;
     _originX = origin.x;
     _originY = origin.y;
@@ -3065,7 +2961,7 @@ static NSMutableData *IFCRenderErrorBar(NSString *text, long width, long barHeig
         IFCUniforms u = IFCUniformsZero();
         IFCSetSource(&u, CGRectMake(0, 0, (CGFloat)_bgTexture.width, (CGFloat)_bgTexture.height), (double)_bgTexture.width,
                      (double)_bgTexture.height);
-        [self draw:IFCPipeTexture pass:IFCompositorPassBackground dst:IFCRectIMake(0, 0, c->outW, c->outH) uniforms:&u texture:_bgTexture
+        [self draw:IFCPipeTexture dst:IFCRectIMake(0, 0, c->outW, c->outH) uniforms:&u texture:_bgTexture
            element:nil];
     }
     [self drawOutlines:frame scale:c->s viewportW:c->viewportW viewportH:c->viewportH];
@@ -3074,7 +2970,6 @@ static NSMutableData *IFCRenderErrorBar(NSString *text, long width, long barHeig
     [self endPass];
     _originX = _originY = 0;
     _internal = NO;
-    _passMask = mask;
     return draws;
 }
 
@@ -3201,19 +3096,6 @@ static BOOL IFCItemMayReach(const IFCItem *item, IFCRectI capture, double s, lon
     if (entry->frostForceFrames > 0) entry->frostForceFrames--;
     BOOL dirty = !entry->frostValid || entry->frostKey != key || beat || forced;
 
-    if (_debugDrawHandler) {
-        _debugDrawHandler(@{
-            @"pass": @"blur_info",
-            @"element": @(element.identifier),
-            @"screen_rect": @[@(screen.x), @(screen.y), @(screen.w), @(screen.h)],
-            @"capture": @[@(clipped.x), @(clipped.y), @(clipped.w), @(clipped.h)],
-            @"pad": @(pad),
-            @"passes": @(passes),
-            @"offset": @(offset),
-            @"direct": @(direct),
-            @"recomputed": @(dirty),
-        });
-    }
     if (!dirty) {
         entry->frostSeen = _generation;
         return;
@@ -3278,7 +3160,7 @@ static BOOL IFCItemMayReach(const IFCItem *item, IFCRectI capture, double s, lon
         return;
     }
 
-    id<MTLTexture> blurred = [self encodeKawaseOn:padA other:padB passes:passes offset:offset commandBuffer:commandBuffer stage:nil];
+    id<MTLTexture> blurred = [self encodeKawaseOn:padA other:padB passes:passes offset:offset commandBuffer:commandBuffer];
 
     // The frost and the mask: the window's extent, allocated in steps so that
     // a zoom does not reallocate them on every frame (`quantized_alloc`).
@@ -3307,9 +3189,7 @@ static BOOL IFCItemMayReach(const IFCItem *item, IFCRectI capture, double s, lon
         // origin at (0, 0), over transparent.
         if ([self beginPassOn:mask width:screen.w height:screen.h load:MTLLoadActionClear clear:MTLClearColorMake(0, 0, 0, 0)
                 commandBuffer:commandBuffer]) {
-            IFCompositorPass passMask = _passMask;
-            _passMask = 0;
-            _skipPasses = IFCompositorPassShadow;
+            _skipShadow = YES;
             _internal = YES;
             _originX = screen.x;
             _originY = screen.y;
@@ -3317,8 +3197,7 @@ static BOOL IFCItemMayReach(const IFCItem *item, IFCRectI capture, double s, lon
             [self endPass];
             _originX = _originY = 0;
             _internal = NO;
-            _skipPasses = 0;
-            _passMask = passMask;
+            _skipShadow = NO;
 
             // Threshold its alpha and multiply the frost by it.
             if ([self beginPassOn:entry->frostTexture width:screen.w height:screen.h load:MTLLoadActionLoad
@@ -3342,7 +3221,6 @@ static BOOL IFCItemMayReach(const IFCItem *item, IFCRectI capture, double s, lon
     entry->frostValid = YES;
     entry->frostZeroed = NO;
     entry->frostSeen = _generation;
-    _blurComputeCount++;
 }
 
 // The frosts of this encode, before its own pass opens.
@@ -3553,8 +3431,7 @@ static unsigned IFCStackBucket(IFCompositorElementKind kind, IFCompositorStackLa
     _touched = 0;
     [_graveyard began];
     [commandBuffer addCompletedHandler:_completion];
-    _passMask = frame.debugPasses;
-    _skipPasses = 0;
+    _skipShadow = NO;
     _hasXform = NO;
     _originX = _originY = 0;
     _internal = NO;
@@ -3577,7 +3454,7 @@ static unsigned IFCStackBucket(IFCompositorElementKind kind, IFCompositorStackLa
 
     // The frost of every blurred window, into textures of its own, before the
     // frame's pass opens. Nothing here runs unless an element asks for it.
-    if (_blurRequested && (!_passMask || (_passMask & IFCompositorPassBlur))) {
+    if (_blurRequested) {
         // A background with a chunk cache bakes or uploads inside its encode,
         // which comes after the frost keys: its chunk work for this frame is
         // done here instead, so that the frame a chunk lands in is the frame
@@ -3608,7 +3485,7 @@ static unsigned IFCStackBucket(IFCompositorElementKind kind, IFCompositorStackLa
 
     // Background (upstream's `bg_elements`), replacing the cleared pixels.
     IFBackgroundProgram *background = frame.background;
-    if (background && (!_passMask || (_passMask & IFCompositorPassBackground))) {
+    if (background) {
         IFBackgroundFrame bg = {frame.cameraX, frame.cameraY, frameZoom, frame.size.width, frame.size.height, s, frame.time};
         if ([background encodeFrame:bg inEncoder:encoder] && opaqueClear && background.isTransparent) {
             // The background wrote premultiplied colour with its own alpha;
@@ -3616,10 +3493,7 @@ static unsigned IFCStackBucket(IFCompositorElementKind kind, IFCompositorStackLa
             _boundPipeline = nil;
             IFCUniforms u = IFCUniformsZero();
             u.color = simd_make_float4(0, 0, 0, 1);
-            IFCompositorPass mask = _passMask;
-            _passMask = 0;
-            [self draw:IFCPipeAlphaOne pass:IFCompositorPassBackground dst:_target uniforms:&u texture:nil element:nil];
-            _passMask = mask;
+            [self draw:IFCPipeAlphaOne dst:_target uniforms:&u texture:nil element:nil];
         }
         _boundPipeline = nil;
     }
@@ -3743,8 +3617,7 @@ static IFCRectD IFCMergeRects(IFCRectD a, IFCRectD b) {
         item.g = (IFCGeom){{-bounds.x, -bounds.y, w, h}, 1.0};
         item.scissor = IFCRectIMake(0, 0, physW, physH);
         item.lifeAlpha = 1.0f;
-        _passMask = 0;
-        _skipPasses = 0;
+        _skipShadow = NO;
         _originX = _originY = 0;
         _internal = YES;
         _bake = YES;
@@ -3777,54 +3650,7 @@ static IFCRectD IFCMergeRects(IFCRectD a, IFCRectD b) {
     return snapshot;
 }
 
-// MARK: Diagnostics
-
-- (NSData *)debugBlurBGRA:(NSData *)pixels width:(NSUInteger)width height:(NSUInteger)height passes:(NSUInteger)passes
-                   offset:(float)offset stages:(NSMutableArray<NSData *> *)stages {
-    if (_resources.error || width == 0 || height == 0 || width > kIFCMaxTextureSide || height > kIFCMaxTextureSide ||
-        pixels.length != width * height * 4 || passes > kIFCBlurMaxPasses) {
-        return nil;
-    }
-    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:width height:height mipmapped:NO];
-    td.storageMode = MTLStorageModeShared;
-    id<MTLTexture> staging = [_device newTextureWithDescriptor:td];
-    id<MTLTexture> result = [_device newTextureWithDescriptor:td];
-    id<MTLTexture> padA = [self newBlurTextureWidth:(long)width height:(long)height];
-    id<MTLTexture> padB = [self newBlurTextureWidth:(long)width height:(long)height];
-    id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
-    if (!staging || !result || !padA || !padB || !commandBuffer) return nil;
-    [staging replaceRegion:MTLRegionMake2D(0, 0, width, height) mipmapLevel:0 withBytes:pixels.bytes bytesPerRow:width * 4];
-    [_graveyard began];
-    [commandBuffer addCompletedHandler:_completion];
-
-    void (^copy)(id<MTLTexture>, id<MTLTexture>) = ^(id<MTLTexture> from, id<MTLTexture> to) {
-        id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
-        [blit copyFromTexture:from sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(width, height, 1)
-                    toTexture:to destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
-        [blit endEncoding];
-    };
-    copy(staging, padA);
-    NSMutableArray<id<MTLTexture>> *written = stages ? [NSMutableArray array] : nil;
-    id<MTLDevice> device = _device;
-    id<MTLTexture> blurred = [self encodeKawaseOn:padA other:padB passes:(uint32_t)passes offset:offset commandBuffer:commandBuffer
-                                            stage:(written ? ^(id<MTLTexture> texture) {
-                                                id<MTLTexture> kept = [device newTextureWithDescriptor:td];
-                                                if (!kept) return;
-                                                copy(texture, kept);
-                                                [written addObject:kept];
-                                            } : nil)];
-    if (blurred) copy(blurred, result);
-    [commandBuffer commit];
-    [commandBuffer waitUntilCompleted];
-    if (!blurred || commandBuffer.status != MTLCommandBufferStatusCompleted) return nil;
-    NSData * (^bytes)(id<MTLTexture>) = ^NSData *(id<MTLTexture> texture) {
-        NSMutableData *data = [NSMutableData dataWithLength:width * height * 4];
-        [texture getBytes:data.mutableBytes bytesPerRow:width * 4 fromRegion:MTLRegionMake2D(0, 0, width, height) mipmapLevel:0];
-        return data;
-    };
-    for (id<MTLTexture> texture in written) [stages addObject:bytes(texture)];
-    return bytes(result);
-}
+// MARK: Offscreen export
 
 - (id<MTLTexture>)renderOffscreen:(IFCompositorFrame *)frame error:(NSError **)error {
     NSUInteger w, h;
@@ -3866,32 +3692,6 @@ static uint8_t *IFCCopyBytes(id<MTLTexture> texture) {
     uint8_t *bytes = IFCCopyBytes(target);
     if (!bytes) return NULL;
     return IFCCreateImage(bytes, target.width, target.height, frame.clear == IFCompositorClearTransparent);
-}
-
-- (NSData *)BGRADataForFrame:(IFCompositorFrame *)frame error:(NSError **)error {
-    id<MTLTexture> target = [self renderOffscreen:frame error:error];
-    if (!target) return nil;
-    uint8_t *bytes = IFCCopyBytes(target);
-    if (!bytes) return nil;
-    return [NSData dataWithBytesNoCopy:bytes length:target.width * target.height * 4 freeWhenDone:YES];
-}
-
-- (BOOL)writePNGForFrame:(IFCompositorFrame *)frame toURL:(NSURL *)url error:(NSError **)error {
-    CGImageRef image = [self newImageForFrame:frame error:error];
-    if (!image) return NO;
-    CGImageDestinationRef destination = CGImageDestinationCreateWithURL((__bridge CFURLRef)url, CFSTR("public.png"), 1, NULL);
-    BOOL ok = NO;
-    if (destination) {
-        CGImageDestinationAddImage(destination, image, NULL);
-        ok = CGImageDestinationFinalize(destination);
-        CFRelease(destination);
-    }
-    CGImageRelease(image);
-    if (!ok && error) {
-        *error = [NSError errorWithDomain:IFCErrorDomain code:5 userInfo:@{NSLocalizedDescriptionKey:
-            [NSString stringWithFormat:@"could not write %@", url.path]}];
-    }
-    return ok;
 }
 @end
 
@@ -4047,11 +3847,8 @@ static int IFCCompareInterval(const void *a,const void *b) {double x=*(const dou
     double _lastTime;
     BOOL _hasAnimateStamp;
     double _lastAnimate;  // upstream `background_last_animate`, in frame time
-    id<MTLTexture> _debugCopy;
-    BOOL _debugCopyAlpha;
     IFCPresentedCount *_presented;  // made with the first handler; nil until `countsPresented`
     IFCDrawablePool *_drawables;
-    id<CAMetalDrawable> _displayDrawable;
     BOOL _stopped;
 }
 
@@ -4059,19 +3856,7 @@ static int IFCCompareInterval(const void *a,const void *b) {double x=*(const dou
     return _presented ? atomic_load(&_presented->shown) : 0;
 }
 - (IFCompositorPresentationStats)takePresentationStats {IFCompositorPresentationStats stats=_presented?[_presented take:_presentationInterval]:(IFCompositorPresentationStats){0};[_drawables takeStats:&stats];return stats;}
-- (BOOL)drawablePending {return _displayLinkDriven?!_displayDrawable:(_asynchronousDrawables&&!_debugCaptureEnabled&&[_drawables waiting]);}
-- (void)setDisplayLinkDriven:(BOOL)driven {
-    if(_displayLinkDriven==driven)return;
-    _displayLinkDriven=driven;_displayDrawable=nil;[_drawables cancel];_drawables=nil;
-    // The display link owns the drawable's presentation budget; its offers
-    // must not wait for a second Core Animation transaction to retire.
-    if(driven)self.presentsWithTransaction=NO;
-}
-- (void)withDisplayDrawable:(id<CAMetalDrawable>)drawable presentationTime:(CFTimeInterval)time frame:(void (^)(void))frame {
-    if(_stopped||!_displayLinkDriven||!drawable||!frame)return;
-    _displayDrawable=drawable;_displaySubmissionTime=0;self.presentationTime=time;
-    @try { frame(); } @finally { _displayDrawable=nil; }
-}
+- (BOOL)drawablePending {return [_drawables waiting];}
 
 - (instancetype)init {
     return [self initWithRenderer:nil];
@@ -4083,7 +3868,7 @@ static int IFCCompareInterval(const void *a,const void *b) {double x=*(const dou
     if (_renderer) self.device = _renderer.device;
     self.pixelFormat = MTLPixelFormatBGRA8Unorm;
     self.framebufferOnly = YES;
-    // The framebuffer holds sRGB-encoded values (see NOTES.md, "Colour").
+    // The framebuffer holds sRGB-encoded values (see COMPOSITOR-NOTES.md, "Colour").
     CGColorSpaceRef srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
     self.colorspace = srgb;
     CGColorSpaceRelease(srgb);
@@ -4109,14 +3894,7 @@ static int IFCCompareInterval(const void *a,const void *b) {double x=*(const dou
     _dirty = YES;
 }
 
-- (void)stopDrawing { _stopped=YES;_displayDrawable=nil;self.drawableReady=nil;[_drawables cancel];_drawables=nil; }
-
-- (void)setDebugCaptureEnabled:(BOOL)enabled {
-    _debugCaptureEnabled = enabled;
-    if(enabled){[_drawables cancel];_drawables=nil;}
-    self.framebufferOnly = !enabled;
-    if (!enabled) _debugCopy = nil;
-}
+- (void)stopDrawing { _stopped=YES;self.drawableReady=nil;[_drawables cancel];_drawables=nil; }
 
 - (BOOL)updateWithFrame:(IFCompositorFrame *)frame {
     _missed = NO;
@@ -4141,25 +3919,20 @@ static int IFCCompareInterval(const void *a,const void *b) {double x=*(const dou
     }
 
     CGSize drawableSize = CGSizeMake(pxW, pxH);
-    // Standalone and screen-link paths present a first/resized or unpaced frame
-    // inside the host's CATransaction. Their paced, unchanged frames present by
-    // command buffer without waiting for scheduling. A Metal display-link offer
-    // always owns its presentation deadline and bypasses that transaction.
+    // A first, resized or unpaced frame presents inside the host's
+    // CATransaction. A paced, unchanged frame presents by command buffer
+    // without waiting for scheduling.
     BOOL resized = !_hasLast || !CGSizeEqualToSize(self.drawableSize, drawableSize) || (frame.scale > 0 && self.contentsScale != frame.scale);
-    BOOL transaction = !_displayLinkDriven && (resized || !_paced);
+    BOOL transaction = resized || !_paced;
     if (self.presentsWithTransaction != transaction) self.presentsWithTransaction = transaction;
     if (self.contentsScale != frame.scale && frame.scale > 0) self.contentsScale = frame.scale;
     if (!CGSizeEqualToSize(self.drawableSize, drawableSize)) self.drawableSize = drawableSize;
     BOOL opaque = frame.clear == IFCompositorClearOpaqueBlack;
     if (self.opaque != opaque) self.opaque = opaque;
 
-    id<CAMetalDrawable> drawable;double presentationTarget=_presentationTime;
-    if(_displayLinkDriven){drawable=_displayDrawable;_displayDrawable=nil;
-        // A resize can be described after the display link obtained its offer.
-        // Leave this scene owed until the link offers the new raster size.
-        if(drawable.texture.width!=pxW||drawable.texture.height!=pxH)drawable=nil;}
-    else if(_asynchronousDrawables&&!_debugCaptureEnabled){if(!_drawables)_drawables=[[IFCDrawablePool alloc]initWithLayer:self];drawable=[_drawables takeFrom:self];}
-    else drawable=[self nextDrawable];
+    double presentationTarget=_presentationTime;
+    if(!_drawables)_drawables=[[IFCDrawablePool alloc]initWithLayer:self];
+    id<CAMetalDrawable> drawable=[_drawables takeFrom:self];
     if(!drawable){_missed=YES;return NO;}
     id<MTLCommandBuffer> commandBuffer = [_renderer.commandQueue commandBuffer];
     if (!commandBuffer) {  // still dirty: the next update retries
@@ -4171,23 +3944,11 @@ static int IFCCompareInterval(const void *a,const void *b) {double x=*(const dou
         return NO;
     }
 
-    id<MTLTexture> copy = nil;
-    if (_debugCaptureEnabled) {
-        MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:pxW height:pxH mipmapped:NO];
-        td.storageMode = MTLStorageModeShared;
-        copy = [_renderer.device newTextureWithDescriptor:td];
-        id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
-        [blit copyFromTexture:drawable.texture sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0)
-                   sourceSize:MTLSizeMake(pxW, pxH, 1) toTexture:copy destinationSlice:0 destinationLevel:0
-            destinationOrigin:MTLOriginMake(0, 0, 0)];
-        [blit endEncoding];
-    }
-
     if (_countsPresented) {
         // The handler runs off the main thread and keeps the count, not the layer: a layer's last release stays the host's.
         if (!_presented) _presented = [IFCPresentedCount new];
         IFCPresentedCount *count = _presented;
-        double submitted=CACurrentMediaTime(),target=(_paced||_displayLinkDriven)?presentationTarget:0;
+        double submitted=CACurrentMediaTime(),target=_paced?presentationTarget:0;
         // Copy the camera used to encode, not its later mutable description.
         // A new background clock or captured buffer is not a new camera step.
         double cameraX=frame.cameraX,cameraY=frame.cameraY,zoom=frame.zoom;
@@ -4203,12 +3964,7 @@ static int IFCCompareInterval(const void *a,const void *b) {double x=*(const dou
             if(elapsed>0){count->completed++;count->gpuSeconds+=elapsed;count->gpuWorst=fmax(count->gpuWorst,elapsed);}os_unfair_lock_unlock(&count->lock);
         }];
     }
-    if (_displayLinkDriven) {
-        // CAMetalDisplayLink requires present() before targetTimestamp, with
-        // commands committed first. Its offer already carries the presentation
-        // time; an explicit atTime: would violate that drawable contract.
-        [commandBuffer commit];[drawable present];_displaySubmissionTime=CACurrentMediaTime();
-    } else if (self.presentsWithTransaction) {
+    if (self.presentsWithTransaction) {
         [commandBuffer commit];
         [commandBuffer waitUntilScheduled];
         [drawable present];
@@ -4216,12 +3972,6 @@ static int IFCCompareInterval(const void *a,const void *b) {double x=*(const dou
         if(presentationTarget>0)[commandBuffer presentDrawable:drawable atTime:presentationTarget];else [commandBuffer presentDrawable:drawable];
         [commandBuffer commit];
     }
-    if (copy) {
-        [commandBuffer waitUntilCompleted];
-        _debugCopy = copy;
-        _debugCopyAlpha = !opaque;
-    }
-
     if (animateDue) {
         _lastAnimate = frame.time;
         _hasAnimateStamp = YES;
@@ -4232,19 +3982,5 @@ static int IFCCompareInterval(const void *a,const void *b) {double x=*(const dou
     _dirty = NO;
     _drawCount++;
     return YES;
-}
-
-- (CGImageRef)newDebugImageOfLastFrame {
-    if (!_debugCopy) return NULL;
-    uint8_t *bytes = IFCCopyBytes(_debugCopy);
-    if (!bytes) return NULL;
-    return IFCCreateImage(bytes, _debugCopy.width, _debugCopy.height, _debugCopyAlpha);
-}
-
-- (NSData *)debugBGRADataOfLastFrame {
-    if (!_debugCopy) return nil;
-    uint8_t *bytes = IFCCopyBytes(_debugCopy);
-    if (!bytes) return nil;
-    return [NSData dataWithBytesNoCopy:bytes length:_debugCopy.width * _debugCopy.height * 4 freeWhenDone:YES];
 }
 @end

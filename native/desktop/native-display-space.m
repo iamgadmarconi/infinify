@@ -4,9 +4,10 @@
 #include <dlfcn.h>
 #include <stdatomic.h>
 
-// Private getter declarations cross-checked against yabai (MIT), revision
-// dd845723416f5fe92af49fad5ebab00369e07edd, src/misc/extern.h:13,22,42,54,56.
-// Attribution and upstream license: ../families/YABAI-NOTICE.txt.
+// Private getter declarations cross-checked against yabai (MIT),
+// https://github.com/asmvik/yabai, revision dd845723416f5fe92af49fad5ebab00369e07edd,
+// src/misc/extern.h:13,22,42,54,56.
+// Attribution and upstream license: YABAI-NOTICE.txt (this directory).
 typedef struct {
     int (*connection)(void),(*type)(int,uint64_t);
     uint64_t (*current)(int,CFStringRef);

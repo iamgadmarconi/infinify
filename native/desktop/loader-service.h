@@ -2,8 +2,8 @@
 #import <Foundation/Foundation.h>
 // The app's side of the launch daemon (native/privileged/loadd.m): its registration with SMAppService and the XPC
 // request that has it load the Dock payload as root. Translated from Sunlight's `LiveWindowsService`
-// (third_party/sunlight/Sources/Canvas/Setup/LiveWindowsService.swift, afeea74, MIT, Copyright (c) 2026 spacefarm);
-// the line ranges are given in loader-service.m. Every call is a round trip to launchd or the daemon.
+// (Sources/Canvas/Setup/LiveWindowsService.swift in https://github.com/spacefarm-digital/sunlight, commit
+// afeea74b18e70ca49bf462d6fe462cf65deb2b32, MIT, Copyright (c) 2026 spacefarm); the line ranges are given in loader-service.m. Every call is a round trip to launchd or the daemon.
 typedef NS_ENUM(NSInteger,DWLoaderState) {
     DWLoaderUnavailable,   // no daemon in this build (ad-hoc signed, or running outside a bundle)
     DWLoaderNotRegistered,

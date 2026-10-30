@@ -13,15 +13,10 @@
 //   increment WxH      contentResizeIncrements; a size that is off the increment all the same is snapped down by the fixture itself
 //                      and counted in `snapped`, so the case does not depend on AppKit applying increments to a size set from outside
 //   hidden             the window is shown only when DIR/show appears
-//   size WxH           the window's content opens at this size, or at what of it fits the screen's visible area, instead of 420x470
-//                      (tests/e2e/scoped-render-bench.sh: a window as large as a person keeps one)
-//   animate RATE       explicitly redraw a moving band in the plain view at RATE Hz, even under the canvas (capture benchmark only)
-//   report_ms 50|500    periodic status reporting at 50ms (default) or every tenth 50ms tick; watchdog/commands and animation are unchanged
 //   corner WxH         the window opens with its lower right corner W and H points inside the visible area's, instead of centred:
 //                      from there a larger size does not fit the screen
 // and it then also obeys, each a file in DIR removed once read: `frame` "W H" (set its own frame size, top left kept), `hang` SECONDS
 // (block the main thread now), `stall` SECONDS (block it inside the next resize, once the window has its new size) and `close` (close the window; the process ends on the next tick).
-// With animate, DIR/stripes enables a one-point black/white export marker after the benchmark's timing phases.
 // The report gains `limits` (min, max as frame sizes and increment, or null), `snapped` and `resizes`.
 // Every report has `screen_visible`, the visible area of the window's screen as the window server and Accessibility measure it,
 // and `screen_size`, that screen's whole size.
@@ -41,10 +36,6 @@ static WKWebView *web;
 static NSSize increment,base;
 static double stall;
 static NSUInteger snapped,resizes;
-static double animationRate;
-static NSUInteger reportEvery=1;
-static NSUInteger animationFrames;
-static BOOL exportStripes;
 static id pair(NSSize s) { return s.width>0&&s.height>0?@[@(s.width),@(s.height)]:(id)NSNull.null; }
 // A content size as the size of the frame that holds it: what the window server and Accessibility report.
 static id framed(NSSize content) { if(!(content.width>0&&content.height>0)||content.width>=FLT_MAX||content.height>=FLT_MAX)return NSNull.null;return pair([window frameRectForContentRect:(NSRect){NSZeroPoint,content}].size); }
@@ -74,7 +65,7 @@ static void report(void) {
         @"controls":@{@"button":control(button),@"plain":control(plain),@"web":control(web)},@"counts":[counts copy],@"last":[last copy],@"front":[front copy],@"visible":@(window.visible),
         @"frontmost":@(NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier),
         @"key_window":@(window.keyWindow),@"main_window":@(window.mainWindow),@"app_active":@(NSApp.active),@"activations":@(activations),
-        @"occlusion_visible":(window.occlusionState&NSWindowOcclusionStateVisible)?@YES:@NO,@"above":above,@"animation_frames":@(animationFrames),@"export_stripes":@(exportStripes),
+        @"occlusion_visible":(window.occlusionState&NSWindowOcclusionStateVisible)?@YES:@NO,@"above":above,
         @"limits":@{@"min":framed(window.contentMinSize),@"max":framed(window.contentMaxSize),@"increment":pair(increment)},@"snapped":@(snapped),@"resizes":@(resizes),@"screen_visible":visible,@"screen_size":@[@(whole.width),@(whole.height)]};
     // Whole or not at all: a reader never sees half a report.
     NSString *path=[directory stringByAppendingPathComponent:@"status.json"],*partial=[path stringByAppendingString:@".tmp"];
@@ -87,11 +78,6 @@ static void report(void) {
 - (BOOL)acceptsFirstMouse:(NSEvent *)e { (void)e;return NO; }
 - (void)drawRect:(NSRect)dirty {
     (void)dirty;[NSColor.systemTealColor setFill];NSRectFill(self.bounds);
-    if(animationRate>0){
-        [NSColor.systemYellowColor setFill];NSRectFill(NSMakeRect(0,fmod(animationFrames*9,self.bounds.size.height),self.bounds.size.width,48));
-        // One-point stripes disappear in an overview raster. A 2x export must recover their contrast from native pixels.
-        if(exportStripes)for(int x=0;x<64;x++){[(x%2?NSColor.whiteColor:NSColor.blackColor)setFill];NSRectFill(NSMakeRect(16+x,16,1,32));}
-    }
 }
 - (void)mouseDown:(NSEvent *)e { count(@"plain_down");last[@"plain_down"]=local(e.locationInWindow);report(); }
 - (void)mouseUp:(NSEvent *)e { count(@"plain_up");last[@"plain_up"]=local(e.locationInWindow);report(); }
@@ -125,13 +111,11 @@ int main(int argc,const char **argv) { @autoreleasepool {
     if(argc<5)return 64;
     directory=@(argv[1]);char *end=NULL;double dx=strtod(argv[3],&end);if(!end||*end)return 64;
     double seconds=strtod(argv[4],&end);if(!end||*end||!(seconds>=1&&seconds<=300))return 64;
-    BOOL resizable=NO,hidden=NO;NSSize least=NSZeroSize,most=NSZeroSize,opens=NSZeroSize,corner=NSZeroSize;
+    BOOL resizable=NO,hidden=NO;NSSize least=NSZeroSize,most=NSZeroSize,corner=NSZeroSize;
     for(int i=5;i<argc;i++){
         if(!strcmp(argv[i],"resizable")){resizable=YES;continue;}
         if(!strcmp(argv[i],"hidden")){hidden=YES;continue;}
-        if(!strcmp(argv[i],"animate")){if(++i>=argc)return 64;animationRate=strtod(argv[i],&end);if(!end||*end||!isfinite(animationRate)||animationRate<1||animationRate>240)return 64;continue;}
-        if(!strcmp(argv[i],"report_ms")){if(++i>=argc)return 64;if(!strcmp(argv[i],"50"))reportEvery=1;else if(!strcmp(argv[i],"500"))reportEvery=10;else return 64;continue;}
-        NSSize *into=!strcmp(argv[i],"min")?&least:!strcmp(argv[i],"max")?&most:!strcmp(argv[i],"increment")?&increment:!strcmp(argv[i],"size")?&opens:!strcmp(argv[i],"corner")?&corner:NULL;int w=0,h=0;
+        NSSize *into=!strcmp(argv[i],"min")?&least:!strcmp(argv[i],"max")?&most:!strcmp(argv[i],"increment")?&increment:!strcmp(argv[i],"corner")?&corner:NULL;int w=0,h=0;
         if(!into||++i>=argc||sscanf(argv[i],"%dx%d",&w,&h)!=2||w<1||h<1)return 64;
         *into=NSMakeSize(w,h);
     }
@@ -140,8 +124,6 @@ int main(int argc,const char **argv) { @autoreleasepool {
     for(NSString *key in @[@"button_action",@"plain_down",@"plain_up",@"web_down",@"web_up",@"web_click",@"raf"])counts[key]=@0;
     [NSApplication sharedApplication];[NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
     NSRect area=(NSScreen.mainScreen?:NSScreen.screens.firstObject).visibleFrame;CGFloat width=420,height=470;
-    // Less its title bar, and no wider than leaves DX its place.
-    if(opens.width>0){width=MAX(420,MIN(opens.width,area.size.width-2*fabs(dx)));height=MAX(470,MIN(opens.height,area.size.height-40));}
     NSRect opening=NSMakeRect(NSMidX(area)-width/2+dx,NSMidY(area)-height/2,width,height);
     if(corner.width>0)opening.origin=NSMakePoint(NSMaxX(area)-corner.width-width,NSMinY(area)+corner.height);
     window=[[NSWindow alloc]initWithContentRect:opening styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|(resizable?NSWindowStyleMaskResizable:0) backing:NSBackingStoreBuffered defer:NO];
@@ -169,7 +151,7 @@ int main(int argc,const char **argv) { @autoreleasepool {
     __block BOOL waiting=hidden;BOOL commanded=argc>5;
     // A command of the sizing test: the file's text, and the file gone.
     NSString *(^command)(NSString *)=^NSString *(NSString *name){NSString *path=[directory stringByAppendingPathComponent:name],*text=[NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];if(text)[NSFileManager.defaultManager removeItemAtPath:path error:nil];return text;};
-    pid_t parent=getppid();NSDate *until=[NSDate dateWithTimeIntervalSinceNow:seconds];__block NSUInteger reportTicks=0;
+    pid_t parent=getppid();NSDate *until=[NSDate dateWithTimeIntervalSinceNow:seconds];
     [NSTimer scheduledTimerWithTimeInterval:.05 repeats:YES block:^(NSTimer *timer){(void)timer;if(getppid()!=parent||until.timeIntervalSinceNow<=0||(!waiting&&!window.visible))exit(0);
         if(commanded){NSString *text=nil;
             if(waiting&&command(@"show")){waiting=NO;[window orderFrontRegardless];}
@@ -179,10 +161,6 @@ int main(int argc,const char **argv) { @autoreleasepool {
             if(command(@"close"))[window close];}
         NSString *below=[directory stringByAppendingPathComponent:@"below"],*number=[NSString stringWithContentsOfFile:below encoding:NSUTF8StringEncoding error:nil];
         if(number.integerValue>0){[NSFileManager.defaultManager removeItemAtPath:below error:nil];[window orderWindow:NSWindowBelow relativeTo:number.integerValue];}
-        if(animationRate>0&&command(@"stripes"))exportStripes=YES;
-        // The first periodic tick still reports promptly. Only this diagnostic
-        // cadence changes; event-driven reports above stay immediate.
-        if(reportTicks++%reportEvery==0)report();}];
-    if(animationRate>0){NSTimer *animation=[NSTimer timerWithTimeInterval:1/animationRate repeats:YES block:^(NSTimer *timer){(void)timer;animationFrames++;[plain display];}];[NSRunLoop.mainRunLoop addTimer:animation forMode:NSRunLoopCommonModes];}
+        report();}];
     [NSApp run];return 0;
 } }

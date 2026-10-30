@@ -9,20 +9,20 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import signal
-import socket
 import subprocess
 import sys
 import tempfile
 import time
-
 sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import live_helpers  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[2]
 os.chdir(ROOT)
 if sys.argv[1:] != ['--live-owned-fixture']:
     print('LIVE NOT RUN: pass --live-owned-fixture for the disposable two-helper scenario.')
     raise SystemExit(0 if len(sys.argv) == 1 else 2)
-spec = importlib.util.spec_from_file_location('owned_helper', ROOT / 'native/privileged/fixture_v2_test.py')
+spec = importlib.util.spec_from_file_location('owned_helper', ROOT / 'native/privileged/fixture_test.py')
 owned = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(owned)
 APP = ROOT / 'target/app/Infinify.app/Contents/MacOS/Infinify'
@@ -38,11 +38,7 @@ app = None
 owned.sky.SLSGetWindowBounds.argtypes = [C.c_int, C.c_uint32, C.POINTER(owned.Rect)]
 owned.sky.SLSGetWindowBounds.restype = C.c_int
 
-def interrupted(number, _frame):
-    raise SystemExit(128 + number)
-
-for number in (signal.SIGTERM, signal.SIGHUP):
-    signal.signal(number, interrupted)
+live_helpers.exit_on_signals()
 
 def original(wid):
     rect = owned.Rect()
@@ -50,29 +46,10 @@ def original(wid):
     return {'transform': owned.transform(wid), 'alpha': owned.alpha(wid),
             'own': [rect.origin.x, rect.origin.y, rect.size.width, rect.size.height]}
 
-def until(read, passed, seconds=8):
-    deadline = time.monotonic() + seconds
-    while True:
-        value = read()
-        if passed(value):
-            return value
-        assert time.monotonic() < deadline, value
-        time.sleep(.05)
+until = live_helpers.until
 
 def ask(request):
-    with socket.socket(socket.AF_UNIX) as connection:
-        connection.settimeout(5)
-        connection.connect(str(sock))
-        connection.sendall((json.dumps(request) + '\n').encode())
-        data = b''
-        while not data.endswith(b'\n'):
-            chunk = connection.recv(65536)
-            if not chunk:
-                break
-            data += chunk
-    value = json.loads(data)
-    assert 'Ok' in value, value
-    return value['Ok']
+    return live_helpers.ask(sock, request, timeout=5)
 
 def native():
     return ask({'DebugNative': {}})['DebugNative']
@@ -130,9 +107,9 @@ try:
     for zoom in (.5, .85):
         ask({'Zoom': zoom})
         settled(zoom, camera)
-        checked = until(native, lambda value: len(value['records']) == 2 and all(abs(r['m'][0] - 1 / zoom) < 1e-6 for r in value['records']))
+        checked = until(native, lambda value, zoom=zoom: len(value['records']) == 2 and all(abs(r['m'][0] - 1 / zoom) < 1e-6 for r in value['records']))
         assert all(s['stats']['records_failed'] == 0 for s in checked['sessions']), checked
-        until(lambda: [owned.transform(w) for w in wids], lambda values: all(abs(v[0] - 1 / zoom) < 1e-6 for v in values))
+        until(lambda: [owned.transform(w) for w in wids], lambda values, zoom=zoom: all(abs(v[0] - 1 / zoom) < 1e-6 for v in values))
         assert all(original(w)['own'] == before[w]['own'] for w in wids)
         phases.append({'zoom': zoom, 'camera': camera, 'transforms': [owned.transform(w) for w in wids], 'rectangles': [owned.screen(w) for w in wids], 'sessions': checked['sessions']})
     hosts[0].stop()
@@ -156,7 +133,7 @@ finally:
     try:
         for host, wid in zip(hosts, wids):
             if host.child.poll() is None and wid in before:
-                until(lambda: original(wid), lambda value: value == before[wid], seconds=3)
+                until(lambda wid=wid: original(wid), lambda value, wid=wid: value == before[wid], seconds=3)
     finally:
         for host in owned.hosts:
             host.stop()

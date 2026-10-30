@@ -1,9 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Ported from malbiruk/driftwm src/config/toml.rs at
-// df3de27b26c7998e8a460cffd8a4925cbed3a322 (GPL-3.0-or-later).
-// Changes from upstream: the config directory under `$XDG_CONFIG_HOME` (or
-// `~/.config`) is the new constant `CONFIG_DIR_NAME` ("infinify") where upstream
-// hard-codes "driftwm". Nothing else; the `DRIFTWM_CONFIG` override is kept.
+//
+// Ported from DriftWM (GPL-3.0-or-later)
+//   repository: https://github.com/malbiruk/driftwm
+//   commit:     df3de27b26c7998e8a460cffd8a4925cbed3a322
+//   path:       src/config/toml.rs
+//   sha-256:    6e67a2e41ba1c39a7a71fea7b340b32bfafc0ca1994af248ebdaaf39df2d024b (upstream file)
+// Changes from upstream: this header; the config directory under `$XDG_CONFIG_HOME`
+// (or `~/.config`) is the new constant `CONFIG_DIR_NAME` ("infinify") where upstream
+// hard-codes "driftwm"; `set_config_path`, `CONFIG_PATH_OVERRIDE` and its branch in
+// `config_path` are removed. Nothing else; the
+// `DRIFTWM_CONFIG` override is kept.
+// See PORT.md in the crate root for the full change log.
+
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
@@ -454,20 +462,7 @@ impl Default for XwaylandConfig {
 /// `~/.config`) that holds `config.toml`. Upstream hard-codes `driftwm`.
 pub const CONFIG_DIR_NAME: &str = "infinify";
 
-/// Set by `--config`, held in-process so children don't inherit it the way they
-/// would a `DRIFTWM_CONFIG` set on the process env.
-static CONFIG_PATH_OVERRIDE: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
-
-/// Point [`config_path`] at `path` for the rest of the process. Only the first
-/// call takes effect.
-pub fn set_config_path(path: &std::path::Path) {
-    let _ = CONFIG_PATH_OVERRIDE.set(expand_config_path(path.as_os_str().to_owned()));
-}
-
 pub fn config_path() -> std::path::PathBuf {
-    if let Some(path) = CONFIG_PATH_OVERRIDE.get() {
-        return path.clone();
-    }
     if let Some(p) = std::env::var_os("DRIFTWM_CONFIG") {
         return expand_config_path(p);
     }

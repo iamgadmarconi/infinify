@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm df3de27b26c7998e8a460cffd8a4925cbed3a322
-// (v0.21.0), read at third_party/driftwm: src/input/mod.rs (maybe_hover_focus,
-// hover_focus_window, pick_target_under, pointer_focus_under_pick,
+// Adapted from https://github.com/malbiruk/driftwm @
+// df3de27b26c7998e8a460cffd8a4925cbed3a322 (v0.21.0): src/input/mod.rs
+// (maybe_hover_focus, hover_focus_window, pick_target_under, pointer_focus_under_pick,
 // refresh_pointer_focus's pull and user_moved_camera, whose `hover_viewport`
 // and `hover_follows_camera` are `FocusRuntime::hover_stamp` and
 // `hover_parked`), src/state/navigation.rs (pick_mode, resolve_pick),
 // src/input/pointer.rs (try_pick_button, maybe_promote_pick, the pick-mode
 // retry of on_pointer_axis in the canvas context, the MouseAction::CenterNearest
-// and MouseAction::FocusNearest arms), src/grabs/navigate_grab.rs (NavigateGrab: the dead zone and the negated
-// drag), src/state/keyboard_focus.rs (set_window_focus, set_suspended_focus:
+// and MouseAction::FocusNearest arms), src/grabs/navigate_grab.rs
+// (NavigateGrab: the dead zone and the negated drag),
+// src/state/keyboard_focus.rs (set_window_focus, set_suspended_focus:
 // focus with no raise) and src/handlers/mod.rs (focus_changed). The octant of a
 // drag is driftwm-core's `input::gestures::direction_from_vector`, upstream's
 // own code. A detached placeholder is upstream's stand-in. The window under the
@@ -410,7 +411,7 @@ impl Controller {
         bound: Option<WindowId>,
         forward_bound: bool,
     ) -> Result<Value, Error> {
-        if !point_valid(screen) {
+        if !screen.valid() {
             return Err(Error::Invalid("invalid screen point"));
         }
         let viewport = self
@@ -600,7 +601,7 @@ impl Controller {
         held: bool,
         focus: bool,
     ) -> Result<Value, Error> {
-        if !point_valid(screen) || !point_valid(start) {
+        if !screen.valid() || !start.valid() {
             return Err(Error::Invalid("invalid screen point"));
         }
         if self.scene.output(output).is_none() {

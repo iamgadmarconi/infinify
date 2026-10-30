@@ -50,8 +50,6 @@ fn parity_frozen_history_removal_and_interruption() {
                 .add_window(Window {
                     id,
                     world_rect: Rect::new(id.0 as f64 + 0.25, 0.5, 100.75, 100.125),
-                    native: None,
-                    title: id.0.to_string(),
                 })
                 .unwrap(),
             "focus" => scene.focus(id).unwrap(),

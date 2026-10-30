@@ -212,10 +212,17 @@ mod tests {
         // SAFETY: copy transfers to this Box; original is freed exactly once.
         let mut owned = unsafe { Box::from_raw(copy) };
         unsafe { driftwm_desktop_destroy(original) };
+        let snapshot = br#"{"version":1,"command":{"op":"snapshot"}}"#;
         let outputs = std::thread::spawn(move || {
-            assert!(owned.scene().outputs().is_empty());
+            let count = |controller: &mut Controller| {
+                controller.request(snapshot).unwrap()["outputs"]
+                    .as_array()
+                    .unwrap()
+                    .len()
+            };
+            assert_eq!(count(&mut owned), 0);
             owned.request(register).unwrap();
-            owned.scene().outputs().len()
+            count(&mut owned)
         })
         .join()
         .unwrap();

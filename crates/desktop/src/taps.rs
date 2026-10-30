@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
+// Adapted from https://github.com/malbiruk/driftwm @
+// 352333a8fa1b22171492d4b71a54102045c9a19d:
 // src/input/keyboard.rs (on_keyboard: the chord TapTracker completes is looked
 // up with Config::tap_lookup ahead of the pass_keys decision, on a release,
 // which that decision never sees; its action then runs through execute_action

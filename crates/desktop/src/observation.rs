@@ -16,7 +16,7 @@ impl Controller {
         let native_size_changed =
             self.fresh(window, identity)?.observed_rect.size != source_rect.size;
         buffer.validate()?;
-        if !rect_valid(source_rect) {
+        if !source_rect.valid() {
             return Err(Error::Invalid("invalid observed source rectangle"));
         }
         let source = self
@@ -62,7 +62,7 @@ impl Controller {
         self.guard_resize_structure(Some(window))?;
         self.check_generation(window, identity, generation)?;
         self.require_source_interactive(window)?;
-        if !rect_valid(observed_rect) || !rect_valid(expected_world_rect) || !point_valid(delta) {
+        if !observed_rect.valid() || !expected_world_rect.valid() || !delta.valid() {
             return Err(Error::Invalid("invalid source displacement"));
         }
         if self.fresh(window, identity)?.observed_rect != observed_rect {
@@ -139,7 +139,7 @@ impl Controller {
             || !self.lifecycle.marks.is_empty()
             || !self.lifecycle.held.is_empty()
             || buffer.validate().is_err()
-            || !rect_valid(source_rect)
+            || !source_rect.valid()
         {
             return false;
         }

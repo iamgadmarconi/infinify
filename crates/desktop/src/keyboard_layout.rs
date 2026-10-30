@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
+// Adapted from https://github.com/malbiruk/driftwm @
+// 352333a8fa1b22171492d4b71a54102045c9a19d:
 // src/input/actions.rs (the SwitchLayout arm of execute_action) and
 // src/ipc/mod.rs (cmd_layout, active_layout_short). Upstream's layouts are the
 // xkb groups of its own keymap; here they are the keyboard input sources the

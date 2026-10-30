@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import "focus.h"
+#import "../desktop/ax-lookup.h"
 #import <AppKit/AppKit.h>
 #include <libproc.h>
 #include <dlfcn.h>
@@ -8,23 +9,20 @@
 #include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
-// Signature provenance: yabai dd845723416f5fe92af49fad5ebab00369e07edd,
-// src/misc/extern.h:8 and src/misc/helpers.h:499-504, as native/resize.
-// New implementation with no title matching, but for forward() below, which is adapted from yabai (MIT, same commit):
+// Signature provenance: yabai (https://github.com/asmvik/yabai, MIT) commit dd845723416f5fe92af49fad5ebab00369e07edd,
+// src/misc/extern.h:8 and src/misc/helpers.h:499-504, as native/resize/resize.m.
+// New implementation with no title matching, but for forward() below, which is adapted from yabai (MIT, same repository and commit):
 // src/window_manager.c:1269-1291 (window_manager_make_key_window) and 1324-1335 (window_manager_focus_window_with_raise),
 // with the signatures of src/misc/extern.h:81-82 and kCPSUserGenerated of src/window_manager.h:5.
+// Licence text: native/desktop/YABAI-NOTICE.txt.
 typedef AXError (*GetWindow)(AXUIElementRef, uint32_t *);
 typedef CGError (*FrontWithOptions)(ProcessSerialNumber *,uint32_t,uint32_t);
 typedef CGError (*PostEventRecord)(ProcessSerialNumber *,uint8_t *);
 // Not yabai's, which is handed its serial numbers by Carbon process events: the deprecated HIServices call, looked up by
 // name like the private ones.
 typedef OSStatus (*ProcessForPID)(pid_t,ProcessSerialNumber *);
-static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return t.tv_sec+t.tv_nsec/1e9; }
-bool dw_focus_birth(pid_t p,uint64_t *s,uint64_t *u) {
-    struct proc_bsdinfo b={0};
-    if(!s||!u||p<=0||proc_pidinfo(p,PROC_PIDTBSDINFO,0,&b,sizeof(b))!=sizeof(b))return false;
-    *s=b.pbi_start_tvsec;*u=b.pbi_start_tvusec;return true;
-}
+static double now(void) { return DWMonotonicSeconds(); }
+bool dw_focus_birth(pid_t p,uint64_t *s,uint64_t *u) { return DWProcessBirth(p,s,u); }
 static bool fresh(DWFocusIdentity i) { uint64_t s,u;return dw_focus_birth(i.pid,&s,&u)&&s==i.seconds&&u==i.microseconds; }
 static bool (*ownBounds)(uint32_t,CGRect *);
 void dw_focus_set_bounds(bool (*read)(uint32_t,CGRect *)) { ownBounds=read; }
@@ -43,30 +41,10 @@ bool dw_focus_identity(pid_t p,CGWindowID w,DWFocusIdentity *out) {
     if(!out)return false;*out=(DWFocusIdentity){0};DWFocusIdentity i={.pid=p,.window=w};
     if(!dw_focus_birth(p,&i.seconds,&i.microseconds)||!dw_focus_owner(i,NULL))return false;*out=i;return true;
 }
-static AXError timeout(AXUIElementRef w,double end) { double r=end-now();return r>0?AXUIElementSetMessagingTimeout(w,(float)fmin(.1,r)):kAXErrorCannotComplete; }
+static AXError timeout(AXUIElementRef w,double end) { return DWAXTimeout(w,end,.1); }
 static AXError copy(AXUIElementRef w,CFStringRef key,CFTypeRef *v,double end) { AXError e=timeout(w,end);return e==kAXErrorSuccess?AXUIElementCopyAttributeValue(w,key,v):e; }
-static void log_window_lookup(AXUIElementRef element,pid_t expectedPID,uint32_t expectedWindow,CFIndex index,AXError error,double end) {
-    if(!getenv("INFINIFY_DEBUG"))return;
-    CFTypeRef role=NULL,subrole=NULL;pid_t candidatePID=0;
-    AXError pidError=AXUIElementGetPid(element,&candidatePID);
-    AXError roleError=timeout(element,end);
-    if(!roleError)roleError=AXUIElementCopyAttributeValue(element,kAXRoleAttribute,&role);
-    AXError subroleError=timeout(element,end);
-    if(!subroleError)subroleError=AXUIElementCopyAttributeValue(element,kAXSubroleAttribute,&subrole);
-    const char *roleName=role&&CFGetTypeID(role)==CFStringGetTypeID()?[(__bridge NSString *)role UTF8String]:"unavailable";
-    const char *subroleName=subrole&&CFGetTypeID(subrole)==CFStringGetTypeID()?[(__bridge NSString *)subrole UTF8String]:"unavailable";
-    fprintf(stderr,"[infinify-debug] focus AX window lookup pid=%d target=%u index=%ld error=%d candidate_pid=%d pid_error=%d role=%s role_error=%d subrole=%s subrole_error=%d\n",expectedPID,expectedWindow,(long)index,error,candidatePID,pidError,roleName,roleError,subroleName,subroleError);
-    if(role)CFRelease(role);if(subrole)CFRelease(subrole);
-}
-// Finder includes its same-process desktop AXScrollArea in AXWindows. It has
-// no WindowServer ID; only that verified non-window role may be skipped.
-static bool windowless_scroll_area(AXUIElementRef element,pid_t expectedPID,double end) {
-    pid_t pid=0;if(AXUIElementGetPid(element,&pid)!=kAXErrorSuccess||pid!=expectedPID)return false;
-    CFTypeRef role=NULL;AXError error=timeout(element,end);
-    if(error==kAXErrorSuccess)error=AXUIElementCopyAttributeValue(element,kAXRoleAttribute,&role);
-    bool known=error==kAXErrorSuccess&&role&&CFGetTypeID(role)==CFStringGetTypeID()&&CFEqual(role,kAXScrollAreaRole);
-    if(role)CFRelease(role);return known;
-}
+static void log_window_lookup(AXUIElementRef element,pid_t expectedPID,uint32_t expectedWindow,CFIndex index,AXError error,double end) { DWAXLogWindowLookup("focus",.1,element,expectedPID,expectedWindow,index,error,end); }
+static bool windowless_scroll_area(AXUIElementRef element,pid_t expectedPID,double end) { return DWAXWindowlessScrollArea(element,expectedPID,end,.1); }
 static AXUIElementRef resolve(DWFocusIdentity i,double end,DWFocusResult *r) {
     if(!dw_focus_owner(i,&r->bounds)){r->outcome=DWFocusStale;return NULL;}
     GetWindow get=(GetWindow)dlsym(RTLD_DEFAULT,"_AXUIElementGetWindow");

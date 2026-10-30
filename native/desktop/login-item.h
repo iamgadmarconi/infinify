@@ -10,3 +10,10 @@
 // `msg`: no window, no privacy grant. argv is what follows "login-item".
 // Returns the exit status: 0 done or reported, 1 macOS refused, 64 usage.
 int DWLoginItemCommand(int argc,const char **argv);
+// The bundle's LaunchAgent property list, as SMAppService names it, and the pane where the owner approves the login item
+// and the launch daemon (native-desktop-cli.m and loader-service.m name both).
+extern NSString *const DWLoginItemAgentPlist;
+extern NSString *const DWLoginItemsPane;
+// Says on stderr, as `who: registering the bundle at PATH, which is not in an Applications folder; ...`, when the running
+// bundle is not in an Applications folder: a registration names the bundle where it is, and a build directory's is replaced by every build.
+void DWLoginItemWarnIfOutsideApplications(const char *who);

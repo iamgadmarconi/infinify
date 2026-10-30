@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
+// Adapted from https://github.com/malbiruk/driftwm @
+// 352333a8fa1b22171492d4b71a54102045c9a19d:
 // src/state/reload.rs (reload_config: a file that cannot be read or parsed keeps
 // the old config, a file that has gone missing included; an accepted one is
 // swapped in whole and its bookmark seeds are reconciled with the live

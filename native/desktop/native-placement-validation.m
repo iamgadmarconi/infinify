@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Read-only ABI cross-checked in ../privileged/payload.m and the owned event-hit
-// fixture against yabai (MIT), dd845723416f5fe92af49fad5ebab00369e07edd:
+// fixture against yabai (MIT), https://github.com/asmvik/yabai,
+// dd845723416f5fe92af49fad5ebab00369e07edd:
 // src/osax/payload.m; src/misc/extern.h:16,17,79,82. Native parent discovery is
-// provided by native-family.m. Preserve ../families/YABAI-NOTICE.txt and
-// ../privileged/YABAI-LICENSE.txt. No setter or ownership-transfer API is loaded.
+// provided by native-family.m. Preserve YABAI-NOTICE.txt (this directory, the
+// yabai licence text). No setter or ownership-transfer API is loaded.
 #import "native-placement-validation.h"
 #import "native-family.h"
-#include "../privileged/protocol2.h"
+#include "../privileged/protocol.h"
 #include <dlfcn.h>
 #include <libproc.h>
 #include <limits.h>

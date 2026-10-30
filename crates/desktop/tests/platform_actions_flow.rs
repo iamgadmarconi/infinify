@@ -5,37 +5,17 @@
 //! positions are worked out by hand from the adapted upstream rules, not from an
 //! oracle build. Nothing here watches a pointer, warps one, selects an input
 //! source, writes to a socket or starts a process: those are the shell's.
-use driftwm_desktop::*;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::ffi::CStr;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
-struct Host(*mut Controller);
+#[path = "support/host.rs"]
+mod host;
+use host::Host;
+
 impl Host {
-    fn new() -> Self {
-        let handle = driftwm_desktop_create();
-        assert!(!handle.is_null());
-        Self(handle)
-    }
-    fn call(&mut self, command: Value) -> Value {
-        let bytes = serde_json::to_vec(&json!({"version":1,"command":command})).unwrap();
-        // SAFETY: live exclusive handle, valid bytes, response freed exactly once.
-        unsafe {
-            let response = driftwm_desktop_request(self.0, bytes.as_ptr(), bytes.len());
-            assert!(!response.is_null());
-            let result = serde_json::from_slice(CStr::from_ptr(response).to_bytes()).unwrap();
-            driftwm_desktop_response_free(response);
-            result
-        }
-    }
-    fn ok(&mut self, command: Value) -> Value {
-        let response = self.call(command);
-        assert_eq!(response["ok"], true, "{response}");
-        response["data"].clone()
-    }
     /// A controller error, which must leave the controller as it was.
     fn error(&mut self, command: Value) -> String {
         let before = self.snapshot();
@@ -43,9 +23,6 @@ impl Host {
         assert_eq!(response["ok"], false, "{command}: {response}");
         assert_eq!(self.snapshot(), before, "{command}");
         response["error"].as_str().unwrap().to_owned()
-    }
-    fn snapshot(&mut self) -> Value {
-        self.ok(json!({"op":"snapshot"}))
     }
     fn action_on(&mut self, output: Value, action: &str) -> Value {
         self.ok(json!({"op":"action","output":output,"action":action}))
@@ -89,14 +66,6 @@ impl Host {
         self.ok(json!({"op":"state_event","output":output}))["line"].clone()
     }
 }
-impl Drop for Host {
-    fn drop(&mut self) {
-        unsafe {
-            driftwm_desktop_destroy(self.0);
-        }
-    }
-}
-
 /// A directory of this test's own, removed when the test ends.
 struct Scratch(PathBuf);
 impl Scratch {

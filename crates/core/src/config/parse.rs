@@ -1,8 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Ported from malbiruk/driftwm src/config/parse.rs at
-// df3de27b26c7998e8a460cffd8a4925cbed3a322 (GPL-3.0-or-later).
-// Changes from upstream: `smithay::` paths read `crate::platform::`.
+//
+// Ported from DriftWM (GPL-3.0-or-later)
+//   repository: https://github.com/malbiruk/driftwm
+//   commit:     df3de27b26c7998e8a460cffd8a4925cbed3a322
+//   path:       src/config/parse.rs
+//   sha-256:    4c123070660e17df07af21be03755cc000bd5b935dd716328f89b5c659ebf2cc (upstream file)
+// Changes from upstream: this header; `smithay::` paths read `crate::platform::`; the
+// `go-to` migration arm of `parse_action`, the `REMOVED_ACTIONS` list and its
+// use in `parse_threshold_action` are removed (`go-to` is an ordinary unknown
+// action), with the test `removed_actions_keep_their_migration_message_everywhere`.
 // Nothing else.
+// See PORT.md in the crate root for the full change log.
+
 use crate::platform::input::keyboard::{keysyms, xkb};
 
 use super::types::*;
@@ -166,10 +175,6 @@ pub fn parse_action(s: &str) -> Result<Action, String> {
             }
         }
         "home-toggle" => Ok(Action::HomeToggle),
-        "go-to" => Err(
-            "go-to was removed — save the point as a bookmark and use go-to-bookmark <name>"
-                .to_string(),
-        ),
         "go-to-bookmark" => {
             let name = arg
                 .filter(|a| !a.is_empty())
@@ -284,12 +289,6 @@ pub const ACTION_NAMES: &[(&str, &str)] = &[
     ("zoom-to-fit", "zoom-to-fit"),
     ("zoom-to-fit-snapped", "zoom-to-fit-snapped"),
 ];
-
-/// Actions `parse_action` rejects with a migration message. Not bindable, so
-/// excluded from `ACTION_NAMES`/the docs, but the gesture/touch fallback still
-/// needs to recognize them here or the message degrades to "unknown gesture
-/// action".
-const REMOVED_ACTIONS: &[&str] = &["go-to"];
 
 /// Parse a mouse action string like "move-window" or "zoom".
 /// Continuous/grab actions are matched first; anything else falls through
@@ -432,9 +431,7 @@ fn parse_threshold_action(s: &str) -> Result<Option<ThresholdAction>, String> {
         Ok(action) => Ok(Some(ThresholdAction::Fixed(action))),
         Err(e) => {
             let first = s.split_whitespace().next().unwrap_or("");
-            if ACTION_NAMES.iter().any(|(name, _)| *name == first)
-                || REMOVED_ACTIONS.contains(&first)
-            {
+            if ACTION_NAMES.iter().any(|(name, _)| *name == first) {
                 Err(e)
             } else {
                 Ok(None)
@@ -759,20 +756,6 @@ mod tests {
         );
         assert!(parse_action("set-trackpad maybe").is_err());
         assert!(parse_action("set-trackpad").is_err());
-    }
-
-    #[test]
-    fn removed_actions_keep_their_migration_message_everywhere() {
-        for name in REMOVED_ACTIONS {
-            let err = parse_action(name)
-                .expect_err("a removed action must be rejected, not silently parsed");
-            assert!(
-                !ACTION_NAMES.iter().any(|(n, _)| n == name),
-                "{name} is removed, so it must not stay in the documented catalog"
-            );
-            let trigger = GestureTrigger::Swipe { fingers: 4 };
-            assert_eq!(parse_gesture_config_entry(&trigger, name), Err(err));
-        }
     }
 
     #[test]

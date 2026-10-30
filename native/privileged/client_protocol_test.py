@@ -8,7 +8,6 @@ import struct
 import subprocess
 import tempfile
 import threading
-import time
 
 ROOT = Path(__file__).resolve().parents[2]
 PRIVILEGED = ROOT / "native" / "privileged"
@@ -49,7 +48,7 @@ class FakePeer:
     def __init__(self, mode, runtime):
         self.mode = mode
         self.space = mode.startswith("space_") and mode != "space_no_cap"
-        self.space |= mode == "legacy_bad_opcode"
+        self.space |= mode == "plain_bad_opcode"
         self.pinned = "pinned" in mode and not mode.endswith("no_cap")
         self.veil = mode.startswith("veil_") and mode != "veil_no_cap"
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -107,12 +106,12 @@ class FakePeer:
 
     def serve_control(self, connection):
         try:
-            if "pinned" in self.mode or self.mode == "legacy_pin_status":
+            if "pinned" in self.mode or self.mode == "plain_pin_status":
                 kind = FRAME_SPACE if self.space else FRAME
                 message = recv_message(connection)
-                has_pin = not self.mode.endswith("no_cap") and self.mode != "legacy_pin_status"
+                has_pin = not self.mode.endswith("no_cap") and self.mode != "plain_pin_status"
                 self.check_frame(message, kind, 1, pinned=has_pin)
-                status = 11 if self.mode == "pinned_bad_space_status" else 12 if self.mode in ("pinned_status", "legacy_pin_status") else 0
+                status = 11 if self.mode == "pinned_bad_space_status" else 12 if self.mode in ("pinned_status", "plain_pin_status") else 0
                 send_message(connection, kind, message[2], FRAME_REPLY.pack(0, 1, 0, 0, 1) + bytes([status]))
                 if self.mode.endswith("apply"):
                     message = recv_message(connection)
@@ -131,10 +130,10 @@ class FakePeer:
                     send_message(connection, VEIL, seq, reply)
                 while recv_exact(connection, 1):
                     pass
-            elif self.mode in ("coalesced_apply", "space_coalesced_apply", "space_coalesced_legacy"):
+            elif self.mode in ("coalesced_apply", "space_coalesced_apply", "space_coalesced_plain"):
                 first = recv_message(connection)
                 second = recv_message(connection)
-                self.check_frame(first, FRAME_SPACE if self.mode == "space_coalesced_legacy" else FRAME, 1)
+                self.check_frame(first, FRAME_SPACE if self.mode == "space_coalesced_plain" else FRAME, 1)
                 self.check_frame(second, FRAME_SPACE if self.mode == "space_coalesced_apply" else FRAME, 2)
                 statuses = b"\x00\x00"
                 body = FRAME_REPLY.pack(0, 2, 1, 0, 1) + statuses
@@ -142,19 +141,19 @@ class FakePeer:
                 while recv_exact(connection, 1):
                     pass
             elif self.mode in ("bad_sequence", "bad_count", "space_bad_sequence", "space_bad_count",
-                               "space_bad_opcode", "space_bad_dropped_opcode", "legacy_bad_opcode",
-                               "space_bad_status", "legacy_space_status", "space_status", "space_no_cap"):
+                               "space_bad_opcode", "space_bad_dropped_opcode", "plain_bad_opcode",
+                               "space_bad_status", "plain_space_status", "space_status", "space_no_cap"):
                 message = recv_message(connection)
-                kind = FRAME_SPACE if self.space and self.mode != "legacy_bad_opcode" else FRAME
+                kind = FRAME_SPACE if self.space and self.mode != "plain_bad_opcode" else FRAME
                 self.check_frame(message, kind, 1)
                 seq = message[2] + (1 if self.mode.endswith("bad_sequence") else 0)
                 dropped = self.mode == "space_bad_dropped_opcode"
                 count = 0 if self.mode.endswith("bad_count") or dropped else 1
-                status = 12 if self.mode == "space_bad_status" else 11 if self.mode in ("space_status", "legacy_space_status") else 0
+                status = 12 if self.mode == "space_bad_status" else 11 if self.mode in ("space_status", "plain_space_status") else 0
                 body = FRAME_REPLY.pack(1 if dropped else 0, count, 0, 0, 1) + bytes([status] * count)
                 if self.mode in ("space_bad_opcode", "space_bad_dropped_opcode"):
                     kind = FRAME
-                elif self.mode == "legacy_bad_opcode":
+                elif self.mode == "plain_bad_opcode":
                     kind = FRAME_SPACE
                 send_message(connection, kind, seq, body)
                 while recv_exact(connection, 1):
@@ -262,7 +261,7 @@ int main(int argc, char **argv) {
         spaces[i].target_space=i ? 101 : 0;
     }
     int spaceMode=!strncmp(argv[3],"space_",6) && strcmp(argv[3],"space_no_cap");
-    if ((spaceMode || !strcmp(argv[3],"legacy_bad_opcode")) != !!(info.caps&DW2_CAP_SPACE)) return 51;
+    if ((spaceMode || !strcmp(argv[3],"plain_bad_opcode")) != !!(info.caps&DW2_CAP_SPACE)) return 51;
     if (!strncmp(argv[3],"veil_",5)) {
         uint32_t held=0;int hasCap=(info.caps&DW2_CAP_VEIL)!=0;
         if (!strcmp(argv[3],"veil_no_cap")) {
@@ -286,11 +285,11 @@ int main(int argc, char **argv) {
         if (atomic_load(&lost_reason)) return 77;
         dw_client_close(client);return 0;
     }
-    if (strstr(argv[3],"pinned") || !strcmp(argv[3],"legacy_pin_status")) {
+    if (strstr(argv[3],"pinned") || !strcmp(argv[3],"plain_pin_status")) {
         int noCap=strstr(argv[3],"no_cap")!=NULL;
-        int bad=!strcmp(argv[3],"legacy_pin_status") || !strcmp(argv[3],"pinned_bad_space_status");
+        int bad=!strcmp(argv[3],"plain_pin_status") || !strcmp(argv[3],"pinned_bad_space_status");
         if (!strcmp(argv[3],"pinned_status")) expected_status=DW2_SUBLEVEL;
-        if (strcmp(argv[3],"legacy_pin_status")) { records[0].flags|=DW2_RECORD_PINNED;spaces[0].record.flags|=DW2_RECORD_PINNED; }
+        if (strcmp(argv[3],"plain_pin_status")) { records[0].flags|=DW2_RECORD_PINNED;spaces[0].record.flags|=DW2_RECORD_PINNED; }
         if (noCap) {
             uint64_t unchanged=99;
             int submitted=spaceMode ? dw_client_submit_space_frame(client,spaces,1,&unchanged) : dw_client_submit_frame(client,records,1,&unchanged);
@@ -309,8 +308,8 @@ int main(int argc, char **argv) {
         }
         dw_client_close(client);return 0;
     }
-    if (!strcmp(argv[3],"coalesced_apply") || !strcmp(argv[3],"space_coalesced_apply") || !strcmp(argv[3],"space_coalesced_legacy")) {
-        int submitted=!strcmp(argv[3],"space_coalesced_legacy") ? dw_client_submit_space_frame(client,spaces,1,&first)
+    if (!strcmp(argv[3],"coalesced_apply") || !strcmp(argv[3],"space_coalesced_apply") || !strcmp(argv[3],"space_coalesced_plain")) {
+        int submitted=!strcmp(argv[3],"space_coalesced_plain") ? dw_client_submit_space_frame(client,spaces,1,&first)
             : dw_client_submit_frame(client,records,1,&first);
         if (submitted!=DW_CLIENT_OK || !wait_written(client,1)) return 11;
         submitted=!strcmp(argv[3],"space_coalesced_apply") ? dw_client_submit_space_frame(client,spaces,2,&second)
@@ -337,7 +336,7 @@ int main(int argc, char **argv) {
             && stats.records_failed==(spaceMode ? 1 : 0) && stats.records_applied==(spaceMode ? 0 : 1);
         dw_client_close(client);return ok ? 0 : 55;
     }
-    if ((strstr(argv[3],"bad_") && strcmp(argv[3],"bad_restore_summary")) || !strcmp(argv[3],"legacy_space_status")) {
+    if ((strstr(argv[3],"bad_") && strcmp(argv[3],"bad_restore_summary")) || !strcmp(argv[3],"plain_space_status")) {
         int submitted=spaceMode ? dw_client_submit_space_frame(client,spaces,1,&first) : dw_client_submit_frame(client,records,1,&first);
         if (submitted!=DW_CLIENT_OK || !wait_lost()) return 20;
         int ok=atomic_load(&lost_reason)==DW_LOST_PROTOCOL;
@@ -378,11 +377,11 @@ def main():
         subprocess.run([compiler, "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-pthread",
                         "-I", str(PRIVILEGED), str(PRIVILEGED / "dwclient.c"), str(harness), "-o", str(executable)], check=True)
         for mode in ("coalesced_apply", "bad_sequence", "bad_count", "restore_pending", "restore_undurable", "bad_restore_summary",
-                     "space_coalesced_apply", "space_coalesced_legacy", "space_no_cap", "space_bad_max_body",
+                     "space_coalesced_apply", "space_coalesced_plain", "space_no_cap", "space_bad_max_body",
                      "space_bad_sequence", "space_bad_count", "space_bad_opcode", "space_bad_dropped_opcode",
-                     "legacy_bad_opcode", "space_bad_status", "legacy_space_status", "space_status", "space_restore_pending",
+                     "plain_bad_opcode", "space_bad_status", "plain_space_status", "space_status", "space_restore_pending",
                      "pinned_apply", "space_pinned_apply", "pinned_no_cap", "space_pinned_no_cap",
-                     "pinned_status", "legacy_pin_status", "pinned_bad_space_status",
+                     "pinned_status", "plain_pin_status", "pinned_bad_space_status",
                      "veil_apply", "veil_refused", "veil_no_cap", "veil_bad_status", "veil_bad_timeout", "veil_bad_length"):
             with tempfile.TemporaryDirectory(prefix="dw2-run-", dir="/tmp") as runtime_dir:
                 runtime = Path(runtime_dir)

@@ -2,25 +2,18 @@
 #import "native-tablet.h"
 #include <math.h>
 
-static BOOL tabletMouse(CGEventType type) {
-    return type==kCGEventMouseMoved||type==kCGEventLeftMouseDown||type==kCGEventLeftMouseUp||type==kCGEventLeftMouseDragged
-        ||type==kCGEventRightMouseDown||type==kCGEventRightMouseUp||type==kCGEventRightMouseDragged
-        ||type==kCGEventOtherMouseDown||type==kCGEventOtherMouseUp||type==kCGEventOtherMouseDragged;
-}
 BOOL DWNativeTabletProximityEvent(CGEventRef event) {
     if(!event)return NO;CGEventType type=CGEventGetType(event);
-    return type==kCGEventTabletProximity||(tabletMouse(type)&&CGEventGetIntegerValueField(event,kCGMouseEventSubtype)==kCGEventMouseSubtypeTabletProximity);
+    return type==kCGEventTabletProximity||(DWMouseForwardable(type)&&CGEventGetIntegerValueField(event,kCGMouseEventSubtype)==kCGEventMouseSubtypeTabletProximity);
 }
 BOOL DWNativeTabletEvent(CGEventRef event) {
     if(!event)return NO;CGEventType type=CGEventGetType(event);
     return type==kCGEventTabletPointer||DWNativeTabletProximityEvent(event)
-        ||(tabletMouse(type)&&CGEventGetIntegerValueField(event,kCGMouseEventSubtype)==kCGEventMouseSubtypeTabletPoint);
+        ||(DWMouseForwardable(type)&&CGEventGetIntegerValueField(event,kCGMouseEventSubtype)==kCGEventMouseSubtypeTabletPoint);
 }
 static NSNumber *tabletDevice(CGEventRef event) {
     return @(CGEventGetIntegerValueField(event,DWNativeTabletProximityEvent(event)?kCGTabletProximityEventDeviceID:kCGTabletEventDeviceID));
 }
-static BOOL tabletDown(CGEventType type) { return type==kCGEventLeftMouseDown||type==kCGEventRightMouseDown||type==kCGEventOtherMouseDown; }
-static BOOL tabletUp(CGEventType type) { return type==kCGEventLeftMouseUp||type==kCGEventRightMouseUp||type==kCGEventOtherMouseUp; }
 static BOOL tabletTargetEqual(NSDictionary *a,NSDictionary *b) {
     if(!a||!b)return NO;
     // Geometry is refreshed within the same ownership key. It is deliberately
@@ -133,7 +126,7 @@ static BOOL tabletSameTool(CGEventRef a,CGEventRef b) {
         DWNativeTabletTool *outgoing=[self detachTool:tool];[_tools removeObjectForKey:device];
         // An unexpected physical tool-out still closes every admitted mouse
         // button. The physical packet itself is copied intact afterwards.
-        NSInteger release=tabletUp(type)?CGEventGetIntegerValueField(event,kCGMouseEventButtonNumber):-1;
+        NSInteger release=DWMouseUp(type)?CGEventGetIntegerValueField(event,kCGMouseEventButtonNumber):-1;
         [self releaseContact:outgoing time:CGEventGetTimestamp(event) exceptButton:release validate:validate post:post];
         if(revision!=_revision)return NO;
         return outgoing.target&&[self postCopy:event target:outgoing.target local:outgoing.local validate:validate post:post];
@@ -143,7 +136,7 @@ static BOOL tabletSameTool(CGEventRef a,CGEventRef b) {
     if(!tool||!tool.inProximity||!tool->entry)return NO;
     BOOL same=tabletTargetEqual(tool.target,target);
     uint32_t buttons=tool.mouseButtons;NSInteger button=CGEventGetIntegerValueField(event,kCGMouseEventButtonNumber);
-    if(button>=0&&button<32){if(tabletDown(type))buttons|=1u<<(uint32_t)button;else if(tabletUp(type))buttons&=~(1u<<(uint32_t)button);}
+    if(button>=0&&button<32){if(DWMouseDown(type))buttons|=1u<<(uint32_t)button;else if(DWMouseUp(type))buttons&=~(1u<<(uint32_t)button);}
     double pressure=proximity?0:CGEventGetDoubleValueField(event,kCGTabletEventPointPressure);
     uint32_t tabletButtons=proximity?0:(uint32_t)CGEventGetIntegerValueField(event,kCGTabletEventPointButtons);
     BOOL contact=buttons||tabletButtons||(isfinite(pressure)&&pressure>0);
@@ -161,10 +154,10 @@ static BOOL tabletSameTool(CGEventRef a,CGEventRef b) {
         // A contact admitted in one replica cannot begin a stroke in another.
         // Its physical zero-pressure/release returns to the existing recipient
         // at the last admitted application point; new hover can retarget later.
-        BOOL matchingUp=tabletUp(type)&&button>=0&&button<32&&(tool.mouseButtons&(1u<<(uint32_t)button));
+        BOOL matchingUp=DWMouseUp(type)&&button>=0&&button<32&&(tool.mouseButtons&(1u<<(uint32_t)button));
         // Additional buttons belong to the already captured tool as well. They
         // need their complete down/up pair even after it crossed a member edge.
-        BOOL additionalDown=tabletDown(type)&&button>=0&&button<32;
+        BOOL additionalDown=DWMouseDown(type)&&button>=0&&button<32;
         if(contact&&!matchingUp&&!additionalDown)return NO;
         BOOL sent=[self postCopy:event target:tool.target local:tool.local validate:validate post:post];
         if(revision!=_revision)return sent;
@@ -176,7 +169,7 @@ static BOOL tabletSameTool(CGEventRef a,CGEventRef b) {
         return sent;
     }
     // A fresh target must never receive the up-half of another app's press.
-    if(tabletUp(type)&&(button<0||button>=32||!(tool.mouseButtons&(1u<<(uint32_t)button))))return NO;
+    if(DWMouseUp(type)&&(button<0||button>=32||!(tool.mouseButtons&(1u<<(uint32_t)button))))return NO;
     if(![target[@"identity"]isKindOfClass:NSDictionary.class]||![target[@"generation"]isKindOfClass:NSNumber.class]
         ||![target[@"window"]isKindOfClass:NSNumber.class]||![target[@"output"]isKindOfClass:NSNumber.class]
         ||!isfinite(local.x)||!isfinite(local.y))return NO;
@@ -192,7 +185,7 @@ static BOOL tabletSameTool(CGEventRef a,CGEventRef b) {
     }
     BOOL sent=[self postCopy:event target:tool.target local:local validate:validate post:post];
     if(revision!=_revision)return sent;
-    if(sent&&(!proximity||tabletDown(type)||tabletUp(type))){
+    if(sent&&(!proximity||DWMouseDown(type)||DWMouseUp(type))){
         tool.mouseButtons=buttons;tool.contact=contact;
         if(tool->point)CFRelease(tool->point);tool->point=CGEventCreateCopy(event);
     }

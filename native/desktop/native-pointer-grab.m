@@ -6,12 +6,9 @@
 #import "native-tablet.h"
 #include <math.h>
 
-static BOOL pointerDown(CGEventType type) { return type==kCGEventLeftMouseDown||type==kCGEventRightMouseDown||type==kCGEventOtherMouseDown; }
-static BOOL pointerUp(CGEventType type) { return type==kCGEventLeftMouseUp||type==kCGEventRightMouseUp||type==kCGEventOtherMouseUp; }
-static BOOL pointerDrag(CGEventType type) { return type==kCGEventLeftMouseDragged||type==kCGEventRightMouseDragged||type==kCGEventOtherMouseDragged; }
 static BOOL pointerMouse(CGEventRef event) {
     if(!event||DWNativeTabletEvent(event))return NO;CGEventType type=CGEventGetType(event);
-    return pointerDown(type)||pointerUp(type)||pointerDrag(type)||type==kCGEventMouseMoved;
+    return DWMouseForwardable(type);
 }
 // Copy nested target dictionaries too: a caller's mutable native_bounds or
 // identity must not silently alter the already-admitted recipient.
@@ -81,12 +78,11 @@ static BOOL pointerLocal(id value,CGPoint *out) {
     if((self=[super init])){_unsupportedPhysical=[NSMutableSet set];_cancelled=[NSMutableArray array];}return self;
 }
 - (NSDictionary *)target { return _recipient.target; }
-- (uint32_t)buttonMask { return _physical; }
 - (BOOL)active { return _recipient!=nil; }
 - (BOOL)suppressed { return !_recipient&&(_physical||_unsupportedPhysical.count); }
 - (BOOL)ownsEvent:(CGEventRef)event { return NSThread.isMainThread&&pointerMouse(event)&&(_physical||_unsupportedPhysical.count||_busy); }
 - (BOOL)admitEvent:(CGEventRef)event target:(NSDictionary *)target local:(CGPoint)local {
-    if(!NSThread.isMainThread||_busy||_recipient||_physical||_unsupportedPhysical.count||!pointerMouse(event)||!pointerDown(CGEventGetType(event))||!isfinite(local.x)||!isfinite(local.y))return NO;
+    if(!NSThread.isMainThread||_busy||_recipient||_physical||_unsupportedPhysical.count||!pointerMouse(event)||!DWMouseDown(CGEventGetType(event))||!isfinite(local.x)||!isfinite(local.y))return NO;
     int64_t button=CGEventGetIntegerValueField(event,kCGMouseEventButtonNumber);if(button<0||button>=32)return NO;
     NSDictionary *frozen=pointerFreeze(target,0),*key=pointerKey(frozen);if(!key)return NO;
     DWPointerButton *packet=[DWPointerButton new];packet->down=CGEventCreateCopy(event);if(!packet->down)return NO;packet.paired=YES;
@@ -94,10 +90,10 @@ static BOOL pointerLocal(id value,CGPoint *out) {
     ++_revision;_physical=1u<<(uint32_t)button;_recipient=recipient;return YES;
 }
 - (void)observePhysical:(CGEventRef)event {
-    CGEventType type=CGEventGetType(event);if(!pointerDown(type)&&!pointerUp(type))return;
+    CGEventType type=CGEventGetType(event);if(!DWMouseDown(type)&&!DWMouseUp(type))return;
     int64_t button=CGEventGetIntegerValueField(event,kCGMouseEventButtonNumber);
-    if(button>=0&&button<32){uint32_t bit=1u<<(uint32_t)button;if(pointerDown(type))_physical|=bit;else _physical&=~bit;}
-    else if(pointerDown(type))[_unsupportedPhysical addObject:@(button)];else [_unsupportedPhysical removeObject:@(button)];
+    if(button>=0&&button<32){uint32_t bit=1u<<(uint32_t)button;if(DWMouseDown(type))_physical|=bit;else _physical&=~bit;}
+    else if(DWMouseDown(type))[_unsupportedPhysical addObject:@(button)];else [_unsupportedPhysical removeObject:@(button)];
 }
 - (void)queueCancellation:(DWPointerRecipient *)recipient validate:(DWNativePointerValidate)validate post:(DWNativePointerPost)post {
     if(!recipient||recipient.cancelled)return;
@@ -155,15 +151,15 @@ static BOOL pointerLocal(id value,CGPoint *out) {
     if(!recipient)return NO;uint64_t revision=++_revision;_busy=YES;BOOL sent=NO;CGEventRef copy=NULL;
     DWPointerButton *packet=nil;CGEventType type=CGEventGetType(event);int64_t index=CGEventGetIntegerValueField(event,kCGMouseEventButtonNumber);
     @try {
-        BOOL buttonEvent=pointerDown(type)||pointerUp(type)||pointerDrag(type);
+        BOOL buttonEvent=DWMouseDown(type)||DWMouseUp(type)||DWMouseDragged(type);
         if(buttonEvent&&(index<0||index>=32)){[self cancelWithValidate:validate post:post];return NO;}
         uint32_t bit=buttonEvent?1u<<(uint32_t)index:0;
         // A second physical down for an already-held button means a release
         // was lost. Pair the old recipient and suppress this new press's tails;
         // it must never inherit an old application press or select a new one.
-        if(pointerDown(type)&&(before&bit)){[self cancelWithValidate:validate post:post];return NO;}
+        if(DWMouseDown(type)&&(before&bit)){[self cancelWithValidate:validate post:post];return NO;}
         // No up/drag half of a press owned elsewhere.
-        if((pointerUp(type)||pointerDrag(type))&&!(before&bit))return NO;
+        if((DWMouseUp(type)||DWMouseDragged(type))&&!(before&bit))return NO;
         if(!resolve||!validate||!post||!isfinite(screen.x)||!isfinite(screen.y)){[self cancelWithValidate:validate post:post];return NO;}
         NSDictionary *result=resolve(recipient.target,screen);
         if(revision!=_revision||_recipient!=recipient)return NO;
@@ -174,13 +170,13 @@ static BOOL pointerLocal(id value,CGPoint *out) {
         BOOL valid=validate(target);if(revision!=_revision||_recipient!=recipient)return NO;
         if(!valid){[self cancelWithValidate:validate post:post];return NO;}
         copy=CGEventCreateCopy(event);if(!copy){[self cancelWithValidate:validate post:post];return NO;}
-        if(pointerDown(type)){
+        if(DWMouseDown(type)){
             packet=[DWPointerButton new];packet->down=CGEventCreateCopy(event);
             if(!packet->down){[self cancelWithValidate:validate post:post];return NO;}recipient.buttons[@(index)]=packet;
-        }else if(pointerUp(type))packet=recipient.buttons[@(index)];
+        }else if(DWMouseUp(type))packet=recipient.buttons[@(index)];
         if(packet)packet.inFlight=YES;
         sent=post(copy,target,local);
-        if(packet){packet.inFlight=NO;if(sent&&pointerDown(type))packet.paired=YES;else if(sent&&pointerUp(type))packet.paired=NO;}
+        if(packet){packet.inFlight=NO;if(sent&&DWMouseDown(type))packet.paired=YES;else if(sent&&DWMouseUp(type))packet.paired=NO;}
         if(sent){recipient.target=target;recipient.local=local;}
         if(revision!=_revision||_recipient!=recipient){
             // Cancellation/reset inside post must also pair a down that post
@@ -188,13 +184,13 @@ static BOOL pointerLocal(id value,CGPoint *out) {
             if(sent&&!recipient.cancelled)[self queueCancellation:recipient validate:validate post:post];return sent;
         }
         if(!sent){[self cancelWithValidate:validate post:post];return NO;}
-        if(pointerUp(type))[recipient.buttons removeObjectForKey:@(index)];
+        if(DWMouseUp(type))[recipient.buttons removeObjectForKey:@(index)];
         if(!_physical&&!_unsupportedPhysical.count)_recipient=nil;
         return sent;
     } @catch(NSException *exception) {
         // An exception from post does not prove that the down was never sent.
         // Close that uncertain pair through the same validated recipient too.
-        (void)exception;if(packet){if(packet.inFlight&&pointerDown(type))packet.paired=YES;packet.inFlight=NO;}
+        (void)exception;if(packet){if(packet.inFlight&&DWMouseDown(type))packet.paired=YES;packet.inFlight=NO;}
         [self cancelWithValidate:validate post:post];return NO;
     } @finally {
         if(copy)CFRelease(copy);_busy=NO;[self drainCancellations];

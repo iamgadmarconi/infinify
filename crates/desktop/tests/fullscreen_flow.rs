@@ -3,7 +3,7 @@
 //! plays the shell's part: it answers every resize effect with a synthetic
 //! `native_resize_result`. No native window is resized or drawn, so nothing
 //! here is evidence that a real Mac window fills a screen. The scenarios that
-//! have an upstream counterpart follow malbiruk/driftwm
+//! have an upstream counterpart follow https://github.com/malbiruk/driftwm
 //! `352333a8fa1b22171492d4b71a54102045c9a19d` (GPL-3.0-or-later)
 //! `src/tests/{fullscreen_centering,fullscreen_handoff,translucent_fullscreen}.rs`,
 //! read for the contract and not executed. Config files are written to a

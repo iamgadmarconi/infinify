@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
+// Adapted from https://github.com/malbiruk/driftwm @
+// 352333a8fa1b22171492d4b71a54102045c9a19d:
 // src/input/actions.rs (the SendToOutput and SendCursorToOutput arms of
 // execute_action; SendToOutput's fullscreen leg is fullscreen.rs's
 // `send_fullscreen_to_output`), src/state/output.rs
@@ -12,7 +13,7 @@ use super::actions::{Outcome, action_string};
 use super::ipc::frame;
 use super::view_actions::{pixel, pixel_size};
 use super::*;
-use driftwm_canvas::policy;
+use driftwm_core::canvas;
 use driftwm_core::config::{Direction, HotCorner, HotCorners};
 
 /// A corner of an output, as `[outputs.hot_corners]` names it.
@@ -124,7 +125,7 @@ impl Controller {
                 ) else {
                     return false;
                 };
-                let visible = policy::visible_canvas_rect((left, top).into(), size, viewport.zoom);
+                let visible = canvas::visible_canvas_rect((left, top).into(), size, viewport.zoom);
                 let (left, top) = (i64::from(visible.loc.x), i64::from(visible.loc.y));
                 x >= left
                     && x < left + i64::from(visible.size.w)

@@ -6,8 +6,7 @@
 BOOL DWNativeRelativeMotionEvent(CGEventRef event) {
     if(!event||DWNativeTabletEvent(event))return NO;
     CGEventType type=CGEventGetType(event);
-    return type==kCGEventMouseMoved||type==kCGEventLeftMouseDragged
-        ||type==kCGEventRightMouseDragged||type==kCGEventOtherMouseDragged;
+    return DWMouseMove(type);
 }
 static NSDictionary *relativeTarget(NSDictionary *target) {
     if(![target isKindOfClass:NSDictionary.class]||![target[@"identity"]isKindOfClass:NSDictionary.class]

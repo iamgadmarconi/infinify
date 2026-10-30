@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm df3de27b26c7998e8a460cffd8a4925cbed3a322 (v0.21.0),
-// read at third_party/driftwm: src/state/resize.rs (step_resize_focused,
-// step_resize, step_target, resize_element_to, PendingResize,
+// Adapted from https://github.com/malbiruk/driftwm @
+// df3de27b26c7998e8a460cffd8a4925cbed3a322 (v0.21.0): src/state/resize.rs
+// (step_resize_focused, step_resize, step_target, resize_element_to, PendingResize,
 // requested_element_size, placed_element_size), src/state/fit.rs
 // (compute_fit_geometry, fit_window, unfit_window, fit_window_snapped,
 // unfit_window_snapped, snap_rects_with_primary, shift_cluster_around_primary,
@@ -22,9 +22,9 @@
 // fill search, the cluster walk and the push cascade are not adapted: they
 // are driftwm-core's `layout::fill::fill_rect` and `layout::cluster::
 // {cluster_of, adjacent_side, resolve_cluster_shifts}`, upstream's own code.
-// The restore state is driftwm-core `stage`'s per-entry `fit_saved_size`,
-// `fit_push` (its `FitPush` record, used as it is), `fill_saved` and
-// `restore_size`, kept here by window ID because the scene is not that stage.
+// The restore state is upstream `stage`'s per-entry `fit_saved_size`,
+// `fit_push` (the `FitPush` record below), `fill_saved` and `restore_size`,
+// kept here by window ID because the scene is not that stage.
 //
 // Upstream writes a placement for the size it asks a client for and lets the
 // client answer later. Here a size reaches a native window only through the
@@ -46,22 +46,33 @@ use super::resize_transaction::ResizeSlot;
 use super::view_actions::{ViewReturn, pixel, pixel_size};
 use super::window_actions::Moved;
 use super::*;
-use driftwm_canvas::policy;
+use driftwm_core::canvas;
 use driftwm_core::config::{Action, Direction};
 use driftwm_core::layout::cluster::{
     ResizeClassification, Side, adjacent_side, cluster_of, resolve_cluster_shifts,
 };
 use driftwm_core::layout::fill::fill_rect;
 use driftwm_core::layout::snap::SnapRect;
-use driftwm_core::stage::FitPush;
 use std::collections::{HashSet, VecDeque};
 
 /// A location or a size in upstream's whole logical pixels.
 pub(crate) type Px = [i64; 2];
 
+// FitPush: https://github.com/malbiruk/driftwm @
+// df3de27b26c7998e8a460cffd8a4925cbed3a322, src/stage/mod.rs (GPL-3.0-or-later).
+/// The frame rects a snapped fit pushed its cluster between, `home` being the
+/// pre-fit one. Kept so a close can put the cluster back after the window's own
+/// geometry has stopped describing the fit: a disconnect drops its title bar
+/// first, a fullscreen parks it elsewhere.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FitPush {
+    pub fitted: SnapRect,
+    pub home: SnapRect,
+}
+
 /// What `place_window` says for a move during a gesture: a sizing action is
 /// refused the same way.
-const GRABBED: &str = "a window is under an interactive move or resize";
+pub(crate) const GRABBED: &str = "a window is under an interactive move or resize";
 /// Upstream cmd_resize's own words for a window a grab is driving.
 const GRABBED_IPC: &str =
     "this window is under an interactive move or resize, or still settling one";
@@ -346,7 +357,7 @@ impl Sizes {
     }
 }
 
-fn point_of(px: Px) -> Point {
+pub(crate) fn point_of(px: Px) -> Point {
     Point::new(px[0] as f64, px[1] as f64)
 }
 fn size_of(px: Px) -> Size {
@@ -1665,11 +1676,11 @@ impl Controller {
             return None;
         }
         let (zoom_x, zoom_y) = (extent[0] as f64 / width, extent[1] as f64 / height);
-        if (zoom_x - zoom_y).abs() > 1e-6 * zoom_x.max(zoom_y) || zoom_x > policy::MAX_ZOOM + 1e-9 {
+        if (zoom_x - zoom_y).abs() > 1e-6 * zoom_x.max(zoom_y) || zoom_x > canvas::MAX_ZOOM + 1e-9 {
             return None;
         }
-        let zoom = zoom_x.min(policy::MAX_ZOOM);
-        if zoom < policy::MIN_ZOOM_FLOOR {
+        let zoom = zoom_x.min(canvas::MAX_ZOOM);
+        if zoom < canvas::MIN_ZOOM_FLOOR {
             return None;
         }
         Some((
@@ -1739,11 +1750,11 @@ impl Controller {
             }
             members.push(((x, y).into(), (right - x, bottom - y).into()));
         }
-        let Some(bbox) = policy::all_windows_bbox(members.into_iter()) else {
+        let Some(bbox) = canvas::all_windows_bbox(members.into_iter()) else {
             return Ok(json!({"navigation": null}));
         };
         // Upstream fit_to_bbox.
-        let fit = policy::zoom_to_fit(
+        let fit = canvas::zoom_to_fit(
             bbox,
             pixel_size(usable.size)?,
             self.config().zoom_fit_padding,

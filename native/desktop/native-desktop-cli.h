@@ -17,7 +17,7 @@
 int DWNativeDesktopCommand(int argc,const char **argv);
 // `login-start`: whether the owner enabled compositor mode as the login default.
 BOOL DWNativeLoginIsCompositor(void);
-// The login-mode record and the pause, for tests: the directory they live in.
+// The login-mode record (login.plist, owner-only, in the given state directory): written by `enable`, read by `login-start` and `status`.
 BOOL DWNativeWriteLoginRecord(NSString *directory,BOOL agentAdded);
 NSDictionary *DWNativeReadLoginRecord(NSString *directory);
 BOOL DWNativeRemoveLoginRecord(NSString *directory);

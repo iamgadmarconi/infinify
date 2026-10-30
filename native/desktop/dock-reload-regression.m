@@ -19,7 +19,8 @@ static void pump(BOOL (^done)(void),NSTimeInterval seconds) {
 }
 static void settle(NSTimeInterval seconds) { pump(^BOOL{return NO;},seconds); }
 
-// Translated from third_party/sunlight/Tests/CanvasTests/AdditionReloaderTests.swift lines 20-64.
+// Translated from lines 20-64 of Tests/CanvasTests/AdditionReloaderTests.swift in https://github.com/spacefarm-digital/sunlight, commit
+// afeea74b18e70ca49bf462d6fe462cf65deb2b32 (MIT, Copyright (c) 2026 spacefarm; notice in SUNLIGHT-NOTICE.txt).
 static void crashGuard(void) {
     // testTripsOnThreeRestartsAroundLoads (22-36): a load, the Dock going down, the next load, down again: the third trips it.
     DWDockCrashGuard guard={0};NSTimeInterval now=0;

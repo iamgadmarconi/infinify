@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from spacefarm-digital/sunlight afeea74b18e70ca49bf462d6fe462cf65deb2b32 (MIT, Copyright (c) 2026 spacefarm):
-// third_party/sunlight/Sources/Canvas/TrackpadPan.swift (the same file at that commit; until the vendored copy is merged,
-// a clone of the repository at it). Translated function by function, with Sunlight's names where they fit:
+// Adapted from Sunlight, repository https://github.com/spacefarm-digital/sunlight, commit afeea74b18e70ca49bf462d6fe462cf65deb2b32
+// (MIT, Copyright (c) 2026 spacefarm; notice in SUNLIGHT-NOTICE.txt), upstream path Sources/Canvas/TrackpadPan.swift;
+// the line numbers below are those of that file at that commit. Translated function by function, with Sunlight's names where they fit:
 //   TrackpadPan.shared, 65-66 ...................... activeSource: the framework's callback is a C function with no context pointer
 //   TrackpadPan.start (wake observer), 97-102 ...... -[DWMultitouchSource start]: on NSWorkspaceDidWakeNotification, restartDevices a second later
 //   TrackpadPan.startDevices, 118-138 .............. -[DWMultitouchSource startDevices] (was attach): the list of devices, each one's surface size in hundredths
@@ -123,7 +123,7 @@ static int contactFrame(void *device,const void *contacts,int32_t count,double t
 - (DWMultitouchFrame *)intake:(const void *)records count:(int32_t)count device:(uintptr_t)device surface:(CGSize)surface at:(NSTimeInterval)now {
     NSArray *fingers=surfaceContacts(records,count,self.resting);BOOL skip=NO,ended=NO;
     atomic_fetch_add(&_callbacks,1);
-    if(DWGestureTrace()&&records){
+    if(DWDebugTrace()&&records){
         // Which states the framework's records carry, so that a firmware whose numbering differs from Sunlight's (touching is 4) shows up as records and no fingers.
         int32_t n=MIN(MAX(count,0),64);atomic_fetch_add(&_records,(NSUInteger)n);
         for(int32_t i=0;i<n;i++){int32_t state;memcpy(&state,(const uint8_t *)records+(size_t)i*DWContactSize+DWContactState,4);atomic_fetch_add(&_states[state>=0&&state<15?state:15],1);}
@@ -167,10 +167,10 @@ static int contactFrame(void *device,const void *contacts,int32_t count,double t
     if(frame.generation!=atomic_load(&_generation))return;
     if(!_delivering&&frame.contacts.count){
         _delivering=YES;[_guard setLive:YES];
-        if(DWGestureTrace())fprintf(stderr,"debug: multitouch: delivering, from a frame of %lu finger(s) (%lu framework callbacks so far); the views' own touches no longer feed the recogniser\n",(unsigned long)frame.contacts.count,(unsigned long)atomic_load(&_callbacks));
+        if(DWDebugTrace())fprintf(stderr,"debug: multitouch: delivering, from a frame of %lu finger(s) (%lu framework callbacks so far); the views' own touches no longer feed the recogniser\n",(unsigned long)frame.contacts.count,(unsigned long)atomic_load(&_callbacks));
         if(_deliveringChanged)_deliveringChanged(YES);
     }
-    if(DWGestureTrace())[self trace:frame];
+    if(DWDebugTrace())[self trace:frame];
     if(_frames)_frames(frame);
 }
 // TrackpadPan.startDevices, 118-138.
@@ -192,10 +192,10 @@ static int contactFrame(void *device,const void *contacts,int32_t count,double t
     for(NSValue *device in registered){
         mt.add(device.pointerValue,contactFrame);int rc=mt.start(device.pointerValue,0);
         // The return value says nothing Sunlight acts on; it is shown because a start that failed would otherwise be silent.
-        if(rc||DWGestureTrace())fprintf(stderr,"%sMultitouch source: MTDeviceStart(device %p) returned %d\n",rc?"":"debug: ",device.pointerValue,rc);
+        if(rc||DWDebugTrace())fprintf(stderr,"%sMultitouch source: MTDeviceStart(device %p) returned %d\n",rc?"":"debug: ",device.pointerValue,rc);
     }
     _running=YES;
-    if(DWGestureTrace()){
+    if(DWDebugTrace()){
         // An untouched pad sends nothing, so silence proves nothing yet: the line says what to do.
         __weak DWMultitouchSource *weakSelf=self;NSUInteger generation=atomic_load(&_generation);
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW,20*NSEC_PER_SEC),dispatch_get_main_queue(),^{
@@ -215,7 +215,7 @@ static int contactFrame(void *device,const void *contacts,int32_t count,double t
     atomic_fetch_add(&_generation,1);_running=NO;
     if(_delivering){
         _delivering=NO;[_guard setLive:NO];
-        if(DWGestureTrace())fprintf(stderr,"debug: multitouch: stopped delivering after %lu frame(s) (%lu framework callbacks)\n",(unsigned long)_delivered,(unsigned long)atomic_load(&_callbacks));
+        if(DWDebugTrace())fprintf(stderr,"debug: multitouch: stopped delivering after %lu frame(s) (%lu framework callbacks)\n",(unsigned long)_delivered,(unsigned long)atomic_load(&_callbacks));
         if(_deliveringChanged)_deliveringChanged(NO);
     }
     _touching=NO;

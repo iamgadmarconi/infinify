@@ -10,20 +10,20 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import signal
-import socket
 import subprocess
 import sys
 import tempfile
 import time
-
 sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import live_helpers  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[2]
 os.chdir(ROOT)
 if sys.argv[1:] != ['--live-owned-fixture']:
     print('LIVE NOT RUN: pass --live-owned-fixture for the disposable green-control scenario.')
     raise SystemExit(0 if len(sys.argv) == 1 else 2)
-spec = importlib.util.spec_from_file_location('owned_helper', ROOT / 'native/privileged/fixture_v2_test.py')
+spec = importlib.util.spec_from_file_location('owned_helper', ROOT / 'native/privileged/fixture_test.py')
 owned = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(owned)
 APP = ROOT / 'target/app/Infinify.app/Contents/MacOS/Infinify'
@@ -40,11 +40,7 @@ host = app = before = log = None
 owned.sky.SLSGetWindowBounds.argtypes = [C.c_int, C.c_uint32, C.POINTER(owned.Rect)]
 owned.sky.SLSGetWindowBounds.restype = C.c_int
 
-def interrupted(number, _frame):
-    raise SystemExit(128 + number)
-
-for number in (signal.SIGTERM, signal.SIGHUP):
-    signal.signal(number, interrupted)
+live_helpers.exit_on_signals()
 
 def own(wid):
     rect = owned.Rect()
@@ -55,28 +51,9 @@ def originals():
     return {str(w): {'transform': owned.transform(w), 'alpha': owned.alpha(w)} for w in wids}
 
 def ask(request):
-    with socket.socket(socket.AF_UNIX) as connection:
-        connection.settimeout(4)
-        connection.connect(str(sock))
-        connection.sendall((json.dumps(request) + '\n').encode())
-        data = b''
-        while not data.endswith(b'\n'):
-            chunk = connection.recv(65536)
-            if not chunk:
-                break
-            data += chunk
-    reply = json.loads(data)
-    assert 'Ok' in reply, reply
-    return reply['Ok']
+    return live_helpers.ask(sock, request, timeout=4)
 
-def until(read, passed, seconds=8):
-    deadline = time.monotonic() + seconds
-    while True:
-        value = read()
-        if passed(value):
-            return value
-        assert time.monotonic() < deadline, value
-        time.sleep(.05)
+until = live_helpers.until
 
 def state():
     return ask('State')['State']
@@ -128,13 +105,13 @@ try:
         probe = green(logical, action)
         target = probe['identity']['wid']
         assert target in wids, probe
-        def arrived(value):
+        def arrived(value, mode=mode, target=target, size=size):
             if mode == 'Fullscreen':
                 return any(w['id'] == logical for w in value['fullscreen']) and own(target)[2:] == size
             window = next((w for w in value['windows'] if w['id'] == logical), None)
             return window and window['mode'] == mode and window['size'] == size
         current = until(state, arrived)
-        native = until(lambda: own(target), lambda value: value[2:] == size)
+        native = until(lambda target=target: own(target), lambda value, size=size: value[2:] == size)
         assert all(own(w) == native_before[i] for i, w in enumerate(wids) if w != target), 'The second window changed.'
         rows.append({'action': action, 'mode': mode, 'native_bounds': native, 'green_control': probe})
     ask({'Action': 'quit'})

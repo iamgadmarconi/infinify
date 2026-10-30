@@ -12,12 +12,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anyhow"
-version = "1.0.104"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
-
-[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -54,7 +48,7 @@ checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 name = "driftwm-canvas"
 version = "0.1.0"
 dependencies = [
- "proptest",
+ "driftwm-core",
  "serde",
  "serde_json",
  "thiserror",
@@ -83,37 +77,6 @@ dependencies = [
  "serde_json",
  "thiserror",
  "toml",
-]
-
-[[package]]
-name = "driftwm-macos"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "driftwm-canvas",
- "driftwm-macos-backend",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "driftwm-macos-backend"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "driftwm-runtime"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "driftwm-canvas",
- "libc",
- "serde",
- "serde_json",
 ]
 
 [[package]]

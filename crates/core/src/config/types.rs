@@ -1,15 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Ported from malbiruk/driftwm src/config/types.rs at
-// df3de27b26c7998e8a460cffd8a4925cbed3a322 (GPL-3.0-or-later).
-// Changes from upstream: `smithay::` paths read `crate::platform::`;
-// `applied_rule` (reads the applied rule off a `WlSurface`'s data map) is
-// removed. Nothing else.
+//
+// Ported from DriftWM (GPL-3.0-or-later)
+//   repository: https://github.com/malbiruk/driftwm
+//   commit:     df3de27b26c7998e8a460cffd8a4925cbed3a322
+//   path:       src/config/types.rs
+//   sha-256:    3a7a6be2a912c13a2a626527bd6a740e920a90de822abdc92132b7f883a15f8e (upstream file)
+// Changes from upstream: this header; `smithay::` paths read `crate::platform::`;
+// `applied_rule` (reads the applied rule off a `WlSurface`'s data map),
+// `DEFAULT_SHADER`, `Action::ends_fullscreen`, `ThresholdAction::ends_fullscreen`,
+// `Modifiers::{union, all_held}`, `ModKey::is_pressed`, `PassList::allows_raw`,
+// `WindowRule::has_criteria` and `HotCorner::contains` are removed, with their tests
+// (`action_ends_fullscreen`, `threshold_action_ends_fullscreen`,
+// `all_held_requires_mod3_bit_too`, `union_combines_mod3_bit`). Nothing else.
+// See PORT.md in the crate root for the full change log.
+
 use std::collections::HashMap;
 use std::f64::consts::FRAC_1_SQRT_2;
 use std::hash::Hash;
 
 use crate::platform::backend::input::AxisSource;
-use crate::platform::input::keyboard::{Keysym, ModifiersState};
+use crate::platform::input::keyboard::ModifiersState;
 use crate::platform::utils::Transform;
 
 pub const BTN_LEFT: u32 = 0x110;
@@ -137,12 +147,6 @@ impl Action {
                 | Action::SendToOutput(_)
         )
     }
-
-    /// Whether dispatching this during fullscreen ends it — either the guard
-    /// exits first, or the action itself does (ToggleFullscreen).
-    pub fn ends_fullscreen(&self) -> bool {
-        !self.runs_during_fullscreen() || matches!(self, Action::ToggleFullscreen)
-    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
@@ -177,27 +181,6 @@ impl Modifiers {
 
     pub fn is_empty(&self) -> bool {
         *self == Self::EMPTY
-    }
-
-    /// Accumulates the high-water mark of a held chord for tap-modifier bindings.
-    pub fn union(&self, other: &Self) -> Self {
-        Self {
-            ctrl: self.ctrl || other.ctrl,
-            alt: self.alt || other.alt,
-            shift: self.shift || other.shift,
-            logo: self.logo || other.logo,
-            mod3: self.mod3 || other.mod3,
-        }
-    }
-
-    /// True if every modifier set in `self` is currently held in `state`. The
-    /// Alt-Tab cycle commits once its hold modifier is no longer all held.
-    pub fn all_held(&self, state: &ModifiersState) -> bool {
-        (!self.ctrl || state.ctrl)
-            && (!self.alt || state.alt)
-            && (!self.shift || state.shift)
-            && (!self.logo || state.logo)
-            && (!self.mod3 || state.iso_level5_shift)
     }
 }
 
@@ -240,15 +223,6 @@ impl ModKey {
                 mod3: true,
                 ..Modifiers::EMPTY
             },
-        }
-    }
-
-    /// Check if this mod key is pressed in the given modifier state.
-    pub fn is_pressed(self, state: &ModifiersState) -> bool {
-        match self {
-            ModKey::Alt => state.alt,
-            ModKey::Super => state.logo,
-            ModKey::Mod3 => state.iso_level5_shift,
         }
     }
 }
@@ -387,16 +361,6 @@ pub enum ThresholdAction {
     CenterNearest,
     FocusNearest,
     Fixed(Action),
-}
-
-impl ThresholdAction {
-    pub fn ends_fullscreen(&self) -> bool {
-        match self {
-            ThresholdAction::CenterNearest => true, // fires Action::CenterNearest
-            ThresholdAction::FocusNearest => true,  // fires Action::FocusNearest
-            ThresholdAction::Fixed(a) => a.ends_fullscreen(),
-        }
-    }
 }
 
 /// Resolved at parse time from trigger + action combination.
@@ -781,25 +745,6 @@ impl<C: Clone + PartialEq> PassList<C> {
     }
 }
 
-impl PassList<KeyCombo> {
-    /// Returns `true` if the given raw key event should be forwarded to the app.
-    /// Constructs and normalises a `KeyCombo` internally — no import needed at call sites.
-    pub fn allows_raw(&self, modifiers: &ModifiersState, sym: Keysym) -> bool {
-        match self {
-            PassList::None => false,
-            PassList::All => true,
-            PassList::Only(combos) => {
-                let mut current = KeyCombo {
-                    modifiers: Modifiers::from_state(modifiers),
-                    sym,
-                };
-                current.normalize();
-                combos.iter().any(|c| c == &current)
-            }
-        }
-    }
-}
-
 impl PassList<MouseBinding> {
     /// Returns `true` if a mouse binding with these modifiers and trigger should
     /// be forwarded to the app. `MouseBinding` has no normalisation step, and the
@@ -891,11 +836,6 @@ impl WindowRule {
         let app_ok = self.app_id.as_ref().is_none_or(|p| p.matches(app_id));
         let ttl_ok = self.title.as_ref().is_none_or(|p| p.matches(title));
         app_ok && ttl_ok
-    }
-
-    /// True if at least one match criterion is set (rules with no criteria are rejected).
-    pub fn has_criteria(&self) -> bool {
-        self.app_id.is_some() || self.title.is_some()
     }
 }
 
@@ -1285,23 +1225,6 @@ pub enum HotCorner {
     BottomRight,
 }
 
-impl HotCorner {
-    /// True when `(x, y)` in output-local screen coords is within `threshold`
-    /// pixels of this corner.
-    pub fn contains(&self, x: f64, y: f64, out_w: f64, out_h: f64, threshold: f64) -> bool {
-        let on_left = x < threshold;
-        let on_right = x > out_w - threshold;
-        let on_top = y < threshold;
-        let on_bottom = y > out_h - threshold;
-        match self {
-            Self::TopLeft => on_left && on_top,
-            Self::TopRight => on_right && on_top,
-            Self::BottomLeft => on_left && on_bottom,
-            Self::BottomRight => on_right && on_bottom,
-        }
-    }
-}
-
 /// Per-output hot-corner bindings. Empty map = no corners configured.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HotCorners {
@@ -1349,9 +1272,6 @@ pub enum OutputMode {
     /// Highest resolution (w*h), then highest refresh.
     Max,
 }
-
-/// Built-in dot grid shader — used when no background source is configured.
-pub const DEFAULT_SHADER: &str = include_str!("../shaders/dot_grid.glsl");
 
 /// Background source. The three image-bearing variants are intentionally
 /// orthogonal to "animated vs not" — animation is detected from the shader
@@ -1423,35 +1343,6 @@ mod tests {
     }
 
     #[test]
-    fn action_ends_fullscreen() {
-        // ends it via its own handler despite being allowlisted
-        assert!(Action::ToggleFullscreen.ends_fullscreen());
-        assert!(!Action::Spawn("foo".into()).ends_fullscreen());
-        assert!(Action::CloseWindow.ends_fullscreen());
-    }
-
-    #[test]
-    fn threshold_action_ends_fullscreen() {
-        assert!(ThresholdAction::CenterNearest.ends_fullscreen());
-        assert!(ThresholdAction::FocusNearest.ends_fullscreen());
-        assert!(!ThresholdAction::Fixed(Action::Spawn("foo".into())).ends_fullscreen());
-        assert!(ThresholdAction::Fixed(Action::CloseWindow).ends_fullscreen());
-    }
-
-    #[test]
-    fn all_held_requires_mod3_bit_too() {
-        let mod3 = Modifiers {
-            mod3: true,
-            ..Modifiers::EMPTY
-        };
-        assert!(!mod3.all_held(&ModifiersState::default()));
-        assert!(mod3.all_held(&ModifiersState {
-            iso_level5_shift: true,
-            ..Default::default()
-        }));
-    }
-
-    #[test]
     fn focus_placement_default_is_center() {
         assert_eq!(FocusPlacement::default(), FocusPlacement::Center);
     }
@@ -1472,25 +1363,5 @@ mod tests {
         for (placement, expected) in cases {
             assert_eq!(placement.pull(), expected, "placement: {placement:?}");
         }
-    }
-
-    #[test]
-    fn union_combines_mod3_bit() {
-        let a = Modifiers {
-            mod3: true,
-            ..Modifiers::EMPTY
-        };
-        let b = Modifiers {
-            shift: true,
-            ..Modifiers::EMPTY
-        };
-        assert_eq!(
-            a.union(&b),
-            Modifiers {
-                mod3: true,
-                shift: true,
-                ..Modifiers::EMPTY
-            }
-        );
     }
 }

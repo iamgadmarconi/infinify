@@ -13,7 +13,7 @@ edition = "2024"
 rust-version = "1.88"
 license = "GPL-3.0-or-later"
 authors = ["Klim Kostiuk <2601074@gmail.com>"]
-description = "Platform-neutral port of DriftWM's pure modules: canvas, config, layout, session, stage and the touch gesture recogniser"
+description = "Platform-neutral port of DriftWM's pure modules: canvas, config and layout"
 repository = "https://github.com/malbiruk/driftwm"
 publish = false
 
@@ -23,8 +23,6 @@ name = "driftwm_core"
 [dependencies]
 # Same requirements as upstream's Cargo.toml for the crates the ported modules use.
 serde = { version = "1", features = ["derive"] }
-# session.rs reads and writes session.json; config uses it in one embedded test.
-serde_json = "1"
 toml = "0.8"
 regex = "1"
 tracing = "0.1"
@@ -32,9 +30,10 @@ tracing = "0.1"
 xkeysym = "0.2.1"
 
 [dev-dependencies]
-# Property tests in layout::fill, stage, the touch recogniser and
-# tests/config_robustness_test.rs.
+# Property tests in layout::fill, layout::snap and tests/config_robustness_test.rs.
 proptest = "1"
+# One config unit test builds a JSON document.
+serde_json = "1"
 
 # Carried over from upstream's Cargo.toml.
 [lints.clippy]

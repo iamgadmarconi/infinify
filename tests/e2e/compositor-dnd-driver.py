@@ -150,10 +150,10 @@ def mode_pair(argv, evidence):
         for tag, fx, fy in (('A', 0.3, 0.7), ('B', 0.8, 0.25)):
             px, py = cg2[0] + fx * cw * zoom, cg2[1] + (TITLE + fy * ch) * zoom
             exp = [(px - cg2[0]) / zoom, ch - ((py - cg2[1]) / zoom - TITLE)]   # window-local, bottom-left origin, native points
-            a0, b0 = len(log_lines('p1')), len(log_lines('p2'))
+            b0 = len(log_lines('p2'))
             hid([w2], ['move', px, py, 'sleep', 150, 'down', px, py, 'sleep', 60, 'up', px, py, 'sleep', 300])
             click = [e for e in log_lines('p2')[b0:] if e['ev'] == 'mouseDown']
-            a0, b0 = len(log_lines('p1')), len(log_lines('p2'))
+            b0 = len(log_lines('p2'))
             sx, sy = cg1[0] + 0.5 * cg1[2], cg1[1] + (TITLE + 0.25 * ch) * zoom
             r = drag(w1, w2, (sx, sy), (px, py), zoom, evidence, f'pair-z{zoom}-{tag}')
             perform = [e for e in log_lines('p2')[b0:] if e['ev'] == 'perform']
@@ -222,7 +222,6 @@ def mode_outside(argv, evidence):
         return {}, ['no point inside the destination native rectangle and outside both drawn rectangles']
     p_src = (cg1[0] + 0.5 * cg1[2], cg1[1] + (TITLE + 0.25 * (n2[3] - TITLE)) * 0.5)
     r = drag(w1, w2, p_src, pt, 0.5, evidence, 'outside-z0.5')
-    under = [w for row in r['rows'] if row.get('label') == 'hover' and 'wins' in row for w in row['wins']]
     out = {'point': pt, 'dst_native': n2, 'dst_drawn': cg2, 'dropped': r['dropped'], 'taps': r['taps']}
     print(f'drop at {pt[0]:.0f},{pt[1]:.0f}: inside native {n2}, outside drawn {cg2}: destination dropped={r["dropped"]}', flush=True)
     return out, ([] if not r['dropped'] else ['the destination received a drop outside its drawn rectangle'])

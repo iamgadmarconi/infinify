@@ -13,7 +13,7 @@ shell's, see the [shell notes](../../native/desktop/README.md).
 Upstream receives ready-made gestures from libinput: a swipe, a pinch or a hold,
 each with a finger count, as a begin, any number of updates and an end. macOS
 has no such stream, so the shell synthesizes one and sends it in three commands.
-They are additions to ABI v1; no existing command changed.
+They are ABI v1 commands.
 
 ```json
 {"op":"gesture_begin","kind":"swipe","fingers":3,
@@ -109,7 +109,7 @@ All three reply alike:
   reply: the shell keeps `tick_navigation` running until it reads false.
 - `trackpad` is whether gesture dispatch is on, see [set-trackpad](#set-trackpad).
 
-The snapshot gains `trackpad`: `{"enabled","gesture","coasting"}`, the gesture
+The snapshot carries `trackpad`: `{"enabled","gesture","coasting"}`, the gesture
 in progress and the outputs whose cameras are coasting. `coasting` is a view of
 the snapshot's `navigation.momentum`, the one momentum there is: a coast a
 scroll or a drag pan launched is listed too. None of it is saved.
@@ -126,8 +126,8 @@ hold-swipe triggers, and thresholds in millimetres of panel travel.
 
 A Mac trackpad is upstream's trackpad. Its bindings are the `[gestures]` ones,
 so the controller adapts the libinput-event dispatch, and the shell stands in
-for libinput. `driftwm-core` carries upstream's touch recogniser verbatim; it is
-not used here, and `[touch]` stays read and unapplied.
+for libinput. `driftwm-core` does not carry upstream's touch recogniser
+(`src/grabs/touch_recognizer.rs`), and `[touch]` stays read and unapplied.
 
 ## Dispatch
 
@@ -435,7 +435,7 @@ The [shell notes](../../native/desktop/README.md#trackpad-gestures) say why.
   trackpad.
 - Read from upstream's sources for this port: `src/input/gestures.rs`,
   `src/input/gestures/{swipe,pinch,hold,device_config}.rs`, the config types
-  and defaults, `README.md` and `docs/config.md`; what the gestures drive
+  and defaults, upstream's `README.md` and `docs/config.md` (DriftWM); what the gestures drive
   (momentum, the pinch, the move grab's edge pan) is
   [camera motion](MOTION.md)'s reading of its own sources. Not read: the
   pending-middle-click code in the pointer handler, the `set-trackpad` arm of
@@ -524,206 +524,6 @@ counts, which is implemented and has not run on a trackpad either), that a frame
 is drawn, or that a window moves on screen. No part of this was run against a
 trackpad.
 
-### Integration run, 2026-10-09
-
-The two halves were built together for the first time (`scripts/build-app.sh`,
-ad-hoc signed, macOS 27.2, Apple Silicon) and nothing had to change to make
-them fit. Nothing from this run is saved as evidence. **No physical trackpad
-gesture was performed**: an automated session has no fingers, and touch input
-cannot be injected. What was run instead:
-
-- **The built app over its socket.** One launch as `--windowed 1100x700` on a
-  private scene (three seeded detached placeholders), config and socket, driven
-  through `Infinify msg`:
-  - a config file with a `[gestures]` override in upstream's grammar
-    (`swipe_threshold`, `pinch_in_threshold`, `"3-finger-swipe" = "none"`,
-    rebound four- and five-finger swipes, a per-direction trigger and an
-    on-canvas hold) loaded with nothing on stderr, and the bookmark the same
-    file defines read back over the socket;
-  - `action set-trackpad off`, `on`, `toggle` (twice) and `OFF` each answered
-    `ok` with exit status 0; `set-trackpad maybe` answered upstream's
-    `set-trackpad: expected on, off, or toggle, got 'maybe'` and a bare
-    `set-trackpad` answered `set-trackpad requires on, off, or toggle`, each
-    with exit status 1. The resulting on/off state is in the snapshot and in
-    gesture replies, neither of which the socket reaches, so it was not read
-    back there;
-  - the file rewritten with four malformed gesture entries: upstream's four
-    warnings on stderr (`per-direction swipe triggers only accept threshold
-    actions, not 'pan-viewport'`, `finger count must be 2-5, got 7`, `unknown
-    gesture type: 'wiggle'`, `unknown gesture action: 'frobnicate'`), each
-    printed once by the file watch and once by `reload-config`, and the file
-    otherwise accepted: the bookmark it moved read back at its new point;
-  - the file rewritten with `swipe_threshold = "far"`: upstream's
-    `config error: TOML parse error … invalid type: string "far", expected f64`
-    on stderr, and the bookmark that file also moved still at the previous
-    file's point;
-  - `camera 400 -250`, `zoom 0.5`, `home-toggle` (to `0 -0` at zoom 1 and
-    back), `zoom-to-fit` (to `750 -390` at 0.28484848484848485 and back) and
-    `pan-viewport right` (200 canvas points at zoom 0.5) each landing on the
-    same values as before this milestone, on the frame timer that now also
-    serves a coast; `center-nearest up` still refused by name;
-  - SIGTERM: exit status 0, socket file removed.
-- **The recogniser into the controller, without AppKit.** A throwaway
-  command-line program outside the repository linked the real
-  `trackpad-gestures.m` and the real controller library, added to each
-  `gesture_begin` the fields the shell adds, and played nine scripted touch
-  sequences in millimetres. All 95 events the recogniser emitted were accepted
-  by the controller. Seen there, under upstream's default table: three fingers
-  swiping right 30 mm became `swipe_pan`, moved the camera 378 points (24
-  updates of 10.5 units at `trackpad_speed` 1.5) and coasted for 56 frames;
-  four fingers swiping up fired `center-nearest down` once, refused by name;
-  a three-finger tap and a swipe 206 ms later over a window carried
-  `doubletap`, became `swipe_move` and carried the window 63 points; a
-  four-finger pinch in fired `zoom-to-fit` once at scale 0.839 and its flight
-  landed; a four-finger rest of 400 ms became a `hold` that fired
-  `center-window` on lift, refused by name; a three-finger pinch out became
-  `pinch_zoom`; Control-Option with a three-finger swipe resolved
-  `mod+3-finger-swipe`; Option with a three-finger swipe over a window became
-  `swipe_resize`, which was inert with a note at the time of that run; and after `set-trackpad off` a swipe's
-  begin answered `"gesture":null` and nothing moved.
-
-Still unrun, and not shown by any of the above: real fingers on a trackpad;
-that AppKit delivers indirect touches to the canvas panel, and every finger in
-every event; the shell's touch forwarding, hold timer, magnify routing and
-gesture sink in `main.m`, which have only been compiled; how the recogniser's
-thresholds feel; what macOS does with the same fingers when its own three- and
-four-finger gestures are on, or off; anything drawn.
-
-### After review, 2026-10-09
-
-The review changed four things: the launch delay (see [Momentum](#momentum)); a
-move gesture drives and releases only the drag it installed; on a press the
-shell ends the gesture before it cancels navigation; and it follows a cancelled
-pan's end with `cancel_navigation`. The recogniser's rules did not change, and
-its two known misreads are now written out at the top of
-`trackpad-gestures.m`. Run again afterwards, with nothing saved and still **no
-physical trackpad gesture**:
-
-- `gesture_flow`, with the scenarios those changes added;
-- the socket run above, one launch on a freshly seeded scene: the same answers,
-  the same warnings and config error on stderr, the same landing values, exit
-  status 0 and the socket removed;
-- the nine recogniser-into-controller sequences against the rebuilt library:
-  output identical to the first run's.
-
-The two shell changes sit behind touches in `main.m` and have only been
-compiled.
-
-### Put together with camera motion, 2026-10-09
-
-The two runs above were made on this change by itself, when a swipe's coast was
-a tracker and a frame hook of its own beside the gesture, and its pinch a
-formula of its own. Both are gone: the gesture commands now drive
-[camera motion](MOTION.md), which was built at the same time, and the
-[Dispatch](#dispatch), [Momentum](#momentum) and
-[Differences](#differences-from-upstream) sections above describe the result.
-What that changed for a gesture:
-
-- a swipe's end 50 ms or more after its last update still launches, an emptied
-  tracker, so its reply reads `needs_frames: true` and the next frame is at
-  rest; before, nothing was launched and the reply read false;
-- `drift = 0` coasts for one frame, as upstream's `MomentumState` does with it;
-  before, it launched nothing;
-- a flight armed during a coast stops it at once, not at the next frame, and a
-  coast is stopped by everything [MOTION.md](MOTION.md#what-stops-momentum)
-  lists, a wheel zoom and a grab install among them;
-- a pinch from a pose below the dynamic minimum is pulled up to it;
-- a move gesture arms the drag's edge pan;
-- in the shell, a gesture's reply starts the same frame timer as every other
-  motion, a press also cancels a scroll pan waiting to launch, the begin of a
-  recognised swipe or pinch cancels it too and keeps that scroll's lift from
-  sending a `pan_end` beside the gesture's own
-  ([MOTION.md](MOTION.md#what-the-shell-owes)), and a magnify event is a
-  gesture event only, never a `zoom_by` as well.
-
-`gesture_flow`'s expectations changed where they had encoded the separate coast
-(the first three points), and it gained the fourth and fifth, a pinch under a
-pointer drag, and the comparison of a swipe's coast with the same deltas sent as
-timed pans. Run afterwards, with nothing saved and still **no physical trackpad
-gesture**:
-
-- `gesture_flow` and `motion_flow`, and the build under `-Wall -Wextra -Werror`;
-- the built app, one launch of about six seconds as `--windowed 1100x700` on a
-  private freshly seeded scene, config and socket, driven through `Infinify
-  msg`: a file holding camera-motion settings (`drift`, both pan speeds, five
-  `[navigation.edge_pan]` keys, `zoom.trackpad_speed`) and a `[gestures]`
-  override (`swipe_threshold`, both pinch thresholds, `"3-finger-swipe" =
-  "none"`, rebound four- and five-finger swipes, a per-direction trigger and an
-  on-canvas hold) loaded with nothing on stderr, and the bookmark it defines
-  read back; `action set-trackpad off`, `on` and `toggle` twice each answered
-  `ok`, and `set-trackpad maybe` upstream's message with exit status 1;
-  `action toggle-cursor-pan` answered `ok` twice; a second file with other
-  motion values and another override was reloaded with nothing on stderr and
-  its bookmark read back; `pan-viewport right` moved the camera 100 points,
-  `zoom-to-fit` went to `750 -390` at 0.28484848484848485 and back, and
-  `camera 400 -250`, `zoom 0.5`, `home-toggle` (to `0 -0` at zoom 1 and back)
-  and `pan-viewport right` (200 canvas points at zoom 0.5) landed on the values
-  of the runs above; `center-nearest right` was refused by name; SIGTERM, exit
-  status 0, socket removed. Neither the trackpad's state nor the cursor-pan
-  flag can be read over the socket, so only the answers were seen.
-
-Not run again: the recogniser-into-controller program, so the 95 accepted
-events and the figures above (378 points, 56 frames of coast) are the earlier
-library's. Everything behind a touch in `main.m` is still only compiled: the
-merged reply handling, press path and magnify routing included.
-
-### Merged with window navigation and managed windows, 2026-10-10
-
-The three runs above were made on a tree that had neither
-[window navigation](NAVIGATION.md#window-navigation-actions) nor
-[window lifecycle](LIFECYCLE.md): `center-nearest`, `center-window` and
-`cycle-windows` were still refused by name there, which is what those runs
-record. On the tree that has all of it:
-
-- a gesture's threshold or hold action goes through the one action dispatch
-  with the gesture's `pointer` and the firing event's `held`, the new optional
-  field of `gesture_update` and `gesture_end`; the four-finger swipe, the
-  `mod` three-finger swipe and the two holds of the default table now run, and
-  a swipe bound to `cycle-windows` holds its cycle open or commits it as a key
-  binding does;
-- that dispatch's prelude is one: it ends an open cycle before a non-cycle
-  action and stops the output's momentum, for a key, an IPC request, a hot
-  corner and a gesture alike;
-- a move's drag is the one drag there is: a window that closes by itself, or
-  gives way to a stand-in, ends it and disarms its edge pan, and the gesture
-  goes on with nothing to move;
-- in the shell, a gesture reply's focus request goes to the navigation
-  coordinator, a fired `cycle-windows` arms hold-to-commit, a gesture's begin
-  withdraws a native focus request still in flight and leaves a settled open
-  cycle alone, and a press ends an open cycle, then the gesture, then every
-  flight and coast.
-
-`gesture_flow` gained those scenarios (see the list above) and its expectations
-for the four-finger swipe and the hold changed from "refused by name" to what
-the action does. Run afterwards, with nothing saved and still **no physical
-trackpad gesture**:
-
-- `gesture_flow`, `motion_flow`, the navigation, lifecycle, platform, config
-  and IPC scenarios, the headless coordinator regression, and the build under
-  `-Wall -Wextra -Werror`;
-- the built app, one launch of 6.9 seconds as `--windowed 1100x700` on a
-  private freshly seeded scene, config and socket, without Screen Recording
-  access, driven through `Infinify msg`: a file with `[navigation] drift`, the
-  pan speeds, two `[navigation.edge_pan]` keys, `zoom.trackpad_speed`, a
-  `swipe_threshold` and three `[gestures.anywhere]` bindings (a named swipe
-  bound to `cycle-windows forward`, a five-finger swipe, a three-finger hold
-  bound to `focus-center`) loaded with no config line on stderr and its
-  bookmark read back; `action set-trackpad off`, `on` and `toggle` twice each
-  answered `ok`, and `set-trackpad maybe` upstream's message with exit status
-  1; `action toggle-cursor-pan` answered `ok` twice with the camera unmoved in
-  between; `center-nearest right` flew to the seeded window at `1950 0` and
-  focused it, where the runs above saw it refused, and `center-nearest left`,
-  `center-window`, `pan-viewport right` and `left` (100 points each),
-  `zoom-to-fit` (to `750 -390` at 0.28484848484848485 and back) and
-  `home-toggle` (to `0 -0` and back) landed exactly; SIGTERM, exit status 0,
-  socket removed. Neither the trackpad's state nor the cursor-pan flag can be
-  read over the socket, so only the answers were seen.
-
-No gesture event reached that app: a gesture firing `center-nearest`,
-`center-window` or `cycle-windows`, `held` on its events, hold-to-commit armed
-from a gesture, a move's native focus request and the merged press path exist
-there as compiled code and as the controller scenarios above, nothing more.
-
 ## DriftWM v0.20.0 / v0.21.0
 
 Upstream changed the default `[gestures]` table in v0.20.0 and `driftwm-core`
@@ -745,25 +545,7 @@ carries the new table (`crates/core/src/config/defaults.rs`):
 - Removed: the alt+2-finger pinches that fitted and the alt+3-finger pinch that
   toggled fullscreen.
 
-`tests/gesture_flow.rs` reads the table back through `begin`'s binding list. The
-shell's recogniser and Dock-gesture interception changed separately (next
-section); nothing here was run on a trackpad.
-
-### First trackpad run, 2026-10-29
-
-The owner ran the shell in compositor mode on a MacBook with an M5 Pro (macOS 27.2,
-156 x 96 mm built-in trackpad). The owner reports that three- and four-finger swipes
-and a pinch drove the canvas (no log of them was kept). A thumb and three
-fingers spreading and pinching, which are the bound `4-finger-pinch-out` and
-`4-finger-pinch-in` of the default table, instead performed macOS's own Show Desktop and
-Applications, and a four-finger swipe up opened Mission Control once: the shell's
-Dock-control guard did not hold the system's gestures back. Why is not established; the
-[shell notes](../../native/desktop/README.md#trackpad-gestures) list the paths the code
-allows, what changed (the guard decides a Dock-control stream once and follows it to
-its end, the drop timing is Sunlight's, both taps ask the guard, no Dock-control packet
-is converted to an `NSEvent`) and the `INFINIFY_DEBUG` lines that will say which it was.
-The recogniser's pinch reading gained a rule over every finger's distance from their
-centre, because a thumb and three fingers that spread while the hand drifts were read
-as a four-finger swipe: the controller's `4-finger-swipe` binding (`center-nearest` in that build,
-`focus-nearest` since the v0.21.0 defaults above) then fired where a pinch was meant. That rule has been exercised on synthetic hands
-only. The controller is unchanged, and no controller scenario was run for this.
+`tests/gesture_flow.rs` reads the table back through `begin`'s binding list.
+The shell's recogniser and Dock-gesture interception are the shell's
+([shell notes](../../native/desktop/README.md#trackpad-gestures)); nothing here
+was run on a trackpad.

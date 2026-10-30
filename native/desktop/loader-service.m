@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT AND GPL-3.0-or-later
-// Translated from spacefarm-digital/sunlight afeea74b18e70ca49bf462d6fe462cf65deb2b32 (MIT, Copyright (c) 2026 spacefarm;
-// notice in SUNLIGHT-NOTICE.txt), third_party/sunlight/Sources/Canvas/Setup/LiveWindowsService.swift, function by function:
-//   lines 5-7    `LiveWindowsXPC`           -> InfinifyLoaderXPC (it takes the command's arguments as well)
+// Translated from Sunlight, repository https://github.com/spacefarm-digital/sunlight, commit afeea74b18e70ca49bf462d6fe462cf65deb2b32
+// (MIT, Copyright (c) 2026 spacefarm; notice in SUNLIGHT-NOTICE.txt), upstream path Sources/Canvas/Setup/LiveWindowsService.swift,
+// function by function (the line numbers are those of that file at that commit):
+//   lines 5-7    `LiveWindowsXPC`           -> InfinifyLoaderXPC (loadd-request.h; it takes the command's arguments as well)
 //   lines 18-25  `State`                    -> DWLoaderState
 //   lines 27-28  `plistName`, `machService` -> DWLoadDaemonPlist, DWLoadMachService (loadd-request.h)
 //   lines 30     `service`                  -> +service
@@ -17,11 +18,8 @@
 // (this runs before AppKit, from a command), and the plist is looked for at Contents/Library/LaunchDaemons of the main bundle.
 #import "loader-service.h"
 #import "loadd-request.h"
+#import "login-item.h"
 #import <ServiceManagement/ServiceManagement.h>
-
-@protocol InfinifyLoaderXPC
-- (void)runCommand:(NSString *)command arguments:(NSArray<NSString *> *)arguments reply:(void (^)(int status, NSString *output))reply;
-@end
 
 // The XPC reply arrives on another queue than the one waiting for it.
 @interface DWLoaderResult : NSObject
@@ -100,7 +98,7 @@
     switch(state){
         case DWLoaderUnavailable:return @"unavailable (this build has no launch daemon: it is ad-hoc signed, or not run from an Infinify.app)";
         case DWLoaderNotRegistered:return @"not registered";
-        case DWLoaderNeedsApproval:return @"registered, waiting for approval under System Settings > General > Login Items & Extensions";
+        case DWLoaderNeedsApproval:return [@"registered, waiting for approval under " stringByAppendingString:DWLoginItemsPane];
         case DWLoaderEnabled:return @"enabled";
     }
     return @"unknown";

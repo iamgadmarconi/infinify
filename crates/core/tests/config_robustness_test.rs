@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Ported from malbiruk/driftwm tests/config_robustness_test.rs at
-// df3de27b26c7998e8a460cffd8a4925cbed3a322 (GPL-3.0-or-later).
-// Changes from upstream: crate paths only — `driftwm::config` reads
-// `driftwm_core::config`.
-// Nothing else.
+//
+// Ported from DriftWM (GPL-3.0-or-later)
+//   repository: https://github.com/malbiruk/driftwm
+//   commit:     df3de27b26c7998e8a460cffd8a4925cbed3a322
+//   path:       tests/config_robustness_test.rs
+//   sha-256:    a6b4d9d2014260240f8a743e704a53e72d8d31e235ae9ba469b0bf397c52fb65 (upstream file)
+// Changes from upstream: this header, and crate paths only: `driftwm::config` reads
+// `driftwm_core::config`. Nothing else.
+// See PORT.md in the crate root for the full change log.
+
 //! `Config::from_toml_collect` must never panic: malformed TOML and type
 //! mismatches become `Err`, and semantically-bad values (bad regex, unknown
 //! decoration mode, out-of-range numbers) degrade to collected warnings. This

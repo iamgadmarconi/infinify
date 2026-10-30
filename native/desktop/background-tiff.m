@@ -3,15 +3,16 @@
 // Tiled pyramidal TIFF source and decode pool — see background-tiff.h and
 // BACKGROUND-NOTES.md, section 17.
 //
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
-// src/render/tile_chunks_tiff.rs and src/render/tile_worker.rs. New code: the
-// walk over the file's directories (classic TIFF and BigTIFF, either byte
-// order) and the decode of one tile, which hands ImageIO the tile's own
-// compressed bytes inside a one-strip TIFF built in memory. A TIFF tile is
-// encoded exactly like a strip of the tile's size, so every compression
-// ImageIO reads in a TIFF it reads in a tile, and only the tiles a block
-// covers are ever touched: asking ImageIO for a region of a level instead
-// decodes every tile of the rows the region crosses (measured, section 17).
+// Adapted from DriftWM, https://github.com/malbiruk/driftwm @
+// 352333a8fa1b22171492d4b71a54102045c9a19d: src/render/tile_chunks_tiff.rs and
+// src/render/tile_worker.rs. New code: the walk over the file's directories
+// (classic TIFF and BigTIFF, either byte order) and the decode of one tile,
+// which hands ImageIO the tile's own compressed bytes inside a one-strip TIFF
+// built in memory. A TIFF tile is encoded exactly like a strip of the tile's
+// size, so every compression ImageIO reads in a TIFF it reads in a tile, and
+// only the tiles a block covers are ever touched: asking ImageIO for a region
+// of a level instead decodes every tile of the rows the region crosses
+// (measured, section 17).
 
 #import "background-tiff.h"
 
@@ -54,11 +55,6 @@ NSUInteger IFBGTiffWholeLevel(const IFBGTiffLevel *levels, NSUInteger count, uin
         return NSNotFound;
     }
     return count - 1;
-}
-
-// Rust's `io::Error` as upstream prints it.
-static NSString *IFBGTiffOSError(int code) {
-    return [NSString stringWithFormat:@"%s (os error %d)", strerror(code), code];
 }
 
 static BOOL IFBGTiffRead(int fd, void *buffer, size_t length, uint64_t offset) {
@@ -306,7 +302,7 @@ static IFBGTiffPage *IFBGTiffReadPage(int fd, uint64_t fileSize, BOOL bigEndian,
     _path = [path copy];
     _fd = open(path.fileSystemRepresentation, O_RDONLY | O_CLOEXEC);
     if (_fd < 0) {
-        *error = [NSString stringWithFormat:@"open %@: %@", path, IFBGTiffOSError(errno)];
+        *error = [NSString stringWithFormat:@"open %@: %@", path, IFBGOSError(errno)];
         return nil;
     }
     struct stat st;
@@ -416,7 +412,7 @@ static void IFBGTiffEntry(NSMutableData *data, uint16_t tag, uint16_t type, uint
     if (page->jpegTables) [file appendData:page->jpegTables];
     file.length = dataAt + (NSUInteger)length;
     if (!IFBGTiffRead(_fd, (uint8_t *)file.mutableBytes + dataAt, (size_t)length, offset)) {
-        *error = [NSString stringWithFormat:@"read_chunk(%llu) at LOD %lu: %@", index, (unsigned long)lod, IFBGTiffOSError(errno ?: EIO)];
+        *error = [NSString stringWithFormat:@"read_chunk(%llu) at LOD %lu: %@", index, (unsigned long)lod, IFBGOSError(errno ?: EIO)];
         return NULL;
     }
 
@@ -657,7 +653,6 @@ typedef struct {
     NSMutableData *pending;                          // IFBGTileRequest, oldest first (`VecDeque`)
     NSMutableArray<IFBGTileResponse *> *responses;   // oldest first (the mpsc channel)
     NSUInteger running;                              // decoders alive, at most kIFBGTileWorkers
-    NSUInteger decoding;                             // requests taken and not yet answered
     BOOL shutdown;
     IFBGTiffSource *source;
     dispatch_block_t wake;
@@ -676,7 +671,6 @@ typedef struct {
         }
         memcpy(&request, pending.bytes, sizeof request);
         [pending replaceBytesInRange:NSMakeRange(0, sizeof request) withBytes:NULL length:0];
-        decoding++;
         os_unfair_lock_unlock(&lock);
 
         IFBGTileResponse *response = nil;
@@ -686,7 +680,6 @@ typedef struct {
             response = [[IFBGTileResponse alloc] initWithLevel:request.level cx:request.cx cy:request.cy block:block error:error];
         }
         os_unfair_lock_lock(&lock);
-        decoding--;
         BOOL deliver = !shutdown;
         if (deliver) [responses addObject:response];
         dispatch_block_t notify = deliver ? wake : nil;
@@ -756,12 +749,5 @@ typedef struct {
     [_queue->responses removeAllObjects];
     _queue->wake = nil;
     os_unfair_lock_unlock(&_queue->lock);
-}
-
-- (NSUInteger)outstandingCount {
-    os_unfair_lock_lock(&_queue->lock);
-    NSUInteger count = _queue->pending.length / sizeof(IFBGTileRequest) + _queue->decoding + _queue->responses.count;
-    os_unfair_lock_unlock(&_queue->lock);
-    return count;
 }
 @end

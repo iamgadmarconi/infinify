@@ -238,9 +238,9 @@ int main(int argc, char **argv) {
 
         void *handle = dlopen(payload.fileSystemRepresentation, RTLD_LOCAL | RTLD_NOW);
         if (!handle) { fprintf(stderr, "dlopen: %s\n", dlerror()); return 1; }
-        int (*start)(const char *, const char *, const uint32_t *, uint32_t, const char *, int) = dlsym(handle, "dw_privileged_fixture_start_windows");
+        int (*start)(const char *, const char *, const uint32_t *, uint32_t, const char *) = dlsym(handle, "dw_privileged_fixture_start_windows");
         uint32_t wid = (uint32_t)window.windowNumber;
-        int status = start ? start(runtime.fileSystemRepresentation, authNonce.UTF8String, &wid, 1, NULL, -1) : -1;
+        int status = start ? start(runtime.fileSystemRepresentation, authNonce.UTF8String, &wid, 1, NULL) : -1;
         if (status) { fprintf(stderr, "helper fixture start failed: %d\n", status); return 1; }
         printf("READY %s %d %u\n", role.UTF8String, getpid(), wid);
         fflush(stdout);

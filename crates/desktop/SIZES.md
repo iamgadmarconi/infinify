@@ -3,8 +3,8 @@
 DriftWM's sizing actions as controller policy: `grow-window`, `shrink-window`,
 IPC `resize W H`, `fit-window`, `fit-window-snapped`, `fill-window` and
 `zoom-to-fit-snapped`. Which size, which place, which camera and what a second
-press restores are upstream's rules, read from malbiruk/driftwm
-`352333a8fa1b22171492d4b71a54102045c9a19d` (GPL-3.0-or-later):
+press restores are upstream's rules, read from <https://github.com/malbiruk/driftwm>
+at `352333a8fa1b22171492d4b71a54102045c9a19d` (GPL-3.0-or-later):
 `src/state/{resize,fit,fill,cluster_snapshot,recenter,window_frame}.rs`,
 `src/input/actions.rs` and `src/ipc/mod.rs`. The fill search, the cluster walk
 and the push cascade are driftwm-core's `layout::fill::fill_rect` and
@@ -23,8 +23,8 @@ Every sizing action is a canvas window's. What each does beside a
 
 Delivering a size to a real Mac window goes through the size-only
 [native resize transaction](NATIVE_RESIZE.md), which a shell performs once it
-has said that it does. Every normal run says so; a demo, a probe and a
-controller nobody told anything do not.
+has said that it does. Every normal run says so; a controller nobody told
+anything does not.
 
 ```json
 {"op":"native_resize_capability","enabled":true}
@@ -32,9 +32,7 @@ controller nobody told anything do not.
 
 answers `{}`. `enabled` is required and must be a boolean. Native readback
 settles every size without waiting for a capture
-([Readback mode](NATIVE_RESIZE.md#readback-mode)). The retired `readback` field
-and capture-acknowledgement commands are rejected. There is no alternate
-resize flag. On fixture windows of the test's own the readback path runs end
+([Readback mode](NATIVE_RESIZE.md#readback-mode)). On fixture windows of the test's own the readback path runs end
 to end in `tests/e2e/scoped-sizing.sh`
 ([native/desktop/README.md](../../native/desktop/README.md#window-sizing-actions));
 arbitrary application behavior remains unvalidated.
@@ -65,9 +63,8 @@ While it is `false`:
 - a window rule's `size` is recorded and named in `rule.not_applied`
   ([RULES.md](RULES.md#a-rules-size)).
 
-Those replies are byte for byte what they were before this work:
-`tests/sizes_flow.rs` compares them with the responses captured from the tree
-before it. There is no other switch.
+`tests/sizes_flow.rs` compares these replies with literals recorded from a
+tree that had no sizing actions.
 
 `zoom-to-fit-snapped` moves only a camera. It is not gated and always runs.
 
@@ -274,7 +271,9 @@ Differences: upstream slides the pushed-back neighbours
 (`animate_cluster_shift`); here they move at once, as the fit's own shove moves
 them. The inventory note that came with the row mentions an upstream fix (#322)
 for a docked window moving after closing an app that opened maximized; nothing
-of it is in the vendored source this was read from, and it is not claimed here.
+of it is in the upstream source this was read from
+(<https://github.com/malbiruk/driftwm> @
+`df3de27b26c7998e8a460cffd8a4925cbed3a322`), and it is not claimed here.
 Why the record exists at all is upstream's own account, in `FitPush`'s
 comment: the window's geometry has stopped describing the fit by the time it
 closes (a disconnect drops its title bar first, a fullscreen parks it
@@ -686,78 +685,6 @@ establish that:
 
 Upstream's own tests (`src/tests/window_mode.rs`, `src/tests/focus_placement.rs`)
 were read for the contract and are not executed here.
-
-### Built together and run, 2026-10-10
-
-Historical evidence: invocations of `--experimental-native-resize` below
-refer to the mode removed on 2026-10-12 and are not current launch instructions.
-
-The controller and the shell were built into the app
-(`scripts/build-app.sh`, ad-hoc signed, macOS 27.2, Apple Silicon) and the app
-was launched twice as `--windowed 1100x700` on a private scene of three
-detached placeholders, a private config and a private socket, and driven
-through `Infinify msg`. Neither launch had Screen Recording access, so no
-window on the canvas had a source. Nothing from them is saved as evidence.
-
-- Without the flag, `action fit-window`, `fit-window-snapped`, `fill-window`,
-  `grow-window right` and `shrink-window right` each answered
-  `action not implemented on macOS yet: <name>`, and `resize --id 1 800 600`
-  answered
-  `resize is not implemented on macOS yet: native layout resize is not available`.
-- With `--experimental-native-resize`, on the same placeholders, the three
-  toggles answered `ok` and changed nothing, `grow-window right` and
-  `shrink-window right` answered
-  `<name> needs a live window: a stand-in has no native size to change`, and
-  `resize --id 1 800 600` answered
-  `this window has no native size to set: it is a stand-in or has no live window`.
-  So the app does send the capability, and it holds after the scene load.
-- In both, `State` reported `"mode": "Normal"` for every window, and
-  `zoom-to-fit-snapped` on a focused window with one neighbour moved to the
-  snap gap flew from camera `550 -318` at zoom 1 to camera `976 -450` at zoom
-  `0.6056701030927835`, which is the center of the two frames' bounding box
-  and (1100 - 2 x 80) / 1552 with `fit_padding = 80`; a second one flew back.
-
-**No size transaction ran in the app.** A stand-in begins none, so the hook
-handed nothing to the resize coordinator, `consume:` was never reached from a
-sizing action, and no native window was read or resized. The shell's side of
-[The shell](#the-shell) is compiled and read, not exercised, beyond the
-capability and the reply paths those answers came back through.
-[The shell notes](../../native/desktop/README.md#window-sizing-actions) list
-what else is unrun.
-
-### Built with rules, rendering and the pointer policy, 2026-10-10
-
-Historical evidence: invocations of `--experimental-native-resize` below
-refer to the mode removed on 2026-10-12 and are not current launch instructions.
-
-After the sizing work was merged into the tree that has window rules, the
-renderer and the pointer policy, the same checks were repeated on the same
-machine. `tests/sizes_flow.rs` passed with 30 scenarios and
-`tests/rules_flow.rs` with 22. A throwaway program outside the repository sent
-the same requests, with the capability off, to the tree before the merge and
-to the merged one, on a scene with a canvas window, a widget, a rule-pinned
-window and a window whose rule names a `size`; of 168 raw replies and the
-saved scene file, the only differences were `"mode": null` on every
-`snapshot.windows[]` entry and `zoom-to-fit-snapped` reported implemented by
-`bindings`.
-
-The built app was launched again on three detached placeholders, with a
-private scene, config and socket and no Screen Recording access. Without the
-flag the five actions and the resize write answered the refusals quoted above,
-`zoom-to-fit-snapped` framed a two-placeholder cluster at camera `2236 -0` and
-zoom `0.6385869565217391` ((1100 - 160) / 1472) and returned, and a viewport
-screenshot of that view was written and looked at. With
-`--experimental-native-resize` the three toggles answered `ok` and changed
-nothing, `grow-window right` and `shrink-window right` answered
-`<name> needs a live window: a stand-in has no native size to change`, and
-`resize --id 1 800 600` answered
-`this window has no native size to set: it is a stand-in or has no live window`.
-
-**No live window existed, so again no size transaction ran in the app**, by an
-action or by a rule. The joins with widgets, pins, rules, hover and pick mode
-ran only in the controller scenarios.
-[The shell notes](../../native/desktop/README.md#what-has-been-run-for-sizing-with-everything-else-built-in)
-have the commands and the answers.
 
 ## Keyboard snapping: `move-to-snap`, `resize-to-snap` (v0.20.0, v0.21.0)
 

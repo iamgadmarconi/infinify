@@ -7,8 +7,8 @@
 // why this header exists: a tap that hands a type-30 CGEvent to +[NSEvent eventWithCGEvent:] gets nil and AppKit
 // logs "unrecognized type is 30" once per packet. Nothing may convert one: classify it here instead.
 //
-// DockSwipe field/type/phase decoding adapted from joshuarli/iss, commit
-// 493b008f2ea8e9215877c39700e8ea3add800e97, iss.c (cb, lines 436-515):
+// DockSwipe field/type/phase decoding adapted from joshuarli/iss, repository https://github.com/joshuarli/iss,
+// commit 493b008f2ea8e9215877c39700e8ea3add800e97, upstream path iss.c, lines 436-515 (cb) of that file at that commit:
 // https://github.com/joshuarli/iss/blob/493b008f2ea8e9215877c39700e8ea3add800e97/iss.c
 // Copyright (c) 2026 joshuarli
 // Permission to use, copy, modify, and/or distribute this software for any
@@ -25,17 +25,19 @@
 // Desktop pinch in particular is unverified, which is why every type-30 event that does not decode is classified
 // `Other` and decided by the tap's own rules instead of being guessed at.
 #import <Foundation/Foundation.h>
+#import "debug-trace.h"
 #import <CoreGraphics/CoreGraphics.h>
 #import <QuartzCore/QuartzCore.h>
 #include <os/lock.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-// TrackpadPan.dockControl, third_party/sunlight/Sources/Canvas/TrackpadPan.swift 61-63 (spacefarm-digital/sunlight afeea74, MIT, Copyright (c) 2026 spacefarm).
+// TrackpadPan.dockControl, lines 61-63 of Sources/Canvas/TrackpadPan.swift in https://github.com/spacefarm-digital/sunlight at commit
+// afeea74b18e70ca49bf462d6fe462cf65deb2b32 (MIT, Copyright (c) 2026 spacefarm; notice in SUNLIGHT-NOTICE.txt).
 static const CGEventType DWDockControlType=(CGEventType)30;
 static const CGEventField DWGestureRealType=55,DWGestureHIDType=110,DWGestureAxis=123,DWGesturePhase=132;
 // How long after the fingers lift, or the gesture ends, Dock control is still dropped: the system's swipe ends a beat later.
-// TrackpadPan.dockTail, TrackpadPan.swift 58-60 (the same Sunlight commit).
+// TrackpadPan.dockTail, lines 58-60 of the same file at that commit.
 static const NSTimeInterval DWDockControlTail=.3;
 
 // Where a packet sits in the system's stream: its beginning, its middle or its end, or `Other` for a type-30 packet
@@ -54,15 +56,8 @@ static inline DWDockControlKind DWDockControlClassify(CGEventRef event,NSInteger
     if(p==kCGGesturePhaseEnded||p==kCGGesturePhaseCancelled)return DWDockControlEnded;
     return DWDockControlOther;
 }
-// The earlier all-or-nothing decode: a recognised DockSwipe and its phase.
-static inline BOOL DWDockSwipe(CGEventRef event,NSInteger *phase) {
-    NSInteger axis=0,p=0;if(DWDockControlClassify(event,&axis,&p)==DWDockControlOther)return NO;
-    *phase=p;return YES;
-}
 
 // --- INFINIFY_DEBUG diagnostics ---------------------------------------------------------------------------------------
-// The environment variable is read once; the same switch as main.m's DWInputTrace, which this header cannot see.
-static inline BOOL DWGestureTrace(void) { static int on=-1;if(on<0)on=getenv("INFINIFY_DEBUG")!=NULL;return on; }
 // Every integer field of the packet from 40 to 169 that is not zero, so that the first packet of a stream a decoder
 // does not know can be read off a log. A field that holds a double reads as a huge integer; that is shown as ~.
 static inline void DWDockControlFields(CGEventRef event,char *buffer,size_t size) {
@@ -77,7 +72,7 @@ static inline void DWDockControlFields(CGEventRef event,char *buffer,size_t size
 // are always written; a packet that repeats the last one is counted and mentioned with the next line, at most every
 // quarter second. `via` names the tap, `detail` is the caller's account of its own state.
 static inline void DWDockControlTrace(const char *via,CGEventRef event,DWDockControlKind kind,DWDockControlVerdict verdict,const char *reason,const char *detail) {
-    if(!DWGestureTrace())return;
+    if(!DWDebugTrace())return;
     static os_unfair_lock lock=OS_UNFAIR_LOCK_INIT;static NSTimeInterval last=0;static NSUInteger suppressed=0,total=0;
     static const char *lastVia=NULL,*lastReason=NULL;static DWDockControlVerdict lastVerdict=DWDockControlUndecided;
     static const char *kinds[]={"other","began","changed","ended"},*verdicts[]={"pass","DROP","undecided"};

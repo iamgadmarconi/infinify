@@ -1,195 +1,198 @@
 # Infinify
 
-A GPL-3.0-or-later Rust/macOS development port of [DriftWM](https://github.com/malbiruk/driftwm), targeting Apple Silicon and macOS 26+. The objective is a persistent infinite canvas containing live native Mac windows, with independent output cameras, pan/zoom, correct native input, focus, and recovery.
+A GPL-3.0-or-later Rust and Objective-C port of [DriftWM](https://github.com/malbiruk/driftwm) to
+Apple Silicon and macOS 26+. DriftWM's persistent infinite canvas becomes the desktop of live native Mac
+windows: one canvas per display with its own camera, pan and zoom, DriftWM's bindings, gestures, window rules
+and IPC, and native input, focus and recovery.
 
-**An experimental native app is available.** It displays live captured Mac windows on a persistent canvas, with an independent camera for each connected display. Panning and zooming change the views while the original windows remain in place. The same source can appear through multiple cameras. The app uses a Rust canvas/controller and an Objective-C desktop shell.
+Infinify replaces the native desktop rather than adding an app to it: it is meant to be installed, started at
+login and left running until you quit it. Literal Wayland and X11 client hosting is outside the scope.
 
-The explicit native mode has also run with TextEdit, Finder, Safari and Calculator
-in a macOS 27.0.1 UTM guest. The owner confirmed stable repeated TextEdit/Finder
-titlebar dragging, including while zoomed out. Same-Space Fill/restore was checked
-with TextEdit and Safari, including exact return to the prior geometry; TextEdit
-recordings show the AppKit snapshot transition. These are specific real-app
-checks. Native display-boundary clipping, fresh captured copies while a native
-window is scaled, physical multi-display behavior and macOS 26 execution remain
-open. This is a development build, not yet a complete desktop replacement.
+## Requirements and status
 
-The completion requirement is **exact DriftWM behavior for native Mac apps**.
-The [source-pinned parity contract](docs/parity/README.md) tracks known differences
-and required proof. Literal Wayland/X11 client hosting is outside the agreed scope.
+- An Apple Silicon Mac on macOS 26 or later. The development host runs macOS 27.2, so macOS 26 execution is not
+  verified. Rust 1.88+, the Xcode command-line tools and the macOS SDK build it; the build sets
+  `MACOSX_DEPLOYMENT_TARGET=26.0`.
+- **Screen Recording** (to capture windows) and **Accessibility** (native input, focus and sizing). While one is
+  missing, a small window names it and offers an Allow button; the canvas opens once both are granted. Builds
+  signed ad hoc lose both grants on every reinstall; sign with your own identity (see Install).
+- Two modes. The default **capture overlay** draws live copies of the windows on the canvas and needs no change to
+  SIP. **Compositor mode** has the window server itself draw the real windows where the canvas places them,
+  through a helper loaded into the Dock; it needs a Developer-ID signed build, SIP debugging restrictions relaxed
+  (which Dock injection requires), and a launch daemon that you approve once. See
+  [Compositor mode](#compositor-mode).
+- This is a pre-release. The [parity contract](docs/parity/README.md) tracks every difference from DriftWM; no row
+  is `verified`. Native display-boundary clipping, physical multi-display behaviour, broad third-party
+  application compatibility and macOS 26 execution remain open. The tests below do not change privacy settings or
+  SIP, and nothing in them proves compositing of third-party windows.
 
-## Run the app
+## Install
 
-From `/Users/gad/Documents/code/personal/infinify`:
+These steps are for you to run; no script here registers a login item or a launch daemon on its own.
 
 ```sh
-./scripts/build-app.sh
+INFINIFY_SIGN_IDENTITY="<your signing identity>" ./scripts/install-app.sh
+```
+
+`security find-identity -v -p codesigning` lists identities. The script builds the app with that identity and copies
+the exact signed bundle to `~/Applications/Infinify.app`, after checking the outer signature, the executable hash
+and the helper hashes. With an identity the app, the loader, the doctor and the launch daemon are signed with the
+hardened runtime; without the variable the build is ad hoc. `--built` installs the identity already used for that
+build.
+
+1. `open ~/Applications/Infinify.app`, click the Allow buttons in the permission window, switch Infinify on in the
+   two System Settings panes they open, then click Relaunch (macOS gives Screen Recording only to a newly started
+   app). Quit again before the next step.
+2. `~/Applications/Infinify.app/Contents/MacOS/Infinify login-item on` starts Infinify now, at every login and again
+   after a crash. macOS may ask you to allow it under System Settings > General > Login Items & Extensions.
+   `login-item status` reports it; `login-item off` removes it and ends the instance it started.
+3. To remove it: `login-item off`, then `native-desktop disable` if you enabled compositor mode, then delete the
+   bundle.
+
+## Run
+
+```sh
+./scripts/build-app.sh      # builds target/app/Infinify.app; launches nothing
 open target/app/Infinify.app
 ```
 
-A normal run is the desktop: one canvas panel covers each display whole, on every Space, under the menu bar and the Dock, with no toolbar, no status line and no chooser. With Screen Recording and Accessibility access the canvas opens at once and every real application window on screen (a standard window or a dialog, not a popup or a helper window) joins it by itself; while either is missing one small window names it and offers its Allow button, and the canvas opens once both are there. Stage Manager and macOS window tiling would fight the canvas (Stage Manager keeps every window outside the current stage as a thumbnail in its strip, which is then all a canvas could show of it, blurred and still; tiling snaps a dragged or resized window to a screen edge), so a normal run switches them off itself while its canvas is open: it writes `false` to `GloballyEnabled`, `EnableTilingByEdgeDrag`, `EnableTopTilingByEdgeDrag` and `EnableTilingOptionAccelerator` in `com.apple.WindowManager` (a key that was absent is removed again afterwards), after saving your own values to `~/Library/Application Support/Infinify/window-prefs-snapshot.plist`, and puts them back when it ends (quit, signal, log out) or, if it was killed, at the next launch. One line on stderr names what was changed and restored. A setting you change yourself while it runs stays as you set it. `--windowed`, `--manual` and `--only-pid` runs leave the settings alone. With `--manual` the chooser comes first and only the windows chosen there are added, and `--windowed` opens the canvas in one ordinary window instead. Owned-fixture capture and native geometry checks have run with Screen Recording access; broad third-party acceptance remains open. See [Desktop mode](native/desktop/README.md#desktop-mode) and [Managed windows](native/desktop/README.md#managed-windows). With no config file, DriftWM's default bindings apply under the default super key (Control-Option): drag blank canvas or Control-Option-drag anywhere to pan; use the mouse wheel on blank canvas, Control-Option-scroll anywhere, or pinch to zoom; and Option-drag a window to move it in the world (add Shift to move its snapped cluster). Command editing shortcuts and Command-Tab remain with native apps. `--super cmd` restores the previous Command canvas bindings; explicit config bindings still take precedence. A DriftWM-grammar config file or `--super` changes these; see [Configuration](native/desktop/README.md#configuration). Unmodified clicks and scrolling on a window reach its native application; that application retains keyboard focus. Quit with Control-Option-Escape, Control-Option-Command-Shift-Q or `Infinify msg action quit`: quitting closes the canvas panels and returns the native desktop.
+One canvas panel per display covers the whole display on every Space, under the menu bar and the Dock, which both
+stay. There is no toolbar, status line or chooser; status notes go to stderr. Every real application window on
+screen (a standard window or a dialog, not a popup or helper window) joins the canvas by itself.
 
-Screen Recording access is needed for capture and Accessibility access for native input. The permission window explains missing access. The build and tests do not change privacy settings or SIP. The capture-based app does not require disabling SIP; its private input path still needs validation on each supported macOS release.
+- **Quit** with Control-Option-Escape, Control-Option-Command-Shift-Q or `Infinify msg action quit`. The scene is
+  saved, the panels close and the native desktop returns.
+- **What a run changes.** Stage Manager and macOS window tiling would fight the canvas, so while the canvas is
+  open the run writes `false` to `GloballyEnabled`, `EnableTilingByEdgeDrag`, `EnableTopTilingByEdgeDrag` and
+  `EnableTilingOptionAccelerator` in `com.apple.WindowManager` (an absent key is removed again afterwards), after
+  saving your own values to `~/Library/Application Support/Infinify/window-prefs-snapshot.plist`. They are put
+  back when it ends (quit, signal, log out) or, if it was killed, at the next launch. A setting you change
+  yourself meanwhile stays as you set it. `--windowed`, `--manual` and `--only-pid` runs leave the settings alone.
+- **Saved scene.** World positions are saved in `~/Library/Application Support/Infinify/scene.json`. Cameras are
+  restored only with `[session] restore_camera = true`. A scene file with an unsupported schema version or invalid contents is refused whole: the
+  shell says so, preserves the file and does not save over it.
+- `Infinify --help` lists every option. The user options are `--state`, `--socket`, `--config`, `--super`,
+  `--no-native-focus` and `--no-hover-forwarding`. `--native-desktop-helper` is the launcher's whole-desktop flag,
+  started by `Infinify native-desktop`. `--windowed`, `--manual`, `--only-pid`, `--debug-pointer` and `--native-helper`
+  are a test seam for live tests on disposable windows ([native/desktop/README.md](native/desktop/README.md)).
 
-Saved scenes retain world positions. Display cameras are saved too, but are restored on restart only with `[session] restore_camera = true`; with DriftWM's default (off) each display starts with its top-left corner on the world origin at zoom 1. On restart a managed launch returns running windows to their saved slots, matched by application and title, places the others as new windows, and drops the slots nothing matched unless `[session] restore_windows = true` keeps them as stand-ins; with `--manual`, saved windows appear as detached placeholders and are rebound through its chooser. Without Screen Recording access a normal run shows the permission window instead of the canvas, and a `--windowed` run shows the placeholders with no way to rebind them. Native resizing, popovers, context menus and richer pointer interactions are unfinished. See the [desktop app guide](native/desktop/README.md) for the disposable demo, exact controls, persistence and limitations.
+## Controls
 
-Window navigation is part of every normal launch: Control-Option-arrows jump to the
-nearest window, Control-Option-C centres the focused one, Option-Tab cycles windows
-most recently focused first, and a click focuses the window it lands on. With
-Accessibility access the focused window's real window is activated and raised;
-`--no-native-focus` keeps focus logical. The actions were driven live through the IPC socket on detached
-placeholders. Native focus and click forwarding now also pass on disposable
-scoped fixture windows; physical hot keys and event delivery still need desktop
-validation. See
-[Window navigation and native focus](native/desktop/README.md#window-navigation-and-native-focus).
+With no config file, DriftWM's default bindings apply under the default super key, Control-Option (`--super cmd`
+uses Command instead):
 
-DriftWM's sizing actions (Control-Option-M fits the focused window,
-`grow-window`, `shrink-window`, `fill-window`, `Infinify msg resize W H`), a
-window rule's `size` and fullscreen (Control-Option-F) act on the real window in
-every normal run: the size is asked through Accessibility and read back, and the
-canvas takes the size the application allowed. In addition to the scoped sizing
-checks (`tests/e2e/scoped-sizing.sh`), same-Space Fill/restore has been checked on
-real TextEdit and Safari windows in the macOS 27 VM. Other application sizing
-policies still need validation. See
-[Window sizing actions](native/desktop/README.md#window-sizing-actions) and
-[Fullscreen](native/desktop/README.md#fullscreen).
+| Do | With |
+| --- | --- |
+| Pan | drag blank canvas, or Control-Option-drag anywhere |
+| Zoom | mouse wheel on blank canvas, Control-Option-scroll anywhere, or pinch |
+| Move a window in the world | Option-drag (add Shift to move its snapped cluster) |
+| Nearest window | Control-Option-arrows |
+| Centre the focused window | Control-Option-C |
+| Cycle windows, most recently focused first | Option-Tab |
+| Fit / fullscreen the focused window | Control-Option-M / Control-Option-F |
 
-Pointer borders and configured resize gestures use the same readback path in
-every normal run. Owned physical and scoped resize scenarios cover the supported
-path; arbitrary application behavior and independent display-boundary clipping
-still need validation. The former orange-handle mode and its UI-driving probe
-have been removed. Their failed attempts remain as
-[historical resize evidence](native/desktop/README.md#experimental-native-resizing).
+Unmodified clicks and scrolling on a window reach its native application, which keeps keyboard focus; Command
+editing shortcuts and Command-Tab stay with the applications. Every binding, action and default table is in
+[crates/desktop/CONFIG.md](crates/desktop/CONFIG.md); a config file's bindings take precedence.
 
-## Using Infinify as your desktop
+## Configuration
 
-The [cooperative native presentation backend](native/desktop/README.md#native-presentation-through-a-cooperative-helper)
-can now present real fixture windows with pan, zoom, focus, resize and recovery.
-Its scoped end-to-end test passed three times on macOS 27.2, including independent
-transform and alpha restoration checks. Finite helper scopes remain available for owned fixtures. The owner-run `native-desktop` command and `scripts/start-native-desktop.sh` prepare whole-desktop admission through an authenticated Dock helper; normal startup does not inject one. The installed command uses only signed files inside its `.app` bundle, while the repository script also checks that a selected bundle matches the current checkout. The macOS 27.0.1 VM now runs this whole-desktop path with the real applications named above. Those checks do not establish native clipping or general application compatibility; host injection has not been validated.
+The config file is DriftWM's grammar. The app reads `--config ABSOLUTE_PATH`, else
+`$XDG_CONFIG_HOME/infinify/config.toml`, else `~/.config/infinify/config.toml`; DriftWM's built-in defaults apply
+when it is missing, and the file is read again whenever it changes. What a file gets wrong is drawn in the error
+bar. See [CONFIG.md](crates/desktop/CONFIG.md) for `[session]`, `[background]`, `[[window_rules]]`, `[effects]`
+and every other table, and [RULES.md](crates/desktop/RULES.md) for window rules.
 
-DriftWM is the session, not an app one launches, and a normal run of Infinify is meant the same way: installed, started at login, and there until you quit it. These steps are for you to run; no script or agent here installs, signs with your identity or registers a login item or a launch daemon, and steps 1 to 4 have not been run on your Mac (step 5 and the Dock restarts have been run only in the disposable guest, below). The login item is the regular capture-mode startup until step 5 turns compositor mode (the Dock helper) into the login default; without step 5, full-desktop helper mode is a separate explicit terminal action and is not started at login.
+## Scripting
 
-1. **Install.** `INFINIFY_SIGN_IDENTITY="<your signing identity>" ./scripts/install-app.sh` builds the app with that identity, then copies the exact signed bundle to `~/Applications/Infinify.app`. The bundle carries the doctor, arm64e loader, payload, launch daemon and standalone launcher; installation verifies the outer signature, executable hash, and helper hashes. `security find-identity -v -p codesigning` lists identities. With an identity the app, the loader, the doctor and the launch daemon are signed with the hardened runtime and no entitlements (the payload, which the Dock maps, stays ad hoc). Without the variable the build is signed ad hoc, without the hardened runtime, and macOS drops both grants on each reinstall. With `--built`, the installer preserves the identity already used for that build.
-2. **Grant access once.** `open ~/Applications/Infinify.app`. A small window names what is missing: click Allow screen recording… and Allow input…, switch Infinify on in the two System Settings panes they open, then click Relaunch (macOS gives Screen Recording only to a newly started app). The canvas opens over the whole display, under the menu bar and the Dock, and takes the windows that are open. Quit it again with Control-Option-Escape before the next step.
-3. **Turn the login item on.** `~/Applications/Infinify.app/Contents/MacOS/Infinify login-item on` starts Infinify now, at every login, and again after a crash; macOS may ask you to allow it under System Settings > General > Login Items & Extensions. `login-item status` reports it and `login-item off` removes it and ends the instance it started.
-4. **Quit** with Control-Option-Escape, Control-Option-Command-Shift-Q or `~/Applications/Infinify.app/Contents/MacOS/Infinify msg action quit`. The scene is saved, the panels close and the native desktop is back; a quit is not restarted. Infinify starts again at the next login, or at once with `launchctl kickstart gui/$(id -u)/com.marengox.infinify.agent`.
+`Infinify msg [--json] [--socket PATH] COMMAND ...` is DriftWM's IPC client for the running app. The socket is
+`~/Library/Application Support/Infinify/infinify.sock` unless `--socket` says otherwise. Requests, replies and
+limits are in [crates/desktop/IPC.md](crates/desktop/IPC.md).
 
-5. **Compositor mode as the login default, surviving Dock restarts (optional).** With a build signed by your team identity (step 1), quit any regular instance, then run `~/Applications/Infinify.app/Contents/MacOS/Infinify native-desktop enable`. It checks the bundle and the boot policy, registers the app's launch daemon and opens System Settings > General > Login Items & Extensions: switch Infinify on there once (the command waits up to three minutes). It then confirms the daemon answers the app, makes the login item start compositor mode, and starts it now. From then on a login starts the Dock helper by itself, with no terminal and no password: the launch daemon, which accepts only this signed app (hardened runtime, no `get-task-allow`, not started with a `DYLD_*` variable: unset those in the shell you run `Infinify native-desktop` from) and runs only the bundled loader with the launcher's own arguments, does the privileged load; the Dock opens a root-owned copy of the bundled payload that the daemon stages in `/private/var/run`, never a file you or another process of yours can write (design and checks in [native/privileged/README.md](native/privileged/README.md#launch-daemon-login-start-and-dock-reload)). A Dock restart (`killall Dock`, a crash) is noticed by the running app, which has the same launcher reload the helper from the retired Dock's journal and returns the windows to native presentation; three Dock restarts in a row around loads stop that for the build, remembered across launches, until you run `Infinify native-desktop` by hand. `native-desktop status` reports all of it and changes nothing; `native-desktop disable` reverts it (daemon unregistered, login mode and any pause removed, the login item left as you had it). Builds signed ad hoc cannot use the daemon.
+## Compositor mode
 
-Run in the disposable macOS 27.0.1 guest with a Developer ID signed build, not on a physical Mac and not on macOS 26: `enable` (the one approval asked for the admin password), compositor mode starting by itself after a reboot, `killall Dock` reloading the payload through the daemon in about five seconds with the same WindowServer transforms read before and after (the windows sit at the screen's top-left corner meanwhile), three Dock kills in a row stopping automatic loading until a by-hand `native-desktop`, a crash of the app restarted by launchd, the daemon refusing an ad-hoc caller and malformed loads, and `disable` removing the daemon and the login item again. A later guest run covered the hardened-runtime build and the staged payload: a hostile process of the login user rewriting the user-side payload 95,600 times during a load changed nothing the Dock mapped (the root-owned copy, read from the Dock as root), a non-hardened, `get-task-allow`, ad-hoc or `DYLD_INSERT_LIBRARIES`-started copy of the app was refused by the daemon, and the Dock-restart reload and `disable` worked as before. The hardened runtime alone does not stop `DYLD_INSERT_LIBRARIES` on a Mac with SIP debugging restrictions off, which the Dock injection needs, so the daemon checks the caller's environment as well; the owner-run sudo path still loads a user-owned copy (with you at the terminal). Details and the limits are in [native/privileged/README.md](native/privileged/README.md#what-was-run).
+`Infinify native-desktop --check | enable | disable | status` (run from a terminal, with no `DYLD_*` variable set)
+drives the bundled launcher. `--check` verifies the package and runs the read-only doctor without sudo.
+`enable` registers the app's launch daemon (you approve it once in Login Items & Extensions), makes the login item
+start compositor mode, and starts it. A login then loads the Dock helper by itself, and a Dock restart is
+noticed and reloaded from the helper's journal; three Dock restarts in a row around loads pause automatic loading
+until you run `Infinify native-desktop` by hand. `status` changes nothing; `disable` reverts it. Builds signed ad
+hoc cannot use the daemon.
 
-To opt into full-desktop helper mode once, without step 5, first quit any regular Infinify instance,
-then run `~/Applications/Infinify.app/Contents/MacOS/Infinify native-desktop`
-from a terminal. Its `native-desktop --check` form verifies the bundle and runs
-the read-only doctor without sudo, runtime creation, helper loading, or app
-launch. Without the launch daemon the launch command asks for the owner’s explicit sudo authorization
-for the loader (with it, nothing is asked); only that loader runs as root, and the app then runs as the login
-user. `scripts/start-native-desktop.sh --app /absolute/path/Infinify.app` is the
-checkout-aware alternative; it also requires the bundle to match the current
-source snapshot. Neither entrypoint establishes ordinary third-party compositing
-or native clipping readiness.
+The safety model (journal before every mutation, identity fences, the daemon accepting only this signed app, a
+root-owned staged copy of the payload) is in [native/privileged/README.md](native/privileged/README.md); what
+compositor mode does to windows, popups and drags is in
+[native/desktop/COMPOSITOR-MODE.md](native/desktop/COMPOSITOR-MODE.md). It has been run only in disposable macOS
+27 guests, not on a physical Mac and not on macOS 26.
 
-There are no buttons and no status line: keys, pointer gestures and `Infinify msg` do everything, and status notes go to stderr, which a run started at login does not show. Windows may sit under the menu bar and the Dock, which both stay. The [desktop app guide](native/desktop/README.md#desktop-mode) lists what else changes and the known limits, among them that a window whose capture macOS stops across sleep is not captured again by itself, and that nothing prevents a second instance (which is why step 2 ends with a quit).
+## Troubleshooting
 
-## Build and inspect
+- **No canvas, a permission window instead.** Grant Screen Recording and Accessibility, then Relaunch. After an
+  ad-hoc rebuild macOS drops the grants again.
+- **Diagnostics.** `INFINIFY_DEBUG=1 target/app/Infinify.app/Contents/MacOS/Infinify` from a terminal adds the
+  shell's diagnostics to stderr.
+- **Files.** Under `~/Library/Application Support/Infinify`: `scene.json`, `infinify.sock`,
+  `window-prefs-snapshot.plist`, and `native-desktop/` (`login.plist`, `login.log`, `auto-reload-paused.plist`).
+- **A second instance** exits at once; nothing prevents starting one except that.
+- **After sleep** a window whose capture macOS stopped is not captured again by itself.
+- **Scene refused.** Move or delete `scene.json` (and any `--state` file) to start from an empty canvas.
 
-Install Rust (1.88+), Xcode command-line tools, and the macOS SDK on an Apple Silicon Mac running macOS 26+. The build sets `MACOSX_DEPLOYMENT_TARGET=26.0`.
+## Development
 
-```sh
-./scripts/build-macos.sh
-./target/release/driftwm doctor --json
-./target/release/driftwm windows --json
-./target/release/driftwm --help
-```
-
-Build verification on 2026-10-09: release build, `cargo check -p driftwm-macos`, targeted CLI clippy, and all five `cli_scenarios` tests passed on arm64 macOS 27.2 with Rust 1.96.0. The release binary reports Mach-O minimum macOS 26.0; macOS 26 runtime execution remains untested. Release stripping is disabled because this host toolchain produced procedural-macro libraries with a misaligned Mach-O LINKEDIT string pool when stripping was enabled.
-
-`doctor` and `windows` are read-only and do not request permissions or change system settings. Doctor reports the actual host and backend observations, including limitations. Window metadata visibility depends on macOS permissions. No SIP state change is performed by this project.
-
-## Canvas scenarios
-
-Replay runs the actual `driftwm-canvas` reducer and persistence code. It never changes native application windows. Use an existing state directory to keep saved scenes separate from the source fixtures:
-
-```sh
-mkdir -p /tmp/driftwm-scene
-cargo run -p driftwm-macos --bin driftwm -- scenario tests/e2e/scenarios/pan_zoom_persist.json --state-dir /tmp/driftwm-scene --json
-cargo run -p driftwm-macos --bin driftwm -- scenario tests/e2e/scenarios/multiple_outputs.json --json
-cargo test -p driftwm-macos --test cli_scenarios
-cargo check -p driftwm-macos
-cargo clippy -p driftwm-macos --all-targets --locked -- -D warnings
-```
-
-A scenario is JSON with `version: 1`, `name`, and an `operations` array. The checked-in fixtures are executable examples. `scene` is an alias for `scenario`. Rectangles use `[x, y, width, height]`, points use `[x, y]`, and identifiers are unsigned integers.
-
-| Operation | Fields |
-|---|---|
-| `add_window` | `id`, `rect`, optional `title` |
-| `add_output` | `id`, `bounds`, `camera`, `zoom` |
-| `pan` | `output`, `delta` in screen points; positive X reveals the right |
-| `zoom` | `output`, absolute `zoom` (0.001–1.0), global screen `anchor` |
-| `set_window_rect` | `window`, `rect` in world points |
-| `assert_positions` | exhaustive `placements`, each with `window`, `output`, `screen`, optional `clip` and `source` |
-| `assert_hit` | `output`, global screen `point`, expected `window` or `null`, optional unscaled `local` |
-| `save`, `load` | relative `path` under the state directory (scenario directory by default) |
-
-Assertions use a 0.000001-point tolerance. Failures exit nonzero and identify the operation. Unknown fields and unsupported versions fail. The output labels its evidence `canvas_reducer_and_persistence_only`; scene persistence contains logical state and does not establish identity across application relaunches. A persisted CGWindowID or PID is a transient observation, never sufficient on its own to adopt a window after restore. Runtime restoration must reconcile fresh application identity and reject stale or reused native IDs. Treat scenario files as trusted local input: they can replace scene files in the selected state directory.
-
-## Native fixture probe
+| Path | Contents |
+| --- | --- |
+| `crates/canvas` | the platform-independent window canvas: scene, camera, snapping, stage |
+| `crates/core` | DriftWM's pure modules ported to Rust (canvas math, config, layout), see [PORT.md](crates/core/PORT.md) |
+| `crates/desktop` | the controller library and C interface: actions, navigation, sizing, rules, IPC, rendering requests; [README](crates/desktop/README.md) |
+| `native/desktop` | the Objective-C shell and renderer, linked with the controller; [README](native/desktop/README.md) |
+| `native/privileged` | the Dock helper, loader, doctor, launch daemon and client library; [README](native/privileged/README.md) |
+| `native/focus`, `native/resize` | the Accessibility focus and resize adapters |
+| `native/fixture` | disposable AppKit fixtures that the live tests start |
+| `scripts` | `build-app.sh`, `build-privileged.sh`, `install-app.sh`, the launcher and packaging helpers |
+| `docs/parity` | the parity contract |
 
 ```sh
-cargo build -p driftwm-macos-backend --bins
-cargo run -p driftwm-macos --bin driftwm -- fixture-probe --json
+./scripts/build-app.sh                           # app bundle in target/app
+cargo fmt --check
+cargo clippy -p driftwm-core -p driftwm-canvas -p driftwm-desktop --all-targets --locked -- -D warnings
+python3 scripts/test-build-app-package.py       # packaging
 ```
 
-The native probe is a bounded experiment against an explicitly created disposable fixture. Read the returned evidence and errors before drawing conclusions. It is not a command to control arbitrary desktop applications. The native boundary reports capabilities separately from verified operation; missing permissions or unavailable private APIs remain blockers rather than simulated passes.
+Focused tests (run these, not the whole suite): `cargo test -p driftwm-canvas --test snap_parity --test stage_parity`
+and `cargo test -p driftwm-desktop --test controller_flow --test navigation_flow --test native_resize_flow`, plus the
+`tests/e2e` scripts below. Headless scripts build a small program from the real shell sources and run it with no
+window, event, permission or Dock; the live ones start disposable fixture windows or need a guest.
 
-## Components and verification
+| Script | Covers | Live |
+| --- | --- | --- |
+| `background-tiff.sh` | crafted and mutated TIFF wallpapers: a picture or an error, never a crash or hang | no |
+| `capture-configuration.sh` | capture request and rate state | no |
+| `compositor-lifetime.sh` | the CPU lifetime fence of the compositor | no |
+| `controller-hit.sh` | the controller's `{"hit": null}` answer through the shell's hit reply | no |
+| `desktop-navigation.sh`, `desktop-resize.sh` | the navigation and resize coordinators against the real controller | no |
+| `family-geometry.sh` | renderer queries for window families | no |
+| `ipc-limits.sh` | IPC limits and the atomic screenshot write on the production server and writer | no |
+| `mac-wallpaper-refresh.sh` | the wallpaper refresh timing policy | no |
+| `multitouch-source.sh` | synthetic MultitouchSupport records and the Dock-control decision | no |
+| `native-daemon.sh` | the launch daemon's and Dock reloader's decisions, caller requirement and artifact checks | no |
+| `native-launcher.sh` | the bundled launcher's modes against stub tools and a throwaway HOME | no |
+| `native-display-space-cache.sh`, `native-family-recovery.sh`, `native-frame-restore.sh`, `native-input-policy.sh`, `native-placement-validation.sh`, `native-presenter-readiness.sh`, `native-view-transfer.sh` | the native presenter, views, placement, input policy and recovery logic with substituted native calls | no |
+| `native-focus.sh` | the focus adapter refuses an identity that is not a live window | no |
+| `privileged-regression.sh` | the Dock payload and its C client with substituted native calls | no |
+| `root-capture-mailbox.sh` | the root capture mailbox and captured-input acceptance code | no |
+| `system-takeover.sh` | the Stage Manager and tiling snapshot and restore against an in-memory store | no |
+| `window-discovery.sh`, `window-events.sh` | window discovery scheduling and the application and window lifecycle events | no |
+| `scoped-windows.sh`, `scoped-sizing.sh`, `scoped-resize-drag.sh`, `scoped-native.sh`, `physical-resize-edge.sh`, `native-drag-drop.sh` | the product on disposable fixture windows of the test's own (`--only-pid`) | yes |
+| `privileged-fixture.sh`, `compositor-dnd.sh` | the Dock helper and drag-and-drop in compositor mode; guest only, off unless a live flag is given | yes |
 
-Additional experimental paths are available separately:
+[AGENTS.md](AGENTS.md) holds the development rules: default commands are read-only, native mutation touches only
+the disposable fixture a test starts, the original state is restored on every exit, and a reducer test or a
+successful API return is never presented as proof of third-party window compositing.
 
-- [Transform helper](native/privileged/README.md): explicit native enrollment,
-  authenticated local IPC, durable original-state records and lease restoration.
-  Its cooperative fixture passes; Dock injection and control of ordinary
-  applications remain untested.
-- [Scene/runtime bridge](crates/runtime/README.md): applies camera projections to
-  one enrolled native window and verifies actual screen geometry. Live tests
-  preserve world coordinates and restore after controller termination.
-- [Live surface views](native/surfaces/README.md): two independent views of a
-  cooperating process's live Core Animation content, verified through changing
-  pixels, scaling and clipping. Acquiring an ordinary application's window
-  surface and routing input through those views remain separate work.
-- [Captured native windows](native/captured-windows/README.md): live per-window
-  streams shown through two views while the source stays at its original desktop
-  position. Disposable AppKit fixtures verify native button, text and scrolling
-  input. This is a separate rendering path from the cooperative layer experiment;
-  it does not require the source to export its own layer context.
-- [Desktop controller](crates/desktop/README.md): a Rust library and C interface
-  joining real canvas geometry, camera gestures, transient source bindings,
-  clipped placements, input coordinates and persistent unbound placeholders.
-  Its [focus contract](crates/desktop/FOCUS.md) adds one window/stacking authority,
-  confirmed focus history and held cycling, with stale native results rejected.
-  [Normal-window navigation](crates/desktop/NAVIGATION.md) adds animated camera
-  targets, cancellation and current-camera persistence through the same C API;
-  native shell dispatch and frame scheduling remain unfinished.
-- [Native desktop app](native/desktop/README.md): a signed local app bundle,
-  explicit source chooser, per-display panels, shared live streams, native input,
-  world dragging, camera controls and saved scenes.
-- [Native resize adapter](native/resize/README.md): exact AX window identity,
-  observed accepted geometry, constraints/rejection and restoration, verified on
-  disposable windows. The [controller transaction](crates/desktop/NATIVE_RESIZE.md)
-  adds coalescing, actual-size settlement and capture/input gates; native shell
-  integration and an end-to-end run through both components remain unfinished.
-- [Native focus adapter](native/focus/README.md): exact selected-window requests,
-  external focus readback and guarded input checks. Source review and nonmutating
-  checks pass. Live normal-path attempts pass the repaired readiness handshake
-  but stop before focus/input at the activity guard; cleanup-specific scenarios
-  remain unrun. Failed attempts are retained as evidence.
-- [Window family diagnostic](native/families/README.md): genuine native panels
-  and sheets exposed a failed capture-placement assumption. Metadata normalization
-  now passes saved-pixel checks for a right-extending panel and an in-bounds sheet
-  through two views. Parent discovery, other popup extents and native interaction
-  remain unproved; this is not a supported popup compositor.
+## Provenance and licence
 
-A complete deliverable still requires broader native application compatibility, native layout resizing, popovers and dialogs, richer input, and validation of display hotplug, hidden/minimized sources and multiple physical displays. Overlapping independent output cameras require separate live surface instances for the same window; one global WindowServer transform cannot satisfy that requirement. The capture app implements those separate instances, while the transform helper remains a separate experiment. The development host runs macOS 27.2, so a deployment target of 26.0 does not establish runtime verification on macOS 26. Private WindowServer interfaces require runtime validation for each supported macOS release; this repository does not claim that SIP-enabled or SIP-disabled third-party control is already proven.
-
-The code separates the canvas (`crates/canvas`), platform boundary (`crates/macos-backend`, `native`), and CLI (`crates/driftwm`). See [NOTICE](NOTICE) for the pinned upstream baseline and provenance, and [LICENSE](LICENSE) for GPL terms.
+Infinify is distributed under [GPL-3.0-or-later](LICENSE). [NOTICE](NOTICE) names every upstream the code embeds or
+adapts, with repository, commit and licence: DriftWM v0.21.0
+(`df3de27b26c7998e8a460cffd8a4925cbed3a322`), Sunlight (MIT), yabai (MIT), iss (ISC) and the Smithay and
+xkbcommon-derived tables (MIT). Each embedded file's header names the upstream path it follows. The app bundle
+carries LICENSE, NOTICE and the Sunlight and yabai notices.

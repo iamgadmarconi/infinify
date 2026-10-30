@@ -122,8 +122,6 @@ typedef struct { NSUInteger requests,flushes,drawn,presented;double flushSeconds
 - (NSString *)standInPart:(NSNumber *)window output:(NSNumber *)output screen:(CGPoint)point snapshot:(NSDictionary *)snapshot;
 // Counts for -takeCounts. Set before the first frame is described; without it nothing is counted or timed.
 @property BOOL measured;
-// Scoped benchmark baseline only: retain the previous synchronous drawable acquisition. Set before the first frame.
-@property BOOL synchronousDrawables;
 - (DWCanvasCounts)takeCounts;
 // Native presentation (native-presenter.h): WindowServer draws each real window
 // at its selected placement. That placement draws no duplicate picture or chrome
@@ -189,9 +187,6 @@ typedef struct { NSUInteger requests,flushes,drawn,presented;double flushSeconds
 // refreshing (the launch's first frame, the quit-pending loop, a display asleep), where a drawable left to the next refresh
 // could wait for one that does not come.
 - (void)flush;
-// The same from the shell's frame timer, once per refresh of the display, after everything else of that frame: its frames
-// are the command buffer's to present at the refresh being served, and the main thread waits for nothing.
-- (void)flushFrame;
 // A paced flush with the display link's next refresh as presentation target and
 // drawable retry deadline. refreshRate sets the expected presentation interval.
 - (void)flushFrameAtTime:(CFTimeInterval)time refreshRate:(NSInteger)refreshRate;

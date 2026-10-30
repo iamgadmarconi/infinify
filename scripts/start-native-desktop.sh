@@ -4,7 +4,7 @@
 set +x
 set -eu
 
-native_root=$(CDPATH= cd -P "$(dirname "$0")/.." && pwd -P)
+native_root=$(CDPATH='' cd -P "$(dirname "$0")/.." && pwd -P)
 native_mode=launch
 native_build=false
 native_bundle="$native_root/target/app/Infinify.app"
@@ -51,7 +51,7 @@ if [ "$native_build" = true ]; then
 fi
 
 [ -d "$native_bundle" ] && [ ! -L "$native_bundle" ] || fail "selected app bundle is missing or is a symlink: $native_bundle"
-native_bundle=$(CDPATH= cd -P "$native_bundle" && pwd -P) || fail 'could not resolve the selected app bundle.'
+native_bundle=$(CDPATH='' cd -P "$native_bundle" && pwd -P) || fail 'could not resolve the selected app bundle.'
 [ "${native_bundle##*/}" = Infinify.app ] || fail 'selected bundle must be named Infinify.app.'
 native_launcher="$native_bundle/Contents/Resources/NativeDesktop/launch.sh"
 [ -f "$native_launcher" ] && [ -x "$native_launcher" ] && [ ! -L "$native_launcher" ] || fail 'selected app has no executable bundled native launcher.'

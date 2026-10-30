@@ -64,5 +64,7 @@ for n in p1 p2; do
   gs "grep -q '\"ready\"' $logs/$n.jsonl" || { echo "FAIL: fixture $n did not start in the guest" >&2; exit 1; }
 done
 
+# The tilde stays literal on purpose: the driver puts this path into commands it runs in the guest, whose shell expands it.
+# shellcheck disable=SC2088
 DND_HID=/tmp/compositor-dnd-hid DND_LOG_DIR='~/dnd-fixture-log' python3 tests/e2e/compositor-dnd-driver.py "$mode" "$evidence" "$@"
 echo "PASS: compositor-mode $mode run finished; evidence in $evidence (guest-observed, disposable fixtures only; not third-party acceptance)."

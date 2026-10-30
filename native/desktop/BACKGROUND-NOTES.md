@@ -1,15 +1,25 @@
-# Infinify canvas background — port notes
+# Infinify canvas background — notes
 
-> Carried into `native/desktop/` with `background.{h,m}` as the standalone port's own notes. Sections 1 to 16 are those notes; what the two chunk caches changed in them (`cache_shader` and tiled pyramidal TIFF tiles, added in this repository) is marked "section 17" where it stands, and section 17 is new. Where `background.h` and `background.m` say `NOTES.md` they mean this file. The copy of the module in this directory is the one in the compositor port, which adds one method ([COMPOSITOR-NOTES.md](COMPOSITOR-NOTES.md), section 14). The notes were written before the module was adopted: `bgrender.m`, `build.sh`, `verify/`, `assets/`, `out/`, `fix-renders/` and `review-renders/` were not carried in, and section 3 describes a host that draws the background with a layer of its own, which the compositor layer replaced.
+These notes document `background.h` and `background.m`: the Metal renderer for
+DriftWM's per-output canvas background (the built-in dot grid, user GLSL
+shaders with or without an image, tiled images and cover-fit wallpapers), which
+scrolls and zooms with each output's camera exactly as upstream's does, and the
+two chunk caches added with it (`cache_shader` and tiled pyramidal TIFF tiles,
+section 17, with `background-tiff.{h,m}`). The compositor draws the background
+first in every frame ([COMPOSITOR-NOTES.md](COMPOSITOR-NOTES.md)); section 3
+says how `canvas-renderer.m` and `compositor.m` drive it. Where `background.h`,
+`background.m`, `background-tiff.h` and `background-tiff.m` cite
+`BACKGROUND-NOTES.md`, they mean this file.
 
-A standalone Metal port of DriftWM's per-output canvas background: the built-in
-dot grid, user GLSL shaders (with or without an image), tiled images and
-cover-fit wallpapers. It scrolls and zooms with each output's camera exactly as
-upstream's does.
+Upstream: DriftWM, <https://github.com/malbiruk/driftwm>, GPL-3.0-or-later,
+commit `352333a8fa1b22171492d4b71a54102045c9a19d`. This module is a derived work
+and carries the same licence.
 
-Upstream: DriftWM, GPL-3.0-or-later, commit
-`352333a8fa1b22171492d4b71a54102045c9a19d`. This module is a derived work and
-carries the same licence.
+Section numbers are kept from the notes' earlier layout, which is why 14 to 16
+and 17.9 are missing: the verification, commands and review-round sections are
+not kept, and a citation of section 14, 15, 16 or 17.9 below refers to text that is no longer in this repository. The checks and measurements that the text below cites by
+tool name (`bgrender`, `verify/`, `assets/`, `fix-renders/`) were made with the
+standalone port's tooling, which is gone.
 
 ### macOS wallpaper extension (2026-10-11)
 
@@ -26,8 +36,9 @@ This extends wallpaper uniforms and redraw dependency flags; it does not change
 tile or user-shader coordinates. The inherited wallpaper shader also composites
 the desktop fill color for letterboxing and image alpha. The exact upstream
 source hashes below remain the provenance of the starting implementation.
-Historical verification sections predate these additions; build/source checks
-do not establish their visual behavior on the user's display.
+The historical verification sections (not kept)
+predate these additions; build/source checks do not establish their visual
+behavior on the user's display.
 
 For a deleted original still, `mac-wallpaper-cache.m` checks the image provider's
 current-user cache for the exact SHA-256 source-path key and display resolution.
@@ -41,15 +52,8 @@ rejected unrelated paths and mismatched display keys; optical parity is unrun.
 | File | What it is |
 |---|---|
 | `background.h`, `background.m` | The module (Objective-C, ARC). No dependency on the rest of the app. |
-| `bgrender.m` | Command-line tool built from the same object file. |
-| `build.sh` | Builds `build/background.o` and `build/bgrender`. |
-| `verify/` | Verification only: reference formulas in Python, an OpenGL reference renderer, the script that reproduces every check and its last log, the identifier sweep (`names.py`), the damaged-image generator (`make_damaged.py`) and the probes behind sections 5 and 6 (`probe/`). |
-| `assets/` | Generated test images and test shaders. |
-| `out/` | PNGs from the last verification run. |
-| `fix-renders/` | Review round 1 (section 16): the reviewed `background.m` and a binary built from it, the before/after script and its log. |
-| `review-renders/` | The independent reviewer's own files. Not modified. |
-
-Nothing under the Infinify checkout was modified or built.
+| `background-tiff.h`, `background-tiff.m` | The tiled pyramidal TIFF source and its decode pool (section 17). Foundation and ImageIO only; no Metal. |
+| `metal-support.h` | The Metal plumbing `background.m` and `compositor.m` share: integer output size, per-device resource cache, shader compile options, linear sampler. Header-only. |
 
 ## 1. Provenance of the built-in shaders
 
@@ -90,103 +94,124 @@ Everything is in `background.h`.
 - `IFBackgroundProgram` — a loaded background (compiled pipeline and/or image).
   Immutable; share one between all outputs.
   `+programWithConfig:device:` never fails: it falls back as upstream does and
-  sets `errorText`. Properties: `kind` (what really renders), `errorText`,
-  `animated`, `usesCamera`, `usesZoom`, `transparent`, `textureSize`,
-  `translatedShaderSource`. Rendering: `-encodeFrame:intoTexture:commandBuffer:`,
-  `-newImageForFrame:error:`, `-writePNGForFrame:toURL:error:` (offscreen: no
-  window, no layer, no privacy permission).
+  sets `errorText`. Properties: `config`, `device`, `kind` (what really
+  renders), `errorText`, `animated`, `transparent`. Rendering:
+  `-encodeFrame:inEncoder:`, which draws into a render pass the caller has
+  already opened (the compositor's own). The module has no offscreen path of its
+  own; a screenshot goes through the compositor
+  ([COMPOSITOR-NOTES.md](COMPOSITOR-NOTES.md), section 14).
 - The chunk caches (section 17): `cache`, `-programForOutput`,
   `-captureProgram`, `pendingChunkCount`, `-chunkGenerationForFrame:`,
-  `chunkReadyHandler`, `-shrinkChunkCache` and five diagnostics counters. All
-  additive: a program without a cache behaves exactly as before, and for it
-  `-programForOutput` and `-captureProgram` return the program itself.
-- `IFBackgroundLayer : CAMetalLayer` — one output's background.
-  `program` (or `-setConfig:`), `-updateWithFrame:` (returns YES when it drew),
-  `animated`, `errorText`, `-setNeedsRedraw`, `drawCount`, and a diagnostics-only
-  frame capture used by `bgrender --via-layer`.
+  `chunkReadyHandler` and `-shrinkChunkCache`. All additive: a program without
+  a cache behaves exactly as before, and for it `-programForOutput` and
+  `-captureProgram` return the program itself.
 
 ## 3. How the host drives it
 
-**Load.** Once per config load or reload, build one program and show its error:
+The host is `canvas-renderer.m`, and the draw is `compositor.m`: the background
+has no layer of its own. `IFCompositorFrame.background` holds the program, and
+the compositor encodes it as the first draw of each output's frame.
+
+**Load.** `-[DWCanvasRenderer configure:]` runs once per config revision. It
+builds an `IFBackgroundConfig` from the controller's `render.background` table
+(`type`, `path`, `texture`, `mirror_tile`, `transparent_shader`, `cache_shader`,
+`parallax`, `animate_fps`, `cache_budget_mb`) with
+`+configWithTypeString:path:texture:warning:`, then builds the program:
 
 ```objc
 IFBackgroundProgram *program = [IFBackgroundProgram programWithConfig:config device:nil];
-self.statusText = program.errorText;   // nil clears the error, as upstream's error bar does
 ```
 
-A reload must build a *new* program: that is what re-reads the shader and the
-image from disk (upstream re-reads on every config reload).
-`programWithConfig:` does file I/O and a shader compile; it may be called off the
-main thread, the program is immutable afterwards.
+The program's `errorText` (or, when it has none, the config's warning) is the
+note the renderer keeps, and `errorText` is also offered to the error bar as one
+of its messages (`-backgroundErrors:`). A reload builds a
+*new* program: that is what re-reads the shader and the image from disk
+(upstream re-reads on every config reload). `programWithConfig:` does file I/O
+and a shader compile; the program is immutable afterwards unless it owns a chunk
+cache (section 17).
 
-**One layer per output.** `DesktopView` already places everything in the
-panel's top-left coordinates, so for each output in the panel:
+**One program per output.** `-cache:output:` picks each output's program: the
+shell's `backgroundForOutput` hook may answer one for that output (the Mac
+desktop still, resolved per display, loaded on a serial worker) and otherwise the
+shared program is used. The answer goes through `-programForOutput`, which is the
+program itself unless it has a chunk cache, in which case the output gets a
+program of its own that shares everything loaded. Such a program's
+`chunkReadyHandler` marks the output dirty and redraws it. When the hook later
+answers differently, `-refreshBackgrounds` swaps the program in, shrinks the
+chunk cache of the one it replaced and redraws.
+
+**Draw.** For each output the host fills one `IFCompositorFrame` (camera, zoom,
+size, backing scale, `time`, `background`) and calls
+`-[IFCompositorLayer updateWithFrame:]`. The compositor opens one render pass on
+the drawable, clears it, and calls
 
 ```objc
-IFBackgroundLayer *bg = [IFBackgroundLayer layer];
-bg.program = program;
-bg.zPosition = -1;                 // DesktopView inserts window tiles at index 0
-[view.layer addSublayer:bg];
+[program encodeFrame:(IFBackgroundFrame){cameraX, cameraY, zoom, width, height, scale, time}
+           inEncoder:encoder];
 ```
 
-**Update.** Call `-updateWithFrame:` whenever the output's camera, zoom, bounds
-or backing scale may have changed — in practice at the end of
-`-[DesktopView render:]`, inside its existing `CATransaction`:
+with the frame's own camera, zoom, size, scale and time. The program draws into
+the open pass (section 2); `-encodeFrame:inEncoder:` returns NO, drawing
+nothing, for `none` or when no pipeline could be built, and the frame then shows
+its clear. Pass integral point sizes (they are rounded). The same frame also
+feeds the blur: when an element asks for the frost, the compositor draws the
+background once more into a texture the backdrop passes copy from
+(COMPOSITOR-NOTES.md, section 18.1), because the background computes from the
+pixel position and cannot be relocated.
 
-```objc
-CGRect sb = jsonRect(o[@"screen_bounds"]);
-bg.frame = CGRectOffset(sb, -view.globalBounds.origin.x, -view.globalBounds.origin.y);
-CGPoint cam = jsonPoint(o[@"camera"]);
-[bg updateWithFrame:(IFBackgroundFrame){
-    .cameraX = cam.x, .cameraY = cam.y, .zoom = [o[@"zoom"] doubleValue],
-    .width = sb.size.width, .height = sb.size.height,
-    .scale = view.window.backingScaleFactor,
-    .time = CACurrentMediaTime() - appStartTime}];
-```
+**Redraw gating.** The compositor layer redraws when the hash of the frame
+description differs from the last drawn frame's. The hash covers the camera, the
+zoom, the output size and scale and the identity of the background program; it
+does not cover `time` or the chunks of a cached program. The skips of the
+earlier standalone background layer, which ignored a camera change for a
+wallpaper or for a shader that did not declare `u_camera`, are not repeated: any
+change of camera or zoom redraws the frame, whatever the kind, because the
+windows move with them.
 
-Calling it too often is free: it draws only when something this background
-depends on changed (table below) and otherwise returns NO without touching the
-GPU. The layer sets its own `drawableSize` and `contentsScale` from the frame;
-the host only sets `frame`. Pass integral point sizes (they are rounded).
+| Change since the last drawn frame | what the compositor does |
+|---|---|
+| camera, zoom, output size or backing scale | redraw |
+| a new program object, `-setNeedsRedraw` | redraw |
+| time | nothing, unless the program `isAnimated` (the shader reads `u_time`): then a redraw on every call, or at most `animate_fps` times a second when `animate_fps` is not 0 (upstream `background_animation_due`) |
 
-| Change since the last drawn frame | dot grid, tile | shader | wallpaper | none |
-|---|---|---|---|---|
-| camera | redraw | redraw only if it declares `u_camera` | skip | skip |
-| zoom | redraw | redraw | skip | skip |
-| output size or backing scale | redraw | redraw | redraw | redraw |
-| time | skip | redraw only if it declares `u_time`, at most `animate_fps` times a second (0 = every call) | skip | skip |
-| new program, `-setNeedsRedraw` | redraw | redraw | redraw | redraw |
+A cached program's changes reach the screen another way (section 17.3): the host
+forces a redraw of the output, whose description is unchanged, while
+`pendingChunkCount` is not zero and when `chunkReadyHandler` fires.
+`-chunkGenerationForFrame:` goes into the blur's key, not into the layer's hash
+(COMPOSITOR-NOTES.md, section 18.1).
 
-**Animated backgrounds.** When `program.isAnimated` the host must keep its
-frame timer running while the panel is visible and call `-updateWithFrame:` on
-every tick with an advancing `time`; the layer applies the `animate_fps` budget
-itself. Today the shell's timer only runs during camera flights, so this needs
-one extra condition there. Stop ticking when the panel is hidden or occluded
-(upstream stops on DPMS-off and when a fullscreen window conceals the canvas).
-Use one clock for all outputs: seconds since the app started.
+**Animated backgrounds.** While the program `isAnimated`, the frame's
+`needsContinuousRedraw` is YES; the host keeps its frame callback running and
+describes the frame on every tick with an advancing `time`, and the layer applies
+the `animate_fps` budget itself. A cache that is still filling is redrawn the same
+way until `pendingChunkCount` is zero. Upstream stops on DPMS-off and when a
+fullscreen window conceals the canvas; when one conceals an output, the host
+(outside native-window presentation) takes the background out of that output's
+frame and shrinks its chunk cache. Use one clock for all outputs: `time` is
+seconds since the app started.
 
-**Several outputs in one panel.** One `IFBackgroundLayer` per output, each with
-its own frame, camera and zoom, all sharing the one program. The shader is
-compiled once and the image uploaded once (upstream also compiles once, but
-loads the image per output). Outputs are independent: each layer has its own
-"last drawn" state and its own `animate_fps` stamp, like upstream's per-output
-`background_last_animate`.
+**Several outputs.** Each output has its own `IFCompositorLayer`, camera and
+zoom. A shared program compiles its shader once and uploads its image once
+(upstream also compiles once, but loads the image per output). Outputs are
+independent: each layer keeps its own "last drawn" state and its own `animate_fps`
+stamp, like upstream's per-output `background_last_animate`, and a cached
+program is one program per output.
 
-**Presentation.** The layer sets `presentsWithTransaction = YES`, so the new
-background frame lands in the same Core Animation commit as the window tiles
-the host moved in that transaction. Call update on the main thread.
+**Presentation.** The compositor layer decides how a frame is presented
+(COMPOSITOR-NOTES.md, section 3, "Presentation"). Encode on the main thread.
 
-**Transparency.** The layer is opaque unless the program is transparent
-(`transparent_shader`, an image with alpha) or `none`. Whatever is behind it —
-today the view's flat `backgroundColor` — shows through, composited
-premultiplied. For `none` the layer presents one fully transparent frame and
-then nothing more; the host may also simply hide it (`kind ==
-IFBackgroundKindNone`).
+**Transparency.** The compositor clears opaque black for a live output. A
+program that is `transparent` (`transparent_shader`, an image with alpha)
+writes premultiplied colour with its own alpha into that clear, and the
+compositor then makes a pass that sets alpha to 1, so the layer stays opaque
+(section 8). A transparent clear (a screenshot target) keeps the background's
+alpha.
 
-**Teardown.** `[bg removeFromSuperlayer]` and drop the reference. There are no
-timers, display links, observers or threads to stop. The program frees its
-pipeline and texture with its last reference. A small per-device cache (command
-queue, sampler, the four built-in pipelines) lives for the life of the process.
+**Teardown.** The host stops the layer, takes the background out of the frame and
+calls `-shrinkChunkCache` on the program. There are no timers, display links or
+observers to stop. The program frees its pipeline and texture with its last
+reference. A small per-device cache (command queue, sampler, the built-in
+pipelines) lives for the life of the process.
 
 ## 4. Uniform mapping
 
@@ -271,7 +296,7 @@ module.** Reasons:
   with macros (section 16); none is known now.
 - No system dependency and nothing deprecated: the system's OpenGL could run
   the GLSL directly, but it is deprecated and cannot back a `CAMetalLayer`. It
-  is used here only as a verification reference.
+  is not used.
 
 What the translator does (`IFBGTranslateGLSL`: a 305-line function over a small
 lexer, about 580 lines in all, token based — no regular expressions over code):
@@ -311,7 +336,7 @@ which upstream does not provide either. A declaration is recognised by its
 spelling: `uniform <type> <name>` with a name and type from the table, not an
 array, any precision qualifier, any number of names in one declaration.
 
-`animated`, `usesCamera`, `usesZoom` and the "samples `tex` without a texture"
+`animated` and the "samples `tex` without a texture"
 test use upstream's `references_uniform` literally: a substring search of the
 raw source for `uniform [precision ]<type> <name>`. It therefore also matches
 inside comments and matches names that merely start with the given name, as
@@ -343,7 +368,7 @@ text this removes any Metal macro the shader could collide with; after it, it
 removes every macro the shader defined (a macro's name necessarily occurs in
 the text). `#undef` of a name that is not a macro does nothing, and the Metal
 compiler accepts it for keywords, types and library functions without a
-diagnostic (`verify/probe/undef_probe.metal`). A fixed list of the 193 names
+diagnostic. A fixed list of the 193 names
 would also have fixed the reported cases, but the set belongs to the toolchain
 and its feature switches (in `metal_types` the `BFLT_*` names sit under
 `__HAVE_BFLOAT__`, and `M_PI` and the `DBL_*` names under
@@ -355,12 +380,11 @@ Left alone: names containing `__` and names starting with `GL_` (reserved in
 GLSL; the compiler's built-in macros and this module's `GL_ES` /
 `GL_FRAGMENT_PRECISION_HIGH` live there), and `defined` and the C++ operator
 spellings (`and`, `or`, `not`, `xor`, `bitand`, `bitor`, `compl`, `and_eq`,
-`or_eq`, `xor_eq`, `not_eq`), which the preprocessor refuses as macro names
-(`verify/probe/landmine_probe.metal`). A shader's own use of one of those
+`or_eq`, `xor_eq`, `not_eq`), which the preprocessor refuses as macro names. A shader's own use of one of those
 operator words never reaches Metal under that name: it is renamed with
 `_glsl` like any other reserved word.
 
-Measured with `verify/names.py`: the 193 header names plus 147 identifiers
+Checked with the standalone port's tooling: the 193 header names plus 147 identifiers
 that the generated code spells out, that shader authors commonly use, or that
 are C++ keywords and operator spellings (`in`, `U`, `s`, `position`, `buffer`,
 `stage_in`, `texture`, `sampler`, `float4`, `time`, `zoom`, `camera`,
@@ -451,8 +475,7 @@ colon comes from this platform.
 Compiler output is condensed to its `error:` diagnostics; warnings and Metal's
 lists of overload candidates are dropped.
 
-**Damaged images.** ImageIO does not report a damaged file by itself. Measured
-with `verify/probe/imgstatus.m` (the table is in `fix-renders/before_after.log`):
+**Damaged images.** ImageIO does not report a damaged file by itself:
 
 | File | `CGImageSourceGetStatusAtIndex` before / after decoding | What ImageIO returns |
 |---|---|---|
@@ -485,8 +508,8 @@ See deviation 13 for where this may differ from upstream's decoders.
   upstream's GL framebuffer. Images are uploaded as `RGBA8Unorm` from the
   file's raw samples, so sampling and filtering also happen on encoded values,
   as upstream's do.
-- The layer's `colorspace` is sRGB, and the PNG is tagged sRGB (`sips` reports
-  `sRGB IEC61966-2.1`). Upstream hands the same numbers to the scanout with no
+- The layer's `colorspace` is sRGB, and the image of an offscreen export is
+  tagged sRGB. Upstream hands the same numbers to the scanout with no
   colour management, which means "interpret as the display's native encoding",
   in practice sRGB. Tagging them sRGB makes Core Animation show those colours
   correctly on a Display P3 panel instead of stretching them to the wider gamut.
@@ -494,10 +517,9 @@ See deviation 13 for where this may differ from upstream's decoders.
   it: a Display-P3-tagged photo shows the same (slightly desaturated) numbers
   it shows upstream. Verified for gAMA-tagged, greyscale, P3-tagged,
   P3-converted and palette PNGs: samples pass through bit for bit.
-- Opaque backgrounds are written to the PNG without an alpha channel.
-  Transparent ones are premultiplied in the framebuffer and ImageIO
-  un-premultiplies them for the PNG; `bgrender --dump-bgra` gives the exact
-  framebuffer bytes.
+- Opaque backgrounds are exported without an alpha channel. Transparent ones
+  are premultiplied in the framebuffer, and the exported image carries that
+  alpha (compositor.h, `-newImageForFrame:error:`).
 
 ## 8. Deviations from upstream
 
@@ -538,14 +560,15 @@ See deviation 13 for where this may differ from upstream's decoders.
 11. **Tile with a TIFF path**: drawn from the pyramid since section 17, which
     lists that path's own differences from upstream.
 12. **Alpha is forced to 1 on the plain-shader path** unless
-    `transparent_shader` is set. `docs/shaders.md` says the alpha component "is
+    `transparent_shader` is set. upstream's `docs/shaders.md` says the alpha component "is
     ignored by default — backgrounds are composited opaque", and
     `background.rs` declares the whole area opaque. smithay 0.7.0 nevertheless
     draws a pixel-shader element with blending on (section 13, item 5), so
     upstream a shader that writes alpha below 1 without `transparent_shader` is
     blended over whatever the framebuffer still holds there (nothing is drawn
     beneath an opaque region). The port follows the documentation instead:
-    `assets/shaders/transparent.glsl` without the option gives `(128,0,0,255)`.
+    the documented `transparent.glsl` without the option
+    gives `(128,0,0,255)`.
     The dot grid and all ten bundled shaders write alpha 1, so their pixels are
     the same either way. On the texture path (tile, wallpaper, textured shader)
     forcing alpha to 1 is exactly what upstream's blend-off draw does. No code
@@ -634,31 +657,9 @@ upstream's own picture at such coordinates differs between GPU vendors.
 
 ## 12. Cost
 
-Apple M5 Pro, 1728×1117 points at 2x (3456×2234 pixels), `bgrender --bench 60`,
-GPU time per frame:
-
-| Background | mean ms |
-|---|---|
-| wallpaper | 0.16 |
-| default dot grid | 0.27 |
-| tile | 0.35 |
-| `compass_grid` | 0.43 |
-| `mirrored_parallax`, `ripple` | 0.25 – 0.29 |
-| `pink_cloud` | 2.0 |
-| `acid_lava`, `blue_drift` | 2.6 – 2.7 |
-| `dark_sea` | 4.1 |
-| `dense_clouds` | 6.0 |
-| `fast_smoke` | 7.4 |
-
-Loading an image checks a PNG's container first (section 6), which reads the
-file once more: 0.12 s for a 67 MB PNG (4096×4096, stored uncompressed), once
-per program.
-
-Static backgrounds cost this only when the camera, zoom or size changes.
-Animated ones cost it on every tick; the heavy three leave little of a 120 Hz
-frame, which is what `animate_fps` is for. Loading a program (read, translate,
-compile) is fast enough that the whole `bgrender` process, start to PNG, takes
-about 50 ms.
+Static backgrounds cost a draw only when the camera, zoom or size changes;
+animated ones cost it on every tick, and the heavy shaders leave little of a
+120 Hz frame, which is what `animate_fps` is for.
 
 ## 13. Assumptions about smithay
 
@@ -677,7 +678,7 @@ Paths are relative to `src/backend/renderer/`.
    it with `Uniform2f(program.uniform_size, …)`. DriftWM says the same three
    times: `dot_grid.glsl` ("Zoom is handled externally (RescaleRenderElement) —
    shader works in canvas space"), `compass_grid.glsl` ("size is the visible
-   canvas area") and `docs/shaders.md` (`u_output_size` = "output / zoom",
+   canvas area") and upstream's `docs/shaders.md` (`u_output_size` = "output / zoom",
    "carries the same value" as `size`).
 2. `RescaleRenderElement::geometry` rounds the scaled rectangle with
    `to_i32_round`, after the element's own rounding to physical pixels
@@ -704,224 +705,6 @@ Paths are relative to `src/backend/renderer/`.
 
 If 1 or 2 were wrong the dot spacing would not track zoom, or would be off by a
 sub-pixel stretch; 3–5 affect only filtering and alpha.
-
-## 14. Verification
-
-Everything below is reproduced by `verify/run_all.sh <driftwm checkout>`; the
-complete output of the last run is `verify/last_run.log` (70 PASS lines, no
-FAIL, plus 69 OpenGL comparisons: 67 within 1 level, the two exceptions
-explained below). Every PNG named here was also opened and looked at.
-
-Two independent references were used, because upstream itself cannot run here:
-
-- **Formula reference** (`verify/check.py`): the upstream GLSL re-typed in
-  Python, with the uniform mapping of `background.rs`. It shares no code with
-  the module.
-- **OpenGL reference** (`verify/glref.c`): the system's legacy OpenGL compiling
-  the *unmodified* upstream `.glsl` file (as GLSL 1.20, with `precision` and
-  its qualifiers defined away) into an offscreen framebuffer, over the same
-  quad smithay draws.
-
-| Check | Result |
-|---|---|
-| Dot grid, zoom 1, camera (0,0), 400×300 | matches the formula exactly (0 levels). Dots are 2×2 pixels of 227 at every multiple of 80: columns 79/80, 159/160 …, rows 79/80 … |
-| Dot grid, camera (37,−12) | matches exactly. Dots at columns 42/43, 122/123 … and rows 11/12, 91/92 …: the image is the camera-(0,0) image shifted by exactly (−37, +12) points, 0 mismatches over the 104,544 overlapping pixels |
-| Dot grid, zoom 0.5 | matches exactly. Spacing 40 points. Camera (0,0): four pixels of 5 per dot; camera (1,1): one pixel of 255 per dot at 39, 79, 119 … |
-| Dot grid, zoom 0.25 | matches exactly. Spacing 20 points. Camera (0,0): no lit pixel at all; camera (2,2): one pixel of 255 per dot at 19, 39, 59 … |
-| Dot grid, 2x backing scale | 800×600 pixels, matches exactly; each dot is a soft disc six pixels across (columns 157–162 …, values 33/104/203/255). At zoom 0.5 and 2x: the zoom-1 1x pattern, pixel for pixel in layout (2×2 pixels of 227 every 80 pixels) |
-| Dot grid, zoom 0.7 at 401×299 and zoom 0.333 at 2x with camera (123456.5, −98765.25) | within 1 level; exercises the element rounding (`dest_px` 401×300 and 1280×721) |
-| Built-in dot grid vs OpenGL running `src/shaders/dot_grid.glsl`, 7 frames | 0 levels in six, 1 level in the seventh (zoom 0.333 at 2x, camera (123456.5, −98765.25)) |
-| Tile, with and without `mirror_tile`, cameras (0,0), (37,−12), (133,90) | match the formula exactly; (37,−12) is the (0,0) image shifted by exactly (−37,+12). The image is centred on the canvas origin with seams at ± half its size; mirrored copies alternate |
-| Tile at zoom 0.5, at 2x, at zoom 0.7 2x mirrored | within 1 level (bilinear filtering) |
-| Built-in tile vs OpenGL running `src/shaders/tile_bg.glsl`, plain and with `#define MIRROR`, 12 frames | 0 levels in all |
-| Tile with alpha | framebuffer holds the straight texel values: `(0,220,255,255)`, `(255,140,0,128)`, `(255,0,255,0)`; `transparent = 1`, PNG has alpha |
-| Image decoding (gAMA 1.0, grey, P3-tagged, P3-converted, palette + tRNS) | samples reach the framebuffer unchanged |
-| Wallpaper from a 2:1 image at 4:3, 3:1, 3:4, 2:1 and 4:3 at 2x | within 1 level of `wallpaper_cover_src` + bilinear; a circle in the image stays a circle; 4:3 crops the sides, 3:1 crops top and bottom; a different camera and zoom give the identical picture |
-| Wallpaper from a JPEG | renders; within JPEG loss of the PNG reference |
-| All 10 bundled shaders | compile and render; within 1 level of OpenGL at two frames each. Far from the origin after an hour (camera ≈ 250000, t = 3600): blue_drift 0, dark_sea 1, fast_smoke up to 4 levels on 34 of 144,000 pixels (section 11) |
-| `fast_smoke`, `acid_lava`, `dense_clouds` at t = 0 and t = 5; `ripple` at t = 0 and t = 2 | pictures differ and look like the same scene evolving |
-| `mirrored_parallax` | camera +500 at zoom 0.5 and parallax 0.2 moves the picture exactly 50 pixels |
-| `compass_grid` vs its formula, zoom 1 and zoom 0.4 at 2x | within 1 level |
-| Translator stress shaders `assets/shaders/features.glsl`, `features2.glsl` | within 1 level of OpenGL, except 11 hard-edge pixels in one frame (deviation 1) |
-| `es_header.glsl` (`#version 100`, `#extension`, `#pragma`, derivatives, `gl_FragCoord`, `gl_FragData`, `invariant`) | compiles and renders (no reference: desktop GLSL rejects the header) |
-| A shader's own macros: the reviewer's `macro_time`, `macro_zoom`, `macro_s`, and `macro_names.glsl` (19 macros named after the entry point's parameters, attributes, types, uniform-block fields and a swizzle) | exit 0, `kind=shader`; 0 or 1 level from OpenGL at both frames. `macro_s` centre pixel `(96,96,191)` = `v_coords × 0.75`, blue 0.75 |
-| Names Metal's library defines as macros: the reviewer's `const_infinity`, `const_fltmax`, and `stdlib_names.glsl` (`INFINITY`, `FLT_MAX`, `FLT_EPSILON`, `M_PI_F`, `INT_MAX`, `NAN`, `assert`, `MAXFLOAT`, `HUGE_VALF`, `FLT_MIN`, `METAL_FUNC`, `TARGET_OS_MAC`, `CHAR_BIT`, `INT_MIN` as constants, a global, functions, parameters and locals) | exit 0; 0 or 1 level from OpenGL. `const_infinity` blue channel is 255 (`min(INFINITY, sin(π/2))`) |
-| Identifier sweep, `verify/names.py` (not part of `run_all.sh`, about 4 minutes, log in `verify/names_last_run.log`): 193 macro names from the installed Metal headers and 147 other identifiers, each as constant, local, function and macro | every shader the OpenGL compiler accepts (339 / 339 / 339 / 340) compiles and matches it within 1 level |
-| The reviewer's own sweep, `review-renders/tools/names.py`, with the reviewed binary and the fixed one | before: 10, 10, 11 and 11 names rejected (`INFINITY` … `CHAR_BIT`, `assert`; `float4`, `sampler`, `texture`, `time`, `zoom`, `camera`, `position`, `buffer`, `stage_in`, `s`, `U`). After: none |
-| Contract uniforms under `#ifdef`: the reviewer's `ifdef_uniform` (inactive branch), `ifdef_active` (same shader with the macro defined), `ifdef_else_const` (uniform in one branch, constant of the same name in the other), `contract_forms` (several names per declaration, precision qualifiers, a macro defined before the declaration, both branches of `#if`) | exit 0; 0 or 1 level from OpenGL. Centre pixel at t = 12.25: `ifdef_uniform` `(128,128,0)`, `ifdef_active` `(128,128,64)` (blue = `fract(12.25)`), `ifdef_else_const` `(128,64,64)` |
-| Damaged images: PNG cut at 300 bytes and in half, PNG without `IEND`, PNG with one bit flipped in `IDAT`, JPEG cut in half; as tile, wallpaper and shader texture | each draws the identical dot grid and reports the text in section 6 |
-| Oddly finished images: wrong CRC on an ancillary chunk, bytes after `IEND`, JPEG without its end marker | load, and draw the same pixels as the intact file |
-| Everything the previous run produced | all 127 PNGs of the run before review round 1 are byte-identical after it, and every line of the previous log is unchanged in the new one (`fix-renders/out_md5_before.txt`, `out_md5_after.txt`, `last_run.log.before`) |
-| Broken shader | dot grid, pixel-identical to the default at the same camera; error text carries the user's line and column |
-| Missing shader, `tex` without texture, missing image, broken textured shader, bad varying, non-image tile, TIFF tile, TIFF wallpaper, missing path, unknown type | each draws the identical dot grid and reports the text in section 6 |
-| `none` | framebuffer `(0,0,0,0)` |
-| `transparent_shader` on / off | on: `(128,0,0,128)` and `(0,0,0,0)` preserved; off: same colours with alpha 255 |
-| `IFBackgroundLayer` (not attached to a window) vs the offscreen path | pixel-identical for dot grid 1x and 2x, mirrored tile, wallpaper, animated shader, textured shader, none |
-| Redraw gating | exactly the table in section 3, for default, tile, wallpaper, a screen-fixed shader, an animated shader with `animate_fps` 0 and 10, and none |
-
-**Not run:**
-
-- **Upstream DriftWM itself.** It is a Linux Wayland compositor; no pixel of
-  this port has been compared with a pixel from real DriftWM. "Matches
-  upstream" above means: matches upstream's shader source, executed by two
-  independent implementations, under the uniform mapping read from
-  `background.rs` and the smithay assumptions of section 13.
-- **Upstream's image decoders** (`image` 0.25.10, `png` 0.18.1, `zune-jpeg`
-  0.5.15). Not on this machine, not downloaded. What upstream does with a
-  damaged file is stated from knowledge of the crates (deviation 13).
-- **smithay at the pinned revision.** Section 13 was read in the crates.io
-  0.7.0 release.
-- **The layer on screen.** No window was shown and nothing was captured from
-  the display (no screen-recording permission in this shell). Unverified
-  therefore: that the picture is upright inside `DesktopView` (a flipped view),
-  colour appearance on a real display, that presentation really lands in the
-  same frame as the tiles, frame pacing under a real timer, behaviour across
-  display changes. Two things were looked at without capturing: AppKit gives a
-  flipped layer-backed view's layer `geometryFlipped = YES`, and an
-  `IFBackgroundLayer` sublayer of it reports `contentsAreFlipped = YES`, the
-  same situation as the shell's existing `AVSampleBufferDisplayLayer` tiles. An
-  attempt to composite the layer offscreen with `CARenderer` produced an empty
-  image and proved nothing either way. **First thing to check in the shell:**
-  load `extras/wallpapers/static/compass_grid.glsl` and pan up — the tint must
-  turn blue (north); green means the layer is upside down.
-- `animate_fps` against a real clock (only against synthetic frame times).
-- 16-bit PNG, CMYK JPEG, progressive JPEG, images above 16384 pixels.
-- Any GPU other than this machine's (Apple M5 Pro, macOS 27.2 build 26B5091g,
-  deployment target 26.0).
-- Integration with the Rust core or the shell: none was attempted.
-
-## 15. Commands
-
-Build and the complete verification run:
-
-```sh
-cd background-port
-./build.sh
-verify/run_all.sh /path/to/driftwm-upstream > verify/last_run.log 2>&1
-```
-
-`build.sh` runs:
-
-```sh
-xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror -O2 -g -c background.m -o build/background.o
-xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror -O2 -g -c bgrender.m -o build/bgrender.o
-xcrun clang -arch arm64 -mmacosx-version-min=26.0 build/background.o build/bgrender.o \
-    -framework Foundation -framework Metal -framework QuartzCore -framework CoreGraphics \
-    -framework ImageIO -framework Accelerate -o build/bgrender
-```
-
-The individual renders, as `run_all.sh` issues them (`W` is
-`…/driftwm-upstream/extras/wallpapers`):
-
-```sh
-# default dot grid
-build/bgrender --type default --camera 0,0     --zoom 1    --size 400x300 --out out/dot_z1_c0.png
-build/bgrender --type default --camera 37,-12  --zoom 1    --size 400x300 --out out/dot_z1_c37_-12.png
-build/bgrender --type default --camera 0,0     --zoom 0.5  --size 400x300 --out out/dot_z05_c0.png
-build/bgrender --type default --camera 1,1     --zoom 0.5  --size 400x300 --out out/dot_z05_c1.png
-build/bgrender --type default --camera 0,0     --zoom 0.25 --size 400x300 --out out/dot_z025_c0.png
-build/bgrender --type default --camera 2,2     --zoom 0.25 --size 400x300 --out out/dot_z025_c2.png
-build/bgrender --type default --camera 0,0     --zoom 1    --size 400x300 --scale 2 --out out/dot_z1_c0_2x.png
-python3 verify/check.py dot   out/dot_z1_c0.png 0 0 1 400 300 1
-python3 verify/check.py shift out/dot_z1_c0.png out/dot_z1_c37_-12.png -37 12
-
-# tile, with and without mirror_tile, two cameras
-build/bgrender --type tile --path assets/tile_rgb.png --camera 0,0    --zoom 1 --size 400x300 --out out/tile_c0.png
-build/bgrender --type tile --path assets/tile_rgb.png --camera 37,-12 --zoom 1 --size 400x300 --out out/tile_c37.png
-build/bgrender --type tile --path assets/tile_rgb.png --mirror-tile --camera 0,0    --zoom 1 --size 400x300 --out out/tile_mirror_c0.png
-build/bgrender --type tile --path assets/tile_rgb.png --mirror-tile --camera 37,-12 --zoom 1 --size 400x300 --out out/tile_mirror_c37.png
-python3 verify/check.py tile out/tile_mirror_c37.png assets/tile_rgb.png 37 -12 1 400 300 1 1 1
-
-# wallpaper at two aspect ratios
-build/bgrender --type wallpaper --path assets/wall_2x1.png --camera 0,0 --zoom 1 --size 400x300 --out out/wall_4x3.png
-build/bgrender --type wallpaper --path assets/wall_2x1.png --camera 0,0 --zoom 1 --size 600x200 --out out/wall_3x1.png
-python3 verify/check.py wallpaper out/wall_4x3.png assets/wall_2x1.png 400 300 1 2
-
-# user shaders: static, animated at two times, textured
-build/bgrender --type shader --path $W/static/compass_grid.glsl --camera 300,-150 --zoom 1 --size 480x300 --out out/sh_compass_grid.png
-build/bgrender --type shader --path $W/animated/fast_smoke.glsl --camera 300,-150 --zoom 1 --size 480x300 --time 0 --out out/sh_fast_smoke_t0.png
-build/bgrender --type shader --path $W/animated/fast_smoke.glsl --camera 300,-150 --zoom 1 --size 480x300 --time 5 --out out/sh_fast_smoke_t5.png
-build/bgrender --type shader --path $W/textured/ripple.glsl --texture assets/wall_2x1.png --camera 100,40 --zoom 1 --size 480x300 --time 2 --out out/sh_ripple_t2.png
-python3 verify/glcompare.py $W/animated/fast_smoke.glsl 300 -150 1 480 300 1 12.5
-
-# deliberately broken shader: exit status 1, error on stderr, dot grid in the PNG
-build/bgrender --type shader --path assets/shaders/broken.glsl --camera 37,-12 --zoom 1 --size 400x300 --out out/fallback_broken.png
-python3 verify/check.py same out/dot_z1_c37_-12.png out/fallback_broken.png
-
-# the layer path, redraw gating, cost
-build/bgrender --type default --camera 37,-12 --zoom 1 --size 400x300 --via-layer --out out/layer_dot.png
-build/bgrender --type shader --path $W/animated/fast_smoke.glsl --animate-fps 10 --camera 0,0 --zoom 1 --size 400x300 --gating-test
-build/bgrender --type shader --path $W/animated/fast_smoke.glsl --camera 10,10 --zoom 1 --size 1728x1117 --scale 2 --bench 60
-```
-
-Review round 1 (section 16):
-
-```sh
-./build.sh
-verify/run_all.sh /path/to/driftwm-upstream > verify/last_run.log 2>&1   # 50 s: 70 PASS, 0 FAIL
-python3 verify/names.py out/names > verify/names_last_run.log            # 4 min: 4 PASS
-fix-renders/before_after.sh > fix-renders/before_after.log 2>&1         # reviewed binary vs fixed binary
-```
-
-and, from the additions to `run_all.sh`:
-
-```sh
-python3 verify/make_damaged.py assets
-python3 verify/glcompare.py assets/shaders/macro_names.glsl 300 -150 1 480 300 1 12.5
-python3 verify/glcompare.py assets/shaders/stdlib_names.glsl -8123.5 4567.25 0.37 401 299 2 3.25
-build/bgrender --type shader --path assets/shaders/ifdef_uniform.glsl --camera 300,-150 --zoom 1 --size 480x300 --time 12.25 --out out/sh_ifdef_uniform.png --dump-bgra out/sh_ifdef_uniform.bgra
-python3 verify/check.py pixel out/sh_ifdef_uniform.bgra 480 300 240 150 128 128 0 255
-build/bgrender --type wallpaper --path assets/bad_trunc_half.png --camera 37,-12 --zoom 1 --size 400x300 --out out/fallback_png_trunc_half.png
-build/bgrender --type wallpaper --path assets/bad_trunc_half.jpg --camera 37,-12 --zoom 1 --size 400x300 --out out/fallback_jpg_trunc_half.png
-build/bgrender --type wallpaper --path assets/ok_ancillary_crc.png --camera 0,0 --zoom 1 --size 480x240 --out out/img_ok_ancillary_crc.png
-python3 verify/check.py same out/wall_2x1_exact.png out/img_ok_ancillary_crc.png
-```
-
-The probes that decided the design were built and run by `before_after.sh`:
-`verify/probe/imgstatus.m` (what ImageIO reports for damaged files) and
-`verify/probe/mslc.m` on `undef_probe.metal`, `agg_probe.metal` and
-`landmine_probe.metal` (what the Metal compiler accepts). The smithay points of
-section 13 were read with `grep -n` in
-`~/.cargo/registry/src/*/smithay-0.7.0/src/backend/renderer/`. The macro list
-was taken with
-`grep -rhoE '^\s*#\s*define\s+[A-Za-z_][A-Za-z0-9_]*' <the header directory in section 5>`;
-`xcrun -sdk macosx metal -E -dM` does not show these names, because the
-library is a prebuilt module.
-
-`bgrender` exits 0 when it rendered what was configured, 1 when it rendered but
-the background fell back (the reason is on stderr as `error: …`), 2 on a usage
-or I/O failure. Its first stderr line reports
-`kind= animated= uses_camera= uses_zoom= transparent= texture= device=`.
-
-The math-mode comparison in section 11 was made by temporarily switching the
-compile options in `+[IFBGDeviceResources compileOptions]` and re-running
-`--bench 30` and `verify/glcompare.py … 250000.5 -180000.25 1 480 300 1 3600`;
-the switch is not in the shipped source.
-
-Upstream files read beyond the list in the brief, because the listed ones could
-not answer the question: `src/render/elements.rs` lines 1–200
-(`TileShaderElement`: how `v_coords` and the wallpaper crop reach the shader),
-`src/state/redraw.rs` (`background_animation_due`: the `animate_fps` rule),
-`src/config/mod.rs` and `src/config/types.rs` (`resolve_background_kind`,
-`BackgroundConfig`: fields and defaults).
-
-## 16. Review round 1
-
-An independent review reported five issues. All five were reproduced first with
-the reviewer's own files; none was rejected. `fix-renders/before_after.log`
-shows each failing command with the reviewed binary and with the fixed one.
-
-| # | Finding | Verdict | What changed |
-|---|---|---|---|
-| 1 | A shader's `#define`s leak into the generated entry point (`#define time u_time`, `#define s 0.75`) and the shader falls back | real | Every identifier the shader mentions is `#undef`'d after its last line (section 5, "Macros"). The entry point no longer has one line per uniform at all (finding 3) |
-| 2 | Identifiers that `<metal_stdlib>` defines as macros (`INFINITY`, `FLT_MAX`, `assert`, …) are rejected | real | The same `#undef` block before the shader's first line. No list of names is kept; the review suggested one |
-| 3 | A contract uniform declared inside an inactive `#ifdef` makes the shader fall back | real | The value is attached to the declaration (`float u_time = gl_if_time;`) instead of being assigned by the entry point, so it follows the declaration through the preprocessor |
-| 4 | Truncated or corrupt images render partially with no error | real, but the suggested fix does not work | ImageIO reports "complete" for every damaged PNG tried, before and after decoding. PNG: own container check. JPEG: status read after decoding. Truncated JPEG is probably stricter than upstream now (deviation 13) |
-| 5 | Section 13 item 5 was wrong for the pixel-shader path | real | Notes and the comment on `ifbg_finish` corrected; recorded as deviation 12. No code change. Section 13 now cites the 0.7.0 source for all five points |
-| — | Not in the review, found while checking finding 2: `not` as a user identifier or macro name was rejected (Metal reads it as `!`) | real | `not` joins the renamed reserved words; the built-in `not(bvec)` is provided as `not_glsl` |
-
-Not changed: `background.h`, `bgrender.m`, `build.sh`, the built-in shaders,
-the uniform mapping, the layer.
 
 ## 17. Chunk caches: `cache_shader` and tiled pyramidal TIFF tiles
 
@@ -984,8 +767,8 @@ reset]` drops every output and with it every cache.
 ### 17.3 How the host drives a cached program
 
 A cached program is drawn through the same two calls as any other
-(`-encodeFrame:inEncoder:` from the compositor's pass, `-newImageForFrame:`
-offscreen). What is new:
+(`-encodeFrame:inEncoder:`, from the compositor's pass, which also serves the
+compositor's offscreen export). What is new:
 
 - **Encoding a frame works first.** A baked shader bakes the chunks this frame
   may (below) in one command buffer of the module's own queue and waits for it
@@ -1246,9 +1029,11 @@ above, and upstream was followed.
     same level and decoded without a hole, and otherwise decoded once per
     load; upstream opens and decodes the file again for every capture. A file
     replaced on disk without a config reload is captured as loaded.
-11. **`usesCamera` is YES for both kinds**, where upstream clears
-    `background_uses_camera`: there the chunk elements damage what they move
-    over; here that flag is what makes `IFBackgroundLayer` redraw on a pan.
+11. **A cached background has no camera-dependency flag of its own.** Upstream
+    clears `background_uses_camera` for both kinds: there the chunk elements
+    damage what they move over. Here the compositor redraws a frame whenever the
+    camera changes, whatever the background (section 3), so a pan redraws a
+    cached background too.
 12. **Limits of this reader**: 64 pages, 4096 entries a directory, 1 GiB of
     compressed data a tile, 256 MiB of decoded samples a tile (the `tiff`
     crate's default `decoding_buffer_size`, which upstream's `read_chunk` runs
@@ -1279,7 +1064,8 @@ above, and upstream was followed.
 
 DriftWM v0.21.0 turned a TIFF failure that aborted the compositor into an
 error (inventory row `platform.tiff_wallpaper_abort`). Its source, read at
-`third_party/driftwm/src/render/tile_chunks_tiff.rs`: `MAX_WHOLE_LOD_DIM`
+<https://github.com/malbiruk/driftwm> @ `df3de27b26c7998e8a460cffd8a4925cbed3a322`,
+`src/render/tile_chunks_tiff.rs`: `MAX_WHOLE_LOD_DIM`
 (16384, "1 GiB of RGBA at the limit, and past it an allocation that can abort
 the compositor before it draws") and `whole_lod`, which the chunk cache and
 the capture both use to choose the level they decode whole. Here:
@@ -1322,126 +1108,3 @@ files and runs them through `IFBGTiffSource` and `IFBackgroundProgram`; see
 that makes ImageIO itself crash is out of this module's reach (no such file
 was found in 156,000 mutations). A level of tiles a few pixels wide is slow
 (one ImageIO call a tile) and not refused.
-
-### 17.9 Verification
-
-Run with throwaway programs kept outside the repository (a generator for a
-synthetic picture and its box-filtered levels, `tiffcp` 4.7.2 to tile and
-compress them, and a harness that links `background.m`,
-`background-tiff.m`, `compositor.m` and `canvas-renderer.m`). Frames were
-compared as raw BGRA; the PNGs named "looked at" were opened.
-
-| Check | Result |
-|---|---|
-| Baked against live, `dot_grid.glsl` and the four `static/` shaders, ten cameras, zooms and scales each | the table in 17.4; baked and live frames at zoom 0.33 2x (`dark_sea`) and zoom 0.7 (`compass_grid`) looked at: same scene, no seam between chunks |
-| Bake allowances | a jump to six new cells: 2 baked and 4 pending, then 2 and 2, then 2 and 0; the same instant encoded twice bakes nothing more; first frame of a view: cover and all four cells at once |
-| Bake budget, pan of 400 frames (37, 11 a frame) at 2x, 1728×1117 | 128 MB: 112.4 MB at most, never above the budget after a frame, 44 chunks baked, 37 evicted, 21 frames degraded (`pink_cloud.glsl`; the same figures for it and for `dark_sea.glsl` when the pan was run again after the review fixes). 512 MB: 497.9 MB at most, never above. `MTLDevice.currentAllocatedSize` after 1500 frames: 123.6 MB and 544.0 MB. Process footprint at 128 MB: 296 MB after 300 frames and after 1500 (164 MB of it is the harness with no chunk at all) |
-| Scale 1 to 2 on one cache; shrink | the cache starts again (16 chunks to 7); shrink leaves the LOD 7 chunk, nothing pending |
-| Which programs are cached | static shader with `cache_shader`: baked. Without it, animated, `u_zoom`, no `u_camera`, default dot grid: live. Broken and missing shader: dot grid, messages of section 6 |
-| TIFF reader | 17.6. Refusals of section 6 for a stripped, a planar, a grey, a 16-bit, a CMYK, a YCbCr, a non-square-tile, a truncated and a non-TIFF file and a missing one; the frames of three of them (grey, stripped, non-TIFF) compared with the dot grid's: byte-identical |
-| TIFF (16384×8192) against the same picture as a PNG tile, zoom 1 at 1x, cameras (0,0), (−8300,−4200) across the wrap seam, (8000,3900) | byte-identical |
-| … zoom 0.5 at 1x, camera (0,0) | one level at most on 92 % of pixels: the generator's rounded box filter against the GPU's average of the same four texels |
-| … fractional camera; 2x; zoom 0.7; zoom 0.25 and 0.1 (plane only) | different, as 17.5 says: camera rounding; chunk-edge clamping; a level resampled; the 4096 level against an unfiltered minification of the full picture. Frames at zoom 1 across the seam, 0.7 and 0.1 looked at: right place, wrap at the image edge, no hole |
-| A 2048×1024 single-level TIFF; a 4096×2048 pyramid at zoom 0.5 2x with a fractional camera; LZW; BigTIFF | byte-identical to the PNG tile (to the classic file for BigTIFF) |
-| RGBA pyramid | an output's frame has alpha 255 everywhere; a capture's has the file's 128 and 255 |
-| TIFF budget, pan of 300 frames at 2x | 128 MB: 128.0 MB at most, never above, 82 uploads, 50 evictions, at most 8 uploads a frame. 32 and 8 MB: 32.0 and 8.0 at most, never above, nothing pending at the end. 3 and 0 MB: no chunk, plane only. Metal's allocation after 1500 frames: 33.2 MB with no chunk (the fallback level), 65.5 MB at 32 MB, 162.2 MB at 128 MB. Process footprint at 32 MB: 306 MB after 300 frames, 313 MB after 1500 |
-| Outputs released while their decoders run, 2000 in a row; a program, its output's program and its capture program released | Metal's allocation stays at the fallback level; `leaks --atExit` on a run of 400: 0 leaks; every program deallocated |
-| `DWCanvasRenderer`, `-render:` and `-flush` on a layer outside any window, then `-animates:draw:` every 1/60 s while it says so | baked shader: one draw, none in 30 further ticks; after a pan to new cells two ticks and three draws, then identical to the live frame. TIFF: three draws (plane, then the chunks as they arrive), none in 30 further ticks, identical to the PNG tile. Two outputs at different cameras and zooms: each identical to the module's frame for it. A fullscreen description: one draw, nothing pending. A snapshot without `cache_budget_mb`: the default. A refused TIFF: its message in `note` |
-| `-[DWCanvasRenderer screenshot:snapshot:]` | `cache_shader` true and false: the PNG files are byte-identical at four regions and scales. TIFF: pixel-identical to its 4096 level drawn as a PNG tile at the matching scale; against the full-resolution PNG 59 % to 95 % of pixels differ (17.7); one capture looked at |
-| After the review: one translucent blurred window over a cached background, through the compositor's offscreen encode. A view, then frames with only `time` advancing until nothing is pending, compared with a renderer that has no frost yet drawing the settled view. Baked `dark_sea.glsl` after a jump (1x, and 2x under 512 MB) and on the frame that leaves a concealed stretch; baked `dot_grid.glsl` leaving one at 2x; the 16384×8192 pyramid after a jump at 1x, 2x and zoom 0.5 and on its first frames | the frost is recomputed on each frame a chunk lands in (one or two frames a case) and on none after; settled against fresh: 0 pixels differ inside the window and outside in all eight, and the two PNG files are byte-identical; bakes and uploads per frame as before the change (5 then 7; 3, 11, 13). Controls, the live shader and the PNG tile: no recompute after the first frame, 0 pixels. Before the change the same sequences left 150,243 to 214,121 of 231,000 window pixels different for the baked shader (the reviewer's run). Three frames looked at: the first frame of a jump with the frost over the coarse cover, the settled one with a fine blur of the sharp field, and a settled pyramid |
-| 2026-10-30: crafted TIFFs and mutations (`tests/e2e/background-tiff.sh`) | 17.10. On the tree this change started from the regression ended with `SIGSEGV` (exit 139) at its first file whose tile read failed ("float samples"), after two earlier files had been read as valid pictures that should be errors (a 40000×40000 tile declared over 256×256, in 9 s; a 20000×20000 level read whole). On the tree with the change: 47,832 checks pass in about 5 s: 59 crafted files (a valid RGB8, RGBA8 Deflate, PackBits and two-page set read back to the pixel; empty, 4-byte, text, wrong-magic, cut and looped files; zero, 2³²−1 and 20000-pixel dimensions; stripped, planar, CMYK, 16-bit, grey, palette, YCbCr, 1-bit and float files; a second page that is bad; tile offsets and counts past the end; a Deflate stream that inflates to 805 MB) each an error with its cause or, for the lenient ones, a picture; the nine `bad` files and six unreadable ones through `IFBackgroundProgram` as `type = "tile"` and as an inherited TIFF wallpaper: the dot grid and a message, never a crash; and 6000 mutations of four valid files (seed 20261030; 4584 opened, 4543 read clean). A one-off run of 150,000 mutations (seed 777, 1m42s): 114,717 opened, 113,700 read clean, none crashed or hung |
-| After the review: a pyramid's output described once, then concealed by a fullscreen description before its decodes were received, and the shell's timer for a second; the decode pool read through its private counters. Twelve runs before the change to the ready handler and twelve after | before: in 3 runs two blocks were still decoding at the concealment, and both were still held a second later (in the other 9 none was); after: in 11 runs one or two were, and none was held a second later. No draw in that second either way |
-
-**At integration,** with the controller's `cache_budget_mb` key: the app was
-built from the tree and launched five times, and the harness was rebuilt from
-the final sources and its matrices run again (the baked-against-live matrix,
-the pyramid against its PNG, the budget pans, and the renderer on a detached
-2x layer); the numbers came out as in the table, and the launches are in
-[README.md](README.md#what-was-run-for-the-background-caches). In the app,
-through `msg screenshot` and the app's stderr: captures with `cache_shader`
-on and off byte-identical, a 4096×2048 pyramid byte-identical to its PNG at
-three zooms, a 16384×8192 one byte-identical to its 4096 level as a PNG tile
-at the matching scale, three refused files with upstream's texts over the dot
-grid, and the caches' budget lines carrying the budgets the configs named.
-Since a capture draws no cache (17.7), none of that shows a baked chunk or a
-decoded one.
-
-**After the review,** with the chunk generation in the frost keys (17.3) and
-the shrink in the renderer's ready handler: the harness was rebuilt from the
-tree and the two rows marked "After the review" were run, with the 400-frame
-bake pan, TIFF pans of 300 frames under 128, 32, 8 and 2 MB (128.0, 32.0 and
-8.0 MB at most, never above; 82, 95 and 26 uploads, 50, 87 and 24 evictions;
-no chunk under 2) and the renderer on a detached 2x layer, whose nine
-comparisons gave the figures of the integration run to the pixel. The app
-was built again and launched three more times (README.md, the same section):
-the captures and stderr lines came out as at integration. No launch shows
-the frost change: a capture draws no cache, and the scene has no blurred
-window.
-
-**At the merge with the display-link frame timer,** the same day. Everything
-above was run on the tree the caches were built in, whose frame timer was a
-60 Hz `NSTimer`; the tree that lands ticks from a display link, 120 Hz on the
-display this was run on. A second throwaway program outside the repository
-linked the landed tree's `frame-driver.m`, `canvas-renderer.m`,
-`compositor.m`, `background.m` and `background-tiff.m` with the release
-controller library, took the controller's own snapshot for a config, and
-drove a layer in no window by the rule `main.m` has (describe and flush;
-start the frame timer when `-animates:draw:NO` says so; each tick ask
-`-animates:draw:YES` and end the timer when it says no). It is that rule
-copied, not `main.m` running. Baked `dark_sea.glsl` on 3000×2000 points at
-1x, budget 128:
-
-| Step | Result |
-|---|---|
-| A first view; the same view again; a change of level | 13 chunks, then none, then 12, each in the description's own draw; no timer started |
-| A jump to cells never shown | 2 baked in the description's draw and 7 pending; the timer started, ticked at 119.8 to 120.1 a second, baked 2 a tick (2, 2, 2, 1) and ended by itself on the tick after the frame that left nothing pending; the first tick after the description forced nothing, that draw having been its frame |
-| Half a second idle after each, and one more description | no tick, no chunk, no timer |
-| A flight of 40 camera frames of (400, 250) units, each described and flushed inside its tick as `-cameraFrame` does | as merged textually: up to 4 chunks between one tick and the next (0 4 2 3 0 3 3 0 3 4 …), 82 in all, 79 ticks a second in three runs. With one forced frame a tick at most: 2 a tick, 81 in all, 119 to 120 ticks a second in three runs |
-| The same on 1728×1117 points at 2x, budget 512 | before, up to 4 a tick at 94 ticks a second; after, at most 2 at 111 |
-
-The flight row is why `-animates:draw:` no longer forces a frame on an output
-that has drawn since the last tick. A flight's tick drew twice, the camera
-frame and then the forced one at a later `time`, so the cache spent its
-allowances twice a tick. The 60 Hz timer the caches were built on ran the
-same two steps in the same order (read in that tree, not measured there);
-nothing above had driven a camera through a filling cache.
-
-The 8192×4096 four-level pyramid of this run (generated blocks, `tiffcp -t -w
-256 -l 256 -c zip`), same program: a first view asked for 12 chunks, the
-timer started, 8 were uploaded by the wake-up's own redraw and 4 by the next
-frame, and the timer ended by itself; the ready handler was called once or
-twice a view and never off the main thread; a flight uploaded at most 3
-between two ticks, a wake-up's frame and a tick's. At zoom 0.5 the picture is
-its always-loaded level and nothing is pending.
-
-The app built from the landed tree was launched four times, twice before
-that change and twice after (README.md, the same section). None of this
-shows a chunk on the app's panel, and the program
-is not the shell: `main.m`'s own block, a real flight ticked by the
-controller, a window's picture arriving while a cache fills and a second
-display were not run.
-
-**Not run:**
-
-- **The caches' pictures in the app.** Nothing on a display was looked at:
-  not a chunk arriving on the panel, not the shell's own timer serving a
-  filling cache, not eviction there. In the app the two caches are known only
-  by their stderr lines and by the app answering and exiting cleanly.
-- Upstream itself, the `tiff` crate, and a file written by `vips` or GDAL
-  (neither is on this machine): the files were `tiffcp`'s.
-- A picture larger than 16384×8192, compressions other than none, PackBits,
-  LZW, Deflate and RGB JPEG, a big-endian file, a pyramid cut by a page that
-  is not half its predecessor.
-- A frosted window over a cached background in the app or on a layer: it was
-  run through the compositor's offscreen encode only (the row above), with
-  one window, default `[effects]` and a jump of the view, not the app's pans
-  and fullscreen exits. Two displays of different scale, a display whose
-  scale changes under a live output, a GPU that rejects a bake.
-
-Upstream files read beyond the ones the brief named, because they decide where
-a chunk lands: `src/render/elements.rs` lines 1 to 372 (`TileShaderElement`,
-`tile_corner_round`, `corner_round_rect`, `PixelSnapRescaleElement`),
-`src/render/mod.rs` lines 1725 to 1772 (the caches' call site),
-`src/canvas.rs` `visible_canvas_rect`, and the lines a search for the caches'
-callers printed from `src/backend/udev.rs`, `src/state/render_cache.rs` and
-`src/state/reload.rs`.

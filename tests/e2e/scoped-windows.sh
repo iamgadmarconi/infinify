@@ -14,9 +14,6 @@
 # window of another application lay over a fixture (SKIPPED) or another application took the foreground after a click had
 # landed (DISTURBED), or because Stage Manager is on and nothing was started (NOT RUN). The last line names what was not
 # checked. 2 is a usage error.
-#
-# INFINIFY_E2E_ELECTRON=/path/to/Electron (a generic Electron binary) adds an Electron window; unset, that case is
-# skipped and said to be.
 set -eu
 cd "$(dirname "$0")/../.."
 [ "$#" -ne 0 ] || { echo 'LIVE NOT RUN: pass --live-owned-fixture to validate disposable managed windows'; exit 0; }
@@ -41,8 +38,7 @@ quit() {
   wait "$infinify" 2>/dev/null || true; infinify=
 }
 # Only what this script started is ever signalled.
-# Chromium's profile is most of what a run leaves behind and says nothing about it.
-cleanup() { quit; for pid in $fixtures; do kill "$pid" 2>/dev/null || true; done; for pid in $fixtures; do wait "$pid" 2>/dev/null || true; done; rm -rf "$evidence/electron-data"; }
+cleanup() { quit; for pid in $fixtures; do kill "$pid" 2>/dev/null || true; done; for pid in $fixtures; do wait "$pid" 2>/dev/null || true; done; }
 trap cleanup EXIT
 trap 'exit 1' INT TERM HUP
 
@@ -63,7 +59,6 @@ refused() {
 refused 'a process that does not exist' --state "$state" --only-pid 4194304
 refused "another user's process" --state "$state" --only-pid 1
 refused 'a scope with the chooser' --state "$state" --only-pid "$P" --manual
-refused 'the retired resize flag is an unknown argument' --state "$state" --only-pid "$P" --experimental-native-resize
 refused 'a process named twice' --state "$state" --only-pid "$P,$P"
 refused '--debug-pointer without a scope' --state "$state" --debug-pointer
 refused 'a scope on the default scene (no --state)' --only-pid "$P"
@@ -84,17 +79,7 @@ start() { mkdir "$evidence/$1"; "$fixture" "$evidence/$1" "$2" "$3" 110 & fixtur
 start a "Scope fixture A $$" -240; A=$!
 start b "Scope fixture B $$" 240; B=$!
 # Out of scope, started last so that it lies over the other two, and in the middle of where the canvas will be.
-start z "Scope decoy Z $$" 0; Z=$!
-E=
-if [ -n "${INFINIFY_E2E_ELECTRON:-}" ]; then
-  [ -x "$INFINIFY_E2E_ELECTRON" ] || { echo "INFINIFY_E2E_ELECTRON is not an executable: $INFINIFY_E2E_ELECTRON" >&2; exit 2; }
-  mkdir "$evidence/e" "$evidence/electron-data"
-  # 90 points up: its top strip then lies under the canvas alone, clear of the decoy, which is the last window shown and may cover the rest.
-  SCOPE_DIR=$evidence/e SCOPE_TITLE="Scope Electron $$" SCOPE_SECONDS=110 SCOPE_DY=-90 "$INFINIFY_E2E_ELECTRON" "$root/tests/e2e/scoped-electron" "--user-data-dir=$evidence/electron-data" >"$evidence/electron.log" 2>&1 &
-  E=$!; fixtures="$fixtures $E"
-else
-  echo 'SKIPPED: Electron case, INFINIFY_E2E_ELECTRON is unset'
-fi
+start z "Scope decoy Z $$" 0
 
 cat > "$evidence/driver.py" <<'PY'
 import json, os, pathlib, re, socket, subprocess, sys, time
@@ -154,10 +139,9 @@ if phase == 'unscoped':
         check(f'fixture {n} untouched by the unscoped run', now['counts'] | {'raf': 0} == before[n]['counts'] | {'raf': 0} and now['activations'] == before[n]['activations'], {'counts': now['counts'], 'activations': now['activations']})
     sys.exit(0)
 
-infinify = int(sys.argv[4]); electron = len(sys.argv) > 5 and sys.argv[5] == 'electron'
-scope = ['a', 'b'] + (['e'] if electron else [])
+infinify = int(sys.argv[4])
+scope = ['a', 'b']
 reports = {n: status(n) for n in scope + ['z']}
-if electron: until('Electron fixture has a window', 15, lambda: status('e'), lambda r: r.get('window'))
 decoy = status('z')
 titles = sorted(status(n)['title'] for n in scope)
 
@@ -177,16 +161,14 @@ def contains(outer, inner): return outer[0] <= inner[0] and outer[1] <= inner[1]
 # seen: those assertions are skipped for that fixture, and said to be. The clicks below do not depend on it.
 def overlaps(a, b): return a[0] < b[0] + b[2] and b[0] < a[0] + a[2] and a[1] < b[1] + b[3] and b[1] < a[1] + a[3]
 own = {infinify} | {status(n)['pid'] for n in scope + ['z']}
-# The Electron fixture does not report what lies over it: the two native ones, which flank it, answer for it.
-def foreign(name): return [[pid, b] for n in (['a', 'b'] if name == 'e' else [name]) for r in [status(n)] for pid, b, _ in r['above'] if pid not in own and overlaps(b, r['bounds'])]
+def foreign(name): return [[pid, b] for r in [status(name)] for pid, b, _ in r['above'] if pid not in own and overlaps(b, r['bounds'])]
 for name in ['a', 'b']:
     report = status(name); over = [number for pid, b, number in report['above'] if pid == infinify and contains(b, report['bounds'])]
     check(f'{name} lies whole under the canvas', bool(over), {'bounds': report['bounds'], 'above': report['above']})
-    # Each native fixture is asked to put its window directly under the canvas, and the Electron one directly over the first of
-    # them: a window of another application that had come between them and the canvas is then under them, and nothing is skipped
-    # for it. One that lies over the canvas itself is not this test's to move.
+    # Each fixture is asked to put its window directly under the canvas: a window of another application that had come between
+    # them and the canvas is then under them, and nothing is skipped for it. One that lies over the canvas itself is not this
+    # test's to move.
     (evidence / name / 'below').write_text(str(over[-1])); until(f'{name} took its place under the canvas', 2, lambda: (evidence / name / 'below').exists(), lambda there: not there)
-if electron: (evidence / 'e' / 'above').write_text(str(status('a')['window'])); until('e took its place under the canvas', 2, lambda: (evidence / 'e' / 'above').exists(), lambda there: not there)
 time.sleep(.3)
 for name in ['a', 'b']:
     report = status(name); check(f'{name} still lies whole under the canvas', any(pid == infinify and contains(b, report['bounds']) for pid, b, _ in report['above']), {'bounds': report['bounds'], 'above': report['above']})
@@ -195,7 +177,7 @@ for name in scope:
     before = foreign(name); visible = status(name).get('occlusion_visible'); first = status(name)['counts']['raf']; time.sleep(1); second = status(name)['counts']['raf']; others = before + foreign(name)
     if others:
         skipped.append(f'{name} visible and drawing under the canvas'); print(f'SKIPPED: {name} visible and drawing under the canvas: a window of another application lies over it: {others}', flush=True); continue
-    if name != 'e': check(f'{name} is visible to the window server', visible is True, visible)
+    check(f'{name} is visible to the window server', visible is True, visible)
     check(f'{name} draws under the canvas (animation frames in 1 s)', second - first >= 30, second - first)
 note()
 for name in ['a', 'b']:
@@ -206,14 +188,13 @@ later = windows()
 check('still adopted and not suspended after 3 s', sorted(x['title'] for x in later) == titles and not any(x['suspended'] for x in later), [(w['title'], w['suspended']) for w in later])
 ids = {n: next(w['id'] for w in later if w['title'] == status(n)['title']) for n in scope}
 
-# Layout: zoom 1, the tiles side by side so that every point aimed at is the tile's own; the Electron tile out of the way until its turn.
+# Layout: zoom 1, the tiles side by side so that every point aimed at is the tile's own.
 state = ask('State')['Ok']['State']; check('zoom is 1', state['zoom'] == 1.0, state['zoom'])
 cx, cy = state['camera']
 def place(name, x):
     done = msg('move', '--id', str(ids[name]), str(int(x)), str(int(cy)))
     if done.returncode: fail(f'msg move {name}', done.stderr.strip())
 place('a', cx - 250); place('b', cx + 250)
-if electron: place('e', cx + 4000)
 time.sleep(.3)
 check('adoption and msg move asked for no native focus', not any('native focus' in l for l in trace()), [l for l in trace() if 'native focus' in l])
 for name, control in [('a', 'web'), ('a', 'plain'), ('a', 'button'), ('b', 'plain'), ('b', 'web')]:
@@ -293,11 +274,6 @@ time.sleep(3); held = status('b')['counts']; check('abandoned press: no release 
 let = until('abandoned press is released by itself', 4, lambda: status('b'), lambda r: r['counts']['plain_up'] == before['plain_up'] + 1); took = time.time() - began
 check('abandoned press: released once, where it went down, about 5 s on', let['counts']['plain_down'] == before['plain_down'] + 1 and near(let['last']['plain_up'], centre(let, 'plain')) and 4.5 <= took <= 6.5, {'counts': let['counts'], 'last': let['last']['plain_up'], 'seconds': round(took, 2)})
 reply = pointer('up', ids['b'], at); check('abandoned press: a release after it is refused', 'no DebugPointer press is down' in reply.get('Err', ''), reply)
-if electron:
-    # The Electron window, inactive because b is active: its tile takes the middle and the others leave.
-    place('a', cx - 4000); place('b', cx + 4000); place('e', cx); time.sleep(.3)
-    report = status('e'); check('Electron is not active before its click', not report['app_active'] and not report['key_window'], {'app_active': report['app_active'], 'key_window': report['key_window']})
-    lines = click('e', 'web', None); traced(lines, 'e', 1, 500); landed('e', web, 'web', 1)
 
 # The decoy: a regular application's window on screen under the canvas, and nothing of this run reached it.
 after = status('z')
@@ -314,15 +290,15 @@ launch() { : > "$evidence/err.log"; INFINIFY_DEBUG=1 "$app" --windowed 1100x700 
   n=0; while [ ! -S "$socket" ] && [ "$n" -lt 50 ]; do sleep .1; n=$((n+1)); done; [ -S "$socket" ] || { echo "FAIL: no socket: $(cat "$evidence/err.log")"; exit 1; }; }
 # The fixtures' windows are on screen before Infinify starts: it then adopts them as windows that were already open, which it
 # neither focuses nor reveals. A window that appears later is a new one, which gets the focus as any new window does.
-# Each fixture says when its window is shown, which for Electron is some time after its first report.
+# Each fixture says when its window is shown.
 shown() { grep -q '"visible":true' "$evidence/$1/status.json" 2>/dev/null; }
-for name in a b z ${E:+e}; do
+for name in a b z; do
   n=0; while ! shown "$name" && [ "$n" -lt 150 ]; do sleep .1; n=$((n+1)); done
-  shown "$name" || { echo "FAIL: fixture $name never showed its window: $(cat "$evidence/electron.log" 2>/dev/null)"; exit 1; }
+  shown "$name" || { echo "FAIL: fixture $name never showed its window: $(cat "$evidence/$name/status.json" 2>/dev/null)"; exit 1; }
 done
 sleep .5
-launch --debug-pointer --only-pid "$A,$B${E:+,$E}"
-python3 "$evidence/driver.py" "$evidence" "$app" scoped "$infinify" ${E:+electron}
+launch --debug-pointer --only-pid "$A,$B"
+python3 "$evidence/driver.py" "$evidence" "$app" scoped "$infinify"
 quit; [ "$gone" = yes ] || { echo 'FAIL: Infinify did not quit within 3 s of msg action quit'; exit 1; }
 echo 'ok: quit within 3 s'
 cp "$evidence/err.log" "$evidence/scoped.err.log"

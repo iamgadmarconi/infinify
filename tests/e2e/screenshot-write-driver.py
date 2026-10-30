@@ -107,9 +107,9 @@ with tempfile.TemporaryDirectory(prefix="ifshot.", dir="/tmp") as directory:
     try:
         ready, _, _ = select.select([server.stdout], [], [], 5)
         check(ready and server.stdout.readline() == b"READY\n", "headless server starts")
-        legacy = subprocess.run([str(binary), "ownership", "once", str(sock), str(root / "scene")], capture_output=True, timeout=5)
-        check(legacy.returncode == 0 and legacy.stdout == b"DUPLICATE\n" and b"already answers" in legacy.stderr,
-              "legacy live socket without leases refuses before controller admission")
+        live = subprocess.run([str(binary), "ownership", "once", str(sock), str(root / "scene")], capture_output=True, timeout=5)
+        check(live.returncode == 0 and live.stdout == b"DUPLICATE\n" and b"already answers" in live.stderr,
+              "live socket without leases refuses before controller admission")
 
         def shot(path, raw=False):
             args = [str(binary), "msg", "--socket", str(sock)]
@@ -163,9 +163,9 @@ with tempfile.TemporaryDirectory(prefix="ifshot.", dir="/tmp") as directory:
         server.terminate()
         try:
             stdout, stderr = server.communicate(timeout=5)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as err:
             server.kill()
             stdout, stderr = server.communicate()
-            raise AssertionError("headless server failed to stop")
+            raise AssertionError("headless server failed to stop") from err
         check(server.returncode == 0, f"server exit {server.returncode}: {stderr.decode(errors='replace')}")
         check(not sock.exists(), "headless server removes its socket")

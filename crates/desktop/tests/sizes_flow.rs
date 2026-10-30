@@ -811,8 +811,9 @@ fn fit_window_snapped_shoves_the_snapped_neighbours_and_brings_them_back() {
     assert_eq!(world(&mut h, 5), rect(3000.0, 3000.0, 100.0, 100.0));
 }
 
-// Upstream v0.20 release_fit_push (third_party/driftwm/src/state/fit.rs, called
-// by handlers/xdg_shell.rs toplevel_destroyed for a real close): a snapped fit
+// Upstream v0.20 release_fit_push (https://github.com/malbiruk/driftwm @
+// df3de27b26c7998e8a460cffd8a4925cbed3a322, src/state/fit.rs, called by
+// src/handlers/xdg_shell.rs toplevel_destroyed for a real close): a snapped fit
 // records the frames it pushed its cluster between, and a close of the fit
 // window puts the cluster back. Window 1 fits to (-180, -120) 960 x 740, which
 // pushes window 2 from x 512 to 792, window 3 from y 412 to 632 and window 4

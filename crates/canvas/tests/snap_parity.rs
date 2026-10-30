@@ -1,28 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Public Scene traces against byte-for-byte pinned upstream algorithms.
+//! Public Scene traces against driftwm-core's upstream layout::{snap, cluster}.
 //! These tests establish canvas geometry parity, not native app behavior.
-use driftwm_canvas::{Point, Rect, ResizeEdges, Scene, Size, SnapOptions, Window, WindowId};
-
-// Keep upstream source unedited, including its own tests and lint attributes.
-#[allow(dead_code, clippy::all)]
-#[path = "upstream/cluster.rs"]
-mod upstream_cluster;
-#[allow(dead_code, clippy::all)]
-#[path = "upstream/snap.rs"]
-mod upstream_snap;
-mod layout {
-    pub(crate) use crate::upstream_cluster as cluster;
-    pub(crate) use crate::upstream_snap as snap;
-}
-use layout::snap::{SnapParams, SnapRect, SnapState};
+use driftwm_canvas::{Point, Rect, ResizeEdges, Scene, SnapOptions, Window, WindowId};
+use driftwm_core::layout::cluster::{
+    ResizeClassification, Side, cluster_of, resolve_cluster_shifts,
+};
+use driftwm_core::layout::snap::{self, SnapParams, SnapRect, SnapState};
 
 fn add(scene: &mut Scene, id: u64, rect: Rect) {
     scene
         .add_window(Window {
             id: WindowId(id),
             world_rect: rect,
-            native: None,
-            title: id.to_string(),
         })
         .unwrap();
 }
@@ -59,7 +48,7 @@ fn upstream_drag(
     center: bool,
 ) -> Rect {
     let y = state.y.as_ref().map_or(natural.origin.y, |s| s.snapped_pos);
-    let x = layout::snap::update_axis(
+    let x = snap::update_axis(
         &mut state.x,
         &mut state.cooldown_x,
         natural.origin.x,
@@ -76,7 +65,7 @@ fn upstream_drag(
             edge_center: center,
         },
     );
-    let y = layout::snap::update_axis(
+    let y = snap::update_axis(
         &mut state.y,
         &mut state.cooldown_y,
         natural.origin.y,
@@ -251,7 +240,7 @@ fn parity_resize_all_edges_and_corner_held_perpendicular_ranges() {
                                 0
                             })
                         .max(1);
-                        layout::snap::snap_resize_edges(
+                        snap::snap_resize_edges(
                             &mut oracle,
                             mask,
                             (0, 0),
@@ -297,20 +286,18 @@ fn parity_resize_all_edges_and_corner_held_perpendicular_ranges() {
 }
 
 #[test]
-fn parity_resize_constraints_before_snap_and_cluster_propagation() {
-    // resize_grab.rs::SizeConstraints::clamp and apply_motion clamp BEFORE
-    // snapping. The direct snap oracle therefore receives the clamped size.
+fn parity_resize_group_member_stays_while_the_primary_edge_moves() {
+    // A left-edge resize moves nothing downstream: the right neighbour captured
+    // with the group keeps its frame, and the primary floors at one point.
     let mut scene = Scene::new();
     add(&mut scene, 1, Rect::new(0.0, 0.0, 100.0, 100.0));
     add(&mut scene, 2, Rect::new(112.0, 0.0, 100.0, 100.0));
     let mut resize = scene
         .begin_resize(WindowId(1), ResizeEdges::Left, SnapOptions::default(), true)
-        .unwrap()
-        .with_constraints(Size::new(50.0, 40.0), Size::new(160.0, 180.0))
         .unwrap();
     for (delta, expected_x, expected_width) in [
-        (200.0, 50.0, 50.0),
-        (-200.0, -60.0, 160.0),
+        (200.0, 99.0, 1.0),
+        (-200.0, -200.0, 300.0),
         (0.0, 0.0, 100.0),
     ] {
         assert_rect(
@@ -318,59 +305,17 @@ fn parity_resize_constraints_before_snap_and_cluster_propagation() {
                 .resize_to(&mut resize, Point::new(delta, 0.0))
                 .unwrap(),
             Rect::new(expected_x, 0.0, expected_width, 100.0),
-            "constraints",
+            "left edge",
         );
         assert_eq!(
             scene.window(WindowId(2)).unwrap().world_rect.origin.x,
             112.0
         );
     }
-    // A target can pull a clamped 150-wide frame back to 138, under min 145.
-    let mut scene = Scene::new();
-    add(&mut scene, 1, Rect::new(0.0, 0.0, 100.0, 100.0));
-    add(&mut scene, 2, Rect::new(150.0, 0.0, 100.0, 100.0));
-    let mut resize = scene
-        .begin_resize(
-            WindowId(1),
-            ResizeEdges::Right,
-            SnapOptions::default(),
-            false,
-        )
-        .unwrap()
-        .with_constraints(Size::new(145.0, 0.0), Size::new(150.0, 0.0))
-        .unwrap();
-    let mut oracle = SnapState::default();
-    let mut width = 150;
-    let mut height = 100;
-    layout::snap::snap_resize_edges(
-        &mut oracle,
-        8,
-        (0, 0),
-        (100, 100),
-        0,
-        0,
-        &mut width,
-        &mut height,
-        &[snap_rect(Rect::new(150.0, 0.0, 100.0, 100.0))],
-        1.0,
-        12.0,
-        24.0,
-        32.0,
-        false,
-    );
-    assert_eq!(
-        scene
-            .resize_to(&mut resize, Point::new(200.0, 0.0))
-            .unwrap()
-            .size
-            .width,
-        f64::from(width)
-    );
 }
 
 #[test]
 fn parity_cluster_components_and_integer_bond_reversal() {
-    use layout::cluster::{ResizeClassification, Side, cluster_of, resolve_cluster_shifts};
     let rects = [
         Rect::new(0.0, 0.0, 100.0, 100.0),
         Rect::new(112.0, 0.0, 100.0, 100.0),
@@ -470,7 +415,7 @@ fn parity_resize_excludes_shifted_members_but_attracts_stationary_members() {
     for delta in [20, 80, 100, 133, 80] {
         let mut width = 100 + delta;
         let mut height = 100;
-        layout::snap::snap_resize_edges(
+        snap::snap_resize_edges(
             &mut oracle,
             8,
             (0, 0),

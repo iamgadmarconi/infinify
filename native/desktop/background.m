@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Carried into native/desktop/ from the standalone compositor port that was built, verified against upstream's shaders and independently reviewed outside this repository. Changed here since: the two chunk caches, `cache_shader` and tiled pyramidal TIFF tiles (BACKGROUND-NOTES.md, section 17).
+// Infinify canvas background renderer — see background.h and BACKGROUND-NOTES.md.
 //
-// Infinify canvas background renderer — see background.h and NOTES.md.
-//
-// Derived from DriftWM (GPL-3.0-or-later), upstream commit
+// Derived from DriftWM (GPL-3.0-or-later), https://github.com/malbiruk/driftwm @
 // 352333a8fa1b22171492d4b71a54102045c9a19d. The three built-in fragment
 // shaders below are hand translations of upstream GLSL; each carries the
 // upstream path and SHA-256 of the file it was translated from.
 
 #import "background.h"
 #import "background-tiff.h"
+#import "metal-support.h"
 
 #import <Accelerate/Accelerate.h>
 #import <AppKit/NSImage.h>
@@ -73,13 +72,13 @@ static NSString *const kIFBGCommonMSL =
      "static inline float2 ifbg_v_coords(float4 position, constant IFBGUniforms &U) {\n"
      "    return U.src_origin + (position.xy / U.dest_px) * U.src_size;\n"
      "}\n"
-     // A background that is not transparent is composited opaque: docs/shaders.md,
+     // A background that is not transparent is composited opaque: upstream docs/shaders.md,
      // "The alpha component ... is ignored by default". On upstream's texture path
      // (tile, wallpaper, textured shader) smithay draws the element's opaque region
      // with blending off, so this is exactly what reaches the screen. On the plain
      // pixel-shader path smithay 0.7.0 leaves blending on, so a shader writing
      // alpha < 1 without `transparent_shader` blends over stale framebuffer
-     // contents there; forcing alpha to 1 is a deliberate deviation (NOTES.md,
+     // contents there; forcing alpha to 1 is a deliberate deviation (BACKGROUND-NOTES.md,
      // section 8).
      "static inline float4 ifbg_finish(float4 color, constant IFBGUniforms &U) {\n"
      "    return U.opaque > 0.5 ? float4(color.rgb, 1.0) : color;\n"
@@ -1026,7 +1025,6 @@ static NSString *IFBGCondenseDiagnostics(NSString *text) {
 @property (nonatomic, readonly) id<MTLTexture> placeholderTexture;
 @property (nonatomic, readonly, nullable) NSString *builtinError;
 + (instancetype)resourcesForDevice:(id<MTLDevice>)device;
-+ (MTLCompileOptions *)compileOptions;
 - (nullable id<MTLRenderPipelineState>)builtinPipeline:(NSString *)fragmentName;
 - (nullable id<MTLRenderPipelineState>)pipelineWithFragment:(id<MTLFunction>)fragment error:(NSError **)error;
 /// The quad pipeline of a cached chunk (ifbg_chunk_vertex, ifbg_chunk).
@@ -1040,32 +1038,7 @@ static NSString *IFBGCondenseDiagnostics(NSString *text) {
 }
 
 + (instancetype)resourcesForDevice:(id<MTLDevice>)device {
-    static NSMutableDictionary<NSNumber *, IFBGDeviceResources *> *cache;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{ cache = [NSMutableDictionary dictionary]; });
-    @synchronized(cache) {
-        NSNumber *key = @(device.registryID);
-        IFBGDeviceResources *r = cache[key];
-        if (!r) {
-            r = [[IFBGDeviceResources alloc] initWithDevice:device];
-            cache[key] = r;
-        }
-        return r;
-    }
-}
-
-// IEEE-754 arithmetic (no reassociation, NaN and infinity honoured) so GLSL
-// written for `precision highp float` computes what it says; library functions
-// (sin, pow, ...) stay at the GPU's native precision, as on every GL driver.
-// Measured on an Apple M5 Pro at 3456x2234: fast_smoke costs 8.6 ms of GPU time
-// per frame this way against 20.6 ms with MTLMathFloatingPointFunctionsPrecise,
-// and the precise variant draws a *different* noise pattern from the system
-// GLSL compiler far from the canvas origin (see NOTES.md, "Math mode").
-+ (MTLCompileOptions *)compileOptions {
-    MTLCompileOptions *options = [MTLCompileOptions new];
-    options.mathMode = MTLMathModeSafe;
-    options.mathFloatingPointFunctions = MTLMathFloatingPointFunctionsFast;
-    return options;
+    return DWMetalSharedForDevice(self, device, ^id{ return [[IFBGDeviceResources alloc] initWithDevice:device]; });
 }
 
 - (instancetype)initWithDevice:(id<MTLDevice>)device {
@@ -1076,7 +1049,7 @@ static NSString *IFBGCondenseDiagnostics(NSString *text) {
 
     NSError *error = nil;
     _builtinLibrary = [device newLibraryWithSource:[[kIFBGCommonMSL stringByAppendingString:kIFBGBuiltinMSL] stringByAppendingString:kIFBGChunkMSL]
-                                           options:[IFBGDeviceResources compileOptions]
+                                           options:DWMetalCompileOptions()
                                              error:&error];
     if (!_builtinLibrary) {
         // Upstream: "Default shader must compile".
@@ -1087,13 +1060,7 @@ static NSString *IFBGCondenseDiagnostics(NSString *text) {
     _vertexFunction = [_builtinLibrary newFunctionWithName:@"ifbg_vertex"];
 
     // smithay: GL_LINEAR minification and magnification, CLAMP_TO_EDGE, no mipmaps.
-    MTLSamplerDescriptor *sd = [MTLSamplerDescriptor new];
-    sd.minFilter = MTLSamplerMinMagFilterLinear;
-    sd.magFilter = MTLSamplerMinMagFilterLinear;
-    sd.mipFilter = MTLSamplerMipFilterNotMipmapped;
-    sd.sAddressMode = MTLSamplerAddressModeClampToEdge;
-    sd.tAddressMode = MTLSamplerAddressModeClampToEdge;
-    _sampler = [device newSamplerStateWithDescriptor:sd];
+    _sampler = DWMetalLinearClampSampler(device);
 
     // Bound when a shader declares a sampler but no image is configured.
     MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
@@ -1158,11 +1125,6 @@ static NSString *IFBGCondenseDiagnostics(NSString *text) {
 
 // MARK: - Files
 
-// Rust-style description of an errno, as upstream prints it.
-static NSString *IFBGOSError(int code) {
-    return [NSString stringWithFormat:@"%s (os error %d)", strerror(code), code];
-}
-
 static NSString *IFBGReadText(NSString *path, NSString **error) {
     FILE *f = fopen(path.fileSystemRepresentation, "rb");
     if (!f) {
@@ -1208,7 +1170,7 @@ static uint32_t IFBGCRC32(const uint8_t *bytes, size_t length) {
 /// Walks a PNG file's chunk list and returns what is wrong with it, or nil.
 /// ImageIO decodes a truncated or damaged PNG without any sign of trouble: it
 /// reports kCGImageStatusComplete before and after decoding and leaves the
-/// missing rows empty (measured, NOTES.md section 6). Upstream's decoder (the
+/// missing rows empty (measured, BACKGROUND-NOTES.md section 6). Upstream's decoder (the
 /// `png` crate behind `image::open`) reports an error for such a file, and the
 /// background then falls back, so the container is checked here: every chunk
 /// must be present in full up to and including IEND, and a critical chunk
@@ -1477,9 +1439,10 @@ static id<MTLTexture> IFBGLoadImage(id<MTLDevice> device, NSString *path, CGSize
 
 // MARK: - Chunk caches
 //
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
-// src/render/shader_chunks.rs (ShaderChunkCache: apron_dims, interior_src,
-// bake_chunk, render_elements, shrink, visible_chunks), src/render/tile_chunks.rs
+// Adapted from DriftWM, https://github.com/malbiruk/driftwm @
+// 352333a8fa1b22171492d4b71a54102045c9a19d: src/render/shader_chunks.rs
+// (ShaderChunkCache: apron_dims, interior_src, bake_chunk, render_elements,
+// shrink, visible_chunks), src/render/tile_chunks.rs
 // (BgChunkCache: new_from_tiff, ensure_visible_loaded, drain_responses, shrink;
 // pick_lod, derive_chunk_layout, compute_aggregations, compute_k_range,
 // chunks_intersecting, visibility_query, chunk_actual_size, chunk_canvas_origin,
@@ -1672,9 +1635,8 @@ static void IFBGApronDims(long chunkSize, long bakePx, long *areaCanvas, long *f
 /// first. nil when the coarse cover could not be baked: the caller draws live.
 - (nullable NSArray<IFBGChunkDraw *> *)drawsForFrame:(IFBackgroundFrame)frame;
 - (void)shrink;
-@property (nonatomic, readonly) NSUInteger pendingCount, count, loadCount, evictionCount;
+@property (nonatomic, readonly) NSUInteger pendingCount;
 @property (nonatomic, readonly) uint64_t bytes;
-@property (nonatomic, readonly) BOOL degraded;
 /// Changes whenever the cached chunks do: a bake or an upload, an eviction, a shrink that dropped something.
 @property (nonatomic, readonly) uint64_t generation;
 @end
@@ -1711,14 +1673,6 @@ static void IFBGApronDims(long chunkSize, long bakePx, long *areaCanvas, long *f
     _budget = budget;
     _chunks = [NSMutableDictionary dictionary];
     return self;
-}
-
-- (NSUInteger)count {
-    return _chunks.count;
-}
-
-- (BOOL)degraded {
-    return _degraded || _coverTooLarge;
 }
 
 - (uint64_t)chunkBytes:(long)chunkSize {
@@ -1817,7 +1771,6 @@ static void IFBGApronDims(long chunkSize, long bakePx, long *areaCanvas, long *f
     for (IFBGChunk *chunk in baked) {
         _chunks[IFBGChunkKey(chunk->lod, chunk->cx, chunk->cy)] = chunk;
         _bytes += chunk->bytes;
-        _loadCount++;
         _generation++;
     }
 }
@@ -1965,7 +1918,6 @@ static IFBGChunk *IFBGChunkMake(uint32_t lod, long cx, long cy) {
 
     // Evict last, so that the chunks chosen for this frame are protected.
     NSUInteger evicted = IFBGEvictLRU(_chunks, &_bytes, _budget);
-    _evictionCount += evicted;
     _generation += evicted;
     _plan = IFBGSortDraws(draws);
     _planFrame = f;
@@ -2104,9 +2056,8 @@ static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l,
 /// them is the caller's.
 - (NSArray<IFBGChunkDraw *> *)drawsForFrame:(IFBackgroundFrame)frame;
 - (void)shrink;
-@property (nonatomic, readonly) NSUInteger pendingCount, count, loadCount, evictionCount;
+@property (nonatomic, readonly) NSUInteger pendingCount;
 @property (nonatomic, readonly) uint64_t bytes;
-@property (nonatomic, readonly) BOOL degraded;
 /// Changes whenever the cached chunks do: a bake or an upload, an eviction, a shrink that dropped something.
 @property (nonatomic, readonly) uint64_t generation;
 @end
@@ -2122,6 +2073,7 @@ static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l,
     uint64_t _frameCounter;
     BOOL _shrunk;
     atomic_bool _wakePosted;
+    BOOL _degraded;  // the last frame's working set exceeded the budget
     BOOL _hasPlan;
     IFBackgroundFrame _planFrame;
     NSArray<IFBGChunkDraw *> *_plan;
@@ -2163,10 +2115,6 @@ static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l,
         dispatch_block_t handler = cache.readyHandler;
         if (handler) handler();
     });
-}
-
-- (NSUInteger)count {
-    return _chunks.count;
 }
 
 // `has_pending_loads`: decodes asked for and not yet uploaded or failed.
@@ -2218,7 +2166,6 @@ static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l,
         chunk->touched = frame;
         _chunks[key] = chunk;
         _bytes += chunk->bytes;
-        _loadCount++;
         _generation++;
         uploaded++;
     }
@@ -2288,7 +2235,6 @@ static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l,
         }
     }
     NSUInteger evicted = IFBGEvictLRU(_chunks, &_bytes, _budget);
-    _evictionCount += evicted;
     _generation += evicted;
 
     // chunk_render_elements: for each visible target cell of each image
@@ -2353,6 +2299,9 @@ static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l,
     // This program's own chunk cache, made by its first frame.
     IFBGShaderChunks *_shaderChunks;
     IFBGTileChunks *_tileChunks;
+    // Image size in pixels for tile / wallpaper / textured shader, else zero.
+    // For a pyramidal TIFF: the size of its full-resolution level.
+    CGSize _textureSize;
 }
 
 + (instancetype)programWithConfig:(IFBackgroundConfig *)config device:(id<MTLDevice>)device {
@@ -2387,10 +2336,7 @@ static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l,
     _pipeline = [_resources builtinPipeline:@"ifbg_dot_grid"];
     _texture = nil;
     _textureSize = CGSizeZero;
-    _translatedShaderSource = nil;
     _animated = NO;
-    _usesCamera = YES;
-    _usesZoom = NO;
     _transparent = _config.transparentShader;
 }
 
@@ -2401,9 +2347,8 @@ static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l,
         if (error) *error = translateError;
         return nil;
     }
-    _translatedShaderSource = msl;
     NSError *nsError = nil;
-    id<MTLLibrary> library = [_device newLibraryWithSource:msl options:[IFBGDeviceResources compileOptions] error:&nsError];
+    id<MTLLibrary> library = [_device newLibraryWithSource:msl options:DWMetalCompileOptions() error:&nsError];
     id<MTLFunction> fragment = [library newFunctionWithName:@"ifbg_user_fragment"];
     if (!fragment) {
         if (error) *error = IFBGCondenseDiagnostics(nsError.localizedDescription ?: @"no fragment function");
@@ -2467,8 +2412,6 @@ static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l,
             _texture = texture;
             _textureSize = size;
             _animated = NO;
-            _usesCamera = !wallpaper || _config.parallax;
-            _usesZoom = wallpaper && _config.parallax;
             _transparent = hasTransparency && !inherited;
             if (inherited) {
                 _wallpaperFill = simd_make_float4(0, 0, 0, 1);
@@ -2507,7 +2450,6 @@ static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l,
             _errorText = [NSString stringWithFormat:@"background shader '%@': compile error: %@", path, compileError];
             return;
         }
-        NSString *translated = _translatedShaderSource;
         NSString *imageError = nil;
         CGSize size = CGSizeZero;
         id<MTLTexture> texture = IFBGLoadImage(_device, texturePath, &size, NO, NULL, &imageError);
@@ -2520,10 +2462,7 @@ static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l,
         _pipeline = pipeline;
         _texture = texture;
         _textureSize = size;
-        _translatedShaderSource = translated;
         _animated = IFBGReferencesUniform(source, @"float", @"u_time");
-        _usesCamera = IFBGReferencesUniform(source, @"vec2", @"u_camera");
-        _usesZoom = IFBGReferencesUniform(source, @"float", @"u_zoom");
         _transparent = _config.transparentShader;  // the texture's alpha does not decide
         return;
     }
@@ -2558,18 +2497,13 @@ static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l,
                           : [NSString stringWithFormat:@"background shader: compile error: %@", compileError];
         return;
     }
-    NSString *translated = _translatedShaderSource;
     _kind = IFBackgroundKindShader;
     _pipeline = pipeline;
-    _translatedShaderSource = translated;
     _animated = IFBGReferencesUniform(source, @"float", @"u_time");
-    _usesCamera = IFBGReferencesUniform(source, @"vec2", @"u_camera");
-    _usesZoom = IFBGReferencesUniform(source, @"float", @"u_zoom");
     _transparent = _config.transparentShader;
     if (!bake) return;
     // The shader itself stays compiled: the bake draws through it, and so does
-    // a capture. `usesCamera` stays YES where upstream clears its flag: there
-    // the chunk elements damage what they move over by themselves.
+    // a capture.
     if ([_resources chunkPipeline]) {
         _cache = IFBackgroundCacheShaderBake;
     } else {
@@ -2608,8 +2542,6 @@ static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l,
     _fallbackHoles = fallback.failedTileCount;
     _fallbackTransparency = fallback.hasTransparency;
     _animated = NO;
-    _usesCamera = YES;
-    _usesZoom = NO;
     // Opaque whatever the file's alpha: chunk_bg.glsl writes alpha 1, and the
     // fallback plane claims its whole area opaque.
     _transparent = NO;
@@ -2618,14 +2550,7 @@ static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l,
 
 // Integer output size, as upstream's logical output size is integral.
 static void IFBGPixelSize(IFBackgroundFrame f, long *logicalW, long *logicalH, NSUInteger *pxW, NSUInteger *pxH) {
-    double scale = (isfinite(f.scale) && f.scale > 0) ? f.scale : 1.0;
-    long lw = isfinite(f.width) ? lround(f.width) : 0, lh = isfinite(f.height) ? lround(f.height) : 0;
-    lw = MAX(lw, 0L);
-    lh = MAX(lh, 0L);
-    if (logicalW) *logicalW = lw;
-    if (logicalH) *logicalH = lh;
-    if (pxW) *pxW = (NSUInteger)MAX(0L, lround((double)lw * scale));
-    if (pxH) *pxH = (NSUInteger)MAX(0L, lround((double)lh * scale));
+    DWMetalPixelSize(f.width, f.height, f.scale, logicalW, logicalH, pxW, pxH);
 }
 
 /// The uniform mapping, including the macOS wallpaper extension below.
@@ -2713,22 +2638,8 @@ static void IFBGPixelSize(IFBackgroundFrame f, long *logicalW, long *logicalH, N
     return u;
 }
 
-- (void)encodeFrame:(IFBackgroundFrame)frame
-        intoTexture:(id<MTLTexture>)target
-      commandBuffer:(id<MTLCommandBuffer>)commandBuffer {
-    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
-    pass.colorAttachments[0].texture = target;
-    pass.colorAttachments[0].loadAction = MTLLoadActionClear;
-    pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0);
-    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
-    id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:pass];
-    [self encodeFrame:frame inEncoder:encoder];
-    [encoder endEncoding];
-}
-
-// Compositor hook (the only change against the reviewed background-port copy):
-// the draw of -encodeFrame:intoTexture:commandBuffer:, without the render pass
-// around it, so the compositor can put the background first in its own pass.
+// Draws the frame into a render pass the caller already opened, so that the
+// compositor can put the background first in its own pass.
 - (BOOL)encodeFrame:(IFBackgroundFrame)frame inEncoder:(id<MTLRenderCommandEncoder>)encoder {
     if (_kind == IFBackgroundKindNone || !_pipeline) return NO;
     if (_cache != IFBackgroundCacheNone && [self encodeChunksOfFrame:frame inEncoder:encoder]) return YES;
@@ -2836,11 +2747,8 @@ static void IFBGPixelSize(IFBackgroundFrame f, long *logicalW, long *logicalH, N
     _kind = base->_kind;
     _errorText = base->_errorText;
     _animated = base->_animated;
-    _usesCamera = base->_usesCamera;
-    _usesZoom = base->_usesZoom;
     _transparent = base->_transparent;
     _textureSize = base->_textureSize;
-    _translatedShaderSource = base->_translatedShaderSource;
     _pipeline = base->_pipeline;
     _texture = base->_texture;
     _wallpaperFill = base->_wallpaperFill;
@@ -2923,255 +2831,7 @@ static void IFBGPixelSize(IFBackgroundFrame f, long *logicalW, long *logicalH, N
     [_tileChunks shrink];
 }
 
-- (NSUInteger)chunkCount {
-    return _shaderChunks.count + _tileChunks.count;
-}
-
-- (uint64_t)chunkBytes {
-    return _shaderChunks.bytes + _tileChunks.bytes;
-}
-
-- (NSUInteger)chunkLoadCount {
-    return _shaderChunks.loadCount + _tileChunks.loadCount;
-}
-
-- (NSUInteger)chunkEvictionCount {
-    return _shaderChunks.evictionCount + _tileChunks.evictionCount;
-}
-
-- (BOOL)isChunkCacheDegraded {
-    return _shaderChunks.degraded || _tileChunks.degraded;
-}
-
 - (id<MTLCommandQueue>)commandQueue {
     return _resources.queue;
-}
-
-static void IFBGReleaseBytes(void *info, const void *data, size_t size) {
-    (void)info;
-    (void)size;
-    free((void *)data);
-}
-
-// BGRA8 texture -> sRGB CGImage. Transparent backgrounds keep their
-// (premultiplied) alpha; opaque ones are written without an alpha channel.
-static CGImageRef IFBGCreateImage(id<MTLTexture> texture, BOOL transparent) CF_RETURNS_RETAINED {
-    NSUInteger w = texture.width, h = texture.height;
-    uint8_t *bytes = malloc(w * h * 4);
-    [texture getBytes:bytes bytesPerRow:w * 4 fromRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:0];
-    CGDataProviderRef provider = CGDataProviderCreateWithData(NULL, bytes, w * h * 4, IFBGReleaseBytes);
-    CGColorSpaceRef srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-    CGBitmapInfo info = (CGBitmapInfo)kCGBitmapByteOrder32Little |
-                        (CGBitmapInfo)(transparent ? kCGImageAlphaPremultipliedFirst : kCGImageAlphaNoneSkipFirst);
-    CGImageRef image = CGImageCreate(w, h, 8, 32, w * 4, srgb, info, provider, NULL, false, kCGRenderingIntentDefault);
-    CGColorSpaceRelease(srgb);
-    CGDataProviderRelease(provider);
-    return image;
-}
-
-- (CGImageRef)newImageForFrame:(IFBackgroundFrame)frame error:(NSError **)error {
-    NSUInteger w, h;
-    IFBGPixelSize(frame, NULL, NULL, &w, &h);
-    if (!_resources || w == 0 || h == 0 || w > kIFBGMaxTextureSide || h > kIFBGMaxTextureSide) {
-        if (error) *error = [NSError errorWithDomain:IFBGErrorDomain code:2 userInfo:@{NSLocalizedDescriptionKey:
-            _resources ? [NSString stringWithFormat:@"invalid render size %lux%lu pixels", (unsigned long)w, (unsigned long)h]
-                       : @"no Metal device"}];
-        return NULL;
-    }
-    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
-                                                                                  width:w
-                                                                                 height:h
-                                                                              mipmapped:NO];
-    td.usage = MTLTextureUsageRenderTarget;
-    td.storageMode = MTLStorageModeShared;
-    id<MTLTexture> target = [_device newTextureWithDescriptor:td];
-    id<MTLCommandBuffer> commandBuffer = [_resources.queue commandBuffer];
-    if (!target || !commandBuffer) {
-        if (error) *error = [NSError errorWithDomain:IFBGErrorDomain code:3 userInfo:@{NSLocalizedDescriptionKey: @"could not allocate the render target"}];
-        return NULL;
-    }
-    [self encodeFrame:frame intoTexture:target commandBuffer:commandBuffer];
-    [commandBuffer commit];
-    [commandBuffer waitUntilCompleted];
-    if (commandBuffer.status != MTLCommandBufferStatusCompleted) {
-        if (error) *error = commandBuffer.error ?: [NSError errorWithDomain:IFBGErrorDomain code:4 userInfo:@{NSLocalizedDescriptionKey: @"the render did not complete"}];
-        return NULL;
-    }
-    // `none` has nothing to be opaque about: its image is fully transparent.
-    return IFBGCreateImage(target, _transparent || _kind == IFBackgroundKindNone);
-}
-
-- (BOOL)writePNGForFrame:(IFBackgroundFrame)frame toURL:(NSURL *)url error:(NSError **)error {
-    CGImageRef image = [self newImageForFrame:frame error:error];
-    if (!image) return NO;
-    CGImageDestinationRef destination = CGImageDestinationCreateWithURL((__bridge CFURLRef)url, CFSTR("public.png"), 1, NULL);
-    BOOL ok = NO;
-    if (destination) {
-        CGImageDestinationAddImage(destination, image, NULL);
-        ok = CGImageDestinationFinalize(destination);
-        CFRelease(destination);
-    }
-    CGImageRelease(image);
-    if (!ok && error) {
-        *error = [NSError errorWithDomain:IFBGErrorDomain code:5 userInfo:@{NSLocalizedDescriptionKey:
-            [NSString stringWithFormat:@"could not write %@", url.path]}];
-    }
-    return ok;
-}
-@end
-
-// MARK: - Layer
-
-@implementation IFBackgroundLayer {
-    BOOL _dirty;
-    BOOL _hasLast;
-    IFBackgroundFrame _last;       // the frame last drawn
-    BOOL _hasAnimateStamp;
-    double _lastAnimate;           // upstream `background_last_animate`, in frame time
-    id<MTLTexture> _debugCopy;
-}
-
-- (instancetype)init {
-    if (!(self = [super init])) return nil;
-    self.pixelFormat = MTLPixelFormatBGRA8Unorm;
-    self.framebufferOnly = YES;
-    // The shader's values are sRGB-encoded (see NOTES.md, "Colour").
-    CGColorSpaceRef srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-    self.colorspace = srgb;
-    CGColorSpaceRelease(srgb);
-    self.opaque = YES;
-    // Presents inside the host's CATransaction so the background and the
-    // window tiles it sits behind move in the same display frame.
-    self.presentsWithTransaction = YES;
-    self.allowsNextDrawableTimeout = YES;
-    self.needsDisplayOnBoundsChange = NO;
-    // Never animate geometry or contents implicitly.
-    self.actions = @{@"bounds": NSNull.null, @"position": NSNull.null, @"contents": NSNull.null,
-                     @"contentsScale": NSNull.null, @"hidden": NSNull.null, @"opacity": NSNull.null};
-    _dirty = YES;
-    return self;
-}
-
-- (void)setProgram:(IFBackgroundProgram *)program {
-    if (_program == program) return;
-    _program = program;
-    if (program.device) self.device = program.device;
-    // `none` clears to transparent so nothing of an earlier background remains.
-    self.opaque = program && !program.isTransparent && program.kind != IFBackgroundKindNone;
-    _dirty = YES;
-    _hasAnimateStamp = NO;
-}
-
-- (void)setConfig:(IFBackgroundConfig *)config {
-    self.program = [IFBackgroundProgram programWithConfig:config device:nil];
-}
-
-- (BOOL)isAnimated {
-    return _program.isAnimated;
-}
-
-- (NSString *)errorText {
-    return _program.errorText;
-}
-
-- (void)setNeedsRedraw {
-    _dirty = YES;
-}
-
-- (void)setDebugCaptureEnabled:(BOOL)enabled {
-    _debugCaptureEnabled = enabled;
-    self.framebufferOnly = !enabled;
-    if (!enabled) _debugCopy = nil;
-}
-
-- (BOOL)updateWithFrame:(IFBackgroundFrame)frame {
-    IFBackgroundProgram *program = _program;
-    if (!program) return NO;
-    long logicalW, logicalH;
-    NSUInteger pxW, pxH;
-    IFBGPixelSize(frame, &logicalW, &logicalH, &pxW, &pxH);
-    if (pxW == 0 || pxH == 0 || pxW > kIFBGMaxTextureSide || pxH > kIFBGMaxTextureSide) return NO;
-
-    IFBackgroundKind kind = program.kind;
-    BOOL canvasSpace = kind != IFBackgroundKindNone && kind != IFBackgroundKindWallpaper;
-    BOOL need = _dirty || !_hasLast;
-    if (!need) {
-        long lastW, lastH;
-        IFBGPixelSize(_last, &lastW, &lastH, NULL, NULL);
-        // Output resized or moved to a display with another backing scale.
-        need = lastW != logicalW || lastH != logicalH || _last.scale != frame.scale;
-    }
-    if (!need && kind != IFBackgroundKindNone) {
-        // Upstream: a zoom change resizes and rescales every canvas-space
-        // element; the camera only matters to a background that reads it.
-        BOOL zoomChanged = (canvasSpace || program.usesZoom) && _last.zoom != frame.zoom;
-        BOOL cameraMoved = program.usesCamera &&
-                           (_last.cameraX != frame.cameraX || _last.cameraY != frame.cameraY);
-        need = zoomChanged || cameraMoved;
-    }
-    // state/redraw.rs background_animation_due(): every frame, or at most
-    // `animate_fps` times a second.
-    BOOL animateDue = NO;
-    if (program.isAnimated && (!_hasLast || _last.time != frame.time)) {
-        NSUInteger fps = program.config.animateFPS;
-        animateDue = fps == 0 || !_hasAnimateStamp || frame.time < _lastAnimate ||
-                     frame.time - _lastAnimate >= 1.0 / (double)fps;
-    }
-    // A chunk cache that is still filling: upstream keeps firing frames until
-    // the visible set resolves.
-    if (!need && program.pendingChunkCount && (!_hasLast || _last.time != frame.time)) need = YES;
-    if (!need && !animateDue) return NO;
-
-    if (self.contentsScale != frame.scale && frame.scale > 0) self.contentsScale = frame.scale;
-    CGSize drawableSize = CGSizeMake(pxW, pxH);
-    if (!CGSizeEqualToSize(self.drawableSize, drawableSize)) self.drawableSize = drawableSize;
-
-    id<CAMetalDrawable> drawable = [self nextDrawable];
-    id<MTLCommandBuffer> commandBuffer = [[program commandQueue] commandBuffer];
-    if (!drawable || !commandBuffer) return NO;  // still dirty: the next update retries
-    [program encodeFrame:frame intoTexture:drawable.texture commandBuffer:commandBuffer];
-
-    id<MTLTexture> copy = nil;
-    if (_debugCaptureEnabled) {
-        MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
-                                                                                      width:pxW
-                                                                                     height:pxH
-                                                                                  mipmapped:NO];
-        td.storageMode = MTLStorageModeShared;
-        copy = [program.device newTextureWithDescriptor:td];
-        id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
-        [blit copyFromTexture:drawable.texture sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0)
-                   sourceSize:MTLSizeMake(pxW, pxH, 1) toTexture:copy destinationSlice:0 destinationLevel:0
-            destinationOrigin:MTLOriginMake(0, 0, 0)];
-        [blit endEncoding];
-    }
-
-    if (self.presentsWithTransaction) {
-        [commandBuffer commit];
-        [commandBuffer waitUntilScheduled];
-        [drawable present];
-    } else {
-        [commandBuffer presentDrawable:drawable];
-        [commandBuffer commit];
-    }
-    if (copy) {
-        [commandBuffer waitUntilCompleted];
-        _debugCopy = copy;
-    }
-
-    if (animateDue) {
-        _lastAnimate = frame.time;
-        _hasAnimateStamp = YES;
-    }
-    _last = frame;
-    _hasLast = YES;
-    _dirty = NO;
-    _drawCount++;
-    return YES;
-}
-
-- (CGImageRef)newDebugImageOfLastFrame {
-    if (!_debugCopy) return NULL;
-    return IFBGCreateImage(_debugCopy, _program.isTransparent || _program.kind == IFBackgroundKindNone);
 }
 @end

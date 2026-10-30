@@ -1,7 +1,8 @@
 # DriftWM macOS development rules
 
 Target Apple Silicon, macOS 26 or later. The Rust canvas is platform-independent;
-platform integration belongs in macos-backend and native adapters.
+platform integration belongs in native/ adapters (native/desktop, native/privileged,
+native/focus, native/resize).
 
 Preserve GPL-3.0-or-later attribution and exact upstream source provenance.
 Keep camera/world geometry independent of native ownership and screen coordinates.

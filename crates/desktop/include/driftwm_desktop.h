@@ -3,6 +3,8 @@
 #define DRIFTWM_DESKTOP_H
 #include <stddef.h>
 #include <stdint.h>
+/* Largest IPC request line in bytes. The shell's socket reader and the controller both enforce it. */
+#define DRIFTWM_DESKTOP_MAX_REQUEST_BYTES 1048576
 #ifdef __cplusplus
 extern "C" {
 #endif

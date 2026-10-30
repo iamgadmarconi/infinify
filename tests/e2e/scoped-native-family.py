@@ -10,14 +10,14 @@ import json
 import math
 import os
 from pathlib import Path
-import signal
-import socket
 import subprocess
 import sys
 import tempfile
 import time
-
 sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import live_helpers  # noqa: E402
+
 
 ROOT = Path(__file__).resolve().parents[2]
 os.chdir(ROOT)
@@ -25,7 +25,7 @@ export_images = sys.argv[1:] == ['--live-owned-export']
 if sys.argv[1:] != ['--live-owned-fixture'] and not export_images:
     print('LIVE NOT RUN: pass --live-owned-fixture or --live-owned-export for the disposable popup/sheet scenario.')
     raise SystemExit(0 if len(sys.argv) == 1 else 2)
-spec = importlib.util.spec_from_file_location('owned_helper', ROOT / 'native/privileged/fixture_v2_test.py')
+spec = importlib.util.spec_from_file_location('owned_helper', ROOT / 'native/privileged/fixture_test.py')
 owned = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(owned)
 APP = ROOT / 'target/app/Infinify.app/Contents/MacOS/Infinify'
@@ -43,10 +43,7 @@ runtime.mkdir(mode=0o700)
 sock = evidence / 's'
 host = app = before = None
 log = None
-def interrupted(number, _frame):
-    raise SystemExit(128 + number)
-for number in (signal.SIGTERM, signal.SIGHUP):
-    signal.signal(number, interrupted)
+live_helpers.exit_on_signals()
 
 owned.sky.SLSGetWindowBounds.argtypes = [C.c_int, C.c_uint32, C.POINTER(owned.Rect)]
 owned.sky.SLSGetWindowBounds.restype = C.c_int
@@ -61,28 +58,9 @@ def own(wid):
     return [rect.origin.x, rect.origin.y, rect.size.width, rect.size.height]
 
 def ask(request):
-    with socket.socket(socket.AF_UNIX) as connection:
-        connection.settimeout(4)
-        connection.connect(str(sock))
-        connection.sendall((json.dumps(request) + '\n').encode())
-        reply = b''
-        while not reply.endswith(b'\n'):
-            chunk = connection.recv(65536)
-            if not chunk:
-                break
-            reply += chunk
-    value = json.loads(reply)
-    assert 'Ok' in value, value
-    return value['Ok']
+    return live_helpers.ask(sock, request, timeout=4)
 
-def until(read, passed, seconds=8):
-    deadline = time.monotonic() + seconds
-    while True:
-        value = read()
-        if passed(value):
-            return value
-        assert time.monotonic() < deadline, value
-        time.sleep(.04)
+until = live_helpers.until
 
 def panel():
     rows = owned.cg.CGWindowListCopyWindowInfo(1, 0)
@@ -184,7 +162,7 @@ try:
             unchanged = {str(w): original(w) for w in wids}
             result = subprocess.run([str(APP), 'msg', '--socket', str(sock), 'screenshot', '--scale', '1', '-o', str(path), 'region', str(left + wide // 2), str(-top - high // 2), str(wide), str(high)], capture_output=True, text=True, timeout=6)
             assert result.returncode == 0 and path.is_file(), (result.stdout, result.stderr, (evidence / 'app.log').read_text())
-            png_spec = importlib.util.spec_from_file_location('png_bytes', ROOT / 'native/captured-windows/verify-png.py')
+            png_spec = importlib.util.spec_from_file_location('png_bytes', ROOT / 'tests/e2e/png_pixels.py')
             png = importlib.util.module_from_spec(png_spec)
             png_spec.loader.exec_module(png)
             pixels = png.pixels(path, (wide, high))

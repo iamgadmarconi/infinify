@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm src/layout/cluster.rs::resolve_cluster_shifts
-// and src/state/cluster_snapshot.rs::cluster_snapshot_for_resize_with_rects at
+// Adapted from https://github.com/malbiruk/driftwm
+// src/layout/cluster.rs::resolve_cluster_shifts and
+// src/state/cluster_snapshot.rs::cluster_snapshot_for_resize_with_rects at
 // 352333a8fa1b22171492d4b71a54102045c9a19d, GPL-3.0-or-later.
 // Uses fractional world points instead of i32 pixel rounding. Unsettled cascades
 // return an error rather than applying the upstream iteration-limit result.

@@ -138,7 +138,8 @@ static DWResizeIdentity reset(CGRect frame) {
     sizeReturnedAt=postSizeReadSeconds=sizeSettlesAfter=lastSizeObservationStarted=0;clampSize=NO;requestedSize=CGSizeZero;
     frontmost=YES;focusedWindow=42;focusChangesAfterMenu=fillStale=fillDisagree=fillTransientDisagree=fillUnchanged=fillAnimating=fillDrifting=menuTimeout=NO;fillError=fillReadError=kAXErrorSuccess;pressedAt=0;animationDelay=.18;pressedIdentifier=nil;fillFrame=CGRectMake(0,30,960,740);
     menuRoot=menuTree(@[@{@"role":(id)kAXMenuItemRole,@"AXIdentifier":@"_zoomFill:",@"AXEnabled":@YES}]);
-    DWResizeIdentity identity={0};check(dw_resize_identity(getpid(),42,&identity),@"mock identity enrolled");return identity;
+    DWResizeIdentity identity={.pid=getpid(),.window=42};
+    check(birth(identity.pid,&identity.birth_seconds,&identity.birth_microseconds)&&owner(identity,NULL),@"mock identity is owned");return identity;
 }
 int main(void) {@autoreleasepool {
     CGRect original=CGRectMake(183.5,211.25,400.5,300.25);
@@ -182,9 +183,6 @@ int main(void) {@autoreleasepool {
     check(restored.outcome==DWResizeApplied&&restored.observed&&restored.mutation_attempted&&restored.ax_error==kAXErrorCannotComplete,@"an initial size timeout survives later successful frame stages");
     identity=reset(CGRectMake(900,690,100,100));positionExhaustsDeadline=YES;restored=dw_resize_apply_frame(identity,original);
     check(restored.outcome==DWResizeTimedOut&&!restored.observed&&restored.mutation_attempted&&[writes isEqual:@[@"position"]],@"preparatory movement is counted even when no size setter can run");
-    identity=reset((CGRect){CGPointMake(0,30),original.size});
-    restored=dw_resize_restore((DWResizeSnapshot){.identity=identity,.original=original,.valid=true});
-    check(restored.observed&&restored.actual_ax.origin.y==30&&[writes isEqual:@[@"size"]],@"existing snapshot restore remains size only");
     identity=reset(CGRectMake(0,30,960,740));
     NSDictionary *who=@{@"pid":@(identity.pid),@"birth_sec":@(identity.birth_seconds),@"birth_usec":@(identity.birth_microseconds),@"wid":@(identity.window)};
     NSDictionary *effect=@{@"identity":who,@"requested":@{@"width":@(original.size.width),@"height":@(original.size.height)},@"native_origin":@{@"x":@(original.origin.x),@"y":@(original.origin.y)}};

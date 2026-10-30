@@ -5,7 +5,7 @@
 //  OPS: pos | move X Y | down X Y [B] | up X Y [B] | drag X Y STEPS DELAYMS [B] | click X Y [B] [N] | sleep MS
 //       probe LABEL (one json line per --wid) | wins LABEL [MINLAYER] (on-screen window list at or above that layer, one json line)
 //       sh COMMAND | flags cmd,opt,shift,ctrl | noflags | key CODE | state LABEL (runs `PATH msg state`) | watch TOTALMS EVERYMS LABEL
-// Derived from the guest probe written for lane interact (hidprobe); no third-party source.
+// No third-party source.
 #include <ApplicationServices/ApplicationServices.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <dlfcn.h>

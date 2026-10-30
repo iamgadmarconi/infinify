@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
+// Adapted from https://github.com/malbiruk/driftwm @
+// 352333a8fa1b22171492d4b71a54102045c9a19d:
 // src/state/viewport_animation.rs (drift_pan_on, launch_momentum_on,
 // MOMENTUM_LAUNCH_DELAY, cancel_animations_on, tick_scroll_momentum_on,
 // tick_edge_pan_on), src/state/edge_pan.rs (the request, shared_edges_at,
@@ -18,9 +19,9 @@
 // its swipe pan is `drift_pan` and `pan_end`, its pinch zoom is `pinch_begin`,
 // `pinch_update` and `pinch_end`, and its move arms the drag's edge pan.
 use super::navigation::{Anchor, ViewFlight};
+use super::view_actions::{core_point, world_point};
 use super::*;
-use driftwm_canvas::policy;
-use driftwm_core::canvas::MomentumState;
+use driftwm_core::canvas::{self, MomentumState};
 use serde::de::Error as _;
 use std::time::Duration;
 
@@ -385,7 +386,7 @@ impl Controller {
         time_ms: u32,
         source: Option<PanSource>,
     ) -> Result<(), Error> {
-        if !point_valid(screen_delta) {
+        if !screen_delta.valid() {
             return Err(Error::Invalid("invalid pan delta"));
         }
         self.user_moved_camera();
@@ -470,7 +471,7 @@ impl Controller {
         viewport.camera = viewport.camera + delta;
         let size = viewport.screen_bounds.size;
         let far = viewport.camera + Point::new(size.width, size.height) / viewport.zoom;
-        Ok((point_valid(viewport.camera) && point_valid(far)).then_some(viewport))
+        Ok((viewport.camera.valid() && far.valid()).then_some(viewport))
     }
     /// Upstream tick_scroll_momentum_on. Upstream's guard for a held PanGrab
     /// has no counterpart: a `pan_end` is taken for that grab's release, so
@@ -704,7 +705,7 @@ impl Controller {
         output: Option<OutputId>,
         screen: Point,
     ) -> Result<Value, Error> {
-        if !point_valid(screen) {
+        if !screen.valid() {
             return Err(Error::Invalid("invalid screen point"));
         }
         if output.is_some_and(|output| self.scene.output(output).is_none()) {
@@ -752,7 +753,7 @@ impl Controller {
         source: ZoomSource,
         phase: Option<PinchPhase>,
     ) -> Result<Value, Error> {
-        if !point_valid(anchor) || !delta.is_finite() {
+        if !anchor.valid() || !delta.is_finite() {
             return Err(Error::Invalid("invalid zoom anchor or delta"));
         }
         self.user_moved_camera();
@@ -779,7 +780,7 @@ impl Controller {
             .get(&output)
             .and_then(|flight| flight.zoom_target)
             .unwrap_or(viewport.zoom);
-        let target = (base * factor).clamp(self.min_zoom(usable)?, policy::MAX_ZOOM);
+        let target = (base * factor).clamp(self.min_zoom(usable)?, canvas::MAX_ZOOM);
         if delta == 0.0 || target == base || target.is_nan() {
             return Ok(Value::Null);
         }
@@ -788,12 +789,14 @@ impl Controller {
             canvas: viewport.camera + screen / viewport.zoom,
             screen,
         };
-        let camera = policy::zoom_anchor_camera(anchor.canvas, screen, target);
+        let camera = world_point(canvas::zoom_anchor_camera(
+            core_point(anchor.canvas),
+            core_point(screen),
+            target,
+        ));
         // As arm_view: a destination no frame could apply is never armed.
         let size = viewport.screen_bounds.size;
-        if !point_valid(camera)
-            || !point_valid(camera + Point::new(size.width, size.height) / target)
-        {
+        if !camera.valid() || !(camera + Point::new(size.width, size.height) / target).valid() {
             return Err(Error::Invalid("navigation target out of bounds"));
         }
         self.next_navigation = self
@@ -845,7 +848,7 @@ impl Controller {
             .ok_or(Error::Invalid("unknown output"))?
             .zoom;
         let scaled = 1.0 + pinch.scale * self.config().zoom_trackpad_speed;
-        let zoom = (pinch.initial_zoom * scaled).clamp(pinch.min_zoom, policy::MAX_ZOOM);
+        let zoom = (pinch.initial_zoom * scaled).clamp(pinch.min_zoom, canvas::MAX_ZOOM);
         if zoom == current {
             return Ok(false);
         }
@@ -862,7 +865,7 @@ impl Controller {
             .output(output)
             .ok_or(Error::Invalid("unknown output"))?
             .zoom;
-        let snapped = policy::snap_zoom(current);
+        let snapped = canvas::snap_zoom(current);
         if snapped == current {
             return Ok(false);
         }

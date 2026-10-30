@@ -17,13 +17,14 @@
 #
 # It runs with or without Screen Recording access; without it the tiles have no picture and everything here is the same.
 # Everything acted on is a process this script started, as in tests/e2e/scoped-sizing.sh, whose conventions these are: the
-# clicks take the foreground. Run it while nothing else needs the keyboard.
+# clicks take the foreground. Run it while nothing else needs the keyboard. Without --live-owned-fixture it starts nothing.
 #
 # Exit status: 0 everything was checked and held; 1 something failed; 2 usage; 3 nothing failed and nothing was checked,
 # because Stage Manager is on or another Infinify is running (NOT RUN).
 set -eu
 cd "$(dirname "$0")/../.."
-[ "$#" -eq 0 ] || { echo "Usage: $0" >&2; exit 2; }
+[ "$#" -ne 0 ] || { echo 'LIVE NOT RUN: pass --live-owned-fixture to validate the pointer resize on disposable windows'; exit 0; }
+[ "$#" -eq 1 ] && [ "$1" = --live-owned-fixture ] || { echo "Usage: $0 [--live-owned-fixture]" >&2; exit 2; }
 root=$PWD
 [ "$(defaults read com.apple.WindowManager GloballyEnabled 2>/dev/null || echo 0)" != 1 ] || { echo 'NOT RUN: Stage Manager is on (com.apple.WindowManager GloballyEnabled is 1); nothing was started and nothing was checked. Run it with Stage Manager off.'; exit 3; }
 app=$root/target/app/Infinify.app/Contents/MacOS/Infinify

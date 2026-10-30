@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // New implementation. The caller requirement has the form Sunlight uses for its launch daemon
-// (third_party/sunlight/LiveWindows/helper.m lines 462-478, `daemonMain`: anchor apple generic, the app's
+// (https://github.com/spacefarm-digital/sunlight, commit afeea74b18e70ca49bf462d6fe462cf65deb2b32, LiveWindows/helper.m
+// lines 462-478, `daemonMain`: anchor apple generic, the app's
 // identifier, the team's certificate subject OU); the rest is Infinify's own: the argument shapes are the two
 // native-desktop-launcher.sh builds for loader-arm64e --inject-dock (less the payload, which the daemon supplies), the
 // hardened-runtime caller rules, the staging of the payload and the digests of the loader and payload the build embeds in

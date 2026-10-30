@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// DriftWM (malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d) is handed
+// DriftWM (repository https://github.com/malbiruk/driftwm, commit 352333a8fa1b22171492d4b71a54102045c9a19d) is handed
 // ready-made swipe, pinch and hold gestures by libinput; its src/input/gestures/
 // {swipe,pinch,hold}.rs dispatch them. macOS hands a view raw touches, so this file
 // stands where libinput stands. Taken from upstream itself: DOUBLE_TAP_WINDOW_MS
@@ -8,8 +8,9 @@
 // doubletap-swipe. macOS has no tap-to-click middle button, so the tap is found here.
 //
 // One rule is not libinput's and is not this file's own: the reading of a thumb and three fingers that spread or close (Show Desktop and Launchpad
-// on a Mac) from every finger's distance from their common centre, translated from spacefarm-digital/sunlight afeea74b18e70ca49bf462d6fe462cf65deb2b32
-// (MIT, Copyright (c) 2026 spacefarm), third_party/sunlight/Sources/Canvas/TrackpadPan.swift (the same file at that commit):
+// on a Mac) from every finger's distance from their common centre, translated from Sunlight, repository https://github.com/spacefarm-digital/sunlight, commit
+// afeea74b18e70ca49bf462d6fe462cf65deb2b32 (MIT, Copyright (c) 2026 spacefarm; notice in SUNLIGHT-NOTICE.txt), upstream path Sources/Canvas/TrackpadPan.swift;
+// the line numbers are those of that file at that commit:
 //   TrackpadPan.frame, 183-189 ..................... `shape:travel:` computes the mean distance of the fingers from their centroid (`spread`, there in trackpad
 //                                                    widths, here in millimetres) and how far the centroid has moved
 //   TrackpadRecognizer.anchorSpread, 266-267, 315 .. the fingers' own ix, iy, taken when recognition starts (`pair:`)

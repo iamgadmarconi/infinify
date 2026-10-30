@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
+// Adapted from DriftWM, repository https://github.com/malbiruk/driftwm, commit 352333a8fa1b22171492d4b71a54102045c9a19d:
 // src/state/viewport_animation.rs (MOMENTUM_LAUNCH_DELAY, schedule_momentum_timer,
 // launch_momentum_on) and src/input/pointer.rs (the finger stop of on_pointer_axis).
 // Timing only: the momentum itself is the controller's, launched by its pan_end.

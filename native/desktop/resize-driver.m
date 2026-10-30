@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#import "ax-lookup.h"
 #import "resize-driver.h"
 #import "../resize/resize.h"
+#import "native-geometry-json.h"
 #include <time.h>
 #include <math.h>
-static double monotonic(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec+t.tv_nsec/1e9;}
+static double monotonic(void){return DWMonotonicSeconds();}
 @implementation DWNativeFillRebase
 @end
 // This lease has no dependency on the main run loop or the serial AX worker.
@@ -52,7 +54,6 @@ static id onMain(double deadline,DWNativeUpdateLease *lease,id (^work)(void)){
     double left=deadline-monotonic();if(left<=0||dispatch_semaphore_wait(answered,dispatch_time(DISPATCH_TIME_NOW,(int64_t)(left*NSEC_PER_SEC))))return nil;
     return value;
 }
-static NSDictionary *rect(CGRect r){return @{ @"origin":@{@"x":@(r.origin.x),@"y":@(r.origin.y)},@"size":@{@"width":@(r.size.width),@"height":@(r.size.height)}};}
 static DWResizeIdentity identity(NSDictionary *i){return (DWResizeIdentity){[i[@"pid"]intValue],[i[@"birth_sec"]unsignedLongLongValue],[i[@"birth_usec"]unsignedLongLongValue],[i[@"wid"]unsignedIntValue]};}
 static DWResizeResult withMutation(DWResizeResult result,DWResizeResult previous){
     result.mutation_attempted|=previous.mutation_attempted;result.moved|=previous.moved;
@@ -255,7 +256,7 @@ typedef NS_ENUM(NSInteger,DWResizeAdmission) {
         }
         else r=(DWResizeResult){.outcome=DWResizeInvalidRequest,.requested=size};
     }
-    NSDictionary *result=@{@"outcome":@(dw_resize_outcome_name(r.outcome)),@"ax_error":@(r.ax_error),@"mutation_attempted":r.mutation_attempted?@YES:@NO,@"observed":r.observed?@YES:@NO,@"requested":@{@"width":@(r.requested.width),@"height":@(r.requested.height)},@"actual_ax":rect(r.actual_ax),@"actual_cg":rect(r.actual_cg)};
+    NSDictionary *result=@{@"outcome":@(dw_resize_outcome_name(r.outcome)),@"ax_error":@(r.ax_error),@"mutation_attempted":r.mutation_attempted?@YES:@NO,@"observed":r.observed?@YES:@NO,@"requested":@{@"width":@(r.requested.width),@"height":@(r.requested.height)},@"actual_ax":DWRectJSON(r.actual_ax),@"actual_cg":DWRectJSON(r.actual_cg)};
     // The controller's result names its fields exactly, and where the window sits is in actual_ax: that a native position write
     // made room for the size first is for the trace alone.
     if(self.didPerform){NSMutableDictionary *traced=[result mutableCopy];traced[@"moved"]=r.moved?@YES:@NO;traced[@"method"]=method;self.didPerform(e,traced);}

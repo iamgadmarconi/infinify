@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
+// Adapted from DriftWM, repository https://github.com/malbiruk/driftwm, commit 352333a8fa1b22171492d4b71a54102045c9a19d:
 // src/input/mod.rs (dispatch_absolute_motion and on_pointer_motion_relative: every
 // real pointer motion is delivered to the surface under it and runs
 // maybe_hover_focus), src/input/pointer.rs (try_pick_button, maybe_promote_pick and
@@ -11,12 +11,12 @@
 // controller's (crates/desktop/src/pointer_policy.rs). Upstream is handed every
 // motion by its backend; a panel that is never key gets them from a tracking area.
 #import "pointer-hover.h"
+#import "typed-value.h"
 #import <QuartzCore/QuartzCore.h>
 
-static id typed(id value,Class type) { return [value isKindOfClass:type]?value:nil; }
 static NSDictionary *pointJSON(CGPoint p) { return @{@"x":@(p.x),@"y":@(p.y)}; }
 BOOL DWPickOutput(NSDictionary *snapshot,NSNumber *output) {
-    for(id listed in typed(snapshot[@"outputs"],NSArray.class)){NSDictionary *entry=typed(listed,NSDictionary.class);if([entry[@"id"]isEqual:output]&&[entry[@"pick"]isEqual:@YES])return YES;}
+    for(id listed in DWTyped(snapshot[@"outputs"],NSArray.class)){NSDictionary *entry=DWTyped(listed,NSDictionary.class);if([entry[@"id"]isEqual:output]&&[entry[@"pick"]isEqual:@YES])return YES;}
     return NO;
 }
 NSDictionary *DWPickHit(NSDictionary *hit,NSDictionary *snapshot,NSNumber *output) {
@@ -99,10 +99,10 @@ typedef NS_ENUM(NSInteger,DWPress) {
     // Upstream's order: the motion goes to the window under it, whoever holds the keyboard, then focus follows.
     if(self.forwarding&&[reply[@"forward"]isEqual:@YES])[host pointerDeliver:motion at:p output:output];
     // Sloppy focus moved: only then is there an effect to perform and anything to draw.
-    if([reply[@"dirty"]isEqual:@YES])[host pointerFocused:typed(reply[@"effect"],NSDictionary.class)];
+    if([reply[@"dirty"]isEqual:@YES])[host pointerFocused:DWTyped(reply[@"effect"],NSDictionary.class)];
 }
 - (BOOL)pickPress:(NSDictionary *)hit button:(NSInteger)button claimed:(BOOL)claimed at:(CGPoint)screen output:(NSNumber *)output {
-    NSNumber *window=typed(hit[@"window"],NSNumber.class);
+    NSNumber *window=DWTyped(hit[@"window"],NSNumber.class);
     if(claimed||!window||!output||![hit[@"pick"]isEqual:@YES])return NO;
     // try_pick_button: any button is swallowed and focuses and raises its target; only the left one arms the pick.
     _press=button?DWPressSpent:DWPressPick;_window=window;_output=output;_start=screen;
@@ -126,7 +126,7 @@ typedef NS_ENUM(NSInteger,DWPress) {
     _press=DWPressSpent;
     // begin_drag raises and focuses its window, as the press did, and the focus request in its reply takes the place of the press's:
     // it is carried out the same way, or the controller would wait on a request nobody answers.
-    id reply=[host pointerCommand:@{@"op":@"begin_drag",@"window":_window,@"output":_output,@"group":@NO} quiet:NO];if(typed(reply,NSDictionary.class))[host pointerApply:reply];
+    id reply=[host pointerCommand:@{@"op":@"begin_drag",@"window":_window,@"output":_output,@"group":@NO} quiet:NO];if(DWTyped(reply,NSDictionary.class))[host pointerApply:reply];
     return reply!=nil;
 }
 - (void)pressReleased:(CGPoint)screen {

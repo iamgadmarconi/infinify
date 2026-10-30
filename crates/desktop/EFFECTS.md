@@ -10,7 +10,8 @@ into frames is the compositor's host protocol,
 [native/desktop/COMPOSITOR-NOTES.md](../../native/desktop/COMPOSITOR-NOTES.md),
 sections 17 to 23; this file is the controller's half.
 
-Adapted from malbiruk/driftwm at `352333a8fa1b22171492d4b71a54102045c9a19d`:
+Adapted from <https://github.com/malbiruk/driftwm> at
+`352333a8fa1b22171492d4b71a54102045c9a19d`:
 `src/state/errors.rs` (`ErrorSource`, `summarize_config_errors`, `set_error`
 and `clear_error`), the calls of those two in `src/state/reload.rs` and
 `src/state/init.rs`, and what decides which window events are animated: the
@@ -23,21 +24,20 @@ pushes and `reveal_deferred_adopt` in `src/state/suspended.rs`, and
 blur are not adapted: they are `driftwm-core`'s `EffectsConfig`,
 `parse_effects_config` and `effective_blur`, upstream's own code.
 
-Everything here is additive. `ABI_VERSION`, `SAVE_VERSION`, the save file and
-every command shape are unchanged, and there is no new command.
+This contract has no command of its own; three keys carry it:
 
-| Addition | Where |
+| Key | Where |
 | --- | --- |
-| `effects` | a new key of the snapshot's `render` block |
-| `errors` | a new key of the snapshot's `render` block |
-| `lifecycle_events` | a new key of the snapshot |
+| `effects` | a key of the snapshot's `render` block |
+| `errors` | a key of the snapshot's `render` block |
+| `lifecycle_events` | a key of the snapshot |
 
-Two existing values changed what they say:
+Two values to note:
 
-- `decoration.blur` is false for every window without a source. It was
-  `[decorations] blur` for a stand-in, which upstream never frosts.
+- `decoration.blur` is false for every window without a source: a stand-in is
+  never frosted by `[decorations] blur`, as upstream never frosts one.
 - `render.revision` also moves when `render.errors` changes, so a config file
-  that is refused now spends one ([Errors](#errors)).
+  that is refused spends one ([Errors](#errors)).
 
 ## `render.effects`
 
@@ -62,7 +62,7 @@ value, an infinite `blur_strength`, because JSON has no number for it:
 A value of the wrong type (`blur_radius = -1`, a string) and a key upstream
 does not have are parse failures: the whole file is refused and the table in
 force stays ([CONFIG.md](CONFIG.md)). `animate_blur`, which upstream retired,
-is accepted and warned about and changes nothing.
+is such a key.
 
 A change spends a render revision as every other drawn table does
 ([RENDER.md](RENDER.md#render)): each accepted reload spends one whatever it
@@ -404,6 +404,5 @@ renderer offscreen, which drew the bar with these messages, the frost for
 `decoration.blur` and each of the five events once; and the app itself was
 driven through a failing and a mended config and two dismissals over `msg`,
 where none of the three keys can be read back and nothing was looked at.
-[What was run for effects](../../native/desktop/README.md#what-was-run-for-effects)
-has both, and what neither showed: the app's panel on a display and a captured
-window.
+The [shell notes](../../native/desktop/README.md) have both, and what neither
+showed: the app's panel on a display and a captured window.

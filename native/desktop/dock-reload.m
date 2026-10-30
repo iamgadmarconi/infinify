@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT AND GPL-3.0-or-later
-// Translated from spacefarm-digital/sunlight afeea74b18e70ca49bf462d6fe462cf65deb2b32 (MIT, Copyright (c) 2026 spacefarm;
-// notice in SUNLIGHT-NOTICE.txt), third_party/sunlight/Sources/Canvas/RealWindows/AdditionReloader.swift, function by function:
+// Translated from Sunlight, repository https://github.com/spacefarm-digital/sunlight, commit afeea74b18e70ca49bf462d6fe462cf65deb2b32
+// (MIT, Copyright (c) 2026 spacefarm; notice in SUNLIGHT-NOTICE.txt), upstream path Sources/Canvas/RealWindows/AdditionReloader.swift,
+// function by function (the line numbers are those of that file at that commit):
 //   lines 38-42   dockBundleID, dockSettle, answerTimeout   -> kDockBundleID, dockSettle, kAnswerTimeout
 //   lines 44-48   onDockRestarted, onPaused, crashGuard     -> the blocks and `guard`
 //   lines 50-56   pausedKey, pausedAfterDockCrashes         -> DWDockReloadPaused/-Pause (a file the launcher reads too,
@@ -24,9 +25,9 @@
 // once more after 10 s, still at most kQuietTriesPerDock per Dock; the guard counts the launcher's own load before the
 // app started, so that a Dock killed soon after login is a strike.
 #import "dock-reload.h"
+#import "owner-file.h"
 #import <AppKit/AppKit.h>
 #include <libproc.h>
-#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -47,39 +48,22 @@ BOOL DWDockCrashGuardDockRestarted(DWDockCrashGuard *guard,NSTimeInterval at) {
 }
 void DWDockCrashGuardReset(DWDockCrashGuard *guard) { guard->strikes=0; }
 
-NSString *DWDockReloadStateDirectory(void) { return [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/Infinify/native-desktop"]; }
-static BOOL privateFile(NSString *path) {
-    struct stat st;
-    return lstat(path.fileSystemRepresentation,&st)==0&&S_ISREG(st.st_mode)&&st.st_uid==getuid()&&(st.st_mode&07777)==0600;
-}
+NSString *DWDockReloadStateDirectory(void) { return [DWSupportDirectory() stringByAppendingPathComponent:@"native-desktop"]; }
 BOOL DWDockReloadPaused(NSString *directory,NSString *payloadSHA256) {
     NSString *path=[directory stringByAppendingPathComponent:kPauseFile];
     struct stat st;
     if(lstat(path.fileSystemRepresentation,&st))return NO;
     // Present but not a pause this user made: it cannot be told from one, so it holds loading back until the owner loads by hand.
-    if(!privateFile(path))return YES;
-    NSDictionary *record=[NSDictionary dictionaryWithContentsOfFile:path];
-    if(![record isKindOfClass:NSDictionary.class]||![record[@"version"] isEqual:@1]||![record[@"payload_sha256"] isKindOfClass:NSString.class])return YES;
+    NSDictionary *record=DWOwnerFileReadPlist(path);
+    if(!record||![record[@"version"] isEqual:@1]||![record[@"payload_sha256"] isKindOfClass:NSString.class])return YES;
     return [record[@"payload_sha256"] isEqualToString:payloadSHA256];
 }
 BOOL DWDockReloadPause(NSString *directory,NSString *payloadSHA256,NSString *reason) {
     if(payloadSHA256.length!=64)return NO;
-    NSDictionary *record=@{@"version":@1,@"payload_sha256":payloadSHA256,@"paused_at":[NSDate date],@"reason":reason?:@""};
-    NSData *data=[NSPropertyListSerialization dataWithPropertyList:record format:NSPropertyListXMLFormat_v1_0 options:0 error:nil];
-    NSString *path=[directory stringByAppendingPathComponent:kPauseFile],*staged=[path stringByAppendingFormat:@".%d",getpid()];
-    int fd=open(staged.fileSystemRepresentation,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600);
-    if(fd<0)return NO;
-    BOOL ok=data&&write(fd,data.bytes,data.length)==(ssize_t)data.length&&fsync(fd)==0;
-    close(fd);
-    if(!ok||rename(staged.fileSystemRepresentation,path.fileSystemRepresentation)){unlink(staged.fileSystemRepresentation);return NO;}
-    return YES;
+    return DWOwnerFileWritePlist([directory stringByAppendingPathComponent:kPauseFile],
+        @{@"version":@1,@"payload_sha256":payloadSHA256,@"paused_at":[NSDate date],@"reason":reason?:@""});
 }
-BOOL DWDockReloadResume(NSString *directory) {
-    NSString *path=[directory stringByAppendingPathComponent:kPauseFile];
-    struct stat st;
-    if(lstat(path.fileSystemRepresentation,&st))return NO;
-    return unlink(path.fileSystemRepresentation)==0;
-}
+BOOL DWDockReloadResume(NSString *directory) { return DWOwnerFileRemove([directory stringByAppendingPathComponent:kPauseFile]); }
 
 BOOL DWDockReloadParseEndpoint(NSString *output,NSString *__autoreleasing *runtime,NSString *__autoreleasing *nonceFile) {
     NSString *line=nil;

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from koekeishiya/yabai dd845723416f5fe92af49fad5ebab00369e07edd (MIT, Copyright (c) 2019 Åsmund Vikane; the licence
-// text is native/families/YABAI-NOTICE.txt): src/workspace.m (the NSWorkspace notifications an application is followed by),
+// Adapted from yabai (https://github.com/asmvik/yabai) dd845723416f5fe92af49fad5ebab00369e07edd (MIT, Copyright (c) 2019 Åsmund
+// Vikane; the licence text is native/desktop/YABAI-NOTICE.txt): src/workspace.m (the NSWorkspace notifications an application is followed by),
 // src/application.h and src/application.c (the application notification table, application_observe and application_unobserve:
 // one AXObserver per application on the main run loop, and ax_retry for an application that does not answer yet), src/window.h
 // and src/window.c (the window notification table, window_observe and window_unobserve: destroyed, miniaturized and
@@ -10,8 +10,10 @@
 // windows are enumerated). New implementation: yabai keeps a model of every window and acts on it from its own event loop; this
 // keeps none. An event only says which application or window to look at now, and the looking is the pass the poll makes.
 // Public Accessibility and NSWorkspace API, and _AXUIElementGetWindow as window-manager.m uses it. SkyLight too, for the window
-// server's connection notifications 1325 and 1326 and the owner lookup they need, as Sunlight takes them (window-events.m): the window
-// server says a window was added to a Space within milliseconds, where the application's Accessibility notification can be late.
+// server's connection notifications 1325 and 1326 and the owner lookup they need, as Sunlight takes them (window-events.m):
+// https://github.com/spacefarm-digital/sunlight afeea74b18e70ca49bf462d6fe462cf65deb2b32 (MIT; licence text SUNLIGHT-NOTICE.txt),
+// Sources/Canvas/RealWindows/WindowServerEvents.swift. The window server says a window was added to a Space within milliseconds,
+// where the application's Accessibility notification can be late.
 #import <AppKit/AppKit.h>
 // What the observers report. Every call arrives on the main thread, from the main run loop, never from inside another call of
 // this protocol. A report is a hint that something may have changed, never the change itself: the sink reads the window list

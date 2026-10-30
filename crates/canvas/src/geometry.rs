@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Coordinate transforms adapted from malbiruk/driftwm src/canvas.rs at 352333a8fa1b22171492d4b71a54102045c9a19d.
+// Coordinate transforms adapted from https://github.com/malbiruk/driftwm
+// src/canvas.rs at 352333a8fa1b22171492d4b71a54102045c9a19d.
 // Native Rust geometry replaces Smithay's platform-specific geometry types.
 use serde::{Deserialize, Serialize};
 
@@ -17,7 +18,9 @@ impl Point {
     pub const fn new(x: f64, y: f64) -> Self {
         Self { x, y }
     }
-    pub(crate) fn valid(self) -> bool {
+    /// Whether both coordinates are finite and within 1e12 of the origin, the
+    /// bound every world coordinate keeps so sums and products stay exact enough.
+    pub fn valid(self) -> bool {
         self.x.is_finite() && self.y.is_finite() && self.x.abs() <= 1e12 && self.y.abs() <= 1e12
     }
 }
@@ -110,7 +113,9 @@ impl Rect {
             ..self
         }
     }
-    pub(crate) fn valid(self) -> bool {
+    /// Whether the origin and far corner are in range, and the width and
+    /// height are finite and positive.
+    pub fn valid(self) -> bool {
         self.origin.valid()
             && Point::new(self.right(), self.bottom()).valid()
             && self.size.width.is_finite()

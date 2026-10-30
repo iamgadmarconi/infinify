@@ -1,10 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Ported from malbiruk/driftwm tests/window_rules_test.rs at
-// df3de27b26c7998e8a460cffd8a4925cbed3a322 (GPL-3.0-or-later).
-// Changes from upstream: crate paths only — `driftwm::config` reads
-// `driftwm_core::config` and `smithay::` reads `driftwm_core::platform::`.
-// rustfmt re-wrapped the four `let combo = …Keysym::from(…KEY_q);` statements
-// that the longer paths pushed past 100 columns. Nothing else.
+//
+// Ported from DriftWM (GPL-3.0-or-later)
+//   repository: https://github.com/malbiruk/driftwm
+//   commit:     df3de27b26c7998e8a460cffd8a4925cbed3a322
+//   path:       tests/window_rules_test.rs
+//   sha-256:    20219f894820fab07bc07a3e40f9fce6e367c1112f659d3e4042c5d06a38f684 (upstream file)
+// Changes from upstream: this header; crate paths: `driftwm::config` reads
+// `driftwm_core::config` and `smithay::` reads `driftwm_core::platform::`; rustfmt
+// re-wrapped the four `let combo = …Keysym::from(…KEY_q);` statements that the
+// longer paths pushed past 100 columns; the three `window_rule_has_criteria_*`
+// tests are removed. Nothing else.
+// See PORT.md in the crate root for the full change log.
+
 use driftwm_core::config::{
     AppliedWindowRule, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, Config, DecorationConfig, DecorationMode,
     Modifiers, MouseBinding, MouseTrigger, PassKeys, PassMouse, Pattern, WindowRule,
@@ -104,7 +111,7 @@ fn pattern_regex_matches_via_regex_rules() {
     assert!(!p.matches("foobar"));
 }
 
-// ── WindowRule::matches / has_criteria ───────────────────────────────────────
+// ── WindowRule::matches ───────────────────────────────────────
 
 #[test]
 fn window_rule_matches_both_app_id_and_title_must_both_match() {
@@ -131,24 +138,6 @@ fn window_rule_matches_only_title_app_id_is_wildcard() {
     let rule = bare_rule(None, Some("*term*"));
     assert!(rule.matches("any-app", "terminal"));
     assert!(!rule.matches("any-app", "browser"));
-}
-
-#[test]
-fn window_rule_has_criteria_false_when_both_none() {
-    let rule = bare_rule(None, None);
-    assert!(!rule.has_criteria());
-}
-
-#[test]
-fn window_rule_has_criteria_true_when_app_id_set() {
-    let rule = bare_rule(Some("foot"), None);
-    assert!(rule.has_criteria());
-}
-
-#[test]
-fn window_rule_has_criteria_true_when_title_set() {
-    let rule = bare_rule(None, Some("*"));
-    assert!(rule.has_criteria());
 }
 
 // ── PassKeys::merge_from ─────────────────────────────────────────────────────

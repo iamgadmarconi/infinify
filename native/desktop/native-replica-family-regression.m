@@ -58,9 +58,6 @@ BOOL DWNativeWindowBelongsToRoot(NSDictionary *member,NSDictionary *root) {
     if(captureCallbacks)return [member[@"wid"]isEqual:@43]&&[root[@"wid"]isEqual:@42]&&[member[@"pid"]isEqual:root[@"pid"]];
     (void)member;(void)root;check(NO,@"headless recovery must not read native parentage");return NO;
 }
-BOOL DWNativeWindowIsCaptureControl(NSDictionary *member,NSDictionary *root,CGRect rootBounds,CGRect memberBounds) {
-    (void)member;(void)root;(void)rootBounds;(void)memberBounds;return NO;
-}
 bool DWNativeBounds(uint32_t wid,CGRect *out) {
     if(captureCallbacks){check(wid==42||wid==43,@"capture validates only declared root/child bounds");*out=wid==42?CGRectMake(100,100,320,232):CGRectMake(106,106,66,20);return true;}
     (void)wid;(void)out;check(NO,@"headless recovery must not read native bounds");return false;
@@ -108,7 +105,7 @@ static DWNativeReplicaFamilies *provider(void) {
 static DWReplicaMember *attemptFor(DWNativeReplicaFamilies *owner,NSNumber *logical,uint32_t wid,NSUInteger *starting) {
     DWReplicaRecovery *record=[owner admitRecovery:identity(wid) root:owner.roots[logical] bounds:childBounds() starting:starting];if(!record)return nil;
     DWReplicaMember *member=[DWReplicaMember new];member.owner=owner;member.root=owner.roots[logical];member.identity=identity(wid);
-    member.bounds=childBounds();member.rootBounds=familyRect(member.root[@"native_bounds"]);member.lastVisible=now;member.image=[DWCanvasAttachment new];member.image.key=[@(wid)stringValue];
+    member.bounds=childBounds();member.rootBounds=DWRectFromJSON(member.root[@"native_bounds"]);member.lastVisible=now;member.image=[DWCanvasAttachment new];member.image.key=[@(wid)stringValue];
     member.stream=(SCStream *)[RecoveryStream new];record.attempt=member;[owner.coldAttempts addObject:member];
     owner.members[logical]=[(owner.members[logical]?:@[]) arrayByAddingObject:member];return member;
 }

@@ -19,7 +19,6 @@ typedef BOOL (^DWNativePointerPost)(CGEventRef event,NSDictionary *target,CGPoin
 // physical buttons are consumed until their real release after cancellation.
 @interface DWNativePointerGrab : NSObject
 @property(nonatomic,readonly) NSDictionary *target;
-@property(nonatomic,readonly) uint32_t buttonMask; // physically held supported buttons, including suppressed tails
 @property(nonatomic,readonly) BOOL active;         // an admitted native recipient remains
 @property(nonatomic,readonly) BOOL suppressed;     // physical tails remain after cancellation
 // Admission is separate from posting: call ONLY AFTER an initial mouse-down

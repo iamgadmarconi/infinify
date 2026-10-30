@@ -118,9 +118,9 @@ typedef NS_ENUM(NSUInteger,DWWindowDiscoveryMode) {
 // Already offered WIDs, for excluding redundant native candidate getter reads.
 // This is discovery bookkeeping and never native ownership/identity authority.
 @property (copy,readonly) NSSet<NSNumber *> *offeredWindows;
-// A disposable native benchmark may put its owned windows above the canvas.
+// A disposable native test panel may put its owned windows above the canvas.
 // Default 0; an extra level is considered only with an explicit process scope.
-@property NSInteger benchmarkWindowLevel;
+@property NSInteger testPanelWindowLevel;
 // Native presentation only: discover application utility panels. A positive
 // floating level alone is insufficient; AX must report a floating-window role.
 @property BOOL nativePanels;

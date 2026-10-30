@@ -1,15 +1,14 @@
 # Actions, bookmarks and IPC, ABI 1
 
-Four additive ABI 1 commands make the controller scriptable in DriftWM's own
+Four ABI 1 commands make the controller scriptable in DriftWM's own
 words: `action` runs one upstream action string, `ipc` answers one upstream IPC
 request, `state_event` produces the lines of upstream's
 [event stream](#event-stream), and `screenshot_result` completes the one
 request the controller cannot answer by itself
 ([RENDER.md](RENDER.md#screenshots)). The exported `driftwm_desktop_msg` is the
-matching `msg` client. All five are adapted from malbiruk/driftwm at
+matching `msg` client. All five are adapted from <https://github.com/malbiruk/driftwm> at
 `352333a8fa1b22171492d4b71a54102045c9a19d` (`src/config/{types,parse}.rs`,
-`src/input/actions.rs`, `src/ipc/{protocol,mod,client}.rs`). Existing commands,
-their shapes, `ABI_VERSION` and `SAVE_VERSION` are unchanged.
+`src/input/actions.rs`, `src/ipc/{protocol,mod,client}.rs`).
 
 The controller owns no socket. The shell reads one JSON line from a client,
 passes it as `request`, performs what the reply asks of it, and writes `reply`
@@ -116,10 +115,10 @@ kept apart and checked in this order:
    with or without an output.
 3. It needs an output and `output` is `null`: `no active output`.
 
-`go-to X Y` is not a canvas-point jump. Upstream removed it before the pinned
-commit and its parser answers
-`go-to was removed — save the point as a bookmark and use go-to-bookmark <name>`,
-which is what this one answers too. `resize-window` and `resize-window-snapped`
+There is no canvas-point jump: upstream removed `go-to X Y` before the pinned
+commit, and here it is an unknown action like any other (`unknown action:
+go-to`). Save the point as a bookmark and use `go-to-bookmark <name>`.
+`resize-window` and `resize-window-snapped`
 keep upstream's "drag action" message. An unknown output rejects, and every
 action that arms a flight rejects during an active drag or resize gesture,
 exactly as the direct commands do.
@@ -147,9 +146,8 @@ they stop their own output's momentum.
 ## Bookmarks
 
 A bookmark is a name and a canvas point `[x, y]`: upstream's user-facing
-convention, a **center** point with **Y up**. It never stores zoom. The map is
-separate from `driftwm_canvas::Scene`'s own camera-and-zoom bookmarks, which
-nothing here reads or writes. Names are unrestricted strings, as upstream's are.
+convention, a **center** point with **Y up**. It never stores zoom. Names are
+unrestricted strings, as upstream's are.
 Neither their length nor their number is bounded, so enough of them push the
 save past its 32 MiB limit, and every save then fails until some are deleted.
 
@@ -176,17 +174,15 @@ save past its 32 MiB limit, and every save then fails until some are deleted.
   `[navigation.bookmarks]`, and `session.restore_bookmarks` decides whether a
   saved map comes back and whether runtime edits are written. What follows
   describes a controller no config was loaded into.
-- The map is saved under the top-level `bookmarks` key of the save file. The key
-  is additive under save schema 1: a file without it loads with no bookmarks,
-  and it is omitted while the map is empty. A build from before bookmarks
-  rejects a file that has the key, so only a save with no bookmarks stays
-  readable by it.
+- The map is saved under the top-level `bookmarks` key of the save file, which
+  is always written and holds an empty map while there are no bookmarks. A file
+  without the key is refused whole.
 - Numbers are parsed exactly (`serde_json`'s `float_roundtrip` feature, enabled
   in this crate's manifest): the coordinate a request sets is the one stored,
   saved and read back after a reload. Without it a fractional coordinate could
   land one unit in the last place away, which the first live run showed.
 - Each output has an **active bookmark**: the visible bookmark nearest its
-  usable center, from `driftwm_canvas::policy::active_bookmark` with upstream's
+  usable center, from `driftwm_core::canvas::active_bookmark` with upstream's
   hysteresis for the incumbent. Upstream re-evaluates it once per rendered
   frame; here it is re-evaluated after every accepted command, `tick_navigation`
   included, so the incumbent follows the poses the camera actually passed
@@ -243,7 +239,7 @@ Upstream speaks center points with Y up; the controller's world is top-left
 with Y down. Two centers are in play and they are not interchangeable:
 
 - `Camera`, `StateInfo.camera` and `OutputInfo.camera` are the center of the
-  **whole output** (`policy::viewport_center` / `camera_for_center` over the
+  **whole output** (`driftwm_core::canvas::viewport_center` / `camera_for_center` over the
   `screen_bounds` size), as upstream's `camera_center` is.
 - Bookmarks, zoom anchoring and the focus visibility test use the **usable
   rectangle**, as upstream's `usable_center_screen` and usable area are.
@@ -417,7 +413,7 @@ initialisation.
 infinify msg [--json] [--socket PATH] <command> [arguments]
 ```
 
-Commands and arguments are upstream's (`docs/cli.md`): `state`, `subscribe`,
+Commands and arguments are upstream's ([`docs/cli.md`](https://github.com/malbiruk/driftwm/blob/df3de27b26c7998e8a460cffd8a4925cbed3a322/docs/cli.md)): `state`, `subscribe`,
 `focus [APP_ID] [--id ID]`, `move [X] [Y] [--id ID]`,
 `resize [WIDTH] [HEIGHT] [--id ID]`, `close`, `suspend` and `relaunch`
 `[APP_ID] [--id ID]`, `opacity [VALUE] [--id ID]`, `pin [on|off] [--id ID]`,
@@ -499,27 +495,28 @@ is its spec, joined by single spaces. Parsing is by hand; there is no clap.
 
 ## v0.21.0 hardening
 
-DriftWM v0.21.0 (`df3de27b26c7998e8a460cffd8a4925cbed3a322`, `third_party/driftwm`
-in this repository) "hardens driftwm against misbehaving clients". What applies
+DriftWM v0.21.0 (<https://github.com/malbiruk/driftwm> @
+`df3de27b26c7998e8a460cffd8a4925cbed3a322`) "hardens driftwm against
+misbehaving clients". What applies
 to a Mac app is here; what does not is listed after the table. Upstream's tests
 are compositor integration tests over Wayland clients and are not run; each row
 names the Infinify test that covers it, and says plainly what ran.
 
 | v0.21.0 item | Upstream source | Here | Covered by |
 | --- | --- | --- | --- |
-| A request is at most 1 MiB, was 4 KiB upstream and 64 KiB here | `src/ipc/mod.rs` `MAX_COMMAND_SIZE` | `DWIPCMaxLine = 1 MiB` in `native/desktop/ipc-server.m`; the C ABI's `MAX_REQUEST_BYTES` was already 1 MiB | `tests/e2e/ipc-limits.sh`: a 200 KiB and a 900 KiB line are answered, one past 1 MiB is hung up on without a reply |
-| At most 1024 connections; one past it is told why in one line and closed | `MAX_CONNECTIONS`, `refuse_connection` | `DWIPCMaxConnections = 1024` (was 16), `refuse()`: `{"Err":"1024 IPC connections are already open"}`. The listen backlog is 128 (what std's `UnixListener::bind` ends up with on macOS: it passes -1 and the system caps it at 128; it was 16), so a burst is not refused while it is accepted. A connection takes a descriptor, so the app raises its soft open-file limit at launch (`raiseOpenFileLimit` in `main.m`: to `kern.maxfilesperproc`; macOS starts a process at 256) | `tests/e2e/ipc-limits.sh`: 1024 held connections, the next one reads the refusal line and EOF, a freed slot is reused |
+| A request is at most 1 MiB (4 KiB upstream) | `src/ipc/mod.rs` `MAX_COMMAND_SIZE` | `DWIPCMaxLine = 1 MiB` in `native/desktop/ipc-server.m`; the C ABI's `MAX_REQUEST_BYTES` is 1 MiB | `tests/e2e/ipc-limits.sh`: a 200 KiB and a 900 KiB line are answered, one past 1 MiB is hung up on without a reply |
+| At most 1024 connections; one past it is told why in one line and closed | `MAX_CONNECTIONS`, `refuse_connection` | `DWIPCMaxConnections = 1024`, `refuse()`: `{"Err":"1024 IPC connections are already open"}`. The listen backlog is 128 (what std's `UnixListener::bind` ends up with on macOS: it passes -1 and the system caps it at 128), so a burst is not refused while it is accepted. A connection takes a descriptor, so the app raises its soft open-file limit at launch (`raiseOpenFileLimit` in `main.m`: to `kern.maxfilesperproc`; macOS starts a process at 256) | `tests/e2e/ipc-limits.sh`: 1024 held connections, the next one reads the refusal line and EOF, a freed slot is reused |
 | Only the bytes just read can complete a request, so a long partial line is not rescanned | `serve_connection` | `-[DWIPCServer read:]` returns at once on a read with no newline | `tests/e2e/ipc-limits.sh`: a 256 KiB line written in 4 KiB pieces completes |
 | The writes of one reply share one deadline, from when the reply is ready; a reader that stalls is dropped | `write_line`, `wait_writable`, `WRITE_TIMEOUT` | already so: `writeBytes` in `ipc-server.m` polls to one monotonic one-second deadline for the owed events and the reply together | not newly covered; the stalled-reader drop was never run (see below) |
 | One read per wakeup | `serve_connection` | already so: one 4096-byte read per dispatch event, and a connection is read again only after its reply | by construction |
 | Window positions within +-1,050,000,000, `msg camera` and bookmarks within +-1e9, sizes at most 32767 | `src/ipc/mod.rs` `check_point`, `check_size`, `cmd_camera`; `src/state/session_store.rs` `POSITION_LIMIT`, `CAMERA_LIMIT`, `valid_canvas_point`, `within_window_range`, `bookmark_problem` | `ipc.rs` (`check_point`, `check_size`, `cmd_camera`, `cmd_bookmark`), `storage.rs` (the constants and predicates), `render.rs` (a screenshot region, and a `from_screen` one that lands past the window range zoomed out: `region lies past the canvas range`) | `tests/ipc_flow.rs` `requests_are_bounded_as_v0_21_0_bounds_them`, `a_screenshot_region_is_bounded_before_a_pixel_is_drawn`, the Move arm of `move_resize_and_focus_address_logical_windows` |
 | The bookmark registry holds at most 256 names of at most 256 bytes | `MAX_BOOKMARKS`, `MAX_BOOKMARK_NAME`, `DriftWm::set_bookmark` | `Controller::store_bookmark` (`storage.rs`), used by `Bookmark` and by `set-bookmark`, which drops a refusal as upstream logs it | `tests/ipc_flow.rs` as above |
-| A saved bookmark registry is cut to what `set` would accept, a saved camera past the window range is not restored | `bounded_bookmarks`, `valid_camera_seed` | `Controller::load`: out-of-bounds bookmarks are dropped one by one (it refused the whole file for a non-finite one before, which JSON cannot carry); such a camera is replaced by the origin at zoom 1 | `tests/hardening_flow.rs` `restoring_a_scene_keeps_only_the_bookmarks_a_set_would_have_accepted`, `restoring_a_scene_keeps_at_most_256_bookmarks`, `a_saved_camera_past_the_window_range_is_not_restored` |
+| A saved bookmark registry is cut to what `set` would accept, a saved camera past the window range is not restored | `bounded_bookmarks`, `valid_camera_seed` | `Controller::load`: out-of-bounds bookmarks are dropped one by one; such a camera is replaced by the origin at zoom 1 | `tests/hardening_flow.rs` `restoring_a_scene_keeps_only_the_bookmarks_a_set_would_have_accepted`, `restoring_a_scene_keeps_at_most_256_bookmarks`, `a_saved_camera_past_the_window_range_is_not_restored` |
 | A stand-in is capped at 16384 px (`MAX_BUFFER_EXTENT`); a larger saved one is dropped on restore | `SizeConstraints::for_suspended`, `standin_body_rect`, `valid_entry_geometry`, `suspended_entry` | a window that becomes a stand-in is cut to 16384 on each side keeping its top-left (`cap_standin`, `lifecycle.rs`); a saved slot of any window whose side is past 16384 or whose top-left is past the position limit is dropped with its metadata, stand-in mark and pin, and the focus is left empty if it was the focused one (`Controller::load`) | `tests/hardening_flow.rs` `a_stand_in_is_cut_to_the_largest_chrome_buffer_and_keeps_its_top_left`, `restoring_a_scene_drops_the_slots_a_stand_in_could_not_be_or_that_lie_past_the_window_range` |
-| Session and state files are owner-only | `src/session.rs` | the scene file was already written through a new 0600 file and renamed (`Controller::save`); the sockets and `.infinify-lock` files are 0600 and the support directory 0700 when the app creates it | `tests/hardening_flow.rs` `the_scene_file_is_owner_only_and_leaves_no_temporary_behind`; the sockets and locks by `tests/e2e/screenshot-write.sh` (unchanged) |
-| A screenshot is written to a temporary file beside its target and renamed into place | `src/render/screenshot.rs` `write_png` | `DWWriteScreenshotPixels` (`screenshot-writer.m`): `.NAME.PID-N.tmp`, `O_EXCL`, written, `rename`; removed on any failure | `tests/e2e/ipc-limits.sh` (a symbolic link at the path is replaced, its target untouched; a directory at the path leaves no temporary) and the existing `tests/e2e/screenshot-write.sh` |
-| `screenshot -o -` goes through a private file the client reserves; nothing is written under `/tmp` | `src/ipc/client.rs` `StdoutCapture`, `edd108f` | see the `msg` client above | `tests/ipc_flow.rs` `screenshot_to_stdout_goes_through_a_private_file_the_client_reserved`; `tests/e2e/screenshot-write.sh` (stdout equals the file capture, nothing left behind) |
-| A spawned app inherits no descriptor, neither `DRIFTWM_CONFIG` nor `RUST_LOG`, and gets the normal open-file limit back | `prepare_child`, `raise_nofile_limit`, `1a1bcf3`, `764abd6` | already no descriptor (`POSIX_SPAWN_CLOEXEC_DEFAULT`, `POSIX_SPAWN_SETSID`); `execCommand` now also drops `DRIFTWM_CONFIG`, `RUST_LOG` and every `INFINIFY_` variable from the environment it passes on (`INFINIFY_SOCKET` is put back, and an `[env]` entry still wins); after a raise, `sh` restores the original soft limit first (`ulimit -Sn`, because `posix_spawn` has no hook between fork and exec) | the wrapper's behaviour was run in isolation only (a child of `sh -c 'ulimit -Sn "$0"; exec sh -c "$1"' 256 …` reads 256 and its exit status 126 comes through); `main.m` itself compiles clean (`clang -fsyntax-only -Wall -Wextra -Werror`) and has not been run |
+| Session and state files are owner-only | `src/session.rs` | the scene file is written through a new 0600 file and renamed (`Controller::save`); the sockets and `.infinify-lock` files are 0600 and the support directory 0700 when the app creates it | `tests/hardening_flow.rs` `the_scene_file_is_owner_only_and_leaves_no_temporary_behind`; the sockets and locks by `tests/e2e/ipc-limits.sh` |
+| A screenshot is written to a temporary file beside its target and renamed into place | `src/render/screenshot.rs` `write_png` | `DWWriteScreenshotPixels` (`screenshot-writer.m`): `.NAME.PID-N.tmp`, `O_EXCL`, written, `rename`; removed on any failure | `tests/e2e/ipc-limits.sh` (a symbolic link at the path is replaced, its target untouched; a directory at the path leaves no temporary) |
+| `screenshot -o -` goes through a private file the client reserves; nothing is written under `/tmp` | `src/ipc/client.rs` `StdoutCapture`, `edd108f` | see the `msg` client above | `tests/ipc_flow.rs` `screenshot_to_stdout_goes_through_a_private_file_the_client_reserved`; `tests/e2e/ipc-limits.sh` (stdout equals the file capture, nothing left behind) |
+| A spawned app inherits no descriptor, neither `DRIFTWM_CONFIG` nor `RUST_LOG`, and gets the normal open-file limit back | `prepare_child`, `raise_nofile_limit`, `1a1bcf3`, `764abd6` | no descriptor is inherited (`POSIX_SPAWN_CLOEXEC_DEFAULT`, `POSIX_SPAWN_SETSID`); `execCommand` also drops `DRIFTWM_CONFIG`, `RUST_LOG` and every `INFINIFY_` variable from the environment it passes on (`INFINIFY_SOCKET` is put back, and an `[env]` entry still wins); after a raise, `sh` restores the original soft limit first (`ulimit -Sn`, because `posix_spawn` has no hook between fork and exec) | the wrapper's behaviour was run in isolation only (a child of `sh -c 'ulimit -Sn "$0"; exec sh -c "$1"' 256 …` reads 256 and its exit status 126 comes through); `main.m` itself compiles clean (`clang -fsyntax-only -Wall -Wextra -Werror`) and has not been run |
 | `exec-terminal` and `exec-launcher` read `$TERMINAL` and `$LAUNCHER` from the config's `[env]` before the process environment | `detect_terminal`, `detect_launcher`, `child_var` | `from_environment` (`actions.rs`) | `tests/hardening_flow.rs` `exec_terminal_and_exec_launcher_read_the_config_env_before_the_process_env` |
 
 Out of scope, with the reason (none of these has a Mac counterpart in this app):
@@ -564,8 +561,8 @@ loader's contract, which this change does not touch.
 and checks reply shapes and resulting controller state: the `State` shape,
 camera and zoom round trips on outputs whose `screen_bounds` origin is not the
 global origin and whose usable center differs from the output center, bookmark
-set / go-to / list / delete and the save file with and without the `bookmarks`
-key, a camera read of `-0.0` for a viewport centered on Y 0, `Move` with its
+set / go-to / list / delete and the save file's `bookmarks` key (a file without
+it is refused whole), a camera read of `-0.0` for a viewport centered on Y 0, `Move` with its
 range refusal, `Focus` of a bound window (zoom 1) and of a
 placeholder (current zoom), every refused and unknown request against an
 unchanged `snapshot`, and an accept / reject table for the action grammar. The window navigation actions, `pointer`, `held` and the cycle prelude
@@ -596,7 +593,7 @@ no Rust runtime flushes it at exit). The shell's side of the stream is not
 covered by these tests at all: its socket writes, its subscriber limit, how it
 drops a peer that stops reading, and when it calls `state_event`. Two launches
 of the built app on 2026-10-09, described in the
-[shell notes](../../native/desktop/README.md#what-has-been-run), observed the
+[shell notes](../../native/desktop/README.md), observed the
 stream over the real socket (the ack and first line, one line per frame of a
 flight and none while idle, no repeated line, the limit of eight, requests on a
 subscribed connection, a clean end on exit); they left no saved evidence and
@@ -607,93 +604,3 @@ oracle build.
 The tests are logical controller behavior only. Nothing in them opens a socket
 in the app, registers a hot key, moves or focuses a native window, renders, or
 captures.
-
-### Live run, 2026-10-09
-
-The built app (`scripts/build-app.sh`, ad-hoc signed, macOS 27.2, Apple Silicon)
-was launched as `--windowed 1100x700` on a private scene file and socket, with a
-seeded scene of three detached placeholders (frames 640x420 at (200, 150),
-900x600 at (1500, -300) and 560x380 at (-900, 700), top-left and Y down), and
-driven by a script through `Infinify msg` and a few raw socket lines, in several
-runs; the last two, identical in every value read, were made after the review
-fixes (focus zoom chosen by binding, the
-`Move` range refusal, the client's non-finite refusal). Nothing from them is
-saved as evidence. Observed, each read back through the socket:
-
-- `state`: three windows at `[520, -360]`, `[1950, 0]` and `[-620, -890]`, all
-  `suspended`, and one output `windowed` of 1100x636, camera `550 -318`, zoom 1.
-  (The window less the 64-point strip that build kept. Since 2026-10-10 the
-  same launch registers the whole 1100x700: `state` then read `windowed camera
-  550 -350 zoom 1 1100x700`, and `camera` read `550 -350` and, after `action
-  "center-nearest right"`, `1950 -0`. The other figures below that come from
-  636 would follow it and were not read again.)
-- `camera 400 -250` and `zoom 0.5` landing on those values, and `camera 0 0`
-  landing in the first full run and five of six short launches (see below);
-  `zoom 0.01` answering and landing on 0.14242424242424243 and `zoom 5` on 1.
-- `action zoom-in`, `zoom-out`, `zoom-reset`: 0.5 to 0.55, back to 0.5, to 1.
-- `action zoom-to-fit`: camera `750 -390`, zoom 0.28484848484848485, which is
-  the center of the seeded bounding box and (1100 - 160) / 3300; a second one
-  returned to the pose left.
-- `action home-toggle` from camera `400 -250` at zoom 0.5: to the origin at zoom
-  1, and back on the second.
-- `action pan-viewport right` at zoom 0.5: 200 canvas points; `up-left`: 200
-  along the diagonal.
-- `bookmark` set, get, list and delete; `action set-bookmark` storing the point
-  `camera` reports (the app registers no usable area, so the two centers
-  coincide there); `action go-to-bookmark` landing the camera on a bookmark with
-  the zoom unchanged and `active_bookmark` naming it; an unset name answering Ok.
-- `move --id 2 100 200`: read back as `100 200`, saved as top-left (-350, -500).
-- `move --id 1` to `-2147483648 0`, `2147483647 0` and `0 2147483647`: each
-  `window geometry exceeds integer range` with exit status 1. Afterwards
-  `move --id 1` still read `520 -360`, `state` answered, and `action zoom-to-fit`
-  framed the moved layout (camera `-30 -290`, zoom 0.3012658227848101, which is
-  (636 - 160) / 1580) and returned.
-- `focus --id 3` at zoom 0.5 with that window partly out of view: the reply
-  names the window, the camera lands on its center `-620 -890` with the zoom
-  still 0.5, and `focus` reads it back. `focus example.SEED` then lands on
-  window 1's center `520 -360`, again at 0.5, and focusing window 1 once more,
-  now wholly in view, moves nothing. The scene file records the focus. Every
-  window was a placeholder, so no focus effect was produced and a bound
-  window's zoom-1 navigation was not seen. In the runs before the fix a
-  placeholder focused this way landed at zoom 1.
-- `zoom nan`, `zoom inf` and `camera inf 0`: refused by the client with exit
-  status 1 and the zoom unchanged.
-- On the raw socket, `{"Move":{"window":1,"to":[520.0,-360.0]}}` answering
-  `{"Ok":{"Position":{"x":520,"y":-360}}}` and `{"Camera":[1e999,0]}` answering
-  `{"Err":"invalid request"}`: the shell's re-encoding described under
-  [Differences from upstream](#differences-from-upstream).
-- `unknown action: frobnicate`, `action not implemented on macOS yet:
-  toggle-fullscreen`, `unknown direction: sideways`, the `go-to` removal
-  message, the `resize` write refusal and the eight `<name> is not implemented
-  on macOS yet` replies (none since: `close`, `suspend` and `relaunch` are
-  answered since the [lifecycle](LIFECYCLE.md) work, `layout` and `subscribe`
-  since the platform actions, and `Opacity`, `Pin` and `Screenshot` run:
-  [RULES.md](RULES.md#live-run-2026-10-10) and
-  [RENDER.md](RENDER.md#verification-boundary) have what later launches
-  observed of those three), each
-  with exit status 1; `{"Err":"invalid request"}`
-  for a line that is not JSON.
-- The reply's alphabetical member order on the raw socket; the client's output
-  in both forms; `$INFINIFY_SOCKET`.
-- The scene file holding the bookmarks, the moved window, the focus and the
-  camera, and a second launch reading them back.
-
-Two flights in the runs before the fixes, both `camera 0 0` as the first write
-after a launch (one full run and one short launch), stopped part-way along
-their path, and one later flight ended 0.31 points off in x alone. A press or
-scroll on a canvas stops or pans a flight by design and the machine was in use,
-so pointer input reaching the panel is the likely cause; that was not
-confirmed. Every other flight landed exactly, every one in the last two runs
-included.
-
-The last two runs did not repeat `zoom 0.01` and `zoom 5`, the `zoom-in`, `zoom-out`
-and `zoom-reset` actions, `pan-viewport up-left`, `go-to-bookmark` with an unset
-name, `unknown direction: sideways`, the `go-to` removal message, the eight
-`<name> is not implemented on macOS yet` replies, the member order,
-`$INFINIFY_SOCKET` and the second launch: those stand as observed on the build
-before the fixes.
-
-Not observed: bound sources (so no focus effect, no zoom-1 focus navigation and
-no live-over-placeholder choice), more than one output, a request with no active output, a request
-during a gesture, and anything drawn. This run is no evidence of usable
-native-window compositing or of native focus delivery.

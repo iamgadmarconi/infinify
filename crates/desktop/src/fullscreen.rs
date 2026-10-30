@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
+// Adapted from https://github.com/malbiruk/driftwm @
+// 352333a8fa1b22171492d4b71a54102045c9a19d:
 // src/state/fullscreen.rs (resolve_fullscreen_output, enter_fullscreen,
 // exit_fullscreen_on, restore_fullscreen_view, reap_dead_fullscreen,
 // resize_fullscreen_for_output, recentre_fullscreen_window),
@@ -40,7 +41,7 @@ use super::actions::Outcome;
 use super::ipc::{OutputFullscreen, frame, readable};
 use super::lifecycle::Arrival;
 use super::rules::{Pin, clamp_pin};
-use super::sizes::Screen;
+use super::sizes::{GRABBED, Px, Screen, point_of};
 use super::view_actions::{ViewReturn, pixel, pixel_size};
 use super::*;
 use driftwm_canvas::Placement;
@@ -48,11 +49,6 @@ use driftwm_core::config::{Action, Direction};
 use driftwm_core::layout::auto_placement::{self, place_auto};
 use std::collections::{BTreeSet, HashSet};
 
-/// A location or a size in upstream's whole logical pixels.
-type Px = [i64; 2];
-
-/// What sizes.rs says to a sizing action during a drag or resize gesture.
-const GRABBED: &str = "a window is under an interactive move or resize";
 const HELD: &str = "a fullscreen window is not moved or resized by hand";
 /// How many size transactions one exit may begin for the size it owes. One
 /// that ended without ever asking the window (cancelled before its setter, a
@@ -214,9 +210,6 @@ impl Fullscreen {
     }
 }
 
-fn point_of(px: Px) -> Point {
-    Point::new(px[0] as f64, px[1] as f64)
-}
 /// Does the shell pass this command's reply through the hook that performs a
 /// size transaction (`-consumeSize:`, the first step of `-applyReply:`)? A
 /// size still owed after a fullscreen exit leaves with the first such reply

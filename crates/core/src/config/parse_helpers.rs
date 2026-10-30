@@ -1,8 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Ported from malbiruk/driftwm src/config/parse_helpers.rs at
-// df3de27b26c7998e8a460cffd8a4925cbed3a322 (GPL-3.0-or-later).
-// Changes from upstream: `smithay::` paths read `crate::platform::`.
+//
+// Ported from DriftWM (GPL-3.0-or-later)
+//   repository: https://github.com/malbiruk/driftwm
+//   commit:     df3de27b26c7998e8a460cffd8a4925cbed3a322
+//   path:       src/config/parse_helpers.rs
+//   sha-256:    57e32e373dae1d62e597f8903376b24dd08ace81c51198e0e886bd85778d3247 (upstream file)
+// Changes from upstream: this header; `smithay::` paths read `crate::platform::`.
 // Nothing else.
+// See PORT.md in the crate root for the full change log.
+
 //! TOML → config-type conversion helpers.
 //!
 //! Bridges raw serde structs in `super::toml` to the processed types in

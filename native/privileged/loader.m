@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT
- * Adapted from yabai src/osax/loader.m at dd845723416f5fe92af49fad5ebab00369e07edd.
+ * Adapted from yabai (https://github.com/asmvik/yabai) src/osax/loader.m at commit dd845723416f5fe92af49fad5ebab00369e07edd.
  * arm64e injection path by Jeremy Legendre; original attribution retained below.
- * DriftWM changes: explicit opt-in/preflight, absolute payload path, private
+ * Infinify changes: explicit opt-in/preflight, absolute payload path, private
  * per-user runtime configuration, bounded completion status and cleanup.
  * Infinify daemon change: get_dock_pid falls back to console_dock_pid (libproc, by path and
  * owner, root only) where LaunchServices lists no Dock, as in a launch daemon.
@@ -46,15 +46,14 @@
 #include <inttypes.h>
 #include <CommonCrypto/CommonDigest.h>
 #include "preflight.h"
+#include "journal-fields.h"
 #include "staged-payload.h"
 #include "dwclient.h"
 #include <sys/un.h>
 #include <limits.h>
 
-#ifdef __arm64__
 #include <ptrauth.h>
 kern_return_t (*_thread_convert_thread_state)(thread_act_t thread, int direction, thread_state_flavor_t flavor, thread_state_t in_state, mach_msg_type_number_t in_stateCnt, thread_state_t out_state, mach_msg_type_number_t *out_stateCnt);
-#endif
 
 static char *payload_path;
 
@@ -65,36 +64,6 @@ static char *payload_path;
 //
 
 static char shell_code[168 + PATH_MAX] =
-#ifdef __x86_64__
-"\x55"                             // push       rbp
-"\x48\x89\xE5"                     // mov        rbp, rsp
-"\x48\x83\xEC\x10"                 // sub        rsp, 0x10
-"\x48\x8D\x7D\xF8"                 // lea        rdi, qword [rbp+var_8]
-"\x31\xC0"                         // xor        eax, eax
-"\x89\xC1"                         // mov        ecx, eax
-"\x48\x8D\x15\x1E\x00\x00\x00"     // lea        rdx, qword ptr [rip+0x1E]
-"\x48\x89\xCE"                     // mov        rsi, rcx
-"\x48\xB8"                         // movabs     rax, pthread_create_from_mach_thread
-"\x00\x00\x00\x00\x00\x00\x00\x00" //
-"\xFF\xD0"                         // call       rax
-"\x48\x83\xC4\x10"                 // add        rsp, 0x10
-"\x5D"                             // pop        rbp
-"\x48\xC7\xC0\x65\x62\x61\x79"     // mov        rax, 0x79616265
-"\xEB\xFE"                         // jmp        0x0
-"\xC3"                             // ret
-"\x55"                             // push       rbp
-"\x48\x89\xE5"                     // mov        rbp, rsp
-"\xBE\x01\x00\x00\x00"             // mov        esi, 0x1
-"\x48\x8D\x3D\x16\x00\x00\x00"     // lea        rdi, qword ptr [rip+0x16]
-"\x48\xB8"                         // movabs     rax, dlopen
-"\x00\x00\x00\x00\x00\x00\x00\x00" //
-"\xFF\xD0"                         // call       rax
-"\x31\xF6"                         // xor        esi, esi
-"\x89\xF7"                         // mov        edi, esi
-"\x48\x89\xF8"                     // mov        rax, rdi
-"\x5D"                             // pop        rbp
-"\xC3"                             // ret
-#elif __arm64__
 "\xFF\xC3\x00\xD1"                 // sub        sp, sp, #0x30
 "\xFD\x7B\x02\xA9"                 // stp        x29, x30, [sp, #0x20]
 "\xFD\x83\x00\x91"                 // add        x29, sp, #0x20
@@ -135,7 +104,6 @@ static char shell_code[168 + PATH_MAX] =
 "\xFF\xC3\x00\x91"                 // add        sp, sp, #0x30
 "\xFF\x0F\x5F\xD6"                 // retab
 "\x00\x00\x00\x00\x00\x00\x00\x00" //
-#endif
 "\x00\x00\x00\x00\x00\x00\x00\x00" // empty space for payload_path
 "\x00\x00\x00\x00\x00\x00\x00\x00"
 "\x00\x00\x00\x00\x00\x00\x00\x00"
@@ -151,7 +119,8 @@ static char shell_code[168 + PATH_MAX] =
 "\x00\x00\x00\x00\x00\x00\x00\x00";
 
 // A launch daemon sits outside the login user's session, where LaunchServices lists no Dock (Sunlight found the
-// same, third_party/sunlight/LiveWindows/helper.m lines 128-148 and its README's "Installation boundary"), so a root
+// same: https://github.com/spacefarm-digital/sunlight, commit afeea74b18e70ca49bf462d6fe462cf65deb2b32,
+// LiveWindows/helper.m lines 128-148 and LiveWindows/README.md "Installation boundary"), so a root
 // loader looks for the console user's Dock by its executable path and owner. Only a root loader does, and the launcher
 // always pins the Dock it has identified (--expected-dock), which is compared against this answer before anything is loaded.
 static pid_t console_dock_pid(void)
@@ -203,15 +172,6 @@ static BOOL current_dock(pid_t pid,const struct proc_bsdinfo *expected) {
     return get_dock_pid()==pid && process_info(pid,&now) && now.pbi_uid==expected->pbi_uid
         && now.pbi_start_tvsec==expected->pbi_start_tvsec && now.pbi_start_tvusec==expected->pbi_start_tvusec;
 }
-static BOOL canonical_boot_uuid(id value) {
-    if(![value isKindOfClass:NSString.class] || [value length]!=36)return NO;
-    for(NSUInteger i=0;i<36;i++) {
-        unichar c=[value characterAtIndex:i];
-        if(i==8 || i==13 || i==18 || i==23) { if(c!='-')return NO; }
-        else if(!((c>='0'&&c<='9')||(c>='A'&&c<='F')))return NO;
-    }
-    return YES;
-}
 static BOOL boot_session_uuid(char output[37]) {
     char value[37]={0};size_t size=sizeof(value);
     if(sysctlbyname("kern.bootsessionuuid",value,&size,NULL,0) || size!=sizeof(value) || value[36]!='\0')return NO;
@@ -221,10 +181,6 @@ static BOOL boot_session_uuid(char output[37]) {
         else if(!((c>='0'&&c<='9')||(c>='A'&&c<='F')))return NO;
     }
     memcpy(output,value,sizeof(value));return YES;
-}
-static BOOL exact_json_keys(NSDictionary *value,NSArray *keys) {
-    return [value isKindOfClass:NSDictionary.class]
-        && [[NSSet setWithArray:value.allKeys]isEqual:[NSSet setWithArray:keys]];
 }
 static BOOL json_integer(id value,uint64_t minimum,uint64_t maximum) {
     return [value isKindOfClass:NSNumber.class]
@@ -321,10 +277,10 @@ static BOOL recovery_journal(const char *sourcePath,const char *runtime,const st
         @"generation",@"state",@"windows",@"released_windows",@"last_restore"];
     NSArray *windows=journal[@"windows"],*released=journal[@"released_windows"];
     char bootUUID[37];
-    if(!boot_session_uuid(bootUUID) || !exact_json_keys(journal,keys)
+    if(!boot_session_uuid(bootUUID) || !dw_exact_keys(journal,keys)
         || !json_integer(journal[@"v"],3,3) || !json_integer(journal[@"server_pid"],2,INT_MAX)
         || !json_integer(journal[@"server_birth_sec"],1,UINT64_MAX) || !json_integer(journal[@"server_birth_usec"],0,999999)
-        || !json_integer(journal[@"server_uid"],1,UINT32_MAX) || !canonical_boot_uuid(journal[@"boot_uuid"])
+        || !json_integer(journal[@"server_uid"],1,UINT32_MAX) || !dw_boot_uuid_valid(journal[@"boot_uuid"])
         || !json_integer(journal[@"generation"],0,UINT64_MAX-1)
         || ![@[@"empty",@"holding",@"restoring"] containsObject:journal[@"state"]]
         || ![windows isKindOfClass:NSArray.class] || ![released isKindOfClass:NSArray.class]
@@ -382,24 +338,16 @@ static BOOL read_nonce_file(const char *path,uid_t uid,char nonce[65]) {
 // process birth and exact requested scope are checked here. The bootstrap
 // sentinel alone proves only pthread dispatch, never dlopen completion.
 static BOOL wait_for_helper(const char *runtime,const char *nonce,pid_t pid,
-                            const struct proc_bsdinfo *dock,const struct dw2_process *only,BOOL recovering) {
+                            const struct proc_bsdinfo *dock,BOOL recovering) {
     if(geteuid()!=dock->pbi_uid || !current_dock(pid,dock))return NO;
     dw_client *client=NULL;struct dw_client_info info={0};
     int status=dw_client_open(runtime,nonce,NULL,5000,&client,&info);
     if(status!=DW_CLIENT_OK){fprintf(stderr,"protocol v2 readiness connection failed (%d)\n",status);return NO;}
-    uint32_t scope=only ? DW2_SCOPE_ALLOWLIST : DW2_SCOPE_SAME_USER;
     uint32_t required=DW2_CAP_ALPHA|DW2_CAP_RESTORE_WINDOW|DW2_CAP_ENROLLMENT|DW2_CAP_INSPECT;
-    BOOL ok=info.server_pid==pid && info.scope==scope && (info.caps&required)==required
+    BOOL ok=info.server_pid==pid && info.scope==DW2_SCOPE_SAME_USER && (info.caps&required)==required
         && !(info.caps&DW2_CAP_FIXTURE_FAMILY);
-    struct dw2_process enrolled={0};uint32_t count=UINT32_MAX;
-    if(ok)ok=dw_client_enrollment(client,2000,only ? &enrolled : NULL,only ? 1 : 0,&count)==DW_CLIENT_OK
-        && count==(only ? 1U : 0U);
-    if(ok && only) {
-        struct proc_bsdinfo now;
-        ok=enrolled.pid==only->pid && enrolled.birth_sec==only->birth_sec && enrolled.birth_usec==only->birth_usec
-            && process_info(only->pid,&now) && now.pbi_uid==dock->pbi_uid
-            && now.pbi_start_tvsec==only->birth_sec && now.pbi_start_tvusec==only->birth_usec;
-    }
+    uint32_t count=UINT32_MAX;
+    if(ok)ok=dw_client_enrollment(client,2000,NULL,0,&count)==DW_CLIENT_OK && count==0;
     struct dw2_probe_reply probe={0};size_t length=0;
     if(ok)ok=dw_client_probe(client,2000,&probe,sizeof(probe),&length)==DW_CLIENT_OK
         && length==sizeof(probe) && probe.scope==info.scope && probe.caps==info.caps
@@ -416,9 +364,8 @@ static BOOL wait_for_helper(const char *runtime,const char *nonce,pid_t pid,
 static int usage(void) {
     fprintf(stderr,"usage: loader --dock-identity\n"
         "       loader --inject-dock PAYLOAD RUNTIME --nonce-file ABS_FILE --desktop [--expected-dock PID SEC USEC] [--recover-journal ABS_PATH --expected-retired-dock PID SEC USEC]\n"
-        "       loader --inject-dock PAYLOAD RUNTIME --nonce-file ABS_FILE --only-pid PID [--expected-dock PID SEC USEC]\n"
         "Paths must be absolute. Explicit scope is required; run doctor first. No SIP/boot settings are changed.\n"
-        "--desktop authorizes same-login-user scope; --only-pid pins one process instance.\n");
+        "--desktop authorizes same-login-user scope.\n");
     return 2;
 }
 int main(int argc, char **argv) { @autoreleasepool {
@@ -434,21 +381,17 @@ int main(int argc, char **argv) { @autoreleasepool {
     if(argc<7 || strcmp(argv[1],"--inject-dock") || strcmp(argv[4],"--nonce-file"))return usage();
     const char *runtime=argv[3],*nonceFile=argv[5];
     int option=6;
-    BOOL desktop=NO,pinned=NO;uint64_t onlyPID=0,expectedPID=0,expectedSec=0,expectedUsec=0;
+    BOOL pinned=NO;uint64_t expectedPID=0,expectedSec=0,expectedUsec=0;
     const char *recoveryJournalPath=NULL;uint64_t retiredPID=0,retiredSec=0,retiredUsec=0;
-    if(option<argc && !strcmp(argv[option],"--desktop")) {
-        desktop=YES;option++;
-    } else if(option+1<argc && !strcmp(argv[option],"--only-pid")) {
-        if(!parse_decimal(argv[option+1],INT_MAX,&onlyPID) || onlyPID<=1)return usage();
-        option+=2;
-    } else return usage();
+    if(option>=argc || strcmp(argv[option],"--desktop"))return usage();
+    option++;
     if(option<argc && !strcmp(argv[option],"--expected-dock")) {
         if(option+4>argc || !parse_decimal(argv[option+1],INT_MAX,&expectedPID) || expectedPID<=1
             || !parse_decimal(argv[option+2],UINT64_MAX,&expectedSec) || !expectedSec
             || !parse_decimal(argv[option+3],999999,&expectedUsec))return usage();
         pinned=YES;option+=4;
     }
-    if(desktop && option<argc && !strcmp(argv[option],"--recover-journal")) {
+    if(option<argc && !strcmp(argv[option],"--recover-journal")) {
         if(option+6!=argc || !pinned || !argv[option+1][0] || argv[option+1][0]!='/'
             || strcmp(argv[option+2],"--expected-retired-dock")
             || !parse_decimal(argv[option+3],INT_MAX,&retiredPID) || retiredPID<=1
@@ -485,18 +428,6 @@ int main(int argc, char **argv) { @autoreleasepool {
     if(lstat(runtime,&st)||!S_ISDIR(st.st_mode)||st.st_uid!=dockInfo.pbi_uid||(st.st_mode&07777)!=0700){fprintf(stderr,"create a fresh 0700 runtime directory as Dock login user first\n");return 1;}
     char nonce[65];
     if(!read_nonce_file(nonceFile,dockInfo.pbi_uid,nonce)){fprintf(stderr,"nonce file must be a login-user-owned regular 0600 file containing 64 lowercase hex bytes and optional newline\n");return 1;}
-    // Resolve --only-pid into a single {pid,birth} allowlist entry. The
-    // start time is read the same way the payload resolves window identity, so the
-    // helper can pin itself to exactly that process and refuse every other window.
-    NSArray *allowlist=nil;struct dw2_process only={0};
-    if(!desktop) {
-        if((pid_t)onlyPID==pid){fprintf(stderr,"--only-pid must not be Dock itself\n");return 1;}
-        struct proc_bsdinfo onlyInfo={0};
-        if(!process_info((pid_t)onlyPID,&onlyInfo)){fprintf(stderr,"could not resolve --only-pid process\n");return 1;}
-        if(onlyInfo.pbi_uid!=dockInfo.pbi_uid){fprintf(stderr,"--only-pid must be owned by Dock's login user\n");return 1;}
-        only=(struct dw2_process){.pid=(pid_t)onlyPID,.birth_sec=onlyInfo.pbi_start_tvsec,.birth_usec=onlyInfo.pbi_start_tvusec};
-        allowlist=@[@{@"pid":@(only.pid),@"birth_sec":@(only.birth_sec),@"birth_usec":@(only.birth_usec)}];
-    }
     NSData *recoveryBytes=nil;NSDictionary *recoveryFields=nil;
     if(recoveryJournalPath && !recovery_journal(recoveryJournalPath,runtime,&dockInfo,(pid_t)retiredPID,retiredSec,retiredUsec,&recoveryBytes,&recoveryFields)) {
         fprintf(stderr,"recovery journal is not a committed same-boot schema-3 record for a positively retired same-user Dock; refusing recovery\n");return 1;
@@ -530,7 +461,6 @@ int main(int argc, char **argv) { @autoreleasepool {
     if(!current_dock(pid,&dockInfo)){fprintf(stderr,"Dock identity changed before sidecar creation\n");return 1;}
     NSString *configPath=[payloadString stringByAppendingString:@".json"];
     NSMutableDictionary *sidecar=[@{@"runtime":runtimeString,@"nonce":[NSString stringWithUTF8String:nonce]} mutableCopy];
-    if(allowlist)sidecar[@"allowlist"]=allowlist;
     if(recoveryFields)[sidecar addEntriesFromDictionary:recoveryFields];
     NSData *configuration=[NSJSONSerialization dataWithJSONObject:sidecar options:0 error:NULL];
     int configFD=open(configPath.fileSystemRepresentation,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600);
@@ -582,7 +512,7 @@ int main(int argc, char **argv) { @autoreleasepool {
         uid_t savedUID=geteuid();
         // getpeereid is checked by server as well: root must connect as login UID.
         if(seteuid(dockInfo.pbi_uid)==0) {
-            BOOL ready=wait_for_helper(runtime,nonce,pid,&dockInfo,desktop ? NULL : &only,recoveryBytes!=nil);
+            BOOL ready=wait_for_helper(runtime,nonce,pid,&dockInfo,recoveryBytes!=nil);
             if(seteuid(savedUID)!=0){fprintf(stderr,"failed to restore effective UID\n");goto cleanup;}
             if(ready)result=0;
         }
@@ -609,7 +539,7 @@ cleanup:
     // bootstrap termination. Keep its tiny allocations and sidecar until Dock exits;
     // never restart Dock here, never free memory whose liveness is uncertain.
     if(task)mach_port_deallocate(mach_task_self(),task);
-    if(result==0)fprintf(stderr,"authenticated v2 helper ready in Dock (%s); empty window table, no frames submitted\n",desktop ? "same-user desktop scope" : "one-process scope");
+    if(result==0)fprintf(stderr,"authenticated v2 helper ready in Dock (same-user desktop scope); empty window table, no frames submitted\n");
     else fprintf(stderr,"helper readiness not established%s\n",executed ? "; execution began, retain sidecar/runtime and do not retry blindly" : "; pre-execution resources and sidecar cleaned up");
     return result;
 } }

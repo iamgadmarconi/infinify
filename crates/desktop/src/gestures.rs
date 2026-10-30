@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
+// Adapted from https://github.com/malbiruk/driftwm @
+// 352333a8fa1b22171492d4b71a54102045c9a19d:
 // src/input/gestures.rs (GestureState), src/input/gestures/swipe.rs
 // (on_gesture_swipe_begin, _update and _end, build_swipe_threshold,
 // has_swipe_direction_bindings, try_start_gesture_move,
@@ -21,7 +22,7 @@
 // is its pinch, and a move is the pointer's own drag, a canvas window's with
 // its edge pan. The pending middle click and the
 // set-trackpad action arm live in upstream files this port did not read:
-// set-trackpad is taken from device_config.rs and docs/config.md.
+// set-trackpad is taken from device_config.rs and upstream docs/config.md.
 //! Upstream's trackpad gesture dispatch, driven by libinput-shaped events.
 //!
 //! libinput hands upstream ready-made swipe, pinch and hold gestures. macOS has
@@ -463,8 +464,9 @@ impl Controller {
         report: &mut Report,
     ) -> Option<GestureState> {
         let window = self.gesture_target(output, pointer)?;
-        // A shell that performs no resize effect (a demo, a probe) would
-        // leave the transaction's first read unanswered for good.
+        // The capability is an ABI precondition: a caller that has not sent
+        // `native_resize_capability` performs no resize effect and would leave
+        // the transaction's first read unanswered for good.
         if !self.sizes.capability {
             return None;
         }
@@ -671,7 +673,7 @@ impl Controller {
     }
     pub(crate) fn gesture_begin(&mut self, start: GestureStart) -> Result<Value, Error> {
         let time = event_ms(start.time_ms)?;
-        if !point_valid(start.pointer) {
+        if !start.pointer.valid() {
             return Err(Error::Invalid("invalid gesture pointer"));
         }
         if self.scene.output(start.output).is_none() {
@@ -732,7 +734,7 @@ impl Controller {
         held: bool,
     ) -> Result<Value, Error> {
         let time = event_ms(time_ms)?;
-        if !point_valid(delta) || !scale.is_finite() || scale <= 0.0 || !rotation.is_finite() {
+        if !delta.valid() || !scale.is_finite() || scale <= 0.0 || !rotation.is_finite() {
             return Err(Error::Invalid("invalid gesture update"));
         }
         let mut report = Report::default();

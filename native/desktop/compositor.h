@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Originally carried into native/desktop/ from the standalone compositor port; desktop frame scheduling and diagnostics are adapted here.
 //
 // Infinify compositor: one Metal renderer per output that draws the whole
 // frame — canvas background, output outlines, and every window with its
@@ -7,7 +6,7 @@
 // stand-ins for suspended windows — and can render the same frame offscreen.
 //
 // A port of DriftWM's per-output frame composition to Metal. Derived from
-// DriftWM (GPL-3.0-or-later), upstream commit
+// DriftWM (GPL-3.0-or-later), https://github.com/malbiruk/driftwm @
 // 352333a8fa1b22171492d4b71a54102045c9a19d:
 //   src/shaders/{border,shadow,corner_clip}.glsl, src/render/shaders.rs,
 //   src/render/elements.rs, src/render/chrome.rs, src/render/suspended.rs,
@@ -17,9 +16,8 @@
 //   src/config/types.rs (DecorationConfig, OutputOutlineSettings,
 //   effective_*).
 //
-// Effects (this copy, compositor-effects): frosted-glass blur behind windows,
-// open / close lifecycle animations with closing snapshots, and the config
-// error bar, from
+// Effects: frosted-glass blur behind windows, open / close lifecycle
+// animations with closing snapshots, and the config error bar, from
 //   src/shaders/{blur_down,blur_up,blur_mask}.glsl, src/render/blur.rs,
 //   src/render/closing.rs, src/render/error_bar.rs,
 //   src/state/window_animation.rs (open_scale, open_alpha, animated_visual),
@@ -27,8 +25,8 @@
 //   src/config/types.rs (EffectsConfig).
 //
 // The module depends only on background.h (the canvas background renderer)
-// and system frameworks. See NOTES.md for the host protocol, the mapping from
-// the shell's snapshot, and every deviation from upstream.
+// and system frameworks. See COMPOSITOR-NOTES.md for the host protocol, the
+// mapping from the shell's snapshot, and every deviation from upstream.
 
 #import <CoreGraphics/CoreGraphics.h>
 #import <CoreVideo/CoreVideo.h>
@@ -410,21 +408,6 @@ typedef NS_ENUM(NSInteger, IFCompositorClear) {
     IFCompositorClearTransparent,
 };
 
-/// Diagnostics: restrict a frame to some of its passes (0 = everything).
-typedef NS_OPTIONS(NSUInteger, IFCompositorPass) {
-    IFCompositorPassBackground = 1 << 0,
-    IFCompositorPassOutline = 1 << 1,
-    IFCompositorPassShadow = 1 << 2,
-    IFCompositorPassBorder = 1 << 3,
-    IFCompositorPassContent = 1 << 4,
-    IFCompositorPassTitleBar = 1 << 5,
-    IFCompositorPassStandInBody = 1 << 6,
-    IFCompositorPassLabel = 1 << 7,
-    IFCompositorPassBlur = 1 << 8,      ///< the frost of blurred windows
-    IFCompositorPassSnapshot = 1 << 9,  ///< closing snapshots
-    IFCompositorPassErrorBar = 1 << 10,
-};
-
 /// Everything one output shows at one instant. The host owns one per output,
 /// refills it and hands it to the layer; nothing in it is retained by the
 /// renderer beyond the call.
@@ -458,7 +441,6 @@ typedef NS_OPTIONS(NSUInteger, IFCompositorPass) {
 @property (nonatomic) IFCompositorOutlineSettings outline;
 - (void)setOutlineRects:(nullable const CGRect *)rects count:(NSUInteger)count;
 @property (nonatomic, readonly) NSUInteger outlineRectCount;
-- (CGRect)outlineRectAtIndex:(NSUInteger)index;
 
 /// `[effects]`; defaults to upstream's. Read through
 /// `IFCompositorEffectsSanitized`.
@@ -484,8 +466,6 @@ typedef NS_OPTIONS(NSUInteger, IFCompositorPass) {
 /// changes nothing: an animated background, or an element whose lifecycle
 /// animation runs on `lifecycleStartTime` and is not finished at `time`.
 @property (nonatomic, readonly) BOOL needsContinuousRedraw;
-
-@property (nonatomic) IFCompositorPass debugPasses;
 @end
 
 // MARK: - Renderer
@@ -515,13 +495,6 @@ typedef NS_OPTIONS(NSUInteger, IFCompositorPass) {
 /// (premultiplied) alpha only when `frame.clear` is transparent.
 - (nullable CGImageRef)newImageForFrame:(IFCompositorFrame *)frame
                                   error:(NSError **)error CF_RETURNS_RETAINED;
-- (BOOL)writePNGForFrame:(IFCompositorFrame *)frame
-                   toURL:(NSURL *)url
-                   error:(NSError **)error;
-/// The exact framebuffer of an offscreen render: tightly packed BGRA8 rows,
-/// top row first, premultiplied.
-- (nullable NSData *)BGRADataForFrame:(IFCompositorFrame *)frame
-                                error:(NSError **)error;
 
 /// closing.rs `flatten` + `snapshot_canvas` / `snapshot_screen`: bakes
 /// `element` — a live window as it stands, with the content it holds right
@@ -555,38 +528,6 @@ typedef NS_OPTIONS(NSUInteger, IFCompositorPass) {
 
 /// Drops every cached texture. The next frame rebuilds what it needs.
 - (void)purge;
-/// Cached per-element entries (diagnostics).
-@property (nonatomic, readonly) NSUInteger cacheEntryCount;
-/// Chrome rasterisations and content-texture wrappers created so far
-/// (diagnostics: both stay constant across steady frames).
-@property (nonatomic, readonly) NSUInteger chromeRasterCount;
-@property (nonatomic, readonly) NSUInteger contentWrapCount;
-/// Diagnostics for the blur: frosts recomputed so far, textures the blur has
-/// allocated so far, and textures it holds now (per blurred window a frost, a
-/// mask and — while it keeps recomputing — a pad pair; plus one copy of the
-/// background). With no blurred element in any frame all three stay 0.
-@property (nonatomic, readonly) NSUInteger blurComputeCount;
-@property (nonatomic, readonly) NSUInteger blurTextureAllocationCount;
-@property (nonatomic, readonly) NSUInteger blurTextureCount;
-
-/// Diagnostics: runs the renderer's own Kawase passes (the same code a frame
-/// uses) over caller-supplied pixels. `pixels` is tightly packed premultiplied
-/// BGRA8, `width` x `height`, top row first: the padded backdrop. Returns the
-/// same texture after `passes` down and `passes` up passes with tap distance
-/// `offset` (already multiplied by the output scale). With `stages` non-nil,
-/// the whole texture written by each pass is appended to it in order
-/// (2 * passes entries, each the full `width` x `height` allocation, of which
-/// the pass wrote the top-left `(width >> shift) x (height >> shift)`).
-- (nullable NSData *)debugBlurBGRA:(NSData *)pixels
-                             width:(NSUInteger)width
-                            height:(NSUInteger)height
-                            passes:(NSUInteger)passes
-                            offset:(float)offset
-                            stages:(nullable NSMutableArray<NSData *> *)stages;
-
-/// Diagnostics: called once per draw with the pass name, the destination
-/// rectangle in pixels and the uniforms. Costs allocations; leave nil.
-@property (nonatomic, copy, nullable) void (^debugDrawHandler)(NSDictionary<NSString *, id> *draw);
 @end
 
 // MARK: - Layer
@@ -630,43 +571,25 @@ typedef struct {
 @property (nonatomic, readonly) NSUInteger drawCount;
 
 /// A screen-link callback may present an unchanged-size frame by command
-/// buffer. NO uses the caller's CATransaction. A supplied Metal display-link
-/// offer always follows its own presentation contract regardless of this flag.
+/// buffer. NO uses the caller's CATransaction.
 @property (nonatomic) BOOL paced;
-/// The expected display time, in Mach absolute seconds. Screen-link frames use
-/// it as an atTime target; Metal offers use it for diagnostics only.
-/// Zero preserves immediate presentation for standalone callers.
+/// The expected display time, in Mach absolute seconds, used as the atTime
+/// target of a paced frame. Zero presents immediately.
 @property (nonatomic) CFTimeInterval presentationTime;
 /// Expected refresh interval for diagnostic gap counts. Zero leaves gaps unclassified.
 @property (nonatomic) CFTimeInterval presentationInterval;
 
-/// Acquire drawables on a private serial queue, keeping at most two ready ones
-/// (at most the layer's pool size minus one). An unavailable drawable leaves
+/// Drawables are acquired on a private serial queue, keeping at most two ready
+/// ones (at most the layer's pool size minus one). An unavailable drawable leaves
 /// `missed` set and returns immediately. Encodes the latest scene on main only
 /// after acquisition; a size or presentation-mode change discards old acquisitions.
 /// Ready drawables are published on the worker under a short lock and can be
-/// consumed before their main-queue notification arrives.
-/// Desktop enabled; synchronous probes retain the default NO. `drawableReady`
+/// consumed before their main-queue notification arrives. `drawableReady`
 /// runs on the main queue to retry within the current refresh's budget.
-@property (nonatomic) BOOL asynchronousDrawables;
 @property (nonatomic, copy, nullable) void (^drawableReady)(void);
 /// An acquisition is pending and has no ready drawable. A paced host can
 /// retain its dirty scene and let drawableReady resume it within that refresh.
 @property (nonatomic, readonly) BOOL drawablePending;
-/// A desktop frame driver supplies drawables directly from CAMetalDisplayLink.
-/// While enabled, nextDrawable is never called. A callback without an offer
-/// keeps the scene owed, including the controller's occluded/asleep fallback.
-/// Main thread only; disable before detaching the driver's layer.
-@property (nonatomic) BOOL displayLinkDriven;
-/// Borrow one offered drawable for the synchronous frame callback. The layer
-/// consumes it at most once, even if describing a resized output flushes before
-/// the frame callback's final flush. The caller must not retain the offer.
-- (void)withDisplayDrawable:(id<CAMetalDrawable>)drawable
-          presentationTime:(CFTimeInterval)time
-                     frame:(void (^)(void))frame;
-/// When the current/last offer was submitted with present(); zero if unused.
-/// Main thread only. A driver's deadline diagnostics use this, not callback end.
-@property (nonatomic, readonly) CFTimeInterval displaySubmissionTime;
 /// Terminal: cancel acquisitions and release ready drawables before detaching. Main thread only.
 - (void)stopDrawing;
 
@@ -682,12 +605,6 @@ typedef struct {
 /// Actual drawable presentation intervals and GPU times, consumed since the
 /// previous call. Counts and timing only run when countsPresented is enabled.
 - (IFCompositorPresentationStats)takePresentationStats;
-
-/// Diagnostics only: keep a copy of each presented frame (gives up
-/// `framebufferOnly`). Used by `comprender --via-layer`.
-@property (nonatomic) BOOL debugCaptureEnabled;
-- (nullable CGImageRef)newDebugImageOfLastFrame CF_RETURNS_RETAINED;
-- (nullable NSData *)debugBGRADataOfLastFrame;
 @end
 
 NS_ASSUME_NONNULL_END

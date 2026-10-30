@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from spacefarm-digital/sunlight afeea74b18e70ca49bf462d6fe462cf65deb2b32 (MIT, Copyright (c) 2026 spacefarm):
-// third_party/sunlight/Sources/Canvas/TrackpadPan.swift (the same file at that commit; until the vendored copy is merged,
-// a clone of the repository at it). Translated function by function, with Sunlight's names where they fit:
+// Adapted from Sunlight, repository https://github.com/spacefarm-digital/sunlight, commit afeea74b18e70ca49bf462d6fe462cf65deb2b32
+// (MIT, Copyright (c) 2026 spacefarm; notice in SUNLIGHT-NOTICE.txt), upstream path Sources/Canvas/TrackpadPan.swift;
+// the line numbers below are those of that file at that commit. Translated function by function, with Sunlight's names where they fit:
 //   TrackpadPan.dockTail, 58-60 .................... DWDockControlTail (dock-control.h) and DWDockTail
 //   TrackpadPan.dockControl, 61-63 ................. DWDockControlType (dock-control.h)
 //   TrackpadPan.threadMain, 203-209 ................ the thread block of -[DWDockTap start]: a thread of its own, a 5 s watchdog, CFRunLoopRun
@@ -98,11 +98,11 @@ static NSString *boundCounts(uint32_t mask) {
 }
 - (void)setBound:(uint32_t)mask {
     os_unfair_lock_lock(&_lock);uint32_t before=_state.bound;DWDockGuardBound(&_state,mask);os_unfair_lock_unlock(&_lock);
-    if(DWGestureTrace()&&before!=mask)fprintf(stderr,"debug: dock-guard: Dock control is held back for the finger counts %s (was %s)\n",boundCounts(mask).UTF8String,boundCounts(before).UTF8String);
+    if(DWDebugTrace()&&before!=mask)fprintf(stderr,"debug: dock-guard: Dock control is held back for the finger counts %s (was %s)\n",boundCounts(mask).UTF8String,boundCounts(before).UTF8String);
 }
 - (void)setLive:(BOOL)live {
     os_unfair_lock_lock(&_lock);BOOL before=_state.live;DWDockGuardLive(&_state,live);uint32_t bound=_state.bound;NSUInteger reports=_reports;os_unfair_lock_unlock(&_lock);
-    if(DWGestureTrace()&&before!=live)fprintf(stderr,"debug: dock-guard: %s (bound counts %s, %lu frame reports so far)\n",live?"a touch source delivers: Dock control is held back for bound counts":"no touch source delivers: nothing is held back",boundCounts(bound).UTF8String,(unsigned long)reports);
+    if(DWDebugTrace()&&before!=live)fprintf(stderr,"debug: dock-guard: %s (bound counts %s, %lu frame reports so far)\n",live?"a touch source delivers: Dock control is held back for bound counts":"no touch source delivers: nothing is held back",boundCounts(bound).UTF8String,(unsigned long)reports);
 }
 - (uint32_t)fingers:(NSUInteger)fingers at:(NSTimeInterval)now {
     os_unfair_lock_lock(&_lock);_reports++;DWDockGuardFingers(&_state,fingers,now);uint32_t contact=_state.contact;os_unfair_lock_unlock(&_lock);return contact;
@@ -120,7 +120,7 @@ static NSString *boundCounts(uint32_t mask) {
     DWDockControlVerdict verdict=state.live?(drop?DWDockControlDrop:DWDockControlPass):DWDockControlUndecided;
     _decidedStamp=stamp;strlcpy(_decidedVia,via,sizeof _decidedVia);_decidedAt=now;_decidedVerdict=verdict;
     os_unfair_lock_unlock(&_lock);
-    if(DWGestureTrace()){
+    if(DWDebugTrace()){
         char detail[192];snprintf(detail,sizeof detail,"fingers=%u gesture=%u bound=%s live=%d refused=%d tail_ms=%.0f reports=%lu",state.fingers,state.gesture,boundCounts(state.bound).UTF8String,state.live,state.refused,MAX(0,state.until-now)*1000,(unsigned long)reports);
         DWDockControlTrace(via,event,kind,verdict,DWDockReasonName(reason),detail);
     }
@@ -144,7 +144,7 @@ static CGEventRef dockTapCallback(CGEventTapProxy proxy,CGEventType type,CGEvent
 - (CGEventRef)filter:(CGEventType)type event:(CGEventRef)event at:(NSTimeInterval)now {
     if(type==kCGEventTapDisabledByTimeout||type==kCGEventTapDisabledByUserInput){
         if(_tap)CGEventTapEnable(_tap,true);
-        if(DWGestureTrace())fprintf(stderr,"debug: dock-tap: the system disabled the tap (%s); enabled again: %d\n",type==kCGEventTapDisabledByTimeout?"timeout":"user input",_tap?(int)CGEventTapIsEnabled(_tap):0);
+        if(DWDebugTrace())fprintf(stderr,"debug: dock-tap: the system disabled the tap (%s); enabled again: %d\n",type==kCGEventTapDisabledByTimeout?"timeout":"user input",_tap?(int)CGEventTapIsEnabled(_tap):0);
         return event;
     }
     // Only Dock control: anything else is the system's. The guard decides per stream, with the same answer for the other tap that may see the packet.
@@ -154,7 +154,7 @@ static CGEventRef dockTapCallback(CGEventTapProxy proxy,CGEventType type,CGEvent
 - (BOOL)start {
     // A port the system invalidated (Accessibility taken away) is replaced, as Sunlight's watchdog replaces it.
     if(_tap&&CFMachPortIsValid(_tap)){
-        if(!self.running){CGEventTapEnable(_tap,true);if(DWGestureTrace())fprintf(stderr,"debug: dock-tap: found installed and disabled; enabled again: %d\n",(int)self.running);}
+        if(!self.running){CGEventTapEnable(_tap,true);if(DWDebugTrace())fprintf(stderr,"debug: dock-tap: found installed and disabled; enabled again: %d\n",(int)self.running);}
         return self.running;
     }
     [self stop];
@@ -164,7 +164,7 @@ static CGEventRef dockTapCallback(CGEventTapProxy proxy,CGEventType type,CGEvent
     if(!trusted||!(_tap=CGEventTapCreate(kCGSessionEventTap,kCGHeadInsertEventTap,kCGEventTapOptionDefault,CGEventMaskBit(30),dockTapCallback,(__bridge void *)self))){
         if(!atomic_flag_test_and_set(&noted))fprintf(stderr,"Dock-control suppression unavailable: the session event tap needs Accessibility access. The system's three- and four-finger gestures stay on.\n");
         NSTimeInterval now=CACurrentMediaTime();
-        if(DWGestureTrace()&&now-lastTrace>=30){lastTrace=now;fprintf(stderr,"debug: dock-tap: not installed: AXIsProcessTrusted=%d, CGEventTapCreate %s (tried again at the next native-input configuration)\n",(int)trusted,trusted?"returned NULL":"not tried");}
+        if(DWDebugTrace()&&now-lastTrace>=30){lastTrace=now;fprintf(stderr,"debug: dock-tap: not installed: AXIsProcessTrusted=%d, CGEventTapCreate %s (tried again at the next native-input configuration)\n",(int)trusted,trusted?"returned NULL":"not tried");}
         _tap=NULL;return NO;
     }
     _source=CFMachPortCreateRunLoopSource(NULL,_tap,0);
@@ -179,7 +179,7 @@ static CGEventRef dockTapCallback(CGEventTapProxy proxy,CGEventType type,CGEvent
                 CFRetain(loop);tap->_loop=loop;
                 // TrackpadPan.checkTap, 229-238: a tap the system disabled without telling is turned back on.
                 tap->_watchdog=CFRunLoopTimerCreateWithHandler(NULL,CFAbsoluteTimeGetCurrent()+5,5,0,0,^(CFRunLoopTimerRef timer){(void)timer;DWDockTap *t=weak;
-                    if(t&&t->_tap&&!CGEventTapIsEnabled(t->_tap)){CGEventTapEnable(t->_tap,true);if(DWGestureTrace())fprintf(stderr,"debug: dock-tap: the watchdog found the tap disabled; enabled again: %d\n",(int)CGEventTapIsEnabled(t->_tap));}});
+                    if(t&&t->_tap&&!CGEventTapIsEnabled(t->_tap)){CGEventTapEnable(t->_tap,true);if(DWDebugTrace())fprintf(stderr,"debug: dock-tap: the watchdog found the tap disabled; enabled again: %d\n",(int)CGEventTapIsEnabled(t->_tap));}});
                 CFRunLoopAddTimer(loop,tap->_watchdog,kCFRunLoopCommonModes);CFRunLoopAddSource(loop,tap->_source,kCFRunLoopCommonModes);
             }
             dispatch_semaphore_signal(ready);tap=nil;
@@ -190,12 +190,12 @@ static CGEventRef dockTapCallback(CGEventTapProxy proxy,CGEventType type,CGEvent
     _thread.name=@"infinify.dockguard";_thread.qualityOfService=NSQualityOfServiceUserInteractive;[_thread start];
     dispatch_semaphore_wait(ready,dispatch_time(DISPATCH_TIME_NOW,(int64_t)(2*NSEC_PER_SEC)));
     CGEventTapEnable(_tap,true);
-    if(DWGestureTrace())fprintf(stderr,"debug: dock-tap: installed (session tap, head insert, Dock-control events only), enabled=%d, tap thread %s\n",(int)CGEventTapIsEnabled(_tap),_loop?"running":"not confirmed within 2 s");
+    if(DWDebugTrace())fprintf(stderr,"debug: dock-tap: installed (session tap, head insert, Dock-control events only), enabled=%d, tap thread %s\n",(int)CGEventTapIsEnabled(_tap),_loop?"running":"not confirmed within 2 s");
     return YES;
 }
 - (void)stop {
     if(!_tap)return;
-    if(DWGestureTrace())fprintf(stderr,"debug: dock-tap: stopped\n");
+    if(DWDebugTrace())fprintf(stderr,"debug: dock-tap: stopped\n");
     // Nothing left in the thread's run loop, so that it ends even if it had not started running when it is stopped.
     CGEventTapEnable(_tap,false);CFMachPortInvalidate(_tap);if(_watchdog)CFRunLoopTimerInvalidate(_watchdog);
     if(_loop)CFRunLoopStop(_loop);

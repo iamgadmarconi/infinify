@@ -6,7 +6,7 @@ for the controller. A window that appears is adopted into a waiting slot or
 placed by `window_placement`; a window that closes leaves the scene or leaves a
 stand-in; titles follow; closing, suspending and relaunching are actions.
 
-The rules are adapted from malbiruk/driftwm at
+The rules are adapted from <https://github.com/malbiruk/driftwm> at
 `352333a8fa1b22171492d4b71a54102045c9a19d`: `src/state/placement.rs`, the first
 sized commit in `src/handlers/compositor.rs`, `toplevel_destroyed` in
 `src/handlers/xdg_shell.rs`, `src/state/suspended.rs`, the follow helpers of
@@ -15,9 +15,9 @@ sized commit in `src/handlers/compositor.rs`, `toplevel_destroyed` in
 `layout::auto_placement::place_auto`, upstream's own code; so are
 `layout::cluster::cluster_of` and the window-rule matcher.
 
-One existing command gains two optional inputs and three commands are new.
-`ABI_VERSION`, `SAVE_VERSION` and every other command shape are unchanged; the
-snapshot gains `lifecycle`. The controller still
+The commands are `attach` (a new window takes the optional inputs `output` and
+`pointer`), `window_closed`, `retitle` and `adoption_complete`; the snapshot
+carries `lifecycle`. The controller
 performs no native operation: `close_window`, `launch` and
 `focus_native_window` are requests to the shell.
 
@@ -338,11 +338,10 @@ the last save is written at all.
 
 On macOS applications outlive Infinify. So:
 
-- **The scene file keeps a slot for every window**, live or not, as it always
-  has. The additive key `standins` lists the logical ids that are stand-ins; it
-  is omitted while empty, and a file without it has none. Nothing else changed
-  in the file: no pid, window number, process birth or binding generation is
-  written.
+- **The scene file keeps a slot for every window**, live or not. The key
+  `standins` lists the logical ids that are stand-ins; it is always written and
+  is empty while there are none. No pid, window number, process birth or
+  binding generation is written.
 - **The launch pass.** Until the first `adoption_complete`, the windows the
   shell reports are the ones that were already open. Each takes its waiting
   slot back by the adoption rule above, or is placed. None is focused or
@@ -703,16 +702,15 @@ the user's account of it. In this contract's terms the shell
   that failed it is asked again when it next comes on screen. A window left
   out is not named in `present` either, so a slot an earlier run saved for it
   is dropped by the pass like any slot nothing matched. The chooser, which
-  since 2026-10-10 only a `--manual` run has, lists as it did and adds any of
+  only a `--manual` run has, lists as it did and adds any of
   them by hand;
 - sends the new-window `attach`, with `output` and `pointer`, for every
   candidate window it discovers that passes that test; `adoption_complete`
   after the first read of each window manager, with `present` built from the
   titled candidate windows of that read that exist but were not offered. A
-  run has one window manager since 2026-10-10, made when its canvas opens (at
-  launch, or when the onboarding window hands over) and kept until quit, so
-  that is once in a run; before, a canvas reopened after Return to desktop
-  made another and ended a pass of its own;
+  run has one window manager, made when its canvas opens (at launch, or when
+  the onboarding window hands over) and kept until quit, so that is once in a
+  run;
   `window_closed`, with `output`, when a managed window's number has left the
   window list or its process is gone, or when its application has reported it
   destroyed and the window list no longer shows it on screen; `retitle` when
@@ -773,132 +771,9 @@ the user's account of it. In this contract's terms the shell
   bundle identifier. A press that was skipped (no Accessibility access, a
   binding that changed) leaves the mark to lapse by itself. A bundle identifier
   with no installed application is reported on stderr (a normal run draws no
-  status line since 2026-10-10) after the IPC reply has already answered `Ok`,
+  status line) after the IPC reply has already answered `Ok`,
   and the relaunch stays pending until it lapses; upstream answers
   `<name> is no longer installed` and records nothing;
 - sends no new-window `attach` and no `adoption_complete` without Screen
   Recording access or with `--manual`: `settled` stays false for the whole run,
   no slot is dropped and `session.restore_windows` is never read.
-
-### Stand-in relaunch validation, 2026-10-22
-
-The production v11 native app in the macOS VM (SHA-256
-`5bc5a15d747220a06a2f84f1815c99d3d8e9043b07fab168f509a34e188d6857`)
-reopened the deliberately launched Terminal stand-in through actual CUA Return.
-It kept logical id `61`, world center `[1468, -1444]` and size `860x499`.
-Actual typing of `echo infinify-v11-workflow` followed by Return produced visible
-shell output. Actual F3 overview and return restored the previous camera/zoom.
-The original six application mappings stayed unchanged; the temporary Terminal
-was closed through product IPC and the original six-window view restored.
-
-Evidence is retained under `target/native-vm/ux-flow-20261022/`:
-`keyboard/standin-before-enter.json`, `keyboard/standin-after-enter-v11.json`,
-`keyboard/v11-terminal.png`, `keyboard/v11-f3-overview.json`,
-`keyboard/v11-f3-return.json` and `infinify-v11-relaunch.mov`.
-The same Return action left the stand-in suspended on v10
-(`keyboard/standin-after-enter-v10.json`). Label-click, close-button and title-drag
-physical inputs remain unverified because CUA pointer delivery was unavailable.
-This validates the scoped Terminal relaunch/edit/return workflow, not all
-application matching, lifecycle failures or general parity.
-
-### Live runs, 2026-10-09
-
-The built app (`scripts/build-app.sh`, ad-hoc signed, macOS 27.2, Apple Silicon)
-was launched four times on a private scene, config and socket and driven
-through `Infinify msg`, each launch for a few seconds. The launches had no
-Screen Recording and no Accessibility grant, so the last point above applied to
-all of them: nothing here is evidence of discovery, adoption, placement,
-capture, a close button press or an application launch, and no
-`adoption_complete` was ever sent. Nothing from them is saved as evidence. The
-scene was seeded through the controller with three windows attached at explicit
-world rectangles and saved: "Notes", "Browser" and "Terminal", all with the
-bundle identifier `org.example.seed`, which no application has. Loaded, they are
-three waiting slots; none is a stand-in.
-
-- `--windowed 1100x700`, empty config: the app owned one on-screen window of
-  1100x700 at layer 0, stderr carried `Windows are not managed: Infinify has no
-  Screen Recording access. …`, and `state` listed the three windows, all
-  `suspended`, on one output `windowed` of 1100x636 (the window less the
-  64-point strip that build kept; the whole 1100x700 since 2026-10-10). Three
-  seconds later `state` was the same: without a discovery pass nothing is
-  dropped.
-- In that launch: `focus --id 1` then `action close-window`: window 1 gone.
-  `close --id 2`: gone. `suspend --id 3`: `window is already suspended`;
-  `suspend --id 99`: `no window with id 99`; `relaunch --id 99`:
-  `no suspended window matching selector`; each with exit status 1.
-- `relaunch --id 3`: `ok`, and `Relaunch failed: no application with bundle
-  identifier "org.example.seed" is installed` on stderr. Asked again about a
-  second later: `ok` and no second line on stderr, the no-op for a relaunch
-  that is pending. The app kept answering `state`. The thirty seconds were not
-  waited out, so the lapse itself was not seen in the app.
-- After SIGTERM the scene file held window 3 alone, no `standins` key, and no
-  pid, window number, process birth, identity or generation.
-- `--windowed 1100x700` on the reseeded scene with `[session] restore_windows =
-  true`: the not-managed line again, three windows in `state` at once and three
-  seconds later, and three in the file it saved at exit.
-- `--manual` twice on that saved file with the same config: `state` listed the
-  three windows and no output, stderr stayed empty, and the file still held the
-  three after exit. In the second of them the app owned one on-screen window of
-  720x502 at layer 4, the chooser, read from the system window list 1.5 s after
-  the socket answered; in the first that list was read at once and was still
-  empty.
-- Every launch exited 0 on SIGTERM with its socket file removed.
-
-`restore_windows` made no observable difference, as the contract says it cannot
-without `adoption_complete`. Who follows a close, the held slots, a
-refused config file, expiry on the clock and the pass of a reopened canvas are
-not observable through `msg` in such a run; they rest on `lifecycle_flow`
-alone.
-
-Six earlier launches the same day, on the build before the review fixes (the
-close tiers read no history of logical focus, no expiry, no `present`, one
-`adoption_complete` per process), covered the same ground with one seeded stand-in: there `focus` on an
-out-of-view stand-in flew the camera to it, `action suspend-window` on a
-focused stand-in dismissed it, a saved stand-in was listed under `standins` and
-read back at the next launch, and a repeated `relaunch` printed the failure
-line each time, which this build no longer does.
-
-One more launch the same day ran the build that holds this contract together
-with [window navigation](NAVIGATION.md#window-navigation-actions), the
-[event stream](IPC.md#event-stream) and autostart, again without Screen
-Recording access and on three seeded waiting slots: dismissal by
-`close-window`, the `Suspend` and `Relaunch` replies above and the pending
-relaunch's no-op were the same, and a subscriber was sent the state without the
-dismissed window. No window had a bound source, so no focus request and no
-focus history entry was produced there. The
-[shell notes](../../native/desktop/README.md#what-was-run-for-managed-windows)
-list what was read.
-
-### The event-driven shell, 2026-10-10
-
-The build that follows native windows by their events
-([event delivery](#event-delivery); the
-[shell notes](../../native/desktop/README.md#event-driven-tracking) say what
-it observes) was built, and launched four times, the fourth on the final
-build: `--windowed 1100x700` for three seconds on a private scene of the same
-three seeded slots, a config that sets nothing and a private socket, without
-Screen Recording access. Each time `state` listed the three windows on one
-output `windowed` of 1100x636, `action center-nearest right` settled the
-camera at `1950 -0` on window 2, and the app exited 0 on SIGTERM with its
-socket removed and one line on stderr, the not-managed line.
-
-Those launches are no evidence of event delivery. Without Screen Recording access
-the shell creates no window manager, and the observers belong to it: none was
-created, no window was bound, and no `attach`, `window_closed`, `retitle`,
-`observe`, `adoption_complete` or native `activate` was sent. The observers
-were run only outside the app, in a throwaway program that registers and
-counts ([what was run](../../native/desktop/README.md#what-was-run-for-event-driven-tracking)),
-which sends nothing to a controller. That a native event leads to exactly one
-report, in the order and with the answers the table above gives, rests on
-`lifecycle_flow`, where the test plays the shell, and on a reading of the
-shell's code.
-
-The build that landed has the tap bindings and the background caches beside
-the events. It was launched once more the same day, the same way but with a
-config holding one `alt+shift` tap, for four seconds: the same `state`,
-`center-nearest right` at `1950 -0` on window 2, `pan-viewport right` at
-`2050 -0`, `zoom-to-fit` at zoom `0.28484848484848485` and back, a viewport
-capture written and opened, and exit 0 on SIGTERM with its socket removed and
-the one not-managed line on stderr. It had no window manager either, so the
-paragraph above holds for it unchanged: no observer was created and no event
-of a native window was driven.

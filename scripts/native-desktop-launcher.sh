@@ -46,8 +46,8 @@ if [ "$native_mode" = login ]; then
   exec >> "$native_log" 2>&1
   printf '%s login start\n' "$(/bin/date '+%Y-%m-%d %H:%M:%S')"
 fi
-native_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd -P) || fail 'could not resolve the bundled native helper directory.'
-native_bundle=$(CDPATH= cd -P "$native_dir/../../.." && pwd -P) || fail 'could not resolve the containing app bundle.'
+native_dir=$(CDPATH='' cd -P "$(dirname "$0")" && pwd -P) || fail 'could not resolve the bundled native helper directory.'
+native_bundle=$(CDPATH='' cd -P "$native_dir/../../.." && pwd -P) || fail 'could not resolve the containing app bundle.'
 native_name=${native_bundle##*/}
 [ "$native_name" = Infinify.app ] || fail 'the bundled launcher must run from Infinify.app.'
 [ "$native_dir" = "$native_bundle/Contents/Resources/NativeDesktop" ] || fail 'native helper path resolves outside the containing app bundle.'
@@ -285,7 +285,7 @@ native_validate_retired_journal() {
   native_journal_size=$(/usr/bin/stat -f '%z' "$native_journal") || fail 'could not inspect the retired helper journal.'
   native_decimal "$native_journal_size" && [ "$native_journal_size" -ge 1 ] && [ "$native_journal_size" -le 4194304 ] || fail 'the retired helper journal size is invalid; preserve it and inspect it.'
   native_journal_version=$(/usr/bin/plutil -extract v raw -expect integer -o - "$native_journal") || fail 'the retired helper journal is not a valid schema-3 journal.'
-  [ "$native_journal_version" = 3 ] || fail 'the retired helper journal is schema 2 or unknown; it has no retained original-window ledger for safe Dock recovery. Preserve it and inspect it; no automatic transform reconstruction is safe.'
+  [ "$native_journal_version" = 3 ] || fail 'the retired helper journal has an unsupported schema; it has no retained original-window ledger for safe Dock recovery. Preserve it and inspect it; no automatic transform reconstruction is safe.'
   native_journal_pid=$(/usr/bin/plutil -extract server_pid raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no exact integer server PID.'
   native_pid_valid "$native_journal_pid" && [ "$native_journal_pid" = "$native_old_dock_pid" ] || fail 'the retired helper journal does not identify its recorded Dock process.'
   native_journal_sec=$(/usr/bin/plutil -extract server_birth_sec raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no exact server birth time.'

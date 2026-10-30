@@ -6,16 +6,17 @@
 //                  `load` over XPC for the app alone: same team, Infinify's bundle identifier, the console user
 //   loadd status   read-only: the team this daemon is signed by and the digests built into it
 //
-// Copied from spacefarm-digital/sunlight afeea74b18e70ca49bf462d6fe462cf65deb2b32 (MIT, Copyright (c) 2026 spacefarm;
-// notice in native/desktop/SUNLIGHT-NOTICE.txt), third_party/sunlight/LiveWindows/helper.m, which is itself adapted from
-// yabai's src/sa.m (MIT, Copyright (c) 2019 Asmund Vikane; native/privileged/YABAI-LICENSE.txt). Copied verbatim:
+// Copied from Sunlight, https://github.com/spacefarm-digital/sunlight, commit afeea74b18e70ca49bf462d6fe462cf65deb2b32 (MIT,
+// Copyright (c) 2026 spacefarm; notice in native/desktop/SUNLIGHT-NOTICE.txt), upstream path LiveWindows/helper.m, which is itself
+// adapted from yabai's src/sa.m (https://github.com/asmvik/yabai, MIT, Copyright (c) 2019 Asmund Vikane; notice in
+// native/desktop/YABAI-NOTICE.txt). Copied verbatim:
 //   lines 93-112   runCapturing
 //   lines 43, 114-148   kDockPath, consoleUID, consoleUser, dockPID
 //   lines 386-408  ownTeam, ownPath
 // Copied with edits:
 //   lines 410-460  `Daemon` (the class, its listener check, runCommand, exitWhenIdle) and
 //   lines 462-478  `daemonMain`
-//     - the protocol is InfinifyLoaderXPC and takes the command's arguments as well (Sunlight's two commands take none);
+//     - the protocol is InfinifyLoaderXPC (loadd-request.h) and takes the command's arguments as well (Sunlight's two commands take none);
 //     - the commands are `ping` and `load`, checked by DWLoadRefusal (loadd-request.m) before anything runs;
 //     - the child is not the daemon's own executable but the bundled loader-arm64e, run from a root-owned copy whose
 //       bytes were checked against the digest built into this daemon;
@@ -133,11 +134,6 @@ static NSString *ownPath(void)
 }
 
 // MARK: Launch daemon
-
-/// What the app may ask the daemon for. native/desktop/loader-service.m mirrors it.
-@protocol InfinifyLoaderXPC
-- (void)runCommand:(NSString *)command arguments:(NSArray<NSString *> *)arguments reply:(void (^)(int status, NSString *output))reply;
-@end
 
 /// The directory of the loader and payload next to this executable: Contents/Resources/NativeDesktop of the bundle
 /// the daemon was registered from. Nil when the executable is not at that place of an Infinify.app.

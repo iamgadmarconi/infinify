@@ -2,6 +2,10 @@
 
 `driftwm-desktop` builds an `rlib` and `libdriftwm_desktop.a`. Include
 [`include/driftwm_desktop.h`](include/driftwm_desktop.h) from the native shell.
+The shell that links it is the Objective-C desktop in
+[`native/desktop`](../../native/desktop/README.md): `./scripts/build-app.sh`
+builds this crate (`cargo build -p driftwm-desktop --release`) and links the
+static library into `target/app/Infinify.app`.
 Use one handle per scene, with serialized access. The C boundary catches Rust
 unwinds; it cannot protect against invalid pointers, use-after-free or OOM aborts.
 `driftwm_desktop_clone` copies logical state into a separately owned handle,
@@ -73,7 +77,7 @@ Preserve them as integers in native code.
 | `gesture_begin` | `kind`, `fingers`, `modifiers`, `context`, `output`, global `pointer` point, optional `doubletap`, `time_ms` | `{gesture, fired, note, navigation, effects, dirty, needs_frames, trackpad}` |
 | `gesture_update` | optional `dx`, `dy`, `scale`, `rotation`, `held`; `time_ms` | the same |
 | `gesture_end` | optional `cancelled`, `held`; `time_ms` | the same |
-| `snapshot` | none | `outputs`, `windows`, `focus` (`intent`, `observed_native`, `pending_effect`, `last_result`, `history`, `cycle`, `release_pending`; see [FOCUS.md](FOCUS.md)), `pass_keys` ([RULES.md](RULES.md#pass_keys)), `placements`, `lifecycle`, `lifecycle_events` ([EFFECTS.md](EFFECTS.md#lifecycle-events)), `render`, `evidence`; each output with `pick` ([POINTER.md](POINTER.md#pick-mode)) and `fullscreen` ([FULLSCREEN.md](FULLSCREEN.md#wire-contract)), each window with its `widget`, `pinned`, `rule` and `mode` ([SIZES.md](SIZES.md#mode)), each placement with `pinned`, `widget` and `opacity`, and both with what the window is drawn with (`kind`, `decoration` and the rest of [RENDER.md](RENDER.md#placements)) |
+| `snapshot` | none | `outputs`, `windows`, `focus` (`intent`, `observed_native`, `pending_effect`, `last_result`, `history`, `cycle`, `release_pending`; see [FOCUS.md](FOCUS.md)), `pass_keys` ([RULES.md](RULES.md#pass_keys)), `placements`, `lifecycle`, `lifecycle_events` ([EFFECTS.md](EFFECTS.md#lifecycle-events)), `render`; each output with `pick` ([POINTER.md](POINTER.md#pick-mode)) and `fullscreen` ([FULLSCREEN.md](FULLSCREEN.md#wire-contract)), each window with its `widget`, `pinned`, `rule` and `mode` ([SIZES.md](SIZES.md#mode)), each placement with `pinned`, `widget` and `opacity`, and both with what the window is drawn with (`kind`, `decoration` and the rest of [RENDER.md](RENDER.md#placements)) |
 | `screenshot_result` | `path`, `width`, `height`; or `error` | `{reply}`: upstream's reply to the client that asked for the screenshot |
 | `save` / `load` | explicit caller `path` string | `{}` |
 | `load_config` | `path` string or null | `{path, exists, errors, warnings, dirty, effects, focus_follows_mouse}` |
@@ -82,11 +86,11 @@ Preserve them as integers in native code.
 | `mouse_binding` | `trigger` (a button, `scroll`, or the wheel notch `wheel_up` / `wheel_down`), `source`, `modifiers`, `context`, optional `window`, optional `pick` boolean | `{binding}` or `{binding: null}`; `{binding: null, passed: true}` when the window's `pass_mouse` claims the trigger, which a pick target never does ([RULES.md](RULES.md#pass_mouse)) |
 | `hot_corner` | `output`, `corner`, optional `pointer`, `held` | `{navigation, effects, dirty}` |
 | `tap` | `modifiers`, `output` or null, optional `pointer`, `held` | `{navigation, effects, dirty}`, an `action` reply: the [tap binding](CONFIG.md#tap-bindings) on a bare modifier chord that was pressed and released alone |
-| `native_resize_capability` | `enabled` boolean, optional `readback` boolean | `{}`; the shell performs resize effects in this run, and with `readback` a size is settled by the native read alone: see [SIZES.md](SIZES.md#the-gate) and [NATIVE_RESIZE.md](NATIVE_RESIZE.md#readback-mode) |
+| `native_resize_capability` | `enabled` boolean | `{}`; the shell performs resize effects in this run, and a size is settled by the native read alone: see [SIZES.md](SIZES.md#the-gate) and [NATIVE_RESIZE.md](NATIVE_RESIZE.md#readback-mode) |
 | `layout_changed` | `name`, `short`, `index`, `count` | `{}` |
 | `state_event` | `output` or null | `{line}`: the State event line, or null when unchanged |
 
-See [focus/cycle commands](FOCUS.md) for the additive focus ABI and
+See [focus/cycle commands](FOCUS.md) for the focus ABI and
 [normal-window navigation](NAVIGATION.md) for camera commands, runtime snapshots,
 and the native frame-clock contract. [Camera motion](MOTION.md) covers timed
 pans and momentum, edge pan, cursor edge pan and `zoom_by`.
@@ -218,94 +222,54 @@ sibling temporary file, fsync, atomic rename and parent-directory sync. A direct
 sync error can be reported after the rename committed. Parent directories must
 already exist. Loads are bounded at 32 MiB and never modify the input file.
 
-Verification:
+Verification. One test target per area lives in `crates/desktop/tests/`, each
+driving the controller through JSON and the exported C ABI; run the targets of
+the files you change, not the whole suite:
 
 ```sh
-cargo test -p driftwm-desktop --test navigation_flow --test navigation_actions_flow --test focus_cycle_flow --test controller_flow --test config_flow --test lifecycle_flow --test motion_flow --test gesture_flow --test rules_flow --test render_flow --test pointer_flow --test sizes_flow --test effects_flow --test fullscreen_flow --test usable_tap_flow --locked
+cargo test -p driftwm-desktop --test controller_flow --locked
 cargo clippy -p driftwm-desktop --all-targets -- -D warnings
 cargo fmt -p driftwm-desktop --check
-cargo build -p driftwm-desktop
-cc -Wall -Wextra -Werror -mmacosx-version-min=26.0 \
-  -Icrates/desktop/include crates/desktop/tests/abi_smoke.c \
-  target/debug/libdriftwm_desktop.a -o /tmp/driftwm-desktop-abi-smoke
-/tmp/driftwm-desktop-abi-smoke
 ```
+
+The targets are `config_flow`, `controller_flow`, `effects_flow`,
+`focus_cycle_flow`, `focus_nearest_flow`, `fullscreen_flow`, `gesture_flow`,
+`hardening_flow`, `interact_min_flow`, `ipc_flow`, `lifecycle_flow`,
+`motion_flow`, `native_resize_flow`, `navigation_actions_flow`,
+`navigation_flow`, `passthrough_flow`, `platform_actions_flow`, `pointer_flow`,
+`render_flow`, `rules_flow`, `sizes_flow`, `snap_actions_flow`,
+`usable_tap_flow` and `view_actions_flow`. Each document in this directory names
+the ones that cover it in its "Evidence and limits" or "Verification boundary"
+section.
 
 These scenarios prove controller behavior through JSON and the exported C ABI.
 They do not prove captured pixels, drawn frames, written screenshots, usable
 compositing or native input delivery.
 
-## Outputs since desktop mode
+## Outputs
 
-Since 2026-10-10 a normal run of the shell is the desktop, not an app in a
-window: `register_output` carries each display's whole rectangle, menu bar and
-Dock included, and with `--windowed` the whole window. No command changed
-shape, and the controller needed no change: `screen_bounds` is whatever
+A normal run of the shell is the desktop, not an app in a window:
+`register_output` carries each display's whole rectangle, menu bar and Dock
+included, and with `--windowed` the whole window. `screen_bounds` is whatever
 rectangle the shell names, and the usable area is the whole of it unless the
 registration, a `set_usable_area` or a `set_navigation_context` names a
 smaller one, which the shell never sends
-([NAVIGATION.md](NAVIGATION.md#the-usable-area)). What follows from the larger rectangle is
-described where it applies: [hot corners](CONFIG.md#hot-corners),
+([NAVIGATION.md](NAVIGATION.md#the-usable-area)). What follows from the larger
+rectangle is described where it applies: [hot corners](CONFIG.md#hot-corners),
 [cursor edge pan](MOTION.md) and the environment of a run
 [started at login](CONFIG.md#started-at-login).
 
-Before that the shell kept a 64-point toolbar strip at the top of every panel
-and registered the rest. The live runs these documents record up to that date
-were made with that build and are left as observed: a `--windowed 1100x700`
-launch reported an output of 1100x636 with its view center at `550 -318`,
-where the same launch now registers 1100x700. Their status-line, toolbar,
-Choose windows and Return to desktop remarks describe that build too; a normal
-run has none of the four now.
-
-What was run of this, on 2026-10-10: the scenario modules `controller_flow`,
-`lifecycle_flow`, `navigation_actions_flow`, `platform_actions_flow`,
-`render_flow`, `pointer_flow`, `ipc_flow` and `config_flow` (95 scenarios, none
-failed, none of them about desktop mode), and five `--windowed 1100x700`
-launches of the built app on a private scene, config and socket, without
-Screen Recording access (Accessibility was evidently trusted for the session
-that started them: no launch printed the missing-Accessibility note, and with
-detached placeholders only no native focus or input was attempted). There
-`msg state` read `windowed camera 550 -350 zoom 1 1100x700`, a viewport
-screenshot was 1100 x 700 pixels
-of canvas with no strip, `action "center-nearest right"` moved the camera to
-`1950 -0` with the 900x600 placeholder centered in the whole 1100x700, and
-`action quit` and SIGTERM each ended the app with exit status 0 and the socket
-file gone. No run was made on a whole display, under launchd, across a sleep,
-a lock or a Space change, or with real windows: the
-[shell notes](../../native/desktop/README.md#what-was-run-for-desktop-mode)
-have the list.
-
-Desktop mode was built on the tree before tap bindings (`72be7ea`), the
-background caches (`a47217e`) and event-driven tracking (`532a67d`), and
-landed on the tree that has all three. No controller code changed at that
-join either. On the landed tree, the same day, thirteen scenario modules
-passed (179 scenarios: the eight above with `lifecycle_flow` at 32, and
-`usable_tap_flow`, `motion_flow`, `effects_flow`, `passthrough_flow` and
-`rules_flow`), and two more `--windowed 1100x700` launches on the private
-paths, with a config holding an `alt+shift` tap, read the same output,
-captures, camera and exits; what was read in the shell at the join and not
-run is in the same shell notes.
-
-## DriftWM v0.21.0
+## Behaviour source
 
 The desktop controller follows DriftWM v0.21.0
-(`df3de27b26c7998e8a460cffd8a4925cbed3a322`, `third_party/driftwm`). Its parser,
-defaults and snapping stops come from `driftwm-core`, which was brought to that
-commit verbatim ([PORT.md](../core/PORT.md#update-to-v0210)); the controller
-adaptations are named in each source file's header, and a doc here that still
-cites `352333a8fa1b22171492d4b71a54102045c9a19d` names the commit that part was
-adapted at, which this update re-read only where the v0.20/v0.21 changes touch it.
-
-| Release note | Where it lives here | Status |
-| --- | --- | --- |
-| Changed defaults (v0.20.0): `window_placement` auto; `[session] restore_*` on; `reset_on_new_window` off; `interact_min` 0.5; `[snap] corners` on, `outer_gap` 12; `decoration_resize_snapped` / `decoration_fit_snapped` on; decoration colours; blur 5 / 1.5 | `driftwm-core` defaults ([CONFIG.md](CONFIG.md)); the macOS `window_placement = auto` adapter default is now upstream's | in force; tests of the existing flows were updated to them |
-| Default bindings (v0.20.0): `focus-nearest` on mod+arrows, 4-finger and mod+3-finger swipes and mod+ctrl+drag; mod+shift+arrows `move-to-snap`; snapped resize and fit, Shift for the single window; mod+middle `fill-window`; holds `focus-center`; mod+shift+q `suspend-window`; mod+e, mod+z and the alt pinches removed | `driftwm-core` tables; [CONFIG.md](CONFIG.md#key-bindings), [GESTURES.md](GESTURES.md#driftwm-v0200--v0210), [POINTER.md](POINTER.md) | in force |
-| `focus-nearest`, `move-to-snap`, `resize-to-snap` | `window_actions.rs`, `keyboard_snap.rs`, `sizes.rs`; [NAVIGATION.md](NAVIGATION.md#driftwm-v0200--v0210), [SIZES.md](SIZES.md#keyboard-snapping-move-to-snap-resize-to-snap-v0200-v0210) | scenario tests; no native run |
-| Alt-Tab leaves a window already whole alone; `auto_navigate_on_click` scrolls minimally; `focus-center` fallback; sloppy focus after pans | `window_actions.rs`, `pointer_policy.rs`; [NAVIGATION.md](NAVIGATION.md#driftwm-v0200--v0210), [POINTER.md](POINTER.md) | scenario tests; the shell half of the pull is built, not run |
-| `nudge_step` / `resize_step` in screen pixels; `fit-window` edge to edge | `keyboard_snap.rs` (`canvas_step`), `sizes.rs` | scenario tests |
-| `interact_min` default 0.5 | the pick mode of v0.19, now on by default; [POINTER.md](POINTER.md#pick-mode) | scenario tests (`tests/interact_min_flow.rs`); the shell paths were read, a pen's dedicated packets are now taken over a pick target; no Mac run |
-| IPC `pid`, `msg cursor`; request, connection, position, size, stand-in caps; owner-only files; screenshots through a temp file; spawned apps' environment | [IPC.md](IPC.md#v0210-hardening) | scenario tests and `tests/e2e/ipc-limits.sh`; see there for what was not run |
-| Closing a window fitted with a snapped fit puts back the neighbours (v0.20.0); suspending it leaves them | `sizes.rs` (`Restore::Fit`'s `FitPush`, `release_fit_push`), `lifecycle.rs` (`depart`); [SIZES.md](SIZES.md#closing-a-snapped-fit-window-puts-the-neighbours-back-v0200) | scenario tests (`tests/sizes_flow.rs`); no native run |
+(<https://github.com/malbiruk/driftwm> @
+`df3de27b26c7998e8a460cffd8a4925cbed3a322`). Its parser, defaults and snapping
+stops come from `driftwm-core`, which carries that commit's code
+([PORT.md](../core/PORT.md#update-to-v0210)); the controller adaptations are
+named in each source file's header, and a doc here that still cites
+`352333a8fa1b22171492d4b71a54102045c9a19d` names the commit that part was
+adapted at, which was re-read only where the v0.20/v0.21 changes touch it. The status of each
+upstream behaviour is tracked in [docs/parity](../../docs/parity/README.md).
 
 Left out because they exist only for the Wayland or Linux stack: the KDE
 server-decoration protocol (GTK header bars under `[decorations] default_mode`),
@@ -313,5 +277,5 @@ activation-token expiry, gamma tables and virtual keymaps from memfds, the
 wlr-screencopy region fix, ext-image-copy-capture offsets, the monotonic capture
 clock, pen-over-lock-screen cursor, the DRM error dump, layer-surface resize
 (a Wayland layer shell), desktop-entry limits, the flake and its Home Manager
-module, and the XDG autostart note. `docs/parity/README.md` lists each with its
-status.
+module, and the XDG autostart note. [docs/parity](../../docs/parity/README.md)
+lists each with its status.

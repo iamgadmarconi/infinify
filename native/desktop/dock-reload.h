@@ -10,8 +10,8 @@
 // the payload version, across launches, until the owner loads by hand.
 //
 // Translated from Sunlight's `AdditionReloader` and `DockCrashGuard`
-// (third_party/sunlight/Sources/Canvas/RealWindows/AdditionReloader.swift, afeea74, MIT, Copyright (c) 2026 spacefarm);
-// dock-reload.m names the line ranges.
+// (Sources/Canvas/RealWindows/AdditionReloader.swift in https://github.com/spacefarm-digital/sunlight, commit
+// afeea74b18e70ca49bf462d6fe462cf65deb2b32, MIT, Copyright (c) 2026 spacefarm); dock-reload.m names the line ranges.
 
 // Seconds a Dock restart counts as near a load, and the strikes that stop automatic loading.
 extern const NSTimeInterval DWDockCrashWindow;

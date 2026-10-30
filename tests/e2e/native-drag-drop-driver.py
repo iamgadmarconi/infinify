@@ -18,7 +18,8 @@ import struct
 import sys
 import time
 import subprocess
-import zlib
+
+import png_pixels
 
 ROOT = Path(__file__).resolve().parents[2]
 HEADER = struct.Struct('<IHHQ')
@@ -65,8 +66,8 @@ sky.SLSConnectionGetPID.restype = C.c_int
 sky.SLSFindWindowAndOwner.argtypes = [C.c_int, C.c_int, C.c_int, C.c_int,
     C.POINTER(Point), C.POINTER(Point), C.POINTER(C.c_uint32), C.POINTER(C.c_int)]
 sky.SLSFindWindowAndOwner.restype = C.c_int
-# Existing read-only family ABI: native/families/window-server-family.h;
-# yabai dd845723416f5fe92af49fad5ebab00369e07edd, extern.h:9,66-72.
+# Read-only family ABI of native/desktop/window-server-family.h;
+# yabai (https://github.com/asmvik/yabai) dd845723416f5fe92af49fad5ebab00369e07edd, extern.h:9,66-72.
 sky.SLSCopyAssociatedWindows.argtypes = [C.c_int, C.c_uint32]
 sky.SLSCopyAssociatedWindows.restype = C.c_void_p
 sky.SLSWindowQueryWindows.argtypes = [C.c_int, C.c_void_p, C.c_int]
@@ -513,41 +514,10 @@ def native_at(seen, wanted):
 
 def png_rgb(path):
     """Bounded 8-bit screenshot decoder; reject other formats, never infer pixels."""
-    data = Path(path).read_bytes()
-    check(data[:8] == b'\x89PNG\r\n\x1a\n' and len(data) <= 1024 * 1024, 'bounded actual PNG screenshot')
-    offset, compressed, dimensions = 8, bytearray(), None
-    while offset < len(data):
-        length = struct.unpack('>I', data[offset:offset + 4])[0]
-        kind, body = data[offset + 4:offset + 8], data[offset + 8:offset + 8 + length]
-        check(offset + 12 + length <= len(data), 'PNG chunk stays in file')
-        if kind == b'IHDR':
-            dimensions = struct.unpack('>IIBBBBB', body)
-        elif kind == b'IDAT':
-            compressed.extend(body)
-        offset += length + 12
-        if kind == b'IEND':
-            break
-    check(dimensions is not None, 'PNG has dimensions')
-    width, height, depth, color, compression, filtering, interlace = dimensions
-    check(0 < width <= 256 and 0 < height <= 256 and depth == 8 and color in (2, 6)
-          and (compression, filtering, interlace) == (0, 0, 0), 'supported bounded screenshot pixel format', dimensions)
-    channels, prior, pixels = (3 if color == 2 else 4), bytearray(width * (3 if color == 2 else 4)), []
-    stride = len(prior)
-    raw = zlib.decompress(bytes(compressed))
-    check(len(raw) == (stride + 1) * height, 'PNG pixel bytes match dimensions')
-    for y in range(height):
-        filter_type = raw[y * (stride + 1)]
-        row = bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
-        check(filter_type <= 4, 'PNG filter is known')
-        for x in range(stride):
-            left, up, corner = (row[x - channels] if x >= channels else 0), prior[x], (prior[x - channels] if x >= channels else 0)
-            predictor = left + up - corner
-            distances = [abs(predictor - value) for value in (left, up, corner)]
-            paeth = (left, up, corner)[distances.index(min(distances))]
-            row[x] = (row[x] + (0, left, up, (left + up) // 2, paeth)[filter_type]) & 255
-        pixels.extend(tuple(row[x:x + 3]) for x in range(0, stride, channels))
-        prior = row
-    return width, height, pixels
+    check(Path(path).stat().st_size <= 1024 * 1024, 'bounded actual PNG screenshot')
+    width, height, channels, rows = png_pixels.decode(Path(path))
+    check(0 < width <= 256 and 0 < height <= 256, 'supported bounded screenshot pixel format', (width, height))
+    return width, height, [tuple(row[x:x + 3]) for row in rows for x in range(0, len(row), channels)]
 
 
 def verify_replica_pixels(evidence, destination_copy, targets, canvas_wid):
@@ -557,7 +527,7 @@ def verify_replica_pixels(evidence, destination_copy, targets, canvas_wid):
     check(contains(destination_copy, crop[:2]) and contains(destination_copy, [crop[0] + crop[2], crop[1] + crop[3]]), 'capture rectangle lies inside replica')
     points = [[crop[0] + x, crop[1] + y] for x, y in ((0, 0), (31, 0), (0, 19), (31, 19), (16, 10))]
     path = evidence / 'destination-replica-before.png'
-    for attempt in range(8):
+    for _ in range(8):
         for point in points:
             check(owned_hit(point, targets)['wid'] == canvas_wid, 'independent optical sample sees exact canvas at replica, not native destination')
         done = subprocess.run(['/usr/sbin/screencapture', '-x', '-R' + ','.join(map(str, crop)), str(path)], capture_output=True, timeout=3)
@@ -712,8 +682,8 @@ def run(args):
                 check(owned_hit(point, {panel_row['wid']: canvas_original})['wid'] == panel_row['wid'], 'output setup point is the owned canvas')
                 check(cg.CGWarpMouseCursorPosition(Point(*point)) == 0, 'cursor selects exact owned logical view')
                 msg(args.app, sock_path, 'zoom', '0.5')
-                wait_for(5, lambda: next(item for item in state(sock_path)['outputs'] if item['name'] == output['name'])['zoom'] == .5, 'per-output zoom flight settles')
-                def centered():
+                wait_for(5, lambda output=output: next(item for item in state(sock_path)['outputs'] if item['name'] == output['name'])['zoom'] == .5, 'per-output zoom flight settles')
+                def centered(output=output, point=point):
                     # The final zoom anchor tick may consume the first camera
                     # target even when State already reports the target zoom.
                     # Repeat the explicit target, checking the selected view.
@@ -860,7 +830,7 @@ def run(args):
         if args.replica_destination:
             initial_destination = actual[destination_wid]
             promoted = None
-            for attempt in range(20):
+            for _ in range(20):
                 observed = independent_snapshot(destination_wid)
                 if native_at(observed, destination_copy) and owned_hit(drop, targets)['wid'] == destination_wid:
                     promoted = observed

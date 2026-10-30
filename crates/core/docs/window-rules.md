@@ -96,7 +96,7 @@ This is what makes a layout portable. `size = [800, 600]` gives you an 800x600
 window on screen whether it is server-decorated, client-decorated, or bare, and
 two windows placed 800 apart sit flush against each other either way. The same
 numbers come back out of `driftwm msg state` and the
-[state file](ipc.md#state-file), so a rule and a running window always describe
+[state file](https://github.com/malbiruk/driftwm/blob/df3de27b26c7998e8a460cffd8a4925cbed3a322/docs/ipc.md#state-file), so a rule and a running window always describe
 the same rectangle.
 
 The app itself gets whatever is left inside the frame. With
@@ -109,7 +109,7 @@ The app itself gets whatever is left inside the frame. With
 Every rule field — its type, default, accepted values, and per-field caveats
 (which fields `decoration = "none"` ignores, the blur GPU/VRAM cost, the one-shot
 `size`, how layer-shell surfaces opt into chrome) — is documented in the generated
-[config reference](config.md#window-rules), whose canonical source is
+[config reference](https://github.com/malbiruk/driftwm/blob/df3de27b26c7998e8a460cffd8a4925cbed3a322/docs/config.md#window-rules), whose canonical source is
 [`config.reference.toml`](../config.reference.toml). This page is the recipe and
 semantics guide; the reference is the field dictionary.
 
@@ -120,7 +120,7 @@ Layer-shell surfaces interpret chrome fields differently — see
 
 `opacity` below 1.0 makes a window see-through, and that carries into fullscreen:
 a translucent fullscreen window shows the **canvas** behind it instead of black.
-"Canvas" means the compositor's own [`[background]`](config.md#background) —
+"Canvas" means the compositor's own [`[background]`](https://github.com/malbiruk/driftwm/blob/df3de27b26c7998e8a460cffd8a4925cbed3a322/docs/config.md#background) —
 the built-in dot grid, your shader, or your `tile`/`wallpaper` image — plus any
 canvas layers. Everything else stays hidden: other windows, pinned windows,
 suspended stand-ins, and every layer-shell surface, panels included. It is a
@@ -152,7 +152,7 @@ has to compose the canvas under it every frame. Leave games opaque.
 
 A rule `opacity` is a **pin**: the window draws at that one value whether it is
 focused or not, and it opts the window out of the global `opacity` /
-`opacity_focused` defaults in [`[decorations]`](config.md#decorations). That
+`opacity_focused` defaults in [`[decorations]`](https://github.com/malbiruk/driftwm/blob/df3de27b26c7998e8a460cffd8a4925cbed3a322/docs/config.md#decorations). That
 includes `opacity = 1.0` — how a screen-pinned PiP window stays fully opaque
 while everything else dims. `driftwm msg opacity <value>` pins the window the
 same way.
@@ -317,7 +317,7 @@ lasts only for the session.
 
 To pin arbitrary images to canvas spots — hand-drawn shortcut sheets, logos,
 region labels — render a transparent PNG/SVG as a borderless window with
-[`extras/scripts/driftwm-decal`](../extras/scripts/driftwm-decal) (deps:
+[`extras/scripts/driftwm-decal`](https://github.com/malbiruk/driftwm/blob/df3de27b26c7998e8a460cffd8a4925cbed3a322/extras/scripts/driftwm-decal) (deps:
 python-gobject + gtk4), then pin each one with a `widget` rule. The transparent
 parts show the dot grid (or your shader wallpaper) through; decals sit below
 normal windows and stay off alt-tab. Each invocation is one decal window,
@@ -481,7 +481,7 @@ evaluated per frame (likewise),
 the session is saved or loaded. On load, `restore_windows` is matched against a
 saved record, which carries an `app_id` but no title, so only the `app_id`
 criterion is consulted there (see
-[session restore](session.md#restore_windows)).
+[session restore](https://github.com/malbiruk/driftwm/blob/df3de27b26c7998e8a460cffd8a4925cbed3a322/docs/session.md#restore_windows)).
 
 ## Debugging
 

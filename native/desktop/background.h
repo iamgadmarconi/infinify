@@ -1,22 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Carried into native/desktop/ from the standalone compositor port that was built, verified against upstream's shaders and independently reviewed outside this repository. Changed here since: the two chunk caches, `cache_shader` and tiled pyramidal TIFF tiles (BACKGROUND-NOTES.md, section 17).
-//
 // Infinify canvas background renderer.
 //
 // A port of DriftWM's per-output canvas background (the dot grid, user GLSL
 // shaders, tiled images and cover-fit wallpapers) to Metal. Derived from
-// DriftWM (GPL-3.0-or-later), upstream commit
+// DriftWM (GPL-3.0-or-later), https://github.com/malbiruk/driftwm @
 // 352333a8fa1b22171492d4b71a54102045c9a19d:
 //   src/render/background.rs, src/render/shaders.rs, src/render/elements.rs,
-//   src/shaders/{dot_grid,tile_bg,wallpaper_bg}.glsl, docs/shaders.md.
+//   src/shaders/{dot_grid,tile_bg,wallpaper_bg}.glsl, upstream docs/shaders.md.
 // The two chunk caches (`cache_shader` and tiled pyramidal TIFF tiles) are
 // adapted from the same commit's src/render/shader_chunks.rs,
 // src/render/tile_chunks.rs, src/render/capture_background.rs,
-// src/shaders/chunk_bg.glsl and docs/gigapixel-wallpapers.md, with
-// background-tiff.{h,m} beside this file (NOTES.md, section 17).
+// src/shaders/chunk_bg.glsl and upstream docs/gigapixel-wallpapers.md, with
+// background-tiff.{h,m} beside this file (BACKGROUND-NOTES.md, section 17).
 //
-// The module has no dependency on the rest of the app. See NOTES.md for the
-// uniform mapping, the host driving protocol and every deviation from upstream.
+// The module has no dependency on the rest of the app. See BACKGROUND-NOTES.md
+// for the uniform mapping, the host driving protocol and every deviation from
+// upstream.
 
 #import <CoreGraphics/CoreGraphics.h>
 #import <Foundation/Foundation.h>
@@ -91,7 +90,7 @@ typedef struct IFBackgroundFrame {
 } IFBackgroundFrame;
 
 /// A compiled background: shader pipeline and/or image for one device.
-/// Immutable after creation and safe to share between any number of layers, so
+/// Immutable after creation and safe to share between any number of outputs, so
 /// a panel with several outputs loads the configuration once.
 @interface IFBackgroundProgram : NSObject
 
@@ -109,29 +108,11 @@ typedef struct IFBackgroundFrame {
 @property (nonatomic, readonly, copy, nullable) NSString *errorText;
 /// The shader reads `u_time`: the host must call update every frame.
 @property (nonatomic, readonly, getter=isAnimated) BOOL animated;
-/// The output changes when the camera moves (upstream `background_uses_camera`,
-/// plus tile mode and wallpapers with parallax enabled).
-@property (nonatomic, readonly) BOOL usesCamera;
-/// The shader reads `u_zoom` (informational; every canvas-space kind is
-/// redrawn on a zoom change regardless, as upstream resizes the element).
-/// Wallpapers with parallax enabled also report YES.
-@property (nonatomic, readonly) BOOL usesZoom;
 /// The output carries alpha that must be composited (premultiplied) over
 /// whatever is below; otherwise it is opaque.
 @property (nonatomic, readonly, getter=isTransparent) BOOL transparent;
-/// Image size in pixels for tile / wallpaper / textured shader, else zero.
-/// For a pyramidal TIFF: the size of its full-resolution level.
-@property (nonatomic, readonly) CGSize textureSize;
-/// The Metal source generated from the user's GLSL (nil for built-in kinds).
-@property (nonatomic, readonly, copy, nullable) NSString *translatedShaderSource;
 
-/// Encodes one render pass drawing `frame` into `target` (BGRA8Unorm).
-- (void)encodeFrame:(IFBackgroundFrame)frame
-        intoTexture:(id<MTLTexture>)target
-      commandBuffer:(id<MTLCommandBuffer>)commandBuffer;
-
-/// Compositor hook (added in compositor-port; see its NOTES.md). Draws `frame`
-/// into a render pass the caller already opened on a BGRA8Unorm target of
+/// Draws `frame` into a render pass the caller already opened on a BGRA8Unorm target of
 /// round(width*scale) x round(height*scale) pixels, with the full-target
 /// viewport and scissor. Blending is off: the background replaces what the
 /// pass cleared. Sets the pipeline, fragment buffer 0, fragment texture 0 and
@@ -141,19 +122,11 @@ typedef struct IFBackgroundFrame {
 /// `none` or when no pipeline could be built.
 - (BOOL)encodeFrame:(IFBackgroundFrame)frame inEncoder:(id<MTLRenderCommandEncoder>)encoder;
 
-/// Offscreen render: no window, no layer, no privacy permission.
-/// Returns an sRGB image of round(width*scale) x round(height*scale) pixels.
-- (nullable CGImageRef)newImageForFrame:(IFBackgroundFrame)frame
-                                  error:(NSError **)error CF_RETURNS_RETAINED;
-- (BOOL)writePNGForFrame:(IFBackgroundFrame)frame
-                   toURL:(NSURL *)url
-                   error:(NSError **)error;
-
-// MARK: Chunk caches (NOTES.md, section 17)
+// MARK: Chunk caches (BACKGROUND-NOTES.md, section 17)
 
 /// What this program draws from: `IFBackgroundCacheNone` for every kind that is
 /// rendered live. A cached program has `kind` Shader (a baked shader) or Tile
-/// (a pyramidal TIFF), and `usesCamera` YES.
+/// (a pyramidal TIFF).
 @property (nonatomic, readonly) IFBackgroundCache cache;
 
 /// Upstream keeps one chunk cache per output: its chunks are baked at that
@@ -207,47 +180,6 @@ typedef struct IFBackgroundFrame {
 /// drops every chunk and every outstanding request and keeps its fallback
 /// level. Nothing is pending afterwards.
 - (void)shrinkChunkCache;
-
-/// Diagnostics: chunk textures this cache holds and their bytes (what
-/// `cache_budget_mb` bounds; a TIFF's fallback level is not counted, as
-/// upstream does not count it), chunks baked or uploaded so far, chunks
-/// evicted so far, and whether the last frame's working set exceeded the
-/// budget (a baked shader then shows its coarsest level only; a TIFF keeps
-/// the coarser levels that fit).
-@property (nonatomic, readonly) NSUInteger chunkCount;
-@property (nonatomic, readonly) uint64_t chunkBytes;
-@property (nonatomic, readonly) NSUInteger chunkLoadCount;
-@property (nonatomic, readonly) NSUInteger chunkEvictionCount;
-@property (nonatomic, readonly, getter=isChunkCacheDegraded) BOOL chunkCacheDegraded;
-@end
-
-/// Renders one output's background. Main thread only.
-@interface IFBackgroundLayer : CAMetalLayer
-
-/// The background to draw. Assigning marks the layer dirty.
-@property (nonatomic, strong, nullable) IFBackgroundProgram *program;
-
-/// Convenience for a single output: builds a private program on the system
-/// default device.
-- (void)setConfig:(IFBackgroundConfig *)config;
-
-@property (nonatomic, readonly, getter=isAnimated) BOOL animated;
-@property (nonatomic, readonly, copy, nullable) NSString *errorText;
-
-/// Redraws if, and only if, something this background depends on changed
-/// since the last drawn frame. Returns YES when a new frame was presented.
-- (BOOL)updateWithFrame:(IFBackgroundFrame)frame;
-
-/// Forces the next update to redraw.
-- (void)setNeedsRedraw;
-
-/// Frames presented so far (diagnostics).
-@property (nonatomic, readonly) NSUInteger drawCount;
-
-/// Diagnostics only: when YES the layer keeps a copy of each frame it draws
-/// (and gives up `framebufferOnly`). Used by `bgrender --via-layer`.
-@property (nonatomic) BOOL debugCaptureEnabled;
-- (nullable CGImageRef)newDebugImageOfLastFrame CF_RETURNS_RETAINED;
 @end
 
 NS_ASSUME_NONNULL_END

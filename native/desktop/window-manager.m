@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
+// Adapted from malbiruk/driftwm (https://github.com/malbiruk/driftwm) 352333a8fa1b22171492d4b71a54102045c9a19d:
 // src/handlers/xdg_shell.rs (new_toplevel, toplevel_destroyed: every toplevel is
 // managed from the moment it exists), src/handlers/compositor.rs (a new window is
 // placed on its first sized commit, not before), src/input/actions.rs (CloseWindow:
@@ -7,7 +7,8 @@
 // resolve the app afresh, report one that no longer resolves). New implementation
 // over the macOS window list, ScreenCaptureKit, Accessibility and NSWorkspace; the
 // placement, matching and focus rules stay in the controller.
-// Event-driven tracking is adapted from koekeishiya/yabai dd845723416f5fe92af49fad5ebab00369e07edd (MIT), src/event_loop.c:
+// Event-driven tracking is adapted from yabai (https://github.com/asmvik/yabai) dd845723416f5fe92af49fad5ebab00369e07edd (MIT;
+// licence text in YABAI-NOTICE.txt), src/event_loop.c:
 // WINDOW_CREATED, WINDOW_DEMINIMIZED and APPLICATION_VISIBLE look for the window at once, APPLICATION_LAUNCHED for all of an
 // application's. window-events.h has the observers and the rest of the provenance. Here creation hints coalesce into the
 // host's single-flight worker observation; existing bound-window events are delivered to the host immediately.
@@ -113,14 +114,14 @@ static NSArray<NSNumber *> *preservationBirth(pid_t pid) {
        !process.pbi_start_tvsec||process.pbi_start_tvusec>=1000000)return nil;
     return @[@(process.pbi_start_tvsec),@(process.pbi_start_tvusec)];
 }
-static NSArray<NSDictionary *> *nativePreservedWindows(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope,NSSet<NSNumber *> *offered,NSInteger benchmark,NSString *__autoreleasing *why) {
+static NSArray<NSDictionary *> *nativePreservedWindows(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope,NSSet<NSNumber *> *offered,NSInteger panelLevel,NSString *__autoreleasing *why) {
     NSArray *rows=CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionAll|kCGWindowListExcludeDesktopElements,kCGNullWindowID));
     if(!rows){if(why)*why=@"the all-window metadata for saved slots is unavailable";return nil;}
     NSMutableDictionary *births=[NSMutableDictionary dictionary],*bundles=[NSMutableDictionary dictionary],*candidates=[NSMutableDictionary dictionary],*asked=[NSMutableDictionary dictionary],*titles=[NSMutableDictionary dictionary];
     for(NSDictionary *row in rows){
         NSNumber *wid=row[(id)kCGWindowNumber],*pid=row[(id)kCGWindowOwnerPID],*level=row[(id)kCGWindowLayer];CGRect frame=CGRectZero;
         if(![wid isKindOfClass:NSNumber.class]||!wid.unsignedIntValue||![pid isKindOfClass:NSNumber.class]||pid.intValue<=1||pid.intValue==getpid()||[offered containsObject:wid]||(scope&&!scope[pid]))continue;
-        if(![level isKindOfClass:NSNumber.class]||(level.integerValue!=0&&!(scope&&benchmark>0&&level.integerValue==benchmark)))continue;
+        if(![level isKindOfClass:NSNumber.class]||(level.integerValue!=0&&!(scope&&panelLevel>0&&level.integerValue==panelLevel)))continue;
         NSDictionary *bounds=row[(id)kCGWindowBounds];
         if(![bounds isKindOfClass:NSDictionary.class]||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)bounds,&frame)||
            !isfinite(frame.origin.x)||!isfinite(frame.origin.y)||!isfinite(frame.size.width)||!isfinite(frame.size.height)||frame.size.width<40||frame.size.height<40)continue;
@@ -323,12 +324,12 @@ static DWWindowCandidate *createdNativeWindow(AXUIElementRef element,pid_t pid,N
     NSMutableDictionary<NSNumber *,NSDictionary *> *bounds=[NSMutableDictionary dictionary],*bases=[NSMutableDictionary dictionary];NSMutableDictionary<NSNumber *,NSNumber *> *wanted=[NSMutableDictionary dictionary],*warming=[NSMutableDictionary dictionary],*regular=[NSMutableDictionary dictionary],*since=[NSMutableDictionary dictionary],*scoped=[NSMutableDictionary dictionary],*sampled=[NSMutableDictionary dictionary];NSMutableDictionary *candidateTitles=[NSMutableDictionary dictionary];NSMutableArray<NSNumber *> *front=[NSMutableArray array];BOOL moving=NO;NSTimeInterval stabilityDelay=still,titleDelay=0;
     for(NSDictionary *w in list){
         NSNumber *wid=w[(id)kCGWindowNumber],*pid=w[(id)kCGWindowOwnerPID];NSDictionary *b=w[(id)kCGWindowBounds];CGRect r=CGRectZero;
-        NSInteger level=[w[(id)kCGWindowLayer]integerValue];BOOL benchmark=self.scope&&self.benchmarkWindowLevel>0&&level==self.benchmarkWindowLevel;
+        NSInteger level=[w[(id)kCGWindowLayer]integerValue];BOOL testPanel=self.scope&&self.testPanelWindowLevel>0&&level==self.testPanelWindowLevel;
         if(![wid isKindOfClass:NSNumber.class]||![pid isKindOfClass:NSNumber.class]||pid.intValue==getpid())continue;
         // --only-pid: a window of any other process leaves no trace here. It is neither timed nor wanted, so nothing below asks about it.
         if(self.scope){NSNumber *within=scoped[pid];if(!within)within=scoped[pid]=@(DWInScope(self.scope,pid.intValue));if(!within.boolValue)continue;}
         BOOL panel=self.nativePanels&&level==NSFloatingWindowLevel;
-        if(level!=0&&!benchmark&&!panel)continue;
+        if(level!=0&&!testPanel&&!panel)continue;
         if(![b isKindOfClass:NSDictionary.class]||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)b,&r)||r.size.width<40||r.size.height<40)continue;
         bounds[wid]=b;
         if([self.offered containsObject:wid])continue;
@@ -488,9 +489,9 @@ static DWWindowCandidate *createdNativeWindow(AXUIElementRef element,pid_t pid,N
 // metadata-only pass; it neither widens on-screen discovery nor requests capture permission.
 - (void)complete:(SCShareableContent *)content {
     if(self.native){
-        self.reading=YES;NSDictionary *scope=self.scope;NSSet *offered=self.offered.copy;NSInteger benchmark=self.benchmarkWindowLevel;__weak DWWindowManager *weak=self;
+        self.reading=YES;NSDictionary *scope=self.scope;NSSet *offered=self.offered.copy;NSInteger panelLevel=self.testPanelWindowLevel;__weak DWWindowManager *weak=self;
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
-            NSString *why=nil;NSArray *records=nativePreservedWindows(scope,offered,benchmark,&why);
+            NSString *why=nil;NSArray *records=nativePreservedWindows(scope,offered,panelLevel,&why);
             dispatch_async(dispatch_get_main_queue(),^{DWWindowManager *manager=weak;if(!manager||manager.stopped)return;manager.reading=NO;
                 if(!records){manager.retry=NSProcessInfo.processInfo.systemUptime+2;manager.requested=[NSSet set];[manager.host discoveryFailed:why];return;}
                 NSMutableArray *present=[NSMutableArray array];
@@ -503,8 +504,8 @@ static DWWindowCandidate *createdNativeWindow(AXUIElementRef element,pid_t pid,N
     NSMutableArray<NSDictionary *> *present=[NSMutableArray array];id<DWWindowHost> host=self.host;
     for(SCWindow *w in content.windows){
         pid_t pid=w.owningApplication.processID;NSString *bundle=w.owningApplication.bundleIdentifier;
-        BOOL benchmark=self.scope&&self.benchmarkWindowLevel>0&&w.windowLayer==self.benchmarkWindowLevel;
-        if((w.windowLayer!=0&&!benchmark)||pid==getpid()||w.frame.size.width<40||w.frame.size.height<40||!w.title.length||!bundle.length||[self.offered containsObject:@(w.windowID)]||!DWInScope(self.scope,pid))continue;
+        BOOL testPanel=self.scope&&self.testPanelWindowLevel>0&&w.windowLayer==self.testPanelWindowLevel;
+        if((w.windowLayer!=0&&!testPanel)||pid==getpid()||w.frame.size.width<40||w.frame.size.height<40||!w.title.length||!bundle.length||[self.offered containsObject:@(w.windowID)]||!DWInScope(self.scope,pid))continue;
         if([NSRunningApplication runningApplicationWithProcessIdentifier:pid].activationPolicy!=NSApplicationActivationPolicyRegular||[host managesWindow:w.windowID pid:pid])continue;
         [present addObject:@{@"bundle_id":bundle,@"title":w.title}];
     }

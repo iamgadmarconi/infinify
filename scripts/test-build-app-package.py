@@ -41,7 +41,7 @@ def main() -> int:
         fake_bin.mkdir()
 
         write(repo / "native/desktop/Info.plist", "plist\n")
-        write(repo / "native/families/YABAI-NOTICE.txt", "upstream notice\n")
+        write(repo / "native/desktop/YABAI-NOTICE.txt", "upstream notice\n")
         write(repo / "native/desktop/SUNLIGHT-NOTICE.txt", "sunlight notice\n")
         write(repo / "LICENSE", "license\n")
         write(repo / "NOTICE", "notice\n")
@@ -281,6 +281,16 @@ def main() -> int:
         if hashlib.sha256((publish_dir / "Infinify.app/Contents/Resources/NativeDesktop/payload-arm64e.dylib").read_bytes()).hexdigest() != manifest["native_payload_sha256"]:
             raise AssertionError("BUILD.json native payload digest does not match the packaged payload")
 
+        for resource, expected in (
+            ("LICENSE", "license with attribution correction\n"),
+            ("NOTICE", "notice\n"),
+            ("SUNLIGHT-NOTICE.txt", "sunlight notice\n"),
+            ("YABAI-NOTICE.txt", "upstream notice\n"),
+        ):
+            packaged = publish_dir / "Infinify.app/Contents/Resources" / resource
+            if not packaged.is_file() or packaged.read_text(encoding="utf-8") != expected:
+                raise AssertionError(f"the published bundle does not carry {resource}")
+
         damaged_bundle = base / "damaged.app"
         shutil.copytree(publish_dir / "Infinify.app", damaged_bundle)
         damaged_payload = damaged_bundle / "Contents/Resources/NativeDesktop/payload-arm64e.dylib"
@@ -393,4 +403,4 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except (OSError, subprocess.SubprocessError, RuntimeError, AssertionError) as error:
         print(f"test-build-app-package: {error}", file=sys.stderr)
-        raise SystemExit(1)
+        raise SystemExit(1) from None

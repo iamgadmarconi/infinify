@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include "protocol2.h"
+#include "protocol.h"
 // Client of the transform helper's protocol v2 (README.md "Protocol v2"), for the
 // shell to link. Plain C and pthreads. No call here waits on the helper beyond its
 // stated bound, whatever the helper does: a frame is handed to a writer thread and

@@ -6,11 +6,12 @@
 //   path:       src/input/gestures.rs
 //   sha-256:    6a07e9e9a620b45bd5a52aa59136887775d609d00ad94b9c53d93c89ac3323d3 (upstream file)
 // This is an EXTRACT, not the whole file. Kept: `direction_from_vector`
-// (upstream lines 86-113, body unmodified), which is the pure helper the
-// touch recognizer calls. Changes from upstream:
+// (upstream lines 86-113, body unmodified), the pure helper that maps a
+// vector to one of eight directions; the Infinify controller
+// (crates/desktop) calls it. Changes from upstream:
 //   - visibility widened from `pub(crate)` to `pub`: upstream also calls
 //     it from `src/input/gestures/swipe.rs` and `src/grabs/navigate_grab.rs`
-//     (binary crate), so the native backend crate needs to reach it;
+//     (binary crate), so the driftwm-desktop crate needs to reach it;
 //   - imports reduced to what the function uses, with the prefixes
 //     `smithay::` -> `crate::platform::` and `driftwm::` -> `crate::`
 //     (`use smithay::utils::{Logical, Point};`,

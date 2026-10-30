@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm df3de27b26c7998e8a460cffd8a4925cbed3a322 (v0.21.0),
-// read at third_party/driftwm: src/input/actions.rs (execute_action's prelude,
-// which ends an Alt-Tab cycle and stops scroll momentum, and its dispatch,
+// Adapted from https://github.com/malbiruk/driftwm @
+// df3de27b26c7998e8a460cffd8a4925cbed3a322 (v0.21.0): src/input/actions.rs
+// (execute_action's prelude, which ends an Alt-Tab cycle and stops scroll
+// momentum, and its dispatch,
 // exec_command, NudgeWindow, MoveToSnap, FocusNearest, detect_terminal,
 // detect_launcher). The grammar itself is not adapted: it is
 // driftwm-core's `config::{Action, parse_action}`, upstream's own code. The
@@ -18,17 +19,6 @@ use super::window_actions::Moved;
 use super::*;
 use driftwm_core::config::{Action, Direction, LayoutSwitch, TrackpadState, parse_action};
 
-/// Upstream's compositor-side toolkit fallbacks in `Config::child_env`
-/// (src/config/mod.rs `TOOLKIT_DEFAULTS`). They select Wayland backends, which
-/// would stop a Qt, SDL or GTK program from starting on macOS, so an `exec`
-/// effect carries them only when the user's own `[env]` sets them.
-const WAYLAND_TOOLKIT_ENV: [&str; 5] = [
-    "MOZ_ENABLE_WAYLAND",
-    "QT_QPA_PLATFORM",
-    "SDL_VIDEODRIVER",
-    "GDK_BACKEND",
-    "ELECTRON_OZONE_PLATFORM_HINT",
-];
 /// What `exec-terminal` runs when `$TERMINAL` is unset: macOS always ships
 /// Terminal, and opening a folder in it makes a new window, as upstream's
 /// terminals do. Upstream's own fallback list is Linux binaries.
@@ -37,20 +27,6 @@ const DEFAULT_TERMINAL: &str = "open -a Terminal \"$HOME\"";
 /// launcher of macOS 26 and later.
 const DEFAULT_LAUNCHER: &str = "open -a Apps";
 
-impl From<&Direction> for ViewDirection {
-    fn from(value: &Direction) -> Self {
-        match value {
-            Direction::Up => Self::Up,
-            Direction::Down => Self::Down,
-            Direction::Left => Self::Left,
-            Direction::Right => Self::Right,
-            Direction::UpLeft => Self::UpLeft,
-            Direction::UpRight => Self::UpRight,
-            Direction::DownLeft => Self::DownLeft,
-            Direction::DownRight => Self::DownRight,
-        }
-    }
-}
 /// The name `parse_action` matched, as upstream's catalog spells it.
 fn action_name(action: &Action) -> &'static str {
     match action {
@@ -178,7 +154,8 @@ fn runs_here(action: &Action) -> bool {
 }
 /// Upstream detect_terminal / detect_launcher, less their probe of installed
 /// Linux programs: the variable as children see it (v0.21.0's `child_var`,
-/// third_party/driftwm/src/input/actions.rs: the config-built `child_env`
+/// https://github.com/malbiruk/driftwm @ df3de27b26c7998e8a460cffd8a4925cbed3a322,
+/// src/input/actions.rs: the config-built `child_env`
 /// first, which holds the user's `[env]`, then the process environment), else
 /// the macOS default.
 fn from_environment(
@@ -241,16 +218,9 @@ impl Controller {
         Ok(self.run_action(output, spec, pointer, held)?.reply())
     }
     /// Upstream spawn_command as a request to the shell: `sh -c command` with
-    /// the config's child environment, less the Wayland toolkit fallbacks.
+    /// the config's child environment.
     pub(crate) fn exec_effect(&self, command: &str) -> Value {
-        let config = self.config();
-        let env: BTreeMap<&String, &String> = config
-            .child_env
-            .iter()
-            .filter(|(key, _)| {
-                config.env.contains_key(*key) || !WAYLAND_TOOLKIT_ENV.contains(&key.as_str())
-            })
-            .collect();
+        let env: BTreeMap<&String, &String> = self.config().child_env.iter().collect();
         json!({"op":"exec","command":command,"env":env})
     }
     /// Upstream NudgeWindow: the focused window moves by `navigation.nudge_step`
@@ -461,7 +431,7 @@ impl Controller {
                 outcome.dirty = self.set_trackpad(state)?;
                 return Ok(outcome);
             }
-            Action::PanViewport(direction) => self.pan_viewport(active()?, direction.into())?,
+            Action::PanViewport(direction) => self.pan_viewport(active()?, direction)?,
             Action::HomeToggle => {
                 self.home_toggle_fullscreen(active()?, was_fullscreen, &mut outcome)?
             }

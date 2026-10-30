@@ -1,8 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Ported from malbiruk/driftwm src/config/defaults.rs at
-// df3de27b26c7998e8a460cffd8a4925cbed3a322 (GPL-3.0-or-later).
-// Changes from upstream: `smithay::` paths read `crate::platform::`.
+//
+// Ported from DriftWM (GPL-3.0-or-later)
+//   repository: https://github.com/malbiruk/driftwm
+//   commit:     df3de27b26c7998e8a460cffd8a4925cbed3a322
+//   path:       src/config/defaults.rs
+//   sha-256:    c2569a8d2db92dc3326238698c18b3c461dfc39835c4ae98d6b512856002dcd4 (upstream file)
+// Changes from upstream: this header, and `smithay::` paths read `crate::platform::`.
 // Nothing else.
+// See PORT.md in the crate root for the full change log.
+
 use std::collections::HashMap;
 
 use crate::platform::input::keyboard::{Keysym, keysyms};

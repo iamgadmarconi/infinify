@@ -1,46 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Controller integration scenarios cross the exported C ABI and JSON decoder.
 //! They provide no native rendering, capture, or input-delivery evidence.
-use driftwm_desktop::*;
 use serde_json::{Value, json};
-use std::ffi::CStr;
 
-struct Host(*mut Controller);
-impl Host {
-    fn new() -> Self {
-        let handle = driftwm_desktop_create();
-        assert!(!handle.is_null());
-        Self(handle)
-    }
-    fn raw(&mut self, bytes: &[u8]) -> Value {
-        // SAFETY: live exclusive handle, valid bytes, response freed exactly once.
-        unsafe {
-            let response = driftwm_desktop_request(self.0, bytes.as_ptr(), bytes.len());
-            assert!(!response.is_null());
-            let result = serde_json::from_slice(CStr::from_ptr(response).to_bytes()).unwrap();
-            driftwm_desktop_response_free(response);
-            result
-        }
-    }
-    fn call(&mut self, command: Value) -> Value {
-        self.raw(&serde_json::to_vec(&json!({"version":1,"command":command})).unwrap())
-    }
-    fn ok(&mut self, command: Value) -> Value {
-        let response = self.call(command);
-        assert_eq!(response["ok"], true, "{response}");
-        response["data"].clone()
-    }
-    fn snapshot(&mut self) -> Value {
-        self.ok(json!({"op":"snapshot"}))
-    }
-}
-impl Drop for Host {
-    fn drop(&mut self) {
-        unsafe {
-            driftwm_desktop_destroy(self.0);
-        }
-    }
-}
+#[path = "support/host.rs"]
+mod host;
+use host::Host;
+
+impl Host {}
 fn rect(x: f64, y: f64, w: f64, h: f64) -> Value {
     json!({"origin":{"x":x,"y":y},"size":{"width":w,"height":h}})
 }

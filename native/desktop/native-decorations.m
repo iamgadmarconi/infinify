@@ -3,6 +3,7 @@
 #import "native-presenter.h"
 #import "native-placement-validation.h"
 #import "native-toolbar-extent.h"
+#import "native-geometry-json.h"
 #import "../focus/focus.h"
 #import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -10,7 +11,6 @@
 #include <math.h>
 #include <stdlib.h>
 
-static NSDictionary *decorationRect(CGRect r){return @{ @"origin":@{@"x":@(r.origin.x),@"y":@(r.origin.y)},@"size":@{@"width":@(r.size.width),@"height":@(r.size.height)}};}
 static BOOL decorationFrame(AXUIElementRef element,CGRect *out){
     // Chrome refresh visits several elements every 200 ms. Fetch each frame in
     // one AX message instead of two; no geometry or freshness result is cached.
@@ -41,9 +41,6 @@ static id decorationAttribute(AXUIElementRef element,CFStringRef name,AXError *e
     if(result){if(value)CFRelease(value);return nil;}return CFBridgingRelease(value);
 }
 static CGRect decorationLocal(CGRect frame,CGRect own){frame.origin.x-=own.origin.x;frame.origin.y-=own.origin.y;return frame;}
-static CGRect decorationReadRect(NSDictionary *value){
-    return CGRectMake([value[@"origin"][@"x"]doubleValue],[value[@"origin"][@"y"]doubleValue],[value[@"size"][@"width"]doubleValue],[value[@"size"][@"height"]doubleValue]);
-}
 static BOOL decorationFinderFrame(AXUIElementRef element,pid_t pid,uint32_t wid,AXError(*getWindow)(AXUIElementRef,uint32_t *),CFTimeInterval deadline,CGRect *frame){
     pid_t actualPID=0;uint32_t actualWindow=0;
     return CACurrentMediaTime()<deadline&&!AXUIElementSetMessagingTimeout(element,.02)
@@ -87,7 +84,7 @@ static NSDictionary *decorationFinderSearchHeader(AXUIElementRef window,CGRect o
         if(![role isKindOfClass:NSString.class]||CACurrentMediaTime()>=deadline)return nil;
         if([role isEqual:(__bridge NSString *)kAXGroupRole]&&[identifier isEqual:@"_NS:129"]){if(header)return nil;header=child;headerFrame=frame;}
         else {
-            [siblings addObject:decorationRect(frame)];
+            [siblings addObject:DWRectJSON(frame)];
             if([role isEqual:(__bridge NSString *)kAXScrollAreaRole]&&[identifier isEqual:@"_NS:23"]){if(!CGRectIsNull(results))return nil;results=frame;}
         }
     }
@@ -107,12 +104,12 @@ static NSDictionary *decorationFinderSearchHeader(AXUIElementRef window,CGRect o
         id identifier=decorationAttribute(control,kAXIdentifierAttribute,NULL),role=decorationAttribute(control,kAXRoleAttribute,NULL);
         if(![identifier isKindOfClass:NSString.class]||!roles[identifier]||![roles[identifier]isEqual:role]||[seen containsObject:identifier])return nil;
         if([identifier isEqual:@"plusMinusButton"]&&![decorationAttribute(control,kAXSubroleAttribute,NULL)isEqual:@"AXToggle"])return nil;
-        [seen addObject:identifier];[excluded addObject:decorationRect(decorationLocal(CGRectInset(frame,-1,-1),own))];
+        [seen addObject:identifier];[excluded addObject:DWRectJSON(decorationLocal(CGRectInset(frame,-1,-1),own))];
     }
-    for(NSDictionary *sibling in siblings){CGRect frame=CGRectIntersection(decorationReadRect(sibling),headerFrame);
-        if(!CGRectIsNull(frame)&&!CGRectIsEmpty(frame))[excluded addObject:decorationRect(decorationLocal(CGRectInset(frame,-1,-1),own))];}
+    for(NSDictionary *sibling in siblings){CGRect frame=CGRectIntersection(DWRectFromJSON(sibling),headerFrame);
+        if(!CGRectIsNull(frame)&&!CGRectIsEmpty(frame))[excluded addObject:DWRectJSON(decorationLocal(CGRectInset(frame,-1,-1),own))];}
     CGRect after;if(seen.count!=4||!decorationFinderFrame(header,pid,wid,getWindow,deadline,&after)||!CGRectEqualToRect(after,headerFrame))return nil;
-    return @{@"region":decorationRect(decorationLocal(headerFrame,own)),@"excluded":excluded};
+    return @{@"region":DWRectJSON(decorationLocal(headerFrame,own)),@"excluded":excluded};
 }
 // Retain the first rejection for the next debug press, without another AX read
 // or a log line on every background refresh. No title or document text is kept.
@@ -158,12 +155,12 @@ static NSDictionary *decorationToolbar(AXUIElementRef window,CGRect own,CGRect l
         // is ignored; an ordinary content/control rectangle stays excluded.
         BOOL wrapper=CGRectEqualToRect(frame,own)&&([role isEqual:(__bridge NSString *)kAXSplitGroupRole]
             ||([role isEqual:(__bridge NSString *)kAXGroupRole]&&[decorationAttribute(child,kAXSubroleAttribute,NULL)isEqual:@"AXHostingView"]));
-        if(!wrapper)[otherFrames addObject:decorationRect(frame)];
+        if(!wrapper)[otherFrames addObject:DWRectJSON(frame)];
     }
     if(!toolbar)return decorationRejected(reason,@"missing_top_toolbar");
     for(NSDictionary *value in otherFrames){
-        CGRect frame=CGRectMake([value[@"origin"][@"x"]doubleValue],[value[@"origin"][@"y"]doubleValue],[value[@"size"][@"width"]doubleValue],[value[@"size"][@"height"]doubleValue]);
-        frame=CGRectIntersection(frame,toolbarFrame);if(!CGRectIsNull(frame)&&!CGRectIsEmpty(frame))[excluded addObject:decorationRect(decorationLocal(CGRectInset(frame,-1,-1),own))];
+        CGRect frame=DWRectFromJSON(value);
+        frame=CGRectIntersection(frame,toolbarFrame);if(!CGRectIsNull(frame)&&!CGRectIsEmpty(frame))[excluded addObject:DWRectJSON(decorationLocal(CGRectInset(frame,-1,-1),own))];
     }
     if(CACurrentMediaTime()>=deadline)return decorationRejected(reason,@"toolbar_deadline");
     id items=decorationAttribute(toolbar,kAXChildrenAttribute,NULL);
@@ -173,10 +170,10 @@ static NSDictionary *decorationToolbar(AXUIElementRef window,CGRect own,CGRect l
         AXUIElementRef item=(__bridge AXUIElementRef)value;CGRect frame;uint32_t itemWindow=0;
         if(AXUIElementSetMessagingTimeout(item,.02)||getWindow(item,&itemWindow)||itemWindow!=wid||!decorationFrame(item,&frame)
             ||!CGRectContainsRect(CGRectInset(toolbarFrame,-1,-1),frame))return decorationRejected(reason,@"toolbar_item_geometry_or_owner");
-        [excluded addObject:decorationRect(decorationLocal(CGRectInset(decorationGroupExtent(item,frame,wid,getWindow,deadline),-1,-1),own))];
+        [excluded addObject:DWRectJSON(decorationLocal(CGRectInset(decorationGroupExtent(item,frame,wid,getWindow,deadline),-1,-1),own))];
     }
     if(reason)*reason=@"accepted_unified_toolbar";
-    return @{@"region":decorationRect(decorationLocal(toolbarFrame,own)),@"excluded":excluded};
+    return @{@"region":DWRectJSON(decorationLocal(toolbarFrame,own)),@"excluded":excluded};
 }
 // Standard AppKit frames expose their title, traffic lights and document proxy
 // separately from content. Their first content child is the lower boundary,
@@ -209,7 +206,7 @@ static NSDictionary *decorationTitle(AXUIElementRef window,CGRect own,uint32_t w
             if(![role isEqual:(__bridge NSString *)kAXStaticTextRole])return decorationRejected(reason,@"title_not_static_text");title=frame;
         }
         [chrome addObject:value];
-        if(index!=3)[excluded addObject:decorationRect(decorationLocal(CGRectInset(frame,-1,-1),own))];
+        if(index!=3)[excluded addObject:DWRectJSON(decorationLocal(CGRectInset(frame,-1,-1),own))];
     }
     if(CGRectIsNull(lights))return decorationRejected(reason,@"missing_traffic_lights");
     if(CGRectIsNull(title))return decorationToolbar(window,own,lights,title,wid,getWindow,deadline,chrome,excluded,reason);
@@ -232,14 +229,14 @@ static NSDictionary *decorationTitle(AXUIElementRef window,CGRect own,uint32_t w
         if(([role isEqual:(__bridge NSString *)kAXMenuButtonRole]||[role isEqual:(__bridge NSString *)kAXStaticTextRole])
             &&CGRectGetMinY(frame)>=fmin(CGRectGetMinY(lights),CGRectGetMinY(title))-1
             &&CGRectGetMaxY(frame)<=fmax(CGRectGetMaxY(lights),CGRectGetMaxY(title))+1){
-            [excluded addObject:decorationRect(decorationLocal(CGRectInset(frame,-1,-1),own))];continue;
+            [excluded addObject:DWRectJSON(decorationLocal(CGRectInset(frame,-1,-1),own))];continue;
         }
-        if(detail&&CGRectGetMinY(frame)<bottom)boundary=@{@"role":[role isKindOfClass:NSString.class]?role:@"unavailable",@"frame":decorationRect(decorationLocal(frame,own))};
+        if(detail&&CGRectGetMinY(frame)<bottom)boundary=@{@"role":[role isKindOfClass:NSString.class]?role:@"unavailable",@"frame":DWRectJSON(decorationLocal(frame,own))};
         bottom=fmin(bottom,CGRectGetMinY(frame));content=YES;
-        [excluded addObject:decorationRect(decorationLocal(CGRectInset(frame,-1,-1),own))];
+        [excluded addObject:DWRectJSON(decorationLocal(CGRectInset(frame,-1,-1),own))];
     }
     if(!content||bottom<=fmax(CGRectGetMaxY(lights),CGRectGetMaxY(title))){
-        if(detail)*detail=@{@"lights":decorationRect(decorationLocal(lights,own)),@"title":decorationRect(decorationLocal(title,own)),@"boundary":boundary?:@{}};
+        if(detail)*detail=@{@"lights":DWRectJSON(decorationLocal(lights,own)),@"title":DWRectJSON(decorationLocal(title,own)),@"boundary":boundary?:@{}};
         // Finder exposes a real title inside its unified toolbar, alongside
         // a full-window content wrapper. Re-audit through the same toolbar
         // path, requiring that toolbar to contain the primary title too. Its
@@ -248,7 +245,7 @@ static NSDictionary *decorationTitle(AXUIElementRef window,CGRect own,uint32_t w
         return decorationRejected(reason,@"no_content_boundary");
     }
     if(reason)*reason=@"accepted";
-    return @{@"region":decorationRect(CGRectMake(0,0,own.size.width,bottom-own.origin.y)),@"excluded":excluded};
+    return @{@"region":DWRectJSON(CGRectMake(0,0,own.size.width,bottom-own.origin.y)),@"excluded":excluded};
 }
 NSDictionary *DWNativeDecorationButtons(NSDictionary *identity){
     if(!AXIsProcessTrusted())return nil;
@@ -274,7 +271,7 @@ NSDictionary *DWNativeDecorationButtons(NSDictionary *identity){
             if(!AXUIElementSetMessagingTimeout(button,.02)&&!AXUIElementCopyAttributeValue(button,kAXRoleAttribute,&role)&&role&&CFEqual(role,kAXButtonRole)
                 &&!AXUIElementCopyAttributeValue(button,kAXEnabledAttribute,&enabled)&&enabled&&CFGetTypeID(enabled)==CFBooleanGetTypeID()&&CFBooleanGetValue(enabled)
                 &&decorationFrame(button,&frame)&&CGRectContainsRect(CGRectInset(own,-1,-1),frame)){
-                frame.origin.x-=own.origin.x;frame.origin.y-=own.origin.y;NSDictionary *rect=decorationRect(frame);if(![buttons containsObject:rect])[buttons addObject:rect];
+                frame.origin.x-=own.origin.x;frame.origin.y-=own.origin.y;NSDictionary *rect=DWRectJSON(frame);if(![buttons containsObject:rect])[buttons addObject:rect];
             }
         }
         if(enabled)CFRelease(enabled);if(role)CFRelease(role);if(value)CFRelease(value);
@@ -286,14 +283,14 @@ NSDictionary *DWNativeDecorationButtons(NSDictionary *identity){
     // an already successful green-button lookup from this unchanged window.
     if(CACurrentMediaTime()>=deadline){title=nil;if(debug)titleReason=@"title_deadline";}
     if(title&&[titleReason isEqual:@"accepted_unified_toolbar"]){
-        CGRect toolbar=decorationReadRect(title[@"region"]);toolbar.origin.x+=own.origin.x;toolbar.origin.y+=own.origin.y;
+        CGRect toolbar=DWRectFromJSON(title[@"region"]);toolbar.origin.x+=own.origin.x;toolbar.origin.y+=own.origin.y;
         NSDictionary *header=decorationFinderSearchHeader(window,own,toolbar,selected.pid,selected.window,getWindow,deadline);
         // This optional audit never withdraws the independently valid toolbar.
         if(header){NSMutableDictionary *extended=[title mutableCopy];extended[@"additional_regions"]=@[header];title=extended.copy;titleReason=@"accepted_unified_toolbar_finder_search_header";}
     }
     CFRelease(window);CGRect after;
     if(!dw_focus_owner(selected,&after)||!CGRectEqualToRect(own,after))return nil;
-    NSMutableDictionary *report=[@{@"identity":[identity copy],@"native_bounds":decorationRect(own),@"buttons":buttons.copy,@"title":title?:@{},@"sampled_at":@(CACurrentMediaTime())}mutableCopy];
+    NSMutableDictionary *report=[@{@"identity":[identity copy],@"native_bounds":DWRectJSON(own),@"buttons":buttons.copy,@"title":title?:@{},@"sampled_at":@(CACurrentMediaTime())}mutableCopy];
     if(debug)report[@"title_reason"]=titleReason?:@"unavailable";
     if(debug&&titleDetail)report[@"title_detail"]=titleDetail;
     return report;
@@ -311,12 +308,12 @@ static BOOL decorationDragMiss(NSDictionary *identity,CGPoint point,const char *
 }
 BOOL DWNativeWindowDragHit(NSDictionary *identity,NSDictionary *report,CGPoint point){
     if(!NSThread.isMainThread||![report[@"identity"]isEqual:identity]||CACurrentMediaTime()-[report[@"sampled_at"]doubleValue]>.5)return decorationDragMiss(identity,point,"stale_report");
-    NSDictionary *title=report[@"title"];CGRect region=decorationReadRect(title[@"region"]);if(CGRectIsEmpty(region))return decorationDragMiss(identity,point,"no_region");
+    NSDictionary *title=report[@"title"];CGRect region=DWRectFromJSON(title[@"region"]);if(CGRectIsEmpty(region))return decorationDragMiss(identity,point,"no_region");
     NSDictionary *recipient=DWNativeEventRecipientAtPoint(point);
     for(NSString *key in @[@"pid",@"wid",@"birth_sec",@"birth_usec"])if(!identity[key]||![identity[key]isEqual:recipient[key]])return decorationDragMiss(identity,point,"recipient_changed");
     DWFocusIdentity selected={.pid=[identity[@"pid"]intValue],.window=[identity[@"wid"]unsignedIntValue],.seconds=[identity[@"birth_sec"]unsignedLongLongValue],.microseconds=[identity[@"birth_usec"]unsignedLongLongValue]};
     CGRect own;if(!dw_focus_owner(selected,&own))return decorationDragMiss(identity,point,"native_unavailable");
-    CGRect cached=decorationReadRect(report[@"native_bounds"]);
+    CGRect cached=DWRectFromJSON(report[@"native_bounds"]);
     if(!CGRectEqualToRect(own,cached)){
         if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"debug: native title miss native=%g,%g,%g,%g cached=%g,%g,%g,%g\n",own.origin.x,own.origin.y,own.size.width,own.size.height,cached.origin.x,cached.origin.y,cached.size.width,cached.size.height);
         return decorationDragMiss(identity,point,"native_changed");
@@ -329,9 +326,9 @@ BOOL DWNativeWindowDragHit(NSDictionary *identity,NSDictionary *report,CGPoint p
     NSArray *regions=[@[title]arrayByAddingObjectsFromArray:[title[@"additional_regions"]isKindOfClass:NSArray.class]?title[@"additional_regions"]:@[]];
     BOOL inside=NO;
     for(NSDictionary *candidate in regions){
-        if(CGRectContainsPoint(decorationReadRect(candidate[@"region"]),local))inside=YES;
-        for(NSDictionary *excluded in candidate[@"excluded"])if(CGRectContainsPoint(decorationReadRect(excluded),local)){
-            if(getenv("INFINIFY_DEBUG")){CGRect frame=decorationReadRect(excluded);fprintf(stderr,"debug: native title miss local=%g,%g excluded=%g,%g,%g,%g\n",local.x,local.y,frame.origin.x,frame.origin.y,frame.size.width,frame.size.height);}
+        if(CGRectContainsPoint(DWRectFromJSON(candidate[@"region"]),local))inside=YES;
+        for(NSDictionary *excluded in candidate[@"excluded"])if(CGRectContainsPoint(DWRectFromJSON(excluded),local)){
+            if(getenv("INFINIFY_DEBUG")){CGRect frame=DWRectFromJSON(excluded);fprintf(stderr,"debug: native title miss local=%g,%g excluded=%g,%g,%g,%g\n",local.x,local.y,frame.origin.x,frame.origin.y,frame.size.width,frame.size.height);}
             return decorationDragMiss(identity,point,"native_control");
         }
     }

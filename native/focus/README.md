@@ -1,23 +1,30 @@
-# Exact selected native-window focus gate
+# Native focus adapter
 
-Harness prepared for Apple Silicon / macOS 26+. **Live focus and native-input
-verification has not succeeded.** Three authorized normal-path attempts are
-preserved in [readiness evidence](evidence/live-readiness-20261009/index.json).
-The first exposed invalid startup identities; the repaired version enrolled both
-fixtures, but the latest attempt stopped at the global HID inactivity check
-before any focus/input step. Both fixtures restored their controls and all three
-children were reaped. Cleanup-specific scenarios remain unrun.
-Build success, pure geometry and read-only doctor
-results establish no usable native-focus capability. No IME, menus, drag-and-drop,
-unowned apps, or rendering/compositing capability is claimed by this gate.
+GPL-3.0-or-later; Apple Silicon / macOS 26+. `focus.h` exposes a C ABI for the
+Objective-C desktop shell (`native/desktop`); `focus.m` is compiled into the app by
+`scripts/build-app.sh` and needs AppKit and ApplicationServices. Serial background use.
+Nothing here claims more than the headless test and the packaged-app tests below observe.
 
 ## API
 
-`focus.h` exports a C ABI. Enrollment binds PID + kernel process-birth seconds and
-microseconds + CGWindowID. `dw_focus_observe` is read-only. `dw_focus_select` requires
-an explicit caller guard, called before activation, each exact AX setter/raise,
-and while polling. Guard cancellation, stale identity/bounds, missing or ambiguous
-AX identity, AX errors, and a 1.5 second call deadline are distinct outcomes.
+Enrollment binds PID + kernel process-birth seconds and microseconds + CGWindowID
+(`dw_focus_identity`; `dw_focus_birth` and `dw_focus_owner` are its read-only parts).
+`dw_focus_observe` is read-only. `dw_focus_select` requires an explicit caller guard,
+called before activation, each exact AX setter/raise, and while polling. Guard
+cancellation, stale identity/bounds, missing or ambiguous AX identity, AX errors, and a
+1.5 second call deadline are distinct outcomes (`dw_focus_outcome_name`):
+
+| Outcome | Meaning |
+|---|---|
+| `observed`, `focused` | the reads agreed; `focused` also says the window is the focused one |
+| `invalid` | `dw_focus_select` was given no guard |
+| `stale_identity_or_bounds` | the window is another one: its process, start time or window number is no longer the one asked for (a frame that only moved or changed size is the same window) |
+| `unavailable` | Accessibility is not trusted, `_AXUIElementGetWindow` is absent, the application's window list cannot be read, or a window's number cannot be read from it |
+| `missing_window`, `ambiguous_window` | no AX window, or more than one, has the window number |
+| `readback_failed` | AX and CG bounds disagree beyond one point, the frame changed while it was read, or a focus read failed |
+| `guard_denied` | the caller's guard refused |
+| `ax_failed` | activation or an AX setter failed |
+| `timed_out` | the call deadline passed |
 
 One case is not left at "missing": a window the window server still lists as its
 process's, that is not on screen and that is in no Accessibility list, which is what a
@@ -34,133 +41,50 @@ another desktop, so that this works is unobserved.
 
 Successful selection requires current CG ownership, AX/CG bounds agreement,
 system-wide AX focused application and its focused CGWindowID, the selected app's
-AX focused CGWindowID, and the native foreground PID. The ordinary fixture's
-AppKit key-window telemetry is a separate gate requirement. API return codes,
-event target fields, and fixture self-reports alone cannot pass the gate.
-The caller must independently establish ownership/authorization; enrollment is
-not authorization. Private AX signature provenance is pinned in `focus.m`.
+AX focused CGWindowID, and the native foreground PID. API return codes alone do not
+establish focus: `focused` is set only when those reads agree. The caller must
+independently establish ownership/authorization; enrollment is not authorization.
 
-## Safe defaults and test window
+The other entry points, as documented in `focus.h`:
+
+- `dw_focus_set_bounds` sets where a window's frame is read from, for every bounds this
+  file reports and compares with Accessibility's. The default is the window list's
+  `kCGWindowBounds`; under native presentation the shell sets a reader of the window's
+  own frame, and a window it cannot read is then no owner. Set it once, before any
+  other call.
+- `dw_focus_frontmost` is a read-only shortcut target, independent of cached logical
+  focus. It reads only the frontmost application's focused AX window with one shared
+  50 ms deadline, pins process birth before the AX read and validates the exact
+  PID/window ownership, birth and foreground afterward. It does no AXWindows
+  enumeration, retry or activation. False zeroes the output and covers unknown and
+  expired reads; revalidate before executing a queued action.
+- `dw_focus_minimized` reads AXMinimized for one exact identity with the same bounded
+  resolver and before/after ownership checks. Unknown is not false.
+- `dw_focus_set_minimized` is an explicit minimize/deminimize request. It never closes or
+  focuses, and the guard must approve the exact live binding immediately before the write.
+
+## Test
 
 ```
-./tests/e2e/native-focus.sh
+sh tests/e2e/native-focus.sh
 ```
 
-Builds with warnings as errors, compiles the API from C, checks the pure camera
-inverse contract, invalid/no-guard requests, and the foreground-admission policy,
-then runs read-only doctor. The policy check admits exact original and enrolled
-owned PID/birth pairs while rejecting unknown and PID-reuse cases. It never
-launches fixture windows, activates applications, injects input, requests permissions,
-or changes settings.
+Builds `focus.m` and `focus-regression.c` with warnings as errors and checks, through
+the C ABI, that an identity which is not a live window of the process it names is never
+owned, that `dw_focus_select` refuses it before its guard runs, and that neither it nor
+`dw_focus_set_minimized` changes anything for it. It is read-only: no
+window is launched or activated, no Accessibility message is sent, no permission is
+requested and no input is posted. Real-window coverage of `dw_focus_select` goes
+through the packaged app: `tests/e2e/scoped-windows.sh --live-owned-fixture` asserts
+that native focus requests on disposable fixture windows are answered focused.
 
-Only after a concrete desktop test window has been approved:
+## Provenance
 
-```
-./tests/e2e/native-focus.sh --live-owned-focus --scenario normal
-```
-
-The supervisor refuses startup unless existing AX and listen-event access are
-available and HID input has been idle for three seconds. Each fixture has TWO
-ordinary titled NSWindows with identical titles, actual NSButton/NSTextField
-controls, and distinct CGWindowIDs. Both fixtures are owned direct children of the
-Python supervisor. A third child runs the focus controller. Controller enrollment
-is acknowledged by signed fixture telemetry before activation is permitted. A
-fixture publishes no startup snapshot until both WindowServer identities resolve
-to its exact PID and AppKit window numbers, with positive process-birth seconds
-and distinct nonzero CGWindowIDs. The supervisor waits for that signed explicit
-readiness state while checking the child on every iteration, and the controller
-independently revalidates signed readiness and current ownership before enrollment.
-
-The live sequence is A1 -> A2 -> B1, repeated through two camera inverses (0.75x
-and 1.5x with different pan/origins). At every step the controller explicitly
-selects the bound identity, proves external AX focus, then waits for fresh native
-key-window telemetry. Actual private native events exercise the check button,
-select-all and text entry. Expected text is compared by SHA-256 only. Every other
-window's button/text state must remain unchanged. All new events from both apps
-must bear the session tag/controller PID, reach the selected native/key window,
-and show the expected local mouse coordinates. Mapping and native focus are
-reported separately. Camera points are generated probe inputs, not user clicks
-on a rendered compositor; no rendered-canvas input claim is made here.
-
-A listen-only event tap cancels on any non-session input (including motion,
-modifiers, tablet and other buttons), tap disablement, pointer movement, signals,
-or an unexpected foreground process. Fresh ownership/bounds and external native
-focus are rechecked before each post. The fresh AX observation's bounds must
-match the original mapping bounds. After the final guard (which may pump the run
-loop), CG ownership/birth/bounds are checked again immediately before the scoped
-post, with no intervening AX call, callback, or run-loop pumping. A changed frame
-rejects the event; the router never silently remaps it. This narrows the race;
-macOS supplies no atomic compare-bounds-and-post operation. Private PID/window routing signatures and
-fields retain the Cantrip provenance in `probe.m`. There is no global injection
-fallback or pointer warp. An unrelated foreground app is never reactivated by
-the selection guard. During activation, only the previous foreground or selected
-owned app is accepted; transient windows inside that owned app are not treated as
-successful focus.
-
-Immediately before installing the event tap, evidence records AX trust, listen
-access, HID idle time, and the current foreground PID/birth alongside the original
-foreground identity. The foreground gate accepts only an exact original identity
-or an exact identity from signed, foreign-input-free fixture readiness that still
-passes native ownership validation. The observed allowed identity seeds the first
-focus transition; the original identity remains unchanged for conditional cleanup
-restoration. An owned fixture being foreground is admitted without asserting what
-caused that foreground state.
-
-Fixture event records and snapshots are HMAC-SHA256 signed with an ephemeral
-session key in a mode-0600 file inside a mode-0700 evidence directory. The
-controller verifies signatures before using telemetry. The supervisor removes
-the key during cleanup; retained signatures are audit markers, not independently
-verifiable evidence after key deletion. The controller PID/tag is not a security
-boundary against hostile same-user processes. No raw received human text is
-recorded or forwarded to fixture controls. Only expected synthetic text hashes
-are retained; event records contain no raw characters.
-
-## Cleanup scenarios (also live, separately opt-in)
-
-Use `--scenario signal`, `--scenario controller-death`, or `--scenario deadline`.
-Each stops after the first proved native interaction and exercises controller
-SIGINT, SIGKILL, or the controller's 15-second deadline respectively. The
-supervisor always terminates/reaps all owned direct children and requires fixture
-restoration receipts. A crashed controller cannot strand fixtures: each fixture
-checks controller/supervisor process birth and has its own 25-second deadline.
-A timer also runs in AppKit tracking mode and posts an **in-process** mouse-up
-outside the control to wake a nested button-tracking loop before restoring owned
-state. The input filter admits only the exact retained teardown event object,
-once, while teardown is active, for the pending-down window and outside-control
-location. A copied/forged event or an event carrying the normal session tag does
-not gain this exception. Foreign human input still cancels the fixture. This
-local teardown event is not input-routing evidence. Button highlight and original
-window frames are also reset and checked in restoration receipts.
-
-`--scenario partial-down-controller-death` exercises the vulnerable interval:
-it posts exactly one native button-down, requires signed fixture evidence that
-AppKit entered its event-tracking mode, and then SIGKILLs the controller before
-any native mouse-up. The supervisor requires both fixtures to exit through their
-own watchdogs within three seconds, **before** sending any cleanup signal. The
-selected fixture must report one accepted internal teardown release, zero foreign
-events, restored controls/frame, and a successful exit. This is prepared for the
-next authorized test window; it has not been run.
-
-`--scenario bounds-before-readback` and `--scenario bounds-after-guard` are
-negative live gates. A signed hook moves only the selected owned fixture by a
-known offset, first in the gap before the blocking AX observation, or second after
-the final guard. They require rejection at the corresponding bounds check, zero
-posted events, and unchanged control/audit state in both apps. These deterministic
-interleavings exercise the stale-geometry paths; they do not claim to reproduce
-all WindowServer scheduling races. Original fixture frames are restored during
-cleanup. These scenarios also remain unrun.
-
-Normal and signal cleanup conditionally restore the original foreground app
-only while an owned fixture with unchanged birth is still foreground and the
-original process birth still matches. Fixtures provide the same conditional
-restore on controller/supervisor death; no unrelated foreground app is displaced.
-All buttons, action counters, and text fields are reset before windows close.
-Hard-killed/unresponsive fixtures without restoration receipts fail cleanup.
-If the Python supervisor itself is SIGKILLed it cannot reap children; fixture
-watchdogs exit and OS adoption/reaping applies. That path is instrumented by
-fixture exit receipts but is not a supervisor-reaping success claim.
-
-Evidence includes selected identities, external AX focus, fresh native key-window
-state, per-camera input maps, control hashes/state, signed native event targets,
-interference failures, cleanup receipts, direct-child exit statuses, and exact
-source SHA-256 hashes. Live failures remain failures; no fallback widens scope.
+Private AX signature provenance: [yabai](https://github.com/asmvik/yabai) commit
+`dd845723416f5fe92af49fad5ebab00369e07edd`, `src/misc/extern.h:8` and
+`src/misc/helpers.h:499-504`. `forward()` in `focus.m` is adapted from the same commit
+(MIT): `src/window_manager.c:1269-1291` (`window_manager_make_key_window`) and
+`1324-1335` (`window_manager_focus_window_with_raise`), with the signatures of
+`src/misc/extern.h:81-82` and `kCPSUserGenerated` of `src/window_manager.h:5`. The rest
+is new, with no title matching. The licence text is
+[native/desktop/YABAI-NOTICE.txt](../desktop/YABAI-NOTICE.txt).

@@ -29,20 +29,6 @@ static BOOL screenBasis(CGPoint *basis) {
 static NSRect appKitRect(CGRect rect,CGPoint basis) {
     return NSMakeRect(rect.origin.x+basis.x,basis.y-CGRectGetMaxY(rect),rect.size.width,rect.size.height);
 }
-static CGImageRef copyPixels(CVPixelBufferRef buffer) CF_RETURNS_RETAINED {
-    if(!buffer||CVPixelBufferIsPlanar(buffer)||CVPixelBufferGetPixelFormatType(buffer)!=kCVPixelFormatType_32BGRA)return NULL;
-    size_t width=CVPixelBufferGetWidth(buffer),height=CVPixelBufferGetHeight(buffer),stride=CVPixelBufferGetBytesPerRow(buffer);
-    if(!width||!height||width>16384||height>16384||stride<width*4||stride>SIZE_MAX/height||stride*height>INT32_MAX)return NULL;
-    if(CVPixelBufferLockBaseAddress(buffer,kCVPixelBufferLock_ReadOnly)!=kCVReturnSuccess)return NULL;
-    const UInt8 *bytes=CVPixelBufferGetBaseAddress(buffer);
-    CFDataRef data=bytes?CFDataCreate(kCFAllocatorDefault,bytes,(CFIndex)(stride*height)):NULL;
-    CVPixelBufferUnlockBaseAddress(buffer,kCVPixelBufferLock_ReadOnly);
-    if(!data)return NULL;
-    CGDataProviderRef provider=CGDataProviderCreateWithCFData(data);CFRelease(data);
-    CGColorSpaceRef attached=CVImageBufferGetColorSpace(buffer),color=attached?CGColorSpaceRetain(attached):CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-    CGImageRef image=provider&&color?CGImageCreate(width,height,8,32,stride,color,kCGBitmapByteOrder32Little|kCGImageAlphaPremultipliedFirst,provider,NULL,YES,kCGRenderingIntentDefault):NULL;
-    if(color)CGColorSpaceRelease(color);if(provider)CGDataProviderRelease(provider);return image;
-}
 @interface DWTransitionPanel : NSPanel
 @end
 
@@ -282,10 +268,6 @@ static BOOL captureRootCurrent(NSDictionary *identity,CGRect native,CGRect scree
         picture.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;picture.accessibilityElement=NO;_panel.contentView=picture;
     }
     CGImageRelease(owned);return self;
-}
-- (instancetype)initWithPixelBuffer:(CVPixelBufferRef)buffer screenRect:(CGRect)rect {
-    CGImageRef image=copyPixels(buffer);if(!image)return nil;
-    self=[self initWithImage:image screenRect:rect];CGImageRelease(image);return self;
 }
 - (BOOL)isVisible {return !_closed&&_panel.isVisible;}
 - (BOOL)isAnimating {return _animating;}

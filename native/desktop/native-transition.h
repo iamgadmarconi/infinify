@@ -13,9 +13,6 @@ NS_ASSUME_NONNULL_BEGIN
 @interface DWNativeTransition : NSObject
 // Retains an immutable copy of the image. No panel is shown during construction.
 - (nullable instancetype)initWithImage:(CGImageRef)image screenRect:(CGRect)rect;
-// Copies a packed premultiplied 32BGRA buffer before returning; later changes to
-// the source cannot change the picture. Uses its color space, or sRGB if absent.
-- (nullable instancetype)initWithPixelBuffer:(CVPixelBufferRef)buffer screenRect:(CGRect)rect;
 - (instancetype)init NS_UNAVAILABLE;
 + (instancetype)new NS_UNAVAILABLE;
 @property(nonatomic,readonly,getter=isVisible) BOOL visible;

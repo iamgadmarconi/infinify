@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm df3de27b26c7998e8a460cffd8a4925cbed3a322
-// (v0.21.0), read at third_party/driftwm/src/state/keyboard_snap.rs
-// (move_to_snap_focused, keyboard_move_element, canvas_step,
+// Adapted from https://github.com/malbiruk/driftwm @
+// df3de27b26c7998e8a460cffd8a4925cbed3a322 (v0.21.0),
+// src/state/keyboard_snap.rs (move_to_snap_focused, keyboard_move_element, canvas_step,
 // resize_to_snap_focused, stop_query, axis_of) and src/state/fill.rs
 // (usable_canvas_bounds). The walk itself is not adapted: the stops, the
 // nearest origin past a window and the grow and shrink lines are driftwm-core's

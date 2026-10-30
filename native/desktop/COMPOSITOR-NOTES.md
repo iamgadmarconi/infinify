@@ -1,57 +1,66 @@
-# Infinify compositor — port notes
+# Infinify compositor — notes
 
-> Carried into `native/desktop/` with `compositor.{h,m}` as the standalone module's own notes, unchanged apart from this paragraph and from what section 19.1 says of a background drawn from a chunk cache under "When it is recomputed" (added in this repository with the background's chunk caches): first the port's, and with the effects the notes of the copy that added them, which are the port's (Part I) with Part II after them. Where `compositor.h` and `compositor.m` say `NOTES.md` they mean this file; where `background.h` and `background.m` say it they mean [BACKGROUND-NOTES.md](BACKGROUND-NOTES.md). The notes were written before the module was adopted: "this directory", "this copy" and `compositor-effects/` are that standalone copy, `comprender.m`, `build.sh`, `scenes/`, `assets/`, `out/`, `verify/` and `review-renders/` were not carried in, "the shell" is the shell as it drew before adoption, and sections 3 and 18 are the protocols `canvas-renderer.m` now follows. How it follows section 18 is written where it does so, in `canvas-renderer.h` and `canvas-renderer.m`: which of the controller's lifecycle events plays which animation, and the four things that are the shell's own there. An animation begins one 60 Hz tick before the frame that first shows it when the output has drawn nothing more recent, because this canvas draws on demand (18.2, "Cadence"). A window that opens is held at the animation's first instant, which is invisible, until its stream has delivered its first picture, for a second at most (18.3), and the stand-in whose slot a relaunched window adopted stays whole until that window's first picture likewise (18.4). Each output bakes its own closing snapshot, at upstream's one density, instead of sharing a texture (18.2, "Scale"). And upstream's age limit on a closing window's pixels has nothing to test: the bake is taken from the element of the frame last described, the picture that was on screen (18.2, "When not to"). What the port was run with once adopted is in [README.md](README.md#rendering), and what the effects were run with, joined to the controller, under [What was run for effects](README.md#what-was-run-for-effects).
+These notes document `compositor.h` and `compositor.m`: the Metal renderer that
+draws one output's whole frame, and the host protocol that `canvas-renderer.m`
+follows to drive it. The background it draws first is
+[BACKGROUND-NOTES.md](BACKGROUND-NOTES.md). Where `compositor.h` and
+`compositor.m` cite `COMPOSITOR-NOTES.md`, they mean this file.
 
-A standalone Metal port of DriftWM's per-output frame composition: canvas
-background, outlines of other outputs' viewports, and every window with its
+The renderer ports DriftWM's per-output frame composition to Metal: the canvas
+background, the outlines of other outputs' viewports, and every window with its
 shadow, border, rounded and clipped content, opacity and (optionally) a
 compositor-drawn title bar, plus the stand-ins upstream draws for suspended
-windows — and, in this copy, upstream's remaining rendering effects: the
-frosted-glass **blur** behind windows, the **open / close animations** with
-their closing snapshots, and the **config error bar**. One renderer per output
-draws the whole frame; the same code renders a frame offscreen to a PNG.
+windows, and upstream's remaining rendering effects: the frosted-glass **blur**
+behind windows, the **open / close animations** with their closing snapshots,
+and the **config error bar**. One renderer per output draws the whole frame;
+the same code renders a frame offscreen to an image
+(`-newImageForFrame:error:`, which the screenshots use).
 
-Upstream: DriftWM, GPL-3.0-or-later, commit
-`352333a8fa1b22171492d4b71a54102045c9a19d`. This module is a derived work and
-carries the same licence.
+Upstream: DriftWM, <https://github.com/malbiruk/driftwm>, GPL-3.0-or-later,
+commit `352333a8fa1b22171492d4b71a54102045c9a19d`. This module is a derived work
+and carries the same licence.
 
-**This directory, `compositor-effects/`, is a copy of the reviewed
-`compositor-port/` with the effects added.** The existing API is unchanged
-and every scene of `compositor-port` renders byte-identically (28 of 28
-PNGs, section 23).
+- **Part I** (sections 1 to 14) is the compositor itself: provenance, public
+  API, how the host drives it, geometry, draw order, colour, resources, redraw
+  gating, deviations from upstream, behaviour kept on purpose, what is not
+  supported.
+- **Part II** (sections 17 to 22) is the effects: API additions, the host
+  protocol for each, how they are built, every deviation from upstream, what is
+  kept on purpose and what is not supported.
 
-- **Part I** (sections 1 to 16) is `compositor-port`'s notes. They still
-  hold. Where this copy changed a fact, the text is brought up to date
-  (the file table, the provenance tables, the API list, the draw order, the
-  pipeline count and cost table, the tool's options and schema, sections 10,
-  13 and 16). Measurements and history that were made in `compositor-port`
-  and not repeated here are said to be so.
-- **Part II** (sections 17 to 25) is the effects: API additions, the host
-  protocol for each, how they are built, every deviation from upstream, what
-  is kept on purpose, what is not supported, the verification, the cost and
-  the commands run.
+Section numbers are kept from the notes' earlier layout, which is why 9, 15, 16
+and 23 to 25 are missing. Section 9 described the debug tool of the standalone port and the debug
+API it used, both removed. Sections 15 and 16 (Part I
+verification and commands) and 23 to 25 (the effects' verification, cost
+measurements and commands) are not kept. The checks and measurements that the text below cites by tool name
+(`comprender`, `verify/`, `scenes/`, `out/`) were made with the standalone
+port's tooling, which is gone.
+
+In the text below, `compositor-port` is the standalone port this module started
+from (without the effects), "this copy" is the module with the effects added,
+which is `compositor.m`, and a citation of section 15, 16, 23, 24 or 25 refers to text that is no longer in this repository.
 
 | File | What it is |
 |---|---|
 | `compositor.h`, `compositor.m` | The module (Objective-C, ARC). Depends only on `background.h` and system frameworks. |
-| `background.h`, `background.m` | The reviewed canvas background module, copied from `background-port/` with one added method (section 14). Not changed in this copy. |
-| `comprender.m` | Command-line tool built from the same objects (section 9). |
-| `build.sh` | Builds `build/background.o`, `build/compositor.o`, `build/comprender`. Unchanged. |
-| `scenes/`, `assets/` | Scene descriptions and test images / test shaders. New here: `scenes/blur.json`, `blur_shapes.json`, `blur_animated.json`, `lifecycle.json`, `lifecycle_timed.json`, `closing_order.json`, `error_bar.json`, `error_bar_many.json`, `effects_all.json`; `assets/shaders/detail.glsl` (a busy test background, not from upstream). |
-| `out/` | PNGs of the last `verify/render_scenes.sh` run: the 28 of `compositor-port` and 28 new ones. |
-| `verify/` | Verification only. From `compositor-port`, unchanged: `check.py` (driver), `upstream.py` (upstream's Rust geometry and GLSL re-typed in Python), `glref.c` (OpenGL reference running the unmodified upstream `.glsl`), `bgcompare.py`, `make_assets.py`, `pngio.py`, `cvage_probe.m`. New: `check_effects.py` (the effects against OpenGL and re-typed Rust), `glblur.c` (upstream's Kawase chain with the unmodified `blur_down.glsl` / `blur_up.glsl` on OpenGL), `sanitize.sh`, `crop.py` (magnify a region of a PNG to look at it). Extended: `render_scenes.sh`, `run_all.sh`; `last_run.log` is this copy's run (made before the review round recorded in section 23, which changed no renderer source). |
+| `background.h`, `background.m` | The canvas background module the compositor draws first. One method, `-encodeFrame:inEncoder:`, draws it inside the compositor's own render pass (section 14). |
+| `canvas-renderer.h`, `canvas-renderer.m` | The host: builds the frames of sections 3 and 18 from the controller's snapshot and drives one `IFCompositorLayer` per output. |
 
-Nothing under the Infinify checkout, `compositor-port/`, `background-port/` or
-the upstream checkout was modified, and nothing was built there. Nothing was
-committed (the work directory is not a repository).
+How `canvas-renderer.m` follows section 18 is written where it does so, in
+`canvas-renderer.h` and `canvas-renderer.m`: which of the controller's lifecycle
+events plays which animation, and the four things that are the shell's own
+there. An animation begins one 60 Hz tick before the frame that first shows it
+when the output has drawn nothing more recent, because this canvas draws on
+demand (18.2, "Cadence"). A window that opens is held at the animation's first
+instant, which is invisible, until its stream has delivered its first picture,
+for a second at most (18.3), and the stand-in whose slot a relaunched window
+adopted stays whole until that window's first picture likewise (18.4). Each
+output bakes its own closing snapshot, at upstream's one density, instead of
+sharing a texture (18.2, "Scale"). And upstream's age limit on a closing
+window's pixels has nothing to test: the bake is taken from the element of the
+frame last described, the picture that was on screen (18.2, "When not to").
 
-An independent review of this copy found two things, both accepted (section
-23, "Review findings (effects)"): the order inside the closing bucket, which
-is now the host's to list as section 18.2 says (deviation 42; no renderer
-change), and a false failure of `comprender --blur-cache-test` (fixed in
-`comprender.m`). `compositor.m` is unchanged since that review.
-
-# Part I — the compositor (from `compositor-port`)
+# Part I — the compositor
 
 ## 1. Provenance
 
@@ -71,7 +80,7 @@ names are kept, so the two read side by side.
 | `ifc_mirror_copy` | none: stands in for `GL_MIRRORED_REPEAT` on upstream's clipped capture (deviation 25) | — |
 
 The path and the hash are also written beside each translation in
-`compositor.m`; `run_all.sh` prints both sides.
+`compositor.m`.
 
 The CPU side mirrors upstream function by function and cites each one in a
 comment:
@@ -105,8 +114,8 @@ arithmetic wherever upstream narrows to `f32`.
 
 ## 2. Public API
 
-Everything is in `compositor.h`. What this copy added is listed in section 17;
-the list below is `compositor-port`'s and unchanged.
+Everything is in `compositor.h`. What the effects added is listed in section 17;
+the list below is the rest of the API.
 
 - **`IFCompositorFrame`** — what one output shows at one instant. `size`
   (points), `scale` (backing scale), `cameraX/Y` (world point at the top-left,
@@ -116,8 +125,7 @@ the list below is `compositor-port`'s and unchanged.
   (`IFCompositorChromeStyle`: `bg_color`, `fg_color`, `corner_radius`,
   `title_bar_height`, `font`, `font_size`, `font_weight`, `title_align`);
   `decorationScale`; `placeholderColor`; `elements` (bottom to top);
-  `outline` + `-setOutlineRects:count:`; `needsContinuousRedraw`;
-  `debugPasses`.
+  `outline` + `-setOutlineRects:count:`; `needsContinuousRedraw`.
 - **`IFCompositorElement`** — a window or a stand-in: `identifier` (unique
   within a frame; kept when a window becomes a stand-in or back), `kind`,
   `rect` + `space` (canvas, the default / output points / pinned), `layer`
@@ -136,34 +144,33 @@ the list below is `compositor-port`'s and unchanged.
 - **`IFCompositorOutlineSettings`**, `IFCompositorOutlineRect(...)`.
 - **`IFCompositorRenderer`** — draws frames for one output and owns that
   output's caches. `+rendererWithDevice:`,
-  `-encodeFrame:intoTexture:commandBuffer:`, `-newImageForFrame:error:`,
-  `-writePNGForFrame:toURL:error:`, `-BGRADataForFrame:error:`, `-purge`,
-  diagnostics (`cacheEntryCount`, `chromeRasterCount`, `contentWrapCount`,
-  `debugDrawHandler`).
+  `-encodeFrame:intoTexture:commandBuffer:`, `-newImageForFrame:error:`
+  (the offscreen export), `-purge`.
 - **`IFCompositorLayer : CAMetalLayer`** — one output on screen.
   `-initWithRenderer:`, `-updateWithFrame:` (returns YES when it drew),
-  `-setNeedsRedraw`, `needsContinuousRedraw`, `drawCount`, and a
-  diagnostics-only frame capture used by `comprender --via-layer`.
+  `-setNeedsRedraw`, `needsContinuousRedraw`, `drawCount`, the presentation
+  controls of section 3 (`paced`, `presentationTime`, `presentationInterval`,
+  `drawableReady`, `drawablePending`, `missed`, `-stopDrawing`) and the
+  presentation counters (`countsPresented`, `presentedCount`,
+  `-takePresentationStats`).
 
 ## 3. How the host drives it
 
-**Once per config load:** build one `IFBackgroundProgram` (as today's notes
-for the background module say) and one `IFCompositorChromeStyle` from
-`[decorations]`.
+**Once per config load:** build one `IFBackgroundProgram` ([BACKGROUND-NOTES.md](BACKGROUND-NOTES.md),
+section 3) and one `IFCompositorChromeStyle` from `[decorations]`.
 
-**One layer per output.** The compositor layer replaces, for its output, the
-`IFBackgroundLayer`, every tile `CALayer`, every
-`AVSampleBufferDisplayLayer` and the "Detached window" `CATextLayer`:
+**One layer per output.** `canvas-renderer.m` keeps one compositor layer and one
+frame description for each output, in the host layer's top-left coordinates:
 
 ```objc
 IFCompositorLayer *layer = [[IFCompositorLayer alloc] initWithRenderer:nil];
-layer.frame = CGRectOffset(outputScreenBounds, -view.globalBounds.origin.x, -view.globalBounds.origin.y);
-[view.layer addSublayer:layer];
+layer.frame = CGRectOffset(outputScreenBounds, -origin.x, -origin.y);   // origin: the panel's global origin
+[host insertSublayer:layer atIndex:0];                  // below the toolbar and the status line
 IFCompositorFrame *frame = [IFCompositorFrame new];     // kept; refilled in place
 ```
 
 **Update.** Call `-updateWithFrame:` on the main thread whenever anything may
-have changed: at the end of `-[DesktopView render:]`, after a stream delivered
+have changed: after the host has described a frame, after a stream delivered
 a sample (set the element's `pixelBuffer` first), and on every display tick
 while `layer.needsContinuousRedraw`. The frame and its elements are plain
 unsynchronised objects: change them only on the thread that calls
@@ -195,8 +202,8 @@ layer sets its own `drawableSize`, `contentsScale` and `opaque`.
 | `element.contentRect` | `placements[].source.content_rect` (the window content inside the buffer, in buffer pixels) — **not** `buffer_crop`, which is only the visible part |
 | `element.contentGeneration` | the actual image generation, advanced when accepted pixel content changes |
 | `element.focused` | `placements[].focused` |
-| `element.decoration` | the vendored `effective_*` helpers of `crates/core/src/config/types.rs` (`effective_decoration_mode`, `effective_border_width`, `effective_border_color(_focused)`, `effective_corner_radius`, `effective_shadow_enabled`, `effective_opacity`), then `IFCompositorDecorationDrawn` (below). macOS windows carry their own title bar, so the mode is `client` |
-| `element.kind = StandIn`, `rect`, `appName`, `title` | a placement whose source is gone (today's "Detached window" tile), under the window's identifier. **`rect` is not the window's rectangle:** a stand-in's `rect` is its body and the bar is drawn above it, so for a window that carried its own title bar (every macOS window; upstream's CSD origin) pass `IFCompositorStandInBodyRect(world_rect, YES, chrome.titleBarHeight)` = `(x, y + title_bar_height, w, max(h - title_bar_height, 1))`. Bar + body then cover exactly the placement's rectangle, which is what the shell culls and hit-tests with (`out/standin_mapping.png`). Passing `world_rect` itself draws the stand-in 25 px too tall, its bar outside the placement. Set `pixelBuffer` and `texture` to nil (a stand-in draws no content; the renderer lets go of the buffer either way, the element only when cleared). `appName` = the app's display name, `title` = `windows[].metadata.title` (not drawn, see deviations). Its `decoration` comes from the global `[decorations]` table alone — upstream calls `effective_*(None, mode, config)` for a stand-in, no window rule — and it is never passed through `IFCompositorDecorationDrawn` (a stand-in is not subject to the coverage rule) |
+| `element.decoration` | the ported `effective_*` helpers of `crates/core/src/config/types.rs` (`effective_decoration_mode`, `effective_border_width`, `effective_border_color(_focused)`, `effective_corner_radius`, `effective_shadow_enabled`, `effective_opacity`), then `IFCompositorDecorationDrawn` (below). macOS windows carry their own title bar, so the mode is `client` |
+| `element.kind = StandIn`, `rect`, `appName`, `title` | a placement whose source is gone (today's "Detached window" tile), under the window's identifier. **`rect` is not the window's rectangle:** a stand-in's `rect` is its body and the bar is drawn above it, so for a window that carried its own title bar (every macOS window; upstream's CSD origin) pass `IFCompositorStandInBodyRect(world_rect, YES, chrome.titleBarHeight)` = `(x, y + title_bar_height, w, max(h - title_bar_height, 1))`. Bar + body then cover exactly the placement's rectangle, which is what the shell culls and hit-tests with. Passing `world_rect` itself draws the stand-in 25 px too tall, its bar outside the placement. Set `pixelBuffer` and `texture` to nil (a stand-in draws no content; the renderer lets go of the buffer either way, the element only when cleared). `appName` = the app's display name, `title` = `windows[].metadata.title` (not drawn, see deviations). Its `decoration` comes from the global `[decorations]` table alone — upstream calls `effective_*(None, mode, config)` for a stand-in, no window rule — and it is never passed through `IFCompositorDecorationDrawn` (a stand-in is not subject to the coverage rule) |
 | `placements[].presentation_settled == false` | today the shell hides the surface. Here: keep the last buffer, or set `pixelBuffer = nil` to show the placeholder. Host's choice |
 | `frame.outline`, outline rects | `[output.outline]`; one `IFCompositorOutlineRect(camera, zoom, other.camera, other.size, other.zoom)` per other output |
 
@@ -223,25 +230,33 @@ budget itself (`background_animation_due`). (`needsContinuousRedraw` is now
 also YES while an open or close animation runs on the frame's clock, section
 18; those redraw on every tick, whatever `animate_fps` says.)
 
-**Presentation.** The layer sets `presentsWithTransaction = YES`, so a frame
-lands in the same Core Animation commit as anything else the host changed. For
-lowest latency on video-rate content the host may set it to NO; both paths are
-implemented.
+**Presentation.** The layer chooses per frame. A first, resized or unpaced frame
+presents inside the caller's `CATransaction` (`presentsWithTransaction = YES`),
+so it lands in the same Core Animation commit as anything else the host
+changed. With `paced` set, as in a display-link callback, an unchanged-size
+frame presents by its command buffer at `presentationTime` (Mach absolute
+seconds) without waiting for scheduling. Drawables are acquired on a private
+serial queue, at most two kept ready; a frame that finds none leaves `missed`
+set and the layer dirty, and `drawableReady` (main queue) tells the host to
+retry within the same refresh. `-stopDrawing` cancels the acquisitions before
+the layer is detached.
 
 **Screenshots** (`msg screenshot`). Upstream renders a canvas region at a
 chosen DPI with zoom 1 and no outlines, into a transparent target. Build a
 frame with `size` = region size, `scale` = DPI scale, `camera` = region
 origin, `zoom` = 1, `clear = IFCompositorClearTransparent`, no outline rects,
 `background` = the program or nil, canvas-space elements, and call
-`-writePNGForFrame:toURL:error:` on a separate `IFCompositorRenderer`. For an
-isolated `window` capture put only that element in the frame.
+`-newImageForFrame:error:` on a separate `IFCompositorRenderer`, then write
+the image it returns. For an isolated `window` capture put only that element
+in the frame.
 
 **Blur, opening and closing windows, the error bar.** Section 18.
 
-**Teardown.** `[layer removeFromSuperlayer]` and drop the references. No
-timers, display links, observers or threads. Textures a frame in flight still
-samples are released when that frame completes, even if the renderer is
-already gone.
+**Teardown.** `-[IFCompositorLayer stopDrawing]` (it cancels the drawable
+acquisitions and releases the ready drawables), then `[layer
+removeFromSuperlayer]` and drop the references. The layer and renderer start no
+timers, display links or observers. Textures a frame in flight still samples
+are released when that frame completes, even if the renderer is already gone.
 
 **Threads.** A renderer is used from one thread at a time; the layer from the
 main thread. A frame and its elements must not be changed by another thread
@@ -318,7 +333,8 @@ not: section 19.1.)
 - The target (layer drawable and offscreen texture) is
   `MTLPixelFormatBGRA8Unorm`, deliberately not an `_sRGB` format: values are
   stored and blended as written, in sRGB encoding, exactly like upstream's GL
-  framebuffer. The layer's `colorspace` is sRGB and the PNG is tagged sRGB.
+  framebuffer. The layer's `colorspace` is sRGB and the image of
+  `-newImageForFrame:error:` is tagged sRGB.
 - Window buffers are sampled as `BGRA8Unorm` (no transfer function), linear
   filtering, clamp to edge, no mipmaps — smithay's defaults for a client
   buffer. They are treated as **premultiplied alpha**, the Wayland ARGB8888
@@ -361,26 +377,17 @@ not: section 19.1.)
   its entry is never evicted; the renderer therefore drops the other kind's
   resources itself: a stand-in retires the content wrapper and buffer it held
   as a live window, a window retires the stand-in's body and label, and the
-  title bar unless it still draws one. Measured (`--kind-switch-test`): a
-  3456×2234 buffer has retain count 3 / IOSurface use count 2 while live (the
-  test, the element, the renderer); 2 / 1 as a stand-in whose element still
-  holds it; 1 / 1 (idle) once the element is cleared. A 1728×1117 stand-in's
-  30.9 MB body is gone within four frames of becoming a live window, and a
-  title bar when a server-decorated window turns client-decorated.
+  title bar unless it still draws one. A stand-in's body is gone within four frames of
+  becoming a live window, and a title bar when a server-decorated window turns
+  client-decorated.
 - CoreVideo's cache keeps the Metal texture of a released wrapper, and through
   it the IOSurface's memory, until a flush that comes at least one second
   (its default age, now set explicitly) after the buffer's last holder let go
-  — the renderer or, later, the host (`verify/cvage_probe.m`). The renderer
-  flushes at the end of the three encodes after a retirement — too early for
-  that, but it is what returns the surface to its pool — and, independently,
-  at most once every 1.5 s at the end of an encode or in an
-  `-updateWithFrame:` that skips its redraw. Measured
-  (`--kind-switch-test`): with a 3456×2234 buffer retired by the renderer but
-  held elsewhere for 1.7 s more, 61.6 MB allocated (30.9 MB of it the
-  stand-in's body); still 61.6 MB right after its release; 32.1 MB one frame
-  1.7 s later. Through a layer whose scene went static as the window became a
-  stand-in: 31.0 MB until one more update, which skipped the redraw and left
-  1.4 MB. Without such a later call (a host that never updates that output
+  — the renderer or, later, the host. The renderer flushes at the end of the three
+  encodes after a retirement — too early for that, but it is what returns the
+  surface to its pool — and, independently, at most once every 1.5 s at the
+  end of an encode or in an `-updateWithFrame:` that skips its redraw.
+  Without such a later call (a host that never updates that output
   again) the surface stays mapped until the renderer is released or purged.
 - A steady frame (nothing changed) costs a hash of the description (every
   field, every UTF-16 unit of each title and app name), one reading of the
@@ -389,32 +396,10 @@ not: section 19.1.)
   this module: uniforms go through `setVertexBytes` / `setFragmentBytes`, the
   render pass descriptor and the completion block are reused. Metal's own
   per-frame objects (command buffer, encoder, drawable) remain.
-  Measured with `--bench` over 119 identical frames after the first, for the
-  three scenes below: chrome rasterisations and content wrappers +0, +0; live
-  heap blocks −306, +3, +15; heap allocations made while `-encodeFrame:` runs
-  (counted with libmalloc's logger hook, Metal's own included): 3, 3 and 6
-  per frame. An empty frame — clear only — also costs 3, so those are Metal's
-  for opening a pass, and 1000 draws add 3 more for its uniform storage.
 - The shadow and border quads are drawn as four strips around the region where
   their shader returns exactly zero (deviation 3). For the 320-element scene
   this took GPU time from 12.1 ms to about 4 ms with byte-identical output.
 
-Apple M5 Pro, `comprender --bench 120`, per frame, from this copy's
-`verify/last_run.log`:
-
-| Scene | Target | Draws | CPU encode | GPU |
-|---|---|---|---|---|
-| 2 windows over the paper shader | 3456×2234 | 6 | 0.01 ms | 0.35 ms |
-| 4 stand-ins + 2 server-decorated windows | 1800×1040 | 28 | 0.02 ms | 0.27 ms |
-| `many.json`: 300 overlapping windows + 20 stand-ins | 3456×2234 | 1000 | 0.42 ms | 4.41 ms |
-
-`many.json` by pass: background 0.40, shadow 2.13, border 0.37, content 1.94,
-bars / bodies / labels 0.36 ms. `compositor-port`'s own log read 0.02 / 0.42,
-0.02 / 0.17 and 0.46 / 4.33 ms for the three scenes; the figures move by a few
-tenths of a millisecond between runs (this copy's previous run of the same
-script, an hour earlier, read 0.26, 0.22 and 4.11 ms GPU). Run against each other, interleaved,
-this copy's encode of `many.json` is about 0.03 ms slower than
-`compositor-port`'s and the GPU time is the same (deviation 41).
 There is no occlusion culling (deviation 8): 300 windows are blended back to
 front.
 
@@ -432,8 +417,8 @@ its content identity (pixel-buffer object, IOSurface id and change seed,
 texture object, `contentGeneration`) — or when an animated background is due.
 Strings (title, app name, font name) enter the hash with every UTF-16 unit,
 not through `-[NSString hash]`, which looks at 96 characters of a longer
-string at most. `time` alone never causes a redraw of a static frame. Measured
-sequence (`--gating-test`): first frame redraw; identical skip; time only
+string at most. `time` alone never causes a redraw of a static frame. The sequence
+first frame redraw; identical skip; time only
 skip; camera, zoom, element moved, generation bumped, focus, opacity, same
 buffer rewritten (surface seed), a 130-character title set, its character 40
 changed, a 130-character app name set, its character 41 changed,
@@ -446,122 +431,8 @@ element's `blur` flag and lifecycle state, and — for an animation that runs on
 `lifecycleStartTime` and is not yet finished — its progress at `frame.time`.
 That is the one way `time` reaches the hash: such a frame redraws on every
 tick until the animation is over, and `time` alone still redraws nothing
-otherwise (`--lifecycle-test`, section 23). The animated background's
+otherwise. The animated background's
 `animate_fps` gate is unchanged and applies to the background only.
-
-## 9. comprender
-
-```
-comprender scene.json --out frame.png
-           [--scale S] [--zoom Z] [--camera X,Y] [--size WxH] [--time T]
-           [--clear opaque|transparent] [--only PASS[,PASS...]]
-           [--blur-radius N] [--blur-strength X] [--animation-scale A] [--animation-speed V]
-           [--via-layer] [--dump-bgra FILE] [--dump-draws FILE.json]
-           [--gating-test] [--bench N] [--bench-pan N] [--churn-test N] [--kind-switch-test]
-           [--lifecycle-test] [--blur-cache-test]
-comprender --blur-test IN.bgra W H PASSES OFFSET OUT.bgra [--blur-stages PREFIX]
-```
-
-Exit status 0: rendered as described; 1: rendered, but the background fell
-back (reason on stderr as `error: ...`); 2: usage, scene or I/O failure.
-`--gating-test` and `--kind-switch-test` print `FAIL` and exit with 1 when a
-long string's change did not redraw, or when something stayed allocated or
-drew differently after a change of kind.
-`--only` takes `background, outline, shadow, border, content, title_bar, body,
-label, blur, snapshot, error_bar`. `--dump-draws` writes each draw's
-destination rectangle, scissor and uniforms; the draws of a frost's own passes
-are not listed, but each blurred window adds a `blur_info` record (screen
-rectangle, capture rectangle, pad, passes, offset, whether it was recomputed).
-New in this copy: `--blur-radius`, `--blur-strength`, `--animation-scale`,
-`--animation-speed` override the scene's `effects`; `--bench-pan` is `--bench`
-with the camera moving a point per frame (every frost recomputed);
-`--lifecycle-test` and `--blur-cache-test` print PASS / FAIL lines and exit
-with 1 on a failure. `--blur-cache-test` expects a frost for the blurred
-windows that have one on this output: those the renderer reports a
-`blur_info` record for in the encode at hand, i.e. whose padded capture
-reaches the output (counted per encode, because a camera move or a larger
-pad can bring a capture onto the output). A blurred window off the output has
-no frost (upstream: "frost left unrendered: the padded capture is entirely
-off the output"); such windows are counted in a second header line and not
-expected. The test drives the last listed blurred window whose top-left
-corner is on the output (it puts an element just inside that corner). A scene
-is refused with exit status 2 when no blurred window's capture reaches the
-output, when none of those windows has its top-left corner on the output, or
-when it has no background and a blurred window on the output got no frost in
-the first frame (a window with nothing drawn beneath it has none, upstream's
-"frost zeroed"; a background is always beneath). `--blur-test` needs no scene and runs the renderer's
-Kawase passes over a raw image (with `--blur-stages`, also the whole texture
-each pass wrote). A render of a scene with error messages prints the joined
-text as `error bar: …`.
-
-Scene schema (every key optional unless marked; colours are `"#RRGGBB"` or
-`"#RRGGBBAA"`, straight alpha; paths are relative to the scene file):
-
-```jsonc
-{
-  "output": {"size": [800, 600], "scale": 1, "camera": [0, 0], "zoom": 1, "time": 0,
-             "clear": "opaque",            // or "transparent"
-             "decoration_scale": 0,
-             "usable_area": [x, y, w, h]}, // when given, each window's decoration goes through
-                                           // IFCompositorCoverageOfFrame + IFCompositorDecorationDrawn
-  "background": {"type": "default",        // default | shader | tile | wallpaper | none
-                 "path": "…", "texture": "…", "mirror_tile": false,
-                 "transparent_shader": false, "animate_fps": 0},
-  "chrome": {"bg_color": "#303030", "fg_color": "#FFFFFF", "corner_radius": 10,
-             "title_bar_height": 25, "font": "Adwaita Sans", "font_size": 11,
-             "font_weight": "medium",      // thin … black, as upstream
-             "title_align": "center"},     // left | center
-  "placeholder_color": "#303030",
-  "effects": {"blur_radius": 2, "blur_strength": 1.1, "animate_blur_fps": 20,   // upstream [effects], its defaults
-              "animation_speed": 0.5, "animation_scale": 0.95},
-  "errors": ["config error: …", "…"],      // the error bar's messages; absent or empty: no bar
-  "outline": {"color": "#ffffff", "thickness": 1, "opacity": 0.5,
-              "rects": [[x, y, w, h]],                                      // output-local points
-              "outputs": [{"camera": [x, y], "size": [w, h], "zoom": 1}]},  // projected with upstream's math
-  "decoration": { … },                     // defaults for every element, same keys as below
-  "elements": [                            // bottom to top
-    {"id": 1,
-     "kind": "window",                     // window | standin | snapshot
-     "rect": [x, y, w, h],                 // required (not for a snapshot with "snapshot_of")
-     "blur": false,                        // frosted glass behind a window
-     "lifecycle": {"type": "open",         // open | close | close_alpha_only
-                   "progress": 0.5},       //   explicit progress, or instead: "start": t (the frame time it began at)
-     "snapshot_of": { … },                 // kind snapshot: a window object (same keys as an element); it is baked with
-                                           //   -closingSnapshotOfElement:inFrame:flattenScale: and the snapshot takes its
-                                           //   place; "flatten_scale": s (default, as upstream: output scale x zoom, at
-                                           //   least 1; the output scale for a pinned window); the outer
-                                           //   "decoration": {"opacity": …} multiplies the fade. Without "snapshot_of" a
-                                           //   snapshot takes "rect" and "content" (always through a texture)
-     "space": "canvas",                    // canvas | output | pinned
-     "replaces": "client",                 // standin only, canvas or pinned space: `rect` is the rectangle of the
-                                           // client- | server-decorated window it replaces; the element gets
-                                           // IFCompositorStandInBodyRect(rect, …, chrome.title_bar_height)
-     "layer": "normal",                    // normal | widget | pinned | closing
-     "clip": [x, y, w, h],
-     "focused": false,
-     "fullscreen": false,                  // IFCompositorDecorationDrawn(…, fullscreen = true, …)
-     "decoration": {"mode": "client",      // client | server | minimal | none
-                    "border_width": 0, "border_color": "#303030", "border_color_focused": "#303030",
-                    "corner_radius": 10, "shadow": true, "shadow_radius": 14,
-                    "shadow_color": "#00000066", "opacity": 1},
-     "content": null,                      // nil buffer, or one of:
-     //  {"type": "solid", "color": "#…"}
-     //  {"type": "gradient", "from": "#…", "to": "#…", "direction": "horizontal|vertical|diagonal"}
-     //  {"type": "checker", "a": "#…", "b": "#…", "cell": 16}
-     //  {"type": "png", "path": "…", "rect": [x, y, w, h]}          premultiplied on load
-     //  {"type": "raw", "path": "…", "size": [w, h], "rect": […]}   premultiplied RGBA8 bytes, used as given
-     //  common keys: "size": [w, h] (pattern buffer size; default: the rectangle at the output's density),
-     //               "margin": n, "margin_color": "#ff00ff" (pattern inside a larger buffer; sets the content rect),
-     //               "via": "pixelbuffer" | "texture", "opaque": false
-     "title": "…", "app_name": "…", "launching": false, "pinned_indicator": false,
-     "transform": {"origin": [x, y], "offset": [x, y], "scale": 1}}   // physical pixels, as upstream
-  ]
-}
-```
-
-Pattern and PNG contents become an IOSurface-backed BGRA `CVPixelBuffer`
-(through `CVMetalTextureCache`, the path live windows take) unless
-`"via": "texture"`.
 
 ## 10. Blur and closing animations
 
@@ -654,7 +525,8 @@ Sections 17 to 25.
 16. **Background over the opaque clear**: the background module draws with
     blending off; when its output carries alpha a second draw sets the
     target's alpha to 1, which is what source-over onto opaque black leaves.
-    The background module's own deviations (its NOTES, section 8) carry over.
+    The background module's own deviations ([BACKGROUND-NOTES.md](BACKGROUND-NOTES.md),
+    section 8) carry over.
 17. **Opacity is clamped to 0..1**; outline opacity to at most 1.
 18. **Stand-in label falls back to `title`** when `appName` is empty.
     Upstream's display name is never empty.
@@ -677,11 +549,9 @@ Deviations 24 to 41 (the effects) are in section 20.
 
 - A border colour is used un-premultiplied (`u_color * coverage * alpha`), so
   a translucent border colour adds light instead of tinting:
-  `#e5a50a80` over the paper background comes out bright yellow
-  (`out/variants.png`, bottom right).
+  `#e5a50a80` over the paper background comes out bright yellow.
 - A corner radius beyond half the smaller side: the clip clamps it, the border
-  and shadow do not, and the border disappears (`out/variants.png`, bottom
-  left, radius 500).
+  and shadow do not, and the border disappears (radius 500).
 - Where two outline strips cross, the corner pixel is blended twice (191
   instead of 128 for white at 0.5).
 - At zooms where the border element's two axes round differently, the stroke
@@ -696,7 +566,7 @@ Deviations 24 to 41 (the effects) are in section 20.
 - `draw_line`'s unchecked column index (a stroke past the right edge wraps to
   the next row); never reached at sane widths.
 - The default dot grid is nearly invisible at zoom 0.5 on a 1x output
-  (background module; `out/two_windows_z05_s1.png` shows none).
+  (background module).
 
 ## 13. Not supported, and assumptions
 
@@ -726,208 +596,30 @@ Assumptions:
   `CVMetalTexture` is released on Metal's completion thread (Apple's samples
   do this); not found documented.
 - `CVMetalTextureCacheFlush` evicts a texture once its buffer has been
-  released by everyone for the cache's maximum age, and not before: measured
-  on this system with `verify/cvage_probe.m` (flushes at 0.01 and 0.5 s keep
-  30 MB, at 1.2 and 1.7 s free it; never while the buffer is alive), not found
+  released by everyone for the cache's maximum age, and not before: a
+  flush at 0.01 or 0.5 s after the last release keeps the memory, one at 1.2 or 1.7 s frees it, and none
+  does while the buffer is alive; not found
   documented beyond the name of the attribute.
 
 ## 14. Changes to the copied background module
 
-One method, added to `IFBackgroundProgram`:
+One method, added to `IFBackgroundProgram` (`background.h`, `background.m`):
 
 ```objc
 - (BOOL)encodeFrame:(IFBackgroundFrame)frame inEncoder:(id<MTLRenderCommandEncoder>)encoder;
 ```
 
-It is the draw of `-encodeFrame:intoTexture:commandBuffer:` without the render
-pass around it, and that method now calls it. `background.h`: 9 added lines.
-`background.m`: the body of the old method moved into the new one (23 changed
-lines). Nothing else differs from `background-port/`, which was not touched.
-`verify/bgcompare.py` renders seven backgrounds at three views through the
-compositor and through the reviewed module's own `bgrender`: the framebuffers
-are byte-identical with a transparent clear, and have the same colour with
-alpha 255 with the opaque clear (42 comparisons).
-
-## 15. Verification
-
-`verify/run_all.sh <driftwm checkout> <bgrender> <compositor-port/out>`
-reproduces the table below — except its rows made by hand (the sanitizer
-build, `leaks`, `clang --analyze`; this copy's own are in section 23) and its
-last row, which is history — and section 23's checks of the effects. Its
-complete output is `verify/last_run.log`: 443 PASS lines, no FAIL; of this
-section, 211 checks of `check.py`, 21 lines for the 42 background comparisons
-and 14 of the kind-switch test, all against this copy's build, with the same
-megabyte and retain-count figures as before. The churn test does more in this
-copy (section 23), so its counters differ a little from the row below (300
-windows, 120 frames: 22,911 wrappers and 11,273 chrome rasters now).
-
-The rest of this section — what was found and fixed, the review findings,
-what was looked at and what was not run — is `compositor-port`'s record. The
-measurements quoted in it that are not printed by `run_all.sh`
-(`cvage_probe.m`, the reviewer's reproductions, the builds with a fix taken
-out again) were made there and not repeated for this copy.
-
-Upstream itself cannot run here, so three independent references were used:
-
-- **Uniforms**: upstream's Rust (`painted_rect`, `corner_round_rect`,
-  `border_area_for`, `border_uniforms_precise`, `shadow_area_for`,
-  `shadow_uniforms_precise`, `compute_uniforms`) re-typed in Python
-  (`verify/upstream.py`), compared with what the module passes to its shaders
-  (`--dump-draws`).
-- **OpenGL**: the system's legacy OpenGL compiling the *unmodified* upstream
-  `.glsl` (GLSL 1.20, `precision` qualifiers defined away) and drawing the
-  element's quad with the Python-computed uniforms; compared with the module's
-  framebuffer for that pass alone (`--only`, transparent clear).
-- **Formulas**: the three shaders re-typed in Python, evaluated per pixel.
-
-| Check | Result |
-|---|---|
-| Border, shadow and content pass, 15 cases: scale 1 / 1.5 / 2; zoom 0.25 … 2; fractional and half-pixel cameras; odd sizes; a painted-rect tie at 1.5x; border 0 … 4; radius 0 … 40; opacity 0.6 with a translucent border colour | uniforms and destination rectangles equal upstream's in all 44 comparisons |
-| The same passes against OpenGL running `border.glsl`, `shadow.glsl`, `corner_clip.glsl` | 44 of 44 within 1 level over the whole frame; 39 exact |
-| Border and shadow against the Python formulas, every third row of the element | 0 pixels off by more than 1 level in all 29 comparisons |
-| Content pass, 8 more cases: bottom-only radii under a title bar, square under a title bar, `NO_ALPHA`, buffers at half and double density, zoom 1/3, a content sub-rectangle (two cases) | uniforms equal; 8 of 8 within 1 level of OpenGL, 7 exact |
-| Border thickness in device pixels, pure border colour along both axes | scale 1 zoom 1 width 2: 2 px on all four sides; 2x: 4; zoom 0.5: 1 (2 at 2x); zoom 2: 4; 1.5x width 1: 2; 2x zoom 0.7 width 3: 4; width 5: 5; 2x zoom 1.5 width 4: 12; zoom 0.25 width 1 and 3: 1 px left / right, blended top / bottom (section 12) |
-| Corner coverage, every pixel of the four corner squares against `corner_alpha` | radius 10 at 1x, 2x, zoom 2; radius 16 at 2x zoom 0.5; radius 25: 0 of 576 … 2916 px off by more than 1 level. E.g. 1x radius 10 diagonal: (0,0) (1,1) (2,2) background, (3,3) onward fully window |
-| Shadow alpha by distance from the edge, mid-side, over the flat background (200,204,210) | 1x: 1 px 0.183 → (163,167,172); 4 px 0.091; 8 px 0.022; 12 px 0.003; beyond 14 px none. 2x: same curve over twice the pixels. zoom 0.5: 1 px 0.166, 2 px 0.104, 4 px 0.027. All pixels within 1 level of the formula |
-| Opacity 0.6 over the stripe tile | every sampled inside pixel = `0.6·white + 0.4·background` within 1 level (1x, 2x, zoom 0.5); nothing outside changed |
-| Opacity on chrome | border pixel (233,82,84) and shadow pixel (186,190,195) as computed |
-| Z order | overlap shows the upper window; swapping the list swaps it; widget < normal < pinned whatever the list order |
-| Upper window's shadow on the lower | white lower window, left of the upper: 208, 225, 243, 253, 255 at 1, 3, 6, 10, 14 px — the formula's values |
-| Clip rectangle, 1x and 2x | 0 pixels changed outside the clip; content and border present inside |
-| Window partly outside the output | content, right and bottom border at the expected pixels |
-| Content sub-rectangle with a magenta margin | 0 stray pixels at 1x, 2x, zoom 0.5, and 2x zoom 1.5 (deviation 2) |
-| Outline strips, 1x and 2x | edge 128, inside 0, crossing corner 191, thickness 1 and 2 px, a rectangle past the edge clipped; projection of another output gives upstream's `(99, 74, 241, 151)` |
-| Missing content | placeholder (48,48,48) inside border and rounded corner; with placeholder alpha 0 only shadow and border are drawn |
-| Canvas-space vs output-space rectangle at an integer camera (zoom 0.75, 2x); pinned vs zoom | byte-identical frames |
-| Canvas space against upstream's content rectangle (`loc_phys`, `PixelSnapRescaleElement`), 150 windows at integer positions, eight views (half-pixel, quarter-pixel and integer cameras; zoom 0.37 to 1; 1x and 2x) | 0 of 150 wrong in every view. The same windows given as output-space rectangles `(world − camera) · zoom`: 19, 13, 26, 12 off by a pixel at the four views of deviation 10, 0 at the other four |
-| A stand-in given `IFCompositorStandInBodyRect` of a client-decorated window's rectangle, 1x and 2x | bar at the window's top, body down to its bottom; border and shadow rectangles and uniforms equal the live window's. Server origin: body = the rectangle, bar above. A window shorter than the bar: 1 px body |
-| Clear modes | transparent: corner (0,0,0,0), shadow pixel alpha 30; opaque: alpha 255 everywhere |
-| Stand-in, 1x and 2x | bar, body and label rectangles as `suspended.rs` computes them (label buffer 22 and 44 px high); text ink centred on the body within 2 px; close glyph at the expected box within 2 px; long name ellipsised inside the 24 px side padding |
-| Server-side title bar | order shadow, border, content, bar; border wraps bar + content; content radii (0,0,10,10) |
-| `IFCompositorCoverageOfFrame` + `IFCompositorDecorationDrawn` (the cases of upstream's `chrome.rs` tests), through a scene with a usable area | none: chrome unchanged, also when short by half a pixel; exact (at zoom 1, and at zoom 0.5 with a camera): square corners, no shadow, border kept; overhang: border gone too; server mode keeps its bar in both; fullscreen: content only, unclipped |
-| `IFCompositorLayer` (not attached to a window) vs offscreen, seven scenes at 2x | byte-identical |
-| Background pass vs the reviewed module's `bgrender` | 42 of 42 (section 14) |
-| Redraw gating | section 8; the two long-string steps are checked (exit status), the rest is printed |
-| Kind switch (`--kind-switch-test`), 14 checks: window → stand-in → window and server → client decoration under one identifier, offscreen and through a layer whose scene then goes static | buffer retain count / IOSurface use count 3 / 2 → 2 / 1 → 1 / 1; allocation 61.6 MB → 32.1 MB (the body that remains) one frame 1.7 s after the buffer's last holder let go; stand-in body 32.1 MB → 1.0 MB; title bar 7.0 MB → 1.1 MB; layer 31.0 MB → 1.4 MB on the update that skipped; 7 switches each byte-identical to a fresh renderer's frame (section 7) |
-| Churn (`--churn-test`): a new pixel buffer per window per frame, elements removed and re-added, content switching between buffer / texture / none, every window a stand-in for two frames in eleven (once cleared, once with its content still set), `-purge` every 13th frame, frames not waited for, renderer released with a frame in flight | 400, 120 (300 windows, 22,911 wrappers, 11,277 chrome rasters) and 3000 frames: completed without error; live heap blocks after teardown below mid-run |
-| The same churn runs (400 / 60 / 1500 frames), the kind-switch test, the gating test and one render in a build with `-fsanitize=address,undefined` (by hand) | no report; 14 of 14 kind-switch checks; the render byte-identical to the normal build's |
-| `leaks --atExit` on one render, a 200-frame churn, the layer gating test and the kind-switch test | 0 leaks in each |
-| `clang --analyze` on `compositor.m`, `comprender.m` | no findings |
-| The 27 scene PNGs of `out/` rendered before the review fixes | byte-identical after them |
-
-**Found and fixed during verification:** the churn test crashed in
-`CVMetalTextureCache::bufferBackingNotInUse` when a retired `CVMetalTexture`
-was released after the renderer's cache. Every holder of a `CVMetalTexture`
-now also holds the cache.
-
-**Review findings** (an independent review of the first version; all four
-were reproduced and accepted, none rejected):
-
-1. *A cache entry kept the other kind's resources when an element changed
-   kind under one identifier.* Reproduced with the reviewer's
-   `review-renders/variants/retain_test.m` built against these sources:
-   before, a 3456×2234 buffer still had retain count 2 / use count 2 sixty
-   stand-in frames later, and a stand-in's 30.9 MB body stayed allocated
-   (61.6 MB) sixty frames after it became a live window; after, 1 / 1 and
-   0.9 MB. Fix: `-drawStandIn:` retires the entry's content, `-drawWindow:`
-   retires body, label and (unless server-decorated) bar. The churn test got
-   kind switches, and `--kind-switch-test` checks the outcome; with the two
-   retire calls taken out again it fails 7 of its 14 checks.
-   While measuring this with `device.currentAllocatedSize` a second holder
-   turned up that retain counts do not show (**not one of the four findings;
-   added on my own account**): CoreVideo's texture cache keeps a released
-   wrapper's texture, and the surface memory, until a flush at least one
-   second after the buffer's last holder let go (`verify/cvage_probe.m`), and
-   the renderer only flushed during the three encodes right after a
-   retirement. In a scene that went static the 30 MB therefore stayed until
-   the next content change anywhere on that output. The renderer now also
-   flushes for age at most every 1.5 s, in an encode or a skipped layer
-   update (section 7): about twenty lines of `compositor.m`; with that flush
-   disabled the test fails 2 checks.
-2. *The layer skipped the redraw when a long title or app name changed in the
-   middle.* Reproduced with the reviewer's `gate_test.m`: character 40 of a
-   130-character server title or stand-in name, `change redrew=0`; after,
-   `redrew=1` at every position. Fix: the fingerprint and the chrome-style
-   hash mix every UTF-16 unit instead of `-[NSString hash]`. `--gating-test`
-   has the case and fails without the fix.
-3. *The mapping gave a stand-in the window's whole rectangle, 25 px too
-   tall.* The renderer was right (it draws what `push_suspended_element`
-   draws); the mapping table missed upstream's `standin_body_rect`. Fix:
-   `IFCompositorStandInBodyRect`, the header comment of `rect`, the stand-in
-   row of section 3, a `"replaces"` key in the scene schema, two checks and
-   `out/standin_mapping.png`.
-4. *Output-space rectangles shift a share of the windows by one pixel at
-   half-pixel cameras.* Confirmed with the shell's own arithmetic: 19, 13, 26
-   and 12 of 150 at the reviewer's four views (the reviewer's own windows gave
-   20, 16, 16 and 20). Fix: `IFCompositorSpaceCanvas` is now the enum's zero
-   value and so the default of a new element and of a scene's `"space"`; the
-   header and deviation 10 say that Output space is not pixel-exact; section 3
-   tells the host to pass `world_rect`.
-
-**Looked at** (in `compositor-port`, where each of these PNGs was opened; the
-ones in this copy's `out/` are byte-identical to them and were not opened
-again):
-
-| PNG | What it shows |
-|---|---|
-| `two_windows_z1_s1.png` | focused (amber border) and unfocused (grey border) window over the default dot grid at zoom 1: 2 px borders, radius 10 corners. The shadow is black on a black background, so it cannot be seen in this picture; the `paper` renders below show it |
-| `two_windows_z05_s1.png`, `two_windows_z1_s2.png`, `two_windows_z05_s2.png` | the same scene at zoom 0.5, at 2x, and both: half size with 1 px borders; 4 px borders and smooth corners at 2x; no dots at zoom 0.5 1x (section 12) |
-| `two_windows_paper_*.png` (zoom 1, 0.5, 1.5 at 1x; zoom 1, 0.5, 0.7 at 2x) | the same two windows over a light test shader: soft shadow all round, visible and plausible at every zoom; the background grid scrolls and scales with the windows |
-| `overlap.png`, `overlap_z15_s2.png` | three overlapping windows: correct stacking, the upper windows' shadows darken the lower ones |
-| `partial_clip.png` | two windows hanging off opposite corners of the output; a third cut to its clip rectangle with a hard edge through content, border and shadow |
-| `opacity.png` | a 0.6 window over the stripe tile: stripes show through, its border and shadow are dimmed too; a 1.0 window beside it |
-| `variants.png` | no border; no shadow; radius 0; radius 60; radius 500 (content clamped to a stadium, no border — section 12); mode none (bare); no chrome at all; 8 px translucent border (bright yellow — section 12) |
-| `standin.png`, `standin_s2.png`, `standin_z05.png` | stand-ins: dark body, close glyph, centred label; a long name and a long fallback title ellipsised; "Terminal launching…"; a server-decorated window with an ellipsised long title; a bar with the pinned dot. Crisp at 2x, scaled at zoom 0.5 |
-| `chrome_style.png` | another style: named font (Helvetica Neue bold), left-aligned title, 32 px bar, other colours |
-| `outlines.png` | three outlines at 50 % white, one clipped by the output edge, under a window |
-| `missing.png` | a window with no buffer: placeholder fill inside its border and shadow |
-| `content_rect.png` | a buffer with a margin (none of it visible); a PNG with a translucent block through a Metal texture; the same PNG with `opaque`; a buffer at half density, magnified |
-| `layers_transform.png` | a pinned element at zoom 1 over a zoomed canvas; a widget listed last but drawn below; a transformed (0.8 scale, offset) element at 0.7 opacity |
-| `standin_mapping.png` | a live client-decorated window and three stand-ins for a window of the same rectangle (drawn as a red outline behind each). `"replaces": "client"`: exactly the window's footprint, bar at its top, label centred in it. `"replaces": "server"` and the rectangle passed as it is: 25 px taller, bar above the outline. Also opened at 2x, zoom 0.75, camera (10.5, 20.5): same relation, crisp |
-| `many.png` | 300 windows and 20 stand-ins |
-| `two_windows_no_background.png` | transparent clear: windows and shadows on alpha |
-| `two_windows_animated_t0.png`, `_t1.png` | an animated background at two times |
-
-**Not run:**
-
-- **Upstream DriftWM itself.** No pixel here was compared with a pixel from
-  real DriftWM. "Matches upstream" means: matches upstream's shader source
-  executed by OpenGL and by a Python re-typing, under uniforms re-typed from
-  upstream's Rust, and smithay as read in the 0.7.0 release.
-- **cosmic-text.** Text was not compared with upstream's rasteriser, and not
-  rendered in Adwaita Sans.
-- **Real ScreenCaptureKit buffers.** Everything in section 6 about them is an
-  assumption. Contents came from generated `CVPixelBuffer`s and textures.
-- **The layer on screen.** No window was shown and nothing was captured from
-  the display. Unverified: orientation inside `DesktopView` (a flipped view),
-  colour on a real display, presentation timing, behaviour across display
-  changes. The layer was driven unattached and its frames read back.
-- **Integration** with the shell or the Rust core: none attempted.
-- **Any other GPU** than this machine's (Apple M5 Pro, macOS 27.2 build
-  26B5091g, deployment target 26.0).
-- The upstream chrome rasterisers' bytes (`render_title_bar`,
-  `render_body_fill`): ported line by line and checked for geometry and
-  colour, not compared byte for byte with upstream's output.
-- The animation transform against upstream; `animate_fps` against a real
-  clock; scales other than 1, 1.5 and 2.
-- `IFCompositorStandInBodyRect` against upstream's Rust: it is three lines
-  read off `standin_body_rect`, checked here only through what it makes the
-  renderer draw.
-- The kind switch and the aged cache flush with ScreenCaptureKit's own pool
-  surfaces and inside the host's run loop: the buffers of the test are
-  `CVPixelBufferCreate`d ones, the layer unattached. That the host calls
-  `-updateWithFrame:` again some time after a window became a stand-in is an
-  assumption about the host.
-
-## 16. Commands
-
-The commands `compositor-port` ran are in its own `NOTES.md`, section 16.
-What was run for this copy — which includes all of `compositor-port`'s
-`run_all.sh` — is in section 25.
+It draws the background into a render pass the caller has already opened, so
+the compositor can put it first in its own pass, and it is the background's
+only encode entry point. The module's own offscreen path
+(`-encodeFrame:intoTexture:commandBuffer:`, `-newImageForFrame:error:`,
+`-writePNGForFrame:toURL:error:`) and its `IFBackgroundLayer` were removed on
+2026-10-30; screenshots go through `-[IFCompositorRenderer
+newImageForFrame:error:]`.
 
 # Part II — effects: blur, lifecycle animations, error bar
 
-Everything below is new in `compositor-effects/`. Upstream files read for it,
+The effects follow upstream's. The upstream files they were written from,
 all at commit `352333a8fa1b22171492d4b71a54102045c9a19d`:
 `src/shaders/{blur_down,blur_up,blur_mask}.glsl`, `src/render/blur.rs`
 (`process_blur_requests`, `render_blur`, `blur_pass`, `blur_pad`,
@@ -948,10 +640,9 @@ presentation feedback, nothing that is drawn: the open animation lives in
 
 ## 17. API additions
 
-All in `compositor.h`. Nothing was removed and no signature changed; enum
-values were appended (`IFCompositorElementKindSnapshot`,
-`IFCompositorStackLayerClosing`, three `IFCompositorPass` bits);
-`IFCompositorDecoration` is unchanged.
+All in `compositor.h`. They were added to the API of Part I without changing
+any signature; enum values were appended (`IFCompositorElementKindSnapshot`,
+`IFCompositorStackLayerClosing`); `IFCompositorDecoration` is unchanged.
 
 - **`IFCompositorEffects`** — upstream `EffectsConfig`, field for field:
   `blurRadius` (2), `blurStrength` (1.1), `animateBlurFPS` (20),
@@ -978,23 +669,17 @@ values were appended (`IFCompositorElementKindSnapshot`,
   `IFCompositorAnimationDuration(speed)`, `IFCompositorCloseAlpha(p)`,
   `IFCompositorCloseScale(p, amplitude)`, `IFCompositorOpenAlpha(p)`,
   `IFCompositorOpenScale(p, amplitude)`.
-- `IFCompositorPassBlur`, `IFCompositorPassSnapshot`,
-  `IFCompositorPassErrorBar`.
-- Diagnostics: `blurComputeCount`, `blurTextureAllocationCount`,
-  `blurTextureCount`, `-debugBlurBGRA:width:height:passes:offset:stages:`
-  (the renderer's own Kawase passes over caller-supplied pixels; what
-  `comprender --blur-test` and the OpenGL comparison use).
 
 ## 18. Host protocol
 
 ### 18.1 Blur
 
 ```objc
-frame.effects = effects;        // once per config load: [effects], through the vendored parser
+frame.effects = effects;        // once per config load: [effects], through the ported parser
 element.blur = effective_blur;  // per window, whenever its rule or fullscreen state changes
 ```
 
-- `effective_blur` is the vendored helper of
+- `effective_blur` is the ported helper of
   `crates/core/src/config/types.rs`:
   `applied.is_some_and(|r| r.blur) || (decorations.blur && !is_fullscreen)` —
   a window rule `blur = true` always, the global `[decorations] blur` for a
@@ -1072,8 +757,7 @@ if ([frame lifecycleFinishedForElement:snapshot]) [frame.elements removeObject:s
   window's `identifier` and clip, `lifecycle = Closing`. Under that
   identifier the renderer lets go of what it held for the live window — its
   buffer wrapper, title bar and frost — when it first draws the snapshot
-  (read off the code path; not measured the way `--kind-switch-test` measures
-  a window that becomes a stand-in). If the window's element stays in the
+  (read off the code path; not measured). If the window's element stays in the
   frame as well, give the snapshot another identifier. Its position in the
   list does not matter against windows (it is drawn in the closing bucket);
   inside that bucket list order holds, and the next point says what the
@@ -1103,8 +787,6 @@ if ([frame lifecycleFinishedForElement:snapshot]) [frame.elements removeObject:s
   overlapping windows closes first within one animation (0.11 s at the
   default speed, up to 7 frames), or a stand-in fades at an index above a
   snapshot's: the overlap then shows the wrong one of the two.
-  `scenes/closing_order.json` (`out/closing_order.png`) is listed upstream's
-  way: a fading stand-in, a snapshot at progress 0, an older one at 0.5.
 - **Scale.** `flattenScale` is the density of the bake. Upstream uses, for a
   canvas window, the largest `backing scale · zoom` among the outputs that
   show it, never less than 1 (`flatten_scale_for_canvas_rect`), and for a
@@ -1259,7 +941,7 @@ of frosting the clear colour.
 **Zoom and scale.** The zoom enters only through the window's rectangle on
 screen: the blur has the same reach in *physical pixels* at any zoom, so a
 window zoomed out to half its size is blurred twice as coarsely relative to
-its content (`out/blur_z05.png`). The backing scale multiplies the tap
+its content. The backing scale multiplies the tap
 distance and the pad, so the frost looks the same in logical pixels at 1x and
 2x. The rectangles:
 
@@ -1433,8 +1115,8 @@ Numbered on from Part I.
   alpha of 0.3, the frost is fully there.
 - **The frost covers the content's rectangle only.** The border ring lies
   outside it and is drawn over the sharp backdrop; inside the content's corner
-  squares the frost shows wherever the border's ring is (`out/blur.png`,
-  magnified in section 23's "looked at").
+  squares the frost shows wherever the border's ring is (magnified in section
+  23's "looked at").
 - **A lower window's frost is not in an upper window's backdrop.** Had it
   been, 16,940 px of the upper frost in the test of section 23 would differ
   by more than 2 levels (up to 31).
@@ -1493,377 +1175,3 @@ Numbered on from Part I.
   empty frost is left out so that a fullscreen window can be scanned out
   directly.
 - **A frost for a stand-in or a snapshot** (upstream has none either).
-
-## 23. Verification (effects)
-
-`verify/run_all.sh` runs everything in this section except the lines marked
-*by hand*; `verify/last_run.log` is its complete output for this copy:
-**443 PASS lines, no FAIL** — 211 of `check.py` (Part I, unchanged), 122 of
-`check_effects.py`, 21 lines for the 42 background comparisons, 1 for the 28
-earlier PNGs, 17 of the lifecycle test, 57 of the three blur-cache tests, 14 of
-the kind-switch test.
-
-The log was made before the review round recorded below ("Review findings
-(effects)"). That round changed `comprender.m` (how `--blur-cache-test`
-counts), two comments in `compositor.h`, `verify/render_scenes.sh` (one more
-render), a new scene and these notes; `compositor.m`, `background.m`,
-`background.h` and `build.sh` are byte for byte what the log was made from.
-`run_all.sh` was **not** run again after it: only what the round touched was
-repeated, and those rows are marked *review round*. A new run of the script
-would print one more render line (`out/closing_order.png`); that its other
-lines would be the same was checked for the three blur-cache runs (identical
-to the log line for line) and for the 55 renders (byte-identical PNGs), and
-not for the rest.
-
-As in Part I, upstream itself cannot run here. References: the **unmodified
-upstream GLSL** compiled by the system's legacy OpenGL (`verify/glblur.c`
-re-types `render_blur` / `blur_pass` in C and runs `blur_down.glsl` and
-`blur_up.glsl` in upstream's ping-pong on two textures with
-`GL_MIRRORED_REPEAT`; `verify/glref.c` runs `blur_mask.glsl`), and upstream's
-**Rust re-typed in Python** in `verify/check_effects.py` (`blur_pad`, the
-`wants_blur` rectangle, `transform_rect`, `TextureRenderElement::geometry`,
-`fade_out_alpha`, `open_alpha`, `open_scale`, the per-frame tick, `flatten`'s
-bounds, `ClosingSnapshot::render_element`, `join_errors`).
-
-| Check | Result |
-|---|---|
-| **The 28 PNGs of `compositor-port/out`**, re-rendered here from the same scenes | 28 of 28 byte-identical (`cmp`). None differs |
-| `check.py` and `bgcompare.py` of Part I, unchanged, against this build | 211 of 211; 42 of 42 |
-| Kawase chain against OpenGL running `blur_down.glsl` / `blur_up.glsl`: 11 inputs (1 × 1 to 400 × 300, odd sizes), 0 to 6 passes, offset 0 to 3 | the result within 1 level everywhere in all 11; every intermediate texture compared *whole* (so also the regions a pass does not write): all within 1 level, the downscale passes exact |
-| A frost end to end, 22 cases: the frame's blur pass alone (`--only blur`) against — the scene below the window rendered without it, cropped to the padded rectangle (mirrored in Python where it leaves the output), blurred by OpenGL with the unmodified shaders, cropped, multiplied by `blur_mask.glsl`'s output for the window's own shape | 22 of 22: every pixel of the frost's rectangle within 1 level, nothing drawn outside it. Cases: 1x and 2x; zoom 0.5, 0.7, 0.75, 1.5; fractional and half-pixel cameras; corner radius 0, 70, 500; 0, 1, 4 and 6 passes; strength 0, 2, 3; hanging off the left / top, off the right / bottom at 2x, and wider than the output (mirror); server-side title bar at 1x and at 2x zoom 0.75; pinned over a zoomed canvas; content with alpha 0 / 1/255 / 255; a blurred window over a blurred window |
-| The same 22 cases: screen rectangle, pad, capture rectangle, pass count, offset; the frost element's rectangle and alpha | equal to the re-typed Rust in all 44 comparisons |
-| Mask threshold | under content alpha 0: no frost (0, 0, 0, 0); under alpha 1/255: a full one, alpha 255 |
-| Content over frost | every pixel of `--only blur,content` = content + frost · (1 − content alpha) within 1 level; frost alpha 255 at the centre of a window whose opacity is 0.4 |
-| Draw order of a blurred window | shadow, blur, border, content |
-| A blurred frame through `IFCompositorLayer` (unattached) vs offscreen, 2x | byte-identical; the layer stays `framebufferOnly` unless the diagnostics capture is on |
-| Nothing beneath the window (no background, no lower element) | no frost drawn |
-| **Upstream's own pixel test replayed** (`src/tests/blur_pixels.rs`, `the_frost_sees_backdrop_a_pad_without_the_output_scale_would_miss`: 1600 × 1200 at 2x, 5 passes, strength 1.5, a 600 × 400 window of alpha 1/255 over stripes that end 110 px past it) | frost bounds 600 × 400, centred; centre luma 127 (upstream asserts 126..128); 4 px in from each edge 137, 135, 136, 136 (upstream asserts each at least centre + 5) |
-| When a frost is recomputed (`--blur-cache-test`, three scenes, 57 checks) | first two frames: all; identical third frame: none; `time` alone over a still background: none; the window's own content after 8 changes: none; a lower element out of reach added, then changed: none; the same under a frosted window: recomputed, also when its content changes and when it leaves; an element above: none; camera moved, `blur_strength` changed: all. Moving background, `animate_blur_fps` 20: 40 recomputations in 120 frames at 60 Hz; at 0: none in 60 frames, a camera move still recomputes |
-| `--blur-cache-test` on scenes with blurred windows that have no frost on the output (*by hand, review round*) | the reviewer's `review-renders/scenes/r4_extremes.json` (10 blurred windows, one at canvas (5000, 5000)): "9 of them with a capture on the output; 1 without one", 18 of 18 PASS, exit 0 (before the fix: 5 FAIL, exit 1). Scratch scenes under `build/tmp/fix/scenes/`: the off-output window listed last, 18 of 18; a second window whose capture ends 2 px short of the output, 1 frost expected until the camera moves by 3, then 2 of 2, 18 of 18; the last listed window hanging off the top-left corner by all but a pixel, 18 of 18 (the test drives the other one); no background but a checker window beneath, 18 of 18. Refused with exit 2 and a reason: every blurred window off the output; the only one hanging off the top-left corner; no background and nothing beneath. The three shipped runs: 57 PASS, the output identical line for line to before the change and to `verify/last_run.log`. Control: against a scratch copy of `compositor.m` with `force_dirty_frames` cut from 2 to 1 the test fails its second-frame check, on `blur_shapes.json` and on `r4_extremes.json` (17 PASS, 1 FAIL, exit 1 each) |
-| Where "off the output" begins (*by hand, review round*; `--dump-draws`): a 120 px wide blurred window on a 400 px wide output at 1x, pad 16 | at x = 415 (padded rectangle from 399) the renderer reports a capture 1 px wide, (399, 64, 1, 122), and builds the frost; at x = 416 (from 400) no `blur_info` record, no frost. Upstream: `backdrop_capture` is `padded.intersection(output)`, and smithay's `intersection` is `None` unless the rectangles strictly overlap |
-| Blur textures (`--blur-cache-test`, `--bench`) | nine frosted windows: 37 textures after the first frame (9 × frost, mask, two pads; one background copy), none allocated in the second frame or in 119 panning frames; a frosted window hanging off the output moved for five frames: none allocated; blur off for 70 frames: nothing computed, nothing allocated, 0 held. With no blurred element in a scene (`many.json`, 120 frames): 0 frosts, 0 textures |
-| Closing snapshot: rectangle, alpha and bake size at progress 0, 0.25, 0.5, 0.75, 0.9, five views (1x, 2x, zoom 0.5, 2x zoom 0.7 with a fractional camera, zoom 1.3 with a half-pixel camera; bake density `max(scale · zoom, 1)`: 1, 2, 1, 1.4, 1.3) | equal to the re-typed `flatten` bounds and `render_element` in all 25 (e.g. 1x: bake 179 × 139 texels for canvas rect (56, 46, 179, 139); at 0.5: (58, 48, 175, 135), alpha 0.75) |
-| End of a close | progress 1, 0.995, 0.9901: not drawn; 0.99 and 0.98: drawn (section 21) |
-| Alpha-only snapshot; pinned snapshot | fades in place; ignores camera and zoom |
-| Snapshot at progress 0 against the live window, 2x | no border: every value within 2 levels. 2 px border: differs (section 21) |
-| Closing bucket | above a normal window listed after it, below a pinned one listed before it |
-| Order inside the closing bucket (*by hand, review round*): `scenes/closing_order.json` with `--dump-draws` — a fading stand-in, a snapshot at progress 0 and an older one at 0.5, listed as section 18.2 says | drawn in that order: the stand-in's five passes, snapshot 2, snapshot 1, which is upstream's order read backwards. The reviewer's `review-renders/scenes/r5_two_snapshots.json`, the same three elements listed snapshot 1, stand-in, snapshot 2, is drawn as listed and is byte-identical to the reviewer's own render: the renderer does not sort |
-| The host protocol of 18.2 / 18.4 through the public API (*by hand, review round*; `build/tmp/fix/order_check.m`, built with `-Wall -Wextra -Werror`): stacking alive, bottom to top, stand-in S1, window A, stand-in S2, window B, a window that stays; then S1 fades, A closes, B closes, S2 fades, one 120 Hz tick apart, each put in the list by the rule of 18.2 (real bakes through `-closingSnapshotOfElement:inFrame:flattenScale:`) | `frame.elements` ends as S2, S1, the staying window, snapshot B, snapshot A; drawn bottom to top: the staying window, S2, S1, B, A — what upstream's `closing_snapshots = [A, B]`, `standin_fades = [S1, S2]` give; all four still running, `needsContinuousRedraw` YES |
-| Opening window: content rectangle and alpha at the same five progress values and five views, opacity 0.8 | equal to the re-typed `animated_visual` / `transform_rect` in all 25 (e.g. 1x at 0.5: (72, 61, 147, 109) from (70, 60, 151, 111) at rest, alpha 0.6 = 0.8 · 0.75); at progress 1 the frame is byte-identical to the plain window's |
-| A blurred window opening | its `screen_rect` is the transformed one: (140, 120, 302, 222) at rest, (170, 142, 242, 178) at progress 0.5 with amplitude 0.6 |
-| Dismissed stand-in; adoption crossfade | all 5 passes shrink by 0.975 about (198.38, 172.34) and carry alpha 0.75; alpha-only: same rectangles as at rest |
-| The clock: alpha of a timed close against upstream's tick-by-tick recurrence, speeds 0.5, 0.25, 0.9, ticks of 1/60 s, 1/120 s and uneven ones | 9 of 9: alpha error 0 at every tick, and the snapshot disappears on the tick upstream's would (speed 0.5 at 60 Hz: drawn through tick 6, gone from tick 7; at 120 Hz: 13 / 14) |
-| Lifecycle through a layer (`--lifecycle-test`, 17 checks) | a static frame skips on `time` alone; an opening window and then a closing snapshot redraw on each of their 14 ticks at 120 Hz with `needsContinuousRedraw` YES, and after the end it is NO and updates skip |
-| Error bar at 1x, 2x, and 2x zoom 0.5 | rectangle (0, 217, 640, 23) at 1x, (0, 434, 1280, 46) at 2x; drawn last; opaque black over a normal and a pinned window; no pixel above it changed; text starts at x 13 (inset 12) / 26 (inset 24), ink rows 6..16 of 23 / 13..35 of 46; joined text equal to the re-typed `join_errors` |
-| Error bar: long text; one empty message; no messages | last ink at x 626 of 640 (inset 12); a bar without text; no bar |
-| Churn (`--churn-test`, now also switching blur per window, opening windows, baking and playing closing snapshots, toggling the error bar): 400, 120 (300 windows), 3000, 1500 (nine frosted windows at 2x) and 400 frames | completed without error; live heap blocks after teardown below mid-run in each |
-| Address + undefined-behaviour sanitizers (`verify/sanitize.sh`, *by hand*): six churn runs, the blur-cache, lifecycle, gating and kind-switch tests, five renders | no report; the renders byte-identical to the normal build's |
-| `leaks --atExit` (*by hand*) on a 200-frame churn with frost, the lifecycle test, the animated blur-cache test, two renders, the gating and kind-switch tests | 0 leaks in each (a ten-`malloc` control leak was reported by the same command) |
-| `clang --analyze` on `compositor.m`, `comprender.m` (*by hand*) | no findings |
-| After the review round (*by hand, review round*): `./build.sh`, `verify/render_scenes.sh`, `cmp` | built with `-Wall -Wextra -Werror`; the 55 earlier PNGs byte-identical to those rendered before the round, the 28 of `compositor-port` among them still equal to `compositor-port/out`; `out/closing_order.png` is the 56th |
-| The changed tool under the address + undefined-behaviour sanitizers and the analyzer (*by hand, review round*; `build/tmp/fix/asan_run.sh`) | five blur-cache runs (93 PASS, no FAIL) and the three refusals: no report; `closing_order.json`: PNG byte-identical to the normal build's; `clang --analyze comprender.m`: no findings |
-
-**Review findings (effects)** (an independent review of this copy; both were
-checked against the code and upstream, reproduced and accepted, neither
-rejected):
-
-1. *The z-order among simultaneous closing elements is not upstream's when
-   the documented host protocol is followed.* Confirmed in upstream:
-   `self.closing_snapshots.push(snapshot)` (window_animation_driver.rs) and
-   `self.standin_fades.push(..)` (state/suspended.rs, both sites) append;
-   `render_snapshots_for_output` walks the snapshots in that order and is
-   documented "top-most first"; mod.rs then pushes every fade's elements onto
-   the same `zoomed_closing` vector, behind them. So the oldest snapshot is
-   top-most and every fade is beneath every snapshot, while section 18.2 told
-   the host to put the snapshot at the dead window's index and said "among
-   snapshots list order holds". Reproduced with the reviewer's
-   `r5_two_snapshots.json`: drawn as listed, snapshot 1, stand-in 3,
-   snapshot 2. Fix: the host is told, as the reviewer proposed, and the
-   renderer is unchanged — section 18.2 (the sample and "Order in the closing
-   bucket"), 18.4, 19.2, section 5, deviation 42, a line in section 21, the
-   comments of `IFCompositorStackLayerClosing` and
-   `-closingSnapshotOfElement:inFrame:flattenScale:` in `compositor.h`
-   (comments only), and `scenes/closing_order.json`. Not done: sorting the
-   bucket in `collectItems`. A lifecycle given by explicit progress has no
-   start time to sort by, and the renderer would be reordering what the host
-   listed. What that leaves: the module on its own still draws any order it
-   is given, so DriftWM's stacking depends on the host following 18.2; the
-   protocol was run once through the API (the table's row) and never in a
-   host.
-   Added on my own account, read in the same upstream block: upstream draws
-   no snapshot and no fade on a visually fullscreen output. 18.2 "When not
-   to" now says so; it is the host's to leave them out.
-2. *`comprender --blur-cache-test` prints FAIL for correct behaviour when a
-   blurred window has no capture on the output.* Reproduced: 5 FAIL lines and
-   exit 1 on `r4_extremes.json`, where the renderer is right
-   (`-prepareFrostOfItem:` returns where upstream logs "frost left
-   unrendered: the padded capture is entirely off the output"). The test
-   counted every element with `blur` set. Fix, in `comprender.m` only: the
-   expected count is the number of `blur_info` records of the encode at hand
-   — the renderer's own account of the windows whose padded capture reaches
-   the output — and the window the test drives is chosen among those. Two
-   more false failures of the same kind turned up while testing the fix
-   (**not in the finding; added on my own account**) and are now refusals
-   with exit status 2 instead: a scene without a background in which a
-   blurred window has nothing beneath it (no frost, upstream's "frost
-   zeroed"), and a scene whose only blurred windows on the output hang off
-   its left or top edge (the element the test slides under the driven window
-   then misses its capture: 3 FAIL lines before the refusal was added).
-   What the fix costs: the expected count now comes from the renderer, so
-   this test no longer notices a window that the renderer wrongly takes to be
-   off the output. The rectangles that decision is made from are checked
-   elsewhere (the 44 comparisons of screen and capture rectangles with the
-   re-typed Rust in `check_effects.py`, overhanging cases among them); the
-   decision itself was checked by hand in this round and is in no script
-   (the table's "off the output" row). With the shipped scenes the test
-   prints exactly what it printed before.
-
-**Looked at** (each PNG was opened; the earlier 28 are in Part I's table):
-
-| PNG | What it shows |
-|---|---|
-| `blur.png` | left: a 35 % white window with `blur` over the detailed test background and over a green checker window — both are smoothed inside the window's rounded shape, sharp outside it. Right: the same window without `blur` — background and checker sharp through it. Magnified at the top-left corner: the frost ends on the rounded corner; the amber border is drawn over the sharp background |
-| `blur_z05.png`, `blur_s2.png`, `blur_z05_s2.png` | zoom 0.5: the window is half the size and its frost coarser relative to it (the checker under it blurs to a flat tone); 2x: same look as 1x with crisp corners; both |
-| `blur_radius0.png`, `blur_radius5_strength2.png`, `blur_strength0.png` | no passes: the frosted window looks like the unfrosted one beside it (background and checker sharp through it); 5 passes at strength 2: an almost flat tint; strength 0: only the softening of the down / up sampling — the fine lines are gone, the blocks keep their edges |
-| `blur_shapes.png`, `blur_shapes_z075_s2.png` | corner radius 0 (square frost); 60; 500 (a stadium, as the content clamps); a server-decorated window frosted under bar and content; a window hanging off the left edge, frosted up to the edge; a translucent gradient window and a second frosted window over it (the upper frost shows the lower window blurred); an opaque image whose translucent corner block alone shows frost; a pinned window off the bottom-right corner. At 2x, zoom 0.75, camera (30, 20): the same, crisp, the pinned one unmoved |
-| `lifecycle.png`, `lifecycle_scale06.png` | row 1: a window, then its closing snapshot at progress 0 (the same picture), 0.25, 0.5, 0.75 (fainter and slightly smaller each), 1 (absent). Row 2: the window, then it opening at 0 (invisible), 0.25, 0.5, 0.75, 1 (the plain window). Row 3: a stand-in, then dismissed at the same five values. With `animation_scale` 0.6 the shrink and the grow about the centre are plain to see |
-| `lifecycle_timed_tick1.png` | one tick (1/60 s) after the start: the snapshot and the opening window both at 75 % alpha, a little small, beside the live window |
-| `closing_order.png` (*review round*) | the older, blue snapshot (progress 0.5: three quarters opaque, a little smaller) lies over the newer, orange one (progress 0), their overlap a grey-blue mix; the fading stand-in is beneath both, only its right edge and the close glyph showing past the orange snapshot. Beside it `build/tmp/fix/r5_as_listed.png`, the reviewer's listing of the same three elements: there the orange snapshot covers the blue one in the overlap |
-| `error_bar.png`, `error_bar_many.png` | a black strip across the bottom over a normal and a pinned window, white monospace text from the left inset; three messages on one line with bullets between them, the multi-line one flattened, the line cut with an ellipsis at the right inset |
-| `effects_all.png` | everything at once: a frosted window over a checker window, a closing snapshot at 0.5 above it, an opening frosted window, a launching stand-in, a pinned frosted server-decorated window, the error bar with two messages |
-
-Rendered by `render_scenes.sh` and not opened: `blur_radius1.png`,
-`blur_frost_only.png`, `blur_animated.png`, `lifecycle_z075_s2.png`,
-`lifecycle_timed_tick{0,2,3,4,6,7}.png`, `error_bar_many_s2.png`,
-`effects_all_z08_s2.png`.
-
-**Not run:**
-
-- **Upstream DriftWM itself.** No frost, snapshot or error bar here was
-  compared with a pixel from real DriftWM. "Matches upstream" means what it
-  means in Part I: upstream's shader source executed by OpenGL, upstream's
-  Rust re-typed, and smithay as read in the 0.7.0 release
-  (`render_texture_from_to`, `GlesRenderer::render`'s viewport and blend
-  state, `TextureRenderElement::geometry`). Upstream's `blur_pixels` test was
-  replayed through this module, not run.
-- **The shared-backdrop path**, client blur regions, resize crossfades: not
-  ported (section 22).
-- **Real ScreenCaptureKit buffers**, also for the bake: a snapshot was only
-  ever baked from generated buffers and textures.
-- **The layer on screen.** No frost or animation was watched on a display;
-  the animation tests drive an unattached layer with a synthetic clock. How
-  the host's tick lines up with the display, and whether presenting inside a
-  transaction costs a frame during an animation, is untested.
-- **The host side**: detecting a close in time to bake, the one-second
-  freshness rule, the start time of an animation, the error list.
-- **Fractional backing scales** for the effects, and the bake against
-  upstream's `flatten` at a fractional scale or window size (deviation 34).
-- **`animate_blur_fps` against a real clock.**
-- **Memory under a zoom animation.** A frosted window whose size on screen
-  changes every frame gets a new pad pair every frame, as upstream's
-  `ensure_pads` does; the old pair is released when the frames that used it
-  complete. Reasoned, not measured.
-- **Any GPU other than this machine's** (Apple M5 Pro, macOS 27.2 build
-  26B5091g, deployment target 26.0).
-- `verify/cvage_probe.m`, the reviewer's reproductions and the `lldb` run of
-  Part I's history were not repeated for this copy; `--kind-switch-test`,
-  which rests on the same facts, was (14 of 14, with the same megabyte
-  figures as Part I).
-
-## 24. Cost of the effects
-
-Apple M5 Pro, 3456 × 2234 target unless noted, `comprender --bench 120` /
-`--bench-pan 120`, per frame, from `verify/last_run.log`:
-
-| Scene | Frosts recomputed per frame | CPU encode | GPU | Heap allocations in `-encodeFrame:` |
-|---|---|---|---|---|
-| `many.json`, no blur anywhere | 0 | 0.42 ms | 4.41 ms | 6 |
-| `blur.json`, one 600 × 600 px frost, nothing moving (frost reused) | 0 | 0.03 ms | 0.62 ms | 3 |
-| the same with `blur` off, the camera moving (by hand, an earlier run) | 0 | 0.02 ms | 0.49 ms | 3 |
-| `blur.json`, the camera moving a point per frame | 1 | 0.07 ms | 0.98 ms | 42 |
-| `blur_shapes.json`, nine frosts, nothing moving | 0 | 0.05 ms | 0.60 ms | 4 to 7 |
-| the same, the camera moving | 9 | 0.38 ms | 1.79 ms | 326 |
-| `lifecycle.json` at 2x (5 snapshots, 5 opening windows, 5 fading stand-ins) | 0 | 0.03 ms | 0.29 ms | 4 |
-| `error_bar_many.json` at 2x (1600 × 600) | 0 | 0.01 ms | 0.35 ms | 3 |
-
-GPU times move by one or two tenths of a millisecond between runs on this
-machine (the error-bar scene read 0.13 ms in the previous run of the script,
-`blur_shapes` panning 1.59 ms); the counts do not.
-
-- With no blurred element the blur costs one flag test per element while the
-  list is resolved; no texture exists (`blurTextureCount` 0), no pass is
-  added.
-- A reused frost costs one textured quad.
-- A recomputed frost costs a backdrop pass (the scene below, scissored to
-  the padded rectangle), `2 · blur_radius` small passes, a copy, a mask pass
-  and a multiply; the first one in an encode also the background copy (a
-  full-output pass). The allocations are Metal's own, about four per render
-  or blit encoder; this module allocates nothing per frame, and no texture
-  after the first frame (the table's panning runs: 0 more in 119 frames).
-- A window whose size on screen changes (zoom, resize) reallocates its pad
-  pair, and its frost and mask at every 64 px step, as upstream does.
-- A snapshot costs one textured quad; the bake one small pass, once.
-
-## 25. Commands
-
-Everything under `compositor-effects/`; nothing was written anywhere else.
-Nothing was committed (the directory is not a repository).
-
-Set-up and the unchanged baseline:
-
-```sh
-mkdir compositor-effects
-cp -p compositor-port/{NOTES.md,background.h,background.m,compositor.h,compositor.m,comprender.m,build.sh} compositor-effects/
-cp -Rp compositor-port/{verify,scenes,assets} compositor-effects/
-cd compositor-effects
-./build.sh && verify/render_scenes.sh           # before any change: 28 of 28 PNGs equal to ../compositor-port/out (cmp)
-```
-
-Build, and the complete verification run (the log is `verify/last_run.log`):
-
-```sh
-./build.sh
-verify/run_all.sh ../driftwm-upstream ../background-port/build/bgrender ../compositor-port/out > verify/last_run.log 2>&1
-```
-
-`build.sh` is unchanged (`-arch arm64 -mmacosx-version-min=26.0 -fobjc-arc
--Wall -Wextra -Werror -O2 -g` for the three sources). `run_all.sh` runs, in
-order:
-
-```sh
-./build.sh
-xcrun clang -arch arm64 -O2 -Wall -Wextra -Werror verify/glref.c -framework OpenGL -o build/glref
-xcrun clang -arch arm64 -O2 -Wall -Wextra -Werror verify/glblur.c -framework OpenGL -o build/glblur
-shasum -a 256 $UPSTREAM/src/shaders/{border,shadow,corner_clip,blur_down,blur_up,blur_mask}.glsl
-python3 verify/check.py $UPSTREAM
-python3 verify/check_effects.py $UPSTREAM
-python3 verify/bgcompare.py $BGRENDER
-verify/render_scenes.sh
-cmp $PORT_OUT/NAME.png out/NAME.png                  # each of the 28
-build/comprender scenes/two_windows.json --gating-test
-build/comprender scenes/two_windows_animated.json --gating-test
-build/comprender scenes/standin.json --gating-test
-build/comprender scenes/lifecycle_timed.json --lifecycle-test
-build/comprender scenes/blur_shapes.json --blur-cache-test
-build/comprender scenes/blur.json --scale 2 --blur-cache-test
-build/comprender scenes/blur_animated.json --blur-cache-test
-build/comprender scenes/two_windows_paper.json --scale 2 --size 1728x1117 --bench 120
-build/comprender scenes/standin.json --scale 2 --bench 120
-build/comprender scenes/many.json --bench 120
-build/comprender scenes/many.json --only PASS --bench 60      # for each pass
-build/comprender scenes/blur.json --scale 2 --size 1728x1117 --bench 120
-build/comprender scenes/blur.json --scale 2 --size 1728x1117 --bench-pan 120
-build/comprender scenes/blur_shapes.json --scale 2 --size 1728x1117 --bench 120
-build/comprender scenes/blur_shapes.json --scale 2 --size 1728x1117 --bench-pan 120
-build/comprender scenes/lifecycle.json --scale 2 --bench 120
-build/comprender scenes/error_bar_many.json --scale 2 --bench 120
-build/comprender scenes/standin.json --kind-switch-test
-build/comprender scenes/standin.json --churn-test 400
-build/comprender scenes/many.json --churn-test 120
-build/comprender scenes/overlap.json --scale 2 --churn-test 3000
-build/comprender scenes/blur_shapes.json --scale 2 --churn-test 1500
-build/comprender scenes/lifecycle.json --churn-test 400
-```
-
-`render_scenes.sh` runs the 28 renders of `compositor-port` (unchanged) and
-then:
-
-```sh
-build/comprender scenes/blur.json --out out/blur.png
-build/comprender scenes/blur.json --zoom 0.5 --out out/blur_z05.png
-build/comprender scenes/blur.json --scale 2 --out out/blur_s2.png
-build/comprender scenes/blur.json --scale 2 --zoom 0.5 --out out/blur_z05_s2.png
-build/comprender scenes/blur.json --blur-radius 0 --out out/blur_radius0.png
-build/comprender scenes/blur.json --blur-radius 1 --out out/blur_radius1.png
-build/comprender scenes/blur.json --blur-radius 5 --blur-strength 2 --out out/blur_radius5_strength2.png
-build/comprender scenes/blur.json --blur-strength 0 --out out/blur_strength0.png
-build/comprender scenes/blur.json --only blur --clear transparent --out out/blur_frost_only.png
-build/comprender scenes/blur_shapes.json --out out/blur_shapes.png
-build/comprender scenes/blur_shapes.json --scale 2 --zoom 0.75 --camera 30,20 --out out/blur_shapes_z075_s2.png
-build/comprender scenes/blur_animated.json --time 0.3 --out out/blur_animated.png
-build/comprender scenes/lifecycle.json --out out/lifecycle.png
-build/comprender scenes/lifecycle.json --animation-scale 0.6 --out out/lifecycle_scale06.png
-build/comprender scenes/lifecycle.json --scale 2 --zoom 0.75 --out out/lifecycle_z075_s2.png
-build/comprender scenes/lifecycle_timed.json --time T/60 --out out/lifecycle_timed_tickT.png    # T = 0 1 2 3 4 6 7
-build/comprender scenes/error_bar.json --out out/error_bar.png
-build/comprender scenes/error_bar_many.json --out out/error_bar_many.png
-build/comprender scenes/error_bar_many.json --scale 2 --out out/error_bar_many_s2.png
-build/comprender scenes/effects_all.json --out out/effects_all.png
-build/comprender scenes/effects_all.json --scale 2 --zoom 0.8 --camera 20,10 --out out/effects_all_z08_s2.png
-```
-
-By hand, outside the script (`FW` = the framework list of `build.sh`):
-
-```sh
-verify/sanitize.sh                               # -fsanitize=address,undefined build into build/asan, then:
-#   build/asan/comprender scenes/{blur_shapes,lifecycle,standin,overlap}.json --churn-test 300
-#   build/asan/comprender scenes/blur_shapes.json --scale 2 --churn-test 1000
-#   build/asan/comprender scenes/many.json --churn-test 60
-#   build/asan/comprender scenes/blur_shapes.json --blur-cache-test
-#   build/asan/comprender scenes/lifecycle_timed.json --lifecycle-test
-#   build/asan/comprender scenes/standin.json --gating-test ; … --kind-switch-test
-#   build/asan/comprender scenes/{blur,blur_shapes,lifecycle,error_bar_many,standin_mapping}.json --scale 2 --out …   (cmp with the normal build)
-xcrun clang --analyze -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc compositor.m comprender.m
-leaks --atExit -- build/comprender scenes/blur_shapes.json --churn-test 200
-leaks --atExit -- build/comprender scenes/lifecycle_timed.json --lifecycle-test
-leaks --atExit -- build/comprender scenes/blur_animated.json --blur-cache-test
-leaks --atExit -- build/comprender scenes/blur_shapes.json --scale 2 --out build/tmp/leakcheck.png
-leaks --atExit -- build/comprender scenes/effects_all.json --out build/tmp/leakcheck2.png
-leaks --atExit -- build/comprender scenes/standin.json --gating-test
-leaks --atExit -- build/comprender scenes/standin.json --kind-switch-test
-#   leaks prints "Process … is not debuggable" for this unsigned tool and still reports; checked with a control that
-#   leaks ten blocks (reported: 10 leaks), and by repeating four of the runs on a copy signed with get-task-allow:
-cp build/comprender build/tmp/comprender_dbg && codesign -s - -f --entitlements build/tmp/ent.plist build/tmp/comprender_dbg
-leaks --atExit -- build/tmp/comprender_dbg scenes/blur_shapes.json --churn-test 200       # and three more: 0 leaks each
-# many.json against compositor-port's build, interleaved, three times:
-build/comprender scenes/many.json --bench 240 ; ../compositor-port/build/comprender ../compositor-port/scenes/many.json --bench 240
-build/comprender build/tmp/blur_off.json --scale 2 --size 1728x1117 --bench-pan 120     # blur.json with every "blur" false
-python3 verify/crop.py out/blur.png build/crop1.png 40 20 120 100 6                    # magnified crops for looking at
-python3 verify/crop.py out/blur_s2.png build/crop_s2.png 60 40 760 660 1
-python3 verify/crop.py out/blur_z05_s2.png build/crop_z05_s2.png 30 20 380 480 2
-```
-
-The review round (section 23, "Review findings (effects)"), all by hand;
-`run_all.sh` was not run again. `F` = `build/tmp/fix`, scratch files of this
-round (scenes, logs, the two scripts and `order_check.m`):
-
-```sh
-build/comprender review-renders/scenes/r4_extremes.json --blur-cache-test          # before: 5 FAIL, exit 1; after: 18 PASS, exit 0
-build/comprender review-renders/scenes/r5_two_snapshots.json --out $F/r5_as_listed.png --dump-draws $F/r5_as_listed_draws.json
-cmp $F/r5_as_listed.png review-renders/out/r5_two_snapshots.png                    # identical: drawn as listed
-cp -Rp out $F/out_before                                                            # the 55 PNGs, before any change
-./build.sh                                                                          # after each edit of comprender.m / compositor.h
-build/comprender scenes/blur_shapes.json --blur-cache-test                          # the three shipped runs, before and after:
-build/comprender scenes/blur.json --scale 2 --blur-cache-test                       #   57 PASS, output identical (diff), also to
-build/comprender scenes/blur_animated.json --blur-cache-test                        #   that section of verify/last_run.log
-build/comprender $F/scenes/NAME.json --blur-cache-test                              # NAME = t_off_listed_last t_enters_on_pan
-                                                                                    #   t_no_bg_lower_element t_last_hangs_off_corner (18 PASS each),
-                                                                                    #   t_only_hangs_off_corner t_all_off t_nothing_beneath (exit 2 each)
-build/comprender $F/scenes/t_edge_415.json --out $F/t_edge_415.png --dump-draws $F/t_edge_415.draws.json   # and t_edge_416
-build/comprender scenes/closing_order.json --out out/closing_order.png --dump-draws $F/closing_order_draws.json
-python3 verify/crop.py out/closing_order.png $F/closing_order_x2.png 0 0 420 300 2                         # to look at
-verify/render_scenes.sh                                                             # then cmp: 55 of 55 equal to $F/out_before,
-                                                                                    #   28 of 28 equal to ../compositor-port/out
-xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror -O2 -I. $F/order_check.m \
-    build/background.o build/compositor.o $FW -o $F/order_check && $F/order_check   # the protocol of 18.2 / 18.4: 2 PASS
-$F/asan_run.sh        # verify/sanitize.sh's build into $F/asan; the blur-cache test on blur_shapes, blur_animated, r4_extremes
-                      #   and the scratch scenes; closing_order.json against the normal build's PNG
-$F/mutant_run.sh      # control: the tool linked against a scratch copy of compositor.m with kIFCBlurForceDirtyFrames = 1:
-                      #   the test fails its second-frame check (compositor.m itself is not touched)
-xcrun clang --analyze -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc comprender.m -o /dev/null
-shasum -a 256 compositor.m background.m background.h build.sh                       # equal to review-renders/src.sha
-```
-
-Runs made while developing, each superseded by the scripts above:
-`comprender --blur-test` against `build/glblur` on a 203 × 151 image for six
-pass / offset pairs; `verify/check_effects.py` four times by hand (the first
-run failed 3 of 121 checks, all three wrong expectations of the script: the
-frost of a second window in the same pass, a second window's content in the
-composition check, and progress 0.99 taken for finished); `verify/check.py`
-and `verify/bgcompare.py` once by hand; `verify/render_scenes.sh` four times;
-the three `--blur-cache-test` runs several times (they found that a pool of
-textures keyed by extent thrashed, which is why pads, frost and mask are kept
-per window as upstream keeps them, and that the `animate_blur_fps` cadence
-needed its slack); `--churn-test 300` on six scenes twice; the many.json
-bench six more times. `verify/run_all.sh` twice: the second run, made after the last change to the
-sources before the review round, is the log.

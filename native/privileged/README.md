@@ -1,10 +1,9 @@
-# Transform helper: protocol v2
+# Transform helper
 
-This experimental native adapter targets Apple Silicon macOS 26 or later. Its
-sole listener is binary protocol v2 on `RUNTIME/v2.sock`. Loading a payload starts
-no transformation; a controller must name an exact in-scope process instance and
-window in a `FRAME` request. There is no v1 listener, JSON request client, protocol
-fallback, or second restoration state machine.
+This native adapter targets Apple Silicon macOS 26 or later. Its listener is
+binary protocol v2 on `RUNTIME/v2.sock`. Loading a payload starts no
+transformation; a controller must name an exact in-scope process instance and
+window in a `FRAME` request.
 
 Default commands remain read-only. Build commands compile and sign artifacts but
 do not load Dock or launch fixtures. Native mutation tests use only explicitly
@@ -14,20 +13,21 @@ native-window compositing.
 
 ## Build and entrypoints
 
-`./scripts/build-privileged.sh` builds the following in `target/privileged`:
+`./scripts/build-privileged.sh` builds the following in `target/privileged`
+(helper code at `-O2`):
 
 - `doctor`: a read-only SIP and arm64e boot-policy report.
 - `payload-arm64e.dylib`: the explicit Dock-targeted payload.
 - `payload-arm64.dylib` and `host`: an ordinary cooperative fixture process.
 - `dwclient.o` and `dwclient-arm64e.o`: the plain C/pthread v2 client library.
-- `v2client`: a fixture driver for `bench`, `hold`, `enrollment`, and `inspect`.
+- `fixture-client`: a fixture driver for `stream`, `hold`, `enrollment`, and `inspect`.
 - `loader-arm64e`: an opt-in Mach loader with authenticated v2 readiness checks.
 - `loadd`: the launch daemon (see [Launch daemon, login start and Dock reload](#launch-daemon-login-start-and-dock-reload)),
   built last with the SHA-256 of the signed loader and payload compiled in.
 
-`--doctor-only` builds only the doctor. `--production` omits the fixture payload,
-host and driver. Production builds ad-hoc sign the doctor, arm64e payload,
-loader and launch daemon; merely building never executes any of them. When
+`--production` omits the fixture payload, host and driver. Production builds ad-hoc
+sign the doctor, arm64e payload, loader and launch daemon; merely building never
+executes any of them. When
 `INFINIFY_SIGN_IDENTITY` names an identity (as `scripts/build-app.sh` passes it down) the
 doctor and the loader are signed with it and the hardened runtime instead, without
 entitlements; the payload stays ad hoc, being no executable, mapped by the Dock and pinned by
@@ -38,39 +38,37 @@ with the build identity when there is one (hardened runtime, `--options runtime`
 (the same way) and verifies the complete app. Its plist manifest binds the final helper, daemon and launcher bytes;
 `scripts/install-app.sh` checks the executable and helper hashes and deep app
 signature after copying the already-signed build; it does not re-sign the copy.
-The prior v1 JSON client and Dock spike
-scripts, including their separate spike fixture, are retired. Supported
-workflows are the owner-run [native desktop launcher](../../scripts/start-native-desktop.sh)
-and the v2 disposable-fixture scenarios below; the retired spike's historical
-receipts are not validation of this protocol or production compositing.
+Supported workflows are the owner-run [native desktop launcher](../../scripts/start-native-desktop.sh)
+and the v2 disposable-fixture scenarios below.
 
 The cooperative host accepts:
 
 ```text
 host ABS_PAYLOAD PRIVATE_RUNTIME NONCE64HEX [ALLOWLIST_JSON_FILE]
-     [--windows N] [--v2-queue own|main] [--level 0..4] [--alpha 0..1]
-     [--family popup|sheet|both|none]
+     [--windows N] [--size WIDTHxHEIGHT] [--activation accessory|regular]
+     [--watchdog SECONDS] [--level 0..4] [--all-spaces yes|no]
+     [--family popup|sheet|both|none] [--floating-panel yes|no]
 ```
 
 The runtime must already be a current-user-owned directory with mode 0700. Keep
 its path short: `RUNTIME/v2.sock` must fit macOS's Unix socket path limit. The host
-creates 1..16 windows, with a 90-second watchdog. Optional family children count
-toward that limit and are all listed explicitly. Capability bit 3 identifies this
-finite native-family fixture mode; it expands no process or window authority.
-Level and alpha options apply only to the newly created fixture windows.
-`READY` is printed only after the sole v2 listener binds and its journal passes
-startup validation. Failed startup prints no readiness receipt.
+creates 1..16 windows, with a 90-second watchdog (`--watchdog` takes 1..900 seconds).
+Optional family children count toward that limit and are all listed explicitly.
+Capability bit 3 identifies this finite native-family fixture mode; it expands no
+process or window authority. The level, size and Space options apply only to the newly
+created fixture windows. `READY` is printed only after the v2 listener binds and
+its journal passes startup validation. Failed startup prints no readiness receipt.
 
 The current C driver can inspect an exact identity without holding it:
 
 ```text
-v2client inspect RUNTIME NONCE64HEX PID WID BIRTH_SEC BIRTH_USEC
-v2client enrollment RUNTIME NONCE64HEX
+fixture-client inspect RUNTIME NONCE64HEX PID WID BIRTH_SEC BIRTH_USEC
+fixture-client enrollment RUNTIME NONCE64HEX
 ```
 
-The desktop links the C library; the supported Rust runtime uses typed binary v2
-requests. Both must authenticate the helper and audit scope before any frame.
-Read-only probe/inspection never enrolls ordinary applications automatically.
+The desktop links the C library, which must authenticate the helper and audit
+scope before any frame. Read-only probe/inspection never enrolls ordinary
+applications automatically.
 
 ## Explicit production launcher
 
@@ -85,7 +83,7 @@ or retries an uncertain injection automatically.
 
 The repository wrapper `./scripts/start-native-desktop.sh` is checkout-aware.
 It verifies the selected bundle against current source and the standard app's
-`target/app/BUILD.json` schema 2 record before calling its bundled launcher.
+`target/app/BUILD.json` schema 1 record before calling its bundled launcher.
 That record binds the post-sign app executable, native manifest, payload and
 complete tracked/nonignored source snapshot. Pass `--app /absolute/path/Infinify.app`
 to check an installed bundle; `--build` explicitly rebuilds production artifacts
@@ -108,9 +106,7 @@ The boot identity is the canonical uppercase `kern.bootsessionuuid`. XNU's
 [`kern_sysctl.c`](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/kern_sysctl.c)
 exposes that UUID read-only, while
 [`clock.c`](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/osfmk/kern/clock.c)
-shows that `clock_boottime` can change with calendar adjustment. The pinned
-source hashes and Apple license are recorded in the local XNU provenance receipt;
-no XNU implementation code is copied into Infinify.
+shows that `clock_boottime` can change with calendar adjustment. No XNU implementation code is copied into Infinify.
 
 For a retired Dock, the launcher accepts only a committed schema-3 journal
 written by the recorded Dock process, same login UID and same
@@ -132,51 +128,29 @@ When a ready schema-3 record belongs to a different boot session, the launcher
 archives its exact bytes and starts fresh without replaying the old journal;
 any remaining runtime and journal are left untouched. A missing runtime in the
 same boot session remains an error. Pending/unknown outcomes remain refused,
-including across a reboot. Schema-2 launch records lack the boot UUID and are
-preserved with an inspection error rather than inferred or upgraded.
+including across a reboot. A launch record of any other version, or without the boot UUID,
+is refused with an inspection error and preserved; it is never inferred or upgraded.
 
 The launcher keeps the previous ready record until the recovery loader reports
 authenticated readiness. A private `launch.pending.plist` marker blocks any
 retry after an interrupted or uncertain recovery. On success, the old record is
 archived byte-for-byte and the new ready record is promoted. The old runtime and
-journal remain untouched. Schema-2 and unknown journals are refused because
-they lack the retained originals needed for safe connection handoff; the
+journal remain untouched. Journals of any schema but 3 are refused: schema 3 is the one
+that retains the originals needed for safe connection handoff, and the
 launcher never reconstructs transforms from native bounds. A same-boot journal
 with a mismatched boot-session UUID, unresolved recovery, a live or uncertain
 prior Dock, or invalid payloads blocks startup and preserves all state. There is
-no compatibility fallback or automatic injection retry. The launcher runs only
+no fallback or automatic injection retry. The launcher runs only
 the loader as root (through sudo in the owner's terminal, or through the launch
 daemon the owner approved once, below) and starts the app as the login user. The login
 item starts compositor mode only after `native-desktop enable`; until then it is the
 capture-mode startup and does not invoke this helper path.
 
-An earlier UTM run established that a new helper could start after an empty
-schema-2 journal, but it did not cover a window whose transform had been touched
-by the retiring Dock. A later read-only receipt showed Calculator WID 183 at
-transform `[-510,-554]` with `windows: []` before Dock exit, then at identity
-transform before the replacement helper was injected. The old empty journal had
-already discarded the original transform. The schema-3 retained-original fix
-passed one production-launcher handoff with ordinary Calculator on build
-`2d9c7d6`: independent native geometry matched the exact original after recovery
-and again after normal quit. Its black screenshot provides no optical proof.
-A second handoff was interrupted by a guest reboot before the recovery launcher
-ran; the reboot cause is undetermined. Receipts are under
-`target/native-vm/pending-restore-inspect/` and
-`target/native-vm/retained-originals/receipt.json`.
-On the following boot, build `5cee261` passed two consecutive handoffs with a
-fresh ordinary Calculator instance: exact originals were recovered before
-readmission and restored on quit, with awake-display screenshots confirming
-its restored position. See
-`target/native-vm/retained-originals/two-handoff-receipt.json`. This does not
-establish all-app or crash-during-frame recovery. Automatic prior-boot record
-archival has focused record validation but has not yet been exercised through
-another actual guest reboot.
-
 Direct loader invocation also requires explicit prepared-machine authorization:
 
 ```text
 loader-arm64e --inject-dock ABS_PAYLOAD ABS_PRIVATE_RUNTIME
-  --nonce-file ABS_NONCE_FILE --only-pid PID
+  --nonce-file ABS_NONCE_FILE --desktop
   [--expected-dock PID BIRTH_SEC BIRTH_USEC]
 
 loader-arm64e --inject-dock ABS_PAYLOAD ABS_PRIVATE_RUNTIME
@@ -185,7 +159,7 @@ loader-arm64e --inject-dock ABS_PAYLOAD ABS_PRIVATE_RUNTIME
   --expected-retired-dock OLD_PID OLD_BIRTH_SEC OLD_BIRTH_USEC
 ```
 
-`--desktop` selects same-login-user scope instead of a finite `--only-pid` scope.
+`--desktop` is required: it selects same-login-user scope, the only scope the loader offers.
 The payload is one of two classes, told apart by its path so that neither can stand in for the
 other: any ordinary path must be the login user's own regular file that no one else can write (the
 sudo path above), while a path of the exact form
@@ -195,12 +169,14 @@ writable by others and writable by a group only if the login user is not in it
 (`/private/var/run` is `root:daemon 0775`), the staged directory is root's and writable by no
 one else, and the payload is root's regular file, not group/other-writable, with one link; no
 component may be a link (`native/privileged/staged-payload.h`, shared with the daemon).
-The runtime directory, the nonce file and the journals stay the login user's, private (0700, 0600), as before.
+The runtime directory, the nonce file and the journals stay the login user's, private (0700, 0600).
 The nonce is a cryptographically random 32-byte value encoded as 64 lowercase
 hexadecimal characters, in a login-user-owned regular file with mode 0600; one
 trailing newline is accepted. Nonce bytes are never accepted in the loader's
 argv. A private, adjacent `ABS_PAYLOAD.json` sidecar opts in the constructor with
-runtime, nonce and optional exact-process allowlist. No sidecar means no listener.
+the runtime, the nonce and, for a recovery, the recovery source digest and writer identity
+(the payload also accepts an exact-process `allowlist` key, which the loader never writes).
+No sidecar means no listener.
 The recovery form accepts only a committed same-boot schema-3 journal from the
 positively retired Dock recorded by the launcher. It copies those exact bytes to
 the fresh runtime and binds their digest and writer identity in the sidecar. The
@@ -209,8 +185,7 @@ before any restore setter. Later recovery uses that committed journal; if it is
 malformed, the retained import source is not a fallback. The launcher adds a
 private pending marker before sudo and promotes its ready record only after
 authenticated readiness; an interrupted or uncertain handoff blocks retry.
-Schema-2 journals are refused because their original-window ledger was not
-retained.
+Journals of any other schema are refused.
 After loading, readiness authenticates v2, verifies scope/process identity,
 required restoration/scope/inspection capabilities, `held=restoring=table_count=0`
 and `journal_pending=0`, then disconnects without submitting a frame. A missing
@@ -221,8 +196,9 @@ or failed v2 listener is startup failure, with no alternate server.
 The explicit launcher above asks for the owner's sudo password at every load, and a
 Dock restart ends the payload, so the helper path alone cannot run at login or survive
 `killall Dock`. This section is the prompt-free path, ported from Sunlight's mechanism
-(`third_party/sunlight/LiveWindows/README.md`, "Installation boundary" and "Dock
-restarts"; Sunlight afeea74b18e70ca49bf462d6fe462cf65deb2b32, MIT, Copyright (c) 2026
+(`LiveWindows/README.md`, "Installation boundary" and "Dock restarts", of
+<https://github.com/spacefarm-digital/sunlight> at commit
+afeea74b18e70ca49bf462d6fe462cf65deb2b32; MIT, Copyright (c) 2026
 spacefarm). Nothing here is installed or registered by building or by installing the app.
 
 **Owner commands** (the installed app, in a terminal):
@@ -281,7 +257,7 @@ ranges). It answers two commands:
   RUNTIME is `/tmp/if-native.XXXXXX`; NONCE is that runtime's `nonce`; JOURNAL is the
   `v2-journal.json` of a different such runtime; PID/SEC/USEC are canonical decimals in range.
   There is no payload argument and the request cannot name one: the daemon supplies the file the Dock opens (below).
-  No `--only-pid`, no unpinned Dock, no other flag, nothing else.
+  No unpinned Dock, no other flag, nothing else.
 
 Checks, in order:
 
@@ -349,13 +325,13 @@ what a request can ask for: a load of the bundle's own payload into the pinned, 
 
 ### Launcher modes
 
-`launch.sh` (reached as `Infinify native-desktop`, `--login` or `--reload`) keeps every existing
-check: manifest and signature verification, the doctor, the Dock identity pin, `pending`/`ready`
+`launch.sh` (reached as `Infinify native-desktop`, `--login` or `--reload`) makes every check of the
+explicit launcher above: manifest and signature verification, the doctor, the Dock identity pin, `pending`/`ready`
 schema-3 records, payload hashes, the boot-session rule, the retired-Dock journal handoff, no
-automatic retry of an uncertain load. Changes:
+automatic retry of an uncertain load. Its modes:
 
 - The loader step runs through the daemon when `Infinify native-desktop daemon status` says it is
-  enabled, else through `sudo` in a terminal as before. In `--login` and `--reload` there is no
+  enabled, else through `sudo` in a terminal. In `--login` and `--reload` there is no
   terminal, so a missing daemon is a refusal.
 - `--login` (the login item): waits up to about five minutes for a Dock whose identity reads the same
   twice three seconds apart, writes to `native-desktop/login.log`, exits 0 for every refusal (launchd
@@ -367,7 +343,7 @@ automatic retry of an uncertain load. Changes:
 - Pause: `auto-reload-paused.plist` (below). A manual `Infinify native-desktop` removes it; `--login`
   and `--reload` refuse while it names this payload's digest.
 - An interrupted or uncertain load keeps its pending marker and blocks every mode, including across
-  reboots, as before.
+  reboots.
 
 ### Dock reload in the app
 
@@ -391,144 +367,9 @@ journal. A payload with
 another digest is not paused. The owner lifts it by running `Infinify native-desktop` (or `enable`).
 The ready launch record is kept, so that run performs the journal handoff from the last Dock.
 
-### What was run
-
-All of it in the disposable macOS 27.0.1 (26A434) UTM guest (SIP off, `-arm64e_preview_abi`), with the app signed by the
-Developer ID Application identity of team PBKWRHQV74 and installed as `~/Applications/Infinify.app`; none of it on a
-physical Mac or on macOS 26. The numbers are from 2026-10-30.
-
-- **Decision regressions** (`tests/e2e/native-daemon.sh`, no daemon, root or Dock; the figures in this bullet are the first guest run's,
-  before the hardening run below, which changed the request shape and added checks, see its own numbers): `loadd-request-regression.m` 179 checks
-  (caller requirement text, parsing and refusal of an ad-hoc process, acceptance for a real team signature and refusal for
-  another team; the launcher's two request forms and dozens of mutations of them; loader and payload digest, ownership, link and
-  swap cases) and `dock-reload-regression.m` 68 checks (Sunlight's `DockCrashGuard` tests translated, the pause file, the endpoint
-  line, the reloader against a fake Dock, clock and launcher, the login-mode record). `scripts/test-build-app-package.py` passes
-  with the daemon artifact, its digest binding, the identity-only property list and the separate signing.
-- **Launcher modes** (`tests/e2e/native-launcher.sh`, stub loader/app/daemon client, real launcher script and real bundle
-  verification, a throwaway `HOME`): 84 checks passed in the guest with the committed script, and 84 on the host against a copy
-  that matches processes by path (the owner's real Infinify runs there). They cover the daemon's arguments in both forms, the
-  retired-Dock journal handoff twice in a row, `--reload` accepted only from the one running Infinify as its child, the pause,
-  quiet login refusals, no retry of an uncertain load, prior-boot archival and the no-daemon refusals. A host run found that
-  macOS `pgrep` leaves out the caller's ancestors unless `-a` is given, which would have refused every real reload.
-- **Enable and approval.** `Infinify native-desktop enable` over SSH: the launcher check passed, `SMAppService` registration
-  answered "Operation not permitted" and `sfltool dumpbtm` showed `loadd` as `[enabled, disallowed]`; the pane opened. Toggling
-  Infinify under Login Items (a synthesized click) raised a sheet asking for the admin password; the guest's password was typed
-  into it with the vm-tools helper as HID events. After that: `The launch daemon answers.` (a real XPC `ping` through the
-  caller requirement), `login item: on`, and launchd started the login item at once, which started compositor mode: its log shows
-  the launcher, `Only the loader runs as root, through the launch daemon.` and `authenticated v2 helper ready in Dock`; no
-  password was asked for the load. `disable` then `enable` again needed no second approval (BTM keeps the item as allowed).
-- **Login.** `sudo reboot`, auto-login on: about 15 s after SSH answered, Infinify, started by launchd, was running in compositor
-  mode; `login.log` shows a start at 00:36:51 that archived the previous boot's record and loaded fresh through the daemon.
-  `pkill -9` of that instance: launchd started it again after 4 s, and the launcher reused the helper already in the Dock.
-- **Dock restart.** Three TextEdit documents at camera zoom 0.5 (WindowServer transform `[2,0,0,2,-1165,-1037]` and so on,
-  read independently with `SLSGetWindowTransform`), `killall Dock`: the new Dock was there at t+1 s, the three windows were drawn
-  at transform identity, bounds 0,0, until the reload; the launch record moved to the new Dock at t+8 s (first build) and
-  t+6 s (the build with a 1 s poll and a 1 s reload confirmation), and the windows read exactly the same transforms again.
-  The app's log: `Native presentation lost; restoring and reconnecting`, `The Dock restarted (4803 -> 5495)`, the launcher's
-  recovery load through the daemon, `Dock payload reloaded; reconnecting`, `Native presentation reconnected after authenticated
-  restoration audit`. So the windows sit at the screen's top-left corner for about 5 s each time; this is the Dock's own reset of
-  the transforms, and shortening it further is open.
-- **Crash guard.** Quit, `killall Dock`, `launchctl kickstart gui/$(id -u)/com.marengox.infinify.agent` (a load), then three
-  `killall Dock` in a row 8 s apart: the first two were reloaded (launch record moved at t+6 s and t+13 s), the third printed
-  the three-restarts line and the stop line, wrote `auto-reload-paused.plist` and the app ended without being restarted (the
-  windows were left at transform identity). `native-desktop status` then said `paused`; a login start (`kickstart`) logged
-  `Automatic loading is paused for this payload ... compositor mode was not started`; a by-hand `Infinify native-desktop`
-  (no terminal needed with the daemon) printed `this start by hand lifts the pause`, performed the journal-handoff load and the
-  windows read `[1,0,0,1,-137,-396.5]`, `[1,0,0,1,-735,-396.5]` and `[1,0,0,1,-137,103.5]` again, their original native
-  transforms. The three kills were repeated with the final build (the stop line was reworded after the first run): the log lines were as above
-  with the new wording, the pause file was written and the app ended; windows were not read that time, and a by-hand run followed.
-- **The daemon refuses what it should**, through the real root daemon: an ad-hoc signed XPC client's `ping` got `Couldn't
-  communicate with a helper application`; the signed app's `ping` answered with the requirement and the loader digest;
-  `daemon load` of a payload outside the runtime and of a form without the Dock pin exited 64; a well-formed load whose runtime
-  payload was not the bundled one exited 70; a load pinning the current Dock's PID with another process birth exited 71. Nothing was loaded by
-  any of them.
-- **Fallback and revert.** With the daemon unregistered, `run-native` loaded through `sudo` exactly as before. `disable`
-  removed `login.plist`, unregistered the login item (ending its instance) and the daemon (`launchctl print` found neither
-  service), and `status` read `disabled`; BTM keeps both records as `disabled, allowed`. The guest was left with Infinify quit,
-  the payload dropped by a Dock restart, Stage Manager off and the four tiling keys on.
-
-### What was run for the hardened runtime and the staged payload
-
-The same guest (macOS 27.0.1, SIP off, `-arm64e_preview_abi`), 2026-10-30, with the Developer ID Application build of team
-PBKWRHQV74 made from this tree and installed as `~/Applications/Infinify.app`; none of it on a physical Mac or on macOS 26. Where a
-guest result needed a comparison, the comparison was run too.
-
-- **Signatures.** `codesign -dvv`: the app executable, `loadd`, `loader-arm64e` and `doctor` carry `flags=0x10000(runtime)` and the team
-  signature, with no entitlements at all (`codesign -d --entitlements -` is empty); the payload is ad hoc. The bundle verifies
-  (`--deep --strict`). No entitlement was needed by anything tried: the capture mode, the Dock injection, the daemon and the launcher all
-  ran with none.
-- **The hardened app still works.** Capture mode (`open`): `msg state` read one output and, with two TextEdit windows open, both;
-  `msg screenshot` wrote a 2056x1251 PNG (3.1 MB) showing the TextEdit text rendered over the wallpaper (Screen Recording grant carried over from
-  the earlier build: the grant follows the designated requirement, which the hardened runtime does not change). Pointer events posted at
-  the HID tap (`CGEventPost`) were seen by `msg cursor`. Compositor mode started the owner-launcher way with the sudo loader (the
-  non-daemon path, the Developer ID hardened loader as root through sudo): `authenticated v2 helper ready in Dock (same-user desktop
-  scope)`; `msg zoom 0.5` halved the windows in a `screencapture` of the display; a posted F3 key press (a key the app owns, through its
-  session event tap when Accessibility is trusted) ran `zoom-to-fit` (zoom 0.5 to 1, camera moved), and the log carries no "System
-  shortcut interception unavailable" line. Command-chord hot keys (Command-0, Command-=) posted the same way did not fire; they did not
-  in capture mode either and were not compared with the earlier build, so this is unexplained and not shown to be the hardened runtime.
-  The guest has no trackpad (`MultitouchSupport lists no trackpad`), so the trackpad gesture path itself was not exercised.
-- **Enable and load, hardened.** `enable`: check passed, `The launch daemon answers.` (the ping crossed the new audit-token check and answered
-  `answering for a hardened-runtime ...`; the approval from the earlier run persisted, none was asked), `login item: on`. After
-  `killall Dock`, `Infinify native-desktop` (launch daemon on): `Only the loader runs as root, through the launch daemon.`, `authenticated v2
-  helper ready in Dock`. The Dock's mapping, read as root: `vmmap` lists the payload's `__TEXT/__DATA/__LINKEDIT` regions from
-  `/var/run/infinify-payload.FIZ1M3/payload-arm64e.dylib`, `lsof` lists it as the Dock's `txt` file with inode 572489, and `stat` of that
-  file gives the same inode, owner root, mode 0644; its SHA-256 `bd1eb48a...cd47` is the bundle's, the manifest's and the digest compiled into the daemon
-  (`loadd status`). The directory is `root:daemon 0755`; beside the payload is the sidecar, `admin:staff 0600`. The runtime of that load holds
-  no payload copy.
-- **The race, with a hostile same-user process.** A direct `daemon load` (so as to hold the runtime) with an evil arm64e dylib, whose
-  constructor writes `/tmp/harden-evil-marker`, planted at `RUNTIME/payload-arm64e.dylib` (the path the earlier design would have had the Dock open),
-  while a racer run as the login user hammered for 12 s: it rewrote that runtime payload 95,600 times, saw the staged directory 9,746 times, and tried to
-  open-for-write, create beside, rename and unlink the staged payload each time: 19,492 write attempts, 9,746 renames and 9,746 unlinks all
-  denied, none succeeded. The load returned 0, the marker never appeared, and the Dock mapped the root-owned staged file (inode 572524,
-  digest `bd1eb48a...`, root 0644). The racer's file was still on the user-writable path afterwards: the Dock never opened it. (The
-  racer wrote its evil file into every runtime directory in `/tmp`, including the recorded one; the launcher then refused to reuse that runtime,
-  `recorded runtime payload bytes differ from the launch record`, which is the reuse check doing its job.)
-- **Refusals, through the real root daemon.** `Infinify native-desktop daemon ping` from copies of this bundle signed in other ways: the Developer ID
-  signature without the hardened runtime (`flags=0x0`), with the runtime and `get-task-allow`, and ad hoc: each `Couldn't communicate with a helper
-  application` (no connection); `codesign -R` showed the first two satisfy the daemon's requirement, so it was the hardening check that
-  refused them. The installed hardened app: the ping was answered. The hardened app started with `DYLD_INSERT_LIBRARIES` naming a
-  dylib: the dylib's constructor ran inside the signed hardened app (the marker file appeared: the flag does not stop this on this SIP configuration) and the daemon
-  refused both its ping and a well-formed load. A load after the bundle's payload had been replaced with the evil dylib exited 70, `the bundled payload is not
-  the one this daemon was built with`, with nothing staged; the bundle was restored and verified.
-- **The loader's own rule, on real root-owned files** (the hardened loader as root, against a pinned current Dock, refused before any sidecar or
-  injection): a root-owned payload outside the staged form; at a staged-form path, a 0666 payload, a 0664 payload, a 0777 directory, a 0775
-  `root:wheel` directory, a directory owned by the login user, a payload owned by the login user, a payload that is a symlink, a payload
-  with a second link, and a directory that is a symlink: ten of ten exited 1 with the matching reason.
-- **Dock restart, reuse and revert.** With the daemon on and compositor mode running, `killall Dock`: `The Dock restarted`, the launcher's recovery load through the
-  daemon (the retired runtime's sidecar read from its staged directory), `Dock payload reloaded; reconnecting`, `Native presentation reconnected after
-  authenticated restoration audit`; the new staged directory replaced the old (`ls /private/var/run` showed one), the record moved to the new Dock. After
-  quitting the app, a second `Infinify native-desktop` in the same Dock logged `Reusing the recorded same-Dock desktop helper` (the check read the staged copy through
-  `daemon staged`). `disable`: login item off, daemon not registered (`launchctl print` found no service), `status` read `disabled`. The guest was left with
-  Infinify quit, the payload dropped by a Dock restart, no staged directory, Stage Manager off and the four tiling keys on.
-- **What a same-user process can do to a hardened or an ordinary target** (ad-hoc test binaries, same guest, Developer Mode off): `task_for_pid` by the
-  login user failed (5) for a plain target and for a hardened one, and succeeded for a hardened one with `get-task-allow`; root succeeded for all; a binary
-  holding the `com.apple.security.cs.debugger` entitlement did not succeed for either. A `DYLD_INSERT_LIBRARIES` dylib loaded into the plain and the hardened target
-  alike (the same on the development Mac, whose SIP configuration is the same). These are why the daemon requires no `get-task-allow` and refuses a `DYLD_*` start in addition to the flag.
-- **The final build, a short run.** After the refusals were given a log line (`os_log` in the daemon, reason named, the caller told only that the
-  connection failed) and the app's message a hint, the build from this tree was deployed again: `enable` answered, a daemon load into a fresh Dock
-  was ready with the Dock mapping the root-owned staged copy (inode 572988, digest `bd1eb48a...`), the three re-signed copies and a hardened app started with
-  `DYLD_FOO=1` were refused, and `sudo log show --last 5m --predicate 'process == "loadd"'` gave the reasons (`the caller's signature does not carry the
-  hardened-runtime flag`, `... (get-task-allow)`, `the caller was started with DYLD_FOO, which can load code into it`); then `disable`. The one change after that
-  build is the word `sudo` in the app's hint text (an unprivileged `log show` printed nothing for the daemon), compiled by the regression build but not re-run.
-- **Tests of the changed modules.** `tests/e2e/native-daemon.sh target/app/Infinify.app`: `loadd-request-regression.m` 278 checks including a real team
-  signature (the new request shape and its mutations, the staged-payload rule on mutated real directories and files, staging and pruning, the caller
-  flags, entitlements and environment) and `dock-reload-regression.m` 68 checks, then eight live-process checks of the caller rule on ad-hoc copies of the
-  regression binary signed with and without the runtime flag, with `get-task-allow`, `allow-dyld-environment-variables`, `disable-library-validation` and
-  `allow-jit`, each started with and without a `DYLD_INSERT_LIBRARIES` dylib; `tests/e2e/native-launcher.sh`: 95 checks (11 added: no payload in the
-  daemon-mode runtime, none named in the request, the staged copy checked on reuse, changed or missing refused), on the host and in the guest;
-  `scripts/test-build-app-package.py`: ad-hoc builds are signed as before and an identity build signs the daemon and the bundle with `--options runtime` and nothing
-  that weakens it.
-
-Not run: macOS 26, a physical Mac, the owner's Mac (its approval sheet may differ, e.g. Touch ID), `/Applications` instead of
-`~/Applications`, a Dock that dies during the loader run (the pending-marker path was exercised only with stubs), a second user
-logged in (the prune leaves another user's staged copy alone by its sidecar's owner; that was checked in the regression only), a
-trackpad, a Mac with Developer Mode on (a debugger-entitled tool attaching to the hardened app), notarization or a secure timestamp
-(the builds have neither, as before), the sudo path's payload race (it still exists, with the owner at the terminal), the sidecar being
-rewritten during a load, and the Command-chord hot keys posted by HID events. The 60 s window and three-strike limit are Sunlight's and were not tuned.
-
 ## Protocol v2
 
-[`protocol2.h`](protocol2.h) is the sole wire schema. All integers and floating
+[`protocol.h`](protocol.h) is the wire schema. All integers and floating
 values are little-endian, matching the fixed arm64 layouts. A 16-byte header is
 `{u32 length, u16 type, u16 flags=0, u64 seq}`, followed by `length` body bytes
 (maximum 131072). Replies carry `type|0x8000` and the request's sequence. Bad
@@ -552,8 +393,10 @@ matches the reported helper PID with the kernel socket peer PID.
 Capabilities are alpha=1, per-window restoration=2, enrollment audit=4, explicit
 fixture family=8, inspection=16, Space migration=32, pinned sublevel=64 and
 arrival veil=128. Scopes are cooperative=1, allowlist=2, and
-same user=3. Queue is own=0 or main=1. Current clients require the relevant current
-capabilities and refuse unsupported helpers; there is no old-capability bypass.
+same user=3. Queue is own=0: the helper runs its native calls on its own queue and always
+reports 0 (clients accept 0 or 1). Current clients require the relevant current
+capabilities and refuse unsupported helpers. Protocol v2 advertises no native clipping
+capability and display-boundary clipping is not implemented.
 
 A window identity is `{i32 pid, u32 wid, u64 birth_sec, u64 birth_usec}`. The helper
 resolves its current WindowServer owner connection and process birth itself,
@@ -595,10 +438,8 @@ snapshot=5, journal=6, not applied=7, restore pending=8, table full=9, malformed
 Space admission=11 (retryable without a setter).
 An applied transform requires fresh readback equality after float rounding,
 matching WindowServer transform storage, and a current final identity. A called
-status-bearing scalar or list setter must also succeed. Private transaction
-staging/commit return registers are ignored: on the inspected macOS 27.0.0 build
-26A434 they are not trustworthy error statuses, despite the pinned upstream
-headers declaring `CGError`. A failed or differing set remains journaled because
+status-bearing scalar setter must also succeed. Space moves return no usable status
+and cannot substitute for readback. A failed or differing set remains journaled because
 it may have changed the window. A status or symbol alone is not evidence of
 usable native presentation.
 The helper revalidates exact process birth, owner connection, UID and scope
@@ -611,7 +452,8 @@ fresh native getters still equal the current request. A mismatch gets a new
 identity fence before correction. The saved originals remain unchanged.
 
 `FRAME_SPACE` adds `u64 target_space` after each unchanged 80-byte record.
-Zero leaves membership untouched; legacy `FRAME` bytes remain unchanged.
+Zero leaves membership untouched; `FRAME` is the same request without Space targets
+and keeps the 80-byte record.
 `dw_client_submit_space_frame` requires capability 32. Forward migration requires
 singleton ordinary source membership and an ordinary target currently active on
 a different active, awake physical display. It cannot gather windows from an
@@ -624,7 +466,7 @@ named by the owner cache) for the few frames before the client released it, and
 an extended frame, or a nonzero target on a restoration record, are malformed.
 
 Before a Space write, schema-3 entries optionally persist
-`original_space: {id, display, pending_target}`; old entries remain valid. The
+`original_space: {id, display, pending_target}`; an entry without that key has no Space obligation. The
 original singleton and display UUID never change. The void move API is accepted
 only after exact membership readback; an unobserved pending target cannot be
 superseded. Restoration returns to the original existing ordinary Space even if
@@ -636,24 +478,15 @@ valid managed-Space inventory covers every active display, the target is absent,
 and the exact window is back on its original Space on the saved display. A failed
 per-Space getter alone does not establish deletion.
 
-Real TextEdit at 1x and Finder at .5 scale appeared on a temporary second display
-in the macOS 27.0.1 guest, with independent native hits reaching each exact window.
-The Finder successor preserved all six canvas world frames, and recovery cleared
-the retained request to deleted Space 128. The final Finder handoff-and-quit run
-verified all six original memberships and transforms before display removal and
-again compared original transforms afterward. Evidence is under
-`target/native-vm/space-handoff-20261021/`, in `textedit-observed-1`,
-`finder-reflow-1`, `recovery-deployment` and `finder-quit-settle-1`.
-Finder's native extent still reflowed from `2056x1130` to `1280x770` on the smaller
-display. These runs do not establish native content-extent/detail preservation,
-general child-family transfer, physical-display or macOS 26 acceptance.
+The Space-handoff runs in the macOS 27.0.1 guest (TextEdit at 1x and Finder at .5 scale on a temporary second display) do not establish native
+content-extent/detail preservation, general child-family transfer, physical-display or macOS 26 acceptance.
 
 ### Arrival veil
 
 A window an application opens is shown at its native size and place until the shell has listed
 it and the first frame has placed it: about 20 to 30 ms when placement works and for its whole life
 when it is refused. The `VEIL` request (capability 128) closes that gap from inside the Dock. It is an
-adaptation of the idea Sunlight uses (see below), as an alpha write instead of a window level.
+adaptation of the idea Sunlight uses (see [Attribution and provenance](#attribution-and-provenance)), as an alpha write instead of a window level.
 
 - **Offered** only by the explicit same-user helper (not an allowlist or cooperative one) that has
   alpha getters/setters and could register for the window server's announcement of a window added to
@@ -663,8 +496,7 @@ adaptation of the idea Sunlight uses (see below), as an alpha write instead of a
   it and releases what is held. A malformed request ends the session like any other. It ends with
   the session. The desktop shell asks after its empty-table audit and carries on without it if refused.
 - **Which windows.** The Dock's main thread only receives the announcement and hands its window id to v2q;
-  every native call and the journal write run on v2q, which is the helper's own queue unless the sidecar's
-  `v2_queue` is `main` (then v2q is the main queue and a veil runs there). A window is
+  every native call and the journal write run on v2q, the helper's own queue. A window is
   veiled when it is at layer 0, at alpha exactly 1, at least 40x40 native points (the shell's own candidate
   floor), of the login user, in scope, with a process birth that resolves, not in the table or released
   table, and not a window of the Dock or of the client's process (the control connection's `LOCAL_PEERPID`).
@@ -705,10 +537,9 @@ adaptation of the idea Sunlight uses (see below), as an alpha write instead of a
   overwritten by the application: TextEdit's own open animation wrote alpha 1 about 0.5 s after creation (measured
   501 to 533 ms), before the bound, when nothing placed the window. The veil is not an optical result.
 - **Arrival placement: a child of a placed root.** The veil holds a window by alpha, and only at layer 0 and alpha 1. A context menu is
-  announced already at level 101 and on screen (measured with a temporary trace in the Dock, since removed: the notification arrived with
-  layer 101, ordered in, alpha 1), and the shell's family frame placed it 23 to 40 ms after the announcement (four timed cases). A sheet, a
-  popover or a completion list is announced at alpha 0 to 0.9 under the application's own fade, which no veil can hold. With the same
-  build and this path switched off (a temporary switch, since removed), 12 of 12 such popups on vm2 were on screen where the application
+  announced already at level 101 and on screen (the notification arrives with layer 101, ordered in, alpha 1), and the shell's family frame placed it 23 to 40 ms after the announcement (four timed cases). A sheet, a
+  popover or a completion list is announced at alpha 0 to 0.9 under the application's own fade, which no veil can hold. Without
+  this path, 12 of 12 such popups in a guest were on screen where the application
   put them, not where their root is drawn, for 1.3 to 191.3 ms: context menus 10.9 to 36.2 ms, pop-up button and pull-down menus 81.4 and
   114.6 ms, a popover 191.3 ms (fading in), a sheet 13.2 ms (alpha up to 0.16), a combo list 1.3 ms. So for such a window the helper does
   not hide it: at the announcement it gives it the placement the shell gives every member of its root's family. Conditions, all read fresh
@@ -722,31 +553,10 @@ adaptation of the idea Sunlight uses (see below), as an alpha write instead of a
   replaces the placement (normally by an equal one: a repeated record writes nothing); otherwise `DW2_ARRIVAL_TIMEOUT_MS` (500 ms) after the
   announcement, RESTORE, RESTORE_ALL, the end of the veil (mode 0 or the session) or a closed window release it by the ordinary release, which
   puts the original transform back. Nothing else is touched: a window with no parent (the global menu bar's menus, status items, every
-  application's own windows) is left alone, as is a child of a window the shell has not placed. It is gated by the veil request
-  (`INFINIFY_NO_VEIL` also turns it off). Announcement to the read-back placement took 1.0 to 3.4 ms for 27 of 29 windows in the trace
+  application's own windows) is left alone, as is a child of a window the shell has not placed. It is gated by the veil request. Announcement to the read-back placement took 1.0 to 3.4 ms for 27 of 29 windows in the trace
   build and 22.6 and 26.5 ms for two opened while frames were being applied (the helper's queue is serial). A window that the helper has
   released and the application shows again (Chromium and AppKit reuse windows) is in `v2Released` and is not placed again by this path.
-  No wire change. Results with the shell running are in [the shell's account](../desktop/README.md#popups-and-menus-of-a-transformed-window-full-desktop-dock-helper).
-- **A browser's windows: what the veil held, measured, and a test that was not adopted.** The owner's Aside windows "randomly flashed"
-  with the veil on; the veil was not the cause (see [the shell's account](../desktop/README.md#a-root-whose-family-cannot-be-read-the-browsers-main-window-flashing)).
-  What Chrome 156.0.8078.80 showed in the macOS 27.0.1 guest, every 1325 announcement read from inside the helper with a temporary trace (removed):
-  the main window is announced at alpha 0, Chrome fading it in itself, and is not veiled; the windows 1038 wide and 88 to 139 high that appear
-  while the address bar is typed into (shadow 0/0/0, alpha 1; probably the completion list) are eligible and were veiled once in the first run,
-  0.4 ms after the announcement, and lifted by the first frame of the family 48.6 ms later; the windows 270 by 80 to 122 that appear over a
-  hovered tab or link (probably hover cards or tooltips) are announced at alpha 0.01, so they are not eligible; a window 316 to 323 by 22
-  (shadow 13.2/0.300/4) is announced at alpha 0, is under the size floor, and was announced 29 times in 70 s (the owner's host log has a
-  window of Aside with the same pattern, 61 times, and no decline for it). That 22-point window read alpha 0 for 19 to 107 ms,
-  8 to 26 times in a 70 s run, with and without the veil: the application's own fade. A window the helper
-  released and the application orders in again is never veiled again (`v2Released`), and a placed one is in the table;
-  `restore_identity_test.m` announces such a window three more times and checks that nothing is written and the alpha stays 1.
-  Sunlight's `sunbeam_shadow_standard` (`LiveWindows/osax/sunbeam.h:295-308`, which tells a titled window from a panel by
-  `SLSGetWindowShadowAndRimParameters`) was tried as an eligibility test. The parameters are readable when the announcement arrives (a main
-  window read 32.94/0.700/18 at alpha 0), but on macOS 27 every ordinary window reads density 0.700, not the 0.4 of Sunlight's constants
-  (guest 27.0.1, and read only on the owner's 27.2: Ghostty, UTM, Aside, a window server panel), so against those constants nothing is
-  standard; with the active look at 0.7 it separates a main window from Chrome's windows of shadow 0/0/0 but also from the completion window
-  above, the one window the veil held and the family placed within 49 ms, which would then show at its native place for that long. It was
-  built, run through the substituted-call tests and on one Aside sign-in window (veiled, lifted by its first frame), and not adopted; the
-  experiment is kept outside the tree (`target/flash/experiments/`). The helper's veil is unchanged.
+  No wire change. Results with the shell running are in [the shell's account](../desktop/COMPOSITOR-MODE.md#popups-and-menus-of-a-transformed-window-full-desktop-dock-helper).
 - **The shell** (`native-presenter.m`, `window-manager.m`, `main.m`) asks after admission, and lets go at once
   of a window it will not manage: `-windowNotAdopted:pid:` is sent once per appearance, from the first discovery
   pass on, for a window of a non-regular application, a window the shareable windows or Accessibility do not count as
@@ -757,55 +567,15 @@ adaptation of the idea Sunlight uses (see below), as an alpha write instead of a
   unreadable one, the shell assumes the veil may be on and keeps releasing explicitly: a wrong "on" costs a no-op record,
   a wrong "off" would leave such a window invisible for the whole bound.
 
-What was run (macOS 27.0.1 (26A434) guest, SIP off, final build): `native/privileged/restore_identity_test.m` and
-`forward-operations-test.m` use substituted native calls for every rule above (eligibility refusals, journal
-before alpha with a failing journal changing nothing, transform-then-alpha in the scalar, transaction and
-list paths, decline/bound/end/recovery, closed and replaced windows, the request and the announcement
-payload through the real handler on a socket pair); `client_protocol_test.py` checks the C client's request,
-refusal and invalid-reply handling against a fake peer; `fixture_v2_test.py`'s frames group, run in the
-guest, shows a cooperative helper offering no veil (caps 119) and refusing the request without ending its session.
-The arrival placement cases (`arrivalCases` in the same file: journal and original before the write at level 0 and 101 and with a fading
-alpha, claim by the shell's frame with no second write, bound, release record, end of the veil, closed window, replay of a writer that died with
-the placement, 17 refusals: no or inexact parent, a cycle, an unplaced, releasing, veiled, rotated, stale-transformed, other-process or
-other-connection root, a root with no applied transform, an equal placement, no veil asked, the client's process, another user, unreadable bounds; a journal that cannot be written changes nothing; a
-transform that does not take is released at once) ran on the host after the change: `restore_identity_test` passed (7 PASS lines),
-`forward-operations-test` and `client_protocol_test.py` passed. They use substituted native calls and are not native evidence. The live run
-of the final build in the vm2 guest is in the shell's account above.
-These are not native evidence. The live numbers below were taken before three later changes: the first frame's re-read and
-journal write (`veil_bare`), the conditional veil alpha (`veil_alpha`, and a lift that leaves an alpha the application
-took over), and the shell's declines from the first pass on; those are covered by the substituted-call and in-memory
-tests only and have not been run live in a guest. Live, in the guest with the full-desktop helper: SkyLight 1325 reached the
-Dock's handler for other processes' windows (and for Infinify's own canvas panels, which are refused); from announcement to
-alpha 0 read back took 1.25 to 2.1 ms over eight windows (one 6.1 ms): about 0.13 to 0.4 ms to reach v2q,
-0.6 ms to check and resolve, 0.4 to 0.9 ms to journal, 0.15 to 0.3 ms to write and read back. `measure-opening 8 0.5`
-(TextEdit, camera zoom 0.5, `reset_on_new_window = false`, extended meter at 1 ms) reported, for eight windows,
-`unplaced_ms` 0.0 to 2.3 (what the meter sampled before the veil landed), `how=hidden`, visible again at 9.9 to 81.1 ms at
-scale 2.000, alpha 1.00, none left hidden; main (`ca88bbd`) had been measured at about 20 to 30 ms at native size. A silent
-client (veil asked, nothing placed or declined) held non-animating windows for 1000.9 and 1023.3 ms before
-the bound released them. With the shell running: a regular window placed after 131.8 ms hidden; an accessory-app window was released
-by the shell's decline after 16.0 ms and a borderless regular-app window (not adopted: AXUnknown) after 132.0 ms, both visible
-at scale 1, alpha 1; a 30x62 window was never veiled; the real TextEdit *Save* sheet was not veiled (alpha 0.66 at
-first sight, mid-fade) and was placed 22 ms later, still fading in. `quit-native` with managed windows at scale 2.0 and a window
-0.1 s into its veil left 47 of 47 layer-0 windows at alpha 1, scale 1. **A Dock exit does not undo
-alpha:** an alpha the Dock set on a settled window (0) was still 0 3.5 s after `killall Dock`, while its transform reset
-(tx -168 to 0); a veiled non-animating window was still at alpha 0 with the Dock gone, and the launcher's recovery handoff
-(`run-native`) restored it to alpha 1.00. A veiled window is therefore invisible after a Dock crash
-until that recovery runs: the bound's timer died with the Dock, so nothing limits it, unless the application
-rewrites alpha itself. Not run: macOS 26, a physical display, other applications' open animations, optical capture.
-
-**Measuring this: read alpha before the transform.** On the integrated build a meter that read a window's transform and then its
-alpha reported `hidden`, `native` (alpha 1, scale 1), `placed` for about one window in six (11 of 72 over six 12-document runs), a few to 30 ms apart. It never
-happened: the helper writes a window's transform and then its alpha 0.1 to 0.5 ms later, and a meter whose two reads straddle those
-writes pairs the old transform with the new alpha (and stamps the pair at the start of its tick, before a window-list copy that can take
-10 ms or more). A helper-side poll of the window's alpha every 150 us for 120 ms after each veil (temporary instrumentation, removed) read 0
-continuously until the helper's own alpha write, which followed its transform write, then 1, with no other value, in 24 of 24 windows. A meter that
-reads alpha first, then the transform, never shows a visible window at its old transform (the transform is already
-scaled by the time alpha is above 0): it reported none in 36 of 36 windows (three runs), while a transform-first meter running at the same time on the same
-windows in two of those runs reported two of 24 (wid 1009 and wid 1036). The extended `openmeter` reads alpha first.
+`restore_identity_test.m` and `forward-operations-test.m` use substituted native calls for every rule above (eligibility
+refusals, journal before alpha with a failing journal changing nothing, transform-then-alpha, decline/bound/end/recovery, closed and replaced
+windows, the request and the announcement payload through the real handler on a socket pair), and `restore_identity_test.m`
+covers the arrival placement cases (`arrivalCases`). `client_protocol_test.py` checks the C client's request, refusal and invalid-reply
+handling against a fake peer. These are not native evidence.
 
 One control `HELLO` creates the session and a random token. A second heartbeat
 connection uses that token; requests on either renew the 2000 ms lease. The C
-client heartbeats every quarter lease; Rust runtime heartbeats every 400 ms.
+client heartbeats every quarter lease.
 Control disconnect, malformed control request or lease expiry restores all held
 windows. Closing only a heartbeat connection does not end the session. An alive
 C heartbeat thread can retain windows while its caller stalls. A fully stopped
@@ -815,32 +585,9 @@ Frames use one newest-frame slot, limited to 1024 records. Waiting frames are
 superseded instead of building a queue; the next frame reply counts them. One bad
 record does not prevent the others. `RESTORE_ALL` discards a waiting frame;
 a later frame is processed afterward. Probe, inspect, restore, native calls,
-table changes and journal writes run serially on the helper's own queue by
-default. `DW_V2_MAIN_QUEUE=1` at build time, a sidecar `v2_queue` of `own`/`main`,
-or the fixture's `--v2-queue` can select the main queue. Socket parsing, heartbeats
+table changes and journal writes run serially on the helper's own queue. Socket parsing, heartbeats
 and lease checks run on connection threads. Acceptance of own-queue native calls
 inside Dock still requires scoped real-host evidence.
-
-Production helper builds use `-O2`. For explicit comparisons,
-`DW_V2_TRANSACTION_BATCH=1` stages changed transforms in one transaction, while
-`DW_V2_WINDOW_LIST_BATCH=1` uses one `SLSSetWindowTransforms` call; if both are
-selected the list path takes precedence. Missing APIs/create failures use the
-scalar path. Each staged record retains its original and is audited immediately
-before submission, read back afterward, and finally identity-checked. Any changed
-identity cancels the pending batch. Transaction release without commit was
-observed to leave all eight owned fixture windows unchanged on macOS 27.0.0;
-that does not establish the same behavior on every supported build.
-`DW_V2_TRANSACTION_SYNC=1` and `DW_V2_TRANSACTION_TRACE=1` are diagnostic build
-controls, and `DW_V2_ALPHA_DEDUP=0` keeps the previous alpha-write behavior for a
-comparison. No protocol layout or per-window restoration contract changes.
-Ordinary scalar builds compile the optional batching machinery out entirely;
-there are no batch setup objects or extracted finalizer calls on that path.
-`forward-operations.h` records exact ABI provenance. The substituted-call
-`forward-operations-test.m` uses `DW_FORWARD_ONLY_SCALAR=1` to exercise this exact
-production scalar path; its default comparison build includes the explicit
-transaction/list paths. It can also compile against a frozen payload using
-`DW_FORWARD_PAYLOAD` and `DW_TEST_FROZEN_BASELINE=1`. Its observations are call
-counts and controller correctness, not native compositing evidence.
 
 ## Journal and strict recovery
 
@@ -864,7 +611,7 @@ Restoration re-resolves the exact identity, owner, UID and scope, sets the captu
 original transform (re-based on the native origin read at the write, below) and alpha, and requires exact float
 readback. A real cross-display
 quit exposed late AppKit reflow after an immediate successful readback. Entries
-with a Space obligation now remain pending for at least two seconds from the
+with a Space obligation remain pending for at least two seconds from the
 start of restoration and until native bounds, original membership and exact
 transform/owed alpha stay stable for 500 ms. Samples precede corrective writes;
 settlement checks run every 250 ms, and their transient timing evidence is never
@@ -889,10 +636,10 @@ alpha obligation is refused if the required native symbols are unavailable.
 Only a private regular staging file may be removed after successful validation,
 or when no committed journal could have authorized a mutation.
 
-Legacy `recovery.json`, `recovery.next`, or `helper.sock` artifacts are never
-replayed, cleared or converted automatically. Any presence refuses startup and
-preserves the files, including a purportedly clean legacy receipt. Existing
-`v2.sock` also refuses startup. Bind/listen and journal validation must succeed
+`recovery.json`, `recovery.next` or `helper.sock` artifacts left by an earlier
+helper are never replayed, cleared or converted automatically. Any presence
+refuses startup and preserves the files, including a purportedly clean receipt.
+Existing `v2.sock` also refuses startup. Bind/listen and journal validation must succeed
 before readiness. A process crash, machine failure or stalled helper cannot run
 in-process restoration; preserved journals require exact-identity reconciliation,
 not blind reinjection or deletion.
@@ -904,58 +651,44 @@ window that is not transformed reads `[1,0,0,1,-x,-y]` and is drawn at its nativ
 first touch therefore says the origin the window had then. Written back unchanged after the native frame has moved, it draws
 the window at its old place while its native frame (hit testing, macOS tiling, the next session's original) is elsewhere.
 
-Measured in the macOS 27.0.1 guest with the helper before this change: Ghostty 1.4.0 at zoom 1, pressed at its title (the
-application's own window drag, taken over by the shell: `native/desktop/README.md`, "Takeover"), had its native frame moved
-by WindowServer from `(601,417)` to `(494,399)` while the canvas dragged the drawn window; after `quit-native` the window list
-drew it at `(601,417)` with transform `[1,0,0,1,-601,-417]` and `SLSGetWindowBounds` read `(494,399)`. Safari showed the same
-without any drag: its native origin changed from `(40,136)` to `(41,131)` after its own toolbar re-layout in the first seconds,
-and it was put back at transform `[1,0,0,1,-40,-136]`. Without a drag or any other native move the restore was exact. A
-session started from such a window then captured the wrong original again, so the mismatch outlived the session.
-
 The native frame moves during a session for reasons the shell cannot all prevent (the application, a window-server drag the
-shell took over, a toolbar re-layout), so restoration no longer writes the captured transform as it is:
+shell took over, a toolbar re-layout), so restoration does not write the captured transform as it is:
 
 - **Plain original** (scale 1, no rotation: what an unmanaged window has): written as `[1,0,0,1,-x,-y]` at the origin read now.
   A plain transform is native by definition, which also puts right an original that was captured already displaced (the stale
-  windows an earlier restore left behind): the first quit with this helper restored the two windows above to native on
-  a session that did nothing else to them.
+  windows an earlier restore left behind).
 - **Any other original** keeps its linear part and its place relative to the frame: `t' = t - M*(origin_now - origin_captured)`
   (`v2RestoreTransform`), where `origin_captured` is the first-touch `bounds` the journal already holds. Unmoved, it is exactly
-  the original; there is no new journal key.
+  the original; the journal needs no extra key.
 - **The origin is read before the write and again after it** (`SLSGetWindowBounds`, with the readback of the transform that
   was already required). A window that moved between the two reads is not restored by that write: it stays `restoring` and
   the next pass writes the origin it has then. Without a readable origin the captured original is written as the best that can be
   done and the window stays pending, so the next pass writes the re-based one. The journal keeps the captured transform and
   bounds until release, so a crash between a move and the release is re-based by the next helper the same way.
 - **After release** the retained record holds the transform that was written and the bounds read after it, so a later
-  re-base (a reattachment after the Dock was replaced) starts from a pair that belongs together. The reattachment guard is as
-  strict as before (geometry unchanged, and the transform either the original, the identity reset or the re-based one).
-- A veil-only release (`veil_bare`) still adopts the transform in force; the Space settlement samples compare against the
+  re-base (a reattachment after the Dock was replaced) starts from a pair that belongs together. The reattachment guard is
+  strict (geometry unchanged, and the transform either the original, the identity reset or the re-based one).
+- A veil-only release (`veil_bare`) adopts the transform in force; the Space settlement samples compare against the
   re-based transform at the bounds sampled.
-- The pending receipt's `diagnostic` gained `captured_origin`, `native_origin`, `origin_status` and `target_transform`. Receipts
-  stay valid without them.
+- The pending receipt's `diagnostic` carries `captured_origin`, `native_origin`, `origin_status` and `target_transform`; it is
+  informational, and a receipt is valid without it.
 
 `restore_identity_test.m` covers this with substituted calls (`rebaseCases`: unmoved, moved, stale plain, scaled and rotated
-originals, unreadable origin, a move between write and read, crash recovery, reattachment); its other fixtures were made
-consistent (a window whose original says `[1,0,0,1,-25,-35]` is at `(25,35)`; before, they paired it with `(0,0)`). These are not native evidence.
-Native evidence, owned fixture only (`fixture_v2_test.py --native-move`, opt-in, needs Accessibility for the test process; the host's own windows are
-moved through Accessibility while the helper holds them): in the macOS 27.0.1 guest the whole default run passed with this payload (53 cases, the
-unmoved restoration of all eight windows exact), and the new group passed: the two moved windows were restored to `[1,0,0,1,-x,-y]` at the origin
-they had (for example the window moved from `(1100,808)` to `(1071,849)` read `[1,0,0,1,-1071,-849]`, drawn at `(1071,849)`, where the captured
-original `[1,0,0,1,-1100,-808]` would have put it 29 points right and 41 up of its frame) and the six others exactly their originals. The same group
-against the payload without this change fails on the first moved window: it reads `[1,0,0,1,-80,-808]`, drawn at `(80,808)` with the frame at `(117,831)`
-(`target/restore/evidence/fixture-native-move-{NEW,OLD}-payload.*` of the working tree). The whole-desktop evidence (Ghostty, Safari, TextEdit, Finder
-in the Dock, quit, acceptance check 9) is in the shell's README section "Restore after a native-origin move".
+originals, unreadable origin, a move between write and read, crash recovery, reattachment); its fixtures pair an original of
+`[1,0,0,1,-25,-35]` with a window at `(25,35)`. These are not native evidence.
+
+The owned-fixture native evidence is `fixture_test.py --native-move` (opt-in, needs Accessibility for the test process).
+The whole-desktop evidence is in the shell's README section "Restore after a native-origin move".
 
 ## Focused fixture validation
 
 `./tests/e2e/privileged-fixture.sh` builds only by default. Passing
-`--live-owned-fixture` explicitly runs `fixture_v2_test.py` against spawned,
+`--live-owned-fixture` explicitly runs `fixture_test.py` against spawned,
 finite-window cooperative hosts. Individual scenarios can be selected directly
 with `--inspect`, `--startup`, `--release-window`, or `--enrollment` after building.
 `--client-restore` checks only C restore exit status; `--recovery` selects recovery
-and read-only audit groups. `--client-and-recovery` also runs the C benchmark
-groups without repeating the frames/lease groups. Its C-driver checks require a successful durable restore
+and read-only audit groups. `--client-and-recovery` also runs the C-client groups
+without repeating the frames/lease groups. Its C-driver checks require a successful durable restore
 to exit zero; a staging obstruction produces nonzero exit even when native
 geometry has already been restored, until autonomous persistence retry completes.
 The harness cleans up its children on all exits, independently reads transforms
@@ -973,26 +706,33 @@ identity/scope, and retention of the original in the table and durable journal.
 It also replaces the simulated owner after journal fsync and between setters,
 checking that no later property write or successful frame acknowledgement reaches
 that replacement. This regression creates no window and is not native API evidence.
-The `4063db2` helper also passed the existing `--release-window` scenario on
-2026-10-12: eight owned windows, transform/alpha writes, per-window release,
-rebind and exact restoration, with the host and client closed afterward.
-Local hashes and scope are in `target/helper-identity-readiness.json`; the log
-is `target/helper-identity-live-release.log`. This does not establish foreign-app
-or optical presentation behavior.
+
 The current tests do not inject into Dock, change policy or settings, enroll
 another user's applications, or prove third-party visual/input usability. Native
 restore API failure and startup restoration of a still-live foreign window remain
-separate evidence requirements. Historical files under `evidence/` record their
-original runs; they are not receipts for later protocol revisions.
+separate evidence requirements.
+
+The headless tests, which need no window and no Dock, are `restore_identity_test.m`, `forward-operations-test.m`
+(alpha de-duplication, drift correction, failed readback, identity loss during an alpha readback, veil ordering and exact restoration),
+`loadd-request-regression.m` and `client_protocol_test.py`.
 
 ## Attribution and provenance
 
 Original helper/protocol code is GPL-3.0-or-later. Private ABI declarations were
-cross-checked against yabai commit
+cross-checked against yabai (<https://github.com/asmvik/yabai>) commit
 [`dd845723416f5fe92af49fad5ebab00369e07edd`](https://github.com/asmvik/yabai/tree/dd845723416f5fe92af49fad5ebab00369e07edd):
 `src/osax/payload.m` and `src/misc/extern.h` (alpha declarations at lines 16, 17
 and 79). The loader is adapted from that exact revision's `src/osax/loader.m`,
-with the MIT notice retained in [`YABAI-LICENSE.txt`](YABAI-LICENSE.txt). Ad-hoc
+with the MIT notice retained in the loader's header and in
+[`native/desktop/YABAI-NOTICE.txt`](../desktop/YABAI-NOTICE.txt). Ad-hoc
 signing follows `src/sa.m`'s `scripting_addition_prepare_binaries` at the same
 revision (`codesign -f -s -`). The source notices and exact pinned upstream
 provenance remain attached to the implementation.
+
+The launch daemon, its caller requirement and its property list come from Sunlight
+(<https://github.com/spacefarm-digital/sunlight>, commit `afeea74b18e70ca49bf462d6fe462cf65deb2b32`, MIT, Copyright (c) 2026
+spacefarm; notice in [`native/desktop/SUNLIGHT-NOTICE.txt`](../desktop/SUNLIGHT-NOTICE.txt)): `loadd.m` copies ranges of
+`LiveWindows/helper.m` and lists them in its header, `loadd-request.m` follows the form of its caller requirement, and
+`com.marengox.infinify.loader.plist` adapts `Resources/LaunchDaemons/com.spacefarm.sunlight.live-windows.plist`. The arrival veil in
+`payload.m` adapts an idea and the window server announcement of Sunlight (`LiveWindows/README.md`, `LiveWindows/osax/sunbeam.h`,
+`Sources/Canvas/RealWindows/WindowServerEvents.swift`), as its header lists.

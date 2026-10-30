@@ -1,10 +1,10 @@
 # Camera motion, ABI 1
 
-Additive ABI 1 commands and fields make the camera move as DriftWM's does: a
+ABI 1 commands and fields make the camera move as DriftWM's does: a
 flick keeps the viewport drifting until friction stops it, a window dragged to
 the edge of its output pans the canvas under it, a bare pointer pushed against
 an edge can pan the view, and the pointer zooms take their speeds from the
-[config](CONFIG.md). The logic is adapted from malbiruk/driftwm at
+[config](CONFIG.md). The logic is adapted from <https://github.com/malbiruk/driftwm> at
 `352333a8fa1b22171492d4b71a54102045c9a19d`: `src/state/viewport_animation.rs`,
 `src/state/edge_pan.rs`, `src/grabs/pan_grab.rs`, the edge-pan hook of
 `src/grabs/move_grab.rs`, the scroll, wheel-zoom and cursor-pan parts of
@@ -27,10 +27,8 @@ and the navigation context's `usable_rect_local` only.
 | `tick_navigation` | `timestamp_ns` | `changed_outputs`, `needs_frames`, `needs_pointer`, `clock_only` |
 | `action` `toggle-cursor-pan` | optional `output` | `{navigation: null, effects: [], dirty: false}` |
 
-Every other command keeps its shape. `pan` without `time_ms`, `gesture_to`
-without `pointer` and `zoom` do what they did, except that `gesture_to` now
-answers `{needs_frames}` instead of `{}` and that `pan` and `zoom` end a coast.
-A rejected command leaves all of the state below as it was.
+`gesture_to` answers `{needs_frames}`, and `pan` and `zoom` end a coast. A
+rejected command leaves all of the state below as it was.
 
 The [trackpad gesture](GESTURES.md) commands come through the same code, so
 nothing below exists twice. A gesture that pans (`swipe_pan`) makes a timed
@@ -263,7 +261,7 @@ answers `needs_pointer: false`.
 
 The macOS shell reserves nothing: it sends a usable rectangle with none of
 the three ([NAVIGATION.md](NAVIGATION.md#the-usable-area)), so
-the usable area is the whole output, and since 2026-10-10 a normal run's output
+the usable area is the whole output, and a normal run's output
 is the whole display, with the menu bar and the Dock drawn over it. The zones
 are therefore at the display's own edges, and the top one lies under the menu
 bar. What pans there is decided by the shell's report, not here: it names an
@@ -495,12 +493,12 @@ alone.
 - Cursor edge pan measures the usable area only. Upstream also stands down
   while the pointer is over a bar or dock surface that reserves no area, under
   a session lock, and on a fullscreen output. The last it does here too
-  ([FULLSCREEN.md](FULLSCREEN.md#the-parked-camera)). The first is the shell's
-  since 2026-10-10, when the menu bar and the Dock became exactly such
-  surfaces: the controller has no notion of them and stands down only because
-  the shell reports no output there ([Cursor edge pan](#cursor-edge-pan)). A
+  ([FULLSCREEN.md](FULLSCREEN.md#the-parked-camera)). The first is the shell's:
+  the menu bar and the Dock are exactly such surfaces, the controller has no
+  notion of them and stands down only because the shell reports no output
+  there ([Cursor edge pan](#cursor-edge-pan)). A
   session lock is macOS's own and nothing here knows of it. The
-  experimental native resize transaction does not hold the request, and
+  native resize transaction does not hold the request, and
   neither does a held button the controller has no gesture for: holding the
   reports back for those is left to the shell.
 - A pinch event without a begun gesture is scaled from the zoom it finds, so a
@@ -591,7 +589,5 @@ in the [shell notes](../../native/desktop/README.md#camera-motion).
 
 That run was of this change by itself. The app built after
 [trackpad gestures](GESTURES.md) were put on the same code was driven the same
-way once more, and
-[GESTURES.md](GESTURES.md#put-together-with-camera-motion-2026-10-09) has that
-run. It reached the same things and no more: no scroll, drag, swipe or pinch
+way once more. That run reached the same things and no more: no scroll, drag, swipe or pinch
 was produced by real input.

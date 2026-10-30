@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d, with
-// the v0.21.0 additions from df3de27b26c7998e8a460cffd8a4925cbed3a322
-// (third_party/driftwm/src/ipc/{protocol,mod}.rs: Request::Cursor and cmd_cursor,
+// Adapted from https://github.com/malbiruk/driftwm @
+// 352333a8fa1b22171492d4b71a54102045c9a19d, with the v0.21.0 additions from
+// df3de27b26c7998e8a460cffd8a4925cbed3a322
+// (src/ipc/{protocol,mod}.rs: Request::Cursor and cmd_cursor,
 // the `pid` of WindowInfo, OutputFullscreen and OutputPinned, check_point,
 // check_size, the camera and bookmark bounds of cmd_camera and cmd_bookmark):
 // src/ipc/protocol.rs (every wire type: names, serde shapes and field order),
@@ -15,9 +16,9 @@
 // their title bar, so chrome is zero.
 use super::actions::Outcome;
 use super::storage::{CAMERA_LIMIT, POSITION_LIMIT, valid_canvas_point};
-use super::view_actions::pixel_size;
+use super::view_actions::{core_point, pixel_size};
 use super::*;
-use driftwm_canvas::policy;
+use driftwm_core::canvas;
 
 /// Selects a window: by stable id (JSON number) or case-insensitive `app_id`
 /// substring (JSON string). Untagged, so the wire form is just `5` or `"term"`.
@@ -488,8 +489,8 @@ impl Controller {
     /// The viewport center, Y-up, over the whole output: upstream camera_center.
     fn camera_center(viewport: &Viewport) -> Result<(f64, f64), String> {
         let size = pixel_size(viewport.screen_bounds.size).map_err(text)?;
-        Ok(policy::viewport_center(
-            viewport.camera,
+        Ok(canvas::viewport_center(
+            core_point(viewport.camera),
             viewport.zoom,
             size,
         ))
@@ -575,7 +576,7 @@ impl Controller {
         // Same bounds and usable-center anchor as keyboard zoom; the reply
         // reports what was applied.
         let (viewport, usable) = self.view(output).map_err(text)?;
-        let clamped = zoom.clamp(self.min_zoom(usable).map_err(text)?, policy::MAX_ZOOM);
+        let clamped = zoom.clamp(self.min_zoom(usable).map_err(text)?, canvas::MAX_ZOOM);
         outcome.navigation = self
             .zoom_to_anchored(output, &viewport, usable.center(), clamped)
             .map_err(text)?["navigation"]

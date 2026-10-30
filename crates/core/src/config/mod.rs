@@ -1,12 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Ported from malbiruk/driftwm src/config/mod.rs at
-// df3de27b26c7998e8a460cffd8a4925cbed3a322 (GPL-3.0-or-later).
-// Changes from upstream: `smithay::` paths read `crate::platform::`;
-// `CONFIG_DIR_NAME` is re-exported next to `config_path`, and the doc comment
-// of `Config::load` names the `infinify` config directory. Nothing else.
-// (The driftwm-config port also redirected `crate::canvas::MAX_ZOOM` to a
-// stand-in; driftwm-core carries the real `canvas` module, so that line is
-// upstream's again.)
+//
+// Ported from DriftWM (GPL-3.0-or-later)
+//   repository: https://github.com/malbiruk/driftwm
+//   commit:     df3de27b26c7998e8a460cffd8a4925cbed3a322
+//   path:       src/config/mod.rs
+//   sha-256:    ac10ef20e1d65098edbc730372124e8c15aa06ecc3c824c6ee6cb9b4be82177f (upstream file)
+// Changes from upstream: this header; `smithay::` paths read `crate::platform::`;
+// `CONFIG_DIR_NAME` is re-exported next to `config_path`; removed: the re-export
+// of `set_config_path`, `Config::{load, load_collect, load_from,
+// load_from_collect, check_from, outer_frame_inset, match_window_rule,
+// match_window_rule_nth, resolve_window_rules_for_layer_instance}`,
+// `TOOLKIT_DEFAULTS` (so `child_env` is the cursor variables plus the user's
+// `[env]`), and the tests that covered them
+// (`outer_frame_inset_goes_negative_at_zero_outer_gap_with_a_border`, the
+// six `check_from_*` tests and their `TempDir`,
+// `removed_go_to_errors_in_every_binding_table`,
+// `removed_go_to_binding_is_dropped_and_bookmarks_still_bind`). The
+// migration warnings for renamed keys are upstream's and stay. Nothing else.
+// See PORT.md in the crate root for the full change log.
+
 mod defaults;
 
 mod parse;
@@ -19,7 +31,7 @@ pub use parse::{
     parse_gesture_trigger, parse_key_combo, parse_mouse_action, parse_mouse_binding,
     parse_tap_combo, parse_touch_config_entry, parse_touch_trigger,
 };
-pub use toml::{CONFIG_DIR_NAME, config_path, set_config_path};
+pub use toml::{CONFIG_DIR_NAME, config_path};
 pub use types::*;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -40,16 +52,6 @@ use parse_helpers::{
     parse_output_rule, parse_window_rule, positive_or_default,
 };
 use toml::{ConfigFile, expand_tilde};
-
-/// Env vars the compositor sets as toolkit fallbacks.
-/// `[env]` config entries take precedence over these.
-const TOOLKIT_DEFAULTS: &[(&str, &str)] = &[
-    ("MOZ_ENABLE_WAYLAND", "1"),
-    ("QT_QPA_PLATFORM", "wayland;xcb"),
-    ("SDL_VIDEODRIVER", "wayland,x11"),
-    ("GDK_BACKEND", "wayland,x11"),
-    ("ELECTRON_OZONE_PLATFORM_HINT", "wayland"),
-];
 
 /// Seed bookmarks when `[navigation.bookmarks]` is absent: the four canvas
 /// corners, matching the default `go-to-bookmark 1..4` keybindings. Y-up.
@@ -279,7 +281,7 @@ pub struct Config {
     pub focus_placement: FocusPlacement,
     pub env: HashMap<String, String>,
     /// Pre-merged env passed to spawned child processes via `Command::envs()`.
-    /// Layers (later wins): toolkit defaults → XCURSOR_* → user `[env]`. Built
+    /// Layers (later wins): XCURSOR_* → user `[env]`. Built
     /// once in `from_raw` so we never touch process env at runtime.
     pub child_env: HashMap<String, String>,
     pub output_configs: Vec<OutputConfig>,
@@ -313,14 +315,6 @@ pub struct Config {
 }
 
 impl Config {
-    /// Inset from the usable area to a window's visual frame, in canvas px.
-    /// `outer_gap` measures to the title bar / content edge and the border lies
-    /// outside it, so the frame sits one border closer — outside the usable
-    /// area at 0.
-    pub fn outer_frame_inset(&self, border_width: i32) -> f64 {
-        self.snap_outer_gap - border_width as f64
-    }
-
     pub fn lookup(&self, modifiers: &ModifiersState, sym: Keysym) -> Option<&Action> {
         let mut combo = KeyCombo {
             modifiers: Modifiers::from_state(modifiers),
@@ -412,77 +406,16 @@ impl Config {
     }
 
     /// Parse a TOML string into a Config. Useful for testing and config reload.
-    /// Does NOT set env vars (unlike `load()`).
+    /// Does NOT set env vars.
     pub fn from_toml(toml_str: &str) -> Result<Self, ::toml::de::Error> {
         Self::from_toml_collect(toml_str).map(|(c, _)| c)
     }
 
     /// Parse a TOML string into a Config, collecting validation warnings
-    /// (out-of-bounds values, deprecated fields, etc.) alongside.
+    /// (out-of-bounds values, etc.) alongside.
     pub fn from_toml_collect(toml_str: &str) -> Result<(Self, Vec<String>), ::toml::de::Error> {
         let raw: ConfigFile = ::toml::from_str(toml_str)?;
         Ok(Self::from_raw_collect(raw))
-    }
-
-    /// Load config from `$XDG_CONFIG_HOME/infinify/config.toml` (or `~/.config/infinify/config.toml`).
-    /// Missing file → all defaults. Parse failure → error log + all defaults.
-    pub fn load() -> Self {
-        Self::load_from(&config_path())
-    }
-
-    /// Like `load()` but returns config file warnings (out-of-bounds values, etc.)
-    /// alongside the config so callers can surface them in the on-screen error bar.
-    pub fn load_collect() -> (Self, Vec<String>) {
-        Self::load_from_collect(&config_path())
-    }
-
-    /// Load config from an explicit path. Used by `--config <path>` CLI arg.
-    /// Missing file → all defaults. Parse failure → error log + all defaults.
-    pub fn load_from(config_path: &std::path::Path) -> Self {
-        Self::load_from_collect(config_path).0
-    }
-
-    /// Like `load_from` but returns config file warnings alongside the config.
-    pub fn load_from_collect(config_path: &std::path::Path) -> (Self, Vec<String>) {
-        let (raw, mut warnings) = match std::fs::read_to_string(config_path) {
-            Ok(contents) => {
-                tracing::info!("Loaded config from {}", config_path.display());
-                match ::toml::from_str::<ConfigFile>(&contents) {
-                    Ok(cf) => (cf, vec![]),
-                    Err(e) => {
-                        let msg = format!("config error: {e}");
-                        tracing::error!("{msg}");
-                        (ConfigFile::default(), vec![msg])
-                    }
-                }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                tracing::info!("No config file found, using defaults");
-                (ConfigFile::default(), vec![])
-            }
-            Err(e) => {
-                let msg = format!("config: failed to read {}: {e}", config_path.display());
-                tracing::error!("{msg}");
-                (ConfigFile::default(), vec![msg])
-            }
-        };
-        let (cfg, extra) = Self::from_raw_collect(raw);
-        warnings.extend(extra);
-        (cfg, warnings)
-    }
-
-    /// Validate the config file at `path` without applying it. `Err` is a hard
-    /// read or parse failure; `Ok` carries the non-fatal value warnings. A missing
-    /// file is not a failure: the compositor runs on built-in defaults.
-    pub fn check_from(path: &std::path::Path) -> Result<Vec<String>, String> {
-        let contents = match std::fs::read_to_string(path) {
-            Ok(contents) => contents,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
-            Err(e) => return Err(format!("config: failed to read {}: {e}", path.display())),
-        };
-        Self::from_toml_collect(&contents)
-            .map(|(_, warnings)| warnings)
-            .map_err(|e| format!("config error: {e}"))
     }
 
     /// Build a Config from a parsed (but unvalidated) ConfigFile.
@@ -493,8 +426,8 @@ impl Config {
     }
 
     /// Like `from_raw` but returns config file warnings (out-of-bounds values,
-    /// deprecated fields, etc.) alongside the config so callers can surface
-    /// them in the on-screen error bar.
+    /// etc.) alongside the config so callers can surface them in the on-screen
+    /// error bar.
     fn from_raw_collect(raw: ConfigFile) -> (Self, Vec<String>) {
         let mut errors: Warnings = Vec::new();
 
@@ -1058,10 +991,7 @@ impl Config {
         let cursor_theme = raw.cursor.theme.filter(|t| t.as_str() != "none");
         let cursor_size = raw.cursor.size.filter(|s| *s != 0);
 
-        let mut child_env: HashMap<String, String> = TOOLKIT_DEFAULTS
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
+        let mut child_env: HashMap<String, String> = HashMap::new();
         if let Some(theme) = &cursor_theme {
             child_env.insert("XCURSOR_THEME".into(), theme.clone());
         }
@@ -1278,31 +1208,6 @@ impl Config {
         (config, errors)
     }
 
-    /// Find the first matching window rule for `app_id` and `title`.
-    /// Kept for backward-compat callers that need a `&WindowRule` reference
-    /// (layer shell position, render blur check).
-    /// For building `AppliedWindowRule` use `resolve_window_rules` instead.
-    pub fn match_window_rule(&self, app_id: &str, title: &str) -> Option<&WindowRule> {
-        self.window_rules
-            .iter()
-            .find(|rule| rule.matches(app_id, title))
-    }
-
-    /// Find the Nth matching window rule (with position) for the given `app_id` and `title`.
-    /// Used by layer shell to assign different rules to successive surfaces with
-    /// the same namespace (e.g. two waybar instances at different positions).
-    pub fn match_window_rule_nth(
-        &self,
-        app_id: &str,
-        title: &str,
-        n: usize,
-    ) -> Option<&WindowRule> {
-        self.window_rules
-            .iter()
-            .filter(|rule| rule.position.is_some() && rule.matches(app_id, title))
-            .nth(n)
-    }
-
     /// Merge ALL matching window rules and return the combined `AppliedWindowRule`.
     ///
     /// Rules are applied in config order; later rules override earlier ones for
@@ -1316,43 +1221,6 @@ impl Config {
                     None => result = Some(AppliedWindowRule::from(rule)),
                     Some(r) => r.merge_from(rule),
                 }
-            }
-        }
-        result
-    }
-
-    /// Variant of `resolve_window_rules` for canvas-layer instances. Pairs with
-    /// `match_window_rule_nth`: the Nth positioned rule (matching `app_id`/`title`)
-    /// is treated as *this* instance's positioned rule; other positioned rules
-    /// matching the same app are ignored, so multi-instance layer-shells like
-    /// `waybar` get per-instance chrome. Non-positioned matching rules (e.g. an
-    /// `app_id = "*"` wildcard) are still merged in, so shared chrome still
-    /// applies across instances.
-    pub fn resolve_window_rules_for_layer_instance(
-        &self,
-        app_id: &str,
-        title: &str,
-        instance_idx: usize,
-    ) -> Option<AppliedWindowRule> {
-        let nth_positioned_index: Option<usize> = self
-            .window_rules
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| r.position.is_some() && r.matches(app_id, title))
-            .map(|(i, _)| i)
-            .nth(instance_idx);
-
-        let mut result: Option<AppliedWindowRule> = None;
-        for (i, rule) in self.window_rules.iter().enumerate() {
-            if !rule.matches(app_id, title) {
-                continue;
-            }
-            if rule.position.is_some() && Some(i) != nth_positioned_index {
-                continue;
-            }
-            match &mut result {
-                None => result = Some(AppliedWindowRule::from(rule)),
-                Some(r) => r.merge_from(rule),
             }
         }
         result
@@ -1600,12 +1468,6 @@ mod tests {
     }
 
     #[test]
-    fn outer_frame_inset_goes_negative_at_zero_outer_gap_with_a_border() {
-        let (config, _) = Config::from_toml_collect("[snap]\nouter_gap = 0.0\n").unwrap();
-        assert_eq!(config.outer_frame_inset(4), -4.0);
-    }
-
-    #[test]
     fn effects_animation_speed_out_of_range_rejects_and_clamps() {
         let (zero, warnings) = Config::from_toml_collect(
             r#"
@@ -1701,43 +1563,6 @@ mod tests {
     fn anchors_default_is_empty() {
         let config = Config::from_toml("").unwrap();
         assert!(config.nav_anchors.is_empty());
-    }
-
-    /// Each binding table wraps errors differently, so check the migration
-    /// message survives all of them, not just one.
-    #[test]
-    fn removed_go_to_errors_in_every_binding_table() {
-        let removal = parse_action("go-to 100 200").unwrap_err();
-        for toml_str in [
-            "[keybindings]\n\"mod+5\" = \"go-to 100 200\"\n",
-            "[gestures.anywhere]\n\"4-finger-swipe-up\" = \"go-to 0 0\"\n",
-            "[mouse.on-canvas]\n\"middle\" = \"go-to 50 50\"\n",
-            "[[outputs]]\nname = \"eDP-1\"\n[outputs.hot_corners]\ntop_left = \"go-to 0 0\"\n",
-        ] {
-            let (_config, warnings) = Config::from_toml_collect(toml_str).unwrap();
-            assert!(
-                warnings.iter().any(|w| w.contains(&removal)),
-                "got: {warnings:?} for {toml_str}"
-            );
-        }
-    }
-
-    #[test]
-    fn removed_go_to_binding_is_dropped_and_bookmarks_still_bind() {
-        let (config, _) = Config::from_toml_collect(
-            "[keybindings]\n\"mod+5\" = \"go-to 100 200\"\n\"mod+9\" = \"go-to-bookmark home\"\n",
-        )
-        .unwrap();
-        let combo = |s| {
-            let mut c = parse::parse_key_combo(s, ModKey::Super).unwrap();
-            c.normalize();
-            c
-        };
-        assert!(!config.bindings.contains_key(&combo("mod+5")));
-        assert_eq!(
-            config.bindings.get(&combo("mod+9")),
-            Some(&Action::GoToBookmark("home".into()))
-        );
     }
 
     #[test]
@@ -2693,81 +2518,5 @@ mod tests {
             !warnings.iter().any(|w| w.contains("will never fire")),
             "got: {warnings:?}"
         );
-    }
-
-    /// Self-cleaning unique temp directory (mirrors the helpers in
-    /// `desktop_entry` and `session`, which this module can't reach).
-    struct TempDir {
-        path: std::path::PathBuf,
-    }
-
-    impl TempDir {
-        fn new() -> Self {
-            use std::sync::atomic::{AtomicUsize, Ordering};
-            static COUNTER: AtomicUsize = AtomicUsize::new(0);
-            let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "driftwm-config-check-test-{}-{n}",
-                std::process::id()
-            ));
-            std::fs::create_dir_all(&path).unwrap();
-            Self { path }
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.path);
-        }
-    }
-
-    #[test]
-    fn check_from_missing_file_is_ok_with_no_warnings() {
-        let tmp = TempDir::new();
-        let path = tmp.path.join("does-not-exist.toml");
-        let warnings = Config::check_from(&path).unwrap();
-        assert!(warnings.is_empty());
-    }
-
-    #[test]
-    fn check_from_malformed_toml_is_err() {
-        let tmp = TempDir::new();
-        let path = tmp.path.join("config.toml");
-        std::fs::write(&path, "this is not [ valid toml").unwrap();
-        assert!(Config::check_from(&path).is_err());
-    }
-
-    #[test]
-    fn check_from_unknown_top_level_key_is_err() {
-        let tmp = TempDir::new();
-        let path = tmp.path.join("config.toml");
-        // There is no `[general]` table; `deny_unknown_fields` rejects it.
-        std::fs::write(&path, "[general]\n").unwrap();
-        assert!(Config::check_from(&path).is_err());
-    }
-
-    #[test]
-    fn check_from_valid_config_is_ok_with_no_warnings() {
-        let tmp = TempDir::new();
-        let path = tmp.path.join("config.toml");
-        std::fs::write(&path, "mod_key = \"alt\"\nfocus_follows_mouse = true\n").unwrap();
-        let warnings = Config::check_from(&path).unwrap();
-        assert!(warnings.is_empty());
-    }
-
-    #[test]
-    fn check_from_unreadable_path_is_err() {
-        let tmp = TempDir::new();
-        // A directory reads as EISDIR, not NotFound — that is a hard failure.
-        assert!(Config::check_from(&tmp.path).is_err());
-    }
-
-    #[test]
-    fn check_from_bad_value_is_ok_with_warnings() {
-        let tmp = TempDir::new();
-        let path = tmp.path.join("config.toml");
-        std::fs::write(&path, "mod_key = \"bogus\"\n").unwrap();
-        let warnings = Config::check_from(&path).unwrap();
-        assert!(!warnings.is_empty());
     }
 }

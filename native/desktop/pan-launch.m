@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Adapted from DriftWM (https://github.com/malbiruk/driftwm @ 352333a8fa1b22171492d4b71a54102045c9a19d); the upstream path is cited in pan-launch.h.
 #import "pan-launch.h"
 
 static const NSTimeInterval launchDelay=.05; // upstream's MOMENTUM_LAUNCH_DELAY

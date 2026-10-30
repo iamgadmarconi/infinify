@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
+// Adapted from https://github.com/malbiruk/driftwm @
+// 352333a8fa1b22171492d4b71a54102045c9a19d:
 // src/handlers/compositor.rs (a new toplevel's first sized commit: the rules
 // resolved once and stored, the pinned_to_screen and position arms, what a
 // widget and `focus_on_open = false` leave out), src/state/pinned.rs
@@ -34,10 +35,9 @@ use super::ipc::{
     rule_to_internal,
 };
 use super::lifecycle::Arrival;
-use super::view_actions::pixel_size;
+use super::view_actions::{PixelSize, pixel_size};
 use super::*;
 use driftwm_canvas::Placement;
-use driftwm_canvas::policy::PixelSize;
 use driftwm_core::config::{AppliedWindowRule, DecorationMode, PassList, effective_opacity};
 use std::collections::{BTreeSet, VecDeque};
 
@@ -92,7 +92,7 @@ fn pass_name<C>(list: &PassList<C>) -> &'static str {
 /// of the window when it mapped, `fullscreened` that its `fullscreen` was
 /// applied then. `layer_order` is among them by upstream's own rule: it
 /// orders layer-shell surfaces and is "Ignored for regular windows"
-/// (docs/config.md), and every window here is a regular one.
+/// (upstream docs/config.md), and every window here is a regular one.
 fn rule_json(rule: &AppliedWindowRule, sized: bool, fullscreened: bool) -> Value {
     let not_applied: Vec<&str> = [
         (rule.size.is_some() && !sized, "size"),

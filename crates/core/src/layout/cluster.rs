@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Ported verbatim from DriftWM (GPL-3.0-or-later)
+// Ported from DriftWM (GPL-3.0-or-later)
 //   repository: https://github.com/malbiruk/driftwm
 //   commit:     df3de27b26c7998e8a460cffd8a4925cbed3a322
 //   path:       src/layout/cluster.rs
 //   sha-256:    4190c07d8f09cc70fdee19e1745297713f1ff8e06ab2db4337c0e316ea351a1a (upstream file)
-// Changes from upstream: this header only; everything below is unmodified.
+// Changes from upstream: this header, and `impl Side { fn opposite }` (an
+// `#[allow(dead_code)]` method that nothing calls) is removed. Everything else
+// is unmodified.
 // See PORT.md in the crate root for the full change log.
 
 //! Window clustering — on-demand connected components over snap-adjacency.
@@ -27,18 +29,6 @@ pub enum Side {
     Right,
     Top,
     Bottom,
-}
-
-impl Side {
-    #[allow(dead_code)]
-    pub fn opposite(self) -> Side {
-        match self {
-            Side::Left => Side::Right,
-            Side::Right => Side::Left,
-            Side::Top => Side::Bottom,
-            Side::Bottom => Side::Top,
-        }
-    }
 }
 
 /// Which side of `a` is edge-adjacent to `b`? Edges are flush-with-`gap` on

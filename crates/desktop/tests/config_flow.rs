@@ -4,45 +4,22 @@
 //! config path, and they provide no evidence that a chord is registered with
 //! macOS, that a key or button reaches the shell, or that a command is run.
 use driftwm_core::config::{Config, parse_action};
-use driftwm_desktop::*;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::CStr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-struct Host(*mut Controller);
+#[path = "support/host.rs"]
+mod host;
+use host::Host;
+
 impl Host {
-    fn new() -> Self {
-        let handle = driftwm_desktop_create();
-        assert!(!handle.is_null());
-        Self(handle)
-    }
-    fn call(&mut self, command: Value) -> Value {
-        let bytes = serde_json::to_vec(&json!({"version":1,"command":command})).unwrap();
-        // SAFETY: live exclusive handle, valid bytes, response freed exactly once.
-        unsafe {
-            let response = driftwm_desktop_request(self.0, bytes.as_ptr(), bytes.len());
-            assert!(!response.is_null());
-            let result = serde_json::from_slice(CStr::from_ptr(response).to_bytes()).unwrap();
-            driftwm_desktop_response_free(response);
-            result
-        }
-    }
-    fn ok(&mut self, command: Value) -> Value {
-        let response = self.call(command);
-        assert_eq!(response["ok"], true, "{response}");
-        response["data"].clone()
-    }
     fn error(&mut self, command: Value) -> String {
         let before = self.snapshot();
         let response = self.call(command.clone());
         assert_eq!(response["ok"], false, "{command}: {response}");
         assert_eq!(self.snapshot(), before, "{command}");
         response["error"].as_str().unwrap().to_owned()
-    }
-    fn snapshot(&mut self) -> Value {
-        self.ok(json!({"op":"snapshot"}))
     }
     fn action(&mut self, action: &str) -> Value {
         self.ok(json!({"op":"action","output":1,"action":action}))
@@ -76,14 +53,6 @@ impl Host {
         binding
     }
 }
-impl Drop for Host {
-    fn drop(&mut self) {
-        unsafe {
-            driftwm_desktop_destroy(self.0);
-        }
-    }
-}
-
 /// A directory of this test's own, removed when the test ends.
 struct Scratch(PathBuf);
 impl Scratch {
@@ -1339,8 +1308,7 @@ fn nudge_exec_spawn_and_reload_actions() {
         json!({"navigation":null,"effects":[{"op":"reload_config"}],"dirty":false})
     );
 
-    // [env] and the cursor variables reach the child. Upstream's Wayland
-    // toolkit fallbacks do not, unless the file itself sets one.
+    // [env] and the cursor variables are the child's environment.
     let mut h = configured(
         &scratch,
         "[env]\nFOO = \"bar\"\nQT_QPA_PLATFORM = \"cocoa\"\n[cursor]\ntheme = \"Adwaita\"\nsize = 24\n",
@@ -1500,4 +1468,38 @@ fn session_flags_govern_what_a_scene_file_restores() {
     register(&mut h);
     assert_eq!(target(&h.action("pan-viewport right")).0, point(250.0, 0.0));
     assert_eq!(h.ok(json!({"op":"bindings"}))["super"], "cmd");
+}
+
+/// Keys that upstream renamed still load: each is reported as a warning and
+/// the rest of the file applies, instead of the whole file being refused.
+#[test]
+fn renamed_upstream_keys_warn_instead_of_refusing_the_file() {
+    let scratch = Scratch::new();
+    let mut h = Host::new();
+    for (key, table, value) in [
+        ("animation_speed", "navigation", "0.8"),
+        ("friction", "navigation", "0.94"),
+        ("same_edge", "snap", "true"),
+        ("edge_center", "snap", "true"),
+        ("animate_blur", "effects", "true"),
+    ] {
+        let text = format!("[{table}]\n{key} = {value}\n[navigation]\npan_step = 40.0\n");
+        // TOML forbids a repeated table; fold the second one in when it is the same.
+        let text = if table == "navigation" {
+            format!("[navigation]\n{key} = {value}\npan_step = 40.0\n")
+        } else {
+            text
+        };
+        let path = scratch.write("config.toml", &text);
+        let reply = h.load_config(&path);
+        assert_eq!(reply["errors"], json!([]), "{key}: {reply}");
+        assert!(
+            reply["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|w| w.as_str().unwrap().contains(key)),
+            "{key}: {reply}"
+        );
+    }
 }

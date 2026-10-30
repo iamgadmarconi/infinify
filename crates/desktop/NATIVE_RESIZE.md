@@ -101,16 +101,14 @@ Logical `begin_resize` remains a canvas operation; native pinned resizing uses
   `src/window_manager.c:618–699`; that implementation also uses proxies and a
   separate connection, so it does not prove this app-connection rebase is atomic.
   Actual TextEdit Fill from an aligned start was sampled without an offset jump;
-  a translated start previously retained the old offset through the animation
-  (`target/native-vm/real-desktop-20261021/textedit-fill-frame-samples.jsonl`).
+  a translated start previously retained the old offset through the animation.
   VM validation on macOS 27: two consecutive TextEdit cycles at 65% zoom restored
   native frame, world position/size, camera, zoom and displayed transform exactly;
   the recording shows the AppKit snapshot animation. A translated TextEdit cycle
   at 100% used native Fill and restored exactly. Already-screen-sized Safari at
   65% also restored exactly, with both animation/reveal handoffs acknowledged;
   its final recorder stalled, so that run is geometry/handoff evidence only.
-  Evidence is under `target/native-vm/real-desktop-20261021/` (`hidden-textedit-*`,
-  `live-unit-*`, `live-safari-*`). Physical title dragging was manually confirmed
+  Physical title dragging was manually confirmed
   stable in the VM, including zoomed-out TextEdit and Finder. Physical double-click,
   attached families and broader application coverage remain separate checks.
 - `native_resize_result {transaction, effect_id, identity, generation, result}`
@@ -174,7 +172,7 @@ A held grab resting without an effect is not an orphan.
 
 Forget, source removal, rebind through removal, and same-handle load are blocked
 while a transaction is live. Cancel drops unsent intent and drains every effect
-already sent. No lifetime attestation command or retired-identity cache remains.
+already sent.
 
 ## Presentation and input
 
@@ -200,9 +198,7 @@ when all its existing idle, gesture, policy and lifecycle guards pass.
 Buffer coordinates stay independent of native coordinates.
 Actual ScreenCaptureKit pixel crop, timestamp and image-generation
 checks remain in the native capture adapters; no reducer acknowledgement
-establishes pixel freshness. The retired `native_resize_capture_ready` and
-`invalidate_native_capture` commands, and their revision handshake fields, are
-absent from the strict pre-release schema.
+establishes pixel freshness.
 
 ## Persistence and evidence
 
@@ -213,9 +209,8 @@ transaction, effect and binding generation counters.
 
 `tests/native_resize_flow.rs` crosses the exported C ABI. Its hash-verified
 original upstream request/clamp and ordinary settlement blocks come from
-malbiruk/driftwm `df3de27b26c7998e8a460cffd8a4925cbed3a322` (v0.21.0,
-GPL-3.0-or-later; they were byte-identical at the earlier pin
-`352333a8fa1b22171492d4b71a54102045c9a19d`).
+<https://github.com/malbiruk/driftwm> @
+`df3de27b26c7998e8a460cffd8a4925cbed3a322` (v0.21.0, GPL-3.0-or-later).
 See `tests/resize_upstream/README.md` for the exact mechanical extraction scope.
 The original Wayland release/configure/commit machinery does not execute here.
 The existing snap oracle remains separate. The native transaction cuts the
@@ -227,9 +222,7 @@ DriftWM/native macOS behavior parity is claimed.
 ## Readback mode
 
 `{"op":"native_resize_capability","enabled":true}` announces that the shell
-performs native readback effects. `enabled` must be a boolean. There is one
-supported resize protocol: the old `readback` field and alternate capture mode
-are rejected, with no default conversion or compatibility alias.
+performs native readback effects. `enabled` must be a boolean.
 
 The native window is the authority for its size. A differing baseline is
 adopted, including when a window changed itself before a poll. A baseline that
@@ -332,94 +325,3 @@ canvas shows the size the window has, not the one asked.
 Scenarios: `readback_grab_*` in `tests/native_resize_flow.rs`, the resize
 swipes of `tests/gesture_flow.rs`, the ratio in `tests/rules_flow.rs`, and on
 fixture windows `tests/e2e/scoped-resize-drag.sh`.
-
-### Historical experimental desktop integration (headless evidence only)
-
-The flag, orange-handle UI, executable live probe and unused capture-ack
-protocol were removed on 2026-10-12. The following account is historical; its frozen evidence and
-source provenance remain unchanged. It did not establish completed native
-resize and independent pixel proof. The standalone synthetic frame-metadata oracle
-and read-only saved-byte oracle remain.
-
-The retired desktop flag `--experimental-native-resize` connects eight true-edge handles
-to the native resize transaction C ABI through a serial adapter coordinator, in
-the capture-acknowledged mode. It gates only those handles: the sizing actions,
-IPC resize, a rule's size and fullscreen run without it, in
-[readback mode](#readback-mode). See
-`native/desktop/README.md` for dispatch, capture metadata, provenance, lifecycle,
-and exact unrun native boundaries. `dw_resize_apply_guarded` preserves the original
-`dw_resize_apply` wrapper while allowing a fresh root-only family policy veto before
-the setter. A veto returns Unsupported with the real preflight observation and
-`mutation_attempted=false`; this is policy refusal, not an AX capability finding.
-Ownership/deadline are rechecked after the family query. No frozen live fixture
-receipts or hashes were replaced; this guarded path has no live validation yet.
-
-### First run on real windows, 2026-10-10
-
-The owner's first run with the flag on real application windows (three Chrome
-windows, two Electron applications, a terminal; one 2056x1329 display at 2x)
-showed every adopted window as an empty tile, and every click refused with
-`source presentation unsettled`: no capture was ever acknowledged for any of
-them. Which check refused them is not known. The coordinator gave no reason,
-and nothing in that run recorded one, so two things changed, neither of which
-is the gate (the flag is as opt-in as it was, and a window still shows no
-picture that was not acknowledged against its observed geometry):
-
-- **One comparison was wrong by this contract's own terms.** A result is
-  accepted when `actual_ax` and `actual_cg` agree within one point on each
-  coordinate, and `actual_ax` becomes `observed_rect`. The coordinator then
-  required the root extent, which is the WindowServer's rectangle, to equal
-  `observed_rect` exactly, in `-validate:` and in `-accept:…`. A window whose
-  two rectangles differ by a fraction of a point could therefore get no
-  frame acknowledged, and no input, for as long as its transaction was
-  unresolved. Now the extent matches when it is exactly `observed_rect`, or
-  when it is within one point of it on each coordinate while a resize
-  transaction of that window is unresolved. At rest the comparison is exact
-  as before, and a difference of any size is still a native move that is
-  mapped again with `observe`. This cannot be what refused the six windows:
-  a freshly adopted window's `observed_rect` is the WindowServer's rectangle
-  too. It is fixed because it is wrong, and the headless regression covers
-  it (`disagreeing()` in `native/desktop/resize-regression.m`: it fails
-  without the change).
-- **Every refusal now has a reason a person can read.** The coordinator
-  records why the last frame it was offered for a window was not
-  acknowledged (`-refusal:detail:`): `family` (no root-only extent, with the
-  family query's own account: how many native windows are in the family, or
-  its error), `geometry` (the extent and `observed_rect`, both printed),
-  `metadata` (the first check of the frame's own description that failed,
-  with the values: status, display time against the cutoff, scale factors,
-  the screen rectangle against the extent, the content rectangle against the
-  extent and the buffer), `stale frame` (displayed before the cutoff, by how
-  many milliseconds), `refused` (the controller did not take the
-  acknowledgement) and `not installed`. The reason is forgotten when a
-  capture is acknowledged and when the observation moves on. The shell adds
-  three of its own: `stream` (the capture stream failed, with its error,
-  which was silent before), `unobserved`, and `no frame` (none offered in two
-  seconds). It prints one stderr line per window per change of reason, once
-  the reason has stood for two readings half a second apart:
-  `capture of #7 (com.google.Chrome) not acknowledged: family — no root-only
-  extent: 3 native windows in its family (the window and 2 attached to it)`.
-  A press on such a window says the short reason instead of `source
-  presentation unsettled`: on stderr, since a normal run draws no status line
-  (until 2026-10-10 it was shown there).
-
-What reading suggests, without deciding it: `-rootExtent:` answers only for a
-window that is alone in its native family, and an application window with any
-attached child window is refused as `family` by design; a still window gets
-one frame per configuration update, so a first frame refused for any reason
-may be the only one (`stale frame` or `no frame` would then stand); and the
-frame's screen rectangle must equal the extent exactly. The next run's stderr
-says which. None of this was run: the build has no Screen Recording grant
-from an agent's shell.
-
-The capture rate of this path is unchanged, 30 frames a second at most, where
-a window captured without the flag now follows the display's refresh rate.
-Every frame offered to `-accept:…` is judged on the main thread: a controller
-snapshot for every bound window in `-sync` and several more, and a
-`-rootExtent:` family query, before the frame's own description is read. One
-snapshot round trip was measured in review at about a quarter of a millisecond
-with six windows (headless, against the release controller), so a refused
-frame costs a few milliseconds of the thread that also serves hot keys, input
-and the frame callback, and 120 frames a second from each redrawing window
-would have been four times the 30 it was. The rate can follow the display
-once a frame costs one snapshot instead of one per window.

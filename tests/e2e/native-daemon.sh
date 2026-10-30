@@ -32,9 +32,9 @@ xcrun clang -arch arm64 -dynamiclib -o "$task_dir/inject.dylib" "$task_dir/injec
 codesign --force --sign - "$task_dir/inject.dylib" 2>/dev/null
 caller_fails=0; caller_checks=0
 entitlements() { { printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>'; for key in "$@"; do printf '<key>%s</key><true/>\n' "$key"; done; printf '%s\n' '</dict></plist>'; } > "$task_dir/entitlements.plist"; }
-# caller LABEL ENV(clean|dyld) EXPECTED(accepted|refused) INJECTED(yes|no) CODESIGN-OPTIONS...: the live check on a binary signed so,
+# expect_caller LABEL ENV(clean|dyld) EXPECTED(accepted|refused) INJECTED(yes|no) CODESIGN-OPTIONS...: the live check on a binary signed so,
 # started with or without DYLD_INSERT_LIBRARIES; INJECTED says whether the dylib's constructor ran in it.
-caller() {
+expect_caller() {
   label=$1; mode=$2; want=$3; injected=$4; shift 4
   cp "$task_dir/loadd-request" "$task_dir/caller"
   codesign --force --sign - "$@" "$task_dir/caller" 2>/dev/null
@@ -50,19 +50,19 @@ caller() {
   else caller_fails=$((caller_fails + 1)); printf 'FAIL caller %s, %s environment: %s (wanted %s), injected %s (wanted %s): %s\n' "$label" "$mode" "$got" "$want" "$ran" "$injected" "$(cat "$task_dir/caller.out")"; fi
 }
 # Without the flag, or with an entitlement that gives the hardening back, the daemon refuses whatever the environment.
-caller 'signed without the hardened runtime' clean refused no
-caller 'signed without the hardened runtime' dyld refused yes
+expect_caller 'signed without the hardened runtime' clean refused no
+expect_caller 'signed without the hardened runtime' dyld refused yes
 # With it, a clean start is accepted. The flag alone does not keep a DYLD_INSERT_LIBRARIES dylib out on a Mac with SIP debugging
 # restrictions off (this one, the guest and the owner's): the dylib is injected (yes below), and the daemon refuses the caller for the variable.
-caller 'hardened runtime' clean accepted no -o runtime
-caller 'hardened runtime' dyld refused yes -o runtime
+expect_caller 'hardened runtime' clean accepted no -o runtime
+expect_caller 'hardened runtime' dyld refused yes -o runtime
 entitlements com.apple.security.get-task-allow
-caller 'hardened runtime with get-task-allow' clean refused no -o runtime --entitlements "$task_dir/entitlements.plist"
+expect_caller 'hardened runtime with get-task-allow' clean refused no -o runtime --entitlements "$task_dir/entitlements.plist"
 entitlements com.apple.security.cs.allow-dyld-environment-variables
-caller 'hardened runtime with allow-dyld-environment-variables' clean refused no -o runtime --entitlements "$task_dir/entitlements.plist"
+expect_caller 'hardened runtime with allow-dyld-environment-variables' clean refused no -o runtime --entitlements "$task_dir/entitlements.plist"
 entitlements com.apple.security.cs.disable-library-validation
-caller 'hardened runtime with disable-library-validation' clean refused no -o runtime --entitlements "$task_dir/entitlements.plist"
+expect_caller 'hardened runtime with disable-library-validation' clean refused no -o runtime --entitlements "$task_dir/entitlements.plist"
 entitlements com.apple.security.cs.allow-jit
-caller 'hardened runtime with allow-jit only' clean accepted no -o runtime --entitlements "$task_dir/entitlements.plist"
+expect_caller 'hardened runtime with allow-jit only' clean accepted no -o runtime --entitlements "$task_dir/entitlements.plist"
 if [ "$caller_fails" -ne 0 ]; then printf 'native-daemon: %s of %s live caller checks FAILED\n' "$caller_fails" "$caller_checks" >&2; exit 1; fi
 printf 'native-daemon: %s live caller checks passed\n' "$caller_checks"

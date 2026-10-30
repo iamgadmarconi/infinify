@@ -2,16 +2,15 @@
 
 The controller is configured by one TOML file in DriftWM's own grammar. The
 parser, portable defaults, action grammar and binding tables are upstream's
-code, carried in `driftwm-core` (malbiruk/driftwm at
-`df3de27b26c7998e8a460cffd8a4925cbed3a322`, v0.21.0, `src/config/`; the first
-port was `352333a8`, see [PORT.md](../core/PORT.md#update-to-v0210)); nothing
+code, carried in `driftwm-core` (<https://github.com/malbiruk/driftwm> at
+`df3de27b26c7998e8a460cffd8a4925cbed3a322`, v0.21.0, `src/config/`; see
+[PORT.md](../core/PORT.md#update-to-v0210)); nothing
 here re-implements their grammar. `window_placement` is `auto` when omitted,
 which is upstream's own default since v0.20.0 (the adapter had set it before);
 explicit values use upstream parsing. The macOS adapter also adds
 wallpaper policy and Super+Tab, F3 and Super+scroll defaults, while honoring
 explicit bindings and disabled defaults. What is new is the map from upstream's
-modifiers and keysyms to a Mac keyboard, and six additive ABI 1 commands.
-Existing commands, their shapes, `ABI_VERSION` and `SAVE_VERSION` are unchanged.
+modifiers and keysyms to a Mac keyboard, and the six ABI 1 commands below.
 
 | `command.op` | Fields | Result data |
 | --- | --- | --- |
@@ -196,7 +195,9 @@ code, and then unused, because the feature it configures does not exist here:
   `layer_order` is there by upstream's own rule, which ignores it for a
   regular window ([RULES.md](RULES.md#layer_order)). `pass_keys` and
   `pass_mouse` are applied ([RULES.md](RULES.md#pass-rules))
-- `[touch.*]` and its thresholds: upstream's touchscreen gestures, see
+- `[touch.*]` and its thresholds: upstream's touchscreen gestures. The table
+  is read and validated, and `driftwm-core` does not carry upstream's touch
+  recogniser, see
   [GESTURES.md](GESTURES.md#why-this-path-and-not-the-touch-recogniser)
 - `[mouse] decoration_fit_snapped` (`resize_on_border` and
   `decoration_resize_snapped` are applied: the `resize_border` command,
@@ -685,7 +686,7 @@ earliest registered. `up` is the smaller y.
    adjacent output nothing happens. The steps below are for a canvas window.
 3. The source output is the first registered output whose viewport shows the
    window's center (upstream's `output_for_window`: the visible canvas rectangle
-   is `policy::visible_canvas_rect` at the camera rounded to whole points, and
+   is `driftwm_core::canvas::visible_canvas_rect` at the camera rounded to whole points, and
    the center is truncated), else the command's `output`. With neither the
    action is refused with `no active output`.
 4. No adjacent output in that direction, a single output included: nothing
@@ -756,11 +757,7 @@ desktop: each display's panel covers the whole display, menu bar and Dock
 included, and the shell registers that same rectangle as the output's
 `screen_bounds` (with `--windowed`, the whole window). The corners are
 therefore the display's true corners, where a flicked pointer comes to rest,
-the two top ones under the menu bar. Until 2026-10-10 the shell kept a 64-point
-toolbar strip above every output and measured the corners on the panel instead,
-`screen_bounds` plus that strip; nothing of that is left in a normal run. The
-probe, demo and owned-fixture runs keep their strip and never send
-`load_config`, so no corner is ever bound in them. The trigger rectangle is the
+the two top ones under the menu bar. The trigger rectangle is the
 shell's own panel frame; it reaches the controller only as the `output` of
 `hot_corner` and enters no camera or world math. The shell reads the pointer at
 its poll and frame cadence, and only while some output has a bound corner,
@@ -849,9 +846,9 @@ window because a grant is missing holds them until the canvas opens from that
 window: its Relaunch starts the same run again in the same process, whose
 controller is new and returns the effects once more, so they must not have run
 already. A launch whose saved scene could not be loaded runs none. A restart by
-launchd after a crash is a launch like any other and runs them again. Probe,
-demo and owned-fixture runs never send `load_config`, so they never start
-anything.
+launchd after a crash is a launch like any other and runs them again. A shell
+that never sends `load_config` (the C-ABI tests, and `--only-pid` fixture runs)
+never starts anything.
 
 Upstream inserts `WAYLAND_DISPLAY` into `child_env` for these commands, and its
 `msg` client derives the socket from that variable, so a child always talks to
@@ -980,10 +977,11 @@ was restored too early back to a new output's pose.
   that `true` adds.
 - `zoom-in` with a `zoom.step` below 1 zooms out and stops at the scene's
   minimum zoom, 0.001. Upstream sets no lower bound there.
-- An `exec` effect's `env` is upstream's `child_env` less its five Wayland
+- An `exec` effect's `env` is `driftwm-core`'s `child_env`: the cursor
+  variables and the file's own `[env]`. Upstream's also carries five Wayland
   toolkit fallbacks (`MOZ_ENABLE_WAYLAND`, `QT_QPA_PLATFORM`, `SDL_VIDEODRIVER`,
   `GDK_BACKEND`, `ELECTRON_OZONE_PLATFORM_HINT`), which would stop a Qt, SDL or
-  GTK program from starting on macOS. One the file's own `[env]` sets is kept.
+  GTK program from starting on macOS; they are not carried.
 - Upstream's `child_env` also carries `WAYLAND_DISPLAY`. An `exec` effect's
   `env` has no counterpart; the shell adds `INFINIFY_SOCKET` to the child
   instead, see [Autostart](#autostart).
@@ -992,8 +990,8 @@ was restored too early back to a new output's pose.
   place. It does not raise the window. It ends a fill restore point as
   upstream's does; one exists only for a window filled with `fill-window`, which needs the
   capability ([SIZES.md](SIZES.md#mode)).
-- A new output's camera is the world origin at its top-left corner, as before;
-  upstream centers the origin.
+- A new output's camera is the world origin at its top-left corner; upstream
+  centers the origin.
 - Every window is saved as a slot whatever `restore_windows` says, because
   applications outlive the canvas; the flag decides at `adoption_complete`
   whether a slot whose window is gone stays as a stand-in. See
@@ -1084,30 +1082,7 @@ output, one that drops `pointer` and `held`, an unbound chord answered idle,
 modifier key was pressed for any of it: the controller is sent `tap` by the
 test, and whether the shell sends one is the shell's to show.
 
-In the built app, launched once on 2026-10-10 as `--windowed 1100x700` with a
-private scene, config and socket, a file whose `[keybindings]` held
-`"alt+shift" = "switch-layout next"` loaded with no line on stderr but the one
-about Screen Recording access, and `msg action reload-config` answered `ok` and
-added none. Rewritten with `"mod" = "home-toggle"` and `"ctrl+alt" =
-"zoom-reset"` beside it, the file brought `binding 'mod' = 'home-toggle'
-skipped: 'ctrl+alt' already holds this macOS chord` to stderr at the file watch
-and again at `reload-config`: the collision rule above, read from this table
-by the shell. That is all a socket reaches. `bindings` is not an IPC request,
-so `taps` was not read back from the app; a windowed run watches no modifier;
-and no key was tapped, so the app has sent no `tap` command. The build this
-landed in, which also holds the display-link frame timer, was launched the
-same way later that day with the first file only: the same one line on stderr,
-`reload-config` answered `ok` and added none, and again no key was tapped.
-
-The join itself ran once outside the app, in a throwaway program that linked
-the release library with the shell's `tap-keys.m`: `bindings.taps` for that
-file went into the shell's tracker, modifier events built in memory (Option
-down, Shift down, Shift up) completed the chord, and the `tap` it produced,
-with the entry's own `modifiers`, a `pointer` and `held: true`, was answered
-with the `switch_layout` effect; an unbound chord and a tainted one produced
-nothing, and a `tap` on Control alone was refused with `no tap binding on ⌃`.
-No monitor was installed and no key was pressed for it
-([shell notes](../../native/desktop/README.md#what-has-been-run-for-tap-bindings)).
+No modifier key was pressed in the launches of the built app that were made, and the app has sent no `tap` command.
 
 `tests/gesture_flow.rs` covers what the file does to gestures: the `[gestures]`
 tables and thresholds, the two trackpad speeds, `drift`, the edge pan under a
@@ -1165,20 +1140,4 @@ that an input source is listed, selected or reported, or that an autostart
 command starts. Host-owned system-control commands are omitted from the default
 table; none is executed by these controller scenarios.
 
-The shell's side is described in the
-[shell notes](../../native/desktop/README.md#configuration). Their
-[What has been run](../../native/desktop/README.md#what-has-been-run) lists a
-scripted session against the built app on 2026-10-09 in which the file watch,
-`reload-config`, a broken file, a file moved away and back, `nudge-window`,
-`spawn` and `exec` were observed over the IPC socket, and names what stayed unrun: every hot key
-and every pointer binding. Two more launches that day, listed there as well,
-observed an `autostart` command starting once and not again on a reload, the
-launch `layout_changed` report in `Layout` and `State`, `switch-layout next`
-with a single enabled input source (nothing selected), and `send-to-output` and
-`send-cursor-to-output` with a single output (nothing moved, no warp). Two
-further launches after the review fixes observed `INFINIFY_SOCKET` in an
-autostart child and in an IPC `exec` child (the served socket, and the file's
-`[env]` value once it set one), and an autostart `msg` with no `--socket`
-answered by that instance. No hot
-corner was fired, no pointer was warped, no input source was selected and
-`pmset` was not run in any of them.
+The shell's side is described in the [shell notes](../../native/desktop/README.md#configuration). The launches of the built app that were made did not run any hot key or pointer binding, fire a hot corner, warp the pointer, select an input source or run `pmset`.

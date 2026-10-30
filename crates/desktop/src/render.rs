@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d, with
-// the v0.21.0 region bounds of df3de27b26c7998e8a460cffd8a4925cbed3a322
-// (third_party/driftwm/src/ipc/mod.rs: the check_point, check_size and
+// Adapted from https://github.com/malbiruk/driftwm @
+// 352333a8fa1b22171492d4b71a54102045c9a19d, with the v0.21.0 region bounds of
+// df3de27b26c7998e8a460cffd8a4925cbed3a322
+// (src/ipc/mod.rs: the check_point, check_size and
 // within_window_range tests of cmd_screenshot):
 // src/ipc/mod.rs (cmd_screenshot, resolve_screenshot_region,
 // window_visual_rect, snap_rect_to_rect, union_rect, element_by_selector),

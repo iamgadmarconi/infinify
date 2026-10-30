@@ -5,41 +5,18 @@
 //! capture, focus or input-delivery evidence, and never touch a real socket.
 use driftwm_desktop::*;
 use serde_json::{Value, json};
-use std::ffi::{CStr, CString, c_char};
+use std::ffi::{CString, c_char};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
-struct Host(*mut Controller);
+#[path = "support/host.rs"]
+mod host;
+use host::Host;
+
 impl Host {
-    fn new() -> Self {
-        let handle = driftwm_desktop_create();
-        assert!(!handle.is_null());
-        Self(handle)
-    }
-    fn raw(&mut self, bytes: &[u8]) -> Value {
-        // SAFETY: live exclusive handle, valid bytes, response freed exactly once.
-        unsafe {
-            let response = driftwm_desktop_request(self.0, bytes.as_ptr(), bytes.len());
-            assert!(!response.is_null());
-            let result = serde_json::from_slice(CStr::from_ptr(response).to_bytes()).unwrap();
-            driftwm_desktop_response_free(response);
-            result
-        }
-    }
-    fn call(&mut self, command: Value) -> Value {
-        self.raw(&serde_json::to_vec(&json!({"version":1,"command":command})).unwrap())
-    }
-    fn ok(&mut self, command: Value) -> Value {
-        let response = self.call(command);
-        assert_eq!(response["ok"], true, "{response}");
-        response["data"].clone()
-    }
-    fn snapshot(&mut self) -> Value {
-        self.ok(json!({"op":"snapshot"}))
-    }
     /// One upstream request with `output` active. Never a controller error.
     fn ipc_on(&mut self, output: Value, request: Value) -> Value {
         self.ok(json!({"op":"ipc","output":output,"request":request}))
@@ -80,14 +57,6 @@ impl Host {
         response["data"].clone()
     }
 }
-impl Drop for Host {
-    fn drop(&mut self) {
-        unsafe {
-            driftwm_desktop_destroy(self.0);
-        }
-    }
-}
-
 /// Output 1's usable center in output-local points. The whole output's center
 /// is (500, 400): the two conventions disagree by 10 points of height.
 const CENTER: (f64, f64) = (500.0, 410.0);
@@ -401,7 +370,7 @@ fn bookmarks_round_trip_through_actions_ipc_and_the_save_file() {
     assert_eq!(centered(&mut h), (1300.0, 1020.0));
     assert_eq!(pose(&mut h, 1)["zoom"], 1.0);
 
-    // go-to disarms a zoom-to-fit return, so the next fit press fits again.
+    // go-to-bookmark disarms a zoom-to-fit return, so the next fit press fits again.
     let fit = h.action("zoom-to-fit")["navigation"].clone();
     close(&fit["target_zoom"], FIT);
     land(&mut h, &mut clock, &fit);
@@ -501,7 +470,7 @@ fn bookmarks_round_trip_through_actions_ipc_and_the_save_file() {
     }
     let kept = json!({"1":[1300.0,-1020.0],"home":[0.0,0.0],"my desk":[1500.0,-1020.0]});
 
-    // Saved under schema 1 as an additive key, and restored by load.
+    // Saved under schema 1, and restored by load.
     let path = std::env::temp_dir().join(format!("driftwm-ipc-flow-{}.json", std::process::id()));
     h.ok(json!({"op":"save","path":path}));
     let mut saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -844,7 +813,6 @@ const REFUSED: &str = r#"
 {"Action":"frobnicate"} | unknown action: frobnicate
 {"Action":"fill-window"} | action not implemented on macOS yet: fill-window
 {"Action":"pan-viewport"} | pan-viewport requires a direction
-{"Action":"go-to 0 0"} | go-to was removed — save the point as a bookmark and use go-to-bookmark <name>
 "#;
 
 #[test]
@@ -1010,10 +978,6 @@ fn action_strings_follow_upstream_grammar() {
         ("pan-viewport north", "unknown direction: north"),
         ("pan-viewport up_left", "unknown direction: up_left"),
         ("nudge-window", "nudge-window requires a direction"),
-        (
-            "go-to 100 200",
-            "go-to was removed — save the point as a bookmark and use go-to-bookmark <name>",
-        ),
         ("go-to-bookmark", "go-to-bookmark requires a bookmark name"),
         ("set-bookmark   ", "set-bookmark requires a bookmark name"),
         (
@@ -1740,5 +1704,44 @@ fn screenshot_to_stdout_goes_through_a_private_file_the_client_reserved() {
     assert!(!reserved.exists());
     assert!(captures(&dir).is_empty());
     assert_eq!(server.join().unwrap().len(), 2);
+    std::fs::remove_file(path).unwrap();
+}
+
+/// A scene file as the first builds wrote it: a title on every window, a
+/// bookmark table and an `unsnapped` list in the scene, and none of the
+/// top-level `bookmarks`, `standins` and `pins` keys. It still loads.
+#[test]
+fn a_scene_file_from_an_earlier_build_still_loads() {
+    let legacy = json!({
+        "version": 1,
+        "scene": {
+            "windows": [{
+                "id": 20,
+                "world_rect": {"origin": {"x": -2065.5, "y": -828.5},
+                               "size": {"width": 1782.0, "height": 1291.0}},
+                "title": "an earlier build kept the title here"
+            }],
+            "outputs": [],
+            "focused": 20,
+            "bookmarks": {},
+            "unsnapped": []
+        },
+        "metadata": {"20": {"bundle_id": "app.term", "title": "alpha"}},
+        "outputs": {"1": {
+            "stable_id": "37D8832A-2D66-02CA-B9F7-8F30A301B230",
+            "viewport": {"id": 1, "camera": {"x": 534.0, "y": 97.0}, "zoom": 1.0,
+                         "screen_bounds": {"origin": {"x": 0.0, "y": 0.0},
+                                           "size": {"width": 2056.0, "height": 1329.0}}}
+        }},
+        "next_window": 21,
+        "next_output": 2
+    });
+    let path = std::env::temp_dir().join(format!("driftwm-ipc-legacy-{}.json", std::process::id()));
+    std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    let mut h = Host::new();
+    h.ok(json!({"op":"load","path":path}));
+    let windows = h.snapshot()["windows"].as_array().unwrap().clone();
+    assert_eq!(windows.len(), 1, "{windows:?}");
+    assert_eq!(windows[0]["window"], 20);
     std::fs::remove_file(path).unwrap();
 }

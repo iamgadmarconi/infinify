@@ -1,31 +1,43 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Not an upstream file. Local stand-ins for the items that the ported parts of
-// malbiruk/driftwm (commit 352333a8fa1b22171492d4b71a54102045c9a19d: src/config,
-// src/canvas.rs, src/stage, src/window_ext.rs, src/grabs/touch_recognizer and
+// malbiruk/driftwm (repository: https://github.com/malbiruk/driftwm; these
+// stand-ins were written against commit
+// 352333a8fa1b22171492d4b71a54102045c9a19d: src/config, src/canvas.rs and
 // src/input/gestures.rs) import from the Wayland stack, so the ported modules
 // compile with no C library and no system dependency.
 //
 // The module tree mirrors the upstream paths one for one, so the only change
 // in the ported sources is the prefix `smithay::` -> `crate::platform::`:
 //
-//   smithay::backend::input::{AxisSource, TouchSlot}
+//   smithay::backend::input::AxisSource
 //   smithay::input::keyboard::{Keysym, ModifiersState, keysyms, xkb}
 //   smithay::utils::{Coordinate, Logical, Point, Rectangle, Size, Transform}
-//   smithay::reexports::wayland_server::protocol::wl_surface::WlSurface
 //
-// History: the config stand-ins (`AxisSource`, the `keyboard` module, `Logical`,
-// the base of `Point`, `Transform`) come from the driftwm-config port. Added for
-// driftwm-core: `TouchSlot`, `Coordinate`, `Size`, `Rectangle`, `WlSurface`, and
-// on `Point` the arithmetic, `Default`, `to_f64`. Removed: the config port's
-// `platform::canvas::MAX_ZOOM` stand-in, since `crate::canvas` is the real
-// module here.
+// Third-party origin (full list and licences: PORT.md, SMITHAY-LICENSE.txt):
 //
-// Type shapes follow the Smithay 0.7.0 release (MIT, Copyright (c) 2017 Victor
-// Berger and Victoria Brekenfeld); the geometry impls are Smithay's own code
-// from `src/utils/geometry.rs`, reduced to what the ported modules use.
-// `xkb::keysym_from_name` reimplements libxkbcommon 1.7.0's
-// `xkb_keysym_from_name` (MIT/X11). PORT.md lists what each stand-in keeps,
-// what it leaves out, and where it differs.
+//   Smithay 0.7.0, MIT, Copyright (c) 2017 Victor Berger and Victoria Brekenfeld
+//     repository: https://github.com/Smithay/smithay
+//     git:        a166cf4c94b5aedc332a65aa1dd753e8148829c3 (the 0.7.0 release)
+//     paths:      src/utils/geometry.rs        (Logical, Coordinate, Point, Size,
+//                                               Rectangle: Smithay's own code,
+//                                               reduced to what the ported modules
+//                                               use; Transform: shape only)
+//                 src/backend/input/mod.rs     (AxisSource: shape only)
+//                 src/input/keyboard/modifiers_state.rs (ModifiersState: shape only)
+//   xkeysym 0.2.1, MIT OR Apache-2.0 OR Zlib: `Keysym` is its type, and
+//     keysyms.rs is generated from its names and values
+//     repository: https://github.com/notgull/xkeysym
+//   xkbcommon 0.9.0 (MIT): one constant (`hpYdiaeresis`) and the list of
+//     `KEY_*` names it was checked against
+//     repository: https://github.com/rust-x-bindings/xkbcommon-rs
+//   xkbcommon-rs 0.1.2 (a Rust port of libxkbcommon 1.7.0): read for the
+//     algorithm of `xkb::keysym_from_name` and its name table
+//     repository: https://github.com/wysiwys/xkbcommon-rs
+//   libxkbcommon (MIT/X11): `xkb::keysym_from_name` reimplements its
+//     `xkb_keysym_from_name`.
+//
+// PORT.md lists what each stand-in keeps, what it leaves out, and where it
+// differs.
 //! Platform-neutral stand-ins for the Wayland-stack items the ported modules
 //! import upstream. Only what those modules and their tests use is provided.
 
@@ -45,34 +57,6 @@ pub mod backend {
             Wheel,
             /// Scrolling through tilting the scroll wheel.
             WheelTilt,
-        }
-
-        /// Slot of a different touch event.
-        ///
-        /// Touch events are grouped by slots, usually to identify different
-        /// fingers on a multi-touch enabled input device. Events should only
-        /// be interpreted in the context of other events on the same slot.
-        ///
-        /// Same private field, derives and conversions as
-        /// `smithay::backend::input::TouchSlot`: built from `Option<u32>`, read
-        /// back as `i32` (`-1` for a slot-less, single-touch device).
-        #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-        pub struct TouchSlot {
-            id: Option<u32>,
-        }
-
-        impl From<Option<u32>> for TouchSlot {
-            #[inline]
-            fn from(id: Option<u32>) -> Self {
-                Self { id }
-            }
-        }
-
-        impl From<TouchSlot> for i32 {
-            #[inline]
-            fn from(slot: TouchSlot) -> i32 {
-                slot.id.map(|id| id as i32).unwrap_or(-1)
-            }
         }
     }
 }
@@ -677,32 +661,5 @@ pub mod utils {
         Flipped180,
         /// Plane is flipped vertically and rotated by 270 degrees
         Flipped270,
-    }
-}
-
-/// Stand-in for `smithay::reexports`.
-pub mod reexports {
-    /// Stand-in for `smithay::reexports::wayland_server` (the `wayland-server`
-    /// crate).
-    pub mod wayland_server {
-        /// Stand-in for `wayland_server::protocol`.
-        pub mod protocol {
-            /// Stand-in for `wayland_server::protocol::wl_surface`.
-            pub mod wl_surface {
-                /// A Wayland surface handle. Upstream names the type in one
-                /// signature that is ported, `WindowExt::parent_surface(&self)
-                /// -> Option<WlSurface>`; nothing ported ever builds or reads
-                /// one.
-                ///
-                /// There are no Wayland surfaces off Wayland, so this stand-in
-                /// has no values: `Option<WlSurface>` is always `None`, which
-                /// is what the upstream test mock returns. Parent/child
-                /// relations between windows go through
-                /// `StageElement::is_child_of` instead. The derives are the
-                /// traits the generated `wayland_server` type implements.
-                #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-                pub enum WlSurface {}
-            }
-        }
     }
 }

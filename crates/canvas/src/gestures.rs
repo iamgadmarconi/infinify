@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Geometric adaptation of malbiruk/driftwm at
+// Geometric adaptation of https://github.com/malbiruk/driftwm at
 // 352333a8fa1b22171492d4b71a54102045c9a19d (GPL-3.0-or-later):
 // src/layout/snap.rs::update_axis, src/state/cluster_snapshot.rs, and
 // src/grabs/resize_grab.rs. No Smithay/native grab or configure protocol is ported.
 use crate::cluster_resize::{ResizeMember, classify, resolve};
 use crate::layout::{candidates, closest, edge_candidates};
-use crate::{Error, Point, Rect, Scene, Size, SnapOptions, WindowId};
+use crate::{Error, Point, Rect, Scene, SnapOptions, WindowId};
 
 /// A side or corner to resize. Opposite edges stay fixed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,8 +123,6 @@ pub struct ResizeGesture {
     bonds: Vec<(usize, usize)>,
     resistance: f64,
     same_edge: bool,
-    min: Size,
-    max: Size,
     x: AxisState,
     y: AxisState,
 }
@@ -183,22 +181,6 @@ impl ResizeGesture {
         self.resistance = break_force;
         Ok(self)
     }
-
-    /// Capture minimum/maximum visible frame sizes. Zero means unconstrained.
-    /// As upstream, bounds are applied before snapping, with a 1-point floor;
-    /// a snap may subsequently cross a declared bound. Native callers must
-    /// supply sizes including chrome, since canvas frames already include it.
-    pub fn with_constraints(mut self, min: Size, max: Size) -> Result<Self, Error> {
-        if [min.width, min.height, max.width, max.height]
-            .iter()
-            .any(|v| !v.is_finite() || *v < 0.0 || *v > 1e12)
-        {
-            return Err(Error::Invalid("resize constraints"));
-        }
-        self.min = min;
-        self.max = max;
-        Ok(self)
-    }
 }
 
 fn validate_break_force(break_force: f64) -> Result<(), Error> {
@@ -206,11 +188,6 @@ fn validate_break_force(break_force: f64) -> Result<(), Error> {
         return Err(Error::Invalid("snap break force"));
     }
     Ok(())
-}
-
-fn clamp_size(value: f64, min: f64, max: f64) -> f64 {
-    let value = value.max(1.0).max(min);
-    if max > 0.0 { value.min(max) } else { value }
 }
 
 impl Scene {
@@ -318,8 +295,6 @@ impl Scene {
             bonds: Vec::new(),
             resistance: 32.0,
             same_edge: false,
-            min: Size::new(0.0, 0.0),
-            max: Size::new(0.0, 0.0),
             x: AxisState::default(),
             y: AxisState::default(),
         })
@@ -332,8 +307,8 @@ impl Scene {
     ///
     /// Downstream members translate without resizing. Collisions can push other
     /// captured members, retaining directional bonds across motion reversals.
-    /// Outside windows and all cameras remain unchanged. Dimensions clamp to
-    /// captured constraints before snapping. Invalid deltas,
+    /// Outside windows and all cameras remain unchanged. Dimensions floor at
+    /// one point before snapping. Invalid deltas,
     /// nonfinite/out-of-range geometry, missing/externally changed members or an
     /// unsettled cascade fail atomically, including the gesture's bond state.
     pub fn resize_to(&mut self, gesture: &mut ResizeGesture, delta: Point) -> Result<Rect, Error> {
@@ -414,8 +389,8 @@ impl Scene {
         let mut rect = Rect::new(
             initial.origin.x,
             initial.origin.y,
-            clamp_size(width, next.min.width, next.max.width),
-            clamp_size(height, next.min.height, next.max.height),
+            width.max(1.0),
+            height.max(1.0),
         );
         if next.edges.left() {
             rect.origin.x = initial.right() - rect.size.width;

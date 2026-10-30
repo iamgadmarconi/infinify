@@ -9,20 +9,20 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import signal
-import socket
 import subprocess
 import sys
 import tempfile
 import time
-
 sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import live_helpers  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[2]
 os.chdir(ROOT)
 if sys.argv[1:] != ['--live-owned-fixture']:
     print('LIVE NOT RUN: pass --live-owned-fixture for the disposable floating-panel scenario.')
     raise SystemExit(0 if len(sys.argv) == 1 else 2)
-spec = importlib.util.spec_from_file_location('owned_helper', ROOT / 'native/privileged/fixture_v2_test.py')
+spec = importlib.util.spec_from_file_location('owned_helper', ROOT / 'native/privileged/fixture_test.py')
 owned = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(owned)
 APP = ROOT / 'target/app/Infinify.app/Contents/MacOS/Infinify'
@@ -39,11 +39,7 @@ host = app = before = log = None
 owned.sky.SLSGetWindowBounds.argtypes = [C.c_int, C.c_uint32, C.POINTER(owned.Rect)]
 owned.sky.SLSGetWindowBounds.restype = C.c_int
 
-def interrupted(number, _frame):
-    raise SystemExit(128 + number)
-
-for number in (signal.SIGTERM, signal.SIGHUP):
-    signal.signal(number, interrupted)
+live_helpers.exit_on_signals()
 
 def own(wid):
     rect = owned.Rect()
@@ -54,28 +50,9 @@ def originals():
     return {str(w): {'transform': owned.transform(w), 'alpha': owned.alpha(w)} for w in wids}
 
 def ask(request):
-    with socket.socket(socket.AF_UNIX) as connection:
-        connection.settimeout(4)
-        connection.connect(str(sock))
-        connection.sendall((json.dumps(request) + '\n').encode())
-        data = b''
-        while not data.endswith(b'\n'):
-            chunk = connection.recv(65536)
-            if not chunk:
-                break
-            data += chunk
-    reply = json.loads(data)
-    assert 'Ok' in reply, reply
-    return reply['Ok']
+    return live_helpers.ask(sock, request, timeout=4)
 
-def until(read, passed, seconds=8):
-    deadline = time.monotonic() + seconds
-    while True:
-        value = read()
-        if passed(value):
-            return value
-        assert time.monotonic() < deadline, value
-        time.sleep(.05)
+until = live_helpers.until
 
 def state():
     return ask('State')['State']
@@ -114,9 +91,9 @@ try:
     phases = []
     for zoom in (.5, .85):
         ask({'Zoom': zoom})
-        until(state, lambda value: abs(value['zoom'] - zoom) < 1e-6 and all(abs(a - b) < 1 for a, b in zip(value['camera'], camera)))
-        until(lambda: ask({'DebugNative': {}})['DebugNative'], lambda value: value['stats']['records_failed'] == 0 and any(r['wid'] == wids[0] and abs(r['m'][0] - 1 / zoom) < 1e-6 for r in value['records']))
-        until(lambda: owned.transform(wids[0]), lambda value: abs(value[0] - 1 / zoom) < 1e-6)
+        until(state, lambda value, zoom=zoom: abs(value['zoom'] - zoom) < 1e-6 and all(abs(a - b) < 1 for a, b in zip(value['camera'], camera)))
+        until(lambda: ask({'DebugNative': {}})['DebugNative'], lambda value, zoom=zoom: value['stats']['records_failed'] == 0 and any(r['wid'] == wids[0] and abs(r['m'][0] - 1 / zoom) < 1e-6 for r in value['records']))
+        until(lambda: owned.transform(wids[0]), lambda value, zoom=zoom: abs(value[0] - 1 / zoom) < 1e-6)
         current = {'transform': owned.transform(fixed), 'screen': owned.screen(fixed), 'own': own(fixed)}
         assert current == pin_before, ('panel moved', pin_before, current)
         assert own(wids[0]) == native_before[0], 'Canvas motion changed native root geometry.'

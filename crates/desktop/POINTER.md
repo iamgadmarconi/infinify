@@ -8,10 +8,8 @@ where it is and applies the answer; nothing here delivers an event, focuses a
 native window or changes a cursor, and none of this crate's tests shows that
 any of that happens.
 
-Everything below is an addition to ABI 1: no existing command lost or changed
-a field, and no existing reply lost one. The logic is in
-[`src/pointer_policy.rs`](src/pointer_policy.rs), which names the upstream
-functions it follows.
+The logic is in [`src/pointer_policy.rs`](src/pointer_policy.rs), which names
+the upstream functions it follows.
 
 "The window under the pointer" is everywhere the layered hit of
 [RULES.md](RULES.md#navigation-activation-gestures-and-outputs), the one `hit`
@@ -28,11 +26,11 @@ collected in one place below.
 | `hover_source` | `window`, exact `identity` and `generation`, `output`, global `screen`, optional `time_ms`, optional `forward_motion` (default false) | The same policy reply for a recipient freshly resolved by the native adapter |
 | `pick` | `window`, `output` | `{effect, navigation, dirty}`, or `{navigation: null, dirty: false}` when the output is no longer in pick mode |
 | `pointer_nearest` | `output`, global `screen` and `start` points, optional `held` boolean (default false) | `{navigation, effects, dirty}`, the reply of the `center-nearest` action |
-| `hit`, `input` | unchanged | gain `pick` on the reply and on the hit object |
+| `hit`, `input` | `output`, global `screen` point; `input` also the expected `identity` | the reply and the hit object carry `pick` |
 | `resize_border` | `output`, global `screen` point | `{border}`: null, or `{window, edges, snapped}` when the point is in a window's resize border. Read-only, see [The resize border](#the-resize-border) |
-| `mouse_binding` | gains optional `pick` boolean (default false), beside its optional `window` ([RULES.md](RULES.md#pass_mouse)) | unchanged; a pick target never answers `passed` |
-| `snapshot` | unchanged | each entry of `outputs` gains `pick` |
-| `load_config` | unchanged | gains `focus_follows_mouse`, the value now in force |
+| `mouse_binding` | optional `pick` boolean (default false), beside its optional `window` ([RULES.md](RULES.md#pass_mouse)) | `{binding}`; a pick target never answers `passed` |
+| `snapshot` | none | each entry of `outputs` carries `pick` |
+| `load_config` | `path` string or null | the reply carries `focus_follows_mouse`, the value now in force |
 
 ### `hover`
 
@@ -573,7 +571,7 @@ does nothing, where upstream had already fired.
   applied to a position already in drawn space; no standard popup measured
   does this). Tooltips could not be triggered in the guest, so no tooltip
   window was measured.
-  [Measurements](../../native/desktop/README.md#popups-and-menus-of-a-transformed-window-full-desktop-dock-helper).
+  [Measurements](../../native/desktop/COMPOSITOR-MODE.md#popups-and-menus-of-a-transformed-window-full-desktop-dock-helper).
 - **An open focus cycle stops hover focus.** Upstream's guard is the pointer
   grab alone, and a hover during Alt-Tab would end the cycle and commit its
   selection. Here the selection stands until the cycle is released or
@@ -738,4 +736,4 @@ neither before this contract was joined to [camera motion](MOTION.md) and
 show (both settings loading and reloading, upstream's two range warnings for
 `interact_min`, the zoom crossing the threshold, a screenshot taken below it)
 and everything they did not is in the
-[shell notes](../../native/desktop/README.md#what-has-been-run-for-the-pointer-policy).
+[shell notes](../../native/desktop/README.md).

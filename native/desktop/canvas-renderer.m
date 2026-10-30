@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
-// src/ipc/mod.rs (cmd_screenshot, resolve_screenshot_region, window_visual_rect,
-// snap_rect_to_rect, union_rect: what each screenshot target captures),
+// Adapted from DriftWM, https://github.com/malbiruk/driftwm @
+// 352333a8fa1b22171492d4b71a54102045c9a19d: src/ipc/mod.rs (cmd_screenshot,
+// resolve_screenshot_region, window_visual_rect, snap_rect_to_rect, union_rect:
+// what each screenshot target captures),
 // src/render/screenshot.rs (capture_region_to_png: the scale rule, the 16384 px
 // limit and their refusals), src/state/mod.rs (output_viewport_rect),
 // src/canvas.rs (rule_to_internal), src/render/capture_background.rs (wallpaper_dest
@@ -9,14 +10,14 @@
 // src/render/mod.rs (compose_capture_elements: the opacity of a window captured
 // alone; what a canvas capture leaves out: a screen-pinned window is never in one,
 // a widget is drawn below the other windows). The frame description is the host
-// protocol of the compositor port (compositor.h): canvas-space elements bottom to
+// protocol of the compositor (compositor.h): canvas-space elements bottom to
 // top from the controller's placements, a widget in the widget layer and a
 // screen-pinned window in the pinned layer and the pinned space (upstream
 // compose_frame's zoomed_widgets and zoomed_pinned buckets, and
 // window_render_transform in src/state/output.rs: a pin's output-relative point at
 // zoom 1), DrawnChrome's coverage rule per output, upstream's stand-in body
 // rectangle and its projection of the other outputs' viewports. The effects are the
-// same port's (COMPOSITOR-NOTES.md, section 18), with src/state/errors.rs (ErrorSource:
+// compositor's (COMPOSITOR-NOTES.md, section 18), with src/state/errors.rs (ErrorSource:
 // the order of the error bar's messages) and src/state/window_animation_driver.rs
 // (start_window_open_animation, snapshot_closing_window, flatten_scale_for_canvas_rect:
 // an event on no output animates nothing, and the density a closing window is baked
@@ -30,53 +31,51 @@
 // New code over the controller's snapshot; cameras, world rectangles and pinned
 // screen rectangles are the controller's, and no native window geometry is read.
 #import "canvas-renderer.h"
+#import "typed-value.h"
+#import "native-geometry-json.h"
 #import "compositor.h"
 #import <AppKit/AppKit.h>
 #import <ImageIO/ImageIO.h>
 #import "screenshot-writer.h"
 
-static NSDictionary *dict(id value) { return [value isKindOfClass:NSDictionary.class]?value:nil; }
 static NSArray *list(id value) { return [value isKindOfClass:NSArray.class]?value:@[]; }
-static NSString *text(id value) { return [value isKindOfClass:NSString.class]?value:nil; }
-static NSNumber *number(id value) { return [value isKindOfClass:NSNumber.class]?value:nil; }
-static BOOL finiteImageRect(CGRect r) { return isfinite(r.origin.x)&&isfinite(r.origin.y)&&isfinite(r.size.width)&&isfinite(r.size.height)&&r.size.width>0&&r.size.height>0&&isfinite(CGRectGetMaxX(r))&&isfinite(CGRectGetMaxY(r)); }
 static BOOL validAttachment(DWCanvasAttachment *image) {
-    if(![image isKindOfClass:DWCanvasAttachment.class]||!image.buffer||!finiteImageRect(image.unitRect))return NO;
+    if(![image isKindOfClass:DWCanvasAttachment.class]||!image.buffer||!DWFiniteRect(image.unitRect))return NO;
     CGRect crop=image.contentRect;if(CGRectIsNull(crop))return YES;
-    return finiteImageRect(crop)&&crop.origin.x>=0&&crop.origin.y>=0&&CGRectGetMaxX(crop)<=CVPixelBufferGetWidth(image.buffer)&&CGRectGetMaxY(crop)<=CVPixelBufferGetHeight(image.buffer);
+    return DWFiniteRect(crop)&&crop.origin.x>=0&&crop.origin.y>=0&&CGRectGetMaxX(crop)<=CVPixelBufferGetWidth(image.buffer)&&CGRectGetMaxY(crop)<=CVPixelBufferGetHeight(image.buffer);
 }
-static CGPoint pointOf(id value) { NSDictionary *p=dict(value);return CGPointMake([number(p[@"x"])doubleValue],[number(p[@"y"])doubleValue]); }
+static CGPoint pointOf(id value) { NSDictionary *p=DWTyped(value,NSDictionary.class);return CGPointMake([DWTyped(p[@"x"],NSNumber.class)doubleValue],[DWTyped(p[@"y"],NSNumber.class)doubleValue]); }
 // The controller's {origin:{x,y},size:{width,height}}; CGRectNull for anything else.
 static CGRect rectOf(id value) {
-    NSDictionary *r=dict(value),*origin=dict(r[@"origin"]),*size=dict(r[@"size"]);if(!number(origin[@"x"])||!number(origin[@"y"])||!number(size[@"width"])||!number(size[@"height"]))return CGRectNull;
-    return CGRectMake([number(origin[@"x"])doubleValue],[number(origin[@"y"])doubleValue],[number(size[@"width"])doubleValue],[number(size[@"height"])doubleValue]);
+    NSDictionary *r=DWTyped(value,NSDictionary.class),*origin=DWTyped(r[@"origin"],NSDictionary.class),*size=DWTyped(r[@"size"],NSDictionary.class);if(!DWTyped(origin[@"x"],NSNumber.class)||!DWTyped(origin[@"y"],NSNumber.class)||!DWTyped(size[@"width"],NSNumber.class)||!DWTyped(size[@"height"],NSNumber.class))return CGRectNull;
+    return CGRectMake([DWTyped(origin[@"x"],NSNumber.class)doubleValue],[DWTyped(origin[@"y"],NSNumber.class)doubleValue],[DWTyped(size[@"width"],NSNumber.class)doubleValue],[DWTyped(size[@"height"],NSNumber.class)doubleValue]);
 }
 static BOOL currentDrawnPlacement(NSDictionary *p) {
-    NSString *kind=text(p[@"kind"]);
-    return ([kind isEqual:@"window"]||[kind isEqual:@"standin"])&&number(p[@"focused"])&&finiteImageRect(rectOf(p[@"world_rect"]));
+    NSString *kind=DWTyped(p[@"kind"],NSString.class);
+    return ([kind isEqual:@"window"]||[kind isEqual:@"standin"])&&DWTyped(p[@"focused"],NSNumber.class)&&DWFiniteRect(rectOf(p[@"world_rect"]));
 }
 static BOOL currentOutputPlacement(NSDictionary *p) {
-    return currentDrawnPlacement(p)&&number(p[@"window"])&&number(p[@"output"]);
+    return currentDrawnPlacement(p)&&DWTyped(p[@"window"],NSNumber.class)&&DWTyped(p[@"output"],NSNumber.class);
 }
 static BOOL currentOutputPlacements(id value) {
     if(![value isKindOfClass:NSArray.class])return NO;
-    for(id entry in value)if(!currentOutputPlacement(dict(entry)))return NO;
+    for(id entry in value)if(!currentOutputPlacement(DWTyped(entry,NSDictionary.class)))return NO;
     return YES;
 }
 static BOOL drawableOutput(NSDictionary *output) {
-    NSDictionary *camera=dict(output[@"camera"]);NSNumber *zoom=number(output[@"zoom"]),*identifier=number(output[@"id"]);
-    return identifier&&isfinite(identifier.doubleValue)&&identifier.doubleValue>0&&floor(identifier.doubleValue)==identifier.doubleValue&&identifier.unsignedLongLongValue>0&&finiteImageRect(rectOf(output[@"screen_bounds"]))&&number(camera[@"x"])&&number(camera[@"y"])&&isfinite([camera[@"x"]doubleValue])&&isfinite([camera[@"y"]doubleValue])&&isfinite(zoom.doubleValue)&&zoom.doubleValue>0;
+    NSDictionary *camera=DWTyped(output[@"camera"],NSDictionary.class);NSNumber *zoom=DWTyped(output[@"zoom"],NSNumber.class),*identifier=DWTyped(output[@"id"],NSNumber.class);
+    return identifier&&isfinite(identifier.doubleValue)&&identifier.doubleValue>0&&floor(identifier.doubleValue)==identifier.doubleValue&&identifier.unsignedLongLongValue>0&&DWFiniteRect(rectOf(output[@"screen_bounds"]))&&DWTyped(camera[@"x"],NSNumber.class)&&DWTyped(camera[@"y"],NSNumber.class)&&isfinite([camera[@"x"]doubleValue])&&isfinite([camera[@"y"]doubleValue])&&isfinite(zoom.doubleValue)&&zoom.doubleValue>0;
 }
 // Upstream output_viewport_rect: size / zoom canvas units from the rounded camera. CGRectNull without an output.
 static CGRect viewportOf(NSDictionary *o) {
     CGRect bounds=rectOf(o[@"screen_bounds"]);if(!o||CGRectIsNull(bounds))return CGRectNull;
-    CGPoint camera=pointOf(o[@"camera"]);double zoom=[number(o[@"zoom"])doubleValue];if(!(isfinite(zoom)&&zoom>0))zoom=1;
+    CGPoint camera=pointOf(o[@"camera"]);double zoom=[DWTyped(o[@"zoom"],NSNumber.class)doubleValue];if(!(isfinite(zoom)&&zoom>0))zoom=1;
     return CGRectMake(round(camera.x),round(camera.y),round(round(bounds.size.width)/zoom),round(round(bounds.size.height)/zoom));
 }
 // A straight-alpha sRGB [r,g,b,a] in 0..1 back to upstream's [u8; 4].
 static IFCompositorColor colorOf(id value,IFCompositorColor fallback) {
     NSArray *c=list(value);uint8_t bytes[4];if(c.count!=4)return fallback;
-    for(NSUInteger i=0;i<4;i++){NSNumber *n=number(c[i]);if(!n)return fallback;bytes[i]=(uint8_t)lround(fmin(fmax(n.doubleValue,0),1)*255);}
+    for(NSUInteger i=0;i<4;i++){NSNumber *n=DWTyped(c[i],NSNumber.class);if(!n)return fallback;bytes[i]=(uint8_t)lround(fmin(fmax(n.doubleValue,0),1)*255);}
     return IFCompositorColorMake(bytes[0],bytes[1],bytes[2],bytes[3]);
 }
 // Upstream FontWeight by any of the names its config accepts, however the word is joined.
@@ -88,15 +87,15 @@ static IFCompositorFontWeight weightOf(NSString *name) {
 // A placement's resolved decoration. Without one: upstream's defaults at the configured radius.
 static IFCompositorDecoration decorationOf(NSDictionary *d,NSInteger radius) {
     IFCompositorDecoration v=IFCompositorDecorationDefault();v.cornerRadius=(int32_t)radius;if(!d)return v;
-    NSString *mode=text(d[@"mode"]);
+    NSString *mode=DWTyped(d[@"mode"],NSString.class);
     v.mode=[mode isEqual:@"server"]?IFCompositorDecorationModeServer:[mode isEqual:@"minimal"]?IFCompositorDecorationModeMinimal:[mode isEqual:@"none"]?IFCompositorDecorationModeNone:IFCompositorDecorationModeClient;
-    if(number(d[@"border_width"]))v.borderWidth=(int32_t)lround([d[@"border_width"]doubleValue]);
+    if(DWTyped(d[@"border_width"],NSNumber.class))v.borderWidth=(int32_t)lround([d[@"border_width"]doubleValue]);
     v.borderColor=colorOf(d[@"border_color"],v.borderColor);v.borderColorFocused=colorOf(d[@"border_color_focused"],v.borderColorFocused);
-    if(number(d[@"corner_radius"]))v.cornerRadius=(int32_t)lround([d[@"corner_radius"]doubleValue]);
-    if(number(d[@"shadow"]))v.shadow=[d[@"shadow"]boolValue];
-    if(number(d[@"shadow_radius"]))v.shadowRadius=[d[@"shadow_radius"]floatValue];
+    if(DWTyped(d[@"corner_radius"],NSNumber.class))v.cornerRadius=(int32_t)lround([d[@"corner_radius"]doubleValue]);
+    if(DWTyped(d[@"shadow"],NSNumber.class))v.shadow=[d[@"shadow"]boolValue];
+    if(DWTyped(d[@"shadow_radius"],NSNumber.class))v.shadowRadius=[d[@"shadow_radius"]floatValue];
     v.shadowColor=colorOf(d[@"shadow_color"],v.shadowColor);
-    if(number(d[@"opacity"]))v.opacity=[d[@"opacity"]doubleValue];
+    if(DWTyped(d[@"opacity"],NSNumber.class))v.opacity=[d[@"opacity"]doubleValue];
     return v;
 }
 // Upstream labels a stand-in with its desktop entry's name and falls back to the
@@ -279,7 +278,7 @@ static CGRect geometryFromScreen(CGRect rect,IFCompositorSpace space,IFComposito
 @property BOOL following; // the first frame described has set that mark
 @property uint64_t marks; // counts the identifiers of closing-bucket elements
 @property NSNumber *sizing; // the window the controller owes a size, as the snapshot last described had it
-@property BOOL paced; // inside -flushFrame: the display link's own frame, which the layers may present by themselves
+@property BOOL paced; // inside -flushFrameAtTime:refreshRate: the display link's own frame, which the layers may present by themselves
 @property BOOL placed; // an output described since the last flush is new, or its layer changed its place, size or scale
 @property CFTimeInterval frameTarget; // the current display tick's upcoming refresh, also valid for a drawable retry
 @end
@@ -308,15 +307,15 @@ static CGRect geometryFromScreen(CGRect rect,IFCompositorSpace space,IFComposito
     if(!enabled)for(DWCanvasOutput *state in self.states.allValues)[self stopMenuBackground:state];
 }
 - (void)describeMenuBackground:(DWCanvasOutput *)state output:(NSDictionary *)output snapshot:(NSDictionary *)snapshot {
-    NSNumber *identifier=number(output[@"id"]);CGRect bounds=rectOf(output[@"screen_bounds"]);
-    NSDictionary *context=dict(dict(dict(snapshot[@"navigation"])[@"contexts"])[identifier.stringValue]);
+    NSNumber *identifier=DWTyped(output[@"id"],NSNumber.class);CGRect bounds=rectOf(output[@"screen_bounds"]);
+    NSDictionary *context=DWTyped(DWTyped(DWTyped(snapshot[@"navigation"],NSDictionary.class)[@"contexts"],NSDictionary.class)[identifier.stringValue],NSDictionary.class);
     CGRect usable=rectOf(context[@"usable_rect_local"]);double top=usable.origin.y;
-    if(!self.nativeWindows||!self.nativeMenuBackground||!dict(output[@"fullscreen"])||CGRectIsNull(usable)||!isfinite(top)||top<=0||top>=bounds.size.height){[self stopMenuBackground:state];return;}
+    if(!self.nativeWindows||!self.nativeMenuBackground||!DWTyped(output[@"fullscreen"],NSDictionary.class)||CGRectIsNull(usable)||!isfinite(top)||top<=0||top>=bounds.size.height){[self stopMenuBackground:state];return;}
     top=ceil(top);if(top>=bounds.size.height){[self stopMenuBackground:state];return;}
     NSRect place=NSMakeRect(bounds.origin.x,NSMaxY(NSScreen.screens.firstObject.frame)-bounds.origin.y-top,bounds.size.width,top);
     if(!state.menuPanel){
         DWCanvasMenuRenderer *renderer=[DWCanvasMenuRenderer rendererWithDevice:state.layer.renderer.device];if(!renderer)return;
-        state.menuLayer=[[IFCompositorLayer alloc]initWithRenderer:renderer];state.menuLayer.asynchronousDrawables=!self.synchronousDrawables;
+        state.menuLayer=[[IFCompositorLayer alloc]initWithRenderer:renderer];
         state.menuFrame=[IFCompositorFrame new];state.menuFrame.clear=IFCompositorClearOpaqueBlack;
         state.menuPanel=[[DWCanvasMenuPanel alloc]initWithContentRect:place styleMask:NSWindowStyleMaskBorderless|NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO];
         state.menuPanel.releasedWhenClosed=NO;state.menuPanel.level=NSMainMenuWindowLevel-1;state.menuPanel.ignoresMouseEvents=YES;
@@ -338,44 +337,44 @@ static CGRect geometryFromScreen(CGRect rect,IFCompositorSpace space,IFComposito
     if(!state.menuPanel.isVisible)[state.menuPanel orderFrontRegardless];
 }
 - (BOOL)configure:(NSDictionary *)snapshot {
-    NSDictionary *render=dict(snapshot[@"render"]);NSNumber *revision=number(render[@"revision"]);
+    NSDictionary *render=DWTyped(snapshot[@"render"],NSDictionary.class);NSNumber *revision=DWTyped(render[@"revision"],NSNumber.class);
     // An unanswered snapshot changes nothing; the first call builds upstream's defaults at least.
     if(self.program&&(!snapshot||revision==self.revision||[revision isEqual:self.revision]))return NO;
     self.revision=revision;self.style++;
-    NSDictionary *b=dict(render[@"background"]),*c=dict(render[@"chrome"]),*o=dict(render[@"outline"]);NSString *warning=nil;
-    self.inheritsMacBackground=[number(b[@"inherit_macos"])boolValue];
+    NSDictionary *b=DWTyped(render[@"background"],NSDictionary.class),*c=DWTyped(render[@"chrome"],NSDictionary.class),*o=DWTyped(render[@"outline"],NSDictionary.class);NSString *warning=nil;
+    self.inheritsMacBackground=[DWTyped(b[@"inherit_macos"],NSNumber.class)boolValue];
     // Upstream BackgroundConfig, field for field; the module expands ~ and falls back by itself.
-    IFBackgroundConfig *config=[IFBackgroundConfig configWithTypeString:text(b[@"type"]) path:text(b[@"path"]) texture:text(b[@"texture"]) warning:&warning];
-    config.mirrorTile=[number(b[@"mirror_tile"])boolValue];config.transparentShader=[number(b[@"transparent_shader"])boolValue];config.cacheShader=[number(b[@"cache_shader"])boolValue];
-    if(number(b[@"parallax"]))config.parallax=[number(b[@"parallax"])boolValue];
-    config.animateFPS=(NSUInteger)lround(fmin(fmax([number(b[@"animate_fps"])doubleValue],0),1000));
+    IFBackgroundConfig *config=[IFBackgroundConfig configWithTypeString:DWTyped(b[@"type"],NSString.class) path:DWTyped(b[@"path"],NSString.class) texture:DWTyped(b[@"texture"],NSString.class) warning:&warning];
+    config.mirrorTile=[DWTyped(b[@"mirror_tile"],NSNumber.class)boolValue];config.transparentShader=[DWTyped(b[@"transparent_shader"],NSNumber.class)boolValue];config.cacheShader=[DWTyped(b[@"cache_shader"],NSNumber.class)boolValue];
+    if(DWTyped(b[@"parallax"],NSNumber.class))config.parallax=[DWTyped(b[@"parallax"],NSNumber.class)boolValue];
+    config.animateFPS=(NSUInteger)lround(fmin(fmax([DWTyped(b[@"animate_fps"],NSNumber.class)doubleValue],0),1000));
     // Upstream's u32 of megabytes; a controller that does not report the key leaves upstream's default of 128.
-    if(number(b[@"cache_budget_mb"]))config.cacheBudgetMB=(NSUInteger)llround(fmin(fmax([b[@"cache_budget_mb"]doubleValue],0),UINT32_MAX));
+    if(DWTyped(b[@"cache_budget_mb"],NSNumber.class))config.cacheBudgetMB=(NSUInteger)llround(fmin(fmax([b[@"cache_budget_mb"]doubleValue],0),UINT32_MAX));
     self.program=[IFBackgroundProgram programWithConfig:config device:nil];self.note=self.program.errorText?:warning;
     IFCompositorChromeStyle *style=[IFCompositorChromeStyle new];
     style.backgroundColor=colorOf(c[@"background"],style.backgroundColor);style.foregroundColor=colorOf(c[@"foreground"],style.foregroundColor);
-    if(number(c[@"corner_radius"]))style.cornerRadius=lround([c[@"corner_radius"]doubleValue]);
-    if(number(c[@"title_bar_height"]))style.titleBarHeight=lround([c[@"title_bar_height"]doubleValue]);
-    if(text(c[@"font"]).length)style.font=c[@"font"];
-    if(number(c[@"font_size"]))style.fontSize=(NSUInteger)lround(fmax([c[@"font_size"]doubleValue],0));
-    if(text(c[@"font_weight"]))style.fontWeight=weightOf(c[@"font_weight"]);
-    if(text(c[@"title_align"]))style.titleAlign=[c[@"title_align"]isEqual:@"left"]?IFCompositorTitleAlignLeft:IFCompositorTitleAlignCenter;
+    if(DWTyped(c[@"corner_radius"],NSNumber.class))style.cornerRadius=lround([c[@"corner_radius"]doubleValue]);
+    if(DWTyped(c[@"title_bar_height"],NSNumber.class))style.titleBarHeight=lround([c[@"title_bar_height"]doubleValue]);
+    if(((NSString *)DWTyped(c[@"font"],NSString.class)).length)style.font=c[@"font"];
+    if(DWTyped(c[@"font_size"],NSNumber.class))style.fontSize=(NSUInteger)lround(fmax([c[@"font_size"]doubleValue],0));
+    if(DWTyped(c[@"font_weight"],NSString.class))style.fontWeight=weightOf(c[@"font_weight"]);
+    if(DWTyped(c[@"title_align"],NSString.class))style.titleAlign=[c[@"title_align"]isEqual:@"left"]?IFCompositorTitleAlignLeft:IFCompositorTitleAlignCenter;
     self.chrome=style;
     IFCompositorOutlineSettings outline=IFCompositorOutlineSettingsDefault();outline.color=colorOf(o[@"color"],outline.color);
-    if(number(o[@"thickness"]))outline.thickness=(int32_t)lround([o[@"thickness"]doubleValue]);
-    if(number(o[@"opacity"]))outline.opacity=[o[@"opacity"]doubleValue];
+    if(DWTyped(o[@"thickness"],NSNumber.class))outline.thickness=(int32_t)lround([o[@"thickness"]doubleValue]);
+    if(DWTyped(o[@"opacity"],NSNumber.class))outline.opacity=[o[@"opacity"]doubleValue];
     self.outline=outline;
     // Upstream EffectsConfig, field for field, as the controller's parser left it; the compositor's own copy of upstream's parse rules changes nothing in it.
-    NSDictionary *e=dict(render[@"effects"]);IFCompositorEffects effects=IFCompositorEffectsDefault();
-    if(number(e[@"blur_radius"]))effects.blurRadius=(uint32_t)lround(fmin(fmax([e[@"blur_radius"]doubleValue],0),UINT32_MAX));
-    if(number(e[@"blur_strength"]))effects.blurStrength=[e[@"blur_strength"]doubleValue];
-    if(number(e[@"animate_blur_fps"]))effects.animateBlurFPS=(uint32_t)lround(fmin(fmax([e[@"animate_blur_fps"]doubleValue],0),UINT32_MAX));
-    if(number(e[@"animation_speed"]))effects.animationSpeed=[e[@"animation_speed"]doubleValue];
-    if(number(e[@"animation_scale"]))effects.animationScale=[e[@"animation_scale"]doubleValue];
+    NSDictionary *e=DWTyped(render[@"effects"],NSDictionary.class);IFCompositorEffects effects=IFCompositorEffectsDefault();
+    if(DWTyped(e[@"blur_radius"],NSNumber.class))effects.blurRadius=(uint32_t)lround(fmin(fmax([e[@"blur_radius"]doubleValue],0),UINT32_MAX));
+    if(DWTyped(e[@"blur_strength"],NSNumber.class))effects.blurStrength=[e[@"blur_strength"]doubleValue];
+    if(DWTyped(e[@"animate_blur_fps"],NSNumber.class))effects.animateBlurFPS=(uint32_t)lround(fmin(fmax([e[@"animate_blur_fps"]doubleValue],0),UINT32_MAX));
+    if(DWTyped(e[@"animation_speed"],NSNumber.class))effects.animationSpeed=[e[@"animation_speed"]doubleValue];
+    if(DWTyped(e[@"animation_scale"],NSNumber.class))effects.animationScale=[e[@"animation_scale"]doubleValue];
     self.effects=IFCompositorEffectsSanitized(effects);
     // Upstream's error bar shows state.errors in the order of ErrorSource: config, background, keyboard. The controller sends its own
     // sources' messages in that order, config first, and the background's is this program's, so it follows the first of them.
-    NSMutableArray<NSString *> *errors=[NSMutableArray array];for(id message in list(render[@"errors"]))if(text(message))[errors addObject:message];
+    NSMutableArray<NSString *> *errors=[NSMutableArray array];for(id message in list(render[@"errors"]))if(DWTyped(message,NSString.class))[errors addObject:message];
     if(self.program.errorText)[errors insertObject:self.program.errorText atIndex:MIN(errors.count,(NSUInteger)1)];
     self.errors=errors.count?errors:nil;return YES;
 }
@@ -389,7 +388,7 @@ static CGRect geometryFromScreen(CGRect rect,IFCompositorSpace space,IFComposito
     NSMutableArray *errors=[self.errors mutableCopy]?:[NSMutableArray array];[errors insertObject:program.errorText atIndex:MIN(errors.count,(NSUInteger)1)];return errors.copy;
 }
 - (void)cache:(DWCanvasOutput *)state output:(NSDictionary *)description {
-    IFBackgroundProgram *base=self.backgroundForOutput?self.backgroundForOutput(number(description[@"id"]),description,self.program):nil;
+    IFBackgroundProgram *base=self.backgroundForOutput?self.backgroundForOutput(DWTyped(description[@"id"],NSNumber.class),description,self.program):nil;
     base=base?:self.program;state.background=[base programForOutput];if(state.background==base)return;
     __weak DWCanvasRenderer *weak=self;__weak DWCanvasOutput *output=state;
     state.background.chunkReadyHandler=^{DWCanvasOutput *shown=output;if(!shown.frame.background){[shown.background shrinkChunkCache];return;}shown.dirty=YES;[shown.layer setNeedsRedraw];shown.menuDirty=shown.menuLayer!=nil;[shown.menuLayer setNeedsRedraw];[weak setNeedsFlush];};
@@ -398,8 +397,8 @@ static CGRect geometryFromScreen(CGRect rect,IFCompositorSpace space,IFComposito
     if(!self.program||!self.backgroundForOutput)return;BOOL changed=NO;
     for(DWCanvasOutput *state in self.states.allValues){
         IFBackgroundProgram *prior=state.background;[self cache:state output:state.orderOutput];if(state.background==prior)continue;
-        [prior shrinkChunkCache];NSDictionary *full=dict(state.orderOutput[@"fullscreen"]);
-        state.frame.background=!self.nativeWindows&&full&&![text(full[@"backdrop"])isEqual:@"canvas"]?nil:state.background;
+        [prior shrinkChunkCache];NSDictionary *full=DWTyped(state.orderOutput[@"fullscreen"],NSDictionary.class);
+        state.frame.background=!self.nativeWindows&&full&&![DWTyped(full[@"backdrop"],NSString.class)isEqual:@"canvas"]?nil:state.background;
         state.menuFrame.background=state.background;state.menuDirty=state.menuLayer!=nil;
         state.frame.errorMessages=[self backgroundErrors:state.background];state.dirty=YES;changed=YES;
     }
@@ -412,7 +411,7 @@ static CGRect geometryFromScreen(CGRect rect,IFCompositorSpace space,IFComposito
 }
 // Is the window of this placement, or of this entry of the window list, screen-pinned?
 // A placement says so with a boolean, a window entry with its pin ({output, screen_rect}).
-static BOOL pinnedOf(NSDictionary *p) { return [number(p[@"pinned"])boolValue]||dict(p[@"pinned"])!=nil; }
+static BOOL pinnedOf(NSDictionary *p) { return [DWTyped(p[@"pinned"],NSNumber.class)boolValue]||DWTyped(p[@"pinned"],NSDictionary.class)!=nil; }
 // One placement as a compositor element. `rect` is the window's rectangle: its canvas
 // rectangle, or with `onScreen` its pin's rectangle in the output's own points, which
 // the compositor draws at zoom 1 whatever the camera (upstream's screen-pinned
@@ -426,15 +425,15 @@ static BOOL pinnedOf(NSDictionary *p) { return [number(p[@"pinned"])boolValue]||
 // whose bar and body together cover exactly the window's rectangle.
 - (BOOL)fill:(IFCompositorElement *)element window:(NSNumber *)window placement:(NSDictionary *)p rect:(CGRect)world onScreen:(BOOL)onScreen {
     if(!currentDrawnPlacement(p))return NO;
-    NSString *kind=text(p[@"kind"]),*title=text(p[@"title"]),*app=displayName(text(p[@"app_name"]));BOOL standin=[kind isEqual:@"standin"];
+    NSString *kind=DWTyped(p[@"kind"],NSString.class),*title=DWTyped(p[@"title"],NSString.class),*app=displayName(DWTyped(p[@"app_name"],NSString.class));BOOL standin=[kind isEqual:@"standin"];
     element.identifier=window.unsignedLongLongValue;element.kind=standin?IFCompositorElementKindStandIn:IFCompositorElementKindWindow;
     element.space=onScreen?IFCompositorSpacePinned:IFCompositorSpaceCanvas;
-    element.layer=onScreen?IFCompositorStackLayerPinned:[number(p[@"widget"])boolValue]?IFCompositorStackLayerWidget:IFCompositorStackLayerNormal;
+    element.layer=onScreen?IFCompositorStackLayerPinned:[DWTyped(p[@"widget"],NSNumber.class)boolValue]?IFCompositorStackLayerWidget:IFCompositorStackLayerNormal;
     // Upstream's dot at the left of a pinned window's title bar. The compositor draws it in a `server` bar only: a stand-in's bar and a client-decorated window show none.
     element.showsPinnedIndicator=pinnedOf(p);
-    element.focused=[number(p[@"focused"])boolValue];
-    element.decoration=decorationOf(dict(p[@"decoration"]),self.chrome.cornerRadius);
-    element.appName=app;element.launching=[number(p[@"launching"])boolValue];
+    element.focused=[DWTyped(p[@"focused"],NSNumber.class)boolValue];
+    element.decoration=decorationOf(DWTyped(p[@"decoration"],NSDictionary.class),self.chrome.cornerRadius);
+    element.appName=app;element.launching=[DWTyped(p[@"launching"],NSNumber.class)boolValue];
     if(standin){element.title=title;element.rect=IFCompositorStandInBodyRect(world,YES,self.chrome.titleBarHeight);element.pixelBuffer=NULL;element.texture=nil;element.contentGeneration=0;element.contentRect=CGRectNull;return YES;}
     // A server title bar shows the title, else the application's name, as upstream falls back to the app id.
     element.title=title.length?title:app?:@"";element.rect=world;
@@ -455,7 +454,7 @@ static const double sizeHold=10;
 static NSArray<NSDictionary *> *orderBinding(NSDictionary *snapshot,NSNumber *output) {
     NSMutableArray *placements=[NSMutableArray array];
     for(id entry in list(snapshot[@"placements"])){
-        NSDictionary *p=dict(entry);if(![p[@"output"]isEqual:output])continue;
+        NSDictionary *p=DWTyped(entry,NSDictionary.class);if(![p[@"output"]isEqual:output])continue;
         if(p[@"focused"]){NSMutableDictionary *binding=[p mutableCopy];[binding removeObjectForKey:@"focused"];[placements addObject:binding.copy];}
         else [placements addObject:p];
     }
@@ -477,7 +476,7 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
         if([token[@"barrier"]boolValue])segment++;
     }
     for(NSUInteger i=0;i<candidate.count;i++){
-        NSDictionary *token=dict(candidate[i]),*original=base[i];
+        NSDictionary *token=DWTyped(candidate[i],NSDictionary.class),*original=base[i];
         if(!token||![expected containsObject:token]||[seen containsObject:token]||![token[@"bucket"]isEqual:original[@"bucket"]])return base;
         if([original[@"barrier"]boolValue]?![token isEqual:original]:[token[@"barrier"]boolValue]||![segments[token]isEqual:segments[original]])return base;
         [seen addObject:token];[accepted addObject:[expected member:token]];if(token[@"window"]&&!token[@"key"])[nextRoots addObject:token];
@@ -492,7 +491,7 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
         IFCompositorStackLayer bucket=buckets[i];
         for(NSDictionary *p in state.orderPlacements){
             NSNumber *window=p[@"window"];IFCompositorElement *root=state.elements[window];
-            IFCompositorStackLayer layer=root?root.layer:[number(p[@"pinned"])boolValue]?IFCompositorStackLayerPinned:[number(p[@"widget"])boolValue]?IFCompositorStackLayerWidget:IFCompositorStackLayerNormal;
+            IFCompositorStackLayer layer=root?root.layer:[DWTyped(p[@"pinned"],NSNumber.class)boolValue]?IFCompositorStackLayerPinned:[DWTyped(p[@"widget"],NSNumber.class)boolValue]?IFCompositorStackLayerWidget:IFCompositorStackLayerNormal;
             if(layer!=bucket)continue;
             BOOL barrier=!root||root.kind==IFCompositorElementKindStandIn;
             NSDictionary *token=barrier?@{@"window":window,@"bucket":@(bucket),@"barrier":@YES}:@{@"window":window,@"bucket":@(bucket)};
@@ -531,7 +530,7 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
     if(self.liveOrderRevision){if(state.orderRevision!=self.liveOrderRevision(output))return nil;}
     else if(![state.orderApplied isEqualToArray:validatedOrder(self.liveOrder?self.liveOrder(state.orderBase,output):nil,state.orderBase)])return nil;
     if(snapshot!=state.orderSnapshot&&snapshot!=state.orderMatchedSnapshot){
-        NSDictionary *current=nil;for(id entry in list(snapshot[@"outputs"])){NSDictionary *o=dict(entry);if(drawableOutput(o)&&[o[@"id"]isEqual:output]){current=o;break;}}
+        NSDictionary *current=nil;for(id entry in list(snapshot[@"outputs"])){NSDictionary *o=DWTyped(entry,NSDictionary.class);if(drawableOutput(o)&&[o[@"id"]isEqual:output]){current=o;break;}}
         if(![state.orderOutput isEqual:current]||![state.orderBinding isEqualToArray:orderBinding(snapshot,output)])return nil;
         state.orderMatchedSnapshot=snapshot;
     }
@@ -635,7 +634,7 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
         IFCompositorElement *picture=[renderer closingSnapshotOfElement:image inFrame:state.frame flattenScale:scale];
         if(!picture){[renderer purge];return nil;}
         CGRect rect=picture.rect;rect=CGRectMake(rect.origin.x/unit,rect.origin.y/unit,rect.size.width/unit,rect.size.height/unit);
-        if(!finiteImageRect(rect)){[renderer purge];return nil;}
+        if(!DWFiniteRect(rect)){[renderer purge];return nil;}
         picture.rect=rect;picture.space=IFCompositorSpaceCanvas;picture.hasClipRect=NO;picture.lifecycle=IFCompositorLifecycleClosingAlphaOnly;picture.lifecycleStartTime=NAN;picture.lifecycleProgress=0;picture.contentGeneration=image.contentGeneration;
         if(image==root)centre=CGPointMake(CGRectGetMidX(rect),CGRectGetMidY(rect));bounds=CGRectUnion(bounds,rect);[baked addObject:picture];
     }
@@ -699,12 +698,12 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
 // animations are over on their first tick, and nothing is played.
 - (void)play:(NSDictionary *)snapshot now:(double)now {
     NSArray *events=list(snapshot[@"lifecycle_events"]);uint64_t played=self.played,newest=played;
-    for(id event in events)newest=MAX(newest,[number(dict(event)[@"serial"])unsignedLongLongValue]);
+    for(id event in events)newest=MAX(newest,[DWTyped(DWTyped(event,NSDictionary.class)[@"serial"],NSNumber.class)unsignedLongLongValue]);
     self.played=newest;if(!self.following){self.following=YES;return;}
     if(newest==played||self.effects.animationSpeed>=1)return;
     for(id entry in events){
-        NSDictionary *event=dict(entry);NSNumber *window=number(event[@"window"]);NSString *name=text(event[@"event"]);
-        if(!window||[number(event[@"serial"])unsignedLongLongValue]<=played)continue;
+        NSDictionary *event=DWTyped(entry,NSDictionary.class);NSNumber *window=DWTyped(event[@"window"],NSNumber.class);NSString *name=DWTyped(event[@"event"],NSString.class);
+        if(!window||[DWTyped(event[@"serial"],NSNumber.class)unsignedLongLongValue]<=played)continue;
         if([name isEqual:@"close"]||[name isEqual:@"close_to_standin"])[self close:window inPlace:[name isEqual:@"close_to_standin"] now:now];
         else if([name isEqual:@"standin_dismiss"]||[name isEqual:@"standin_adopted"])[self fade:window inPlace:[name isEqual:@"standin_adopted"] now:now];
     }
@@ -729,17 +728,17 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
     if(!state.geometry)state.geometry=[NSMutableDictionary dictionary];
     CGRect bounds=rectOf(state.orderOutput[@"screen_bounds"]);
     if(!CGRectEqualToRect(bounds,state.geometryBounds)){[state.geometry removeAllObjects];state.geometryBounds=bounds;}
-    NSDictionary *resize=dict(snapshot[@"native_resize"]);NSString *phase=text(resize[@"phase"]);
-    BOOL live=dict(resize[@"pending_effect"])||[phase isEqual:@"preparing"]||[phase isEqual:@"dragging"]||[phase isEqual:@"settling"];
+    NSDictionary *resize=DWTyped(snapshot[@"native_resize"],NSDictionary.class);NSString *phase=DWTyped(resize[@"phase"],NSString.class);
+    BOOL live=DWTyped(resize[@"pending_effect"],NSDictionary.class)||[phase isEqual:@"preparing"]||[phase isEqual:@"dragging"]||[phase isEqual:@"settling"];
     double duration=fmin(.35,fmax(.20,IFCompositorAnimationDuration(self.effects.animationSpeed)));
     for(NSNumber *window in state.geometry.allKeys)if(!state.elements[window])[state.geometry removeObjectForKey:window];
     for(NSNumber *window in state.elements){
-        IFCompositorElement *element=state.elements[window];NSDictionary *p=state.placements[window],*source=dict(p[@"source"]),*identity=dict(source[@"identity"]);NSNumber *generation=number(source[@"generation"]);
-        if(element.kind!=IFCompositorElementKindWindow||!identity||!generation||!finiteImageRect(element.rect)){[state.geometry removeObjectForKey:window];continue;}
+        IFCompositorElement *element=state.elements[window];NSDictionary *p=state.placements[window],*source=DWTyped(p[@"source"],NSDictionary.class),*identity=DWTyped(source[@"identity"],NSDictionary.class);NSNumber *generation=DWTyped(source[@"generation"],NSNumber.class);
+        if(element.kind!=IFCompositorElementKindWindow||!identity||!generation||!DWFiniteRect(element.rect)){[state.geometry removeObjectForKey:window];continue;}
         DWCanvasGeometry *geometry=state.geometry[window];BOOL known=geometry&&[geometry.identity isEqual:identity]&&[geometry.generation isEqual:generation];
-        BOOL full=[number(p[@"fullscreen"])boolValue];
-        BOOL action=[resize[@"window"]isEqual:window]&&number(resize[@"interactive"])&&![resize[@"interactive"]boolValue]&&[resize[@"identity"]isEqual:identity]&&[resize[@"generation"]isEqual:generation];
-        NSNumber *transaction=action?number(resize[@"transaction"]):nil;CGRect target=element.rect;
+        BOOL full=[DWTyped(p[@"fullscreen"],NSNumber.class)boolValue];
+        BOOL action=[resize[@"window"]isEqual:window]&&DWTyped(resize[@"interactive"],NSNumber.class)&&![resize[@"interactive"]boolValue]&&[resize[@"identity"]isEqual:identity]&&[resize[@"generation"]isEqual:generation];
+        NSNumber *transaction=action?DWTyped(resize[@"transaction"],NSNumber.class):nil;CGRect target=element.rect;
         if(!known){geometry=[DWCanvasGeometry new];geometry.identity=identity;geometry.generation=generation;geometry.target=target;geometry.space=element.space;geometry.screen=geometryScreen(target,element.space,state.frame);state.geometry[window]=geometry;}
         BOOL changed=geometry.space!=element.space||!CGRectEqualToRect(geometry.target,target);
         BOOL permitted=(geometry.active||geometry.fullscreen!=full||(action&&(live||geometry.actionLive||![geometry.transaction isEqual:transaction])))&&!(action&&[geometry.blockedTransaction isEqual:transaction]);
@@ -750,7 +749,7 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
             // controller's already-smooth camera flight is not delayed again.
             CGRect from=geometry.space==element.space?geometryRect(geometry,now):geometryFromScreen(geometry.screen,element.space,state.frame);
             double end=geometry.active&&now<geometry.end?fmax(geometry.end,now+.04):now+duration;
-            geometry.from=from;geometry.start=now;geometry.end=end;geometry.active=finiteImageRect(from)&&!CGRectEqualToRect(from,target);
+            geometry.from=from;geometry.start=now;geometry.end=end;geometry.active=DWFiniteRect(from)&&!CGRectEqualToRect(from,target);
         }else if(changed||!animate||now>=geometry.end)geometry.active=NO;
         geometry.target=target;geometry.space=element.space;geometry.fullscreen=full;geometry.actionLive=action&&live;geometry.transaction=transaction;
         element.rect=geometryRect(geometry,now);state.geometryAnimating|=geometry.active;
@@ -789,32 +788,31 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
     // Reconcile against all snapshot outputs, not just this host's subset: a
     // separate host will describe the other displays in the same shell turn.
     NSMutableArray<NSDictionary *> *all=[NSMutableArray array];NSMutableSet<NSNumber *> *alive=[NSMutableSet set];
-    for(id entry in list(snapshot[@"outputs"])){NSDictionary *output=dict(entry);if(drawableOutput(output)&&![alive containsObject:output[@"id"]]){[all addObject:output];[alive addObject:output[@"id"]];}}
+    for(id entry in list(snapshot[@"outputs"])){NSDictionary *output=DWTyped(entry,NSDictionary.class);if(drawableOutput(output)&&![alive containsObject:output[@"id"]]){[all addObject:output];[alive addObject:output[@"id"]];}}
     for(NSNumber *output in self.states.allKeys)if(![alive containsObject:output]){[self stopOutput:self.states[output]];[self.states removeObjectForKey:output];}
     if(!host)return;[self configure:snapshot];double now=canvasTime();[self play:snapshot now:now];
     // The windows an `open` event of this snapshot names, and the serial of each: an output that has not been described with it yet opens the window.
     NSMutableDictionary<NSNumber *,NSNumber *> *opened=[NSMutableDictionary dictionary];
-    for(id entry in list(snapshot[@"lifecycle_events"])){NSDictionary *event=dict(entry);if(number(event[@"window"])&&number(event[@"serial"])&&[event[@"event"]isEqual:@"open"])opened[event[@"window"]]=event[@"serial"];}
+    for(id entry in list(snapshot[@"lifecycle_events"])){NSDictionary *event=DWTyped(entry,NSDictionary.class);if(DWTyped(event[@"window"],NSNumber.class)&&DWTyped(event[@"serial"],NSNumber.class)&&[event[@"event"]isEqual:@"open"])opened[event[@"window"]]=event[@"serial"];}
     // The window the controller owes a size: its one size transaction, while an effect of it is outstanding. Null in a run that cannot deliver a size.
-    NSDictionary *resize=dict(snapshot[@"native_resize"]);self.sizing=dict(resize[@"pending_effect"])?number(resize[@"window"]):nil;
+    NSDictionary *resize=DWTyped(snapshot[@"native_resize"],NSDictionary.class);self.sizing=DWTyped(resize[@"pending_effect"],NSDictionary.class)?DWTyped(resize[@"window"],NSNumber.class):nil;
     for(NSDictionary *o in all){
-        NSNumber *output=number(o[@"id"]);CGRect bounds=rectOf(o[@"screen_bounds"]);if(![alive containsObject:output]||![outputs containsObject:output])continue;
+        NSNumber *output=DWTyped(o[@"id"],NSNumber.class);CGRect bounds=rectOf(o[@"screen_bounds"]);if(![alive containsObject:output]||![outputs containsObject:output])continue;
         DWCanvasOutput *state=self.states[output];
         // An output that is new shows no event that came before it: nothing was on it to open.
-        if(!state){state=self.states[output]=[DWCanvasOutput new];state.layer=[[IFCompositorLayer alloc]initWithRenderer:nil];state.frame=[IFCompositorFrame new];state.elements=[NSMutableDictionary dictionary];state.placements=[NSMutableDictionary dictionary];state.attachments=[NSMutableDictionary dictionary];state.leaving=[NSMutableArray array];state.unseen=[NSMutableDictionary dictionary];state.adopted=[NSMutableDictionary dictionary];state.owed=[NSMutableDictionary dictionary];state.serial=self.played;state.layer.countsPresented=self.measured;state.layer.asynchronousDrawables=!self.synchronousDrawables;__weak DWCanvasRenderer *weak=self;state.layer.drawableReady=^{[weak retryDrawable:output];};self.placed=YES;}
-        // Below the toolbar and the status line, as the window tiles were.
+        if(!state){state=self.states[output]=[DWCanvasOutput new];state.layer=[[IFCompositorLayer alloc]initWithRenderer:nil];state.frame=[IFCompositorFrame new];state.elements=[NSMutableDictionary dictionary];state.placements=[NSMutableDictionary dictionary];state.attachments=[NSMutableDictionary dictionary];state.leaving=[NSMutableArray array];state.unseen=[NSMutableDictionary dictionary];state.adopted=[NSMutableDictionary dictionary];state.owed=[NSMutableDictionary dictionary];state.serial=self.played;state.layer.countsPresented=self.measured;__weak DWCanvasRenderer *weak=self;state.layer.drawableReady=^{[weak retryDrawable:output];};self.placed=YES;}
         if(state.layer.superlayer!=host){[host insertSublayer:state.layer atIndex:0];self.placed=YES;}
         CGRect place=CGRectOffset(bounds,-origin.x,-origin.y);if(!CGRectEqualToRect(state.layer.frame,place)){state.layer.frame=place;self.placed=YES;}
-        IFCompositorFrame *frame=state.frame;CGPoint camera=pointOf(o[@"camera"]);double zoom=[number(o[@"zoom"])doubleValue];
+        IFCompositorFrame *frame=state.frame;CGPoint camera=pointOf(o[@"camera"]);double zoom=[DWTyped(o[@"zoom"],NSNumber.class)doubleValue];
         if(frame.scale!=(scale>0?scale:1))self.placed=YES;
         frame.size=bounds.size;frame.scale=scale>0?scale:1;frame.cameraX=camera.x;frame.cameraY=camera.y;frame.zoom=zoom;frame.clear=IFCompositorClearOpaqueBlack;frame.decorationScale=decorationScale;
         if(state.style!=self.style||!CGRectEqualToRect(bounds,rectOf(state.orderOutput[@"screen_bounds"]))){state.style=self.style;[self cache:state output:o];frame.background=state.background;frame.chrome=self.chrome;frame.placeholderColor=self.chrome.backgroundColor;frame.outline=self.outline;frame.effects=self.effects;frame.errorMessages=[self backgroundErrors:state.background];}
         // The other outputs' viewports, projected as upstream's build_output_outline_elements does.
         NSMutableData *outlines=[NSMutableData data];
         for(NSDictionary *other in all){
-            if(other==o||!number(other[@"id"])||[other[@"id"]isEqual:output])continue;
+            if(other==o||!DWTyped(other[@"id"],NSNumber.class)||[other[@"id"]isEqual:output])continue;
             CGPoint otherCamera=pointOf(other[@"camera"]);CGRect otherBounds=rectOf(other[@"screen_bounds"]);if(CGRectIsNull(otherBounds))continue;
-            CGRect outline=IFCompositorOutlineRect(camera.x,camera.y,zoom,otherCamera.x,otherCamera.y,otherBounds.size,[number(other[@"zoom"])doubleValue]);[outlines appendBytes:&outline length:sizeof(outline)];
+            CGRect outline=IFCompositorOutlineRect(camera.x,camera.y,zoom,otherCamera.x,otherCamera.y,otherBounds.size,[DWTyped(other[@"zoom"],NSNumber.class)doubleValue]);[outlines appendBytes:&outline length:sizeof(outline)];
         }
         [frame setOutlineRects:outlines.bytes count:outlines.length/sizeof(CGRect)];
         // Placement order is the controller's bottom-to-top z order: this output's widgets, its canvas
@@ -824,18 +822,18 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
         NSMutableArray<NSDictionary *> *orderedPlacements=[NSMutableArray array];NSMutableSet<NSNumber *> *seenPlacements=[NSMutableSet set];
         NSMutableDictionary<NSNumber *,NSNumber *> *unseen=[NSMutableDictionary dictionary],*owed=[NSMutableDictionary dictionary];
         for(id entry in list(snapshot[@"placements"])){
-            NSDictionary *p=dict(entry);if(!currentOutputPlacement(p))continue;
-            NSNumber *window=number(p[@"window"]);if(!window||![p[@"output"]isEqual:output]||[seenPlacements containsObject:window])continue;
+            NSDictionary *p=DWTyped(entry,NSDictionary.class);if(!currentOutputPlacement(p))continue;
+            NSNumber *window=DWTyped(p[@"window"],NSNumber.class);if(!window||![p[@"output"]isEqual:output]||[seenPlacements containsObject:window])continue;
             // A screen-pinned placement has no canvas position to draw from: its screen_rect is its pin's, in
             // global screen points at the window's own size whatever the camera and the zoom, and the pinned
             // space takes it in this output's own points. Its world rectangle is bookkeeping and is not read.
-            BOOL pinned=[number(p[@"pinned"])boolValue];CGRect world;
+            BOOL pinned=[DWTyped(p[@"pinned"],NSNumber.class)boolValue];CGRect world;
             if(pinned){world=rectOf(p[@"screen_rect"]);if(CGRectIsNull(world))continue;world=CGRectOffset(world,-bounds.origin.x,-bounds.origin.y);}
             else {world=rectOf(p[@"world_rect"]);if(CGRectIsNull(world))continue;}
             [seenPlacements addObject:window];[orderedPlacements addObject:p];
             // Preserve physical roots in the complete order as barriers even
             // though WindowServer, rather than this frame, draws their pixels.
-            BOOL standin=[text(p[@"kind"])isEqual:@"standin"];
+            BOOL standin=[DWTyped(p[@"kind"],NSString.class)isEqual:@"standin"];
             if(self.nativeWindows&&!standin&&!(self.nativeReplica&&self.nativeReplica(window,output)))continue;
             IFCompositorElement *element=state.elements[window]?:[IFCompositorElement new];
             if(![self fill:element window:window placement:p rect:world onScreen:pinned])continue;
@@ -848,7 +846,7 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
                 CGRect visual=CGRectMake((left-bw)*z,(top-bar-bw)*z,(world.size.width+2*bw)*z,(world.size.height+bar+2*bw)*z);
                 element.decoration=IFCompositorDecorationDrawn(d,NO,IFCompositorCoverageOfFrame(visual,CGRectMake(0,0,bounds.size.width,bounds.size.height)));
                 // Upstream's effective_blur, the controller's answer: a plain flag that the coverage rule does not touch. Never set for a capture.
-                element.blur=[number(dict(p[@"decoration"])[@"blur"])boolValue];
+                element.blur=[DWTyped(DWTyped(p[@"decoration"],NSDictionary.class)[@"blur"],NSNumber.class)boolValue];
                 // Upstream's open animation, for a window an `open` event names that this output has not shown opening. It runs from the
                 // window's first picture: here when it has one, or has waited a second for it, else in -contentChanged:. While its size is
                 // owed (`owed`, above) the wait is renewed instead, so that second starts when the size transaction has ended.
@@ -857,7 +855,7 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
                 // long as the application takes. It is drawn from its first picture at the size it has (FULLSCREEN.md, No transition).
                 NSNumber *since=state.unseen[window];
                 if([opened[window]unsignedLongLongValue]>state.serial&&self.effects.animationSpeed<1){since=@(now);element.lifecycle=IFCompositorLifecycleOpening;element.lifecycleStartTime=NAN;element.lifecycleProgress=0;}
-                NSNumber *held=since&&[self.sizing isEqual:window]&&![number(p[@"fullscreen"])boolValue]?(state.owed[window]?:@(now)):nil;
+                NSNumber *held=since&&[self.sizing isEqual:window]&&![DWTyped(p[@"fullscreen"],NSNumber.class)boolValue]?(state.owed[window]?:@(now)):nil;
                 if(held)owed[window]=held;
                 if(held&&now-held.doubleValue<sizeHold)unseen[window]=@(now);
                 else if(since&&!pictured(element)&&now-since.doubleValue<1)unseen[window]=since;
@@ -873,7 +871,7 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
         // Upstream draws no closing snapshot and no stand-in fade on an output that is visually fullscreen ("no dying-window flash over a
         // fullscreen app": COMPOSITOR-NOTES.md 18.2, When not to). They are left out of that output's frame and run out unseen on the
         // clock they began on, as upstream's lists do: -flush drops each when it is over, and what is left is back with the canvas.
-        if(!dict(o[@"fullscreen"]))[frame.elements addObjectsFromArray:state.leaving];
+        if(!DWTyped(o[@"fullscreen"],NSDictionary.class))[frame.elements addObjectsFromArray:state.leaving];
         state.elements=elements;state.placements=placements;state.unseen=unseen;state.owed=owed;state.serial=self.played;state.dirty=YES;
         state.orderPlacements=orderedPlacements.copy;state.orderOutput=o;state.orderSnapshot=snapshot;state.orderMatchedSnapshot=nil;state.orderBinding=orderBinding(snapshot,output);state.orderDirty=YES;
         [self describeMenuBackground:state output:o snapshot:snapshot];
@@ -889,9 +887,10 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
         [self applyOrderForOutput:output state:state];
     }
 }
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
-// src/state/fullscreen.rs (enter_fullscreen: the window fills its output at zoom 1 from
-// the output's own corner; recentre_fullscreen_window: one that took another size sits
+// Adapted from DriftWM, https://github.com/malbiruk/driftwm @
+// 352333a8fa1b22171492d4b71a54102045c9a19d: src/state/fullscreen.rs
+// (enter_fullscreen: the window fills its output at zoom 1 from the output's own
+// corner; recentre_fullscreen_window: one that took another size sits
 // in the middle of it), src/render/chrome.rs (DrawnChrome::drawn: a fullscreen window
 // sheds bar, border, corners and shadow) and src/tests/translucent_fullscreen.rs
 // (fullscreen_conceals_canvas: an opaque fullscreen window conceals the background and
@@ -914,10 +913,10 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
 // visually fullscreen, opaque or see-through): an output with such a neighbour has its
 // outlines described again here, from the snapshot's outputs, without that neighbour's.
 - (void)fullscreen:(NSDictionary *)o among:(NSArray<NSDictionary *> *)all state:(DWCanvasOutput *)state {
-    IFCompositorFrame *frame=state.frame;NSDictionary *full=dict(o[@"fullscreen"]);CGPoint corner=rectOf(o[@"screen_bounds"]).origin;
+    IFCompositorFrame *frame=state.frame;NSDictionary *full=DWTyped(o[@"fullscreen"],NSDictionary.class);CGPoint corner=rectOf(o[@"screen_bounds"]).origin;
     // "black": nothing but the clear colour lies behind the window. "canvas": its opacity is below 1 and the canvas shows through it.
-    BOOL concealed=full&&![text(full[@"backdrop"])isEqual:@"canvas"],parked=NO;
-    for(NSDictionary *other in all)if(other!=o&&dict(other[@"fullscreen"]))parked=YES;
+    BOOL concealed=full&&![DWTyped(full[@"backdrop"],NSString.class)isEqual:@"canvas"],parked=NO;
+    for(NSDictionary *other in all)if(other!=o&&DWTyped(other[@"fullscreen"],NSDictionary.class))parked=YES;
     // Upstream shrinks a concealed output's chunk cache on every such frame: it frees its chunks, keeps its floor and has nothing pending.
     // Native windows fill the usable desktop area while this canvas covers the
     // entire display. Keep its background beneath the menu bar and uncovered
@@ -927,16 +926,16 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
     else if(parked){
         NSMutableData *outlines=[NSMutableData data];
         for(NSDictionary *other in all){
-            if(other==o||!number(other[@"id"])||[other[@"id"]isEqual:o[@"id"]]||dict(other[@"fullscreen"]))continue;
+            if(other==o||!DWTyped(other[@"id"],NSNumber.class)||[other[@"id"]isEqual:o[@"id"]]||DWTyped(other[@"fullscreen"],NSDictionary.class))continue;
             CGPoint otherCamera=pointOf(other[@"camera"]);CGRect otherBounds=rectOf(other[@"screen_bounds"]);if(CGRectIsNull(otherBounds))continue;
-            CGRect outline=IFCompositorOutlineRect(frame.cameraX,frame.cameraY,frame.zoom,otherCamera.x,otherCamera.y,otherBounds.size,[number(other[@"zoom"])doubleValue]);[outlines appendBytes:&outline length:sizeof(outline)];
+            CGRect outline=IFCompositorOutlineRect(frame.cameraX,frame.cameraY,frame.zoom,otherCamera.x,otherCamera.y,otherBounds.size,[DWTyped(other[@"zoom"],NSNumber.class)doubleValue]);[outlines appendBytes:&outline length:sizeof(outline)];
         }
         [frame setOutlineRects:outlines.bytes count:outlines.length/sizeof(CGRect)];
     }
     for(NSNumber *window in state.placements){
         NSDictionary *p=state.placements[window];IFCompositorElement *element=state.elements[window];CGRect screen=rectOf(p[@"screen_rect"]);
         // The controller refuses a stand-in fullscreen; one marked so all the same is drawn as the stand-in it is.
-        if(![number(p[@"fullscreen"])boolValue]||element.kind!=IFCompositorElementKindWindow||CGRectIsNull(screen))continue;
+        if(![DWTyped(p[@"fullscreen"],NSNumber.class)boolValue]||element.kind!=IFCompositorElementKindWindow||CGRectIsNull(screen))continue;
         element.rect=CGRectOffset(screen,-corner.x,-corner.y);element.space=IFCompositorSpacePinned;
         element.decoration=IFCompositorDecorationDrawn(element.decoration,YES,IFCompositorCoverageNone);
     }
@@ -971,7 +970,7 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
         // The first picture of a window that was waited for: its opening, and the fade of the stand-in whose slot it adopted, begin.
         // Not while the window's size is owed: that picture is of the size it is leaving, and -render: starts both when the size has settled.
         // A window that is fullscreen here is not held for the output's size (-render:).
-        if(!state.unseen[window]||!pictured(element)||([self.sizing isEqual:window]&&![number(state.placements[window][@"fullscreen"])boolValue]))continue;
+        if(!state.unseen[window]||!pictured(element)||([self.sizing isEqual:window]&&![DWTyped(state.placements[window][@"fullscreen"],NSNumber.class)boolValue]))continue;
         [state.unseen removeObjectForKey:window];IFCompositorElement *fade=state.adopted[window];double start=began(state,canvasTime());
         if(element.lifecycle==IFCompositorLifecycleOpening&&isnan(element.lifecycleStartTime)){element.lifecycleStartTime=start;opening=YES;}
         if(fade){fade.lifecycleStartTime=start;[state.adopted removeObjectForKey:window];opening=YES;}
@@ -1017,7 +1016,6 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
 - (void)flushDescribed { _counts.requests+=self.measured;if(self.placed||!(self.frame&&self.frame(NO)))[self flush]; }
 // Metal hands out autoreleased drawables and encoder contexts; a caller outside a run-loop
 // callout (the launch's first frame, the quit-pending loop) has no pool of its own to end them.
-- (void)flushFrame {[self flushFrameAtTime:0 refreshRate:0];}
 - (void)flushFrameAtTime:(CFTimeInterval)time refreshRate:(NSInteger)rate {
     self.frameTarget=time;self.paced=YES;for(DWCanvasOutput *state in self.states.allValues){state.layer.presentationTime=time;state.layer.presentationInterval=rate>0?1.0/rate:0;state.menuLayer.presentationTime=time;state.menuLayer.presentationInterval=state.layer.presentationInterval;}[self flush];self.paced=NO;
 }
@@ -1069,8 +1067,8 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
 // controller's own `region`, when the effect carries one, is used instead: it knows
 // zoom.fit_padding and the decoration of windows that are on no output.
 - (CGRect)region:(NSDictionary *)effect snapshot:(NSDictionary *)snapshot elements:(NSArray<IFCompositorElement *> *)elements isolate:(IFCompositorElement *)isolate refusal:(NSString *__autoreleasing *)refused {
-    NSArray<NSDictionary *> *outputs=list(snapshot[@"outputs"]);NSDictionary *active=nil;id target=effect[@"target"];NSDictionary *r=dict(dict(target)[@"Region"]);
-    for(NSDictionary *o in outputs)if(number(effect[@"output"])&&[o[@"id"]isEqual:effect[@"output"]])active=o;
+    NSArray<NSDictionary *> *outputs=list(snapshot[@"outputs"]);NSDictionary *active=nil;id target=effect[@"target"];NSDictionary *r=DWTyped(DWTyped(target,NSDictionary.class)[@"Region"],NSDictionary.class);
+    for(NSDictionary *o in outputs)if(DWTyped(effect[@"output"],NSNumber.class)&&[o[@"id"]isEqual:effect[@"output"]])active=o;
     if(isolate)return [self visual:isolate];
     if([target isEqual:@"Viewport"]){
         if(!active){*refused=@"no active output to capture";return CGRectNull;}
@@ -1081,28 +1079,28 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
         // without one). `elements` holds no pinned window; a widget is drawn and not framed, as upstream's is_canvas_window says.
         CGRect all=CGRectNull;for(IFCompositorElement *element in elements)if(element.layer!=IFCompositorStackLayerWidget)all=CGRectUnion(all,[self visual:element]);
         if(CGRectIsNull(all)){*refused=@"no windows to capture";return CGRectNull;}
-        double pad=round(fmax(number(effect[@"fit_padding"])?[effect[@"fit_padding"]doubleValue]:80,0));return CGRectInset(all,-pad,-pad);
+        double pad=round(fmax(DWTyped(effect[@"fit_padding"],NSNumber.class)?[effect[@"fit_padding"]doubleValue]:80,0));return CGRectInset(all,-pad,-pad);
     }
     if(!r){*refused=@"unknown screenshot target";return CGRectNull;}
-    long x=[number(r[@"x"])longValue],y=[number(r[@"y"])longValue],w=[number(r[@"w"])longValue],h=[number(r[@"h"])longValue];
+    long x=[DWTyped(r[@"x"],NSNumber.class)longValue],y=[DWTyped(r[@"y"],NSNumber.class)longValue],w=[DWTyped(r[@"w"],NSNumber.class)longValue],h=[DWTyped(r[@"h"],NSNumber.class)longValue];
     if(w<=0||h<=0){*refused=@"region width and height must be positive";return CGRectNull;}
     // rule_to_internal: the rectangle is centred on a Y-up canvas point.
-    if(![number(r[@"from_screen"])boolValue])return CGRectMake(x-w/2,-y-h/2,w,h);
+    if(![DWTyped(r[@"from_screen"],NSNumber.class)boolValue])return CGRectMake(x-w/2,-y-h/2,w,h);
     // Screen points, mapped through the output they lie on, else the active one.
     NSDictionary *output=nil;for(NSDictionary *o in outputs)if(!output&&CGRectContainsPoint(rectOf(o[@"screen_bounds"]),CGPointMake(x,y)))output=o;
     if(!output)output=active;if(!output){*refused=@"no output for the screen region";return CGRectNull;}
-    CGPoint camera=pointOf(output[@"camera"]),corner=rectOf(output[@"screen_bounds"]).origin;double zoom=[number(output[@"zoom"])doubleValue];if(!(isfinite(zoom)&&zoom>0))zoom=1;
+    CGPoint camera=pointOf(output[@"camera"]),corner=rectOf(output[@"screen_bounds"]).origin;double zoom=[DWTyped(output[@"zoom"],NSNumber.class)doubleValue];if(!(isfinite(zoom)&&zoom>0))zoom=1;
     return CGRectMake(round(camera.x+(x-corner.x)/zoom),round(camera.y+(y-corner.y)/zoom),round(w/zoom),round(h/zoom));
 }
 - (NSDictionary *)screenshotPixels:(NSDictionary *)effect snapshot:(NSDictionary *)snapshot {
-    NSString *path=text(effect[@"path"]),*refused=nil;double scale=number(effect[@"scale"])?[effect[@"scale"]doubleValue]:NAN;
+    NSString *path=DWTyped(effect[@"path"],NSString.class),*refused=nil;double scale=DWTyped(effect[@"scale"],NSNumber.class)?[effect[@"scale"]doubleValue]:NAN;
     if(!path.isAbsolutePath)return refusal(@"screenshot path must be absolute");
     if(!snapshot)return refusal(@"no renderer available for capture");
     if(!currentOutputPlacements(snapshot[@"placements"]))return refusal(@"snapshot placements do not match the current schema");
     [self configure:snapshot];
     // A window target is composed alone on transparency, its shadow included. The controller resolved the selector.
-    id target=effect[@"target"];IFCompositorElement *isolate=nil;NSDictionary *alone=dict(dict(target)[@"Window"]);
-    NSNumber *wanted=alone?number(alone[@"window"])?:number(dict(snapshot[@"focus"])[@"intent"]):nil;
+    id target=effect[@"target"];IFCompositorElement *isolate=nil;NSDictionary *alone=DWTyped(DWTyped(target,NSDictionary.class)[@"Window"],NSDictionary.class);
+    NSNumber *wanted=alone?DWTyped(alone[@"window"],NSNumber.class)?:DWTyped(DWTyped(snapshot[@"focus"],NSDictionary.class)[@"intent"],NSNumber.class):nil;
     // Every world window bottom to top at its canvas rectangle, described by its placement on any
     // output; one that is on no output is described by its entry of the window list. Upstream
     // compose_capture_elements: a canvas capture never includes a screen-pinned window
@@ -1111,7 +1109,7 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
     // which for a pinned window is the canvas frame its pin shows.
     NSMutableDictionary<NSNumber *,NSDictionary *> *placed=[NSMutableDictionary dictionary];
     for(id entry in list(snapshot[@"placements"])){
-        NSDictionary *p=dict(entry);NSNumber *window=number(p[@"window"]);
+        NSDictionary *p=DWTyped(entry,NSDictionary.class);NSNumber *window=DWTyped(p[@"window"],NSNumber.class);
         if(currentOutputPlacement(p)&&(!placed[window]||[p[@"output"]isEqual:effect[@"output"]]))placed[window]=p;
     }
     NSMutableArray<IFCompositorElement *> *elements=[NSMutableArray array];
@@ -1119,16 +1117,16 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
     NSMutableArray<NSDictionary *> *exportTokens=self.exportOrder?[NSMutableArray array]:nil;
     NSMutableDictionary<NSDictionary *,IFCompositorElement *> *exportElements=self.exportOrder?[NSMutableDictionary dictionary]:nil;
     for(id entry in list(snapshot[@"windows"])){
-        NSDictionary *w=dict(entry);if(!w)return refusal(@"snapshot window entries must be objects");
-        NSNumber *window=number(w[@"window"]);CGRect world=rectOf(w[@"world_rect"]);NSDictionary *p=placed[window],*source=dict(w[@"source"]),*metadata=dict(w[@"metadata"]);
+        NSDictionary *w=DWTyped(entry,NSDictionary.class);if(!w)return refusal(@"snapshot window entries must be objects");
+        NSNumber *window=DWTyped(w[@"window"],NSNumber.class);CGRect world=rectOf(w[@"world_rect"]);NSDictionary *p=placed[window],*source=DWTyped(w[@"source"],NSDictionary.class),*metadata=DWTyped(w[@"metadata"],NSDictionary.class);
         // Upstream's windows are at least one pixel in each direction.
         if(!window||CGRectIsNull(world)||world.size.width<=0||world.size.height<=0)continue;
         // An isolated export has exactly this family's token set. Other roots
         // neither constrain its order nor borrow pixels into this composition.
         if(alone&&![window isEqual:wanted])continue;
         if(pinnedOf(w)&&![window isEqual:wanted])continue;
-        if(!p){NSMutableDictionary *described=[w mutableCopy];BOOL settled=source&&[number(source[@"observation_known"])boolValue];
-            described[@"presentation_settled"]=settled?@YES:@NO;if(!described[@"title"])described[@"title"]=text(metadata[@"title"])?:@"";if(!described[@"app_name"])described[@"app_name"]=text(metadata[@"bundle_id"])?:@"";p=described;}
+        if(!p){NSMutableDictionary *described=[w mutableCopy];BOOL settled=source&&[DWTyped(source[@"observation_known"],NSNumber.class)boolValue];
+            described[@"presentation_settled"]=settled?@YES:@NO;if(!described[@"title"])described[@"title"]=DWTyped(metadata[@"title"],NSString.class)?:@"";if(!described[@"app_name"])described[@"app_name"]=DWTyped(metadata[@"bundle_id"],NSString.class)?:@"";p=described;}
         if(!currentDrawnPlacement(p))return refusal(@"snapshot window entries do not match the current schema");
         // Native presentation omits live pictures from the on-screen canvas, but
         // an export supplies separate one-shot pixels through the source provider.
@@ -1140,7 +1138,7 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
         // family's matching output may supply pixels when no one-shot ordering
         // contract is installed. Never borrow live observations into an ordered
         // one-shot export, or another output's geometry/capture generation.
-        NSArray<DWCanvasAttachment *> *familyImages=element.kind==IFCompositorElementKindWindow?(self.exportAttachments?self.exportAttachments(window):!self.exportOrder&&self.liveAttachments&&number(p[@"output"])?self.liveAttachments(window,p[@"output"]):nil):nil;
+        NSArray<DWCanvasAttachment *> *familyImages=element.kind==IFCompositorElementKindWindow?(self.exportAttachments?self.exportAttachments(window):!self.exportOrder&&self.liveAttachments&&DWTyped(p[@"output"],NSNumber.class)?self.liveAttachments(window,p[@"output"]):nil):nil;
         if(familyImages.count){NSMutableArray *family=[NSMutableArray array];NSMutableSet<NSString *> *keys=exportTokens?[NSMutableSet set]:nil;
             for(DWCanvasAttachment *image in familyImages){
                 if(!validAttachment(image))return refusal(@"capture attachment has no valid image geometry or source-pixel crop");
@@ -1172,7 +1170,7 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
         if(!isolate)return refusal(window?@"window has no capturable area":@"no window matching selector");
         // Upstream compose_capture_elements: a window captured alone is drawn as itself, at its rule's
         // opacity or 1, not at the opacity its focus gives it on screen. The controller resolved which.
-        NSNumber *opacity=number(dict(dict(target)[@"Window"])[@"opacity"]);if(opacity){IFCompositorDecoration d=isolate.decoration;d.opacity=opacity.doubleValue;isolate.decoration=d;
+        NSNumber *opacity=DWTyped(DWTyped(DWTyped(target,NSDictionary.class)[@"Window"],NSDictionary.class)[@"opacity"],NSNumber.class);if(opacity){IFCompositorDecoration d=isolate.decoration;d.opacity=opacity.doubleValue;isolate.decoration=d;
             for(IFCompositorElement *child in attachments[window]){IFCompositorDecoration d=child.decoration;d.opacity=opacity.doubleValue;child.decoration=d;}}
     }
     CGRect region=rectOf(effect[@"region"]);if(CGRectIsNull(region))region=[self region:effect snapshot:snapshot elements:elements isolate:isolate refusal:&refused];
@@ -1195,7 +1193,7 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
     CGPoint backgroundCentre=CGPointMake(region.origin.x+trunc(region.size.width/2),region.origin.y+trunc(region.size.height/2));NSDictionary *backgroundOutput=nil,*activeBackgroundOutput=nil;
     for(NSDictionary *output in list(snapshot[@"outputs"])){if(!backgroundOutput&&CGRectContainsPoint(viewportOf(output),backgroundCentre))backgroundOutput=output;if([output[@"id"]isEqual:effect[@"output"]])activeBackgroundOutput=output;}
     backgroundOutput=backgroundOutput?:activeBackgroundOutput;
-    IFBackgroundProgram *backgroundProgram=!isolate&&self.backgroundForOutput&&backgroundOutput?self.backgroundForOutput(number(backgroundOutput[@"id"]),backgroundOutput,self.program):nil;backgroundProgram=backgroundProgram?:self.program;
+    IFBackgroundProgram *backgroundProgram=!isolate&&self.backgroundForOutput&&backgroundOutput?self.backgroundForOutput(DWTyped(backgroundOutput[@"id"],NSNumber.class),backgroundOutput,self.program):nil;backgroundProgram=backgroundProgram?:self.program;
     BOOL wallpaper=!isolate&&backgroundProgram.kind==IFBackgroundKindWallpaper;CGRect dest=CGRectNull;
     if(wallpaper){
         dest=viewportOf(backgroundOutput);
@@ -1220,7 +1218,7 @@ static NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidat
         // The picture that output shows, drawn by the same module at the capture's density (one texture at
         // most), laid under the scene at whole pixels. Core Graphics counts rows from the bottom.
         IFCompositorFrame *under=[IFCompositorFrame new];size_t wide=CGImageGetWidth(image),high=CGImageGetHeight(image);
-        CGRect paperBounds=rectOf(backgroundOutput[@"screen_bounds"]);CGPoint paperCamera=pointOf(backgroundOutput[@"camera"]);double paperZoom=[number(backgroundOutput[@"zoom"])doubleValue];
+        CGRect paperBounds=rectOf(backgroundOutput[@"screen_bounds"]);CGPoint paperCamera=pointOf(backgroundOutput[@"camera"]);double paperZoom=[DWTyped(backgroundOutput[@"zoom"],NSNumber.class)doubleValue];
         under.size=paperBounds.size;under.scale=fmin(scale/paperZoom,16384/fmax(paperBounds.size.width,paperBounds.size.height));under.cameraX=paperCamera.x;under.cameraY=paperCamera.y;under.zoom=paperZoom;under.time=frame.time;under.clear=IFCompositorClearTransparent;under.background=backgroundProgram;
         CGImageRef paper=[renderer newImageForFrame:under error:&error];CGColorSpaceRef srgb=CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
         CGContextRef context=paper?CGBitmapContextCreate(NULL,wide,high,8,0,srgb,kCGImageAlphaPremultipliedFirst|kCGBitmapByteOrder32Little):NULL;CGColorSpaceRelease(srgb);

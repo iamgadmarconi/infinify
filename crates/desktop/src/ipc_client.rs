@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
+// Adapted from https://github.com/malbiruk/driftwm @
+// 352333a8fa1b22171492d4b71a54102045c9a19d:
 // src/ipc/client.rs (the Msg command tree, run, to_request, parse_region,
 // resolve_output_path, stream_events, print_response, print_state) and the
-// argument grammar docs/cli.md generates from it. Arguments are parsed by hand
+// argument grammar upstream docs/cli.md generates from it. Arguments are parsed by hand
 // instead of by clap, and the socket is Infinify's own. `cursor` and
 // StdoutCapture (the private file `screenshot -o -` is relayed through) are
-// v0.21.0's, df3de27b26c7998e8a460cffd8a4925cbed3a322,
-// third_party/driftwm/src/ipc/client.rs: `-o -` is left empty by
-// resolve_output_path, a file is reserved O_EXCL with mode 0600 before the
+// v0.21.0's (https://github.com/malbiruk/driftwm @
+// df3de27b26c7998e8a460cffd8a4925cbed3a322, src/ipc/client.rs): `-o -` is
+// left empty by resolve_output_path, a file is reserved O_EXCL with mode 0600
+// before the
 // request, and the client reads that path, never the one in the reply. Upstream
 // reserves it under $XDG_RUNTIME_DIR/driftwm, which macOS has no equivalent of:
 // it is the directory of the socket, which the app requires to be this user's

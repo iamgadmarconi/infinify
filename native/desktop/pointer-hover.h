@@ -3,7 +3,7 @@
 // What the pointer policy asks of the canvas view it serves. Main thread only.
 @protocol DWPointerHost <NSObject>
 // One controller command: its reply's data, or nil when the controller refused it.
-// `quiet` leaves the status line as it was, whatever the controller answered.
+// `quiet` leaves the resting status as it was, whatever the controller answered.
 - (NSDictionary *)pointerCommand:(NSDictionary *)command quiet:(BOOL)quiet;
 // The reply to a press the policy sent (activate, pick, pointer_nearest, and the
 // begin_drag of a pick-mode press that became a move), carried out like every bound

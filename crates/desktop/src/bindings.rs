@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
+// Adapted from https://github.com/malbiruk/driftwm @
+// 352333a8fa1b22171492d4b71a54102045c9a19d:
 // src/config/mod.rs (Config::lookup, tap_lookup and the mouse_*_lookup_ctx
 // lookups), src/config/types.rs (ContextBindings::lookup: the pointer's own
 // context before `anywhere`) and src/input/pointer.rs (how a button press and

@@ -8,15 +8,14 @@ effects, reports results, and says which launches do so. No command here alone
 changes a native app or proves compositing, and none of this crate's tests
 exercises live focus or shortcut delivery.
 
-ABI_VERSION and SAVE_VERSION are independently fixed at 1. Existing `focus`
-updates logical intent and raises the window. Its response now contains `effect`,
-which is null for a detached placeholder, or a `focus_native_window` request:
+`focus` updates logical intent and raises the window. Its response contains
+`effect`, which is null for a detached placeholder, or a `focus_native_window` request:
 `effect_id`, `window`, exact `identity` (including birth time and optional owner),
 and binding `generation`. The adapter must revalidate before mutation and obtain
 independent native readback before reporting success. An API return code alone
 must not become `success: true`.
 
-Additive ABI 1 commands:
+Focus commands:
 
 - `cycle_focus`: required `backward` and `held` booleans. Selects and raises from
   frozen confirmed MRU history. Returns an effect, if a target exists. The first

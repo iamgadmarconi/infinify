@@ -9,6 +9,9 @@
 #import "native-tablet.h"
 #import "native-relative-motion.h"
 #import "hotkeys.h"
+#import "typed-value.h"
+#import "native-geometry-json.h"
+#import "debug-trace.h"
 #import <Carbon/Carbon.h>
 @interface DWHotKeys (StandInRegression)
 - (CGEventRef)filterKey:(CGEventType)type event:(CGEventRef)event;
@@ -94,8 +97,6 @@
 @property InputViews *nativeViews;
 @property InputFamilies *nativeFamilies;
 @property BOOL sessionInactive,cleaning,logicalFocus;
-@property BOOL configured;
-@property BOOL probe,probeDrivingGesture,probeHumanInput;
 @property NSArray *views;
 @property InputResize *resize;
 @property NSDictionary *nativeTitleClick;
@@ -163,7 +164,6 @@
 @property CGPoint heldPoint,heldDragPoint;
 @property CFTimeInterval heldSince;
 @property NSTimer *heldTimer;
-@property(copy) dispatch_block_t duringFocus;
 @property NSDictionary *nativeTitlePress;
 @property BOOL nativeTitleMoved,nativeTitleReleased,clearsFocus;
 @property NSInteger gesture,gestureButton;
@@ -180,22 +180,18 @@
 - (NSDictionary *)inputIntentForHit:(NSDictionary *)hit output:(NSNumber *)output;
 - (BOOL)childPressCurrent:(NSDictionary *)intent;
 - (BOOL)focusPending:(NSNumber *)window intent:(NSDictionary *)intent;
-- (void)focusSource:(LiveSource *)source;
 - (CGPoint)screenPoint:(NSEvent *)event;
 - (void)mouseDragged:(NSEvent *)event;
 - (void)pan:(CGPoint)delta output:(NSNumber *)output event:(NSEvent *)event source:(NSString *)source;
 - (void)deliverHeld;
 - (void)releasePressed;
-- (BOOL)forward:(CGEventRef)event at:(CGPoint)point output:(NSNumber *)output activate:(BOOL)activate;
-- (BOOL)forward:(CGEventRef)event at:(CGPoint)point output:(NSNumber *)output activate:(BOOL)activate expected:(NSDictionary *)expected;
-- (BOOL)forwardCaptured:(CGEventRef)event at:(CGPoint)point output:(NSNumber *)output activate:(BOOL)activate expected:(NSDictionary *)expected;
+- (BOOL)forward:(CGEventRef)event at:(CGPoint)point output:(NSNumber *)output;
+- (BOOL)forward:(CGEventRef)event at:(CGPoint)point output:(NSNumber *)output expected:(NSDictionary *)expected;
+- (BOOL)forwardCaptured:(CGEventRef)event at:(CGPoint)point output:(NSNumber *)output expected:(NSDictionary *)expected;
 @end
-static NSNumber *asNumber(id value) { return [value isKindOfClass:NSNumber.class]?value:nil; }
 static BOOL boundIdentity(NSDictionary *a,NSDictionary *b) { return a&&b&&[a isEqual:b]; }
 static NSDictionary *pointJSON(CGPoint p) { return @{@"x":@(p.x),@"y":@(p.y)}; }
 static CGPoint jsonPoint(NSDictionary *p) { return CGPointMake([p[@"x"]doubleValue],[p[@"y"]doubleValue]); }
-static NSDictionary *rectJSON(CGRect r) { return @{@"origin":pointJSON(r.origin),@"size":@{@"width":@(r.size.width),@"height":@(r.size.height)}}; }
-static CGRect jsonRect(NSDictionary *r) { return CGRectMake([r[@"origin"][@"x"]doubleValue],[r[@"origin"][@"y"]doubleValue],[r[@"size"][@"width"]doubleValue],[r[@"size"][@"height"]doubleValue]); }
 static CGRect originalRect(void) { return CGRectMake(10,20,64,48); }
 static BOOL DWNativeBounds(uint32_t wid,CGRect *bounds) { (void)wid;*bounds=originalRect();return YES; }
 static BOOL DWInScope(NSDictionary *scope,pid_t pid) { (void)scope;return pid==7; }
@@ -203,7 +199,6 @@ static NSArray *birth(pid_t pid) { return pid==7?@[@123,@456]:nil; }
 static NSDictionary *windowInfo(uint32_t wid) {
     return wid==9?@{(id)kCGWindowOwnerPID:@7,(id)kCGWindowBounds:(__bridge_transfer NSDictionary *)CGRectCreateDictionaryRepresentation(originalRect())}:nil;
 }
-static BOOL DWInputTrace(void) { return NO; }
 static BOOL inputTrusted(void) { return YES; }
 // WindowServer's recipient annotation is read-only on constructed scroll
 // packets. Substitute only that annotation; AppKit decodes real packet phases.
@@ -227,7 +222,6 @@ enum { DWPolicyPress=5 };
 - (NSDictionary *)hit:(CGPoint)point output:(NSNumber *)output { (void)point;(void)output;return self.testHit; }
 - (BOOL)childPressCurrent:(NSDictionary *)intent { return [self.desktop validateInputTarget:intent]; }
 - (BOOL)focusPending:(NSNumber *)window intent:(NSDictionary *)intent { (void)window;(void)intent;return NO; }
-- (void)focusSource:(LiveSource *)source { (void)source;if(self.duringFocus)self.duringFocus(); }
 - (CGPoint)screenPoint:(NSEvent *)event { return CGEventGetLocation(event.CGEvent); }
 - (void)pan:(CGPoint)delta output:(NSNumber *)output event:(NSEvent *)event source:(NSString *)source { (void)delta;(void)output;(void)event;(void)source; }
 #include "captured-input-view-consumers.inc"
@@ -280,14 +274,14 @@ static InputView *inputView(LiveSource *s) {
     s.router.bounds=(__bridge_transfer NSDictionary *)CGRectCreateDictionaryRepresentation(originalRect());
     InputDesktop *desktop=[InputDesktop new];desktop.sources=[@{@1:s}mutableCopy];
     desktop.snapshot=@{@"windows":@[@{@"window":@1,@"source":@{@"identity":s.identity,@"generation":@2,@"observation_known":@YES}}],
-        @"placements":@[@{@"window":@1,@"output":@3,@"screen_rect":rectJSON(CGRectMake(100,200,32,24))}]};
+        @"placements":@[@{@"window":@1,@"output":@3,@"screen_rect":DWRectJSON(CGRectMake(100,200,32,24))}]};
     InputView *view=[InputView new];view.desktop=desktop;view.testHit=@{@"window":@1};return view;
 }
 static CGEventRef mousePacket(CGEventType type,CGMouseButton button) { return CGEventCreateMouseEvent(NULL,type,CGPointMake(104,205),button); }
 static void titleReleaseCase(NSString *mode,BOOL expected) {
-    InputView *v=inputView(source(NO));v.desktop.configured=YES;v.gesture=2;v.gestureButton=0;v.startPoint=CGPointMake(100,200);v.dragOutput=@3;
+    InputView *v=inputView(source());v.gesture=2;v.gestureButton=0;v.startPoint=CGPointMake(100,200);v.dragOutput=@3;
     LiveSource *s=v.desktop.sources[@1];v.nativeTitlePress=@{@"window":@1,@"output":@3,@"identity":s.identity,@"generation":@2};v.nativeTitleReleased=YES;
-    NSMutableDictionary *snapshot=[v.desktop.snapshot mutableCopy];snapshot[@"outputs"]=@[@{@"id":@3,@"camera":pointJSON(CGPointZero),@"zoom":@.5,@"screen_bounds":rectJSON(CGRectMake(0,0,500,500))}];
+    NSMutableDictionary *snapshot=[v.desktop.snapshot mutableCopy];snapshot[@"outputs"]=@[@{@"id":@3,@"camera":pointJSON(CGPointZero),@"zoom":@.5,@"screen_bounds":DWRectJSON(CGRectMake(0,0,500,500))}];
     snapshot[@"focus"]=@{@"intent":@1,@"observed_native":v.nativeTitlePress};v.desktop.snapshot=snapshot;v.desktop.nativeViews=[InputViews new];
     CGPoint release=v.startPoint;
     if([mode isEqual:@"slop"])release=CGPointMake(103,204);
@@ -310,7 +304,7 @@ static void titleReleaseCase(NSString *mode,BOOL expected) {
     [v.desktop cancelNativeTitleClick];
 }
 static void titleMotionCase(void) {
-    InputView *v=inputView(source(NO));v.desktop.configured=YES;v.gesture=2;v.gestureButton=0;v.startPoint=CGPointMake(100,200);v.dragOutput=@3;
+    InputView *v=inputView(source());v.gesture=2;v.gestureButton=0;v.startPoint=CGPointMake(100,200);v.dragOutput=@3;
     v.nativeTitlePress=@{@"window":@1,@"output":@3};
     CGEventRef packet=mousePacket(kCGEventLeftMouseDragged,kCGMouseButtonLeft);
     CGEventSetLocation(packet,CGPointMake(103,204));[v mouseDragged:[NSEvent eventWithCGEvent:packet]];
@@ -323,19 +317,19 @@ static void titleMotionCase(void) {
     check(v.desktop.gestureMoves==3&&[v.desktop.lastGestureMove[@"screen_delta"]isEqual:pointJSON(CGPointMake(8,0))],@"real title drag consumes final release displacement");
     check(!v.desktop.nativeTitleClick&&v.desktop.endedGestures==1,@"real title drag ends without click navigation");
     CFRelease(packet);
-    v=inputView(source(NO));v.desktop.configured=YES;v.gesture=2;v.gestureButton=0;v.startPoint=CGPointMake(100,200);v.dragOutput=@3;
+    v=inputView(source());v.gesture=2;v.gestureButton=0;v.startPoint=CGPointMake(100,200);v.dragOutput=@3;
     v.nativeTitlePress=@{@"window":@1,@"output":@3};v.nativeTitleReleased=YES;
     [v released:CGPointMake(106,200) at:1];
     check(v.desktop.gestureMoves==1&&[v.desktop.lastGestureMove[@"screen_delta"]isEqual:pointJSON(CGPointMake(6,0))],@"release crossing click slop starts movement even without a drag packet");
-    v=inputView(source(NO));v.desktop.configured=YES;v.gesture=2;v.gestureButton=0;v.startPoint=CGPointMake(100,200);v.dragOutput=@3;
+    v=inputView(source());v.gesture=2;v.gestureButton=0;v.startPoint=CGPointMake(100,200);v.dragOutput=@3;
     packet=mousePacket(kCGEventLeftMouseDragged,kCGMouseButtonLeft);CGEventSetLocation(packet,v.startPoint);
     [v mouseDragged:[NSEvent eventWithCGEvent:packet]];
     check(v.desktop.gestureMoves==1,@"bound window moves retain their existing immediate gesture behavior");CFRelease(packet);
 }
 static void titleDeferredCase(NSString *mode) {
-    InputView *v=inputView(source(NO));InputDesktop *d=v.desktop;LiveSource *s=d.sources[@1];d.configured=YES;d.nativeViews=[InputViews new];
+    InputView *v=inputView(source());InputDesktop *d=v.desktop;LiveSource *s=d.sources[@1];d.nativeViews=[InputViews new];
     NSDictionary *intent=@{@"window":@1,@"output":@3,@"identity":s.identity,@"generation":@2};
-    NSMutableDictionary *pose=[@{@"id":@3,@"camera":pointJSON(CGPointZero),@"zoom":@.5,@"screen_bounds":rectJSON(CGRectMake(0,0,500,500))}mutableCopy];
+    NSMutableDictionary *pose=[@{@"id":@3,@"camera":pointJSON(CGPointZero),@"zoom":@.5,@"screen_bounds":DWRectJSON(CGRectMake(0,0,500,500))}mutableCopy];
     NSMutableDictionary *focus=[@{@"intent":@1,@"observed_native":intent}mutableCopy],*snapshot=[d.snapshot mutableCopy];snapshot[@"focus"]=focus;snapshot[@"outputs"]=@[pose];d.snapshot=snapshot;
     [d deferNativeTitleClick:intent];NSTimer *first=d.nativeTitleClickTimer;
     if([mode isEqual:@"second_down"])[d cancelNativeTitleClick];
@@ -352,7 +346,7 @@ static CGEventRef tabletPacket(CGEventType type,int64_t button,double pressure) 
     return event;
 }
 static void heldFocusCase(NSString *name,NSString *mode,BOOL succeeds) {
-    LiveSource *s=source(NO);InputView *v=inputView(s);publish(s,1);InputDesktop *d=v.desktop;
+    LiveSource *s=source();InputView *v=inputView(s);publish(s,1);InputDesktop *d=v.desktop;
     NSDictionary *effect=@{@"op":@"focus_native_window",@"effect_id":@11,@"window":@1,@"generation":@2,@"identity":s.identity};
     NSMutableDictionary *observed=[effect mutableCopy];observed[@"op"]=@"observed_native_focus";observed[@"effect_id"]=@0;
     NSMutableDictionary *focus=[@{@"intent":@1,@"pending_effect":NSNull.null,@"last_result":@{@"effect":effect,@"success":@YES},@"observed_native":observed}mutableCopy];
@@ -528,7 +522,7 @@ static BOOL fillScroll(InputDesktop *desktop,CGScrollPhase phase,CGMomentumScrol
     BOOL consumed=[desktop fillInput:kCGEventScrollWheel event:packet];CFRelease(packet);return consumed;
 }
 static void fillInputTails(void) {
-    InputView *view=inputView(source(NO));InputDesktop *desktop=view.desktop;desktop.native=[InputNative new];LiveSource *live=desktop.sources[@1];
+    InputView *view=inputView(source());InputDesktop *desktop=view.desktop;desktop.native=[InputNative new];LiveSource *live=desktop.sources[@1];
     NSDictionary *handoff=@{@"identity":@{@"wid":@99},@"output":@3,@"background":@{@"placements":@[@{@"window":@1,@"output":@3,@"source":@{@"identity":live.identity}}]}};
     desktop.nativeFillHandoff=handoff;
     check(fillScroll(desktop,kCGScrollPhaseBegan,kCGMomentumScrollPhaseNone,YES)&&desktop.nativeFillBlockedScroll,@"a retained background owns a swallowed precise scroll from its beginning");
@@ -556,25 +550,25 @@ static void fillInputTails(void) {
 }
 
 static void fillBackgroundCase(NSString *mode,BOOL retained) {
-    InputDesktop *desktop=inputView(source(NO)).desktop;desktop.native=[InputNative new];desktop.nativeViews=[InputViews new];desktop.nativeFillRoot=[NSObject new];
-    LiveSource *background=source(NO);background.logical=@2;background.identity=@{@"pid":@7,@"wid":@10,@"birth_sec":@123,@"birth_usec":@456};desktop.sources[@2]=background;
+    InputDesktop *desktop=inputView(source()).desktop;desktop.native=[InputNative new];desktop.nativeViews=[InputViews new];desktop.nativeFillRoot=[NSObject new];
+    LiveSource *background=source();background.logical=@2;background.identity=@{@"pid":@7,@"wid":@10,@"birth_sec":@123,@"birth_usec":@456};desktop.sources[@2]=background;
     BOOL pinned=[mode hasPrefix:@"pin_"];
-    NSDictionary *screen=rectJSON(CGRectMake(0,0,1600,1200)),*parked=pointJSON(CGPointMake(12,-4));
+    NSDictionary *screen=DWRectJSON(CGRectMake(0,0,1600,1200)),*parked=pointJSON(CGPointMake(12,-4));
     NSDictionary *oldOutput=@{@"id":@3,@"camera":pointJSON(CGPointMake(12.25,-4.5)),@"zoom":@.75,@"screen_bounds":screen};
     NSMutableDictionary *output=[@{@"id":@3,@"camera":parked,@"zoom":@1,@"screen_bounds":screen}mutableCopy];
     NSDictionary *root=desktop.snapshot[@"windows"][0],*binding=@{@"identity":background.identity,@"generation":@3,@"observation_known":@YES};
-    NSDictionary *screenRect=rectJSON(CGRectMake(100,110,pinned?200:150,pinned?100:75));
+    NSDictionary *screenRect=DWRectJSON(CGRectMake(100,110,pinned?200:150,pinned?100:75));
     NSDictionary *pin=@{@"output":@3,@"screen_rect":screenRect};
-    NSDictionary *old=@{@"window":@2,@"source":binding,@"world_rect":rectJSON(CGRectMake(50,60,200,100)),@"pinned":pinned?pin:(id)NSNull.null};
+    NSDictionary *old=@{@"window":@2,@"source":binding,@"world_rect":DWRectJSON(CGRectMake(50,60,200,100)),@"pinned":pinned?pin:(id)NSNull.null};
     NSDictionary *placement=@{@"window":@2,@"output":@3,@"source":binding,@"screen_rect":screenRect,@"clip_rect":screenRect,@"pinned":@(pinned)};
     NSMutableDictionary *current=[old mutableCopy],*currentRoot=[root mutableCopy];
-    if(pinned||[mode isEqual:@"moved"])current[@"world_rect"]=rectJSON(CGRectMake(112,106,200,100));
-    if([mode isEqual:@"display"])output[@"screen_bounds"]=rectJSON(CGRectMake(0,0,1800,1200));
+    if(pinned||[mode isEqual:@"moved"])current[@"world_rect"]=DWRectJSON(CGRectMake(112,106,200,100));
+    if([mode isEqual:@"display"])output[@"screen_bounds"]=DWRectJSON(CGRectMake(0,0,1800,1200));
     if([mode isEqual:@"camera"])output[@"camera"]=pointJSON(CGPointMake(13,-4));
     if([mode isEqual:@"binding"]){NSMutableDictionary *changed=[root[@"source"]mutableCopy];changed[@"generation"]=@4;currentRoot[@"source"]=changed;}
     if([mode isEqual:@"source"]){NSMutableDictionary *changed=[binding mutableCopy];changed[@"generation"]=@4;current[@"source"]=changed;}
     if([mode isEqual:@"identity"])background.identity=@{@"pid":@7,@"wid":@10,@"birth_sec":@124,@"birth_usec":@456};
-    if([mode isEqual:@"pin_screen"])current[@"pinned"]=@{@"output":@3,@"screen_rect":rectJSON(CGRectMake(101,110,200,100))};
+    if([mode isEqual:@"pin_screen"])current[@"pinned"]=@{@"output":@3,@"screen_rect":DWRectJSON(CGRectMake(101,110,200,100))};
     if([mode isEqual:@"pin_output"])current[@"pinned"]=@{@"output":@4,@"screen_rect":screenRect};
     NSDictionary *prior=@{@"outputs":@[oldOutput],@"windows":@[root,old],@"placements":@[placement]};
     NSDictionary *snapshot=@{@"outputs":@[output],@"windows":@[currentRoot,current],@"placements":@[]};
@@ -591,19 +585,19 @@ static void fillBackgroundCase(NSString *mode,BOOL retained) {
 int main(void) {@autoreleasepool {
     jobs=[NSMutableArray array];checks=0;
     CGRect chromeNative=CGRectMake(90,100,230,408),chromeScreen=CGRectMake(600,200,230,408);
-    NSMutableDictionary *chrome=[@{@"pinned":@YES,@"screen_rect":rectJSON(chromeScreen),@"clip_rect":rectJSON(chromeScreen)}mutableCopy];
-    NSDictionary *chromeOutput=@{@"zoom":@.5,@"screen_bounds":rectJSON(CGRectMake(0,0,1600,1200))};
+    NSMutableDictionary *chrome=[@{@"pinned":@YES,@"screen_rect":DWRectJSON(chromeScreen),@"clip_rect":DWRectJSON(chromeScreen)}mutableCopy];
+    NSDictionary *chromeOutput=@{@"zoom":@.5,@"screen_bounds":DWRectJSON(CGRectMake(0,0,1600,1200))};
     check(DWNativeChromeFrameMatches(chromeNative,chromeScreen,chrome,chromeOutput,CGPointMake(610,210)),@"pinned chrome stays unit scale at overview zoom");
     check(!DWNativeChromeFrameMatches(chromeNative,CGRectMake(600,200,115,204),chrome,chromeOutput,CGPointMake(610,210)),@"scaled pin cannot authorize a direct chrome action");
-    chrome[@"pinned"]=@NO;chrome[@"screen_rect"]=rectJSON(CGRectMake(600.2,200.3,115,204));
+    chrome[@"pinned"]=@NO;chrome[@"screen_rect"]=DWRectJSON(CGRectMake(600.2,200.3,115,204));
     check(DWNativeChromeFrameMatches(chromeNative,CGRectMake(600,200,116,205),chrome,chromeOutput,CGPointMake(610,210)),@"four-edge outward raster rounding is accepted");
     check(!DWNativeChromeFrameMatches(chromeNative,CGRectMake(610,200,116,205),chrome,chromeOutput,CGPointMake(620,210)),@"stale displayed translation refuses direct chrome");
-    chrome[@"screen_rect"]=rectJSON(CGRectMake(-100,200,115,204));chrome[@"clip_rect"]=rectJSON(CGRectMake(0,200,15,204));
+    chrome[@"screen_rect"]=DWRectJSON(CGRectMake(-100,200,115,204));chrome[@"clip_rect"]=DWRectJSON(CGRectMake(0,200,15,204));
     check(DWNativeChromeFrameMatches(chromeNative,CGRectMake(-100,200,115,204),chrome,chromeOutput,CGPointMake(5,210)),@"visible chrome of a partially offscreen root remains eligible");
     check(DWNativeChromeFrameMatches(chromeNative,CGRectMake(-100,200,115,204),chrome,chromeOutput,CGPointMake(16,210)),@"frame proof permits separately controller-qualified outer resize band");
     check(!DWNativeChromeFrameMatches(chromeNative,CGRectMake(-100,200,115,204),chrome,chromeOutput,CGPointMake(-1,210)),@"chrome point outside output clip refuses");
     NSDictionary *chromeIdentity=@{@"pid":@7,@"wid":@9};double chromeSample=CACurrentMediaTime();
-    NSDictionary *chromeReport=@{@"identity":chromeIdentity,@"native_bounds":rectJSON(chromeNative),@"sampled_at":@(chromeSample),@"title":@{@"excluded":@[@"same local controls"]}};
+    NSDictionary *chromeReport=@{@"identity":chromeIdentity,@"native_bounds":DWRectJSON(chromeNative),@"sampled_at":@(chromeSample),@"title":@{@"excluded":@[@"same local controls"]}};
     NSDictionary *moved=DWNativeMovedButtons(chromeReport,chromeIdentity,CGRectMake(600,200,230,408));
     check(moved&&[moved[@"sampled_at"]isEqual:chromeReport[@"sampled_at"]]&&[moved[@"title"]isEqual:chromeReport[@"title"]],@"move-only report preserves sample age and local exclusions");
     check(!DWNativeMovedButtons(chromeReport,chromeIdentity,CGRectMake(600,200,231,408)),@"extent change invalidates move-only chrome");
@@ -617,7 +611,7 @@ int main(void) {@autoreleasepool {
     check(!DWNativeButtonsAfterRefresh(nil,chromeReport,chromeIdentity,refreshNow,YES,CGRectOffset(chromeNative,1,0)),@"failed refresh cannot translate a public title map");
     check(!DWNativeButtonsAfterRefresh(nil,chromeReport,@{@"pid":@7,@"wid":@10},refreshNow,YES,chromeNative),@"failed refresh cannot retain a different source identity");
     check(!DWNativeButtonsAfterRefresh(nil,nil,chromeIdentity,refreshNow,YES,chromeNative),@"invalidated public map cannot be resurrected from a prior request");
-    NSDictionary *negativeChrome=@{@"identity":chromeIdentity,@"native_bounds":rectJSON(chromeNative),@"sampled_at":@(refreshNow),@"title":@{}};
+    NSDictionary *negativeChrome=@{@"identity":chromeIdentity,@"native_bounds":DWRectJSON(chromeNative),@"sampled_at":@(refreshNow),@"title":@{}};
     check(DWNativeButtonsAfterRefresh(negativeChrome,chromeReport,chromeIdentity,refreshNow,YES,chromeNative)==negativeChrome,@"successful negative title report replaces the older map");
     check(!DWNativeButtonsAfterRefresh(chromeReport,chromeReport,chromeIdentity,refreshNow,YES,chromeNative),@"late nonnil report cannot fall back to an older map");
 
@@ -646,21 +640,19 @@ int main(void) {@autoreleasepool {
     heldFocusCase(@"valid focus completion after half a second remains usable",@"slow_success",YES);
     heldFocusCase(@"logical-only focus keeps deliberate captured click semantics",@"logical",YES);
     heldFocusCase(@"focus invalidated during mapping cannot post the held press",@"revoked_during_forward",NO);
-    LiveSource *s=source(NO);InputView *v=inputView(s);InputDesktop *d=v.desktop;
+    LiveSource *s=source();InputView *v=inputView(s);InputDesktop *d=v.desktop;
     CGEventRef down=mousePacket(kCGEventLeftMouseDown,kCGMouseButtonLeft),up=mousePacket(kCGEventLeftMouseUp,kCGMouseButtonLeft);
     check([v inputIntentForHit:v.testHit output:@3]==nil,@"unpublished captured image cannot establish a click intent");publish(s,1);
     NSDictionary *intent=[v inputIntentForHit:v.testHit output:@3];check(intent!=nil,@"published captured image establishes exact recipient intent");
     deliverPacket(s,packet(@(SCFrameStatusSuspended),NO,NO,0));
-    check([v inputIntentForHit:v.testHit output:@3]==nil&&![v forward:down at:CGPointMake(104,205) output:@3 activate:NO],@"retained suspended image refuses fresh mouse input");
+    check([v inputIntentForHit:v.testHit output:@3]==nil&&![v forward:down at:CGPointMake(104,205) output:@3],@"retained suspended image refuses fresh mouse input");
     check(s.router.posts==0,@"refused fresh down does not reach router");
     v.heldPress=[NSEvent eventWithCGEvent:down];v.heldRelease=[NSEvent eventWithCGEvent:up];v.heldReleased=YES;v.heldWindow=@1;v.heldOutput=@3;v.heldIntent=intent;v.clickWindow=@1;
     [v deliverHeld];check(s.router.posts==0&&!v.heldPress&&!v.clickWindow,@"focus-delayed click is rechecked and drops its whole unsent pair");
-    publish(s,2);check([v forward:down at:CGPointMake(104,205) output:@3 activate:NO],@"current captured down reaches router");
+    publish(s,2);check([v forward:down at:CGPointMake(104,205) output:@3],@"current captured down reaches router");
     deliverPacket(s,packet(@(SCFrameStatusStopped),NO,NO,0));
-    check(![v forward:up at:CGPointMake(104,205) output:@3 activate:NO],@"unavailable capture cannot map another synthetic packet");
+    check(![v forward:up at:CGPointMake(104,205) output:@3],@"unavailable capture cannot map another synthetic packet");
     [v releasePressed];check(s.router.posts==2&&s.router.lastType==kCGEventLeftMouseUp&&!v.pressedSource,@"already-admitted normal button closes original recipient despite unavailable capture");
-    publish(s,3);__weak LiveSource *weak=s;v.duringFocus=^{deliverPacket(weak,packet(@(SCFrameStatusBlank),NO,NO,0));};
-    check(![v forward:down at:CGPointMake(104,205) output:@3 activate:YES]&&s.router.posts==2,@"revocation during focus is rechecked immediately before posting");v.duringFocus=nil;
     publish(s,4);intent=[v inputIntentForHit:v.testHit output:@3];
     check([d resolveCapturedPointer:intent screen:CGPointMake(104,205)]!=nil,@"current captured pointer uses existing mapping");
     deliverPacket(s,packet(@(SCFrameStatusSuspended),NO,NO,0));check([d resolveCapturedPointer:intent screen:CGPointMake(104,205)]==nil&&[d validateInputTarget:intent],@"motion mapping revokes while original-identity release validation stays valid");
@@ -677,9 +669,6 @@ int main(void) {@autoreleasepool {
     CGEventRef penUp=tabletPacket(kCGEventLeftMouseUp,0,0),extraUp=tabletPacket(kCGEventRightMouseUp,1,0);NSUInteger posted=d.posts;
     [d forwardTabletTail:penUp];[d forwardTabletTail:extraUp];
     check(d.posts==posted&&![d.tablet ownsEvent:extraUp],@"tablet physical tail retires without repost or duplicate cleanup");
-    publish(s,6);s.synth=[NSObject new];check([v inputIntentForHit:v.testHit output:@3]==nil&&![v forward:down at:CGPointMake(104,205) output:@3 activate:NO],@"synthetic load never authorizes app input");s.synth=nil;
-    resetSource(s);s.composited=NO;check([v inputIntentForHit:v.testHit output:@3]!=nil,@"distinct AV fixture does not invent a production mailbox requirement");
-    s.router.validIdentity=NO;check(![v forward:down at:CGPointMake(104,205) output:@3 activate:NO],@"AV fixture still requires original native binding validation");
     for(NSValue *value in @[[NSValue valueWithPointer:down],[NSValue valueWithPointer:up],[NSValue valueWithPointer:second],[NSValue valueWithPointer:secondUp],[NSValue valueWithPointer:enter],[NSValue valueWithPointer:pen],[NSValue valueWithPointer:extra],[NSValue valueWithPointer:penUp],[NSValue valueWithPointer:extraUp]])CFRelease(value.pointerValue);
     printf("captured input: %lu checks passed (actual consumers; substituted posting)\n",(unsigned long)checks);return 0;
 }}

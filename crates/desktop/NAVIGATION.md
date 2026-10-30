@@ -1,8 +1,7 @@
 # Normal-window navigation, ABI 1
 
-The `normal_window_navigation` snapshot capability covers a selected normal
-window's camera placement with `keep` or `reset` zoom. The commands in the table
-below are that primitive. Upstream's own window navigation (`center-window`,
+The commands in the table below place the camera on a selected normal window
+with `keep` or `reset` zoom. Upstream's own window navigation (`center-window`,
 `center-nearest`, `cycle-windows`, `focus-center`, and what a click or an
 activation does) is built on it and described under
 [Window navigation actions](#window-navigation-actions). Modal handling is
@@ -91,8 +90,8 @@ or disconnect cancels its runtime flight/context: a registration leaves the
 output with the usable rectangle it carries, the whole output without one.
 Reconnect uses its current or saved camera and never resumes a flight.
 
-Save schema 1 is unchanged: saves contain current cameras, not destinations,
-and no flight, clock, navigation generation, or context. Load clears all of these
+Saves contain current cameras, not destinations, and no flight, clock,
+navigation generation, or context. Load clears all of these
 runtime states (retaining generation monotonicity on the same handle).
 
 ## The usable area
@@ -122,8 +121,7 @@ output-local points with the origin at the output's own top left:
 The rectangle must have an extent and lie inside its output, edges inclusive;
 anything else is refused with `invalid usable area`, and a registration refused
 for it registers nothing. A registration always replaces what the output had,
-so one without a rectangle is the whole output again, as every registration
-was before the field existed. `set_usable_area` on an output that is not
+so one without a rectangle is the whole output again. `set_usable_area` on an output that is not
 registered is `unknown output`. Before any config is loaded it keeps the
 placement, speed and gap `set_navigation_context` supplied. The rectangle is
 runtime state like the rest of the context: in the snapshot under
@@ -168,12 +166,10 @@ those three functions in `src/state` and `src/input`, and `clamp_pin_frame`
 with its callers; the rest stand as their own pages document them.
 
 On the Mac the counterpart of that rectangle would be the part of
-`NSScreen.visibleFrame` inside the output. A shell file that read it, sent it
-with every registration and sent `set_usable_area` when the Dock or the menu
-bar changed it was written with these two commands and removed before it
-landed, on the decision above. So the shell's `register_output` carries no
-`usable_rect_local`, the shell never sends `set_usable_area`, in a normal run
-as in a windowed one, and the renderer's coverage rule tests the whole output
+`NSScreen.visibleFrame` inside the output. On the decision above the shell's
+`register_output` carries no `usable_rect_local`, the shell never sends
+`set_usable_area`, in a normal run as in a windowed one, and the renderer's
+coverage rule tests the whole output
 ([shell notes](../../native/desktop/README.md#the-usable-area)).
 
 `usable_tap_flow` drives this through the exported C ABI on two outputs,
@@ -203,13 +199,12 @@ held the shell's usable-area file and then the build that landed without it
 gave the same: `msg state` the seeded placeholders and the output `windowed` of
 1100x636 at camera `550 -318`, `action center-nearest right` settled on camera
 `1950 -0`, and `action zoom-to-fit` on zoom `0.28484848484848485` at camera
-`750 -390`, the numbers recorded for earlier builds on the same seed
-([IPC.md](IPC.md#live-run-2026-10-09)), as in the last scenario above. No
+`750 -390`, the numbers of earlier builds on the same seed, as in the last scenario above. No
 normal run was made with either build. (Since desktop mode landed, later the
 same day, that launch reads an output of 1100x700 at camera `550 -350`, the
 whole window being the output; it settles on the same two poses, `1950 -0`
 and zoom `0.28484848484848485` at `750 -390`:
-[README.md](README.md#outputs-since-desktop-mode).) While the shell file existed, the two
+[README.md](README.md#outputs).) While the shell file existed, the two
 commands were sent once in its own JSON by a throwaway program that linked the
 release library with it: the display's output registered with the rectangle
 read from `NSScreen` (the whole output on that display), and a rectangle 80
@@ -494,7 +489,7 @@ no placeholder ever enters it. The four malformed specs answered upstream's
 messages. No window had a bound source, so no focus effect was produced,
 `held`, `activate`, `focus_logical` and `clear_focus` were not reached, and
 `focus-center` was sent without knowing what was under the pointer. The
-[shell README](../../native/desktop/README.md#what-has-been-run-for-navigation)
+[shell README](../../native/desktop/README.md)
 has the transcript's values. Nothing from those runs is saved as evidence.
 
 ## View actions
@@ -562,7 +557,7 @@ zoom is `min((usable - 2·padding) / box)` per axis, clamped to `[0.001, 1]`;
 the dynamic minimum is half the fit zoom, floored at 0.001, with upstream's 5×5
 box at (-2,-2) when there are no windows.
 
-`driftwm_canvas::policy` works in upstream's integer logical pixels and leaves
+`driftwm_core::canvas` works in upstream's integer logical pixels and leaves
 the rounding to its caller. A window's world rectangle becomes the smallest
 enclosing integer rectangle: the origin is floored and the far edge ceiled, so
 a fit never clips a fractional frame. Output and usable extents are rounded to
@@ -576,8 +571,8 @@ disarmed by `pan`, `zoom`, a `zoom_by` that changes or retargets the zoom,
 `pan_viewport`, `zoom_in`, `zoom_out`, `zoom_reset`, and leaving for home; only
 `home_toggle` consumes a home return. Cancelling a flight, starting a gesture,
 changing the navigation context, or re-registering a connected output leaves
-both in place. Removing the output drops both. Neither is saved: save schema 1
-is unchanged and load starts with none.
+both in place. Removing the output drops both. Neither is saved, and
+load starts with none.
 
 Differences from upstream:
 
@@ -609,25 +604,25 @@ every zoom frame, extended pan destinations, each fit-return disarm except
 output removal. Expected values are derived by hand from the contract above; unlike
 `navigation_flow`, upstream's action bodies are not executed as an oracle, so
 parity with them is by reading, not by differential test. The pure helpers they
-call are covered by the canvas crate's `policy_flow`.
+call are `driftwm_core::canvas`, upstream's own code.
 
 This is controller ABI evidence only. It shows no key binding, shell dispatch,
 frame scheduling, native rendering, capture, or input delivery. The default
 shell binds these commands to global shortcuts and ticks their flights once per
-frame of the display (a display link; 60 Hz until 2026-10-10); the toolbar
-buttons a normal run also had until 2026-10-10 went with its toolbar strip,
-and the shortcut path is built but unrun. See the
+frame of the display (a display link), and the shortcut path is built but
+unrun. See the
 [shell README](../../native/desktop/README.md).
 
 ## DriftWM v0.20.0 / v0.21.0
 
-Adapted from `src/state/navigation.rs` (`reveal_element`, `RevealPan`,
+Adapted from <https://github.com/malbiruk/driftwm> @
+`df3de27b26c7998e8a460cffd8a4925cbed3a322`, `src/state/navigation.rs`
+(`reveal_element`, `RevealPan`,
 `MinimalPan`, `minimal_pan_camera`, `pan_minimally_to_element`, `reveal_frame`,
 `related_to_focus`, `window_fully_in_view_at`, `window_shown_as_fully_at`,
 `navigation_target_zoom`), `src/state/viewport.rs` (`landing_view_on`,
 `set_camera_anchor`) and `src/input/actions.rs` (`nearest_in_direction`,
-`FocusNearest`, `center_on_anchor`, `FocusCenter`) at
-`df3de27b26c7998e8a460cffd8a4925cbed3a322`, read at `third_party/driftwm`. The
+`FocusNearest`, `center_on_anchor`, `FocusCenter`). The
 minimal pans are `driftwm-core`'s `canvas::{minimal_reveal_camera,
 leading_edge_camera}`. Code: [`src/window_actions.rs`](src/window_actions.rs),
 [`src/navigation.rs`](src/navigation.rs). Scenarios:

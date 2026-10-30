@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Ported from malbiruk/driftwm tests/config_toml_test.rs at
-// df3de27b26c7998e8a460cffd8a4925cbed3a322 (GPL-3.0-or-later).
-// Changes from upstream: crate paths only — `driftwm::config` reads
+//
+// Ported from DriftWM (GPL-3.0-or-later)
+//   repository: https://github.com/malbiruk/driftwm
+//   commit:     df3de27b26c7998e8a460cffd8a4925cbed3a322
+//   path:       tests/config_toml_test.rs
+//   sha-256:    e489f62bb90048885ca552f4670c925c7540357c65998dd596ed458bc8121740 (upstream file)
+// Changes from upstream: this header; crate paths: `driftwm::config` reads
 // `driftwm_core::config` and `smithay::` reads `driftwm_core::platform::`.
 // Nothing else.
+// See PORT.md in the crate root for the full change log.
+
 use driftwm_core::config::{
     Action, BTN_RIGHT, BackgroundKind, BindingContext, Config, ContinuousAction,
     GestureConfigEntry, GestureTrigger, Modifiers, MouseAction, ThresholdAction,
