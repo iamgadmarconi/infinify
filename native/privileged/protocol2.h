@@ -15,11 +15,15 @@
 #define DW2_MAX_CONNECTIONS 8
 #define DW2_MAX_PROCESSES 1024
 #define DW2_REPLY 0x8000
+// How long the helper keeps a veiled window invisible without a frame or a RESTORE
+// record for it before it releases the window itself (VEIL below).
+#define DW2_VEIL_TIMEOUT_MS 1000
 
-enum { DW2_HELLO=1, DW2_FRAME=2, DW2_HEARTBEAT=3, DW2_RESTORE_ALL=4, DW2_PROBE=5, DW2_ENROLLMENT=6, DW2_INSPECT=7, DW2_FRAME_SPACE=8 };
+enum { DW2_HELLO=1, DW2_FRAME=2, DW2_HEARTBEAT=3, DW2_RESTORE_ALL=4, DW2_PROBE=5, DW2_ENROLLMENT=6, DW2_INSPECT=7, DW2_FRAME_SPACE=8, DW2_VEIL=9 };
 enum { DW2_ROLE_CONTROL=1, DW2_ROLE_HEARTBEAT=2 };
 enum { DW2_HELLO_OK=0, DW2_HELLO_AUTH=1, DW2_HELLO_VERSION=2, DW2_HELLO_BUSY=3, DW2_HELLO_TOKEN=4, DW2_HELLO_MALFORMED=5 };
-enum { DW2_CAP_ALPHA=1, DW2_CAP_RESTORE_WINDOW=2, DW2_CAP_ENROLLMENT=4, DW2_CAP_FIXTURE_FAMILY=8, DW2_CAP_INSPECT=16, DW2_CAP_SPACE=32, DW2_CAP_PINNED=64 };
+enum { DW2_CAP_ALPHA=1, DW2_CAP_RESTORE_WINDOW=2, DW2_CAP_ENROLLMENT=4, DW2_CAP_FIXTURE_FAMILY=8, DW2_CAP_INSPECT=16, DW2_CAP_SPACE=32, DW2_CAP_PINNED=64,
+       DW2_CAP_VEIL=128 };
 // FIXTURE_FAMILY asks a client to exercise native root/child presentation on
 // the host's finite, explicitly created window list. It expands no process or
 // window authority and says nothing about third-party family compositing.
@@ -46,6 +50,19 @@ enum { DW2_APPLIED=0, DW2_SCOPE=1, DW2_IDENTITY=2, DW2_MATRIX=3, DW2_ALPHA=4, DW
 // SUBLEVEL refuses a pin request when the optional sublevel API is unavailable.
 // SPACE refuses unsupported, invalid, non-singleton or non-current Space
 // admission. An attempted but unconfirmed move is NOT_APPLIED instead.
+// VEIL is negotiated by CAP_VEIL, offered only by a same-user (desktop) helper that can
+// read and write alpha and hear the window server announce a window. Mode 1 asks the
+// helper to hold every ordinary window an application opens afterwards at alpha 0, from
+// the moment the window server announces it, until a frame places it or the window is
+// released; mode 0 ends that and releases what is still held. A veiled window is an
+// ordinary table entry, journalled with its original alpha before the write. It is
+// released by its own RESTORE record, by RESTORE_ALL, by the end of the session, or
+// DW2_VEIL_TIMEOUT_MS after it was veiled. A frame record for it applies the transform
+// first and then the record's alpha, or the original alpha when the record has none.
+// The reply is DW2_APPLIED or, for a helper that cannot, DW2_SCOPE, and the timeout.
+// The helper never veils a window of the requesting client's own process. Veiling ends
+// with the session. The idea, and the window server announcement it rests on, are adapted
+// from Sunlight (MIT); exact source provenance is in payload-v2.m.
 enum { DW2_FRAME_APPLIED=0, DW2_FRAME_DROPPED=1 };
 enum { DW2_RESTORED=0, DW2_GONE=1, DW2_PENDING=2 };
 enum { DW2_HELD=0, DW2_RESTORING=1 };
@@ -64,6 +81,8 @@ struct dw2_space_record { struct dw2_record record; uint64_t target_space; };
 struct dw2_frame { uint32_t count, reserved; }; // then count records of the opcode's type
 struct dw2_frame_reply { uint32_t disposition, count, superseded, reserved; uint64_t frames_applied; }; // then count status bytes
 struct dw2_heartbeat_reply { uint32_t status, lease_ms, held, restoring; };
+struct dw2_veil { uint32_t mode, reserved; };
+struct dw2_veil_reply { uint32_t status, timeout_ms; };
 struct dw2_restore_result { struct dw2_identity id; uint32_t outcome; int32_t set_status; };
 struct dw2_restore_reply { uint32_t count, pending, journal_persisted, reserved; }; // then count results
 struct dw2_probe_entry { struct dw2_identity id; uint32_t state; float alpha; double transform[6], screen_rect[4]; };
@@ -89,6 +108,8 @@ _Static_assert(sizeof(struct dw2_space_record)==88,"Space record");
 _Static_assert(sizeof(struct dw2_frame)==8,"frame");
 _Static_assert(sizeof(struct dw2_frame_reply)==24,"frame reply");
 _Static_assert(sizeof(struct dw2_heartbeat_reply)==16,"heartbeat reply");
+_Static_assert(sizeof(struct dw2_veil)==8,"veil request");
+_Static_assert(sizeof(struct dw2_veil_reply)==8,"veil reply");
 _Static_assert(sizeof(struct dw2_restore_result)==32,"restore result");
 _Static_assert(sizeof(struct dw2_restore_reply)==16,"restore reply");
 _Static_assert(sizeof(struct dw2_probe_entry)==112,"probe entry");

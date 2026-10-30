@@ -19,7 +19,9 @@ FRAME_REPLY = struct.Struct("<4IQ")
 RESTORE_REPLY = struct.Struct("<4I")
 RESTORE_RESULT = struct.Struct("<iIQQIi")
 SPACE_RECORD = struct.Struct("<iIQQ6dfIQ")
-HELLO_TYPE, FRAME, HEARTBEAT, RESTORE_ALL, FRAME_SPACE, REPLY = 1, 2, 3, 4, 8, 0x8000
+VEIL_REQUEST = struct.Struct("<II")
+VEIL_REPLY = struct.Struct("<II")
+HELLO_TYPE, FRAME, HEARTBEAT, RESTORE_ALL, FRAME_SPACE, VEIL, REPLY = 1, 2, 3, 4, 8, 9, 0x8000
 NONCE = "7" * 64
 TOKEN = b"\x13" * 16
 
@@ -49,6 +51,7 @@ class FakePeer:
         self.space = mode.startswith("space_") and mode != "space_no_cap"
         self.space |= mode == "legacy_bad_opcode"
         self.pinned = "pinned" in mode and not mode.endswith("no_cap")
+        self.veil = mode.startswith("veil_") and mode != "veil_no_cap"
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.listener.bind(str(runtime / "v2.sock"))
         self.listener.listen(4)
@@ -66,7 +69,7 @@ class FakePeer:
         if magic != b"DWv2" or version != 2 or role != expected_role or nonce != NONCE.encode():
             raise AssertionError((magic, version, role, nonce))
         record_size = 88 if self.space and self.mode != "space_bad_max_body" else 80
-        reply = HELLO_REPLY.pack(0, 2000, 16, 8 + 16 * record_size, (32 if self.space else 0) | (64 if self.pinned else 0), 3, 0, os.getpid(), TOKEN)
+        reply = HELLO_REPLY.pack(0, 2000, 16, 8 + 16 * record_size, (32 if self.space else 0) | (64 if self.pinned else 0) | (128 if self.veil else 0), 3, 0, os.getpid(), TOKEN)
         send_message(connection, HELLO_TYPE, 0, reply)
 
     def serve(self):
@@ -115,6 +118,17 @@ class FakePeer:
                     message = recv_message(connection)
                     self.check_frame(message, kind, 1)
                     send_message(connection, kind, message[2], FRAME_REPLY.pack(0, 1, 0, 0, 2) + b"\x00")
+                while recv_exact(connection, 1):
+                    pass
+            elif self.mode.startswith("veil_"):
+                # The request is a mode and a zero; a helper without the capability is never sent one.
+                for mode in ((1, 0), (0, 0)) if self.mode == "veil_apply" else () if self.mode == "veil_no_cap" else ((1, 0),):
+                    kind, flags, seq, body = recv_message(connection)
+                    if kind != VEIL or flags or not seq or body != VEIL_REQUEST.pack(*mode):
+                        raise AssertionError((kind, flags, seq, body, mode))
+                    status, timeout = {"veil_refused": (1, 1000), "veil_bad_status": (5, 1000), "veil_bad_timeout": (0, 0)}.get(self.mode, (0, 1000))
+                    reply = VEIL_REPLY.pack(status, timeout) + (b"\x00" if self.mode == "veil_bad_length" else b"")
+                    send_message(connection, VEIL, seq, reply)
                 while recv_exact(connection, 1):
                     pass
             elif self.mode in ("coalesced_apply", "space_coalesced_apply", "space_coalesced_legacy"):
@@ -249,6 +263,29 @@ int main(int argc, char **argv) {
     }
     int spaceMode=!strncmp(argv[3],"space_",6) && strcmp(argv[3],"space_no_cap");
     if ((spaceMode || !strcmp(argv[3],"legacy_bad_opcode")) != !!(info.caps&DW2_CAP_SPACE)) return 51;
+    if (!strncmp(argv[3],"veil_",5)) {
+        uint32_t held=0;int hasCap=(info.caps&DW2_CAP_VEIL)!=0;
+        if (!strcmp(argv[3],"veil_no_cap")) {
+            // Without the capability nothing is asked, so a peer that would answer is never sent a request.
+            if (hasCap) return 70;
+            if (dw_client_veil(client,2000,true,&held)!=DW_CLIENT_INVALID || held) return 71;
+            dw_client_close(client);return 0;
+        }
+        if (!hasCap) return 72;
+        int result=dw_client_veil(client,2000,true,&held);
+        if (!strcmp(argv[3],"veil_apply")) {
+            // Asked on, then off; the helper's own bound comes back with an acceptance.
+            if (result!=DW_CLIENT_OK || held!=DW2_VEIL_TIMEOUT_MS) return 73;
+            held=0;if (dw_client_veil(client,2000,false,&held)!=DW_CLIENT_OK || held!=DW2_VEIL_TIMEOUT_MS) return 74;
+        } else if (!strcmp(argv[3],"veil_refused")) {
+            if (result!=DW_CLIENT_REFUSED || held) return 75;
+        } else {
+            // An answer outside the contract is not an acceptance, and says nothing of the bound.
+            if (result!=DW_CLIENT_INVALID || held) return 76;
+        }
+        if (atomic_load(&lost_reason)) return 77;
+        dw_client_close(client);return 0;
+    }
     if (strstr(argv[3],"pinned") || !strcmp(argv[3],"legacy_pin_status")) {
         int noCap=strstr(argv[3],"no_cap")!=NULL;
         int bad=!strcmp(argv[3],"legacy_pin_status") || !strcmp(argv[3],"pinned_bad_space_status");
@@ -345,7 +382,8 @@ def main():
                      "space_bad_sequence", "space_bad_count", "space_bad_opcode", "space_bad_dropped_opcode",
                      "legacy_bad_opcode", "space_bad_status", "legacy_space_status", "space_status", "space_restore_pending",
                      "pinned_apply", "space_pinned_apply", "pinned_no_cap", "space_pinned_no_cap",
-                     "pinned_status", "legacy_pin_status", "pinned_bad_space_status"):
+                     "pinned_status", "legacy_pin_status", "pinned_bad_space_status",
+                     "veil_apply", "veil_refused", "veil_no_cap", "veil_bad_status", "veil_bad_timeout", "veil_bad_length"):
             with tempfile.TemporaryDirectory(prefix="dw2-run-", dir="/tmp") as runtime_dir:
                 runtime = Path(runtime_dir)
                 peer = FakePeer(mode, runtime)

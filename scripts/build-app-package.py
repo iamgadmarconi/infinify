@@ -302,6 +302,7 @@ def copy_resources(root: Path, app: Path, privileged_dir: Path) -> None:
     for source, destination in (
         ("native/desktop/Info.plist", app / "Contents/Info.plist"),
         ("native/families/YABAI-NOTICE.txt", resources / "YABAI-NOTICE.txt"),
+        ("native/desktop/SUNLIGHT-NOTICE.txt", resources / "SUNLIGHT-NOTICE.txt"),
         ("LICENSE", resources / "LICENSE"),
         ("NOTICE", resources / "NOTICE"),
         (

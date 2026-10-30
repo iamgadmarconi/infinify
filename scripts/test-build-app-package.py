@@ -42,6 +42,7 @@ def main() -> int:
 
         write(repo / "native/desktop/Info.plist", "plist\n")
         write(repo / "native/families/YABAI-NOTICE.txt", "upstream notice\n")
+        write(repo / "native/desktop/SUNLIGHT-NOTICE.txt", "sunlight notice\n")
         write(repo / "LICENSE", "license\n")
         write(repo / "NOTICE", "notice\n")
         write(repo / "native/desktop/com.marengox.infinify.agent.plist", "agent\n")

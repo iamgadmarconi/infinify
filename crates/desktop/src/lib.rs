@@ -465,6 +465,10 @@ pub enum Command {
     },
     /// The key bindings as macOS chords, and each output's armed hot corners.
     Bindings {},
+    /// The finger counts a trackpad gesture can be bound to in this run, for
+    /// the shell to hold the system's own gestures back for those and no
+    /// others. Read-only. See GESTURES.md.
+    GestureFingers {},
     /// Run the action bound to one hot corner of one output. `pointer` and
     /// `held` are as `action` takes them.
     HotCorner {
@@ -890,6 +894,7 @@ impl Controller {
         // that the native caller may already have decoded from a snapshot.
         match &request.command {
             Command::Snapshot {} => return self.pointer_snapshot(),
+            Command::GestureFingers {} => return Ok(self.gesture_fingers()),
             Command::Hit { output, screen } => return self.pointer_hit(*output, *screen, None),
             Command::Input {
                 output,
@@ -984,6 +989,7 @@ impl Controller {
         }
         match command {
             Command::Snapshot {} => return self.pointer_snapshot(),
+            Command::GestureFingers {} => return Ok(self.gesture_fingers()),
             Command::NativeDecoration {
                 window,
                 output,

@@ -9,7 +9,9 @@
 // (window_manager_begin and window_manager_add_application_windows: every regular application that runs is observed and its
 // windows are enumerated). New implementation: yabai keeps a model of every window and acts on it from its own event loop; this
 // keeps none. An event only says which application or window to look at now, and the looking is the pass the poll makes.
-// Public Accessibility and NSWorkspace API, and _AXUIElementGetWindow as window-manager.m uses it; no SkyLight call.
+// Public Accessibility and NSWorkspace API, and _AXUIElementGetWindow as window-manager.m uses it. SkyLight too, for the window
+// server's connection notifications 1325 and 1326 and the owner lookup they need, as Sunlight takes them (window-events.m): the window
+// server says a window was added to a Space within milliseconds, where the application's Accessibility notification can be late.
 #import <AppKit/AppKit.h>
 // What the observers report. Every call arrives on the main thread, from the main run loop, never from inside another call of
 // this protocol. A report is a hint that something may have changed, never the change itself: the sink reads the window list
@@ -51,12 +53,13 @@
 // Event-driven window tracking, the way yabai does it. NSWorkspace says when an application launches, ends, is activated,
 // hidden or shown, and when the active Space changes; with Accessibility access one AXObserver per regular application says
 // when a window is created, moved, resized, retitled or focused, and each window it knows says when it is destroyed,
-// miniaturized or deminiaturized. Read-only: it registers for notifications and reads a window's number and role, and never
-// moves, focuses, resizes or closes anything. Every Accessibility message is sent off the main thread with a quarter-second
-// timeout, so an application that does not answer delays nothing but its own observation, which is tried again five times a
-// tenth of a second apart and then at every -reconcile. A window it did not answer for, or gave no window number for, is asked
-// about again when a notification next names it, and its windows are listed again at every -reconcile until it does; until
-// then that window's end is the poll's to find. A callback only looks its element up in a table and reports.
+// miniaturized or deminiaturized. The window server says when a window is added to a Space or leaves one (SkyLight's connection
+// notifications, which need no Accessibility access). Read-only: it registers for notifications and reads a window's number, role
+// and owning process, and never moves, focuses, resizes or closes anything. Every Accessibility message is sent off the main
+// thread with a quarter-second timeout, so an application that does not answer delays nothing but its own observation, which is
+// tried again five times a tenth of a second apart and then at every -reconcile. A window it did not answer for, or gave no window
+// number for, is asked about again when a notification next names it, and its windows are listed again at every -reconcile until it
+// does; until then that window's end is the poll's to find. A callback only looks its element up in a table and reports.
 // Main thread only.
 @interface DWWindowEvents : NSObject
 // The NSWorkspace observers are in place from here on. Accessibility registration follows asynchronous application

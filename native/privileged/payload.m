@@ -104,6 +104,7 @@ static int startServer(const char *directory, const char *nonce, const uint32_t 
     getTransform=dlsym(sky,"SLSGetWindowTransform");setTransform=dlsym(sky,"SLSSetWindowTransform");getScreenRect=dlsym(sky,"SLSGetScreenRectForWindow");getBounds=dlsym(sky,"SLSGetWindowBounds");
     if(!mainConnection||!getOwner||!getTransform||!setTransform||!getScreenRect||!getBounds)return -__LINE__;
     getAlpha=dlsym(sky,"SLSGetWindowAlpha");setAlpha=dlsym(sky,"SLSSetWindowAlpha");connectionPID=dlsym(sky,"SLSConnectionGetPID");
+    v2RegisterNotify=dlsym(sky,"SLSRegisterConnectionNotifyProc");
     copyWindowSpaces=dlsym(sky,"SLSCopySpacesForWindows");copySpaceDisplay=dlsym(sky,"SLSCopyManagedDisplayForSpace");
     displayCurrentSpace=dlsym(sky,"SLSManagedDisplayGetCurrentSpace");getSpaceType=dlsym(sky,"SLSSpaceGetType");
     moveWindowsToSpace=dlsym(sky,"SLSMoveWindowsToManagedSpace");createDisplayUUID=dlsym(RTLD_DEFAULT,"CGDisplayCreateUUIDFromDisplayID");

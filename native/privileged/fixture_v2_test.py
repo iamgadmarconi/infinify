@@ -26,7 +26,7 @@ BUILD = Path('target/privileged')
 HEADER = struct.Struct('<IHHQ')
 RECORD = struct.Struct('<iIQQ6dfI')
 IDENTITY = struct.Struct('<iIQQ')
-HELLO, FRAME, HEARTBEAT, RESTORE_ALL, PROBE, INSPECT, REPLY = 1, 2, 3, 4, 5, 7, 0x8000
+HELLO, FRAME, HEARTBEAT, RESTORE_ALL, PROBE, INSPECT, VEIL, REPLY = 1, 2, 3, 4, 5, 7, 9, 0x8000
 APPLIED, SCOPE, IDENTITY_MISMATCH, JOURNAL = 0, 1, 2, 6
 results = []
 hosts = []
@@ -228,6 +228,11 @@ class Conn:
         value['fixtures'] = [IDENTITY.unpack(body[offset + 24 * i:offset + 24 * i + 24]) for i in range(value['fixture_count'])]
         assert offset + 24 * value['fixture_count'] == len(body)
         return value
+    def veil(self, mode=1):
+        want = self.send(VEIL, struct.pack('<II', mode, 0))
+        kind, seq, body = self.recv()
+        assert kind == VEIL and seq == want and len(body) == 8, (kind, seq, want, len(body))
+        return struct.unpack('<II', body)
     def restore_all(self):
         want = self.send(RESTORE_ALL)
         kind, seq, body = self.recv()
@@ -291,6 +296,12 @@ def frames_group():
     refused = dict(wrong_nonce=Conn(host, nonce='0' * 64).status, wrong_version=Conn(host, version=3).status, second_controller=Conn(host).status, heartbeat_wrong_token=Conn(host, role=2, token=b'x' * 16).status)
     assert refused == dict(wrong_nonce=1, wrong_version=2, second_controller=3, heartbeat_wrong_token=4), refused
     results.append(dict(test='hello refusals', status=refused))
+
+    # The arrival veil is the explicit same-user helper's, in the Dock. A cooperative fixture helper offers none, answers a request
+    # for it with a refusal (scope, and its bound), and the session goes on.
+    assert not c.caps & 128, c.caps
+    assert c.veil(1) == (1, 1000) and c.veil(0) == (0, 1000) and c.heartbeat()['status'] == 0
+    results.append(dict(test='arrival veil refused by a cooperative helper', caps=c.caps))
 
     # 1. One frame, eight windows, two of them with alpha.
     target = [half(o, 20 + 5 * i, 10) for i, o in enumerate(original)]

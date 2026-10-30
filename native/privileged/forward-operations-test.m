@@ -35,6 +35,8 @@ static int owners[2];
 static unsigned transformSets,transformGets,alphaSets,alphaGets,identityGets,transactionCreates,transactionStages,transactionCommits,listCalls;
 static BOOL ignoreTransform,failAlphaRead,replaceOnAlphaRead,replaceOnStage,failStage,failCommit,ignoreCommit,ignoreList,failList,replaceAfterPersist;
 static unsigned indexOf(uint32_t wid){assert(wid==42||wid==43);return wid-42;}
+// Native writes in the order they reach the window server: "T<wid>", "A<wid>:<alpha>", and "C"/"L" for a committed batch.
+static NSMutableArray<NSString *> *events;
 static int testConnection(void){return 1;}
 static int testSync(int fd){int status=fsync(fd);if(!status&&fd==directoryFD&&replaceAfterPersist){replaceAfterPersist=NO;owners[0]++;}return status;}
 static CGError testOwner(int cid,uint32_t wid,int *owner){assert(cid==1);identityGets++;*owner=owners[indexOf(wid)];return 0;}
@@ -45,15 +47,16 @@ static int testProcess(int pid,int flavor,uint64_t argument,void *buffer,int siz
 }
 static CFArrayRef testWindows(CGWindowListOption option,CGWindowID wid){
     assert(option==kCGWindowListOptionAll||option==kCGWindowListOptionIncludingWindow);(void)wid;
-    return CFRetain((__bridge CFArrayRef)@[@{(id)kCGWindowNumber:@42,(id)kCGWindowOwnerPID:@123},@{(id)kCGWindowNumber:@43,(id)kCGWindowOwnerPID:@123}]);
+    return CFRetain((__bridge CFArrayRef)@[@{(id)kCGWindowNumber:@42,(id)kCGWindowOwnerPID:@123,(id)kCGWindowLayer:@0,(id)kCGWindowIsOnscreen:@YES},
+        @{(id)kCGWindowNumber:@43,(id)kCGWindowOwnerPID:@123,(id)kCGWindowLayer:@0,(id)kCGWindowIsOnscreen:@YES}]);
 }
 static CGError testTransformGet(int cid,uint32_t wid,CGAffineTransform *value){assert(cid==1);transformGets++;*value=transforms[indexOf(wid)];return 0;}
-static CGError testTransformSet(int cid,uint32_t wid,CGAffineTransform value){assert(cid==1);transformSets++;if(!ignoreTransform)transforms[indexOf(wid)]=value;return 0;}
+static CGError testTransformSet(int cid,uint32_t wid,CGAffineTransform value){assert(cid==1);transformSets++;[events addObject:[NSString stringWithFormat:@"T%u",wid]];if(!ignoreTransform)transforms[indexOf(wid)]=value;return 0;}
 static CGError testBounds(int cid,uint32_t wid,CGRect *value){assert(cid==1);indexOf(wid);*value=CGRectMake(0,0,300,200);return 0;}
 static CGError testAlphaGet(int cid,uint32_t wid,float *value){
     assert(cid==1);alphaGets++;*value=alphas[indexOf(wid)];if(replaceOnAlphaRead){replaceOnAlphaRead=NO;owners[indexOf(wid)]++;}return failAlphaRead?1000:0;
 }
-static CGError testAlphaSet(int cid,uint32_t wid,float value){assert(cid==1);alphaSets++;alphas[indexOf(wid)]=value;return 0;}
+static CGError testAlphaSet(int cid,uint32_t wid,float value){assert(cid==1);alphaSets++;[events addObject:[NSString stringWithFormat:@"A%u:%.2f",wid,value]];alphas[indexOf(wid)]=value;return 0;}
 #if !DW_TEST_FROZEN_BASELINE && DW_V2_BATCH_COMPILED
 static CFTypeRef testTransactionCreate(int cid){assert(cid==1);transactionCreates++;return CFDictionaryCreateMutable(NULL,0,&kCFTypeDictionaryKeyCallBacks,&kCFTypeDictionaryValueCallBacks);}
 static void testTransactionStage(CFTypeRef transaction,uint32_t wid,int first,int second,CGAffineTransform value){
@@ -62,11 +65,11 @@ static void testTransactionStage(CFTypeRef transaction,uint32_t wid,int first,in
     if(replaceOnStage){replaceOnStage=NO;owners[0]++;}
 }
 static void testTransactionCommit(CFTypeRef transaction,int synchronous){
-    assert(synchronous==DW_V2_TRANSACTION_SYNC);transactionCommits++;
+    assert(synchronous==DW_V2_TRANSACTION_SYNC);transactionCommits++;[events addObject:@"C"];
     if(!ignoreCommit&&!failCommit)for(NSNumber *wid in (__bridge NSDictionary *)transaction){CGAffineTransform value;[((__bridge NSDictionary *)transaction)[wid]getValue:&value];transforms[indexOf(wid.unsignedIntValue)]=value;}
 }
 static CGError testWindowList(int cid,const uint32_t *wids,const CGAffineTransform *values,uint32_t count){
-    assert(cid==1&&count>0&&count<=2);listCalls++;
+    assert(cid==1&&count>0&&count<=2);listCalls++;[events addObject:@"L"];
     if(!ignoreList)for(uint32_t i=0;i<count;i++)transforms[indexOf(wids[i])]=values[i];
     return failList?1000:0;
 }
@@ -86,6 +89,39 @@ static void assertRestored(void){
     struct dw2_restore_reply result={0};v2Restore(@"forward comparison",NO,nil,&result);assert(!result.pending&&!v2Table.count&&result.journal_persisted);
     for(unsigned i=0;i<2;i++)assert(v2SameTransform(transforms[i],CGAffineTransformMake(1,0,0,1,-25,-35))&&alphas[i]==1);
 }
+#if !DW_TEST_FROZEN_BASELINE
+// Two windows an application just opened, veiled by the helper, then placed by one frame whose records carry no alpha: for each,
+// its transform reaches the window server before its original alpha does, whichever way the transforms are submitted.
+static void veilThenPlace(const char *how,BOOL transaction,BOOL list){
+    resetState();events=[NSMutableArray array];
+#if DW_V2_BATCH_COMPILED
+    v2UseTransactionBatch=transaction;v2UseWindowListBatch=list;
+#else
+    (void)transaction;(void)list;
+#endif
+    v2Veil(42);v2Veil(43);
+    assert(v2Table.count==2&&alphas[0]==0&&alphas[1]==0&&!transformSets&&v2Table[@42]->veiled&&v2Table[@43]->veiled);
+    struct dw2_record plain[2]={recordFor(42),recordFor(43)};uint8_t statuses[2]={255,255};
+    for(unsigned i=0;i<2;i++)plain[i].flags=0;
+    [events removeAllObjects];uint64_t generation=v2Generation;
+    v2Apply(plain,2,statuses);
+    // One journal write for the whole frame, before any transform: the first frame says each window now owes its transform.
+    assert(statuses[0]==DW2_APPLIED&&statuses[1]==DW2_APPLIED&&alphas[0]==1&&alphas[1]==1&&v2Generation==generation+1);
+    for(NSNumber *wid in @[@42,@43]){
+        NSUInteger transform=NSNotFound,alpha=NSNotFound;
+        for(NSUInteger i=0;i<events.count;i++){
+            NSString *event=events[i];
+            if(transform==NSNotFound&&([event isEqual:[NSString stringWithFormat:@"T%@",wid]]||[event isEqual:@"C"]||[event isEqual:@"L"]))transform=i;
+            if([event hasPrefix:[NSString stringWithFormat:@"A%@:",wid]])alpha=i;
+        }
+        if(transform==NSNotFound||alpha==NSNotFound||transform>alpha){fprintf(stderr,"%s: window %u alpha before transform: %s\n",how,wid.unsignedIntValue,[[events componentsJoinedByString:@" "]UTF8String]);abort();}
+    }
+    assert(!v2Table[@42]->veiled&&!v2Table[@43]->veiled&&!v2Table[@42]->veilBare&&!v2Table[@43]->veilBare);
+    [events removeAllObjects];generation=v2Generation;v2Apply(plain,2,statuses);
+    assert(statuses[0]==DW2_APPLIED&&statuses[1]==DW2_APPLIED&&v2Generation==generation&&![events containsObject:@"A42:1.00"]&&![events containsObject:@"A43:1.00"]); // later frames write no alpha and no journal
+    assertRestored();
+}
+#endif
 int main(void){@autoreleasepool{
     mainConnection=testConnection;getOwner=testOwner;connectionPID=testOwnerPID;getTransform=testTransformGet;setTransform=testTransformSet;
     getBounds=testBounds;getAlpha=testAlphaGet;setAlpha=testAlphaSet;fixtureOnly=NO;
@@ -109,6 +145,10 @@ int main(void){@autoreleasepool{
     failAlphaRead=YES;v2Apply(records,2,statuses);assert(statuses[0]==DW2_NOT_APPLIED&&statuses[1]==DW2_NOT_APPLIED);failAlphaRead=NO;
     assertRestored();
 #if !DW_TEST_FROZEN_BASELINE
+    // The arrival veil needs a desktop helper's identity and a queue that never runs its 1-second bound on its own.
+    {static dispatch_queue_t held;held=dispatch_queue_create("dw.forward.veil",DISPATCH_QUEUE_SERIAL);dispatch_suspend(held);v2q=held;}
+    v2VeilRegistered=YES;atomic_store(&v2VeilOn,true);atomic_store(&v2VeilClient,999);
+    veilThenPlace("scalar",NO,NO);
 #if DW_V2_ALPHA_DEDUP
     // On the skip path, identity loss during alpha readback never authorizes a
     // corrective setter and final identity still prevents APPLIED.
@@ -121,6 +161,7 @@ int main(void){@autoreleasepool{
     resetState();v2UseTransactionBatch=YES;v2Apply(records,2,statuses);
     assert(statuses[0]==DW2_APPLIED&&statuses[1]==DW2_APPLIED&&transactionCreates==1&&transactionStages==2&&transactionCommits==1&&!transformSets);
     assertRestored();
+    veilThenPlace("transaction",YES,NO);
     // Neither staging nor commit status zero establishes a transform readback.
     resetState();v2UseTransactionBatch=YES;ignoreCommit=YES;v2Apply(records,2,statuses);
     assert(statuses[0]==DW2_NOT_APPLIED&&statuses[1]==DW2_NOT_APPLIED);assertRestored();
@@ -138,6 +179,7 @@ int main(void){@autoreleasepool{
     v2SetWindowTransforms=testWindowList;
     resetState();v2UseWindowListBatch=YES;v2Apply(records,2,statuses);
     assert(statuses[0]==DW2_APPLIED&&statuses[1]==DW2_APPLIED&&listCalls==1&&!transformSets&&!transactionCreates);assertRestored();
+    veilThenPlace("window list",NO,YES);
     resetState();v2UseWindowListBatch=YES;ignoreList=YES;v2Apply(records,2,statuses);
     assert(statuses[0]==DW2_NOT_APPLIED&&statuses[1]==DW2_NOT_APPLIED&&listCalls==1);assertRestored();
     resetState();v2UseWindowListBatch=YES;failList=YES;v2Apply(records,2,statuses);

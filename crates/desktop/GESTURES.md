@@ -294,6 +294,37 @@ and a scene `load` keeps it. `disable_on_external_mouse` counts as on: no
 device is watched. The action's reply does not carry the state; read it from
 the snapshot or from any gesture reply.
 
+## The finger counts a run binds
+
+`{"op":"gesture_fingers"}` answers `{"fingers":[3,4],"enabled":true}`: the
+finger counts, three or more, that a gesture can be bound to in this run, and
+whether the trackpad is on. It is read-only and takes nothing. The shell uses
+it for one thing: the system reads the same three and four fingers as Mission
+Control, Spaces, App Exposé and Launchpad, and the shell drops the Dock-control
+events of those gestures for the counts listed here and for no others
+([shell notes](../../native/desktop/README.md#trackpad-gestures)). A count the
+controller does not list is left to the system, as upstream leaves an unbound
+gesture to the client.
+
+- A count is listed when any trigger the shell's recogniser can produce takes
+  it: a swipe (plain, or up, down, left, right), a doubletap swipe, a pinch (plain, in
+  or out) or a hold, in any of the three `[gestures]` tables, whatever modifier
+  the binding asks for. Two fingers are the pointer's, the scroll's and AppKit's
+  magnify and are never listed. `tap`, `doubletap` and the hold-swipes are
+  touchscreen triggers, valid only under `[touch]`, and are never listed.
+- The desktop's own bindings count until a config unbinds them (`"none"`) or
+  `[bindings] disable_defaults` lists `gestures`: the bare four-finger swipe up
+  and the three-finger doubletap swipe over a window. They are one table,
+  `desktop_gestures`, read by this command and by the dispatch, so the two agree.
+- `enabled` is the state `set-trackpad` and `[input.trackpad] enable` leave, and
+  `fingers` is empty while it is false: no gesture is dispatched then, so none is
+  held back. The shell asks again after every config load and after any
+  `set-trackpad` it sees run, by key, gesture, hot corner or `msg action`.
+- Because the modifier is not part of the answer, a config that binds only
+  `alt+4-finger-swipe-up` lists 4: the system's four-finger gestures are held
+  back without Option as well. The decision is by count, and the modifier is
+  known to the shell only when a gesture begins.
+
 ## Momentum
 
 There is one momentum: each output's `MomentumState`, upstream's own code, which
@@ -345,7 +376,9 @@ The [shell notes](../../native/desktop/README.md#trackpad-gestures) say why.
   `native/desktop/trackpad-gestures.m`. The dispatch cannot be more faithful
   than the stream it is given.
 - An unbound gesture is forwarded to the focused client upstream. Here it does
-  nothing.
+  nothing to the canvas and is not forwarded; the system's own gesture of the
+  same fingers is what an unbound count keeps, once the shell's guard lets it
+  through (see [the finger counts a run binds](#the-finger-counts-a-run-binds)).
 - `resize-window` and `resize-window-snapped` resize through the size
   transaction of [NATIVE_RESIZE.md](NATIVE_RESIZE.md#pointer-resize), whose
   differences from upstream's grab are listed there. A screen-pinned window is
@@ -473,6 +506,12 @@ built-in table and with config files in a throwaway directory. It checks:
 - a config file's bindings, thresholds and speeds, `"none"`, per-direction
   triggers, `disable_defaults`, and a reload;
 - `set-trackpad` by action, IPC, gesture and config, and its override rule;
+- `gesture_fingers`: the default table lists 3 and 4; unbinding every
+  three-finger binding, modified ones included, leaves 4; `disable_defaults`
+  with a modified five-finger swipe and a two-finger pinch lists 5; nothing
+  bound lists nothing; unbinding the four-finger swipe up leaves the
+  three-finger doubletap swipe default and the other four-finger bindings, so
+  3 and 4 stay; `set-trackpad off` empties the list and `on` restores it;
 - malformed events.
 
 Expected values are derived by hand from upstream's handlers as read. Those
@@ -482,8 +521,10 @@ them is by reading, not by differential test.
 This is controller evidence only. It does not show that the shell's recogniser
 produces these streams from real touches, that macOS delivers three- and
 four-finger touches to the canvas (its own Mission Control, Spaces and Launchpad
-gestures must be turned off in System Settings for that), that a frame is
-drawn, or that a window moves on screen. No part of this was run against a
+gestures must be turned off in System Settings for that, unless the shell's
+MultitouchSupport source and Dock-control guard hold them back for the bound
+counts, which is implemented and has not run on a trackpad either), that a frame
+is drawn, or that a window moves on screen. No part of this was run against a
 trackpad.
 
 ### Integration run, 2026-10-09

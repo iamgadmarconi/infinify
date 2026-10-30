@@ -57,6 +57,9 @@
                       cancelled:(void (^)(void))cancelled;
 @property (readonly) BOOL running;
 @property (readonly) BOOL ownsTouches;
+// When it answers YES another tap holds Dock control back, and for the bound finger counts only: this one leaves
+// Dock-control packets alone instead of owning every one of them. Asked per packet; no state of its own is touched.
+@property (copy) BOOL (^dockElsewhere)(void);
 // An original mouse press is outside this adapter's owned touch contact.
 // Tagged application-posted packets never alter
 // this state. New global gesture admission must leave such a press alone.

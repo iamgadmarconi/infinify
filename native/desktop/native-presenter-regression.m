@@ -49,6 +49,9 @@ int dw_client_inspect(dw_client *client,uint32_t timeout,const struct dw2_identi
 int dw_client_restore_all(dw_client *client,uint32_t timeout,struct dw2_restore_result *results,uint32_t capacity,uint32_t *count,uint32_t *pending,uint32_t *persisted) {
     (void)client;(void)timeout;(void)results;(void)capacity;*count=0;*pending=0;*persisted=1;return DW_CLIENT_OK;
 }
+int dw_client_veil(dw_client *client,uint32_t timeout,bool enable,uint32_t *held) {
+    (void)client;(void)timeout;(void)enable;(void)held;return DW_CLIENT_INVALID;
+}
 void dw_client_stats(dw_client *client,struct dw_client_stats *stats) { (void)client;memset(stats,0,sizeof(*stats)); }
 void dw_client_close(dw_client *client) { if(client){closed++;free(client);} }
 NSDictionary *DWNativeWindowFamily(NSDictionary *identity,NSString *__autoreleasing *why) {
@@ -70,6 +73,8 @@ bool dw_focus_birth(pid_t pid,uint64_t *seconds,uint64_t *microseconds) { (void)
 - (void)fixtureCooperative;
 - (void)fixtureSpaceFrames;
 - (void)fixturePinned;
+- (void)fixtureVeiling;
+- (NSUInteger)fixtureReleases;
 - (DWNativeSpaceReflow *)fixtureSpaceReflow:(NSNumber *)wid;
 - (void)fixtureBound:(NSDictionary *)identity bounds:(CGRect)native family:(NSDictionary *)family;
 - (NSUInteger)fixtureRetainedFrames;
@@ -98,6 +103,8 @@ bool dw_focus_birth(pid_t pid,uint64_t *seconds,uint64_t *microseconds) { (void)
 - (void)fixtureCooperative { _info.scope=DW2_SCOPE_COOPERATIVE; }
 - (void)fixtureSpaceFrames { _desktopWide=YES;_info.caps|=DW2_CAP_SPACE; }
 - (void)fixturePinned { _info.caps|=DW2_CAP_PINNED|DW2_CAP_ALPHA; }
+- (void)fixtureVeiling { _veiling=YES; }
+- (NSUInteger)fixtureReleases { return _releases.count; }
 - (DWNativeSpaceReflow *)fixtureSpaceReflow:(NSNumber *)wid { return _spaceReflows[wid]; }
 - (void)fixtureBound:(NSDictionary *)identity bounds:(CGRect)native family:(NSDictionary *)family {
     BOOL desktop=_desktopWide;_desktopWide=NO;[self bound:identity bounds:native family:family];_desktopWide=desktop;
@@ -586,5 +593,37 @@ int main(void) {@autoreleasepool {
     [presenter unbound:root];check(![group isAcknowledgedPlacementCurrent:current],@"unbinding revokes a grouped receipt");
     [other fixtureExpire];check(!receipt(other,otherRoot,2,1)&&![group isAcknowledgedPlacementCurrent:otherReceipt],@"disconnect revokes receipt before main callback delivery");
     [group finish];check(closed==10,@"all in-memory sessions drain and close");
+    // What an answer to the veil request says about the helper: acceptance, and no or unreadable answer (the helper may have applied it),
+    // leave it possibly veiling, so an unmanaged window is released explicitly; a refusal, a lost helper and a bad request do not.
+    check(DWNativeVeilMayBeOn(DW_CLIENT_OK)&&DWNativeVeilMayBeOn(DW_CLIENT_TIMEOUT)&&DWNativeVeilMayBeOn(DW_CLIENT_INVALID)
+        &&!DWNativeVeilMayBeOn(DW_CLIENT_REFUSED)&&!DWNativeVeilMayBeOn(DW_CLIENT_LOST),@"a veil request that may have been applied is assumed on");
+    // A window the shell declines, which the helper's arrival veil may hold: one RESTORE record, retired by whatever the reply, and never
+    // for a bound window, a helper without the veil, or a process instance that is not the one named.
+    {
+        NSDictionary *screens=@{@"outputs":@[@{@"id":@1,@"screen_bounds":rect(CGRectMake(0,0,1200,900))}],@"placements":@[],@"windows":@[]};
+        DWNativePresenter *plain=[DWNativePresenter fixturePID:@123];[plain declineWindow:identity(123,99)];
+        check(![plain fixtureReleases],@"a helper without the arrival veil is never asked to release a window it holds nothing of");
+        DWNativePresenter *declining=[DWNativePresenter fixturePID:@123];[declining fixtureVeiling];
+        NSMutableDictionary *reused=[identity(123,99) mutableCopy];reused[@"birth_usec"]=@21;[declining declineWindow:reused];
+        check(![declining fixtureReleases],@"a decline names the process instance it was read from");
+        NSDictionary *held=identity(123,42);[declining bound:held bounds:native family:family(held,native,@[])];
+        [declining declineWindow:held];check(![declining fixtureReleases],@"a bound window is placed or released by its own records, never declined");
+        [declining declineWindow:identity(123,99)];[declining declineWindow:identity(123,99)];
+        check([declining fixtureReleases]==1,@"a decline is queued once");
+        [declining describe:screens bound:@{}];[declining submit];
+        const struct dw2_record *sent=declining.fixtureRecords.bytes;
+        check(declining.fixtureRecords.length==sizeof(*sent)+0&&sent[0].id.wid==99&&sent[0].flags==DW2_RECORD_RESTORE&&sent[0].id.pid==123&&sent[0].id.birth_sec==100&&sent[0].id.birth_usec==20,
+            @"a decline is one release record for that exact window instance");
+        uint64_t first=declining.fixtureSequence;[declining submit];check(declining.fixtureSequence==first,@"an unchanged pending release is not resent at once");
+        [declining fixtureAck:@[@(DW2_IDENTITY)] sequence:first];
+        check(![declining fixtureReleases],@"a decline is a hint: any reply retires it, none is retried");
+        [declining describe:screens bound:@{}];check(!declining.fixtureRecords.length,@"the next frame no longer carries it");
+        [declining declineWindow:identity(123,99)];[declining describe:screens bound:@{}];[declining submit];
+        [declining fixtureAck:@[@(DW2_APPLIED)] sequence:declining.fixtureSequence];
+        check(![declining fixtureReleases],@"an acknowledged decline is retired");
+        [declining declineWindow:identity(123,100)];[declining fixtureExpire];
+        check([declining fixtureReleases]==1,@"queued before the session ended");
+        [plain finish];[declining finish];
+    }
     printf("PASS: %lu presenter readiness checks; no native mutation or input-usability claim\n",(unsigned long)checks);
 }return 0;}

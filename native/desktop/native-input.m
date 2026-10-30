@@ -97,6 +97,7 @@ static CGEventRef globalTrackpadInput(CGEventTapProxy proxy,CGEventType type,CGE
         BOOL enabled=_enabled&&_enabled();if(!enabled)[self cancel];
         NSInteger dockPhase=0;
         if(DWDockSwipe(event,&dockPhase)){
+            BOOL (^elsewhere)(void)=_dockElsewhere;if(elsewhere&&elsewhere()){_dockOwned=NO;return event;}
             if(dockPhase==kCGGesturePhaseBegan||dockPhase==kCGGesturePhaseMayBegin)_dockOwned=enabled&&!self.hasNativeMousePress&&(!NSEvent.pressedMouseButtons||_ownsTouches);
             BOOL owned=_dockOwned;
             if(dockPhase==kCGGesturePhaseEnded||dockPhase==kCGGesturePhaseCancelled)_dockOwned=NO;

@@ -215,9 +215,11 @@ matches the reported helper PID with the kernel socket peer PID.
 | 6 `ENROLLMENT` | empty | scope, count, server PID, zero, count × 24-byte process instance |
 | 7 `INSPECT` | one 24-byte window identity | one 144-byte inspection result |
 | 8 `FRAME_SPACE` | u32 count, u32 zero, count × 88-byte Space record | same frame reply, matching opcode |
+| 9 `VEIL` | u32 mode (1 on, 0 off), u32 zero | u32 status (0, or 1 = refused), u32 bound in ms |
 
 Capabilities are alpha=1, per-window restoration=2, enrollment audit=4, explicit
-fixture family=8, inspection=16, and Space migration=32. Scopes are cooperative=1, allowlist=2, and
+fixture family=8, inspection=16, Space migration=32, pinned sublevel=64 and
+arrival veil=128. Scopes are cooperative=1, allowlist=2, and
 same user=3. Queue is own=0 or main=1. Current clients require the relevant current
 capabilities and refuse unsupported helpers; there is no old-capability bypass.
 
@@ -282,7 +284,11 @@ Zero leaves membership untouched; legacy `FRAME` bytes remain unchanged.
 singleton ordinary source membership and an ordinary target currently active on
 a different active, awake physical display. It cannot gather windows from an
 inactive Space or another Space on the same display. Already-on-target windows
-receive no Space setter or new Space restoration obligation. Duplicate WIDs in
+receive no Space setter or new Space restoration obligation. A window that has no
+Space membership at all is refused `SPACE` with no write and no journal change; the
+guest showed this for a document being closed (destroyed in WindowServer, still
+named by the owner cache) for the few frames before the client released it, and
+`restore_identity_test.m` covers that sequence with substituted calls. Duplicate WIDs in
 an extended frame, or a nonzero target on a restoration record, are malformed.
 
 Before a Space write, schema-3 entries optionally persist
@@ -309,6 +315,110 @@ again compared original transforms afterward. Evidence is under
 Finder's native extent still reflowed from `2056x1130` to `1280x770` on the smaller
 display. These runs do not establish native content-extent/detail preservation,
 general child-family transfer, physical-display or macOS 26 acceptance.
+
+### Arrival veil
+
+A window an application opens is shown at its native size and place until the shell has listed
+it and the first frame has placed it: about 20 to 30 ms when placement works and for its whole life
+when it is refused. The `VEIL` request (capability 128) closes that gap from inside the Dock. It is an
+adaptation of the idea Sunlight uses (see below), as an alpha write instead of a window level.
+
+- **Offered** only by the explicit same-user helper (not an allowlist or cooperative one) that has
+  alpha getters/setters and could register for the window server's announcement of a window added to
+  a Space (SkyLight connection notification 1325; payload: Space id u64, then window id u32). A control
+  session asks with mode 1 and is answered status 0 and the bound (`DW2_VEIL_TIMEOUT_MS`, 1000 ms), or
+  status 1 (refused: no capability, or the client's own process could not be read from the socket); mode 0 ends
+  it and releases what is held. A malformed request ends the session like any other. It ends with
+  the session. The desktop shell asks after its empty-table audit and carries on without it if refused.
+- **Which windows.** The Dock's main thread only receives the announcement and hands its window id to v2q;
+  every native call and the journal write run on v2q, which is the helper's own queue unless the sidecar's
+  `v2_queue` is `main` (then v2q is the main queue and a veil runs there). A window is
+  veiled when it is at layer 0, at alpha exactly 1, at least 40x40 native points (the shell's own candidate
+  floor), of the login user, in scope, with a process birth that resolves, not in the table or released
+  table, and not a window of the Dock or of the client's process (the control connection's `LOCAL_PEERPID`).
+  A window below alpha 1 is fading in under its application's own animation (a TextEdit
+  *Save* sheet was read at 0.79, and its next animation frames overwrote the veil); it is left alone, and a
+  fractional alpha is never taken for an original. The window need not be on screen: the announcement
+  comes before it is ordered in, and its row has no on-screen key yet.
+- **How.** A veiled window is an ordinary table entry with its original transform, bounds and alpha
+  (and `alpha_touched`), journalled (the whole table, fsync, rename, directory fsync) **before** alpha 0 is
+  written and read back. Two optional journal keys mark what the veil has and has not touched:
+  `veil_bare` (only alpha was changed, so no transform is owed) and `veil_alpha` (the alpha obligation is the
+  veil's, so it is put back only while the window still reads alpha 0). If the record cannot be written nothing
+  is changed and the journal is retried. If the write or readback fails or identity changes, the ordinary
+  release runs. A full table first prunes released windows proven gone, like a frame; if it is still full the
+  window is not veiled.
+- **Ways out.** (a) A frame record for it. The first one re-reads the window's transform and bounds, because
+  the application may have moved or resized it since the announcement, and writes one journal record
+  (the fresh values, `veil_bare` cleared, `veil_alpha` cleared too if the record carries an alpha) **before any
+  write**; if that record cannot be written the status is `JOURNAL`, nothing is written, and the window stays
+  veiled with what it was read as. Then the transform, then the record's alpha, or, when it has none, the original
+  alpha lifted only if the window still reads 0 (an application that has taken the alpha over is not
+  overwritten). The window is never left invisible by a transform that did not take. Later frames write no journal
+  and no alpha for it. (b) A `RESTORE` record for it, or `RESTORE_ALL`, the end of the session or `VEIL` mode 0: the
+  ordinary release. (c) `DW2_VEIL_TIMEOUT_MS` after it was veiled, if still veiled and held: the same release. The
+  timer lives in the Dock: if the Dock dies there is no bound and no release until recovery. (d) A window that closes or
+  is replaced is dropped by the identity logic of the release, with no write. A crash or lost helper is covered by
+  the journal replay like any entry. A release of a window that was only veiled (`veil_bare`) writes no transform
+  (the window server's transform follows the window's position): it reads the transform and takes it as the
+  original, and a replay of such an entry does the same. After the first frame the journal says a transform is
+  owed, with the values read then. An alpha obligation with `veil_alpha` is written back only while alpha reads 0, so
+  a window that was placed with no alpha of its own is never written again, and a window an application has taken
+  over keeps its alpha; an alpha the shell asked for is its own obligation and is put back as before. `veiled`
+  (whether alpha is being held now) is memory only.
+- **Not covered.** Windows not at layer 0 (utility panels at the floating level, menus, popovers) are not veiled.
+  A window already known to the window server that is announced again for a Space change and not managed by the shell
+  is held for up to the bound (while the Dock lives). A window the application animates (TextEdit's document windows, sheets) can have the veil
+  overwritten by the application: TextEdit's own open animation wrote alpha 1 about 0.5 s after creation (measured
+  501 to 533 ms), before the bound, when nothing placed the window. The veil is not an optical result.
+- **The shell** (`native-presenter.m`, `window-manager.m`, `main.m`) asks after admission, and lets go at once
+  of a window it will not manage: `-windowNotAdopted:pid:` is sent once per appearance, from the first discovery
+  pass on, for a window of a non-regular application, a window the shareable windows or Accessibility do not count as
+  a window, one a read of which settled as not real, one `attach` refused, and one `-windowAppeared:` could not take
+  because the canvas was closing or had no panels. The presenter queues one `RESTORE` record for that exact process
+  instance (`-declineWindow:`); any reply retires it, since the helper's bound is the backstop. A window the helper
+  holds nothing of answers a release with a no-op status 0. If the veil request gets no answer in time or an
+  unreadable one, the shell assumes the veil may be on and keeps releasing explicitly: a wrong "on" costs a no-op record,
+  a wrong "off" would leave such a window invisible for the whole bound.
+
+What was run (macOS 27.0.1 (26A434) guest, SIP off, final build): `native/privileged/restore_identity_test.m` and
+`forward-operations-test.m` use substituted native calls for every rule above (eligibility refusals, journal
+before alpha with a failing journal changing nothing, transform-then-alpha in the scalar, transaction and
+list paths, decline/bound/end/recovery, closed and replaced windows, the request and the announcement
+payload through the real handler on a socket pair); `client_protocol_test.py` checks the C client's request,
+refusal and invalid-reply handling against a fake peer; `fixture_v2_test.py`'s frames group, run in the
+guest, shows a cooperative helper offering no veil (caps 119) and refusing the request without ending its session.
+These are not native evidence. The live numbers below were taken before three later changes: the first frame's re-read and
+journal write (`veil_bare`), the conditional veil alpha (`veil_alpha`, and a lift that leaves an alpha the application
+took over), and the shell's declines from the first pass on; those are covered by the substituted-call and in-memory
+tests only and have not been run live in a guest. Live, in the guest with the full-desktop helper: SkyLight 1325 reached the
+Dock's handler for other processes' windows (and for Infinify's own canvas panels, which are refused); from announcement to
+alpha 0 read back took 1.25 to 2.1 ms over eight windows (one 6.1 ms): about 0.13 to 0.4 ms to reach v2q,
+0.6 ms to check and resolve, 0.4 to 0.9 ms to journal, 0.15 to 0.3 ms to write and read back. `measure-opening 8 0.5`
+(TextEdit, camera zoom 0.5, `reset_on_new_window = false`, extended meter at 1 ms) reported, for eight windows,
+`unplaced_ms` 0.0 to 2.3 (what the meter sampled before the veil landed), `how=hidden`, visible again at 9.9 to 81.1 ms at
+scale 2.000, alpha 1.00, none left hidden; main (`ca88bbd`) had been measured at about 20 to 30 ms at native size. A silent
+client (veil asked, nothing placed or declined) held non-animating windows for 1000.9 and 1023.3 ms before
+the bound released them. With the shell running: a regular window placed after 131.8 ms hidden; an accessory-app window was released
+by the shell's decline after 16.0 ms and a borderless regular-app window (not adopted: AXUnknown) after 132.0 ms, both visible
+at scale 1, alpha 1; a 30x62 window was never veiled; the real TextEdit *Save* sheet was not veiled (alpha 0.66 at
+first sight, mid-fade) and was placed 22 ms later, still fading in. `quit-native` with managed windows at scale 2.0 and a window
+0.1 s into its veil left 47 of 47 layer-0 windows at alpha 1, scale 1. **A Dock exit does not undo
+alpha:** an alpha the Dock set on a settled window (0) was still 0 3.5 s after `killall Dock`, while its transform reset
+(tx -168 to 0); a veiled non-animating window was still at alpha 0 with the Dock gone, and the launcher's recovery handoff
+(`run-native`) restored it to alpha 1.00. A veiled window is therefore invisible after a Dock crash
+until that recovery runs: the bound's timer died with the Dock, so nothing limits it, unless the application
+rewrites alpha itself. Not run: macOS 26, a physical display, other applications' open animations, optical capture.
+
+**Measuring this: read alpha before the transform.** On the integrated build a meter that read a window's transform and then its
+alpha reported `hidden`, `native` (alpha 1, scale 1), `placed` for about one window in six (11 of 72 over six 12-document runs), a few to 30 ms apart. It never
+happened: the helper writes a window's transform and then its alpha 0.1 to 0.5 ms later, and a meter whose two reads straddle those
+writes pairs the old transform with the new alpha (and stamps the pair at the start of its tick, before a window-list copy that can take
+10 ms or more). A helper-side poll of the window's alpha every 150 us for 120 ms after each veil (temporary instrumentation, removed) read 0
+continuously until the helper's own alpha write, which followed its transform write, then 1, with no other value, in 24 of 24 windows. A meter that
+reads alpha first, then the transform, never shows a visible window at its old transform (the transform is already
+scaled by the time alpha is above 0): it reported none in 36 of 36 windows (three runs), while a transform-first meter running at the same time on the same
+windows in two of those runs reported two of 24 (wid 1009 and wid 1036). The extended `openmeter` reads alpha first.
 
 One control `HELLO` creates the session and a random token. A second heartbeat
 connection uses that token; requests on either renew the 2000 ms lease. The C
@@ -423,7 +533,7 @@ newest-frame bursts, disconnect and lease restoration, client/helper loss, the
 C client, per-window release, process-scope audit, read-only inspection before
 first touch and after restoration, strict startup refusals with byte preservation,
 and a filesystem obstruction that leaves an empty table with a pending journal.
-`restore_identity_test.m` compiles the actual apply/restore code with native
+`restore_identity_test.m` (also the arrival veil cases) compiles the actual apply/restore code with native
 call substitutes to check unavailable enumeration, owner/process lookup, changed
 identity/scope, and retention of the original in the table and durable journal.
 It also replaces the simulated owner after journal fsync and between setters,

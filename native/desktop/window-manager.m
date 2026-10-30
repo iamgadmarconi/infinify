@@ -30,6 +30,8 @@ static const NSTimeInterval still=.05;
 @property BOOL native;
 // On-screen candidates already offered, found bound, or given up on.
 @property NSMutableSet<NSNumber *> *offered;
+// The windows -windowNotAdopted: has been told of, until they leave the screen.
+@property NSMutableSet<NSNumber *> *declined;
 // Candidates one read did not list: a second miss ends the asking.
 @property NSMutableSet<NSNumber *> *missed;
 // Candidates their application answered for without listing them among its windows: each is asked about once more.
@@ -219,7 +221,7 @@ static DWWindowCandidate *createdNativeWindow(AXUIElementRef element,pid_t pid,N
     if(mode!=DWWindowDiscoveryModeCaptureOverlay&&mode!=DWWindowDiscoveryModeNativePresentation)return nil;
     BOOL native=mode==DWWindowDiscoveryModeNativePresentation;
     BOOL capturing=!native&&CGPreflightScreenCaptureAccess();if(!scope&&!native&&!capturing)return nil;
-    DWWindowManager *manager=[self new];manager.scope=[scope copy];manager.capturing=capturing;manager.native=native;manager.host=host;manager.offered=[NSMutableSet set];manager.missed=[NSMutableSet set];manager.unlisted=[NSMutableSet set];manager.placed=[NSMutableDictionary dictionary];manager.titleRetries=[NSMutableDictionary dictionary];
+    DWWindowManager *manager=[self new];manager.scope=[scope copy];manager.capturing=capturing;manager.native=native;manager.host=host;manager.offered=[NSMutableSet set];manager.declined=[NSMutableSet set];manager.missed=[NSMutableSet set];manager.unlisted=[NSMutableSet set];manager.placed=[NSMutableDictionary dictionary];manager.titleRetries=[NSMutableDictionary dictionary];
     manager.nativeMetadata=[NSMutableDictionary dictionary];manager.events=[[DWWindowEvents alloc]initWithSink:manager scope:manager.scope];return manager;
 }
 - (BOOL)live { return self.events.live; }
@@ -332,7 +334,7 @@ static DWWindowCandidate *createdNativeWindow(AXUIElementRef element,pid_t pid,N
         if([self.offered containsObject:wid])continue;
         NSNumber *policy=regular[pid];
         if(!policy)policy=regular[pid]=[NSRunningApplication runningApplicationWithProcessIdentifier:pid.intValue].activationPolicy==NSApplicationActivationPolicyRegular?@YES:@NO;
-        if(!policy.boolValue)continue;
+        if(!policy.boolValue){[self declineWindow:wid pid:pid];continue;}
         if([host managesWindow:wid.unsignedIntValue pid:pid.intValue]){[self.offered addObject:wid];continue;}
         // CG bounds include the owner's opening animation. Native stability is
         // the fresh untransformed extent AND original affine basis, while the
@@ -356,7 +358,7 @@ static DWWindowCandidate *createdNativeWindow(AXUIElementRef element,pid_t pid,N
         wanted[wid]=pid;[front addObject:wid];
     }
     // Leaving the screen ends a window's turn; coming back is a new appearance.
-    NSSet<NSNumber *> *present=[NSSet setWithArray:bounds.allKeys];self.bounds=bounds;self.bases=bases;self.sampled=sampled;self.since=since;[self.offered intersectSet:present];[self.missed intersectSet:present];[self.unlisted intersectSet:present];
+    NSSet<NSNumber *> *present=[NSSet setWithArray:bounds.allKeys];self.bounds=bounds;self.bases=bases;self.sampled=sampled;self.since=since;[self.offered intersectSet:present];[self.declined intersectSet:present];[self.missed intersectSet:present];[self.unlisted intersectSet:present];
     for(NSNumber *wid in self.titleRetries.allKeys)if(![self.titleRetries[wid][@"basis"]isEqual:bases[wid]])[self.titleRetries removeObjectForKey:wid];
     for(NSNumber *wid in self.nativeMetadata.allKeys){NSDictionary *ticket=self.nativeMetadata[wid];
         if(![ticket[@"basis"]isEqual:bases[wid]]||![ticket[@"since"]isEqual:since[wid]]||![ticket[@"cg_title"]isEqual:candidateTitles[wid]?:NSNull.null])[self.nativeMetadata removeObjectForKey:wid];
@@ -435,7 +437,7 @@ static DWWindowCandidate *createdNativeWindow(AXUIElementRef element,pid_t pid,N
         if(![self.bases[wid]isEqual:basis[wid]]||!held||(earlyTickets?!earlyReady:NSProcessInfo.processInfo.systemUptime-held.doubleValue<still)){again=YES;continue;}
         DWWindowCandidate *window=found[wid];
         // A window the read did not list yet is asked for once more, then left until it next comes on screen.
-        if(!window){if([self.missed containsObject:wid])[self.offered addObject:wid];else {[self.missed addObject:wid];again=YES;}continue;}
+        if(!window){if([self.missed containsObject:wid]){[self.offered addObject:wid];[self declineWindow:wid pid:asked[wid]];}else {[self.missed addObject:wid];again=YES;}continue;}
         // Only a real window is adopted: by Accessibility a standard window or a dialog, whatever its size or title. One its application does not
         // list yet is asked about once more, by its own count (`unlisted`: a read that missed it above has not spent that look). Where
         // Accessibility cannot say, or the application still does not list the window (it lists only those of the active Space), the rule is the
@@ -463,6 +465,7 @@ static DWWindowCandidate *createdNativeWindow(AXUIElementRef element,pid_t pid,N
         [self.nativeMetadata removeObjectForKey:wid];
         [self.offered addObject:wid];
         if(!real){
+            [self declineWindow:wid pid:asked[wid]];
             // A window of a size a person would call a window is named, so that one this rule leaves out can be found and added by hand.
             if(window.frame.size.width>=200&&window.frame.size.height>=150)fprintf(stderr,"%s window \"%s\" (%gx%g) not adopted: %s. Choose windows adds it by hand.\n",(window.applicationName?:@"An application's").UTF8String,(window.title?:@"").UTF8String,window.frame.size.width,window.frame.size.height,
                 [subrole isKindOfClass:NSString.class]?[NSString stringWithFormat:@"Accessibility reports it as %@, not a standard window or a dialog",subrole].UTF8String:"its application does not list it among its windows");
@@ -506,6 +509,12 @@ static DWWindowCandidate *createdNativeWindow(AXUIElementRef element,pid_t pid,N
         [present addObject:@{@"bundle_id":bundle,@"title":w.title}];
     }
     self.completed=YES;[host discoveryCompleted:present];
+}
+// Told to the host once per appearance, from the first pass on: a window that arrives while it runs is held back too.
+- (void)declineWindow:(NSNumber *)wid pid:(NSNumber *)pid {
+    if(self.stopped||!self.native||[self.declined containsObject:wid])return;
+    [self.declined addObject:wid];
+    if([self.host respondsToSelector:@selector(windowNotAdopted:pid:)])[self.host windowNotAdopted:wid.unsignedIntValue pid:pid.intValue];
 }
 - (BOOL)capture:(NSNumber *)window placed:(BOOL)placed {
     NSTimeInterval now=NSProcessInfo.processInfo.systemUptime;

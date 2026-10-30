@@ -3,6 +3,14 @@
 // Original implementation, compiled as part of payload.m (one translation unit, so
 // it shares resolved native symbols, scope and runtime directory). Wire format:
 // protocol2.h. Semantics: README.md "Protocol v2".
+// The arrival veil (v2Veil below) adapts an idea and a technique of spacefarm-digital/sunlight
+// afeea74b18e70ca49bf462d6fe462cf65deb2b32 (MIT, Copyright (c) 2026 spacefarm): that a window an
+// application opens must not be seen at its native place before the canvas has placed it
+// (LiveWindows/README.md:129 and LiveWindows/osax/sunbeam.h:40-51, which keep the canvas and its
+// windows one window level up), and the window server's own announcement of it, SkyLight
+// connection notification 1325 with the Space id (u64) then the window id (u32) as payload,
+// registered with SLSRegisterConnectionNotifyProc (Sources/Canvas/RealWindows/WindowServerEvents.swift:4-15,
+// 36-55 and 73-85). The level lift is not taken: here the window is held at alpha 0 instead.
 #import <pthread.h>
 #import <stdatomic.h>
 #import <sys/uio.h>
@@ -32,6 +40,16 @@ static uint32_t fixtureWids[16], fixtureCount;
     float appliedAlpha; BOOL appliedAlphaKnown;
     // Optional pin obligation, immutable after first durable admission.
     int originalSublevel; BOOL sublevelTouched, sublevelFresh;
+    // Arrival veil. veiled (memory only): alpha is held at 0 by v2Veil, and the first frame that places the
+    // window gives it back. veilBare: nothing but the alpha has been changed, so a release does not write
+    // the transform (the window server's transform follows the window's position, which the application
+    // may have changed since); the first frame clears it, durably, before any write. veilAlpha: the alpha
+    // obligation is the veil's, so a release writes the original only while the alpha still reads 0 (the
+    // application may have taken it over); a frame that carries an alpha makes it unconditional, durably.
+    // veilBare and veilAlpha are journalled (optional keys veil_bare, veil_alpha). The Cleared flags and
+    // veilPrior* only undo a first-frame change whose journal write failed.
+    BOOL veiled, veilBare, veilAlpha, veilBareCleared, veilAlphaCleared;
+    CGAffineTransform veilPriorTransform; CGRect veilPriorBounds;
     // Optional Space obligation. Original membership is immutable. A void
     // forward request remains uncertain until its target is actually observed.
     uint64_t originalSpace, pendingSpace; NSString *originalSpaceDisplay;
@@ -75,6 +93,16 @@ static CGError (*v2GetWindowLevel)(int,uint32_t,int *);
 static int (*v2GetWindowSublevel)(int,uint32_t);
 static CGError (*v2SetWindowSublevel)(int,uint32_t,int);
 static BOOL v2SublevelAPI(void) { return v2GetWindowLevel&&v2GetWindowSublevel&&v2SetWindowSublevel; }
+// Arrival veil. v2VeilOn is set on v2q by the session's VEIL request and cleared with the session; the
+// notification handler reads it from the main thread. v2VeilClient is the control connection's process.
+static int (*v2RegisterNotify)(int,void (*)(uint32_t,void *,size_t,void *),uint32_t,void *);
+static BOOL v2VeilRegistered;
+static _Atomic bool v2VeilOn;
+static _Atomic int32_t v2VeilClient;
+// A window narrower or shorter than this is never offered to the shell (window-manager.m), so it is not veiled.
+static const CGFloat v2VeilMinimumExtent=40;
+// Only the explicit same-user (desktop) helper; allowlist and cooperative scopes are not veiled.
+static BOOL v2VeilAvailable(void) { return v2VeilRegistered&&!fixtureOnly&&!allowlist&&setAlpha&&getAlpha&&getBounds&&getTransform; }
 static void v2ResolveSublevels(void) {
     void *sky=dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight",RTLD_LAZY|RTLD_LOCAL);
     if(!sky)return;
@@ -93,7 +121,7 @@ static BOOL v2Listed(const struct dw2_identity *who) {
     return NO;
 }
 static BOOL v2SpaceAPI(void) { return copyWindowSpaces&&copySpaceDisplay&&displayCurrentSpace&&getSpaceType&&moveWindowsToSpace&&createDisplayUUID; }
-static uint32_t v2Caps(void) { return DW2_CAP_RESTORE_WINDOW|DW2_CAP_ENROLLMENT|DW2_CAP_INSPECT|(setAlpha&&getAlpha?DW2_CAP_ALPHA:0)|(fixtureOnly&&fixtureNativeFamilies?DW2_CAP_FIXTURE_FAMILY:0)|(v2SpaceAPI()?DW2_CAP_SPACE:0)|(v2SublevelAPI()?DW2_CAP_PINNED:0); }
+static uint32_t v2Caps(void) { return DW2_CAP_RESTORE_WINDOW|DW2_CAP_ENROLLMENT|DW2_CAP_INSPECT|(setAlpha&&getAlpha?DW2_CAP_ALPHA:0)|(fixtureOnly&&fixtureNativeFamilies?DW2_CAP_FIXTURE_FAMILY:0)|(v2SpaceAPI()?DW2_CAP_SPACE:0)|(v2SublevelAPI()?DW2_CAP_PINNED:0)|(v2VeilAvailable()?DW2_CAP_VEIL:0); }
 static uint64_t v2WindowSpace(uint32_t wid) {
     if(!v2SpaceAPI())return 0;
     CFArrayRef raw=copyWindowSpaces(mainConnection(),7,(__bridge CFArrayRef)@[@(wid)]);
@@ -248,7 +276,7 @@ static BOOL v2ReattachCurrent(DW2Entry *e) {
     return v2EntryCurrent(e) && !getBounds(mainConnection(),e->who.wid,&bounds) && v2FiniteRect(bounds)
         && CGRectEqualToRect(bounds,e->bounds) && !getTransform(mainConnection(),e->who.wid,&actual) && finiteMatrix(actual)
         && (v2SameTransform(actual,e->transform) || v2SameTransform(actual,CGAffineTransformIdentity))
-        && (!e->alphaTouched || (getAlpha && !getAlpha(mainConnection(),e->who.wid,&alpha) && alpha==e->alpha))
+        && (!e->alphaTouched || e->veilAlpha || (getAlpha && !getAlpha(mainConnection(),e->who.wid,&alpha) && alpha==e->alpha))
         && (!e->sublevelTouched || v2SublevelMatches(e,e->originalSublevel)) && v2EntryCurrent(e);
 }
 static void v2Count(void) {
@@ -257,26 +285,39 @@ static void v2Count(void) {
     atomic_store(&v2Held,(uint32_t)v2Table.count-restoring);atomic_store(&v2Restoring,restoring);
 }
 
+// The alpha a frame leaves a window at: the record's own or, for a veiled window whose record carries none, its original.
+static BOOL v2FrameAlpha(DW2Entry *e,const struct dw2_record *r,float *alpha) {
+    if(r->flags&DW2_RECORD_HAS_ALPHA){*alpha=r->alpha;return YES;}
+    if(e->veiled){
+        // No alpha of its own to ask for: lift the veil, unless the application has taken the alpha over since (it no longer reads 0).
+        float held=-1;
+        if(!getAlpha(mainConnection(),e->who.wid,&held) && held!=0){e->veiled=NO;return NO;}
+        *alpha=e->alpha;return YES;
+    }
+    return NO;
+}
+
 #if DW_V2_BATCH_COMPILED
 // The explicit batching comparison builds share final property verification.
 // Hints only omit a setter after a fresh getter proves the desired native value;
 // originals, identity fences and restoration never depend on a hint.
 static uint8_t v2FinishForward(DW2Entry *e,const struct dw2_record *r,uint64_t target,BOOL ok) {
-    BOOL alphaOK=YES;
-    if(r->flags&DW2_RECORD_HAS_ALPHA) {
+    BOOL alphaOK=YES;float want=0;
+    BOOL wantsAlpha=v2FrameAlpha(e,r,&want);
+    if(wantsAlpha) {
         if(!v2EntryCurrent(e))return DW2_IDENTITY;
         float actual=-1;
-        BOOL repeated=DW_V2_ALPHA_DEDUP && e->appliedAlphaKnown && e->appliedAlpha==r->alpha;
-        alphaOK=repeated && !getAlpha(mainConnection(),e->who.wid,&actual) && actual==r->alpha;
+        BOOL repeated=DW_V2_ALPHA_DEDUP && e->appliedAlphaKnown && e->appliedAlpha==want;
+        alphaOK=repeated && !getAlpha(mainConnection(),e->who.wid,&actual) && actual==want;
         e->appliedAlphaKnown=NO;
         if(!alphaOK) {
             // A corrective write after the getter needs the same fresh identity
             // fence as a corrective transform; a reused WID receives no write.
             if(repeated && !v2EntryCurrent(e))return DW2_IDENTITY;
-            alphaOK=!setAlpha(mainConnection(),e->who.wid,r->alpha)
-                && !getAlpha(mainConnection(),e->who.wid,&actual) && actual==r->alpha;
+            alphaOK=!setAlpha(mainConnection(),e->who.wid,want)
+                && !getAlpha(mainConnection(),e->who.wid,&actual) && actual==want;
         }
-        if(!alphaOK)ok=NO;
+        if(!alphaOK)ok=NO;else e->veiled=NO;
     }
     if(e->sublevelTouched) {
         int requested=(r->flags&DW2_RECORD_PINNED)?CGWindowLevelForKey(kCGFloatingWindowLevelKey):e->originalSublevel;
@@ -287,7 +328,7 @@ static uint8_t v2FinishForward(DW2Entry *e,const struct dw2_record *r,uint64_t t
     if(!spaceOK||!ok)return DW2_NOT_APPLIED;
     e->appliedTransform=CGAffineTransformMake(r->m[0],r->m[1],r->m[2],r->m[3],r->m[4],r->m[5]);
     e->appliedTransformKnown=YES;
-    if(r->flags&DW2_RECORD_HAS_ALPHA){e->appliedAlpha=r->alpha;e->appliedAlphaKnown=alphaOK;}
+    if(wantsAlpha){e->appliedAlpha=want;e->appliedAlphaKnown=alphaOK;}
     return DW2_APPLIED;
 }
 
@@ -299,6 +340,8 @@ static NSDictionary *v2JournalEntry(DW2Entry *e,NSString *state) {
         @"transform":matrix(e->transform),@"alpha":e->hasAlpha ? @(e->alpha) : (id)NSNull.null,@"alpha_touched":@(e->alphaTouched),
         @"bounds":@[@(e->bounds.origin.x),@(e->bounds.origin.y),@(e->bounds.size.width),@(e->bounds.size.height)],@"state":state}mutableCopy];
     if(e->sublevelTouched)row[@"original_sublevel"]=@(e->originalSublevel);
+    if(e->veilBare)row[@"veil_bare"]=@YES;
+    if(e->veilAlpha)row[@"veil_alpha"]=@YES;
     if(e->originalSpace)row[@"original_space"]=@{@"id":@(e->originalSpace),@"display":e->originalSpaceDisplay,@"pending_target":@(e->pendingSpace)};
     return row;
 }
@@ -432,7 +475,7 @@ static void v2SpaceRestoreSample(DW2Entry *e) {
         &&v2WindowSpace(e->who.wid)==e->originalSpace
         &&!getBounds(mainConnection(),e->who.wid,&bounds)&&v2FiniteRect(bounds)&&CGRectEqualToRect(bounds,e->restoreSpaceBounds)
         &&!getTransform(mainConnection(),e->who.wid,&actual)&&v2SameTransform(actual,e->transform)
-        &&(!e->alphaTouched||(getAlpha&&!getAlpha(mainConnection(),e->who.wid,&alpha)&&alpha==e->alpha))
+        &&(!e->alphaTouched||e->veilAlpha||(getAlpha&&!getAlpha(mainConnection(),e->who.wid,&alpha)&&alpha==e->alpha))
         &&(!e->sublevelTouched||v2SublevelMatches(e,e->originalSublevel))
         &&v2EntryCurrent(e);
     if(!stable)e->restoreSpaceQuiet=0;
@@ -448,6 +491,15 @@ static BOOL v2SpaceRestoreSettled(DW2Entry *e,CGRect bounds,BOOL exact) {
 }
 
 static void v2Restore(NSString *reason,BOOL retry,NSMutableData *results,struct dw2_restore_reply *summary);
+// Live released originals remain obligations across connection death. Make room only by proving
+// a recorded instance is gone, never age. Returns whether the released table changed.
+static BOOL v2PruneReleased(void) {
+    BOOL changed=NO;
+    NSDictionary *owners=v2RestoreOwners();
+    for(NSNumber *releasedKey in v2Released.allKeys){DW2Entry *old=v2Released[releasedKey];
+        if(v2RestoreIdentityWithOwners(&old->who,old->owner,owners)==DW2_INSTANCE_GONE){[v2Released removeObjectForKey:releasedKey];changed=YES;}}
+    return changed;
+}
 static void v2ScheduleRetry(void) {
     if(v2RetryScheduled)return;
     v2RetryScheduled=YES;
@@ -485,14 +537,27 @@ static void v2Restore(NSString *reason,BOOL retry,NSMutableData *results,struct 
             // Space calls and their readbacks can outlive the window as well.
             if(e->originalSpace&&!v2EntryCurrent(e)){e->restoreSpaceQuiet=0;e->restoreSpaceSample=NO;e->state=DW2_RESTORING;pending++;count++;[results appendBytes:&r length:sizeof(r)];
                 [report addObject:@{@"pid":@(r.id.pid),@"birth_sec":@(r.id.birth_sec),@"birth_usec":@(r.id.birth_usec),@"wid":@(r.id.wid),@"outcome":@"pending",@"set_status":@(-1)}];continue;}
-            transformSet=YES;r.set_status=transformSetStatus=setTransform(mainConnection(),e->who.wid,e->transform);
-            BOOL ok=r.set_status==0 && (transformRead=YES,transformGetStatus=getTransform(mainConnection(),e->who.wid,&actual))==0
-                && (transformMatches=v2SameTransform(actual,e->transform));
+            BOOL ok;
+            if(e->veilBare) {
+                // Nothing but alpha was changed: the transform in force is the window's own, and moves with it. Adopt it as the original.
+                r.set_status=0;transformRead=YES;
+                ok=(transformGetStatus=getTransform(mainConnection(),e->who.wid,&actual))==0 && finiteMatrix(actual);
+                if(ok){e->transform=actual;transformMatches=YES;}
+            } else {
+                transformSet=YES;r.set_status=transformSetStatus=setTransform(mainConnection(),e->who.wid,e->transform);
+                ok=r.set_status==0 && (transformRead=YES,transformGetStatus=getTransform(mainConnection(),e->who.wid,&actual))==0
+                    && (transformMatches=v2SameTransform(actual,e->transform));
+            }
             if(e->alphaTouched) {
                 alphaChecked=YES;alphaCurrent=e->reattaching ? v2ReattachCurrent(e) : v2EntryCurrent(e);
-                int status=alphaCurrent ? (alphaSet=YES,alphaSetStatus=setAlpha(mainConnection(),e->who.wid,e->alpha)) : -1;
-                if(status && !r.set_status)r.set_status=status;
-                if(status || (alphaRead=YES,alphaGetStatus=getAlpha(mainConnection(),e->who.wid,&alpha)) || alpha!=e->alpha)ok=NO;
+                // The veil's alpha is put back only while it still reads 0: a window the application has since taken over, or that
+                // a frame lifted without asking for an alpha of its own, is left as it is.
+                float held=-1;BOOL owed=!(e->veilAlpha && alphaCurrent && !getAlpha(mainConnection(),e->who.wid,&held) && held!=0);
+                if(owed) {
+                    int status=alphaCurrent ? (alphaSet=YES,alphaSetStatus=setAlpha(mainConnection(),e->who.wid,e->alpha)) : -1;
+                    if(status && !r.set_status)r.set_status=status;
+                    if(status || (alphaRead=YES,alphaGetStatus=getAlpha(mainConnection(),e->who.wid,&alpha)) || alpha!=e->alpha)ok=NO;
+                }
             }
             if(e->sublevelTouched){
                 int sublevelStatus=0;
@@ -509,7 +574,10 @@ static void v2Restore(NSString *reason,BOOL retry,NSMutableData *results,struct 
         }
         if(r.outcome==DW2_PENDING){e->state=DW2_RESTORING;pending++;}
         else {
-            if(r.outcome==DW2_RESTORED){e->bounds=releasedBounds;e->reattaching=NO;e->appliedTransformKnown=NO;v2Released[wid]=e;}
+            if(r.outcome==DW2_RESTORED){e->bounds=releasedBounds;e->reattaching=NO;e->appliedTransformKnown=NO;
+                // A veil's conditional alpha was settled by this release; its mark is not an original to guard later.
+                if(e->veilAlpha)e->alphaTouched=NO;
+                e->veiled=e->veilBare=e->veilAlpha=NO;v2Released[wid]=e;}
             [v2Table removeObjectForKey:wid];
         }
         count++;
@@ -616,13 +684,7 @@ static void v2ApplyWithSpaces(const struct dw2_record *records,const uint64_t *t
         if(e && e->owner!=owner){status[i]=DW2_IDENTITY;continue;}
         if(e && e->state==DW2_RESTORING){status[i]=DW2_RESTORE_PENDING;continue;}
         if(!e) {
-            // Live released originals remain obligations across connection death.
-            // Make room only by proving a recorded instance is gone, never age.
-            if(!v2Released[key] && v2Table.count+v2Released.count>=DW2_MAX_TABLE) {
-                NSDictionary *owners=v2RestoreOwners();
-                for(NSNumber *releasedKey in v2Released.allKeys){DW2Entry *old=v2Released[releasedKey];
-                    if(v2RestoreIdentityWithOwners(&old->who,old->owner,owners)==DW2_INSTANCE_GONE){[v2Released removeObjectForKey:releasedKey];changed=YES;}}
-            }
+            if(!v2Released[key] && v2Table.count+v2Released.count>=DW2_MAX_TABLE && v2PruneReleased())changed=YES;
             if(v2Table.count+v2Released.count-(v2Released[key]?1:0)>=DW2_MAX_TABLE){status[i]=DW2_TABLE_FULL;continue;}
             e=[DW2Entry new];e->who=now;e->owner=owner;e->state=DW2_HELD;e->fresh=YES;
             if(getTransform(mainConnection(),now.wid,&e->transform) || !finiteMatrix(e->transform) || getBounds(mainConnection(),now.wid,&e->bounds) || !v2FiniteRect(e->bounds)){status[i]=DW2_SNAPSHOT;continue;}
@@ -650,24 +712,36 @@ static void v2ApplyWithSpaces(const struct dw2_record *records,const uint64_t *t
             e->pendingSpace=target;e->pendingSpaceFresh=YES;e->pendingSpaceObserved=NO;changed=YES;
         }
         if(wantsAlpha && !e->alphaTouched){e->alphaTouched=e->alphaFresh=YES;changed=YES;}
+        if(e->veilBare && !e->veilBareCleared) {
+            // The first frame for a window the veil only hid. Its original was read at the announcement and the application may have moved or
+            // resized the window since: read it again, and make the record say a transform is now owed, before anything is written.
+            CGAffineTransform current=CGAffineTransformIdentity;CGRect bounds=CGRectZero;
+            if(getTransform(mainConnection(),now.wid,&current) || !finiteMatrix(current) || getBounds(mainConnection(),now.wid,&bounds) || !v2FiniteRect(bounds)){status[i]=DW2_SNAPSHOT;continue;}
+            e->veilPriorTransform=e->transform;e->veilPriorBounds=e->bounds;
+            e->transform=current;e->bounds=bounds;e->veilBare=NO;e->veilBareCleared=YES;changed=YES;
+        }
+        if(wantsAlpha && e->veilAlpha && !e->veilAlphaCleared){e->veilAlpha=NO;e->veilAlphaCleared=YES;changed=YES;}
         entries[i]=e;status[i]=DW2_APPLIED;
     }
     if(changed) {
         BOOL saved=v2Persist();
         for(uint32_t i=0;i<count;i++) {
             DW2Entry *e=entries[i];
-            if((id)e==NSNull.null || !(e->fresh || e->alphaFresh || e->sublevelFresh || e->pendingSpaceFresh))continue;
+            if((id)e==NSNull.null || !(e->fresh || e->alphaFresh || e->sublevelFresh || e->pendingSpaceFresh || e->veilBareCleared || e->veilAlphaCleared))continue;
             if(!saved) {
                 // Nothing of this window (or of its alpha) is changed without a record on disk.
                 status[i]=DW2_JOURNAL;entries[i]=NSNull.null;
                 if(e->fresh){NSNumber *key=@(e->who.wid);[v2Table removeObjectForKey:key];if(replacedReleases[key])v2Released[key]=replacedReleases[key];}
                 else {if(e->alphaFresh)e->alphaTouched=NO;
+                    // The window stays veiled, with what the announcement read, and is asked again with the next frame.
+                    if(e->veilBareCleared){e->transform=e->veilPriorTransform;e->bounds=e->veilPriorBounds;e->veilBare=YES;}
+                    if(e->veilAlphaCleared)e->veilAlpha=YES;
                     if(e->sublevelFresh)e->sublevelTouched=NO;
                     if(e->spaceFresh){e->originalSpace=0;e->originalSpaceDisplay=nil;}
                     if(e->pendingSpaceFresh)e->pendingSpace=0;}
             }
         }
-        for(DW2Entry *e in v2Table.objectEnumerator)e->fresh=e->alphaFresh=e->sublevelFresh=NO;
+        for(DW2Entry *e in v2Table.objectEnumerator)e->fresh=e->alphaFresh=e->sublevelFresh=e->veilBareCleared=e->veilAlphaCleared=NO;
         if(!saved){v2JournalStale=YES;v2ScheduleRetry();}
     }
     BOOL spaceAttempted=NO;
@@ -741,19 +815,20 @@ static void v2ApplyWithSpaces(const struct dw2_record *records,const uint64_t *t
         // Keep the ordinary scalar loop in its original shape: no batching
         // objects, nil message sends, or extracted finalization call. The only
         // optional extra behavior here is freshly verified alpha deduplication.
-        BOOL alphaOK=YES;
-        if(r->flags&DW2_RECORD_HAS_ALPHA) {
+        BOOL alphaOK=YES;float wantAlpha=0;
+        BOOL wantsAlphaWrite=v2FrameAlpha(e,r,&wantAlpha);
+        if(wantsAlphaWrite) {
             if(!v2EntryCurrent(e)){status[i]=DW2_IDENTITY;continue;}
             float actualAlpha=-1;
-            BOOL repeatedAlpha=DW_V2_ALPHA_DEDUP&&e->appliedAlphaKnown&&e->appliedAlpha==r->alpha;
-            alphaOK=repeatedAlpha&&!getAlpha(mainConnection(),e->who.wid,&actualAlpha)&&actualAlpha==r->alpha;
+            BOOL repeatedAlpha=DW_V2_ALPHA_DEDUP&&e->appliedAlphaKnown&&e->appliedAlpha==wantAlpha;
+            alphaOK=repeatedAlpha&&!getAlpha(mainConnection(),e->who.wid,&actualAlpha)&&actualAlpha==wantAlpha;
             e->appliedAlphaKnown=NO;
             if(!alphaOK) {
                 if(repeatedAlpha&&!v2EntryCurrent(e)){status[i]=DW2_IDENTITY;continue;}
-                alphaOK=!setAlpha(mainConnection(),e->who.wid,r->alpha)
-                    &&!getAlpha(mainConnection(),e->who.wid,&actualAlpha)&&actualAlpha==r->alpha;
+                alphaOK=!setAlpha(mainConnection(),e->who.wid,wantAlpha)
+                    &&!getAlpha(mainConnection(),e->who.wid,&actualAlpha)&&actualAlpha==wantAlpha;
             }
-            if(!alphaOK)ok=NO;
+            if(!alphaOK)ok=NO;else e->veiled=NO;
         }
         if(e->sublevelTouched) {
             int requestedSublevel=(r->flags&DW2_RECORD_PINNED)?CGWindowLevelForKey(kCGFloatingWindowLevelKey):e->originalSublevel;
@@ -764,7 +839,7 @@ static void v2ApplyWithSpaces(const struct dw2_record *records,const uint64_t *t
         else if(!spaceOK||!ok)status[i]=DW2_NOT_APPLIED;
         else {
             e->appliedTransform=requested;e->appliedTransformKnown=YES;
-            if(r->flags&DW2_RECORD_HAS_ALPHA){e->appliedAlpha=r->alpha;e->appliedAlphaKnown=alphaOK;}
+            if(wantsAlphaWrite){e->appliedAlpha=wantAlpha;e->appliedAlphaKnown=alphaOK;}
         }
 #endif
     }
@@ -806,6 +881,80 @@ static void v2ApplyWithSpaces(const struct dw2_record *records,const uint64_t *t
 }
 
 static void v2Apply(const struct dw2_record *records,uint32_t count,uint8_t *status) { v2ApplyWithSpaces(records,NULL,count,status); }
+
+// Arrival veil. The window server announces a window added to a Space (SkyLight notification 1325) as
+// the window appears, a few milliseconds before the shell can have placed it. A window that qualifies
+// is admitted as an ordinary table entry, its original transform, bounds and alpha journalled before
+// anything is written, and held at alpha 0. The first frame for it lifts the alpha after its transform
+// (v2FrameAlpha); a RESTORE record, the end of the session, or DW2_VEIL_TIMEOUT_MS releases it by the
+// ordinary release, which puts the original alpha back. A window that closes meanwhile is dropped by
+// the identity logic of v2Restore, and the journal covers a crash like any other entry.
+// Only ordinary windows are veiled: level 0, at full alpha, at least the shell's size floor, same user
+// and process birth, in scope, and never the helper's own process or the client's. A window below full
+// alpha is fading in under its application's own animation (a sheet was read at 0.79 and the application's
+// next frames overwrote the veil): it is not veiled, and the fraction is never taken for an original to
+// write back later. Whether a window is on screen is not asked: the announcement comes before it is ordered in.
+static BOOL v2VeilEligible(uint32_t wid) {
+    CFArrayRef rows=CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow,wid);
+    if(!rows)return NO;
+    BOOL eligible=NO;
+    for(id row in (__bridge NSArray *)rows) {
+        if(![row isKindOfClass:NSDictionary.class] || !isNumber(row[(id)kCGWindowNumber]) || [row[(id)kCGWindowNumber]unsignedLongLongValue]!=wid)continue;
+        // The window server announces a window before it is ordered in: its row then has no kCGWindowIsOnscreen yet.
+        eligible=isNumber(row[(id)kCGWindowLayer]) && [row[(id)kCGWindowLayer]integerValue]==0;
+        break;
+    }
+    CFRelease(rows);return eligible;
+}
+static void v2VeilExpire(DW2Entry *e) {
+    if(v2Table[@(e->who.wid)]!=e || !e->veiled || e->state!=DW2_HELD)return;
+    e->state=DW2_RESTORING;
+    struct dw2_restore_reply summary={0};
+    v2Restore(@"veil timeout",YES,nil,&summary);
+}
+static void v2Veil(uint32_t wid) {
+    if(!atomic_load(&v2VeilOn) || !wid || !v2Table)return;
+    NSNumber *key=@(wid);
+    // A window the table or a release already knows is the shell's to place, not an arrival.
+    if(v2Table[key] || v2Released[key] || !v2VeilEligible(wid))return;
+    int owner=0;struct dw2_identity who={0};uid_t uid=0;
+    if(!v2Resolve(wid,&owner,&who,&uid) || uid!=getuid() || !v2InScope(&who) || who.pid==getpid() || who.pid==atomic_load(&v2VeilClient))return;
+    DW2Entry *e=[DW2Entry new];e->who=who;e->owner=owner;e->state=DW2_HELD;
+    if(getTransform(mainConnection(),wid,&e->transform) || !finiteMatrix(e->transform) || getBounds(mainConnection(),wid,&e->bounds) || !v2FiniteRect(e->bounds)
+        || e->bounds.size.width<v2VeilMinimumExtent || e->bounds.size.height<v2VeilMinimumExtent
+        || getAlpha(mainConnection(),wid,&e->alpha) || e->alpha!=1 || !v2EntryCurrent(e))return;
+    e->hasAlpha=e->alphaTouched=e->veiled=e->veilBare=e->veilAlpha=YES;
+    BOOL pruned=NO;
+    if(v2Table.count+v2Released.count>=DW2_MAX_TABLE)pruned=v2PruneReleased();
+    if(v2Table.count+v2Released.count>=DW2_MAX_TABLE){if(pruned){v2JournalStale=YES;v2ScheduleRetry();}return;}
+    v2Table[key]=e;
+    if(!v2Persist()) {
+        // Nothing of this window is changed without a record on disk.
+        [v2Table removeObjectForKey:key];v2JournalStale=YES;v2ScheduleRetry();v2Count();return;
+    }
+    v2Count();
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)DW2_VEIL_TIMEOUT_MS*NSEC_PER_MSEC),v2q,^{v2VeilExpire(e);});
+    float seen=-1;
+    if(!v2EntryCurrent(e) || setAlpha(mainConnection(),wid,0) || getAlpha(mainConnection(),wid,&seen) || seen!=0) {
+        // It may have been changed: the ordinary release puts back what was journalled, or finds the window gone.
+        e->state=DW2_RESTORING;struct dw2_restore_reply summary={0};
+        v2Restore(@"veil not applied",YES,nil,&summary);
+    }
+}
+// On v2q. Ending the veil releases whatever it still holds.
+static void v2VeilRelease(void) {
+    for(DW2Entry *e in v2Table.objectEnumerator)if(e->veiled && e->state==DW2_HELD)e->state=DW2_RESTORING;
+    struct dw2_restore_reply summary={0};
+    v2Restore(@"veil ended",YES,nil,&summary);
+}
+
+// Main thread, from the window server. Only a window id leaves it; every native call is v2q's.
+static void v2WindowAdded(uint32_t type,void *data,size_t length,void *context) {
+    (void)context;
+    if(type!=1325 || !data || length<12 || !atomic_load(&v2VeilOn))return;
+    uint32_t wid=0;memcpy(&wid,(const char *)data+8,sizeof(wid));
+    if(wid)dispatch_async(v2q,^{v2Veil(wid);});
+}
 
 static NSData *v2Enrollment(void) {
     struct dw2_enrollment_reply head={.scope=fixtureOnly ? DW2_SCOPE_COOPERATIVE : allowlist ? DW2_SCOPE_ALLOWLIST : DW2_SCOPE_SAME_USER,.server_pid=getpid()};
@@ -957,6 +1106,11 @@ static BOOL v2Hello(DW2Connection *c,const struct dw2_header *h,const void *body
                 else {
                     v2Session=++v2Sessions;v2Beats=[NSMutableArray array];
                     arc4random_buf(v2Token,sizeof(v2Token));
+                    // The client's own windows are never veiled; without its process there is no veil.
+                    pid_t peer=0;socklen_t peerSize=sizeof(peer);
+                    if(getsockopt(c->fd,SOL_LOCAL,LOCAL_PEERPID,&peer,&peerSize)||peerSize!=sizeof(peer)||peer<=1)peer=0;
+                    atomic_store(&v2VeilClient,peer);
+                    atomic_store(&v2VeilOn,false);
                 }
             } else if(!v2Session || memcmp(hello.token,v2Token,sizeof(v2Token)))reply.status=DW2_HELLO_TOKEN;
             else [v2Beats addObject:c];
@@ -992,6 +1146,27 @@ static BOOL v2Handle(DW2Connection *c,const struct dw2_header *h,const void *bod
         pthread_mutex_lock(&v2Lock);
         atomic_store(&v2Deadline,v2Now()+DW2_LEASE_MS);
         dispatch_async(v2q,^{struct dw2_inspect_reply reply=v2Inspect(requested);v2Send(c,DW2_INSPECT,seq,&reply,sizeof(reply));});
+        pthread_mutex_unlock(&v2Lock);
+        return YES;
+    }
+    if(h->type==DW2_VEIL) {
+        struct dw2_veil request;
+        if(h->length!=sizeof(request))return NO;
+        memcpy(&request,body,sizeof(request));
+        if(request.reserved || request.mode>1)return NO;
+        pthread_mutex_lock(&v2Lock);
+        atomic_store(&v2Deadline,v2Now()+DW2_LEASE_MS);
+        dispatch_async(v2q,^{
+            // The session may have ended since the request was read: it then enables nothing. Checked and stored under the lock the
+            // session's end takes to clear it, so no interleaving leaves the veil on for a session that is gone.
+            struct dw2_veil_reply reply={.status=DW2_SCOPE,.timeout_ms=DW2_VEIL_TIMEOUT_MS};
+            pthread_mutex_lock(&v2Lock);
+            BOOL allowed=c->session==v2Session && (!request.mode || (v2VeilAvailable() && atomic_load(&v2VeilClient)));
+            if(allowed){atomic_store(&v2VeilOn,request.mode!=0);reply.status=DW2_APPLIED;}
+            pthread_mutex_unlock(&v2Lock);
+            if(allowed && !request.mode)v2VeilRelease();
+            v2Send(c,DW2_VEIL,seq,&reply,sizeof(reply));
+        });
         pthread_mutex_unlock(&v2Lock);
         return YES;
     }
@@ -1081,6 +1256,8 @@ static void *v2Serve(void *argument) { @autoreleasepool {
         uint64_t droppedSeq;uint32_t superseded;
         v2Discard(&droppedSeq,&superseded,NULL);
         v2Beats=nil;v2Session=0;
+        // No veil outlives its session: the restore queued below releases what it still holds.
+        atomic_store(&v2VeilOn,false);atomic_store(&v2VeilClient,0);
         for(DW2Connection *beat in beats)if(!atomic_exchange(&beat->closed,true))shutdown(beat->fd,SHUT_RDWR);
         dispatch_async(v2q,^{v2Restore(reason,NO,nil,NULL);});
     }
@@ -1205,6 +1382,8 @@ static DW2Entry *v2DecodeEntry(NSDictionary *w,BOOL released) {
     NSArray *keys=@[@"pid",@"birth_sec",@"birth_usec",@"wid",@"owner",@"transform",@"alpha",@"alpha_touched",@"bounds",@"state"];
     if([w isKindOfClass:NSDictionary.class]&&w[@"original_space"])keys=[keys arrayByAddingObject:@"original_space"];
     if([w isKindOfClass:NSDictionary.class]&&w[@"original_sublevel"])keys=[keys arrayByAddingObject:@"original_sublevel"];
+    if([w isKindOfClass:NSDictionary.class]&&w[@"veil_bare"])keys=[keys arrayByAddingObject:@"veil_bare"];
+    if([w isKindOfClass:NSDictionary.class]&&w[@"veil_alpha"])keys=[keys arrayByAddingObject:@"veil_alpha"];
     if(!v2Keys(w,keys)
         || !v2Integer(w[@"pid"],1,INT_MAX) || !v2Integer(w[@"birth_sec"],1,UINT64_MAX) || !v2Integer(w[@"birth_usec"],0,999999)
         || !v2Integer(w[@"wid"],1,UINT32_MAX) || !v2Integer(w[@"owner"],1,INT_MAX) || !v2Boolean(w[@"alpha_touched"])
@@ -1224,6 +1403,11 @@ static DW2Entry *v2DecodeEntry(NSDictionary *w,BOOL released) {
     }
     e->alphaTouched=[w[@"alpha_touched"]boolValue];
     if(e->alphaTouched && (!e->hasAlpha || !setAlpha || !getAlpha))return nil;
+    // Marks of an arrival veil: only an active, never-released entry has them, and the alpha mark needs its alpha obligation.
+    if(w[@"veil_bare"]||w[@"veil_alpha"]){
+        if((w[@"veil_bare"]&&(!v2Boolean(w[@"veil_bare"])||![w[@"veil_bare"]boolValue]))||(w[@"veil_alpha"]&&(!v2Boolean(w[@"veil_alpha"])||![w[@"veil_alpha"]boolValue]||!e->alphaTouched))||released)return nil;
+        e->veilBare=[w[@"veil_bare"]boolValue];e->veilAlpha=[w[@"veil_alpha"]boolValue];
+    }
     id sublevel=w[@"original_sublevel"];
     if(sublevel){
         // Unlike identity fields, a signed sublevel can be negative.
@@ -1305,6 +1489,9 @@ static int v2Start(const char *directory,BOOL onMain,NSDictionary *recovery) {
     v2OnMain=onMain;
     v2q=onMain ? dispatch_get_main_queue() : dispatch_queue_create("dw.v2",dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,QOS_CLASS_USER_INTERACTIVE,0));
     v2Table=[NSMutableDictionary dictionary];v2Released=[NSMutableDictionary dictionary];
+    // Announcements of new windows, for the arrival veil. Delivered on this (the main) thread, which has an
+    // NSApplication in the Dock; the handler does nothing until a session asks for the veil.
+    if(!fixtureOnly&&!allowlist&&v2RegisterNotify)v2VeilRegistered=v2RegisterNotify(mainConnection(),v2WindowAdded,1325,NULL)==0;
     struct sockaddr_un addr={.sun_family=AF_UNIX};
     if(snprintf(addr.sun_path,sizeof(addr.sun_path),"%s/" DW2_SOCKET,directory)>=(int)sizeof(addr.sun_path))return -__LINE__;
     int listener=socket(AF_UNIX,SOCK_STREAM,0);

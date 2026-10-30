@@ -211,6 +211,18 @@ int main(void) {@autoreleasepool {
     check(!global.hasNativeMousePress,@"disabled global tap retires stale native reservation");
     [global handleGlobal:kCGEventLeftMouseDown event:down];[global stop];
     check(!global.hasNativeMousePress,@"stopping global tap clears physical reservation");
+    // Dock control is owned wholesale unless another tap, the multitouch source's, holds it back by finger count.
+    __block BOOL elsewhere=NO;
+    DWGlobalTrackpadInput *shared=[[DWGlobalTrackpadInput alloc]initWithEnabled:^BOOL{return YES;} admitTouches:^BOOL(DWTrackpadTouchFrame *frame){(void)frame;return NO;}
+        touches:^(DWTrackpadTouchFrame *frame){(void)frame;} magnify:^BOOL(NSEvent *event){(void)event;return NO;} ignoreEvent:nil cancelled:^{}];
+    shared.dockElsewhere=^BOOL{return elsewhere;};
+    CGEventRef dockBegan=dockPacket(kCGGesturePhaseBegan),dockEnded=dockPacket(kCGGesturePhaseEnded);
+    if(!NSEvent.pressedMouseButtons)check([shared handleGlobal:30 event:dockBegan]==NULL,@"without another tap a Dock swipe of any finger count is owned");
+    [shared handleGlobal:30 event:dockEnded];
+    elsewhere=YES;
+    check(unchanged(dockBegan,^{return [shared handleGlobal:30 event:dockBegan];}),@"a Dock swipe another tap holds back by finger count is left alone");
+    check(unchanged(dockEnded,^{return [shared handleGlobal:30 event:dockEnded];}),@"and so is its end");
+    CFRelease(dockBegan);CFRelease(dockEnded);
 
     Method decode=class_getClassMethod(DWTrackpadTouchFrame.class,@selector(frameWithEvent:device:));
     check(decode!=NULL,@"decoded touch frame entrypoint exists");

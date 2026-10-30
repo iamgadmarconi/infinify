@@ -55,6 +55,15 @@
 // adopted as a toplevel. Native family presentation must reconcile its roots
 // without waiting for the regular one-second poll. 0 means all scoped roots.
 - (void)windowFamilyChanged:(pid_t)pid;
+// A window the manager decided, at one of three places, it will not offer, once per appearance and from the
+// first pass on (a window that was open before the run is told as well; a host that held nothing back for it has
+// nothing to undo). It is on screen at a candidate level and at least 40x40, and either its application is not a
+// regular one (told on first sight), or the shareable windows did not list it in two reads, or the read of it
+// settled as not a real window. Not told: a window under 40x40 or at another level, one still moving or waiting
+// for a title, one that was offered (a host that refuses it in -windowAppeared: reports that itself), and one the
+// manager never sees (outside --only-pid). A native host that lets the window server hold new windows invisible
+// until they are placed uses this to let the window appear now rather than at that hold's own bound.
+- (void)windowNotAdopted:(CGWindowID)window pid:(pid_t)pid;
 @end
 // DriftWM manages every toplevel; this is that rule for native Mac windows. Candidates
 // are the normal-layer windows of regular applications other than this process, at

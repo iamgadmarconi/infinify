@@ -205,6 +205,49 @@ fn trigger_name(trigger: &GestureTrigger) -> String {
     };
     format!("{fingers}-finger-{kind}")
 }
+/// The bindings the desktop adds to upstream's tables, with the context each
+/// is bare (no modifier) in: a four-finger swipe up fits the windows, a
+/// two-finger pinch over a window zooms, and a three-finger doubletap swipe
+/// over a window pans.
+fn desktop_gestures() -> [(GestureTrigger, BindingContext, GestureConfigEntry); 3] {
+    [
+        (
+            GestureTrigger::SwipeUp { fingers: 4 },
+            BindingContext::Anywhere,
+            GestureConfigEntry::Threshold(ThresholdAction::Fixed(Action::ZoomToFit)),
+        ),
+        (
+            GestureTrigger::Pinch { fingers: 2 },
+            BindingContext::OnWindow,
+            GestureConfigEntry::Continuous(ContinuousAction::Zoom),
+        ),
+        (
+            GestureTrigger::DoubletapSwipe { fingers: 3 },
+            BindingContext::OnWindow,
+            GestureConfigEntry::Continuous(ContinuousAction::PanViewport),
+        ),
+    ]
+}
+/// The finger count of a trigger the shell's recogniser can produce: a swipe,
+/// pinch or hold of three or more fingers. Two fingers are the pointer's, the
+/// scroll's and AppKit's magnify; tap, doubletap and the hold-swipes are
+/// touchscreen-only.
+fn recognised_fingers(trigger: &GestureTrigger) -> Option<u32> {
+    let fingers = match trigger {
+        GestureTrigger::Swipe { fingers }
+        | GestureTrigger::SwipeUp { fingers }
+        | GestureTrigger::SwipeDown { fingers }
+        | GestureTrigger::SwipeLeft { fingers }
+        | GestureTrigger::SwipeRight { fingers }
+        | GestureTrigger::DoubletapSwipe { fingers }
+        | GestureTrigger::Pinch { fingers }
+        | GestureTrigger::PinchIn { fingers }
+        | GestureTrigger::PinchOut { fingers }
+        | GestureTrigger::Hold { fingers } => *fingers,
+        _ => return None,
+    };
+    (3..32).contains(&fingers).then_some(fingers)
+}
 /// libinput stamps events in `u32` milliseconds, which wrap.
 fn event_ms(time_ms: f64) -> Result<u32, Error> {
     if !time_ms.is_finite() || time_ms < 0.0 {
@@ -261,6 +304,38 @@ impl Controller {
             self.trackpad_gesture = None;
         }
     }
+    /// The finger counts, three or more, that have a gesture binding in this
+    /// run: the three `[gestures]` tables as the config left them, whatever
+    /// modifier a binding asks for, and the desktop's own defaults unless a
+    /// config unbound or disabled them. Empty while the trackpad is off, since
+    /// then no gesture is dispatched. The shell holds back the system's own
+    /// gestures for these counts and for no others.
+    pub(crate) fn gesture_fingers(&self) -> Value {
+        let enabled = self.trackpad_enabled();
+        let mut fingers = std::collections::BTreeSet::new();
+        if enabled {
+            let gestures = &self.config().gestures;
+            for table in [&gestures.on_window, &gestures.on_canvas, &gestures.anywhere] {
+                fingers.extend(
+                    table
+                        .keys()
+                        .filter_map(|key| recognised_fingers(&key.trigger)),
+                );
+            }
+            if !self.settings.default_gestures_disabled {
+                for (trigger, context, _) in desktop_gestures() {
+                    let key = GestureBinding {
+                        modifiers: driftwm_core::config::Modifiers::EMPTY,
+                        trigger,
+                    };
+                    if !self.settings.wrote_gesture(context, &key) {
+                        fingers.extend(recognised_fingers(&key.trigger));
+                    }
+                }
+            }
+        }
+        json!({"fingers":fingers,"enabled":enabled})
+    }
     pub(crate) fn trackpad_snapshot(&self) -> Value {
         json!({
             "enabled":self.trackpad_enabled(),
@@ -302,23 +377,12 @@ impl Controller {
                     && !self.settings.default_gestures_disabled
                     && !self.settings.wrote_gesture(table_context, &key)
                 {
-                    match (&trigger, table_context) {
-                        (GestureTrigger::SwipeUp { fingers: 4 }, BindingContext::Anywhere) => {
-                            Some(GestureConfigEntry::Threshold(ThresholdAction::Fixed(
-                                Action::ZoomToFit,
-                            )))
-                        }
-                        (GestureTrigger::Pinch { fingers: 2 }, BindingContext::OnWindow) => {
-                            Some(GestureConfigEntry::Continuous(ContinuousAction::Zoom))
-                        }
-                        (
-                            GestureTrigger::DoubletapSwipe { fingers: 3 },
-                            BindingContext::OnWindow,
-                        ) => Some(GestureConfigEntry::Continuous(
-                            ContinuousAction::PanViewport,
-                        )),
-                        _ => None,
-                    }
+                    desktop_gestures()
+                        .into_iter()
+                        .find(|(default, context, _)| {
+                            *default == trigger && *context == table_context
+                        })
+                        .map(|(_, _, entry)| entry)
                 } else {
                     None
                 };

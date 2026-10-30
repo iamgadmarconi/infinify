@@ -3,9 +3,13 @@
 // text is native/families/YABAI-NOTICE.txt): src/workspace.m, src/application.h, src/application.c, src/window.h, src/window.c
 // (window_observe, window_unobserve), src/event_loop.c and src/window_manager.c, as window-events.h says of each. Where this
 // differs from yabai is said where it does.
+// Adapted from spacefarm-digital/sunlight afeea74b18e70ca49bf462d6fe462cf65deb2b32 (MIT, Copyright (c) 2026 spacefarm):
+// Sources/Canvas/RealWindows/WindowServerEvents.swift (the window-server events 1325/1326, their payload, main-thread delivery once an
+// NSApplication exists).
 #import "window-events.h"
 #include <signal.h>
 #include <errno.h>
+#include <string.h>
 #import "../focus/focus.h"
 #include <dlfcn.h>
 #include <os/lock.h>
@@ -212,9 +216,11 @@ static void *catalogObservation=&catalogObservation;
 @property NSTimeInterval creationTraceUntil; // DEBUG-only raw notifications for 150 ms after creation
 @property pid_t creationTracePID;
 @property NSUInteger creationTraceLines;
+@property NSUInteger windowServerTraceLines; // DEBUG-only SkyLight 1325/1326 lines, counted apart from the Accessibility ones
 @property BOOL trusted, stopped;
 @property BOOL scanning; // one collection-KVO/initial catalog read is under way off the main thread
 - (void)notified:(CFStringRef)notification element:(AXUIElementRef)element application:(DWObservedApplication *)application window:(DWObservedWindow *)window;
+- (void)windowServerType:(uint32_t)type window:(CGWindowID)window;
 @end
 // yabai's application_notification_handler. On the main thread, from the observer's run-loop source. The context is the
 // DWObservedApplication for an application's notifications and the DWObservedWindow for a window's own; both outlive the source.
@@ -244,6 +250,46 @@ BOOL DWInScope(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope,pid_t pid) 
     NSArray<NSNumber *> *born=scope[@(pid)];uint64_t seconds=0,microseconds=0;
     return born.count==2&&dw_focus_birth(pid,&seconds,&microseconds)&&born[0].unsignedLongLongValue==seconds&&born[1].unsignedLongLongValue==microseconds;
 }
+// SkyLight's connection notifications, as Sunlight takes them: 1325 when a window is added to a Space, 1326 when it leaves one. The
+// payload is the Space's id (8 bytes), then the window's (4 bytes, at offset 8). Looked up by name, as native-placement-validation.m
+// does; the regression replaces this lookup with #define before it imports this file, so its fakes stand in for SkyLight.
+#ifndef windowServerSymbol
+static void *windowServerSymbol(const char *name) { static void *sky;static dispatch_once_t once;dispatch_once(&once,^{sky=dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight",RTLD_NOW|RTLD_LOCAL);});return sky?dlsym(sky,name):NULL; }
+#endif
+typedef void (*WindowServerNotify)(uint32_t,void *,size_t,void *);
+typedef int (*WindowServerConnection)(void);
+typedef int (*WindowServerRegister)(int,WindowServerNotify,uint32_t,void *);
+typedef CGError (*WindowServerOwner)(int,CGWindowID,int *);
+typedef CGError (*WindowServerConnectionPID)(int,pid_t *);
+static struct { int connection;WindowServerOwner owner;WindowServerConnectionPID connectionPID; } windowServerAPI;
+// The one current instance: set by -initWithSink:scope:, cleared by -stop. Registration is once for the process (there is no
+// unregister), so the handler reaches whichever instance is current, and none after that one has stopped.
+static __weak DWWindowEvents *windowServerEvents;
+// SkyLight calls this on the main thread, once the process has an NSApplication (measured on macOS 27.0.1). Should it come from another
+// thread, the window id is copied out first, because the payload is SkyLight's only for the call. A payload shorter than 12 bytes,
+// or window 0, is nothing.
+static void windowServerNotified(uint32_t type,void *payload,size_t length,void *context) {
+    (void)context;CGWindowID window=0;
+    if(payload&&length>=12)memcpy(&window,(const char *)payload+8,sizeof window);
+    if(!window)return;
+    if(NSThread.isMainThread)[windowServerEvents windowServerType:type window:window];
+    else dispatch_async(dispatch_get_main_queue(),^{[windowServerEvents windowServerType:type window:window];});
+}
+// Once for the process, the first time an instance starts. A missing symbol, or a nonzero result, leaves no hints and nothing else
+// changes. 1325 is registered first, so its failure registers nothing; a failure of 1326 keeps 1325, which cannot be unregistered.
+static void windowServerRegister(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once,^{
+        WindowServerConnection connection=(WindowServerConnection)windowServerSymbol("SLSMainConnectionID");
+        WindowServerRegister registerProc=(WindowServerRegister)windowServerSymbol("SLSRegisterConnectionNotifyProc");
+        windowServerAPI.owner=(WindowServerOwner)windowServerSymbol("SLSGetWindowOwner");windowServerAPI.connectionPID=(WindowServerConnectionPID)windowServerSymbol("SLSConnectionGetPID");
+        if(!connection||!registerProc||!windowServerAPI.owner||!windowServerAPI.connectionPID){if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"debug: native window events: SkyLight's window notifications are not there\n");return;}
+        // Delivery needs the process's NSApplication (measured), so it is made before the connection is taken; the app has one already.
+        [NSApplication sharedApplication];windowServerAPI.connection=connection();
+        if(registerProc(windowServerAPI.connection,windowServerNotified,1325,NULL)){if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"debug: native window events: registering for 1325 failed\n");return;}
+        if(registerProc(windowServerAPI.connection,windowServerNotified,1326,NULL)&&getenv("INFINIFY_DEBUG"))fprintf(stderr,"debug: native window events: registering for 1326 failed; 1325 stays\n");
+    });
+}
 @implementation DWWindowEvents
 - (instancetype)initWithSink:(id<DWWindowEventSink>)sink scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope {
     if((self=[super init])){_sink=sink;_scope=[scope copy];_applications=[NSMutableDictionary dictionary];_sent=[NSMutableDictionary dictionary];_owed=[NSMutableSet set];_moveOnly=[NSMutableSet set];
@@ -257,6 +303,8 @@ BOOL DWInScope(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope,pid_t pid) 
         [center addObserver:self selector:@selector(hidden:) name:NSWorkspaceDidHideApplicationNotification object:nil];
         [center addObserver:self selector:@selector(unhidden:) name:NSWorkspaceDidUnhideApplicationNotification object:nil];
         [center addObserver:self selector:@selector(spaceChanged:) name:NSWorkspaceActiveSpaceDidChangeNotification object:nil];
+        // The window server's own word for a window's appearance, forwarded here while this is the current instance (windowServerNotified).
+        windowServerEvents=self;windowServerRegister();
         [self reconcile];
     }return self;
 }
@@ -606,6 +654,19 @@ static NSArray<DWApplicationMetadata *> *canonicalApplications(NSArray<NSRunning
     if(known&&CFEqual(notification,kAXWindowMovedNotification))[self changed:known.window pid:pid moveOnly:YES];
     else [self changed:known?known.window:0 pid:pid];
 }
+// SkyLight's 1325 or 1326 for one window, reported as the Accessibility observers report the same change: 1325, a window added to a
+// Space, is the appearance an AXCreated gives, so the window list is read for that process at once, coalesced with the rest; 1326, a
+// window left a Space, is a generic change of that window, which a minimize, a hide or a move to another Space gives too, so it is
+// never a destruction. The window's process is asked of SkyLight. An event whose process cannot be found (or is pid 0), is this
+// process's own window, or is outside the scope is ignored: the Accessibility observers and the poll still find it.
+- (void)windowServerType:(uint32_t)type window:(CGWindowID)window {
+    int owner=0;pid_t pid=0;
+    if(self.stopped||windowServerAPI.owner(windowServerAPI.connection,window,&owner)!=kCGErrorSuccess||windowServerAPI.connectionPID(owner,&pid)!=kCGErrorSuccess||pid<=0)return;
+    if(pid==getpid()||!DWInScope(self.scope,pid))return;
+    if(getenv("INFINIFY_DEBUG")&&self.windowServerTraceLines<128){self.windowServerTraceLines++;
+        fprintf(stderr,"debug: native creation event pid=%d at=%.6f notification=SLS%u known_wid=%u\n",pid,NSProcessInfo.processInfo.systemUptime,type,window);}
+    [self changed:type==1325?appeared:window pid:pid];
+}
 // yabai's process manager has launch, end and front switch from Carbon; NSWorkspace says the same.
 - (void)applyApplicationNotice:(DWApplicationMetadata *)notice {
     DWApplicationWatch *record=notice.watch;
@@ -730,7 +791,7 @@ static NSArray<DWApplicationMetadata *> *canonicalApplications(NSArray<NSRunning
 }
 // Nothing here forms a weak reference to self: -dealloc calls it.
 - (void)stop {
-    if(self.stopped)return;self.stopped=YES;self.sink=nil;
+    if(self.stopped)return;self.stopped=YES;self.sink=nil;if(windowServerEvents==self)windowServerEvents=nil;
     [self.workspaceNotifications removeObserver:self];self.workspaceNotifications=nil;[self.timer invalidate];self.timer=nil;
     [self clearApplicationWatches];
     for(NSNumber *pid in self.applications.allKeys)[self remove:pid.intValue ended:NO];

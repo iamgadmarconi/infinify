@@ -45,9 +45,9 @@ struct dw_client {
     bool slotFull;
     struct dw_client_pending_frame *pendingFrames;
     uint32_t pendingHead, pendingCount;
-    // The one inspection, probe, enrollment audit or restore-all in flight.
+    // The one inspection, probe, enrollment audit, veil request or restore-all in flight.
     uint16_t request;
-    struct dw2_identity requestIdentity;
+    uint8_t requestBody[sizeof(struct dw2_identity)];
     size_t requestLength;
     uint64_t requestSeq;
     bool requestWritten, replyReady;
@@ -158,7 +158,7 @@ static void *writer_main(void *argument) {
             pthread_cond_wait(&c->wake,&c->lock);
         }
         if(c->lost || c->closing)break;
-        struct dw2_header header={0};struct dw2_frame frame={0};struct dw2_identity requestIdentity={0};
+        struct dw2_header header={0};struct dw2_frame frame={0};uint8_t requestBody[sizeof(c->requestBody)]={0};
         struct iovec parts[3];int count=1,reason=0;
         // In the order they were asked for, so frame sequence numbers only rise.
         if(frameWanted) {
@@ -168,7 +168,7 @@ static void *writer_main(void *argument) {
             parts[1]=(struct iovec){&frame,sizeof(frame)};parts[2]=(struct iovec){records,c->slotBytes};count=3;
         } else {
             header=(struct dw2_header){.length=(uint32_t)c->requestLength,.type=c->request,.seq=c->requestSeq};c->requestWritten=true;
-            if(c->requestLength){requestIdentity=c->requestIdentity;parts[1]=(struct iovec){&requestIdentity,sizeof(requestIdentity)};count=2;}
+            if(c->requestLength){memcpy(requestBody,c->requestBody,c->requestLength);parts[1]=(struct iovec){requestBody,c->requestLength};count=2;}
         }
         if(count==3) {
             uint32_t index=(c->pendingHead+c->pendingCount)&(DW_CLIENT_MAX_PENDING_FRAMES-1);
@@ -213,7 +213,7 @@ static void *reader_main(void *argument) {
             pthread_mutex_unlock(&c->lock);
             if(!valid){reason=DW_LOST_PROTOCOL;break;}
             if(head.disposition==DW2_FRAME_APPLIED && c->callbacks.frame_result)c->callbacks.frame_result(c->callbacks.context,header.seq,status,head.count);
-        } else if(type==DW2_PROBE || type==DW2_RESTORE_ALL || type==DW2_ENROLLMENT || type==DW2_INSPECT) {
+        } else if(type==DW2_PROBE || type==DW2_RESTORE_ALL || type==DW2_ENROLLMENT || type==DW2_INSPECT || type==DW2_VEIL) {
             pthread_mutex_lock(&c->lock);
             if(c->request==type && c->requestSeq==header.seq && !c->replyReady) {
                 c->replyLength=header.length;
@@ -399,7 +399,7 @@ int dw_client_submit_space_frame(dw_client *c, const struct dw2_space_record *re
 }
 // Waits on a condition for at most timeout_ms; the request itself is written by
 // the writer thread.
-static int ask(dw_client *c, uint16_t type, const struct dw2_identity *identity, uint32_t timeout_ms, void *reply, size_t capacity, size_t *length) {
+static int ask(dw_client *c, uint16_t type, const void *body, size_t bodyLength, uint32_t timeout_ms, void *reply, size_t capacity, size_t *length) {
     uint64_t deadline=now_ms()+timeout_ms;
     int result=DW_CLIENT_OK;
     bool sent=false;
@@ -410,8 +410,8 @@ static int ask(dw_client *c, uint16_t type, const struct dw2_identity *identity,
         if(!sent && !c->request) {
             // What is asked to be restored must not be followed by an older frame.
             if(type==DW2_RESTORE_ALL && c->slotFull){c->slotFull=false;c->stats.dropped_local++;}
-            c->requestLength=identity ? sizeof(*identity) : 0;
-            if(identity)c->requestIdentity=*identity;
+            c->requestLength=bodyLength;
+            if(bodyLength)memcpy(c->requestBody,body,bodyLength);
             c->request=type;c->requestSeq=++c->next;c->requestWritten=c->replyReady=false;
             c->reply=reply;c->replyCapacity=capacity;c->replyLength=0;sent=true;
             pthread_cond_signal(&c->wake);
@@ -435,7 +435,7 @@ static int ask(dw_client *c, uint16_t type, const struct dw2_identity *identity,
 int dw_client_probe(dw_client *c, uint32_t timeout_ms, void *reply, size_t capacity, size_t *length) {
     if(!c || !reply || capacity<sizeof(struct dw2_probe_reply))return DW_CLIENT_INVALID;
     size_t received=0;
-    int result=ask(c,DW2_PROBE,NULL,timeout_ms,reply,capacity,&received);
+    int result=ask(c,DW2_PROBE,NULL,0,timeout_ms,reply,capacity,&received);
     if(result!=DW_CLIENT_OK)return result;
     struct dw2_probe_reply head;
     if(received<sizeof(head))return DW_CLIENT_INVALID;
@@ -450,7 +450,7 @@ int dw_client_probe(dw_client *c, uint32_t timeout_ms, void *reply, size_t capac
 int dw_client_inspect(dw_client *c, uint32_t timeout_ms, const struct dw2_identity *identity, struct dw2_inspect_reply *reply) {
     if(!c || !identity || !reply || !(c->info.caps&DW2_CAP_INSPECT))return DW_CLIENT_INVALID;
     struct dw2_inspect_reply observed={0};size_t length=0;
-    int result=ask(c,DW2_INSPECT,identity,timeout_ms,&observed,sizeof(observed),&length);
+    int result=ask(c,DW2_INSPECT,identity,sizeof(*identity),timeout_ms,&observed,sizeof(observed),&length);
     if(result!=DW_CLIENT_OK)return result;
     if(length!=sizeof(observed) || memcmp(&observed.id,identity,sizeof(*identity)))return DW_CLIENT_INVALID;
     if(observed.status) {
@@ -464,13 +464,23 @@ int dw_client_inspect(dw_client *c, uint32_t timeout_ms, const struct dw2_identi
     }
     *reply=observed;return DW_CLIENT_OK;
 }
+int dw_client_veil(dw_client *c, uint32_t timeout_ms, bool enable, uint32_t *held_ms) {
+    if(!c || !(c->info.caps&DW2_CAP_VEIL))return DW_CLIENT_INVALID;
+    struct dw2_veil request={.mode=enable ? 1 : 0};struct dw2_veil_reply observed={0};size_t length=0;
+    int result=ask(c,DW2_VEIL,&request,sizeof(request),timeout_ms,&observed,sizeof(observed),&length);
+    if(result!=DW_CLIENT_OK)return result;
+    if(length!=sizeof(observed) || (observed.status!=DW2_APPLIED && observed.status!=DW2_SCOPE) || !observed.timeout_ms || observed.timeout_ms>60000)return DW_CLIENT_INVALID;
+    if(observed.status)return DW_CLIENT_REFUSED;
+    if(held_ms)*held_ms=observed.timeout_ms;
+    return DW_CLIENT_OK;
+}
 int dw_client_enrollment(dw_client *c, uint32_t timeout_ms, struct dw2_process *processes,
                          uint32_t capacity, uint32_t *count) {
     if(!c || !count || (capacity && !processes) || !(c->info.caps&DW2_CAP_ENROLLMENT))return DW_CLIENT_INVALID;
     size_t size=sizeof(struct dw2_enrollment_reply)+DW2_MAX_PROCESSES*sizeof(struct dw2_process),length=0;
     struct dw2_enrollment_reply *reply=malloc(size);
     if(!reply)return DW_CLIENT_INVALID;
-    int result=ask(c,DW2_ENROLLMENT,NULL,timeout_ms,reply,size,&length);
+    int result=ask(c,DW2_ENROLLMENT,NULL,0,timeout_ms,reply,size,&length);
     if(result==DW_CLIENT_OK && (length<sizeof(*reply) || reply->reserved || reply->scope!=c->info.scope || reply->server_pid!=c->info.server_pid || reply->count>DW2_MAX_PROCESSES || reply->count>capacity || length!=sizeof(*reply)+(size_t)reply->count*sizeof(*processes)))result=DW_CLIENT_INVALID;
     const struct dw2_process *entries=(const struct dw2_process *)(reply+1);
     if(result==DW_CLIENT_OK){
@@ -492,7 +502,7 @@ int dw_client_restore_all(dw_client *c, uint32_t timeout_ms, struct dw2_restore_
     size_t size=sizeof(struct dw2_restore_reply)+DW2_MAX_TABLE*sizeof(struct dw2_restore_result),length=0;
     struct dw2_restore_reply *reply=malloc(size);
     if(!reply)return DW_CLIENT_INVALID;
-    int result=ask(c,DW2_RESTORE_ALL,NULL,timeout_ms,reply,size,&length);
+    int result=ask(c,DW2_RESTORE_ALL,NULL,0,timeout_ms,reply,size,&length);
     if(result==DW_CLIENT_OK && (length<sizeof(*reply) || reply->count>DW2_MAX_TABLE || reply->pending>reply->count
         || reply->journal_persisted>1 || reply->reserved || (results && reply->count>capacity)
         || length!=sizeof(*reply)+(size_t)reply->count*sizeof(struct dw2_restore_result)))result=DW_CLIENT_INVALID;

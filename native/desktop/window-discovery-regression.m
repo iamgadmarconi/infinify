@@ -247,7 +247,7 @@ static NSDictionary *row(uint32_t window,CGFloat width) {
         (id)kCGWindowBounds:CFBridgingRelease(CGRectCreateDictionaryRepresentation(CGRectMake(100,100,width,232)))};
 }
 @interface DiscoveryHost : NSObject <DWWindowHost>
-@property NSUInteger requested,appeared,completed,failed,moved,changed;
+@property NSUInteger requested,appeared,completed,failed,moved,changed,declined;
 @property NSArray<NSDictionary *> *present;
 @property NSMutableArray<NSString *> *titles;
 @property NSSet<NSNumber *> *managed;
@@ -263,6 +263,7 @@ static NSDictionary *row(uint32_t window,CGFloat width) {
 - (void)windowDestroyed:(CGWindowID)window pid:(pid_t)pid { (void)window;(void)pid; }
 - (void)focusChanged {}
 - (void)windowDiscoveryRequested { self.requested++; }
+- (void)windowNotAdopted:(CGWindowID)window pid:(pid_t)pid { check(window==91&&pid==123,@"a decline names the exact window and process");self.declined++; }
 @end
 static void titleRetryInvalidation(void) {
     NSMutableDictionary *unknown=[row(74,320)mutableCopy];[unknown removeObjectForKey:(id)kCGWindowName];NSArray *rows=@[unknown];
@@ -306,6 +307,30 @@ static void titleRetryInvalidation(void) {
         check(workerBlocks.count==1,[NSString stringWithFormat:@"old nil-title reply cannot reinstate backoff after a fresh %@ hint",mode]);
         drain();[manager stop];
     }
+}
+// A native window the pass reads and does not offer is told to the host, once per appearance and from the first pass on (a window that
+// arrives while it runs is held back like any other), so that a host that holds new windows invisible until they are placed can let it appear at once.
+static void declineHint(void) {
+    titleTesting=YES;
+    for(NSString *phase in @[@"after the first pass",@"before the first pass"]){
+        BOOL after=[phase hasPrefix:@"after"];
+        fixtureNow=700;DiscoveryHost *host=[DiscoveryHost new];DWWindowManager *manager=[DWWindowManager managerWithHost:host scope:nil mode:DWWindowDiscoveryModeNativePresentation];manager.completed=after;
+        NSArray *rows=@[row(91,320)];NSDictionary *bases=candidateBases(rows);
+        closeElements=@[@{@"pid":@123,@"wid":@91,@"subrole":@"AXUnknown",@"title":@"A helper surface"}];
+        [manager pollWithWindowRecords:rows nativeCandidateBases:bases sampledAt:fixtureTime()];drain();fixtureNow=700.051;
+        [manager.discoveryTimer fire];[manager pollWithWindowRecords:rows nativeCandidateBases:bases sampledAt:fixtureTime()];drain();
+        check(!host.appeared&&[manager.offered containsObject:@91],[NSString stringWithFormat:@"a window that is not a real one is read and not offered %@",phase]);
+        check(host.declined==1,[NSString stringWithFormat:@"the host is told of a window not adopted exactly once, %@",phase]);
+        fixtureNow=700.2;[manager pollWithWindowRecords:rows nativeCandidateBases:bases sampledAt:fixtureTime()];drain();
+        check(host.declined==1,@"a window already told of is not told again while it stays");
+        // Leaving the screen ends the appearance; coming back is a new one, which is a window the pass reads again.
+        fixtureNow=701;[manager pollWithWindowRecords:@[] nativeCandidateBases:@{} sampledAt:fixtureTime()];drain();
+        fixtureNow=702;[manager pollWithWindowRecords:rows nativeCandidateBases:bases sampledAt:fixtureTime()];drain();fixtureNow=702.051;
+        [manager.discoveryTimer fire];[manager pollWithWindowRecords:rows nativeCandidateBases:bases sampledAt:fixtureTime()];drain();
+        check(host.declined==2,@"a returning window is a new appearance");
+        [manager stop];
+    }
+    titleTesting=NO;closeElements=nil;
 }
 static void nativeMetadataOverlap(void) {
     titleTesting=YES;
@@ -465,7 +490,7 @@ int main(void) {@autoreleasepool {
     titleRows=@[row(75,320),row(76,320)];fixtureNow=115;[titleManager pollWithWindowRecords:titleRows nativeCandidateBases:candidateBases(titleRows) sampledAt:fixtureTime()];drain();
     fixtureNow=115.051;[titleManager pollWithWindowRecords:titleRows nativeCandidateBases:candidateBases(titleRows) sampledAt:fixtureTime()];drain();
     check(titleHost.appeared==2&&[titleHost.titles isEqual:@[@"",@"Current AX title"]],@"successful AX title overrides CG and known empty title remains distinct from unavailable");[titleManager stop];titleTesting=NO;closeElements=nil;
-    titleRetryInvalidation();nativeMetadataOverlap();nativeEarlyAdmission();nativeCreatedAdmission();
+    titleRetryInvalidation();nativeMetadataOverlap();declineHint();nativeEarlyAdmission();nativeCreatedAdmission();
 
     DiscoveryHost *nativeHost=[DiscoveryHost new];DWWindowManager *nativeManager=[DWWindowManager managerWithHost:nativeHost scope:nil mode:DWWindowDiscoveryModeNativePresentation];
     fixtureNow=150;NSArray *animated=@[row(72,604)];NSDictionary *stableOwn=candidateBases(@[row(72,610)]);

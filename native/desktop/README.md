@@ -1976,6 +1976,42 @@ memberships and the primary camera were returned before display removal.
 Evidence is in `target/native-vm/space-handoff-20261021/textedit-observed-1`.
 This establishes that one transfer, not general multi-display acceptance.
 
+On one display, the line `native presentation: window N of process P not placed:
+the window and destination do not have eligible display Spaces` (helper status
+`SPACE`) does not mean that a newly opened window was left unplaced. On
+2026-10-29, in the macOS 27.0.1 guest with TextEdit and Safari, a temporary helper
+build that logged every frame and every refused Space check (diagnostics removed
+afterwards) showed the following. Each of 11 new windows in two traces had the
+display's current ordinary Space (1) as its target from its first record, and the
+helper answered `APPLIED` on that first frame and on every later frame while the
+document was open; `APPLIED` includes the helper's own readback that the window's
+membership equals the target. The refusals came at the end of a window's life,
+about 2.4 s after its first frame, when the script closed the document. In the one
+session that also logged window state at the refused call (three windows), the window
+was absent from `CGWindowListCopyWindowInfo(kCGWindowListOptionAll)`, its alpha read
+0, `SLSGetWindowTransform` failed with 1000 and every `SLSCopySpacesForWindows`
+selector returned an empty array, while the private owner cache still named it. The
+canvas kept sending it for two to six frames (about 15 ms each); where the trace
+recorded what followed, the release record was then applied. With no membership
+there is nothing to journal or confirm, so the refusal is intended and the line is
+noise for a closing window. Some runs printed it for every closed document and
+others for none; the cause of that variation was not established.
+
+The apparent "only the first new window is placed" came from the canvas, not the
+helper. `[zoom] reset_on_new_window` (on by default) flies the camera to each new
+window at 1:1, so after the first new document the canvas zoom is 1 and every later
+window is correctly placed with a unit-scale matrix. A meter that counts scale 1 as
+unplaced, such as the guest's `measure-opening N 0.5`, which sets the zoom once,
+reports those windows as untouched for their whole life. Stock `measure-opening 8
+0.5` with the default configuration gave one window at scale 1.712 and seven at 1.000;
+with `reset_on_new_window = false` it gave all eight at scale 2.000 (opening exposure
+17.3 to 76.0 ms) and no `SPACE` line. Four documents opened together at zoom 0.5,
+with Safari and a TextEdit document that predated the launch, all read back scale
+2.000 and appeared in `msg state`; `quit-native` returned all six to scale 1.000.
+This is one display and one document-based application read through SkyLight
+getters, not optical, input or multi-display evidence. Raw traces and the
+transcribed measurements are in `target/native-vm/space-diagnosis-20261029`.
+
 The first guest deployment exposed AppKit reflow during a handoff: Safari's
 native frame changed from `0,30,2056,1130` to `366,115,1324,940`, and an ordinary
 size observation incorrectly changed its world frame. A submitted new Space
@@ -2586,6 +2622,54 @@ delivery of the new magnify bridge, Spaces gathering,
 native popup placement and ordering across applications still require further
 integration. A Dock or other third-party host has not been loaded
 or validated by these tests.
+
+#### Arrival veil (full-desktop Dock helper)
+
+A new application window used to be shown at its native size and place until the first frame placed
+it (about 20 to 30 ms on the pre-veil build when placement worked, for its whole life when it did not).
+With the explicit same-user Dock helper the shell now asks, once admission has confirmed an empty
+restoration table, for the helper's arrival veil (`dw_client_veil`, capability 128): the helper holds each window
+an application opens at alpha 0 from the window server's own announcement of it, and the first frame the
+shell sends for it re-reads the window's transform and bounds (the application may have moved it), has the helper
+journal that, applies the transform and then the record's alpha (or lifts the alpha). The shell
+does not decide what is veiled and keeps no list of it. A helper that does not offer or refuses the
+veil leaves new windows as they were, and the session is not refused for that.
+
+A window the shell will not manage is let go instead of waiting for the helper's own bound of 1 s:
+`DWWindowManager` tells its host (`-windowNotAdopted:pid:`), once per appearance and from the first discovery
+pass on (a window that arrives while it runs is held back like any other), of a window of a non-regular application,
+one the shareable windows or Accessibility do not count as a window, one a read settled as not real, and `Desktop`
+tells it of a window `attach` refused, and of one `-windowAppeared:` could not take while the canvas was closing or had no
+panels. If the helper does not answer the veil request in time, or answers unreadably, the shell assumes the veil may be on
+and keeps releasing explicitly (a no-op record at worst) rather than leave such windows invisible for the helper's bound. The
+presenter turns that into one release record for the exact process instance (`-declineWindow:`), sent with the next
+frame (one frame is made for several declines together) and retired by any answer. A release of a window the
+helper holds nothing of is a no-op, and one for a window the presenter already binds is never queued. A child
+of a managed root (the TextEdit *Save* sheet) is placed by the family reconciliation (in an earlier run, before the
+helper stopped veiling windows below alpha 1, it was veiled and placed 9 ms after the announcement); `-windowAppeared:` hands such a window to that path and does not
+decline it.
+
+(Meter caveat: a meter that reads a window's transform before its alpha can report a visible window at its old scale that never existed, because
+its two reads straddle the helper's transform write and the alpha write 0.1 to 0.5 ms after it. The meter used for the integrated build's
+12-document run reads alpha first, then the transform, and showed no native state before `placed` in 12 of 12 windows; the same windows read by a transform-first
+meter at the same time showed one. See [`native/privileged/README.md`](../privileged/README.md#arrival-veil).)
+(The numbers below were measured before the helper's first frame began to re-read and journal the window's transform and the shell
+began to decline from the first pass on; those two changes have only been run through the substituted-call and in-memory tests.)
+Measured in the macOS 27.0.1 guest with `measure-opening 8 0.5` and a meter that samples at 1 ms (the extended
+`openmeter`, in `target/veil-probe/` of the working tree, not committed; it reads transform and alpha back): all
+eight TextEdit windows were hidden within 0 to 2.3 ms of the meter first seeing them (`unplaced_ms` 0.0 to 2.3,
+`how=hidden`) and shown again at scale 2.000, alpha 1.00 after 9.9 to 81.1 ms, none left hidden. Outside that
+path: with the shell running, an accessory-application window was shown again after 16.0 ms and a borderless window the
+shell declined after 132.0 ms, both at scale 1, alpha 1; a window under 40x40 was never veiled; with a client
+that placed and declined nothing, a non-animating window was shown again at 1000.9 and 1023.3 ms (the helper's
+bound); `Infinify msg action quit` with managed windows at scale 2.0 and one window 0.1 s into its veil
+left 47 of 47 layer-0 windows at alpha 1, scale 1. Limits that were observed: TextEdit's own open animation wrote
+alpha 1 about 0.5 s after a window's creation, so an application that animates its windows can lift the
+veil itself; the TextEdit *Save* sheet arrives mid-fade (alpha 0.79 at first read) and is not veiled, so its
+fade-in still shows at native size for about 22 ms before it is placed; a Dock exit does not undo an alpha the Dock set
+(a veiled window stayed at alpha 0 after `killall Dock` until the launcher's recovery handoff restored it); these runs
+are meter readbacks, not optical capture, and a frame actually reaching the display was not observed. See
+[`native/privileged/README.md`](../privileged/README.md#arrival-veil) for the helper's rules and tests.
 
 ### What was run for managed windows
 
@@ -5506,15 +5590,20 @@ that moves a window is the drag of a bound button press, edge pan included.
 
 | Fingers | Where the stream comes from |
 | --- | --- |
-| 3 or more | raw trackpad touches, recognised by `trackpad-gestures.m` |
+| 3 or more | raw trackpad touches, recognised by `trackpad-gestures.m`: in desktop mode from MultitouchSupport wherever the pointer is, otherwise from the touches AppKit hands the canvas view under the pointer |
 | 2, pinching | AppKit's magnify events, sent as a `pinch` of 2 fingers: its scale is the running product of each event's `1 + magnification`, with no rotation and no delta |
 | 2, scrolling | not a gesture: the `trackpad-scroll` mouse binding above |
 
 Every canvas view accepts indirect touches and hands each event's touches to one
 recogniser, `DWTrackpadGestures`, a state machine with no AppKit in it, fed
 `(identity, x, y, phase, time)` in millimetres and emitting the begin, update
-and end events. Its rules and every constant are written out at the top of
-`trackpad-gestures.m` beside the libinput behaviour each imitates. In short:
+and end events. Those AppKit touches arrive only while the pointer is over a
+canvas view of the key window, and in desktop mode only through the session tap
+(`DWGlobalTrackpadInput`); the MultitouchSupport source described below, under
+"Touches from anywhere", does not depend on where the pointer is, and feeds the
+same recogniser the same calls. Its rules and every constant are written out at the
+top of `trackpad-gestures.m` beside the libinput behaviour each imitates. In
+short:
 
 - The finger count is fixed once a gesture has begun. Before that each landing
   or lift restarts recognition, and motion is not read for 50 ms after it. After
@@ -5576,10 +5665,116 @@ threshold gesture fired (`Home`, `Zoom to fit`), the refusal of an action that
 does not run here yet, and the note of a resize that is refused (a
 screen-pinned window's).
 
+**Touches from anywhere.** Desktop mode only; the windowed and fixture modes
+keep the views' touches. Implemented and compiled, **never run on a physical
+trackpad**: no frame from MultitouchSupport has been received by this code on
+any machine.
+
+AppKit gives a view touches only while the pointer is over it, so three fingers
+over a native window, or with another application key, reach no one that way.
+The private MultitouchSupport framework, the one Mac gesture tools read, reports
+every contact of every trackpad to a callback wherever the pointer is.
+`multitouch-source.m` loads it with `dlopen` and six `dlsym` lookups
+(`MTDeviceCreateList`, `MTRegisterContactFrameCallback`,
+`MTUnregisterContactFrameCallback`, `MTDeviceStart`, `MTDeviceStop`,
+`MTDeviceGetSensorSurfaceDimensions`), so there is no link-time dependency, and
+registers a callback on every device that can say how big its surface is. The
+technique, the contact layout and the wake restart are
+[Sunlight](https://github.com/spacefarm-digital/sunlight)'s (MIT, Copyright (c)
+2026 spacefarm, commit `afeea74b18e70ca49bf462d6fe462cf65deb2b32`); the file's
+header says which lines.
+
+- A contact is a 96-byte record, of which four fields are read: the path index
+  (offset 16, stable while the finger stays down), the state (20), x (32) and y
+  (36), both 0 to 1 with y 0 at the bottom. Only the states make-touch (3) and
+  touching (4) are fingers; hovering, breaking off and lingering contacts are
+  not. Neither the layout nor the unit of the surface size (hundredths of a
+  millimetre) has been checked against a record of a running device; the
+  regression builds records with offsets written out a second time and shows
+  only that the code reads what it was told to read.
+- The callback decodes on the framework's thread, stamps the frame with
+  `CACurrentMediaTime()` (the contact's own timestamp is not read: its clock was
+  not checked), and queues it for the main thread, where frames arrive in the
+  order they were made. The first device with a finger on it is followed until
+  it has none, so two pads never make one fictitious gesture; a followed device
+  that sends nothing for 30 s loses the claim.
+- `DWMultitouchFeed` turns a frame into the recogniser's calls: millimetres are
+  the position times the surface in millimetres, y flipped to run towards the
+  user; the identity is the path index; a finger seen first is `Began`, after
+  that `Moved`, and one that lifts while others stay is ended by name; one frame
+  closes each callback, and the empty frame the last lift brings ends the
+  gesture at once, uncancelled. Fingers before the third are counted and not
+  passed on.
+- The third finger of a fresh touch asks the same admission the session tap
+  asks (a canvas under the pointer, no button down, no gesture on a view, no
+  geometry transition under way); a refusal stands until every finger has
+  lifted, and the system keeps that touch. Whichever of the two sources sees the
+  third finger first answers for both, so the other does not end the gesture the
+  first began. The presses that end gestures (see above) end this one too, and
+  the rest of that touch is ignored until the fingers lift.
+- **Resting and palm contacts are not told apart.** The NSTouch path leaves out
+  what AppKit calls `resting`, and a contact record carries no such flag.
+  `DWMultitouchSource.resting` is where a classifier would go; nothing in the
+  tree sets it, since any threshold would be a guess with no trackpad to tune it
+  on. So on this path a thumb resting on the pad counts as a finger, and three
+  fingers with a thumb down are a four-finger gesture. The regression shows only
+  that a contact the block names is left out of the frame, the recogniser and
+  the Dock guard alike.
+- The source takes over only once it **delivers**: from the first frame with a
+  finger, and not before. Until then, and whenever the framework, a function or
+  a device is missing (one line on stderr, the reason), the views' touches and
+  the session tap's stay exactly as they were. Once it delivers, neither of them
+  feeds the recogniser. The session tap keeps what it did besides: owning the
+  touch's AppKit events once it admits the touch, and the pointer-press guards.
+  `INFINIFY_NO_MULTITOUCH=1` keeps the source from starting at all.
+- Devices are stopped and started again a second after wake, and the source
+  stops delivering, with the gesture in progress ended cancelled, until the next
+  frame. A start that finds no device is tried again every ten seconds; a
+  second trackpad attached after the first was found is not noticed until the
+  next wake or restart. A Magic Mouse reports through the same framework and is
+  not told apart from a pad.
+
 **macOS takes three- and four-finger touches for itself first.** Infinify
-changes no system setting. For the canvas to receive those finger counts
-cleanly, turn these off yourself in System Settings (the names recent macOS
-releases use; they were not checked against this release's panes):
+changes no system setting. The system reads the fingers the canvas reads as
+Mission Control, App Exposé, a Spaces swipe or a Launchpad or Show Desktop
+pinch, and drives the Dock with Dock-control events (event type 30). While the
+touch source delivers, a session event tap of its own (`dock-guard.m`) drops
+those events, and only those:
+
+- while the fingers on the pad, counted on the framework's thread before the
+  main thread has seen the frame, or the recogniser's gesture in progress, are a
+  count that a `[gestures]` binding takes. The controller answers which with
+  `gesture_fingers` ([GESTURES.md](../../crates/desktop/GESTURES.md#the-finger-counts-a-run-binds)):
+  the three tables as the config left them, whatever modifier a binding asks for,
+  and the desktop's defaults; none while `set-trackpad` is off. The shell asks
+  again after every config load and after any `set-trackpad` it sees run;
+- and for 0.3 s after the last bound finger lifts or the gesture ends, since the
+  system's swipe ends a beat later (Sunlight's tail).
+
+Never for a count with no binding, and a touch that grows from a bound count to
+an unbound one is handed back to the system at once, with no tail. Never when
+the source is not delivering. Never for a touch the shell declined (a button
+down, no canvas under the pointer, the canvas closed or the session away). The
+decision is a plain function of a small state, `DWDockGuardDrops`, and the tap
+runs on a thread of its own, so a busy main thread cannot make the system
+disable it (a 5 s watchdog turns a tap the system disabled quietly back on).
+Because a modifier is not part of the decision, a config that binds only
+`alt+4-finger-swipe-up` still holds back the system's four-finger gestures
+without Option. The session tap `DWGlobalTrackpadInput` still owns Dock swipes
+of every count when the source is not delivering, and leaves them alone when it
+is and this tap is running.
+
+The tap needs Accessibility, which a normal run already needs. Without it, one
+line goes to stderr, nothing is dropped, and the system's gestures stay on;
+it is tried again whenever the native input is configured. It holds back
+Dock-control events and nothing else: the Look up tap, three-finger drag and
+the page swipe are not Dock control.
+
+That is the whole mechanism, and none of it has run against a trackpad. If the
+source is not delivering (the framework or a device is missing, the opt-out is
+set, a windowed run), or for the gestures the tap does not touch, the earlier
+advice stands. Turn these off yourself in System Settings (the names recent
+macOS releases use; they were not checked against this release's panes):
 
 - Trackpad > More Gestures: Mission Control, App Exposé, Swipe between
   full-screen applications, Launchpad, Show Desktop, and Swipe between pages if
@@ -5699,11 +5894,37 @@ on a tree that had neither window navigation nor managed windows, so
   status 1; `center-nearest right` flew to the seeded window at 1950 0 and
   focused it; [Camera motion](#what-has-been-run-of-camera-motion) has the
   flights of that run. No gesture event reached the app.
+- The MultitouchSupport source and the Dock-control guard, on 2026-10-29 (macOS
+  27.2, Apple Silicon, signed build, nothing launched). `tests/e2e/multitouch-source.sh`
+  (`multitouch-regression.m`, in memory, no framework call, tap, device or
+  window) feeds synthetic 96-byte contact records through the source's decoder
+  and the feed into the real recogniser, and checks the events it emits: a
+  three- and a four-finger swipe (begin, updates of 10.5 units a millimetre,
+  uncancelled end at the lift), a three- and a four-finger pinch and its scale,
+  a cancel and the touch that follows it, a finger lifting while others stay, a
+  contact the `resting` block names, a declined admission, a second device, and
+  a stale frame; and, on synthetic states, the Dock decision for bound and
+  unbound counts, the tail and its expiry, a declined touch, a source that is not
+  delivering, and the tap's filter on an in-memory type-30 event. A few
+  deliberate breaks of the code (the y flip, an offset, the tail, the explicit
+  lift) each made it fail. `tests/e2e/native-input-policy.sh` still passes with
+  the session tap's new "Dock control is held elsewhere" case.
+  `gesture_flow` gained `the_finger_counts_a_run_binds_follow_the_config_and_the_trackpad`,
+  which passes; five older scenarios of that file (`the_default_table_on_a_mac`
+  and four others, all about `mod`/⌘ bindings) fail identically on the commit
+  this started from and were not touched. A read-only program on the author's
+  Mac called `MTDeviceCreateList` and `MTDeviceGetSensorSurfaceDimensions` and
+  found one device whose surface read 15600 x 9600, which is 156 x 96 mm if the
+  unit is hundredths of a millimetre; it registered no callback and started no
+  device. **No frame from MultitouchSupport was received, no event tap was
+  installed, and no gesture was performed.**
 
 Only compiled, never executed: everything between a finger and the recogniser,
 and between the recogniser and the controller, inside the app. That is the
 views' touch forwarding, the conversion of a touch to millimetres, the hold and
-finger-count timer, the magnify routing of a two-finger pinch, the modifiers,
+finger-count timer, the magnify routing of a two-finger pinch, the MultitouchSupport
+source's registration, callback thread, wake restart and takeover from the views'
+touches, the Dock-control tap itself and its thread, the modifiers,
 context, output and pointer added to `gesture_begin`, the status line feedback,
 the frame timer started by a coast or by the edge pan under a moved window,
 what a press or a cancelled pan does to that coast, and everything the merge
@@ -6784,9 +7005,13 @@ touch, timer and magnify glue has only been compiled (see
 four-finger touches to the non-activating canvas panel, how the recogniser's
 thresholds feel under a hand, and what macOS does with the same fingers at the
 same time are all unverified, as is the two-finger pinch now that it goes
-through the gesture table. macOS's own three- and four-finger gestures must be
-turned off in System Settings by the user for the canvas to receive those
-finger counts cleanly; Infinify changes no setting. Six of upstream's default
+through the gesture table. Desktop mode now also reads the pad through
+MultitouchSupport and holds the system's Dock-control gestures back for the
+finger counts a binding takes, with no setting changed; both are implemented and
+neither has run against a trackpad ([Trackpad gestures](#trackpad-gestures)).
+Where that source is not delivering, macOS's own three- and four-finger gestures
+must be turned off in System Settings by the user for the canvas to receive those
+finger counts cleanly. Six of upstream's default
 gesture bindings name `fit-window`, `fit-window-snapped` and
 `toggle-fullscreen`, which run since 2026-10-11
 ([Window sizing actions](#window-sizing-actions)); its two resize gestures are claimed and do nothing, and an unbound gesture

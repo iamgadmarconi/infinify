@@ -28,6 +28,17 @@ the calls and the event record of yabai's window_manager_focus_window_with_raise
 and window_manager_make_key_window (src/window_manager.c:1269-1335,
 src/misc/extern.h:81-82, src/window_manager.h:5) at the same commit, under the
 same license and copyright.
+native/desktop/multitouch-source.m and native/desktop/dock-guard.m adapt
+techniques from Sunlight, https://github.com/spacefarm-digital/sunlight, at
+commit afeea74b18e70ca49bf462d6fe462cf65deb2b32 (Sources/Canvas/TrackpadPan.swift:
+reading trackpad contacts through MultitouchSupport, and a session event tap
+that holds back Dock-control events), and the arrival veil of
+native/privileged/payload-v2.m adapts from the same commit
+Sources/Canvas/RealWindows/WindowServerEvents.swift (SkyLight's window-created
+event and its payload) and the aim of LiveWindows/osax/sunbeam.h that a new
+window is never seen before it is placed, MIT, Copyright (c) 2026 spacefarm. Its
+license text is retained in native/desktop/SUNLIGHT-NOTICE.txt, which the app
+bundle carries beside this file, and each adapted file names what it took.
 crates/core carries DriftWM's pure modules (canvas, config, layout, session,
 stage and the touch gesture recogniser) from the source baseline with their
 tests; each file records its upstream path, and crates/core/PORT.md lists every

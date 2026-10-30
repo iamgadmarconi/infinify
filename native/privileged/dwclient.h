@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #ifndef DW_PRIVILEGED_CLIENT_H
 #define DW_PRIVILEGED_CLIENT_H
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include "protocol2.h"
@@ -55,6 +56,13 @@ int dw_client_enrollment(dw_client *client, uint32_t timeout_ms, struct dw2_proc
 // Transport success can still carry a refused reply.status with zero geometry.
 int dw_client_inspect(dw_client *client, uint32_t timeout_ms, const struct dw2_identity *identity,
                       struct dw2_inspect_reply *reply);
+// Asks a helper that offers DW2_CAP_VEIL to hold every ordinary window an application opens afterwards
+// invisible (alpha 0) from the moment the window server announces it, until a frame for it places it, a
+// RESTORE record for it or RESTORE_ALL releases it, or *held_ms (the helper's own bound, DW2_VEIL_TIMEOUT_MS)
+// passes. enable false ends it and releases what is held. DW_CLIENT_INVALID: no such capability, or an
+// invalid reply (nothing was changed); DW_CLIENT_REFUSED: the helper declined; it hides nothing. The veil
+// ends with the session. A frame or a release for a window the helper did not veil is as before.
+int dw_client_veil(dw_client *client, uint32_t timeout_ms, bool enable, uint32_t *held_ms);
 // Asks the helper to put every window back. A frame submitted and not yet written
 // is dropped. On DW_CLIENT_TIMEOUT the request may still be carried out. The
 // journal_persisted output is required. A structurally valid reply with pending

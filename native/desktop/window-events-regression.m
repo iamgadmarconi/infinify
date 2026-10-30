@@ -4,6 +4,7 @@
 #import <AppKit/AppKit.h>
 #include <unistd.h>
 #include <errno.h>
+#include <string.h>
 
 static NSUInteger checks,metadataReads,catalogReads;
 static BOOL inWorker,trusted=YES;
@@ -20,6 +21,31 @@ static void eventAsync(dispatch_queue_t queue,dispatch_block_t block) {
 static BOOL eventTrusted(void) { return trusted; }
 static int eventKill(pid_t pid,int signal) { check(signal==0,@"only process liveness is requested");if(births[@(pid)])return 0;errno=ESRCH;return -1; }
 static AXUIElementRef eventAXApplication(pid_t pid) { (void)pid;check(NO,@"headless regression must never create a native AX element");return NULL; }
+// SkyLight's four symbols as window-events.m looks them up: one main connection, each notification registered once, an owner
+// connection for each window and a pid for each owner connection. A window or connection not in the tables is a failed call.
+static NSUInteger windowServerRegistrations;
+static uint32_t windowServerTypes[2];
+static void (*windowServerProc)(uint32_t,void *,size_t,void *);
+static NSMutableDictionary<NSNumber *,NSNumber *> *windowServerOwners,*windowServerPIDs;
+static int fakeWindowServerConnection(void) { return 7; }
+static int fakeWindowServerRegister(int connection,void (*proc)(uint32_t,void *,size_t,void *),uint32_t type,void *context) {
+    check(connection==7&&!context&&windowServerRegistrations<2&&(type==1325||type==1326),@"each notification is registered once, on the main connection");
+    windowServerTypes[windowServerRegistrations++]=type;windowServerProc=proc;return 0;
+}
+static CGError fakeWindowServerOwner(int connection,CGWindowID window,int *owner) {
+    check(connection==7,@"owners are asked of the main connection");
+    NSNumber *value=windowServerOwners[@(window)];if(!value)return kCGErrorFailure;*owner=value.intValue;return kCGErrorSuccess;
+}
+static CGError fakeWindowServerPID(int owner,pid_t *pid) {
+    NSNumber *value=windowServerPIDs[@(owner)];if(!value)return kCGErrorFailure;*pid=value.intValue;return kCGErrorSuccess;
+}
+static void *fakeWindowServerSymbol(const char *name) {
+    if(!strcmp(name,"SLSMainConnectionID"))return (void *)fakeWindowServerConnection;
+    if(!strcmp(name,"SLSRegisterConnectionNotifyProc"))return (void *)fakeWindowServerRegister;
+    if(!strcmp(name,"SLSGetWindowOwner"))return (void *)fakeWindowServerOwner;
+    if(!strcmp(name,"SLSConnectionGetPID"))return (void *)fakeWindowServerPID;
+    check(NO,@"only the four window-server symbols are looked up");return NULL;
+}
 
 @interface EventApplication : NSObject {
     pid_t _pid;
@@ -82,12 +108,14 @@ static AXUIElementRef eventAXApplication(pid_t pid) { (void)pid;check(NO,@"headl
 #define AXUIElementCreateApplication eventAXApplication
 #define kill eventKill
 #define NSWorkspace EventWorkspace
+#define windowServerSymbol fakeWindowServerSymbol
 #import "window-events.m"
 #undef dispatch_async
 #undef AXIsProcessTrusted
 #undef AXUIElementCreateApplication
 #undef kill
 #undef NSWorkspace
+#undef windowServerSymbol
 
 bool dw_focus_birth(pid_t pid,uint64_t *seconds,uint64_t *microseconds) {
     birthReads[@(pid)]=@(birthReads[@(pid)].unsignedIntegerValue+1);
@@ -188,6 +216,54 @@ static void moveProvenance(void) {
     check([sink.creationInvalidations.lastObject isEqual:@0],@"global Space hint invalidates every pending creation read immediately");
     [events stop];NSUInteger count=sink.reports.count;notify(kAXWindowMovedNotification);deliveryDue(events);
     check(sink.reports.count==count&&!events.moveOnly.count&&!events.owed.count,@"stop clears move provenance and fences late callbacks");drain();
+}
+
+// Advances the coalescer as 80 ms would: nothing was reported recently, so the next report is at once.
+static void coalesceElapsed(DWWindowEvents *events) { [events.timer invalidate];events.timer=nil;[events.sent removeAllObjects];[events.owed removeAllObjects];[events.moveOnly removeAllObjects]; }
+// A notification as SkyLight hands it over: the Space's id, then the window's id at offset 8.
+static void windowServerPost(uint32_t type,CGWindowID window,size_t length) {
+    uint8_t payload[16]={0};uint64_t space=0x1234;memcpy(payload,&space,sizeof space);memcpy(payload+8,&window,sizeof window);
+    windowServerProc(type,payload,length,NULL);
+}
+static void windowServerHints(void) {
+    EventWorkspace.sharedWorkspace.catalog=@[];EventDeliverySink *sink=[EventDeliverySink new];
+    births[@123]=@[@100,@20];births[@(getpid())]=@[@100,@20];births[@999]=@[@5,@5];
+    windowServerOwners=[NSMutableDictionary dictionary];windowServerPIDs=[NSMutableDictionary dictionary];
+    windowServerOwners[@42]=@500;windowServerPIDs[@500]=@123;
+    windowServerOwners[@43]=@501;windowServerPIDs[@501]=@(getpid());
+    windowServerOwners[@44]=@502;windowServerPIDs[@502]=@999;
+    windowServerOwners[@46]=@503;
+    windowServerOwners[@47]=@504;windowServerPIDs[@504]=@0;
+    DWWindowEvents *events=[[DWWindowEvents alloc]initWithSink:sink scope:@{@123:@[@100,@20],@(getpid()):@[@100,@20]}];drain();
+    check(windowServerRegistrations==2&&windowServerTypes[0]==1325&&windowServerTypes[1]==1326&&windowServerProc==windowServerNotified&&windowServerEvents==events,@"both notifications are registered once and forwarded to the current instance");
+    windowServerPost(1325,42,12);
+    check([sink.reports isEqual:@[@[@"appeared",@0,@123]]],@"a window added to a Space in scope looks for its process's windows at once");
+    windowServerPost(1325,42,12);
+    check(sink.reports.count==1&&events.owed.count==1,@"a second window-added hint within 80 ms waits for the coalescer");
+    deliveryDue(events);
+    check(sink.reports.count==2&&[sink.reports.lastObject isEqual:@[@"appeared",@0,@123]],@"the owed report is delivered once, 80 ms after the last");
+    coalesceElapsed(events);[sink.reports removeAllObjects];
+    windowServerPost(1326,42,12);
+    check([sink.reports isEqual:@[@[@"changed",@42,@123]]],@"a window left a Space is a generic change of that window, not a destruction");
+    coalesceElapsed(events);[sink.reports removeAllObjects];
+    windowServerPost(1325,43,12);windowServerPost(1326,43,12);windowServerPost(1325,44,12);windowServerPost(1325,45,12);
+    windowServerPost(1325,46,12);windowServerPost(1325,47,12);windowServerPost(1325,42,11);windowServerPost(1325,0,12);
+    check(sink.reports.count==0&&events.owed.count==0,@"this process's, out-of-scope, unowned, pid-less, short and zero-id notifications produce nothing");
+    // A real secondary thread: dispatch_sync to a global queue may run its block on this one.
+    dispatch_semaphore_t posted=dispatch_semaphore_create(0);
+    [NSThread detachNewThreadWithBlock:^{check(!NSThread.isMainThread,@"the off-main post really is off main");windowServerPost(1325,42,12);dispatch_semaphore_signal(posted);}];
+    dispatch_semaphore_wait(posted,DISPATCH_TIME_FOREVER);
+    check(mainBlocks.count==1&&sink.reports.count==0,@"an off-main notification is handed to the main queue");drain();
+    check([sink.reports isEqual:@[@[@"appeared",@0,@123]]],@"the main-queue hop reports as a main-thread notification would");
+    coalesceElapsed(events);[sink.reports removeAllObjects];[events stop];
+    check(windowServerEvents==nil,@"stop clears the current instance");
+    windowServerPost(1325,42,12);windowServerPost(1326,42,12);drain();
+    check(sink.reports.count==0,@"nothing is reported after stop");
+    DWWindowEvents *next=[[DWWindowEvents alloc]initWithSink:sink scope:nil];drain();
+    check(windowServerRegistrations==2&&windowServerEvents==next,@"a later instance is forwarded to without registering again");
+    coalesceElapsed(next);windowServerPost(1326,42,12);
+    check([sink.reports isEqual:@[@[@"changed",@42,@123]]],@"the later instance reports");
+    [next stop];drain();
 }
 
 int main(void) {@autoreleasepool {
@@ -357,6 +433,6 @@ int main(void) {@autoreleasepool {
     [owner stop];drain();EventWorkspace.sharedWorkspace.catalog=@[];drain();
     check(!owner.applicationWatches.count&&!owner.applications.count&&catalogReads==catalogs,@"stop fences a queued catalog result and removes future collection callbacks");
     check(EventWorkspace.sharedWorkspace.installed==EventWorkspace.sharedWorkspace.removed,@"every installed collection observer was removed exactly once");
-    moveProvenance();
+    moveProvenance();windowServerHints();
     printf("window-events registry: %lu checks passed\n",(unsigned long)checks);return 0;
 }}

@@ -38,6 +38,11 @@ CGError DWNativeScreenUpdates(BOOL enabled) {
     return enabled?enable(connection()):disable(connection());
 }
 
+// What the answer to a veil request says about the helper. An acceptance, but also no answer in time (the request may still be
+// carried out) and an answer that cannot be read (it may have been accepted) leave it possibly veiling: the shell then releases
+// a window it will not manage explicitly, which costs a no-op record when nothing is held, where assuming otherwise would leave such a
+// window invisible for the helper's whole bound. A refusal, a lost helper and a bad request say it is not.
+static BOOL DWNativeVeilMayBeOn(int result) { return result==DW_CLIENT_OK||result==DW_CLIENT_TIMEOUT||result==DW_CLIENT_INVALID; }
 static bool DWNativeFiniteRect(CGRect r) {
     return isfinite(r.origin.x)&&isfinite(r.origin.y)&&isfinite(r.size.width)&&isfinite(r.size.height)
         &&r.size.width>0&&r.size.height>0&&isfinite(CGRectGetMaxX(r))&&isfinite(CGRectGetMaxY(r));
@@ -280,7 +285,7 @@ static uint64_t uptime(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW)/10
 // How long the main thread may stay away from its run loop before the session is closed for it.
 static const uint64_t DWStall=10000;
 // One bound window: who it is for the helper, its own frame, and whether an alpha was ever sent for it.
-@interface DWNativeWindow : NSObject { @public struct dw2_identity identity;CGRect bounds;BOOL alpha,familyKnown;NSNumber *logical;uint64_t releaseSeq;uint32_t root,parent; } @end
+@interface DWNativeWindow : NSObject { @public struct dw2_identity identity;CGRect bounds;BOOL alpha,familyKnown,declined;NSNumber *logical;uint64_t releaseSeq;uint32_t root,parent; } @end
 @interface DWNativeSpaceReflow : NSObject { @public
     struct dw2_identity identity;
     CGRect original,before,observed;
@@ -326,6 +331,7 @@ static void DWCloseNativeClient(dw_client *client,id activity) {
     struct dw_client_info _info;
     NSDictionary<NSNumber *,NSArray<NSNumber *> *> *_scope;
     BOOL _desktopWide;
+    BOOL _veiling; // the helper holds each window an application opens invisible until a frame places it, a release lets it go, or its own bound passes
     uid_t _loginUID;
     NSArray<NSNumber *> *_dockBirth;
     _Atomic bool _preparing;
@@ -455,6 +461,13 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     if(refusal){atomic_store(&presenter->_preparing,false);id activity;dw_client *client=[presenter takeActivity:&activity];DWDisposeNativeClient(client,activity);if(why)*why=refusal;return nil;}
     presenter->_desktopWide=desktop;
     presenter->_scope=subset?admitted.copy:[scope copy];
+    // Only after the empty restoration table was confirmed: a window veiled earlier would have been a leftover. A helper that cannot, or
+    // will not, simply leaves new windows to appear as they always did; the session is not refused for it.
+    if(desktop&&(presenter->_info.caps&DW2_CAP_VEIL)){
+        uint32_t held=0;int veiled=dw_client_veil(presenter->_client,2000,true,&held);
+        presenter->_veiling=DWNativeVeilMayBeOn(veiled);
+        if(veiled!=DW_CLIENT_OK&&!presenter.ended)fprintf(stderr,"Infinify: the helper did not confirm the arrival veil (%d)%s\n",veiled,presenter->_veiling?"; it may be on, so windows this shell will not manage are released explicitly":"; new windows show at their native place until placed");
+    }
     atomic_store(&presenter->_preparing,false);
     if(presenter.ended){id activity;dw_client *client=[presenter takeActivity:&activity];DWDisposeNativeClient(client,activity);if(why)*why=@"the helper was lost before native admission completed";return nil;}
     if(watch)[presenter watch];
@@ -583,6 +596,9 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     BOOL retry=NO;
     for(NSUInteger i=0;i<statuses.length&&i<frame.length/sizeof(*records);i++){
         NSNumber *wid=@(records[i].id.wid);BOOL release=(records[i].flags&DW2_RECORD_RESTORE)!=0;
+        // A decline is a hint that spares the helper's own bound: whatever it answers, it is not asked again.
+        DWNativeWindow *declined=release?_releases[wid]:nil;
+        if(declined&&declined->declined&&declined->releaseSeq&&seq>=declined->releaseSeq){[_releases removeObjectForKey:wid];_forced=YES;continue;}
         if(status[i]==DW2_APPLIED){
             DWNativeWindow *pending=_releases[wid];
             if(release&&pending&&pending->releaseSeq&&seq>=pending->releaseSeq){[_releases removeObjectForKey:wid];_forced=YES;}
@@ -860,6 +876,17 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     [_withheld removeObjectForKey:wid];[_transitions removeObjectForKey:wid];[_rebases removeObjectForKey:wid];[_rebased removeObject:wid];
     NSSet *members=_families[wid]?:[NSSet setWithObject:wid];for(NSNumber *child in members){DWNativeWindow *attached=_windows[child];if(attached)[self releaseWindow:attached];}[_families removeObjectForKey:wid];
 }
+// A window this shell will not manage, which the helper's arrival veil may hold invisible: asked to release it now. The helper
+// answers a release of a window it holds nothing of with a no-op, and lets the window go itself after its own bound otherwise.
+- (void)declineWindow:(NSDictionary *)identity {
+    if(!NSThread.isMainThread||self.ended||!_veiling)return;
+    NSNumber *wid=identity[@"wid"];NSArray *born=[self admittedBirth:identity];
+    if(!wid.unsignedIntValue||born.count!=2||![born[0]isEqual:identity[@"birth_sec"]]||![born[1]isEqual:identity[@"birth_usec"]]||_windows[wid]||_releases[wid])return;
+    DWNativeWindow *window=[DWNativeWindow new];
+    window->identity=(struct dw2_identity){.pid=[identity[@"pid"]intValue],.wid=wid.unsignedIntValue,.birth_sec=[born[0]unsignedLongLongValue],.birth_usec=[born[1]unsignedLongLongValue]};
+    window->bounds=CGRectNull;window->root=wid.unsignedIntValue;window->declined=YES;window->releaseSeq=0;
+    _releases[wid]=window;atomic_store(&_releasing,true);_forced=YES;
+}
 - (BOOL)withholdWindow:(NSDictionary *)identity {
     if(!NSThread.isMainThread||self.ended)return NO;
     NSNumber *wid=identity[@"wid"];DWNativeWindow *root=wid?_windows[wid]:nil;
@@ -1045,7 +1072,8 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
             }
         }
         // Alpha is sent for a window from the first frame its opacity is not 1, and from then on always, 1 included: a window whose
-        // alpha nobody asked to change is never written, and the helper journals no alpha for it.
+        // alpha nobody asked to change is never written, and the helper journals no alpha for it. The one exception is a window the
+        // helper's arrival veil holds: the helper lifts that alpha itself with the first frame, and puts it back only while it still reads 0.
         double opacity=[p[@"opacity"]isKindOfClass:NSNumber.class]?fmax(0,fmin(1,[p[@"opacity"]doubleValue])):1;
         if(p&&opacity!=1&&(_info.caps&DW2_CAP_ALPHA))window->alpha=YES;
         if(window->alpha){record.flags=DW2_RECORD_HAS_ALPHA;record.alpha=(float)opacity;}

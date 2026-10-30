@@ -1850,6 +1850,83 @@ fn the_default_table_on_a_mac() {
     );
 }
 
+/// The finger counts the shell may hold the system's own gestures back for.
+fn fingers(h: &mut Host) -> Value {
+    h.ok(json!({"op":"gesture_fingers"}))
+}
+
+#[test]
+fn the_finger_counts_a_run_binds_follow_the_config_and_the_trackpad() {
+    let scratch = Scratch::new();
+    // The default table: three and four fingers. The two-finger pinch is the
+    // pointer's and AppKit's, not a count the recogniser or Dock control has.
+    let mut h = setup();
+    assert_eq!(fingers(&mut h), json!({"fingers":[3,4],"enabled":true}));
+    // Unbinding what binds a count frees it: with the bare three-finger
+    // swipe and pinch, the modified and hold bindings of three and the
+    // doubletap swipe gone, no three-finger binding is left. Four stays.
+    load(
+        &mut h,
+        &scratch,
+        r#"
+[gestures.anywhere]
+"3-finger-swipe" = "none"
+"3-finger-pinch" = "none"
+"mod+3-finger-swipe" = "none"
+"mod+3-finger-pinch-in" = "none"
+"mod+3-finger-pinch-out" = "none"
+"mod+3-finger-hold" = "none"
+[gestures.on-window]
+"3-finger-doubletap-swipe" = "none"
+"alt+3-finger-swipe" = "none"
+"alt+shift+3-finger-swipe" = "none"
+"alt+3-finger-pinch-in" = "none"
+"alt+3-finger-pinch-out" = "none"
+"#,
+    );
+    assert_eq!(fingers(&mut h), json!({"fingers":[4],"enabled":true}));
+    // A modifier does not unbind a count: only a modified five-finger
+    // swipe is bound there, and the bound two-finger pinch is no count.
+    let mut h = setup();
+    load(
+        &mut h,
+        &scratch,
+        r#"
+[bindings]
+disable_defaults = ["gestures"]
+[gestures.anywhere]
+"alt+5-finger-swipe" = "zoom-to-fit"
+"2-finger-pinch" = "zoom"
+"#,
+    );
+    assert_eq!(fingers(&mut h), json!({"fingers":[5],"enabled":true}));
+    // No defaults and no bindings: nothing is bound.
+    load(
+        &mut h,
+        &scratch,
+        "[bindings]\ndisable_defaults = [\"gestures\"]\n",
+    );
+    assert_eq!(fingers(&mut h), json!({"fingers":[],"enabled":true}));
+    // The desktop's own defaults are counts too until a config unbinds them.
+    let mut h = setup();
+    load(
+        &mut h,
+        &scratch,
+        "[gestures.anywhere]\n\"4-finger-swipe-up\" = \"none\"\n",
+    );
+    assert_eq!(fingers(&mut h), json!({"fingers":[3,4],"enabled":true}));
+    // set-trackpad off dispatches no gesture, so no count is held back, and
+    // on restores them.
+    h.action("set-trackpad off");
+    assert_eq!(fingers(&mut h), json!({"fingers":[],"enabled":false}));
+    h.action("set-trackpad on");
+    assert_eq!(fingers(&mut h), json!({"fingers":[3,4],"enabled":true}));
+    // A read changes nothing.
+    let before = h.snapshot();
+    fingers(&mut h);
+    assert_eq!(h.snapshot(), before);
+}
+
 // Upstream's resize gesture (try_start_gesture_resize, the SwipeResize arms
 // of on_gesture_swipe_update and _end), on the readback path every normal run
 // has. These drive the controller alone: nothing here shows a trackpad, a

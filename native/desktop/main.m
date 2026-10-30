@@ -21,6 +21,8 @@
 #import "window-events.h"
 #import "pan-launch.h"
 #import "trackpad-gestures.h"
+#import "multitouch-source.h"
+#import "dock-guard.h"
 #import "pointer-hover.h"
 #import "canvas-cursor.h"
 #import "canvas-renderer.h"
@@ -996,6 +998,7 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 @property DWWindowObserver *windowObserver;
 @property uint64_t observationEpoch;
 @property BOOL windowObservationAgain; // one follow-up after a native family hint during an in-flight read
+@property BOOL declineFrameQueued; // one frame is owed to windows the shell declined
 @property CFMachPortRef navigationTap;
 @property CFRunLoopSourceRef navigationTapSource;
 @property BOOL logicalFocus; // --no-native-focus: no native window is ever activated or raised
@@ -1070,8 +1073,19 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 @property DWTrackpadGestures *trackpad;
 @property DWGlobalTrackpadInput *globalTrackpad;
 @property BOOL globalTrackpadNoted,globalGestureDelivery,globalGestureContact;
+// Desktop mode, where MultitouchSupport reports every contact wherever the pointer is: the touch source, its feed into the recogniser, and the tap that holds
+// the system's Dock-control gestures back for the finger counts a [gestures] binding takes. While the source delivers, the NSTouch paths below feed nothing.
+@property DWMultitouchSource *multitouch;
+@property DWMultitouchFeed *touchFeed;
+@property DWDockGuard *dockGuard;
+@property DWDockTap *dockTap;
+@property NSTimeInterval multitouchRetry;
+- (void)configureMultitouch;
+- (void)multitouchFrame:(DWMultitouchFrame *)frame;
+- (void)refreshGestureFingers;
 - (void)configureGlobalTrackpad;
 - (BOOL)globalGesturesEnabled;
+- (BOOL)admitContact:(NSUInteger)fingers;
 - (BOOL)admitGlobalTouches:(DWTrackpadTouchFrame *)frame;
 - (void)globalTouches:(DWTrackpadTouchFrame *)frame;
 - (BOOL)globalMagnify:(NSEvent *)event;
@@ -2219,6 +2233,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         magnify:^BOOL(NSEvent *event){return [weak globalMagnify:event];}
         ignoreEvent:^BOOL(CGEventRef event){int64_t tag=CGEventGetIntegerValueField(event,kCGEventSourceUserData);return tag&&[weak.postingTags containsObject:@(tag)];}
         cancelled:^{[weak cancelGestures];}];
+    // While the touch source delivers, its own tap holds Dock control back, and for the bound finger counts only; this one would drop it for every count.
+    input.dockElsewhere=^BOOL{Desktop *d=weak;return d.multitouch.delivering&&d.dockTap.running;};
     if([input start]){self.globalTrackpad=input;self.globalTrackpadNoted=NO;return;}
     if(!self.globalTrackpadNoted){self.globalTrackpadNoted=YES;[self say:@"Global trackpad takeover needs existing Accessibility/input access. macOS system gestures remain active until the session tap can start."];}
 }
@@ -2359,8 +2375,12 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         [self finishNativeMouseOwner:source reason:[moved[@"moved"]boolValue]?(extent?@"adopted displayed origin":@"adopted origin; displayed extent differs"):@"adoption refused"];
     }
 }
-- (BOOL)admitGlobalTouches:(DWTrackpadTouchFrame *)frame {
-    if(![self globalGesturesEnabled]||self.nativeFillHandoff||frame.fingers<3)return NO;
+- (BOOL)admitGlobalTouches:(DWTrackpadTouchFrame *)frame { return [self admitContact:frame.fingers]; }
+// Whether a touch of `fingers` fingers is the canvas's, asked once per touch by whichever source sees its third finger first: the session tap's events
+// or MultitouchSupport's frames. When both report one touch the first answer stands, so the second does not end the gesture the first began.
+- (BOOL)admitContact:(NSUInteger)fingers {
+    if(self.multitouch.delivering&&self.globalGestureContact)return YES;
+    if(![self globalGesturesEnabled]||self.nativeFillHandoff||fingers<3)return NO;
     // A native mouse press already owns its drag session, even when its pointer
     // crosses a canvas panel. Extra fingers cannot begin a new camera contact
     // that steals the original source's physical drag and release.
@@ -2372,7 +2392,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     [self cancelGestures];self.globalGestureContact=YES;return YES;
 }
 - (void)globalTouches:(DWTrackpadTouchFrame *)frame {
-    if(!self.trackpad||![self globalGesturesEnabled])return;
+    if(self.multitouch.delivering||!self.trackpad||![self globalGesturesEnabled])return;
     for(NSDictionary *touch in frame.touches)[self.trackpad touch:touch[@"identity"] x:[touch[@"x"]doubleValue] y:[touch[@"y"]doubleValue] phase:(DWTouchPhase)[touch[@"phase"]integerValue] time:frame.time];
     [self.trackpad frame:frame.time];self.lastTouches=frame.time;[self armTrackpad];
     if(!frame.fingers)self.globalGestureContact=NO;
@@ -2391,6 +2411,53 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     @try {[self magnify:event];} @finally {self.globalGestureDelivery=NO;}
     if(beginning&&!self.nativePinchAccepted){[self cancelGestures];return NO;}
     return YES;
+}
+// Desktop mode asks MultitouchSupport for every contact of the pad, wherever the pointer is, and holds the system's Dock-control gestures back for the finger
+// counts a [gestures] binding takes. Asked again each time the native input is configured, about every second: a start that failed is tried again every ten
+// seconds, and the tap, which needs Accessibility the run may not have yet, each time. INFINIFY_NO_MULTITOUCH=1 leaves the views' own touches in charge.
+- (void)configureMultitouch {
+    if(![self globalGesturesEnabled]||(getenv("INFINIFY_NO_MULTITOUCH")&&atoi(getenv("INFINIFY_NO_MULTITOUCH"))==1))return;
+    if(!self.multitouch){
+        if(CACurrentMediaTime()<self.multitouchRetry)return;
+        self.multitouchRetry=CACurrentMediaTime()+10;
+        __weak Desktop *weak=self;DWDockGuard *guard=[DWDockGuard new];
+        DWMultitouchSource *source=[[DWMultitouchSource alloc]initWithGuard:guard frames:^(DWMultitouchFrame *frame){[weak multitouchFrame:frame];}];
+        // Whichever path fed the recogniser until now is not the one that does from here (or the reverse): what it was holding is let go.
+        source.deliveringChanged=^(BOOL delivering){(void)delivering;[weak cancelGestures];};
+        if(![source start])return;
+        self.dockGuard=guard;self.multitouch=source;self.dockTap=[[DWDockTap alloc]initWithGuard:guard];
+        self.touchFeed=[[DWMultitouchFeed alloc]initWithRecogniser:^DWTrackpadGestures *{return weak.trackpad;} admit:^BOOL(NSUInteger fingers){return [weak admitContact:fingers];}];
+        [self refreshGestureFingers];
+    }
+    // A source that lost its devices (a wake that found none) is started again, as a first start is retried.
+    else if(!self.multitouch.running&&CACurrentMediaTime()>=self.multitouchRetry){self.multitouchRetry=CACurrentMediaTime()+10;[self.multitouch start];}
+    if(self.multitouch.running&&!self.dockTap.running)[self.dockTap start];
+}
+// One frame of the pad from MultitouchSupport, in order, on the main thread: the recogniser's calls once the touch is admitted. A frame that comes while the
+// canvas is closed or the session is away is nobody's, and ends what a touch had begun.
+- (void)multitouchFrame:(DWMultitouchFrame *)frame {
+    BOOL empty=!frame.contacts.count;
+    if(!self.touchFeed||!self.trackpad||self.cleaning||self.sessionInactive||![self globalGesturesEnabled]){
+        [self.touchFeed cancel:frame.time];if(empty)self.globalGestureContact=NO;else [self.dockGuard refuseContact:frame.contact];return;
+    }
+    BOOL fed=[self.touchFeed consume:frame];
+    // The system keeps a touch the canvas declined; the guard learns it at once.
+    if(self.touchFeed.refused)[self.dockGuard refuseContact:frame.contact];
+    if(fed){self.lastTouches=frame.time;[self armTrackpad];}
+    if(empty)self.globalGestureContact=NO;
+}
+// The finger counts a [gestures] binding takes, for the Dock guard: after every config load, and when set-trackpad switches gestures off or on.
+- (void)refreshGestureFingers {
+    if(!self.dockGuard)return;
+    NSDictionary *reply=[self call:@{@"op":@"gesture_fingers"}];uint32_t mask=0;
+    for(id count in asArray(reply[@"fingers"])){NSUInteger n=[asNumber(count)unsignedIntegerValue];if(n>0&&n<32)mask|=1u<<n;}
+    [self.dockGuard setBound:mask];
+}
+// The recogniser's gesture in progress, for the Dock guard: it holds the system's gestures back for its finger count until it ends.
+- (void)noteDockGesture:(NSDictionary *)event {
+    NSString *op=event[@"op"];
+    if([op isEqual:@"gesture_begin"])[self.dockGuard gesture:[asNumber(event[@"fingers"])unsignedIntegerValue] at:CACurrentMediaTime()];
+    else if([op isEqual:@"gesture_end"])[self.dockGuard gesture:0 at:CACurrentMediaTime()];
 }
 - (BOOL)captureBackingEnabled {
     const char *flag=getenv("INFINIFY_DEBUG_CAPTURE_BACKING"),*guard=getenv("INFINIFY_DEBUG_CAPTURE_EDGE_GUARD"),*debug=getenv("INFINIFY_DEBUG");
@@ -2854,7 +2921,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     }
 }
 - (void)configureNativeInput {
-    [self configureGlobalTrackpad];
+    [self configureGlobalTrackpad];[self configureMultitouch];
     // The title session tap must be installed after the global session tap so
     // a later global retry cannot observe its down before title admission.
     if(self.native&&[self globalGesturesEnabled]&&!self.globalTrackpad.running)return;
@@ -4644,7 +4711,7 @@ static bool DWVisibilityAllowed(DWFocusIdentity selected,void *context) {
 // millimetres from the pad's top left (a touch is normalised over a pad sized in
 // points). A resting touch is left out, which the recogniser reads as a finger gone.
 - (void)touches:(NSEvent *)e {
-    if(self.globalTrackpad.running)return;
+    if(self.globalTrackpad.running||self.multitouch.delivering)return;
     if(!self.trackpad||self.cleaning||self.sessionInactive)return;
     for(NSTouch *touch in [e touchesMatchingPhase:NSTouchPhaseAny inView:nil]){
         if(touch.type!=NSTouchTypeIndirect||touch.resting)continue;
@@ -4678,7 +4745,7 @@ static bool DWVisibilityAllowed(DWFocusIdentity selected,void *context) {
 - (void)cancelGestures {
     [self.globalTrackpad cancel];self.globalGestureContact=NO;
     NSTimeInterval now=CACurrentMediaTime();
-    [self.trackpadTimer invalidate];self.trackpadTimer=nil;self.trackpadDeadline=0;self.magnifying=NO;[self.trackpad cancel:now];
+    [self.trackpadTimer invalidate];self.trackpadTimer=nil;self.trackpadDeadline=0;self.magnifying=NO;[self.trackpad cancel:now];[self.touchFeed cancel:now];
     if(self.gestureOwner)[self gesture:@{@"op":@"gesture_end",@"cancelled":@YES,@"time_ms":DWGestureTime(now)} owner:self.gestureOwner];
 }
 // macOS platform rule: input whose end never arrived. Upstream's grabs end with their release and libinput ends every gesture it begins; here an end
@@ -4927,6 +4994,7 @@ static bool DWVisibilityAllowed(DWFocusIdentity selected,void *context) {
     NSDictionary *hold=asDict(bindings[@"cycle_hold"]);UInt32 mask=([hold[@"control"]isEqual:@YES]?controlKey:0)|([hold[@"option"]isEqual:@YES]?optionKey:0)|([hold[@"shift"]isEqual:@YES]?shiftKey:0)|([hold[@"command"]isEqual:@YES]?cmdKey:0);
     if(!mask)for(NSDictionary *key in self.hotKeys.keys)if([key[@"action"]isEqual:@"cycle-windows forward"]){mask=[key[@"chord"]unsignedIntValue]&(controlKey|optionKey|shiftKey|cmdKey);break;}
     self.cycleModifiers=mask?:optionKey;
+    [self refreshGestureFingers];
     self.dismissFree=![self mouseBinding:@"left" source:nil flags:NSEventModifierFlagControl|NSEventModifierFlagOption window:YES];
     [self armCorners:bindings];
     self.statusText=status;if(open)[notes addObjectsFromArray:[self startKeys]];
@@ -4971,7 +5039,7 @@ static bool DWVisibilityAllowed(DWFocusIdentity selected,void *context) {
     BOOL snapshot=command.count==1&&[command[@"op"]isEqual:@"snapshot"];
     if(snapshot&&!raw&&self.controllerSnapshot)return self.controllerSnapshot;
     NSString *operation=asString(command[@"op"]);
-    BOOL query=snapshot||[operation isEqual:@"hit"]||[operation isEqual:@"input"]||[operation isEqual:@"resize_border"];
+    BOOL query=snapshot||[operation isEqual:@"hit"]||[operation isEqual:@"input"]||[operation isEqual:@"resize_border"]||[operation isEqual:@"gesture_fingers"];
     BOOL tick=[operation isEqual:@"tick_navigation"];
     NSDictionary *before=tick?self.controllerSnapshot:nil,*visual=tick?self.controllerVisualSnapshot:nil;
     if(!query){self.controllerSnapshot=nil;self.controllerVisualSnapshot=nil;}
@@ -4990,6 +5058,8 @@ static bool DWVisibilityAllowed(DWFocusIdentity selected,void *context) {
             fprintf(stderr,"debug: native resize origin operation=%s ipc=%s action=%s transaction=%llu effect=%llu window=%llu\n",operation.UTF8String,variant.UTF8String,action.UTF8String,[effect[@"transaction"]unsignedLongLongValue],[effect[@"effect_id"]unsignedLongLongValue],[effect[@"window"]unsignedLongLongValue]);
         }
     }
+    // set-trackpad switches every gesture off or on: the finger counts the system's own gestures are held back for follow it. A key, a gesture, a corner or `msg action` may run it.
+    if(self.dockGuard&&!query){NSString *ran=asString(command[@"action"])?:asString(asDict(command[@"request"])[@"Action"])?:asString(asDict(result[@"fired"])[@"action"]);if([ran hasPrefix:@"set-trackpad"])[self refreshGestureFingers];}
     if(snapshot){self.controllerSnapshot=result;if(!self.controllerVisualSnapshot)self.controllerVisualSnapshot=result;}
     else if(tick&&[result[@"clock_only"]isEqual:@YES]){
         // This successful tick changed only clock_ns. Never mutate a retained
@@ -5782,7 +5852,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     }
     // Return to desktop stopped the config watcher and dropped the key table: read the config again.
     if(self.configured&&!self.configWatcher)[self loadConfig:NO];
-    if(self.configured&&!self.trackpad){__weak Desktop *weak=self;self.trackpad=[[DWTrackpadGestures alloc]initWithEmit:^(NSDictionary *event){[weak gesture:event owner:1];}];}
+    if(self.configured&&!self.trackpad){__weak Desktop *weak=self;self.trackpad=[[DWTrackpadGestures alloc]initWithEmit:^(NSDictionary *event){[weak noteDockGesture:event];[weak gesture:event owner:1];}];}
     if(self.nativeEndpoints.count&&self.native.ended){self.nativeResumeWanted=YES;self.nativeResumeAfter=0;}
     if(self.demo){NSRect frame=NSMakeRect(100,120,1040,600);CGRect global=topRect(frame);NSMutableArray *rects=[NSMutableArray array];for(int i=0;i<2;i++)[rects addObject:rectJSON(CGRectOffset(ports[i],global.origin.x,global.origin.y))];[self panel:frame outputRects:rects identities:@[@"fixture-view-a",@"fixture-view-b"]];}
     // The analogue of upstream's nested winit backend: one ordinary window, one output.
@@ -6344,7 +6414,8 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     return NO;
 }
 - (void)windowAppeared:(DWWindowCandidate *)window {
-    if(self.cleaning||!self.panels.count)return;
+    // The manager has marked it offered and will not offer it again while it stays: a window nothing here can adopt now is let go.
+    if(self.cleaning||!self.panels.count){[self windowNotAdopted:window.window pid:window.pid];return;}
     // A positively identified child belongs to its already managed native
     // parent. Do not also adopt it as an independent canvas root.
     for(LiveSource *source in self.sources.allValues)if(!source.detached&&source.router.pid==window.pid&&source.router.wid!=window.window){
@@ -6356,6 +6427,18 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     // Nobody chose this window: a refusal is a passing note.
     NSString *note=[NSString stringWithFormat:@"%@ window not adopted: %@",window.applicationName?:@"A",self.statusText?:@"refused"];
     [self say:note];[self flashStatus:note];[self render];
+    [self windowNotAdopted:window.window pid:window.pid];
+}
+// The helper's arrival veil holds a new window invisible until a frame places it; one that is never to be placed is let go at once
+// rather than at the helper's own bound. Several arrive together at times, so the frame that carries their releases is made once.
+- (void)windowNotAdopted:(CGWindowID)window pid:(pid_t)pid {
+    if(self.cleaning||!self.native||self.native.ended)return;
+    NSArray *born=birth(pid);if(born.count!=2)return;
+    if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"debug: native decline pid=%d wid=%u at=%.6f\n",(int)pid,(unsigned)window,NSProcessInfo.processInfo.systemUptime);
+    [self.native declineWindow:@{@"pid":@(pid),@"wid":@(window),@"birth_sec":born[0],@"birth_usec":born[1]}];
+    if(self.declineFrameQueued)return;
+    self.declineFrameQueued=YES;
+    dispatch_async(dispatch_get_main_queue(),^{self.declineFrameQueued=NO;if(!self.cleaning&&!self.sessionInactive&&self.native&&!self.native.ended)[self render];});
 }
 // macOS platform rule: on Wayland quitting the compositor ends its clients, here
 // applications outlive Infinify. The saved scene keeps one slot per window, the windows
@@ -6840,6 +6923,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     self.nativeSessionEpoch++;self.nativeResumeWanted=NO;
     [self.windowObserver cancel];self.windowObserver=nil;
     [self.globalTrackpad stop];self.globalTrackpad=nil;
+    [self.multitouch stop];self.multitouch=nil;self.touchFeed=nil;[self.dockTap stop];self.dockTap=nil;self.dockGuard=nil;
     [self.nativeInput stop];self.nativeInput=nil;[self.pointerGrab reset];[self.relativeMotion reset];[self.tablet reset];
     // Native presentation ends first, while the canvas is still there: every window is put back where and as it was before anything
     // else is shut down, so no wait further down (a size owed, a fullscreen ending) is spent with a window parked or scaled.
@@ -6884,7 +6968,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     if(!self.sources.count)self.resize=nil;
 
 }
-- (void)dealloc { [self stopMacWallpapers];[_ipc stop];[_manager stop];[_session stop];[_onboarding close];[self stopNavigation];[self stopViewKeys];[_hotKeys invalidate];[_tapKeys stop];[_configWatcher stop];[_statePush invalidate];[_panLaunch cancel];[_trackpadTimer invalidate];[_sceneWriter drain];if(_controller)driftwm_desktop_destroy(_controller); }
+- (void)dealloc { [self stopMacWallpapers];[_ipc stop];[_manager stop];[_session stop];[_onboarding close];[self stopNavigation];[self stopViewKeys];[_hotKeys invalidate];[_tapKeys stop];[_configWatcher stop];[_statePush invalidate];[_panLaunch cancel];[_trackpadTimer invalidate];[_multitouch stop];[_dockTap stop];[_sceneWriter drain];if(_controller)driftwm_desktop_destroy(_controller); }
 @end
 static CGPoint projected(Desktop *desktop,NSNumber *window,NSNumber *output,CGPoint sourcePoint) {
     for(NSDictionary *p in [desktop call:@{@"op":@"snapshot"}][@"placements"])if([p[@"window"]isEqual:window]&&[p[@"output"]isEqual:output]){
@@ -7087,7 +7171,7 @@ int main(int argc,const char **argv) { @autoreleasepool {
         if(i>0&&!strcmp(argv[i],"--windowed")){if(windowed)return 64;windowed=YES;if(i+1<argc&&isdigit((unsigned char)argv[i+1][0])&&!parseWindowSize(argv[++i],&windowSize))return 64;continue;}
         filtered[count++]=argv[i];}filtered[count]=NULL;argc=count;argv=filtered;
 
-    if(argc==2&&!strcmp(argv[1],"--help")){puts("Infinify.app — macOS 26+ Apple Silicon: DriftWM's canvas as the desktop of native Mac windows\nDefault: the desktop. One canvas panel per display covers the whole display on every Space, under the menu bar and the Dock, which both stay; there is no toolbar, no status line and no chooser. Every real application window on screen (by Accessibility a standard window or a dialog, never a popup or a helper window; without Accessibility every window but an untitled one under 200x150) lives on the canvas: existing windows are adopted, a new one is placed by window_placement, a closed one leaves (or leaves a stand-in under session.suspend_on_close). This needs Screen Recording and Accessibility access, and Stage Manager off (it keeps every window outside the current stage as a thumbnail): while one is missing or Stage Manager is on a small window says so and offers the Allow buttons, a button that opens Desktop & Dock, Relaunch (Screen Recording reaches only a newly started app) and Quit, and the canvas opens once nothing is in the way.\nStatus notes go to stderr, one line each; what a config file has wrong is drawn in the error bar.\n--only-pid PID[,PID…] (may repeat): manage only the windows of these processes, each of which must be running and this user's; needs --windowed, and refuses --manual. It works without Screen Recording access too: the windows are then bound, focused and clicked as ever and their tiles have no picture.\n--debug-pointer: with --only-pid, serve the DebugPointer IPC request, by which a test presses and releases on a window without the pointer.\n--native-helper RUNTIME_DIR NONCE_FILE: with --only-pid, native presentation: the window server draws the managed windows themselves where the canvas places them, moved and scaled by the transform helper whose socket is in RUNTIME_DIR (its nonce is read from NONCE_FILE, mode 0600), and the canvas, behind them, draws live copies for additional independently zoomed display views when Screen Recording access is already available. Popup/sheet copies, metadata cropping and scoped member input are implemented but unverified; native display-boundary clipping remains incomplete. A cooperative helper inside its named process, or an authenticated exact helper allowlist of the named process instances, must match --only-pid. Repeat this pair for up to four explicit helpers: each must audit its own disjoint process subset, and their union must exactly match --only-pid. Same-user helpers and allowlists that cannot be audited are refused; nothing is looked for or loaded. Losing one grouped helper ends presentation and restores its siblings. Without a native helper flag every run is the overlay.\n--native-desktop-helper RUNTIME_DIR NONCE_FILE: explicit whole-desktop native presentation for this login user, including newly opened applications. Requires one authenticated Apple Dock-hosted SAME_USER helper with scope audit and per-window restoration; cannot combine with --only-pid, --windowed, --manual or fixture modes. This only connects to a helper you already started; nothing is injected or installed by the app. Requires Accessibility access and Stage Manager off. Screen Recording is optional for the native primary and enables captured replicas on additional independent display views. Native clipping and application compatibility still need validation.\n--manual: show the chooser first and capture only explicitly selected windows; no window is adopted automatically. Open canvas shows the saved world without adding one. The chooser stays open above the canvas; closed there, it is gone for the run.\n--demo EMPTY_DIRECTORY: disposable interactive fixture, bounded to 60 seconds\n--demo-probe EMPTY_DIRECTORY: automated own-fixture E2E, no permission prompts\n--demo-probe-guard EMPTY_DIRECTORY: own-fixture interruption regression (expected exit 2)\n--no-native-focus: window focus stays logical; no native window is activated or raised\n--no-hover-forwarding: pointer motion over a window is not delivered to its application; focus_follows_mouse and pick mode still follow the pointer\n--state ABSOLUTE_PATH: explicit persistent scene file (default Application Support/Infinify/scene.json)\n--socket ABSOLUTE_PATH: IPC socket of a normal run (default Application Support/Infinify/infinify.sock)\n--windowed [WIDTHxHEIGHT]: open the canvas at launch in one ordinary window instead, all of it canvas (default 1200x800, at least 960x480), with no global shortcuts and whatever access there is; with --manual the chooser comes up above it; msg action quit or Control-C in its terminal ends it\n--config ABSOLUTE_PATH: DriftWM config file of a normal run (default $XDG_CONFIG_HOME/infinify/config.toml, else ~/.config/infinify/config.toml; DriftWM's built-in defaults when it is missing); read again whenever it changes\n--super CHORD: the physical keys of DriftWM's super/mod, a +-joined subset of ctrl|alt|cmd (default ctrl+alt; --super cmd restores Command bindings)\nmsg [--json] [--socket PATH] COMMAND ...: DriftWM-style IPC client for the running app; opens no window\nnative-desktop [--check | --help]: run the bundled native desktop launcher from a terminal. --check only verifies the package and reports policy; the explicit start authenticates or loads the helper through its sudo step, then starts native mode. It changes no SIP or settings and refuses an uncertain earlier load.\nlogin-item on | off | status: register, unregister or report the login item, a LaunchAgent inside the bundle that starts Infinify at login and again after a crash, never after a quit. on starts it at once, off ends the instance it started, status only reads; opens no window. For the installed copy: scripts/install-app.sh puts a signed bundle in ~/Applications\n--source DIR SECONDS NONCE: internal disposable child only\nKeys and pointer gestures are DriftWM's bindings from the config file: ctrl is Control, alt is Option, super (mod) is the --super chord. With no config file the canvas uses Control-Option, leaving native Command editing and Command-Tab with macOS. Explicit --super cmd and config bindings keep their authored choices. The registered defaults are:\n  Drag or two-finger scroll on empty canvas, Control-Option-drag anywhere, three-finger swipe: pan; a released pan coasts (navigation.drift). Hold Super (Control-Option by default) and scroll with a wheel or two fingers to zoom anywhere. Wheel or two-finger pinch on empty canvas, Control-Option-pinch anywhere, three-finger pinch: anchored zoom (max 1x).\n  Option-drag on a window: world move/snap; add Shift: cluster. Held at the view's edge, a move pans the canvas under the window (navigation.edge_pan).\n  Trackpad gestures use DriftWM's [gestures] bindings with Mac defaults: four-finger swipe up toggles overview; other directions select the nearest window. Four-finger hold: center the focused window. Four-finger pinch in / out: zoom-to-fit / home toggle. Three-finger swipe or drag pans over windows as well as empty canvas. Two-finger pinch zooms over windows too.\n  Desktop mode intercepts recognized trackpad and Dock swipe streams for canvas navigation; stopping releases interception without changing System Settings. Unknown system gesture formats pass through; hardware behavior needs runtime validation. Windowed mode keeps local gestures only.\n  View actions animate one view's camera only (global shortcuts while the canvas is open, or msg action; held zoom, pan and nudge keys repeat):\n  Control-Option-A: home toggle (origin at 1:1, again to return). Control-Option-Tab or F3: overview toggle (again returns). Control-Option-W: the same zoom-to-fit toggle. Control-Option-Shift-W: the same over the focused window's snap cluster.\n  Control-Option-Equals / Control-Option-Minus: zoom in / out. Control-Option-0 or Control-Option-Z: zoom 1:1.\n  Control-Option-Command-arrows: pan the view under the pointer. Control-Option-Shift-arrows: nudge the focused window.\n  Control-Option-1 to 4: fly to bookmark 1 to 4. Control-Option-Shift-1 to 4: set it.\n  Window navigation flies the camera and focuses the window, natively when Infinify has Accessibility access:\n  Option-Tab / Option-Shift-Tab: cycle windows, most recently focused first; letting go of Option commits the choice.\n  Control-Option-arrows: the nearest window in that direction. Control-Option-C: center the focused window. Control-Option-X: center the window under the pointer.\n  A click on a window gives it canvas focus and starts its native focus, then the click is forwarded; a click on empty canvas unfocuses. Focusing a canvas window in its own application is followed.\n  Pointer motion over a window is delivered to its application; with focus_follows_mouse = true it also focuses that window without raising it, a screen-pinned one before the canvas beneath it and never a widget.\n  Below [zoom] interact_min (off by default) a window on the canvas is one target: a click flies to it, a drag moves it, and no click, scroll or motion reaches its application. A screen-pinned window and a widget are not picked and keep their pointer.\n  Control-Option-Command-drag: center-nearest by pointer, DriftWM's swipe; the direction is taken 16 points from the press.\n  Control-Option-Return: exec-terminal ($TERMINAL, else a new Terminal window). Control-Option-D: exec-launcher ($LAUNCHER, else Apps).\n  Control-Option-Shift-Command-arrows: send-to-output, the focused window to the display on that side (a world move; nothing with one display).\n  The default Control-Option-L lock binding and default volume, brightness, media and screenshot program bindings are left to macOS; their Linux commands are never substituted or started.\n  macOS's Lock Screen and screenshot shortcuts stay available. Explicit config bindings still run exactly as authored.\n  Control-Option-Q: close-window. The focused window's own close button is pressed through Accessibility; a focused placeholder is dismissed.\nThe fixture modes (--demo*) read no config and keep Option-drag pan, Command-wheel and pinch zoom and Control-Option-drag move; they take no trackpad touches. They keep their toolbar strip, status line and chooser, and their Resize status button explains unavailable native layout resizing.\nAn unbound click, drag or scroll on a window (left, right or middle button) is forwarded only to its selected, freshly validated source.\nNative keyboard/IME remain with the real app. Control-Option-Escape (until a binding takes that chord), Control-Option-Command-Shift-Q (quit), msg action quit or SIGTERM ends the run with exit status 0 and returns the native desktop: fullscreens ended, scene saved, panels closed, capture stopped, hot keys released.\nNo SIP/settings changes.");return 0;}
+    if(argc==2&&!strcmp(argv[1],"--help")){puts("Infinify.app — macOS 26+ Apple Silicon: DriftWM's canvas as the desktop of native Mac windows\nDefault: the desktop. One canvas panel per display covers the whole display on every Space, under the menu bar and the Dock, which both stay; there is no toolbar, no status line and no chooser. Every real application window on screen (by Accessibility a standard window or a dialog, never a popup or a helper window; without Accessibility every window but an untitled one under 200x150) lives on the canvas: existing windows are adopted, a new one is placed by window_placement, a closed one leaves (or leaves a stand-in under session.suspend_on_close). This needs Screen Recording and Accessibility access, and Stage Manager off (it keeps every window outside the current stage as a thumbnail): while one is missing or Stage Manager is on a small window says so and offers the Allow buttons, a button that opens Desktop & Dock, Relaunch (Screen Recording reaches only a newly started app) and Quit, and the canvas opens once nothing is in the way.\nStatus notes go to stderr, one line each; what a config file has wrong is drawn in the error bar.\n--only-pid PID[,PID…] (may repeat): manage only the windows of these processes, each of which must be running and this user's; needs --windowed, and refuses --manual. It works without Screen Recording access too: the windows are then bound, focused and clicked as ever and their tiles have no picture.\n--debug-pointer: with --only-pid, serve the DebugPointer IPC request, by which a test presses and releases on a window without the pointer.\n--native-helper RUNTIME_DIR NONCE_FILE: with --only-pid, native presentation: the window server draws the managed windows themselves where the canvas places them, moved and scaled by the transform helper whose socket is in RUNTIME_DIR (its nonce is read from NONCE_FILE, mode 0600), and the canvas, behind them, draws live copies for additional independently zoomed display views when Screen Recording access is already available. Popup/sheet copies, metadata cropping and scoped member input are implemented but unverified; native display-boundary clipping remains incomplete. A cooperative helper inside its named process, or an authenticated exact helper allowlist of the named process instances, must match --only-pid. Repeat this pair for up to four explicit helpers: each must audit its own disjoint process subset, and their union must exactly match --only-pid. Same-user helpers and allowlists that cannot be audited are refused; nothing is looked for or loaded. Losing one grouped helper ends presentation and restores its siblings. Without a native helper flag every run is the overlay.\n--native-desktop-helper RUNTIME_DIR NONCE_FILE: explicit whole-desktop native presentation for this login user, including newly opened applications. Requires one authenticated Apple Dock-hosted SAME_USER helper with scope audit and per-window restoration; cannot combine with --only-pid, --windowed, --manual or fixture modes. This only connects to a helper you already started; nothing is injected or installed by the app. Requires Accessibility access and Stage Manager off. Screen Recording is optional for the native primary and enables captured replicas on additional independent display views. Native clipping and application compatibility still need validation.\n--manual: show the chooser first and capture only explicitly selected windows; no window is adopted automatically. Open canvas shows the saved world without adding one. The chooser stays open above the canvas; closed there, it is gone for the run.\n--demo EMPTY_DIRECTORY: disposable interactive fixture, bounded to 60 seconds\n--demo-probe EMPTY_DIRECTORY: automated own-fixture E2E, no permission prompts\n--demo-probe-guard EMPTY_DIRECTORY: own-fixture interruption regression (expected exit 2)\n--no-native-focus: window focus stays logical; no native window is activated or raised\n--no-hover-forwarding: pointer motion over a window is not delivered to its application; focus_follows_mouse and pick mode still follow the pointer\n--state ABSOLUTE_PATH: explicit persistent scene file (default Application Support/Infinify/scene.json)\n--socket ABSOLUTE_PATH: IPC socket of a normal run (default Application Support/Infinify/infinify.sock)\n--windowed [WIDTHxHEIGHT]: open the canvas at launch in one ordinary window instead, all of it canvas (default 1200x800, at least 960x480), with no global shortcuts and whatever access there is; with --manual the chooser comes up above it; msg action quit or Control-C in its terminal ends it\n--config ABSOLUTE_PATH: DriftWM config file of a normal run (default $XDG_CONFIG_HOME/infinify/config.toml, else ~/.config/infinify/config.toml; DriftWM's built-in defaults when it is missing); read again whenever it changes\n--super CHORD: the physical keys of DriftWM's super/mod, a +-joined subset of ctrl|alt|cmd (default ctrl+alt; --super cmd restores Command bindings)\nmsg [--json] [--socket PATH] COMMAND ...: DriftWM-style IPC client for the running app; opens no window\nnative-desktop [--check | --help]: run the bundled native desktop launcher from a terminal. --check only verifies the package and reports policy; the explicit start authenticates or loads the helper through its sudo step, then starts native mode. It changes no SIP or settings and refuses an uncertain earlier load.\nlogin-item on | off | status: register, unregister or report the login item, a LaunchAgent inside the bundle that starts Infinify at login and again after a crash, never after a quit. on starts it at once, off ends the instance it started, status only reads; opens no window. For the installed copy: scripts/install-app.sh puts a signed bundle in ~/Applications\n--source DIR SECONDS NONCE: internal disposable child only\nKeys and pointer gestures are DriftWM's bindings from the config file: ctrl is Control, alt is Option, super (mod) is the --super chord. With no config file the canvas uses Control-Option, leaving native Command editing and Command-Tab with macOS. Explicit --super cmd and config bindings keep their authored choices. The registered defaults are:\n  Drag or two-finger scroll on empty canvas, Control-Option-drag anywhere, three-finger swipe: pan; a released pan coasts (navigation.drift). Hold Super (Control-Option by default) and scroll with a wheel or two fingers to zoom anywhere. Wheel or two-finger pinch on empty canvas, Control-Option-pinch anywhere, three-finger pinch: anchored zoom (max 1x).\n  Option-drag on a window: world move/snap; add Shift: cluster. Held at the view's edge, a move pans the canvas under the window (navigation.edge_pan).\n  Trackpad gestures use DriftWM's [gestures] bindings with Mac defaults: four-finger swipe up toggles overview; other directions select the nearest window. Four-finger hold: center the focused window. Four-finger pinch in / out: zoom-to-fit / home toggle. Three-finger swipe or drag pans over windows as well as empty canvas. Two-finger pinch zooms over windows too.\n  Desktop mode intercepts recognized trackpad and Dock swipe streams for canvas navigation; stopping releases interception without changing System Settings. Unknown system gesture formats pass through; hardware behavior needs runtime validation. Where MultitouchSupport reports the trackpad, three or more fingers are read from it wherever the pointer is, and the system's Dock-control gestures are held back only for finger counts a [gestures] binding takes, with a short tail (INFINIFY_NO_MULTITOUCH=1 leaves the views' own touches in charge; not yet run on a physical trackpad). Windowed mode keeps local gestures only.\n  View actions animate one view's camera only (global shortcuts while the canvas is open, or msg action; held zoom, pan and nudge keys repeat):\n  Control-Option-A: home toggle (origin at 1:1, again to return). Control-Option-Tab or F3: overview toggle (again returns). Control-Option-W: the same zoom-to-fit toggle. Control-Option-Shift-W: the same over the focused window's snap cluster.\n  Control-Option-Equals / Control-Option-Minus: zoom in / out. Control-Option-0 or Control-Option-Z: zoom 1:1.\n  Control-Option-Command-arrows: pan the view under the pointer. Control-Option-Shift-arrows: nudge the focused window.\n  Control-Option-1 to 4: fly to bookmark 1 to 4. Control-Option-Shift-1 to 4: set it.\n  Window navigation flies the camera and focuses the window, natively when Infinify has Accessibility access:\n  Option-Tab / Option-Shift-Tab: cycle windows, most recently focused first; letting go of Option commits the choice.\n  Control-Option-arrows: the nearest window in that direction. Control-Option-C: center the focused window. Control-Option-X: center the window under the pointer.\n  A click on a window gives it canvas focus and starts its native focus, then the click is forwarded; a click on empty canvas unfocuses. Focusing a canvas window in its own application is followed.\n  Pointer motion over a window is delivered to its application; with focus_follows_mouse = true it also focuses that window without raising it, a screen-pinned one before the canvas beneath it and never a widget.\n  Below [zoom] interact_min (off by default) a window on the canvas is one target: a click flies to it, a drag moves it, and no click, scroll or motion reaches its application. A screen-pinned window and a widget are not picked and keep their pointer.\n  Control-Option-Command-drag: center-nearest by pointer, DriftWM's swipe; the direction is taken 16 points from the press.\n  Control-Option-Return: exec-terminal ($TERMINAL, else a new Terminal window). Control-Option-D: exec-launcher ($LAUNCHER, else Apps).\n  Control-Option-Shift-Command-arrows: send-to-output, the focused window to the display on that side (a world move; nothing with one display).\n  The default Control-Option-L lock binding and default volume, brightness, media and screenshot program bindings are left to macOS; their Linux commands are never substituted or started.\n  macOS's Lock Screen and screenshot shortcuts stay available. Explicit config bindings still run exactly as authored.\n  Control-Option-Q: close-window. The focused window's own close button is pressed through Accessibility; a focused placeholder is dismissed.\nThe fixture modes (--demo*) read no config and keep Option-drag pan, Command-wheel and pinch zoom and Control-Option-drag move; they take no trackpad touches. They keep their toolbar strip, status line and chooser, and their Resize status button explains unavailable native layout resizing.\nAn unbound click, drag or scroll on a window (left, right or middle button) is forwarded only to its selected, freshly validated source.\nNative keyboard/IME remain with the real app. Control-Option-Escape (until a binding takes that chord), Control-Option-Command-Shift-Q (quit), msg action quit or SIGTERM ends the run with exit status 0 and returns the native desktop: fullscreens ended, scene saved, panels closed, capture stopped, hot keys released.\nNo SIP/settings changes.");return 0;}
     BOOL child=argc==5&&!strcmp(argv[1],"--source"),demo=argc==3&&!strcmp(argv[1],"--demo"),guard=argc==3&&!strcmp(argv[1],"--demo-probe-guard"),probe=argc==3&&!strcmp(argv[1],"--demo-probe"),state=argc==3&&!strcmp(argv[1],"--state");
     if(argc!=1&&!child&&!demo&&!probe&&!guard&&!state)return 64;
     if((windowed||socket||config||chord||logical||manual)&&(child||demo||probe||guard))return 64;

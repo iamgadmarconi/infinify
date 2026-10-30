@@ -132,6 +132,12 @@ bool DWNativeClipPlacement(CGRect native,CGRect rootNative,CGRect rootScreen,CGR
 // per-window release record. It remains queued until acknowledged; other bound
 // windows keep their placements. Every admitted helper must support this contract.
 - (void)unbound:(NSDictionary *)identity;
+// A window this shell will not manage (never bound, or about to be refused). The helper's arrival veil
+// holds each window an application opens invisible until a frame places it, so a window nothing
+// places would wait for the helper's own bound (1 s); this queues a release record for it instead,
+// and the next -submit lets it appear. Idempotent, best effort, no-op for a window the helper holds
+// nothing of, for a bound window and for a helper without the veil. Main thread.
+- (void)declineWindow:(NSDictionary *)identity;
 // Temporarily omit this exact root and every bound family member from frames
 // while its application owns a native Fill animation. Originals stay journaled;
 // unbind/finish still restore them. No placement receipt is eligible while held.
