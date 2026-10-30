@@ -234,6 +234,27 @@ recomputed. A row whose old note called a value upstream's default may do so for
 source index, not an oracle; a new row is a coverage obligation, not a claim that
 its edge cases are enumerated.
 
+## 2026-10-30 drag and drop in compositor mode
+
+`protocol.data_device` and `platform.dnd` moved from `missing` to `implemented_unverified` (inventory counts now 471 / 72 /
+83 for `implemented_unverified` / `missing` / `out_of_scope`; the tables above and below are older snapshots and were not
+recomputed). Nothing was implemented for it: in compositor mode (the full-desktop Dock helper) a drag between application
+windows is macOS's own session, and what was missing was knowing whether it works while the helper draws windows away from
+their native frames. In the macOS 27.0.1 guests, with real HID events and independent reads, it does for the cases measured:
+drops of a file, a text selection, a link and an image onto TextEdit, a file onto a Finder list row, between two disposable
+AppKit fixtures, at zoom 1, 0.75 and 0.5, landed under the pointer with the destination's own window-local point equal to the
+point computed from the drawn rectangle (0 to 1 point), a drop outside the drawn rectangle delivered nothing, a file
+released over bare canvas did nothing, and the taps left every press, drag and release of a content drag to the application.
+
+One limit was found and not fixed: a press within the title/toolbar band of a window (28 to 89 points, in DRAWN points)
+begins WindowServer's window drag, so at zoom below 1 the top band/zoom native points of a window cannot start a drag; the
+takeover turns it into a canvas move and no payload is delivered. An unreproduced stuck TextEdit drag session and the helper's
+restore of three takeover-moved windows to their original native origin are recorded in
+[NATIVE-DRAG-ROUTING.md](../../native/desktop/NATIVE-DRAG-ROUTING.md#compositor-mode-dock-helper-drag-and-drop-measured-on-2026-10-30).
+File promises, Mail or Photos sources, a second display, a physical pointer and the capture/replica desktop (where no drag
+session can reach a picture) are not covered, so neither row is `verified`. `tests/e2e/compositor-dnd.sh --live-guest`
+repeats the fixture measurements; it prints `LIVE NOT RUN` without the flag.
+
 ## 2026-10-12 whole-desktop native admission
 
 The owner authorized overnight benchmarks and tests on 2026-10-12. Disposable
@@ -2715,12 +2736,16 @@ view decision):
   preserve the selected display-pin policy and application-owned panel focus.
 - Finish raw multi-finger gesture delivery over application windows and verify
   the physical magnify path. Normal-run sizing/fullscreen dispatch is implemented.
-- Implement drag-and-drop across captured views and application-requested pointer
+- Implement drag-and-drop across captured views (compositor mode passes native drags between
+  transformed windows, measured 2026-10-30, apart from presses in a window's top band at zoom
+  below 1) and application-requested pointer
   lock/confinement. Implicit mouse capture, relative delta conversion and tablet
   payload forwarding are partially implemented; physical delivery
   and replica cursor images remain open. Tablet display mapping is excluded.
-  These are three missing rows because drag-and-drop is
-  represented by both `protocol.data_device` and `platform.dnd`.
+  These were three missing rows because drag-and-drop is
+  represented by both `protocol.data_device` and `platform.dnd`; those two moved to
+  `implemented_unverified` on 2026-10-30 for compositor mode, and the capture/replica
+  path stays unimplemented.
 - Complete panel/overlay compatibility (`protocol.layer_shell`) and the target
   platform acceptance pass (`platform.acceptance`). The two remaining brightness
   gesture examples name Linux commands; the owner uses macOS brightness controls,

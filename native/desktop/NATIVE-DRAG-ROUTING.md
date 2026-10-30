@@ -1,5 +1,11 @@
 # Native drag routing
 
+Two presentation modes matter here. In compositor mode (the full-desktop Dock helper, the shipping mode) every application
+window stays a real native window that the helper only draws away from its native frame, so macOS itself carries every drag
+between application windows; the section [Compositor mode](#compositor-mode-dock-helper-drag-and-drop-measured-on-2026-10-30)
+at the end records what was measured there and the one limit found. The rest of this document is about the capture/replica
+desktop, where the canvas shows pictures of windows and no drag session can reach a picture.
+
 The capture desktop currently forwards mouse packets into the selected native
 recipient. That is enough to route a button press, but it is not a foreign
 AppKit drag-and-drop session bridge. A destination in another application must
@@ -25,7 +31,9 @@ beginning through completion, with no Infinify pasteboard receiver or data
 substitute. WindowServer owns the transformed destination's hit testing and
 window-local conversion. Whether all third-party destinations correctly accept
 that conversion under the helper's transform remains a runtime acceptance
-requirement; compilation and transform readback cannot establish it.
+requirement; compilation and transform readback cannot establish it. For the
+applications and zooms listed in the last section it was observed to hold, with
+one limit at the top edge of a scaled window.
 
 An extra display's captured replica has no second real native destination.
 Simply making its panel transparent or hiding it would reveal whichever native
@@ -330,3 +338,108 @@ The production hover handoff requires actual fresh replica pixels. The old
 down-triggered observation probe has been retired. Neither these diagnostics nor
 successful capture startup validates a replica handoff or a captured-source drag
 session.
+
+## Compositor mode (Dock helper): drag and drop measured on 2026-10-30
+
+Everything in this section was observed in the disposable macOS 27.0.1 (26A434) UTM guests (SIP off, tiling and Stage
+Manager as the owner's), with Infinify in compositor mode (`Infinify native-desktop`, `INFINIFY_DEBUG=1`) from the lane's
+build, which changes no native source. Input was real HID events posted at `kCGHIDEventTap` by a small CGEvent program;
+reads were `SLSGetWindowBounds`, `SLSGetWindowTransform`, the window list, `msg state`, the applications' own text and the
+file system. No claim is made beyond the applications, points and zooms below; nothing here is `verified`.
+
+**What is established: destinations honour the transforms.** A window the helper draws away from its native frame (native
+rectangle and drawn rectangle differed by hundreds of points at every zoom, with transform scale 1, 1.33 and 2 at
+zoom 1, 0.75 and 0.5) is the destination WindowServer picks for a drag when the pointer is over the DRAWN window, and the
+destination's own `NSDraggingInfo.draggingLocation` is the window-local point of the drawn window, not of its native frame:
+
+| Case (source, destination) | Zoom | Result |
+|---|---|---|
+| two disposable AppKit fixtures (`native/fixture/native-dnd-probe.m`), file URL, 6 drops on 2 points | 1, 0.75, 0.5 | `draggingLocation` equals the `mouseDown` location the same window reported for an ordinary click at the same screen point (difference 0 in all 6) and the point computed from the drawn rectangle (0 at 1 and 0.5; 0.7 point in y at 0.75, one rounding step of the 1.33 scale) |
+| Finder file icon, TextEdit rich-text document (12 lines of 28 pt) | 1, 0.75, 0.5 | the file attachment was inserted on the line under the pointer (line 7 of 12) in all three |
+| TextEdit selected word, other TextEdit window | 1, 0.5 | inserted at the line and character under the pointer (between `L05 ` and `word5`) |
+| Safari image, TextEdit | 1, 0.5 | attachment inserted on line 7 |
+| Safari link, TextEdit | 1, 0.75 | inserted on line 7 (as the link text at 1, as an attachment at 0.75; which flavour TextEdit takes is not a coordinate matter) |
+| Chrome link, TextEdit | 1, 0.5 | link text inserted on line 7 |
+| Finder file icon, Finder list view, pointer on a folder row's name | 1 | the file arrived in that row's folder `c` (`dst/c/file-one.txt`), not in the window's own folder |
+| Finder file icon, bare canvas | 1, 0.5 | the Finder session ran and ended with nothing dropped; the file stayed in the source folder |
+
+Where AppKit's own conversion from the window's native frame (`-[NSWindow convertPointToScreen:]`) was asked for the same
+drop, it was hundreds of points from the pointer (916,443 against 908,649 at zoom 0.5): the destinations are correct because
+WindowServer hands them window-local points computed through the transform, so nothing in Infinify translates or needs to
+translate a drop. No native origin has to be moved under the drawn window and no window has to be presented at identity
+scale during a session; neither was implemented.
+
+**The drag image** is a full-display window at layer 500 owned by the SOURCE application, never transformed by the helper.
+It follows the pointer in screen space at the size its application draws: the fixture's 120 by 60 point image stayed centred
+on the pointer at zoom 0.5, Safari's image drag showed the page image at the size it is drawn in the scaled window (about
+half of its 240 by 160 native points). The source's layer-500 window was gone one second after every release. In the harness
+runs the DESTINATION fixture also owned a layer-500 window while the pointer was over its top half (which is its own drag-source
+area) and still one second after the two drops there, never after a drop on its lower half; the source had logged
+`endedAtPoint:` and the window was gone before the next drag started. Why is not known, and no real application showed it.
+
+**What the taps do.** For each completed drag of the matrix (dozens of runs, fixtures and applications) the debug log has one `native mouse owner window=#N begin buttons=1`
+and one `end=unchanged native click` for the SOURCE window: the press, every drag packet and the release reached the
+application untouched (the tap only records an unclaimed native pair and withholds that window from helper frames until the
+release settles, as before), and no takeover happened except for the band presses below. The source's `endedAtPoint:`
+arrived in every fixture run, and the destination fixture's complete callback sequence (entered, updated, prepare, perform,
+conclude) in every drop.
+
+**The limit: a press near the top edge of a scaled window is a window drag.** WindowServer starts its own window drag for a
+left press whose distance from the window's top edge is inside the title/toolbar band measured in DRAWN points, whatever the
+application would do with the point. At zoom z that band covers the top band/z native points of the window, so at zoom 0.5 a
+file icon in the first rows of a Finder window, a link near the top of a Safari page or a fixture press 40 points below the
+window top is not a drag source: the native frame moves, the application also sees the press (the fixture's
+`beginDraggingSession` ran), and `-[Desktop takeOverNativeDrag:event:]` ends WindowServer's drag with its tagged release,
+which also ends the application's session before it can drop. The window then moves with the pointer under canvas control
+(no jump), exactly as for a title press; no payload is delivered.
+
+| Window | Zoom | Press, native points below the top edge (drawn points) | Band (drawn) | Outcome |
+|---|---|---|---|---|
+| fixture, plain title bar | 0.5 | 40 (20) | 28 | window drag taken over, no drop |
+| fixture | 0.75 | 40 (30) | 28 | window drag taken over, no drop |
+| fixture | 0.5 | 70 (35) | 28 | dropped |
+| fixture | 1 | 40 (40) | 28 | dropped |
+| Finder (unified toolbar) | 0.5 | 72 (36), once | about 52 | window drag taken over |
+| Finder | 0.5 | 99 (50), 3 runs | about 52 | window drag taken over (3 of 3) |
+| Finder | 0.5 | 112 (56), 2 runs | about 52 | dropped (2 of 2) |
+| Finder | 0.5 | 122 (61) | about 52 | session, nothing to drop on (bare canvas) |
+| Finder | 1 | 72 (72), 99 (99) | about 52 | session |
+| Safari | 0.5 | 173 (87), the link | content starts at 89 | window drag taken over (3 of 3) |
+| Safari | 0.75 | 173 (130) | 89 | dropped |
+| Safari | 0.5 | 370 (185), the image | 89 | dropped |
+| Chrome | 0.5 | 170 (85), the link | content starts at about 87 | dropped (one run) |
+
+The 28 and 52 point bands are read from the same numbers and from screenshots, not from a WindowServer interface; that
+WindowServer rather than AppKit makes the decision is inferred, because the application's own press location was correct
+(a press at the same native point at zoom 1 starts its session). A fix needs either a WindowServer-level change of that
+band under a transform, or presenting the pressed window so the pointer's offset from its top edge is outside the band while
+the content point under the pointer is unchanged. The second has to be in place before the press, since the decision is made
+on it, so it means rescaling or moving a window under the pointer on hover; and rewriting the press location in the tap
+would make the application see a different content point. None of these was attempted.
+
+**One unreproduced stuck session.** Once, after a Finder takeover and with source and destination being the same overlapping
+TextEdit window, TextEdit's text drag session stayed up (its layer-500 window and its blocked Apple events) until a further
+mouse-up was posted. It did not recur in the other runs of the matrix, which all ended their sessions, and it is not
+explained.
+
+**After `quit-native`** in the first guest session, seven of ten windows were restored to alpha 1, scale 1 and translation
+equal to minus the native origin. The three whose native frame a takeover had moved (a fixture, Safari and a Finder window)
+were left with the translation of their ORIGINAL native origin instead, so each was drawn at its pre-takeover place while the
+application reported the moved frame (translation (-100,-118) against native (611,457), (-111,-155) against (617,471),
+(-100,-100) against (712,531)). Infinify's log had printed `native origin ... reconcile=basis_only` for those moves. This is
+consistent with the helper restoring an enrolled window from its journalled original after a rebase; it was not
+investigated, and it is not a drag-and-drop matter beyond the takeover being how those frames were moved. In the second
+session, which had no takeover of a live window, the one live window restored exactly.
+
+**Reproduce.** `tests/e2e/compositor-dnd.sh --live-guest pair|band|outside` builds the fixture and the HID tool, runs two
+fixture processes in a disposable guest reached through `DND_GSSH`/`DND_GSCP` while Infinify already runs there in compositor
+mode, and writes JSON evidence under `target/ipc/`. `pair` fails if a drop's window-local point differs by more than 1.5 points
+from its own click or from the drawn-rectangle point, or if a source session never ended; `band` fails if the two controls
+(press 70 points down at zoom 0.5, 40 points down at zoom 1) do not drop or are taken over, and only reports the two band
+cases; `outside` drops inside the destination's native rectangle but outside its drawn one at zoom 0.5 and fails if anything
+is delivered (a point at 838,186 with the native rectangle 760,118 520x452 and the drawn one 1048,512 260x227: no drop, the
+source's session ran). The last run of each (vm1, zoom 1 and 0.5 for `pair`) passed. Without the flag it prints `LIVE NOT RUN`. The real-application rows above
+were driven by the lane's own scripts (not committed) and are not reproduced by it. Not measured: file promises, Mail or
+Photos sources, drops onto Dock icons, a second display, tabs torn out of Safari or Chrome, spring-loaded folders, a physical
+trackpad or mouse, and the capture/replica desktop.
+

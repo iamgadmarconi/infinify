@@ -3183,6 +3183,33 @@ policy and geometry with substituted reads; they do not show that any applicatio
 Not run: Aside or any Electron window (Ghostty stands in for a refused title region), a second display, macOS Spaces, tiling
 on a real drag to a screen edge (the takeover prevents the native drag that tiling reads; no edge drag was posted), and a physical pointer.
 
+#### Dragging files, text, links and images between transformed windows (full-desktop Dock helper)
+
+Measured in the macOS 27.0.1 guests with real HID events (2026-10-30; the numbers, the table of applications and the
+reproduction are in [NATIVE-DRAG-ROUTING.md](NATIVE-DRAG-ROUTING.md#compositor-mode-dock-helper-drag-and-drop-measured-on-2026-10-30)).
+No source changed for it. A drag between two application windows is macOS's own session (the source application creates it,
+WindowServer carries it, the destination application accepts it); the helper only changes where the windows are drawn, and the
+session honours that:
+
+- **Destination.** The window under the pointer as DRAWN is the destination, and its `draggingLocation` is the window-local point
+  of the drawn window, so the drop lands under the pointer at zoom 1, 0.75 and 0.5: a Finder file onto TextEdit's seventh line,
+  a TextEdit word between two exact characters of another TextEdit window, Safari's image and link and Chrome's link onto the same
+  line, a Finder file onto a Finder list row's folder. Nothing converts or re-posts the drop; no native frame is moved under the
+  drawn window. A drop at a point inside the destination's native rectangle but outside its drawn one delivered nothing.
+- **Drag image.** A full-display layer-500 window of the source application, at the size the application draws and centred on
+  the pointer; the helper does not transform it.
+- **Canvas space.** A file released over bare canvas did nothing: the session ended, the file stayed where it was.
+- **The taps.** The press, drag packets and release of every drag in window content reached the application untouched
+  (`native mouse owner ... begin` then `end=unchanged native click`); only the withheld-window rule applied to the source.
+- **Limit.** A press whose distance from the window's top edge is inside the title/toolbar band in drawn points (about 28 for a
+  plain title bar, 52 for Finder's toolbar, 89 for Safari's toolbar and tabs) starts WindowServer's window drag. At zoom z that
+  band is the top band/z native points, so at zoom 0.5 the first rows of a Finder window or a link near the top of a Safari page
+  are not drag sources: the takeover above ends the system drag and the canvas moves the window instead, with no payload. Zoom 1
+  is unaffected, and so is any press below the band.
+
+Not measured: file promises, Mail or Photos sources, drops on Dock icons, a second display, spring-loaded folders, a physical
+pointing device, and the capture desktop. `tests/e2e/compositor-dnd.sh --live-guest pair|band|outside` repeats the fixture part.
+
 #### A root whose family cannot be read (the browser's main window "flashing")
 
 The owner's report (build `c49eae1`, Aside, a Chromium browser, compositor mode): the browser "randomly flashes", other applications do not.
