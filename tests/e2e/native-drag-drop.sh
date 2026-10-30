@@ -56,7 +56,7 @@ lineage['actual_executable_sha256'] = actual
 lineage['harness_sha256'] = {
     name: digest(root / name) for name in (
         'tests/e2e/native-drag-drop-driver.py', 'tests/e2e/png_pixels.py', 'tests/e2e/native-drag-drop.sh',
-        'native/fixture/native-drag-drop-host.m', 'target/privileged/payload-arm64.dylib')
+        'tests/native/app/CompositorMode/NativeDragDropFixture.m', 'target/privileged/payload-arm64.dylib')
 }
 (evidence / 'build-evidence.json').write_text(json.dumps(lineage, indent=2) + '\n')
 print('Candidate:', lineage['git_commit'], actual)
@@ -91,7 +91,7 @@ for role in source destination; do
 PLIST
 done
 xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror \
-  native/fixture/native-drag-drop-host.m -framework AppKit -o "$evidence/source/DragDropHost.app/Contents/MacOS/NativeDragDropFixture"
+  tests/native/app/CompositorMode/NativeDragDropFixture.m -framework AppKit -o "$evidence/source/DragDropHost.app/Contents/MacOS/NativeDragDropFixture"
 cp "$evidence/source/DragDropHost.app/Contents/MacOS/NativeDragDropFixture" \
   "$evidence/destination/DragDropHost.app/Contents/MacOS/NativeDragDropFixture"
 source_pid=

@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
-# The launch daemon's and the Dock reloader's decisions (native/privileged/loadd-request.m, native/desktop/dock-reload.m and the
+# The launch daemon's and the Dock reloader's decisions (native/dock-helper/Daemon/DWLoaddRequest.m, native/app/System/DWDockReloader.m and the
 # login-mode record): caller requirement, accepted and refused requests, artifact checks, Sunlight's crash guard, the remembered
 # pause, the reloader's transitions against a fake Dock, the staged-payload rule (the root-owned copy the Dock opens), and the
 # hardened-runtime rule for the caller, checked on real processes signed ad hoc with and without the flag and entitlements, with
@@ -11,12 +11,13 @@ cd "$(dirname "$0")/../.."
 test "$(uname -s)" = Darwin && test "$(uname -m)" = arm64
 task_dir=$(mktemp -d "${TMPDIR:-/tmp}/infinify-native-daemon.XXXXXX")
 trap 'rm -rf "$task_dir"' EXIT HUP INT TERM
-xcrun clang -arch arm64 -mmacosx-version-min=26.0 -O2 -fobjc-arc -Wall -Wextra -Werror -Inative/privileged \
-  native/privileged/loadd-request-regression.m native/privileged/loadd-request.m \
+native_includes='-Icrates/desktop/include -Inative/app -Inative/app/Desktop -Inative/app/Canvas -Inative/app/Windows -Inative/app/Input -Inative/app/CompositorMode -Inative/app/Navigation -Inative/app/System -Inative/app/Support -Inative/dock-helper/Client -Inative/dock-helper/Daemon -Inative/dock-helper/Loader -Inative/dock-helper/Payload'
+xcrun clang -arch arm64 -mmacosx-version-min=26.0 -O2 -fobjc-arc -Wall -Wextra -Werror $native_includes \
+  tests/native/dock-helper/Daemon/DWLoaddRequestTests.m native/dock-helper/Daemon/DWLoaddRequest.m \
   -framework Foundation -framework Security -o "$task_dir/loadd-request"
-xcrun clang -arch arm64 -mmacosx-version-min=26.0 -O2 -fobjc-arc -Wall -Wextra -Werror -Inative/privileged -Inative/desktop \
-  native/desktop/dock-reload-regression.m native/desktop/dock-reload.m native/desktop/native-desktop-cli.m native/desktop/loader-service.m \
-  native/desktop/login-item.m native/privileged/loadd-request.m \
+xcrun clang -arch arm64 -mmacosx-version-min=26.0 -O2 -fobjc-arc -Wall -Wextra -Werror $native_includes \
+  tests/native/app/System/DWDockReloaderTests.m native/app/System/DWDockReloader.m native/app/System/DWNativeDesktopCLI.m native/app/System/DWLoaderService.m \
+  native/app/System/DWLoginItem.m native/dock-helper/Daemon/DWLoaddRequest.m \
   -framework AppKit -framework ServiceManagement -framework Security -o "$task_dir/dock-reload"
 "$task_dir/loadd-request" ${1:+"$1"}
 "$task_dir/dock-reload"

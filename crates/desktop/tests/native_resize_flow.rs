@@ -451,7 +451,7 @@ fn second_commit_anchors_against_last_actual_size_and_save_while_settling() {
 
 #[test]
 fn adapter_outcome_flags_are_validated_atomically_for_reads_and_setters() {
-    // Enumerated from resize.m: resolve/readback failures versus setter paths.
+    // Enumerated from DWNativeResize.m: resolve/readback failures versus setter paths.
     // Bit order is (mutation_attempted, observed): FF, FT, TF, TT.
     for (outcome, read_flags, setter_flags) in [
         (

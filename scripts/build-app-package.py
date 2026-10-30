@@ -328,15 +328,15 @@ def copy_resources(root: Path, app: Path, privileged_dir: Path) -> None:
     if (os.environ.get("INFINIFY_SIGN_IDENTITY") or "-") != "-":
         launch_daemons = app / "Contents/Library/LaunchDaemons"
         launch_daemons.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(root / "native/privileged" / LAUNCH_DAEMON_PLIST, launch_daemons / LAUNCH_DAEMON_PLIST)
+        shutil.copy2(root / "native/dock-helper/Daemon" / LAUNCH_DAEMON_PLIST, launch_daemons / LAUNCH_DAEMON_PLIST)
     for source, destination in (
-        ("native/desktop/Info.plist", app / "Contents/Info.plist"),
-        ("native/desktop/YABAI-NOTICE.txt", resources / "YABAI-NOTICE.txt"),
-        ("native/desktop/SUNLIGHT-NOTICE.txt", resources / "SUNLIGHT-NOTICE.txt"),
+        ("native/app/Resources/Info.plist", app / "Contents/Info.plist"),
+        ("native/app/Resources/YABAI-NOTICE.txt", resources / "YABAI-NOTICE.txt"),
+        ("native/app/Resources/SUNLIGHT-NOTICE.txt", resources / "SUNLIGHT-NOTICE.txt"),
         ("LICENSE", resources / "LICENSE"),
         ("NOTICE", resources / "NOTICE"),
         (
-            "native/desktop/com.marengox.infinify.agent.plist",
+            "native/app/Resources/com.marengox.infinify.agent.plist",
             launch_agents / "com.marengox.infinify.agent.plist",
         ),
     ):

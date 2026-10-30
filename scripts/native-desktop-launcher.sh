@@ -85,7 +85,7 @@ native_valid_boot_uuid() {
 
 # The payload a recorded runtime's Dock opened, and the directory beside which its sidecar was written. Prints "DIRECTORY SHA256".
 # Loaded with sudo, it is the runtime's own private copy. Loaded through the launch daemon, it is the daemon's copy: root's file in
-# root's directory below directories only root writes, which the app (native/privileged/loadd-request.m) checks again, read-only,
+# root's directory below directories only root writes, which the app (native/dock-helper/Daemon/DWLoaddRequest.m) checks again, read-only,
 # against the same rule the loader enforced before it injected. No runtime of the login user is the Dock's payload path then.
 native_loaded_payload() {
   if [ -e "$1/payload-arm64e.dylib" ] || [ -L "$1/payload-arm64e.dylib" ]; then

@@ -81,7 +81,7 @@ cat > "$bundle/Contents/Info.plist" <<'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict><key>CFBundleIdentifier</key><string>org.infinify.scope-fixture</string><key>CFBundleName</key><string>ScopeFixture</string><key>CFBundleExecutable</key><string>ScopeFixture</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>
 PLIST
-xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror native/fixture/scope-fixture.m \
+xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror tests/native/app/Windows/ScopeFixture.m \
   -framework AppKit -framework WebKit -o "$bundle/Contents/MacOS/ScopeFixture"
 fixture=$bundle/Contents/MacOS/ScopeFixture
 start() { name=$1; title=$2; dx=$3; shift 3; mkdir "$evidence/$name"; "$fixture" "$evidence/$name" "$title" "$dx" 280 "$@" & fixtures="$fixtures $!"; }

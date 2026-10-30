@@ -12,4 +12,4 @@ esac
 ./scripts/build-privileged.sh
 [ "$live" = true ] || { echo 'LIVE NOT RUN: pass --live-owned-fixture to launch the disposable native fixture.'; exit 0; }
 # The protocol v2 server, on hosts containing only owned fixture windows.
-exec python3 native/privileged/fixture_test.py
+exec python3 tests/native/dock-helper/Payload/DWPayloadFixtureTests.py

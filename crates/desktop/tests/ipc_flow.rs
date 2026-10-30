@@ -1674,7 +1674,7 @@ fn screenshot_to_stdout_goes_through_a_private_file_the_client_reserved() {
                 return r#"{"Err":"capture refused"}"#.to_owned();
             }
             // The app writes beside the target and renames it into place, as
-            // screenshot-writer.m does; the client reads that, not the reply.
+            // DWScreenshotWriter.m does; the client reads that, not the reply.
             let temporary = file.with_file_name(".written.tmp");
             std::fs::write(&temporary, b"infinify-test-png\n").unwrap();
             std::fs::rename(&temporary, &file).unwrap();

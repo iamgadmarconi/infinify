@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Native presentation (`--native-helper`) end to end, against the cooperative host of native/privileged: an ordinary process of
+# Native presentation (`--native-helper`) end to end, against the cooperative host of native/dock-helper: an ordinary process of
 # this test's that owns three windows and carries the transform helper, which moves and scales that process's own windows and
 # no other. Infinify is started scoped to the host (`--only-pid`) and pointed at the host's helper; it manages the host's windows
 # and has the window server draw them where the canvas places them.
@@ -151,7 +151,7 @@ def state(): return ask('State')['Ok']['State']
 def trace(): return errlog.read_text(errors='replace').splitlines()
 def native(): return ask({'DebugNative': {}})['Ok']['DebugNative']
 
-# The window server, asked from this process. As native/privileged/fixture_test.py asks it.
+# The window server, asked from this process. As tests/native/dock-helper/Payload/DWPayloadFixtureTests.py asks it.
 class Point(C.Structure): _fields_ = [('x', C.c_double), ('y', C.c_double)]
 class Size(C.Structure): _fields_ = [('width', C.c_double), ('height', C.c_double)]
 class Rect(C.Structure): _fields_ = [('origin', Point), ('size', Size)]

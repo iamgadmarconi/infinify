@@ -152,6 +152,7 @@ compositor mode does to windows, popups and drags is in
 | `docs/parity` | the parity contract |
 
 ```sh
+./scripts/check.sh                               # full suite, on request: fmt, clippy, tests, build, packaging, e2e
 ./scripts/build-app.sh                           # app bundle in target/app
 cargo fmt --check
 cargo clippy -p driftwm-core -p driftwm-canvas -p driftwm-desktop --all-targets --locked -- -D warnings

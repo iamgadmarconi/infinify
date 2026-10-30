@@ -6,8 +6,9 @@ cd "$(dirname "$0")/../.."
 test "$(uname -s)" = Darwin && test "$(uname -m)" = arm64
 task_dir=$(mktemp -d "${TMPDIR:-/tmp}/infinify-view-transfer.XXXXXX")
 trap 'rm -rf "$task_dir"' EXIT HUP INT TERM
-xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror \
-  -I native/privileged native/desktop/native-views.m native/desktop/native-views-regression.m \
+native_includes='-Icrates/desktop/include -Inative/app -Inative/app/Desktop -Inative/app/Canvas -Inative/app/Windows -Inative/app/Input -Inative/app/CompositorMode -Inative/app/Navigation -Inative/app/System -Inative/app/Support -Inative/dock-helper/Client -Inative/dock-helper/Daemon -Inative/dock-helper/Loader -Inative/dock-helper/Payload'
+xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror $native_includes \
+  native/app/CompositorMode/DWNativeViews.m tests/native/app/CompositorMode/DWNativeViewsTests.m \
   -framework AppKit -framework ApplicationServices -framework Security \
   -o "$task_dir/native-view-transfer"
 "$task_dir/native-view-transfer"

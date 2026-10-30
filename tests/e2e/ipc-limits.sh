@@ -8,9 +8,10 @@ cd "$(dirname "$0")/../.."
 test "$(uname -s)" = Darwin && test "$(uname -m)" = arm64
 cargo build -p driftwm-desktop --release
 mkdir -p target/screenshot-write
-xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror \
-  -Icrates/desktop/include native/desktop/screenshot-write-regression.m \
-  native/desktop/screenshot-writer.m native/desktop/ipc-server.m \
+native_includes='-Icrates/desktop/include -Inative/app -Inative/app/Desktop -Inative/app/Canvas -Inative/app/Windows -Inative/app/Input -Inative/app/CompositorMode -Inative/app/Navigation -Inative/app/System -Inative/app/Support -Inative/dock-helper/Client -Inative/dock-helper/Daemon -Inative/dock-helper/Loader -Inative/dock-helper/Payload'
+xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror $native_includes \
+  tests/native/app/System/DWScreenshotWriterTests.m \
+  native/app/System/DWScreenshotWriter.m native/app/System/DWIPCServer.m \
   target/release/libdriftwm_desktop.a -framework Foundation -framework CoreGraphics \
   -framework ImageIO -framework Security -framework SystemConfiguration \
   -o target/screenshot-write/regression

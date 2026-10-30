@@ -7,8 +7,9 @@ test "$(uname -s)" = Darwin && test "$(uname -m)" = arm64
 cargo build -p driftwm-desktop --release
 task_dir=$(mktemp -d "${TMPDIR:-/tmp}/infinify-controller-hit.XXXXXX")
 trap 'rm -rf "$task_dir"' EXIT HUP INT TERM
-xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror \
-  -Icrates/desktop/include -Inative/desktop native/desktop/controller-hit-regression.m \
+native_includes='-Icrates/desktop/include -Inative/app -Inative/app/Desktop -Inative/app/Canvas -Inative/app/Windows -Inative/app/Input -Inative/app/CompositorMode -Inative/app/Navigation -Inative/app/System -Inative/app/Support -Inative/dock-helper/Client -Inative/dock-helper/Daemon -Inative/dock-helper/Loader -Inative/dock-helper/Payload'
+xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror $native_includes \
+  tests/native/app/CompositorMode/DWControllerHitTests.m \
   target/release/libdriftwm_desktop.a -framework Foundation -framework CoreGraphics -framework CoreMedia -framework CoreVideo -framework ScreenCaptureKit -framework Security -framework SystemConfiguration \
   -o "$task_dir/controller-hit"
 "$task_dir/controller-hit"

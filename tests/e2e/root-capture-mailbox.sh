@@ -11,7 +11,7 @@ python3 - "$task_dir" <<'PY'
 from pathlib import Path
 import sys
 
-source = Path("native/desktop/main.m").read_text()
+source = Path("native/app/main.m").read_text()
 output = Path(sys.argv[1])
 for marker, name in (
     ("@interface DWRootCaptureMailbox :", "root-capture-mailbox-interface.inc"),
@@ -28,7 +28,7 @@ end = source.index("\n- (BOOL)installPixels:(CVPixelBufferRef)pixels {", start)
 start = source.index("static BOOL DWRootCaptureCrop(")
 end = source.index("\n}\n", start) + len("\n}\n")
 (output / "root-capture-crop.inc").write_text(source[start:end])
-transition = Path("native/desktop/native-transition.m").read_text()
+transition = Path("native/app/CompositorMode/DWNativeTransition.m").read_text()
 geometry = []
 for marker in ("static BOOL validRect(", "static BOOL roundedEdgesMatch(", "static BOOL captureImageGeometry("):
     start = transition.index(marker)
@@ -64,14 +64,15 @@ def method(marker):
     "- (BOOL)nativeFillCurrent:", "- (NSDictionary *)nativeFillBackground:",
 )))
 PY
-xcrun clang -arch arm64 -mmacosx-version-min=26.0 -O2 -fobjc-arc -Wall -Wextra -Werror \
-  -I"$task_dir" native/desktop/root-capture-mailbox-regression.m \
+native_includes='-Icrates/desktop/include -Inative/app -Inative/app/Desktop -Inative/app/Canvas -Inative/app/Windows -Inative/app/Input -Inative/app/CompositorMode -Inative/app/Navigation -Inative/app/System -Inative/app/Support -Inative/dock-helper/Client -Inative/dock-helper/Daemon -Inative/dock-helper/Loader -Inative/dock-helper/Payload'
+xcrun clang -arch arm64 -mmacosx-version-min=26.0 -O2 -fobjc-arc -Wall -Wextra -Werror $native_includes \
+  -I"$task_dir" tests/native/app/Desktop/DWRootCaptureMailboxTests.m \
   -framework Foundation -framework ScreenCaptureKit -framework CoreMedia -framework CoreVideo -framework CoreGraphics \
   -o "$task_dir/root-capture-mailbox"
 "$task_dir/root-capture-mailbox"
-xcrun clang -arch arm64 -mmacosx-version-min=26.0 -O2 -fobjc-arc -Wall -Wextra -Werror \
-  -I"$task_dir" native/desktop/captured-input-regression.m \
-  native/desktop/native-pointer-grab.m native/desktop/native-tablet.m native/desktop/hotkeys.m \
+xcrun clang -arch arm64 -mmacosx-version-min=26.0 -O2 -fobjc-arc -Wall -Wextra -Werror $native_includes \
+  -I"$task_dir" tests/native/app/Desktop/DesktopCapturedInputTests.m \
+  native/app/CompositorMode/DWNativePointerGrab.m native/app/CompositorMode/DWNativeTabletRouter.m native/app/Input/DWHotKeys.m \
   -framework AppKit -framework Carbon -framework ScreenCaptureKit -framework CoreMedia -framework CoreVideo -framework QuartzCore \
   -o "$task_dir/captured-input"
 "$task_dir/captured-input"

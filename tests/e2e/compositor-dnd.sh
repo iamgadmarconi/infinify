@@ -31,7 +31,7 @@ mkdir -p "$root/target/ipc"
 evidence=$(mktemp -d "$root/target/ipc/compositor-dnd.XXXXXX")
 printf 'Evidence: %s\n' "$evidence"
 xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror \
-  native/fixture/native-dnd-probe.m -framework AppKit -framework QuartzCore -o "$evidence/compositor-dnd-probe"
+  tests/native/app/CompositorMode/CompositorDnDFixture.m -framework AppKit -framework QuartzCore -o "$evidence/compositor-dnd-probe"
 xcrun clang -arch arm64 -mmacosx-version-min=26.0 -O1 -Wall -Wextra -Werror \
   tests/e2e/compositor-dnd-hid.c -framework ApplicationServices -framework CoreFoundation -o "$evidence/compositor-dnd-hid"
 codesign -s - -f "$evidence/compositor-dnd-probe" "$evidence/compositor-dnd-hid" >/dev/null 2>&1

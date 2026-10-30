@@ -25,7 +25,7 @@ export_images = sys.argv[1:] == ['--live-owned-export']
 if sys.argv[1:] != ['--live-owned-fixture'] and not export_images:
     print('LIVE NOT RUN: pass --live-owned-fixture or --live-owned-export for the disposable popup/sheet scenario.')
     raise SystemExit(0 if len(sys.argv) == 1 else 2)
-spec = importlib.util.spec_from_file_location('owned_helper', ROOT / 'native/privileged/fixture_test.py')
+spec = importlib.util.spec_from_file_location('owned_helper', ROOT / 'tests/native/dock-helper/Payload/DWPayloadFixtureTests.py')
 owned = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(owned)
 APP = ROOT / 'target/app/Infinify.app/Contents/MacOS/Infinify'

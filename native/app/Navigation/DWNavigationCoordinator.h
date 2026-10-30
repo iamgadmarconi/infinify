@@ -1,0 +1,69 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#import <Foundation/Foundation.h>
+typedef NSDictionary *(^DWCommand)(NSDictionary *);
+typedef void (^DWJob)(void);
+typedef void (^DWSchedule)(DWJob);
+typedef BOOL (^DWGuard)(void);
+// A worker-only read may associate an observed child with a logical root's
+// exact {window, identity, generation} binding. nil leaves ordinary focus alone.
+typedef NSDictionary *(^DWObservedBinding)(NSDictionary *observed);
+// Drivers return an exact independently observed identity, or nil (unknown).
+@protocol DWNavigationDriver <NSObject>
+- (DWGuard)authorization:(NSDictionary *)identity;
+- (BOOL)select:(NSDictionary *)identity guard:(DWGuard)guard;
+- (NSDictionary *)observe;
+@end
+// Performs the controller's focus requests through the driver, follows native focus
+// the user moved themselves, keeps a held cycle open until its modifiers are let go,
+// and ticks camera flights. Main thread only; the driver runs on `worker`.
+@interface DWNavigationCoordinator : NSObject
+- (instancetype)initWithCommand:(DWCommand)command driver:(id<DWNavigationDriver>)driver clock:(uint64_t (^)(void))clock worker:(DWSchedule)worker main:(DWSchedule)main;
+@property BOOL enabled;
+// NO keeps focus logical: every request is answered focus_logical, which claims nothing
+// about native focus and lets the window into the cycle order, and the driver is never asked.
+@property BOOL focusAllowed;
+@property (copy) DWJob changed;
+@property (copy) DWJob settled;
+// The active output, for the camera to follow native focus on; unset or nil sends null.
+@property (copy) NSNumber *(^output)(void);
+// Called on main before an observation to capture immutable native root
+// bindings; its returned block runs on the worker and must only read native state.
+@property (copy) DWObservedBinding (^observationBinding)(void);
+// The focus request of any controller reply — "effect", or the focus_native_window
+// entry of "effects" — goes to the driver and its result back as focus_result, or with
+// focusAllowed NO is answered focus_logical at once. A reply without one withdraws work
+// in flight only if the controller has dropped that request.
+- (void)perform:(NSDictionary *)reply;
+// An attach placed behind Fill, or explicitly suppressed by a post-launch
+// focus_on_open=false rule, may still activate natively. Correct that first
+// root activation once; quiet rules require a previously confirmed live focus.
+- (void)preserveBackgroundArrival:(NSDictionary *)reply;
+- (void)cancelBackgroundArrival;
+// One command and -perform: of its reply; nil when the controller refused it.
+- (NSDictionary *)navigate:(NSDictionary *)command;
+// Hold-to-commit. -hold: opens it with the modifiers that keep a cycle session open, as
+// any mask the caller also samples; -poll: takes the modifiers physically down now and
+// answers whether it is still open. The first poll without all of them ends the cycle.
+- (void)hold:(NSUInteger)modifiers;
+- (BOOL)poll:(NSUInteger)down;
+- (void)releaseCycle;
+- (void)interrupt; // unrelated input: -cancelFocus while a request is in flight, else nothing
+- (void)cancelFocus; // pending focus work and the held cycle; camera flights keep flying
+- (void)invalidate; // cancelFocus, and stops every camera flight
+- (void)shutdown;
+// Reads native focus on the worker and follows it: an activation with cause native when the user focused a window of the
+// canvas natively, focus_lost when focus left them. Called by the focus poll and at once by a focus event (DWWindowEvents.h);
+// what it reads is compared with what the controller already has, so a repeated call sends nothing. One read at a time: a
+// call during a read makes one more read follow it.
+- (void)observe;
+// Observation-only native root press. The shell pins a current binding/output;
+// no event is posted and no driver focus request is made. Actual focus readback
+// uses click policy, then a completed physical click may navigate on release.
+- (void)beginNativeClick:(NSDictionary *)binding output:(NSNumber *)output;
+- (void)endNativeClick:(NSDictionary *)binding completed:(BOOL)completed;
+- (void)cancelNativeClick;
+// Main-thread proof that geometry ownership ended and the unchanged native
+// placement is acknowledged. Missing hook is ready (non-native hosts).
+@property (copy) BOOL (^nativeClickReleaseReady)(NSDictionary *binding);
+- (BOOL)frame;
+@end

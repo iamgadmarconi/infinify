@@ -16,7 +16,7 @@ Pins: each derived file names the commit it was adapted at, either
 df3de27b26c7998e8a460cffd8a4925cbed3a322 (DriftWM v0.21.0, the baseline of
 crates/core) or 352333a8fa1b22171492d4b71a54102045c9a19d (the commit the first
 port started from). The files that name only 352333a8 are crates/canvas/src, the
-crates/desktop/src modules and the native/desktop files listed below that were
+crates/desktop/src modules and the native/app files listed below that were
 written at that port; crates/core/PORT.md records the hashes and deviations of
 crates/core.
 The GPL version 3 text in LICENSE is copied unchanged from the baseline.
@@ -24,7 +24,7 @@ The GPL version 3 text in LICENSE is copied unchanged from the baseline.
 This is a new Rust/Objective-C implementation informed by DriftWM's infinite
 canvas design. It does not compile or run the upstream Wayland/Smithay
 compositor on macOS. Files derived from DriftWM (each names the upstream
-repository, commit and path in its header or, in native/desktop, at the adapted
+repository, commit and path in its header or, in native/app, at the adapted
 block or section):
   crates/core/                  the pure modules: canvas, config, layout, the
                                 direction_from_vector gesture helper, platform
@@ -37,12 +37,19 @@ block or section):
                                 passthrough, pointer_policy, render,
                                 resize_transaction, rules, settings, sizes,
                                 storage, taps, view_actions, window_actions
-  native/desktop/               background, background-tiff, compositor,
-                                canvas-renderer, cycle-hold, frame-driver,
-                                hot-corners, hotkeys, input-sources, ipc-server,
-                                main, pan-launch, pointer-hover,
-                                screenshot-writer, tap-keys, trackpad-gestures,
-                                window-manager
+  native/app/main.m            the process entry point (and the Desktop/ files
+                                cut from the former main.m)
+  native/app/Canvas/            IFBackground.h, IFBackgroundProgram.m,
+                                IFBGTiffSource, IFCompositor.h,
+                                IFCompositorRenderer.m, DWCanvasRenderer,
+                                DWFrameDriver
+  native/app/Input/             DWCycleHold, DWHotCorners, DWHotKeys,
+                                DWInputSources, DWPointerHover, DWTapKeys,
+                                DWTrackpadGestures
+  native/app/System/            DWIPCServer, DWScreenshotWriter
+  native/app/Windows/           DWPanLaunch, DWWindowManager
+  (a file later cut into several keeps the original's provenance header in each
+  piece)
   crates/core/config.reference.toml and the two proptest seed files
   crates/core/proptest-regressions/layout/fill.txt and snap.txt are byte copies
   of the baseline files and crates/core/docs/window-rules.md is the baseline page with six relative links
@@ -56,32 +63,32 @@ Sunlight
 Upstream: https://github.com/spacefarm-digital/sunlight
 Commit: afeea74b18e70ca49bf462d6fe462cf65deb2b32
 Licence: MIT, Copyright (c) 2026 spacefarm. The licence text is
-native/desktop/SUNLIGHT-NOTICE.txt, which the app bundle carries beside this
+native/app/Resources/SUNLIGHT-NOTICE.txt, which the app bundle carries beside this
 file. Each adapted file names what it took. Files derived from Sunlight:
-  native/desktop/multitouch-source.m, dock-guard.m, dock-control.h and
-  trackpad-gestures.m adapt Sources/Canvas/TrackpadPan.swift: reading trackpad
+  native/app/Input/DWMultitouchSource.m, DWDockGuard.m, DWDockControl.h and
+  DWTrackpadGestures.m adapt Sources/Canvas/TrackpadPan.swift: reading trackpad
   contacts through MultitouchSupport, a session event tap that holds back
   Dock-control events, and the spread rule.
-  native/desktop/system-takeover.m translates, function by function,
+  native/app/System/DWSystemTakeover.m translates, function by function,
   Sources/Canvas/Takeover/SystemPrefs.swift and TakeoverMode.swift: snapshot the
   user's own preferences before the first write, an absent key restored as
   absent, restore on every end and from a leftover record at the next launch.
-  native/desktop/window-events.m and window-events.h adapt
+  native/app/Windows/DWWindowEvents.m and DWWindowEvents.h adapt
   Sources/Canvas/RealWindows/WindowServerEvents.swift (SkyLight's window-created
   event and its payload).
-  The arrival veil of native/privileged/payload.m adapts the same event
+  The arrival veil of native/dock-helper/Payload/DWPayload.m adapts the same event
   source and the aim of LiveWindows/osax/sunbeam.h that a new window is never
-  seen before it is placed (native/privileged/protocol.h carries its constants).
-  Compositor mode at login: native/privileged/loadd.m copies LiveWindows/helper.m
+  seen before it is placed (native/dock-helper/Client/DWHelperProtocol.h carries its constants).
+  Compositor mode at login: native/dock-helper/Daemon/Daemon.m copies LiveWindows/helper.m
   (the daemon, its XPC listener and caller requirement, with the edits its header
-  lists); native/privileged/loadd-request.m borrows the caller-requirement form;
-  native/desktop/loader-service.m and native/desktop/dock-reload.m (with
-  dock-reload.h and dock-reload-regression.m) translate
+  lists); native/dock-helper/Daemon/DWLoaddRequest.m borrows the caller-requirement form;
+  native/app/System/DWLoaderService.m and native/app/System/DWDockReloader.m (with
+  DWDockReloader.h and DWDockReloaderTests.m) translate
   Sources/Canvas/Setup/LiveWindowsService.swift,
   Sources/Canvas/RealWindows/AdditionReloader.swift (including DockCrashGuard) and
-  Tests/CanvasTests/AdditionReloaderTests.swift; native/privileged/com.marengox.infinify.loader.plist
+  Tests/CanvasTests/AdditionReloaderTests.swift; native/dock-helper/Daemon/com.marengox.infinify.loader.plist
   adapts Resources/LaunchDaemons/com.spacefarm.sunlight.live-windows.plist.
-  native/privileged/loader.m also cites Sunlight.
+  native/dock-helper/Loader/DWLoader.m also cites Sunlight.
 
 yabai
 -----
@@ -89,33 +96,33 @@ Upstream: https://github.com/asmvik/yabai (https://github.com/koekeishiya/yabai
 redirects to it). Commit: dd845723416f5fe92af49fad5ebab00369e07edd.
 Licence: MIT, Copyright (c) 2019 Åsmund Vikane. The licence text, with the
 provenance of the window-server query and the window-forward calls, is
-native/desktop/YABAI-NOTICE.txt, which the app bundle carries beside this file.
+native/app/Resources/YABAI-NOTICE.txt, which the app bundle carries beside this file.
 Each adapted file names the upstream paths it follows. Files derived from yabai:
-  native/privileged/loader.m is adapted from yabai and retains its MIT licence,
-  copyright and Jeremy Legendre arm64e attribution; payload.m
-  cites the same commit for the Dock-side calls. native/privileged/loadd.m reaches
+  native/dock-helper/Loader/DWLoader.m is adapted from yabai and retains its MIT licence,
+  copyright and Jeremy Legendre arm64e attribution; DWPayload.m
+  cites the same commit for the Dock-side calls. native/dock-helper/Daemon/Daemon.m reaches
   yabai's src/sa.m by way of Sunlight's LiveWindows/helper.m (see Sunlight above)
   and pins only the Sunlight commit.
-  native/desktop/window-events.m, window-events.h and the event handling of
-  native/desktop/window-manager.m (src/workspace.m, src/application.c,
+  native/app/Windows/DWWindowEvents.m, DWWindowEvents.h and the event handling of
+  native/app/Windows/DWWindowManager.m (src/workspace.m, src/application.c,
   src/application.h, src/window.c, src/window.h, src/event_loop.c,
   src/window_manager.c: which notifications an application and a window are
   observed with, and what each one means).
-  native/desktop/window-server-family.h (src/window.c:872-897,
+  native/app/CompositorMode/DWWindowServerFamily.h (src/window.c:872-897,
   src/misc/extern.h:9,66-72, src/window_manager.c:841-855), used by
-  native-family.m, native-display-space.m, native-placement-validation.m and
-  native-presenter.m.
-  native/focus/focus.m brings a window that is on another desktop forward with the
+  DWNativeFamily.m, DWNativeDisplaySpace.m, DWNativePlacementValidation.m and
+  DWNativePresenter.m.
+  native/app/Navigation/DWNativeFocus.m brings a window that is on another desktop forward with the
   calls and the event record of window_manager_focus_window_with_raise and
   window_manager_make_key_window (src/window_manager.c:1269-1335,
   src/misc/extern.h:81-82, src/window_manager.h:5).
-  native/resize/resize.m cites the same commit.
+  native/app/Navigation/DWNativeResize.m cites the same commit.
 
 iss
 ---
-native/desktop/dock-control.h adapts the DockSwipe field/type/phase decoding of
+native/app/Input/DWDockControl.h adapts the DockSwipe field/type/phase decoding of
 iss.c (lines 436-515) from https://github.com/joshuarli/iss at commit
-493b008f2ea8e9215877c39700e8ea3add800e97 (native/desktop/native-input.m cites it
+493b008f2ea8e9215877c39700e8ea3add800e97 (native/app/Input/DWNativeInput.m cites it
 too). ISC licence, Copyright (c) 2026 joshuarli:
 
   Permission to use, copy, modify, and/or distribute this software for any
@@ -130,7 +137,7 @@ too). ISC licence, Copyright (c) 2026 joshuarli:
 
 Cantrip
 -------
-native/desktop/main.m and native/desktop/native-replica-input.m reference the
+native/app/main.m and native/app/CompositorMode/DWNativeReplicaInput.m reference the
 per-window posting fields and signatures of https://github.com/ArcaneArts/Cantrip
 at commit 4da10af479701c8007074c65f9eb6a2db03c8ffc (macos/skylight.rs). No code
 is copied.

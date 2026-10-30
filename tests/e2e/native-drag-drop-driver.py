@@ -66,7 +66,7 @@ sky.SLSConnectionGetPID.restype = C.c_int
 sky.SLSFindWindowAndOwner.argtypes = [C.c_int, C.c_int, C.c_int, C.c_int,
     C.POINTER(Point), C.POINTER(Point), C.POINTER(C.c_uint32), C.POINTER(C.c_int)]
 sky.SLSFindWindowAndOwner.restype = C.c_int
-# Read-only family ABI of native/desktop/window-server-family.h;
+# Read-only family ABI of native/app/CompositorMode/DWWindowServerFamily.h;
 # yabai (https://github.com/asmvik/yabai) dd845723416f5fe92af49fad5ebab00369e07edd, extern.h:9,66-72.
 sky.SLSCopyAssociatedWindows.argtypes = [C.c_int, C.c_uint32]
 sky.SLSCopyAssociatedWindows.restype = C.c_void_p

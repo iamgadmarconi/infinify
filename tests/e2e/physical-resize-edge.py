@@ -314,7 +314,7 @@ def main():
     (bundle / 'Contents/MacOS').mkdir(parents=True)
     (bundle / 'Contents/Info.plist').write_text('''<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>org.infinify.physical-edge-fixture</string><key>CFBundleName</key><string>EdgeFixture</string><key>CFBundleExecutable</key><string>EdgeFixture</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>''')
     executable = bundle / 'Contents/MacOS/EdgeFixture'
-    subprocess.run(['xcrun', 'clang', '-arch', 'arm64', '-mmacosx-version-min=26.0', '-fobjc-arc', '-Wall', '-Wextra', '-Werror', str(ROOT / 'native/privileged/host.m'), '-framework', 'AppKit', '-o', str(executable)], check=True)
+    subprocess.run(['xcrun', 'clang', '-arch', 'arm64', '-mmacosx-version-min=26.0', '-fobjc-arc', '-Wall', '-Wextra', '-Werror', '-I', str(ROOT / 'native/dock-helper/Client'), str(ROOT / 'tests/native/dock-helper/Payload/HostFixture.m'), '-framework', 'AppKit', '-o', str(executable)], check=True)
     manifest = json.loads((ROOT / 'target/app/BUILD.json').read_text())
     owned.check(manifest.get('schema_version') == 1, 'delivery manifest uses schema 1')
     app_hash = hashlib.sha256(APP.read_bytes()).hexdigest()

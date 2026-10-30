@@ -6,8 +6,9 @@ cd "$(dirname "$0")/../.."
 test "$(uname -s)" = Darwin && test "$(uname -m)" = arm64
 task_dir=$(mktemp -d "${TMPDIR:-/tmp}/infinify-family-recovery.XXXXXX")
 trap 'rm -rf "$task_dir"' EXIT HUP INT TERM
-xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror \
-  -I native/privileged native/desktop/native-replica-family-regression.m \
+native_includes='-Icrates/desktop/include -Inative/app -Inative/app/Desktop -Inative/app/Canvas -Inative/app/Windows -Inative/app/Input -Inative/app/CompositorMode -Inative/app/Navigation -Inative/app/System -Inative/app/Support -Inative/dock-helper/Client -Inative/dock-helper/Daemon -Inative/dock-helper/Loader -Inative/dock-helper/Payload'
+xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror $native_includes \
+  tests/native/app/CompositorMode/DWNativeReplicaFamiliesTests.m \
   -framework AppKit -framework ApplicationServices -framework ScreenCaptureKit \
   -framework QuartzCore -framework CoreVideo -framework CoreMedia -o "$task_dir/native-family-recovery"
 INFINIFY_DEBUG_FAMILIES=1 "$task_dir/native-family-recovery" 2>"$task_dir/lifecycle.log" || { cat "$task_dir/lifecycle.log"; exit 1; }
