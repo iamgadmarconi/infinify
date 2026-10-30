@@ -43,6 +43,11 @@ static bool recoveryPermission(void) { check(NO,@"headless recovery must not que
 #define CGWindowListCopyWindowInfo recoveryWindows
 #define CGPreflightScreenCaptureAccess recoveryPermission
 #import "DWNativeReplicaFamilies.m"
+#import "DWNativeReplicaFamilies+Recovery.m"
+#import "DWNativeReplicaFamilies+Ordering.m"
+#import "DWReplicaMember.m"
+#import "DWReplicaRecovery.m"
+#import "DWReplicaOrder.m"
 #undef CACurrentMediaTime
 #undef dispatch_time
 #undef dispatch_after

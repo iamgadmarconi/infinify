@@ -7,7 +7,7 @@
 //   sha-256:    c2569a8d2db92dc3326238698c18b3c461dfc39835c4ae98d6b512856002dcd4 (upstream file)
 // Changes from upstream: this header, and `smithay::` paths read `crate::platform::`.
 // Nothing else.
-// See PORT.md in the crate root for the full change log.
+// See docs/crates/core/PORT.md for the full change log.
 
 use std::collections::HashMap;
 

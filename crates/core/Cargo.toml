@@ -3,7 +3,7 @@
 # NEW FILE, not ported from upstream. One self-contained package holding the
 # pure, compositor-independent parts of DriftWM
 # (https://github.com/malbiruk/driftwm at commit
-# df3de27b26c7998e8a460cffd8a4925cbed3a322, crate `driftwm` 0.21.0). See PORT.md.
+# df3de27b26c7998e8a460cffd8a4925cbed3a322, crate `driftwm` 0.21.0). See docs/crates/core/PORT.md.
 
 [package]
 name = "driftwm-core"

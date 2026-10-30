@@ -6,7 +6,7 @@
 //   path:       src/layout/fill.rs
 //   sha-256:    5f210f68f61c21606f8786b8751c8b36a232357d4ebdcda6e470868a4f1a16b3 (upstream file)
 // Changes from upstream: this header only; everything below is unmodified.
-// See PORT.md in the crate root for the full change log.
+// See docs/crates/core/PORT.md for the full change log.
 
 //! Geometry for `fill-window`: grow a window in place to fill the free space
 //! around it, stopping a gap short of neighboring windows and an outer-gap

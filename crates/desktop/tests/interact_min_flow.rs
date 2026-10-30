@@ -6,7 +6,7 @@
 //! (`hit`/`input`/`hover` `pick`, `mouse_binding`); these scenarios run the
 //! default configuration and the three event classes, press, drag and scroll,
 //! below and at or above the threshold. They are no evidence about what the
-//! Objective-C shell then does with a decision: see POINTER.md. Config files
+//! Objective-C shell then does with a decision: see docs/crates/desktop/POINTER.md. Config files
 //! are written to a throwaway directory; the default config path is never read.
 use driftwm_desktop::*;
 use serde_json::{Value, json};

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The snapshot/restore logic of DWSystemTakeover.m against an in-memory preferences store: no preference of the
 // user's, no WindowManager, no window and no input is touched. What it cannot show is that macOS follows the real
-// keys; the guest runs recorded in native/desktop/README.md ("Desktop mode") are that evidence.
+// keys; the guest runs recorded in docs/native/user-guide.md ("Desktop mode") are that evidence.
 #import <Foundation/Foundation.h>
 #import "DWSystemTakeover.h"
 #include <unistd.h>

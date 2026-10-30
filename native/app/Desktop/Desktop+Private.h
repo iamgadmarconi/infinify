@@ -5,31 +5,26 @@
 #import <AppKit/AppKit.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <Carbon/Carbon.h>
+#import "DWDebugTrace.h"
 #import "DWExportFrame.h"
 #import "DWOnboarding.h"
 #import "DWSessionWatch.h"
 #import "DWTypedValue.h"
 #import "DesktopView.h"
-#import "IFBackgroundProgram.h"
+#import "IFBackground.h"
 #import "LiveSource.h"
 #import "DWDesktopSupport.h"
 // DriftWM's pointer policy (DWPointerHover.h): every panel's view hosts one. DWPolicyPress is a view's
 // `gesture` while a press is the policy's: one in pick mode, or one bound to center-nearest.
 static const NSInteger DWPolicyPress=9;
-@interface Desktop ()
-@property BOOL hoverUndelivered; // --no-hover-forwarding: pointer motion never reaches an application
-@end
 // A normal run is the desktop, as DriftWM is the session: one panel per display covering all of it, on every Space, with
 // no strip, toolbar or status line. Only --manual opens a chooser.
 @interface Desktop () <NSApplicationDelegate>
 @property NSString *said; // the status note last written to stderr (-say:)
-@property DWOnboarding *onboarding; // the one window of a launch that cannot open its canvas yet
-@property BOOL relaunch; // that window's Relaunch: main() starts this run again once it has ended
 @property DWSessionWatch *session; // while the panels are open: wake, the session and the Space coming back (-returned)
 @property BOOL sessionInactive;
 @property BOOL sessionAwaitingCanvas; // preserve the loaded scene until an initially blocked launch opens its outputs
 @property BOOL desktopUp; // the desktop's canvas is open, on however many displays there are: with none there it has no panel and is still open
-- (void)say:(NSString *)note;
 @end
 // Explicit ivars: Desktop+Config.m takes these two by address (&_hotkeyHandler, &_exitHotkey); an ivar that
 // only auto-synthesis creates is invisible outside Desktop.m. The properties bind to them unchanged.
@@ -65,29 +60,48 @@ static inline BOOL sameInputTarget(NSDictionary *a,NSDictionary *b) {
     for(NSString *key in @[@"window",@"output",@"generation",@"identity"])if(![a[key]isEqual:b[key]])return NO;
     return [(a[@"root_identity"]?:a[@"identity"])isEqual:(b[@"root_identity"]?:b[@"identity"])]&&[a[@"native_member"]boolValue]==[b[@"native_member"]boolValue];
 }
+// Fresh session-stage title admission only. These diagnostics use values already
+// read by admission; they do not repeat native queries or change pair ownership.
+static inline BOOL DWNativeTitleRefused(BOOL early,const char *reason,NSNumber *window,CGWindowID wid,CGPoint point,NSDictionary *detail) {
+    if(early&&DWDebugTrace()){
+        NSData *data=detail?[NSJSONSerialization dataWithJSONObject:detail options:0 error:nil]:nil;
+        NSString *json=data?[[NSString alloc]initWithData:data encoding:NSUTF8StringEncoding]:nil;
+        fprintf(stderr,"debug: native title admission refused window=#%s wid=%u point=%g,%g reason=%s detail=%s\n",window.description.UTF8String?:"?",wid,point.x,point.y,reason,json.UTF8String?:"{}");
+    }
+    return NO;
+}
 // Desktop+Input.m
 @interface Desktop (Input)
 - (void)endLostInput;
+- (void)configureNativeInput;
+- (void)cancelNativeInput;
+- (BOOL)nativeInput:(CGEventType)type event:(CGEventRef)event;
+@end
+// Desktop+NativeMouse.m
+@interface Desktop (NativeMouse)
 - (void)nativeMouseOwnershipChanged:(CGEventRef)event buttons:(NSIndexSet *)buttons;
 - (void)updateNativeMouseOwners;
+- (LiveSource *)nativeSource:(CGWindowID)window at:(CGPoint)point;
+- (BOOL)takeOverNativeDrag:(LiveSource *)source event:(CGEventRef)event;
+- (void)finishNativeMouseOwner:(LiveSource *)source reason:(NSString *)reason;
+@end
+// Desktop+CapturedInput.m
+@interface Desktop (CapturedInput)
 - (BOOL)validateInputTarget:(NSDictionary *)target;
 - (BOOL)postInput:(CGEventRef)event target:(NSDictionary *)target local:(CGPoint)local;
 - (BOOL)forwardTabletTail:(CGEventRef)event;
 - (void)cancelCapturedInputForWindow:(NSNumber *)window;
 - (NSDictionary *)resolveCapturedPointer:(NSDictionary *)target screen:(CGPoint)screen;
 - (BOOL)forwardCapturedPointer:(CGEventRef)event screen:(CGPoint)screen;
-- (void)configureNativeInput;
-- (void)cancelNativeInput;
+- (void)deliverNative:(NSEvent *)event type:(CGEventType)type view:(DesktopView *)view at:(CGPoint)point;
+- (void)deliverNative:(NSEvent *)event type:(CGEventType)type view:(DesktopView *)view at:(CGPoint)point familyHit:(NSDictionary *)hit;
+@end
+// Desktop+NativeTitles.m
+@interface Desktop (NativeTitles)
 - (BOOL)earlyNativeTitle:(CGEventType)type event:(CGEventRef)event;
-- (BOOL)nativeInput:(CGEventType)type event:(CGEventRef)event;
-- (LiveSource *)nativeSource:(CGWindowID)window at:(CGPoint)point;
 - (void)refreshNativeButtons:(LiveSource *)source;
 - (BOOL)nativeGreen:(LiveSource *)source at:(CGPoint)point;
 - (BOOL)replicaGreen:(LiveSource *)source at:(CGPoint)point output:(NSNumber *)output;
-- (BOOL)takeOverNativeDrag:(LiveSource *)source event:(CGEventRef)event;
-- (void)finishNativeMouseOwner:(LiveSource *)source reason:(NSString *)reason;
-- (void)deliverNative:(NSEvent *)event type:(CGEventType)type view:(DesktopView *)view at:(CGPoint)point;
-- (void)deliverNative:(NSEvent *)event type:(CGEventType)type view:(DesktopView *)view at:(CGPoint)point familyHit:(NSDictionary *)hit;
 - (BOOL)pickMotionAt:(CGPoint)point window:(NSNumber *)root;
 @end
 // Desktop+Gestures.m
@@ -113,7 +127,6 @@ static inline BOOL sameInputTarget(NSDictionary *a,NSDictionary *b) {
 @interface Desktop (Navigation)
 - (void)configureResize;
 - (BOOL)sizing;
-- (void)resizeCapability;
 - (NSDictionary *)consumeSize:(NSDictionary *)reply;
 - (void)cancelNavigation;
 - (void)configureNavigation;
@@ -171,7 +184,6 @@ static inline BOOL sameInputTarget(NSDictionary *a,NSDictionary *b) {
 - (void)observeVisibility:(DWWindowObservation *)observation source:(LiveSource *)source;
 - (void)requestWindowObservation;
 - (void)forgetNativeFamily:(LiveSource *)source;
-- (void)showChooser:(id)sender;
 - (void)fillRebind:(BOOL)keep;
 - (void)attachChoice:(id)sender;
 - (void)grantAccess:(id)sender;
@@ -213,12 +225,7 @@ static inline BOOL sameInputTarget(NSDictionary *a,NSDictionary *b) {
 - (BOOL)nativeUnavailable;
 - (void)suspendPresentationLeavingSession:(BOOL)leaving;
 - (void)resumeNative;
-- (void)quit:(id)sender;
-- (void)openCanvas:(id)sender;
 - (void)takeOverWindowSettings;
-- (void)putBackWindowSettings;
-- (void)cleanup;
-- (void)onboard;
 - (void)refreshStageManager;
 - (void)leftSession;
 - (void)returned;
@@ -232,13 +239,10 @@ static inline BOOL sameInputTarget(NSDictionary *a,NSDictionary *b) {
 - (dispatch_block_t)standInEnter;
 - (dispatch_block_t)nativeWindowControlKey:(DWNativeWindowControl)action;
 - (void)updateStandInKeyboard:(NSDictionary *)snapshot;
-- (void)loadConfig:(BOOL)platform;
 - (NSDictionary *)mouseBinding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window;
 - (NSDictionary *)mouseBinding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window under:(NSNumber *)under pick:(BOOL)pick;
-- (BOOL)startIPC:(NSString *)path;
 - (void)watchCorners;
 - (void)publishState;
-- (void)runAutostart;
 - (NSString *)actionFeedback:(NSString *)action flight:(NSDictionary *)flight output:(NSNumber *)output;
 - (void)exec:(NSDictionary *)effect;
 - (void)reportLayout;

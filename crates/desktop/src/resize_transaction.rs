@@ -281,13 +281,13 @@ impl Controller {
     /// not wait for a frame between two steps. With native readback (sizes.rs) no
     /// capture exists to wait for at all, the baseline read adopts a size
     /// the window changed by itself, and every transaction ends in bounded
-    /// time: NATIVE_RESIZE.md.
+    /// time: docs/crates/desktop/NATIVE_RESIZE.md.
     ///
     /// `by_hand` is false for the two requests that are not a sizing by
     /// hand: the rule's `size` a window mapped with, which upstream
     /// configures for a widget and a rule-pinned window like any other
     /// (rules.rs), and a fullscreen exit, which hands a window its size back
-    /// after it has pinned it to its screen again (FULLSCREEN.md).
+    /// after it has pinned it to its screen again (docs/crates/desktop/FULLSCREEN.md).
     pub(crate) fn begin_sized_resize(
         &mut self,
         window: WindowId,

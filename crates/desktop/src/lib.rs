@@ -283,13 +283,13 @@ pub struct Controller {
     /// oldest first. Not saved.
     pending_screenshots: Vec<String>,
     /// Fit and fill restore points, the sizing action in flight and whether
-    /// the shell can deliver a size at all. Ephemeral. See SIZES.md.
+    /// the shell can deliver a size at all. Ephemeral. See docs/crates/desktop/SIZES.md.
     sizes: Sizes,
     /// The error bar's message and the window events the shell animates.
     /// Not saved.
     effects: Effects,
     /// Each output's fullscreen window with what its exit restores, and the
-    /// sizes exits still owe. Ephemeral. See FULLSCREEN.md.
+    /// sizes exits still owe. Ephemeral. See docs/crates/desktop/FULLSCREEN.md.
     fullscreen: Fullscreen,
 }
 
@@ -374,7 +374,7 @@ pub(crate) enum Command {
         result: NativeResizeResult,
     },
     /// Whether the shell performs native readback resize effects in this run.
-    /// False until startup announces it; never saved. See SIZES.md.
+    /// False until startup announces it; never saved. See docs/crates/desktop/SIZES.md.
     NativeResizeCapability {
         enabled: bool,
     },
@@ -485,7 +485,7 @@ pub(crate) enum Command {
     Bindings {},
     /// The finger counts a trackpad gesture can be bound to in this run, for
     /// the shell to hold the system's own gestures back for those and no
-    /// others. Read-only. See GESTURES.md.
+    /// others. Read-only. See docs/crates/desktop/GESTURES.md.
     GestureFingers {},
     /// Run the action bound to one hot corner of one output. `pointer` and
     /// `held` are as `action` takes them.
@@ -783,7 +783,7 @@ pub(crate) enum Command {
     },
     EndGesture {},
     /// A trackpad gesture as libinput reports one: it begins with a finger
-    /// count, where the pointer is and what is held. See GESTURES.md.
+    /// count, where the pointer is and what is held. See docs/crates/desktop/GESTURES.md.
     GestureBegin {
         kind: GestureKind,
         fingers: u32,

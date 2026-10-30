@@ -110,6 +110,13 @@ static void *fakeWindowServerSymbol(const char *name) {
 #define NSWorkspace EventWorkspace
 #define windowServerSymbol fakeWindowServerSymbol
 #import "DWWindowEvents.m"
+#import "DWWindowEvents+Applications.m"
+#import "DWWindowEvents+Observation.m"
+#import "DWApplicationWatch.m"
+#import "DWApplicationCatalogWatch.m"
+#import "DWApplicationMetadata.m"
+#import "DWObservedApplication.m"
+#import "DWObservedWindow.m"
 #undef dispatch_async
 #undef AXIsProcessTrusted
 #undef AXUIElementCreateApplication

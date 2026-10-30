@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Infinify canvas background renderer: the chunk layout of a tiled pyramidal
 // TIFF (IFBGTileLayout) and its per-output chunk cache (IFBGTileChunks) - see
-// IFBackgroundProgram.h, IFBGTiffSource.h and BACKGROUND-NOTES.md, section 17.
+// IFBackground.h, IFBGTiffSource.h and docs/native/app/Canvas/BACKGROUND-NOTES.md, section 17.
 //
 // Derived from DriftWM (GPL-3.0-or-later), https://github.com/malbiruk/driftwm @
 // 352333a8fa1b22171492d4b71a54102045c9a19d: src/render/tile_chunks.rs
@@ -14,7 +14,7 @@
 // reached through IFBGTiffWholeLevel.
 // Split from native/desktop/background.m at 37b27b1.
 
-#import "IFBackgroundProgram+Private.h"
+#import "IFBackground+Private.h"
 #import "IFBGTiffSource.h"
 
 #include <math.h>
@@ -257,7 +257,7 @@ static void IFBGVisibilityQuery(const IFBGChunkView *v, const IFBGTileLayout *l,
     // met, and from the first one that no longer fits nothing is stamped or
     // asked for. Upstream asks for all of them; when they exceed the budget
     // every frame evicts chunks the next frame asks for again, and
-    // `has_pending_loads` never clears (BACKGROUND-NOTES.md, section 17).
+    // `has_pending_loads` never clears (docs/native/app/Canvas/BACKGROUND-NOTES.md, section 17).
     __block uint64_t wanted = 0;
     __block BOOL over = NO;
     NSMutableSet<NSNumber *> *seen = [NSMutableSet set];

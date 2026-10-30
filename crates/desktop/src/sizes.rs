@@ -36,9 +36,9 @@
 // (`is_canvas_window`, `Controller::on_canvas`): a widget and a screen-pinned
 // window are passed over, IPC `resize` refuses to write them, and neither is
 // an obstacle, a cluster member or a snap rectangle (`snap_rect_for`,
-// `Scene::snaps`). See SIZES.md. fullscreen.rs asks for an output's size and
+// `Scene::snaps`). See docs/crates/desktop/SIZES.md. fullscreen.rs asks for an output's size and
 // for the size a window had before through `fullscreen_resize`, on this same
-// transaction: FULLSCREEN.md.
+// transaction: docs/crates/desktop/FULLSCREEN.md.
 use super::actions::Outcome;
 use super::ipc::{WindowMode, frame, readable};
 use super::navigation::Anchor;
@@ -1778,7 +1778,7 @@ impl Controller {
     /// A window whose sizing action is still owed its size is placed by that
     /// action's plan when the result arrives, over wherever a drag had put it
     /// by then. So no drag takes it, alone or as a member dragged along. A
-    /// transaction the pointer began is not this: NATIVE_RESIZE.md lets a
+    /// transaction the pointer began is not this: docs/crates/desktop/NATIVE_RESIZE.md lets a
     /// world drag run while its last observation is still owed.
     pub(crate) fn guard_sizing_drag(
         &self,

@@ -2,7 +2,7 @@
 //
 // Infinify compositor — the renderer's element drawing (windows, stand-ins,
 // snapshots, chrome, outlines, error bar) and its render passes. See
-// IFCompositor.h and COMPOSITOR-NOTES.md (under docs/).
+// IFCompositor.h and docs/native/app/Canvas/COMPOSITOR-NOTES.md.
 //
 // Derived from DriftWM (GPL-3.0-or-later), https://github.com/malbiruk/driftwm @
 // 352333a8fa1b22171492d4b71a54102045c9a19d. Each section names the upstream

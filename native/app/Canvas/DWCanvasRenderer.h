@@ -18,7 +18,7 @@ typedef DWCanvasContent (^DWCanvasSource)(NSNumber *window,NSDictionary *placeme
 // which holds no pinned window. A background with a chunk cache ([background] cache_shader
 // on a static shader, a tiled pyramidal TIFF as a tile) has one cache per output, bounded
 // by cache_budget_mb, and is redrawn while that cache fills; a capture draws no cache
-// (BACKGROUND-NOTES.md, section 17). An output the controller reports fullscreen
+// (docs/native/app/Canvas/BACKGROUND-NOTES.md, section 17). An output the controller reports fullscreen
 // (outputs[].fullscreen) shows what its placements list and nothing else: the placement
 // marked fullscreen bare at its screen_rect, over black, or over the canvas background
 // and the outlines when the backdrop is "canvas". No output draws the viewport outline

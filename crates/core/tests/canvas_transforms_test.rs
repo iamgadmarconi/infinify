@@ -10,7 +10,7 @@
 // `driftwm_core::platform::` (1 import, 4 inline type paths); and two
 // `let delta_canvas…` statements carry `#[rustfmt::skip]` plus a comment so
 // they stay on one line as upstream has them. Everything else is unmodified.
-// See PORT.md in the crate root for the full change log.
+// See docs/crates/core/PORT.md for the full change log.
 
 use std::time::Duration;
 

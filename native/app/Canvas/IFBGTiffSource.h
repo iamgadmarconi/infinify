@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Tiled pyramidal TIFF source and decode pool for the canvas background's
-// gigapixel path. Part of the background module (IFBackgroundProgram.h); no dependency
+// gigapixel path. Part of the background module (IFBackground.h); no dependency
 // on the rest of the app, and none on Metal.
 //
 // Adapted from DriftWM, https://github.com/malbiruk/driftwm @
@@ -12,7 +12,7 @@
 // drain_pending, shutdown).
 // Upstream decodes with the `tiff` crate; here the container is walked by this
 // file and each tile's compressed bytes are decoded by ImageIO
-// (BACKGROUND-NOTES.md, section 17).
+// (docs/native/app/Canvas/BACKGROUND-NOTES.md, section 17).
 // Also from DriftWM v0.21.0, https://github.com/malbiruk/driftwm @
 // df3de27b26c7998e8a460cffd8a4925cbed3a322: src/render/tile_chunks_tiff.rs
 // `MAX_WHOLE_LOD_DIM` and `whole_lod`, upstream's turning of an allocation that

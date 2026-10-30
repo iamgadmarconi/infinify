@@ -2430,7 +2430,7 @@ fn crossing_config(opacity: f64, focused: f64, rules: &str) -> String {
     )
 }
 
-/// The policy of this file and the drawing description of RENDER.md, on one
+/// The policy of this file and the drawing description of docs/crates/desktop/RENDER.md, on one
 /// frame: a widget, a rule-pinned window and an ordinary window on main, whose
 /// origin is the global point (200, 100), at half the zoom. The layer each is
 /// drawn in, the space its rectangle is in, and one opacity for both readers.

@@ -36,7 +36,7 @@
 // Native frames include their title bar, so chrome is zero. A fullscreen
 // window is drawn in its output's screen space from world rectangles, the
 // output's `screen_bounds` and the parked camera alone, never native geometry.
-// See FULLSCREEN.md.
+// See docs/crates/desktop/FULLSCREEN.md.
 use super::actions::Outcome;
 use super::ipc::{OutputFullscreen, frame, readable};
 use super::lifecycle::Arrival;

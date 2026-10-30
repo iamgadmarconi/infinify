@@ -5,7 +5,7 @@
 // dd845723416f5fe92af49fad5ebab00369e07edd (src/misc/extern.h), https://github.com/asmvik/yabai;
 // see native/app/Resources/YABAI-NOTICE.txt. Nothing here changes a window: every change is the
 // helper's, asked for through its socket.
-// Split from native/app/CompositorMode/DWNativePresenter.m (37b27b1): session admission and lifetime, restoration, watchdog, debug, and the receipt classes.
+// Split from native/desktop/native-presenter.m (37b27b1): session admission and lifetime, restoration, watchdog, debug, and the receipt classes.
 #import "DWNativePresenter+Private.h"
 #import "DWNativeFocus.h"
 #import <Security/Security.h>

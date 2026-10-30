@@ -8,7 +8,7 @@
 // Changes from upstream: this header, and `impl Side { fn opposite }` (an
 // `#[allow(dead_code)]` method that nothing calls) is removed. Everything else
 // is unmodified.
-// See PORT.md in the crate root for the full change log.
+// See docs/crates/core/PORT.md for the full change log.
 
 //! Window clustering — on-demand connected components over snap-adjacency.
 //! The graph is never stored; each query BFSes current geometry, so there's

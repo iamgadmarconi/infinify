@@ -15,8 +15,8 @@
 // https://github.com/asmvik/yabai commit dd845723416f5fe92af49fad5ebab00369e07edd; its notice is native/app/Resources/YABAI-NOTICE.txt.
 // Shared state and native bindings of the Dock helper payload: the SkyLight calls (the absolute transform read and the placement 1
 // write among them), process configuration, the window and connection records, session, frame-slot and table state, and the
-// optional window server calls with their resolution.
-// Moved verbatim from native/dock-helper/Payload/DWPayload.m (37b27b1), lines 20-278. #imported by DWDockPayload.m in a fixed order; never compiled alone.
+// optional window server calls with their resolution. This file defines the classes DW2Connection and DW2Entry (the connection and window records).
+// Moved verbatim from native/privileged/payload.m (37b27b1), lines 20-278. #imported by DWPayload.m in a fixed order; never compiled alone.
 
 static int (*mainConnection)(void);
 static CGError (*getOwner)(int, uint32_t, int *);
@@ -26,7 +26,7 @@ static CGError (*getOwner)(int, uint32_t, int *);
 static CGError (*getTransform)(int, uint32_t, CGAffineTransform *);
 static CGError (*setTransform)(int, uint32_t, CGAffineTransform);
 // The three SkyLight calls behind them, resolved at start. There is deliberately no SLSSetWindowTransform here: it is placement 0 (see
-// "Placements" in README.md), and nothing in this file writes placement 0.
+// "Placements" in docs/native/dock-helper/Payload/README.md), and nothing in this file writes placement 0.
 static CGError (*skyGetPlacement)(int, uint32_t, int, void *, CGAffineTransform *);
 static CGError (*skySetPlacement)(int, uint32_t, int, int, const CGAffineTransform *);
 static CGError (*skyGetCatenated)(int, uint32_t, CGAffineTransform *);
@@ -70,7 +70,7 @@ static BOOL finiteMatrix(CGAffineTransform t) {
 // relative) and read back as the catenated (effective) transform. Observed on macOS 27.0.1 (26A434); not an upstream API: the
 // signatures are those the system SkyLight's disassembly shows (SLSSetWindowTransform is a tail call into
 // SLSSetWindowTransformAtPlacement(cid,wid,0,0,&t); SLSGetCatenatedWindowTransform is SLSGetWindowTransformAtPlacement(cid,wid,
-// 0x7fffff00,NULL,&t)), see README.md "Placements".
+// 0x7fffff00,NULL,&t)), see docs/native/dock-helper/Payload/README.md "Placements".
 enum { DW_BASE_PLACEMENT=0, DW_LAYER_PLACEMENT=1 };
 // The window server stores 32-bit floats and composes two layers, so an absolute matrix read back after a layered write can differ
 // from the request by a rounding or two: a few ulps of the largest translation, far below anything drawn. v2SameTransform allows this.
@@ -128,7 +128,7 @@ static NSArray *validAllowlist(id raw) {
 }
 static double nowMS(void) { return NSProcessInfo.processInfo.systemUptime*1000; }
 // Protocol v2: many windows per frame, newest frame wins, journalled restoration.
-// Original implementation. Wire format: DWHelperProtocol.h. Semantics: README.md "Protocol v2".
+// Original implementation. Wire format: DWHelperProtocol.h. Semantics: docs/native/dock-helper/Client/README.md "Protocol v2".
 // The arrival veil (v2Veil below) adapts an idea and a technique of Sunlight,
 // https://github.com/spacefarm-digital/sunlight commit afeea74b18e70ca49bf462d6fe462cf65deb2b32
 // (MIT, Copyright (c) 2026 spacefarm): that a window an

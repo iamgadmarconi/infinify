@@ -21,7 +21,7 @@
 //     `impl DriftWm { gesture_camera_zoom, gesture_output_or_active,
 //     gesture_output_fullscreen, cancel_animations }`, which are compositor
 //     state or libinput pointer-gesture handling.
-// See PORT.md in the crate root for the full change log.
+// See docs/crates/core/PORT.md for the full change log.
 
 use crate::platform::utils::{Logical, Point};
 

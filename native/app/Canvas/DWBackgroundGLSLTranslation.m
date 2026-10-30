@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Infinify canvas background renderer: the translation of a user's GLSL ES 1.00
-// background shader into Metal Shading Language - see IFBackgroundProgram.h and
-// BACKGROUND-NOTES.md.
+// background shader into Metal Shading Language - see IFBackground.h and
+// docs/native/app/Canvas/BACKGROUND-NOTES.md.
 //
 // Derived from DriftWM (GPL-3.0-or-later), https://github.com/malbiruk/driftwm @
 // 352333a8fa1b22171492d4b71a54102045c9a19d: the shader contract of
@@ -9,7 +9,8 @@
 // (BG_UNIFORMS / BG_TEX_UNIFORMS), as the comments below cite.
 // Split from native/desktop/background.m at 37b27b1.
 
-#import "IFBackgroundProgram+Private.h"
+#import "IFBackground+Private.h"
+#import "IFBGShaderDecl.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -400,15 +401,6 @@ static BOOL IFBGCanUndef(NSString *name) {
     return ![name containsString:@"__"] && ![name hasPrefix:@"GL_"] && ![never containsObject:name];
 }
 
-@interface IFBGShaderDecl : NSObject
-@property (nonatomic, copy) NSString *qualifier;  // uniform | varying | attribute
-@property (nonatomic, copy) NSString *type;
-@property (nonatomic, copy) NSString *name;
-@property (nonatomic) NSUInteger nameToken;       // index of the name in the token list
-@property (nonatomic) BOOL isArray;
-@end
-@implementation IFBGShaderDecl
-@end
 
 // Upstream `references_uniform` (background.rs): a plain substring test on the
 // raw source. Kept literally, comments and prefixes included, because it is

@@ -6,7 +6,7 @@
 //! src/tests/interact_min.rs where those make sense without Wayland surfaces,
 //! and expected cameras are derived by hand from upstream's rules, not read
 //! back from the controller. The last three are about the layers of
-//! RULES.md: a screen-pinned window and a widget under the pointer, for hover
+//! docs/crates/desktop/RULES.md: a screen-pinned window and a widget under the pointer, for hover
 //! and for pick mode. Config files are written to a throwaway
 //! directory; the default config path is never read. They provide no evidence
 //! that the shell sees the pointer move, that a motion reaches an application,
@@ -329,7 +329,7 @@ fn moved(h: &mut Host, reply: &Value, window: u64) -> Value {
 /// A hover focus restacks nothing and moves no frame and no camera: the
 /// windows, the placements, the outputs and the flights of `after` are those
 /// of `before`. The one key left out is `focused`, which every window and
-/// placement is drawn with (RENDER.md) and which follows the logical focus: it
+/// placement is drawn with (docs/crates/desktop/RENDER.md) and which follows the logical focus: it
 /// is checked for itself, against each snapshot's own focus.
 fn unmoved(after: &Value, before: &Value) {
     let drawn = |snapshot: &Value, part: &str| {
@@ -1424,7 +1424,7 @@ fn input_screen(window: u64, x: f64, y: f64) -> Value {
 // Upstream maybe_hover_focus asks pinned_window_under before the canvas: a
 // pinned window under the pointer has the priority and takes the focus, where
 // it stands. Here it holds that focus outside the focus history, as every
-// focus of a pinned window does (RULES.md), and the echo of its request
+// focus of a pinned window does (docs/crates/desktop/RULES.md), and the echo of its request
 // neither restacks nor flies.
 #[test]
 fn hover_focuses_a_pinned_window_before_the_canvas_beneath_it() {
@@ -1538,7 +1538,7 @@ fn hover_passes_over_a_widget_and_still_forwards_the_motion() {
     );
     // No request was made and none is remembered: the snapshot is the same,
     // and a native report for the widget is no echo. It is the activation of
-    // a widget (RULES.md): focus recorded, history untouched, no flight.
+    // a widget (docs/crates/desktop/RULES.md): focus recorded, history untouched, no flight.
     assert_eq!(h.snapshot(), settled);
     let report = native(&mut h, 3);
     assert_eq!(

@@ -7,7 +7,7 @@
 // Private getter declarations cross-checked against yabai (MIT),
 // https://github.com/asmvik/yabai, revision dd845723416f5fe92af49fad5ebab00369e07edd,
 // src/misc/extern.h:13,22,42,54,56.
-// Attribution and upstream license: YABAI-NOTICE.txt (this directory).
+// Attribution and upstream license: native/app/Resources/YABAI-NOTICE.txt.
 typedef struct {
     int (*connection)(void),(*type)(int,uint64_t);
     uint64_t (*current)(int,CFStringRef);

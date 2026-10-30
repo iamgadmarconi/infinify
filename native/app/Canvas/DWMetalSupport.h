@@ -51,7 +51,7 @@ static inline id DWMetalSharedForDevice(Class owner, id<MTLDevice> device, id (^
 /// fast_smoke costs 8.6 ms of GPU time per frame this way against 20.6 ms with
 /// MTLMathFloatingPointFunctionsPrecise, and the precise variant draws a
 /// *different* noise pattern from the system GLSL compiler far from the canvas
-/// origin (BACKGROUND-NOTES.md, "Math mode").
+/// origin (docs/native/app/Canvas/BACKGROUND-NOTES.md, "Math mode").
 static inline MTLCompileOptions *DWMetalCompileOptions(void) {
     MTLCompileOptions *options = [MTLCompileOptions new];
     options.mathMode = MTLMathModeSafe;

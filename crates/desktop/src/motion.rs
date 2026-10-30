@@ -722,7 +722,7 @@ impl Controller {
             self.refresh_cursor_edge_pan();
         }
         // Upstream's pull for sloppy focus: the view moved under a pointer at
-        // rest (POINTER.md).
+        // rest (docs/crates/desktop/POINTER.md).
         let pulled = match output {
             Some(output) => self.pull_hover(output, screen)?,
             None => Value::Null,

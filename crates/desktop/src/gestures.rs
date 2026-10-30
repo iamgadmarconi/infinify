@@ -29,7 +29,7 @@
 //! no such stream, so the shell synthesizes one and sends it as `gesture_begin`,
 //! `gesture_update` and `gesture_end`. The binding is chosen once, at begin, and
 //! holds for the whole gesture, as upstream's `GestureState` does. See
-//! GESTURES.md for the contract.
+//! docs/crates/desktop/GESTURES.md for the contract.
 use super::actions::{Outcome, action_string};
 use super::motion::Pinch;
 use super::*;

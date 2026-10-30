@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Infinify canvas background renderer: IFBackgroundConfig and
-// IFBackgroundProgram - see IFBackgroundProgram.h and BACKGROUND-NOTES.md.
+// IFBackgroundProgram - see IFBackground.h and docs/native/app/Canvas/BACKGROUND-NOTES.md.
 //
 // Derived from DriftWM (GPL-3.0-or-later), https://github.com/malbiruk/driftwm @
 // 352333a8fa1b22171492d4b71a54102045c9a19d: src/render/background.rs
@@ -9,8 +9,8 @@
 // src/render/capture_background.rs, as the comments below cite.
 // Split from native/desktop/background.m at 37b27b1.
 
-#import "IFBackgroundProgram.h"
-#import "IFBackgroundProgram+Private.h"
+#import "IFBackground.h"
+#import "IFBackground+Private.h"
 #import "IFBGTiffSource.h"
 #import "DWMetalSupport.h"
 

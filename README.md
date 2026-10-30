@@ -74,7 +74,7 @@ screen (a standard window or a dialog, not a popup or helper window) joins the c
 - `Infinify --help` lists every option. The user options are `--state`, `--socket`, `--config`, `--super`,
   `--no-native-focus` and `--no-hover-forwarding`. `--native-desktop-helper` is the launcher's whole-desktop flag,
   started by `Infinify native-desktop`. `--windowed`, `--manual`, `--only-pid`, `--debug-pointer` and `--native-helper`
-  are a test seam for live tests on disposable windows ([native/desktop/README.md](native/desktop/README.md)).
+  are a test seam for live tests on disposable windows ([docs/native/user-guide.md](docs/native/user-guide.md#flags-that-change-it)).
 
 ## Controls
 
@@ -93,21 +93,21 @@ uses Command instead):
 
 Unmodified clicks and scrolling on a window reach its native application, which keeps keyboard focus; Command
 editing shortcuts and Command-Tab stay with the applications. Every binding, action and default table is in
-[crates/desktop/CONFIG.md](crates/desktop/CONFIG.md); a config file's bindings take precedence.
+[docs/crates/desktop/CONFIG.md](docs/crates/desktop/CONFIG.md); a config file's bindings take precedence.
 
 ## Configuration
 
 The config file is DriftWM's grammar. The app reads `--config ABSOLUTE_PATH`, else
 `$XDG_CONFIG_HOME/infinify/config.toml`, else `~/.config/infinify/config.toml`; DriftWM's built-in defaults apply
 when it is missing, and the file is read again whenever it changes. What a file gets wrong is drawn in the error
-bar. See [CONFIG.md](crates/desktop/CONFIG.md) for `[session]`, `[background]`, `[[window_rules]]`, `[effects]`
-and every other table, and [RULES.md](crates/desktop/RULES.md) for window rules.
+bar. See [CONFIG.md](docs/crates/desktop/CONFIG.md) for `[session]`, `[background]`, `[[window_rules]]`, `[effects]`
+and every other table, and [RULES.md](docs/crates/desktop/RULES.md) for window rules.
 
 ## Scripting
 
 `Infinify msg [--json] [--socket PATH] COMMAND ...` is DriftWM's IPC client for the running app. The socket is
 `~/Library/Application Support/Infinify/infinify.sock` unless `--socket` says otherwise. Requests, replies and
-limits are in [crates/desktop/IPC.md](crates/desktop/IPC.md).
+limits are in [docs/crates/desktop/IPC.md](docs/crates/desktop/IPC.md).
 
 ## Compositor mode
 
@@ -120,9 +120,9 @@ until you run `Infinify native-desktop` by hand. `status` changes nothing; `disa
 hoc cannot use the daemon.
 
 The safety model (journal before every mutation, identity fences, the daemon accepting only this signed app, a
-root-owned staged copy of the payload) is in [native/privileged/README.md](native/privileged/README.md); what
+root-owned staged copy of the payload) is in [docs/native/dock-helper/README.md](docs/native/dock-helper/README.md); what
 compositor mode does to windows, popups and drags is in
-[native/desktop/COMPOSITOR-MODE.md](native/desktop/COMPOSITOR-MODE.md). It has been run only in disposable macOS
+[docs/native/app/CompositorMode/COMPOSITOR-MODE.md](docs/native/app/CompositorMode/COMPOSITOR-MODE.md). It has been run only in disposable macOS
 27 guests, not on a physical Mac and not on macOS 26.
 
 ## Troubleshooting
@@ -142,13 +142,13 @@ compositor mode does to windows, popups and drags is in
 | Path | Contents |
 | --- | --- |
 | `crates/canvas` | the platform-independent window canvas: scene, camera, snapping, stage |
-| `crates/core` | DriftWM's pure modules ported to Rust (canvas math, config, layout), see [PORT.md](crates/core/PORT.md) |
-| `crates/desktop` | the controller library and C interface: actions, navigation, sizing, rules, IPC, rendering requests; [README](crates/desktop/README.md) |
-| `native/desktop` | the Objective-C shell and renderer, linked with the controller; [README](native/desktop/README.md) |
-| `native/privileged` | the Dock helper, loader, doctor, launch daemon and client library; [README](native/privileged/README.md) |
-| `native/focus`, `native/resize` | the Accessibility focus and resize adapters |
-| `native/fixture` | disposable AppKit fixtures that the live tests start |
+| `crates/core` | DriftWM's pure modules ported to Rust (canvas math, config, layout), see [PORT.md](docs/crates/core/PORT.md) |
+| `crates/desktop` | the controller library and C interface: actions, navigation, sizing, rules, IPC, rendering requests; [README](docs/crates/desktop/README.md) |
+| `native/app` | the Objective-C shell and renderer, linked with the controller, one directory per module (Desktop, Canvas, Windows, Input, CompositorMode, Navigation (with the Accessibility focus and resize adapters), System, Support, Resources); [README](docs/native/README.md) |
+| `native/dock-helper` | the Dock helper (Payload), loader and doctor (Loader), launch daemon (Daemon) and client library (Client); [README](docs/native/dock-helper/README.md) |
+| `tests/native` | the headless regressions and the disposable AppKit fixtures that the live tests start, one directory per module of `native/app` and `native/dock-helper`; [how they run](docs/native/testing.md) |
 | `scripts` | `build-app.sh`, `build-privileged.sh`, `install-app.sh`, the launcher and packaging helpers |
+| `docs` | all Markdown documentation outside this file and `AGENTS.md`: `docs/native` (user guide, module docs), `docs/crates` (each crate's contracts), `docs/parity`; [index](docs/README.md) |
 | `docs/parity` | the parity contract |
 
 ```sh

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Infinify compositor — the Metal shaders (kIFCMSL) and the per-device pipelines
-// and samplers built from them. See IFCompositor.h and COMPOSITOR-NOTES.md
+// and samplers built from them. See IFCompositor.h and docs/native/app/Canvas/COMPOSITOR-NOTES.md
 // (under docs/).
 //
 // Derived from DriftWM (GPL-3.0-or-later), https://github.com/malbiruk/driftwm @
@@ -70,7 +70,7 @@ static NSString *const kIFCMSL =
      "}\n"
      // texture2D(tex, v_coords) under GL_CLAMP_TO_EDGE, with the edge being that
      // of the content sub-rect instead of the whole texture: for a buffer that
-     // is all content the two are the same sample (COMPOSITOR-NOTES.md, deviations).
+     // is all content the two are the same sample (docs/native/app/Canvas/COMPOSITOR-NOTES.md, deviations).
      "static inline float4 ifc_sample(texture2d<float> tex, sampler smp, float2 v_coords, constant IFCUniforms &U) {\n"
      "    return tex.sample(smp, clamp(v_coords, U.uv_bounds.xy, U.uv_bounds.zw));\n"
      "}\n"

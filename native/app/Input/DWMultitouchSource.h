@@ -12,7 +12,7 @@
 // Nothing here has run on a physical trackpad.
 //
 // The source is `delivering` only once a frame has arrived. Until then, and whenever the
-// framework, a symbol or a device is missing, the NSTouch path of main.m is untouched;
+// framework, a symbol or a device is missing, the NSTouch path (Desktop+Gestures.m and DesktopView.m) is untouched;
 // while it delivers, that path does not also feed the recogniser.
 
 // One contact of a MultitouchSupport frame is a 96-byte record; these are the fields read.

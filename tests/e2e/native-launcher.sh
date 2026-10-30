@@ -4,7 +4,7 @@
 # stub doctor/loader/app/daemon client (tests/e2e/native-launcher/stub.c) that load nothing, a throwaway HOME, and the real
 # launcher script. It shows the launcher's decisions: when it asks the launch daemon and with which arguments, the journal
 # handoff from a retired Dock, the pause of automatic loading, the refusal of uncertain states, the quiet login refusals. It is
-# not evidence that anything loads into a Dock (see native/privileged/README.md for the guest run).
+# not evidence that anything loads into a Dock (see docs/native/dock-helper/Daemon/README.md for the guest run).
 # It needs no Infinify process to be running (the launcher looks for one by name); run it where none is, e.g. the guest.
 set -eu
 cd "$(dirname "$0")/../.."

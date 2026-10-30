@@ -4,7 +4,7 @@
 // that one call with `platform::input::keyboard::xkb`. These checks drive the
 // replacement through the config parser, the way a config file reaches it.
 //
-// The expected values pin libxkbcommon 1.7.0's rules as PORT.md records them.
+// The expected values pin libxkbcommon 1.7.0's rules as docs/crates/core/PORT.md records them.
 // They are not a comparison against the C library.
 use driftwm_core::config::{
     Action, Config, KeyCombo, ModKey, Modifiers, PassKeys, parse_key_combo,

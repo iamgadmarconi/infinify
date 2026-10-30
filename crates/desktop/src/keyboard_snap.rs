@@ -14,7 +14,7 @@
 // compositor's camera target. `resize-to-snap` ends in the same size
 // transaction as `grow-window`: `step_resize` with the delta to the stop.
 // Only world rectangles, output poses and the configuration are read, never
-// native geometry. See SIZES.md ("Keyboard snapping").
+// native geometry. See docs/crates/desktop/SIZES.md ("Keyboard snapping").
 use super::actions::Outcome;
 use super::sizes::{Px, snap_rect_at, usable_px};
 use super::window_actions::MinimalPan;

@@ -8,7 +8,7 @@
 // Changes from upstream: this header, and the one Smithay import
 // (`use smithay::utils::{Logical, Point, Rectangle, Size};`) reads
 // `crate::platform::utils`. Everything else is unmodified.
-// See PORT.md in the crate root for the full change log.
+// See docs/crates/core/PORT.md for the full change log.
 
 use std::collections::BTreeMap;
 use std::collections::VecDeque;

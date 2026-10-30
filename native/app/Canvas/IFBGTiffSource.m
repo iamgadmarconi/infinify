@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Tiled pyramidal TIFF source and decode pool — see IFBGTiffSource.h and
-// BACKGROUND-NOTES.md, section 17.
+// docs/native/app/Canvas/BACKGROUND-NOTES.md, section 17.
 //
 // Adapted from DriftWM, https://github.com/malbiruk/driftwm @
 // 352333a8fa1b22171492d4b71a54102045c9a19d: src/render/tile_chunks_tiff.rs and

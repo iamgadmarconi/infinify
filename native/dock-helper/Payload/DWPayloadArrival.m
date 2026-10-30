@@ -15,7 +15,7 @@
 // https://github.com/asmvik/yabai commit dd845723416f5fe92af49fad5ebab00369e07edd; its notice is native/app/Resources/YABAI-NOTICE.txt.
 // Arrival: the arrival veil and the arrival placement of a placed root's children, their timeouts and release, and the window
 // server's window-added handler. Adapted from Sunlight, see above.
-// Moved verbatim from native/dock-helper/Payload/DWPayload.m (37b27b1), lines 979-1127. #imported by DWDockPayload.m in a fixed order; never compiled alone.
+// Moved verbatim from native/privileged/payload.m (37b27b1), lines 979-1127. #imported by DWPayload.m in a fixed order; never compiled alone.
 
 // Arrival veil. The window server announces a window added to a Space (SkyLight notification 1325) as
 // the window appears, a few milliseconds before the shell can have placed it. A window that qualifies

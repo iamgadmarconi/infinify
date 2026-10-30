@@ -15,7 +15,7 @@
 // https://github.com/asmvik/yabai commit dd845723416f5fe92af49fad5ebab00369e07edd; its notice is native/app/Resources/YABAI-NOTICE.txt.
 // Frames: the alpha a frame leaves a window at, and v2ApplyWithSpaces and v2Apply, which capture and journal every new window before
 // any change and apply each record behind identity fences.
-// Moved verbatim from native/dock-helper/Payload/DWPayload.m (37b27b1), lines 475-486, 790-978. #imported by DWDockPayload.m in a fixed order; never compiled alone.
+// Moved verbatim from native/privileged/payload.m (37b27b1), lines 475-486, 790-978. #imported by DWPayload.m in a fixed order; never compiled alone.
 
 // The alpha a frame leaves a window at: the record's own or, for a veiled window whose record carries none, its original.
 static BOOL v2FrameAlpha(DW2Entry *e,const struct dw2_record *r,float *alpha) {

@@ -8,7 +8,7 @@
 // Changes from upstream: this header, and line 1 of the original
 // ("use driftwm::layout::snap::*;") now imports from this crate
 // ("use driftwm_core::layout::snap::*;"). Everything else is unmodified.
-// See PORT.md in the crate root for the full change log.
+// See docs/crates/core/PORT.md for the full change log.
 
 use driftwm_core::layout::snap::*;
 

@@ -130,7 +130,7 @@ int main(void) {@autoreleasepool {
     check([input handle:kCGEventLeftMouseDown event:taggedDown]==taggedDown&&consumed==before,@"tagged down bypasses physical bookkeeping");
     take=YES;check([input handle:kCGEventMouseMoved event:move]==NULL,@"tagged down creates no native reservation");
 
-    // Below [zoom] interact_min a window takes no hover (POINTER.md): the shell's consumer claims a mouse-moved packet over a pick target
+    // Below [zoom] interact_min a window takes no hover (docs/crates/desktop/POINTER.md): the shell's consumer claims a mouse-moved packet over a pick target
     // and the tap must then drop it, while one it does not claim goes on untouched. The packet is offered to the consumer every time, and
     // a moved packet while a native button is held (the application's own drag tracking) is never the consumer's to claim.
     {CGEventRef still=packet(kCGEventMouseMoved,0,foreign);NSUInteger offered=consumed;

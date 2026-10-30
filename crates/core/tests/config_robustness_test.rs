@@ -7,7 +7,7 @@
 //   sha-256:    a6b4d9d2014260240f8a743e704a53e72d8d31e235ae9ba469b0bf397c52fb65 (upstream file)
 // Changes from upstream: this header, and crate paths only: `driftwm::config` reads
 // `driftwm_core::config`. Nothing else.
-// See PORT.md in the crate root for the full change log.
+// See docs/crates/core/PORT.md for the full change log.
 
 //! `Config::from_toml_collect` must never panic: malformed TOML and type
 //! mismatches become `Err`, and semantically-bad values (bad regex, unknown

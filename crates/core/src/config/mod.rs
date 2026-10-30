@@ -17,7 +17,7 @@
 // `removed_go_to_errors_in_every_binding_table`,
 // `removed_go_to_binding_is_dropped_and_bookmarks_still_bind`). The
 // migration warnings for renamed keys are upstream's and stay. Nothing else.
-// See PORT.md in the crate root for the full change log.
+// See docs/crates/core/PORT.md for the full change log.
 
 mod defaults;
 

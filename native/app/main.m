@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Infinify's entry point: the command line, the IPC/login-item/native-desktop dispatch before AppKit, and the run loop around Desktop.
-#import "Desktop+Private.h"
+#import "Desktop.h"
+#import "DWDesktopSupport.h"
 #import <libproc.h>
 #import <signal.h>
 #import <unistd.h>
@@ -8,6 +9,7 @@
 #include <fcntl.h>
 #import "DWLoginItem.h"
 #import "DWNativeDesktopCLI.h"
+#import "DWOnboarding.h"
 #import "DWOwnerFile.h"
 #import "DWNativeFocus.h"
 #import "DWNativeResize.h"

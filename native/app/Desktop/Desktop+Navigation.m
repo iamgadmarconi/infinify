@@ -119,7 +119,7 @@ static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEvent
     self.resize=[[DWResizeCoordinator alloc]initWithCommand:^NSDictionary *(NSDictionary *c){return [weak resizeCall:c];} driver:driver worker:^(DWJob job){dispatch_async(queue,job);} main:^(DWJob job){dispatch_async(dispatch_get_main_queue(),job);}];
     self.resize.enabled=YES;
 
-    // Native readback (crates/desktop/NATIVE_RESIZE.md): the size a window took is read back from it, no capture is acknowledged, no
+    // Native readback (docs/crates/desktop/NATIVE_RESIZE.md): the size a window took is read back from it, no capture is acknowledged, no
     // picture is cleared. App-owned Fill separately holds placement/input until
     // its native animation and a fresh helper ACK settle. An effect unanswered after three seconds is reported as timed out, which ends its
     // transaction. When a transaction has ended, the window is looked at as the poll looks at it: its bounds, its stream's size
@@ -141,7 +141,7 @@ static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEvent
 // native_resize_capability: DriftWM's sizing actions, the IPC resize write, a rule's size and fullscreen reach a native window through
 // the resize coordinator, which every normal run has. main() says so before the config is read, since the binding table marks the
 // actions that run here and a chord whose action does not is never registered; the coordinator's creation says so again, after the
-// scene load, which rebuilds the controller. A size is settled by the native read alone (crates/desktop/NATIVE_RESIZE.md).
+// scene load, which rebuilds the controller. A size is settled by the native read alone (docs/crates/desktop/NATIVE_RESIZE.md).
 - (void)resizeCapability {
     NSString *status=self.statusText;
     if(![self call:@{@"op":@"native_resize_capability",@"enabled":@YES}]){fprintf(stderr,"native_resize_capability: %s\n",self.statusText.UTF8String);self.statusText=status;}
@@ -158,12 +158,12 @@ static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEvent
 // continuation: upstream's placement, camera and restore point for the size the window took, or why it took none. The reply
 // then gets the tail of an action's reply, on a later turn of the main queue, once the coordinator has consumed its next effect.
 // A result that ends its transaction, a pointer resize's included, can be answered with the first effect of another one: the size
-// transaction of the next window whose rule's size is still owed (RULES.md), which may be waiting behind a fullscreen's enter or
+// transaction of the next window whose rule's size is still owed (docs/crates/desktop/RULES.md), which may be waiting behind a fullscreen's enter or
 // exit as behind any other. The coordinator performs it as it performs every effect a result reply carries; here the transaction
 // it names becomes the one -sizing knows as the controller's own, like the one an attach reply begins, so that a press or an
 // action does not cancel it and a msg request is not turned away for it. The effect that answers one of the controller's own
 // results inside the same transaction is the controller's too, and needs nothing: a fullscreen that is left before the window has
-// taken the output's size asks for the old size on the transaction it already has (FULLSCREEN.md), which -sizing still names.
+// taken the output's size asks for the old size on the transaction it already has (docs/crates/desktop/FULLSCREEN.md), which -sizing still names.
 - (NSDictionary *)resizeCall:(NSDictionary *)command {
     NSDictionary *reply=[self call:command];
     if(!reply||![command[@"op"]isEqual:@"native_resize_result"])return reply;

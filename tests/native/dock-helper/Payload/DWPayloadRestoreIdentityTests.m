@@ -23,7 +23,7 @@ static CGDirectDisplayID displayMirror(CGDirectDisplayID display);
 #define CGDisplayIsOnline displayOnline
 #define CGDisplayIsAsleep displayAsleep
 #define CGDisplayMirrorsDisplay displayMirror
-#import "DWDockPayload.m"
+#import "DWPayload.m"
 #undef CGWindowListCopyWindowInfo
 #undef proc_pidinfo
 #undef fsync

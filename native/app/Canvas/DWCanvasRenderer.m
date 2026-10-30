@@ -17,12 +17,12 @@
 // window_render_transform in src/state/output.rs: a pin's output-relative point at
 // zoom 1), DrawnChrome's coverage rule per output, upstream's stand-in body
 // rectangle and its projection of the other outputs' viewports. The effects are the
-// compositor's (COMPOSITOR-NOTES.md, section 18), with src/state/errors.rs (ErrorSource:
+// compositor's (docs/native/app/Canvas/COMPOSITOR-NOTES.md, section 18), with src/state/errors.rs (ErrorSource:
 // the order of the error bar's messages) and src/state/window_animation_driver.rs
 // (start_window_open_animation, snapshot_closing_window, flatten_scale_for_canvas_rect:
 // an event on no output animates nothing, and the density a closing window is baked
 // at). The background's chunk caches (a baked cache_shader, a pyramidal TIFF's chunks)
-// are the background module's (BACKGROUND-NOTES.md, section 17); from here come
+// are the background module's (docs/native/app/Canvas/BACKGROUND-NOTES.md, section 17); from here come
 // upstream's one cache per output and its shrink while a fullscreen window conceals the
 // canvas (src/render/mod.rs, the bg_elements of compose_frame), the frames that keep
 // coming while a cache fills (has_pending_bakes and has_pending_loads, as
@@ -362,7 +362,7 @@ static NSArray<NSDictionary *> *orderBinding(NSDictionary *snapshot,NSNumber *ou
                 // owed (`owed`, above) the wait is renewed instead, so that second starts when the size transaction has ended.
                 // Not for a window that is fullscreen here (a rule's `fullscreen` as it mapped): the size it is owed is its output's, the
                 // controller has marked the output at once and nothing else is drawn on it, so a held window would leave it black for as
-                // long as the application takes. It is drawn from its first picture at the size it has (FULLSCREEN.md, No transition).
+                // long as the application takes. It is drawn from its first picture at the size it has (docs/crates/desktop/FULLSCREEN.md, No transition).
                 NSNumber *since=state.unseen[window];
                 if([opened[window]unsignedLongLongValue]>state.serial&&self.effects.animationSpeed<1){since=@(now);element.lifecycle=IFCompositorLifecycleOpening;element.lifecycleStartTime=NAN;element.lifecycleProgress=0;}
                 NSNumber *held=since&&[self.sizing isEqual:window]&&![DWTyped(p[@"fullscreen"],NSNumber.class)boolValue]?(state.owed[window]?:@(now)):nil;
@@ -379,7 +379,7 @@ static NSArray<NSDictionary *> *orderBinding(NSDictionary *snapshot,NSNumber *ou
         for(NSNumber *window in state.adopted.allKeys)if(!unseen[window]){state.adopted[window].lifecycleStartTime=began(state,now);[state.adopted removeObjectForKey:window];}
         // Where the closing bucket sits among the windows makes no difference: the compositor draws it above the canvas windows and below the pinned ones.
         // Upstream draws no closing snapshot and no stand-in fade on an output that is visually fullscreen ("no dying-window flash over a
-        // fullscreen app": COMPOSITOR-NOTES.md 18.2, When not to). They are left out of that output's frame and run out unseen on the
+        // fullscreen app": docs/native/app/Canvas/COMPOSITOR-NOTES.md 18.2, When not to). They are left out of that output's frame and run out unseen on the
         // clock they began on, as upstream's lists do: -flush drops each when it is over, and what is left is back with the canvas.
         if(!DWTyped(o[@"fullscreen"],NSDictionary.class))[frame.elements addObjectsFromArray:state.leaving];
         state.elements=elements;state.placements=placements;state.unseen=unseen;state.owed=owed;state.serial=self.played;state.dirty=YES;

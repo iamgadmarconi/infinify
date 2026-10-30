@@ -4,7 +4,7 @@
 # native frames at several canvas zooms (compositor mode). Runs only in a disposable guest reached through $DND_GSSH
 # and $DND_GSCP; Infinify must already be running there in compositor mode (this script never starts, stops or
 # reloads Infinify or the Dock, and changes no setting). It starts two fixture processes of its own and ends them on
-# every exit. See native/desktop/NATIVE-DRAG-ROUTING.md ("Compositor mode") for what the numbers mean.
+# every exit. See docs/native/app/CompositorMode/NATIVE-DRAG-ROUTING.md ("Compositor mode") for what the numbers mean.
 #
 #   DND_GSSH   command prefix that runs one shell command string in the guest, e.g. "ssh -o BatchMode=yes admin@GUEST"
 #   DND_GSCP   command copying SRC to guest:DST, e.g. a scp wrapper that rewrites the guest: prefix

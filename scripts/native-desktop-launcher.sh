@@ -399,7 +399,7 @@ else
     [ ! -e "$native_record" ] && [ ! -L "$native_record" ] || fail 'launch record remains after the retired record check; preserve it and inspect it.'
   fi
   # Without the launch daemon the loader needs the owner's sudo password, at a terminal. With it, nothing is asked: the daemon
-  # accepts only the signed app as its caller and runs only this loader with these arguments (native/privileged/README.md).
+  # accepts only the signed app as its caller and runs only this loader with these arguments (docs/native/dock-helper/Daemon/README.md).
   native_load_via=sudo
   if native_daemon_enabled; then native_load_via=daemon; fi
   case "$native_mode" in

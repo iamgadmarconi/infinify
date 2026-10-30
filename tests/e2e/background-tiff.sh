@@ -8,9 +8,9 @@ cd "$(dirname "$0")/../.."
 test "$(uname -s)" = Darwin && test "$(uname -m)" = arm64
 task_dir=$(mktemp -d "${TMPDIR:-/tmp}/infinify-background-tiff.XXXXXX")
 trap 'rm -rf "$task_dir"' EXIT HUP INT TERM
-native_includes='-Icrates/desktop/include -Inative/app -Inative/app/Desktop -Inative/app/Canvas -Inative/app/Windows -Inative/app/Input -Inative/app/CompositorMode -Inative/app/Navigation -Inative/app/System -Inative/app/Support -Inative/dock-helper/Client -Inative/dock-helper/Daemon -Inative/dock-helper/Loader -Inative/dock-helper/Payload'
+. scripts/native-includes.sh
 xcrun clang -arch arm64 -mmacosx-version-min=26.0 -O1 -fobjc-arc -Wall -Wextra -Werror $native_includes \
-  tests/native/app/Canvas/IFBGTiffSourceTests.m native/app/Canvas/IFBackgroundProgram.m native/app/Canvas/IFBGDeviceResources.m native/app/Canvas/DWBackgroundGLSLTranslation.m native/app/Canvas/DWBackgroundFiles.m native/app/Canvas/IFBGChunk.m native/app/Canvas/IFBGShaderChunks.m native/app/Canvas/IFBGTileChunks.m native/app/Canvas/IFBGTiffSource.m \
+  tests/native/app/Canvas/IFBGTiffSourceTests.m native/app/Canvas/IFBackgroundProgram.m native/app/Canvas/IFBGDeviceResources.m native/app/Canvas/DWBackgroundGLSLTranslation.m native/app/Canvas/IFBGShaderDecl.m native/app/Canvas/DWBackgroundFiles.m native/app/Canvas/IFBGChunk.m native/app/Canvas/IFBGShaderChunks.m native/app/Canvas/IFBGTileChunks.m native/app/Canvas/IFBGTiffSource.m \
   -framework AppKit -framework Metal -framework QuartzCore -framework CoreGraphics -framework CoreText -framework IOSurface \
   -framework ImageIO -framework Accelerate -lz -o "$task_dir/background-tiff"
 "$task_dir/background-tiff"

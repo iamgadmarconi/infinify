@@ -371,7 +371,7 @@ fn a_reload_changes_the_block_and_every_accepted_one_spends_a_revision() {
     assert_eq!(h.configure(&scratch, &elsewhere), again(10));
     // A file that does not parse is not an accepted reload: every table
     // stays. Its message is the error bar's, which the shell draws from this
-    // block, so the revision moves for it (EFFECTS.md). A scene loaded over
+    // block, so the revision moves for it (docs/crates/desktop/EFFECTS.md). A scene loaded over
     // the controller moves nothing.
     std::fs::write(scratch.path("config.toml"), "[decorations\n").unwrap();
     let refused = h.ok(json!({"op":"load_config","path":scratch.path("config.toml")}));

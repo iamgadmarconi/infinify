@@ -2,8 +2,8 @@
 //
 // Infinify compositor — the renderer: deferred release, per-element caches,
 // frame encoding, closing snapshots and offscreen export. See IFCompositor.h
-// and COMPOSITOR-NOTES.md (under docs/). The cached-background chunk
-// generation is described in BACKGROUND-NOTES.md (under docs/), section 17.3.
+// and docs/native/app/Canvas/COMPOSITOR-NOTES.md. The cached-background chunk
+// generation is described in docs/native/app/Canvas/BACKGROUND-NOTES.md, section 17.3.
 //
 // Derived from DriftWM (GPL-3.0-or-later), https://github.com/malbiruk/driftwm @
 // 352333a8fa1b22171492d4b71a54102045c9a19d. Each section names the upstream

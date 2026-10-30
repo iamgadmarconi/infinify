@@ -161,7 +161,7 @@ impl Controller {
     /// so that a zoomed-out edge can still be grabbed. A point over a window's
     /// frame can resize only that window, a lower window's frame included:
     /// upstream's topmost band wins over what lies beneath it, which is not
-    /// adapted (POINTER.md). Among bands the walk is upstream's z-order walk:
+    /// adapted (docs/crates/desktop/POINTER.md). Among bands the walk is upstream's z-order walk:
     /// the topmost canvas window whose band holds the point ends it. A widget
     /// and a fullscreen window have
     /// none (resize_margin_hit_for), and a stand-in has no native size to ask

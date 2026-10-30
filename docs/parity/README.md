@@ -103,13 +103,13 @@ above), so most of these rows are integration and acceptance accounting that que
 ## Gaps without a row
 
 Two gaps have no row of their own. They are recorded in the
-[pointer contract](../../crates/desktop/POINTER.md#differences-from-upstream), not in the inventory.
+[pointer contract](../crates/desktop/POINTER.md#differences-from-upstream), not in the inventory.
 
 - The cursor shape cannot follow the application under the pointer.
 - Popups and menus in compositor (Dock-helper) mode: what is established, and what is still open
   (tooltips, popups with no window-server parent, a popup an application places from the pointer's screen
   position, the owner's real Mac and macOS 26), is in
-  [COMPOSITOR-MODE.md](../../native/desktop/COMPOSITOR-MODE.md#popups-and-menus-of-a-transformed-window-full-desktop-dock-helper).
+  [COMPOSITOR-MODE.md](../native/app/CompositorMode/COMPOSITOR-MODE.md#popups-and-menus-of-a-transformed-window-full-desktop-dock-helper).
 
 ## Drag and drop in compositor mode
 
@@ -117,7 +117,7 @@ Two gaps have no row of their own. They are recorded in the
 `verified`. What was measured, and its limits (a press within a window's title/toolbar band cannot start a drag
 at zoom below 1; file promises, Mail or Photos sources, a second display, a physical pointer and the
 capture/replica desktop are not covered), is in
-[NATIVE-DRAG-ROUTING.md](../../native/desktop/NATIVE-DRAG-ROUTING.md#compositor-mode-dock-helper-drag-and-drop-measured-on-2026-10-30).
+[NATIVE-DRAG-ROUTING.md](../native/app/CompositorMode/NATIVE-DRAG-ROUTING.md#compositor-mode-dock-helper-drag-and-drop-measured-on-2026-10-30).
 
 ## Test oracles
 

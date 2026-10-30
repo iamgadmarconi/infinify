@@ -175,7 +175,7 @@ impl Controller {
     ///
     /// A widget that is not pinned is the one case left open: upstream's
     /// button and scroll sites drop its claim below the threshold too, and
-    /// neither argument says which output the pointer is on (RULES.md).
+    /// neither argument says which output the pointer is on (docs/crates/desktop/RULES.md).
     pub(crate) fn claimant(
         &self,
         window: Option<WindowId>,

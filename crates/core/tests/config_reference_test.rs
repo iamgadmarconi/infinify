@@ -7,7 +7,7 @@
 //   sha-256:    7aca0f3766a832a9c1ab4490aca00999d9abf8a7cc2cf621decf06234376cb86 (upstream file)
 // Changes from upstream: this header, and crate paths only: `driftwm::config` reads
 // `driftwm_core::config`. Nothing else.
-// See PORT.md in the crate root for the full change log.
+// See docs/crates/core/PORT.md for the full change log.
 
 //! Guards `config.reference.toml` against drifting from the compiled-in
 //! defaults — it doubles as documentation, so a stale documented default would
@@ -502,11 +502,11 @@ fn toml_fences(md: &str) -> Vec<String> {
     fences
 }
 
-/// Every window-rule recipe in `docs/window-rules.md` must be valid, warning-free
+/// Every window-rule recipe in `docs/crates/core/window-rules.md` must be valid, warning-free
 /// config, so a hand-written recipe can't drift into broken TOML unnoticed.
 #[test]
 fn window_rules_doc_snippets_parse() {
-    const DOC: &str = include_str!("../docs/window-rules.md");
+    const DOC: &str = include_str!("../../../docs/crates/core/window-rules.md");
     let mut checked = 0;
     for fence in toml_fences(DOC) {
         if !fence.contains("[[window_rules]]") {
@@ -522,6 +522,6 @@ fn window_rules_doc_snippets_parse() {
     }
     assert!(
         checked > 0,
-        "found no [[window_rules]] snippets in docs/window-rules.md"
+        "found no [[window_rules]] snippets in docs/crates/core/window-rules.md"
     );
 }

@@ -18,3 +18,17 @@ Use focused end-to-end CLI scenarios and the test modules of changed files.
 Do not run full suites unless the owner explicitly requests them. Prefer end-to-end
 coverage over unit tests. Format touched Rust files and run targeted clippy/check.
 Do not commit generated build products, local scene saves, or runtime credentials.
+
+## Layout and naming
+
+- Native code lives in `native/app/<Module>` (Desktop, Canvas, Windows, Input, CompositorMode, Navigation, System, Support,
+  Resources) and `native/dock-helper/<Module>` (Payload, Loader, Daemon, Client). `main.m` is the entry point only.
+- A file that defines a class is named exactly after its primary class (`DWWindowManager.h/.m`); a category is
+  `Class+Category.m`; a class's internal interface is `Class+Private.h`. A C-function-only module is
+  `DW<Descriptive>.h/.m`. Prefixes: `DW` for the shell, `IF` for the compositor and background modules.
+- Tests mirror the layout: `tests/native/<same path as the module>/<Module>Tests.m` (`.c`, `.py`), fixture programs are
+  `<What>Fixture.*`, end-to-end scripts are `tests/e2e/<name>.sh` (kebab-case, like every shell script).
+- The header search path for native compiles is defined once, in `scripts/native-includes.sh`; a new module directory or
+  source file is added there and to the build list in `scripts/build-app.sh`.
+- All Markdown under `native/` and `crates/` lives under `docs/` (`docs/native/...`, `docs/crates/<crate>/...`).
+  Licence texts and notices bundled in the app stay next to what needs them.

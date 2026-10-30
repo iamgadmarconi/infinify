@@ -24,8 +24,8 @@
 //   src/state/window_animation_driver.rs (frame_factor),
 //   src/config/types.rs (EffectsConfig).
 //
-// The module depends only on IFBackgroundProgram.h (the canvas background renderer)
-// and system frameworks. See COMPOSITOR-NOTES.md for the host protocol, the
+// The module depends only on IFBackground.h (the canvas background renderer)
+// and system frameworks. See docs/native/app/Canvas/COMPOSITOR-NOTES.md for the host protocol, the
 // mapping from the shell's snapshot, and every deviation from upstream.
 
 #import <CoreGraphics/CoreGraphics.h>
@@ -34,7 +34,7 @@
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
 
-#import "IFBackgroundProgram.h"
+#import "IFBackground.h"
 
 NS_ASSUME_NONNULL_BEGIN
 

@@ -2,7 +2,7 @@
 // The Dock-reload decisions: Sunlight's crash guard (its AdditionReloaderTests, translated), the remembered pause, the launcher's
 // endpoint line, the reloader's state transitions against a fake Dock, clock and launcher, and the login-mode record.
 // No launch daemon, Dock, window, sudo or loader is involved. This does not show that a payload loads into a real Dock (the guest
-// run recorded in native/privileged/README.md does).
+// run recorded in docs/native/dock-helper/Daemon/README.md does).
 #import "DWDockReloader.h"
 #import "DWNativeDesktopCLI.h"
 #include <sys/stat.h>

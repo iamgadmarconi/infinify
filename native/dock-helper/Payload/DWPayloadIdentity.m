@@ -15,7 +15,7 @@
 // https://github.com/asmvik/yabai commit dd845723416f5fe92af49fad5ebab00369e07edd; its notice is native/app/Resources/YABAI-NOTICE.txt.
 // Admission and identity fences: scope, owner and process-instance resolution, restore-time instance proof, transform comparison
 // and re-basing, fenced pin sublevel reads and writes, the reattach guard and the held/restoring counts.
-// Moved verbatim from native/dock-helper/Payload/DWPayload.m (37b27b1), lines 279-287, 319-474, 1140-1143. #imported by DWDockPayload.m in a fixed order; never compiled alone.
+// Moved verbatim from native/privileged/payload.m (37b27b1), lines 279-287, 319-474, 1140-1143. #imported by DWPayload.m in a fixed order; never compiled alone.
 
 static uint64_t v2Now(void) { return (uint64_t)nowMS(); }
 static BOOL v2SameProcess(const struct dw2_identity *a,const struct dw2_identity *b) { return a->pid==b->pid && a->birth_sec==b->birth_sec && a->birth_usec==b->birth_usec; }

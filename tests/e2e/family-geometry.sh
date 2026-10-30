@@ -19,7 +19,7 @@ for marker in ("- (BOOL)hasGeometryTransitions {", "- (BOOL)hasFamilyGeometryTra
     methods.append(source[start:end])
 (Path(sys.argv[1]) / "family-geometry-queries.inc").write_text("\n".join(methods) + "\n")
 PY
-native_includes='-Icrates/desktop/include -Inative/app -Inative/app/Desktop -Inative/app/Canvas -Inative/app/Windows -Inative/app/Input -Inative/app/CompositorMode -Inative/app/Navigation -Inative/app/System -Inative/app/Support -Inative/dock-helper/Client -Inative/dock-helper/Daemon -Inative/dock-helper/Loader -Inative/dock-helper/Payload'
+. scripts/native-includes.sh
 xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror $native_includes \
   -I"$task_dir" tests/native/app/Canvas/DWCanvasRendererTests.m \
   -framework Foundation -framework CoreGraphics -o "$task_dir/family-geometry"

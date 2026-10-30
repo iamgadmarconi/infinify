@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Infinify compositor — internal declarations shared by the compositor's
-// implementation files; not API. See IFCompositor.h and COMPOSITOR-NOTES.md
+// implementation files; not API. See IFCompositor.h and docs/native/app/Canvas/COMPOSITOR-NOTES.md
 // (under docs/).
 //
 // Derived from DriftWM (GPL-3.0-or-later), https://github.com/malbiruk/driftwm @

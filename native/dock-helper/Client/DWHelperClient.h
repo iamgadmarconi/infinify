@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "DWHelperProtocol.h"
-// Client of the transform helper's protocol v2 (README.md "Protocol v2"), for the
+// Client of the transform helper's protocol v2 (docs/native/dock-helper/Client/README.md "Protocol v2"), for the
 // shell to link. Plain C and pthreads. No call here waits on the helper beyond its
 // stated bound, whatever the helper does: a frame is handed to a writer thread and
 // the call returns; the lease is kept by a heartbeat thread on a second connection.

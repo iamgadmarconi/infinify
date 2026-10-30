@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Read-only ABI cross-checked in ../../dock-helper/Payload/DWPayloadState.m and the owned event-hit
+// Read-only ABI cross-checked in native/dock-helper/Payload/DWPayloadState.m and the owned event-hit
 // fixture against yabai (MIT), https://github.com/asmvik/yabai,
 // dd845723416f5fe92af49fad5ebab00369e07edd:
 // src/osax/payload.m; src/misc/extern.h:16,17,79,82. Native parent discovery is
-// provided by DWNativeFamily.m. Preserve YABAI-NOTICE.txt (this directory, the
+// provided by DWNativeFamily.m. Preserve native/app/Resources/YABAI-NOTICE.txt (the
 // yabai licence text). No setter or ownership-transfer API is loaded.
 #import "DWNativePlacementValidation.h"
 #import "DWNativeFamily.h"
@@ -34,7 +34,7 @@ static BOOL DWPlacementLoadAPI(void) {
         placementReadAPI.owner=dlsym(handle,"SLSGetWindowOwner");
         placementReadAPI.connectionPID=dlsym(handle,"SLSConnectionGetPID");
         placementReadAPI.bounds=dlsym(handle,"SLSGetWindowBounds");
-        // The effective (catenated) transform, which is what is drawn: the helper writes placement 1, not placement 0 (native/privileged/README.md, "Placements").
+        // The effective (catenated) transform, which is what is drawn: the helper writes placement 1, not placement 0 (docs/native/dock-helper/Payload/README.md, "Placements").
         placementReadAPI.transform=dlsym(handle,"SLSGetCatenatedWindowTransform");
         placementReadAPI.screen=dlsym(handle,"SLSGetScreenRectForWindow");
         placementReadAPI.alpha=dlsym(handle,"SLSGetWindowAlpha");

@@ -679,7 +679,7 @@ fn skipping_coalesced_size_already_observed_still_drains_final_read_after_setter
 }
 
 // Native readback is the supported resize protocol
-// (NATIVE_RESIZE.md). The native window is the authority for its size.
+// (docs/crates/desktop/NATIVE_RESIZE.md). The native window is the authority for its size.
 fn readback() -> Host {
     setup()
 }

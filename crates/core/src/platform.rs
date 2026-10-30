@@ -13,7 +13,7 @@
 //   smithay::input::keyboard::{Keysym, ModifiersState, keysyms, xkb}
 //   smithay::utils::{Coordinate, Logical, Point, Rectangle, Size, Transform}
 //
-// Third-party origin (full list and licences: PORT.md, SMITHAY-LICENSE.txt):
+// Third-party origin (full list and licences: docs/crates/core/PORT.md, SMITHAY-LICENSE.txt):
 //
 //   Smithay 0.7.0, MIT, Copyright (c) 2017 Victor Berger and Victoria Brekenfeld
 //     repository: https://github.com/Smithay/smithay
@@ -36,7 +36,7 @@
 //   libxkbcommon (MIT/X11): `xkb::keysym_from_name` reimplements its
 //     `xkb_keysym_from_name`.
 //
-// PORT.md lists what each stand-in keeps, what it leaves out, and where it
+// docs/crates/core/PORT.md lists what each stand-in keeps, what it leaves out, and where it
 // differs.
 //! Platform-neutral stand-ins for the Wayland-stack items the ported modules
 //! import upstream. Only what those modules and their tests use is provided.

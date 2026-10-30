@@ -1482,7 +1482,7 @@ fn ipc_resize_keeps_the_center_and_follows_upstreams_refusals() {
 }
 
 // A stand-in has no native window. Upstream resizes a stand-in's own frame for
-// a step and for IPC resize; here that is refused (SIZES.md says why). Fit and
+// a step and for IPC resize; here that is refused (docs/crates/desktop/SIZES.md says why). Fit and
 // fill are upstream's own no-ops: its focused_window is a client.
 #[test]
 fn a_sizing_action_on_a_stand_in_is_refused() {
@@ -2530,7 +2530,7 @@ fn a_resize_drag_elsewhere_leaves_a_pinned_windows_fill() {
 
 // Readback mode: what every normal run without the flag reports. A size is
 // settled by the native read alone, so no command may leave a bound window
-// without a picture revision or refuse a press on it (NATIVE_RESIZE.md).
+// without a picture revision or refuse a press on it (docs/crates/desktop/NATIVE_RESIZE.md).
 fn readback(mut h: Host) -> Host {
     assert_eq!(
         h.ok(json!({"op":"native_resize_capability","enabled":true})),

@@ -8,7 +8,7 @@
 // Changes from upstream: this header, and crate paths only: `driftwm::`
 // reads `driftwm_core::` (2 imports) and `smithay::` reads
 // `driftwm_core::platform::` (1 import). Everything else is unmodified.
-// See PORT.md in the crate root for the full change log.
+// See docs/crates/core/PORT.md for the full change log.
 
 use driftwm_core::canvas::find_nearest;
 use driftwm_core::config::Direction;

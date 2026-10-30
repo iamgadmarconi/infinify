@@ -37,7 +37,7 @@
 //   could not be put back (Sunlight applies over it keeping the snapshot, 129-138, without putting it back first).
 // - Like Sunlight, a stored string "<absent>" cannot be told from an absent key; no WindowManager key holds a string.
 // The regression (DWSystemTakeoverTests.m) drives this file with an in-memory store; the guest runs recorded in
-// native/desktop/README.md ("Desktop mode") are what show WindowManager following the real keys.
+// docs/native/user-guide.md ("Desktop mode") are what show WindowManager following the real keys.
 #import "DWSystemTakeover.h"
 #import "DWOwnerFile.h"
 #include <unistd.h>

@@ -286,7 +286,7 @@ static NSNumber *exitChord(void) { return DWChord(53,controlKey|optionKey); }
 // under: upstream's pass_mouse (src/input/pointer.rs: pass_mouse_claims, pass_mouse_claims_notch). Where that window's rule claims the
 // trigger the controller answers {"binding": null, "passed": true}, and the trigger is unbound here exactly as it is there: nil, and the
 // press or scroll goes on to the window. nil for a placeholder, which has no application to pass anything to.
-// pick: that window is a pick target, as its hit says, and the lookup is upstream's below [zoom] interact_min (POINTER.md); it then
+// pick: that window is a pick target, as its hit says, and the lookup is upstream's below [zoom] interact_min (docs/crates/desktop/POINTER.md); it then
 // claims nothing.
 - (NSDictionary *)mouseBinding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window under:(NSNumber *)under pick:(BOOL)pick {
     NSMutableDictionary *command=[@{@"op":@"mouse_binding",@"trigger":trigger,@"source":source?:NSNull.null,@"modifiers":modifiersJSON(flags),@"context":window?@"window":@"canvas",@"pick":pick?@YES:@NO}mutableCopy];if(under)command[@"window"]=under;

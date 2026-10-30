@@ -23,6 +23,7 @@
 #import "DWNativeTabletRouter.h"
 #import "DWNativeTransition.h"
 #import "DWNativeViews.h"
+#import "DWOnboarding.h"
 #import "DWNavigationCoordinator.h"
 #import "DWPanLaunch.h"
 #import "DWResizeCoordinator.h"
@@ -248,4 +249,21 @@
 - (void)poll;
 - (void)saveScene;
 - (BOOL)loadScene:(NSString *)path;
+@property DWOnboarding *onboarding; // the one window of a launch that cannot open its canvas yet
+@property BOOL relaunch; // that window's Relaunch: main() starts this run again once it has ended
+@property BOOL hoverUndelivered; // --no-hover-forwarding: pointer motion never reaches an application
+@end
+// What main.m calls to start and end a run (implemented in the Desktop+*.m files; see Desktop+Private.h for the rest).
+@interface Desktop (Launch) <NSApplicationDelegate>
+- (void)say:(NSString *)note;
+- (void)resizeCapability;
+- (void)quit:(id)sender;
+- (void)loadConfig:(BOOL)platform;
+- (BOOL)startIPC:(NSString *)path;
+- (void)showChooser:(id)sender;
+- (void)openCanvas:(id)sender;
+- (void)putBackWindowSettings;
+- (void)cleanup;
+- (void)onboard;
+- (void)runAutostart;
 @end

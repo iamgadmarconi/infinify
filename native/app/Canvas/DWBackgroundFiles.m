@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Infinify canvas background renderer: reading a shader's text and decoding a
 // PNG/JPEG (or an inherited macOS still image) into a texture - see
-// IFBackgroundProgram.h and BACKGROUND-NOTES.md.
+// IFBackground.h and docs/native/app/Canvas/BACKGROUND-NOTES.md.
 //
 // Derived from DriftWM (GPL-3.0-or-later), https://github.com/malbiruk/driftwm @
 // 352333a8fa1b22171492d4b71a54102045c9a19d: src/render/background.rs
 // (`load_image_to_texture`), as the comments below cite.
 // Split from native/desktop/background.m at 37b27b1.
 
-#import "IFBackgroundProgram+Private.h"
+#import "IFBackground+Private.h"
 #import "IFBGTiffSource.h"
 
 #import <Accelerate/Accelerate.h>
@@ -68,7 +68,7 @@ static uint32_t IFBGCRC32(const uint8_t *bytes, size_t length) {
 /// Walks a PNG file's chunk list and returns what is wrong with it, or nil.
 /// ImageIO decodes a truncated or damaged PNG without any sign of trouble: it
 /// reports kCGImageStatusComplete before and after decoding and leaves the
-/// missing rows empty (measured, BACKGROUND-NOTES.md section 6). Upstream's decoder (the
+/// missing rows empty (measured, docs/native/app/Canvas/BACKGROUND-NOTES.md section 6). Upstream's decoder (the
 /// `png` crate behind `image::open`) reports an error for such a file, and the
 /// background then falls back, so the container is checked here: every chunk
 /// must be present in full up to and including IEND, and a critical chunk

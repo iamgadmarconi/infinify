@@ -23,9 +23,9 @@
 // placeholder is upstream's stand-in. The candidates of every search here are
 // upstream's canvas windows (`is_canvas_window`, `Controller::on_canvas`): no
 // widget and no screen-pinned window, which are raised and focused where they
-// are and never flown to (RULES.md). A fullscreen window is no canvas window
+// are and never flown to (docs/crates/desktop/RULES.md). A fullscreen window is no canvas window
 // either: it is focused on its own output and no target from any other
-// (FULLSCREEN.md). Modal handling is absent; a filled window's view restore
+// (docs/crates/desktop/FULLSCREEN.md). Modal handling is absent; a filled window's view restore
 // is sizes.rs's `navigate_restoring_fill`.
 // Only world rectangles, output poses and the navigation context are read,
 // never native geometry.
@@ -863,7 +863,7 @@ impl Controller {
                             && held.generation == observed.generation
                     })
                 };
-                // Event delivery (LIFECYCLE.md): the same report again while
+                // Event delivery (docs/crates/desktop/LIFECYCLE.md): the same report again while
                 // the window is still off screen and the flight the first one
                 // armed is in the air asks for what is already under way.
                 // Upstream's repeat sets the camera target it already has.

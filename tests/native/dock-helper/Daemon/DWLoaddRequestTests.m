@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The launch daemon's decisions, as plain functions: which XPC callers it names, which requests it will run, and which files
 // it takes as the loader and payload. No root process, XPC connection, Dock or window is involved; this is not evidence that the
-// daemon loads the payload (that is the guest run recorded in native/privileged/README.md).
+// daemon loads the payload (that is the guest run recorded in docs/native/dock-helper/Daemon/README.md).
 //   argv[1] (optional): an Infinify.app signed with a team identity, to check the caller requirement against a real signature.
 #import "DWLoaddRequest.h"
 #import <Security/Security.h>

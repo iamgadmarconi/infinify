@@ -11,7 +11,7 @@ cd "$(dirname "$0")/../.."
 test "$(uname -s)" = Darwin && test "$(uname -m)" = arm64
 task_dir=$(mktemp -d "${TMPDIR:-/tmp}/infinify-native-daemon.XXXXXX")
 trap 'rm -rf "$task_dir"' EXIT HUP INT TERM
-native_includes='-Icrates/desktop/include -Inative/app -Inative/app/Desktop -Inative/app/Canvas -Inative/app/Windows -Inative/app/Input -Inative/app/CompositorMode -Inative/app/Navigation -Inative/app/System -Inative/app/Support -Inative/dock-helper/Client -Inative/dock-helper/Daemon -Inative/dock-helper/Loader -Inative/dock-helper/Payload'
+. scripts/native-includes.sh
 xcrun clang -arch arm64 -mmacosx-version-min=26.0 -O2 -fobjc-arc -Wall -Wextra -Werror $native_includes \
   tests/native/dock-helper/Daemon/DWLoaddRequestTests.m native/dock-helper/Daemon/DWLoaddRequest.m \
   -framework Foundation -framework Security -o "$task_dir/loadd-request"

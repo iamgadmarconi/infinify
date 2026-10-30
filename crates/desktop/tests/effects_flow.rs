@@ -366,7 +366,7 @@ fn the_config_error_is_the_error_bars_message_and_a_change_spends_a_revision() {
     assert_eq!((h.errors(), h.revision()), (json!([message]), 3));
     assert_eq!(h.render()["effects"]["blur_radius"], 7);
     // The reply is the one every load gives, the key pointer policy added
-    // included (POINTER.md): the refused file's message is all it holds of
+    // included (docs/crates/desktop/POINTER.md): the refused file's message is all it holds of
     // that file, and `focus_follows_mouse` is still the last good file's.
     assert_eq!(
         reply,
@@ -565,7 +565,7 @@ fn lifecycle_events_are_logged_for_what_upstream_animates_and_nothing_else() {
     expected.push(event(7, far, "close", Value::Null));
     expected.push(event(8, clock, "close", json!(1)));
     assert_eq!(h.events(), json!(expected));
-    // The poll behind an event reports a close again (LIFECYCLE.md, Event
+    // The poll behind an event reports a close again (docs/crates/desktop/LIFECYCLE.md, Event
     // delivery): it is refused, and a refusal logs nothing.
     h.error(json!({"op":"window_closed","window":editor,"identity":identity(19),"output":1}));
     assert_eq!(h.events(), json!(expected));
@@ -663,7 +663,7 @@ fn lifecycle_events_are_logged_for_what_upstream_animates_and_nothing_else() {
     assert_eq!(listed[0]["serial"], 14);
 }
 
-// Effects beside window sizing (SIZES.md). Under a shell that can deliver a
+// Effects beside window sizing (docs/crates/desktop/SIZES.md). Under a shell that can deliver a
 // size, a rule's `size` is asked of a new window in the reply that maps it,
 // and until the last of that transaction's effects is answered the window
 // may have nothing settled to draw. The event log is told nothing of that:

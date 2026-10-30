@@ -6,7 +6,7 @@
 //   path:       src/layout/auto_placement.rs
 //   sha-256:    d99fa9d5ca4a5e9d84e6ef6d6672e6ea531186f40187d88082b63285e8999806 (upstream file)
 // Changes from upstream: this header only; everything below is unmodified.
-// See PORT.md in the crate root for the full change log.
+// See docs/crates/core/PORT.md for the full change log.
 
 //! Smart placement of a new window adjacent to a focused window's cluster.
 //!

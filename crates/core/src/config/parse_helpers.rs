@@ -7,7 +7,7 @@
 //   sha-256:    57e32e373dae1d62e597f8903376b24dd08ace81c51198e0e886bd85778d3247 (upstream file)
 // Changes from upstream: this header; `smithay::` paths read `crate::platform::`.
 // Nothing else.
-// See PORT.md in the crate root for the full change log.
+// See docs/crates/core/PORT.md for the full change log.
 
 //! TOML → config-type conversion helpers.
 //!

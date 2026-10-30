@@ -6,7 +6,7 @@
 //   path:       src/layout/snap.rs
 //   sha-256:    66df12387a8f9fc6af09356e3c46b4263863d956d76b83ea6dcd358976f6b1ae (upstream file)
 // Changes from upstream: this header only; everything below is unmodified.
-// See PORT.md in the crate root for the full change log.
+// See docs/crates/core/PORT.md for the full change log.
 
 /// Bounding rectangle of a window in canvas coordinates, used for edge snap detection.
 #[derive(Clone, Copy, Debug)]

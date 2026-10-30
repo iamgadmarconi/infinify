@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Infinify compositor — the on-screen layer: redraw gating, the drawable pool
-// and presentation statistics. See IFCompositor.h and COMPOSITOR-NOTES.md
+// and presentation statistics. See IFCompositor.h and docs/native/app/Canvas/COMPOSITOR-NOTES.md
 // (under docs/).
 //
 // Derived from DriftWM (GPL-3.0-or-later), https://github.com/malbiruk/driftwm @
@@ -188,7 +188,7 @@ static int IFCCompareInterval(const void *a,const void *b) {double x=*(const dou
     if (_renderer) self.device = _renderer.device;
     self.pixelFormat = MTLPixelFormatBGRA8Unorm;
     self.framebufferOnly = YES;
-    // The framebuffer holds sRGB-encoded values (see COMPOSITOR-NOTES.md, "Colour").
+    // The framebuffer holds sRGB-encoded values (see docs/native/app/Canvas/COMPOSITOR-NOTES.md, "Colour").
     CGColorSpaceRef srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
     self.colorspace = srgb;
     CGColorSpaceRelease(srgb);

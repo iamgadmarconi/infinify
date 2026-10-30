@@ -426,7 +426,7 @@ impl Controller {
                 return Ok(outcome);
             }
             // Upstream turns every trackpad's events off or on. Here that is
-            // the gesture dispatch: see GESTURES.md.
+            // the gesture dispatch: see docs/crates/desktop/GESTURES.md.
             Action::SetTrackpad(state) => {
                 outcome.dirty = self.set_trackpad(state)?;
                 return Ok(outcome);
@@ -441,14 +441,14 @@ impl Controller {
             Action::ZoomToFit => self.zoom_to_fit(active()?)?,
             Action::ZoomToFitSnapped => self.zoom_to_fit_snapped(active()?)?,
             // Fullscreen resizes a window to its output, through the same
-            // gate as the sizing actions below: FULLSCREEN.md.
+            // gate as the sizing actions below: docs/crates/desktop/FULLSCREEN.md.
             Action::ToggleFullscreen if self.sizes.capability => {
                 self.toggle_fullscreen(output, &mut outcome)?;
                 return Ok(outcome);
             }
             // These deliver a size to a native window, which a shell that
             // performs resize effects can do, as every normal run's does:
-            // SIZES.md.
+            // docs/crates/desktop/SIZES.md.
             action if self.sizes.capability && super::sizes::delivers_a_size(action) => {
                 self.run_sizing(output, action, &mut outcome)?;
                 return Ok(outcome);

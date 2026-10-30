@@ -17,12 +17,12 @@
 // window_render_transform in src/state/output.rs: a pin's output-relative point at
 // zoom 1), DrawnChrome's coverage rule per output, upstream's stand-in body
 // rectangle and its projection of the other outputs' viewports. The effects are the
-// compositor's (COMPOSITOR-NOTES.md, section 18), with src/state/errors.rs (ErrorSource:
+// compositor's (docs/native/app/Canvas/COMPOSITOR-NOTES.md, section 18), with src/state/errors.rs (ErrorSource:
 // the order of the error bar's messages) and src/state/window_animation_driver.rs
 // (start_window_open_animation, snapshot_closing_window, flatten_scale_for_canvas_rect:
 // an event on no output animates nothing, and the density a closing window is baked
 // at). The background's chunk caches (a baked cache_shader, a pyramidal TIFF's chunks)
-// are the background module's (BACKGROUND-NOTES.md, section 17); from here come
+// are the background module's (docs/native/app/Canvas/BACKGROUND-NOTES.md, section 17); from here come
 // upstream's one cache per output and its shrink while a fullscreen window conceals the
 // canvas (src/render/mod.rs, the bg_elements of compose_frame), the frames that keep
 // coming while a cache fills (has_pending_bakes and has_pending_loads, as
@@ -125,7 +125,7 @@
 // placement is drawn at its screen_rect, global screen points at zoom 1 whatever the
 // output's camera and zoom, and bare. That is the compositor's pinned space: output-local
 // points at zoom 1, which its output space only approximates by dividing by the frame's
-// zoom (COMPOSITOR-NOTES.md, deviation 10); at zoom 1 the two are the same arithmetic.
+// zoom (docs/native/app/Canvas/COMPOSITOR-NOTES.md, deviation 10); at zoom 1 the two are the same arithmetic.
 // The window keeps its place in the list and its layer. Run for every output on every
 // describe, so the background and the outlines are back with the first frame after the exit.
 //

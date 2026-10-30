@@ -6,7 +6,7 @@
 // com.apple.WindowManager (GloballyEnabled, EnableTilingByEdgeDrag, EnableTopTilingByEdgeDrag,
 // EnableTilingOptionAccelerator) and puts the user's settings back when it ends. Written through
 // CFPreferences, as `defaults write` does: WindowManager follows it live, with no restart of anything
-// (established on macOS 27.0.1 in the guest, native/desktop/README.md "Desktop mode").
+// (established on macOS 27.0.1 in the guest, docs/native/user-guide.md "Desktop mode").
 // A translation of Sunlight's takeover preferences; DWSystemTakeover.m names each translated function and its lines.
 //
 // The rules that keep the user's settings theirs:

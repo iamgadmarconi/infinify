@@ -17,7 +17,7 @@ df3de27b26c7998e8a460cffd8a4925cbed3a322 (DriftWM v0.21.0, the baseline of
 crates/core) or 352333a8fa1b22171492d4b71a54102045c9a19d (the commit the first
 port started from). The files that name only 352333a8 are crates/canvas/src, the
 crates/desktop/src modules and the native/app files listed below that were
-written at that port; crates/core/PORT.md records the hashes and deviations of
+written at that port; docs/crates/core/PORT.md records the hashes and deviations of
 crates/core.
 The GPL version 3 text in LICENSE is copied unchanged from the baseline.
 
@@ -29,7 +29,7 @@ block or section):
   crates/core/                  the pure modules: canvas, config, layout, the
                                 direction_from_vector gesture helper, platform
                                 stand-ins and keysym lookup, with their tests;
-                                crates/core/PORT.md lists every hash and deviation
+                                docs/crates/core/PORT.md lists every hash and deviation
   crates/canvas/src/            cluster_resize, geometry, gestures, layout, lib, stage
   crates/desktop/src/           actions, bindings, effects, fullscreen, gestures,
                                 ipc, ipc_client, keyboard_layout, keyboard_snap,
@@ -39,9 +39,10 @@ block or section):
                                 storage, taps, view_actions, window_actions
   native/app/main.m            the process entry point (and the Desktop/ files
                                 cut from the former main.m)
-  native/app/Canvas/            IFBackgroundProgram (.h, .m),
-                                IFBackgroundProgram+Private.h,
+  native/app/Canvas/            IFBackground.h, IFBackgroundProgram.m,
+                                IFBackground+Private.h,
                                 IFBGDeviceResources, DWBackgroundGLSLTranslation,
+                                IFBGShaderDecl,
                                 DWBackgroundFiles, IFBGChunk, IFBGShaderChunks,
                                 IFBGTileChunks, IFBGTiffSource, IFCompositor.h,
                                 IFCompositor+Private.h, IFCDeviceResources,
@@ -61,8 +62,8 @@ block or section):
   piece)
   crates/core/config.reference.toml and the two proptest seed files
   crates/core/proptest-regressions/layout/fill.txt and snap.txt are byte copies
-  of the baseline files and crates/core/docs/window-rules.md is the baseline page with six relative links
-  made absolute (see crates/core/PORT.md); the oracle copies under
+  of the baseline files and docs/crates/core/window-rules.md is the baseline page with six relative links
+  made absolute and one re-pointed (see docs/crates/core/PORT.md); the oracle copies under
   crates/canvas/tests/upstream, crates/desktop/tests/upstream and
   crates/desktop/tests/resize_upstream are upstream excerpts, each directory
   with a SHA256SUMS.
@@ -82,12 +83,15 @@ file. Each adapted file names what it took. Files derived from Sunlight:
   Sources/Canvas/Takeover/SystemPrefs.swift and TakeoverMode.swift: snapshot the
   user's own preferences before the first write, an absent key restored as
   absent, restore on every end and from a leftover record at the next launch.
-  native/app/Windows/DWWindowEvents.m and DWWindowEvents.h adapt
+  native/app/Windows/DWWindowEvents.m, DWWindowEvents.h and the files cut
+  from DWWindowEvents.m (DWWindowEvents+Applications.m, +Observation.m,
+  +Private.h, DWApplicationWatch, DWApplicationCatalogWatch,
+  DWApplicationMetadata, DWObservedApplication, DWObservedWindow) adapt
   Sources/Canvas/RealWindows/WindowServerEvents.swift (SkyLight's window-created
   event and its payload).
   The arrival veil of the Dock helper payload (native/dock-helper/Payload:
   DWPayloadArrival.m, with its state in DWPayloadState.m and its request in
-  DWDockPayload.m) adapts the same event source and the aim of
+  DWPayload.m) adapts the same event source and the aim of
   LiveWindows/osax/sunbeam.h that a new window is never seen before it is placed
   (native/dock-helper/Client/DWHelperProtocol.h carries its constants).
   Compositor mode at login: native/dock-helper/Daemon/Daemon.m copies LiveWindows/helper.m
@@ -111,11 +115,13 @@ native/app/Resources/YABAI-NOTICE.txt, which the app bundle carries beside this 
 Each adapted file names the upstream paths it follows. Files derived from yabai:
   native/dock-helper/Loader/DWLoader.m is adapted from yabai and retains its MIT licence,
   copyright and Jeremy Legendre arm64e attribution; the payload
-  (native/dock-helper/Payload/DWDockPayload.m and the fragments it #imports)
+  (native/dock-helper/Payload/DWPayload.m and the fragments it #imports)
   cites the same commit for the Dock-side calls. native/dock-helper/Daemon/Daemon.m reaches
   yabai's src/sa.m by way of Sunlight's LiveWindows/helper.m (see Sunlight above)
   and pins only the Sunlight commit.
-  native/app/Windows/DWWindowEvents.m, DWWindowEvents.h and the event handling of
+  native/app/Windows/DWWindowEvents.m (with its +Applications.m,
+  +Observation.m and +Private.h files and the classes cut from it),
+  DWWindowEvents.h and the event handling of
   native/app/Windows/DWWindowManager.m (src/workspace.m, src/application.c,
   src/application.h, src/window.c, src/window.h, src/event_loop.c,
   src/window_manager.c: which notifications an application and a window are

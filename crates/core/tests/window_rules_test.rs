@@ -10,7 +10,7 @@
 // re-wrapped the four `let combo = …Keysym::from(…KEY_q);` statements that the
 // longer paths pushed past 100 columns; the three `window_rule_has_criteria_*`
 // tests are removed. Nothing else.
-// See PORT.md in the crate root for the full change log.
+// See docs/crates/core/PORT.md for the full change log.
 
 use driftwm_core::config::{
     AppliedWindowRule, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, Config, DecorationConfig, DecorationMode,

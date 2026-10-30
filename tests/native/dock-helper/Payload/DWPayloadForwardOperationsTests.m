@@ -10,7 +10,7 @@ static CFArrayRef testWindows(CGWindowListOption option,CGWindowID wid);
 static int testProcess(int pid,int flavor,uint64_t argument,void *buffer,int size);
 #define CGWindowListCopyWindowInfo testWindows
 #define proc_pidinfo testProcess
-#import "DWDockPayload.m"
+#import "DWPayload.m"
 #undef CGWindowListCopyWindowInfo
 #undef proc_pidinfo
 // The placement 1 layer of each window; placement 0 is natural at the frame testBounds reports, [1,0,0,1,-25,-35].

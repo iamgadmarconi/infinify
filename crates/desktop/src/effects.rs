@@ -58,7 +58,7 @@ pub(crate) struct Effects {
     /// background's is the shell's, whose background program reports it, and
     /// the keyboard's is never set: upstream raises it when xkb refuses the
     /// config's layout, and here `[input.keyboard] layout` is read and unused,
-    /// macOS owning the layout list (CONFIG.md, Keyboard layouts).
+    /// macOS owning the layout list (docs/crates/desktop/CONFIG.md, Keyboard layouts).
     config_error: Option<String>,
     /// The most recent events, oldest first.
     events: Vec<Logged>,
@@ -85,7 +85,7 @@ impl Controller {
     /// Its `non_negative` lets `blur_strength = inf` through, the one value of
     /// the five JSON cannot carry (it would be written as null): the block
     /// says 0, what the shell's compositor makes of an infinite strength
-    /// (native/desktop/COMPOSITOR-NOTES.md, deviation 31).
+    /// (docs/native/app/Canvas/COMPOSITOR-NOTES.md, deviation 31).
     pub(crate) fn effects_block(&self) -> Value {
         let effects = &self.config().effects;
         let blur_strength = match effects.blur_strength.is_finite() {
@@ -110,7 +110,7 @@ impl Controller {
     /// Whether one element's backdrop is frosted: `effective_blur` over the
     /// rule the window mapped with, for a bound window only. Upstream requests
     /// blur for client windows and never for a stand-in, whatever
-    /// `[decorations] blur` says (native/desktop/COMPOSITOR-NOTES.md, 18.1).
+    /// `[decorations] blur` says (docs/native/app/Canvas/COMPOSITOR-NOTES.md, 18.1).
     /// A fullscreen window is frosted by its own rule's `blur` alone, never
     /// by the global one: `effective_blur`'s `is_fullscreen`.
     pub(crate) fn blur_of(&self, window: WindowId) -> bool {

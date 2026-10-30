@@ -8,7 +8,7 @@
 // Changes from upstream: this header; crate paths: `driftwm::config` reads
 // `driftwm_core::config` and `smithay::` reads `driftwm_core::platform::`.
 // Nothing else.
-// See PORT.md in the crate root for the full change log.
+// See docs/crates/core/PORT.md for the full change log.
 
 use driftwm_core::config::{
     Action, BTN_RIGHT, BackgroundKind, BindingContext, Config, ContinuousAction,

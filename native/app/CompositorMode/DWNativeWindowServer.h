@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Split from native/app/CompositorMode/DWNativePresenter.h (37b27b1): window-server queries and clip geometry for native presentation.
+// Split from native/desktop/native-presenter.h (37b27b1): window-server queries and clip geometry for native presentation.
 #import <Foundation/Foundation.h>
 #import <CoreGraphics/CoreGraphics.h>
 //

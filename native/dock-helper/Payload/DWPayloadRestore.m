@@ -15,7 +15,7 @@
 // https://github.com/asmvik/yabai commit dd845723416f5fe92af49fad5ebab00369e07edd; its notice is native/app/Resources/YABAI-NOTICE.txt.
 // Restoration: released originals pruned only on proof the window is gone, the retry schedule, and v2Restore, which puts back what
 // was captured at first touch behind fresh identity fences.
-// Moved verbatim from native/dock-helper/Payload/DWPayload.m (37b27b1), lines 644-789. #imported by DWDockPayload.m in a fixed order; never compiled alone.
+// Moved verbatim from native/privileged/payload.m (37b27b1), lines 644-789. #imported by DWPayload.m in a fixed order; never compiled alone.
 
 // Live released originals remain obligations across connection death. Make room only by proving
 // a recorded instance is gone, never age. Returns whether the released table changed.

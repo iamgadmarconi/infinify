@@ -15,7 +15,7 @@
 // https://github.com/asmvik/yabai commit dd845723416f5fe92af49fad5ebab00369e07edd; its notice is native/app/Resources/YABAI-NOTICE.txt.
 // Space membership: reads, forward-move eligibility, confirmation of void move requests, deleted-target evidence, and restoration
 // to the original Space with its settling.
-// Moved verbatim from native/dock-helper/Payload/DWPayload.m (37b27b1), lines 288-318, 523-642. #imported by DWDockPayload.m in a fixed order; never compiled alone.
+// Moved verbatim from native/privileged/payload.m (37b27b1), lines 288-318, 523-642. #imported by DWPayload.m in a fixed order; never compiled alone.
 
 static uint64_t v2WindowSpace(uint32_t wid) {
     if(!v2SpaceAPI())return 0;

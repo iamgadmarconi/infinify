@@ -3,7 +3,7 @@
 // actual payload with native call substitutes; no window, Dock load or fault API.
 // Placement model and cases. Split from native/privileged/restore_identity_test.m (37b27b1); #imported by DWPayloadRestoreIdentityTests.m
 // after the payload and the substitutes, in its fixed order, and never compiled on its own.
-// Placements. A model of the window server's per-placement entries, kept honest only about what was observed (README.md "Placements"):
+// Placements. A model of the window server's per-placement entries, kept honest only about what was observed (docs/native/dock-helper/Payload/README.md "Placements"):
 // placement 0 is the window's own entry, [1,0,0,1,-x,-y] while untransformed and following the native frame; placement 1 is a
 // relative layer applied after it; the catenated transform is the two composed. The real dwReadAbsolute / dwWriteAbsolute run on
 // top of it, so every call site's absolute-matrix meaning is exercised through the placement-1 path. Values are stored as 32-bit

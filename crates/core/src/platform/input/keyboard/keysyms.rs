@@ -13,7 +13,7 @@
 // headers), renamed with libxkbcommon's header rule, plus `hpYdiaeresis` from
 // xkbcommon 0.9.0 `src/xkb/keysyms.rs` (MIT; X.Org keysym headers). This file
 // was generated once from those two sources, cross-checked against
-// xkbcommon-rs 0.1.2 (https://github.com/wysiwys/xkbcommon-rs); see PORT.md.
+// xkbcommon-rs 0.1.2 (https://github.com/wysiwys/xkbcommon-rs); see docs/crates/core/PORT.md.
 //
 // Unlike upstream's module this one also carries the name table that
 // libxkbcommon keeps in C (`ks_tables.h`), which `xkb::keysym_from_name` needs.

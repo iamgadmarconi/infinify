@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// DesktopView as DriftWM's pointer-policy host (pointer-hover.h): hover, cursor and policy presses.
+// DesktopView as DriftWM's pointer-policy host (DWPointerHover.h): hover, cursor and policy presses.
 #import "Desktop+Private.h"
 #import "DesktopView.h"
 #import "DWNativeFamily.h"
@@ -47,7 +47,7 @@
 // the pad: a button down anywhere; a press any panel is handling, which is every drag there is (a pan, a window move
 // by a bound press or by a pick-mode press, a press in a native window, a policy press); a trackpad gesture the
 // recogniser has made of the touches or the controller holds, a move gesture's drag among them, and a magnify stream;
-// a native resize that has not drained. The controller refuses the same on its own account (POINTER.md): this
+// a native resize that has not drained. The controller refuses the same on its own account (docs/crates/desktop/POINTER.md): this
 // only keeps the question from being asked.
 - (BOOL)pointerBusy {
     Desktop *desktop=self.desktop;

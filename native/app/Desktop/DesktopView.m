@@ -258,7 +258,7 @@ static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,NSDictionary *focus,
 }
 // Upstream's resize grab, begun by a press bound to resize-window or resize-window-snapped, or by a left press on the resize border
 // (`edges` is then the border's; nil lets the controller take them from where in the window the press fell, upstream's
-// edges_from_position). In a normal run the grab is a native readback size transaction (crates/desktop/NATIVE_RESIZE.md): each size
+// edges_from_position). In a normal run the grab is a native readback size transaction (docs/crates/desktop/NATIVE_RESIZE.md): each size
 // the drag asks is asked of the real window, and the canvas shows the size the window then has.
 // Upstream raises and focuses the window first (raise_and_focus, then start_compositor_resize). A resize that begins carries that
 // focus request in its reply. A begin that is turned away, by the resize path before the controller is asked or by the controller

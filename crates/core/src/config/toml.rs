@@ -10,7 +10,7 @@
 // hard-codes "driftwm"; `set_config_path`, `CONFIG_PATH_OVERRIDE` and its branch in
 // `config_path` are removed. Nothing else; the
 // `DRIFTWM_CONFIG` override is kept.
-// See PORT.md in the crate root for the full change log.
+// See docs/crates/core/PORT.md for the full change log.
 
 use std::collections::HashMap;
 

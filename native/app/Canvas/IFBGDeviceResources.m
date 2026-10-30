@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Infinify canvas background renderer: the built-in Metal sources and the
-// per-device shared state (IFBGDeviceResources) - see IFBackgroundProgram.h and
-// BACKGROUND-NOTES.md.
+// per-device shared state (IFBGDeviceResources) - see IFBackground.h and
+// docs/native/app/Canvas/BACKGROUND-NOTES.md.
 //
 // Derived from DriftWM (GPL-3.0-or-later), https://github.com/malbiruk/driftwm @
 // 352333a8fa1b22171492d4b71a54102045c9a19d. The three built-in fragment
@@ -9,7 +9,7 @@
 // upstream path and SHA-256 of the file it was translated from.
 // Split from native/desktop/background.m at 37b27b1.
 
-#import "IFBackgroundProgram+Private.h"
+#import "IFBackground+Private.h"
 #import "DWMetalSupport.h"
 
 static NSString *const IFBGErrorDomain = @"IFBackgroundErrorDomain";
@@ -45,7 +45,7 @@ NSString *const kIFBGCommonMSL =
      // with blending off, so this is exactly what reaches the screen. On the plain
      // pixel-shader path smithay 0.7.0 leaves blending on, so a shader writing
      // alpha < 1 without `transparent_shader` blends over stale framebuffer
-     // contents there; forcing alpha to 1 is a deliberate deviation (BACKGROUND-NOTES.md,
+     // contents there; forcing alpha to 1 is a deliberate deviation (docs/native/app/Canvas/BACKGROUND-NOTES.md,
      // section 8).
      "static inline float4 ifbg_finish(float4 color, constant IFBGUniforms &U) {\n"
      "    return U.opaque > 0.5 ? float4(color.rgb, 1.0) : color;\n"

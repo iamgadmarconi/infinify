@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Infinify canvas background renderer: the baked-shader chunk cache
-// (`cache_shader`) of one output - see IFBackgroundProgram.h and
-// BACKGROUND-NOTES.md, section 17.
+// (`cache_shader`) of one output - see IFBackground.h and
+// docs/native/app/Canvas/BACKGROUND-NOTES.md, section 17.
 //
 // Derived from DriftWM (GPL-3.0-or-later), https://github.com/malbiruk/driftwm @
 // 352333a8fa1b22171492d4b71a54102045c9a19d: src/render/shader_chunks.rs
@@ -9,7 +9,7 @@
 // shrink, visible_chunks).
 // Split from native/desktop/background.m at 37b27b1.
 
-#import "IFBackgroundProgram+Private.h"
+#import "IFBackground+Private.h"
 
 #include <math.h>
 #include <string.h>
@@ -181,7 +181,7 @@ static void IFBGApronDims(long chunkSize, long bakePx, long *areaCanvas, long *f
     // Not upstream: a cover that does not fit the budget by itself is not baked.
     // Upstream bakes it for every frame it draws and evicts it again when the
     // frame ends, however many cells a far zoom-out makes it; here such a frame
-    // is the live shader's (BACKGROUND-NOTES.md, section 17).
+    // is the live shader's (docs/native/app/Canvas/BACKGROUND-NOTES.md, section 17).
     uint64_t coverBytes = (uint64_t)((coverX1 - coverX0 + 1) * (coverY1 - coverY0 + 1)) * [self chunkBytes:coverSize];
     if (coverBytes > _budget) {
         if (!_coverTooLarge) {

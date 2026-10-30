@@ -15,7 +15,7 @@
 // https://github.com/asmvik/yabai commit dd845723416f5fe92af49fad5ebab00369e07edd; its notice is native/app/Resources/YABAI-NOTICE.txt.
 // The journal: every original is written durably (no-follow staging, fsync, rename) before anything is changed, and a journal an
 // earlier helper left is validated, decoded and recovered, with writer handoff, before the listener accepts a client.
-// Moved verbatim from native/dock-helper/Payload/DWPayload.m (37b27b1), lines 487-522, 643, 1439-1638. #imported by DWDockPayload.m in a fixed order; never compiled alone.
+// Moved verbatim from native/privileged/payload.m (37b27b1), lines 487-522, 643, 1439-1638. #imported by DWPayload.m in a fixed order; never compiled alone.
 
 // Durable no-follow staging and rename; original values survive every frame.
 static NSDictionary *v2JournalEntry(DW2Entry *e,NSString *state) {

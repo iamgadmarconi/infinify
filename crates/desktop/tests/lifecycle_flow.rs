@@ -1979,7 +1979,7 @@ fn retitle_follows_the_window_and_is_saved_for_the_next_launch() {
     );
 }
 
-// Event delivery (LIFECYCLE.md). A shell that follows native windows by their
+// Event delivery (docs/crates/desktop/LIFECYCLE.md). A shell that follows native windows by their
 // events, with a slower poll behind them, reports one change twice (the event,
 // then the poll), late (after the window it is about has gone) and early
 // (before the window is bound), and in bursts. `Host::error` asserts that a

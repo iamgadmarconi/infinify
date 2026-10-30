@@ -10,7 +10,7 @@
 // use in `parse_threshold_action` are removed (`go-to` is an ordinary unknown
 // action), with the test `removed_actions_keep_their_migration_message_everywhere`.
 // Nothing else.
-// See PORT.md in the crate root for the full change log.
+// See docs/crates/core/PORT.md for the full change log.
 
 use crate::platform::input::keyboard::{keysyms, xkb};
 

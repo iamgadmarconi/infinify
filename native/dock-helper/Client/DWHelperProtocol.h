@@ -3,7 +3,7 @@
 #define DW_PRIVILEGED_PROTOCOL_H
 #include <stdint.h>
 // The helper protocol: binary, little-endian, on RUNTIME/v2.sock (the wire names DW2_*, DWv2 and v2.sock
-// carry the protocol's version, which is 2). Semantics and lifecycle: README.md "Protocol v2". Every struct here is laid out
+// carry the protocol's version, which is 2). Semantics and lifecycle: docs/native/dock-helper/Client/README.md "Protocol v2". Every struct here is laid out
 // without padding and is sent as it lies in memory on arm64.
 #define DW2_SOCKET "v2.sock"
 #define DW2_MAGIC "DWv2"

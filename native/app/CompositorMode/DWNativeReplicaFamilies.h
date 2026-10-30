@@ -20,13 +20,6 @@
 // root. Matches the exact root binding; contains no pixel/input acknowledgement.
 @property(nonatomic,readonly) NSDictionary<NSNumber *,NSDictionary *> *descriptions;
 - (NSArray<DWCanvasAttachment *> *)attachments:(NSNumber *)window;
-// Full back-to-front tokens: {window,key? ,bucket?}, with barrier:YES separating
-// physical roots, stand-ins and closing elements. Reorders a whole same-bucket
-// run only with complete membership and one coherent native ordering observation
-// whose root order agrees with the controller. Otherwise preserves that run.
-// Extra fields and exact token membership are preserved. This is drawing/order
-// evidence only; it grants no native input authority.
-- (NSArray<NSDictionary *> *)orderedTokens:(NSArray<NSDictionary *> *)tokens;
 // Changes when the ordering meaning or captured membership changes, not for
 // another pixel frame or an unchanged observation. Main-thread reads only.
 @property(readonly) uint64_t orderRevision;
@@ -40,4 +33,13 @@
 - (BOOL)contains:(NSNumber *)window identity:(NSDictionary *)identity generation:(NSNumber *)generation bounds:(CGRect)bounds;
 - (void)invalidatePID:(pid_t)pid;
 - (void)reset;
+@end
+@interface DWNativeReplicaFamilies (Ordering)
+// Full back-to-front tokens: {window,key? ,bucket?}, with barrier:YES separating
+// physical roots, stand-ins and closing elements. Reorders a whole same-bucket
+// run only with complete membership and one coherent native ordering observation
+// whose root order agrees with the controller. Otherwise preserves that run.
+// Extra fields and exact token membership are preserved. This is drawing/order
+// evidence only; it grants no native input authority.
+- (NSArray<NSDictionary *> *)orderedTokens:(NSArray<NSDictionary *> *)tokens;
 @end

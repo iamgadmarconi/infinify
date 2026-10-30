@@ -9,6 +9,6 @@
 //
 // Visibility: upstream declares `pub(crate) mod gestures;` inside its binary
 // crate. It is `pub` here because its consumer, the driftwm-desktop crate, is another crate.
-// See PORT.md in the crate root for the full change log.
+// See docs/crates/core/PORT.md for the full change log.
 
 pub mod gestures;

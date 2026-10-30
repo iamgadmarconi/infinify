@@ -12,7 +12,7 @@
 // `WindowRule::has_criteria` and `HotCorner::contains` are removed, with their tests
 // (`action_ends_fullscreen`, `threshold_action_ends_fullscreen`,
 // `all_held_requires_mod3_bit_too`, `union_combines_mod3_bit`). Nothing else.
-// See PORT.md in the crate root for the full change log.
+// See docs/crates/core/PORT.md for the full change log.
 
 use std::collections::HashMap;
 use std::f64::consts::FRAC_1_SQRT_2;

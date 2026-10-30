@@ -22,6 +22,8 @@ live_m = (app / "LiveSource.m").read_text()
 private_h = (app / "Desktop+Private.h").read_text()
 view_m = (app / "DesktopView.m").read_text()
 input_m = (app / "Desktop+Input.m").read_text()
+captured_m = (app / "Desktop+CapturedInput.m").read_text()
+titles_m = (app / "Desktop+NativeTitles.m").read_text()
 windows_m = (app / "Desktop+Windows.m").read_text()
 navigation_m = (app / "Desktop+Navigation.m").read_text()
 fill_m = (app / "Desktop+Fill.m").read_text()
@@ -56,9 +58,9 @@ start = one(private_h, "static inline BOOL DWCapturedInputAvailable(")
 end = private_h.index("\n}", start) + len("\n}")
 (output / "root-capture-input-availability.inc").write_text(private_h[start:end] + "\n")
 (output / "native-chrome-geometry.inc").write_text(
-    function(input_m, "static BOOL DWNativeChromeFrameMatches(")
+    function(titles_m, "static BOOL DWNativeChromeFrameMatches(")
     + function(windows_m, "static NSDictionary *DWNativeMovedButtons(")
-    + function(input_m, "static NSDictionary *DWNativeButtonsAfterRefresh("))
+    + function(titles_m, "static NSDictionary *DWNativeButtonsAfterRefresh("))
 start = one(private_h, "static inline NSDictionary *DWFocusedStandIn(")
 end = private_h.index("\n}\n", one(private_h, "static inline BOOL sameInputTarget(")) + len("\n}\n")
 (output / "captured-input-target-functions.inc").write_text(
@@ -78,12 +80,12 @@ def method(source, after, marker):
     "- (void)released:(CGPoint)p at:(NSTimeInterval)time",
 )))
 (output / "captured-input-desktop-consumers.inc").write_text("\n".join(method(source, "@implementation Desktop (", marker) for source, marker in (
-    (input_m, "- (NSDictionary *)resolveCapturedPointer:"), (input_m, "- (BOOL)forwardCapturedPointer:"), (input_m, "- (BOOL)forwardTabletTail:"),
+    (captured_m, "- (NSDictionary *)resolveCapturedPointer:"), (captured_m, "- (BOOL)forwardCapturedPointer:"), (captured_m, "- (BOOL)forwardTabletTail:"),
     (navigation_m, "- (void)cancelNativeTitleClick {"), (navigation_m, "- (void)deferNativeTitleClick:"), (navigation_m, "- (void)fireNativeTitleClick:"),
     (fill_m, "- (BOOL)nativeFillCurrent:"), (fill_m, "- (NSDictionary *)nativeFillBackground:"),
 )))
 PY
-native_includes='-Icrates/desktop/include -Inative/app -Inative/app/Desktop -Inative/app/Canvas -Inative/app/Windows -Inative/app/Input -Inative/app/CompositorMode -Inative/app/Navigation -Inative/app/System -Inative/app/Support -Inative/dock-helper/Client -Inative/dock-helper/Daemon -Inative/dock-helper/Loader -Inative/dock-helper/Payload'
+. scripts/native-includes.sh
 xcrun clang -arch arm64 -mmacosx-version-min=26.0 -O2 -fobjc-arc -Wall -Wextra -Werror $native_includes \
   -I"$task_dir" tests/native/app/Desktop/DWRootCaptureMailboxTests.m \
   -framework Foundation -framework ScreenCaptureKit -framework CoreMedia -framework CoreVideo -framework CoreGraphics \

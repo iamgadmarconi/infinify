@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Original implementation over the client library of native/dock-helper/Client (DWHelperClient.h,
 // DWHelperProtocol.h). The two window-server queries are resolved by name, with the signatures
-// native/dock-helper/Payload/DWDockPayload.m uses, cross-checked there against yabai
+// native/dock-helper/Payload/DWPayload.m uses, cross-checked there against yabai
 // dd845723416f5fe92af49fad5ebab00369e07edd (src/misc/extern.h), https://github.com/asmvik/yabai;
 // see native/app/Resources/YABAI-NOTICE.txt. Nothing here changes a window: every change is the
 // helper's, asked for through its socket.
-// Split from native/app/CompositorMode/DWNativePresenter.m (37b27b1): describing and submitting frames.
+// Split from native/desktop/native-presenter.m (37b27b1): describing and submitting frames.
 #import "DWNativePresenter+Private.h"
 #import "DWGeometryJSON.h"
 #import "DWNativeDisplaySpace.h"
@@ -112,7 +112,7 @@ static BOOL DWNativePlacementSourceMatches(id value,NSDictionary *identity) {
             // for the family. Parking it hid the window until the next good audit, and an audit fails whenever a frame is read mid-resize,
             // a member has no readable parent or size, or a Chromium window meets a transient child with no parent or size yet
             // (parked, its main window vanished for 4 to 339 ms of each such read: the browser "flashing"). Context menus are no such
-            // member: the guest's audits took every level-101 context menu measured as a child of its root (native/desktop/README.md,
+            // member: the guest's audits took every level-101 context menu measured as a child of its root (docs/native/app/CompositorMode/COMPOSITOR-MODE.md,
             // "Popups and menus of a transformed window").
             BOOL sound=!spaceFrames||(targetSpace!=0&&root),spaceSound=sound&&(!spaceFrames||root->familyKnown);
             // The helper's bounds on a matrix; a placement they cannot express (a window a million points off, a zoom of a thousandth) is parked.

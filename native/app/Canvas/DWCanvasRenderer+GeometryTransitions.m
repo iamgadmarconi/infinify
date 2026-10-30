@@ -17,12 +17,12 @@
 // window_render_transform in src/state/output.rs: a pin's output-relative point at
 // zoom 1), DrawnChrome's coverage rule per output, upstream's stand-in body
 // rectangle and its projection of the other outputs' viewports. The effects are the
-// compositor's (COMPOSITOR-NOTES.md, section 18), with src/state/errors.rs (ErrorSource:
+// compositor's (docs/native/app/Canvas/COMPOSITOR-NOTES.md, section 18), with src/state/errors.rs (ErrorSource:
 // the order of the error bar's messages) and src/state/window_animation_driver.rs
 // (start_window_open_animation, snapshot_closing_window, flatten_scale_for_canvas_rect:
 // an event on no output animates nothing, and the density a closing window is baked
 // at). The background's chunk caches (a baked cache_shader, a pyramidal TIFF's chunks)
-// are the background module's (BACKGROUND-NOTES.md, section 17); from here come
+// are the background module's (docs/native/app/Canvas/BACKGROUND-NOTES.md, section 17); from here come
 // upstream's one cache per output and its shrink while a fullscreen window conceals the
 // canvas (src/render/mod.rs, the bg_elements of compose_frame), the frames that keep
 // coming while a cache fills (has_pending_bakes and has_pending_loads, as

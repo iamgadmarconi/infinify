@@ -2631,7 +2631,7 @@ fn a_save_keeps_the_place_from_before_the_size_the_window_has_and_no_fullscreen(
     );
 }
 
-// Fullscreen beside `pass_mouse` and `pass_keys` (RULES.md). Upstream's
+// Fullscreen beside `pass_mouse` and `pass_keys` (docs/crates/desktop/RULES.md). Upstream's
 // fullscreen_claims (src/input/pointer.rs) asks the fullscreen window's
 // `pass_mouse` at the button site, the notch site and the scroll site, each
 // ahead of every pick-mode test; and its key filter asks the window that
@@ -2908,7 +2908,7 @@ fn a_pinned_drag_stays_off_a_fullscreen_output() {
     h.ok(json!({"op":"end_gesture"}));
 }
 
-// Fullscreen beside the effects (EFFECTS.md): the frost, and the window
+// Fullscreen beside the effects (docs/crates/desktop/EFFECTS.md): the frost, and the window
 // events the shell animates. Upstream's effective_blur takes `is_fullscreen`:
 // the global `[decorations] blur` does not reach a fullscreen window, its
 // own rule's `blur` does. And a window that maps straight into fullscreen
@@ -2968,7 +2968,7 @@ fn a_fullscreen_window_is_frosted_by_its_own_rule_alone_and_opens_and_closes_lik
     assert_eq!(fullscreen(&mut h, 2), Value::Null);
 }
 
-// Fullscreen beside the queue of rule sizes (RULES.md): there is one size
+// Fullscreen beside the queue of rule sizes (docs/crates/desktop/RULES.md): there is one size
 // transaction, and a window whose rule names a `size` waits for it in map
 // order, standing at its own size inside the frame it was placed for.
 #[test]

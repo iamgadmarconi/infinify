@@ -22,7 +22,7 @@
 //
 // Not declared (not ported): `desktop_entry`, `protocols`, `text`, and
 // everything else in the binary crate.
-// See PORT.md in the crate root for the full change log.
+// See docs/crates/core/PORT.md for the full change log.
 //! The pure, compositor-independent parts of DriftWM as one platform-neutral
 //! crate: canvas math, configuration and layout.
 
