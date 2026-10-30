@@ -2239,6 +2239,9 @@ static NSNumber *exitChord(void) { return DWChord(53,controlKey|optionKey); }
     if(!self.dockGuard)return;
     NSDictionary *reply=[self call:@{@"op":@"gesture_fingers"}];uint32_t mask=0;
     for(id count in asArray(reply[@"fingers"])){NSUInteger n=[DWTyped(count,NSNumber.class)unsignedIntegerValue];if(n>0&&n<32)mask|=1u<<n;}
+    // Five or more fingers are held back too, bound or not: the system's five-finger spread (Show Desktop) and pinch fling every
+    // window to the screen's edges under a canvas that draws them elsewhere (owner, 2026-10-30, after the first real-Mac run).
+    mask|=~((1u<<5)-1);
     [self.dockGuard setBound:mask];
 }
 // The recogniser's gesture in progress, for the Dock guard: it holds the system's gestures back for its finger count until it ends.
